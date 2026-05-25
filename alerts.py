@@ -1,0 +1,301 @@
+# ruff: noqa: E501
+"""
+alerts.py
+Real-time push notifications for the MTF bot.
+
+Supports two transports — configure whichever you prefer via .env:
+
+  NTFY_TOPIC=your_private_topic_name   # ntfy.sh (free, mobile push via ntfy app)
+  SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...   # Slack incoming webhook
+
+Both are optional and independent — you can enable one, both, or neither.
+If neither is configured, alerts are logged only (graceful no-op).
+
+ntfy.sh setup:
+  1. Install the ntfy app on iOS or Android
+  2. Pick any private topic name (e.g. "alpaca-mtf-abc123" — keep it random)
+  3. Add NTFY_TOPIC=your_topic to .env
+  4. Subscribe to that topic in the app — alerts arrive instantly
+
+Slack setup:
+  1. Create an Incoming Webhook in your Slack workspace
+  2. Add SLACK_WEBHOOK_URL=https://hooks.slack.com/... to .env
+  3. Bot posts to whichever channel the webhook targets
+
+Priority levels (ntfy):
+  5 = max (red banner, bypasses do-not-disturb)   → CRITICAL: kills switch, crash
+  4 = high (orange)                               → ENTRY, EXIT with significant PnL
+  3 = default                                     → routine entries, partials
+  2 = low (grey, silent)                          → info/debug only
+"""
+
+import os
+import time
+import json
+import logging
+import ssl
+import urllib.request
+import urllib.error
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# macOS Python 3.10 ships without system CA certs — use certifi bundle so
+# Slack (and ntfy) HTTPS calls don't fail with CERTIFICATE_VERIFY_FAILED.
+try:
+    import certifi as _certifi
+    _SSL_CTX = ssl.create_default_context(cafile=_certifi.where())
+except ImportError:
+    _SSL_CTX = ssl.create_default_context()   # fallback: default context
+
+logger = logging.getLogger("alerts")
+PT = ZoneInfo("America/Los_Angeles")
+
+# ── Config — read at import time, hot-reload not needed ──────────────────────
+_NTFY_TOPIC       = os.getenv("NTFY_TOPIC", "").strip()
+_SLACK_WEBHOOK    = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+_NTFY_BASE        = "https://ntfy.sh"
+
+
+def _ntfy(title: str, body: str, priority: int = 3, tags: list | None = None) -> bool:
+    """POST to ntfy.sh. Returns True on success."""
+    if not _NTFY_TOPIC:
+        return False
+    url = f"{_NTFY_BASE}/{_NTFY_TOPIC}"
+    headers: dict[str, str] = {
+        "Title":    title,
+        "Priority": str(priority),
+        "Tags":     (",".join(tags) if tags else "chart_with_upwards_trend"),
+        "Content-Type": "text/plain",
+    }
+    try:
+        req = urllib.request.Request(url, data=body.encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=4, context=_SSL_CTX) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.warning(f"ntfy send failed: {e}")
+        return False
+
+
+def _slack(title: str, body: str, emoji: str = ":chart_with_upwards_trend:") -> bool:
+    """POST to Slack incoming webhook. Returns True on success."""
+    if not _SLACK_WEBHOOK:
+        return False
+    payload = json.dumps({
+        "text": f"{emoji} *{title}*\n{body}"
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            _SLACK_WEBHOOK,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=4, context=_SSL_CTX) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.warning(f"Slack send failed: {e}")
+        return False
+
+
+def _send(title: str, body: str, priority: int = 3, tags: list | None = None, emoji: str = ":robot_face:") -> None:
+    """
+    Fire alert to all configured transports.
+    Always logs — transports are best-effort (never raise).
+    """
+    ts = datetime.now(PT).strftime("%H:%M PT")
+    full_body = f"{body}\n— {ts}"
+
+    ntfy_ok  = _ntfy(title, full_body, priority, tags)
+    slack_ok = _slack(title, full_body, emoji)
+
+    if not ntfy_ok and not slack_ok:
+        if _NTFY_TOPIC or _SLACK_WEBHOOK:
+            logger.warning(f"[ALERT FAILED] {title}: {body}")
+        else:
+            logger.debug(f"[ALERT no-op — no transport configured] {title}: {body}")
+
+
+def send_slack(message: str) -> None:
+    """
+    Send a pre-formatted Slack message directly.
+    Used by main.py for ad-hoc operational alerts (watchdog, partial fail, GTC cancel).
+    Falls back to logger.warning if Slack is not configured.
+    """
+    if not _SLACK_WEBHOOK:
+        logger.warning(f"[ALERT no-op] {message[:120]}")
+        return
+    ts = datetime.now(PT).strftime("%H:%M PT")
+    payload = json.dumps({"text": f"{message}\n— {ts}"}).encode()
+    try:
+        req = urllib.request.Request(
+            _SLACK_WEBHOOK,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=4, context=_SSL_CTX) as resp:
+            if resp.status != 200:
+                logger.warning(f"Slack send_slack got status {resp.status}")
+    except Exception as e:
+        logger.warning(f"send_slack failed: {e}")
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
+
+def alert_entry(symbol: str, direction: str, shares: int, price: float,
+                score: int, pdt: int, size_mult: float,
+                overnight: bool = False, spy_ath_dist_pct: float | None = None,
+                mri_level: str | None = None) -> None:
+    """Fire on confirmed entry order submission."""
+    dir_arrow = "▲ LONG" if direction == "long" else "▼ SHORT"
+    title = f"ENTRY {dir_arrow} {symbol}"
+    _ctx_parts = [f"Score: {score}/12", f"PDT: {pdt}/3", f"Size mult: {size_mult:.2f}x"]
+    if overnight:
+        _ctx_parts.append("🌙 FORCED OVERNIGHT")
+    if spy_ath_dist_pct is not None:
+        _ath_flag = f"⚠️ ATH-{spy_ath_dist_pct:.1f}%" if spy_ath_dist_pct < 2.0 else f"ATH-{spy_ath_dist_pct:.1f}%"
+        _ctx_parts.append(_ath_flag)
+    if mri_level:
+        _ctx_parts.append(f"MRI:{mri_level}")
+    body  = (
+        f"{shares} shares @ ${price:.2f}\n"
+        f"{' | '.join(_ctx_parts)}"
+    )
+    tags = ["arrow_up" if direction == "long" else "arrow_down", "moneybag"]
+    _send(title, body, priority=4, tags=tags,
+          emoji=":rocket:" if direction == "long" else ":chart_with_downwards_trend:")
+
+
+def alert_exit(symbol: str, direction: str, pnl: float, reason: str,
+               tqi: int | None = None) -> None:
+    """Fire on full position close."""
+    pnl_sign = "+" if pnl >= 0 else ""
+    pnl_tag  = "white_check_mark" if pnl >= 0 else "x"
+    tqi_str  = f" | TQI: {tqi}/100" if tqi is not None else ""
+    title = f"EXIT {symbol} {pnl_sign}${pnl:.2f}"
+    body  = f"Reason: {reason}{tqi_str}\nDirection: {direction}"
+    priority = 4 if abs(pnl) >= 20 else 3
+    _send(title, body, priority=priority, tags=[pnl_tag, "door"],
+          emoji=":white_check_mark:" if pnl >= 0 else ":x:")
+
+
+def alert_partial(symbol: str, tranche: int, pnl: float, qty: int, price: float) -> None:
+    """Fire on partial tranche close."""
+    title = f"PARTIAL T{tranche} {symbol}"
+    body  = f"{qty} shares @ ${price:.2f} | PnL: ${pnl:+.2f}"
+    _send(title, body, priority=3, tags=["scissors", "chart_with_upwards_trend"],
+          emoji=":scissors:")
+
+
+def alert_kill_switch(daily_pnl: float, limit_pct: float, portfolio: float) -> None:
+    """Fire when daily loss kill switch trips."""
+    title = "⛔ KILL SWITCH TRIPPED"
+    body  = (
+        f"Daily PnL: ${daily_pnl:+.2f} ({daily_pnl/portfolio:.1%})\n"
+        f"Limit: {limit_pct:.0%} of ${portfolio:,.2f}\n"
+        f"No new entries this session."
+    )
+    _send(title, body, priority=5, tags=["rotating_light", "no_entry"],
+          emoji=":rotating_light:")
+
+
+def alert_spy_event(event_type: str, magnitude: float, scans_left: int) -> None:
+    """Fire when hybrid engine triggers a new SPY risk event."""
+    is_extreme = event_type == "EXTREME"
+    title = f"{'⛔' if is_extreme else '⚡'} SPY {event_type}: {magnitude:+.2f}%"
+    body  = (
+        f"New entries {'ALL BLOCKED' if is_extreme else 'directionally gated'}.\n"
+        f"Clears in {scans_left} clean scans."
+    )
+    priority = 5 if is_extreme else 4
+    _send(title, body, priority=priority,
+          tags=["rotating_light" if is_extreme else "warning", "chart_with_downwards_trend"],
+          emoji=":rotating_light:" if is_extreme else ":warning:")
+
+
+def alert_stop_breach(symbol: str, direction: str, current_price: float,
+                      stop: float, pdt: int, gtc_submitted: bool = True) -> None:
+    """Fire when stop is breached but PDT=3/3 blocks immediate close."""
+    title = f"⚠️ STOP BREACH BLOCKED — {symbol}"
+    if gtc_submitted:
+        action = "GTC stop placed — fires next RTH open."
+    else:
+        action = "⛔ GTC stop FAILED — MANUAL ACTION REQUIRED in Alpaca app."
+    body  = (
+        f"Price ${current_price:.2f} breached stop ${stop:.2f}\n"
+        f"PDT {pdt}/3 — cannot close same-day.\n"
+        f"{action}"
+    )
+    _send(title, body, priority=5, tags=["warning", "lock"],
+          emoji=":warning:")
+
+
+def alert_crash(reason: str, open_positions: list) -> None:
+    """Fire on SIGTERM or unhandled exception — dumps open positions."""
+    _sentinel = "/tmp/mtf_planned_restart"
+    if os.path.exists(_sentinel):
+        try:
+            age_s = time.time() - os.path.getmtime(_sentinel)
+            if age_s < 300:
+                os.remove(_sentinel)
+                logger.info("alert_crash: planned restart sentinel — suppressed")
+                return
+            os.remove(_sentinel)   # stale — clean up but send alert
+        except FileNotFoundError:
+            pass   # sentinel not present — expected; proceed with crash alert
+        except OSError as _sentinel_e:
+            logger.warning("alert_crash: sentinel stat/remove failed — %s", _sentinel_e)
+    title = "💥 BOT SHUTDOWN"
+    pos_str = ", ".join(open_positions) if open_positions else "none"
+    body  = (
+        f"Reason: {reason}\n"
+        f"Open positions: {pos_str}\n"
+        f"Check Alpaca dashboard immediately."
+    )
+    _send(title, body, priority=5, tags=["sos", "rotating_light"],
+          emoji=":sos:")
+
+
+def alert_stale_bar(symbol: str, age_min: float) -> None:
+    """Fire when a stale bar gate skips an entry — operator may want to investigate feed."""
+    title = f"📡 STALE FEED — {symbol}"
+    body  = f"Last 15m bar is {age_min:.0f} min old. Entry skipped. Check Alpaca data feed."
+    _send(title, body, priority=3, tags=["satellite", "warning"],
+          emoji=":satellite:")
+
+
+def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> None:
+    """Fire when an overnight GTC stop order cannot be placed — position is unprotected."""
+    title = f"🚨 GTC STOP FAILED — {symbol}"
+    body  = (
+        f"Could not place {side.upper()} stop @ ${stop_px:.2f}.\n"
+        f"Reason: {reason}\n"
+        f"Position is UNPROTECTED overnight. Manual action required."
+    )
+    _send(title, body, priority=5, tags=["sos", "rotating_light", "stop_sign"],
+          emoji=":rotating_light:")
+
+
+def alert_startup_test() -> bool:
+    """
+    Fire a low-priority ping to all configured transports at bot startup.
+    Returns True if at least one transport ACKs successfully.
+    Used to confirm push delivery before the trading session begins.
+    """
+    title = "✅ MTF Bot Online"
+    body  = "Alert system self-test — push delivery confirmed."
+    ntfy_ok  = _ntfy(title, body, priority=2, tags=["white_check_mark"])
+    slack_ok = _slack(title, body, emoji=":white_check_mark:")
+    return ntfy_ok or slack_ok
+
+
+def alert_systemic_stale_feed(median_age: float, cycles: int) -> None:
+    """Fire when median bar age > 20 min for 3 consecutive cycles — systemic yfinance degradation."""
+    title = "📡 SYSTEMIC FEED DEGRADATION"
+    body  = (
+        f"Median bar age {median_age:.0f} min > 20 min threshold\n"
+        f"for {cycles} consecutive cycles — yfinance feed degraded.\n"
+        f"All stale-bar entries are blocked. Check Alpaca data feed status."
+    )
+    _send(title, body, priority=4, tags=["satellite", "warning", "chart_with_downwards_trend"],
+          emoji=":satellite:")

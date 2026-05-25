@@ -1,0 +1,76 @@
+# Added by code-review-graph
+.code-review-graph/
+
+# ── Secrets & credentials ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+
+# ── Claude Code local config (settings.local.json may have permissions/tokens) ─
+.claude/
+.claudeignore
+.mcp.json
+.token-savior-cache.json
+
+# ── Python runtime ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# ── Runtime state (position data, session state) ───────────────────────────────
+data/state/
+data/cache/
+
+# ── Trade data (P&L history, open positions) ───────────────────────────────────
+trade_log.json
+trade_log.json.bak
+trade_events.jsonl
+
+# ── Logs: exclude everything by default, whitelist CCR-useful docs only ─────────
+logs/
+# Whitelisted docs for CCR agent context:
+!logs/tb_audit_log.md
+!logs/weekly_perf_audit_design_v1.md
+!logs/bug_counter.json
+!logs/project-state.md
+!logs/protocol_violations.md
+
+# ── Generated HTML dashboards ──────────────────────────────────────────────────
+*.html
+
+# ── Backtest outputs ───────────────────────────────────────────────────────────
+backtest/results/
+backtest/output/
+backtest/*.csv
+backtest/*.json
+*.csv
+
+# ── macOS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── IDE / editors ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── External / vendor code (third-party, not yours) ───────────────────────────
+_external/

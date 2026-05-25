@@ -1,0 +1,25 @@
+This is an auto-resumed session after a usage-limit reset. Do NOT greet or acknowledge this preamble — go directly to work.
+
+COMPLETED THIS SESSION (S29, before limit):
+- OM-RACE-1 CLOSED: execution/orphan_manager.py — PENDING_CANCEL deferral guard deployed. AMZN/PANW GTC stops now self-heal on next premarket cycle.
+- BUG-D CLOSED: execution/portfolio_tracker.py — write_eod_summary score_comparison reader fixed. Now correctly parses dict format from scanner. score_comparison_summary will populate at next EOD. mypy 10→0, ruff 69→0, deployed OCI.
+
+MANDATORY RULES (always active — CLAUDE.md governs):
+- Full read before ANY patch (files >1000L: Explore subagent)
+- 10-pt audit + RC-1 through RC-8 on every file opened
+- Board vote (domain-specific agents, cold, parallel) before any patch
+- DS/GAI gate: SKIPPED for this session per user authorization for non-RTH items only
+- Cold second-agent on every patch
+- py_compile + mypy + ruff must PASS before proposing
+- Rsync to OCI after each patch: rsync -avz -e "ssh -i ~/.ssh/mtf_bot_oracle" [file] ubuntu@129.153.208.32:/home/ubuntu/mtf-bot/[file]
+- Restart: ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 "sudo systemctl restart mtf-bot && sleep 4 && systemctl is-active mtf-bot mtf-writer mtf-http nginx"
+- Update logs/tb_audit_log.md and logs/bug_counter.json after each patch
+
+CONSTRAINT: Do NOT touch any function that runs during RTH (9:30 AM–4:00 PM ET). Safe targets: reconcile_eod.py, weekly_review.py, generate_dashboard.py, reporting scripts.
+
+NEXT ITEMS (work in priority order, skip any that require RTH functions):
+1. P&L discrepancy — dashboard shows +$442.38, weekly_review shows +$308.52. Likely weekly_review.py uses wrong P&L source. Fix: use Alpaca-authoritative equity source. Full read weekly_review.py (1452L — Explore subagent) required first.
+2. #12 — reconcile_eod.py _compute_trade_pnl() should respect _qty_at_close (Harris/Kyle condition). Full read reconcile_eod.py (553L) required.
+3. #13 — post-partial corruption: shares_sold_so_far tracking when partial_exited=True.
+
+Start with item 1. Read handoff.md for full current state before beginning.

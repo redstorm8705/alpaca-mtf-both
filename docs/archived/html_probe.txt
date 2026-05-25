@@ -1,0 +1,2 @@
+write_html called | open_trades type=dict keys=['AMD', 'SQQQ']
+COLUMNS: Fill=True

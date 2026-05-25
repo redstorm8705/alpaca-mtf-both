@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingbot.alpaca</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/rafaeldeleon/Library/Mobile Documents/com~apple~CloudDocs/2026 LA Dreams -Reality/Trading Bot/alpaca-mtf-bot/launch_bots.sh</string>
+    </array>
+
+    <!-- Starts at 5:45 AM PST (8:45 AM ET) Mon-Fri                -->
+    <!-- 45 min before market open gives pre-market scanner time    -->
+    <!-- to build the mover universe before 9:30 AM ET open         -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <!-- Sunday — stock futures open 5PM PST -->
+        <dict>
+            <key>Weekday</key><integer>0</integer>
+            <key>Hour</key><integer>17</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <!-- Monday -->
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <!-- Tuesday -->
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <!-- Wednesday -->
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <!-- Thursday -->
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <!-- Friday -->
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/rafaeldeleon/Library/Mobile Documents/com~apple~CloudDocs/2026 LA Dreams -Reality/Trading Bot/alpaca-mtf-bot/logs/launcher.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/rafaeldeleon/Library/Mobile Documents/com~apple~CloudDocs/2026 LA Dreams -Reality/Trading Bot/alpaca-mtf-bot/logs/launcher_error.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,3622 @@
+{
+  "total_lines": 7119,
+  "total_functions": 38,
+  "total_module_globals": 58,
+  "functions_with_global_declarations": {
+    "_touch_cycle_ts": [
+      "_last_cycle_complete"
+    ],
+    "_load_hybrid_state": [
+      "_hybrid_state_loaded",
+      "_spy_risk_active",
+      "_spy_risk_direction",
+      "_spy_risk_magnitude",
+      "_spy_risk_scans_left",
+      "_spy_event_type"
+    ],
+    "_record_tqi": [
+      "_tqi_history"
+    ],
+    "execute_entries": [
+      "_feed_age_history",
+      "_systemic_stale_alerted",
+      "_SHORTING_ENABLED"
+    ],
+    "_fetch_actual_fill_price": [
+      "_fill_fallback_count"
+    ],
+    "_safe_close_all": [
+      "_halt_entries_for_session"
+    ],
+    "run_cycle": [
+      "_spy_event_type",
+      "_kill_switch_alerted",
+      "_last_vix",
+      "_spy_200d_ma",
+      "_spy_200d_ma_date",
+      "_spy_risk_active",
+      "_spy_risk_direction",
+      "_spy_risk_magnitude",
+      "_spy_risk_scans_left",
+      "_spy_fetch_failures",
+      "_spy_last_close",
+      "_SHORTING_ENABLED",
+      "_last_breadth",
+      "_analyst_sentiment",
+      "_spy_52w_high",
+      "_last_eod_summary_date",
+      "_premarket_movers_cache",
+      "_last_weekly_review_spawn_date"
+    ],
+    "main": [
+      "_entry_confirm_buffer",
+      "_conviction_streak",
+      "_kill_switch_alerted",
+      "_last_daily_reset_date",
+      "_fill_fallback_count",
+      "_rth_day_stop_failure_counts",
+      "_halt_entries_for_session",
+      "_market_top_score",
+      "_market_top_zone_tier",
+      "_macro_regime_label",
+      "_macro_regime_tier",
+      "_ftd_combined_state",
+      "_ftd_min_score",
+      "_SHORTING_ENABLED",
+      "_last_cycle_complete"
+    ],
+    "_verify_shorting_live": [
+      "_SHORTING_ENABLED"
+    ],
+    "_cycle_watchdog": [
+      "_last_cycle_complete"
+    ]
+  },
+  "module_globals": {
+    "ET": {
+      "line": 32,
+      "type": "Call"
+    },
+    "_SHORTING_ENABLED": {
+      "line": 33,
+      "type": "Constant"
+    },
+    "_premarket_movers_cache": {
+      "line": 34,
+      "type": "annotated"
+    },
+    "_last_weekly_review_spawn_date": {
+      "line": 35,
+      "type": "Constant"
+    },
+    "_last_eod_summary_date": {
+      "line": 36,
+      "type": "Constant"
+    },
+    "_rth_day_stops_submitted_dates": {
+      "line": 37,
+      "type": "annotated"
+    },
+    "_halt_entries_for_session": {
+      "line": 38,
+      "type": "Constant"
+    },
+    "_last_daily_reset_date": {
+      "line": 39,
+      "type": "Constant"
+    },
+    "_spy_risk_active": {
+      "line": 50,
+      "type": "annotated"
+    },
+    "_spy_risk_direction": {
+      "line": 51,
+      "type": "annotated"
+    },
+    "_spy_risk_magnitude": {
+      "line": 52,
+      "type": "annotated"
+    },
+    "_spy_risk_scans_left": {
+      "line": 53,
+      "type": "annotated"
+    },
+    "_spy_event_type": {
+      "line": 54,
+      "type": "annotated"
+    },
+    "_conviction_streak": {
+      "line": 57,
+      "type": "annotated"
+    },
+    "_entry_confirm_buffer": {
+      "line": 58,
+      "type": "annotated"
+    },
+    "_tqi_history": {
+      "line": 59,
+      "type": "annotated"
+    },
+    "_hybrid_state_loaded": {
+      "line": 60,
+      "type": "annotated"
+    },
+    "_spy_fetch_failures": {
+      "line": 61,
+      "type": "annotated"
+    },
+    "_last_vix": {
+      "line": 62,
+      "type": "annotated"
+    },
+    "_kill_switch_alerted": {
+      "line": 63,
+      "type": "annotated"
+    },
+    "_partial_fail_counts": {
+      "line": 64,
+      "type": "annotated"
+    },
+    "_last_breadth": {
+      "line": 65,
+      "type": "annotated"
+    },
+    "_analyst_sentiment": {
+      "line": 66,
+      "type": "annotated"
+    },
+    "_spy_52w_high": {
+      "line": 67,
+      "type": "annotated"
+    },
+    "_spy_last_close": {
+      "line": 68,
+      "type": "annotated"
+    },
+    "_sym_52w_high_cache": {
+      "line": 69,
+      "type": "annotated"
+    },
+    "_market_top_score": {
+      "line": 70,
+      "type": "annotated"
+    },
+    "_market_top_zone_tier": {
+      "line": 71,
+      "type": "annotated"
+    },
+    "_macro_regime_label": {
+      "line": 72,
+      "type": "annotated"
+    },
+    "_macro_regime_tier": {
+      "line": 73,
+      "type": "annotated"
+    },
+    "_ftd_combined_state": {
+      "line": 74,
+      "type": "annotated"
+    },
+    "_ftd_min_score": {
+      "line": 75,
+      "type": "annotated"
+    },
+    "_last_cycle_complete": {
+      "line": 76,
+      "type": "annotated"
+    },
+    "_last_cycle_lock": {
+      "line": 77,
+      "type": "Call"
+    },
+    "_feed_age_history": {
+      "line": 85,
+      "type": "annotated"
+    },
+    "_systemic_stale_alerted": {
+      "line": 86,
+      "type": "annotated"
+    },
+    "_rth_day_stop_failure_counts": {
+      "line": 87,
+      "type": "annotated"
+    },
+    "_fill_fallback_count": {
+      "line": 88,
+      "type": "annotated"
+    },
+    "_spy_200d_ma": {
+      "line": 91,
+      "type": "annotated"
+    },
+    "_spy_200d_ma_date": {
+      "line": 92,
+      "type": "annotated"
+    },
+    "OVERNIGHT_ENTRIES_ENABLED": {
+      "line": 96,
+      "type": "Constant"
+    },
+    "_OVERNIGHT_CANCEL_CUTOFF": {
+      "line": 97,
+      "type": "BinOp"
+    },
+    "_OVERNIGHT_ENTRY_START": {
+      "line": 100,
+      "type": "BinOp"
+    },
+    "_OVERNIGHT_MAX_AH_DRIFT": {
+      "line": 101,
+      "type": "Constant"
+    },
+    "_OVERNIGHT_MIN_AH_VOLUME": {
+      "line": 102,
+      "type": "Constant"
+    },
+    "_BUCKET_A_LEVERAGE": {
+      "line": 108,
+      "type": "Dict"
+    },
+    "_BUCKET_A_MAX_NOTIONAL_PCT": {
+      "line": 109,
+      "type": "Constant"
+    },
+    "_LINEAR_SCORE_MIN": {
+      "line": 124,
+      "type": "Constant"
+    },
+    "_LINEAR_SCORE_MAX": {
+      "line": 125,
+      "type": "Constant"
+    },
+    "LOG_DIR": {
+      "line": 163,
+      "type": "Call"
+    },
+    "_LOG_FILE_PATH": {
+      "line": 168,
+      "type": "Call"
+    },
+    "_rfh": {
+      "line": 169,
+      "type": "Call"
+    },
+    "_handlers": {
+      "line": 172,
+      "type": "annotated"
+    },
+    "logger": {
+      "line": 190,
+      "type": "Call"
+    },
+    "_HYBRID_STATE_FILE": {
+      "line": 261,
+      "type": "BinOp"
+    },
+    "_atr_cache": {
+      "line": 597,
+      "type": "annotated"
+    },
+    "_live_score_cache": {
+      "line": 598,
+      "type": "annotated"
+    },
+    "_ATR_CACHE_TTL": {
+      "line": 599,
+      "type": "BinOp"
+    }
+  },
+  "imports": [
+    {
+      "type": "import",
+      "name": "os",
+      "alias": null,
+      "line": 10
+    },
+    {
+      "type": "import",
+      "name": "sys",
+      "alias": null,
+      "line": 11
+    },
+    {
+      "type": "import",
+      "name": "gc",
+      "alias": null,
+      "line": 12
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": null,
+      "line": 13
+    },
+    {
+      "type": "import",
+      "name": "fcntl",
+      "alias": null,
+      "line": 14
+    },
+    {
+      "type": "import",
+      "name": "socket",
+      "alias": null,
+      "line": 15
+    },
+    {
+      "type": "import",
+      "name": "threading",
+      "alias": null,
+      "line": 16
+    },
+    {
+      "type": "import",
+      "name": "argparse",
+      "alias": null,
+      "line": 17
+    },
+    {
+      "type": "import",
+      "name": "json",
+      "alias": null,
+      "line": 18
+    },
+    {
+      "type": "import",
+      "name": "logging",
+      "alias": null,
+      "line": 19
+    },
+    {
+      "type": "from",
+      "module": "datetime",
+      "names": [
+        "datetime",
+        "timedelta",
+        "date",
+        "timezone"
+      ],
+      "line": 28
+    },
+    {
+      "type": "from",
+      "module": "pathlib",
+      "names": [
+        "Path"
+      ],
+      "line": 29
+    },
+    {
+      "type": "from",
+      "module": "zoneinfo",
+      "names": [
+        "ZoneInfo"
+      ],
+      "line": 30
+    },
+    {
+      "type": "from",
+      "module": "data.sectors",
+      "names": [
+        "SECTOR_MAP"
+      ],
+      "line": 119
+    },
+    {
+      "type": "from",
+      "module": "dotenv",
+      "names": [
+        "load_dotenv"
+      ],
+      "line": 126
+    },
+    {
+      "type": "from",
+      "module": "data.fetcher",
+      "names": [
+        "fetch_bars"
+      ],
+      "line": 130
+    },
+    {
+      "type": "from",
+      "module": "data.alpaca_data",
+      "names": [
+        "get_latest_trade",
+        "get_latest_quote"
+      ],
+      "line": 131
+    },
+    {
+      "type": "from",
+      "module": "data.premarket",
+      "names": [
+        "calculate_atr"
+      ],
+      "line": 132
+    },
+    {
+      "type": "from",
+      "module": "indicators.momentum",
+      "names": [
+        "get_momentum_summary"
+      ],
+      "line": 133
+    },
+    {
+      "type": "from",
+      "module": "indicators.moving_averages",
+      "names": [
+        "add_all_mas",
+        "ema_structure_bullish"
+      ],
+      "line": 134
+    },
+    {
+      "type": "from",
+      "module": "indicators.macd",
+      "names": [
+        "add_both_macds",
+        "dual_macd_agreement"
+      ],
+      "line": 135
+    },
+    {
+      "type": "from",
+      "module": "strategy.signal_generator",
+      "names": [
+        "run_scan",
+        "get_exit_signal"
+      ],
+      "line": 136
+    },
+    {
+      "type": "from",
+      "module": "strategy.volatility_regime",
+      "names": [
+        "RegimeDetector"
+      ],
+      "line": 137
+    },
+    {
+      "type": "from",
+      "module": "execution.kelly",
+      "names": [
+        "KellySizer"
+      ],
+      "line": 138
+    },
+    {
+      "type": "from",
+      "module": "execution.broker",
+      "names": [
+        "get_trading_client",
+        "get_portfolio_value",
+        "get_open_positions",
+        "get_open_position",
+        "get_open_orders",
+        "get_order",
+        "submit_market_order",
+        "submit_gtc_stop_order",
+        "submit_day_stop_order",
+        "submit_limit_order",
+        "cancel_order",
+        "cancel_open_orders_for_symbol",
+        "partial_close_position",
+        "close_position",
+        "is_market_open",
+        "get_account",
+        "get_short_blocked_symbols"
+      ],
+      "line": 139
+    },
+    {
+      "type": "from",
+      "module": "execution.risk_manager",
+      "names": [
+        "RiskManager"
+      ],
+      "line": 147
+    },
+    {
+      "type": "from",
+      "module": "execution.portfolio_tracker",
+      "names": [
+        "PortfolioTracker"
+      ],
+      "line": 148
+    },
+    {
+      "type": "from",
+      "module": "events.calendar",
+      "names": [
+        "EventCalendar"
+      ],
+      "line": 149
+    },
+    {
+      "type": "from",
+      "module": "events.earnings_fetcher",
+      "names": [
+        "fetch_upcoming_earnings"
+      ],
+      "line": 150
+    },
+    {
+      "type": "from",
+      "module": "events.news_monitor",
+      "names": [
+        "NewsMonitor"
+      ],
+      "line": 151
+    },
+    {
+      "type": "from",
+      "module": "events.macro_risk_index",
+      "names": [
+        "MacroRiskIndex"
+      ],
+      "line": 152
+    },
+    {
+      "type": "import",
+      "name": "config",
+      "alias": null,
+      "line": 153
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "alert_entry",
+        "alert_exit",
+        "alert_partial",
+        "alert_kill_switch",
+        "alert_spy_event",
+        "alert_stop_breach",
+        "alert_crash",
+        "alert_stale_bar",
+        "alert_gtc_failed",
+        "alert_startup_test",
+        "alert_systemic_stale_feed"
+      ],
+      "line": 154
+    },
+    {
+      "type": "from",
+      "module": "trade_logger",
+      "names": [
+        "log_event"
+      ],
+      "line": 159
+    },
+    {
+      "type": "from",
+      "module": "logging.handlers",
+      "names": [
+        "RotatingFileHandler"
+      ],
+      "line": 166
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.requests",
+      "names": [
+        "LimitOrderRequest"
+      ],
+      "line": 2330
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.enums",
+      "names": [
+        "OrderSide",
+        "TimeInForce"
+      ],
+      "line": 2331
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.requests",
+      "names": [
+        "StopOrderRequest"
+      ],
+      "line": 2364
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.enums",
+      "names": [
+        "OrderSide",
+        "TimeInForce"
+      ],
+      "line": 2365
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_rth",
+      "line": 2402
+    },
+    {
+      "type": "from",
+      "module": "events.calendar",
+      "names": [
+        "EventRisk"
+      ],
+      "line": 6225
+    },
+    {
+      "type": "import",
+      "name": "threading",
+      "alias": "_threading",
+      "line": 6505
+    },
+    {
+      "type": "from",
+      "module": "execution.risk_manager",
+      "names": [
+        "_load_kill_state"
+      ],
+      "line": 6656
+    },
+    {
+      "type": "import",
+      "name": "signal",
+      "alias": "_sig_h1",
+      "line": 6741
+    },
+    {
+      "type": "from",
+      "module": "data.premarket",
+      "names": [
+        "get_premarket_detail"
+      ],
+      "line": 694
+    },
+    {
+      "type": "from",
+      "module": "strategy.signal_generator",
+      "names": [
+        "_analyze_symbol_full"
+      ],
+      "line": 2585
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.requests",
+      "names": [
+        "GetOrdersRequest"
+      ],
+      "line": 2626
+    },
+    {
+      "type": "from",
+      "module": "alpaca.trading.enums",
+      "names": [
+        "QueryOrderStatus"
+      ],
+      "line": 2627
+    },
+    {
+      "type": "from",
+      "module": "execution.risk_manager",
+      "names": [
+        "_save_kill_state"
+      ],
+      "line": 2752
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_mri",
+      "line": 3732
+    },
+    {
+      "type": "from",
+      "module": "data.premarket",
+      "names": [
+        "scan_premarket_movers",
+        "cache_premarket_movers"
+      ],
+      "line": 3858
+    },
+    {
+      "type": "from",
+      "module": "concurrent.futures",
+      "names": [
+        "ThreadPoolExecutor"
+      ],
+      "line": 3859
+    },
+    {
+      "type": "from",
+      "module": "scan_to_html",
+      "names": [
+        "write_scan_html"
+      ],
+      "line": 5066
+    },
+    {
+      "type": "from",
+      "module": "generate_dashboard",
+      "names": [
+        "generate"
+      ],
+      "line": 5082
+    },
+    {
+      "type": "import",
+      "name": "subprocess",
+      "alias": "_sp",
+      "line": 5095
+    },
+    {
+      "type": "from",
+      "module": "zoneinfo",
+      "names": [
+        "ZoneInfo"
+      ],
+      "line": 5096
+    },
+    {
+      "type": "import",
+      "name": "threading",
+      "alias": "_wdt",
+      "line": 6451
+    },
+    {
+      "type": "from",
+      "module": "data.fmp_client",
+      "names": [
+        "get_economic_calendar"
+      ],
+      "line": 6827
+    },
+    {
+      "type": "from",
+      "module": "events.calendar",
+      "names": [
+        "EventType",
+        "EventRisk"
+      ],
+      "line": 6828
+    },
+    {
+      "type": "from",
+      "module": "data.market_breadth",
+      "names": [
+        "get_breadth_score"
+      ],
+      "line": 6924
+    },
+    {
+      "type": "from",
+      "module": "data.fmp_client",
+      "names": [
+        "get_analyst_sentiment"
+      ],
+      "line": 6935
+    },
+    {
+      "type": "from",
+      "module": "data.fmp_client",
+      "names": [
+        "get_cached_earnings_dates"
+      ],
+      "line": 1199
+    },
+    {
+      "type": "from",
+      "module": "collections",
+      "names": [
+        "deque"
+      ],
+      "line": 1811
+    },
+    {
+      "type": "from",
+      "module": "data.fetcher",
+      "names": [
+        "fetch_bars"
+      ],
+      "line": 3832
+    },
+    {
+      "type": "from",
+      "module": "data.market_breadth",
+      "names": [
+        "get_breadth_score"
+      ],
+      "line": 3886
+    },
+    {
+      "type": "from",
+      "module": "data.fmp_client",
+      "names": [
+        "preload_earnings_week"
+      ],
+      "line": 3936
+    },
+    {
+      "type": "from",
+      "module": "data.fmp_client",
+      "names": [
+        "get_analyst_sentiment"
+      ],
+      "line": 3943
+    },
+    {
+      "type": "from",
+      "module": "scan_to_html",
+      "names": [
+        "write_scan_html"
+      ],
+      "line": 3967
+    },
+    {
+      "type": "from",
+      "module": "scan_to_html",
+      "names": [
+        "write_scan_html"
+      ],
+      "line": 3996
+    },
+    {
+      "type": "import",
+      "name": "subprocess",
+      "alias": "_sp_ah",
+      "line": 4059
+    },
+    {
+      "type": "from",
+      "module": "zoneinfo",
+      "names": [
+        "ZoneInfo"
+      ],
+      "line": 4060
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_ah",
+      "line": 4131
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_wr_t",
+      "line": 5113
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_wr_t2",
+      "line": 5128
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "send_slack"
+      ],
+      "line": 5708
+    },
+    {
+      "type": "import",
+      "name": "threading",
+      "alias": "_alert_retry_threading",
+      "line": 6600
+    },
+    {
+      "type": "import",
+      "name": "statistics",
+      "alias": "_stats_ab3",
+      "line": 1429
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_wr_t_ah",
+      "line": 4075
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_wr_t2_ah",
+      "line": 4094
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_art",
+      "line": 6602
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_tr",
+      "line": 1918
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_pc",
+      "line": 2182
+    },
+    {
+      "type": "import",
+      "name": "random",
+      "alias": "_rnd_be",
+      "line": 3048
+    },
+    {
+      "type": "import",
+      "name": "time",
+      "alias": "_t12c",
+      "line": 986
+    },
+    {
+      "type": "import",
+      "name": "yfinance",
+      "alias": "_yf_gtc",
+      "line": 4199
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "send_slack"
+      ],
+      "line": 5225
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "alert_gtc_failed"
+      ],
+      "line": 5663
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "alert_gtc_failed"
+      ],
+      "line": 5672
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "send_slack"
+      ],
+      "line": 6484
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "send_slack"
+      ],
+      "line": 2304
+    },
+    {
+      "type": "from",
+      "module": "alerts",
+      "names": [
+        "send_slack"
+      ],
+      "line": 5266
+    }
+  ],
+  "functions": {
+    "_touch_cycle_ts": {
+      "line_start": 79,
+      "line_end": 83,
+      "size_lines": 4,
+      "globals_declared": [
+        "_last_cycle_complete"
+      ],
+      "calls": [
+        "time.time"
+      ],
+      "decorators": []
+    },
+    "_should_flatten_eod": {
+      "line_start": 196,
+      "line_end": 201,
+      "size_lines": 5,
+      "globals_declared": [],
+      "calls": [
+        "datetime.now"
+      ],
+      "decorators": []
+    },
+    "_too_early": {
+      "line_start": 204,
+      "line_end": 208,
+      "size_lines": 4,
+      "globals_declared": [],
+      "calls": [
+        "datetime.now"
+      ],
+      "decorators": []
+    },
+    "_get_tod_phase": {
+      "line_start": 212,
+      "line_end": 241,
+      "size_lines": 29,
+      "globals_declared": [],
+      "calls": [
+        "datetime.now"
+      ],
+      "decorators": []
+    },
+    "_tod_size_multiplier": {
+      "line_start": 244,
+      "line_end": 253,
+      "size_lines": 9,
+      "globals_declared": [],
+      "calls": [
+        "{'premarket': 0.0, 'opening': 0.0, 'normal': 1.0, 'midday': config.TOD_MIDDAY_SIZE_MULT, 'power_hour': 1.0, 'closed': 0.0}.get"
+      ],
+      "decorators": []
+    },
+    "_save_hybrid_state": {
+      "line_start": 264,
+      "line_end": 281,
+      "size_lines": 17,
+      "globals_declared": [],
+      "calls": [
+        "Path",
+        "_HYBRID_STATE_FILE.parent.mkdir",
+        "datetime.now",
+        "datetime.now(ET).isoformat",
+        "json.dump",
+        "logger.debug",
+        "open",
+        "os.replace",
+        "str"
+      ],
+      "decorators": []
+    },
+    "_load_hybrid_state": {
+      "line_start": 284,
+      "line_end": 321,
+      "size_lines": 37,
+      "globals_declared": [
+        "_hybrid_state_loaded",
+        "_spy_risk_active",
+        "_spy_risk_direction",
+        "_spy_risk_magnitude",
+        "_spy_risk_scans_left",
+        "_spy_event_type"
+      ],
+      "calls": [
+        "_HYBRID_STATE_FILE.exists",
+        "_spy_risk_direction.upper",
+        "bool",
+        "datetime.now",
+        "datetime.now(ET).strftime",
+        "float",
+        "int",
+        "json.load",
+        "logger.info",
+        "logger.warning",
+        "open",
+        "saved_at.startswith",
+        "state.get",
+        "str"
+      ],
+      "decorators": []
+    },
+    "_find_recent_fvgs": {
+      "line_start": 339,
+      "line_end": 391,
+      "size_lines": 52,
+      "globals_declared": [],
+      "calls": [
+        "any",
+        "c.lower",
+        "col_lower.get",
+        "float",
+        "fvgs.append",
+        "len",
+        "max",
+        "range"
+      ],
+      "decorators": []
+    },
+    "_score_fvg_for_signal": {
+      "line_start": 394,
+      "line_end": 418,
+      "size_lines": 24,
+      "globals_declared": [],
+      "calls": [
+        "abs",
+        "max"
+      ],
+      "decorators": []
+    },
+    "_compute_fvg_mult": {
+      "line_start": 421,
+      "line_end": 470,
+      "size_lines": 49,
+      "globals_declared": [],
+      "calls": [
+        "_find_recent_fvgs",
+        "_score_fvg_for_signal",
+        "fetch_bars",
+        "len",
+        "logger.debug"
+      ],
+      "decorators": []
+    },
+    "_compute_tqi": {
+      "line_start": 475,
+      "line_end": 521,
+      "size_lines": 46,
+      "globals_declared": [],
+      "calls": [
+        "abs",
+        "max",
+        "min",
+        "round",
+        "trade.get",
+        "{'target': 35, 'trail_stop': 28, 'signal': 18, 'opposite_signal': 18, 'thesis_invalidation': 15, 'pm_exit': 12, 'overnight_breakeven': 10, 'hard_stop': 0}.get"
+      ],
+      "decorators": []
+    },
+    "_record_partial_tqi": {
+      "line_start": 524,
+      "line_end": 562,
+      "size_lines": 38,
+      "globals_declared": [],
+      "calls": [
+        "abs",
+        "logger.info",
+        "trade.get",
+        "{0: 10, 1: 18, 2: 25}.get"
+      ],
+      "decorators": []
+    },
+    "_record_tqi": {
+      "line_start": 565,
+      "line_end": 591,
+      "size_lines": 26,
+      "globals_declared": [
+        "_tqi_history"
+      ],
+      "calls": [
+        "_compute_tqi",
+        "_tqi_history.append",
+        "json.dump",
+        "len",
+        "logger.debug",
+        "logger.info",
+        "open",
+        "os.path.abspath",
+        "os.path.dirname",
+        "os.path.join",
+        "os.replace",
+        "round",
+        "sum",
+        "trade.get"
+      ],
+      "decorators": []
+    },
+    "execute_entries": {
+      "line_start": 603,
+      "line_end": 1829,
+      "size_lines": 1226,
+      "globals_declared": [
+        "_feed_age_history",
+        "_systemic_stale_alerted",
+        "_SHORTING_ENABLED"
+      ],
+      "calls": [
+        "_BUCKET_A_LEVERAGE.get",
+        "_SECTOR_MAP.get",
+        "_analyst_sentiment.get",
+        "_analyst_sentiment.get(symbol, {}).get",
+        "_analyst_sentiment[symbol].get",
+        "_atr_cache.get",
+        "_bar_ts.astimezone",
+        "_bar_ts.tz_localize",
+        "_cgf.write",
+        "_cl[-10:].mean",
+        "_cl[-20:].mean",
+        "_compute_fvg_mult",
+        "_conviction_streak.get",
+        "_conviction_streak.pop",
+        "_cycle_bar_ages.append",
+        "_entry_confirm_buffer.get",
+        "_entry_confirm_buffer.pop",
+        "_feed_age_history.append",
+        "_feed_deque",
+        "_get_pm_detail"
+      ],
+      "decorators": []
+    },
+    "check_partial_exits": {
+      "line_start": 1832,
+      "line_end": 2317,
+      "size_lines": 485,
+      "globals_declared": [],
+      "calls": [
+        "_close_pos",
+        "_fetch_actual_fill_price",
+        "_log_trade_event",
+        "_partial_fail_counts.get",
+        "_record_partial_tqi",
+        "_record_tqi",
+        "_rnd_pc.uniform",
+        "_rnd_tr.uniform",
+        "_submit_gtc_limit_partial",
+        "_tranche_allowed",
+        "abs",
+        "alert_exit",
+        "alert_gtc_failed",
+        "alert_partial",
+        "cancel_open_orders_for_symbol",
+        "cancel_order",
+        "datetime.now",
+        "datetime.now(ET).isoformat",
+        "fetch_bars",
+        "float"
+      ],
+      "decorators": []
+    },
+    "_submit_gtc_limit_partial": {
+      "line_start": 2322,
+      "line_end": 2353,
+      "size_lines": 31,
+      "globals_declared": [],
+      "calls": [
+        "LimitOrderRequest",
+        "client.submit_order",
+        "get_trading_client",
+        "logger.error",
+        "logger.info",
+        "logger.warning",
+        "round",
+        "side.upper"
+      ],
+      "decorators": []
+    },
+    "_submit_gtc_stop_close": {
+      "line_start": 2356,
+      "line_end": 2387,
+      "size_lines": 31,
+      "globals_declared": [],
+      "calls": [
+        "StopOrderRequest",
+        "client.submit_order",
+        "get_trading_client",
+        "logger.error",
+        "logger.info",
+        "logger.warning",
+        "round",
+        "side.upper"
+      ],
+      "decorators": []
+    },
+    "_submit_rth_day_stops": {
+      "line_start": 2390,
+      "line_end": 2506,
+      "size_lines": 116,
+      "globals_declared": [],
+      "calls": [
+        "RuntimeError",
+        "_rnd_rth.uniform",
+        "_rth_day_stop_failure_counts.get",
+        "_rth_day_stops_submitted_dates.add",
+        "_side.upper",
+        "abs",
+        "datetime.now",
+        "datetime.now(ET).strftime",
+        "float",
+        "get_open_orders",
+        "get_open_position",
+        "getattr",
+        "int",
+        "len",
+        "logger.debug",
+        "logger.error",
+        "logger.info",
+        "logger.warning",
+        "next",
+        "round"
+      ],
+      "decorators": []
+    },
+    "_cancel_open_gtc_orders": {
+      "line_start": 2509,
+      "line_end": 2571,
+      "size_lines": 62,
+      "globals_declared": [],
+      "calls": [
+        "_partials.items",
+        "cancel_order",
+        "list",
+        "logger.info",
+        "logger.warning",
+        "tracker._save_log",
+        "trade.get"
+      ],
+      "decorators": []
+    },
+    "_get_live_score": {
+      "line_start": 2574,
+      "line_end": 2597,
+      "size_lines": 23,
+      "globals_declared": [],
+      "calls": [
+        "_analyze_symbol_full",
+        "int",
+        "logger.warning",
+        "result.get",
+        "sig.get"
+      ],
+      "decorators": []
+    },
+    "_fetch_actual_fill_price": {
+      "line_start": 2599,
+      "line_end": 2676,
+      "size_lines": 77,
+      "globals_declared": [
+        "_fill_fallback_count"
+      ],
+      "calls": [
+        "GetOrdersRequest",
+        "_dt.fromtimestamp",
+        "_tc.get_orders",
+        "dict",
+        "float",
+        "get_trading_client",
+        "getattr",
+        "logger.info",
+        "logger.warning",
+        "sorted",
+        "str",
+        "time.sleep",
+        "trade.get"
+      ],
+      "decorators": []
+    },
+    "_safe_close_all": {
+      "line_start": 2679,
+      "line_end": 2758,
+      "size_lines": 79,
+      "globals_declared": [
+        "_halt_entries_for_session"
+      ],
+      "calls": [
+        "_fetch_actual_fill_price",
+        "_persist_session_halt",
+        "bool",
+        "close_position",
+        "list",
+        "logger.info",
+        "logger.warning",
+        "risk.register_close",
+        "time.time",
+        "tracker.get_rolling_day_trade_count",
+        "tracker.open_trades.get",
+        "tracker.opened_today",
+        "tracker.record_day_trade",
+        "tracker.record_exit"
+      ],
+      "decorators": []
+    },
+    "check_exits": {
+      "line_start": 2761,
+      "line_end": 3548,
+      "size_lines": 787,
+      "globals_declared": [],
+      "calls": [
+        "_be_now.strftime",
+        "_be_side.upper",
+        "_cancel_open_gtc_orders",
+        "_conviction_streak.pop",
+        "_entry_confirm_buffer.pop",
+        "_fetch_actual_fill_price",
+        "_get_live_score",
+        "_get_tod_phase",
+        "_record_tqi",
+        "_rnd_be.uniform",
+        "_submit_gtc_stop_close",
+        "_tr.get",
+        "abs",
+        "alert_exit",
+        "alert_stop_breach",
+        "bool",
+        "cancel_order",
+        "close_position",
+        "closed.append",
+        "datetime.now"
+      ],
+      "decorators": []
+    },
+    "_pdt_htf_gate": {
+      "line_start": 3553,
+      "line_end": 3662,
+      "size_lines": 109,
+      "globals_declared": [],
+      "calls": [
+        "' | '.join",
+        "add_all_mas",
+        "add_both_macds",
+        "blocked.append",
+        "datetime.now",
+        "dual_macd_agreement",
+        "ema_structure_bullish",
+        "fail_reasons.append",
+        "fetch_bars",
+        "len",
+        "logger.info",
+        "logger.warning",
+        "passed.append",
+        "tracker.get_rolling_day_trade_count"
+      ],
+      "decorators": []
+    },
+    "_apply_mri_breakeven_push": {
+      "line_start": 3665,
+      "line_end": 3761,
+      "size_lines": 96,
+      "globals_declared": [],
+      "calls": [
+        "_log_trade_event",
+        "_rnd_mri.uniform",
+        "cancel_order",
+        "fetch_bars",
+        "float",
+        "get_latest_trade",
+        "list",
+        "logger.debug",
+        "logger.error",
+        "logger.info",
+        "logger.warning",
+        "mri.level",
+        "mri.score",
+        "round",
+        "str",
+        "submit_day_stop_order",
+        "tracker._save_log",
+        "tracker.get_rolling_day_trade_count",
+        "tracker.open_trades.items",
+        "trade.get"
+      ],
+      "decorators": []
+    },
+    "run_cycle": {
+      "line_start": 3766,
+      "line_end": 5134,
+      "size_lines": 1368,
+      "globals_declared": [
+        "_spy_event_type",
+        "_kill_switch_alerted",
+        "_last_vix",
+        "_spy_200d_ma",
+        "_spy_200d_ma_date",
+        "_spy_risk_active",
+        "_spy_risk_direction",
+        "_spy_risk_magnitude",
+        "_spy_risk_scans_left",
+        "_spy_fetch_failures",
+        "_spy_last_close",
+        "_SHORTING_ENABLED",
+        "_last_breadth",
+        "_analyst_sentiment",
+        "_spy_52w_high",
+        "_last_eod_summary_date",
+        "_premarket_movers_cache",
+        "_last_weekly_review_spawn_date"
+      ],
+      "calls": [
+        "Path",
+        "Path(LOG_DIR).mkdir",
+        "ZoneInfo",
+        "_PERSIST.get",
+        "_PmTPE",
+        "_ZI",
+        "_ZI_ah",
+        "_analyst_sentiment.items",
+        "_apply_mri_breakeven_push",
+        "_as_failed.append",
+        "_ath_df['close'].max",
+        "_cancel_and_reconcile_gtc_stops",
+        "_check_exits_extended_hours",
+        "_cmd.append",
+        "_cmd_ah.append",
+        "_composite.get",
+        "_dir_now.upper",
+        "_dt.now",
+        "_entry_confirm_buffer.items",
+        "_err_samples.append"
+      ],
+      "decorators": []
+    },
+    "_cancel_and_reconcile_gtc_stops": {
+      "line_start": 5139,
+      "line_end": 5485,
+      "size_lines": 346,
+      "globals_declared": [],
+      "calls": [
+        "_fetch_actual_fill_price",
+        "_get_tod_phase",
+        "_live_trade.get",
+        "_partials.items",
+        "_pc_slack",
+        "_trade.get",
+        "_trade_dir.upper",
+        "abs",
+        "alert_gtc_failed",
+        "cancel_order",
+        "float",
+        "get_open_position",
+        "get_order",
+        "getattr",
+        "int",
+        "len",
+        "list",
+        "logger.critical",
+        "logger.debug",
+        "logger.error"
+      ],
+      "decorators": []
+    },
+    "_reconcile_positions": {
+      "line_start": 5488,
+      "line_end": 5921,
+      "size_lines": 433,
+      "globals_declared": [],
+      "calls": [
+        "'\\n'.join",
+        "RuntimeError",
+        "_fetch_actual_fill_price",
+        "_get_live_score",
+        "_orph_gtc_alert",
+        "_orph_trade.get",
+        "_orphan_lines.append",
+        "_otrade.get",
+        "_qtm_partials.pop",
+        "_send_slack_orph",
+        "abs",
+        "alpaca_positions.keys",
+        "calculate_atr",
+        "cancel_order",
+        "datetime.now",
+        "datetime.now(ET).isoformat",
+        "fetch_bars",
+        "float",
+        "get_open_orders",
+        "get_open_positions"
+      ],
+      "decorators": []
+    },
+    "_check_exits_extended_hours": {
+      "line_start": 5926,
+      "line_end": 6169,
+      "size_lines": 243,
+      "globals_declared": [],
+      "calls": [
+        "datetime.now",
+        "exit_side.upper",
+        "float",
+        "get_latest_trade",
+        "get_order",
+        "getattr",
+        "int",
+        "kelly.record_trade",
+        "list",
+        "logger.info",
+        "logger.warning",
+        "max",
+        "risk.register_close",
+        "round",
+        "str",
+        "str(getattr(order, 'status', '')).lower",
+        "submit_limit_order",
+        "tracker._save_log",
+        "tracker.open_trades.items",
+        "tracker.opened_today"
+      ],
+      "decorators": []
+    },
+    "_reconcile_pending_overnight_orders": {
+      "line_start": 6174,
+      "line_end": 6210,
+      "size_lines": 36,
+      "globals_declared": [],
+      "calls": [
+        "float",
+        "get_order",
+        "getattr",
+        "len",
+        "list",
+        "logger.debug",
+        "logger.info",
+        "logger.warning",
+        "str",
+        "str(getattr(order, 'status', '')).lower",
+        "t.get",
+        "tracker.cancel_pending_entry",
+        "tracker.get_pending_overnight_entries",
+        "tracker.open_trades.values",
+        "tracker.promote_pending_to_active",
+        "trade.get"
+      ],
+      "decorators": []
+    },
+    "_overnight_entry_check": {
+      "line_start": 6213,
+      "line_end": 6402,
+      "size_lines": 189,
+      "globals_declared": [],
+      "calls": [
+        "_ah_df['volume'].iloc[-30:].sum",
+        "_now.date",
+        "_quote or {}.get",
+        "abs",
+        "calculate_atr",
+        "calendar.get_day_risk",
+        "datetime.now",
+        "direction.upper",
+        "fetch_bars",
+        "float",
+        "get_latest_quote",
+        "get_latest_trade",
+        "get_portfolio_value",
+        "int",
+        "logger.debug",
+        "logger.info",
+        "logger.warning",
+        "max",
+        "min",
+        "risk.check_kill_switch"
+      ],
+      "decorators": []
+    },
+    "main": {
+      "line_start": 6407,
+      "line_end": 7115,
+      "size_lines": 708,
+      "globals_declared": [
+        "_entry_confirm_buffer",
+        "_conviction_streak",
+        "_kill_switch_alerted",
+        "_last_daily_reset_date",
+        "_fill_fallback_count",
+        "_rth_day_stop_failure_counts",
+        "_halt_entries_for_session",
+        "_market_top_score",
+        "_market_top_zone_tier",
+        "_macro_regime_label",
+        "_macro_regime_tier",
+        "_ftd_combined_state",
+        "_ftd_min_score",
+        "_SHORTING_ENABLED",
+        "_last_cycle_complete"
+      ],
+      "calls": [
+        "EventCalendar",
+        "KellySizer",
+        "MacroRiskIndex",
+        "NewsMonitor",
+        "PortfolioTracker",
+        "RegimeDetector",
+        "RiskManager",
+        "_alert_retry_t.start",
+        "_alert_retry_threading.Thread",
+        "_analyst_sentiment.items",
+        "_art.sleep",
+        "_atr_cache.items",
+        "_cancel_and_reconcile_gtc_stops",
+        "_cg_data.get",
+        "_conviction_streak.clear",
+        "_conviction_streak.update",
+        "_entry_confirm_buffer.clear",
+        "_entry_confirm_buffer.update",
+        "_ftd.get",
+        "_get_asent"
+      ],
+      "decorators": []
+    },
+    "_verify_shorting_live": {
+      "line_start": 652,
+      "line_end": 680,
+      "size_lines": 28,
+      "globals_declared": [
+        "_SHORTING_ENABLED"
+      ],
+      "calls": [
+        "bool",
+        "float",
+        "get_account",
+        "getattr",
+        "logger.info",
+        "logger.warning"
+      ],
+      "decorators": []
+    },
+    "_rc8_clear_buffers": {
+      "line_start": 723,
+      "line_end": 746,
+      "size_lines": 23,
+      "globals_declared": [],
+      "calls": [
+        "_cgf.write",
+        "_conviction_streak.pop",
+        "_entry_confirm_buffer.pop",
+        "datetime.now",
+        "datetime.now(ET).date",
+        "json.dumps",
+        "logger.info",
+        "logger.warning",
+        "open",
+        "os.path.abspath",
+        "os.path.dirname",
+        "os.path.join",
+        "os.replace",
+        "str"
+      ],
+      "decorators": []
+    },
+    "_cycle_watchdog": {
+      "line_start": 6450,
+      "line_end": 6503,
+      "size_lines": 53,
+      "globals_declared": [
+        "_last_cycle_complete"
+      ],
+      "calls": [
+        "_wdt.current_thread",
+        "datetime.now",
+        "int",
+        "logger.critical",
+        "logger.debug",
+        "logger.warning",
+        "os.chdir",
+        "os.execv",
+        "os.path.abspath",
+        "os.path.dirname",
+        "os.unlink",
+        "send_slack",
+        "time.sleep",
+        "time.time"
+      ],
+      "decorators": []
+    },
+    "_handle_sigterm": {
+      "line_start": 6742,
+      "line_end": 6762,
+      "size_lines": 20,
+      "globals_declared": [],
+      "calls": [
+        "_lockfile.close",
+        "alert_crash",
+        "hasattr",
+        "list",
+        "logger.info",
+        "logger.warning",
+        "sys.exit",
+        "tracker._save_log",
+        "tracker.open_trades.keys",
+        "tracker.write_eod_summary"
+      ],
+      "decorators": []
+    },
+    "_tranche_allowed": {
+      "line_start": 1990,
+      "line_end": 2000,
+      "size_lines": 10,
+      "globals_declared": [],
+      "calls": [],
+      "decorators": []
+    },
+    "_alert_retry_loop": {
+      "line_start": 6601,
+      "line_end": 6608,
+      "size_lines": 7,
+      "globals_declared": [],
+      "calls": [
+        "_art.sleep",
+        "alert_startup_test",
+        "logger.info",
+        "logger.warning"
+      ],
+      "decorators": []
+    }
+  },
+  "callers": {
+    "time.time": [
+      "_touch_cycle_ts",
+      "execute_entries",
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "datetime.now": [
+      "_should_flatten_eod",
+      "_too_early",
+      "_get_tod_phase",
+      "_save_hybrid_state",
+      "_load_hybrid_state",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_pdt_htf_gate",
+      "run_cycle",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_overnight_entry_check",
+      "main",
+      "_rc8_clear_buffers",
+      "_cycle_watchdog"
+    ],
+    "{'premarket': 0.0, 'opening': 0.0, 'normal': 1.0, 'midday': config.TOD_MIDDAY_SIZE_MULT, 'power_hour': 1.0, 'closed': 0.0}.get": [
+      "_tod_size_multiplier"
+    ],
+    "Path": [
+      "_save_hybrid_state",
+      "run_cycle"
+    ],
+    "_HYBRID_STATE_FILE.parent.mkdir": [
+      "_save_hybrid_state"
+    ],
+    "datetime.now(ET).isoformat": [
+      "_save_hybrid_state",
+      "check_partial_exits",
+      "run_cycle",
+      "_reconcile_positions"
+    ],
+    "json.dump": [
+      "_save_hybrid_state",
+      "_record_tqi",
+      "run_cycle"
+    ],
+    "logger.debug": [
+      "_save_hybrid_state",
+      "_compute_fvg_mult",
+      "_record_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "open": [
+      "_save_hybrid_state",
+      "_load_hybrid_state",
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "main",
+      "_rc8_clear_buffers"
+    ],
+    "os.replace": [
+      "_save_hybrid_state",
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "_rc8_clear_buffers"
+    ],
+    "str": [
+      "_save_hybrid_state",
+      "_load_hybrid_state",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "_fetch_actual_fill_price",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main",
+      "_rc8_clear_buffers"
+    ],
+    "_HYBRID_STATE_FILE.exists": [
+      "_load_hybrid_state"
+    ],
+    "_spy_risk_direction.upper": [
+      "_load_hybrid_state",
+      "run_cycle"
+    ],
+    "bool": [
+      "_load_hybrid_state",
+      "execute_entries",
+      "_safe_close_all",
+      "check_exits",
+      "main",
+      "_verify_shorting_live"
+    ],
+    "datetime.now(ET).strftime": [
+      "_load_hybrid_state",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "run_cycle",
+      "main"
+    ],
+    "float": [
+      "_load_hybrid_state",
+      "_find_recent_fvgs",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "_fetch_actual_fill_price",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main",
+      "_verify_shorting_live"
+    ],
+    "int": [
+      "_load_hybrid_state",
+      "execute_entries",
+      "_submit_rth_day_stops",
+      "_get_live_score",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_overnight_entry_check",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "json.load": [
+      "_load_hybrid_state",
+      "main"
+    ],
+    "logger.info": [
+      "_load_hybrid_state",
+      "_record_partial_tqi",
+      "_record_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close",
+      "_submit_rth_day_stops",
+      "_cancel_open_gtc_orders",
+      "_fetch_actual_fill_price",
+      "_safe_close_all",
+      "check_exits",
+      "_pdt_htf_gate",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main",
+      "_verify_shorting_live",
+      "_rc8_clear_buffers",
+      "_handle_sigterm",
+      "_alert_retry_loop"
+    ],
+    "logger.warning": [
+      "_load_hybrid_state",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close",
+      "_submit_rth_day_stops",
+      "_cancel_open_gtc_orders",
+      "_get_live_score",
+      "_fetch_actual_fill_price",
+      "_safe_close_all",
+      "check_exits",
+      "_pdt_htf_gate",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main",
+      "_verify_shorting_live",
+      "_rc8_clear_buffers",
+      "_cycle_watchdog",
+      "_handle_sigterm",
+      "_alert_retry_loop"
+    ],
+    "saved_at.startswith": [
+      "_load_hybrid_state"
+    ],
+    "state.get": [
+      "_load_hybrid_state"
+    ],
+    "any": [
+      "_find_recent_fvgs",
+      "run_cycle"
+    ],
+    "c.lower": [
+      "_find_recent_fvgs"
+    ],
+    "col_lower.get": [
+      "_find_recent_fvgs"
+    ],
+    "fvgs.append": [
+      "_find_recent_fvgs"
+    ],
+    "len": [
+      "_find_recent_fvgs",
+      "_compute_fvg_mult",
+      "_record_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "_pdt_htf_gate",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_reconcile_pending_overnight_orders",
+      "main"
+    ],
+    "max": [
+      "_find_recent_fvgs",
+      "_score_fvg_for_signal",
+      "_compute_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "range": [
+      "_find_recent_fvgs",
+      "execute_entries",
+      "check_partial_exits",
+      "_reconcile_positions",
+      "main"
+    ],
+    "abs": [
+      "_score_fvg_for_signal",
+      "_compute_tqi",
+      "_record_partial_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_overnight_entry_check"
+    ],
+    "_find_recent_fvgs": [
+      "_compute_fvg_mult"
+    ],
+    "_score_fvg_for_signal": [
+      "_compute_fvg_mult"
+    ],
+    "fetch_bars": [
+      "_compute_fvg_mult",
+      "execute_entries",
+      "check_partial_exits",
+      "check_exits",
+      "_pdt_htf_gate",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_reconcile_positions",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "min": [
+      "_compute_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "run_cycle",
+      "_overnight_entry_check"
+    ],
+    "round": [
+      "_compute_tqi",
+      "_record_tqi",
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "trade.get": [
+      "_compute_tqi",
+      "_record_partial_tqi",
+      "_record_tqi",
+      "check_partial_exits",
+      "_cancel_open_gtc_orders",
+      "_fetch_actual_fill_price",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders"
+    ],
+    "{'target': 35, 'trail_stop': 28, 'signal': 18, 'opposite_signal': 18, 'thesis_invalidation': 15, 'pm_exit': 12, 'overnight_breakeven': 10, 'hard_stop': 0}.get": [
+      "_compute_tqi"
+    ],
+    "{0: 10, 1: 18, 2: 25}.get": [
+      "_record_partial_tqi"
+    ],
+    "_compute_tqi": [
+      "_record_tqi"
+    ],
+    "_tqi_history.append": [
+      "_record_tqi"
+    ],
+    "os.path.abspath": [
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "main",
+      "_rc8_clear_buffers",
+      "_cycle_watchdog"
+    ],
+    "os.path.dirname": [
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "main",
+      "_rc8_clear_buffers",
+      "_cycle_watchdog"
+    ],
+    "os.path.join": [
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "main",
+      "_rc8_clear_buffers"
+    ],
+    "sum": [
+      "_record_tqi",
+      "execute_entries",
+      "run_cycle",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "_BUCKET_A_LEVERAGE.get": [
+      "execute_entries"
+    ],
+    "_SECTOR_MAP.get": [
+      "execute_entries"
+    ],
+    "_analyst_sentiment.get": [
+      "execute_entries"
+    ],
+    "_analyst_sentiment.get(symbol, {}).get": [
+      "execute_entries"
+    ],
+    "_analyst_sentiment[symbol].get": [
+      "execute_entries"
+    ],
+    "_atr_cache.get": [
+      "execute_entries"
+    ],
+    "_bar_ts.astimezone": [
+      "execute_entries"
+    ],
+    "_bar_ts.tz_localize": [
+      "execute_entries"
+    ],
+    "_cgf.write": [
+      "execute_entries",
+      "_rc8_clear_buffers"
+    ],
+    "_cl[-10:].mean": [
+      "execute_entries"
+    ],
+    "_cl[-20:].mean": [
+      "execute_entries"
+    ],
+    "_compute_fvg_mult": [
+      "execute_entries"
+    ],
+    "_conviction_streak.get": [
+      "execute_entries"
+    ],
+    "_conviction_streak.pop": [
+      "execute_entries",
+      "check_exits",
+      "_rc8_clear_buffers"
+    ],
+    "_cycle_bar_ages.append": [
+      "execute_entries"
+    ],
+    "_entry_confirm_buffer.get": [
+      "execute_entries"
+    ],
+    "_entry_confirm_buffer.pop": [
+      "execute_entries",
+      "check_exits",
+      "_rc8_clear_buffers"
+    ],
+    "_feed_age_history.append": [
+      "execute_entries"
+    ],
+    "_feed_deque": [
+      "execute_entries"
+    ],
+    "_get_pm_detail": [
+      "execute_entries"
+    ],
+    "_get_tod_phase": [
+      "execute_entries",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "main"
+    ],
+    "_htf_direction.upper": [
+      "execute_entries"
+    ],
+    "_now_et - _bar_close_ts_et.total_seconds": [
+      "execute_entries"
+    ],
+    "_now_et.replace": [
+      "execute_entries"
+    ],
+    "_open_trade.get": [
+      "execute_entries"
+    ],
+    "_pm_detail_r1.get": [
+      "execute_entries"
+    ],
+    "_pm_detail_r1.items": [
+      "execute_entries"
+    ],
+    "_pm_signif.values": [
+      "execute_entries"
+    ],
+    "_rc8_clear_buffers": [
+      "execute_entries"
+    ],
+    "_settle_end.strftime": [
+      "execute_entries"
+    ],
+    "_stale_td": [
+      "execute_entries"
+    ],
+    "_stats_ab3.stdev": [
+      "execute_entries"
+    ],
+    "_sym_52w_high_cache.get": [
+      "execute_entries"
+    ],
+    "_t12c.sleep": [
+      "execute_entries"
+    ],
+    "_td": [
+      "execute_entries"
+    ],
+    "_verify_shorting_live": [
+      "execute_entries"
+    ],
+    "alert_entry": [
+      "execute_entries"
+    ],
+    "alert_gtc_failed": [
+      "execute_entries",
+      "check_partial_exits",
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "alert_stale_bar": [
+      "execute_entries"
+    ],
+    "alert_systemic_stale_feed": [
+      "execute_entries"
+    ],
+    "all": [
+      "execute_entries"
+    ],
+    "calculate_atr": [
+      "execute_entries",
+      "_reconcile_positions",
+      "_overnight_entry_check"
+    ],
+    "daily_df['close'].pct_change": [
+      "execute_entries"
+    ],
+    "daily_df['close'].pct_change().abs": [
+      "execute_entries"
+    ],
+    "daily_df['close'].pct_change().abs().rolling": [
+      "execute_entries"
+    ],
+    "daily_df['close'].pct_change().abs().rolling(20).median": [
+      "execute_entries"
+    ],
+    "datetime.now(ET).date": [
+      "execute_entries",
+      "main",
+      "_rc8_clear_buffers"
+    ],
+    "dir": [
+      "execute_entries"
+    ],
+    "direction.upper": [
+      "execute_entries",
+      "_overnight_entry_check"
+    ],
+    "entered.append": [
+      "execute_entries"
+    ],
+    "entry_time.isoformat": [
+      "execute_entries"
+    ],
+    "get_account": [
+      "execute_entries",
+      "run_cycle",
+      "main",
+      "_verify_shorting_live"
+    ],
+    "get_cached_earnings_dates": [
+      "execute_entries"
+    ],
+    "get_latest_trade": [
+      "execute_entries",
+      "check_partial_exits",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "_check_exits_extended_hours",
+      "_overnight_entry_check"
+    ],
+    "get_momentum_summary": [
+      "execute_entries"
+    ],
+    "get_momentum_summary(daily_df).get": [
+      "execute_entries"
+    ],
+    "get_open_position": [
+      "execute_entries",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "get_order": [
+      "execute_entries",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders"
+    ],
+    "get_portfolio_value": [
+      "execute_entries",
+      "run_cycle",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "get_short_blocked_symbols": [
+      "execute_entries"
+    ],
+    "getattr": [
+      "execute_entries",
+      "_submit_rth_day_stops",
+      "_fetch_actual_fill_price",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "main",
+      "_verify_shorting_live"
+    ],
+    "globals": [
+      "execute_entries"
+    ],
+    "globals().get": [
+      "execute_entries"
+    ],
+    "hasattr": [
+      "execute_entries",
+      "main",
+      "_handle_sigterm"
+    ],
+    "is_market_open": [
+      "execute_entries",
+      "run_cycle"
+    ],
+    "json.dumps": [
+      "execute_entries",
+      "_rc8_clear_buffers"
+    ],
+    "kelly.get_risk_pct": [
+      "execute_entries"
+    ],
+    "logger.critical": [
+      "execute_entries",
+      "check_partial_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "logger.error": [
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "main"
+    ],
+    "mri.level": [
+      "execute_entries",
+      "check_partial_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "main"
+    ],
+    "risk.calculate_bucket_a_size": [
+      "execute_entries"
+    ],
+    "risk.can_open_position": [
+      "execute_entries"
+    ],
+    "risk.get_news_adjusted_stop": [
+      "execute_entries"
+    ],
+    "risk.get_stop_and_target": [
+      "execute_entries"
+    ],
+    "risk.register_close": [
+      "execute_entries",
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours"
+    ],
+    "risk.register_open": [
+      "execute_entries"
+    ],
+    "send_slack_alert": [
+      "execute_entries"
+    ],
+    "set": [
+      "execute_entries",
+      "_reconcile_positions"
+    ],
+    "sig.get": [
+      "execute_entries",
+      "_get_live_score"
+    ],
+    "sorted": [
+      "execute_entries",
+      "_fetch_actual_fill_price",
+      "_reconcile_positions"
+    ],
+    "submit_gtc_stop_order": [
+      "execute_entries",
+      "check_partial_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "submit_market_order": [
+      "execute_entries"
+    ],
+    "t.get": [
+      "execute_entries",
+      "_submit_rth_day_stops",
+      "run_cycle",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "time.sleep": [
+      "execute_entries",
+      "_fetch_actual_fill_price",
+      "run_cycle",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "tracker._save_log": [
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "_cancel_open_gtc_orders",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours",
+      "main",
+      "_handle_sigterm"
+    ],
+    "tracker.get_rolling_day_trade_count": [
+      "execute_entries",
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "_pdt_htf_gate",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "tracker.is_in_trade": [
+      "execute_entries",
+      "_overnight_entry_check"
+    ],
+    "tracker.open_trades.get": [
+      "execute_entries",
+      "_safe_close_all",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "tracker.open_trades.items": [
+      "execute_entries",
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_check_exits_extended_hours"
+    ],
+    "tracker.open_trades.values": [
+      "execute_entries",
+      "run_cycle",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "tracker.opened_today": [
+      "execute_entries",
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_check_exits_extended_hours"
+    ],
+    "tracker.record_day_trade": [
+      "execute_entries",
+      "_safe_close_all",
+      "check_exits"
+    ],
+    "tracker.record_entry": [
+      "execute_entries"
+    ],
+    "tracker.record_exit": [
+      "execute_entries",
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions",
+      "_check_exits_extended_hours"
+    ],
+    "tracker.set_gtc_stop_order_id": [
+      "execute_entries",
+      "check_partial_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "_close_pos": [
+      "check_partial_exits"
+    ],
+    "_fetch_actual_fill_price": [
+      "check_partial_exits",
+      "_safe_close_all",
+      "check_exits",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "_log_trade_event": [
+      "check_partial_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle"
+    ],
+    "_partial_fail_counts.get": [
+      "check_partial_exits"
+    ],
+    "_record_partial_tqi": [
+      "check_partial_exits"
+    ],
+    "_record_tqi": [
+      "check_partial_exits",
+      "check_exits"
+    ],
+    "_rnd_pc.uniform": [
+      "check_partial_exits"
+    ],
+    "_rnd_tr.uniform": [
+      "check_partial_exits"
+    ],
+    "_submit_gtc_limit_partial": [
+      "check_partial_exits"
+    ],
+    "_tranche_allowed": [
+      "check_partial_exits"
+    ],
+    "alert_exit": [
+      "check_partial_exits",
+      "check_exits"
+    ],
+    "alert_partial": [
+      "check_partial_exits"
+    ],
+    "cancel_open_orders_for_symbol": [
+      "check_partial_exits"
+    ],
+    "cancel_order": [
+      "check_partial_exits",
+      "_cancel_open_gtc_orders",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_reconcile_positions"
+    ],
+    "kelly.record_trade": [
+      "check_partial_exits",
+      "_check_exits_extended_hours"
+    ],
+    "list": [
+      "check_partial_exits",
+      "_cancel_open_gtc_orders",
+      "_safe_close_all",
+      "check_exits",
+      "_apply_mri_breakeven_push",
+      "run_cycle",
+      "_cancel_and_reconcile_gtc_stops",
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders",
+      "main",
+      "_handle_sigterm"
+    ],
+    "partial_close_position": [
+      "check_partial_exits"
+    ],
+    "send_slack": [
+      "check_partial_exits",
+      "_cancel_and_reconcile_gtc_stops",
+      "main",
+      "_cycle_watchdog"
+    ],
+    "submit_day_stop_order": [
+      "check_partial_exits",
+      "_submit_rth_day_stops",
+      "check_exits",
+      "_apply_mri_breakeven_push"
+    ],
+    "tracker.closed_trades[-1].get": [
+      "check_partial_exits",
+      "check_exits"
+    ],
+    "tracker.update_trail_stop": [
+      "check_partial_exits",
+      "_check_exits_extended_hours"
+    ],
+    "trade.setdefault": [
+      "check_partial_exits"
+    ],
+    "LimitOrderRequest": [
+      "_submit_gtc_limit_partial"
+    ],
+    "client.submit_order": [
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close"
+    ],
+    "get_trading_client": [
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close",
+      "_fetch_actual_fill_price"
+    ],
+    "side.upper": [
+      "_submit_gtc_limit_partial",
+      "_submit_gtc_stop_close"
+    ],
+    "StopOrderRequest": [
+      "_submit_gtc_stop_close"
+    ],
+    "RuntimeError": [
+      "_submit_rth_day_stops",
+      "_reconcile_positions"
+    ],
+    "_rnd_rth.uniform": [
+      "_submit_rth_day_stops"
+    ],
+    "_rth_day_stop_failure_counts.get": [
+      "_submit_rth_day_stops",
+      "run_cycle"
+    ],
+    "_rth_day_stops_submitted_dates.add": [
+      "_submit_rth_day_stops"
+    ],
+    "_side.upper": [
+      "_submit_rth_day_stops"
+    ],
+    "get_open_orders": [
+      "_submit_rth_day_stops",
+      "_reconcile_positions"
+    ],
+    "next": [
+      "_submit_rth_day_stops"
+    ],
+    "str(getattr(o, 'time_in_force', '')).lower": [
+      "_submit_rth_day_stops"
+    ],
+    "str(getattr(o, 'type', '')).lower": [
+      "_submit_rth_day_stops"
+    ],
+    "_partials.items": [
+      "_cancel_open_gtc_orders",
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "_analyze_symbol_full": [
+      "_get_live_score"
+    ],
+    "result.get": [
+      "_get_live_score"
+    ],
+    "GetOrdersRequest": [
+      "_fetch_actual_fill_price"
+    ],
+    "_dt.fromtimestamp": [
+      "_fetch_actual_fill_price"
+    ],
+    "_tc.get_orders": [
+      "_fetch_actual_fill_price"
+    ],
+    "dict": [
+      "_fetch_actual_fill_price",
+      "run_cycle"
+    ],
+    "_persist_session_halt": [
+      "_safe_close_all"
+    ],
+    "close_position": [
+      "_safe_close_all",
+      "check_exits"
+    ],
+    "_be_now.strftime": [
+      "check_exits"
+    ],
+    "_be_side.upper": [
+      "check_exits"
+    ],
+    "_cancel_open_gtc_orders": [
+      "check_exits"
+    ],
+    "_get_live_score": [
+      "check_exits",
+      "_reconcile_positions"
+    ],
+    "_rnd_be.uniform": [
+      "check_exits"
+    ],
+    "_submit_gtc_stop_close": [
+      "check_exits"
+    ],
+    "_tr.get": [
+      "check_exits",
+      "run_cycle"
+    ],
+    "alert_stop_breach": [
+      "check_exits"
+    ],
+    "closed.append": [
+      "check_exits"
+    ],
+    "get_exit_signal": [
+      "check_exits"
+    ],
+    "tracker.record_stop_breach_blocked": [
+      "check_exits"
+    ],
+    "tracker.set_pdt_gtc_stop_order_id": [
+      "check_exits"
+    ],
+    "' | '.join": [
+      "_pdt_htf_gate"
+    ],
+    "add_all_mas": [
+      "_pdt_htf_gate"
+    ],
+    "add_both_macds": [
+      "_pdt_htf_gate"
+    ],
+    "blocked.append": [
+      "_pdt_htf_gate"
+    ],
+    "dual_macd_agreement": [
+      "_pdt_htf_gate"
+    ],
+    "ema_structure_bullish": [
+      "_pdt_htf_gate"
+    ],
+    "fail_reasons.append": [
+      "_pdt_htf_gate"
+    ],
+    "passed.append": [
+      "_pdt_htf_gate"
+    ],
+    "_rnd_mri.uniform": [
+      "_apply_mri_breakeven_push"
+    ],
+    "mri.score": [
+      "_apply_mri_breakeven_push",
+      "run_cycle"
+    ],
+    "Path(LOG_DIR).mkdir": [
+      "run_cycle"
+    ],
+    "ZoneInfo": [
+      "run_cycle"
+    ],
+    "_PERSIST.get": [
+      "run_cycle"
+    ],
+    "_PmTPE": [
+      "run_cycle"
+    ],
+    "_ZI": [
+      "run_cycle"
+    ],
+    "_ZI_ah": [
+      "run_cycle"
+    ],
+    "_analyst_sentiment.items": [
+      "run_cycle",
+      "main"
+    ],
+    "_apply_mri_breakeven_push": [
+      "run_cycle"
+    ],
+    "_as_failed.append": [
+      "run_cycle"
+    ],
+    "_ath_df['close'].max": [
+      "run_cycle"
+    ],
+    "_cancel_and_reconcile_gtc_stops": [
+      "run_cycle",
+      "main"
+    ],
+    "_check_exits_extended_hours": [
+      "run_cycle"
+    ],
+    "_cmd.append": [
+      "run_cycle"
+    ],
+    "_cmd_ah.append": [
+      "run_cycle"
+    ],
+    "_composite.get": [
+      "run_cycle"
+    ],
+    "_dir_now.upper": [
+      "run_cycle"
+    ],
+    "_dt.now": [
+      "run_cycle"
+    ],
+    "_entry_confirm_buffer.items": [
+      "run_cycle"
+    ],
+    "_err_samples.append": [
+      "run_cycle"
+    ],
+    "_et_now.weekday": [
+      "run_cycle"
+    ],
+    "_f.fileno": [
+      "run_cycle"
+    ],
+    "_f.flush": [
+      "run_cycle"
+    ],
+    "_fb_200": [
+      "run_cycle"
+    ],
+    "_gen_dash": [
+      "run_cycle"
+    ],
+    "_gside.upper": [
+      "run_cycle"
+    ],
+    "_gtr.get": [
+      "run_cycle"
+    ],
+    "_last_breadth.get": [
+      "run_cycle"
+    ],
+    "_line.find": [
+      "run_cycle"
+    ],
+    "_line[_msg_start + 7:].strip": [
+      "run_cycle"
+    ],
+    "_live_score_cache.clear": [
+      "run_cycle"
+    ],
+    "_load_hybrid_state": [
+      "run_cycle"
+    ],
+    "_new_event.startswith": [
+      "run_cycle"
+    ],
+    "_news_summary.get": [
+      "run_cycle"
+    ],
+    "_nm_summary.get": [
+      "run_cycle"
+    ],
+    "_now_pdt.date": [
+      "run_cycle"
+    ],
+    "_now_pdt.weekday": [
+      "run_cycle"
+    ],
+    "_now_pdt_ah.date": [
+      "run_cycle"
+    ],
+    "_now_pdt_ah.weekday": [
+      "run_cycle"
+    ],
+    "_now_tag.isoformat": [
+      "run_cycle"
+    ],
+    "_now_tag.strftime": [
+      "run_cycle"
+    ],
+    "_opening_regime.get": [
+      "run_cycle"
+    ],
+    "_overnight_entry_check": [
+      "run_cycle"
+    ],
+    "_pdt_htf_gate": [
+      "run_cycle"
+    ],
+    "_pm_ex.submit": [
+      "run_cycle"
+    ],
+    "_pm_fut.result": [
+      "run_cycle"
+    ],
+    "_ptrade.get": [
+      "run_cycle"
+    ],
+    "_reconcile_pending_overnight_orders": [
+      "run_cycle",
+      "main"
+    ],
+    "_rnd_ah.uniform": [
+      "run_cycle"
+    ],
+    "_safe_close_all": [
+      "run_cycle",
+      "main"
+    ],
+    "_save_hybrid_state": [
+      "run_cycle"
+    ],
+    "_should_flatten_eod": [
+      "run_cycle"
+    ],
+    "_sp.Popen": [
+      "run_cycle"
+    ],
+    "_sp_ah.Popen": [
+      "run_cycle"
+    ],
+    "_spy_5m_df['volume'].iloc[:-1].mean": [
+      "run_cycle"
+    ],
+    "_spy_daily_200['close'].tail": [
+      "run_cycle"
+    ],
+    "_spy_daily_200['close'].tail(200).mean": [
+      "run_cycle"
+    ],
+    "_spy_daily_yr['close'].max": [
+      "run_cycle"
+    ],
+    "_spy_event_type.startswith": [
+      "run_cycle"
+    ],
+    "_submit_rth_day_stops": [
+      "run_cycle"
+    ],
+    "_tod_size_multiplier": [
+      "run_cycle"
+    ],
+    "_too_early": [
+      "run_cycle"
+    ],
+    "_touch_cycle_ts": [
+      "run_cycle",
+      "main"
+    ],
+    "_wr_t2.time": [
+      "run_cycle"
+    ],
+    "_wr_t2_ah.time": [
+      "run_cycle"
+    ],
+    "_yf_gtc.Ticker": [
+      "run_cycle"
+    ],
+    "_yf_gtc.Ticker('^VIX').fast_info.get": [
+      "run_cycle"
+    ],
+    "_yf_gtc.Ticker('^VIX').history": [
+      "run_cycle"
+    ],
+    "alert_kill_switch": [
+      "run_cycle"
+    ],
+    "alert_spy_event": [
+      "run_cycle"
+    ],
+    "cache_premarket_movers": [
+      "run_cycle"
+    ],
+    "calendar.get_day_risk": [
+      "run_cycle",
+      "_overnight_entry_check",
+      "main"
+    ],
+    "calendar.get_size_multiplier": [
+      "run_cycle"
+    ],
+    "calendar.is_tradeable": [
+      "run_cycle"
+    ],
+    "check_exits": [
+      "run_cycle"
+    ],
+    "check_partial_exits": [
+      "run_cycle"
+    ],
+    "datetime.now(ZoneInfo('America/Los_Angeles')).date": [
+      "run_cycle"
+    ],
+    "day_risk.get": [
+      "run_cycle",
+      "main"
+    ],
+    "execute_entries": [
+      "run_cycle"
+    ],
+    "get_analyst_sentiment": [
+      "run_cycle"
+    ],
+    "get_breadth_score": [
+      "run_cycle"
+    ],
+    "kelly.print_summary": [
+      "run_cycle",
+      "main"
+    ],
+    "mri.components": [
+      "run_cycle"
+    ],
+    "mri.inject_news_state": [
+      "run_cycle"
+    ],
+    "mri.min_score_floor": [
+      "run_cycle"
+    ],
+    "mri.price_score": [
+      "run_cycle"
+    ],
+    "mri.refresh": [
+      "run_cycle"
+    ],
+    "mri.size_floor": [
+      "run_cycle"
+    ],
+    "mri.summary": [
+      "run_cycle"
+    ],
+    "news.get_active_event_type": [
+      "run_cycle"
+    ],
+    "news.get_news_size_multiplier": [
+      "run_cycle"
+    ],
+    "news.get_summary": [
+      "run_cycle"
+    ],
+    "news.scan_breaking_news": [
+      "run_cycle"
+    ],
+    "news_summary.get": [
+      "run_cycle"
+    ],
+    "now.strftime": [
+      "run_cycle"
+    ],
+    "os.fsync": [
+      "run_cycle"
+    ],
+    "os.path.exists": [
+      "run_cycle",
+      "main"
+    ],
+    "os.path.getmtime": [
+      "run_cycle",
+      "main"
+    ],
+    "preload_earnings_week": [
+      "run_cycle"
+    ],
+    "regime.get_composite_regime": [
+      "run_cycle"
+    ],
+    "regime.get_regime": [
+      "run_cycle",
+      "main"
+    ],
+    "regime_data.get": [
+      "run_cycle"
+    ],
+    "risk.check_kill_switch": [
+      "run_cycle",
+      "_overnight_entry_check"
+    ],
+    "risk.summary": [
+      "run_cycle"
+    ],
+    "risk.update_portfolio_value": [
+      "run_cycle"
+    ],
+    "run_scan": [
+      "run_cycle",
+      "_overnight_entry_check"
+    ],
+    "s.get": [
+      "run_cycle",
+      "_overnight_entry_check"
+    ],
+    "s['direction'].upper": [
+      "run_cycle"
+    ],
+    "str(getattr(_gconfirm, 'status', 'unknown')).lower": [
+      "run_cycle"
+    ],
+    "tracker.attach_news_summary": [
+      "run_cycle"
+    ],
+    "tracker.cancel_pending_entry": [
+      "run_cycle",
+      "_reconcile_pending_overnight_orders"
+    ],
+    "tracker.get_pending_overnight_entries": [
+      "run_cycle",
+      "_reconcile_pending_overnight_orders",
+      "_overnight_entry_check"
+    ],
+    "tracker.get_stats": [
+      "run_cycle"
+    ],
+    "tracker.open_trades.keys": [
+      "run_cycle",
+      "_reconcile_positions",
+      "main",
+      "_handle_sigterm"
+    ],
+    "tracker.print_stats": [
+      "run_cycle",
+      "main"
+    ],
+    "tracker.sync_pdt_with_alpaca": [
+      "run_cycle"
+    ],
+    "tracker.write_eod_summary": [
+      "run_cycle",
+      "main",
+      "_handle_sigterm"
+    ],
+    "v.get": [
+      "run_cycle",
+      "main"
+    ],
+    "write_scan_html": [
+      "run_cycle"
+    ],
+    "_live_trade.get": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "_pc_slack": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "_trade.get": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "_trade_dir.upper": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "str(_pord.status).lower": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "str(order.status).lower": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "tracker.clear_gtc_stop_order_id": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "tracker.get_overnight_gtc_positions": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "tracker.open_trades[symbol].pop": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "tracker.record_gtc_triggered": [
+      "_cancel_and_reconcile_gtc_stops"
+    ],
+    "'\\n'.join": [
+      "_reconcile_positions"
+    ],
+    "_orph_gtc_alert": [
+      "_reconcile_positions"
+    ],
+    "_orph_trade.get": [
+      "_reconcile_positions"
+    ],
+    "_orphan_lines.append": [
+      "_reconcile_positions"
+    ],
+    "_otrade.get": [
+      "_reconcile_positions"
+    ],
+    "_qtm_partials.pop": [
+      "_reconcile_positions"
+    ],
+    "_send_slack_orph": [
+      "_reconcile_positions"
+    ],
+    "alpaca_positions.keys": [
+      "_reconcile_positions"
+    ],
+    "get_open_positions": [
+      "_reconcile_positions"
+    ],
+    "str(getattr(_eord, 'time_in_force', '')).lower": [
+      "_reconcile_positions"
+    ],
+    "str(getattr(_eord, 'type', '')).lower": [
+      "_reconcile_positions"
+    ],
+    "tracker.open_trades[sym].get": [
+      "_reconcile_positions"
+    ],
+    "tracker.traded_today.add": [
+      "_reconcile_positions"
+    ],
+    "type": [
+      "_reconcile_positions"
+    ],
+    "exit_side.upper": [
+      "_check_exits_extended_hours"
+    ],
+    "str(getattr(order, 'status', '')).lower": [
+      "_check_exits_extended_hours",
+      "_reconcile_pending_overnight_orders"
+    ],
+    "submit_limit_order": [
+      "_check_exits_extended_hours",
+      "_overnight_entry_check"
+    ],
+    "tracker.record_partial_exit": [
+      "_check_exits_extended_hours"
+    ],
+    "tracker.promote_pending_to_active": [
+      "_reconcile_pending_overnight_orders"
+    ],
+    "_ah_df['volume'].iloc[-30:].sum": [
+      "_overnight_entry_check"
+    ],
+    "_now.date": [
+      "_overnight_entry_check"
+    ],
+    "_quote or {}.get": [
+      "_overnight_entry_check"
+    ],
+    "get_latest_quote": [
+      "_overnight_entry_check"
+    ],
+    "timedelta": [
+      "_overnight_entry_check"
+    ],
+    "tomorrow.weekday": [
+      "_overnight_entry_check"
+    ],
+    "tracker.record_pending_entry": [
+      "_overnight_entry_check"
+    ],
+    "EventCalendar": [
+      "main"
+    ],
+    "KellySizer": [
+      "main"
+    ],
+    "MacroRiskIndex": [
+      "main"
+    ],
+    "NewsMonitor": [
+      "main"
+    ],
+    "PortfolioTracker": [
+      "main"
+    ],
+    "RegimeDetector": [
+      "main"
+    ],
+    "RiskManager": [
+      "main"
+    ],
+    "_alert_retry_t.start": [
+      "main"
+    ],
+    "_alert_retry_threading.Thread": [
+      "main"
+    ],
+    "_art.sleep": [
+      "main",
+      "_alert_retry_loop"
+    ],
+    "_atr_cache.items": [
+      "main"
+    ],
+    "_cg_data.get": [
+      "main"
+    ],
+    "_conviction_streak.clear": [
+      "main"
+    ],
+    "_conviction_streak.update": [
+      "main"
+    ],
+    "_entry_confirm_buffer.clear": [
+      "main"
+    ],
+    "_entry_confirm_buffer.update": [
+      "main"
+    ],
+    "_ftd.get": [
+      "main"
+    ],
+    "_get_asent": [
+      "main"
+    ],
+    "_get_breadth": [
+      "main"
+    ],
+    "_get_econ_cal": [
+      "main"
+    ],
+    "_ks_restore.get": [
+      "main"
+    ],
+    "_last_breadth.clear": [
+      "main"
+    ],
+    "_last_breadth.update": [
+      "main"
+    ],
+    "_lockfile.close": [
+      "main",
+      "_handle_sigterm"
+    ],
+    "_lockfile.fileno": [
+      "main"
+    ],
+    "_mr.get": [
+      "main"
+    ],
+    "_mt.get": [
+      "main"
+    ],
+    "_read_kill_state": [
+      "main"
+    ],
+    "_reconcile_positions": [
+      "main"
+    ],
+    "_sig_h1.signal": [
+      "main"
+    ],
+    "_threading.Thread": [
+      "main"
+    ],
+    "_tqi_history.clear": [
+      "main"
+    ],
+    "_tqi_history.extend": [
+      "main"
+    ],
+    "_v.get": [
+      "main"
+    ],
+    "_wd_thread.start": [
+      "main"
+    ],
+    "_wdt.current_thread": [
+      "main",
+      "_cycle_watchdog"
+    ],
+    "alert_crash": [
+      "main",
+      "_handle_sigterm"
+    ],
+    "alert_startup_test": [
+      "main",
+      "_alert_retry_loop"
+    ],
+    "argparse.ArgumentParser": [
+      "main"
+    ],
+    "args.mode.upper": [
+      "main"
+    ],
+    "args.profile.upper": [
+      "main"
+    ],
+    "calendar.add_event_dynamic": [
+      "main"
+    ],
+    "calendar.get_week_ahead": [
+      "main"
+    ],
+    "config.PROFILES.get": [
+      "main"
+    ],
+    "config.PROFILES.get('paper', {}).get": [
+      "main"
+    ],
+    "config.validate_config": [
+      "main"
+    ],
+    "date.today": [
+      "main"
+    ],
+    "date.today().isoformat": [
+      "main"
+    ],
+    "datetime.fromtimestamp": [
+      "main"
+    ],
+    "datetime.fromtimestamp(os.path.getmtime(__file__)).strftime": [
+      "main"
+    ],
+    "datetime.now(ET).timestamp": [
+      "main"
+    ],
+    "e['risk'].value.upper": [
+      "main"
+    ],
+    "fcntl.fcntl": [
+      "main"
+    ],
+    "fcntl.flock": [
+      "main"
+    ],
+    "fetch_upcoming_earnings": [
+      "main"
+    ],
+    "gc.collect": [
+      "main"
+    ],
+    "isinstance": [
+      "main"
+    ],
+    "news.refresh_calendar": [
+      "main"
+    ],
+    "os.chdir": [
+      "main",
+      "_cycle_watchdog"
+    ],
+    "os.execv": [
+      "main",
+      "_cycle_watchdog"
+    ],
+    "os.getenv": [
+      "main"
+    ],
+    "os.getenv('NTFY_TOPIC', '').strip": [
+      "main"
+    ],
+    "os.getenv('SLACK_WEBHOOK_URL', '').strip": [
+      "main"
+    ],
+    "os.getpid": [
+      "main"
+    ],
+    "os.remove": [
+      "main"
+    ],
+    "os.unlink": [
+      "main",
+      "_cycle_watchdog"
+    ],
+    "parser.add_argument": [
+      "main"
+    ],
+    "parser.parse_args": [
+      "main"
+    ],
+    "print": [
+      "main"
+    ],
+    "profile.items": [
+      "main"
+    ],
+    "risk.reset_daily": [
+      "main"
+    ],
+    "run_cycle": [
+      "main"
+    ],
+    "s.upper": [
+      "main"
+    ],
+    "setattr": [
+      "main"
+    ],
+    "str(getattr(_startup_acct, 'status', '')).upper": [
+      "main"
+    ],
+    "sys.exit": [
+      "main",
+      "_handle_sigterm"
+    ],
+    "time.perf_counter": [
+      "main"
+    ],
+    "tracker._day_trades.append": [
+      "main"
+    ]
+  }
+}
