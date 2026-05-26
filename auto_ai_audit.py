@@ -77,6 +77,13 @@ _API_TIMEOUT_S = 180  # 3-minute wall-clock limit per API call
 _TRADE_EVENTS_TAIL = 100   # last N trade events to include as Slack proxy
 _BOT_LOG_TAIL_LINES = 150  # last N bot log lines to include
 
+# ── GitHub Gist endpoint (board CCR reads from here — raw IP is allowlisted) ──
+_GIST_ID = "1574ea556d06e7a1db45d00097f9c069"
+_GIST_RAW_URL = (
+    f"https://gist.githubusercontent.com/redstorm8705/{_GIST_ID}"
+    "/raw/meta_audit_latest.json"
+)
+
 
 # ── RTH block ────────────────────────────────────────────────────────────────
 def _check_rth_block() -> None:
@@ -445,6 +452,47 @@ def _call_gemini_rest(prompt: str, api_key: str, t0: float) -> dict:
 
 
 # ── Atomic write (RC-5 compliance) ───────────────────────────────────────────
+def _push_to_gist(data: dict) -> None:
+    """Push meta_audit_latest.json to GitHub Gist so board CCR can fetch it."""
+    import urllib.request  # stdlib only — no requests dependency here
+    token = os.environ.get("GITHUB_GIST_TOKEN", "")
+    if not token:
+        print(
+            "[auto_ai_audit] ⚠️  GITHUB_GIST_TOKEN not set — skipping Gist push",
+            file=sys.stderr,
+        )
+        return
+    payload = json.dumps({
+        "files": {
+            "meta_audit_latest.json": {
+                "content": json.dumps(data, indent=2, ensure_ascii=False),
+            }
+        }
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.github.com/gists/{_GIST_ID}",
+        data=payload,
+        method="PATCH",
+    )
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github.v3+json")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status == 200:
+                print(f"[auto_ai_audit] 📤 Gist updated: {_GIST_RAW_URL}")
+            else:
+                print(
+                    f"[auto_ai_audit] ⚠️  Gist push returned HTTP {resp.status}",
+                    file=sys.stderr,
+                )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[auto_ai_audit] ⚠️  Gist push failed: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _atomic_write_json(path: Path, data: dict) -> None:
     """Write JSON to path atomically via tmp→replace (no partial writes on crash)."""
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -550,6 +598,9 @@ def _run_audit(
                 f"[auto_ai_audit] ⚠️  Could not write board endpoint: {exc}",
                 file=sys.stderr,
             )
+
+        # Push to GitHub Gist so board CCR can fetch without IP allowlist issues
+        _push_to_gist(output)
 
     # ── Print raw responses ───────────────────────────────────────────────
     print()

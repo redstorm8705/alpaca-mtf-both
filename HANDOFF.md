@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-25 S40 | **S40: auto_ai_audit.py BUILT (patch-gate + meta-audit + board CCR); GitHub repo live; DeepSeek API wired; gemini-3.1-pro-preview; full autonomous audit pipeline deployed; weekly_perf_audit.py still next P1**
+**Updated:** 2026-05-26 S40 | **S40 COMPLETE: full autonomous audit pipeline live (DS+Gemini meta-audit → GitHub Gist → Board CCR 4 agents). Board verdict: FAIL — 2 P0s actioned. weekly_perf_audit.py next P1.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -34,8 +34,21 @@
 - [x] **DECISION 1 — entry_logic.py RC-4 #12c:** PATCHED. GAI P0 accepted. 3× retry loop (1s intervals) replaces single 1.5s poll + entry_price fallback. Redundant `import time as _t12c` removed. $0 check moved outside try/except. Board 2/2 APPROVE. OCI deployed, all 4 services active 308MB.
 - [x] **DECISION 2 — weekly_perf_audit.py design revision:** APPROVED by user. 4 DS/GAI additions to incorporate into spec before build: (1) Emergency Escalation Clause >25% drawdown, (2) VIX floor <15=LOW_VOL, (3) Mislabeling cascade prevention 10-trade monthly gate, (4) MIN_TRADES_FOR_HYPOTHESIS (offensive≥20, defensive≥12, emergency≥5).
 
+### Board Verdict (S40 — 2026-05-26, first live autonomous run)
+**OVERALL: FAIL** — 4/4 domains FAIL. Two P0 items require immediate fix before capital increase.
+
+**P0 — risk.open_positions startup initialization bug:** On session start, `risk.open_positions` initializes to 0 regardless of overnight positions held. This is the ROOT CAUSE of the 6-position breach (MAX=4). Fix: query Alpaca positions API at startup, set `risk.open_positions = len(alpaca_positions)`, HALT if ≥ MAX_POSITIONS before any trading.
+
+**P0 — Slack alert noise (alert fatigue):** `mri_refresh` every 12 min + `breadth_refresh` every 15 min + all trade events → hundreds of Slack messages/day. Operator cannot distinguish real alerts. Fix: route all routine events to log only; Slack reserved for `{stop_loss_triggered, position_limit_breach, fill_reconciliation_error, margin_call, service_crash}`.
+
+**P1 items (board-confirmed):** GC pauses 2.8–6.3s (root cause: unbounded bar history), non-atomic P&L writes (stop_hit with pnl=0.0 before reconciliation — needs `status: pending` field), fill reconciliation latency 17s, risk.open_positions desync = Kelly fraction 7–8x.
+
+**Board-only findings (missed by DS/GAI):** No slippage budget per position tier, no margin cascade circuit-breaker, no fill reversion pattern analysis, correlation not validated (all long tech/growth on same day = 0.7+ realized vs 0.2 assumed), no reconnect exponential backoff, no orphan order watchdog, no heartbeat position reconciliation loop.
+
 ### Open Items
 
+- [ ] **P0: risk.open_positions startup fix** — Bot initializes to 0 regardless of overnight positions → root cause of 6-position breach. Fix in `main.py` startup sequence: query Alpaca, set from live roster, halt if ≥ MAX. Full patch sequence required (>1000 lines → Explore subagent + DS/GAI gate, RTH chain).
+- [ ] **P0: Slack alert noise** — Decouple mri_refresh/breadth_refresh/routine events from Slack. Reserve Slack for actionable-only events. Full patch sequence required for `alerts.py` / `events/macro_risk_index.py`.
 - [ ] **P1: weekly_perf_audit.py build** — Design spec at `logs/weekly_perf_audit_design_v1.md`. DS/GAI design review COMPLETE (both APPROVE). **4 DS/GAI additions APPROVED** — must be incorporated into spec before coding: (1) Emergency Escalation Clause >25% drawdown, (2) VIX floor <15=LOW_VOL, (3) monthly 10-trade mislabeling gate, (4) MIN_TRADES thresholds. NOT in RTH chain → no DS/GAI gate. RTH block + atomic write required. Cron: Friday 4:15 PM ET. UNBLOCKED — ready to build.
 - [ ] **P1: weekly_perf_audit.py design spec update** — Add 4 DS/GAI additions to `logs/weekly_perf_audit_design_v1.md` before build begins (separate step from coding).
 - [ ] **P2: RC-9 in scan_to_html.py** — `_fetch_yfinance_news()` uses yfinance for news data (T4 violation). Board vote + migration plan required.
@@ -65,9 +78,11 @@
 
 ### Infrastructure Notes
 - **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here
-- **Board endpoint:** `http://129.153.208.32:8080/meta_audit_latest.json` — nginx serves from `/var/www/mtf-bot/` (no auth)
-- **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY both in local .env and OCI .env ✅
+- **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json` — auto-pushed after every meta-audit run by `auto_ai_audit.py` (added S40). CCR fetches from here (raw IP blocks from Anthropic cloud resolved via Gist).
+- **Board endpoint (nginx):** `http://mtftradingbot.duckdns.org/meta_audit_latest.json` — nginx port 80, ufw open, OCI Security List open. Accessible from home/office. Not accessible from Anthropic CCR (IP allowlist restriction — use Gist URL for CCR).
+- **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
 - **Gemini model:** `gemini-3.1-pro-preview` (matches Google AI Studio) via `google.genai` SDK ✅
+- **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
 
 ## Last Session (S39 — 2026-05-25, in progress)
 
