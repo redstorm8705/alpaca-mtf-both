@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  — long string literals in role preambles and prompt text are intentional
 """
 auto_ai_audit.py — Automated DS/GAI external audit gate
 (Step 4 of mandatory patch sequence) + autonomous meta-audit mode.
@@ -55,7 +56,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -74,8 +75,45 @@ _GEMINI_MODEL = "gemini-3.1-pro-preview"  # matches Google AI Studio selection
 _API_TIMEOUT_S = 180  # 3-minute wall-clock limit per API call
 
 # ── Meta-audit constants ──────────────────────────────────────────────────────
-_TRADE_EVENTS_TAIL = 100   # last N trade events to include as Slack proxy
-_BOT_LOG_TAIL_LINES = 150  # last N bot log lines to include
+_BOT_LOG_TAIL_LINES = 100          # bot log lines for system health context
+_TRADE_EVENTS_DAYS_BACK = 7        # load ALL events from past 7 days (not just tail)
+_FILLS_DAYS_BACK = 7               # Alpaca fills window
+_CHART_PROXY_BARS = 30             # daily bars for chart proxy calc per symbol
+_DIRECTIVES_HISTORY_WEEKS = 4      # prior audit entries to include for compliance check
+_MIN_FILLS_FOR_DIRECTIVES = 20     # N < this → observe only, NO parameter directives
+
+# ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
+_DS_ROLE_PREAMBLE = (
+    "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\n"
+    "YOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\n"
+    "DEFAULT STANCE: Assume the worst interpretation of ambiguous data. "
+    "Challenge every apparent win. Surface hidden fragility.\n"
+    "ANALYTICAL LENSES:\n"
+    "  - Nassim Taleb (Antifragile, The Black Swan): "
+    "Is recent P&L luck or edge? Is this system fragile to tail events?\n"
+    "  - Larry Harris (Trading and Exchanges): "
+    "Is adverse selection or execution leakage consuming alpha?\n"
+    "  - Thomas Peterffy (IBKR infrastructure): "
+    "Where will this system fail silently under load or edge conditions?\n"
+    "If you cannot find evidence of positive expectancy, say so explicitly — "
+    "do not invent edge.\n\n"
+)
+
+_GAI_ROLE_PREAMBLE = (
+    "You are an ALPHA OPTIMIZER reviewing an Alpaca paper trading bot.\n"
+    "YOUR MANDATE: Find evidence this bot's edge is being suppressed by "
+    "overly conservative parameters. Find alpha left on the table.\n"
+    "DEFAULT STANCE: Assume the best interpretation of ambiguous data. "
+    "Identify where caution is costing real returns.\n"
+    "ANALYTICAL LENSES:\n"
+    "  - Ed Thorp (Kelly Criterion, A Man for All Markets): "
+    "Is sizing sub-Kelly? What is the implied Kelly fraction from win rate + avg R?\n"
+    "  - Cliff Asness (AQR research, factor investing): "
+    "Is the confluence signal genuine and persistent? Are we cutting winners too early?\n"
+    "  - Jegadeesh + Titman (1993 momentum paper): "
+    "Is momentum continuation being truncated by stops that are too tight?\n"
+    "Quantify missed alpha wherever found — estimate P&L impact, don't just flag it.\n\n"
+)
 
 # ── GitHub Gist endpoint (board CCR reads from here — raw IP is allowlisted) ──
 _GIST_ID = "1574ea556d06e7a1db45d00097f9c069"
@@ -148,107 +186,619 @@ def _read_tail(path: Path, n_lines: int) -> str:
         return ""
 
 
-def _build_meta_audit_prompt() -> tuple[str, dict]:
-    """Build the meta-audit cross-review prompt.
+# ── Meta-audit data helpers (Round 2 redesign — no Gemini report contamination) ─
 
-    Reads today's Gemini midday + nightly audit files, recent trade events
-    (Slack notification proxy), and recent bot log lines.
+def _load_week_trade_events(days_back: int = _TRADE_EVENTS_DAYS_BACK) -> list[dict]:
+    """Load ALL trade events from the past N days (not just a tail slice)."""
+    path = _LOGS_DIR / "trade_events.jsonl"
+    if not path.exists():
+        return []
+    cutoff = datetime.now(ZoneInfo("UTC")) - timedelta(days=days_back)
+    events: list[dict] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                ts_raw = ev.get("ts", "")
+                if ts_raw:
+                    try:
+                        ev_ts = datetime.fromisoformat(ts_raw)
+                        if ev_ts.tzinfo is None:
+                            ev_ts = ev_ts.replace(tzinfo=_PT)
+                        if ev_ts.astimezone(ZoneInfo("UTC")) < cutoff:
+                            continue
+                    except ValueError:
+                        pass  # unparseable ts — include anyway
+                events.append(ev)
+    except OSError:
+        pass
+    return events
 
-    Returns (prompt_text, sources_info_dict).
+
+def _load_week_rejected_signals(days_back: int = _TRADE_EVENTS_DAYS_BACK) -> list[dict]:
+    """Load rejected entry signals from past N days. Returns [] if file not found.
+    NOTE: rejected_signals.jsonl requires a bot-side build — infrastructure gap until then.
     """
-    midday_file = _find_latest_audit_file("midday_gemini_{date}.txt")
-    nightly_file = _find_latest_audit_file("gemini_audit_{date}.txt")
-    trade_events_path = _LOGS_DIR / "trade_events.jsonl"
-    bot_log_path = _LOGS_DIR / "mtf_bot.log"
+    path = _LOGS_DIR / "rejected_signals.jsonl"
+    if not path.exists():
+        return []
+    cutoff = datetime.now(ZoneInfo("UTC")) - timedelta(days=days_back)
+    signals: list[dict] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    sig = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                ts_raw = sig.get("ts", "")
+                if ts_raw:
+                    try:
+                        sig_ts = datetime.fromisoformat(ts_raw)
+                        if sig_ts.tzinfo is None:
+                            sig_ts = sig_ts.replace(tzinfo=_PT)
+                        if sig_ts.astimezone(ZoneInfo("UTC")) < cutoff:
+                            continue
+                    except ValueError:
+                        pass
+                signals.append(sig)
+    except OSError:
+        pass
+    return signals
 
-    sources: dict = {
-        "midday_gemini": (
-            str(midday_file) if midday_file else "NOT FOUND"
-        ),
-        "nightly_gemini": (
-            str(nightly_file) if nightly_file else "NOT FOUND"
-        ),
-        "trade_events": (
-            str(trade_events_path)
-            if trade_events_path.exists()
-            else "NOT FOUND"
-        ),
-        "bot_log": (
-            str(bot_log_path) if bot_log_path.exists() else "NOT FOUND"
-        ),
+
+def _fetch_week_fills(days_back: int = _FILLS_DAYS_BACK) -> list[dict]:
+    """Fetch FILL activities from Alpaca paper API for the past N days (authoritative P&L source)."""
+    api_key = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    if not api_key or not secret:
+        print("[auto_ai_audit] ⚠️  ALPACA keys not set — skipping fills fetch", file=sys.stderr)
+        return []
+    et_start = (
+        datetime.now(_ET).replace(hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(days=days_back)
+    )
+    et_end = datetime.now(_ET)
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret}
+    _fmt = "%Y-%m-%dT%H:%M:%SZ"
+    import requests  # type: ignore[import-untyped]
+    all_fills: list[dict] = []
+    after_id: str | None = None
+    for _ in range(20):  # max 20 pages × 100 fills = 2000 fills
+        params: dict = {
+            "after": et_start.astimezone(timezone.utc).strftime(_fmt),
+            "until": et_end.astimezone(timezone.utc).strftime(_fmt),
+            "page_size": 100,
+        }
+        if after_id:
+            params["after_id"] = after_id
+        try:
+            resp = requests.get(
+                "https://paper-api.alpaca.markets/v2/account/activities/FILL",
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                print(f"[auto_ai_audit] ⚠️  Fills HTTP {resp.status_code}", file=sys.stderr)
+                break
+            page = resp.json()
+            if not isinstance(page, list) or not page:
+                break
+            all_fills.extend(page)
+            after_id = page[-1].get("id")
+            if len(page) < 100:
+                break
+        except Exception as exc:  # noqa: BLE001
+            print(f"[auto_ai_audit] ⚠️  Fills fetch error: {exc}", file=sys.stderr)
+            break
+    return all_fills
+
+
+def _fetch_chart_proxies(symbols: list[str]) -> dict:
+    """Pull 30-day daily OHLCV for traded symbols via Alpaca Data T1.
+    Returns {symbol: {5d_return_pct, spy_5d_return_pct, 5d_vs_spy_pct,
+    ema20_dist_pct, atr_14d, trend}}.
+    SPY is always fetched for relative return comparison.
+    """
+    if not symbols:
+        return {}
+    api_key = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    if not api_key or not secret:
+        return {}
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret}
+    import requests  # type: ignore[import-untyped]
+    all_syms = list(set(list(symbols) + ["SPY"]))
+    bars_data: dict = {}
+    for sym in all_syms:
+        try:
+            resp = requests.get(
+                f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
+                headers=headers,
+                params={"timeframe": "1Day", "limit": _CHART_PROXY_BARS, "adjustment": "raw"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                bars_data[sym] = resp.json().get("bars", [])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[auto_ai_audit] ⚠️  Chart proxy {sym} failed: {exc}", file=sys.stderr)
+    spy_bars = bars_data.get("SPY", [])
+    spy_5d = (
+        round((spy_bars[-1]["c"] / spy_bars[-6]["c"] - 1) * 100, 2)
+        if len(spy_bars) >= 6 else None
+    )
+    result: dict = {}
+    for sym in symbols:
+        bars = bars_data.get(sym, [])
+        if not bars:
+            result[sym] = {"status": "NO_DATA"}
+            continue
+        closes = [b["c"] for b in bars]
+        ret5 = (
+            round((closes[-1] / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else None
+        )
+        ema20_dist: float | None = None
+        if len(closes) >= 20:
+            k = 2.0 / 21.0
+            ema = closes[-20]
+            for c in closes[-19:]:
+                ema = ema * (1 - k) + c * k
+            ema20_dist = round((closes[-1] / ema - 1) * 100, 2) if ema > 0 else None
+        atr: float | None = None
+        if len(bars) >= 15:
+            start_i = max(1, len(bars) - 14)
+            trs = [
+                max(
+                    bars[i]["h"] - bars[i]["l"],
+                    abs(bars[i]["h"] - bars[i - 1]["c"]),
+                    abs(bars[i]["l"] - bars[i - 1]["c"]),
+                )
+                for i in range(start_i, len(bars))
+            ]
+            atr = round(sum(trs) / len(trs), 2) if trs else None
+        trend = (
+            "ABOVE_STRONG" if (ema20_dist or 0.0) > 3.0
+            else "ABOVE" if (ema20_dist or 0.0) > 0.0
+            else "BELOW" if (ema20_dist or 0.0) > -3.0
+            else "BELOW_STRONG"
+        ) if ema20_dist is not None else "UNKNOWN"
+        result[sym] = {
+            "5d_return_pct": ret5,
+            "spy_5d_return_pct": spy_5d,
+            "5d_vs_spy_pct": (
+                round(ret5 - spy_5d, 2)
+                if ret5 is not None and spy_5d is not None else None
+            ),
+            "ema20_dist_pct": ema20_dist,
+            "atr_14d": atr,
+            "trend": trend,
+        }
+    return result
+
+
+def _fetch_macro_events_week(days_back: int = 7) -> list[dict]:
+    """Fetch high-impact and medium-impact US macro events from FMP for past N days."""
+    fmp_key = os.environ.get("FMP_API_KEY", "")
+    if not fmp_key:
+        return []
+    today = datetime.now(_ET).date()
+    from_date = today - timedelta(days=days_back)
+    import requests  # type: ignore[import-untyped]
+    try:
+        resp = requests.get(
+            "https://financialmodelingprep.com/api/v3/economic_calendar",
+            params={
+                "from": from_date.isoformat(),
+                "to": today.isoformat(),
+                "apikey": fmp_key,
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            print(f"[auto_ai_audit] ⚠️  FMP macro HTTP {resp.status_code}", file=sys.stderr)
+            return []
+        return [
+            {
+                "date": e.get("date", ""),
+                "event": e.get("event", ""),
+                "impact": e.get("impact", ""),
+                "actual": e.get("actual", ""),
+                "estimate": e.get("estimate", ""),
+            }
+            for e in resp.json()
+            if e.get("country", "").upper() == "US"
+            and e.get("impact", "").upper() in ("HIGH", "MEDIUM")
+        ]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[auto_ai_audit] ⚠️  FMP macro calendar failed: {exc}", file=sys.stderr)
+        return []
+
+
+def _compute_trade_stats(events: list[dict], fills: list[dict]) -> dict:
+    """Aggregate trade statistics: per-symbol, score dist, MRI dist, infrastructure gap detection."""
+    entries = [e for e in events if e.get("event") == "entry"]
+    exits = [e for e in events if e.get("event") == "exit"]
+    stop_hits = [e for e in events if e.get("event") == "stop_hit"]
+    partials = [e for e in events if e.get("event") == "partial_exit"]
+    sym_stats: dict = {}
+    for ev in entries + exits + stop_hits + partials:
+        sym = ev.get("symbol", "UNKNOWN")
+        if sym not in sym_stats:
+            sym_stats[sym] = {"entries": 0, "exits": 0, "stop_hits": 0, "partials": 0}
+        if ev.get("event") == "entry":
+            sym_stats[sym]["entries"] += 1
+        elif ev.get("event") == "exit":
+            sym_stats[sym]["exits"] += 1
+        elif ev.get("event") == "stop_hit":
+            sym_stats[sym]["stop_hits"] += 1
+        elif ev.get("event") == "partial_exit":
+            sym_stats[sym]["partials"] += 1
+    score_dist: dict = {}
+    mri_dist: dict = {}
+    for ev in entries:
+        s = str(ev.get("score", "?"))
+        score_dist[s] = score_dist.get(s, 0) + 1
+        m = str(ev.get("mri_level", "?"))
+        mri_dist[m] = mri_dist.get(m, 0) + 1
+    # ── Infrastructure gap detection ──────────────────────────────────────
+    has_components = any("components" in e for e in entries)
+    has_spy_bar = any("spy_bar_pct" in e for e in entries)
+    gaps: list[str] = []
+    if not has_components:
+        gaps.append(
+            "confluence_component_breakdown — 'components' key absent from trade_events.jsonl "
+            "(bot-side build required before per-component analysis is possible)"
+        )
+    if not has_spy_bar:
+        gaps.append(
+            "spy_bar_magnitude_at_entry — 'spy_bar_pct' key absent from trade_events.jsonl "
+            "(board vote required; needed to distinguish strong-bar vs weak-bar entries)"
+        )
+    return {
+        "n_entries": len(entries),
+        "n_exits": len(exits),
+        "n_stop_hits": len(stop_hits),
+        "n_partials": len(partials),
+        "n_fills": len(fills),
+        "symbols_traded": sorted(sym_stats.keys()),
+        "per_symbol": sym_stats,
+        "score_distribution": score_dist,
+        "mri_distribution": mri_dist,
+        "has_component_data": has_components,
+        "has_spy_bar_data": has_spy_bar,
+        "infrastructure_gaps": gaps,
     }
 
-    parts: list[str] = [
-        "META-AUDIT CROSS-REVIEW — alpaca-mtf-bot trading system",
-        "",
-        "You are an independent auditor reviewing Gemini's automated audit "
-        "reports for an Alpaca paper trading bot.",
-        "The nightly and midday reports below were produced by Gemini "
-        "(gemini-2.5-flash). Your job:",
-        "",
-        "1. CONFIRM findings you agree are critical — assign P0/P1/P2/P3",
-        "2. CHALLENGE findings you disagree with or that lack evidence",
-        "3. SURFACE issues Gemini missed based on the raw data below",
-        "4. Final verdict: PASS (no action) / WARN (monitor) / "
-        "FAIL (immediate fix required)",
-        "",
-        "IMPORTANT — Slack notifications proxy:",
-        "  Every entry, exit, stop-hit, and MRI change in trade_events.jsonl "
-        "below corresponds to a Slack alert that was sent to the operator. "
-        "Evaluate whether those alerts represent appropriate bot behavior.",
+
+def _load_prior_directives(n: int = _DIRECTIVES_HISTORY_WEEKS) -> list[dict]:
+    """Load last N weeks of audit directives for compliance tracking."""
+    path = _LOGS_DIR / "audit_directives.jsonl"
+    if not path.exists():
+        return []
+    entries: list[dict] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entries.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    pass
+    except OSError:
+        pass
+    return entries[-n:] if entries else []
+
+
+def _append_directives_log(
+    week: str, ds_text: str | None, gai_text: str | None
+) -> None:
+    """Append this week's audit output to audit_directives.jsonl (atomic write, RC-5 compliant)."""
+    path = _LOGS_DIR / "audit_directives.jsonl"
+    entry = {
+        "week": week,
+        "ts_pt": datetime.now(_PT).strftime("%Y-%m-%d %I:%M %p PT"),
+        "ds_directives_preview": (ds_text or "")[:2000],
+        "gai_directives_preview": (gai_text or "")[:2000],
+        "status": "pending_review",
+    }
+    try:
+        _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        existing: list[dict] = []
+        if path.exists():
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if raw:
+                        try:
+                            existing.append(json.loads(raw))
+                        except json.JSONDecodeError:
+                            pass
+        existing.append(entry)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            for e in existing:
+                fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+        tmp.replace(path)
+        print(f"[auto_ai_audit] 📋 Directives log updated ({len(existing)} total entries): {path.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[auto_ai_audit] ⚠️  Directives log write failed: {exc}", file=sys.stderr)
+
+
+def _build_meta_audit_data_context() -> tuple[dict, dict]:
+    """Build complete data context for meta-audit.
+    GEMINI REPORTS INTENTIONALLY EXCLUDED (Round 2 finding: contamination — DS/Gemini
+    anchored to Gemini's prior conclusions, including prior errors).
+    Returns (context_dict, sources_dict).
+    """
+    sources: dict = {}
+    print("[auto_ai_audit] 📊 Loading week trade events ...")
+    events = _load_week_trade_events()
+    sources["trade_events"] = f"{len(events)} events (past {_TRADE_EVENTS_DAYS_BACK}d)"
+    print("[auto_ai_audit] 📊 Fetching Alpaca fills ...")
+    fills = _fetch_week_fills()
+    sources["fills"] = f"{len(fills)} fills (past {_FILLS_DAYS_BACK}d)"
+    traded_syms = sorted({e.get("symbol", "") for e in events if e.get("symbol")})
+    chart_proxies: dict = {}
+    if traded_syms:
+        print(f"[auto_ai_audit] 📊 Fetching chart proxies: {traded_syms} ...")
+        chart_proxies = _fetch_chart_proxies(traded_syms)
+        sources["chart_proxies"] = f"{len(chart_proxies)} symbols"
+    else:
+        sources["chart_proxies"] = "no trades this week — skipped"
+    print("[auto_ai_audit] 📊 Fetching FMP macro calendar ...")
+    macro_events = _fetch_macro_events_week()
+    sources["macro_calendar"] = f"{len(macro_events)} US macro events past 7d"
+    prior_directives = _load_prior_directives()
+    sources["prior_directives"] = f"{len(prior_directives)} prior audit entries"
+    bot_tail = _read_tail(_LOGS_DIR / "mtf_bot.log", _BOT_LOG_TAIL_LINES)
+    sources["bot_log"] = "✅ loaded" if bot_tail else "⚠️  NOT FOUND"
+    stats = _compute_trade_stats(events, fills)
+    rejected_path = _LOGS_DIR / "rejected_signals.jsonl"
+    if rejected_path.exists():
+        rejected = _load_week_rejected_signals()
+        sources["rejected_signals"] = f"{len(rejected)} rejected signals past 7d"
+    else:
+        rejected = []
+        sources["rejected_signals"] = "⚠️  INFRASTRUCTURE_GAP — rejected_signals.jsonl not yet built"
+        stats["infrastructure_gaps"].append(
+            "blocked_entry_visibility — rejected_signals.jsonl not yet implemented in bot; "
+            "audit cannot evaluate gate efficacy (Type II error blindness)"
+        )
+    return {
+        "events": events,
+        "fills": fills,
+        "chart_proxies": chart_proxies,
+        "macro_events": macro_events,
+        "prior_directives": prior_directives,
+        "bot_log_tail": bot_tail,
+        "stats": stats,
+        "rejected_signals": rejected,
+    }, sources
+
+
+def _format_meta_audit_body(ctx: dict) -> str:
+    """Format shared data sections used by both DS and Gemini prompts."""
+    stats = ctx["stats"]
+    n_fills = stats["n_fills"]
+    n_entries = stats["n_entries"]
+    parts: list[str] = []
+
+    # ── Bot context ───────────────────────────────────────────────────────
+    parts += [
+        "=== BOT CONTEXT ===",
+        "alpaca-mtf-bot: 12-point MTF confluence scoring on Alpaca paper account (~$2,800 equity).",
+        "Entry gate: SPY 5-min bar-over-bar (sole gate). MRI adjusts size floor + MIN_SCORE.",
+        "Params: MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | MAX_RISK=4%/trade | PDT max 3 day trades.",
         "",
     ]
 
-    # ── Midday Gemini report ──────────────────────────────────────────────
-    if midday_file:
-        parts += [
-            f"=== MIDDAY GEMINI AUDIT ({midday_file.name}) ===",
-            midday_file.read_text(encoding="utf-8", errors="replace").strip(),
-            "",
-        ]
+    # ── Statistical guardrail ─────────────────────────────────────────────
+    if n_fills < _MIN_FILLS_FOR_DIRECTIVES:
+        guardrail = (
+            f"⚠️  STATISTICAL GUARDRAIL ACTIVE: Only {n_fills} fills this week "
+            f"(minimum {_MIN_FILLS_FOR_DIRECTIVES} required for parameter directives). "
+            f"You MAY identify patterns and observations. You MUST NOT recommend parameter "
+            f"changes (MIN_SCORE, stop size, targets, sizing). "
+            f"Label any such observations as [INSUFFICIENT_SAMPLE — N={n_fills}]."
+        )
     else:
-        parts += ["=== MIDDAY GEMINI AUDIT: NOT AVAILABLE ===", ""]
+        guardrail = (
+            f"Sample: {n_fills} fills, {n_entries} entries — sufficient for directives."
+        )
+    parts += ["=== STATISTICAL GUARDRAIL ===", guardrail, ""]
 
-    # ── Nightly Gemini report ─────────────────────────────────────────────
-    if nightly_file:
-        parts += [
-            f"=== NIGHTLY GEMINI AUDIT ({nightly_file.name}) ===",
-            nightly_file.read_text(
-                encoding="utf-8", errors="replace"
-            ).strip(),
-            "",
-        ]
+    # ── Infrastructure gaps ───────────────────────────────────────────────
+    gaps = stats.get("infrastructure_gaps", [])
+    if gaps:
+        parts += ["=== INFRASTRUCTURE GAPS (data not yet available — note but do not penalize) ==="]
+        for g in gaps:
+            parts.append(f"  ⚠️  {g}")
+        parts.append("")
+
+    # ── Prior directives (compliance tracking) ────────────────────────────
+    prior = ctx["prior_directives"]
+    if prior:
+        parts += [f"=== PRIOR AUDIT DIRECTIVES (last {len(prior)} weeks — evaluate compliance) ==="]
+        for d in prior:
+            parts += [
+                f"Week {d.get('week', '?')} | {d.get('ts_pt', '')} | Status: {d.get('status', '?')}",
+                f"  DS directives: {d.get('ds_directives_preview', 'N/A')[:600]}",
+                f"  GAI directives: {d.get('gai_directives_preview', 'N/A')[:600]}",
+                "",
+            ]
     else:
-        parts += ["=== NIGHTLY GEMINI AUDIT: NOT AVAILABLE ===", ""]
+        parts += ["=== PRIOR DIRECTIVES: None (first audit run — skip compliance section) ===", ""]
 
-    # ── Trade events (Slack notification proxy) ───────────────────────────
-    trade_tail = _read_tail(trade_events_path, _TRADE_EVENTS_TAIL)
-    if trade_tail:
-        parts += [
-            f"=== RECENT TRADE EVENTS / SLACK NOTIFICATION PROXY"
-            f" (last {_TRADE_EVENTS_TAIL} from trade_events.jsonl) ===",
-            trade_tail,
-            "",
-        ]
+    # ── Trade events with inline chart proxies ────────────────────────────
+    events = ctx["events"]
+    chart_proxies = ctx["chart_proxies"]
+    if events:
+        parts += [f"=== TRADE EVENTS — PAST {_TRADE_EVENTS_DAYS_BACK} DAYS ({len(events)} events) ==="]
+        for ev in events:
+            sym = ev.get("symbol", "?")
+            evt = ev.get("event", "?")
+            ts = ev.get("ts", "?")
+            line = f"[{ts}] {evt.upper()} {sym}"
+            if ev.get("score") is not None:
+                line += f" | score={ev['score']}"
+            if ev.get("mri_level"):
+                line += f" | mri={ev['mri_level']}"
+            if ev.get("price") is not None:
+                line += f" | price=${ev['price']:.2f}"
+            if ev.get("size") is not None:
+                line += f" | qty={ev['size']}"
+            if ev.get("pdt_used") is not None:
+                line += f" | pdt={ev['pdt_used']}"
+            parts.append(line)
+            # Inline chart proxy for entry events
+            if evt == "entry" and sym in chart_proxies:
+                cp = chart_proxies[sym]
+                if cp.get("status") != "NO_DATA":
+                    parts.append(
+                        f"    [chart] 5d={cp.get('5d_return_pct','?')}% "
+                        f"vs_SPY={cp.get('5d_vs_spy_pct','?')}% "
+                        f"ema20_dist={cp.get('ema20_dist_pct','?')}% "
+                        f"trend={cp.get('trend','?')} "
+                        f"atr14d={cp.get('atr_14d','?')}"
+                    )
+        parts.append("")
     else:
-        parts += [
-            "=== TRADE EVENTS: NOT AVAILABLE ===",
-            "",
-        ]
+        parts += [f"=== TRADE EVENTS: None in past {_TRADE_EVENTS_DAYS_BACK} days ===", ""]
 
-    # ── Bot log tail ──────────────────────────────────────────────────────
-    bot_tail = _read_tail(bot_log_path, _BOT_LOG_TAIL_LINES)
+    # ── Fills summary (Alpaca-authoritative) ─────────────────────────────
+    fills = ctx["fills"]
+    if fills:
+        parts += [f"=== ALPACA FILLS — PAST {_FILLS_DAYS_BACK} DAYS ({len(fills)} fills) ==="]
+        for f in fills[:60]:
+            ts = str(f.get("transaction_time", "?"))[:16]
+            parts.append(
+                f"  {ts} | {f.get('symbol','?')} {f.get('side','?')} "
+                f"{f.get('qty','?')}sh @ ${f.get('price','?')}"
+            )
+        if len(fills) > 60:
+            parts.append(f"  ... and {len(fills) - 60} more fills")
+        parts.append("")
+    else:
+        parts += [f"=== FILLS: None in past {_FILLS_DAYS_BACK} days ===", ""]
+
+    # ── Per-symbol summary ────────────────────────────────────────────────
+    per_sym = stats["per_symbol"]
+    if per_sym:
+        parts += ["=== PER-SYMBOL SUMMARY (multi-week pattern detection) ==="]
+        for sym, s in sorted(per_sym.items()):
+            cp = chart_proxies.get(sym, {})
+            line = (
+                f"  {sym}: entries={s['entries']} exits={s['exits']} "
+                f"stops={s['stop_hits']} partials={s['partials']}"
+            )
+            if cp and cp.get("status") != "NO_DATA":
+                line += (
+                    f" | 5d={cp.get('5d_return_pct','?')}% "
+                    f"vs_SPY={cp.get('5d_vs_spy_pct','?')}% "
+                    f"trend={cp.get('trend','?')}"
+                )
+            parts.append(line)
+        parts.append("")
+
+    # ── Score + MRI distributions ─────────────────────────────────────────
+    if stats["score_distribution"]:
+        parts += ["=== SCORE DISTRIBUTION AT ENTRY ===", "  " + str(stats["score_distribution"]), ""]
+    if stats["mri_distribution"]:
+        parts += ["=== MRI LEVEL AT ENTRY ===", "  " + str(stats["mri_distribution"]), ""]
+
+    # ── Rejected signals (if infrastructure exists) ───────────────────────
+    rejected = ctx["rejected_signals"]
+    if rejected:
+        parts += [
+            f"=== REJECTED SIGNALS — PAST {_TRADE_EVENTS_DAYS_BACK} DAYS "
+            f"({len(rejected)} blocked entries) ==="
+        ]
+        for sig in rejected[:30]:
+            parts.append(
+                f"  [{sig.get('ts','?')}] {sig.get('symbol','?')} "
+                f"score={sig.get('score','?')} | BLOCKED: {sig.get('reason','?')}"
+            )
+        if len(rejected) > 30:
+            parts.append(f"  ... and {len(rejected) - 30} more")
+        parts.append("")
+
+    # ── Macro calendar ────────────────────────────────────────────────────
+    macro = ctx["macro_events"]
+    if macro:
+        parts += ["=== US MACRO EVENTS — PAST 7 DAYS (correlation with trade outcomes) ==="]
+        for ev in macro:
+            parts.append(
+                f"  {str(ev.get('date','?'))[:10]} | {ev.get('impact','?'):6} | "
+                f"{ev.get('event','?')} | actual={ev.get('actual','?')} est={ev.get('estimate','?')}"
+            )
+        parts.append("")
+    else:
+        parts += ["=== MACRO CALENDAR: No high-impact US events (or FMP_API_KEY not set) ===", ""]
+
+    # ── Bot log tail (system health only) ────────────────────────────────
+    bot_tail = ctx.get("bot_log_tail", "")
     if bot_tail:
         parts += [
-            f"=== RECENT BOT LOG (last {_BOT_LOG_TAIL_LINES} lines"
-            f" from mtf_bot.log) ===",
+            f"=== BOT LOG TAIL (last {_BOT_LOG_TAIL_LINES} lines — system health context) ===",
             bot_tail,
             "",
         ]
-    else:
-        parts += ["=== BOT LOG: NOT AVAILABLE ===", ""]
 
-    return "\n".join(parts), sources
+    # ── Requested output format ───────────────────────────────────────────
+    directive_instruction = (
+        "MAX 3 DIRECTIVES. Each MUST cite specific trade evidence "
+        "(format: date/symbol/outcome). "
+        "Format: [DIRECTIVE-N] Action | Evidence: date/symbol/outcome | Expected impact"
+        if n_fills >= _MIN_FILLS_FOR_DIRECTIVES
+        else (
+            f"DIRECTIVES BLOCKED — insufficient sample (N={n_fills} < {_MIN_FILLS_FOR_DIRECTIVES}). "
+            "You may note observations but MUST NOT prescribe parameter changes."
+        )
+    )
+    parts += [
+        "=== REQUESTED OUTPUT FORMAT ===",
+        "1. TRADE-BY-TRADE VERDICT",
+        "   For each ENTRY event: [symbol direction score MRI] → outcome if visible →",
+        "   VERDICT: edge_confirmed | entry_error | regime_error | gtc_forced | unknown",
+        "   Use chart_proxies for context: was trade with/against trend? before/after macro?",
+        "",
+        "2. PATTERN ANALYSIS",
+        "   Top 2-3 patterns (positive OR negative). Each pattern MUST cite ≥2 specific trades.",
+        "",
+        "3. PRIOR DIRECTIVES COMPLIANCE",
+        "   For each directive above: CONFIRMED_IMPLEMENTED | NOT_IMPLEMENTED | CANNOT_VERIFY",
+        "   (Skip this section if no prior directives exist.)",
+        "",
+        "4. WEEKLY DIRECTIVES",
+        f"   {directive_instruction}",
+        "",
+        "5. FINAL VERDICT",
+        "   PASS / WARN / FAIL — one sentence rationale.",
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def _build_ds_prompt(ctx: dict) -> str:
+    """Build DeepSeek prompt: skeptical risk auditor role + shared data context."""
+    return _DS_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
+
+
+def _build_gai_prompt(ctx: dict) -> str:
+    """Build Gemini prompt: alpha optimizer role + shared data context."""
+    return _GAI_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
 
 
 # ── Slack post (meta-audit results) ──────────────────────────────────────────
@@ -514,8 +1064,14 @@ def _run_audit(
     out_path: Path,
     mode_label: str,
     post_slack: bool = False,
+    ds_prompt: str | None = None,
+    gai_prompt: str | None = None,
 ) -> tuple[dict, dict]:
     """Submit prompt to DS + Gemini, write JSON, print responses.
+
+    ds_prompt / gai_prompt: adversarial-mode overrides (meta-audit).
+    When provided, DS gets ds_prompt and Gemini gets gai_prompt (different roles).
+    When None, both get the shared `prompt` (patch-gate mode).
 
     Returns (ds_result, gai_result).
     """
@@ -523,11 +1079,19 @@ def _run_audit(
     ts_display = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
     print(f"[auto_ai_audit] [{mode_label}] — {ts_display}")
-    print(f"[auto_ai_audit] Prompt: {len(prompt):,} chars")
+    if ds_prompt is not None or gai_prompt is not None:
+        print(
+            f"[auto_ai_audit] Adversarial mode: "
+            f"DS={len(ds_prompt or ''):,} chars (skeptic) | "
+            f"GAI={len(gai_prompt or ''):,} chars (optimizer)"
+        )
+    else:
+        print(f"[auto_ai_audit] Prompt: {len(prompt):,} chars")
 
-    # ── DeepSeek ─────────────────────────────────────────────────────────
+    # ── DeepSeek (uses ds_prompt override in adversarial mode) ───────────
+    _ds_call_prompt = ds_prompt if ds_prompt is not None else prompt
     print("[auto_ai_audit] ⏳ Calling DeepSeek ...")
-    ds_result = _call_deepseek(prompt)
+    ds_result = _call_deepseek(_ds_call_prompt)
     if ds_result["error"]:
         print(
             f"[auto_ai_audit] ⚠️  DeepSeek FAILED "
@@ -540,9 +1104,10 @@ def _run_audit(
             f"({ds_result['elapsed_s']}s, {ds_result['tokens']} tokens)"
         )
 
-    # ── Gemini ───────────────────────────────────────────────────────────
+    # ── Gemini (uses gai_prompt override in adversarial mode) ────────────
+    _gai_call_prompt = gai_prompt if gai_prompt is not None else prompt
     print("[auto_ai_audit] ⏳ Calling Gemini ...")
-    gai_result = _call_gemini(prompt)
+    gai_result = _call_gemini(_gai_call_prompt)
     if gai_result["error"]:
         print(
             f"[auto_ai_audit] ⚠️  Gemini FAILED "
@@ -559,13 +1124,17 @@ def _run_audit(
     ds_ok = ds_result["error"] is None
     gai_ok = gai_result["error"] is None
 
+    _effective_prompt = ds_prompt or prompt
     output = {
         "schema_version": "1.0",
         "mode": mode_label,
+        "adversarial_mode": ds_prompt is not None,
         "ts_pt": ts_display,
         "ts_iso": now_pt.isoformat(),
-        "prompt_chars": len(prompt),
-        "prompt_preview": prompt[:300] + ("…" if len(prompt) > 300 else ""),
+        "prompt_chars": len(_effective_prompt),
+        "prompt_preview": _effective_prompt[:300] + ("…" if len(_effective_prompt) > 300 else ""),
+        "ds_prompt_chars": len(ds_prompt) if ds_prompt is not None else None,
+        "gai_prompt_chars": len(gai_prompt) if gai_prompt is not None else None,
         "deepseek": ds_result,
         "gemini": gai_result,
         "summary": {
@@ -673,25 +1242,35 @@ def main() -> None:
 
     # ── Meta-audit mode ───────────────────────────────────────────────────
     if args.meta_audit:
-        print("[auto_ai_audit] 📊 Building meta-audit prompt ...")
-        prompt, sources = _build_meta_audit_prompt()
+        print("[auto_ai_audit] 📊 Building meta-audit data context (adversarial mode) ...")
+        context, sources = _build_meta_audit_data_context()
         print("[auto_ai_audit] Sources loaded:")
         for k, v in sources.items():
-            label = "✅" if "NOT FOUND" not in v else "⚠️ "
-            short = Path(v).name if "NOT FOUND" not in v else v
-            print(f"  {label} {k}: {short}")
-        if not prompt.strip():
+            label = "✅" if "⚠️" not in str(v) and "NOT FOUND" not in str(v) else "⚠️ "
+            print(f"  {label} {k}: {v}")
+        ds_p = _build_ds_prompt(context)
+        gai_p = _build_gai_prompt(context)
+        if not ds_p.strip() or not gai_p.strip():
             print(
-                "ERROR: Meta-audit prompt is empty — no audit files found.",
+                "ERROR: Meta-audit prompts are empty — no data context available.",
                 file=sys.stderr,
             )
             sys.exit(2)
         out_path = _LOGS_DIR / f"ai_audit_meta_{ts_file}_PT.json"
         ds_result, gai_result = _run_audit(
-            prompt,
+            "",                          # base prompt unused in adversarial mode
             out_path,
             mode_label="meta-audit",
             post_slack=not args.no_slack,
+            ds_prompt=ds_p,
+            gai_prompt=gai_p,
+        )
+        # Append this week's directives to the running log for future compliance tracking
+        _week_label = datetime.now(_PT).strftime("%Y-W%W")
+        _append_directives_log(
+            _week_label,
+            ds_result.get("text") if ds_result else None,
+            gai_result.get("text") if gai_result else None,
         )
     else:
         # ── Patch-gate mode ───────────────────────────────────────────────
