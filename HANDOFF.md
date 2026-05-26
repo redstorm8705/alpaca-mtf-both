@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-25 S39 (post-compaction resumed) | **S39 COMPLETE — entry_logic.py 3×RC-3 + RC-4 #12c PATCHED; scan_to_html.py 11×RC-3 PATCHED; RC-3 count=3; RC-4 count=10; 2 crons created (usage-reset + nightly); Decision 1+2 RESOLVED; weekly_perf_audit.py build is next P1**
+**Updated:** 2026-05-25 S40 | **S40: auto_ai_audit.py BUILT (patch-gate + meta-audit + board CCR); GitHub repo live; DeepSeek API wired; gemini-3.1-pro-preview; full autonomous audit pipeline deployed; weekly_perf_audit.py still next P1**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -43,11 +43,31 @@
 - [ ] **P2: RAM leak investigation** — 731MB at S39 start (second occurrence after S37's 750MB). Restarted → 211MB. alerts.py GTC retry accumulation suspected (DS S32 audit). Dedicated debug session needed.
 - [ ] **P3: options_scanner.py** — BUG-0DTE-FALLBACK (HIGH, L400-412); RC-5 L1081. `⚠️ AUDITED — PATCH PENDING DS+GAI`. Needs fresh full read (1,946L, Explore subagent) + DS/GAI prompt before patching (prior audit 2026-04-30, all gates reset per RULE C-2).
 
-## Autonomous Crons Created (S39)
-- **Usage-reset (one-time):** `trig_015BE5S4bmQtajwZmcLrSbGt` — fires 2026-05-26T02:55:00Z (7:55 PM PDT) → https://claude.ai/code/routines/trig_015BE5S4bmQtajwZmcLrSbGt
-- **Nightly recurring:** `trig_01GHKQufnHRykVL9Xypqeee4` — `0 7 * * *` = midnight PT every night → https://claude.ai/code/routines/trig_01GHKQufnHRykVL9Xypqeee4
-- ⚠️ **No git remote** — CCR agents can't clone source files. Push to GitHub to enable full autonomous code work.
-- **DS/GAI automation plan:** GEMINI_API_KEY present in .env ✅. DEEPSEEK_API_KEY missing ❌ — add at platform.deepseek.com, then add to OCI .env. Then build `auto_ai_audit.py`.
+## Autonomous Crons / CCRs
+
+### OCI Cron (crontab on 129.153.208.32)
+- **Midday audit:** `30 17,18 * * 1-5` via cron_tz_wrapper → 1:30 PM ET → `midday_audit.py` → `logs/midday_gemini_*.txt` + Slack
+- **Nightly audit:** `5 20,21 * * 1-5` via cron_tz_wrapper → 4:05 PM ET → `nightly_audit.py` → `logs/gemini_audit_*.txt` + Slack
+- **Meta-audit:** `35 20,21 * * 1-5` via cron_tz_wrapper → 4:35 PM ET → `auto_ai_audit.py --meta-audit` → DS+GAI cross-review → `meta_audit_latest.json` → Slack (added S40)
+
+### Claude CCRs (claude.ai/code/routines)
+- **Usage-reset (one-time):** `trig_015BE5S4bmQtajwZmcLrSbGt` — fired 2026-05-26T02:55:00Z → https://claude.ai/code/routines/trig_015BE5S4bmQtajwZmcLrSbGt
+- **Nightly CCR:** `trig_01GHKQufnHRykVL9Xypqeee4` — `0 7 * * *` = midnight PT → https://claude.ai/code/routines/trig_01GHKQufnHRykVL9Xypqeee4
+- **Board Review CCR:** `trig_01B37951UHsX2NAsCvrJuHNK` — weekdays 2:30 PM PDT (5:30 PM ET) → 4 parallel domain agents review meta-audit → board verdict → https://claude.ai/code/routines/trig_01B37951UHsX2NAsCvrJuHNK (added S40)
+
+### Full Daily Pipeline (Mon–Fri)
+| Time ET | What | Output |
+|---------|------|--------|
+| 1:30 PM | midday_audit.py (Gemini) | midday_gemini_*.txt + Slack |
+| 4:05 PM | nightly_audit.py (Gemini) | gemini_audit_*.txt + Slack |
+| 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Slack |
+| 5:30 PM | Board CCR (4 agents: Harris/Brandt, Thorp/Asness, Peterffy/Katsuyama, McKinney) | Board verdict in CCR transcript |
+
+### Infrastructure Notes
+- **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here
+- **Board endpoint:** `http://129.153.208.32:8080/meta_audit_latest.json` — nginx serves from `/var/www/mtf-bot/` (no auth)
+- **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY both in local .env and OCI .env ✅
+- **Gemini model:** `gemini-3.1-pro-preview` (matches Google AI Studio) via `google.genai` SDK ✅
 
 ## Last Session (S39 — 2026-05-25, in progress)
 
