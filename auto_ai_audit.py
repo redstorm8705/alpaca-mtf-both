@@ -532,6 +532,25 @@ def _run_audit(
     _atomic_write_json(out_path, output)
     print(f"[auto_ai_audit] 📄 JSON written: {out_path.name}")
 
+    # In meta-audit mode, also write latest pointer to /var/www/mtf-bot/
+    # so the board CCR can fetch it via nginx at /meta_audit_latest.json
+    if mode_label == "meta-audit":
+        www_path = Path("/var/www/mtf-bot/meta_audit_latest.json")
+        try:
+            www_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_www = www_path.with_suffix(".tmp")
+            tmp_www.write_text(
+                json.dumps(output, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp_www.replace(www_path)
+            print("[auto_ai_audit] 📄 Board endpoint updated: /meta_audit_latest.json")
+        except OSError as exc:
+            print(
+                f"[auto_ai_audit] ⚠️  Could not write board endpoint: {exc}",
+                file=sys.stderr,
+            )
+
     # ── Print raw responses ───────────────────────────────────────────────
     print()
     print("=" * 72)
