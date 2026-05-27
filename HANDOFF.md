@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-26 S40 | **S40 COMPLETE: full autonomous audit pipeline live (DS+Gemini meta-audit → GitHub Gist → Board CCR 4 agents). Board verdict: FAIL — 2 P0s actioned. weekly_perf_audit.py next P1.**
+**Updated:** 2026-05-27 S42 | **S42: weekly_perf_audit.py P1 BUILD COMPLETE — static analysis PASS (py_compile, mypy 0 errors, ruff 0 violations), cold second-agent PASS, impact radius 0. Deployed to OCI. Cron wired Friday 4:15 PM ET. P1 CLOSED. P0 still open: risk.open_positions startup fix (DS/GAI prompt prepared, awaiting user response to paste back).**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -49,8 +49,7 @@
 
 - [ ] **P0: risk.open_positions startup fix** — Bot initializes to 0 regardless of overnight positions → root cause of 6-position breach. Fix in `main.py` startup sequence: query Alpaca, set from live roster, halt if ≥ MAX. Full patch sequence required (>1000 lines → Explore subagent + DS/GAI gate, RTH chain).
 - [ ] **P0: Slack alert noise** — Decouple mri_refresh/breadth_refresh/routine events from Slack. Reserve Slack for actionable-only events. Full patch sequence required for `alerts.py` / `events/macro_risk_index.py`.
-- [ ] **P1: weekly_perf_audit.py build** — Design spec at `logs/weekly_perf_audit_design_v1.md`. DS/GAI design review COMPLETE (both APPROVE). **4 DS/GAI additions APPROVED** — must be incorporated into spec before coding: (1) Emergency Escalation Clause >25% drawdown, (2) VIX floor <15=LOW_VOL, (3) monthly 10-trade mislabeling gate, (4) MIN_TRADES thresholds. NOT in RTH chain → no DS/GAI gate. RTH block + atomic write required. Cron: Friday 4:15 PM ET. UNBLOCKED — ready to build.
-- [ ] **P1: weekly_perf_audit.py design spec update** — Add 4 DS/GAI additions to `logs/weekly_perf_audit_design_v1.md` before build begins (separate step from coding).
+- [x] **P1: weekly_perf_audit.py COMPLETE (S42)** — Script built, static analysis PASS, cold second-agent PASS, OCI deployed, cron wired `15 20,21 * * 5` via cron_tz_wrapper 16:15. 4 DS/GAI additions incorporated (emergency escalation, LOW_VOL VIX regime, monthly mislabeling gate, MIN_TRADES thresholds). Design spec updated at `logs/weekly_perf_audit_design_v1.md` (§14).
 - [ ] **P2: RC-9 in scan_to_html.py** — `_fetch_yfinance_news()` uses yfinance for news data (T4 violation). Board vote + migration plan required.
 - [ ] **P2: BUG-C structural fix** — write_scan_html background thread. Interim 10-min throttle deployed S31. Structural fix deadline 2026-06-30.
 - [ ] **P2: RAM leak investigation** — 731MB at S39 start (second occurrence after S37's 750MB). Restarted → 211MB. alerts.py GTC retry accumulation suspected (DS S32 audit). Dedicated debug session needed.
@@ -62,6 +61,7 @@
 - **Midday audit:** `30 17,18 * * 1-5` via cron_tz_wrapper → 1:30 PM ET → `midday_audit.py` → `logs/midday_gemini_*.txt` + Slack
 - **Nightly audit:** `5 20,21 * * 1-5` via cron_tz_wrapper → 4:05 PM ET → `nightly_audit.py` → `logs/gemini_audit_*.txt` + Slack
 - **Meta-audit:** `35 20,21 * * 1-5` via cron_tz_wrapper → 4:35 PM ET → `auto_ai_audit.py --meta-audit` → DS+GAI cross-review → `meta_audit_latest.json` → Slack (added S40)
+- **Weekly perf audit:** `15 20,21 * * 5` (Fridays only) via cron_tz_wrapper → 4:15 PM ET → `weekly_perf_audit.py` → 8-category failure analysis + HTML tearsheet + Slack (added S42)
 
 ### Claude CCRs (claude.ai/code/routines)
 - **Usage-reset (one-time):** `trig_015BE5S4bmQtajwZmcLrSbGt` — fired 2026-05-26T02:55:00Z → https://claude.ai/code/routines/trig_015BE5S4bmQtajwZmcLrSbGt
@@ -74,6 +74,7 @@
 | 1:30 PM | midday_audit.py (Gemini) | midday_gemini_*.txt + Slack |
 | 4:05 PM | nightly_audit.py (Gemini) | gemini_audit_*.txt + Slack |
 | 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Slack |
+| 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack (added S42) |
 | 5:30 PM | Board CCR (4 agents: Harris/Brandt, Thorp/Asness, Peterffy/Katsuyama, McKinney) | Board verdict in CCR transcript |
 
 ### Infrastructure Notes
@@ -83,6 +84,48 @@
 - **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
 - **Gemini model:** `gemini-3.1-pro-preview` (matches Google AI Studio) via `google.genai` SDK ✅
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
+
+## Last Session (S42 — 2026-05-27)
+
+### S42 (2026-05-27, autonomous non-RTH work)
+- **weekly_perf_audit.py P1 BUILD + DEPLOY COMPLETE:**
+  - New standalone script (~650L) reading Alpaca FIFO fills + `logs/trade_events.jsonl`
+  - 8 failure categories: 1a Directional Macro Headwind, 1b Volatility Regime Sizing Error, 2 Marginal Score Low-Momentum, 3 Leveraged PDT, 4 Time-of-Day Bleed, 5 Earnings Risk, 6 VIX Stop Crush, 7 Holding Period Mismatch, 8 Unknown
+  - 4 DS/GAI design additions incorporated: emergency escalation (>25% drawdown), LOW_VOL VIX (<15) regime, monthly mislabeling gate, MIN_TRADES thresholds (offensive≥20, defensive≥12, emergency≥5, monthly≥10)
+  - 3 mypy errors fixed post-build (float type annotation, Optional[datetime] narrowing, .isoformat() guard)
+  - Static: py_compile PASS, mypy 0 errors, ruff 0 violations
+  - Cold second-agent: PASS (all 4 threat classes)
+  - code-review-graph impact radius: 0 (standalone, no bot imports)
+  - OCI: py_compile PASS, rsync PASS
+  - Cron: `15 20,21 * * 5` → `cron_tz_wrapper.py 16:15` → `weekly_perf_audit.py` (Fridays 4:15 PM ET)
+  - tb_audit_log.md + handoff.md updated
+- **P0 still open (paused, waiting on user):**
+  - DS/GAI prompt for main.py P0 (risk.open_positions startup fix) was fully prepared in S41
+  - User must paste the prompt into DeepSeek AND Google AI Studio, receive responses, paste back
+  - Then: 3-Point AI Summary → decide CYCLE-SYNC threshold → Steps 5–9 for main.py → Steps 1–9 for entry_logic.py
+  - The CYCLE-SYNC threshold board disagreement: Harris (-3), Peterffy (0), Thorp (-1 recommended)
+
+## Last Session (S41 — 2026-05-26)
+
+### S41 (2026-05-26)
+- **auto_ai_audit.py meta-audit redesign COMPLETE + OCI deployed:**
+  - Adversarial role split: DS = skeptic (Taleb/Harris/Peterffy lenses), Gemini = optimizer (Thorp/Asness/Jegadeesh lenses)
+  - Statistical guardrail: if n_fills < 20 (`_MIN_FILLS_FOR_DIRECTIVES`), LLM instructed observe-only, BLOCK parameter change directives
+  - Directives tracking: `logs/audit_directives.jsonl` — atomic append after every meta-audit run, prior 4 weeks injected into prompt for compliance checking
+  - Chart proxies: per traded symbol — 5d return, vs SPY delta, 20-EMA distance, 14d ATR, trend label. Alpaca Data T1 REST.
+  - Macro calendar: FMP `/v3/economic_calendar` — US HIGH/MEDIUM events past 7d
+  - Rejected signals: reads `logs/rejected_signals.jsonl` if exists; flags INFRASTRUCTURE_GAP if not (bot-side build still needed)
+  - Gemini report contamination ELIMINATED — `_build_meta_audit_data_context()` explicitly excludes all prior Gemini reports
+  - 11 new helper functions replacing old `_build_meta_audit_prompt`
+  - `_run_audit()` extended with `ds_prompt`/`gai_prompt` adversarial overrides
+  - Static: py_compile/mypy/ruff all PASS. Cold second-agent: PASS. Impact radius: 0 dependents.
+  - OCI smoke test: 159 trade events loaded, `audit_directives.jsonl` created (1 entry), JSON written, board endpoint updated. No crashes.
+  - Cron intact: `35 20,21 * * 1-5` → 4:35 PM ET
+- **P0 workstream (paused — resume next session):**
+  - DS/GAI responses for main.py startup P0 (risk.open_positions) in prior session transcript
+  - GAI identified CRITICAL CYCLE-SYNC flaw in `execution/entry_logic.py`: unconditional `risk.open_positions = len(tracker.open_trades)` at top of every cycle UNDOES naive startup fix
+  - Correct fix path: (a) read entry_logic.py full (Explore subagent), (b) design CYCLE-SYNC fix OR fail-hard validation at startup, (c) full patch sequence
+  - 3-Point AI Summary for main.py P0 DS/GAI still pending (must be produced before Step 5 of patch sequence)
 
 ## Last Session (S39 — 2026-05-25, in progress)
 
