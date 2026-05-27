@@ -1,3 +1,4 @@
+# ruff: noqa: E501  — long prompt strings and P5 queue text are intentionally long
 """
 nightly_audit.py
 Sends last-24h bot logs + modified source files to Gemini Flash for adversarial
@@ -17,14 +18,13 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv  # must precede module-level os.getenv() calls (E402 fix)
+
+load_dotenv()
 
 PT  = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")  # RC-1 fix: used to make strptime results tz-aware
 _now = datetime.now(PT)
-
-# ── Load .env ────────────────────────────────────────────────────────────────
-from dotenv import load_dotenv
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -179,7 +179,7 @@ def _collect_modified_files() -> dict[str, str]:
     """Source .py files modified in the last 24h."""
     cutoff = datetime.now(UTC).timestamp() - 86_400
     modified = {}
-    skip_dirs = {"__pycache__", "backtest", ".git", "logs"}
+    skip_dirs = {"__pycache__", "backtest", ".git", "logs", "venv", ".venv"}
     for py_file in BASE_DIR.rglob("*.py"):
         if any(part in skip_dirs for part in py_file.parts):
             continue
@@ -399,7 +399,7 @@ def _call_gemini(prompt: str) -> str:
                 contents=prompt,
             )
             logger.info(f"  Success with {model}")
-            return response.text
+            return response.text or ""
         except Exception as e:
             logger.warning(f"  {model} failed: {e}")
             last_err = e
@@ -471,7 +471,7 @@ def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
         content = section_lines[section]
         if content:
             lines.append(f"*{section}*")
-            lines.extend(f"  {l}" for l in content)
+            lines.extend(f"  {ln}" for ln in content)
             lines.append("")
 
     ts = datetime.now(PT).strftime("%b %d · %I:%M %p PT")
