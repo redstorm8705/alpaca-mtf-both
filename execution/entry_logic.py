@@ -345,18 +345,27 @@ def execute_entries(
         """Shim — delegates to strategy.scoring.rc8_clear_buffers (Phase 2)."""
         _rc8_clear_buffers_fn(sym, reason, gate_state)
 
-    # BUG-POS-1 fix: sync risk.open_positions to tracker ground truth every cycle.
-    # _reconcile_positions() only runs at startup; external closes (AH, Alpaca UI)
-    # skip register_close(), inflating the counter and blocking all new entries via
-    # can_open_position(). One line prevents an entire session of ANOMALY-2 false blocks.
+    # P0-CYCLE-SYNC-GUARD: Tracker can only INCREASE risk.open_positions.
+    # Decreases happen exclusively via risk.register_close(), not via cycle-sync.
+    # This prevents a stale tracker (0 entries) from wiping a correct high risk count.
+    # Status filter matches sync_from_tracker() — excludes zombie closed entries.
     if risk is not None:
-        _tracker_open_count = len(tracker.open_trades)
-        if risk.open_positions != _tracker_open_count:
+        _tracker_open_count = sum(
+            1 for t in (tracker.open_trades or {}).values() if t.get("status") != "closed"
+        )
+        if _tracker_open_count > risk.open_positions:
             logger.warning(
-                f"[CYCLE-SYNC] risk.open_positions={risk.open_positions} vs "
-                f"tracker={_tracker_open_count} — correcting to tracker count."
+                f"[CYCLE-SYNC] Tracker ({_tracker_open_count}) > RiskManager ({risk.open_positions}) "
+                f"— syncing UP to tracker count."
             )
             risk.open_positions = _tracker_open_count
+        elif _tracker_open_count < risk.open_positions:
+            logger.critical(
+                f"[CYCLE-SYNC] STATE DESYNC: Tracker ({_tracker_open_count}) < "
+                f"RiskManager ({risk.open_positions}). Ignoring tracker — "
+                f"decreases must happen via register_close(). Manual reconciliation required."
+            )
+            # DO NOT update risk.open_positions downward
 
     for sig in signals:
         symbol    = sig["symbol"]
