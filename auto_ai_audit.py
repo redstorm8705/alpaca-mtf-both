@@ -60,6 +60,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# ── Load .env (required for cron — systemd/cron does not pre-load .env) ──────
+from dotenv import load_dotenv
+if not load_dotenv():
+    print("[auto_ai_audit] WARNING: .env not found — relying on pre-set environment variables", file=sys.stderr)
+
 # ── Absolute path anchors (RC-2 prevention) ───────────────────────────────────
 _HERE = Path(__file__).resolve().parent
 _LOGS_DIR = _HERE / "logs"
