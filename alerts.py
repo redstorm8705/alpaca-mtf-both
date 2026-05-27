@@ -36,7 +36,8 @@ import logging
 import ssl
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # macOS Python 3.10 ships without system CA certs — use certifi bundle so
@@ -54,6 +55,28 @@ PT = ZoneInfo("America/Los_Angeles")
 _NTFY_TOPIC       = os.getenv("NTFY_TOPIC", "").strip()
 _SLACK_WEBHOOK    = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 _NTFY_BASE        = "https://ntfy.sh"
+
+# ── State file paths for alert throttling ────────────────────────────────────
+_HERE      = Path(__file__).resolve().parent
+_STATE_DIR = _HERE / "data" / "state"
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    """
+    Atomic write via tmp→fsync→replace (RC-5, SIGKILL-safe).
+    Creates parent dirs if missing. Writes JSON so keys with
+    newlines or special chars are handled safely.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(path)
+    except (OSError, TypeError, ValueError) as e:
+        logger.warning(f"_atomic_write failed for {path.name}: {e}")
 
 
 def _ntfy(title: str, body: str, priority: int = 3, tags: list | None = None) -> bool:
@@ -245,23 +268,55 @@ def alert_crash(reason: str, open_positions: list) -> None:
             pass   # sentinel not present — expected; proceed with crash alert
         except OSError as _sentinel_e:
             logger.warning("alert_crash: sentinel stat/remove failed — %s", _sentinel_e)
-    title = "💥 BOT SHUTDOWN"
+
+    title   = "💥 BOT SHUTDOWN"
     pos_str = ", ".join(open_positions) if open_positions else "none"
-    body  = (
+    body    = (
         f"Reason: {reason}\n"
         f"Open positions: {pos_str}\n"
         f"Check Alpaca dashboard immediately."
     )
-    _send(title, body, priority=5, tags=["sos", "rotating_light"],
-          emoji=":sos:")
+    # Restore PT timestamp footer (previously injected by _send(); bypassed here
+    # because ntfy and Slack are called directly to allow independent throttling).
+    ts        = datetime.now(PT).strftime("%H:%M PT")
+    full_body = f"{body}\n— {ts}"
+
+    # ntfy (phone): always fires — never throttle phone notification for a crash
+    _ntfy(title, full_body, priority=5, tags=["sos", "rotating_light"])
+
+    # Slack: reason-based dedup to prevent SIGKILL restart-cycle spam.
+    # JSON state avoids newline-injection issues in reason strings.
+    # Fires unless: same crash reason AND elapsed < 60 min since last Slack alert.
+    # Different crash reasons (new problem) always fire Slack regardless of timing.
+    _crash_flag = _STATE_DIR / "last_crash_slack.json"
+    _send_slack = True
+    try:
+        if _crash_flag.exists():
+            state       = json.loads(_crash_flag.read_text(encoding="utf-8"))
+            last_reason = state.get("reason", "")
+            last_ts     = datetime.fromisoformat(state.get("ts", "2000-01-01T00:00:00+00:00"))
+            elapsed     = (datetime.now(timezone.utc) - last_ts).total_seconds()
+            if last_reason == reason and elapsed < 3600:
+                _send_slack = False
+                logger.critical(
+                    f"alert_crash: Slack suppressed — same reason '{reason}' "
+                    f"within {elapsed/60:.0f} min. ntfy sent. Check phone."
+                )
+    except Exception as e:
+        logger.warning(f"alert_crash: crash-flag read failed — {e} — sending Slack anyway")
+
+    if _send_slack:
+        slack_ok = _slack(title, full_body, emoji=":sos:")
+        if slack_ok:
+            _atomic_write(_crash_flag, {
+                "reason": reason,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
 
 
 def alert_stale_bar(symbol: str, age_min: float) -> None:
-    """Fire when a stale bar gate skips an entry — operator may want to investigate feed."""
-    title = f"📡 STALE FEED — {symbol}"
-    body  = f"Last 15m bar is {age_min:.0f} min old. Entry skipped. Check Alpaca data feed."
-    _send(title, body, priority=3, tags=["satellite", "warning"],
-          emoji=":satellite:")
+    """Log stale bar skip — entry already blocked upstream. Log-only (no Slack/ntfy)."""
+    logger.info(f"[STALE BAR] {symbol}: last 15m bar is {age_min:.0f} min old — entry skipped.")
 
 
 def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> None:
