@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-27 S42 | **S42: weekly_perf_audit.py P1 BUILD COMPLETE — static analysis PASS (py_compile, mypy 0 errors, ruff 0 violations), cold second-agent PASS, impact radius 0. Deployed to OCI. Cron wired Friday 4:15 PM ET. P1 CLOSED. P0 still open: risk.open_positions startup fix (DS/GAI prompt prepared, awaiting user response to paste back).**
+**Updated:** 2026-05-27 S43B | **S43B: RAM leak fix P1/P2/P3/P4 ALL DEPLOYED — macro_risk_index.py class-level ThreadPoolExecutor (P1), config.py BARS_TO_FETCH 500→150/300→100 (P2), run_cycle.py gc.collect() try/finally after run_scan() (P3). All 4 OCI services active. RAM 279MB (was 330MB start-of-session → 255MB → 326MB → 279MB across deploys). Priority 4 (signal_generator.py del _entry_df/_daily_df) PENDING. Optional jemalloc LD_PRELOAD PENDING.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -7,7 +7,7 @@
 - **Bot CWD on OCI:** `/home/ubuntu/mtf-bot/` — always rsync to this path (NOT alpaca-mtf-bot_FINAL)
 - **Account:** Paper | equity **$2,852.68** (confirmed S37 MCP) | All-time P&L +$442.38 (Alpaca-authoritative, confirmed S29) | MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | KELLY_MAX_RISK_PCT=6% | MAX_PORTFOLIO_RISK_PCT=4%
 - **Dashboard:** `http://129.153.208.32:8080/dashboard.html`
-- **RAM (S39):** Started at 731MB (threshold exceeded → auto-restarted → 301MB → 211MB after entry_logic.py patch restart). Monitor at each session start. Alert threshold: 550MB → restart all services. Second 731MB peak this cycle (S37 also peaked at 750MB) — RAM leak investigation P2.
+- **RAM (S43B):** 279MB post P1/P2/P3 deploys (was 330MB session start → 255MB after macro_risk_index.py → 326MB after config.py restart → 279MB after run_cycle.py restart). Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). RAM leak investigation in progress — 3/5 fixes deployed (see P2 open item below).
 - **⚠️ SSH KEY NOTE:** Ed25519 key at `~/.ssh/mtf_bot_oracle`. rsync syntax: always use `-e "ssh -i ~/.ssh/mtf_bot_oracle"` — NEVER use `-i` as standalone rsync flag.
 
 ## Open Positions (confirmed Alpaca API ~11:50 PM PT 2026-05-24 — verify at next session start)
@@ -47,12 +47,12 @@
 
 ### Open Items
 
-- [ ] **P0: risk.open_positions startup fix** — Bot initializes to 0 regardless of overnight positions → root cause of 6-position breach. Fix in `main.py` startup sequence: query Alpaca, set from live roster, halt if ≥ MAX. Full patch sequence required (>1000 lines → Explore subagent + DS/GAI gate, RTH chain).
-- [ ] **P0: Slack alert noise** — Decouple mri_refresh/breadth_refresh/routine events from Slack. Reserve Slack for actionable-only events. Full patch sequence required for `alerts.py` / `events/macro_risk_index.py`.
+- [x] **P0: risk.open_positions startup fix — CLOSED S42** — main.py Part A: P0-STARTUP block inserts after sync_from_tracker(); queries Alpaca live positions; overrides risk.open_positions if mismatch; logs _untracked/_stale symbol sets; halts at MAX. entry_logic.py Part B: P0-CYCLE-SYNC-GUARD replaces unconditional BUG-POS-1 sync; directional guard (tracker UP-only); status filter (excludes zombie closed entries); None guard. Both deployed OCI. Startup log confirmed: "Alpaca=4 == tracker=4. OK." → "Already at MAX (4/4). Blocking new entries."
+- [x] **P0: Slack alert noise — PARTIALLY CLOSED S43** — `alerts.py` patched: `alert_crash()` reason-based dedup (same reason+<60min→ntfy only; different reason→Slack+ntfy always); `alert_stale_bar()`→log-only; `alert_startup_test()` + `alert_spy_event()` UNCHANGED (board: keep all). Deployed OCI git 35bccc9. **Remaining:** `events/macro_risk_index.py` mri_refresh noise (confirmed NOT going to Slack currently — JSONL only). SIGKILL cycle itself is root cause (P2 RAM leak — separate session).
 - [x] **P1: weekly_perf_audit.py COMPLETE (S42)** — Script built, static analysis PASS, cold second-agent PASS, OCI deployed, cron wired `15 20,21 * * 5` via cron_tz_wrapper 16:15. 4 DS/GAI additions incorporated (emergency escalation, LOW_VOL VIX regime, monthly mislabeling gate, MIN_TRADES thresholds). Design spec updated at `logs/weekly_perf_audit_design_v1.md` (§14).
 - [ ] **P2: RC-9 in scan_to_html.py** — `_fetch_yfinance_news()` uses yfinance for news data (T4 violation). Board vote + migration plan required.
 - [ ] **P2: BUG-C structural fix** — write_scan_html background thread. Interim 10-min throttle deployed S31. Structural fix deadline 2026-06-30.
-- [ ] **P2: RAM leak investigation** — 731MB at S39 start (second occurrence after S37's 750MB). Restarted → 211MB. alerts.py GTC retry accumulation suspected (DS S32 audit). Dedicated debug session needed.
+- [ ] **P2: RAM leak investigation — IN PROGRESS (4/5 deployed)** — Root cause: 3-layer mechanism (DS+GAI confirmed S43B). Layer 1 (~370MB first-scan spike): Alpaca-py Pydantic deser 200+ symbols × bars + 46 DataFrames in full_results simultaneously. Layer 2 (~56MB/cycle drift): Pandas BlockManager cyclic refs + glibc heap fragmentation. Layer 3 (SIGKILL): accumulated baseline + scan peak exceeds OCI 1GB cgroup. **✅ P1 DEPLOYED:** macro_risk_index.py class-level ThreadPoolExecutor (48 leaked executors × 8MB eliminated). **✅ P2 DEPLOYED:** config.py BARS_TO_FETCH TF_15M 500→150, TF_1H 300→100 (~70% first-scan spike reduction). **✅ P3 DEPLOYED:** run_cycle.py gc.collect() in try/finally after run_scan() (frees Pandas cyclic refs, ~56MB/cycle drift fix). **✅ P4 DEPLOYED (S43B):** signal_generator.py — `fr.pop("_entry_df"/"_daily_df")` in both Phase 3 paths (ADDV-fail before continue + post-16pt-scoring before tag). 8-change patch (5 C-4 pre-existing fixes + 3 primary). RAM 252MB post-deploy. **⬜ OPTIONAL PENDING:** OCI systemd LD_PRELOAD jemalloc (`LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`). Verify: `dpkg -l libjemalloc2`. No code changes. GAI: "silver bullet for glibc C-level heap fragmentation."
 - [ ] **P3: options_scanner.py** — BUG-0DTE-FALLBACK (HIGH, L400-412); RC-5 L1081. `⚠️ AUDITED — PATCH PENDING DS+GAI`. Needs fresh full read (1,946L, Explore subagent) + DS/GAI prompt before patching (prior audit 2026-04-30, all gates reset per RULE C-2).
 
 ## Autonomous Crons / CCRs
@@ -87,23 +87,31 @@
 
 ## Last Session (S42 — 2026-05-27)
 
-### S42 (2026-05-27, autonomous non-RTH work)
-- **weekly_perf_audit.py P1 BUILD + DEPLOY COMPLETE:**
+### S42 (2026-05-27)
+- **weekly_perf_audit.py P1 BUILD + DEPLOY COMPLETE** (autonomous + S42 static analysis):
   - New standalone script (~650L) reading Alpaca FIFO fills + `logs/trade_events.jsonl`
   - 8 failure categories: 1a Directional Macro Headwind, 1b Volatility Regime Sizing Error, 2 Marginal Score Low-Momentum, 3 Leveraged PDT, 4 Time-of-Day Bleed, 5 Earnings Risk, 6 VIX Stop Crush, 7 Holding Period Mismatch, 8 Unknown
   - 4 DS/GAI design additions incorporated: emergency escalation (>25% drawdown), LOW_VOL VIX (<15) regime, monthly mislabeling gate, MIN_TRADES thresholds (offensive≥20, defensive≥12, emergency≥5, monthly≥10)
-  - 3 mypy errors fixed post-build (float type annotation, Optional[datetime] narrowing, .isoformat() guard)
-  - Static: py_compile PASS, mypy 0 errors, ruff 0 violations
-  - Cold second-agent: PASS (all 4 threat classes)
-  - code-review-graph impact radius: 0 (standalone, no bot imports)
-  - OCI: py_compile PASS, rsync PASS
-  - Cron: `15 20,21 * * 5` → `cron_tz_wrapper.py 16:15` → `weekly_perf_audit.py` (Fridays 4:15 PM ET)
-  - tb_audit_log.md + handoff.md updated
-- **P0 still open (paused, waiting on user):**
-  - DS/GAI prompt for main.py P0 (risk.open_positions startup fix) was fully prepared in S41
-  - User must paste the prompt into DeepSeek AND Google AI Studio, receive responses, paste back
-  - Then: 3-Point AI Summary → decide CYCLE-SYNC threshold → Steps 5–9 for main.py → Steps 1–9 for entry_logic.py
-  - The CYCLE-SYNC threshold board disagreement: Harris (-3), Peterffy (0), Thorp (-1 recommended)
+  - Static: py_compile PASS, mypy 0 errors, ruff 0 violations | Cold second-agent: PASS | impact radius: 0
+  - OCI: py_compile PASS, rsync PASS | Cron: `15 20,21 * * 5` → `cron_tz_wrapper.py 16:15` → Fridays 4:15 PM ET
+- **P0 main.py Part A (P0-STARTUP block) DEPLOYED:**
+  - Inserts after `risk.sync_from_tracker(tracker)` at startup
+  - Queries Alpaca live positions via `get_open_positions()`; overrides `risk.open_positions` if mismatch
+  - Logs `_untracked` (in Alpaca, not in tracker) and `_stale` (in tracker, not in Alpaca) symbol sets
+  - Halts new entries (`_set_halt_entries(True)`) if at MAX_OPEN_POSITIONS or on import/API failure
+  - Amendment A-1 (mark-closed loop) REJECTED — `record_exit()` is the only safe close path
+  - Startup log confirmed: "P0-STARTUP: Positions verified — Alpaca=4 == tracker=4. OK." → "Already at MAX (4/4)."
+  - py_compile PASS, mypy 0 errors in main.py, ruff PASS | Cold second-agent PASS (all 5 branches) | OCI PASS
+- **P0 entry_logic.py Part B (P0-CYCLE-SYNC-GUARD) DEPLOYED:**
+  - Replaces unconditional BUG-POS-1 CYCLE-SYNC (lines 348–359)
+  - Directional guard: tracker can only INCREASE `risk.open_positions`; decreases via `register_close()` only
+  - Status filter: `(tracker.open_trades or {}).values()` + `t.get("status") != "closed"` (matches `sync_from_tracker()`)
+  - None guard: `(tracker.open_trades or {})` defends against uninitialized state
+  - Cold second-agent FAIL v1 (None guard) → guard added → PASS v2 | impact radius: 0 | Static PASS all 3
+  - OCI: py_compile PASS, rsync PASS, all 4 services active post-restart (15:42 PT)
+- **⚠️ SIGKILL pattern noted:** Multiple `stop-sigterm` timeouts in systemd journal (May 26–27) — bot not shutting down cleanly. Secondary to P0. Investigate graceful shutdown in separate session (likely threading/event-loop issue).
+- **P2 deferred:** `_set_halt_entries(True)` in at-MAX branch of P0-STARTUP is over-conservative. `can_open_position()` alone is sufficient. Halt clears at midnight daily reset — harmless for paper/overnight. Separate session.
+- **tb_audit_log.md:** entry_logic.py S42 row added + main.py S42 row (from earlier in session)
 
 ## Last Session (S41 — 2026-05-26)
 
