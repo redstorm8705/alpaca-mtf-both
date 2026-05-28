@@ -44,6 +44,7 @@ logs/
 !logs/bug_counter.json
 !logs/project-state.md
 !logs/protocol_violations.md
+!logs/queued_for_review_*.md
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
