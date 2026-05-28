@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-27 S43B | **S43B: RAM leak fix P1/P2/P3/P4 ALL DEPLOYED — macro_risk_index.py class-level ThreadPoolExecutor (P1), config.py BARS_TO_FETCH 500→150/300→100 (P2), run_cycle.py gc.collect() try/finally after run_scan() (P3). All 4 OCI services active. RAM 279MB (was 330MB start-of-session → 255MB → 326MB → 279MB across deploys). Priority 4 (signal_generator.py del _entry_df/_daily_df) PENDING. Optional jemalloc LD_PRELOAD PENDING.**
+**Updated:** 2026-05-27 S43C | **S43C: AUTOMATED PIPELINE FIXED — root cause was username typo in CCR repo URL (redstamp8705 vs redstorm8705). All 3 fixes: (1) Board Review CCR now posts verdict to Slack after every 5:30 PM ET run; (2) New Nightly Autonomous Work CCR created (10 PM ET) with correct repo URL — full 9-step patch sequence, non-hotspot auto-apply, hotspot prepare-only; (3) OCI git pull deployed (auto_deploy.sh + cron at 11 PM ET). GitHub pushed: S43 P1/P2 + main.py P0-STARTUP + S43B P3/P4 (3 commits). RAM 252MB (P4 deployed S43B).**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -7,7 +7,7 @@
 - **Bot CWD on OCI:** `/home/ubuntu/mtf-bot/` — always rsync to this path (NOT alpaca-mtf-bot_FINAL)
 - **Account:** Paper | equity **$2,852.68** (confirmed S37 MCP) | All-time P&L +$442.38 (Alpaca-authoritative, confirmed S29) | MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | KELLY_MAX_RISK_PCT=6% | MAX_PORTFOLIO_RISK_PCT=4%
 - **Dashboard:** `http://129.153.208.32:8080/dashboard.html`
-- **RAM (S43B):** 279MB post P1/P2/P3 deploys (was 330MB session start → 255MB after macro_risk_index.py → 326MB after config.py restart → 279MB after run_cycle.py restart). Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). RAM leak investigation in progress — 3/5 fixes deployed (see P2 open item below).
+- **RAM (S43C):** 252MB post P4 deploy. Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). P1/P2/P3/P4 all deployed. Optional P5 jemalloc pending (systemd unit only).
 - **⚠️ SSH KEY NOTE:** Ed25519 key at `~/.ssh/mtf_bot_oracle`. rsync syntax: always use `-e "ssh -i ~/.ssh/mtf_bot_oracle"` — NEVER use `-i` as standalone rsync flag.
 
 ## Open Positions (confirmed Alpaca API ~11:50 PM PT 2026-05-24 — verify at next session start)
@@ -65,25 +65,53 @@
 
 ### Claude CCRs (claude.ai/code/routines)
 - **Usage-reset (one-time):** `trig_015BE5S4bmQtajwZmcLrSbGt` — fired 2026-05-26T02:55:00Z → https://claude.ai/code/routines/trig_015BE5S4bmQtajwZmcLrSbGt
-- **Nightly CCR:** `trig_01GHKQufnHRykVL9Xypqeee4` — `0 7 * * *` = midnight PT → https://claude.ai/code/routines/trig_01GHKQufnHRykVL9Xypqeee4
-- **Board Review CCR:** `trig_01B37951UHsX2NAsCvrJuHNK` — weekdays 2:30 PM PDT (5:30 PM ET) → 4 parallel domain agents review meta-audit → board verdict → https://claude.ai/code/routines/trig_01B37951UHsX2NAsCvrJuHNK (added S40)
+- **Nightly CCR (OLD — DISABLED):** `trig_01GHKQufnHRykVL9Xypqeee4` — `0 7 * * *` — DEAD (`auto_disabled_repo_access` — wrong username typo in URL)
+- **Board Review CCR:** `trig_01B37951UHsX2NAsCvrJuHNK` — weekdays 5:30 PM ET — 4 parallel domain agents → board verdict → **NOW POSTS TO SLACK** (Step 4 added S43C) → https://claude.ai/code/routines/trig_01B37951UHsX2NAsCvrJuHNK
+- **Nightly Autonomous Work CCR (NEW S43C):** `trig_01NctUPEvjM1TVDH3vgJ2bmw` — weeknights 10 PM ET (2 AM UTC) — reads Gist, full 9-step patch sequence, non-hotspot auto-apply, hotspot prepare-only → Slack summary → https://claude.ai/code/routines/trig_01NctUPEvjM1TVDH3vgJ2bmw
 
-### Full Daily Pipeline (Mon–Fri)
+### Full Daily Pipeline (Mon–Fri) — UPDATED S43C
 | Time ET | What | Output |
 |---------|------|--------|
 | 1:30 PM | midday_audit.py (Gemini) | midday_gemini_*.txt + Slack |
 | 4:05 PM | nightly_audit.py (Gemini) | gemini_audit_*.txt + Slack |
-| 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Slack |
-| 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack (added S42) |
-| 5:30 PM | Board CCR (4 agents: Harris/Brandt, Thorp/Asness, Peterffy/Katsuyama, McKinney) | Board verdict in CCR transcript |
+| 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Gist + **Slack** |
+| 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack |
+| 5:30 PM | Board Review CCR (4 agents) | Board verdict + **Slack** (NEW S43C) |
+| 10:00 PM | Nightly Autonomous Work CCR | Patches committed to GitHub + **Slack** (NEW S43C) |
+| 11:00 PM | auto_deploy.sh (OCI cron) | git pull → restart services if new commits (NEW S43C) |
 
 ### Infrastructure Notes
-- **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here
-- **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json` — auto-pushed after every meta-audit run by `auto_ai_audit.py` (added S40). CCR fetches from here (raw IP blocks from Anthropic cloud resolved via Gist).
-- **Board endpoint (nginx):** `http://mtftradingbot.duckdns.org/meta_audit_latest.json` — nginx port 80, ufw open, OCI Security List open. Accessible from home/office. Not accessible from Anthropic CCR (IP allowlist restriction — use Gist URL for CCR).
+- **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here. **⚠️ Previous CCRs used WRONG URL (`redstamp8705`) — that was the root cause of 3 days of failure (S43C fixed)**
+- **OCI git (NEW S43C):** `/home/ubuntu/mtf-bot` is now a git repo tracking `origin/main`. Credentials stored in `~/.git-credentials`. Run `git pull origin main --ff-only` to sync.
+- **auto_deploy.sh (NEW S43C):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — pulls from GitHub, restarts services if new commits, RTH-safe. Cron: `0 3 * * *` (11 PM ET). Logs to `logs/auto_deploy.log`.
+- **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json`
 - **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
-- **Gemini model:** `gemini-3.1-pro-preview` (matches Google AI Studio) via `google.genai` SDK ✅
+- **Gemini model:** `gemini-3.1-pro-preview` via `google.genai` SDK ✅
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
+
+## Last Session (S43C — 2026-05-28)
+
+### S43C (2026-05-28) — AUTOMATED PIPELINE FIX
+- **ROOT CAUSE IDENTIFIED:** Both autonomous CCRs (`trig_01GHKQufnHRykVL9Xypqeee4` + `trig_01Unsi5gQPtCJvsPurHyCa8P`) had username typo in repo URL — `redstamp8705` instead of `redstorm8705`. Platform disabled both with `auto_disabled_repo_access`. Board Review CCR had no Slack posting step.
+- **FIX 1 — All S43/S43B code committed to GitHub** (3 commits pushed):
+  - `S43: RAM leak P1+P2 + P0-STARTUP` (macro_risk_index.py, config.py, main.py)
+  - `S43B: RAM leak P3+P4 + RC-3 fix` (run_cycle.py, signal_generator.py)
+  - `S43B: handoff update`
+- **FIX 2 — OCI git pull deployed:**
+  - `git init` on OCI `/home/ubuntu/mtf-bot` + remote + credential store
+  - `auto_deploy.sh` written (git pull + RTH-safe restart + log)
+  - Cron added: `0 3 * * *` (11 PM ET daily)
+- **FIX 3 — Board Review CCR updated** (`trig_01B37951UHsX2NAsCvrJuHNK`):
+  - Added Step 4: post verdict to Slack via curl after every run
+  - Test run triggered to verify (fires now)
+- **FIX 4 — New Nightly Autonomous Work CCR created** (`trig_01NctUPEvjM1TVDH3vgJ2bmw`):
+  - Correct repo URL: `https://github.com/redstorm8705/alpaca-mtf-both`
+  - Runs weeknights at 10 PM ET (2 AM UTC)
+  - Full 9-step mandatory patch sequence per CLAUDE.md
+  - Non-hotspot files: auto-apply → commit → push to GitHub
+  - Hotspot files (main.py, broker.py, portfolio_tracker.py): prepare diff → `logs/pending_patches_YYYY-MM-DD.md` → Slack post
+  - Slack summary after every run
+  - First run: tonight 10 PM ET
 
 ## Last Session (S42 — 2026-05-27)
 
