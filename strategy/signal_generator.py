@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E701
 """
 strategy/signal_generator.py
 Orchestrates the full scan: fetches data, scores every ticker, returns ranked signals.
@@ -35,7 +36,7 @@ _pead_cache: dict = {}        # {symbol: {"beat_pct": float, "report_date": date
 _pead_cache_date: str = ""    # ET date string of last cache population
 
 # ── NEW-3: sector map for residual momentum (board-approved 2026-04-20) ───────
-from data.sectors import SECTOR_MAP_SG as _SECTOR_MAP_SG
+from data.sectors import SECTOR_MAP_SG as _SECTOR_MAP_SG  # noqa: E402
 
 logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
@@ -289,7 +290,7 @@ def calculate_score_16pt(
     universe_size: int,
     trade_mode: str,
     residual_rank=None,   # NEW-3: cross-sectional rank of residual momentum (int or None)
-    today_str: str = None, # NEW-1: ET date string for FOMC/macro event check
+    today_str: str | None = None, # NEW-1: ET date string for FOMC/macro event check
     pead_days: int = 0,    # NEW-2: trading days since EPS beat/miss (0 = no PEAD)
     pead_direction: str = "", # NEW-2: "long" beat, "short" miss, "" = none
 ) -> dict:
@@ -313,7 +314,7 @@ def calculate_score_16pt(
         {"score": int, "max_score": 20, "conditions": dict, "notes": list}
     """
     score = 0
-    conds = {}
+    conds: dict = {}
     notes = []
 
     # ── Conditions 1-5: Reuse from 12pt (zero recomputation) ────────────────
@@ -690,6 +691,8 @@ def run_scan(
                 logger.debug(f"[{sym}] vol/sigma/ADDV compute error: {_ve}")
 
         if not _addv_ok:
+            fr.pop("_entry_df", None)
+            fr.pop("_daily_df", None)
             continue   # skip below-liquidity symbols entirely
 
         long_r["vol_ratio"]  = _vol_ratio
@@ -727,6 +730,11 @@ def run_scan(
             pead_days=_pead_days_16,
             pead_direction=_pead_dir_16,
         )
+
+        # Free DataFrame refs after 16pt scoring (Priority 4 RAM leak fix — DS+GAI Q3/Q5, S43B)
+        entry_df = fr.pop("_entry_df", None)
+        daily_df = fr.pop("_daily_df", None)
+        del entry_df, daily_df
 
         # Tag 16pt scores onto signal dicts for downstream logging
         long_r["score_16pt"]      = long_16["score"]
@@ -813,8 +821,8 @@ def run_scan(
             _sc_date = Path(_sc_old).stem.replace("score_comparison_", "")
             if _sc_date < _sc_cutoff:
                 Path(_sc_old).unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.warning(f"run_scan: score_comparison prune error: {_e}")
 
     # ── Sort + dedup (existing behavior unchanged) ────────────────────────────
     all_signals.sort(key=lambda x: x["score"], reverse=True)

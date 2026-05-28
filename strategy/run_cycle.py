@@ -12,7 +12,7 @@ Phase 3 will break those remaining dependencies once the full body move is done.
 """
 from __future__ import annotations
 
-import gc  # noqa: F401 — may be used by inline local imports inside function
+import gc
 import json  # noqa: F401
 import logging
 import os
@@ -1410,7 +1410,10 @@ def run_cycle(
             logger.warning(f"scan_results.html write failed (BV-5): {_bv5_scan_e}")
         return
 
-    signals = run_scan(trade_mode=trade_mode, news_size_mult=_spy_risk_mult)
+    try:
+        signals = run_scan(trade_mode=trade_mode, news_size_mult=_spy_risk_mult)
+    finally:
+        gc.collect()  # free Pandas BlockManager cyclic refs accumulated during scan
 
     # ── Dynamic MIN_SCORE post-filter ─────────────────────────────────────────
     # Raises the effective entry bar based on current market stress level.
