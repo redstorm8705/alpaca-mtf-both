@@ -117,9 +117,30 @@ class MacroRiskIndex:
         self._event_type                     = "TECHNICAL"
         # P2-INJECT-NEWS-LOCK: protects _raw_score/_level in inject_news_state
         self._lock = threading.Lock()
+        self._yf_executor = _cf.ThreadPoolExecutor(max_workers=1)
 
         # Restore from disk if available (handles bot restarts)
         self._restore()
+
+    def __del__(self) -> None:
+        """Best-effort executor cleanup on instance destruction.
+        NOTE: CPython does not guarantee __del__ is called if this object is
+        part of a reference cycle or if the process is killed with SIGTERM
+        before GC runs. This is a safety net for future refactors that might
+        destroy/recreate MacroRiskIndex mid-session. For guaranteed cleanup,
+        add mri._yf_executor.shutdown(wait=True) to the bot's SIGTERM handler
+        in main.py (P3 follow-up). In normal bot operation, MacroRiskIndex
+        lives for the full process lifetime — OS cleans up threads on exit.
+        WARNING: shutdown(wait=True) may block up to 8s if a yfinance request
+        is in-flight at destruction time. In production this is not an issue
+        (MacroRiskIndex persists for the full process lifetime), but future
+        refactors creating/destroying instances mid-session should use async
+        shutdown or handle blocking explicitly.
+        """
+        try:
+            self._yf_executor.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -419,9 +440,16 @@ class MacroRiskIndex:
             def _yf_last_close_safe(
                 ticker: str, timeout: float = 8.0
             ) -> float | None:
-                """8s wall-clock cap on _yf_last_close() via ThreadPoolExecutor."""
-                _ex = _cf.ThreadPoolExecutor(max_workers=1)
-                future = _ex.submit(_yf_last_close, ticker)
+                """8s wall-clock cap on _yf_last_close() via class-level executor.
+                Uses self._yf_executor (created once in __init__, reused every cycle).
+                Called once per _compute() for ^VIX3M only — the 10-min refresh
+                interval ensures any prior timed-out thread has completed before the
+                next call, so queue wait is always near-zero and timeout=8.0
+                is effectively a wall-clock cap in practice.
+                future.cancel() after TimeoutError is a no-op if thread is running;
+                kept for intent documentation. Executor is NOT shut down here.
+                """
+                future = self._yf_executor.submit(_yf_last_close, ticker)
                 try:
                     return future.result(timeout=timeout)
                 except _cf.TimeoutError:
@@ -435,7 +463,7 @@ class MacroRiskIndex:
                     return None
                 finally:
                     future.cancel()
-                    _ex.shutdown(wait=False, cancel_futures=True)
+                    # Executor persists across refresh cycles — do NOT shutdown here.
 
             # ── T2 helpers: ^VIX and USDJPY via FMP stable/quote ─────────────
 

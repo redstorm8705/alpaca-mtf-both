@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 Central configuration for the MTF Confluence Bot.
 All strategy parameters live here — tweak without touching logic files.
@@ -104,7 +105,7 @@ TF_DAILY = "1Day"
 TF_WEEKLY= "1Week"
 
 BARS_TO_FETCH = {
-    TF_15M:   500, TF_30M:  400, TF_1H:   300,
+    TF_15M:   150, TF_30M:  400, TF_1H:   100,  # S43: 500→150, 300→100 — RAM leak fix (DS+GAI Q7; EMA30 needs ~107 bars, MACD26 needs ~93)
     TF_4H:    200, TF_12H:  150, TF_DAILY: 365, TF_WEEKLY: 104,
 }
 

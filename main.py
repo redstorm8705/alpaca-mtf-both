@@ -665,6 +665,64 @@ def main():
         logger.error(f"Pending order reconciliation failed — proceeding without it: {_rec_e}")
     # 4. Sync risk.open_positions to actual tracker state after reconciliation
     risk.sync_from_tracker(tracker)
+    # 5. P0-STARTUP: Validate risk count against Alpaca live ledger.
+    #    sync_from_tracker() reads local JSON — may be stale after crash/external close.
+    #    This block is the authoritative override: Alpaca position count wins.
+    #    Amendment A-1 (marking individual stale entries) was rejected by board (S42):
+    #    record_exit() is the only safe close path — direct status mutation bypasses P&L.
+    #    reconcile_positions() above already handles entry-level cleanup.
+    try:
+        from execution.broker import get_open_positions as _broker_positions
+        _live_pos    = _broker_positions()
+        _live_count  = len(_live_pos)
+        _tracker_count = risk.open_positions
+        if _live_count != _tracker_count:
+            logger.critical(
+                f"P0-STARTUP: Alpaca live positions ({_live_count}) != "
+                f"tracker count ({_tracker_count}). "
+                f"Overriding to Alpaca-authoritative count."
+            )
+            risk.open_positions = _live_count
+            # Observability: surface which symbols are causing the discrepancy
+            _alpaca_syms  = {pos.symbol for pos in _live_pos}
+            _tracker_syms = {s for s, t in tracker.open_trades.items()
+                             if t.get("status") != "closed"}
+            _untracked = _alpaca_syms - _tracker_syms
+            _stale     = _tracker_syms - _alpaca_syms
+            if _untracked:
+                logger.critical(
+                    f"P0-STARTUP: In Alpaca but NOT in tracker: {sorted(_untracked)}. "
+                    f"Stops/targets will NOT fire for these — manual intervention required."
+                )
+            if _stale:
+                logger.critical(
+                    f"P0-STARTUP: In tracker but NOT in Alpaca: {sorted(_stale)}. "
+                    f"Likely externally closed — reconcile_positions() should have handled this."
+                )
+        else:
+            logger.info(
+                f"P0-STARTUP: Positions verified — Alpaca={_live_count} == "
+                f"tracker={_tracker_count}. OK."
+            )
+        if risk.open_positions >= config.MAX_OPEN_POSITIONS:
+            logger.critical(
+                f"P0-STARTUP: Already at MAX positions "
+                f"({risk.open_positions}/{config.MAX_OPEN_POSITIONS}). "
+                f"Blocking new entries."
+            )
+            _set_halt_entries(True)
+    except ImportError as _p0_import_err:
+        logger.critical(
+            f"P0-STARTUP: Cannot import get_open_positions ({_p0_import_err}). "
+            f"Entries HALTED — manual reconciliation required."
+        )
+        _set_halt_entries(True)
+    except Exception as _p0_err:
+        logger.critical(
+            f"P0-STARTUP: Alpaca position count validation FAILED ({_p0_err}). "
+            f"Entries HALTED — manual reconciliation required."
+        )
+        _set_halt_entries(True)
 
     # ── Phase 0.5: GateState — holds conviction_streak + entry_confirm_buffer ──────────────────
     gate_state = GateState()
