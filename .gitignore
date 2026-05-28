@@ -74,3 +74,6 @@ env/
 
 # ── External / vendor code (third-party, not yours) ───────────────────────────
 _external/
+
+# ── OCI deployment scripts (contain Slack webhook URL — never commit) ──────────
+auto_deploy.sh
