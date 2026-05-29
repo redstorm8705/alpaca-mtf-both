@@ -47,6 +47,10 @@ logs/*
 !logs/project-state.md
 !logs/protocol_violations.md
 !logs/queued_for_review_*.md
+# Whitelisted for autonomous pipeline (CCR drafts → OCI DS/GAI → session approval):
+!logs/pending_ds_gai_*.json
+!logs/pending_patch_*.patch
+!logs/pending_approvals_*.md
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
