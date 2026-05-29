@@ -37,7 +37,9 @@ trade_log.json.bak
 trade_events.jsonl
 
 # ── Logs: exclude everything by default, whitelist CCR-useful docs only ─────────
-logs/
+# NOTE: must use logs/* (not logs/) so negation rules below can un-ignore specific files.
+# Using logs/ ignores the directory itself, making negation rules unreachable.
+logs/*
 # Whitelisted docs for CCR agent context:
 !logs/tb_audit_log.md
 !logs/weekly_perf_audit_design_v1.md
