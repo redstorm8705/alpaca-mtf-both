@@ -45,7 +45,29 @@
 
 **Board-only findings (missed by DS/GAI):** No slippage budget per position tier, no margin cascade circuit-breaker, no fill reversion pattern analysis, correlation not validated (all long tech/growth on same day = 0.7+ realized vs 0.2 assumed), no reconnect exponential backoff, no orphan order watchdog, no heartbeat position reconciliation loop.
 
-### Open Items
+### Open Items — New Bugs from S44 Gemini Audit Review (2026-05-25 to 2026-05-29)
+
+> **Source:** 8 Gemini midday + nightly reports. All synthesized S44. CCR tonight will process RTH-chain items through full 9-step sequence. Non-RTH items eligible for direct autonomous apply.
+
+- [ ] **P0: fill_correction math wrong → P&L corruption** — `execution/fill_helpers.py` (RTH-chain). MSTR short 3sh @ $162.95: fill_correction records $62.23 but correct total = ($162.95-$144.84)×1 + ($162.95-$150.36)×2 = $43.29. fill_correction is multiplying incorrectly. ROOT CAUSE of EOD P&L drift. FILL UNVERIFIED fallback (1.44s poll, 2 attempts) uses entry_price as exit — then fill_correction compounds the error. Fix: (1) increase poll to 3 attempts with 3s backoff, (2) verify fill_correction arithmetic for multi-share positions. **Gemini: CRITICAL (May 28 midday + nightly).**
+
+- [ ] **P0: EOD P&L tracker blind to day's losses** — `execution/portfolio_tracker.py` (RTH-chain, hotspot). May 29: tracker=$0.00 vs Alpaca=$-40.43 (drift=$-40.43). `MAX_DAILY_LOSS_PCT` kill switch (7%) cannot trigger if tracker shows $0. Linked to fill_correction bug above — `_fifo_reconstruct` not capturing realized P&L from Alpaca fills. **Gemini: CRITICAL (May 29 midday).**
+
+- [ ] **P1: risk.open_positions desync STILL firing after P0-STARTUP fix** — `main.py` / `execution/orphan_manager.py` (RTH-chain, hotspot). May 27: `CRITICAL | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4`. May 25: `risk.open_positions=0 vs tracker=6`. P0-STARTUP deployed S42 should prevent this — investigate why CRITICAL still fires. Possible root cause: bot restart loop bypasses P0-STARTUP block, or orphan_manager resets risk counter post-startup. **Gemini: CRITICAL (May 25 + May 27).**
+
+- [ ] **P1: pnl=0.0 for stop_hit events with entry≠exit** — `execution/portfolio_tracker.py` (RTH-chain, hotspot). PLTR short: entry $133.29, exit $133.295, pnl=0.0 (should be -$0.01). SOFI: multiple 0.0 P&L stop_hit events. Rounding logic truncates very small P&L to 0 — masks losses in `all_time_stats`. **Gemini: HIGH (May 25 + May 27).**
+
+- [ ] **P1: avg_r_multiple miscalculated** — `reporting/metrics.py` (non-RTH, read-only). Reports -0.034 when (win_rate=40.9%, avg_win=$24.26, avg_loss=-$14.35) → expected +0.10. Formula uses wrong denominator or sign. Affects Kelly sizing calibration and strategy health assessment. **Gemini: HIGH (May 27 + May 28).**
+
+- [ ] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py line 120** — `main.py` (RTH-chain, hotspot). CONFIG says True (overnight holds permitted by design). main.py global override disables it silently. Code checking `_main.OVERNIGHT_ENTRIES_ENABLED` sees False. All overnight entry logic dead-code. Fix: remove line 120 override; read from config only. **Gemini: HIGH (May 25 + May 27).**
+
+- [ ] **P1: MSTR tracked as both closed and overnight_hold in EOD snapshot** — `reconcile_eod.py` + `execution/portfolio_tracker.py` (reconcile_eod non-RTH; portfolio_tracker RTH-chain). trades_today=0 despite alpaca_per_trade showing MSTR closed with fills. MSTR also in overnight_holds list — cannot be both. reconcile_eod _fifo_reconstruct failing to clear closed positions from overnight dict. **Gemini: CRITICAL (May 27).**
+
+- [ ] **P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour** — `execution/entry_logic.py` (RTH-chain). During power_hour with risk.open_positions=4, bot blocks entries with "HALTED for session" despite BUCKET_B_MAX_POSITIONS_POWER=5. RiskManager.can_open_position() doesn't check current TOD when applying limit. Missed entries during highest-volume window. **Gemini: CRITICAL (May 27).**
+
+- [ ] **P2: MAX_DAILY_LOSS_PCT BoD-3 log message misleading** — `main.py` lines 88-94 (RTH-chain, hotspot). BoD-3 block: `if config.MAX_DAILY_LOSS_PCT > 0.15` → for paper, 0.07 > 0.15 is False so block doesn't execute. But the log string references "was 30%" from PROFILES dict — misleading in context. Low-risk comment fix. **Gemini: MEDIUM (May 27 + May 28).**
+
+### Open Items (prior sessions)
 
 - [x] **P0: risk.open_positions startup fix — CLOSED S42** — main.py Part A: P0-STARTUP block inserts after sync_from_tracker(); queries Alpaca live positions; overrides risk.open_positions if mismatch; logs _untracked/_stale symbol sets; halts at MAX. entry_logic.py Part B: P0-CYCLE-SYNC-GUARD replaces unconditional BUG-POS-1 sync; directional guard (tracker UP-only); status filter (excludes zombie closed entries); None guard. Both deployed OCI. Startup log confirmed: "Alpaca=4 == tracker=4. OK." → "Already at MAX (4/4). Blocking new entries."
 - [x] **P0: Slack alert noise — PARTIALLY CLOSED S43** — `alerts.py` patched: `alert_crash()` reason-based dedup (same reason+<60min→ntfy only; different reason→Slack+ntfy always); `alert_stale_bar()`→log-only; `alert_startup_test()` + `alert_spy_event()` UNCHANGED (board: keep all). Deployed OCI git 35bccc9. **Remaining:** `events/macro_risk_index.py` mri_refresh noise (confirmed NOT going to Slack currently — JSONL only). SIGKILL cycle itself is root cause (P2 RAM leak — separate session).

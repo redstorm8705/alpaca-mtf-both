@@ -1,6 +1,8 @@
 # Tech Board (TB) Master Audit Log
 **Project:** Alpaca MTF Confluence Bot
 **Protocol:** 10-Point Per-File Audit (standing — see CLAUDE.md §Board Audit Protocol)
+**Log updated:** 2026-05-29 S44 — Gemini audit synthesis (May 25–29): 8 reports reviewed. 9 new bugs logged below. 2 P0 (fill_correction math, EOD P&L blind). 6 P1 (risk desync regression, pnl=0 rounding, avg_r_multiple wrong, OVERNIGHT_ENTRIES override, MSTR double-record, BUCKET_B power_hour). 1 P2 (BoD-3 log message). All added to handoff.md open items. CCR queued to process tonight. **See GEMINI AUDIT FINDINGS (S44) section below.**
+
 **Log updated:** 2026-05-27 S43B — **strategy/signal_generator.py:** Priority 4 RAM leak fix — fr.pop(_entry_df/_daily_df) in Phase 3 loop (ADDV-fail + post-16pt-scoring paths). 8 changes total (5 C-4 + 3 primary). OCI deployed, RAM 252MB. | **strategy/run_cycle.py:** gc.collect() after run_scan() — Priority 3 RAM leak fix (try/finally, cold agent v2 PASS). OCI deployed. RAM 279MB. | **alerts.py:** Slack noise fix: alert_crash() reason-based dedup (same reason+<60min→ntfy only; different reason→always Slack+ntfy) + alert_stale_bar()→log-only. Full 9-step sequence. OCI deployed. | auto_ai_audit.py: load_dotenv() added (meta-audit never ran since deploy). nightly_audit.py: venv/ excluded from modified-files scan + 4 pre-existing violations fixed (E501 noqa, E402 import reorder, mypy str|None, E741). Both OCI deployed. | P0 entry_logic.py Part B + main.py Part A both deployed S42. P0 FULLY CLOSED.
 
 ---
@@ -18,6 +20,29 @@ Status codes:
 | ⚠️ PATCHED — NEEDS VERIFICATION | Bugs fixed in prior session; post-patch 10-pt re-check not yet run |
 | 🔄 IN PROGRESS | Audit currently underway |
 | 🔴 NOT STARTED | Never audited |
+
+---
+
+---
+
+## GEMINI AUDIT FINDINGS (S44 — 2026-05-29)
+
+**Source:** 8 Gemini midday + nightly reports (2026-05-25 through 2026-05-29). Synthesized manually in S44.
+**RTH-chain classification:** Per RULE C-5 — any file imported (directly or transitively) by files running during RTH requires DS/GAI gate.
+
+| ID | Severity | File(s) | RTH-chain | Description | Gemini Reports |
+|----|----------|---------|-----------|-------------|----------------|
+| S44-BUG-1 | **P0/CRITICAL** | `execution/fill_helpers.py`, `execution/portfolio_tracker.py` | YES | `fill_correction` math wrong: MSTR records $62.23 total P&L when correct = $43.29. fill_correction multiplies incorrectly for multi-share positions. FILL UNVERIFIED fallback (2 attempts/1.44s) uses entry_price as exit price. ROOT CAUSE of EOD P&L drift. | May 28 midday + nightly |
+| S44-BUG-2 | **P0/CRITICAL** | `execution/portfolio_tracker.py` | YES (hotspot) | EOD P&L tracker=$0.00 when Alpaca=$-40.43. `MAX_DAILY_LOSS_PCT` kill switch (7%) cannot activate. `_fifo_reconstruct` not capturing realized P&L from Alpaca fills. Linked to S44-BUG-1. | May 29 midday |
+| S44-BUG-3 | **P1/CRITICAL** | `main.py`, `execution/orphan_manager.py` | YES (hotspot) | `risk.open_positions` desync STILL fires CRITICAL after P0-STARTUP fix (S42). May 27: risk=0 vs tracker=4. May 25: risk=0 vs tracker=6. Likely root cause: restart loop bypasses P0-STARTUP block, or orphan_manager resets risk counter. | May 25 + May 27 |
+| S44-BUG-4 | **P1/HIGH** | `execution/portfolio_tracker.py` | YES (hotspot) | `pnl=0.0` for stop_hit with entry≠exit. PLTR short: entry $133.29, exit $133.295 → pnl=0.0 (should be -$0.01). SOFI multiple 0.0 P&L stops. Rounding logic silently truncates small P&L → corrupts `all_time_stats` + Kelly. | May 25 + May 27 |
+| S44-BUG-5 | **P1/HIGH** | `reporting/metrics.py` | NO (read-only, non-RTH) | `avg_r_multiple` miscalculated: reports -0.034 when math from win_rate=40.9%/avg_win=$24.26/avg_loss=-$14.35 gives ~+0.10. Wrong denominator or sign inversion in formula. Affects strategy performance assessment. | May 27 + May 28 |
+| S44-BUG-6 | **P1/HIGH** | `main.py` line 120 | YES (hotspot) | `OVERNIGHT_ENTRIES_ENABLED = False` hardcoded override. CONFIG constant says True. main.py module global silently kills all overnight entry logic. Fix: remove line 120, read from `config.OVERNIGHT_ENTRIES_ENABLED` only. | May 25 + May 27 |
+| S44-BUG-7 | **P1/CRITICAL** | `reconcile_eod.py`, `execution/portfolio_tracker.py` | NO for reconcile_eod (4:10 PM cron); YES for portfolio_tracker | MSTR simultaneously in `alpaca_per_trade` (closed today, pnl=$6.35) and `overnight_holds`. Impossible state. reconcile_eod `_fifo_reconstruct` failing to clear closed positions from overnight dict after fill processing. | May 27 |
+| S44-BUG-8 | **P1/CRITICAL** | `execution/entry_logic.py` | YES | `BUCKET_B_MAX_POSITIONS_POWER=5` not honored during power_hour. Bot at MAX_POSITIONS=4 blocks entries with "HALTED" despite power_hour expansion config. `RiskManager.can_open_position()` ignores TOD when enforcing position limit. | May 27 |
+| S44-BUG-9 | **P2/MEDIUM** | `main.py` lines 88–94 | YES (hotspot) | BoD-3 block log message misleading: references "was 30%" from PROFILES dict, but for paper profile `config.MAX_DAILY_LOSS_PCT=0.07` → condition `0.07>0.15` is False → block never executes. Log message only appears in cases where limit IS overridden. Low-risk comment clarity fix. | May 27 + May 28 |
+
+**CCR instructions for tonight (10 PM ET):** Process S44-BUG-1 through S44-BUG-9 by priority order. S44-BUG-1/2 are P0 — start there. S44-BUG-5 (`reporting/metrics.py`) and S44-BUG-7 (`reconcile_eod.py`) are non-RTH — eligible for direct autonomous apply if board passes. All others are RTH-chain → full 9-step → write pending_ds_gai + .patch → push to GitHub. autonomous_review.py at 11 PM calls DS + Gemini → user approves tomorrow morning via Step 3c.
 
 ---
 
