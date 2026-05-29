@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-28 S43C2 | **S43C2: AUTONOMOUS PIPELINE SAFETY HARDENED — DS/GAI reviewed and rejected Gist-as-DS/GAI-gate (wrong granularity). 3-Point AI Summary produced. All safety measures implemented: (1) auto_deploy.sh upgraded 36→125L: auto-rollback (git reset --hard, local only), 3-iteration health check, deploy window 10PM-6AM ET, structured logging, Slack alerts, flock lockfile; (2) Nightly CCR rewritten: adversarial board 3/3 PASS (Strict Parser/Red Teamer/Quant Risk), RTH-classification gate, broker.py+config.py hard excluded, forbidden categories, pytest required, 1-file/night limit, queue mechanism (logs/queued_for_review_YYYY-MM-DD.md); (3) CCR re-enabled — next run tonight 10 PM ET. No code changes this session.**
+**Updated:** 2026-05-29 S44 | **S44: AUTONOMOUS PIPELINE STAGE 2 COMPLETE — full end-to-end DS/GAI relay loop now runs without human intervention. autonomous_review.py deployed to OCI (433L): calls DS + Gemini APIs on pending_ds_gai_*.json files from CCR, writes raw responses verbatim to pending_approvals_*.md, Slacks "Patches ready for approval", pushes to GitHub. OCI cron updated: autonomous_review.py at 11 PM ET (03:00 UTC Tue-Sat), auto_deploy.sh shifted to 11:30 PM ET (03:30 UTC). session-start skill updated: Step 3c reads pending_approvals → presents numbered patch list → approval handler uses git apply (NOT Edit tool) + SHA256 verification + health check + auto-rollback. No code changes to bot logic.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -69,25 +69,54 @@
 - **Board Review CCR:** `trig_01B37951UHsX2NAsCvrJuHNK` — weekdays 5:30 PM ET — 4 parallel domain agents → board verdict → **NOW POSTS TO SLACK** (Step 4 added S43C) → https://claude.ai/code/routines/trig_01B37951UHsX2NAsCvrJuHNK
 - **Nightly Autonomous Work CCR (UPDATED S43C2):** `trig_01NctUPEvjM1TVDH3vgJ2bmw` — weeknights 10 PM ET (2 AM UTC) — **RE-ENABLED with safety measures:** (1) reads handoff.md + tb_audit_log.md for priorities (NOT Gist — Gist approach rejected by DS+GAI); (2) RTH-classification gate: non-RTH files only for autonomous apply; RTH-chain files → queue only; (3) broker.py + config.py HARD EXCLUDED; (4) forbidden categories: threading/asyncio, order routing, credential handling, state persistence writes, stop/target logic; (5) 3 adversarial board agents 3/3 PASS required (Strict Parser/Red Teamer/Quant Risk Manager); (6) pytest required; (7) 1 file/night limit; (8) queue mechanism: logs/queued_for_review_YYYY-MM-DD.md → Slack alert → Slack summary → https://claude.ai/code/routines/trig_01NctUPEvjM1TVDH3vgJ2bmw
 
-### Full Daily Pipeline (Mon–Fri) — UPDATED S43C
+### Full Daily Pipeline (Mon–Fri) — UPDATED S44
 | Time ET | What | Output |
 |---------|------|--------|
 | 1:30 PM | midday_audit.py (Gemini) | midday_gemini_*.txt + Slack |
 | 4:05 PM | nightly_audit.py (Gemini) | gemini_audit_*.txt + Slack |
 | 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Gist + **Slack** |
 | 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack |
-| 5:30 PM | Board Review CCR (4 agents) | Board verdict + **Slack** (NEW S43C) |
-| 10:00 PM | Nightly Autonomous Work CCR | Patches committed to GitHub + **Slack** (NEW S43C) |
-| 11:00 PM | auto_deploy.sh (OCI cron) | git pull → restart services if new commits (NEW S43C) |
+| 5:30 PM | Board Review CCR (4 agents) | Board verdict + **Slack** |
+| 10:00 PM | Nightly Autonomous Work CCR | Full 9-step audit → RTH-chain: `pending_ds_gai_*.json` + `.patch` → GitHub + Slack |
+| 11:00 PM | autonomous_review.py (OCI cron, NEW S44) | Calls DS + Gemini → `pending_approvals_*.md` → GitHub + Slack "ready for approval" |
+| 11:30 PM | auto_deploy.sh (OCI cron, shifted S44) | git pull → restart services if new non-RTH commits |
+
+**Session-start approval flow (NEW S44):**
+When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered patch list with DS/GAI verdicts → say "approved #N" → SHA256 verify → `git apply` → static analysis → rsync → health check → auto-rollback on failure.
 
 ### Infrastructure Notes
 - **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here. **⚠️ Previous CCRs used WRONG URL (`redstamp8705`) — that was the root cause of 3 days of failure (S43C fixed)**
 - **OCI git (NEW S43C):** `/home/ubuntu/mtf-bot` is now a git repo tracking `origin/main`. Credentials stored in `~/.git-credentials`. Run `git pull origin main --ff-only` to sync.
-- **auto_deploy.sh (UPGRADED S43C2):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — 125 lines (was 36). **NEW:** flock lockfile (concurrent run protection), deploy window 10PM-6AM ET (replaces dual RTH/time gates), 3-iteration health check at 20s/40s/60s, auto-rollback on fail: `git reset --hard $BEFORE` (LOCAL ONLY — bad commit stays on GitHub, manual fix required), Slack alerts with structured fields (commit SHA, failed service, systemctl tail, elapsed time, rollback result). Cron: `0 3 * * *` (11 PM ET). Logs to `logs/auto_deploy.log`. **IMPORTANT: auto_deploy.sh is NOT tracked in git (untracked) — contains Slack webhook URL. Do not commit.**
+- **autonomous_review.py (NEW S44):** `/home/ubuntu/mtf-bot/autonomous_review.py` — 433 lines. Stage 2 of the autonomous pipeline. Reads `logs/pending_ds_gai_*.json` (written by CCR), calls DeepSeek API + Gemini API with identical prompts (MAX_RETRIES=3, exponential backoff), writes raw responses verbatim to `logs/pending_approvals_YYYY-MM-DD.md` (no autonomous summary — user sees raw DS + GAI text). If REJECT in either response → routes to `queued_for_review_*.md` instead. Updates JSON status `awaiting_ds_gai` → `ready_for_approval`. Commits precise filenames to GitHub, Slacks "🎯 Patches ready for approval". flock: `/tmp/mtf_autonomous_review.lock` (own) + `/tmp/mtf_git.lock` (shared with auto_deploy.sh). Cron: `0 3 * * 2-6` (11 PM ET weeknights).
+- **auto_deploy.sh (UPGRADED S43C2, SHIFTED S44):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — 125 lines (was 36). flock lockfile, deploy window 10PM-6AM ET, 3-iteration health check at 20s/40s/60s, auto-rollback on fail: `git reset --hard $BEFORE` (LOCAL ONLY). Cron: **`30 3 * * *` (11:30 PM ET — shifted from 11 PM to avoid collision with autonomous_review.py).** Logs to `logs/auto_deploy.log`. **IMPORTANT: auto_deploy.sh is NOT tracked in git (untracked) — contains Slack webhook URL. Do not commit.**
 - **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json`
 - **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
 - **Gemini model:** `gemini-3.1-pro-preview` via `google.genai` SDK ✅
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
+
+## Last Session (S44 — 2026-05-29)
+
+### S44 (2026-05-29) — AUTONOMOUS PIPELINE STAGE 2 DEPLOYED
+- **autonomous_review.py deployed to OCI** (433 lines, `/home/ubuntu/mtf-bot/autonomous_review.py`):
+  - Reads `logs/pending_ds_gai_*.json` written by the Nightly CCR
+  - Calls DeepSeek + Gemini with identical 7-section prompts (MAX_RETRIES=3, exponential backoff)
+  - REJECT in either response → routes to `queued_for_review_*.md` (not presented for approval)
+  - Writes raw DS + GAI responses verbatim to `logs/pending_approvals_YYYY-MM-DD.md` — NO autonomous summary
+  - Updates JSON status, commits precise filenames, pushes to GitHub
+  - Slacks "🎯 Patches ready for approval — [timestamp PT]"
+  - Shared git flock with auto_deploy.sh (`/tmp/mtf_git.lock`)
+- **OCI crontab updated:**
+  - NEW: `autonomous_review.py` at `0 3 * * 2-6` (11 PM ET weeknights Tue-Sat)
+  - SHIFTED: `auto_deploy.sh` from `0 3 * * *` → `30 3 * * *` (11:30 PM ET, avoids collision)
+- **session-start skill updated** (`~/.claude/skills/session-start/skill.md`):
+  - NEW Step 3b: `git pull origin main` first (gets CCR-committed patch files)
+  - NEW Step 3c: reads `logs/pending_approvals_*.md`, presents numbered patch list with DS/GAI verdicts
+  - Approval handler: SHA256 verify → `git apply` (NOT Edit tool) → static analysis → rsync → health check → auto-rollback → mark applied → commit + push
+  - Step 6 output template: new PATCHES READY FOR APPROVAL section
+- **handoff.md updated** to reflect new pipeline stages, cron times, infrastructure notes
+- **No changes to bot trading logic** — this session was infrastructure only
+
+---
 
 ## Last Session (S43C2 — 2026-05-28)
 
