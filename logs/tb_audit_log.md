@@ -3065,3 +3065,155 @@ Reason: These four files were patched in S25C without full reads, board vote, DS
 - Rsync: PASS
 - OCI py_compile: PASS
 - Service restart: NOT required (kelly.py loaded at bot restart; next heartbeat cycle picks up change)
+
+---
+
+## S44 — 2026-05-29 — execution/portfolio_tracker.py — 5-Bug Patch (Gemini Audit Synthesis)
+
+**Source:** Gemini midday + nightly audit synthesis (2026-05-25 through 2026-05-29). 5 bugs from P0/P1 backlog patched in-session (skipped overnight CCR due to urgency — 1 week behind on fixes).
+
+### Full Read Gate
+- **Full read:** 1,940 lines confirmed via Explore subagent (prior session S44 part A). Declared before any analysis per ZERO TOLERANCE rule.
+- 1,939L pre-patch; **2,048L post-patch** (+109 lines net).
+
+### 10-Point Audit Results
+
+| Point | Result |
+|-------|--------|
+| 1 — Static analysis | py_compile PASS, mypy 0 errors, ruff PASS (2 E501 fixed in draft) |
+| 2 — Trade path trace | patch_exit_pnl → record_exit → _fifo_reconstruct → _load_prior_day_lots all in P&L recording chain |
+| 3 — Adversarial scenarios | BUG-1: _qty_at_close=0 fully-partial position; BUG-2: orphan close on restart; BUG-3: stale lots after weekend; BUG-4: malformed timestamp; BUG-5: overnight promote with None entry_price |
+| 4 — Full top-to-bottom read | Complete — all functions read |
+| 5 — Cross-references | _fifo_reconstruct callers: reconcile_eod.py, write_eod_summary; record_exit callers: exit_logic.py, orphan_manager.py, main.py |
+| 6 — Conflicting directions | None found — all 5 fixes are additive guards |
+| 7 — Redundancy scan | No dead code introduced |
+| 8 — State persistence | _load_prior_day_lots never returns {} on file-found path — only empty on exception (corrected) |
+| 9 — Data source tier | N/A (no data fetches) |
+| 10 — Timezone + logging | All timestamps use _PT/_ET. logger.warning/critical added. |
+
+### RC Bug Scan
+
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — all datetime.now() calls use _PT or _ET |
+| RC-2 | PASS — all paths anchored to _LOTS_STATE_FILE / _LOG_FILE (Path(__file__) anchors) |
+| RC-3 | **PATCHED** — _fill_et_date() bare `except Exception: return ts_str[:10]` → `except Exception as _e: logger.warning(...)` with safe slice guard (PT-S44-FILL-ET-DATE-RC3) |
+| RC-4 | PASS — record_exit uses _fetch_actual_fill_price() upstream; no current_price passed directly |
+| RC-5 | PASS — _atomic_write uses tmp→replace() pattern |
+| RC-6 | PASS — no new API field assumptions introduced |
+| RC-7 | N/A — no sizing logic in portfolio_tracker.py |
+| RC-8 | N/A — no scan buffer in portfolio_tracker.py |
+
+### Board Vote (4 Cold Independent Subagents)
+
+All 4 agents spawned in parallel via Agent tool. Each received full file content path + domain lens. No shared context.
+
+- **Reliability (Peterffy/Beck/Katsuyama):** APPROVE — _qty_at_close is-not-None sentinel critical; entry_price pre-pop check prevents silent TypeError.
+- **Execution Risk (Harris/Brandt/Douglas):** APPROVE — phantom P&L from BUG-1 blinds kill switch; BUG-2 synthetic short ensures FIFO never skips a lot.
+- **Data Integrity (McKinney/Majors/Minsky):** APPROVE with GAI hybrid on BUG-3 (never return {} is correct — return stale lots over empty; WARNING is right); Slack in BUG-2 except block must itself be wrapped in try/except (incorporated).
+- **Quant Logic (Simons/Thorp/López de Prado):** APPROVE — _entry_px<=0 cross-bug guard prevents phantom profit when BUG-5 (None entry_price) and BUG-1 interact on same trade.
+
+**DS vs GAI conflicts resolved by board:**
+- BUG-2: DS=raise RuntimeError (trigger tracker fallback); GAI=keep+CRITICAL+Slack. Board: GAI wins — Alpaca fills are authoritative per project invariant. Raising on an orphan close introduces risk of corrupt FIFO state.
+- BUG-3: DS=age_days>1 trading-day comparison; GAI=no time threshold (query live positions). Board: HYBRID — DS detection method (age_days>1→WARNING), GAI logic (never return {}).
+
+### DS/GAI External Audit
+
+**Prompt framing (updated S44):** "I am the head quant and lead engineer at a systematic algo trading firm with $50M AUM running an Alpaca-based intraday system. Audit the following code as if a production P&L incident depended on your findings."
+
+**3-Point AI Summary:**
+
+**POINT 1 — ALIGNMENT**
+- BUG-1 _qty_at_close or-chain: 3/3 — Claude ✓ DS ✓ GAI ✓
+- BUG-2 orphan close: 3/3 — Claude ✓ DS ✓ GAI ✓ (design differs, board resolved)
+- BUG-3 stale lots: 3/3 — Claude ✓ DS ✓ GAI ✓ (threshold differs, hybrid adopted)
+- BUG-4 _fill_et_date RC-3: 3/3 — Claude ✓ DS ✓ GAI ✓
+- BUG-5 entry_price=None: 3/3 — Claude ✓ DS ✓ GAI ✓
+
+**POINT 2 — CLAUDE MISSED (DS+GAI consensus)**
+- BUG-5 cross-interaction (GAI priority): `pending_overnight` trade with `entry_price=None` coerced to 0.0. After BUG-1 fix, `_qty=10` (correct). BUG-4 already patched → `patch_exit_pnl()` runs → `(150.00-0.0)*10=$1,500` phantom P&L. Required `_entry_px<=0` guard in patch_exit_pnl(). Claude/board missed this cross-file interaction. → **Incorporated as mandatory addition.**
+- exit_price<=0 guard in patch_exit_pnl (DS): caller can pass 0.0 on data failure. Without guard, `(0.0-entry)*qty` produces phantom loss. → **Incorporated.**
+
+**POINT 3 — FORWARD-LOOKING (new issues)**
+- `_fifo_reconstruct` does not handle buy-to-cover (short side) when a synthetic short is recorded. If FIFO is consulted for a short position next session, it will mismatch against Alpaca. Priority P1 — requires board vote before fix.
+- `_load_prior_day_lots` warning at `age_days>1` does not fire on weekends (Friday→Monday = 3 days normal). Could produce false warnings every Monday. Priority P2 — add trading-day calendar check. No DS/GAI gate (non-RTH path in lots loading).
+
+### Static Analysis (Pre-Proposal + Post-Patch)
+
+| Tool | Pre | Post |
+|------|-----|------|
+| py_compile | PASS | PASS |
+| mypy --warn-unreachable | 0 errors | 0 errors |
+| ruff --select E,W,F,B | 0 violations (2 E501 fixed in draft) | 0 violations |
+
+Two E501 violations identified during draft validation and fixed before proposal:
+- FIFO Slack f-string split across continuation: `f"🚨 FIFO CRITICAL: {sym} closing sell with ..."` (was 89 chars)
+- patch_exit_pnl error string: `"[patch_exit_pnl] Invalid exit_price=%.4f for %s — ..."` (was 89 chars)
+
+### Cold Second-Agent Review
+
+**Verdict: PASS** — All 5 changes verified.
+
+| Threat | Result |
+|--------|--------|
+| Logic inversion | None detected in any of 5 changes |
+| Off-by-one / boundary | `_qty_at_close_raw != ""` string check correct; `age_days > 1` correct (not >=) |
+| Missing conditions | All edge cases covered: None, empty string, non-numeric _qty_at_close; entry<=0; exit<=0; age_days parse failure |
+| Branch completeness | Both TRUE and FALSE paths verified for every new conditional |
+
+### code-review-graph Impact Analysis
+
+Impact radius run via `detect_changes_tool` + `get_impact_radius_tool`. 552 total impacted nodes returned (includes Token Optimization folder and co-located 0dte-strategies — noise filtered). Bot-project actual dependents confirmed via `grep -rl "portfolio_tracker"`:
+- `execution/exit_logic.py` (calls record_exit)
+- `execution/entry_logic.py` (calls record_exit via fill path)
+- `execution/orphan_manager.py` (calls record_exit on GTC adoption)
+- `execution/fill_reconciler.py` (calls mark_fill_expired)
+- `main.py` (calls record_exit + write_eod_summary)
+- `strategy/run_cycle.py` (calls write_eod_summary)
+- `reconcile_eod.py` (calls _fifo_reconstruct via write_eod_summary)
+- `midday_audit.py`, `nightly_audit.py` (analysis — read-only access)
+- `reporting/metrics.py`, `weekly_review.py` (reads closed_trades log)
+
+None of the 5 changes alter function signatures — all changes are internal guard additions. Backward-compatible with all 11 dependents.
+
+### Patch Changes (Applied)
+
+1. **BUG-4 / RC-3** — `_fill_et_date()` L147-151 (was L147-148)
+   - OLD: `except Exception: return ts_str[:10]`
+   - NEW: `except Exception as _e: logger.warning("[fill_date] Could not parse timestamp %r: %s — using raw slice", ts_str, _e); return str(ts_str)[:10] if ts_str and len(str(ts_str)) >= 10 else ""`
+
+2. **BUG-2** — `_fifo_reconstruct()` orphan close guard (new block, ~10 lines, before line 315 append)
+   - Adds CRITICAL log + Slack alert + `side="short"` synthetic lot when closing sell has no prior long lots
+   - Replaces: silent `today_pnl=$0.00` + phantom short seeded opaquely
+
+3. **BUG-3** — `_load_prior_day_lots()` staleness detection (extended by ~20 lines)
+   - Parses `stored_date` → computes `age_days`; if `age_days > 1`: `logger.warning("[lots] Prior lots file is %d days old ...")`
+   - Function NEVER returns `{}` on file-found path — only on exception fallback
+
+4. **BUG-1** — `patch_exit_pnl()` _qty_at_close or-chain fix + entry/exit guards (~30 lines modified)
+   - `_qty_at_close_raw is not None` sentinel replaces falsy `or`-chain (treats 0 correctly)
+   - `exit_price <= 0` → returns False with ERROR log
+   - `_entry_px <= 0` → preserves partial_pnl only, no fill correction (GAI cross-bug guard)
+
+5. **BUG-5** — `record_exit()` pre-pop entry_price validation (~25 lines added before pop)
+   - Pre-pop None/zero check → CRITICAL + Slack alert BEFORE `self.open_trades.pop(symbol)`
+   - `entry = float(trade.get("entry_price") or 0.0)` — safe coercion
+   - `pnl = 0.0` forced if `entry <= 0`
+   - `pnl_pct` guard: `if entry > 0 and _orig_qty > 0 else 0.0`
+
+### Deployment
+
+- **Rsync:** `rsync -av -e "ssh -i ~/.ssh/mtf_bot_oracle" execution/portfolio_tracker.py ubuntu@129.153.208.32:/home/ubuntu/mtf-bot/execution/` — PASS
+- **Service restart:** `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 "sudo systemctl restart mtf-bot mtf-writer mtf-http"` — PASS
+- **Health check:** All 4 services active (mtf-bot, mtf-writer, mtf-http, nginx). Dashboard 401 = expected Basic Auth behavior. Health OK.
+- **OCI py_compile:** PASS (confirmed via SSH post-restart)
+
+### Open Items Carried Forward
+
+- **P1:** S44-BUG-6 — `OVERNIGHT_ENTRIES_ENABLED = False` hardcoded in `main.py` L120 overrides config (RTH-chain, full 9-step + DS/GAI required)
+- **P1:** S44-BUG-3 (desync) — `risk.open_positions` desync still firing after P0-STARTUP fix — root cause unknown
+- **P1:** S44-BUG-8 — `BUCKET_B_MAX_POSITIONS_POWER=5` not honored during power_hour (`execution/entry_logic.py`)
+- **P2:** S44-BUG-5 — `avg_r_multiple` wrong in `reporting/metrics.py` (non-RTH, direct deploy eligible)
+- **P2:** S44-BUG-7 — MSTR double-record in `reconcile_eod.py` (non-RTH, direct deploy eligible)
+- **Forward-looking P1:** `_fifo_reconstruct` short-side FIFO handling (buy-to-cover mismatch) — board vote required
+- **Forward-looking P2:** `_load_prior_day_lots` false Monday warning (calendar-aware age check needed)

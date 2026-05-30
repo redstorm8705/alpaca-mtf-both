@@ -144,8 +144,11 @@ def _fill_et_date(ts_str: str) -> str:
     try:
         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         return dt.astimezone(_ET).strftime("%Y-%m-%d")
-    except Exception:
-        return ts_str[:10]
+    except Exception as _e:
+        logger.warning(
+            "[fill_date] Could not parse timestamp %r: %s — using raw slice", ts_str, _e
+        )
+        return str(ts_str)[:10] if ts_str and len(str(ts_str)) >= 10 else ""
 
 
 def _fetch_alpaca_fills_for_date(date_str: str) -> list:
@@ -312,6 +315,22 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
                 if to_sell > 0:
                     current.append({"qty": to_sell, "price": price, "side": "short"})
             else:
+                logger.critical(
+                    "[FIFO] %s: closing sell with no open long lots "
+                    "(net_qty=%d, qty=%d, price=%.2f). "
+                    "Prior lots likely missing (bot restart / state corruption). "
+                    "Recording as synthetic short — review FIFO state immediately.",
+                    sym, net_qty, qty, price,
+                )
+                try:
+                    from alerts import send_slack as _fifo_slack
+                    _fifo_slack(
+                        f"🚨 FIFO CRITICAL: {sym} closing sell with "
+                        f"no prior long lots. Qty={qty} @ ${price:.2f}. "
+                        f"Synthetic short recorded — verify positions."
+                    )
+                except Exception as _slack_err:
+                    logger.warning("[FIFO] Slack alert failed: %s", _slack_err)
                 current.append({"qty": qty, "price": price, "side": "short"})
 
     remaining_lots = {sym: lts for sym, lts in lots.items() if lts}
@@ -324,6 +343,23 @@ def _load_prior_day_lots() -> dict:
         if _LOTS_STATE_FILE.exists():
             with open(_LOTS_STATE_FILE) as f:
                 data = json.load(f)
+            stored_date = data.get("date", "")
+            if stored_date:
+                try:
+                    stored_dt = datetime.strptime(stored_date, "%Y-%m-%d").date()
+                    today_dt = datetime.now(_PT).date()
+                    age_days = (today_dt - stored_dt).days
+                    if age_days > 1:
+                        logger.warning(
+                            "[lots] Prior lots file is %d days old "
+                            "(stored=%s, today=%s). "
+                            "Loading anyway — verify open positions against Alpaca.",
+                            age_days, stored_date, today_dt.isoformat(),
+                        )
+                except (ValueError, TypeError) as _de:
+                    logger.warning(
+                        "[lots] Cannot parse stored date %r: %s", stored_date, _de
+                    )
             return data.get("open_lots", {})
     except Exception as exc:
         logger.warning(f"Could not load prior day lots state: {exc}")
@@ -481,17 +517,61 @@ class PortfolioTracker:
             )
             return False
 
+        if exit_price <= 0:
+            logger.error(
+                "[patch_exit_pnl] Invalid exit_price=%.4f for %s"
+                " — skipping correction.",
+                exit_price, symbol,
+            )
+            return False
+
         _original_exit_px = float(_trade.get("exit_price") or 0.0)
         _original_pnl     = float(_trade.get("pnl") or 0.0)
         _entry_px         = float(_trade.get("entry_price") or 0.0)
-        _qty              = int(_trade.get("_qty_at_close") or _trade.get("qty") or 0)
-        _orig_qty_full    = int(_trade.get("qty") or 0)
-        _direction        = _trade.get("direction", "long")
-        _dir_mult         = 1 if _direction == "long" else -1
-        _partial_pnl      = float(_trade.get("partial_pnl") or 0.0)
 
-        _new_pnl_remaining = round((exit_price - _entry_px) * _qty * _dir_mult, 2)
-        _new_total_pnl     = round(_new_pnl_remaining + _partial_pnl, 2)
+        # BUG-1 fix: 'or'-chain treats _qty_at_close=0 as falsy → falls back to
+        # original qty. Use 'is not None' sentinel to distinguish legitimate zero
+        # (fully partial-exited position) from absent field (legacy trade).
+        # DS/GAI: add try/except + float() for type safety on non-numeric stored values.
+        _qty_at_close_raw = _trade.get("_qty_at_close")
+        try:
+            if _qty_at_close_raw is not None and _qty_at_close_raw != "":
+                _qty = int(float(_qty_at_close_raw))
+            else:
+                _qty = int(_trade.get("qty") or 0)
+        except (ValueError, TypeError) as _qe:
+            logger.warning(
+                "[patch_exit_pnl] Non-numeric _qty_at_close %r for %s — "
+                "falling back to original qty: %s",
+                _qty_at_close_raw, symbol, _qe,
+            )
+            _qty = int(_trade.get("qty") or 0)
+        if _qty < 0:
+            logger.warning(
+                "[patch_exit_pnl] Negative _qty=%d for %s — clamping to 0.",
+                _qty, symbol,
+            )
+            _qty = 0
+
+        _orig_qty_full = int(_trade.get("qty") or 0)
+        _direction     = _trade.get("direction", "long")
+        _dir_mult      = 1 if _direction == "long" else -1
+        _partial_pnl   = float(_trade.get("partial_pnl") or 0.0)
+
+        # GAI cross-bug guard: if _entry_px=0.0 (pending_overnight never promoted),
+        # (exit_price - 0) * qty produces phantom profit equal to gross proceeds.
+        # Preserve only partial_pnl; skip remaining-share P&L calculation.
+        if _entry_px <= 0:
+            logger.critical(
+                "[patch_exit_pnl] _entry_px=%.4f is invalid for %s — "
+                "cannot compute fill correction. Preserving partial_pnl=%.2f only.",
+                _entry_px, symbol, _partial_pnl,
+            )
+            _new_pnl_remaining = 0.0
+            _new_total_pnl     = round(_partial_pnl, 2)
+        else:
+            _new_pnl_remaining = round((exit_price - _entry_px) * _qty * _dir_mult, 2)
+            _new_total_pnl     = round(_new_pnl_remaining + _partial_pnl, 2)
 
         _delay_secs = 0.0
         try:
@@ -1378,6 +1458,27 @@ class PortfolioTracker:
                 f" ({_original_qty}) — skipping"
             )
             return
+        # BUG-5: validate entry_price BEFORE pop — if entry is None/0 the trade is
+        # still closed (P&L=$0.00) but we need this check here to log CRITICAL + Slack
+        # before pop so the warning is never lost if something goes wrong downstream.
+        _raw_entry_chk = self.open_trades[symbol].get("entry_price")
+        if _raw_entry_chk is None or float(_raw_entry_chk or 0.0) <= 0:
+            logger.critical(
+                "[%s] record_exit: entry_price=%r is None/zero — "
+                "trade will be closed with P&L=$0.00. "
+                "Check pending_overnight promotion and fill logs.",
+                symbol, _raw_entry_chk,
+            )
+            try:
+                from alerts import send_slack as _ep_slack
+                _ep_slack(
+                    f"🚨 CRITICAL: {symbol} closed with missing/zero entry_price. "
+                    f"P&L forced to $0.00. Check OCI logs immediately."
+                )
+            except Exception as _ep_slack_err:
+                logger.warning(
+                    "[%s] entry_price Slack alert failed: %s", symbol, _ep_slack_err
+                )
         trade     = self.open_trades.pop(symbol)
         # Clamp qty_remaining to [0, original_qty].
         # Trades opened before qty_remaining was added fall back to original qty
@@ -1386,7 +1487,7 @@ class PortfolioTracker:
         qty           = trade.get("qty_remaining", _original_qty)
         qty           = max(0, min(qty, _original_qty))
         _partial_pnl  = trade.get("partial_pnl", 0.0)
-        entry         = trade.get("entry_price", 0.0)
+        entry         = float(trade.get("entry_price") or 0.0)
         direction     = trade["direction"]
 
         # qty=0 with no prior partial exits = reconciliation/restart corruption.
@@ -1417,8 +1518,13 @@ class PortfolioTracker:
                     symbol, entry,
                 )
 
-        pnl = (exit_price - entry) * qty if direction == "long" \
-              else (entry - exit_price) * qty
+        # BUG-5: if entry=0.0 (corrupt/never-promoted trade), force pnl=0.0.
+        # Without this guard, pnl = (exit_price - 0.0) * qty = gross proceeds as profit.
+        if entry <= 0:
+            pnl = 0.0
+        else:
+            pnl = (exit_price - entry) * qty if direction == "long" \
+                  else (entry - exit_price) * qty
 
         # Include all locked-in partial exit P&L in the final trade record.
         # partial_pnl accumulates across T1/T2/T3 tranches in record_partial_exit().
@@ -1437,7 +1543,10 @@ class PortfolioTracker:
             "pnl":           _total_pnl,
             # final-close portion only (for audit)
             "pnl_remaining": round(pnl, 2),
-            "pnl_pct":       round((_total_pnl / (entry * _orig_qty)) * 100, 2),
+            "pnl_pct":       (
+                round((_total_pnl / (entry * _orig_qty)) * 100, 2)
+                if entry > 0 and _orig_qty > 0 else 0.0
+            ),
             "status":        "closed",
             # BUG-1 fix: zero on close (was stale pre-exit value)
             "qty_remaining": 0,
