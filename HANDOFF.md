@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-01 S45 | **S45: PIPELINE UNBLOCKED — root cause of OCI git stall identified (dc28423 never pushed to GitHub). Pushed dc28423. OCI now at dc28423. autonomous_review.py dry-run PASS. Stale S44 one-time cron removed. RAM at 695MB (above 550MB threshold) — watchdog will auto-restart post-RTH. auto_deploy.sh BEFORE==AFTER design gap documented (P2 — non-blocking for tonight). No code changes.**
+**Updated:** 2026-06-01 S46 | **S46: main.py S44-BUG-6 PATCHED — OVERNIGHT_ENTRIES_ENABLED hardcoded False removed. Config-driven gate with sys.modules alias (Path B 4/4 board), bool() cast (DS+GAI), conditional WARNING/INFO log. Full 9-step sequence complete. Committed 2a91753. Rsync/restart PENDING post-RTH (4:00 PM ET). OCI git will lag until restart.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -56,7 +56,7 @@
 
 - [ ] **P1: avg_r_multiple miscalculated** — `reporting/metrics.py` (non-RTH, read-only). Reports -0.034 when (win_rate=40.9%, avg_win=$24.26, avg_loss=-$14.35) → expected +0.10. Formula uses wrong denominator or sign. Affects Kelly sizing calibration and strategy health assessment. **Gemini: HIGH (May 27 + May 28).**
 
-- [ ] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py line 120** — `main.py` (RTH-chain, hotspot). CONFIG says True (overnight holds permitted by design). main.py global override disables it silently. Code checking `_main.OVERNIGHT_ENTRIES_ENABLED` sees False. All overnight entry logic dead-code. Fix: remove line 120 override; read from config only. **Gemini: HIGH (May 25 + May 27).**
+- [x] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py — ✅ PATCHED S46** — Hardcoded `False` at line 131 (shifted) removed. Replaced with `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` module-level gate + sys.modules alias (4/4 board Path B) + global re-read after profile loop + conditional WARNING/INFO. Committed 2a91753. Rsync/restart pending post-RTH.
 
 - [ ] **P1: MSTR tracked as both closed and overnight_hold in EOD snapshot** — `reconcile_eod.py` + `execution/portfolio_tracker.py` (reconcile_eod non-RTH; portfolio_tracker RTH-chain). trades_today=0 despite alpaca_per_trade showing MSTR closed with fills. MSTR also in overnight_holds list — cannot be both. reconcile_eod _fifo_reconstruct failing to clear closed positions from overnight dict. **Gemini: CRITICAL (May 27).**
 
@@ -106,13 +106,25 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 
 ### Infrastructure Notes
 - **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here. **⚠️ Previous CCRs used WRONG URL (`redstamp8705`) — that was the root cause of 3 days of failure (S43C fixed)**
-- **OCI git (NEW S43C, verified S45):** `/home/ubuntu/mtf-bot` is a git repo tracking `origin/main`. Credentials in `~/.git-credentials` (valid). Current HEAD: `dc28423` (S44 portfolio_tracker.py patch). ⚠️ LESSON S45: always `git push origin main` from local before session end — commits left local-only will silently break OCI pipeline.
+- **OCI git (NEW S43C, verified S45):** `/home/ubuntu/mtf-bot` is a git repo tracking `origin/main`. Credentials in `~/.git-credentials` (valid). GitHub HEAD: `2a91753` (S46 main.py BUG-6 patch). OCI HEAD: `3cce7a9` (S45 — LAGS GitHub, rsync/restart pending post-RTH). ⚠️ LESSON S45: always `git push origin main` from local before session end — commits left local-only will silently break OCI pipeline.
 - **autonomous_review.py (NEW S44):** `/home/ubuntu/mtf-bot/autonomous_review.py` — 433 lines. Stage 2 of the autonomous pipeline. Reads `logs/pending_ds_gai_*.json` (written by CCR), calls DeepSeek API + Gemini API with identical prompts (MAX_RETRIES=3, exponential backoff), writes raw responses verbatim to `logs/pending_approvals_YYYY-MM-DD.md` (no autonomous summary — user sees raw DS + GAI text). If REJECT in either response → routes to `queued_for_review_*.md` instead. Updates JSON status `awaiting_ds_gai` → `ready_for_approval`. Commits precise filenames to GitHub, Slacks "🎯 Patches ready for approval". flock: `/tmp/mtf_autonomous_review.lock` (own) + `/tmp/mtf_git.lock` (shared with auto_deploy.sh). Cron: `0 3 * * 2-6` (11 PM ET weeknights).
 - **auto_deploy.sh (UPGRADED S43C2, SHIFTED S44):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — 125 lines (was 36). flock lockfile, deploy window 10PM-6AM ET, 3-iteration health check at 20s/40s/60s, auto-rollback on fail: `git reset --hard $BEFORE` (LOCAL ONLY). Cron: **`30 3 * * *` (11:30 PM ET — shifted from 11 PM to avoid collision with autonomous_review.py).** Logs to `logs/auto_deploy.log`. **IMPORTANT: auto_deploy.sh is NOT tracked in git (untracked) — contains Slack webhook URL. Do not commit.**
 - **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json`
 - **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
 - **Gemini model:** `gemini-3.1-pro-preview` via `google.genai` SDK ✅
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
+
+## Last Session (S46 — 2026-06-01)
+
+### S46 (2026-06-01) — main.py S44-BUG-6 PATCHED
+
+- **Bug fixed:** `OVERNIGHT_ENTRIES_ENABLED = False` hardcoded at line 131 removed. Replaced with config-driven `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` at module level (after `import config`) + sys.modules alias + global re-read after profile loop + conditional WARNING/INFO log.
+- **Full 9-step sequence completed:** Full read (951L, 4 chunks). Board vote 3/4 PASS (Quant Logic FAIL → fix incorporated: WARNING when True / INFO when False). DS/GAI gate satisfied: DS Q5 FAIL (bool() cast), GAI Q3 CRITICAL FAIL (__main__/main double-import). DS/GAI conflict resolved via 4-agent board vote → 4/4 PASS Path B (sys.modules alias). 3-Point AI Summary logged. Static analysis PASS. Cold second-agent PASS. Impact trace (manual): bounded to entry_logic.py L1263/1548/1706 only.
+- **Committed:** `2a91753` pushed to GitHub.
+- **Rsync/restart PENDING:** RTH closed at 4:00 PM ET — bot running on prior `main.py` until restart. No behavioral change until config.py defines OVERNIGHT_ENTRIES_ENABLED (currently absent → both namespaces return False, identical to hardcoded behavior).
+- **Next session:** rsync main.py → OCI + restart services + health check. Then continue with P0 bugs (fill_correction location, EOD P&L blind).
+
+---
 
 ## Last Session (S45 — 2026-06-01)
 
