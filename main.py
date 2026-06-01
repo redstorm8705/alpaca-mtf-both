@@ -128,7 +128,7 @@ _spy_200d_ma_date: str   = ""    # ET date of last _spy_200d_ma fetch; prevents 
 
 # ── Overnight entry feature ───────────────────────────────────────────────────
 # Phase 1: DRY-RUN. Set True only after 5-night dry-run validation passes.
-OVERNIGHT_ENTRIES_ENABLED = False       # Rachel Okonkwo: flip after Phase 1 validates
+# OVERNIGHT_ENTRIES_ENABLED is resolved from config.py — see module-level gate below.
 _OVERNIGHT_CANCEL_CUTOFF  = 9 * 60 + 28  # cancel unfilled orders by 9:28 AM ET (2 min before RTH open)
                                            # Ensures stale overnight limits are dead before the first RTH print.
                                            # If the thesis is still valid at open, the scanner regenerates it fresh.
@@ -162,6 +162,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Namespace alias: prevent __main__/main shadow copy ───────────────────────
+# entry_logic.py does `import main as _main` (lazy, inside function bodies).
+# Without this alias, Python loads main.py a second time under sys.modules['main'],
+# creating a shadow namespace that never receives profile overrides.
+sys.modules.setdefault("main", sys.modules["__main__"])
+
 import data.bar_cache as _bar_cache
 from data.fetcher import fetch_bars
 from strategy.run_cycle import run_cycle  # Phase 2 Extraction 9
@@ -189,6 +195,13 @@ from events.earnings_fetcher import fetch_upcoming_earnings
 from events.news_monitor import NewsMonitor
 from events.macro_risk_index import MacroRiskIndex
 import config
+
+# ── Overnight entry feature gate ─────────────────────────────────────────────
+# Phase 1: DRY-RUN. Set True only after 5-night dry-run validation passes.
+# Board vote required before setting OVERNIGHT_ENTRIES_ENABLED = True in config.py.
+# Falls back to False if not defined in config — safe default, no overnight entries.
+OVERNIGHT_ENTRIES_ENABLED = bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))
+
 from alerts import (
     alert_crash,
     alert_startup_test,
@@ -232,7 +245,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)   # P3-3: suppress yfin
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main():
-    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date  # module-level state mutated by main()
+    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date, OVERNIGHT_ENTRIES_ENABLED  # module-level state mutated by main()
     # _fill_fallback_count moved to execution/fill_helpers.py; _rth_day_stop_failure_counts to gtc_manager.py
     parser = argparse.ArgumentParser(description="Alpaca MTF Confluence Bot")
     parser.add_argument("--mode",    default="intraday", choices=["intraday", "swing"])
@@ -277,6 +290,17 @@ def main():
     for key, val in profile.items():
         setattr(config, key, val)
     config.ACTIVE_PROFILE = args.profile
+
+    # Re-read after profile overrides apply (profile may set OVERNIGHT_ENTRIES_ENABLED).
+    OVERNIGHT_ENTRIES_ENABLED = bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))
+    if OVERNIGHT_ENTRIES_ENABLED:
+        logger.warning(
+            "OVERNIGHT_ENTRIES_ENABLED=True — confirm Phase 1 dry-run validation "
+            "is complete and board vote was recorded before proceeding. "
+            "Profile: %s", args.profile
+        )
+    else:
+        logger.info("OVERNIGHT_ENTRIES_ENABLED=False (profile: %s)", args.profile)
 
     # ── BoD-3: Paper kill switch guard ───────────────────────────────────────
     # config.py paper profile sets MAX_DAILY_LOSS_PCT=0.30.
