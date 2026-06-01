@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-05-29 S44 | **S44: AUTONOMOUS PIPELINE STAGE 2 COMPLETE — full end-to-end DS/GAI relay loop now runs without human intervention. autonomous_review.py deployed to OCI (433L): calls DS + Gemini APIs on pending_ds_gai_*.json files from CCR, writes raw responses verbatim to pending_approvals_*.md, Slacks "Patches ready for approval", pushes to GitHub. OCI cron updated: autonomous_review.py at 11 PM ET (03:00 UTC Tue-Sat), auto_deploy.sh shifted to 11:30 PM ET (03:30 UTC). session-start skill updated: Step 3c reads pending_approvals → presents numbered patch list → approval handler uses git apply (NOT Edit tool) + SHA256 verification + health check + auto-rollback. No code changes to bot logic.**
+**Updated:** 2026-06-01 S45 | **S45: PIPELINE UNBLOCKED — root cause of OCI git stall identified (dc28423 never pushed to GitHub). Pushed dc28423. OCI now at dc28423. autonomous_review.py dry-run PASS. Stale S44 one-time cron removed. RAM at 695MB (above 550MB threshold) — watchdog will auto-restart post-RTH. auto_deploy.sh BEFORE==AFTER design gap documented (P2 — non-blocking for tonight). No code changes.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -7,16 +7,13 @@
 - **Bot CWD on OCI:** `/home/ubuntu/mtf-bot/` — always rsync to this path (NOT alpaca-mtf-bot_FINAL)
 - **Account:** Paper | equity **$2,852.68** (confirmed S37 MCP) | All-time P&L +$442.38 (Alpaca-authoritative, confirmed S29) | MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | KELLY_MAX_RISK_PCT=6% | MAX_PORTFOLIO_RISK_PCT=4%
 - **Dashboard:** `http://129.153.208.32:8080/dashboard.html`
-- **RAM (S43C):** 252MB post P4 deploy. Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). P1/P2/P3/P4 all deployed. Optional P5 jemalloc pending (systemd unit only).
+- **RAM (S45):** ⚠️ 695MB used / 113MB free at session start (12:31 PM ET Jun 1 — RTH, no restart). Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). memory_watchdog.sh will auto-restart post-RTH when < 150MB free. P1/P2/P3/P4 all deployed. Optional P5 jemalloc pending (systemd unit only).
 - **⚠️ SSH KEY NOTE:** Ed25519 key at `~/.ssh/mtf_bot_oracle`. rsync syntax: always use `-e "ssh -i ~/.ssh/mtf_bot_oracle"` — NEVER use `-i` as standalone rsync flag.
 
-## Open Positions (confirmed Alpaca API ~11:50 PM PT 2026-05-24 — verify at next session start)
-- AMZN long 1sh @ $264.81 | unrealized +$1.51
-- INTC long 2sh @ $117.00 | unrealized +$5.69
-- MSTR short -3sh @ $162.95 | unrealized +$9.18
-- PANW long 1sh @ $247.26 | unrealized +$13.32
-- TOST short -28sh @ $22.79 | unrealized -$10.36
-- TQQQ long 1sh @ $76.22 | unrealized +$1.62
+## Open Positions (confirmed Alpaca API 9:32 AM PT 2026-06-01)
+- NFLX short -1sh @ $87.69 | unrealized +$1.67
+- NVDA long 1sh @ $216.41 | unrealized +$5.37
+- SPY long 1sh @ $757.06 | unrealized +$0.09
 
 ## PDT
 - **0/3 slots used** (confirmed S37 via Alpaca MCP — daytrade_count=0)
@@ -72,7 +69,8 @@
 - [x] **P0: risk.open_positions startup fix — CLOSED S42** — main.py Part A: P0-STARTUP block inserts after sync_from_tracker(); queries Alpaca live positions; overrides risk.open_positions if mismatch; logs _untracked/_stale symbol sets; halts at MAX. entry_logic.py Part B: P0-CYCLE-SYNC-GUARD replaces unconditional BUG-POS-1 sync; directional guard (tracker UP-only); status filter (excludes zombie closed entries); None guard. Both deployed OCI. Startup log confirmed: "Alpaca=4 == tracker=4. OK." → "Already at MAX (4/4). Blocking new entries."
 - [x] **P0: Slack alert noise — PARTIALLY CLOSED S43** — `alerts.py` patched: `alert_crash()` reason-based dedup (same reason+<60min→ntfy only; different reason→Slack+ntfy always); `alert_stale_bar()`→log-only; `alert_startup_test()` + `alert_spy_event()` UNCHANGED (board: keep all). Deployed OCI git 35bccc9. **Remaining:** `events/macro_risk_index.py` mri_refresh noise (confirmed NOT going to Slack currently — JSONL only). SIGKILL cycle itself is root cause (P2 RAM leak — separate session).
 - [x] **P1: weekly_perf_audit.py COMPLETE (S42)** — Script built, static analysis PASS, cold second-agent PASS, OCI deployed, cron wired `15 20,21 * * 5` via cron_tz_wrapper 16:15. 4 DS/GAI additions incorporated (emergency escalation, LOW_VOL VIX regime, monthly mislabeling gate, MIN_TRADES thresholds). Design spec updated at `logs/weekly_perf_audit_design_v1.md` (§14).
-- [ ] **P2: RC-9 in scan_to_html.py** — `_fetch_yfinance_news()` uses yfinance for news data (T4 violation). Board vote + migration plan required.
+- [ ] **P2: RC-9 in scan_to_html.py** — `_fetch_yfinance_news()` uses yfinance for news data (T4 violation). Board vote + migration plan required. `queued_for_review_2026-05-28.md` exists on OCI.
+- [ ] **P2: auto_deploy.sh BEFORE==AFTER design gap** — When autonomous_review.py runs before auto_deploy.sh (11 PM vs 11:30 PM ET), AR does git pull + git push, advancing OCI HEAD. auto_deploy.sh then sees BEFORE==AFTER and skips restart even if CCR committed code changes. Fix: replace BEFORE/AFTER comparison with last-deployed-SHA tracking file. Non-blocking for RTH-draft-only nights (no direct code commits from CCR). Fix required before CCR can autonomously apply non-RTH code patches end-to-end.
 - [ ] **P2: BUG-C structural fix** — write_scan_html background thread. Interim 10-min throttle deployed S31. Structural fix deadline 2026-06-30.
 - [ ] **P2: RAM leak investigation — IN PROGRESS (4/5 deployed)** — Root cause: 3-layer mechanism (DS+GAI confirmed S43B). Layer 1 (~370MB first-scan spike): Alpaca-py Pydantic deser 200+ symbols × bars + 46 DataFrames in full_results simultaneously. Layer 2 (~56MB/cycle drift): Pandas BlockManager cyclic refs + glibc heap fragmentation. Layer 3 (SIGKILL): accumulated baseline + scan peak exceeds OCI 1GB cgroup. **✅ P1 DEPLOYED:** macro_risk_index.py class-level ThreadPoolExecutor (48 leaked executors × 8MB eliminated). **✅ P2 DEPLOYED:** config.py BARS_TO_FETCH TF_15M 500→150, TF_1H 300→100 (~70% first-scan spike reduction). **✅ P3 DEPLOYED:** run_cycle.py gc.collect() in try/finally after run_scan() (frees Pandas cyclic refs, ~56MB/cycle drift fix). **✅ P4 DEPLOYED (S43B):** signal_generator.py — `fr.pop("_entry_df"/"_daily_df")` in both Phase 3 paths (ADDV-fail before continue + post-16pt-scoring before tag). 8-change patch (5 C-4 pre-existing fixes + 3 primary). RAM 252MB post-deploy. **⬜ OPTIONAL PENDING:** OCI systemd LD_PRELOAD jemalloc (`LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`). Verify: `dpkg -l libjemalloc2`. No code changes. GAI: "silver bullet for glibc C-level heap fragmentation."
 - [ ] **P3: options_scanner.py** — BUG-0DTE-FALLBACK (HIGH, L400-412); RC-5 L1081. `⚠️ AUDITED — PATCH PENDING DS+GAI`. Needs fresh full read (1,946L, Explore subagent) + DS/GAI prompt before patching (prior audit 2026-04-30, all gates reset per RULE C-2).
@@ -108,13 +106,28 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 
 ### Infrastructure Notes
 - **GitHub repo:** `https://github.com/redstorm8705/alpaca-mtf-both` (private) — CCR agents clone from here. **⚠️ Previous CCRs used WRONG URL (`redstamp8705`) — that was the root cause of 3 days of failure (S43C fixed)**
-- **OCI git (NEW S43C):** `/home/ubuntu/mtf-bot` is now a git repo tracking `origin/main`. Credentials stored in `~/.git-credentials`. Run `git pull origin main --ff-only` to sync.
+- **OCI git (NEW S43C, verified S45):** `/home/ubuntu/mtf-bot` is a git repo tracking `origin/main`. Credentials in `~/.git-credentials` (valid). Current HEAD: `dc28423` (S44 portfolio_tracker.py patch). ⚠️ LESSON S45: always `git push origin main` from local before session end — commits left local-only will silently break OCI pipeline.
 - **autonomous_review.py (NEW S44):** `/home/ubuntu/mtf-bot/autonomous_review.py` — 433 lines. Stage 2 of the autonomous pipeline. Reads `logs/pending_ds_gai_*.json` (written by CCR), calls DeepSeek API + Gemini API with identical prompts (MAX_RETRIES=3, exponential backoff), writes raw responses verbatim to `logs/pending_approvals_YYYY-MM-DD.md` (no autonomous summary — user sees raw DS + GAI text). If REJECT in either response → routes to `queued_for_review_*.md` instead. Updates JSON status `awaiting_ds_gai` → `ready_for_approval`. Commits precise filenames to GitHub, Slacks "🎯 Patches ready for approval". flock: `/tmp/mtf_autonomous_review.lock` (own) + `/tmp/mtf_git.lock` (shared with auto_deploy.sh). Cron: `0 3 * * 2-6` (11 PM ET weeknights).
 - **auto_deploy.sh (UPGRADED S43C2, SHIFTED S44):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — 125 lines (was 36). flock lockfile, deploy window 10PM-6AM ET, 3-iteration health check at 20s/40s/60s, auto-rollback on fail: `git reset --hard $BEFORE` (LOCAL ONLY). Cron: **`30 3 * * *` (11:30 PM ET — shifted from 11 PM to avoid collision with autonomous_review.py).** Logs to `logs/auto_deploy.log`. **IMPORTANT: auto_deploy.sh is NOT tracked in git (untracked) — contains Slack webhook URL. Do not commit.**
 - **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json`
 - **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local .env and OCI .env ✅
 - **Gemini model:** `gemini-3.1-pro-preview` via `google.genai` SDK ✅
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
+
+## Last Session (S45 — 2026-06-01)
+
+### S45 (2026-06-01) — PIPELINE UNBLOCKED
+
+- **Root cause found:** `dc28423` (S44 portfolio_tracker.py patch) was committed locally but never pushed to GitHub. OCI's `git pull origin main` returned "Already up to date" because GitHub and OCI were both at `b78565e`. Pipeline was broken since S44.
+- **Fix applied:** `git push origin main` → GitHub + OCI now at `dc28423`.
+- **OCI git reset:** Prior session had done `git reset --hard origin/main` (to clear merge conflicts from untracked log files) → OCI had been at `b78565e`. After push fix, `git pull` on OCI fast-forwarded to `dc28423`.
+- **Stale cron removed:** S44 one-time cron entry (`30 5 30 5 *`) was still in crontab after firing — removed.
+- **autonomous_review.py dry-run:** `git pull...No items awaiting DS/GAI review. Exiting.` → PASS.
+- **RAM alert:** 695MB used / 113MB free at 12:31 PM ET — above 550MB threshold but RTH active, no restart. memory_watchdog.sh will auto-restart when < 150MB free post-RTH.
+- **auto_deploy.sh design gap identified:** BEFORE==AFTER logic fails when autonomous_review.py already advanced HEAD before auto_deploy.sh runs. Documented as P2 above.
+- **No code changes, no patches applied.**
+
+---
 
 ## Last Session (S44 — 2026-05-29)
 
@@ -293,7 +306,7 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 - [ ] CLAUDE.md active (auto-loaded by Claude Code)
 - [ ] handoff.md read (this file)
 - [ ] Verify RAM < 550MB (restart all services if over threshold)
-- [ ] Verify 6 positions still active (AMZN/INTC/MSTR/PANW/TOST/TQQQ)
+- [ ] Verify 3 live positions (NFLX short, NVDA long, SPY long — confirmed S45 9:32 AM PT)
 
 ## References
 - Full session history: `logs/session_summary_*.md` (20 files as of S38)
