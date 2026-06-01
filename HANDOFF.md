@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-01 S46 | **S46: main.py S44-BUG-6 PATCHED — OVERNIGHT_ENTRIES_ENABLED hardcoded False removed. Config-driven gate with sys.modules alias (Path B 4/4 board), bool() cast (DS+GAI), conditional WARNING/INFO log. Full 9-step sequence complete. Committed 2a91753. Rsync/restart PENDING post-RTH (4:00 PM ET). OCI git will lag until restart.**
+**Updated:** 2026-06-01 S46 (post-RTH) | **S46: main.py S44-BUG-6 DEPLOYED ✅ — rsync + restart at 1:41 PM PT. OCI log confirmed OVERNIGHT_ENTRIES_ENABLED=False (profile: paper). P0 fill_correction = PHANTOM (function does not exist). P0 EOD P&L blind = PHANTOM (risk_manager.py full read: dual kill-switch protection confirmed). Real P0: fill_helpers.py sort tie-breaker + 100ms guard (CCR-blocked, Board B FAIL).**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -46,9 +46,11 @@
 
 > **Source:** 8 Gemini midday + nightly reports. All synthesized S44. CCR tonight will process RTH-chain items through full 9-step sequence. Non-RTH items eligible for direct autonomous apply.
 
-- [ ] **P0: fill_correction math wrong → P&L corruption** — `execution/fill_helpers.py` (RTH-chain). MSTR short 3sh @ $162.95: fill_correction records $62.23 but correct total = ($162.95-$144.84)×1 + ($162.95-$150.36)×2 = $43.29. fill_correction is multiplying incorrectly. ROOT CAUSE of EOD P&L drift. FILL UNVERIFIED fallback (1.44s poll, 2 attempts) uses entry_price as exit — then fill_correction compounds the error. Fix: (1) increase poll to 3 attempts with 3s backoff, (2) verify fill_correction arithmetic for multi-share positions. **Gemini: CRITICAL (May 28 midday + nightly).**
+- [ ] **P0: fill_helpers.py sort tie-breaker + 100ms post-filter (CCR-blocked)** — `execution/fill_helpers.py` (RTH-chain). CCR Board B FAIL (2026-06-01): 3rd-attempt retry (proposed fix for FILL UNVERIFIED fallback) increases stale-fill crosstalk risk — `(filled_at, order_id)` sort tie-breaker needed, plus post-filter guard (reject fill where `filled_at` not strictly > `submitted_after + 100ms`). Board A FAIL (minor line count). Board C PASS. CCR fix requirements logged in `logs/queued_for_review_2026-06-01.md`. **Action: full read of fill_helpers.py (212L) → 10-pt audit → board vote with revised patch → DS/GAI → apply.**
 
-- [ ] **P0: EOD P&L tracker blind to day's losses** — `execution/portfolio_tracker.py` (RTH-chain, hotspot). May 29: tracker=$0.00 vs Alpaca=$-40.43 (drift=$-40.43). `MAX_DAILY_LOSS_PCT` kill switch (7%) cannot trigger if tracker shows $0. Linked to fill_correction bug above — `_fifo_reconstruct` not capturing realized P&L from Alpaca fills. **Gemini: CRITICAL (May 29 midday).**
+- [x] **P0: fill_correction math wrong → PHANTOM BUG (downgraded P2)** — `fill_correction` function does NOT exist anywhere in the codebase (not in fill_helpers.py, fill_reconciler.py, or portfolio_tracker.py — all 3 fully read S46). Gemini hallucinated the function name. `patch_exit_pnl()` in portfolio_tracker.py reviewed: math is correct per Explore agent. Reopen only if MSTR double-record reproduces with real fill data.
+
+- [x] **P0: EOD P&L tracker blind → PHANTOM / DOWNGRADED P3** — risk_manager.py full read complete S46 (657L, 3 chunks). Kill switch at L115: `worst_pnl = min(self.daily_pnl, self.equity_pnl)` — dual protection. `equity_pnl = portfolio_value - daily_start_value` is immediately correct at startup (reads Alpaca `last_equity`). Even if `daily_pnl = 0` after `reset_daily()`, the `equity_pnl` backstop catches overnight losses. RC-3 1 instance found (L62, intentional bare `except: pass` in logger-failure guard — low priority). `update_daily_pnl_from_alpaca()` logs warnings on all API failures (not truly silent). **Downgraded to P3.**
 
 - [ ] **P1: risk.open_positions desync STILL firing after P0-STARTUP fix** — `main.py` / `execution/orphan_manager.py` (RTH-chain, hotspot). May 27: `CRITICAL | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4`. May 25: `risk.open_positions=0 vs tracker=6`. P0-STARTUP deployed S42 should prevent this — investigate why CRITICAL still fires. Possible root cause: bot restart loop bypasses P0-STARTUP block, or orphan_manager resets risk counter post-startup. **Gemini: CRITICAL (May 25 + May 27).**
 
@@ -56,7 +58,7 @@
 
 - [ ] **P1: avg_r_multiple miscalculated** — `reporting/metrics.py` (non-RTH, read-only). Reports -0.034 when (win_rate=40.9%, avg_win=$24.26, avg_loss=-$14.35) → expected +0.10. Formula uses wrong denominator or sign. Affects Kelly sizing calibration and strategy health assessment. **Gemini: HIGH (May 27 + May 28).**
 
-- [x] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py — ✅ PATCHED S46** — Hardcoded `False` at line 131 (shifted) removed. Replaced with `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` module-level gate + sys.modules alias (4/4 board Path B) + global re-read after profile loop + conditional WARNING/INFO. Committed 2a91753. Rsync/restart pending post-RTH.
+- [x] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py — ✅ PATCHED + DEPLOYED S46** — Hardcoded `False` at line 131 removed. Replaced with `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` module-level gate + sys.modules alias (4/4 board Path B) + global re-read after profile loop + conditional WARNING/INFO. Committed 2a91753. **Rsync deployed 1:41 PM PT — OCI log confirmed `OVERNIGHT_ENTRIES_ENABLED=False (profile: paper)`.** CCR main.py queued item in `queued_for_review_2026-06-01.md` is STALE — issues already addressed in final BUG-6 patch.
 
 - [ ] **P1: MSTR tracked as both closed and overnight_hold in EOD snapshot** — `reconcile_eod.py` + `execution/portfolio_tracker.py` (reconcile_eod non-RTH; portfolio_tracker RTH-chain). trades_today=0 despite alpaca_per_trade showing MSTR closed with fills. MSTR also in overnight_holds list — cannot be both. reconcile_eod _fifo_reconstruct failing to clear closed positions from overnight dict. **Gemini: CRITICAL (May 27).**
 
@@ -121,8 +123,9 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 - **Bug fixed:** `OVERNIGHT_ENTRIES_ENABLED = False` hardcoded at line 131 removed. Replaced with config-driven `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` at module level (after `import config`) + sys.modules alias + global re-read after profile loop + conditional WARNING/INFO log.
 - **Full 9-step sequence completed:** Full read (951L, 4 chunks). Board vote 3/4 PASS (Quant Logic FAIL → fix incorporated: WARNING when True / INFO when False). DS/GAI gate satisfied: DS Q5 FAIL (bool() cast), GAI Q3 CRITICAL FAIL (__main__/main double-import). DS/GAI conflict resolved via 4-agent board vote → 4/4 PASS Path B (sys.modules alias). 3-Point AI Summary logged. Static analysis PASS. Cold second-agent PASS. Impact trace (manual): bounded to entry_logic.py L1263/1548/1706 only.
 - **Committed:** `2a91753` pushed to GitHub.
-- **Rsync/restart PENDING:** RTH closed at 4:00 PM ET — bot running on prior `main.py` until restart. No behavioral change until config.py defines OVERNIGHT_ENTRIES_ENABLED (currently absent → both namespaces return False, identical to hardcoded behavior).
-- **Next session:** rsync main.py → OCI + restart services + health check. Then continue with P0 bugs (fill_correction location, EOD P&L blind).
+- **Deployed post-RTH:** rsync at 1:41 PM PT. OCI log confirmed `OVERNIGHT_ENTRIES_ENABLED=False (profile: paper)` at 20:43 UTC. All 4 services active. No behavioral change until config.py defines OVERNIGHT_ENTRIES_ENABLED (currently absent → returns False, identical to prior hardcoded behavior).
+- **P0 investigation (post-deploy):** risk_manager.py full read (657L). fill_correction phantom bug confirmed. EOD P&L blind downgraded to P3 (dual kill-switch protection in place). Real P0: fill_helpers.py CCR-blocked sort tie-breaker + 100ms guard.
+- **Next session:** fill_helpers.py P0 — full read (212L) → 10-pt audit → board vote → DS/GAI → patch.
 
 ---
 
