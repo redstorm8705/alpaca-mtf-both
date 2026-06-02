@@ -16,9 +16,26 @@ ACTION: Check weekly_review.py (1667L) next session — likely contains Edge Rat
 PRIORITY: P1 (downgrade to P2 pending location confirmation)
 SOURCE: handoff.md P1 item "avg_r_multiple miscalculated — reporting/metrics.py"
 
-## execution/fill_helpers.py — queued 2026-06-01 10:01 AM PT
+## execution/fill_helpers.py — queued 2026-06-02 07:22 PM PT (TWO ATTEMPTS BOTH FAILED)
 
-REASON: Board FAIL — Agent B (Red Teamer) FAIL: P5-H2 Stale Fill Crosstalk amplification
+ATTEMPT 1 — Sort tie-breaker + 100ms guard:
+REASON: Board FAIL — B=FAIL (UUID v4 random → 50% wrong order on sub-second tie) | C=FAIL (100ms guard rejects fast fills <100ms → fallback to entry_price → P&L blind, ANOMALY-5 false positives)
+
+ATTEMPT 2 — created_at ASC (board-recommended):
+REASON: Board FAIL — B=FAIL (created_at may be None for some order types → falls to UUID sort → random) | C=FAIL (GTC stop from prior session has OLDER created_at than today's close → ASC sort picks GTC fill first → wrong price; depends on whether submitted_after filter reliably excludes yesterday's GTC orders — not empirically verified against Alpaca API)
+
+ROOT CAUSE ANALYSIS: The fundamental problem is that `GetOrdersRequest(after=submitted_after)` behavior for multi-day GTC orders has NOT been verified. All proposed fixes fail either on UUID randomness or GTC interference. The correct fix requires:
+  1. Empirically verify: does Alpaca's `after` parameter filter out GTC orders submitted in prior sessions?
+  2. If YES: created_at ASC is safe (GTC excluded by filter, close has smaller created_at than re-entry)
+  3. If NO: add explicit client-side filter `x.created_at >= submitted_after_dt` after GetOrdersRequest
+  4. Then use created_at ASC sort on filtered results
+REQUIRED: Alpaca SDK source inspection or live test with GTC order + multi-day scenario before proposing any fix.
+
+BOARD: A=PASS (both attempts) | B=FAIL (both) | C=FAIL (both)
+ACTION: Inspect Alpaca's GetOrdersRequest `after` parameter semantics (SDK source or API docs). Confirm: does it filter by created_at/submitted_at, and does it include or exclude orders from prior sessions? Then design fix with confirmed semantics.
+PRIORITY: P0
+
+## execution/fill_helpers.py — queued 2026-06-01 10:01 AM PT
 FINDING: P0 handoff finding "increase poll to 3 attempts with 3s backoff" — proposed patch changes _MAX_TOTAL_WAIT 2.5→3.0 and adds Attempt 3 block. Agent B raised: 3rd attempt increases probability (~27% cumulative vs ~19%) that Alpaca returns stale entry-fill for same-symbol sub-second rapid re-entry. submitted_after filter is partial (only filters by after-time, not by sub-second tie-breaking). Agent A also flagged minor line count discrepancy. Agent C: PASS (change safe, asymmetrically beneficial per Kelly accuracy argument).
 SECONDARY FINDING: "fill_correction math wrong" (the other part of the P0) is NOT in fill_helpers.py after full read (212L). fill_correction function does not exist in this file — likely in execution/fill_reconciler.py or execution/portfolio_tracker.py. Needs investigation.
 BOARD: A=FAIL (line count) | B=FAIL (P5-H2 amplification) | C=PASS
