@@ -1,3 +1,12 @@
+## reconcile_eod.py — RC-3 x4 — queued 2026-06-02 07:12 PM PT
+
+REASON: Board FAIL — Agent B (Red Teamer) FAIL: patch is a detection aid only, not a fix; silent-skip exploit remains exploitable
+FINDING: RC-3 violations (silent exception blocks) at 4 locations: L143 (_parse_fill_ts, unused fn), L155 (_parse_tracker_ts, unused fn), L221 (_weighted_avg_exit_price inner loop), L243 (_weighted_avg_exit_price outer loop). Proposed fix: add logger.debug() before existing continue/return None. Agent B argues malformed fill → silent skip → biased P&L exists pre-patch and post-patch; DEBUG logging is not remediation.
+BOARD: A=PASS | B=FAIL (P5-H2: detection aid not fix — malformed fill still silently skipped in _weighted_avg_exit_price, exit price computed from fewer fills, P&L biased) | C=PASS
+PROPOSED FIX FOR B SATISFACTION: Change logger.debug → logger.warning for the two ACTIVE violations in _weighted_avg_exit_price (L221, L243). Add count sentinel: if skipped_fills > 0 after loop, log WARNING "N fills skipped due to malformed qty/price — exit price may be biased." _parse_fill_ts and _parse_tracker_ts (unused) can remain at DEBUG.
+ACTION: Revise patch to WARNING level for active violations + add post-loop count warning, then re-run board vote
+PRIORITY: P1 (RC-3 protocol violation in active code paths)
+
 ## reporting/metrics.py — queued 2026-06-01 10:00 PM PT
 
 REASON: Bug location misidentified — avg_r_multiple NOT FOUND after full read
