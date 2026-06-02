@@ -215,10 +215,12 @@ def _weighted_avg_exit_price(
     # Skip the first partial_qty shares (FIFO = partial exit tranche)
     skipped = 0
     remaining_fills: list[dict] = []
+    skipped_inner = 0
     for fill in sorted_fills:
         try:
             qty = int(fill.get("qty", 0))
         except (TypeError, ValueError):
+            skipped_inner += 1
             continue
         if skipped < partial_qty:
             take = min(qty, partial_qty - skipped)
@@ -230,9 +232,16 @@ def _weighted_avg_exit_price(
         else:
             remaining_fills.append(fill)
 
+    if skipped_inner > 0:
+        logger.warning(
+            "_weighted_avg_exit_price: %d fill(s) skipped in FIFO loop — malformed qty field. Exit price may be biased.",  # noqa: E501
+            skipped_inner,
+        )
+
     # Weighted average over final-exit fills up to qty_remaining
     total_value  = 0.0
     total_shares = 0
+    skipped_outer = 0
     for fill in remaining_fills:
         if total_shares >= qty_remaining:
             break
@@ -240,10 +249,17 @@ def _weighted_avg_exit_price(
             qty   = int(fill.get("qty", 0))
             price = float(fill.get("price", 0.0))
         except (TypeError, ValueError):
+            skipped_outer += 1
             continue
         take          = min(qty, qty_remaining - total_shares)
         total_value  += take * price
         total_shares += take
+
+    if skipped_outer > 0:
+        logger.warning(
+            "_weighted_avg_exit_price: %d fill(s) skipped in weighted-avg loop — malformed qty/price field. Exit price may be biased.",  # noqa: E501
+            skipped_outer,
+        )
 
     if total_shares == 0:
         return None, 0
