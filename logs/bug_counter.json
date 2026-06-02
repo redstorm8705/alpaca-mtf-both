@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-02 S47 (execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
+    "last_updated": "2026-06-02 S47b (execution/portfolio_tracker.py \u2014 pnl=0.0 false-zero storage rounding: 8 storage locations round(x,2)\u2192round(x,4); L792 _partial_pnl != 0.0 \u2192 abs()>1e-8; 5 display locations unchanged. Full 9-step: Explore 2125L, 10-pt audit, 4/4 board APPROVE, DS/GAI both CONDITIONAL APPROVE, static analysis PASS, cold second-agent PASS, impact radius shown. Commit 5600c70. OCI deployed.) | Prior S47: execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -289,13 +289,14 @@
       "notes": "S21: P6 \u2014 sync_from_tracker() added. S22: H2 VIX step-function if/elif. S27: BUG-B FIFO 4-way (sell_short/buy_to_cover explicit branches + _unknown_sides WARNING) + RC-3 x2 (kill state load/save) + RULE C-4 pre-existing mypy/ruff fixes (Optional, E501 x16, type: ignore requests). Kill switch now sees short P&L."
     },
     "execution/portfolio_tracker.py": {
-      "patch_count": 42,
-      "last_patched": "2026-06-02 S47",
+      "patch_count": 43,
+      "last_patched": "2026-06-02 S47b",
       "audit_s35": "S35 RC-3 x4 PATCHED. All 8 RC PASS post-patch.",
       "audit_s44": "S44 5-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. OCI deployed.",
       "audit_s47": "S47 4-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. DS+GAI both APPROVE. OCI deployed. Commit 0f3aa58.",
+      "audit_s47b": "S47b pnl=0.0 storage rounding fix. 8 locations round(x,2)→round(x,4). L792 float-zero guard. All 8 RC PASS. py_compile PASS, mypy 0, ruff PASS. DS/GAI CONDITIONAL APPROVE. Cold second-agent PASS. OCI deployed. Commit 5600c70.",
       "notes": "S21: P3 (mark_fill_expired method), P4-A (_load_log double-append fix + len guard), P4-B (write_eod_summary _load_log reload), P5 (RC-1 date.today\u2192datetime.now(_PT).date). S22 PT-RC3-EFF: 5 RC-3 violations + L859 display bug. S22 BUG-#4: record_exit() pnl=0.0 when qty_remaining=0 with no partial exits \u2014 guard added (partial_exited flag discriminator, external_close branch, entry.get() defensive). S22 BUG-#11 L1306: stop-hit classification changed from exact set membership to substring match \u2014 any(s in str(reason or \"\") for s in _LOG_STOP_REASONS). Handles compound reason strings (e.g. 'overnight_atr_buffer_exit | detail'). Startup clean PID 1014968. S22 BUG-#6: promote_pending_to_active() \u2014 added _log_event(\"entry\",...) call when overnight limit order fills. Signature extended (filled_qty, mri_level, pdt_used). Idempotency guard (status != pending_ongoing). _qty<=0 guard prevents zero-size event. data_source=\"overnight_limit_fill\". trade_mode from trade dict. direction/stop/target included. Board (Reliability/ExecRisk/DataIntegrity) + DS+GAI + 3-Point AI Summary. Critical: GAI caught AttributeError \u2014 compute_rolling_pdt_count is module-level not method; changed to get_rolling_day_trade_count(). py_compile PASS, ruff 0 new violations. Cold second-agent FAIL\u2192PASS (T2/T3 qty guard added). Startup clean PID 1019546. S35: RC-3 x4 (L123/L134/L583/L419) all -> logger.warning. py_compile/ruff PASS. OCI restart clean. S44: BUG-1 patch_exit_pnl _qty_at_close or-chain \u2192 is not None sentinel (phantom P&L on fully-partial-exited positions); BUG-2 _fifo_reconstruct orphan close CRITICAL+Slack+synthetic short guard; BUG-3 _load_prior_day_lots staleness detection (age_days>1\u2192WARNING, never returns {}); BUG-4/RC-3 _fill_et_date bare except\u2192logger.warning; BUG-5 record_exit pre-pop entry_price=None guard (CRITICAL+Slack) + pnl=0.0 forced + pnl_pct guard. 1939L\u21922048L. 4 cold board agents. DS/GAI APPROVE (with GAI cross-bug guard for entry_px=0.0 interaction). Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. OCI deployed. S47: Bug1 get_stats() avg_r_multiple \u2014 _fill_unverified exclusion, \u00b150R clamp (max(-50,min(50,r))), WARNING log when r_multiples empty + all closed trades unverified, unverified_trades added to return dict; Bug2 record_exit() entry\u22640 sets _fill_unverified=True, pnls filter excludes _fill_unverified, return dict adds verified_trades + unverified_trades; Bug3 _load_log() (symbol,entry_time) tuple replaces symbol-only double-record detection (same-day re-entry has different entry_time \u2014 symbol-only was false-positive); Bug8 _load_day_trades() TOCTOU fix (removed exists()\u2192open() race, handle FileNotFoundError explicitly), 100ms retry loop for transient write-lock collision, CRITICAL+Slack on genuine corruption, self._day_trades=[] set before Slack call. 2049L\u21922124L. 4 cold board agents. DS+GAI APPROVE. Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. Commit 0f3aa58. OCI deployed, all 4 services active.",
-      "lines": 2124
+      "lines": 2125
     },
     "execution/exit_logic.py": {
       "patch_count": 8,
@@ -383,6 +384,36 @@
     }
   },
   "sessions": [
+    {
+      "date": "2026-06-02",
+      "session": "S47b",
+      "files": ["execution/portfolio_tracker.py"],
+      "bugs_fixed": ["PT-S47B-PNL-STORAGE-ROUNDING-4DP"],
+      "rc_classes": {
+        "execution/portfolio_tracker.py": {
+          "RC-1": "PASS",
+          "RC-2": "PASS",
+          "RC-3": "PASS",
+          "RC-4": "PASS — L1667 GTC confirmed compliant (Alpaca filled_avg_price)",
+          "RC-5": "PASS",
+          "RC-6": "PASS",
+          "RC-7": "N/A",
+          "RC-8": "N/A"
+        }
+      },
+      "board": "4 cold parallel subagents (Reliability/Execution Risk/Data Integrity/Quant Logic): 4/4 APPROVE round(x,4). DataIntegrity + QuantLogic: CONDITIONAL APPROVE (decimal.Decimal long-term, test coverage).",
+      "ds_gai": "DS: CONDITIONAL APPROVE (round(x,4) sufficient for reported bug; suggest round(x,6) for robustness; pnl==0.0 search mandatory). GAI: CONDITIONAL APPROVE (same; accumulated drift acknowledged as design trade-off; decimal.Decimal P3 roadmap). 3-Point AI Summary: L792 _partial_pnl != 0.0 → abs()>1e-8 added per DS+GAI mandatory condition. round(x,4) adopted per board vote + authority rule (DS/GAI advisory only).",
+      "cold_second_agent": "PASS — logic inversion CLEAR, boundary CLEAR (1e-8 well below min $0.01 trade P&L), missing conditions CLEAR (display locations verified non-storage), branch completeness CLEAR (_day_slice both paths correct).",
+      "static_analysis": "py_compile PASS, mypy PASS (0 errors in portfolio_tracker.py; 10 unrelated errors in events/calendar.py pre-existing), ruff PASS (0 violations — E501 fixed by shortening comments).",
+      "deploy": "rsync PASS, sudo systemctl restart PASS, all 4 services active, dashboard 401 (expected auth), health OK. Commit 5600c70.",
+      "patch": "portfolio_tracker.py (2124L→2125L): 8 storage round(x,2)→round(x,4): _fifo_reconstruct L282/L308, patch_exit_pnl L585/L587/L588, record_partial_exit L1455, record_exit L1578/L1590. +1 float-zero guard: L792 _partial_pnl != 0.0 → abs(_partial_pnl) > 1e-8. 5 display locations unchanged at round(x,2): L337/L609-611/L823/L826/L2024.",
+      "open_items_carried": [
+        "P1: risk.open_positions desync CRITICAL — main.py/orphan_manager.py",
+        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored — execution/entry_logic.py",
+        "P1: MSTR double-record — reconcile_eod.py + portfolio_tracker.py",
+        "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases (DS+GAI)"
+      ]
+    },
     {
       "date": "2026-06-02",
       "session": "S47",

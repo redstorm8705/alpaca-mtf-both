@@ -3447,5 +3447,126 @@ All 4 changes are internal guard additions. Function signatures unchanged. Backw
 
 - **P1:** S44-BUG-3 — `risk.open_positions` desync CRITICAL still firing — `main.py` / `orphan_manager.py` (RTH-chain, DS/GAI required)
 - **P1:** S44-BUG-8 — `BUCKET_B_MAX_POSITIONS_POWER=5` not honored during power_hour — `execution/entry_logic.py` (RTH-chain)
-- **P1:** pnl=0.0 for stop_hit events with entry≠exit — `execution/portfolio_tracker.py` (Gemini May 27, RTH-chain)
+- ~~**P1:** pnl=0.0 for stop_hit events with entry≠exit — `execution/portfolio_tracker.py` (Gemini May 27, RTH-chain)~~ **PATCHED S47 ✅ — see S47 entry below**
 - **P1:** MSTR double-record in EOD snapshot — `reconcile_eod.py` + `execution/portfolio_tracker.py`
+
+---
+
+## S47 — 2026-06-02 — portfolio_tracker.py pnl=0.0 Storage Rounding Fix
+
+### Patch: pnl=0.0 false-zero storage rounding (9 changes)
+
+**Bug:** Python float repr of tiny P&L values (e.g. `133.29 - 133.295 = -0.004999999...`) were rounded to `0.00` at storage time via `round(x, 2)`. `round(-0.004999..., 2) = 0.0` (banker's rounding toward zero). These false-breakeven records excluded near-zero losses from Kelly loss denominator, inflating win rate.
+
+**Root cause:** 8 internal storage locations used `round(x, 2)` — insufficient precision for sub-cent P&L values.
+
+**Fix:** Changed 8 storage locations to `round(x, 4)` + replaced `_partial_pnl != 0.0` exact float check with `abs(_partial_pnl) > 1e-8`.
+
+### Step 1 — Full Read Gate
+Full read complete: **2125 lines in 8 chunks** (general-purpose subagent, current session). Prior compaction Explore subagent read had 2124 — 1-line discrepancy resolved. All RULE C-2 gates reset and re-satisfied in this session.
+
+### Step 2 — 10-Point Audit
+
+| Point | Finding |
+|-------|---------|
+| 1 Static analysis | py_compile PASS, mypy PASS (portfolio_tracker.py: 0 errors), ruff PASS |
+| 2 Trade path | P&L flows: record_partial_exit → partial_pnl accumulation → record_exit → _total_pnl → trade["pnl"] → get_stats() losses list. Bug confirmed in chain. |
+| 3 Adversarial | edge case: 133.29 - 133.295 = -0.004999... reproduced. round(x,4) produces -0.0000 for values < 5e-5 — within physically impossible range for this bot's trade parameters |
+| 4 Full read | All 2125 lines read. Identified 9 target locations. |
+| 5 Cross-references | get_stats() reads trade["pnl"] directly from closed_trades. kelly.py calls get_stats(). _fifo_reconstruct() per_trade entries read by write_eod_summary(). All chains verified. |
+| 6 No conflicts | No other module writes to partial_pnl or pnl_remaining. |
+| 7 Dead code | None found |
+| 8 State persistence | _atomic_write path unchanged. trade_log.json writes confirmed atomic. |
+| 9 Data source | No data source changes |
+| 10 Timezone | No timestamp changes |
+
+### RC Scan (post-patch)
+
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — no new datetime.now() calls |
+| RC-2 | PASS — no new path constructions |
+| RC-3 | PASS — no new bare except |
+| RC-4 | PASS — L1667 RC-4 still confirmed compliant (GTC = Alpaca filled_avg_price) |
+| RC-5 | PASS — _atomic_write unchanged |
+| RC-6 | PASS — no new .get() calls |
+| RC-7 | PASS — no sizing path changes |
+| RC-8 | N/A |
+
+**New pnl==0.0 comparisons found:**
+- L792 `_partial_pnl != 0.0` → FIXED (replaced with `abs() > 1e-8`)
+- L996 `_alpaca_pnl == 0.0` → KEPT (safe — conjuncted with `len(_day_fills) == 0`, checks display-layer 2dp value, A-4 gap detection only)
+
+### Step 3 — Board Vote
+4 cold parallel subagents via Agent tool (Reliability, Execution Risk, Data Integrity, Quant Logic): **4/4 APPROVE**
+
+### Step 4 — DS/GAI External Audit
+
+**DS (DeepSeek):** CONDITIONAL APPROVE
+- round(x,4) sufficient for reported bug; suggests round(x,6) for extra robustness
+- Audit all trade["pnl"] consumers for exact-zero comparisons (actioned: L792 fixed)
+- Backward compat: p < 0 still works on mixed 2dp/4dp data
+- Missing test coverage flagged (P2 roadmap)
+
+**GAI (Google Gemini 2.5-flash, thinkingBudget=0):** CONDITIONAL APPROVE
+- round(x,4) fixes reported bug; float false-zero class not fully eliminated
+- `pnl == 0.0` exact comparisons must be audited (actioned: L792 fixed, L996 evaluated safe)
+- Accumulated drift from rounding at each step — accepted design trade-off
+- decimal.Decimal recommended as long-term solution (P3 roadmap)
+
+### 3-Point AI Summary
+**Point 1 — Alignment:** round(x,4) fixes bug: 3/3. Display locations correct: 3/3. Backward compat: 2/3. pnl==0.0 audit: 1/3 (Claude missed). False-zero class recurrence: 1/3 (Claude missed).
+
+**Point 2 — Claude Missed (DS+GAI consensus — mandatory):**
+1. `pnl == 0.0` exact comparisons → actioned: L792 fixed, L996 evaluated safe
+2. round(x,4) doesn't eliminate float false-zero class → noted; for bot's $0.01 min tick × 1 share = $0.01 >> 5e-5 threshold; round(x,4) physically sufficient
+
+**Point 3 — Forward-looking:**
+1. decimal.Decimal long-term fix — P3 roadmap, board vote required
+2. Unit/integration test coverage — P2 roadmap
+3. False-zero window narrowed to 5e-5 — negligible for bot parameters
+
+### Step 5a — Static Analysis
+- `python3 -m py_compile` → PASS
+- `python3 -m mypy --warn-unreachable` → PASS (portfolio_tracker.py: 0 errors; 10 errors in events/calendar.py are pre-existing unrelated)
+- `python3 -m ruff check --select E,W,F,B` → PASS (all checks passed)
+
+### Step 5b — Cold Second-Agent
+Spawned cold general-purpose subagent with diff + intent. All 4 checks: logic inversion PASS, boundary PASS, missing conditions PASS, branch completeness PASS. **VERDICT: PASS**
+
+### Step 5c — code-review-graph Impact
+- Risk score: **0.75** (high — expected hotspot)
+- Changed functions: PortfolioTracker, _load_log, write_eod_summary, record_partial_exit
+- 21 affected flows including main (×2) — RTH chain confirmed; DS/GAI gate correctly applied
+- 4 test gaps (no unit tests for changed functions) — P2 roadmap
+
+### Step 7 — Approval
+Pre-authorized by user (2026-06-01 night): "once you've prompted and gotten the responses from DS and GAI, i give you permission to write the code (post 3 point AI summary) and the final proposal is approved."
+
+### Step 8 — Apply + Deploy
+- `git commit 5600c70` — 1 file changed, 10 insertions, 9 deletions
+- `rsync` → `ubuntu@129.153.208.32:/home/ubuntu/mtf-bot/execution/portfolio_tracker.py` — PASS
+- `sudo systemctl restart mtf-bot mtf-writer mtf-http` — PASS
+- Health check: all 4 services active, dashboard 401 (expected — auth protected) — HEALTH OK
+
+### Changes Applied
+| Location | Change |
+|----------|--------|
+| L282 _fifo_reconstruct short-cover | round(pnl, 2) → round(pnl, 4) |
+| L308 _fifo_reconstruct long-sell | round(pnl, 2) → round(pnl, 4) |
+| L585 patch_exit_pnl entry=0 path | round(_partial_pnl, 2) → round(_partial_pnl, 4) |
+| L587 patch_exit_pnl normal _pnl_remaining | round(..., 2) → round(..., 4) |
+| L588 patch_exit_pnl normal _total | round(..., 2) → round(..., 4) |
+| L792 _day_slice overnight guard | _partial_pnl != 0.0 → abs(_partial_pnl) > 1e-8 |
+| L1455 record_partial_exit accumulation | round(..., 2) → round(..., 4) |
+| L1578 record_exit _total_pnl | round(pnl + _partial_pnl, 2) → round(..., 4) |
+| L1590 record_exit pnl_remaining | round(pnl, 2) → round(pnl, 4) |
+
+**Kept at round(x, 2):** L337 daily total, L609-611 pnl_pct%, L823 score bucket, L826 Alpaca comparison, L2024 get_stats total_pnl
+
+### Open Items Carried Forward
+
+- **P1:** S44-BUG-3 — `risk.open_positions` desync CRITICAL — `main.py` / `orphan_manager.py`
+- **P1:** S44-BUG-8 — `BUCKET_B_MAX_POSITIONS_POWER=5` not honored — `execution/entry_logic.py`
+- **P1:** MSTR double-record in EOD snapshot — `reconcile_eod.py` + `execution/portfolio_tracker.py`
+- **P2:** Unit/integration test coverage for portfolio_tracker.py P&L edge cases (DS+GAI flagged)
