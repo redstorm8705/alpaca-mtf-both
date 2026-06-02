@@ -49,6 +49,7 @@ BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
 BUCKET_B_MAX_POSITIONS         = 3      # max 3 simultaneous Bucket B positions (standard RTH)
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
+TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 
 # ── Conviction tiers (non-PDT, 0–2/3 day trades used) ────────────────────────
 # 11-12: full allocation (up to 95% of portfolio as dollar risk cap)

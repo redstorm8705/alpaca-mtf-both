@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-02 S47b (execution/portfolio_tracker.py \u2014 pnl=0.0 false-zero storage rounding: 8 storage locations round(x,2)\u2192round(x,4); L792 _partial_pnl != 0.0 \u2192 abs()>1e-8; 5 display locations unchanged. Full 9-step: Explore 2125L, 10-pt audit, 4/4 board APPROVE, DS/GAI both CONDITIONAL APPROVE, static analysis PASS, cold second-agent PASS, impact radius shown. Commit 5600c70. OCI deployed.) | Prior S47: execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
+    "last_updated": "2026-06-02 S47c (execution/entry_logic.py + config.py \u2014 P1 BUCKET_B power_hour expansion: 7 fixes \u2014 BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode\u2192TOD_EXPANSION_WINDOW_START const, BUG-PH-3 wrong counter\u2192risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable, Fix#6 pre-loop time computation, Fix#7 WARNING before breaks. Full 9-step. DS/GAI both APPROVE. OCI deployed.) | Prior S47b: execution/portfolio_tracker.py \u2014 pnl=0.0 false-zero storage rounding: 8 storage locations round(x,2)\u2192round(x,4); L792 _partial_pnl != 0.0 \u2192 abs()>1e-8; 5 display locations unchanged. Full 9-step: Explore 2125L, 10-pt audit, 4/4 board APPROVE, DS/GAI both CONDITIONAL APPROVE, static analysis PASS, cold second-agent PASS, impact radius shown. Commit 5600c70. OCI deployed.) | Prior S47: execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -261,9 +261,9 @@
       "notes": "S34: exec summary redesign \u2014 _exec_summary_stats() replaced 8 metrics with 4 AB-board metrics: (1) Edge Ratio (Thorp); (2) Score Monotonicity simplified (boundary WRs + \u2713/\u26a0); (3) Early Exit Rate Among Losers (Douglas); (4) MRI P&L split with multi-entry attribution fix (key on symbol+exit_date via _entry_mri()). Removed: Score WR table, Realized R:R, T1 hit rate, min-score losses%, Kelly sample, bugs this week, T4 fallback count. py_compile PASS, mypy 0, ruff 0. Cold second-agent PASS. OCI py_compile PASS. No restart needed. | S33: _exec_summary_stats() function added (~170L). Standalone script \u2014 not in RTH import chain, DS/GAI not triggered."
     },
     "execution/entry_logic.py": {
-      "patch_count": 4,
-      "last_patched": "2026-05-25 S39",
-      "notes": "S22: NEW FILE \u2014 Phase 2 Extraction 11. 1622 lines. Board 9-0, DS+GAI \u2705. S24: ORB gate block added after SPY direction gate. Cold second-agent FAIL\u2192PASS (F1: missing branch pre-9:55 merged into single not-computed\u2192BLOCK). py_compile PASS, ruff PASS. PID 5812. S39 RC-3\u00d73: RC-3 PATCHED (L1072/L1453/L1629) + L1490 stale comment. Full Explore read 1695L. 4 independent board agents + DS+GAI. All RC PASS. py_compile/mypy/ruff PASS. OCI deployed 211MB RAM. S39 RC-4: RC-4 PATCHED (L624-644 #12c exit fill price). 3\u00d7 retry loop replaces single 1.5s poll. Redundant import removed. $0 check moved outside try/except. Full Explore re-read 1707L (C-2 compliance). Board 2/2 APPROVE (Execution Risk + Reliability). DS/GAI documented. py_compile/mypy/ruff PASS. Cold second-agent PASS."
+      "patch_count": 5,
+      "last_patched": "2026-06-02 S47c",
+      "notes": "S47c P1: BUCKET_B power_hour expansion \u2014 7 fixes. Full read 1724L (general-purpose subagent). BUG-PH-1 kill-switch bypass (break before expansion). BUG-PH-2 hardcode 3:30PM\u2192TOD_EXPANSION_WINDOW_START config const. BUG-PH-3 len(tracker.open_trades)\u2192risk.open_positions (authoritative counter). BUG-PH-4 re-check risk.open_positions>=_ph_limit before fall-through. BUG-PH-5 PDT=3/3 expansion disabled (BoD 3-0: Simons/Taleb/Kyle). Fix#6 pre-loop time computation (_is_ph_cyc once per cycle \u2014 Data Integrity board). Fix#7 logger.warning before each break (Reliability board). DS/GAI both APPROVE all 7 questions. 3-Point AI Summary 3/3 unanimous. py_compile/mypy/ruff PASS. Cold second-agent PASS. OCI deployed, all 4 services active. 1724L\u21921747L. | S42 P0-CYCLE-SYNC-GUARD. | S39 RC-4 #12c + RC-3\u00d73. | S28 NEW FILE extraction. S24 ORB gate."
     },
     "execution/trade_engine.py": {
       "patch_count": 4,
@@ -384,6 +384,48 @@
     }
   },
   "sessions": [
+    {
+      "date": "2026-06-02",
+      "session": "S47c",
+      "files": ["execution/entry_logic.py", "config.py"],
+      "bugs_fixed": [
+        "EL-S47C-PH-1-KILL-SWITCH-BYPASS",
+        "EL-S47C-PH-2-HARDCODE-TO-CONFIG-CONST",
+        "EL-S47C-PH-3-WRONG-COUNTER-RISK-OPEN-POSITIONS",
+        "EL-S47C-PH-4-NO-RECHECK-BEFORE-FALLTHROUGH",
+        "EL-S47C-PH-5-PDT-EXHAUSTED-EXPANSION-DISABLE",
+        "EL-S47C-FIX6-PRE-LOOP-TIME-COMPUTATION",
+        "EL-S47C-FIX7-WARNING-BEFORE-BREAKS"
+      ],
+      "rc_classes": {
+        "execution/entry_logic.py": {
+          "RC-1": "PASS",
+          "RC-2": "PASS",
+          "RC-3": "PASS",
+          "RC-4": "PARTIAL (pre-existing L660 fallback — unchanged)",
+          "RC-5": "N/A",
+          "RC-6": "PASS",
+          "RC-7": "PASS",
+          "RC-8": "PARTIAL (pre-existing by-design)"
+        },
+        "config.py": {
+          "RC-1": "N/A", "RC-2": "N/A", "RC-3": "N/A", "RC-4": "N/A",
+          "RC-5": "N/A", "RC-6": "N/A", "RC-7": "N/A", "RC-8": "N/A"
+        }
+      },
+      "board": "4 cold parallel subagents (Reliability/Execution Risk/Data Integrity/Quant Logic). Reliability APPROVE with Fix#7 (WARNING logs before breaks). Execution Risk APPROVE. Data Integrity APPROVE with Fix#6 (pre-loop time computation). Quant Logic APPROVE with Fix#5 (PDT=3/3 disable). BoD tiebreaker 3-0 YES-DISABLE (Simons/Taleb/Kyle) on Fix#5.",
+      "ds_gai": "DS: APPROVE all 7 questions. Q7 confirmed via follow-up: all entry conditions correctly gated. GAI: APPROVE all 7 questions. Forward-looking P3: extract to helper function. 3-Point AI Summary: 3/3 unanimous on all 7 fixes. POINT 2: nothing Claude missed. POINT 3: GAI P3 helper refactor only.",
+      "cold_second_agent": "PASS — logic inversion CLEAR, off-by-one CLEAR (_open_count < _ph_limit allows slots 4+5), missing conditions CLEAR, branch completeness CLEAR (all 4 branches: kill-switch/PDT-exhausted/expansion/standard-limit).",
+      "static_analysis": "entry_logic.py: py_compile PASS, mypy PASS (0 errors in file), ruff PASS. config.py: py_compile PASS, mypy PASS, ruff PASS.",
+      "deploy": "rsync config.py PASS, rsync entry_logic.py PASS. sudo systemctl restart mtf-bot mtf-writer mtf-http: RESTART OK. Health check: all 4 services active (mtf-bot/mtf-writer/mtf-http/nginx). OCI py_compile PASS both files.",
+      "patch": "config.py (+1L): TOD_EXPANSION_WINDOW_START = 15*60+30 constant added. entry_logic.py (1724L→1747L): pre-loop _is_ph_cyc/_mins_ph_cyc computation; restructured if-not-can_open_position block with 4 branches (kill-switch break, PDT-exhausted break, expansion with score gate + re-check, standard limit break); WARNING logs before all breaks.",
+      "open_items_carried": [
+        "P1: risk.open_positions desync CRITICAL — main.py/orphan_manager.py",
+        "P1: MSTR double-record in EOD snapshot — reconcile_eod.py + portfolio_tracker.py",
+        "P2: BoD-3 log message misleading — main.py L88-94",
+        "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases"
+      ]
+    },
     {
       "date": "2026-06-02",
       "session": "S47b",

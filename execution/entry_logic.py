@@ -367,6 +367,12 @@ def execute_entries(
             )
             # DO NOT update risk.open_positions downward
 
+    # Pre-compute power-hour expansion gate once per cycle — prevents inconsistent application
+    # across symbols in scans that straddle the 3:30 PM ET boundary (Data Integrity board fix)
+    _now_ph_cyc   = datetime.now(ET)
+    _mins_ph_cyc  = _now_ph_cyc.hour * 60 + _now_ph_cyc.minute
+    _is_ph_cyc    = _mins_ph_cyc >= config.TOD_EXPANSION_WINDOW_START
+
     for sig in signals:
         symbol    = sig["symbol"]
         direction = sig["direction"]
@@ -572,39 +578,62 @@ def execute_entries(
 
         # ── Position limit check ─────────────────────────────────────────
         # Standard RTH limit: BUCKET_B_MAX_POSITIONS (3)
-        # Power-hour / AH expansion (≥3:30 PM ET): up to BUCKET_B_MAX_POSITIONS_POWER (5)
-        #   PDT 0-2/3 power hour: score ≥11 required for slots 4-5
-        #   PDT 3/3   power hour: score =12 required for slots 4-5 (forced overnight)
-        _now_ph        = datetime.now(ET)
-        _mins_ph       = _now_ph.hour * 60 + _now_ph.minute
-        _is_ph         = _mins_ph >= (15 * 60 + 30)               # after 3:30 PM ET
+        # Power-hour expansion (≥TOD_EXPANSION_WINDOW_START=3:30 PM ET): BUCKET_B_MAX_POSITIONS_POWER (5)
+        #   Power-hour (PDT 0-2/3 only): score ≥ CONVICTION_FULL_MIN (11) required for slots 4-5
+        #   PDT=3/3: expansion DISABLED — forced overnight hold impairs exit (BoD 3-0)
+        #   Kill-switch active: expansion unconditionally blocked
+        _is_ph         = _is_ph_cyc                               # pre-computed once per cycle (DI board fix)
         _pdt_exhausted = rolling_dt >= config.DAY_TRADE_MAX_ROLLING
-        _open_count    = len(tracker.open_trades)
+        _open_count    = risk.open_positions                       # FIX BUG-PH-3: authoritative counter
         _std_limit     = config.BUCKET_B_MAX_POSITIONS            # 3
         _ph_limit      = config.BUCKET_B_MAX_POSITIONS_POWER      # 5
 
         if not risk.can_open_position():
-            # can_open_position() uses the standard limit internally.
-            # Check if power-hour expansion grants an extra slot.
+            # FIX BUG-PH-1: kill-switch is unconditional — must check BEFORE expansion logic.
+            # can_open_position() returns False for BOTH kill-switch AND position-limit;
+            # expansion is only valid for position-limit case.
+            if risk.check_kill_switch():
+                logger.warning(
+                    f"[{symbol}] Kill switch active — stopping entries (expansion blocked)."
+                )
+                break
+            # FIX BUG-PH-5 (BoD 3-0): expansion disabled at PDT=3/3.
+            # Forced overnight hold impairs exit optionality — score gate does not compensate.
+            if _pdt_exhausted:
+                logger.info(
+                    f"[{symbol}] Power-hour expansion blocked at PDT=3/3 — "
+                    f"forced overnight hold. Position limit reached."
+                )
+                break
+            # Standard position-limit (not kill-switch, not PDT=3/3).
+            # Power-hour expansion: allow up to _ph_limit slots with score gate.
             if _is_ph and _open_count < _ph_limit:
-                # Score gate for expanded power-hour slots
-                _ph_score_req = config.CONVICTION_PDT_FULL_MIN if _pdt_exhausted else config.CONVICTION_FULL_MIN
+                _ph_score_req = config.CONVICTION_FULL_MIN
                 if score >= _ph_score_req:
-                    _reason = f"PDT={rolling_dt}/3" if _pdt_exhausted else "power-hour"
                     logger.info(
-                        f"[{symbol}] Power-hour slot expansion ({_reason}): "
-                        f"{_open_count}/{_std_limit} std positions → expanded to {_ph_limit}, "
+                        f"[{symbol}] Power-hour slot expansion: "
+                        f"{_open_count}/{_std_limit} → {_ph_limit}, "
                         f"score {score}/{sig['max_score']} ≥ {_ph_score_req} — allowing slot"
                     )
+                    # FIX BUG-PH-4: re-validate before fall-through (count may shift mid-cycle)
+                    if risk.open_positions >= _ph_limit:
+                        logger.warning(
+                            f"[{symbol}] Power-hour limit reached on re-check "
+                            f"({risk.open_positions}/{_ph_limit}) — stopping entries."
+                        )
+                        break
                     # Fall through to entry logic — intentional power-hour bypass
                 else:
                     logger.info(
-                        f"[{symbol}] Power-hour expansion denied: score {score} < {_ph_score_req} "
-                        f"({'PDT=3/3 need 12' if _pdt_exhausted else 'need 11'}). Position limit reached."
+                        f"[{symbol}] Power-hour expansion denied: "
+                        f"score {score} < {_ph_score_req}. Position limit reached."
                     )
                     break
             else:
-                logger.info("Position limit reached — stopping entries.")
+                logger.warning(
+                    f"[{symbol}] Position limit reached "
+                    f"({_open_count}/{_std_limit}) — stopping entries."
+                )
                 break
 
         # ── #12c: Opposite-direction signal during RTH → immediate exit ─────────
