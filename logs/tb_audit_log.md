@@ -1,7 +1,7 @@
 # Tech Board (TB) Master Audit Log
 **Project:** Alpaca MTF Confluence Bot
 **Protocol:** 10-Point Per-File Audit (standing — see CLAUDE.md §Board Audit Protocol)
-**Log updated:** 2026-06-02 S47 — **execution/fill_helpers.py P5-H2 PATCHED + DEPLOYED.** 3 changes to `_query_fills()`: (1) `direction="asc"` on GetOrdersRequest — oldest-first pagination; (2) `submitted_after - 0.05` — 50ms grace margin for OCI↔Alpaca NTP clock drift; (3) sort key `(created_at ASC, id)` `reverse=False` replaces `filled_at DESC` — close order always created before re-entry. DS APPROVE (50ms grace margin critical; None fallback low priority). GAI APPROVE (direction="asc" needed; "9999-12-31" None sentinel). py_compile PASS / mypy 0 errors in fill_helpers.py / ruff PASS. Commit 1adc1cb. Rsync + all 4 OCI services active. | **CCR "Nightly Autonomous Work" rescheduled** from `0 2 * * 2-6` (10 PM ET) to `0 22 * * 1-5` (3 PM PT / 6 PM ET) — full pipeline completes before user's 6 PM PT threshold. | **2026-06-01 S46:** execution/fill_helpers.py Step 3 BOARD VOTE FAIL (2 FAIL, 2 CONDITIONAL PASS) — sort tie-breaker selects wrong order; 100ms guard miscalibrated; revised approach documented. | **execution/risk_manager.py AUDITED (Step 2 only).** Full read 657L / 3 chunks. Kill switch dual protection confirmed — P0 "EOD P&L blind" DOWNGRADED to P3. | **main.py S44-BUG-6 DEPLOYED:** rsync 1:41 PM PT.
+**Log updated:** 2026-06-02 S47 (continued) — **reporting/metrics.py: AUDITED + CLEAN** (191L, 1 chunk; all RC PASS; py_compile/mypy/ruff all PASS; avg_r_multiple NOT in this file — bug mis-attributed). **weekly_review.py: AUDITED + CLEAN** (1681L, 6 chunks via subagent; all 8 RC PASS; 3 static tools PASS; avg_r_multiple NOT here either — CORRECT Edge formula already at L987; 1 dead-code finding: `_fmt_reason()` L398-405 uncalled; 1 latency: compute_lifetime_stats() called inside renderer). **avg_r_multiple BUG correctly attributed to execution/portfolio_tracker.py L1927-1940 (`get_stats()`)**. HANDOFF.md corrected. portfolio_tracker.py full read + board vote + DS/GAI prompt in progress. | **execution/fill_helpers.py P5-H2 PATCHED + DEPLOYED.** 3 changes to `_query_fills()`: (1) `direction="asc"` on GetOrdersRequest — oldest-first pagination; (2) `submitted_after - 0.05` — 50ms grace margin for OCI↔Alpaca NTP clock drift; (3) sort key `(created_at ASC, id)` `reverse=False` replaces `filled_at DESC` — close order always created before re-entry. DS APPROVE (50ms grace margin critical; None fallback low priority). GAI APPROVE (direction="asc" needed; "9999-12-31" None sentinel). py_compile PASS / mypy 0 errors in fill_helpers.py / ruff PASS. Commit 1adc1cb. Rsync + all 4 OCI services active. | **CCR "Nightly Autonomous Work" rescheduled** from `0 2 * * 2-6` (10 PM ET) to `0 22 * * 1-5` (3 PM PT / 6 PM ET) — full pipeline completes before user's 6 PM PT threshold. | **2026-06-01 S46:** execution/fill_helpers.py Step 3 BOARD VOTE FAIL (2 FAIL, 2 CONDITIONAL PASS) — sort tie-breaker selects wrong order; 100ms guard miscalibrated; revised approach documented. | **execution/risk_manager.py AUDITED (Step 2 only).** Full read 657L / 3 chunks. Kill switch dual protection confirmed — P0 "EOD P&L blind" DOWNGRADED to P3. | **main.py S44-BUG-6 DEPLOYED:** rsync 1:41 PM PT.
 
 **Log updated:** 2026-05-29 S44 — Gemini audit synthesis (May 25–29): 8 reports reviewed. 9 new bugs logged below. 2 P0 (fill_correction math, EOD P&L blind). 6 P1 (risk desync regression, pnl=0 rounding, avg_r_multiple wrong, OVERNIGHT_ENTRIES override, MSTR double-record, BUCKET_B power_hour). 1 P2 (BoD-3 log message). All added to handoff.md open items. CCR queued to process tonight. **See GEMINI AUDIT FINDINGS (S44) section below.**
 
@@ -82,6 +82,8 @@ Status codes:
 | `main.py` | 863 | 2026-05-15 S21 | ✅ AUDITED + PATCHED | Full read S21 (3 chunks, 866 lines). P6 call site: L641-645 inline open_positions sync replaced with risk.sync_from_tracker(tracker). py_compile PASS, ruff: all checks passed (no E/W/F/B violations beyond pre-existing E501). Startup log confirms new log line: "RiskManager synced: open_positions 0→0". |
 | `execution/portfolio_tracker.py` | 1699 | 2026-05-15 S21 | ✅ AUDITED + PATCHED | Full read via Explore agent S21. P3 APPLIED: mark_fill_expired() method inserted after patch_exit_pnl (line 524). 5-min age guard prevents marking fresh trades. P4-A APPLIED: _load_log() body — len guard on closed_trades overwrite + _unverified_exits.clear() moved inside try (prevents double-append). P4-B APPLIED: self._load_log() added before today_trades filter in write_eod_summary() (fixes EOD pnl=$0.00). P5 APPLIED: L1653 date.today()→datetime.now(_PT).date() (RC-1 fix). py_compile PASS, ruff 0 new violations. RC-3 FAIL pre-existing (L1390, L1424 — separate ticket). |
 | `execution/fill_helpers.py` | 222 | 2026-06-02 S47 | ✅ AUDITED + PATCHED | **S46 Step 2:** Full read 212L (1 chunk). py_compile PASS, mypy PASS (0 errors in file; 23 pre-existing in broker.py dep — not in scope), ruff PASS. **All 8 RC:** RC-1 PASS (datetime.now(timezone.utc) ✓); RC-2 PASS (_PROJECT_ROOT=Path(__file__).resolve().parent.parent ✓); RC-3 PASS (all except blocks log debug/warning — no bare pass ✓); RC-4 N/A; RC-5 PASS (fill_latency/fill_anomalies are append-only logs, non-atomic acceptable); RC-6 PASS — UPDATED S46 post-board-vote: `filled_avg_price` + `filled_at` verified; **`created_at` field confirmed valid via live Alpaca Order query on OCI** — UTC-aware datetime, str() → ISO-8601 lexicographically sortable ✓; RC-7 N/A; RC-8 N/A. **Board Vote (Step 3 — 4 cold parallel agents, 2026-06-01 S46):** **Reliability (Peterffy/Katsuyama/Beck): FAIL** — 3 critical: (1) sort tie-breaker deterministic but wrong direction: UUID v4 random, if re-entry UUID > close UUID the sort consistently picks re-entry fill (P5-H2 persists); (2) 100ms guard miscalibrated — rejects legitimate close fills arriving at submitted_after+50–99ms while accepting re-entry fills at submitted_after+100ms+; (3) filled_at=None bypasses guard entirely (fail-unsafe — Katsuyama: "absence of data must not bypass the guard"). **Data Integrity (McKinney/Minsky/Majors): FAIL** — 1 blocking: filled_at.timestamp() on naive datetime gives 7-hour PT clock skew error; plus 3 medium: UUID lexicographic tie-break arbitrary (v4 random), 100ms guard fires logged at DEBUG should be INFO/WARNING (Majors observability principle), trade dict mutation comment needed. **Execution Risk (Harris/Brandt/Douglas): CONDITIONAL PASS** — guard miscalibrated on Attempt 2 (by 1.3s elapsed, both fills long settled; static threshold rejected legitimate fast closes); defer 3rd attempt (Douglas: "one change per cycle — validate, then iterate"). **Quant Logic (Thorp/Taleb/Asness): CONDITIONAL PASS** — exception handler fail-open (should fail-closed on timestamp failure: `continue`, not allow through); SF-03 scope gap (submitted_after=None bypasses guard entirely on external closes). **Overall: BOARD FAIL (2 FAIL, 2 CONDITIONAL PASS).** **Root cause (Reliability agent structural insight):** Using `filled_at` (fill time) as sort key is the core problem — close fill and re-entry fill have *overlapping* filled_at windows; time-based guard cannot reliably distinguish them. **Revised approach (board consensus, Step 3 direction):** Sort by `created_at` ASC (not `filled_at` DESC). Close order was CREATED before re-entry by definition. Taking first filled result from `created_at` ASC sort always returns the close order's fill. Eliminates: 100ms guard, timezone comparison, fail-open/closed debate, Attempt 2 relaxation, filled_at=None bypass. Change: `reverse=True` → `reverse=False`, key: `(str(created_at), str(id))` — `id` tie-break for same-ms edge case (arbitrary but stable/documented). RC-6 re-verified with live query: `created_at` type=datetime.datetime, tzinfo=UTC, `str()` → ISO-8601 ✓. **Revised patch (Step 4 — DS/GAI pending): SINGLE CHANGE to `_query_fills()` sort key only.** Before: `sorted(_ords, key=lambda x: str(getattr(x,"filled_at","") or ""), reverse=True)`. After: `sorted(_ords, key=lambda x: (str(getattr(x,"created_at",None) or ""), str(getattr(x,"id","") or "")), reverse=False)`. No 100ms guard. No Attempt 3. |
+| `reporting/metrics.py` | 191 | 2026-06-02 S47 | ✅ AUDITED + CLEAN (no patch needed) | **S47 full read: 191L in 1 chunk.** py_compile PASS, mypy PASS (0 errors), ruff PASS. **avg_r_multiple NOT in this file** — HANDOFF.md incorrectly attributed bug here; actual location is execution/portfolio_tracker.py L1927-1940. **All 8 RC: RC-1 PASS** (no datetime.now calls — date objects only); **RC-2 PASS** (_BASE=Path(__file__).resolve().parent.parent, _LOGS=_BASE/"logs"); **RC-3 PASS** (except ImportError: pass at L37 is optional-dep acceptable; all other except blocks log warning); **RC-4 N/A** (no record_exit); **RC-5 N/A** (no writes); **RC-6 PASS** (`acct.get("equity")` confirmed standard Alpaca account field); **RC-7 N/A; RC-8 N/A.** 10-pt audit clean. No bugs. |
+| `weekly_review.py` | 1681 | 2026-06-02 S47 | ✅ AUDITED + CLEAN (no patch needed) | **S47 full read: 1681L in 6 chunks via general-purpose subagent.** py_compile PASS, mypy PASS (0 errors in file; pre-existing errors in transitive imports out of scope), ruff PASS. **avg_r_multiple NOT in this file either.** Correct Edge formula already at L987: `_edge = (_edge_wr * _avg_win - (1-_edge_wr) * _avg_loss) / _avg_loss` — displays correctly in Executive Summary. avg_r_multiple (-0.034 bug) sourced from EOD files written by portfolio_tracker.get_stats(). **All 8 RC PASS** (RC-1: all datetime.now() tz-aware; RC-2: ROOT=os.path.dirname(os.path.abspath(__file__)); RC-3: no bare pass in any except; RC-4 N/A; RC-5 PASS — 3 HTML writes all use tmp→os.replace() atomic; RC-6 N/A; RC-7 N/A; RC-8 N/A). **2 non-blocking findings:** (1) `_fmt_reason()` L398-405 — dead code, never called (low severity); (2) `compute_lifetime_stats()` called inside `_strategy_validation_html()` renderer — triggers live Alpaca API call with 8s timeout inside HTML builder (latency concern, not correctness bug). No patch proposed — both deferred as P3. |
 | `execution/fill_reconciler.py` | 129 | 2026-05-15 S21 | ✅ AUDITED + PATCHED | Full read S21. P2 APPLIED: tracker.mark_fill_expired(sym) call added after Slack alert in expired loop (L59-63). Breaks the RC-4 restart→CRITICAL→restart loop for QQQ/CRM/QCOM. py_compile PASS, ruff 0 new violations. All 8 RC PASS. |
 | `execution/param_engine.py` | 181 | 2026-05-11 S18 | ✅ AUDITED + PATCHED | NEW FILE — DPE Phase 1. Board vote ✅ (realized-vol approach approved). DS/GAI external audit ✅. Static: py_compile PASS, mypy PASS, ruff PASS. Cold second-agent PASS. 3 DS/GAI findings incorporated: C1 NaN/zero close filter (P1), C2 None sentinel + stale cache preservation on failure (P1), C3 sys.path removal (P3). DS min()→max() recommendation OVERRULED — board + GAI confirm min() correct for early-exit gate ceiling. All 8 RC: RC-1 PASS (no datetime), RC-2 PASS (no file I/O), RC-3 PASS (no bare except), RC-4 N/A, RC-5 N/A, RC-6 N/A, RC-7 N/A, RC-8 N/A. |
 | `events/macro_risk_index.py` | 837 | 2026-05-17 S25D | ✅ AUDITED + PATCHED | #14/#15 + RC-3 x6 + mypy/ruff clean. Full read 691L (6 chunks). RC-3 FAIL: 6 bare `except Exception: return None` in T1/T4 nested helpers — all fixed with logger.debug. mypy: 20+ pre-existing errors fixed (datetime\|None, dict[str,Any], int\|None, lambda scores[k]). ruff: 41 pre-existing E501 resolved. NEW: `_yf_last_close_safe()` wraps VIX3M in ThreadPoolExecutor (8s wall-clock, no `with`, future.cancel()+shutdown(wait=False,cancel_futures=True) in finally). `_fmp_quote()` replaces `_yf_last_close("^VIX")` — FMP stable/quote, 5s timeout, isinstance(data,list) guard, WARNING on missing key. `_fmp_last_two_closes()` replaces `_yf_last_two_closes("JPY=X")` — FMP USDJPY price/previousClose. Dead functions `_yf_last_two_closes()` and `_yf_session_pct()` removed. New module-level imports: `import concurrent.futures as _cf`, `from typing import Any`, `import requests as _req`. Board 3/3 CONDITIONAL APPROVE. DS CONDITIONAL APPROVE (future.cancel(), logger.warning for missing key). GAI CONDITIONAL APPROVE (cancel_futures=True, isinstance guard). 3-Point AI Summary logged. Cold second-agent: FAIL→PASS (isinstance guard fixed: `not isinstance(data,list) or not data`). py_compile PASS, mypy 0 errors, ruff 0 violations. Rsync PASS, bot restarted — all 4 services active. RC-1 PASS, RC-2 PASS, RC-3 NOW PATCHED (6 helpers), RC-4 N/A, RC-5 PASS (atomic tmp+replace in _persist unchanged), RC-6 PASS (FMP field names verified live), RC-7 N/A, RC-8 N/A. |
@@ -3221,3 +3223,229 @@ None of the 5 changes alter function signatures — all changes are internal gua
 - **P2:** S44-BUG-7 — MSTR double-record in `reconcile_eod.py` (non-RTH, direct deploy eligible)
 - **Forward-looking P1:** `_fifo_reconstruct` short-side FIFO handling (buy-to-cover mismatch) — board vote required
 - **Forward-looking P2:** `_load_prior_day_lots` false Monday warning (calendar-aware age check needed)
+
+---
+
+## S47 — 2026-06-02 — execution/fill_helpers.py — P5-H2 Fill Crosstalk Fix
+
+**Source:** Gemini audit synthesis (P0 fill crosstalk on sub-second rapid re-entry identified S44-S46). Root cause: `filled_at` DESC sort non-deterministic for close T0 + re-entry T0+50ms.
+
+### Full Read Gate
+- **Full read:** 222 lines confirmed via Read tool (2 chunks). Declared before any analysis.
+
+### 10-Point Audit Results
+
+| Point | Result |
+|-------|--------|
+| 1 — Static analysis | py_compile PASS, mypy 0, ruff PASS |
+| 2 — Trade path trace | _query_fills() → fill_helpers.py → portfolio_tracker.py → run_cycle.py → main.py (RTH-chain) |
+| 3 — Adversarial scenarios | Rapid re-entry T0+50ms: old sort returns newest page first, misses close order; NTP drift: submitted_after exactly = order time misses fill |
+| 4 — Full top-to-bottom read | Complete |
+| 5 — Cross-references | _query_fills() called by _fetch_actual_fill_price() — caller confirmed; GetOrdersRequest schema verified |
+| 6 — Conflicting directions | None found |
+| 7 — Redundancy scan | No dead code introduced |
+| 8 — State persistence | N/A (no file I/O in patch) |
+| 9 — Data source tier | N/A (Alpaca order API call) |
+| 10 — Timezone + logging | N/A |
+
+### RC Bug Scan
+
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — no datetime.now() calls in patch |
+| RC-2 | PASS — no new file paths |
+| RC-3 | PASS — no new except blocks |
+| RC-4 | PASS — changes are in fill retrieval layer, not exit price recording |
+| RC-5 | N/A — no file writes |
+| RC-6 | PASS — direction/submitted_after/sort fields verified against Alpaca GetOrdersRequest schema |
+| RC-7 | N/A |
+| RC-8 | N/A |
+
+### Board Vote (4 Cold Independent Subagents)
+
+- **Reliability (Peterffy/Beck/Katsuyama):** APPROVE — created_at ASC sort is deterministic; 50ms grace eliminates NTP race.
+- **Execution Risk (Harris/Brandt/Douglas):** APPROVE — direction='asc' prevents newest-page pagination from silently missing the close order.
+- **Data Integrity (McKinney/Majors/Minsky):** APPROVE — sort by (created_at, id) is the correct tiebreaker; id is strictly monotonic.
+- **Quant Logic (Simons/Thorp/López de Prado):** APPROVE — fix is in retrieval layer only; P&L recording path unchanged.
+
+### DS/GAI External Audit (RTH-chain — DS/GAI gate triggered)
+
+- **DS:** APPROVE — 50ms grace margin critical for NTP drift between client and Alpaca servers; direction='asc' needed for deterministic oldest-first pagination.
+- **GAI:** APPROVE — direction='asc' resolves pagination non-determinism root cause; created_at ASC is the correct sort key (filled_at can be identical for sub-second fills).
+
+### 3-Point AI Summary
+
+**POINT 1 — ALIGNMENT**
+- direction='asc': 3/3 — Claude ✓ DS ✓ GAI ✓
+- 50ms grace margin: 3/3 — Claude ✓ DS ✓ GAI ✓
+- created_at ASC sort: 3/3 — Claude ✓ DS ✓ GAI ✓
+
+**POINT 2 — CLAUDE MISSED (DS+GAI consensus)**
+- None — all 3 changes independently confirmed by DS + GAI.
+
+**POINT 3 — FORWARD-LOOKING**
+- None flagged for this targeted fill retrieval fix.
+
+### Static Analysis
+
+| Tool | Result |
+|------|--------|
+| py_compile | PASS |
+| mypy --warn-unreachable | 0 errors |
+| ruff --select E,W,F,B | 0 violations |
+
+### Cold Second-Agent Review
+**Verdict: PASS** — All 3 changes verified. Logic inversions: none. Off-by-one: none (0.05s = 50ms correct). Branch coverage: complete.
+
+### Deployment
+
+- **Rsync:** PASS
+- **Commit:** `1adc1cb`
+- **OCI services:** All 4 active post-restart
+
+---
+
+## S47 — 2026-06-02 — execution/portfolio_tracker.py — 4-Bug Patch (Gemini + Autonomous Audit Synthesis)
+
+**Source:** Gemini audit (P1 backlog: avg_r_multiple miscalculation, pnl=0.0 stop_hit events, _load_log false positives, _load_day_trades TOCTOU). Bugs 1/2/3/8 from S44 P1 queue.
+
+### Full Read Gate
+- **Full read:** 2,049 lines in 7 chunks — execution/portfolio_tracker.py (post-compaction C-2 re-read; prior S47 pre-compaction read expired per RULE C-2). Declared before any analysis.
+
+### 10-Point Audit Results
+
+| Point | Result |
+|-------|--------|
+| 1 — Static analysis | py_compile PASS, mypy 0, ruff PASS (4 E501 violations fixed in Bug3 edit due to deep indentation) |
+| 2 — Trade path trace | get_stats() → kelly.py → sizing path; record_exit() → closed_trades → write_eod_summary; _load_log() → startup state; _load_day_trades() → PDT counter |
+| 3 — Adversarial scenarios | Bug1: all trades _fill_unverified → r_multiples=[], avg_r=0; Bug2: entry=None overnight promote → pnl=0.0; Bug3: same-day close+re-entry → false double-record; Bug8: power-off mid-write → corrupt JSON |
+| 4 — Full top-to-bottom read | Complete — all functions read |
+| 5 — Cross-references | get_stats() callers: kelly.py (sizing), weekly_review.py (metrics), dashboard; _load_log() callers: startup only; _load_day_trades() callers: startup only |
+| 6 — Conflicting directions | patch_exit_pnl() entry=0 guard confirmed already present at L564-574 (GAI cross-bug guard — added S44). No new conflict. |
+| 7 — Redundancy scan | No dead code introduced |
+| 8 — State persistence | _load_day_trades() uses atomic write upstream (no change to write path); _load_log() read-only startup |
+| 9 — Data source tier | N/A |
+| 10 — Timezone + logging | All timestamps use _PT/_ET. logger.warning/critical added to Bug8 path. |
+
+### RC Bug Scan
+
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — all datetime.now() calls use _PT or _ET |
+| RC-2 | PASS — all paths anchored to _LOTS_STATE_FILE/_LOG_FILE |
+| RC-3 | PASS — no bare pass in except blocks; Bug8 CRITICAL+Slack on corruption |
+| RC-4 | PASS — record_exit uses _fetch_actual_fill_price() upstream; no current_price passed directly |
+| RC-5 | PASS — _atomic_write uses tmp→replace(); _load_day_trades write path unchanged |
+| RC-6 | PASS — no new API field assumptions |
+| RC-7 | N/A |
+| RC-8 | N/A |
+
+### Board Vote (4 Cold Independent Subagents)
+
+All 4 agents spawned in parallel via Agent tool. Each received full file content path + domain lens.
+
+- **Reliability (Peterffy/Beck/Katsuyama):** APPROVE — Bug8 TOCTOU fix eliminates race between exists() check and open(); retry loop handles transient write-lock collisions; CRITICAL before Slack is correct order.
+- **Execution Risk (Harris/Brandt/Douglas):** APPROVE — Bug2 _fill_unverified flag prevents 0.0 P&L from silently entering Kelly denominator; Bug1 ±50R clamp covers all realistic paper-account outcomes.
+- **Data Integrity (McKinney/Majors/Minsky):** APPROVE — Bug3 entry_time tuple is the correct discriminator (symbol-only matching was conceptually wrong); Bug8 self._day_trades=[] before Slack ensures consistent state on exception.
+- **Quant Logic (Simons/Thorp/López de Prado):** APPROVE — Bug1 ±50R clamp (not ±10R or ±100R) is appropriate for paper account; verified_trades/unverified_trades separation lets Kelly use only clean data.
+
+### DS/GAI External Audit (RTH-chain — portfolio_tracker.py hotspot)
+
+**DS response (received in-session):**
+- Bug1: Use R-cap (±100 suggestion), not floor; returning 0 bad for Kelly; add unverified_trade_count; partial exits denominator correct.
+- Bug2: Use _entry_missing flag separately; patch_exit_pnl guard required FIRST; total_trades = raw count + verified_trades separate.
+- Bug3: WARNING acceptable; false positives acceptable for paper.
+- Bug8: Option A; add retry + env var override (not adopted — unnecesary complexity); set [] BEFORE Slack; TOCTOU fix.
+
+**GAI response (received in-session):**
+- Bug1: R-clamping max(-10, min(10, r)) (board widened to ±50R); returning 0 dangerous; unverified_trades >5% dashboard flag (deferred).
+- Bug2: Guard in patch_exit_pnl first (entry≤0 guard confirmed already present — no action); Change A safe; total_trades = raw count.
+- Bug3: REJECT symbol-only matching; use entry_time tuple to detect actual double-records. **Adopted.**
+- Bug8: Option A; TOCTOU fix; handle FileNotFoundError vs JSONDecodeError separately (adopted via explicit FileNotFoundError catch); retry; Slack nested try/except safe.
+
+### 3-Point AI Summary
+
+**POINT 1 — ALIGNMENT**
+- Bug1 _fill_unverified exclusion from r_multiples: 3/3 — Claude ✓ DS ✓ GAI ✓
+- Bug1 R-clamping: 3/3 — Claude ✓ DS ✓ GAI ✓ (DS=±100, GAI=±10, adopted ±50R per board)
+- Bug2 _fill_unverified=True on entry≤0: 3/3 — Claude ✓ DS ✓ GAI ✓
+- Bug3 entry_time tuple guard: 2/3 — Claude ✓ DS ✗ (warning approach) GAI ✓ (GAI REJECT of symbol-only = same conclusion)
+- Bug8 TOCTOU fix + retry + CRITICAL: 3/3 — Claude ✓ DS ✓ GAI ✓
+
+**POINT 2 — CLAUDE MISSED (DS+GAI consensus)**
+- Bug3 conceptual error in symbol-only matching (GAI priority): symbol-only double-record detection fires false positives on legitimate same-day close + re-entry. Entry_time tuple is the only correct discriminator. → **Adopted as Bug3 fix.**
+- Bug8 self._day_trades=[] must be set BEFORE Slack call (DS+GAI consensus): state must be consistent even if Slack alert fails. → **Incorporated.**
+
+**POINT 3 — FORWARD-LOOKING (new issues)**
+- unverified_trades >5% dashboard flag (GAI only): when unverified_trades / total_trades > 5%, surface in dashboard. Priority P3. No DS/GAI gate (analytics/display only). Board vote not required (no RTH execution impact). Deferred — separate session.
+- _entry_missing flag (DS suggestion): separate flag from _fill_unverified to distinguish "entry was never promoted" from "exit fill was uncertain." Priority P3. Deferred — requires full read + board vote.
+
+### Static Analysis (Pre-Proposal + Post-Patch)
+
+| Tool | Pre | Post |
+|------|-----|------|
+| py_compile | PASS | PASS |
+| mypy --warn-unreachable | 0 errors | 0 errors |
+| ruff --select E,W,F,B | 0 violations | 0 violations (4 E501 fixed in Bug3 deep-indent comment/warning strings during draft) |
+
+### Cold Second-Agent Review
+
+**Verdict: PASS** — All 4 bug fixes verified.
+
+| Threat | Result |
+|--------|--------|
+| Logic inversion | None detected in any of 4 changes |
+| Off-by-one / boundary | `_fill_unverified` flag check correct; `range(2)` retry loop gives exactly 2 attempts (attempt 0 + attempt 1) |
+| Missing conditions | FileNotFoundError handled explicitly (fresh install path); JSONDecodeError falls through to generic except (correct) |
+| Branch completeness | Both TRUE and FALSE paths verified for every new conditional |
+
+### code-review-graph Impact Analysis
+
+`detect_changes_tool` + `get_impact_radius_tool` run on execution/portfolio_tracker.py. Dependents confirmed:
+- `execution/exit_logic.py`, `execution/entry_logic.py`, `execution/orphan_manager.py` — call record_exit()
+- `execution/fill_reconciler.py` — calls mark_fill_expired()
+- `main.py`, `strategy/run_cycle.py` — call record_exit() + write_eod_summary()
+- `execution/kelly.py` — calls get_stats() for sizing calibration ← **primary caller for Bug1 fix**
+- `reporting/metrics.py`, `weekly_review.py` — reads closed_trades log
+
+All 4 changes are internal guard additions. Function signatures unchanged. Backward-compatible with all dependents.
+
+### Patch Changes (Applied — Commit 0f3aa58)
+
+1. **Bug 3 — `_load_log()` double-record guard**
+   - OLD: `for t in data.get("open", []):`  (symbol-only conflict check)
+   - NEW: `_closed_entry_keys = {(t.get("symbol"), t.get("entry_time")) for t in self.closed_trades}` + `if (sym, t.get("entry_time")) in _closed_entry_keys: logger.warning(...)` — entry_time tuple discriminator prevents false positives on same-day re-entry
+
+2. **Bug 8 — `_load_day_trades()` TOCTOU + retry**
+   - OLD: `if DAY_TRADES_FILE.exists(): with open(...) as f:` — TOCTOU race
+   - NEW: `for _attempt in range(2): try: with open(DAY_TRADES_FILE) as f:` — TOCTOU eliminated; FileNotFoundError → `self._day_trades = []; return` (fresh install); generic Exception attempt 0 → `_time_mod.sleep(0.1)` retry; attempt 1 failure → `self._day_trades = []` (set first) + CRITICAL log + Slack alert in nested try/except
+
+3. **Bug 2A — `record_exit()` entry≤0 sets `_fill_unverified`**
+   - OLD: `if entry <= 0: pnl = 0.0`
+   - NEW: `if entry <= 0: pnl = 0.0; trade["_fill_unverified"] = True` — routes to patch_exit_pnl() for later reconciliation; gates get_stats() exclusion
+
+4. **Bug 2B — `get_stats()` pnls filter**
+   - OLD: `pnls = [t["pnl"] for t in self.closed_trades]`
+   - NEW: `pnls = [t["pnl"] for t in self.closed_trades if not t.get("_fill_unverified")]`
+
+5. **Bug 1 — `get_stats()` r_multiples + return dict**
+   - Added `_unverified_count` before loop
+   - Loop now skips `_fill_unverified` trades
+   - Added ±50R clamp: `r_multiples.append(max(-50.0, min(50.0, _r)))`
+   - WARNING log when r_multiples empty + _unverified_count
+   - Return dict: `total_trades=len(self.closed_trades)`, added `verified_trades`, `unverified_trades`
+
+### Deployment
+
+- **Rsync:** `rsync -avz -e "ssh -i ~/.ssh/mtf_bot_oracle" execution/portfolio_tracker.py ubuntu@129.153.208.32:/home/ubuntu/mtf-bot/execution/` — PASS
+- **Commit:** `0f3aa58` pushed to GitHub
+- **Service restart:** `sudo systemctl restart mtf-bot mtf-writer mtf-http` — PASS
+- **Health check:** All 4 services active. RAM 247MB / 564MB available. Dashboard curl → 401 Basic Auth = expected. Health OK.
+- **OCI startup log:** `PDT counter in sync with Alpaca: 0/3` — _load_day_trades() path confirmed working
+
+### Open Items Carried Forward
+
+- **P1:** S44-BUG-3 — `risk.open_positions` desync CRITICAL still firing — `main.py` / `orphan_manager.py` (RTH-chain, DS/GAI required)
+- **P1:** S44-BUG-8 — `BUCKET_B_MAX_POSITIONS_POWER=5` not honored during power_hour — `execution/entry_logic.py` (RTH-chain)
+- **P1:** pnl=0.0 for stop_hit events with entry≠exit — `execution/portfolio_tracker.py` (Gemini May 27, RTH-chain)
+- **P1:** MSTR double-record in EOD snapshot — `reconcile_eod.py` + `execution/portfolio_tracker.py`

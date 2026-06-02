@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-05-29 S44 (execution/portfolio_tracker.py \u2014 5 bugs patched: BUG-1 _qty_at_close or-chain (phantom P&L on partial-exit close), BUG-2 _fifo_reconstruct orphan close (CRITICAL+Slack+synthetic short), BUG-3 _load_prior_day_lots staleness detection (age_days>1\u2192WARNING, never returns {}), BUG-4/RC-3 _fill_et_date bare except\u2192logger.warning, BUG-5 record_exit entry_price=None pre-pop guard (CRITICAL+Slack+pnl=0.0 forced). 1939L\u21922048L. All 9 steps complete. OCI deployed.)"
+    "last_updated": "2026-06-02 S47 (execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -252,7 +252,7 @@
     "_meta": {
       "description": "Per-file patch frequency tracker. patch_count = total individual bug fixes logged across all sessions. sessions = number of distinct sessions where the file was patched. Auto-incremented when patch_log.jsonl is written. Seeded 2026-04-23 from tb_audit_log.md history.",
       "last_seeded": "2026-04-23",
-      "last_updated": "2026-05-29 S44"
+      "last_updated": "2026-06-02 S47"
     },
     "weekly_review.py": {
       "patch_count": 2,
@@ -289,12 +289,13 @@
       "notes": "S21: P6 \u2014 sync_from_tracker() added. S22: H2 VIX step-function if/elif. S27: BUG-B FIFO 4-way (sell_short/buy_to_cover explicit branches + _unknown_sides WARNING) + RC-3 x2 (kill state load/save) + RULE C-4 pre-existing mypy/ruff fixes (Optional, E501 x16, type: ignore requests). Kill switch now sees short P&L."
     },
     "execution/portfolio_tracker.py": {
-      "patch_count": 38,
-      "last_patched": "2026-05-29 S44",
+      "patch_count": 42,
+      "last_patched": "2026-06-02 S47",
       "audit_s35": "S35 RC-3 x4 PATCHED. All 8 RC PASS post-patch.",
       "audit_s44": "S44 5-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. OCI deployed.",
-      "notes": "S21: P3 (mark_fill_expired method), P4-A (_load_log double-append fix + len guard), P4-B (write_eod_summary _load_log reload), P5 (RC-1 date.today\u2192datetime.now(_PT).date). S22 PT-RC3-EFF: 5 RC-3 violations + L859 display bug. S22 BUG-#4: record_exit() pnl=0.0 when qty_remaining=0 with no partial exits \u2014 guard added (partial_exited flag discriminator, external_close branch, entry.get() defensive). S22 BUG-#11 L1306: stop-hit classification changed from exact set membership to substring match \u2014 any(s in str(reason or \"\") for s in _LOG_STOP_REASONS). Handles compound reason strings (e.g. 'overnight_atr_buffer_exit | detail'). Startup clean PID 1014968. S22 BUG-#6: promote_pending_to_active() \u2014 added _log_event(\"entry\",...) call when overnight limit order fills. Signature extended (filled_qty, mri_level, pdt_used). Idempotency guard (status != pending_ongoing). _qty<=0 guard prevents zero-size event. data_source=\"overnight_limit_fill\". trade_mode from trade dict. direction/stop/target included. Board (Reliability/ExecRisk/DataIntegrity) + DS+GAI + 3-Point AI Summary. Critical: GAI caught AttributeError \u2014 compute_rolling_pdt_count is module-level not method; changed to get_rolling_day_trade_count(). py_compile PASS, ruff 0 new violations. Cold second-agent FAIL\u2192PASS (T2/T3 qty guard added). Startup clean PID 1019546. S35: RC-3 x4 (L123/L134/L583/L419) all -> logger.warning. py_compile/ruff PASS. OCI restart clean. S44: BUG-1 patch_exit_pnl _qty_at_close or-chain \u2192 is not None sentinel (phantom P&L on fully-partial-exited positions); BUG-2 _fifo_reconstruct orphan close CRITICAL+Slack+synthetic short guard; BUG-3 _load_prior_day_lots staleness detection (age_days>1\u2192WARNING, never returns {}); BUG-4/RC-3 _fill_et_date bare except\u2192logger.warning; BUG-5 record_exit pre-pop entry_price=None guard (CRITICAL+Slack) + pnl=0.0 forced + pnl_pct guard. 1939L\u21922048L. 4 cold board agents. DS/GAI APPROVE (with GAI cross-bug guard for entry_px=0.0 interaction). Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. OCI deployed.",
-      "lines": 2048
+      "audit_s47": "S47 4-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. DS+GAI both APPROVE. OCI deployed. Commit 0f3aa58.",
+      "notes": "S21: P3 (mark_fill_expired method), P4-A (_load_log double-append fix + len guard), P4-B (write_eod_summary _load_log reload), P5 (RC-1 date.today\u2192datetime.now(_PT).date). S22 PT-RC3-EFF: 5 RC-3 violations + L859 display bug. S22 BUG-#4: record_exit() pnl=0.0 when qty_remaining=0 with no partial exits \u2014 guard added (partial_exited flag discriminator, external_close branch, entry.get() defensive). S22 BUG-#11 L1306: stop-hit classification changed from exact set membership to substring match \u2014 any(s in str(reason or \"\") for s in _LOG_STOP_REASONS). Handles compound reason strings (e.g. 'overnight_atr_buffer_exit | detail'). Startup clean PID 1014968. S22 BUG-#6: promote_pending_to_active() \u2014 added _log_event(\"entry\",...) call when overnight limit order fills. Signature extended (filled_qty, mri_level, pdt_used). Idempotency guard (status != pending_ongoing). _qty<=0 guard prevents zero-size event. data_source=\"overnight_limit_fill\". trade_mode from trade dict. direction/stop/target included. Board (Reliability/ExecRisk/DataIntegrity) + DS+GAI + 3-Point AI Summary. Critical: GAI caught AttributeError \u2014 compute_rolling_pdt_count is module-level not method; changed to get_rolling_day_trade_count(). py_compile PASS, ruff 0 new violations. Cold second-agent FAIL\u2192PASS (T2/T3 qty guard added). Startup clean PID 1019546. S35: RC-3 x4 (L123/L134/L583/L419) all -> logger.warning. py_compile/ruff PASS. OCI restart clean. S44: BUG-1 patch_exit_pnl _qty_at_close or-chain \u2192 is not None sentinel (phantom P&L on fully-partial-exited positions); BUG-2 _fifo_reconstruct orphan close CRITICAL+Slack+synthetic short guard; BUG-3 _load_prior_day_lots staleness detection (age_days>1\u2192WARNING, never returns {}); BUG-4/RC-3 _fill_et_date bare except\u2192logger.warning; BUG-5 record_exit pre-pop entry_price=None guard (CRITICAL+Slack) + pnl=0.0 forced + pnl_pct guard. 1939L\u21922048L. 4 cold board agents. DS/GAI APPROVE (with GAI cross-bug guard for entry_px=0.0 interaction). Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. OCI deployed. S47: Bug1 get_stats() avg_r_multiple \u2014 _fill_unverified exclusion, \u00b150R clamp (max(-50,min(50,r))), WARNING log when r_multiples empty + all closed trades unverified, unverified_trades added to return dict; Bug2 record_exit() entry\u22640 sets _fill_unverified=True, pnls filter excludes _fill_unverified, return dict adds verified_trades + unverified_trades; Bug3 _load_log() (symbol,entry_time) tuple replaces symbol-only double-record detection (same-day re-entry has different entry_time \u2014 symbol-only was false-positive); Bug8 _load_day_trades() TOCTOU fix (removed exists()\u2192open() race, handle FileNotFoundError explicitly), 100ms retry loop for transient write-lock collision, CRITICAL+Slack on genuine corruption, self._day_trades=[] set before Slack call. 2049L\u21922124L. 4 cold board agents. DS+GAI APPROVE. Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. Commit 0f3aa58. OCI deployed, all 4 services active.",
+      "lines": 2124
     },
     "execution/exit_logic.py": {
       "patch_count": 8,
@@ -372,9 +373,65 @@
       "last_patched": "2026-05-11",
       "open_rc_violations": [],
       "risk_rating": "LOW \u2014 S16: 4 patches (get_bars missing, dedup logging, P1 retry bypass, P2 overbroad match). All RC classes PASS. Not in RTH execution critical path (data layer only)."
+    },
+    "execution/fill_helpers.py": {
+      "patch_count": 4,
+      "last_patched": "2026-06-02 S47",
+      "lines": 222,
+      "notes": "S5 (2026-05-04): RC-4 fill fallback chain fix (trail_stop\u2192stop\u2192entry_price eliminated; retry logic 2 attempts; entry_price-only fallback; CRITICAL+Slack; _fill_unverified=True). S37: RC-3 x2 \u2014 L55 + L67 bare except blocks upgraded to logger.warning. S47 P5-H2: _query_fills() 3 changes for fill crosstalk on sub-second rapid re-entry: (1) direction='asc' on GetOrdersRequest \u2014 oldest-first pagination prevents newest page missing close order; (2) submitted_after-0.05 \u2014 50ms NTP grace margin; (3) sort key (created_at ASC, id) reverse=False \u2014 close order always created before re-entry. DS APPROVE (50ms critical). GAI APPROVE (direction='asc' needed). py_compile PASS, mypy 0, ruff PASS. Commit 1adc1cb. OCI deployed.",
+      "risk_rating": "HIGH \u2014 RTH-chain (imported by portfolio_tracker.py \u2192 run_cycle.py \u2192 main.py). DS/GAI required for any non-read-only change."
     }
   },
   "sessions": [
+    {
+      "date": "2026-06-02",
+      "session": "S47",
+      "files": [
+        "execution/fill_helpers.py",
+        "execution/portfolio_tracker.py"
+      ],
+      "bugs_fixed": [
+        "PT-S47-BUG1-AVG-R-FILL-UNVERIFIED-50R-CLAMP",
+        "PT-S47-BUG2-ENTRY-NONE-FILL-UNVERIFIED-FLAG",
+        "PT-S47-BUG3-LOAD-LOG-ENTRY-TIME-TUPLE",
+        "PT-S47-BUG8-LOAD-DAY-TRADES-TOCTOU-RETRY",
+        "FH-S47-P5-H2-FILL-CROSSTALK-DIRECTION-GRACE"
+      ],
+      "rc_classes": {
+        "execution/portfolio_tracker.py": {
+          "RC-1": "PASS (all datetime.now calls use _PT/_ET timezone)",
+          "RC-2": "PASS (all paths anchored to _LOTS_STATE_FILE/_LOG_FILE)",
+          "RC-3": "PASS (no bare pass in except blocks)",
+          "RC-4": "PASS (record_exit uses _fetch_actual_fill_price() upstream)",
+          "RC-5": "PASS (_atomic_write uses tmp\u2192replace)",
+          "RC-6": "PASS (no new unverified API field assumptions)",
+          "RC-7": "N/A (no sizing logic in portfolio_tracker.py)",
+          "RC-8": "N/A (no scan buffer in portfolio_tracker.py)"
+        },
+        "execution/fill_helpers.py": {
+          "RC-1": "PASS",
+          "RC-2": "PASS",
+          "RC-3": "PASS",
+          "RC-4": "PASS \u2014 _query_fills() changes are in fill retrieval layer, not exit price path",
+          "RC-5": "N/A",
+          "RC-6": "PASS \u2014 direction/submitted_after/sort fields verified against Alpaca GetOrdersRequest schema",
+          "RC-7": "N/A",
+          "RC-8": "N/A"
+        }
+      },
+      "board": "fill_helpers.py: 4 cold independent subagents APPROVE (RTH-chain \u2014 DS/GAI required and obtained). portfolio_tracker.py: 4 cold independent subagents APPROVE. DS vs GAI conflicts: Bug1 \u2014 DS suggested \u00b1100R cap (Claude used \u00b150R per DS rationale), GAI suggested \u00b110R (too narrow for high-volatility positions per board review). Board resolution: \u00b150R adopted. Bug2 \u2014 DS/GAI both flagged patch_exit_pnl() entry=0 guard as mandatory prerequisite; guard confirmed already present at L564-574 (added S44 as 'GAI cross-bug guard'). Bug3 \u2014 GAI REJECT on symbol-only matching (conceptual error), recommending entry_time-based detection; adopted. Bug8 \u2014 both DS+GAI APPROVE Option A (retry + TOCTOU fix).",
+      "ds_gai": "fill_helpers.py: DS APPROVE (50ms grace margin critical for NTP drift; direction='asc' needed for determinism). GAI APPROVE (direction='asc' resolves pagination non-determinism root cause). portfolio_tracker.py: DS APPROVE (\u00b1100R suggestion noted but \u00b150R adopted; CRITICAL+retry for Bug8; set [] before Slack). GAI APPROVE (Bug3 entry_time guard; Bug8 TOCTOU fix; unverified_trades flag). 3-Point AI Summary completed before Step 5.",
+      "cold_second_agent": "PASS \u2014 all changes verified. Logic inversions: none. Off-by-one/boundary: none. Missing conditions: none. Both TRUE and FALSE branches verified.",
+      "static_analysis": "fill_helpers.py: py_compile PASS, mypy 0, ruff PASS. portfolio_tracker.py: py_compile PASS, mypy 0, ruff PASS (4 E501 violations fixed in Bug3 edit due to deep indentation \u2014 comment and warning strings shortened).",
+      "deploy": "fill_helpers.py: rsync PASS, commit 1adc1cb. portfolio_tracker.py: rsync PASS, py_compile OCI PASS, all 4 services active. RAM 247MB/564MB. Commit 0f3aa58. PDT counter startup log: 'PDT counter in sync with Alpaca: 0/3'.",
+      "patch": "fill_helpers.py (222L): _query_fills() \u2014 (1) direction='asc' on GetOrdersRequest; (2) submitted_after-0.05 (50ms NTP grace); (3) sort (created_at, id) reverse=False. portfolio_tracker.py (2049L\u21922124L): (1) Bug1 get_stats() \u2014 _fill_unverified exclusion from r_multiples loop, \u00b150R clamp, _unverified_count computed before loop, WARNING if r_multiples empty, unverified_trades in return dict; (2) Bug2 record_exit() entry\u22640 branch sets _fill_unverified=True; get_stats() pnls filter excludes _fill_unverified; return dict adds verified_trades+unverified_trades, total_trades=len(self.closed_trades); (3) Bug3 _load_log() \u2014 _closed_entry_keys = {(symbol,entry_time)} tuples, warning message updated; (4) Bug8 _load_day_trades() \u2014 for _attempt in range(2) retry loop, FileNotFoundError\u2192[] return, 100ms sleep on attempt 0, CRITICAL+Slack on attempt 1 failure, self._day_trades=[] before Slack.",
+      "open_items_carried": [
+        "P1: risk.open_positions desync STILL firing \u2014 main.py/orphan_manager.py (RTH-chain, DS/GAI required)",
+        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour \u2014 execution/entry_logic.py (RTH-chain)",
+        "P1: pnl=0.0 for stop_hit events with entry\u2260exit \u2014 portfolio_tracker.py (RTH-chain, Gemini May 27)",
+        "P1: MSTR tracked as both closed and overnight_hold in EOD snapshot \u2014 reconcile_eod.py + portfolio_tracker.py"
+      ]
+    },
     {
       "date": "2026-05-29",
       "session": "S44",
