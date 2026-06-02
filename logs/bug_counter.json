@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-02 S47c (execution/entry_logic.py + config.py \u2014 P1 BUCKET_B power_hour expansion: 7 fixes \u2014 BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode\u2192TOD_EXPANSION_WINDOW_START const, BUG-PH-3 wrong counter\u2192risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable, Fix#6 pre-loop time computation, Fix#7 WARNING before breaks. Full 9-step. DS/GAI both APPROVE. OCI deployed.) | Prior S47b: execution/portfolio_tracker.py \u2014 pnl=0.0 false-zero storage rounding: 8 storage locations round(x,2)\u2192round(x,4); L792 _partial_pnl != 0.0 \u2192 abs()>1e-8; 5 display locations unchanged. Full 9-step: Explore 2125L, 10-pt audit, 4/4 board APPROVE, DS/GAI both CONDITIONAL APPROVE, static analysis PASS, cold second-agent PASS, impact radius shown. Commit 5600c70. OCI deployed.) | Prior S47: execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
+    "last_updated": "2026-06-02 S47d (INVESTIGATION — no patches. ROOT CAUSE 1: generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py _load_lifetime_pnl() is dead code; OCI cache stale/wrong key. ROOT CAUSE 2: trade_engine.py L252-254 direct assignment risk.open_positions bypasses sync guards. Board voted MODIFY on both. DS/GAI prompts prepared in-session. Patches queued post-RTH.) | Prior S47c: execution/entry_logic.py + config.py \u2014 P1 BUCKET_B power_hour expansion: 7 fixes \u2014 BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode\u2192TOD_EXPANSION_WINDOW_START const, BUG-PH-3 wrong counter\u2192risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable, Fix#6 pre-loop time computation, Fix#7 WARNING before breaks. Full 9-step. DS/GAI both APPROVE. OCI deployed.) | Prior S47b: execution/portfolio_tracker.py \u2014 pnl=0.0 false-zero storage rounding: 8 storage locations round(x,2)\u2192round(x,4); L792 _partial_pnl != 0.0 \u2192 abs()>1e-8; 5 display locations unchanged. Full 9-step: Explore 2125L, 10-pt audit, 4/4 board APPROVE, DS/GAI both CONDITIONAL APPROVE, static analysis PASS, cold second-agent PASS, impact radius shown. Commit 5600c70. OCI deployed.) | Prior S47: execution/portfolio_tracker.py \u2014 4 bugs patched: Bug1 get_stats() avg_r_multiple _fill_unverified exclusion+\u00b150R clamp+WARNING on empty+unverified_trades in return dict; Bug2 record_exit() entry\u22640 path sets _fill_unverified=True+pnls filter excludes unverified+verified_trades/unverified_trades added to return dict; Bug3 _load_log() (symbol,entry_time) tuple guard replaces symbol-only double-record detection; Bug8 _load_day_trades() TOCTOU fix+100ms retry+CRITICAL+Slack on corrupt+self._day_trades=[] before Slack. 2049L\u21922124L. All 9 steps. DS+GAI both APPROVE. Commit 0f3aa58. OCI deployed.)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -269,9 +269,11 @@
       "patch_count": 4,
       "sessions": 1,
       "last_patched": "2026-05-16",
-      "open_rc_violations": [],
-      "risk_rating": "HIGH \u2014 4005 lines, RTH execution critical path. S16: RC-4 (pm_exit fill price) + RC-6 (analyst sentiment isinstance). All 8 RC classes now PASS. Decomp plan pending.",
-      "notes": " S22 BUG-#6: _reconcile_pending_overnight_orders() call site \u2014 added filled_qty extraction (getattr order.filled_qty), pdt_count=tracker.get_rolling_day_trade_count(), passed as kwargs to promote_pending_to_active(). py_compile PASS. Startup clean PID 1019546."
+      "open_rc_violations": [
+        "TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252 (CRITICAL \u2014 _reconcile_pending_overnight_orders() at L252-254 directly assigns risk.open_positions = len([t...]) instead of calling risk.register_open(); bypasses CYCLE-SYNC-GUARD monotonic-UP-only constraint from S42; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; patch pending DS/GAI post-RTH)"
+      ],
+      "risk_rating": "HIGH \u2014 265 lines post-decomp (shim/re-export). S47d CRITICAL FINDING: direct risk.open_positions assignment at L252-254. S16: RC-4 (pm_exit fill price) + RC-6 (analyst sentiment isinstance). All 8 RC classes otherwise PASS.",
+      "notes": " S47d: CRITICAL desync bug found at L252-254 \u2014 direct assignment instead of risk.register_open(). Patch queued post-RTH (DS/GAI required, RTH-chain). | S22 BUG-#6: _reconcile_pending_overnight_orders() call site \u2014 added filled_qty extraction (getattr order.filled_qty), pdt_count=tracker.get_rolling_day_trade_count(), passed as kwargs to promote_pending_to_active(). py_compile PASS. Startup clean PID 1019546."
     },
     "execution/fill_reconciler.py": {
       "patch_count": 1,
@@ -384,6 +386,72 @@
     }
   },
   "sessions": [
+    {
+      "date": "2026-06-02",
+      "session": "S47d",
+      "files_read": [
+        "generate_dashboard.py",
+        "monthly_review.py",
+        "reporting/metrics.py",
+        "main.py",
+        "execution/risk_manager.py",
+        "execution/trade_engine.py",
+        "execution/orphan_manager.py",
+        "strategy/run_cycle.py"
+      ],
+      "files_patched": [],
+      "bugs_fixed": [],
+      "bugs_found": [
+        "TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252",
+        "GD-S47D-PL-CACHE-WRITE-GAP",
+        "MR-S47D-DEAD-CODE-LOAD-LIFETIME-PNL"
+      ],
+      "rc_classes": {
+        "generate_dashboard.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS (S36B patches intact)", "RC-4": "N/A",
+          "RC-5": "PASS (atomic tmp→replace)", "RC-6": "PASS", "RC-7": "N/A", "RC-8": "N/A"
+        },
+        "monthly_review.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS (S36B patches intact)", "RC-4": "N/A",
+          "RC-5": "PASS", "RC-6": "N/A", "RC-7": "N/A", "RC-8": "N/A"
+        },
+        "reporting/metrics.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS", "RC-4": "N/A",
+          "RC-5": "N/A", "RC-6": "PASS", "RC-7": "N/A", "RC-8": "N/A"
+        },
+        "main.py": {
+          "RC-1": "MINOR (L771/L813 display-only, non-critical)", "RC-2": "PASS", "RC-3": "MINOR (L229-230 logging setup, non-critical)", "RC-4": "N/A",
+          "RC-5": "N/A", "RC-6": "N/A", "RC-7": "OPEN (pre-existing, deferred)", "RC-8": "PASS"
+        },
+        "execution/risk_manager.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS (L63 intentional board-approved)", "RC-4": "N/A",
+          "RC-5": "PASS", "RC-6": "PASS", "RC-7": "PASS", "RC-8": "N/A"
+        },
+        "execution/trade_engine.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS", "RC-4": "N/A",
+          "RC-5": "PASS", "RC-6": "PASS", "RC-7": "N/A", "RC-8": "N/A",
+          "OPEN": "CRITICAL — TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252"
+        },
+        "execution/orphan_manager.py": {
+          "RC-1": "PASS", "RC-2": "PASS", "RC-3": "PASS (L747-752 acceptable)", "RC-4": "MARGINAL (L481 startup-only)",
+          "RC-5": "PASS", "RC-6": "PASS", "RC-7": "PASS", "RC-8": "N/A"
+        },
+        "strategy/run_cycle.py": {
+          "RC-1": "N/A", "RC-2": "PASS", "RC-3": "PASS (S36 patches intact)", "RC-4": "PASS (L610)",
+          "RC-5": "N/A", "RC-6": "N/A", "RC-7": "N/A", "RC-8": "N/A"
+        }
+      },
+      "board": "4 cold parallel subagents (Kim/McKinney/Harris/Majors) voted on P/L mismatch fix. All 4 MODIFY with 6 mandatory requirements. See tb_audit_log.md header for full detail.",
+      "ds_gai": "Prompts prepared in-session (plain text) for generate_dashboard.py (RTH-chain) and trade_engine.py (RTH-chain). Feedback not yet received — RTH block active. Patches queued for post-RTH.",
+      "investigation_notes": "ROOT CAUSE 1 (P/L mismatch): generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py _load_lifetime_pnl() dead code; stale OCI cache with wrong key 'lifetime_pnl' (should be 'total_pnl'). ROOT CAUSE 2 (desync): trade_engine.py L252-254 direct assignment instead of risk.register_open(). reset_daily() confirmed safe — does NOT reset open_positions. run_cycle.py L824 confirmed as desync trigger during RTH.",
+      "open_items_carried": [
+        "P1: risk.open_positions desync ROOT CAUSE CONFIRMED — trade_engine.py L252-254 direct assignment; patch pending DS/GAI post-RTH",
+        "P1: P/L mismatch — generate_dashboard.py cache write gap + monthly_review.py dead code; board MODIFY; DS/GAI pending for generate_dashboard.py; monthly_review.py patch ready",
+        "P1: MSTR double-record — reconcile_eod.py + portfolio_tracker.py",
+        "P2: BoD-3 log message misleading — main.py L88-94",
+        "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases"
+      ]
+    },
     {
       "date": "2026-06-02",
       "session": "S47c",
