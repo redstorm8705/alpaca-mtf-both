@@ -279,7 +279,7 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
                     per_trade.append({
                         "symbol": sym, "side": "short",
                         "qty": cover, "entry": lot["price"],
-                        "exit": price, "pnl": round(pnl, 2),
+                        "exit": price, "pnl": round(pnl, 4),  # 4dp storage
                         "filled_at": filled_at,
                     })
                     lot["qty"] -= cover
@@ -305,7 +305,7 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
                     per_trade.append({
                         "symbol": sym, "side": "long",
                         "qty": sell, "entry": lot["price"],
-                        "exit": price, "pnl": round(pnl, 2),
+                        "exit": price, "pnl": round(pnl, 4),  # 4dp storage
                         "filled_at": filled_at,
                     })
                     lot["qty"] -= sell
@@ -582,10 +582,10 @@ class PortfolioTracker:
                 _entry_px, symbol, _partial_pnl,
             )
             _new_pnl_remaining = 0.0
-            _new_total_pnl     = round(_partial_pnl, 2)
+            _new_total_pnl     = round(_partial_pnl, 4)  # 4dp storage
         else:
-            _new_pnl_remaining = round((exit_price - _entry_px) * _qty * _dir_mult, 2)
-            _new_total_pnl     = round(_new_pnl_remaining + _partial_pnl, 2)
+            _new_pnl_remaining = round((exit_price - _entry_px) * _qty * _dir_mult, 4)
+            _new_total_pnl     = round(_new_pnl_remaining + _partial_pnl, 4)  # 4dp
 
         _delay_secs = 0.0
         try:
@@ -789,7 +789,7 @@ class PortfolioTracker:
             _pnl_rem         = t.get("pnl_remaining")
             if (
                 _entry_date and _entry_date < today
-                and _partial_pnl != 0.0
+                and abs(_partial_pnl) > 1e-8  # float exact-zero guard
                 and _partial_exit_dt
                 and _partial_exit_dt < today
                 and _pnl_rem is not None
@@ -1452,7 +1452,8 @@ class PortfolioTracker:
         trade["partial_exit_price"] = exit_price
         trade["partial_exit_time"]  = datetime.now(_PT).isoformat()
         # accumulate across all tranches
-        trade["partial_pnl"]        = round(trade.get("partial_pnl", 0.0) + pnl, 2)
+        # 4dp storage: prevents false-zero accumulation on tiny P&L
+        trade["partial_pnl"]        = round(trade.get("partial_pnl", 0.0) + pnl, 4)
 
         self._save_log()
         logger.info(
@@ -1575,7 +1576,7 @@ class PortfolioTracker:
         # partial_pnl accumulates across T1/T2/T3 tranches in record_partial_exit().
         # Without this, partial profits are silently erased from win/loss stats,
         # daily P&L, and kill switch calculations.
-        _total_pnl   = round(pnl + _partial_pnl, 2)
+        _total_pnl   = round(pnl + _partial_pnl, 4)  # 4dp storage
 
         # pnl_pct uses original full position value for accurate return measurement.
         # Use pre-validated _original_qty — avoids corrupt pnl_pct if
@@ -1587,7 +1588,7 @@ class PortfolioTracker:
             "exit_reason":   reason,
             "pnl":           _total_pnl,
             # final-close portion only (for audit)
-            "pnl_remaining": round(pnl, 2),
+            "pnl_remaining": round(pnl, 4),  # 4dp storage
             "pnl_pct":       (
                 round((_total_pnl / (entry * _orig_qty)) * 100, 2)
                 if entry > 0 and _orig_qty > 0 else 0.0
