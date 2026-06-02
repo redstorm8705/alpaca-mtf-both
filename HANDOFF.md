@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-01 S46 (post-RTH) | **S46: main.py S44-BUG-6 DEPLOYED ✅ — rsync + restart at 1:41 PM PT. OCI log confirmed OVERNIGHT_ENTRIES_ENABLED=False (profile: paper). P0 fill_correction = PHANTOM (function does not exist). P0 EOD P&L blind = PHANTOM (risk_manager.py full read: dual kill-switch protection confirmed). Real P0: fill_helpers.py sort tie-breaker + 100ms guard (CCR-blocked, Board B FAIL).**
+**Updated:** 2026-06-02 S47 | **S47: fill_helpers.py P5-H2 PATCHED + DEPLOYED ✅ — `_query_fills()` 3 changes: direction="asc", 50ms grace margin (submitted_after-0.05), created_at ASC sort replaces filled_at DESC. DS+GAI APPROVE. Commit 1adc1cb. CCR "Nightly Autonomous Work" rescheduled to 3 PM PT / 6 PM ET (was 10 PM ET). | S46: main.py S44-BUG-6 DEPLOYED ✅ — OVERNIGHT_ENTRIES_ENABLED fix. P0 fill_correction = PHANTOM. P0 EOD P&L blind = PHANTOM (downgraded P3).**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -46,7 +46,7 @@
 
 > **Source:** 8 Gemini midday + nightly reports. All synthesized S44. CCR tonight will process RTH-chain items through full 9-step sequence. Non-RTH items eligible for direct autonomous apply.
 
-- [ ] **P0: fill_helpers.py sort tie-breaker + 100ms post-filter (CCR-blocked)** — `execution/fill_helpers.py` (RTH-chain). CCR Board B FAIL (2026-06-01): 3rd-attempt retry (proposed fix for FILL UNVERIFIED fallback) increases stale-fill crosstalk risk — `(filled_at, order_id)` sort tie-breaker needed, plus post-filter guard (reject fill where `filled_at` not strictly > `submitted_after + 100ms`). Board A FAIL (minor line count). Board C PASS. CCR fix requirements logged in `logs/queued_for_review_2026-06-01.md`. **Action: full read of fill_helpers.py (212L) → 10-pt audit → board vote with revised patch → DS/GAI → apply.**
+- [x] **P0: fill_helpers.py P5-H2 fill crosstalk — PATCHED + DEPLOYED S47 ✅** — `execution/fill_helpers.py` (RTH-chain). Root cause: `filled_at` DESC sort non-deterministic for sub-second rapid re-entry (close T0, re-entry T0+50ms). Fix: 3 changes to `_query_fills()`: (1) `direction="asc"` on GetOrdersRequest — oldest-first pagination; (2) `submitted_after - 0.05` — 50ms NTP grace margin; (3) sort key `(created_at ASC, id)` `reverse=False` — close order always created before re-entry. DS APPROVE (50ms critical). GAI APPROVE (direction="asc" needed). py_compile PASS / mypy 0 errors / ruff PASS. Commit 1adc1cb. OCI deployed, all 4 services active.
 
 - [x] **P0: fill_correction math wrong → PHANTOM BUG (downgraded P2)** — `fill_correction` function does NOT exist anywhere in the codebase (not in fill_helpers.py, fill_reconciler.py, or portfolio_tracker.py — all 3 fully read S46). Gemini hallucinated the function name. `patch_exit_pnl()` in portfolio_tracker.py reviewed: math is correct per Explore agent. Reopen only if MSTR double-record reproduces with real fill data.
 
@@ -89,7 +89,7 @@
 - **Usage-reset (one-time):** `trig_015BE5S4bmQtajwZmcLrSbGt` — fired 2026-05-26T02:55:00Z → https://claude.ai/code/routines/trig_015BE5S4bmQtajwZmcLrSbGt
 - **Nightly CCR (OLD — DISABLED):** `trig_01GHKQufnHRykVL9Xypqeee4` — `0 7 * * *` — DEAD (`auto_disabled_repo_access` — wrong username typo in URL)
 - **Board Review CCR:** `trig_01B37951UHsX2NAsCvrJuHNK` — weekdays 5:30 PM ET — 4 parallel domain agents → board verdict → **NOW POSTS TO SLACK** (Step 4 added S43C) → https://claude.ai/code/routines/trig_01B37951UHsX2NAsCvrJuHNK
-- **Nightly Autonomous Work CCR (UPDATED S43C2):** `trig_01NctUPEvjM1TVDH3vgJ2bmw` — weeknights 10 PM ET (2 AM UTC) — **RE-ENABLED with safety measures:** (1) reads handoff.md + tb_audit_log.md for priorities (NOT Gist — Gist approach rejected by DS+GAI); (2) RTH-classification gate: non-RTH files only for autonomous apply; RTH-chain files → queue only; (3) broker.py + config.py HARD EXCLUDED; (4) forbidden categories: threading/asyncio, order routing, credential handling, state persistence writes, stop/target logic; (5) 3 adversarial board agents 3/3 PASS required (Strict Parser/Red Teamer/Quant Risk Manager); (6) pytest required; (7) 1 file/night limit; (8) queue mechanism: logs/queued_for_review_YYYY-MM-DD.md → Slack alert → Slack summary → https://claude.ai/code/routines/trig_01NctUPEvjM1TVDH3vgJ2bmw
+- **Nightly Autonomous Work CCR (RESCHEDULED S47):** `trig_01NctUPEvjM1TVDH3vgJ2bmw` — **weekdays 3 PM PT / 6 PM ET (22:00 UTC) — was 10 PM ET** — Runs after auto_ai_audit.py (1:35 PM PT) completes, before user's 6 PM PT threshold. **RE-ENABLED with safety measures:** (1) reads handoff.md + tb_audit_log.md for priorities; (2) RTH-classification gate: non-RTH files only for autonomous apply; RTH-chain files → queue only; (3) broker.py + config.py HARD EXCLUDED; (4) forbidden categories: threading/asyncio, order routing, credential handling, state persistence writes, stop/target logic; (5) 3 adversarial board agents 3/3 PASS required; (6) pytest required; (7) 1 file/night limit; (8) queue mechanism → Slack summary → https://claude.ai/code/routines/trig_01NctUPEvjM1TVDH3vgJ2bmw
 
 ### Full Daily Pipeline (Mon–Fri) — UPDATED S44
 | Time ET | What | Output |
@@ -99,7 +99,7 @@
 | 4:35 PM | auto_ai_audit.py --meta-audit (DS + Gemini) | meta_audit_latest.json + Gist + **Slack** |
 | 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack |
 | 5:30 PM | Board Review CCR (4 agents) | Board verdict + **Slack** |
-| 10:00 PM | Nightly Autonomous Work CCR | Full 9-step audit → RTH-chain: `pending_ds_gai_*.json` + `.patch` → GitHub + Slack |
+| 3:00 PM PT / 6 PM ET | Nightly Autonomous Work CCR (**RESCHEDULED S47**) | Full 9-step audit → RTH-chain: `pending_ds_gai_*.json` + `.patch` → GitHub + Slack |
 | 11:00 PM | autonomous_review.py (OCI cron, NEW S44) | Calls DS + Gemini → `pending_approvals_*.md` → GitHub + Slack "ready for approval" |
 | 11:30 PM | auto_deploy.sh (OCI cron, shifted S44) | git pull → restart services if new non-RTH commits |
 
