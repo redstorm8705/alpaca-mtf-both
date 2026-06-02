@@ -115,17 +115,26 @@ def fetch_actual_fill_price(
                 status=QueryOrderStatus.CLOSED,
                 symbols=[symbol],
                 limit=5,
+                direction="asc",  # P5-H2: oldest-first; aligns pagination with ASC sort
             )
             if submitted_after is not None:
+                # 50ms grace margin: absorbs OCI↔Alpaca NTP clock drift without
+                # pulling in prior same-symbol closes (DS Q5; 2.0s rejected — too wide)
                 _req_kwargs["after"] = datetime.fromtimestamp(
-                    submitted_after, tz=timezone.utc
+                    submitted_after - 0.05, tz=timezone.utc
                 )
             _req = GetOrdersRequest(**_req_kwargs)
             _ords = _tc.get_orders(filter=_req)
             for _o in sorted(
                 _ords,
-                key=lambda x: str(getattr(x, "filled_at", "") or ""),
-                reverse=True,
+                # P5-H2 fix: sort by creation time ASC — close order was created
+                # before re-entry order; first filled result is the close fill.
+                # None created_at → "9999-12-31" (sinks to bottom, never wins ASC sort)
+                key=lambda x: (
+                    str(getattr(x, "created_at", None) or "9999-12-31"),
+                    str(getattr(x, "id", "") or ""),
+                ),
+                reverse=False,
             ):
                 _fp = getattr(_o, "filled_avg_price", None)
                 if _fp:
