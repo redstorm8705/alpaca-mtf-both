@@ -411,9 +411,23 @@ class PortfolioTracker:
                             if _sym:
                                 self._unverified_exits.setdefault(_sym, []).append(_t)
                     # Restore open trades if bot restarted mid-session
+                    # S47 Bug3 guard (GAI): match on (symbol, entry_time), not
+                    # symbol alone — same-day re-entry has a different entry_time
+                    # and must NOT warn (symbol-only check causes false positives).
+                    _closed_entry_keys = {
+                        (t.get("symbol"), t.get("entry_time"))
+                        for t in self.closed_trades
+                    }
                     for t in data.get("open", []):
                         sym = t.get("symbol")
                         if sym:
+                            if (sym, t.get("entry_time")) in _closed_entry_keys:
+                                logger.warning(
+                                    "[%s] _load_log: same entry_time in open "
+                                    "AND closed — double-record (failed pop)? "
+                                    "Keeping open. Verify reconcile_eod.py.",
+                                    sym,
+                                )
                             self.open_trades[sym] = t
             except Exception as e:
                 logger.warning(f"Could not load trade log: {e}")
@@ -685,8 +699,13 @@ class PortfolioTracker:
         return found
 
     def _load_day_trades(self):
-        """Load persisted day trades from disk. Called at startup."""
-        if DAY_TRADES_FILE.exists():
+        """Load persisted day trades from disk. Called at startup.
+
+        S47 Bug8: removed TOCTOU exists()→open() race (GAI); added 100ms retry
+        for transient write-lock collisions (DS+GAI); CRITICAL+Slack on genuine
+        corruption; self._day_trades=[] set before Slack call (DS).
+        """
+        for _attempt in range(2):
             try:
                 with open(DAY_TRADES_FILE) as f:
                     self._day_trades = json.load(f)
@@ -696,11 +715,33 @@ class PortfolioTracker:
                     f" in rolling window "
                     f"({len(self._day_trades)} total records)"
                 )
-            except Exception as e:
-                logger.warning(f"Could not load day trades file: {e}")
+                return
+            except FileNotFoundError:
                 self._day_trades = []
-        else:
-            self._day_trades = []
+                return  # fresh install — correct, no alert needed
+            except Exception as e:
+                if _attempt == 0:
+                    _time_mod.sleep(0.1)   # 100ms retry: transient write-lock collision
+                    continue
+                # Second attempt failed — file is genuinely corrupt
+                self._day_trades = []   # set first: state consistent before Slack
+                logger.critical(
+                    "PDT day_trades file corrupt or unreadable after retry: %s — "
+                    "resetting PDT counter to empty. "
+                    "PDT state is UNKNOWN. Verify manually before next trade.",
+                    e,
+                )
+                try:
+                    from alerts import send_slack as _dt_slack
+                    _dt_slack(
+                        f":rotating_light: CRITICAL: PDT day_trades file unreadable "
+                        f"({e}). PDT counter reset to empty. "
+                        f"PDT state UNKNOWN — verify manually."
+                    )
+                except Exception as _dt_slack_err:
+                    logger.warning(
+                        "PDT corruption Slack alert failed: %s", _dt_slack_err
+                    )
 
     def _save_day_trades(self):
         """Atomically save day trades to disk."""
@@ -1520,8 +1561,12 @@ class PortfolioTracker:
 
         # BUG-5: if entry=0.0 (corrupt/never-promoted trade), force pnl=0.0.
         # Without this guard, pnl = (exit_price - 0.0) * qty = gross proceeds as profit.
+        # S47 Bug2: set _fill_unverified=True so patch_exit_pnl() routes this to the
+        # entry=0 guard at L564–574 (preserves partial_pnl only) and excludes this
+        # trade from get_stats() denominators until reconciled (DS+GAI S47).
         if entry <= 0:
             pnl = 0.0
+            trade["_fill_unverified"] = True
         else:
             pnl = (exit_price - entry) * qty if direction == "long" \
                   else (entry - exit_price) * qty
@@ -1900,7 +1945,14 @@ class PortfolioTracker:
         import math
         import statistics as _stats
 
-        pnls   = [t["pnl"] for t in self.closed_trades]
+        # S47 Bug2: exclude _fill_unverified trades from stats denominators.
+        # Unverified fills have pnl=$0.00 (forced by entry=None guard in record_exit
+        # or by fetch_actual_fill_price fallback) — including them inflates total_trades
+        # and skews win_rate/Sharpe without contributing real signal (DS+GAI S47).
+        pnls   = [
+            t["pnl"] for t in self.closed_trades
+            if not t.get("_fill_unverified")
+        ]
         wins   = [p for p in pnls if p > 0]
         # Exclude breakeven (pnl=0.0) from losses and the win_rate denominator.
         # DS+GAI consensus S20: scratches are not risk outcomes; including them
@@ -1924,23 +1976,47 @@ class PortfolioTracker:
                 (mean_pnl / downside_std) * math.sqrt(252), 3
             ) if downside_std > 0 else 0
 
+        # S47 Bug1: count unverified before loop so it's available for return dict and
+        # warning log even if r_multiples ends up empty.
+        _unverified_count = sum(
+            1 for t in self.closed_trades if t.get("_fill_unverified")
+        )
         r_multiples = []
         for t in self.closed_trades:
+            if t.get("_fill_unverified"):       # S47 Bug1: exclude — pnl unreliable
+                continue
             entry         = t.get("entry_price") or 0
             # fallback for legacy trades
             original_stop = t.get("original_stop") or t.get("stop") or 0
             pnl           = t.get("pnl") or 0
             qty           = t.get("qty") or 1
             risk_per_share = abs(entry - original_stop)
-            if risk_per_share > 0 and qty > 0:
-                # Use total position PnL / (original risk per share × qty) so partial
-                # exits are included and a trailed stop doesn't inflate R.
-                r_multiples.append(pnl / (risk_per_share * qty))
+            if risk_per_share <= 0 or qty <= 0:
+                continue
+            _r = pnl / (risk_per_share * qty)
+            # ±50R clamp: prevents scratch-stop / corrupt-stop R explosion from
+            # distorting avg_r_multiple (DS+GAI S47 — ±50R covers all realistic
+            # paper-account outcomes; any |R|>50 is corrupt data, not a real trade).
+            r_multiples.append(max(-50.0, min(50.0, _r)))
 
-        avg_r = round(sum(r_multiples) / len(r_multiples), 3) if r_multiples else 0
+        if r_multiples:
+            avg_r = round(sum(r_multiples) / len(r_multiples), 3)
+        else:
+            avg_r = 0
+            if self.closed_trades:
+                logger.warning(
+                    "get_stats: no verified R-multiples (%d trades total, "
+                    "%d unverified). avg_r_multiple=0 — Kelly will use "
+                    "minimum sizing until verified trades accumulate.",
+                    len(self.closed_trades), _unverified_count,
+                )
 
         return {
-            "total_trades":   len(pnls),
+            # S47 Bug2: total_trades = ALL closed (for audit); verified_trades and
+            # unverified_trades let callers distinguish clean vs dirty subsets.
+            "total_trades":     len(self.closed_trades),
+            "verified_trades":  len(pnls),
+            "unverified_trades": _unverified_count,
             "win_rate":       (
                 round(len(wins) / (len(wins) + len(losses)) * 100, 1)
                 if (wins or losses) else 0.0
