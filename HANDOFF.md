@@ -108,8 +108,8 @@
 | 4:15 PM Fri | weekly_perf_audit.py | weekly_perf_audit_YYYY-WNN.html + Slack |
 | 5:30 PM | Board Review CCR (4 agents) | Board verdict + **Slack** |
 | 3:00 PM PT / 6 PM ET | Nightly Autonomous Work CCR (**RESCHEDULED S47**) | Full 9-step audit → RTH-chain: `pending_ds_gai_*.json` + `.patch` → GitHub + Slack |
-| 11:00 PM | autonomous_review.py (OCI cron, NEW S44) | Calls DS + Gemini → `pending_approvals_*.md` → GitHub + Slack "ready for approval" |
-| 11:30 PM | auto_deploy.sh (OCI cron, shifted S44) | git pull → restart services if new non-RTH commits |
+| 7:30 PM ET | autonomous_review.py (OCI cron, **RESCHEDULED S47e**) | Calls DS + Gemini → `pending_approvals_*.md` → GitHub + Slack "ready for approval" |
+| 8:00 PM ET | auto_deploy.sh (OCI cron, **RESCHEDULED S47e**) | git pull → restart services if new non-RTH commits |
 
 **Session-start approval flow (NEW S44):**
 When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered patch list with DS/GAI verdicts → say "approved #N" → SHA256 verify → `git apply` → static analysis → rsync → health check → auto-rollback on failure.
