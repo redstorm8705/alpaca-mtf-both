@@ -3739,3 +3739,16 @@ Four threats checked:
 - All 8 RC (post-patch): RC-1 PASS, RC-2 PASS, RC-3 PASS, RC-4 PARTIAL (pre-existing L660 fallback — unchanged), RC-5 N/A, RC-6 N/A, RC-7 PASS, RC-8 PARTIAL (pre-existing by-design)
 
 **Status: ✅ AUDITED + PATCHED — S47c P1 BUCKET_B power_hour expansion fix DEPLOYED**
+
+## reconcile_eod.py — RC-3 dead code removal — 2026-06-03 (Nightly CCR)
+
+**Audit:** Full read 589L (post-patch; 612L pre-patch), 2 chunks.
+**Finding:** _parse_fill_ts (L135) and _parse_tracker_ts (L146) were dead code with silent `except (ValueError, TypeError): return None` — RC-3 violations. Zero callers (AST-confirmed). No external importers.
+**Prior fix:** commit 35ef70f already resolved RC-3 at L221/L243 (_weighted_avg_exit_price — WARNING + skip counter).
+**This fix:** Remove both dead code functions entirely (22 lines removed → 589L).
+**RC-3 status:** PASS (no remaining silent exception blocks in active code paths)
+**Board:** A=PASS | B=PASS | C=PASS
+**Static:** py_compile PASS | mypy PASS | ruff PASS
+**Second-agent:** PASS
+**Tests:** 6/6 PASS
+**MSTR P1 note:** `_fifo_reconstruct` function referenced in handoff.md P1 does NOT EXIST in reconcile_eod.py — PHANTOM BUG. Queued for user clarification.

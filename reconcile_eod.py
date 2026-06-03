@@ -133,29 +133,6 @@ def _fetch_fills(date_str: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Fill matching helpers
 # ---------------------------------------------------------------------------
-def _parse_fill_ts(fill: dict) -> datetime | None:
-    """Parse transaction_time from fill activity into an aware datetime."""
-    raw = fill.get("transaction_time") or fill.get("filled_at") or ""
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return dt.astimezone(_ET)
-    except (ValueError, TypeError):
-        return None
-
-def _parse_tracker_ts(ts_str: str | None) -> datetime | None:
-    """Parse exit_time from EOD trade record."""
-    if not ts_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(ts_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_ET)
-        return dt.astimezone(_ET)
-    except (ValueError, TypeError):
-        return None
-
 def _match_fills_to_trade(trade: dict, fills: list[dict]) -> list[dict]:
     """
     Find fills that match this trade's symbol + exit side.
