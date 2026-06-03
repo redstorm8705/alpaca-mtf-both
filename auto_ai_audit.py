@@ -1176,6 +1176,19 @@ def _run_audit(
         # Push to GitHub Gist so board CCR can fetch without IP allowlist issues
         _push_to_gist(output)
 
+        # S47e: Write local meta_audit_latest.json as guaranteed fallback.
+        # /var/www/mtf-bot/ may not exist; Gist requires GITHUB_GIST_TOKEN.
+        # This ensures board CCR always reads current data via logs/ path.
+        _local_latest = _LOGS_DIR / "meta_audit_latest.json"
+        try:
+            _atomic_write_json(_local_latest, output)
+            print(f"[auto_ai_audit] 📄 Local latest pointer written: {_local_latest.name}")
+        except Exception as _mle:  # noqa: BLE001
+            print(
+                f"[auto_ai_audit] ⚠️  Local latest pointer write failed: {_mle}",
+                file=sys.stderr,
+            )
+
     # ── Print raw responses ───────────────────────────────────────────────
     print()
     print("=" * 72)
