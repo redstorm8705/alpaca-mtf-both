@@ -243,15 +243,41 @@ def _reconcile_pending_overnight_orders(tracker: PortfolioTracker, risk: "RiskMa
             if "filled" in status:
                 fill_price = float(getattr(order, "filled_avg_price", None) or trade["limit_price"])
                 filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
-                pdt_count  = tracker.get_rolling_day_trade_count()
+                pdt_count    = tracker.get_rolling_day_trade_count()
+                # S47d: Capture pre-promote status so register_open() fires exactly once
+                # per genuine pending_overnight→open transition.
+                # promote_pending_to_active() is idempotent (status guard): if already
+                # promoted on a prior cycle, pre=="open" → gate fails → no double-increment.
+                # CALL-ORDER INVARIANT: _reconcile_pending_overnight_orders runs BEFORE
+                # sync_from_tracker() at startup (main.py startup sequence) — register_open()
+                # increments from the base established by sync_from_tracker on prior startup.
+                _pre_status  = trade.get("status", "")
                 tracker.promote_pending_to_active(
                     symbol, fill_price,
                     filled_qty=filled_qty,
                     pdt_used=pdt_count,
                 )
-                risk.open_positions = len(
-                    [t for t in tracker.open_trades.values() if t.get("status") == "open"]
-                )
+                _post_status = tracker.open_trades.get(symbol, {}).get("status", "")
+                if _pre_status == "pending_overnight" and _post_status == "open":
+                    risk.register_open()
+                    logger.info(
+                        "[%s] Overnight fill promoted — risk.register_open()"
+                        " → open_positions=%d",
+                        symbol, risk.open_positions,
+                    )
+                else:
+                    if _pre_status == "pending_overnight" and _post_status != "open":
+                        logger.warning(
+                            "[%s] UNEXPECTED: promote post-status=%s"
+                            " — register_open SKIPPED (possible open_positions undercount)",
+                            symbol, _post_status,
+                        )
+                    else:
+                        logger.debug(
+                            "[%s] promote_pending_to_active no-op (pre=%s post=%s)"
+                            " — register_open skipped",
+                            symbol, _pre_status, _post_status,
+                        )
             elif status in ("cancelled", "expired", "replaced"):
                 logger.info(f"[{symbol}] Overnight order {status} — removing from tracker")
                 tracker.cancel_pending_entry(symbol)
