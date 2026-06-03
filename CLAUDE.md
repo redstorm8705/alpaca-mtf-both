@@ -32,7 +32,7 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 | **1** | **Full Read Gate** — file >1000 lines: Explore subagent, full read, every line. File ≤1000 lines: Read tool in chunks, every line. No grep. No partial reads. No "bug finding" agents that skip this step. Declare "Full read complete: N lines" before any analysis. | No analysis until declared |
 | **2** | **10-Point Audit + RC-1 through RC-8** — all 10 points, all 8 RC classes, every file. Write results to `logs/tb_audit_log.md`. | No patch proposed until written |
 | **3** | **Board Vote** — full board (BoD + AB + TB) for strategy changes; domain-specific for features. Independent Explore subagents, cold, in parallel. Never inline roleplay. Board votes on audit findings — not on a patch already written. | No patch proposed until vote complete |
-| **4** | **DS + GAI External Audit** — required for ANY new or modified code that (a) affects RTH execution and (b) is not read-only. This includes all hotspot files (`main.py`, `broker.py`, `portfolio_tracker.py`) AND any other file where new non-read-only logic runs during RTH — regardless of file name, size, or "wrapper" status. File name and hotspot classification are NOT the gate; RTH execution impact is the gate. User shares draft code with DS + GAI (same prompt, both reviewers). Their feedback (audit findings only — DS/GAI have no mandate authority; user decides) returns before any edit tool is called. | No edit until feedback received |
+| **4** | **DS + GAI External Audit** — required for ANY new or modified code that (a) affects RTH execution and (b) is not read-only. This includes all hotspot files (`main.py`, `broker.py`, `portfolio_tracker.py`) AND any other file where new non-read-only logic runs during RTH — regardless of file name, size, or "wrapper" status. File name and hotspot classification are NOT the gate; RTH execution impact is the gate. **Claude runs this autonomously via direct API (see DS/GAI DIRECT API PROTOCOL below) — user NEVER needs to manually prompt DS or GAI.** Their feedback (audit findings only — DS/GAI have no mandate authority; user decides) returns before any edit tool is called. | No edit until feedback received |
 | **5a** | **Static Analysis Gate** — run on the draft patch for EVERY file, no exceptions: `python3 -m py_compile [file]`, `python3 -m mypy --warn-unreachable [file]`, `ruff check --select E,W,F,B [file]`. All three must pass clean. Output shown to user. | No patch proposed if any fail |
 | **5b** | **Cold Second-Agent Logic Review** — spawn a cold Explore subagent with the exact diff + original intent. Agent explicitly checks: (1) logic inversion, (2) off-by-one/boundary errors, (3) missing conditions. Returns PASS/FAIL. Applies to ALL files, ALL patches. | No patch proposed until PASS returned |
 | **5c** | **code-review-graph Impact Analysis** — run `detect_changes_tool` + `get_impact_radius_tool` on every changed file. Show user which dependent functions are affected. | No patch proposed until complete |
@@ -40,6 +40,42 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 | **7** | **User Approval** — user says "approved." This is the sole required gate. "Approved" implies confirmed — Claude writes immediately without asking a second confirmation question. | No edit without approval |
 | **8** | **Apply, Rsync, Restart** | |
 | **9** | **Post-Patch Verification** — re-run audit points 1, 2, 4, 5. Run mypy + ruff again on patched file. Confirm no regressions. Update `logs/tb_audit_log.md`. | Item not closed until verified |
+
+---
+
+### DS/GAI DIRECT API PROTOCOL — MANDATORY (Established S47e, 2026-06-03)
+
+**Claude runs DS and GAI autonomously via direct API. User NEVER needs to manually prompt DS or GAI.**
+
+**Browser automation is CONFIRMED BROKEN** — DeepSeek and AI Studio are React/Angular SPAs. Background tabs don't render DOM content; Chrome extension security blocks `innerHTML`/`TreeWalker` access. Direct API is the ONLY reliable approach.
+
+**DeepSeek (DS):**
+```bash
+source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env
+curl https://api.deepseek.com/v1/chat/completions \
+  -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-chat","messages":[{"role":"system","content":"<DS_PERSONA>"},{"role":"user","content":"<PROMPT>"}],"max_tokens":4096}'
+```
+- Model: `deepseek-chat` (OpenAI-compatible endpoint)
+- DS persona: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
+
+**Gemini (GAI):**
+```bash
+source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env
+curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"contents":[{"parts":[{"text":"<GAI_PERSONA>\n\n<PROMPT>"}]}],"generationConfig":{"maxOutputTokens":8192}}'
+```
+- Model: `gemini-2.5-flash` (NOT gemini-1.5-pro-latest → 404; NOT gemini-2.5-pro → MAX_TOKENS at 4096)
+- `maxOutputTokens: 8192` is mandatory — flash hits STOP at ~7031 chars (complete response); 4096 truncates mid-answer
+- GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
+
+**API Keys** (in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env`):
+- `DEEPSEEK_API_KEY=sk-2a65640190aa4fd38793a0beba7c56b3`
+- `GEMINI_API_KEY=AIzaSyB902ZD2XQ0HVu_LIXU4KMkyYcSE8QUzPg`
+
+**Same prompt to both:** DS and GAI must always receive the EXACT SAME comprehensive prompt (DS/GAI Same Prompt Rule). Never split questions.
 
 ---
 

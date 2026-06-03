@@ -181,11 +181,11 @@ def _load_alpaca():
             ],
             "orders":[
                 {
-                    "symbol":       o["symbol"],
-                    "side":         o["side"],
-                    "qty":          o["qty"],
-                    "type":         o["order_type"],
-                    "status":       o["status"],
+                    "symbol":       o.get("symbol", "?"),
+                    "side":         o.get("side", "?"),
+                    "qty":          o.get("qty", "?"),
+                    "type":         o.get("type") or o.get("order_type", "unknown"),
+                    "status":       o.get("status", "?"),
                     "submitted_at": o.get("submitted_at", ""),
                 }
                 for o in raw_o[:15]
@@ -410,6 +410,36 @@ def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, mar
     all_pnl    = _lt.get("total_pnl", round(float(equity) - 2500.0, 2))
     all_wr     = _lt.get("win_rate", 0.0)
     all_trades = _lt.get("total_trades", 0)
+
+    # S47e: Write lifetime P&L cache so monthly_review.py reads current data.
+    # Only write when total_pnl is not None — prevents poison writes when
+    # compute_lifetime_stats raises and returns {}. Zero P&L (0.0) correctly
+    # persists (0.0 is not None → True). bool({}) == False guards empty dict.
+    _total_pnl_val = _lt.get("total_pnl") if _lt else None
+    if _lt and _total_pnl_val is not None:
+        try:
+            _lt_cache_path = LOG_DIR / "lifetime_pnl_cache.json"
+            _lt_tmp = _lt_cache_path.with_suffix(".tmp")
+            _lt_tmp.write_text(
+                json.dumps({
+                    "total_pnl":    round(float(_total_pnl_val), 4),
+                    "win_rate":     round(float(_lt.get("win_rate", 0.0)), 2),
+                    "total_trades": int(_lt.get("total_trades", 0)),
+                    "ts":           datetime.now(ET).isoformat(),
+                }, indent=2),
+                encoding="utf-8",
+            )
+            _lt_tmp.replace(_lt_cache_path)
+            logger.info(
+                "_build_html: lifetime_pnl_cache written — total_pnl=%.4f",
+                _total_pnl_val,
+            )
+        except Exception as _lt_cache_e:
+            logger.warning(
+                "_build_html: lifetime_pnl_cache write failed"
+                " — monthly_review.py will use stale/compute fallback: %s",
+                _lt_cache_e,
+            )
 
     # Unrealized P&L: from Alpaca's live open position data.
     # Filtered to symbols the bot has open so re-entries aren't double-counted.
