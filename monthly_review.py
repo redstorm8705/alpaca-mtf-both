@@ -64,19 +64,36 @@ def _load_eod(d: date) -> dict | None:
         return None
 
 
-def _load_lifetime_pnl() -> dict:
-    """Read lifetime P&L cache written by generate_dashboard.py."""
+def _load_lifetime_pnl() -> dict | None:
+    """Read lifetime P&L cache written by generate_dashboard.py.
+    Returns the cache dict only when the required "total_pnl" key is present.
+    Returns None if file missing, parse error, or key mismatch — triggers
+    fallback to compute_lifetime_stats() in callers.
+    """
     path = os.path.join(LOGS_DIR, "lifetime_pnl_cache.json")
     if not os.path.exists(path):
-        return {}
+        return None
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if not isinstance(data, dict) or "total_pnl" not in data:
+            logger.warning(
+                "_load_lifetime_pnl: cache missing 'total_pnl' key"
+                " — falling back to compute_lifetime_stats(). keys=%s",
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
+            return None
+        logger.info(
+            "_load_lifetime_pnl: cache hit — total_pnl=%.2f ts=%s",
+            data.get("total_pnl", 0.0),
+            data.get("ts", "?"),
+        )
+        return data
     except Exception as _lt_pnl_err:
         logger.warning(
             "_load_lifetime_pnl: JSON parse failed parsing %s — %s", path, _lt_pnl_err
         )
-        return {}
+        return None
 
 
 def _month_days(year: int, month: int) -> list[date]:
@@ -294,7 +311,10 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
 
     # Lifetime P&L banner — Alpaca-sourced via compute_lifetime_stats()
     # (equity - $2,500 initial, same code path as dashboard and weekly review)
-    _lt_data   = compute_lifetime_stats()
+    _raw_cache = _load_lifetime_pnl()
+    _lt_data   = _raw_cache if _raw_cache is not None else compute_lifetime_stats()
+    logger.info("monthly_review._build_html: lifetime_pnl_source=%s",
+                "cache" if _raw_cache is not None else "compute_lifetime_stats")
     _lt_pnl    = float(_lt_data.get("total_pnl", 0.0))
     _lt_trades = int(_lt_data.get("total_trades", 0))
     _lt_wr     = float(_lt_data.get("win_rate", 0.0))
