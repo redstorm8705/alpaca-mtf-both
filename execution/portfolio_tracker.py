@@ -428,6 +428,22 @@ class PortfolioTracker:
                                     "Keeping open. Verify reconcile_eod.py.",
                                     sym,
                                 )
+                            # S47f Phase 2a.5: Route externally-closed phantom to
+                            # closed_trades. Prevents Day 2 entry rejection caused
+                            # by a position that closed on Alpaca overnight but was
+                            # never removed from open_trades (GTC stop while down).
+                            if t.get("_fifo_reconciled_closed"):
+                                _t_key = (sym, t.get("entry_time"))
+                                if _t_key not in _closed_entry_keys:
+                                    self.closed_trades.append(t)
+                                    _closed_entry_keys.add(_t_key)
+                                logger.info(
+                                    "[%s] _load_log: _fifo_reconciled_closed=True"
+                                    " — routed to closed_trades (external close,"
+                                    " P&L needs manual verification).",
+                                    sym,
+                                )
+                                continue
                             self.open_trades[sym] = t
             except Exception as e:
                 logger.warning(f"Could not load trade log: {e}")
@@ -1152,6 +1168,149 @@ class PortfolioTracker:
         summary["pdt_slots_used"]   = [
             t for t in self._day_trades if t.get("symbol") != "SYNC"
         ]
+        # ── S47f Phase 2a.5: FIFO-driven overnight reconciliation ────────────────
+        # Detects overnight positions that closed on Alpaca while the bot was down
+        # (e.g. GTC stop fired) by comparing self.open_trades against _alpaca_lots
+        # (FIFO remaining lots). Any overnight-flagged symbol absent from _alpaca_lots
+        # has fully closed; we reconcile via record_exit() so it is correctly absent
+        # from overnight_holds below.
+        # Guards: _alpaca_pnl is not None (FIFO call succeeded); not _a4_gap (no
+        # paper-API 0-fill anomaly that would make _alpaca_lots unreliable).
+        # Q5: explicit catastrophe guard when both data structures are empty despite
+        #     overnight positions (upstream silent FIFO failure).
+        # Q4 (partial-close qty guard) deferred to P2 — board 3/4 OPTION B.
+        if _alpaca_pnl is not None and not _a4_gap:
+            _has_overnight = any(
+                t.get("overnight") for t in self.open_trades.values()
+            )
+            if _has_overnight and not _alpaca_lots and not _alpaca_per_trade:
+                # Q5 catastrophe guard: both data structures empty despite overnight
+                # positions — likely upstream FIFO failure that didn't raise an
+                # exception. Skip reconciliation to prevent spurious closure of all
+                # open positions. EOD summary is written normally.
+                logger.critical(
+                    "write_eod_summary: Phase 2a.5 SKIPPED — overnight positions"
+                    " exist in bot state but _alpaca_lots and _alpaca_per_trade"
+                    " are both empty. Likely upstream data failure."
+                    " Manual reconciliation required.",
+                )
+            else:
+                for _sym_r in list(self.open_trades.keys()):
+                    _tr_r = self.open_trades.get(_sym_r)
+                    if not _tr_r or not _tr_r.get("overnight"):
+                        continue
+                    if _sym_r in _alpaca_lots:
+                        continue  # Legitimately still open — FIFO lots remain
+                    _fifo_matches = [
+                        _pt for _pt in _alpaca_per_trade
+                        if _pt.get("symbol") == _sym_r
+                    ]
+                    if _fifo_matches:
+                        # DS P1: VWAP exit price across all per_trade lots (not [-1])
+                        # DS P0: $0 guard — if all exit prices are 0.0, fall back
+                        #         to marker only (no record_exit call).
+                        _fifo_exits = [
+                            float(pt.get("exit", 0.0))
+                            for pt in _fifo_matches
+                            if float(pt.get("exit", 0.0)) > 0.0
+                        ]
+                        _fifo_qtys = [
+                            float(pt.get("qty", 0.0))
+                            for pt in _fifo_matches
+                            if float(pt.get("exit", 0.0)) > 0.0
+                        ]
+                        if not _fifo_exits:
+                            # DS P0: no valid exit prices — marker-only path
+                            if not _tr_r.get("_fifo_reconciled_closed"):
+                                self.open_trades[_sym_r][
+                                    "_fifo_reconciled_closed"
+                                ] = True
+                                self._save_log()
+                                logger.error(
+                                    "write_eod_summary: %s has no valid FIFO exit"
+                                    " prices (all 0.0) — marked"
+                                    " _fifo_reconciled_closed."
+                                    " Manual P&L reconciliation required.",
+                                    _sym_r,
+                                )
+                            continue
+                        _fifo_zip = zip(
+                            _fifo_exits, _fifo_qtys, strict=False
+                        )
+                        _fifo_exit_px = (
+                            sum(e * q for e, q in _fifo_zip)
+                            / sum(_fifo_qtys)
+                        )
+                        logger.warning(
+                            "write_eod_summary: %s (dir=%s, overnight_since=%s)"
+                            " fully closed on Alpaca — no remaining FIFO lots."
+                            " Reconciling via record_exit(reason=external_close,"
+                            " exit=%.4f).",
+                            _sym_r,
+                            _tr_r.get("direction", "?"),
+                            _tr_r.get("overnight_since", "?"),
+                            _fifo_exit_px,
+                        )
+                        try:
+                            self.record_exit(
+                                _sym_r,
+                                exit_price=_fifo_exit_px,
+                                reason="external_close",
+                                mri_level=_tr_r.get("mri_level", "NORMAL"),
+                            )
+                            # Q1: correct exit_time to actual Alpaca fill timestamp
+                            # so this reconciled trade does not appear in today_trades
+                            # on any future write_eod_summary() call (today_trades
+                            # filters by exit_time.startswith(today)).
+                            # Q3: flag MRI level as uncertain for downstream analytics.
+                            _actual_exit_ts = max(
+                                (
+                                    pt.get("filled_at") or ""
+                                    for pt in _fifo_matches
+                                    if pt.get("filled_at")
+                                ),
+                                default=None,
+                            )
+                            for _ct in reversed(self.closed_trades):
+                                if (
+                                    _ct.get("symbol") == _sym_r
+                                    and not _ct.get("_recon_exit_ts_set")
+                                ):
+                                    if _actual_exit_ts:
+                                        _ct["exit_time"] = _actual_exit_ts
+                                    _ct["mri_at_exit_uncertain"] = True
+                                    _ct["_recon_exit_ts_set"] = True
+                                    break
+                        except Exception as _recon_err:  # DS P1: try-except guard
+                            if not self.open_trades.get(_sym_r, {}).get(
+                                "_fifo_reconciled_closed"
+                            ):
+                                if _sym_r in self.open_trades:
+                                    self.open_trades[_sym_r][
+                                        "_fifo_reconciled_closed"
+                                    ] = True
+                                    self._save_log()
+                            logger.error(
+                                "write_eod_summary: record_exit() failed for %s"
+                                " during FIFO reconciliation — marked"
+                                " _fifo_reconciled_closed: %s",
+                                _sym_r,
+                                _recon_err,
+                            )
+                    else:
+                        # No FIFO match — multi-day gap or fills absent from API.
+                        if not _tr_r.get("_fifo_reconciled_closed"):
+                            self.open_trades[_sym_r][
+                                "_fifo_reconciled_closed"
+                            ] = True
+                            self._save_log()
+                            logger.warning(
+                                "write_eod_summary: %s has no remaining FIFO lots"
+                                " and no per_trade entry — marked"
+                                " _fifo_reconciled_closed and persisted.",
+                                _sym_r,
+                            )
+        # ── end Phase 2a.5 ──────────────────────────────────────────────────────
         summary["overnight_holds"]  = [
             {
                 "symbol":          s,
