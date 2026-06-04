@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-03 S47e — generate_dashboard.py P1 DEPLOYED ✅ + trade_engine.py P1 CLOSED ✅ + DS/GAI direct API protocol established | **S47e: BOTH S47d P1 items CLOSED. (1) trade_engine.py L252-254 risk.open_positions desync — PATCHED + DEPLOYED (commit 4f58c85): register_open() + status-gate replaces direct SET. (2) generate_dashboard.py P1 P/L mismatch — PATCHED + DEPLOYED (S47e): Change1=lifetime_pnl_cache atomic write after all_trades line; Change2=RC-6 `o["order_type"]`→`o.get("type") or o.get("order_type","unknown")`; stale OCI cache deleted. DS/GAI now runs via direct API (curl) — NOT browser automation. | **S47d: ROOT CAUSE 1 (P/L mismatch) — generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py `_load_lifetime_pnl()` dead code (never called in `_build_html`); OCI cache stale May 17 with wrong key "lifetime_pnl" (should be "total_pnl"). Board 4/4 MODIFY. DS/GAI prompts prepared in-session. ROOT CAUSE 2 (risk desync) — trade_engine.py L252-254 direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` in `_reconcile_pending_overnight_orders()`; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; bypasses S42 CYCLE-SYNC-GUARD. DS/GAI required, patch queued post-RTH. | S47c: entry_logic.py + config.py P1 BUCKET_B power_hour expansion PATCHED ✅ — 7 fixes: BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode→TOD_EXPANSION_WINDOW_START, BUG-PH-3 wrong counter→risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable (BoD 3-0), Fix#6 pre-loop time, Fix#7 WARNING logs. 1724L→1747L. DS/GAI APPROVE. OCI deployed, all 4 services active. | S47b: portfolio_tracker.py pnl=0.0 false-zero rounding PATCHED ✅ — 8 storage round(x,2)→round(x,4) + L792 abs()>1e-8 float guard. Commit 5600c70. | S47: portfolio_tracker.py 4-bug patch DEPLOYED ✅ — Bug1 avg_r_multiple, Bug2 entry≤0 phantom, Bug3 _load_log tuple, Bug8 TOCTOU. Commit 0f3aa58. fill_helpers.py P5-H2 PATCHED ✅ — Commit 1adc1cb. | S46: main.py BUG-6 DEPLOYED ✅.**
+**Updated:** 2026-06-04 S48 — Quarterly holds research complete ✅ (AVGO/NVDA/ANET, memo at logs/quarterly_holds_research_2026-06-04.md) | NFLX overnight short 1sh @ $81.84 protected (GTC stop $84.56) | S47f: portfolio_tracker.py Phase 2a.5 FIFO overnight reconciliation DEPLOYED ✅ (commit fb4c662, 2284L) | 2026-06-03 S47e — generate_dashboard.py P1 DEPLOYED ✅ + trade_engine.py P1 CLOSED ✅ + DS/GAI direct API protocol established | **S47e: BOTH S47d P1 items CLOSED. (1) trade_engine.py L252-254 risk.open_positions desync — PATCHED + DEPLOYED (commit 4f58c85): register_open() + status-gate replaces direct SET. (2) generate_dashboard.py P1 P/L mismatch — PATCHED + DEPLOYED (S47e): Change1=lifetime_pnl_cache atomic write after all_trades line; Change2=RC-6 `o["order_type"]`→`o.get("type") or o.get("order_type","unknown")`; stale OCI cache deleted. DS/GAI now runs via direct API (curl) — NOT browser automation. | **S47d: ROOT CAUSE 1 (P/L mismatch) — generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py `_load_lifetime_pnl()` dead code (never called in `_build_html`); OCI cache stale May 17 with wrong key "lifetime_pnl" (should be "total_pnl"). Board 4/4 MODIFY. DS/GAI prompts prepared in-session. ROOT CAUSE 2 (risk desync) — trade_engine.py L252-254 direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` in `_reconcile_pending_overnight_orders()`; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; bypasses S42 CYCLE-SYNC-GUARD. DS/GAI required, patch queued post-RTH. | S47c: entry_logic.py + config.py P1 BUCKET_B power_hour expansion PATCHED ✅ — 7 fixes: BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode→TOD_EXPANSION_WINDOW_START, BUG-PH-3 wrong counter→risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable (BoD 3-0), Fix#6 pre-loop time, Fix#7 WARNING logs. 1724L→1747L. DS/GAI APPROVE. OCI deployed, all 4 services active. | S47b: portfolio_tracker.py pnl=0.0 false-zero rounding PATCHED ✅ — 8 storage round(x,2)→round(x,4) + L792 abs()>1e-8 float guard. Commit 5600c70. | S47: portfolio_tracker.py 4-bug patch DEPLOYED ✅ — Bug1 avg_r_multiple, Bug2 entry≤0 phantom, Bug3 _load_log tuple, Bug8 TOCTOU. Commit 0f3aa58. fill_helpers.py P5-H2 PATCHED ✅ — Commit 1adc1cb. | S46: main.py BUG-6 DEPLOYED ✅.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -10,15 +10,28 @@
 - **RAM (S45):** ⚠️ 695MB used / 113MB free at session start (12:31 PM ET Jun 1 — RTH, no restart). Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). memory_watchdog.sh will auto-restart post-RTH when < 150MB free. P1/P2/P3/P4 all deployed. Optional P5 jemalloc pending (systemd unit only).
 - **⚠️ SSH KEY NOTE:** Ed25519 key at `~/.ssh/mtf_bot_oracle`. rsync syntax: always use `-e "ssh -i ~/.ssh/mtf_bot_oracle"` — NEVER use `-i` as standalone rsync flag.
 
-## Open Positions (confirmed Alpaca API 9:32 AM PT 2026-06-01)
-- NFLX short -1sh @ $87.69 | unrealized +$1.67
-- NVDA long 1sh @ $216.41 | unrealized +$5.37
-- SPY long 1sh @ $757.06 | unrealized +$0.09
+## Open Positions (confirmed Alpaca API 06:40 UTC 2026-06-04)
+- **NFLX short -1sh @ $81.84** | GTC stop BUY 1sh @ $84.56 (order f950a418, accepted) | target $76.41 | overnight hold (overnight_since 2026-06-03 16:06 ET) | pre-market ~$81.96
+- ⚠️ FIFO CRITICAL noted (net_qty accumulating -12 on restarts — pre-existing state corruption, NOT Phase 2a.5 related. Phase 2a.5 correctly skips NFLX because synthetic short lot appears in _alpaca_lots). P2 issue.
 
 ## PDT
-- **0/3 slots used** (confirmed S37 via Alpaca MCP — daytrade_count=0)
+- **0/3 slots used** (daytrade_count=0, confirmed Alpaca MCP S48)
 
-## 🌙 CRON AGENT TASK — Quarterly Holds Research (Run on next autonomous wake)
+## ✅ QUARTERLY HOLDS RESEARCH — COMPLETE (S48, 2026-06-04 pre-market)
+
+**Memo:** `logs/quarterly_holds_research_2026-06-04.md` (commit 93a1898)
+
+| Pick | Ticker | Runway | Pre-Market Entry | Key Signal |
+|------|--------|--------|-----------------|-----------|
+| 1 | **AVGO** | ~13 wk → Sep | **$426 (−11% dip)** | Q2 AI rev +143%, Q3 AI +200%, Druckenmiller 195k shares Q1 2026 |
+| 2 | **NVDA** | ~12 wk → Aug 26 | $214.95 (flat) | Q1 FY2027 $81.6B (+85%), Blackwell ramp |
+| 3 | **ANET** | ~9 wk → Aug 3 | $168.45 (−3.4%) | Q1 2026 +35% rev, EPS beat +10%, AI networking |
+
+**Next step (when Rafael wakes up):** Review memo → decide manual vs. bot-automated entry → if manual: place orders; if automated: full board vote + DS/GAI audit on integration code.
+
+**AVGO entry window is TIME-SENSITIVE:** Stock opened at ~$426 post-earnings dip. This may compress as market digests the AI guidance. Today June 4 is the ideal entry if proceeding manually.
+
+## 🌙 CRON AGENT TASK — Quarterly Holds Research (COMPLETED by in-session Claude S48)
 
 **Requested by Rafael, S47f (2026-06-04). Ready when Rafael wakes up.**
 
