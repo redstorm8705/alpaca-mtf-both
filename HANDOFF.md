@@ -18,6 +18,35 @@
 ## PDT
 - **0/3 slots used** (confirmed S37 via Alpaca MCP — daytrade_count=0)
 
+## 🌙 CRON AGENT TASK — Quarterly Holds Research (Run on next autonomous wake)
+
+**Requested by Rafael, S47f (2026-06-04). Ready when Rafael wakes up.**
+
+### Context
+Rafael wants 2-3 S&P 500 stocks for quarter-minimum long holds — from last reported earnings through the day before next earnings. Inspired by MU/SMH repricing in Q2: semiconductors, memory, and related sectors that could have been identified in April as quarterly anchors. Top investors' 13F filings corroborate these signals. Rafael referenced "slow and steady alpha gains" from anchor positions alongside intraday trading.
+
+### Research Scope
+- **Universe:** Full S&P 500 (not just current scan list — explicitly broadened)
+- **Time horizon:** Entry after earnings report → exit day before next earnings
+- **Direction:** Long (short candidates noted if clearly relevant)
+- **Key sectors to weight:** Semiconductors/memory, AI infrastructure, any other sector with clear fundamental repricing catalyst visible in earnings transcript
+- **13F signal:** Cross-reference with recent 13F filings (SEC EDGAR) from top institutional investors (Druckenmiller, Ackman, Einhorn, Cohen, Tepper, Buffett/Berkshire, etc.)
+
+### Process for CRON Agent
+1. **Pull S&P 500 constituent list** (use Wikipedia `https://en.wikipedia.org/wiki/List_of_S%26P_500_companies` or SEC EDGAR)
+2. **FMP API earnings transcripts:** `https://financialmodelingprep.com/api/v3/earning_call_transcript/{SYMBOL}?quarter={Q}&year={YYYY}&apikey={FMP_API_KEY}` — check most recent 2 years (Q1 2024 through Q1 2026). Focus on: revenue guidance cadence, management confidence tone, margin expansion language, TAM commentary.
+3. **SEC EDGAR 13F filings:** `https://efts.sec.gov/LATEST/search-index?q=%2213F%22&dateRange=custom&startdt=2026-01-01&enddt=2026-06-01&forms=13F-HR` — look for conviction additions (new positions or large increases) from known top investors. EDGAR full-text search: `https://efts.sec.gov/LATEST/search-index`
+4. **Candidate screens:** Look for stocks where: (a) last earnings had positive guidance revision, (b) 13F shows institutional accumulation, (c) sector has a multi-quarter structural tailwind (AI capex, defense spending, energy transition), (d) next earnings is ≥ 6 weeks away
+5. **Web research:** `WebSearch` and `WebFetch` to pull earnings transcript summaries from Seeking Alpha, Motley Fool, or similar if FMP is unavailable/limited
+6. **Board vote** on final 2-3 candidates (BoD + AB + TB). Key questions for board: (a) sizing — what % of account for anchor positions?, (b) stop loss — hold regardless or max-drawdown stop?, (c) coexistence with intraday bot — does bot trade these symbols intraday while holding anchor?, (d) entry timing — immediately post-earnings or wait for confirmation day?
+7. **DS/GAI audit** on the feature integration proposal (this is a new bot feature — RTH chain impact requires audit)
+8. **Output format** — write research memo to `logs/quarterly_holds_research_YYYY-MM-DD.md` with: candidate stocks + rationale + earnings transcript key quotes + 13F corroboration + board vote summary + DS/GAI integration proposal
+
+### Time constraint
+Rafael wants this ready when he wakes up (~5-6 hours from S47f end). Prioritize research quality over exhaustiveness — 3 strong candidates with solid rationale beats 10 weak ones.
+
+---
+
 ## Open Items (next session priority)
 
 ### ✅ CLOSED in S39
@@ -68,9 +97,11 @@
 
 - [x] **P1: OVERNIGHT_ENTRIES_ENABLED hardcoded False in main.py — ✅ PATCHED + DEPLOYED S46** — Hardcoded `False` at line 131 removed. Replaced with `bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", False))` module-level gate + sys.modules alias (4/4 board Path B) + global re-read after profile loop + conditional WARNING/INFO. Committed 2a91753. **Rsync deployed 1:41 PM PT — OCI log confirmed `OVERNIGHT_ENTRIES_ENABLED=False (profile: paper)`.** CCR main.py queued item in `queued_for_review_2026-06-01.md` is STALE — issues already addressed in final BUG-6 patch.
 
-- [ ] **P1: MSTR tracked as both closed and overnight_hold in EOD snapshot — IN PROGRESS S47f** — `execution/portfolio_tracker.py` (RTH-chain, NOT reconcile_eod.py — confirmed phantom in reconcile_eod). ROOT CAUSE CONFIRMED: `write_eod_summary()` L1155-1162 builds `overnight_holds` from `self.open_trades` without consulting `_alpaca_lots` (FIFO remaining lots). Full read complete (2125L, 7 chunks, Explore agent). Board: 1/4 APPROVE (Reliability), 3/4 REJECT (Execution Risk/Data Integrity/Quant Logic) — snapshot-only fix leaves `self.open_trades` corrupted → Day 2 entry rejection. DS: COMPLETE (5 findings below). **GAI: BLOCKED — GEMINI_API_KEY reported as leaked (403 PERMISSION_DENIED). User must rotate key at aistudio.google.com before patch can proceed.** PATCH DESIGN COMPLETE pending GAI: Phase 2a.5 (after L1038) + `_load_log()` update (L421-431). DS-required additions: (1) VWAP exit price not [-1], (2) $0 guard → fallback to marker, (3) try-except around record_exit(), (4) separate _processed_fifo_keys set in _load_log(). tb_audit_log.md entry PENDING (write when patch applied).
+- [x] **P1: MSTR tracked as both closed and overnight_hold in EOD snapshot — PATCHED + DEPLOYED S47f ✅** — `execution/portfolio_tracker.py` (commit fb4c662). Phase 2a.5 block inserted before overnight_holds build (~L1154): detects overnight positions absent from _alpaca_lots, reconciles via record_exit() with VWAP exit price. Q5 catastrophe guard (empty _alpaca_lots + _alpaca_per_trade → log CRITICAL + skip loop). Q1: corrects exit_time to actual Alpaca fill timestamp. Q3: mri_at_exit_uncertain=True on closed_trade record. _load_log() routes _fifo_reconciled_closed=True to closed_trades on restart. Board vote Q4 (partial-close scope): 3/4 OPTION B — deferred to P2 (see below). DS APPROVE, GAI APPROVE (all Q1-Q5 addressed). py_compile/mypy/ruff PASS. Cold second-agent PASS. OCI deployed, all 4 services active.
 
 - [x] **P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour — ✅ PATCHED + DEPLOYED S47c** — `execution/entry_logic.py` + `config.py`. 7 fixes applied: BUG-PH-1 kill-switch no longer bypassed by expansion logic; BUG-PH-2 hardcoded `(15*60+30)` → `config.TOD_EXPANSION_WINDOW_START` (new constant); BUG-PH-3 `len(tracker.open_trades)` → `risk.open_positions` (authoritative counter); BUG-PH-4 re-check `risk.open_positions >= _ph_limit` before fall-through; BUG-PH-5 expansion disabled at PDT=3/3 (BoD 3-0: Simons/Taleb/Kyle — forced overnight hold impairs exit); Fix#6 `_is_ph_cyc` computed once before for-symbol loop (Data Integrity board); Fix#7 `logger.warning` before all `break` statements (Reliability board). DS/GAI both APPROVE all 7 questions. 1724L→1747L. OCI deployed, all 4 services active.
+
+- [ ] **P2: portfolio_tracker.py partial-close reconciliation gap** — Phase 2a.5 handles ONLY full closes (symbol absent from _alpaca_lots). Partial closes (Alpaca shows fewer shares than bot's open_trades qty) are NOT detected. Guard `if _sym_r in _alpaca_lots: continue` skips symbols with any remaining lot. Fix requires qty-level comparison + partial record_exit(). GAI flagged P1; board 3/4 OPTION B (defer). Needs: qty-level comparison design + board vote + DS/GAI audit. NOT blocking (full-close fix deployed; partial-close from GTC is rare).
 
 - [ ] **P2: MAX_DAILY_LOSS_PCT BoD-3 log message misleading** — `main.py` lines 88-94 (RTH-chain, hotspot). BoD-3 block: `if config.MAX_DAILY_LOSS_PCT > 0.15` → for paper, 0.07 > 0.15 is False so block doesn't execute. But the log string references "was 30%" from PROFILES dict — misleading in context. Low-risk comment fix. **Gemini: MEDIUM (May 27 + May 28).**
 
@@ -120,7 +151,7 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 - **autonomous_review.py (NEW S44):** `/home/ubuntu/mtf-bot/autonomous_review.py` — 433 lines. Stage 2 of the autonomous pipeline. Reads `logs/pending_ds_gai_*.json` (written by CCR), calls DeepSeek API + Gemini API with identical prompts (MAX_RETRIES=3, exponential backoff), writes raw responses verbatim to `logs/pending_approvals_YYYY-MM-DD.md` (no autonomous summary — user sees raw DS + GAI text). If REJECT in either response → routes to `queued_for_review_*.md` instead. Updates JSON status `awaiting_ds_gai` → `ready_for_approval`. Commits precise filenames to GitHub, Slacks "🎯 Patches ready for approval". flock: `/tmp/mtf_autonomous_review.lock` (own) + `/tmp/mtf_git.lock` (shared with auto_deploy.sh). Cron: `0 3 * * 2-6` (11 PM ET weeknights).
 - **auto_deploy.sh (UPGRADED S43C2, SHIFTED S44):** `/home/ubuntu/mtf-bot/auto_deploy.sh` — 125 lines (was 36). flock lockfile, deploy window 10PM-6AM ET, 3-iteration health check at 20s/40s/60s, auto-rollback on fail: `git reset --hard $BEFORE` (LOCAL ONLY). Cron: **`30 3 * * *` (11:30 PM ET — shifted from 11 PM to avoid collision with autonomous_review.py).** Logs to `logs/auto_deploy.log`. **IMPORTANT: auto_deploy.sh is NOT tracked in git (untracked) — contains Slack webhook URL. Do not commit.**
 - **Board endpoint (Gist):** `https://gist.githubusercontent.com/redstorm8705/1574ea556d06e7a1db45d00097f9c069/raw/meta_audit_latest.json`
-- **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local `.env` and OCI `.env` ✅ **⚠️ GEMINI_API_KEY COMPROMISED (S47f)** — reported leaked by Google (403). Rotate at aistudio.google.com → update local .env + OCI .env + memory/feedback_ds_gai_direct_api.md.
+- **DS/GAI keys:** DEEPSEEK_API_KEY + GEMINI_API_KEY + GITHUB_GIST_TOKEN all in local `.env` and OCI `.env` ✅ GEMINI_API_KEY rotated S47f — new key working (see .env).
 - **DS/GAI DIRECT API PROTOCOL (S47e — MANDATORY — NOT browser automation):**
   - **DeepSeek:** `curl https://api.deepseek.com/v1/chat/completions -H "Authorization: Bearer $DEEPSEEK_API_KEY" -H "Content-Type: application/json" -d '{"model":"deepseek-chat","messages":[...],"max_tokens":4096}'` — model = `deepseek-chat`
   - **Gemini:** `curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d '{"contents":[...],"generationConfig":{"maxOutputTokens":8192}}'` — model = `gemini-2.5-flash`, maxOutputTokens=8192
@@ -131,15 +162,15 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 - **Gemini model (autonomous_review.py / OCI scripts):** `gemini-3.1-pro-preview` via `google.genai` SDK (OCI scripts unchanged) | **Claude in-session audits:** `gemini-2.5-flash` via direct API curl
 - **Gist ID:** `1574ea556d06e7a1db45d00097f9c069` (redstorm8705 account, public gist)
 
-## Last Session (S47f — 2026-06-03, continuation)
+## Last Session (S47f — 2026-06-03/04)
 
-### S47f (2026-06-03) — portfolio_tracker.py P1 IN PROGRESS; GAI key blocked
+### S47f (2026-06-03/04) — portfolio_tracker.py Phase 2a.5 PATCHED + DEPLOYED ✅; Gemini key rotated; quarterly holds research QUEUED
 
-- **P1 work started:** portfolio_tracker.py MSTR overnight_holds dual-state. Full read (2125L, 7 chunks, Explore subagent). Root cause confirmed: write_eod_summary() L1155-1162 reads self.open_trades without consulting _alpaca_lots. Board 1/4 APPROVE / 3/4 REJECT (Day 2 entry rejection concern). DS complete. **GAI BLOCKED — GEMINI_API_KEY reported as leaked (403). Rotate at aistudio.google.com + update local .env and OCI .env.**
-- **DS findings (all incorporated into revised patch design):** (1) VWAP exit price (P1), (2) $0 guard → marker fallback (P0), (3) try-except around record_exit() (P1), (4) _a4_gap global guard (P1 concern — board vote needed before per-symbol change), (5) separate _processed_fifo_keys in _load_log() (P1 edge case).
-- **Patch design COMPLETE — waiting for GAI only:** Phase 2a.5 after L1038 + _load_log() L421-431 update. Both changes in portfolio_tracker.py only (single-file patch, RULE C-6 satisfied).
-- **GEMINI_API_KEY status:** COMPROMISED (S47f) — old key reported leaked by Google (see .env — key value never stored here). New key rotated: local .env ✅ OCI .env ✅ memory/feedback_ds_gai_direct_api.md ✅ CLAUDE.md ✅ HANDOFF.md ✅. New key CONFIRMED WORKING (finishReason: STOP). Git history retains old key in 3 commits — force-push history rewrite deferred (user decision required).
-- **Next step:** User rotates Gemini key → Claude re-runs GAI curl with same 5-question prompt → 3-Point AI Summary updated → Step 5a (static analysis already passed pre-patch) → Step 5b (cold second-agent) → Step 5c (impact analysis) → Step 6 (propose exact diff) → Step 7 (user approval) → apply.
+- **portfolio_tracker.py P1 CLOSED (commit fb4c662):** Phase 2a.5 FIFO overnight reconciliation patched. 2 changes: (1) Phase 2a.5 block before overnight_holds build — detects fully-closed overnight positions via _alpaca_lots, reconciles via record_exit() VWAP exit price, Q5 catastrophe guard, Q1 exit_time correction, Q3 mri_at_exit_uncertain flag. (2) _load_log() routes _fifo_reconciled_closed=True to closed_trades on restart (prevents Day 2 entry rejection). Board Q4 vote: 3/4 OPTION B (partial-close deferred to P2). DS APPROVE (all 5 DS findings incorporated). GAI APPROVE (Q1-Q5 all addressed). 3-Point AI Summary produced. py_compile/mypy/ruff PASS. Cold second-agent PASS. 2126L→2284L.
+- **GEMINI_API_KEY rotated:** Old key confirmed revoked. New key in local .env + OCI .env. All tracked files clean of hardcoded key values. Git history retains old key in 3 prior commits — force-push rewrite deferred (user decision required).
+- **Key scrub complete:** HANDOFF.md + CLAUDE.md + memory/feedback_ds_gai_direct_api.md — all hardcoded API key values removed. Keys now stored in .env only.
+- **P2 added:** partial-close reconciliation gap (Phase 2a.5 only handles full closes — board 3/4 OPTION B deferred).
+- **NEW REQUEST from Rafael (queued for CRON agent):** Quarterly holds research — identify 2-3 S&P 500 stocks for quarter-minimum long holds. Full process below in CRON AGENT TASK.
 
 ---
 

@@ -3777,3 +3777,36 @@ Four threats checked:
 ### CCR Autonomous Commits (detected on pull)
 - a9e6832: Queue: MSTR P1 phantom + main.py BoD-3 comment
 - 0748e01: Autonomous fix: reconcile_eod.py RC-3 dead code removal
+
+---
+## S47f — execution/portfolio_tracker.py — Phase 2a.5 FIFO overnight reconciliation
+
+**Date:** 2026-06-04  
+**Patch:** S47f Phase 2a.5 — FIFO-driven overnight reconciliation  
+**File:** execution/portfolio_tracker.py  
+**Lines before/after:** 2126 / 2284 (+158)  
+**Commit:** fb4c662
+
+### RC Audit (post-patch)
+| RC | Class | Status |
+|----|-------|--------|
+| RC-1 | Naive datetime | FAIL (pre-existing: L469, L592 — fromisoformat without tz guard) — not introduced by patch |
+| RC-2 | CWD-relative path | FAIL (pre-existing: inconsistent _ROOT usage) — not introduced by patch |
+| RC-3 | Silent exception | FAIL (pre-existing: L365, L432) — not introduced by patch; new except at Phase 2a.5 logs ERROR before fallback |
+| RC-4 | Estimated exit price | FAIL (pre-existing: _fill_unverified framework) — not introduced by patch; Phase 2a.5 uses VWAP from Alpaca fills |
+| RC-5 | Non-atomic write | PASS (_atomic_write used; _save_log() inside Phase 2a.5 uses existing atomic path) |
+| RC-6 | Wrong API field name | PASS (no new API calls in patch) |
+| RC-7 | Zero-share sizing | FAIL (pre-existing: L252-257, L1354) — not introduced by patch |
+| RC-8 | Unbounded scan buffer | FAIL (pre-existing: closed_trades never pruned) — not introduced by patch |
+
+### New code audit
+- Phase 2a.5 block: Q5 catastrophe guard ✅, VWAP exit ✅, $0 guard ✅, try-except ✅, Q1 exit_time correction ✅, Q3 mri_at_exit_uncertain ✅
+- _load_log() change: _fifo_reconciled_closed routing ✅, duplicate guard via _closed_entry_keys ✅
+- Static: py_compile PASS, mypy PASS (0 issues), ruff PASS (0 violations)
+- Cold second-agent: OVERALL PASS (all 4 checks)
+- Board vote Q4: 3/4 OPTION B — partial-close deferred to P2
+- Services: all 4 active post-deploy
+
+### Open items from this audit
+- RC-1, RC-2, RC-3, RC-4, RC-7, RC-8: all pre-existing — not introduced by this patch
+- Q4 (partial close): deferred to P2 — needs qty-level comparison + partial record_exit design
