@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-04 S48 — Quarterly holds research complete ✅ (AVGO/NVDA/ANET, memo at logs/quarterly_holds_research_2026-06-04.md) | NFLX overnight short 1sh @ $81.84 protected (GTC stop $84.56) | S47f: portfolio_tracker.py Phase 2a.5 FIFO overnight reconciliation DEPLOYED ✅ (commit fb4c662, 2284L) | 2026-06-03 S47e — generate_dashboard.py P1 DEPLOYED ✅ + trade_engine.py P1 CLOSED ✅ + DS/GAI direct API protocol established | **S47e: BOTH S47d P1 items CLOSED. (1) trade_engine.py L252-254 risk.open_positions desync — PATCHED + DEPLOYED (commit 4f58c85): register_open() + status-gate replaces direct SET. (2) generate_dashboard.py P1 P/L mismatch — PATCHED + DEPLOYED (S47e): Change1=lifetime_pnl_cache atomic write after all_trades line; Change2=RC-6 `o["order_type"]`→`o.get("type") or o.get("order_type","unknown")`; stale OCI cache deleted. DS/GAI now runs via direct API (curl) — NOT browser automation. | **S47d: ROOT CAUSE 1 (P/L mismatch) — generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py `_load_lifetime_pnl()` dead code (never called in `_build_html`); OCI cache stale May 17 with wrong key "lifetime_pnl" (should be "total_pnl"). Board 4/4 MODIFY. DS/GAI prompts prepared in-session. ROOT CAUSE 2 (risk desync) — trade_engine.py L252-254 direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` in `_reconcile_pending_overnight_orders()`; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; bypasses S42 CYCLE-SYNC-GUARD. DS/GAI required, patch queued post-RTH. | S47c: entry_logic.py + config.py P1 BUCKET_B power_hour expansion PATCHED ✅ — 7 fixes: BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode→TOD_EXPANSION_WINDOW_START, BUG-PH-3 wrong counter→risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable (BoD 3-0), Fix#6 pre-loop time, Fix#7 WARNING logs. 1724L→1747L. DS/GAI APPROVE. OCI deployed, all 4 services active. | S47b: portfolio_tracker.py pnl=0.0 false-zero rounding PATCHED ✅ — 8 storage round(x,2)→round(x,4) + L792 abs()>1e-8 float guard. Commit 5600c70. | S47: portfolio_tracker.py 4-bug patch DEPLOYED ✅ — Bug1 avg_r_multiple, Bug2 entry≤0 phantom, Bug3 _load_log tuple, Bug8 TOCTOU. Commit 0f3aa58. fill_helpers.py P5-H2 PATCHED ✅ — Commit 1adc1cb. | S46: main.py BUG-6 DEPLOYED ✅.**
+**Updated:** 2026-06-04 S48b — Board vote COMPLETE ✅ (25 members BoD+AB+TB, CCR build authorized) | Quarterly holds research complete ✅ (AVGO/NVDA/ANET, memo at logs/quarterly_holds_research_2026-06-04.md) | NFLX overnight short 1sh @ $81.84 protected (GTC stop $84.56) | S47f: portfolio_tracker.py Phase 2a.5 FIFO overnight reconciliation DEPLOYED ✅ (commit fb4c662, 2284L) | 2026-06-03 S47e — generate_dashboard.py P1 DEPLOYED ✅ + trade_engine.py P1 CLOSED ✅ + DS/GAI direct API protocol established | **S47e: BOTH S47d P1 items CLOSED. (1) trade_engine.py L252-254 risk.open_positions desync — PATCHED + DEPLOYED (commit 4f58c85): register_open() + status-gate replaces direct SET. (2) generate_dashboard.py P1 P/L mismatch — PATCHED + DEPLOYED (S47e): Change1=lifetime_pnl_cache atomic write after all_trades line; Change2=RC-6 `o["order_type"]`→`o.get("type") or o.get("order_type","unknown")`; stale OCI cache deleted. DS/GAI now runs via direct API (curl) — NOT browser automation. | **S47d: ROOT CAUSE 1 (P/L mismatch) — generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py `_load_lifetime_pnl()` dead code (never called in `_build_html`); OCI cache stale May 17 with wrong key "lifetime_pnl" (should be "total_pnl"). Board 4/4 MODIFY. DS/GAI prompts prepared in-session. ROOT CAUSE 2 (risk desync) — trade_engine.py L252-254 direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` in `_reconcile_pending_overnight_orders()`; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; bypasses S42 CYCLE-SYNC-GUARD. DS/GAI required, patch queued post-RTH. | S47c: entry_logic.py + config.py P1 BUCKET_B power_hour expansion PATCHED ✅ — 7 fixes: BUG-PH-1 kill-switch bypass, BUG-PH-2 hardcode→TOD_EXPANSION_WINDOW_START, BUG-PH-3 wrong counter→risk.open_positions, BUG-PH-4 no re-check, BUG-PH-5 PDT=3/3 disable (BoD 3-0), Fix#6 pre-loop time, Fix#7 WARNING logs. 1724L→1747L. DS/GAI APPROVE. OCI deployed, all 4 services active. | S47b: portfolio_tracker.py pnl=0.0 false-zero rounding PATCHED ✅ — 8 storage round(x,2)→round(x,4) + L792 abs()>1e-8 float guard. Commit 5600c70. | S47: portfolio_tracker.py 4-bug patch DEPLOYED ✅ — Bug1 avg_r_multiple, Bug2 entry≤0 phantom, Bug3 _load_log tuple, Bug8 TOCTOU. Commit 0f3aa58. fill_helpers.py P5-H2 PATCHED ✅ — Commit 1adc1cb. | S46: main.py BUG-6 DEPLOYED ✅.**
 
 ## Bot Status
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
@@ -27,9 +27,99 @@
 | 2 | **NVDA** | ~12 wk → Aug 26 | $214.95 (flat) | Q1 FY2027 $81.6B (+85%), Blackwell ramp |
 | 3 | **ANET** | ~9 wk → Aug 3 | $168.45 (−3.4%) | Q1 2026 +35% rev, EPS beat +10%, AI networking |
 
-**Next step (when Rafael wakes up):** Review memo → decide manual vs. bot-automated entry → if manual: place orders; if automated: full board vote + DS/GAI audit on integration code.
+**Next step:** Board vote COMPLETE ✅ S48b. CCR building `execution/quarterly_hold_manager.py` autonomously. DS/GAI via `autonomous_review.py` on OCI (11 PM ET tonight). Rafael approves on return.
 
-**AVGO entry window is TIME-SENSITIVE:** Stock opened at ~$426 post-earnings dip. This may compress as market digests the AI guidance. Today June 4 is the ideal entry if proceeding manually.
+⚠️ **AVGO entry deferred per board:** Tudor Jones / Weinstein / Brandt all REJECT same-day gap entry. AVBO enters in 3 tranches starting Day 3 close post-earnings (~June 9). NVDA + ANET proceed when Stage 2 confirmed.
+
+---
+
+## 🗳️ BOARD VOTE COMPLETE — quarterly_hold_manager.py (S48b, June 4 2026)
+
+**25-member cold parallel vote (5 BoD + 12 AB + 8 TB). Rafael stepped away; autonomous build authorized.**
+
+### Hard Blocks + Autonomous Resolutions:
+
+| Block | Board Verdict | Autonomous Resolution |
+|-------|--------------|----------------------|
+| AVGO same-day gap entry | AB REJECT (Tudor Jones/Weinstein/Brandt) | 3-tranche: Day 3/5/7 close post-earnings (~June 9-13) |
+| "NO blocking" coexistence | BoD REJECT 3-2 (Simons/Taleb/Peterffy) | v1: quarterly symbol → intraday blocked while held (shared registry) |
+| 45% w/ zero track record | AB REJECT (Thorp/López de Prado) | Proceed per Rafael mandate; add Kelly fix (available_intraday_equity) |
+| Concurrent broker.py calls | TB REJECT (Katsuyama/Minsky) | OrderDispatcher inside quarterly_hold_manager.py |
+| AVGO AI rev via FMP | TB BLOCK (McKinney) | Semiconductor Solutions segment proxy + null/magnitude/freshness guards |
+
+### Board-Approved Architecture:
+
+- **Stop:** 14-week ATR × 2.5× (weekly bars) + 15% hard floor from entry (whichever fires first); lock at entry — Slack alert on VIX expansion instead of auto-widen
+- **Entry:** 3-tranche limit orders (1/3 Day 1 close, 1/3 Day 3, 1/3 Day 5); Day 1 gate: 30-min bar must close > prior_close × 0.85 or defer to next session
+- **Sizing:** AVGO 20% / NVDA 15% / ANET 10% (45% total conviction-weighted, per Rafael mandate)
+- **Kelly fix (mandatory):** `available_intraday_equity = total_equity - quarterly_holds_market_value`
+- **PDT:** Intraday bot blocked from a symbol on days quarterly module opens/closes that symbol (Levitt flag)
+- **Coexistence v1:** `_quarterly_hold_symbols: set[str]` shared registry; intraday entry_logic.py checks before scanning
+- **State machine (7 states):** PENDING_ENTRY → AWAITING_FILL → ACTIVE → PENDING_STOP_REPLACE → PENDING_EXIT → CLOSED | THESIS_INVALIDATED
+- **State file:** `data/state/quarterly_holds.json` (os.fsync() atomic write; separate from trade_log.json)
+- **Feature flag:** `QUARTERLY_HOLDS_ENABLED` in `.env`; try/except import guard in run_cycle.py (MTTR = env-var toggle, no code change)
+
+### Thesis Invalidation (BoD Q5, all APPROVE):
+
+- **AVGO:** Q3 FY2026 AI rev (FMP Semiconductor Solutions segment proxy) < $13.6B (>15% miss vs $16B guidance) = primary; management language "delay/softness/qualification" in AI XPU Q&A = secondary; AVGO put/call ratio >2.0 (60-90 DTE) for 3+ consecutive days within 6 weeks of Sept earnings → reduce position 50%
+- **NVDA:** Data center miss >10% AND Q3 guide-down simultaneously (BOTH required); TSMC capacity cut at quarterly earnings = supply-chain proxy
+- **ANET:** FY2026 AI networking < $2.8B at August update; Cisco AND Juniper concurrent guide-down = market contraction signal
+
+### Module Interface (TB spec — required interface):
+
+```python
+class QuarterlyHoldManager:
+    def __init__(self, broker, fmp_client, alerter, config: dict,
+                 state_path: Path, dry_run: bool = False, clock=None): ...
+    def reconcile_on_startup(self) -> ReconcileResult: ...    # before first intraday cycle
+    def run_weekly_check(self) -> None: ...                    # once per RTH cycle (not per bar)
+    def maybe_enter_positions(self) -> list[str]: ...          # at RTH open for PENDING_ENTRY positions
+    def get_status(self) -> list[QuarterlyHoldStatus]: ...     # structured status for dashboard tile
+    def safe_stop(self) -> None: ...                           # on shutdown/emergency stop
+```
+
+### Beck's First 3 Tests (must exist before writing implementation):
+
+1. Restart during AWAITING_FILL → `reconcile_on_startup()` calls NO new order submission
+2. GTC stop order not found on Alpaca → state transitions to PENDING_STOP_REPLACE + Slack alert fires
+3. FMP returns null for thesis metric → `ThesisCheckResult.DATA_UNAVAILABLE`, no exit order, state unchanged
+
+### Pending JSON format (for autonomous_review.py):
+
+```json
+{
+  "target_file": "execution/quarterly_hold_manager.py",
+  "status": "awaiting_ds_gai",
+  "base_commit": "<git rev-parse HEAD>",
+  "sha256": "<sha256sum of file>",
+  "description": "New quarterly hold manager module — RTH chain import",
+  "patch_file": "logs/pending_patch_2026-06-04_quarterly_hold_manager.patch",
+  "ds_gai_prompt": "<full DS/GAI prompt>"
+}
+```
+
+---
+
+## 🤖 CCR BUILD TASK — execution/quarterly_hold_manager.py
+
+**Authorization: "patches that have the 3 point AI audit are approved" (Rafael, S48b)**
+**Pipeline: CCR draft → pending_ds_gai JSON + .patch → autonomous_review.py OCI (11 PM ET) → pending_approvals_*.md → Rafael approves next session**
+
+### Mandatory sequence for CCR:
+
+1. `/session-start`
+2. Full read: `strategy/run_cycle.py` + `execution/broker.py` + `execution/portfolio_tracker.py` — ALL >1000L → Explore subagents, declare line count for each
+3. 10-point audit + RC-1 through RC-8 on all three integration files → write findings to `logs/tb_audit_log.md`
+4. Draft `execution/quarterly_hold_manager.py` per module spec + board decisions in this file
+5. `python3 -m py_compile` + `python3 -m mypy --warn-unreachable` + `ruff check --select E,W,F,B` — ALL must PASS
+6. Cold second-agent logic review (diff + intent → PASS/FAIL)
+7. `code-review-graph` detect_changes + get_impact_radius on `strategy/run_cycle.py` + `execution/portfolio_tracker.py`
+8. Create `logs/pending_ds_gai_2026-06-04_quarterly_hold_manager.json` + `logs/pending_patch_2026-06-04_quarterly_hold_manager.patch` → commit to GitHub
+9. Update `HANDOFF.md` and `logs/tb_audit_log.md`; push all to GitHub
+
+If quarterly_hold_manager.py complete and time remains → P2 NFLX FIFO: `portfolio_tracker.py` (2284L → Explore subagent) → audit _save_open_lots() + _fifo_reconstruct() → pending_ds_gai JSON → GitHub
+
+---
 
 ## 🌙 CRON AGENT TASK — Quarterly Holds Research (COMPLETED by in-session Claude S48)
 
