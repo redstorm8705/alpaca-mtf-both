@@ -124,7 +124,7 @@ When you log in → Step 3c reads `pending_approvals_*.md` → shows numbered pa
 - **DS/GAI DIRECT API PROTOCOL (S47e — MANDATORY — NOT browser automation):**
   - **DeepSeek:** `curl https://api.deepseek.com/v1/chat/completions -H "Authorization: Bearer $DEEPSEEK_API_KEY" -H "Content-Type: application/json" -d '{"model":"deepseek-chat","messages":[...],"max_tokens":4096}'` — model = `deepseek-chat`
   - **Gemini:** `curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d '{"contents":[...],"generationConfig":{"maxOutputTokens":8192}}'` — model = `gemini-2.5-flash`, maxOutputTokens=8192
-  - Keys in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env` — `DEEPSEEK_API_KEY=sk-2a65640190aa4fd38793a0beba7c56b3`, `GEMINI_API_KEY=AIzaSyB902ZD2XQ0HVu_LIXU4KMkyYcSE8QUzPg`
+  - Keys in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env` — `DEEPSEEK_API_KEY` and `GEMINI_API_KEY` (see .env — do NOT hardcode key values in handoff or memory files)
   - **WHY DIRECT API:** DeepSeek/AI Studio are React/Angular SPAs — background tabs don't render DOM content; Chrome extension security blocks innerHTML/TreeWalker access. Direct API bypasses ALL of this.
   - DS persona: "Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."
   - GAI persona: "Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."

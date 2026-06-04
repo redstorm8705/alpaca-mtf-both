@@ -72,8 +72,8 @@ curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:g
 - GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
 
 **API Keys** (in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env`):
-- `DEEPSEEK_API_KEY=sk-2a65640190aa4fd38793a0beba7c56b3`
-- `GEMINI_API_KEY=AIzaSyB902ZD2XQ0HVu_LIXU4KMkyYcSE8QUzPg`
+- `DEEPSEEK_API_KEY` — see `.env` (never hardcode key values in CLAUDE.md or any tracked file)
+- `GEMINI_API_KEY` — see `.env` (rotated S47f after prior key was leaked via session transcript)
 
 **Same prompt to both:** DS and GAI must always receive the EXACT SAME comprehensive prompt (DS/GAI Same Prompt Rule). Never split questions.
 
