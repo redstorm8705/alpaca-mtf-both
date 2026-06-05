@@ -1,4 +1,23 @@
 # Tech Board (TB) Master Audit Log
+
+**Log updated:** 2026-06-05 S49 — INVESTIGATION SESSION (RTH active — no patches applied). GTC/DAY stop lifecycle confirmed correct-by-design. MSTR overnight=False gap identified. OCI git reset to origin/main (ae6d692→89ee635, 5 commits fast-forwarded). CCR 1 hit weekly usage limit — no quarterly_hold_manager.py output.
+
+**GTC/DAY stop lifecycle audit (execution/orphan_manager.py + execution/gtc_manager.py):**
+- Design confirmed: pre-RTH `cancel_and_reconcile_gtc_stops()` INTENTIONALLY cancels overnight GTC (log: "Cancelling GTC stop before RTH"). No re-submit at this point — DAY stop takes over at RTH open via `submit_rth_day_stops()`. After 4 PM ET, AH GTC loop (main.py ~L3394) re-submits GTC for overnight protection. All 3 legs observed working today for NFLX. NOT a bug.
+- Today's NFLX stop chain confirmed: GTC `ef4a4bbf` → restart → GTC `2857bef3` → restart → GTC `69842c41` → pre-RTH cancel → DAY `546a4a48` (9:30 AM ET RTH open) → DAY expires 4 PM ET → AH loop submits new GTC tonight.
+
+**MSTR overnight=False gap (P2 observation — no patch required this session):**
+- MSTR short entered 10:13 AM ET (score 11/12). Bot restarted 12:25 PM ET; orphan_manager adopted with overnight=False, ATR stop=$131.61, target=$93.59.
+- `submit_rth_day_stops()` filters `t.get("overnight") == True` — MSTR excluded. No DAY stop submitted.
+- AH GTC loop only protects `overnight=True` positions — MSTR also excluded.
+- Result: MSTR carries no exchange-level stop overnight if not closed before 4 PM ET.
+- Risk: 1 share × (131.61 − 118.94) = $12.67 max loss to ATR stop. Accepted for paper trading.
+- Root cause: orphan_manager sets overnight=False for same-day entries — correct intraday classification, but creates unprotected overnight if position isn't closed intraday.
+
+**POSITION COUNT DRIFT (observed, pre-existing):**
+- CRITICAL logged every restart: `risk.open_positions=0 vs tracker=1`. P0-STARTUP block (S42) corrects it but initializes to 0 at startup before correction fires. Known behavior — not new.
+
+
 **Project:** Alpaca MTF Confluence Bot
 **Protocol:** 10-Point Per-File Audit (standing — see CLAUDE.md §Board Audit Protocol)
 **Log updated:** 2026-06-02 S47d — INVESTIGATION SESSION (RTH block — no patches applied). 8 files fully read. ROOT CAUSE 1 (P/L mismatch): generate_dashboard.py (942L, 4 chunks) NEVER writes lifetime_pnl_cache.json; monthly_review.py `_load_lifetime_pnl()` is dead code (defined at L67-79 but never called in `_build_html` — L297 calls `compute_lifetime_stats()` directly); OCI cache stale since May 17 with wrong key `"lifetime_pnl"` (code reads `"total_pnl"` — always 0.0); during RTH monthly_review.html frozen (RTH self-block L35-41) while dashboard refreshes every ~60s. Board vote (4 cold parallel agents — Kim/McKinney/Harris/Majors) 4/4 MODIFY with 6 requirements: (1) generate_dashboard.py must write cache after compute_lifetime_stats(); (2) cache key must be `"total_pnl"`; (3) fix `_load_lifetime_pnl()` with key validation (None on mismatch); (4) delete stale OCI cache before deploy (Harris M-4); (5) use `LOG_DIR` constant in generate_dashboard.py patch; (6) monthly_review.py L297 use `_raw = _load_lifetime_pnl(); _lt_data = _raw if _raw is not None else compute_lifetime_stats()`. DS/GAI prompts prepared in-session (plain text); generate_dashboard.py patch queued for post-RTH (RTH-chain). ROOT CAUSE 2 (risk.open_positions desync): trade_engine.py L252-254 direct assignment `risk.open_positions = len([t for t in tracker.open_trades.values() if t.get("status") == "open"])` instead of calling `risk.register_open()` in `_reconcile_pending_overnight_orders()` — fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist. reset_daily() confirmed SAFE (does NOT reset open_positions — only resets daily_start_value/portfolio_value/daily_pnl/killed). Full 9-step + DS/GAI required (RTH-chain); patch queued for post-RTH.
