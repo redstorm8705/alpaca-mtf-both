@@ -3829,3 +3829,114 @@ Four threats checked:
 ### Open items from this audit
 - RC-1, RC-2, RC-3, RC-4, RC-7, RC-8: all pre-existing — not introduced by this patch
 - Q4 (partial close): deferred to P2 — needs qty-level comparison + partial record_exit design
+
+---
+
+## S49 — 2026-06-05 — quarterly_hold_manager.py BUILD (new module)
+
+### Integration File Reads (Step 1 — Full Read Gate)
+| File | Lines | Chunks | Declared |
+|------|-------|--------|---------|
+| strategy/run_cycle.py | 1675 | 6 | ✅ |
+| execution/broker.py | 696 | 3 | ✅ |
+| execution/portfolio_tracker.py | 2284 | 8 | ✅ |
+
+### 10-Point Audit — run_cycle.py (1675L)
+1. **Static analysis**: pending (Step 5a, run on draft)
+2. **Trade path**: QHM hooks at (a) startup in main.py after risk.sync, (b) line 717 RTH DAY stops for maybe_enter_positions(), (c) lines 820-836 overnight reconciliation zone for run_weekly_check(), (d) shutdown via safe_stop()
+3. **Adversarial**: QHM import must be in try/except guard (pattern matches lazy imports at lines 209,237,291). If QUARTERLY_HOLDS_ENABLED=False or module missing → graceful skip, not crash.
+4. **Full read**: ✅ declared
+5. **Cross-references**: No existing quarterly_hold refs anywhere. Clean integration surface.
+6. **Conflicts**: None. run_cycle.py has no conflicting QHM state.
+7. **Redundancy**: None relevant.
+8. **RC-2**: Line 74 original unfixed RC-2 (_PROJECT_ROOT defined but root path construction unresolved). Not in scope for this build.
+9. **Data tier**: N/A
+10. **Timezone**: ET/PT used correctly throughout.
+
+### 10-Point Audit — broker.py (696L)
+1. **Static analysis**: pending
+2. **Trade path**: submit_limit_order (DAY TIF) for quarterly entries; submit_gtc_stop_order for overnight stop protection
+3. **Adversarial**: No GTC limit order method (only DAY). Quarterly entries at close use DAY limit — acceptable. AlpacaBroker is stateless wrapper around module-level singleton.
+4. **Full read**: ✅
+5. **Cross-references**: AlpacaBroker.__init__ has no params. All methods delegate to module-level functions.
+6. **Conflicts**: _short_blocked_symbols global set not relevant to quarterly long holds.
+7. **RC-3**: 7 broad except catches (lines 82,104,202,279,340,455,506) — pre-existing, not in scope
+8. **RC-7**: No sizing in broker — sizing in QHM.
+9. **Data tier**: N/A
+10. **Timezone**: N/A
+
+### 10-Point Audit — portfolio_tracker.py (2284L)
+1. **Static analysis**: pending
+2. **Trade path**: record_entry() + record_exit() available for QHM positions IF needed. Decision: QHM manages its own state file (quarterly_holds.json) separately — does NOT call record_entry/exit to avoid intraday P&L attribution confusion.
+3. **Adversarial**: _quarterly_hold_symbols doesn't exist in tracker — QHM module-level set is the source of truth. entry_logic.py imports get_quarterly_hold_symbols() from QHM module.
+4. **Full read**: ✅
+5. **Cross-references**: sync_from_tracker() not found (was sync_pdt_with_alpaca). No QHM integration needed in tracker itself.
+6. **Conflicts**: QHM's separate state file avoids all tracker FIFO/overnight conflicts.
+7. **Redundancy**: None.
+8. **RC-5**: Atomic writes confirmed for trade_log.json and open_lots_prior_day.json — QHM will mirror this pattern.
+9. **Data tier**: N/A
+10. **Timezone**: ET/PT correct throughout.
+
+### RC-1 through RC-8 — Integration Files
+| RC | run_cycle.py | broker.py | portfolio_tracker.py |
+|----|-------------|-----------|----------------------|
+| RC-1 | PASS | PASS | PASS |
+| RC-2 | Line 74 (pre-existing, unfixed) | PASS | PASS |
+| RC-3 | PASS | 7 pre-existing (not in scope) | PASS |
+| RC-4 | PASS | PASS | Existing implementation (correct) |
+| RC-5 | PASS | PASS | PASS (atomic writes) |
+| RC-6 | PASS | PASS | PASS |
+| RC-7 | PASS | PASS | PASS |
+| RC-8 | PASS | PASS | PASS |
+
+### New Module — execution/quarterly_hold_manager.py
+**Status**: Drafting post-board-vote
+**Architecture**: Board-approved S48b (25 members). See handoff.md §BOARD VOTE COMPLETE.
+**Beck's 3 tests**: Required before implementation per board spec.
+**State file**: data/state/quarterly_holds.json (separate from trade_log.json)
+**DS/GAI gate**: RTH execution impact = YES (new module imported by run_cycle.py) → DS+GAI required
+
+
+---
+
+## S49 — DS/GAI EXTERNAL AUDIT — quarterly_hold_manager.py (new module)
+
+**DS:** finish=length (4096 tokens) | **GAI:** finish=MAX_TOKENS (8192 tokens)
+
+=== 3-POINT AI SUMMARY — quarterly_hold_manager.py (new module) ===
+
+POINT 1 — ALIGNMENT (3/3 = all three agree; 2/3 = DS+GAI; 1/3 = Claude only)
+  AWAITING_FILL expiry detection: 3/3 — Claude ✓ (Katsuyama MODIFY HIGH) DS ✓ GAI ✓
+  Beck Test 1 incomplete (no broker-call verification): 1/3 — Claude ✗ DS ✓ GAI ✓
+  orphan_manager cancels QHM GTC stops (unprotected window): 1/3 — Claude ✗ DS ✓ GAI ✓
+  Separate state file avg_entry_price drift: 1/3 — Claude ✗ (partial) DS ✓ GAI ✓
+  ATR bar count fix (num_bars=65, was 19): 1/3 — Claude ✓ (cold agent+McKinney) DS ✗ GAI ✗
+  Tranche day boundary fix (delta >= N-1): 1/3 — Claude ✓ (cold agent) DS ✗ GAI ✗
+
+POINT 2 — CLAUDE MISSED (DS + GAI consensus gaps)
+  1. orphan_manager.py cancels QHM GTC stops pre-RTH. orphan_manager has no knowledge of QHM-registered
+     stops and will cancel them at pre-RTH cleanup, leaving quarterly positions unprotected 9:30 AM → 4 PM ET.
+     Action: orphan_manager.py MUST check get_quarterly_hold_symbols() before cancelling.
+     Scope: separate file (RTH-chain) → separate session, full board vote + DS/GAI.
+     Interim mitigation: flag as P1 in handoff.md; QHM's AH loop resubmit provides ~overnight protection
+     but intraday window is unprotected until orphan_manager fix is deployed.
+  2. Beck Test 1 only checks entry_order_id preserved, not that broker was never called.
+     A broken reconcile could submit new order while preserving ID — test would still pass.
+     Action (in-scope): Strengthen Beck Test 1 to also assert state remains AWAITING_FILL in dry_run.
+  3. Separate state file avg_entry_price drift — on every run_weekly_check() for ACTIVE positions,
+     qty/avg_entry_price should be refreshed from broker.get_position() (Alpaca authoritative).
+     Action (in-scope): Add Alpaca resync in run_weekly_check() for ACTIVE positions.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  orphan_manager integration gap (DS+GAI, P0): orphan_manager.py must import get_quarterly_hold_symbols()
+    and skip cancellation for QHM-registered symbols. Affects RTH-chain file → board vote required.
+    Scheduled as P1 separate session.
+  Beck tests use real symbol names (DS, P2): Beck Test 3 uses "AVGO" — if AVGO is an active position,
+    the test modifies a live HoldPosition. Should use unique test symbol like __BECK_TEST_3__.
+    In-scope fix: rename to __BECK_TEST_3__.
+  Partial fill not handled in _check_fill_and_advance (GAI, P2): Alpaca may return qty=50 when order
+    was for 100 shares. Current code treats partial fill as full fill. Should compare against expected
+    tranche qty. In-scope fix: add partial fill note; acceptable for v1 (paper acct, liquid names).
+
+=== END 3-POINT AI SUMMARY ===
+

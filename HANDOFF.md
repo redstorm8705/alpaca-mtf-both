@@ -5,17 +5,26 @@
 - **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
 - **SSH:** `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32` (Ed25519 key)
 - **Bot CWD on OCI:** `/home/ubuntu/mtf-bot/` — always rsync to this path (NOT alpaca-mtf-bot_FINAL)
-- **Account:** Paper | equity **$2,852.68** (confirmed S37 MCP) | All-time P&L +$442.38 (Alpaca-authoritative, confirmed S29) | MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | KELLY_MAX_RISK_PCT=6% | MAX_PORTFOLIO_RISK_PCT=4%
+- **Account:** Paper | equity **$2,825.67** (confirmed S49 MCP) | All-time P&L +$442.38 (Alpaca-authoritative, confirmed S29) | MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | KELLY_MAX_RISK_PCT=6% | MAX_PORTFOLIO_RISK_PCT=4%
+- **OCI git:** ✅ FIXED S49 — reset to `89ee635` (was `ae6d692`, 5 commits behind). portfolio_tracker.py no longer dirty.
 - **Dashboard:** `http://129.153.208.32:8080/dashboard.html`
 - **RAM (S45):** ⚠️ 695MB used / 113MB free at session start (12:31 PM ET Jun 1 — RTH, no restart). Alert threshold: 550MB → restart all services. Prior peaks: S37=750MB, S39=731MB (both triggered auto-restart). memory_watchdog.sh will auto-restart post-RTH when < 150MB free. P1/P2/P3/P4 all deployed. Optional P5 jemalloc pending (systemd unit only).
 - **⚠️ SSH KEY NOTE:** Ed25519 key at `~/.ssh/mtf_bot_oracle`. rsync syntax: always use `-e "ssh -i ~/.ssh/mtf_bot_oracle"` — NEVER use `-i` as standalone rsync flag.
 
-## Open Positions (confirmed Alpaca API 06:40 UTC 2026-06-04)
-- **NFLX short -1sh @ $81.84** | GTC stop BUY 1sh @ $84.56 (order f950a418, accepted) | target $76.41 | overnight hold (overnight_since 2026-06-03 16:06 ET) | pre-market ~$81.96
-- ⚠️ FIFO CRITICAL noted (net_qty accumulating -12 on restarts — pre-existing state corruption, NOT Phase 2a.5 related. Phase 2a.5 correctly skips NFLX because synthetic short lot appears in _alpaca_lots). P2 issue.
+## Open Positions (confirmed Alpaca API 2026-06-05 S49)
+- **NFLX short -1sh @ $81.84** | RTH DAY stop BUY 1sh @ $84.58 active until 4 PM ET today | after 4 PM: AH GTC loop re-submits GTC automatically (confirmed design) | target $76.41 | overnight hold (overnight_since 2026-06-03 16:06 ET) | current ~$81.52
+- **MSTR short -1sh @ $118.94** | ✅ GTC stop BUY 1sh @ $131.61 (order 30971b38, submitted S49 via SSH/REST) | target $93.59 | entered 10:13 AM ET 2026-06-05, adopted orphan at 12:25 PM ET restart | board-approved (4-domain vote S49) | overnight=False in bot tracker (bot won't auto-resubmit GTC on restart — manual stop is the protection)
+- ⚠️ NFLX FIFO: net_qty accumulating -12 on restarts (pre-existing, NOT Phase 2a.5). P2.
+
+## GTC/DAY Stop Lifecycle (confirmed S49 — NOT a bug)
+- Pre-RTH: orphan_manager cancels overnight GTC (intentional cleanup before RTH)
+- RTH open (9:30 AM ET): gtc_manager submits DAY stop for overnight positions — intraday protection
+- 4 PM ET: DAY stop expires automatically
+- Post-4 PM ET: AH GTC loop (main.py ~L3394) re-submits GTC for next overnight hold
+- Pattern confirmed today: GTC → restart → GTC → restart → GTC → pre-RTH cancel → DAY (9:30 AM) → DAY expires → GTC (tonight)
 
 ## PDT
-- **0/3 slots used** (daytrade_count=0, confirmed Alpaca MCP S48)
+- **0/3 slots used** (daytrade_count=0, confirmed Alpaca MCP S49 — MSTR entry today was SHORT, not a day trade reversal)
 
 ## ✅ QUARTERLY HOLDS RESEARCH — COMPLETE (S48, 2026-06-04 pre-market)
 
@@ -27,7 +36,8 @@
 | 2 | **NVDA** | ~12 wk → Aug 26 | $214.95 (flat) | Q1 FY2027 $81.6B (+85%), Blackwell ramp |
 | 3 | **ANET** | ~9 wk → Aug 3 | $168.45 (−3.4%) | Q1 2026 +35% rev, EPS beat +10%, AI networking |
 
-**Next step:** Board vote COMPLETE ✅ S48b. CCR building `execution/quarterly_hold_manager.py` autonomously. DS/GAI via `autonomous_review.py` on OCI (11 PM ET tonight). Rafael approves on return.
+**CCR 1 status (S49):** Hit weekly usage limit — no output committed. CCR 2 (3:10 PM PT) will retry from Step 1. If CCR 2 also hits limit, schedule fresh CCR in next session.
+**DS/GAI via `autonomous_review.py` on OCI (11 PM ET tonight):** Will run only if CCR 2 produces `logs/pending_ds_gai_*.json`.
 
 ⚠️ **AVGO entry deferred per board:** Tudor Jones / Weinstein / Brandt all REJECT same-day gap entry. AVBO enters in 3 tranches starting Day 3 close post-earnings (~June 9). NVDA + ANET proceed when Stage 2 confirmed.
 

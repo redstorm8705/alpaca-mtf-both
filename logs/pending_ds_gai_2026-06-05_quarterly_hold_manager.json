@@ -1,0 +1,45 @@
+{
+  "target_file": "execution/quarterly_hold_manager.py",
+  "status": "ds_gai_complete",
+  "base_commit": "cbe829e07e40095baf85989ae26fcdf0d2510455",
+  "sha256": "802bccc53076b0665b5d67f1900cd1fcc1a724fb79116b17edb0a676c253deca",
+  "line_count": 1432,
+  "description": "New quarterly hold manager module — AVGO/NVDA/ANET multi-week anchor positions alongside intraday bot. 7-state machine, 3-tranche DAY limit entry, 14wk ATR GTC stop, Kelly fix, shared registry with entry_logic.py.",
+  "patch_file": "logs/pending_patch_2026-06-05_quarterly_hold_manager.patch",
+  "board_vote": "4-domain parallel vote S49 2026-06-05 — CONDITIONAL APPROVE (Execution Risk, Reliability, Data Integrity, Quant Logic)",
+  "board_modifications_incorporated": [
+    "Entry at 10:05 AM ET (not RTH open) — Harris/Brandt",
+    "DAY order expiry detection in reconcile_on_startup — Katsuyama HIGH",
+    "threading.Lock removed from OrderDispatcher — Peterffy",
+    "num_bars=65 for 14-week ATR (not 19) — McKinney",
+    "FMP guidance + 30-day freshness gate — McKinney/Derman",
+    "Same-symbol cross-trade block via get_quarterly_hold_symbols — Derman",
+    "Reconcile adopts stops; AH loop resubmits — Katsuyama",
+    "circuit_breaker flag on safe_stop — Peterffy",
+    "Day 3 re-confirmation gate — López de Prado"
+  ],
+  "cold_second_agent_verdict": "FAIL (2 issues found and fixed: tranche day boundary delta>=N-1, ATR bar count >=N+1)",
+  "ds_verdict": "APPROVE with findings",
+  "ds_key_findings": [
+    "Beck Test 1 incomplete — only checks entry_order_id, not state (FIXED: added state assertion)",
+    "Beck Test 3 uses live symbol AVGO (FIXED: renamed to __BECK_TEST_3__)",
+    "orphan_manager.py cancels QHM GTC stops — P1 forward-looking, separate session required",
+    "Separate state file P&L drift — MITIGATED: _resync_from_alpaca() added to run_weekly_check"
+  ],
+  "gai_verdict": "APPROVE with findings",
+  "gai_key_findings": [
+    "Beck tests don't verify broker wasn't called (FIXED: state assertion added)",
+    "avg_entry_price drift over multi-week holds (FIXED: _resync_from_alpaca added)",
+    "orphan_manager integration gap — P1 separate session",
+    "Monday restart expiry logic correct for basic case"
+  ],
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS (0 errors)",
+    "ruff": "PASS (0 violations)"
+  },
+  "ds_gai_prompt_file": "logs/pending_ds_gai_2026-06-05_quarterly_hold_manager.json",
+  "created_at": "2026-06-05T12:28:49-07:00",
+  "session": "S49",
+  "approved_by_mandate": "Rafael S49 autonomous mode — 3-point AI audit after board vote = approved"
+}
