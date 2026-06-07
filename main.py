@@ -302,17 +302,14 @@ def main():
     else:
         logger.info("OVERNIGHT_ENTRIES_ENABLED=False (profile: %s)", args.profile)
 
-    # ── BoD-3: Paper kill switch guard ───────────────────────────────────────
-    # config.py paper profile sets MAX_DAILY_LOSS_PCT=0.30.
-    # Override to 15% at runtime — aggressive $2.5K→$25K goal; day trades are
-    # the worst-case scenario other than a kill switch hit.  Revisit once
-    # equity exceeds $25K.  config.py is read-only per project rules; this
-    # override applies after the profile loop so it wins regardless of what
-    # the PROFILES dict says.
-    if args.profile == "paper" and getattr(config, "MAX_DAILY_LOSS_PCT", 1.0) > 0.15:
-        config.MAX_DAILY_LOSS_PCT = 0.15
-        _old_pct = config.PROFILES.get("paper", {}).get("MAX_DAILY_LOSS_PCT", 0.30) * 100
-        logger.info(f"BoD-3: Paper kill switch capped at 15% (was {_old_pct:.0f}% in PROFILES dict)")
+    # ── Kill switch: config.py paper profile = 7% (board vote 2026-04-22, 13-0) ──
+    # S50: BoD-3 dead-code removed. Override only fired when profile > 0.15;
+    # paper profile is 0.07, so condition was always False. Single source of
+    # truth is config.py L243. CLAUDE.md Invariant #6 updated to reflect 7%.
+    logger.info(
+        "Kill switch: %.0f%% (config.py paper profile, board vote 2026-04-22)",
+        config.MAX_DAILY_LOSS_PCT * 100,
+    )
 
     # ── AB-4: Opening buffer — config.py now set to 30, this block is redundant ─
     # P5-H4 fix: TOD_MARKET_OPEN_BUFFER_MINS aligned to 30 in config.py directly.
@@ -803,20 +800,27 @@ def main():
     if universe_override:
         logger.info(f"Universe override: {universe_override}")
 
-    # ── Sync PDT counter from Alpaca — catches trades from prior bot instances ─────────────
-    try:
-        _account = get_account()
-        _alpaca_dt_count = int(getattr(_account, "daytrade_count", 0))
-        if _alpaca_dt_count > 0:
-            if not hasattr(tracker, "_day_trades"):
-                tracker._day_trades = []
-            today = date.today().isoformat()
-            existing = sum(1 for t in tracker._day_trades if t["date"] == today)
-            for _ in range(_alpaca_dt_count - existing):
-                tracker._day_trades.append({"symbol": "SYNC", "timestamp": today, "date": today})
-            logger.info(f"PDT counter synced from Alpaca: {_alpaca_dt_count} day trades today")
-    except Exception as _e:
-        logger.warning(f"PDT sync failed: {_e}")
+    # ── PDT counter sync — gated on PDT_ENFORCEMENT_ENABLED (S50 board) ─────────────────────
+    if getattr(config, "PDT_ENFORCEMENT_ENABLED", True):
+        try:
+            _account = get_account()
+            _alpaca_dt_count = int(getattr(_account, "daytrade_count", 0))
+            if _alpaca_dt_count > 0:
+                if not hasattr(tracker, "_day_trades"):
+                    tracker._day_trades = []
+                today = date.today().isoformat()
+                existing = sum(1 for t in tracker._day_trades if t["date"] == today)
+                for _ in range(_alpaca_dt_count - existing):
+                    tracker._day_trades.append(
+                        {"symbol": "SYNC", "timestamp": today, "date": today}
+                    )
+                logger.info(
+                    "PDT counter synced from Alpaca: %d day trades today", _alpaca_dt_count
+                )
+        except Exception as _e:
+            logger.warning("PDT sync failed: %s", _e)
+    else:
+        logger.info("PDT enforcement disabled (PDT_ENFORCEMENT_ENABLED=False) — sync skipped.")
 
     # ── Daily reset ───────────────────────────────────────────────────────────────────────────
     # H-1: use _sod_equity (Alpaca last_equity = SOD baseline) not current portfolio_value.

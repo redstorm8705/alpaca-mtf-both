@@ -71,9 +71,11 @@ CONVICTION_PDT_FULL_MIN  = 12     # PDT=3, score 12 = full size
 
 # ─── DAY-TRADE COUNTER ───────────────────────────────────────────────────────
 # Tracks same-day round-trips (buy and sell same security same day)
-# PDT rule: max 3 day trades per rolling 5-business-day window under 5K
-
-DAY_TRADE_MAX_ROLLING    = 3      # max day trades per rolling window
+# PDT rule: S50 board unanimous — PDT removed for accounts <$25K.
+# Feature flag preserves reversibility for live accounts + future rule changes.
+PDT_ENFORCEMENT_ENABLED  = False  # True = enforce 3-trade rolling window
+                                  # False = unlimited day trades (accounts <$25K)
+DAY_TRADE_MAX_ROLLING    = 3      # max day trades per rolling window (used when enabled)
 DAY_TRADE_ROLLING_DAYS   = 5      # rolling window in business days
 
 # ─── PRE-MARKET MOVER FILTER ────────────────────────────────────────────────────────────

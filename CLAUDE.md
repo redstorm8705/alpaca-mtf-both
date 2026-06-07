@@ -286,6 +286,36 @@ indicators/, utility scripts, and any new files created here.
 
 ---
 
+## OPEN QUESTION PROTOCOL — Mandatory Board + DS + GAI on Decision Forks
+
+**When to trigger:** Any time a patch, config change, or design decision has two or more
+viable options and Claude cannot resolve it from first principles, Claude MUST gather
+all three voices before presenting to Rafael:
+
+1. **Board vote** — relevant domain agents (≥2 cold parallel Explore subagents). For
+   strategy/architecture changes: full board (BoD + AB + TB). For feature-specific changes:
+   domain-specific boards per the domain mapping in BOARD AUDIT PROTOCOL.
+2. **DS audit** — via direct curl API (DEEPSEEK_API_KEY from .env). Same prompt as GAI.
+3. **GAI audit** — via direct curl API (GEMINI_API_KEY from .env). Same prompt as DS.
+
+**Format — present as a decision table:**
+```
+| Voice | Vote | Core argument |
+```
+Then state: "Split X-Y" or "Consensus: [option]" and note that Rafael is the sole authority.
+
+**This protocol applies to:** patch Q&A (e.g., "keep or remove the synthetic lot?"),
+config decisions (e.g., "7% or 15% kill switch?"), architecture forks (e.g., "feature
+flag vs hard removal"), and any design question with legitimate competing arguments.
+
+**This protocol does NOT replace:** the standard mandatory patch sequence (Steps 1-9).
+It adds to Step 6 (Propose) when a decision fork exists within the patch design.
+
+**No work is blocked:** Claude continues non-disputed items in parallel while gathering
+votes. Open questions are surfaced immediately when encountered, not deferred to session end.
+
+---
+
 ## AUTHORITY RULE — PERMANENT
 
 **The user (Rafael) is the sole mandate authority for this project.**
@@ -694,11 +724,16 @@ the board output in plain language without losing the directional conclusion.
 1. **SPY 5-min bar-over-bar is the SOLE entry gate.** MRI and Macro Regime Detector only adjust
    quality bar and size floor.
 2. **Keywords are display-only.** CAUTION/MONITOR = zero size impact. Only HALT = 0.0x.
-3. **PDT is a hard 3-slot rolling window.** At PDT=3/3: GTC stop-market submitted (Alpaca blocks same-day close).
+3. **PDT enforcement disabled (S50, 2026-06-06, board unanimous).** PDT rule removed for accounts <$25K.
+   `PDT_ENFORCEMENT_ENABLED=False` in config.py gates all PDT logic. Feature flag preserves reversibility
+   for live accounts. GTC stops submit for ALL overnight positions regardless of PDT state.
 4. **Bar staleness uses CLOSE-based age.** `_bar_ts_et + timedelta(minutes=15)` — do not revert to open-based.
 5. **Entry price = Alpaca Data real-time last trade + bar close fallback.** Replaces yfinance fast_info.
    Source logged with every entry event in `trade_events.jsonl`.
-6. **Kill switch is 15% for paper.** Revisit ONLY when equity exceeds $25K.
+6. **Kill switch is 7% for paper** (board vote 2026-04-22, 25-1; confirmed S50 board 13-0).
+   config.py paper profile L243 is the single source of truth. Tiered upgrade path:
+   $10K→10% | $20K→12% | $25K→15% — each requires a board vote.
+   BoD-3 main.py override was dead code (condition never fired) and has been removed (S50).
 7. **Bucket A (TQQQ/SQQQ/TSLL) exemption from safe_close_all:** Applies ONLY on routine news halts
    (`circuit_breaker=False`). Circuit-breaker halt closes everything unconditionally.
 8. **paper=True hardcoded in broker.py.** Change to False ONLY at live launch after full board vote.

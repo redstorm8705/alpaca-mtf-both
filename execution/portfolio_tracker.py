@@ -287,7 +287,18 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
                     if lot["qty"] == 0:
                         current.pop(0)
                 if to_cover > 0:
-                    current.append({"qty": to_cover, "price": price, "side": "long"})
+                    # S49 board unanimous (McKinney/Derman/Peterffy): DO NOT append
+                    # synthetic lot. Phantom lots persist into open_lots_prior_day.json
+                    # and accumulate across restarts (AMZN -34→-35→-36 this week).
+                    # CRITICAL log forces operator investigation. P2: add Slack dedup.
+                    logger.critical(
+                        "[FIFO] %s: buy_to_cover with no open short lots "
+                        "(net_qty=%d, qty=%d, price=%.2f). "
+                        "Prior lots missing — qty NOT recorded. "
+                        "Operator review required: check open_lots_prior_day.json.",
+                        sym, net_qty, qty, price,
+                    )
+                    # Intentionally no lot append — prevents phantom accumulation.
             else:
                 current.append({"qty": qty, "price": price, "side": "long"})
 
@@ -1876,7 +1887,14 @@ class PortfolioTracker:
         """
         Record a same-day round-trip (day trade) with timestamp.
         Persisted to logs/day_trades.json so it survives bot restarts.
+        S50: gated on PDT_ENFORCEMENT_ENABLED — skips recording when PDT disabled.
         """
+        import config as _cfg_pdt
+        if not getattr(_cfg_pdt, "PDT_ENFORCEMENT_ENABLED", True):
+            logger.debug(
+                "[%s] PDT enforcement disabled — day trade not recorded.", symbol
+            )
+            return
         self._day_trades.append({
             "symbol":    symbol,
             "timestamp": datetime.now(_PT).isoformat(),

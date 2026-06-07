@@ -164,16 +164,16 @@ def run_cycle(
         _touch_cycle_ts()
         return
 
-    # ── Hourly PDT sync with Alpaca ──────────────────────────────────────────
-    # Detects day trades made outside this bot instance (manual trades, other sessions).
-    _last_pdt_sync = getattr(run_cycle, "_last_pdt_sync_hour", -1)
-    if now.hour != _last_pdt_sync:
-        try:
-            _acct = get_account()
-            tracker.sync_pdt_with_alpaca(int(getattr(_acct, "daytrade_count", 0)))
-            run_cycle._last_pdt_sync_hour = now.hour  # type: ignore[attr-defined]
-        except Exception as _e:
-            logger.warning(f"Hourly PDT sync failed: {_e}")
+    # ── Hourly PDT sync — gated on PDT_ENFORCEMENT_ENABLED (S50 board) ──────
+    if getattr(config, "PDT_ENFORCEMENT_ENABLED", True):
+        _last_pdt_sync = getattr(run_cycle, "_last_pdt_sync_hour", -1)
+        if now.hour != _last_pdt_sync:
+            try:
+                _acct = get_account()
+                tracker.sync_pdt_with_alpaca(int(getattr(_acct, "daytrade_count", 0)))
+                run_cycle._last_pdt_sync_hour = now.hour  # type: ignore[attr-defined]
+            except Exception as _e:
+                logger.warning("Hourly PDT sync failed: %s", _e)
 
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.

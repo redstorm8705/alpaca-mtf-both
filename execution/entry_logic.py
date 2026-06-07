@@ -535,7 +535,11 @@ def execute_entries(
         #   PDT 0-2/3 → need ≥10 to enter (10=½ size, 11-12=full size)
         #   PDT 3/3   → need ≥12/12 × 3 consecutive scans (forced overnight — highest bar)
         rolling_dt = tracker.get_rolling_day_trade_count()
-        pdt_slots_exhausted = rolling_dt >= config.DAY_TRADE_MAX_ROLLING
+        # S50 board unanimous: PDT removed for accounts <$25K. Feature flag.
+        pdt_slots_exhausted = (
+            rolling_dt >= config.DAY_TRADE_MAX_ROLLING
+            if getattr(config, "PDT_ENFORCEMENT_ENABLED", True) else False
+        )
 
         # ── PDT=3/3 entry gate — ALL buckets ─────────────────────────────
         # At PDT=3/3, every new entry is a forced overnight regardless of bucket.
@@ -837,6 +841,19 @@ def execute_entries(
                     f"[{symbol}] ATR fetch failed — falling back to fixed % stops. "
                     f"Stop and target will be less precise. Error: {_atr_e}"
                 )
+
+        # S49 board + meta-audit (Quant Logic unanimous): if ATR unavailable after fetch,
+        # skip entry entirely. Fallback to fixed % stops + 1-share floor is worse than
+        # no entry — it produces undefined position sizing with no volatility context.
+        # RC-8: clear confirm buffer so symbol can re-qualify on next scan.
+        if atr_value is None:
+            logger.warning(
+                "[%s] ATR unavailable — skipping entry. "
+                "Cannot size position without volatility data.",
+                symbol,
+            )
+            _rc8_clear_buffers(symbol, "atr-unavailable")
+            continue
 
         # C-3 deviation check: >20% from prior daily close is a spike, not a move.
         # Placed here (after daily_df fetch) so prior-close is guaranteed available.

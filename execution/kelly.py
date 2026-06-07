@@ -292,14 +292,29 @@ class KellySizer:
         empirical_fraction = kelly_fraction * (1.0 - penalty)
         kelly_risk         = kelly_full * empirical_fraction * a2_mult
 
-        # Clamp — KELLY_MIN_RISK_PCT floor applied AFTER A2 (Beck: floor is unconditional minimum)
-        kelly_risk = max(config.KELLY_MIN_RISK_PCT, min(config.KELLY_MAX_RISK_PCT, kelly_risk))
-
-        # Update ATH on new equity high — persist immediately (infrequent write)
+        # Update ATH on new equity high — runs UNCONDITIONALLY before any early return.
+        # Cold second-agent S49: ATH must update even when kelly_full <= 0 so A2 multiplier
+        # remains current for the next stratum that HAS positive edge.
         if portfolio_value > self._ath_equity:
             self._ath_equity     = portfolio_value
             self._ath_updated_at = datetime.now(timezone.utc).isoformat()
             self._save()
+
+        # S49 board + meta-audit (Thorp/Taleb/Asness unanimous):
+        # Negative Kelly = this stratum has no edge. KELLY_MIN_RISK_PCT floor must NOT
+        # apply here — forcing a 0.75% bet on negative expectancy destroys capital.
+        # Thorp (Fortune's Formula): f* < 0 means expected value is negative; optimal bet = 0.
+        if kelly_full <= 0:
+            logger.warning(
+                "Kelly [%s]: NEGATIVE EXPECTANCY — kelly_full=%.3f "
+                "(WR=%.1%%, avg_win=%.2fR, avg_loss=%.2fR, n=%d). "
+                "Blocking %s entries until edge improves (kelly_full > 0).",
+                key, kelly_full, win_rate, avg_win_r, avg_loss_r, total, key,
+            )
+            return 0.0
+
+        # Clamp — KELLY_MIN_RISK_PCT floor only when kelly_full > 0 (positive edge above)
+        kelly_risk = max(config.KELLY_MIN_RISK_PCT, min(config.KELLY_MAX_RISK_PCT, kelly_risk))
 
         logger.info(
             f"Kelly [{key}]: {total} trades | WR {win_rate:.1%} | "
