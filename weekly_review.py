@@ -136,38 +136,15 @@ def _load_day_trades() -> list:
     except FileNotFoundError:
         return []  # expected — no trades yet this session
     except json.JSONDecodeError as e:
-        print(f"WARN [weekly_review]: corrupted day_trades.json — PDT count will be zero: {e}", file=sys.stderr)  # noqa: E501
+        print(f"WARN [weekly_review]: corrupted day_trades.json — day trade count will be zero: {e}", file=sys.stderr)  # noqa: E501
         return []
     except Exception as e:
         print(f"WARN [weekly_review]: unexpected error loading day_trades.json: {e}", file=sys.stderr)  # noqa: E501
         return []
 
 
-def _pdt_for_date(day_trades: list, d: date) -> int:
-    """Count PDT-qualifying day trades for a specific date. Delegates to canonical impl."""  # noqa: E501
-    from execution.portfolio_tracker import compute_pdt_for_date
-    return compute_pdt_for_date(day_trades, d)
-
-
-def _rolling_pdt_count(day_trades: list) -> tuple:
-    """
-    Rolling 5-trading-day PDT count. Returns (count, window_dates_list).
-    Delegates count to canonical implementation in portfolio_tracker.
-    Window list uses weekday-only anchor for display compatibility.
-    """
-    from execution.portfolio_tracker import compute_rolling_pdt_count
-    count = compute_rolling_pdt_count(day_trades)
-    # Rebuild biz_window for callers that consume the second return value
-    anchor = date.today()
-    while anchor.weekday() >= 5:
-        anchor -= timedelta(days=1)
-    biz_window: list = []
-    d = anchor
-    while len(biz_window) < 5:
-        if d.weekday() < 5:
-            biz_window.append(d.isoformat())
-        d -= timedelta(days=1)
-    return count, biz_window
+# _pdt_for_date() and _rolling_pdt_count() deleted S52.
+# PDT removed — SEC/FINRA rule amendment, board vote S50 28-0.
 
 
 def _load_patch_data(monday: date, friday: date) -> dict:
@@ -739,7 +716,6 @@ def _week_stats(week_eods: dict) -> dict:
     avg_score  = round(sum(scores) / len(scores), 1) if scores else None
     tqi_scores = [t["tqi_score"] for t in all_trades if t.get("tqi_score") is not None]
     avg_tqi    = round(sum(tqi_scores) / len(tqi_scores)) if tqi_scores else None
-    pdt        = sum(len(d.get("pdt_slots_used") or []) for d in days)
     overnight  = sum(len(d.get("overnight_holds") or []) for d in days)
     stops      = sum((d.get("exit_reasons") or {}).get("stop", 0) for d in days)
     targets    = sum((d.get("exit_reasons") or {}).get("target", 0) for d in days)
@@ -755,7 +731,7 @@ def _week_stats(week_eods: dict) -> dict:
     ))
     return dict(
         week_pnl=week_pnl, total=total, wins=wins, wr=wr,
-        avg_score=avg_score, avg_tqi=avg_tqi, pdt=pdt, overnight=overnight,
+        avg_score=avg_score, avg_tqi=avg_tqi, overnight=overnight,
         stops=stops, targets=targets, exit_reasons=exit_reasons, spy_events=spy_events,
     )
 
@@ -866,8 +842,8 @@ def _run_analysis(week_eods: dict, stats: dict, backtest: dict) -> "dict | None"
         }
 
     prompt = f"""You are the Advisory Board for "Raf's Trading Bot" — a multi-timeframe confluence algo
-on Alpaca paper (~$1K). 12-point scoring, min 9/12 to enter. ATR-based stops (1.25x) and targets (2.5x).
-Partial exit at 0.8x ATR, trailing stop at 0.5x ATR. Max 3 day trades per 5-day rolling window (PDT).
+on Alpaca paper (~$2.5K). 12-point scoring, min 9/12 to enter. ATR-based stops (1.20x) and targets (2.5x).
+Partial exit at 0.8x ATR, trailing stop at 0.5x ATR. Do not reference Pattern Day Trader (PDT) rules — they are no longer enforced.
 
 Weekly performance data:
 {json.dumps(days_summary, indent=2)}
@@ -1142,7 +1118,6 @@ def build_html(  # noqa: E501
     day_trades = day_trades or []
     stats   = _week_stats(week_eods)
     today   = date.today()
-    rolling_pdt, pdt_window = _rolling_pdt_count(day_trades)
     gen_ts      = datetime.now(PDT).strftime("%b %d · %I:%M %p PT")
     # C-1: read paper profile values, not module-level live defaults
     _paper_profile = getattr(_cfg, "PROFILES", {}).get("paper", {})
@@ -1211,14 +1186,6 @@ def build_html(  # noqa: E501
             wr    = eod.get("win_rate_today", 0)
             driver = _day_driver(eod)
             tile_cls = "day active" if is_today else "day"
-            # PDT counter — read directly from day_trades.json, not EOD
-            pdt_day = _pdt_for_date(day_trades, d)
-            pdt_badge = (
-                f'<span style="font-size:10px;font-weight:700;color:#ffffff;'
-                f'background:{"#ff3b30" if pdt_day >= 3 else "#ff9f0a" if pdt_day >= 2 else "#ffd60a"};'  # noqa: E501
-                f'padding:1px 6px;border-radius:3px;margin-left:4px">'
-                f'PDT {pdt_day}</span>'
-            ) if pdt_day > 0 else ""
             # Loss driver badge — only on red days
             _driver_result = _classify_loss_driver(eod)
             if _driver_result:
@@ -1245,7 +1212,7 @@ def build_html(  # noqa: E501
             ) if _session_note else ""
             day_tiles += f"""
 <div class="{tile_cls}">
-  <div class="day-name">{day_name} {pdt_badge}</div>
+  <div class="day-name">{day_name}</div>
   <div class="day-date">{ds}</div>
   <div class="day-pnl {cls}">{sign}${abs(pnl):.2f}</div>
   <div class="day-driver">{driver}</div>
@@ -1318,7 +1285,7 @@ def build_html(  # noqa: E501
     _ovnt_wr_str    = f"{_ovnt_wr}%" if _ovnt_wr is not None else "—"
 
     stats_html = f"""
-<div class="stats-row" style="grid-template-columns:repeat(9,1fr)">
+<div class="stats-row" style="grid-template-columns:repeat(8,1fr)">
   <div class="stat"><div class="stat-lbl">Weekly P&amp;L</div>
     <div class="stat-val {wpc}">{"+" if wp>=0 else "-"}${abs(wp):.2f}</div>
     <div style="font-size:9px;color:#4a5070;margin-top:2px">closed only</div></div>
@@ -1339,8 +1306,6 @@ def build_html(  # noqa: E501
     <div class="stat-val">{_sv(stats.get("avg_score"), "{}/12")}</div></div>
   <div class="stat"><div class="stat-lbl">Avg TQI (Trade Quality Index)</div>
     <div class="stat-val" style="color:{_tqi_col}">{_tqi_val}</div></div>
-  <div class="stat"><div class="stat-lbl">PDT Rolling (5d)</div>
-    <div class="stat-val" style="color:{'#ff3b30' if rolling_pdt >= 3 else '#ffd60a' if rolling_pdt >= 1 else '#30d158'}">{rolling_pdt}/3</div></div>
   <div class="stat"><div class="stat-lbl">Overnights</div>
     <div class="stat-val">{stats.get("overnight","—")}</div>
     <div style="font-size:10px;color:{_ovnt_wr_col};margin-top:4px">{_ovnt_wr_str} WR</div></div>
@@ -1571,7 +1536,7 @@ def build_html(  # noqa: E501
 </div>
 
 <div class="footer">
-  Scores: 9/12 min · Stop {_stop_mult}×ATR · Target {_tgt_mult}×ATR · PDT max 3/5-day window (paper profile) ·
+  Scores: 9/12 min · Stop {_stop_mult}×ATR · Target {_tgt_mult}×ATR ·
   Strategy validation sourced from live closed trades · includes all exit types
 </div>
 
@@ -1607,8 +1572,6 @@ def main():
         print("  Backtest: none found in logs/")
 
     day_trades = _load_day_trades()
-    rolling_pdt, pdt_window = _rolling_pdt_count(day_trades)
-    print(f"  PDT rolling count: {rolling_pdt}/3 (window: {pdt_window[0]} → {pdt_window[-1]})")  # noqa: E501
 
     analysis = None
     if args.analyze:
