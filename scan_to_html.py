@@ -143,88 +143,8 @@ def _fetch_implied_range(symbol: str) -> "dict | None":
         return None
 
 
-def _pdt_reset_display(day_trades_list: list, count: int) -> dict:
-    """
-    Compute PDT display strings from raw day_trades list.
-    Returns dict with keys: color, label, next_slot, full_reset, show_swing_warning.
-    """
-    # Color thresholds
-    if count >= 3:
-        color = "#ff3b30"
-        label = "3/3 USED"
-    elif count == 2:
-        color = "#ffd60a"
-        label = "2/3 USED"
-    elif count == 1:
-        color = "#ffd60a"
-        label = "1/3 USED"
-    else:
-        color = "#30d158"
-        label = "0/3 CLEAR"
-
-    # Reset date calculation
-    next_slot_str = None
-    full_reset_str = None
-
-    if day_trades_list:
-        # Anchor on most recent business day so weekend runs show correct window
-        anchor = datetime.now(PT).date()
-        while anchor.weekday() >= 5:
-            anchor -= timedelta(days=1)
-        biz_window: list[str] = []
-        d = anchor
-        while len(biz_window) < 5:
-            if d.weekday() < 5:
-                biz_window.append(d.isoformat())
-            d -= timedelta(days=1)
-
-        def _effective_date(raw_date_str):
-            """Map weekend-stamped entries to prior business day (reconciliation lag)."""
-            try:
-                d2 = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
-                while d2.weekday() >= 5:
-                    d2 -= timedelta(days=1)
-                return d2.isoformat()
-            except Exception as _ed_e:
-                logger.debug("_effective_date: date parse failed — %s", _ed_e)
-                return raw_date_str
-
-        active_dates = [_effective_date(t["date"]) for t in day_trades_list
-                        if isinstance(t, dict)
-                        and _effective_date(t.get("date","")) in biz_window
-                        and t.get("symbol") != "SYNC"]
-
-        if active_dates:
-            oldest = min(active_dates)
-            newest = max(active_dates)
-
-            def _first_off(date_str):
-                """First future date where date_str falls out of 5-biz-day window."""
-                td    = datetime.strptime(date_str, "%Y-%m-%d").date()
-                cnt   = 0
-                cur   = td + timedelta(days=1)
-                while True:
-                    if cur.weekday() < 5:
-                        cnt += 1
-                        if cnt == 5:
-                            return cur
-                    cur += timedelta(days=1)
-
-            def _fmt(d):
-                return d.strftime("%a %b %d").replace(" 0", " ")
-
-            next_slot  = _first_off(oldest)
-            full_reset = _first_off(newest)
-            next_slot_str  = _fmt(next_slot)
-            full_reset_str = _fmt(full_reset) if newest != oldest else None
-
-    return {
-        "color":            color,
-        "label":            label,
-        "next_slot":        next_slot_str,
-        "full_reset":       full_reset_str,
-        "show_swing_warning": count >= 3,
-    }
+# PDT rule removed — accounts <$25K exempt per SEC/FINRA rule amendment (board vote S50 28-0).
+# _pdt_reset_display() deleted S52.
 
 # Top 50 by market cap across S&P500 + Nasdaq 100 (Q1 2026)
 # Breadth across 50 gives a meaningful regime signal
@@ -904,21 +824,19 @@ def build_active_rows(open_trades: dict, results_by_sym: dict, idx_offset: int =
         dir_col  = "#30d158" if direction == "long" else "#ff3b30"
         dir_lbl  = "&#9650; LONG" if direction == "long" else "&#9660; SHORT"
 
-        # P1-OVERNIGHT-TAG: distinguish PDT-forced hold from true AH entry.
+        # Overnight badge: distinguish true AH entry from standard overnight hold.
+        # PDT-forced overnight removed — SEC/FINRA rule amendment, board vote S50 28-0.
         _ovnt_label = "OVERNIGHT"
         if is_overnight:
-            if trade.get("pdt_forced_overnight", False):
-                _ovnt_label = "OVERNIGHT (PDT=3/3)"
-            else:
-                try:
-                    _oe_dt = datetime.fromisoformat(trade.get("entry_time", ""))
-                    if _oe_dt.tzinfo is None:
-                        _oe_dt = _oe_dt.replace(tzinfo=PT)
-                    _oe_et_hour = _oe_dt.astimezone(ET).hour
-                    if _oe_et_hour >= 16 or _oe_et_hour < 4:
-                        _ovnt_label = "OVERNIGHT (AH)"
-                except Exception as _ovnt_err:
-                    logger.debug("[scan] overnight badge parse failed — using default label: %s", _ovnt_err)
+            try:
+                _oe_dt = datetime.fromisoformat(trade.get("entry_time", ""))
+                if _oe_dt.tzinfo is None:
+                    _oe_dt = _oe_dt.replace(tzinfo=PT)
+                _oe_et_hour = _oe_dt.astimezone(ET).hour
+                if _oe_et_hour >= 16 or _oe_et_hour < 4:
+                    _ovnt_label = "OVERNIGHT (AH)"
+            except Exception as _ovnt_err:
+                logger.debug("[scan] overnight badge parse failed — using default label: %s", _ovnt_err)
         overnight_badge = (
             f'<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;'
             f'background:rgba(255,159,10,.15);color:#ff9f0a;margin-left:4px">{_ovnt_label}</span>'
@@ -1745,7 +1663,7 @@ def write_html(data):
         f"SKIP = below {_skip}/{MAX} or no signal · "
         f"HOLD = Bucket A leveraged ETF (min 1-day hold) · "
         f"WK BEAR/BULL SKIP = bot found signal but weekly trend opposes — review manually · "
-        f"Bucket A = leveraged ETF (5% alloc) · Bucket B = swing trade (PDT-aware) · "
+        f"Bucket A = leveraged ETF (5% alloc) · Bucket B = swing trade · "
         f"Stop {sm}×ATR · Target {tm}×ATR · R:R 1:{round(tm/sm,1)} · "
         f"Min score {mn}/{MAX} · "
         f"Sorted: signals first, then by score · Click row to expand"
@@ -1880,39 +1798,7 @@ def write_html(data):
     else:
         implied_bar_html = ""
 
-    # ── PDT status bar ───────────────────────────────────────────────────────
-    pdt_count       = data.get("day_trade_count", 0) or 0
-    day_trades_list = data.get("day_trades_list") or []
-    if day_trades_list is not None:
-        pdt_info = _pdt_reset_display(day_trades_list, pdt_count)
-        pdt_col  = pdt_info["color"]
-        pdt_lbl  = pdt_info["label"]
-        ns       = pdt_info["next_slot"]
-        fr       = pdt_info["full_reset"]
-        swing_tag = ('<span style="font-size:11px;color:#ffd60a;font-weight:600;margin-left:12px">'
-                     '⚠ SWING MODE ONLY — 10/12+ REQUIRED</span>'
-                     if pdt_info["show_swing_warning"] else "")
-        reset_parts = []
-        if ns:  reset_parts.append(f'NEXT SLOT: <b style="color:#e2e4ee">{ns}</b>')
-        if fr:  reset_parts.append(f'FULL RESET: <b style="color:#e2e4ee">{fr}</b>')
-        reset_html = (' <span style="color:#2a2f48">|</span> '
-                      + ' <span style="color:#2a2f48">|</span> '.join(
-                          f'<span style="font-size:12px;color:#c8ccd8;white-space:nowrap">{p}</span>'
-                          for p in reset_parts)
-                      if reset_parts else "")
-        pdt_bar_html = f"""
-<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;
-  display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-  <span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">PDT Status</span>
-  <span style="font-size:13px;font-weight:800;color:{pdt_col};white-space:nowrap">PDT: {pdt_lbl}</span>
-  {reset_html}{swing_tag}
-</div>"""
-    else:
-        pdt_bar_html = """
-<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28">
-  <span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em">PDT Status</span>
-  <span style="font-size:12px;color:#b8bdd4;margin-left:12px">PDT: —</span>
-</div>"""
+    # PDT status bar removed — SEC/FINRA rule amendment, board vote S50 28-0.
 
     # ── TB-4: Bot health header ───────────────────────────────────────────────
     # Katsuyama/Majors: at-a-glance bot status — SPY event, session P&L vs kill
@@ -2271,7 +2157,7 @@ def write_html(data):
 </div>
 {composite_bar_html}{implied_bar_html}
 {bot_health_bar_html}
-{dte_alert_html}{pdt_bar_html}
+{dte_alert_html}
 <table>
   <thead>
     <tr>
@@ -2402,7 +2288,6 @@ function tog(i){{
 
 
 def write_scan_html(signals: "list | None" = None, portfolio_value: "float | None" = None,
-                    day_trade_count: int = 0, day_trades_list: "list | None" = None,
                     open_trades: "dict | None" = None,
                     spy_event_type: str = "",
                     daily_pnl: "float | None" = None,
@@ -2414,8 +2299,6 @@ def write_scan_html(signals: "list | None" = None, portfolio_value: "float | Non
     Never opens a browser. Safe to call after every run_cycle().
     signals:         optional pre-computed signals list (unused currently, reserved)
     portfolio_value: current portfolio value for display
-    day_trade_count: rolling 5-day day trade count for PDT display
-    day_trades_list: raw _day_trades list for reset-date calculation; None = standalone mode
     open_trades:     tracker.open_trades dict for pinned active-position rows; None = skip section
     spy_event_type:  TB-4 bot health — current SPY hybrid event type (EXTREME, BROAD_*, etc.)
     daily_pnl:       TB-4 bot health — session P&L for kill switch proximity display
@@ -2459,8 +2342,6 @@ def write_scan_html(signals: "list | None" = None, portfolio_value: "float | Non
         # and prevent yfinance rate-limit saturation under concurrent fetches.
         data = run_scan(tickers)
         data["portfolio_value"]  = portfolio_value
-        data["day_trade_count"]  = day_trade_count
-        data["day_trades_list"]  = day_trades_list  # None = standalone → PDT bar shows "—"
         data["open_trades"]      = open_trades       # None = standalone → active section hidden
         data["pm_extra"]         = _pm_extra         # off-watchlist additions (count display)
         data["pm_all"]           = list(_pm_all)     # all PM movers (row visual treatment)
@@ -2469,66 +2350,12 @@ def write_scan_html(signals: "list | None" = None, portfolio_value: "float | Non
         data["tqi_history"]      = tqi_history or [] # TB-4 bot health header
         data["confirm_gate"]     = confirm_gate or {} # BoD-1 confirm gate: primed tickers
         write_html(data)
-        # Write pdt_status.js so dashboard can load it via <script> injection.
-        # Chrome blocks fetch() for local file:// resources but allows <script src>.
-        try:
-            _pdt_count = int(day_trade_count or 0)
-            _pdt_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "pdt_status.js")
-            _pdt_tmp   = _pdt_path + ".tmp"
-            with open(_pdt_tmp, "w") as _pf:
-                _pf.write(f"window.__pdtCount={_pdt_count};")
-                _pf.flush()
-                os.fsync(_pf.fileno())
-            os.replace(_pdt_tmp, _pdt_path)
-        except Exception as _pdte:
-            logger.warning(f"PDT state write failed — PDT counter may not persist across restart: {_pdte}")
     except Exception as e:
         logger.warning(f"write_scan_html failed: {e}", exc_info=True)
         print(f"  ✗ write_scan_html failed: {e}", flush=True)
 
 
-def _load_pdt_standalone() -> tuple:
-    """
-    Load logs/day_trades.json and compute rolling 5-biz-day count.
-    Used by standalone runs so PDT display reflects real bot state.
-    Returns (records_list, count).
-    """
-    import json as _json
-    from datetime import timedelta as _td2
-    dt_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "logs", "day_trades.json")
-    try:
-        with open(dt_file) as _f:
-            records = _json.load(_f)
-        # Anchor on most recent business day so weekend runs see correct window
-        from datetime import datetime as _dt3
-        from zoneinfo import ZoneInfo as _ZI3
-        anchor = _dt3.now(_ZI3("America/Los_Angeles")).date()
-        while anchor.weekday() >= 5:
-            anchor -= _td2(days=1)
-        biz_days: list[str] = []
-        d = anchor
-        while len(biz_days) < 5:
-            if d.weekday() < 5:
-                biz_days.append(d.isoformat())
-            d -= _td2(days=1)
-        def _eff(raw):
-            from datetime import date as _dd2
-            try:
-                d2 = _dd2.fromisoformat(raw)
-                while d2.weekday() >= 5:
-                    d2 -= _td2(days=1)
-                return d2.isoformat()
-            except Exception as _eff_e:
-                logger.debug("_eff: nested date lookup failed — %s", _eff_e)
-                return raw
-        count = min(sum(1 for t in records
-                    if _eff(t.get("date","")) in biz_days
-                    and t.get("symbol") != "SYNC"), 3)  # cap — duplicate sync entries are a known artifact
-        return records, count
-    except Exception as _hist_err:
-        logger.debug("[scan] trade history load failed — returning [], 0: %s", _hist_err)
-        return [], 0
+# _load_pdt_standalone() deleted S52 — PDT removed per SEC/FINRA rule amendment, board vote S50 28-0.
 
 
 def main():
@@ -2550,10 +2377,7 @@ def main():
             args.tickers.append(sym)
 
     # First scan + write
-    day_trades_list, day_trade_count = _load_pdt_standalone()
     data = run_scan(args.tickers)
-    data["day_trade_count"] = day_trade_count
-    data["day_trades_list"] = day_trades_list
     html_path = write_html(data)
 
     # Browser open disabled — open scan_results.html manually once in Chrome
@@ -2576,10 +2400,7 @@ def main():
         label = "5min (market open)" if on else "30min (market closed)"
         print(f"\n  Next scan in {label}...", flush=True)
         time.sleep(iv)
-        day_trades_list, day_trade_count = _load_pdt_standalone()
         data = run_scan(args.tickers)
-        data["day_trade_count"] = day_trade_count
-        data["day_trades_list"] = day_trades_list
         write_html(data)
         print("  HTML updated in place — Chrome reloads automatically.", flush=True)
 

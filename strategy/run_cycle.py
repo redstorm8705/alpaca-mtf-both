@@ -313,8 +313,6 @@ def run_cycle(
         try:
             from scan_to_html import write_scan_html
             write_scan_html(portfolio_value=get_portfolio_value(),
-                            day_trade_count=tracker.get_rolling_day_trade_count(),
-                            day_trades_list=getattr(tracker, "_day_trades", None) or [],
                             open_trades=dict(tracker.open_trades),
                             spy_event_type=_main._spy_event_type,
                             daily_pnl=getattr(risk, "equity_pnl", None) or 0.0,   # P1-PNL-AUDIT: equity delta matches dashboard formula
@@ -343,8 +341,6 @@ def run_cycle(
             from scan_to_html import write_scan_html
             write_scan_html(
                 portfolio_value=portfolio_value,
-                day_trade_count=tracker.get_rolling_day_trade_count(),
-                day_trades_list=getattr(tracker, "_day_trades", None) or [],
                 open_trades=dict(tracker.open_trades),
                 spy_event_type=_main._spy_event_type,
                 daily_pnl=getattr(risk, "equity_pnl", None) or 0.0,   # P1-PNL-AUDIT: equity delta matches dashboard formula
@@ -1400,8 +1396,6 @@ def run_cycle(
             from scan_to_html import write_scan_html
             write_scan_html(
                 portfolio_value=portfolio_value,
-                day_trade_count=tracker.get_rolling_day_trade_count(),
-                day_trades_list=getattr(tracker, "_day_trades", None) or [],
                 open_trades=dict(tracker.open_trades),
                 spy_event_type=_main._spy_event_type,
                 daily_pnl=getattr(risk, "equity_pnl", None) or 0.0,
@@ -1575,8 +1569,6 @@ def run_cycle(
             from scan_to_html import write_scan_html
             write_scan_html(
                 portfolio_value=portfolio_value,
-                day_trade_count=tracker.get_rolling_day_trade_count(),
-                day_trades_list=getattr(tracker, "_day_trades", None) or [],
                 open_trades=dict(tracker.open_trades),
                 spy_event_type=_main._spy_event_type,
                 daily_pnl=getattr(risk, "equity_pnl", None) or 0.0,   # P1-PNL-AUDIT: equity delta matches dashboard formula
