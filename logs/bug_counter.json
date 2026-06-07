@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-07 S51 \u2014 Autonomous overnight audit. 7 files, 9744 lines. _base_min fix deployed (43cb457). RC-8 9 sites in entry_logic.py pending approval #1. RC-4 3 violations in exit_logic.py pending strategy decision #2. P1 QHM gap in orphan_manager.py pending board vote #3. P1 PDT cleanup in exit_logic.py blocking RC-3 fix pending decision #4."
+    "last_updated": "2026-06-07 S53 \u2014 exit_logic.py PDT Tier 2 removal (commit 8fc0cd0). RC-3 count 3\u21922 (L1996 bare except fixed). RC-4 3 violations remain pending strategy decision #2."
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -34,7 +34,7 @@
   },
   "RC-3": {
     "label": "Silent exception (except: pass with no logging)",
-    "count": 3,
+    "count": 2,
     "patch_ids": [
       "RC3-ENTRY-LOGIC-KELLY-TQI-L1072-S39",
       "RC3-ENTRY-LOGIC-PHANTOM-ALERT-L1453-S39",
@@ -302,9 +302,9 @@
       "last_patch_desc": "Phase 2a.5 FIFO overnight reconciliation \u2014 commit fb4c662"
     },
     "execution/exit_logic.py": {
-      "patch_count": 8,
-      "last_patched": "2026-05-23 S33B",
-      "lines": 2435,
+      "patch_count": 9,
+      "last_patched": "2026-06-07 S53",
+      "lines": 2123,
       "notes": "S33B BVR-1 trail ratchet GTC/DAY fix (2265L\u21922435L): (1) trail_hit evaluated PRE-ratchet (40310000 prevention \u2014 cancel/resubmit no longer locks shares before close); (2) robust cancel block ported from CRITICAL-1 \u2014 checks cancel_order() return, get_order() verify, break on still-live; (3) 5-poll held_for_orders (max 2.0s, 4\u00d70.5s) with alert_gtc_failed try/except fallback; (4) Alpaca qty clamp downward only; (5) GTC/DAY mutual exclusion: overnight=True\u2192submit_gtc_stop_order+tracker.set_gtc_stop_order_id(), overnight=False\u2192submit_day_stop_order+tracker._save_log() immediately; (6) tracker._save_log() added to partial exit DAY path (~L737) \u2014 asymmetry with GTC auto-save wrapper fixed (Data Integrity Item 5). Board: 4/4 CONDITIONAL APPROVE. DS+GAI audit complete. Cold second-agent FAIL\u2192PASS (observability fixes: log when qty clamped to 0, comment 2.5s\u21922.0s). py_compile PASS, mypy 0, ruff PASS. OCI py_compile PASS, all 4 services active. BVR-1 CLOSED. S22 BUG-#5: thesis invalidation cancel-before-close race (40310000). RC-3 x3 (L971 stale fill warning+continue, L1023 entry_time parse warning, L1601 entry_ts parse debug). RC-7 (L1228 if _gtc_qty>=1 guard). Full Explore read 2108 lines. Board+DS+GAI. Startup clean. S30 #13 CLOSED: (1) L672 qty_remaining KeyError guard \u2014 try/except CRITICAL+computed fallback+key restore; (2) RC-3 x5 \u2014 L229 bar fetch ERROR+continue, L244 live price override WARNING (partials), L852 live price override WARNING (exits), L950 overnight ATR entry_time parse WARNING+_entry_dt=None, L1945 EH get_order() ERROR+continue (critical: was order=None which would have cleared pm_exit_order_id + orphaned live Alpaca limit order); (3) RC-4 x2 \u2014 L1038 overnight ATR else fallback current_price\u2192entry_price+CRITICAL log; L1635 defer GTC fallback current_price\u2192stop or entry_price+CRITICAL log; (4) RULE C-4 mypy 31\u21920. py_compile PASS, mypy 0, ruff 0. 2133L\u21922168L. Rsync PASS. All 4 services active. S32 GTC held_for_orders + DAY-GTC mutual exclusion + qty_remaining desync (2026-05-23): (1) Trail ratchet: removed random offset jitter (_tr_offset/_tr_adj_px), added time.sleep(0.1) cancel propagation buffer; (2) Partial exit stop re-sub (L587-656 replaced, +97 lines): 5-poll held_for_orders loop (2.5s), _submit_stop boolean (False on closed/unknown breaks; True on exhaustion \u2014 submit anyway), for/else exhaustion Slack alert, DAY/GTC mutual exclusion (overnight\u2192GTC only, intraday\u2192DAY only \u2014 root cause of GTC spam per GAI Q9), qty_remaining desync fix (remove qty_orig fallback, recover from Alpaca on None), directional Alpaca qty clamp (downward only, upward\u2192WARNING); (3) Breakeven push: removed offset jitter \u2014 exact entry_price. Board: Beck/Kim/Minsky+Harris/Brandt+Simons/Taleb CONDITIONAL APPROVE. DS Bug#1 (qty_remaining desync) + GAI Q9 (DAY-GTC exclusion) both incorporated. Cold second-agent FAIL x2 \u2192 PASS x1 (FAIL#1: _submit_stop logic inversion fixed; FAIL#2: 3 fixes \u2014 logger.error placement, getattr fallback 0, downward-only clamp; FAIL#2d false positive confirmed). py_compile PASS, mypy 0, ruff 0. 2168L\u21922265L. Rsync PASS. All 4 services active. RAM: 245MB used / 565MB avail post-restart."
     },
     "trade_logger.py": {

@@ -522,11 +522,11 @@ The goal is to find WHY a class keeps recurring and fix the structural cause, no
 table below MUST be updated in the SAME TURN. Updating the JSON file without updating this table is
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
-#### Live RC Counts (as of 2026-06-07 S51)
+#### Live RC Counts (as of 2026-06-07 S53)
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
-| RC-3 | Silent exception (bare `pass` / `debug` swallowing errors) | **3** | OPEN — 1 new site exit_logic.py L1996 blocked by P1 PDT cleanup (#4) | exit_logic.py L1996 (audited: DS✓ GAI✓ 2nd-agent✓ — ready to apply when mypy pre-existing errors resolved) |
+| RC-3 | Silent exception (bare `pass` / `debug` swallowing errors) | **2** | OPEN — 2 unknown-other-files still unlocalized | exit_logic.py L1996 FIXED S53 (8fc0cd0) |
 | RC-4 | Estimated exit price (non-fill price passed to record_exit) | **10** | OPEN — 3 violations in exit_logic.py | exit_logic.py L1345, L1939, L2032 (strategy decision pending #2) |
 | RC-2 | CWD-relative path (logs/ not anchored to `__file__`) | **7** | OPEN | run_cycle.py, entry_logic.py |
 | RC-1 | Naive datetime (tz-unaware `datetime.now()`) | **4** | CLOSED (all 16 instances fixed 2026-04-28) | — |
@@ -535,13 +535,13 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 | RC-7 | Zero-share sizing (int truncation before floor guard) | **2** | OPEN | main.py |
 | RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **1** | OPEN — 9 missing sites in entry_logic.py | entry_logic.py L391/413/434/441/455/462/470/476/488 (Board APPROVE, DS/GAI REJECT on IO grounds — see pending_approvals_2026-06-07.md #1) |
 
-#### Top Hotspot Files by Patch Count (as of 2026-06-07 S51)
+#### Top Hotspot Files by Patch Count (as of 2026-06-07 S53)
 
 | File | Patch Count | Risk Rating | Debug Session Priority |
 |------|-------------|-------------|----------------------|
 | execution/portfolio_tracker.py | **36** | CRITICAL | P0 — schedule dedicated session |
 | main.py | **33** | CRITICAL | P0 — schedule dedicated session |
-| execution/exit_logic.py | **3** | HIGH | P1 — RC-3 + RC-4 (blocked by PDT cleanup #4) |
+| execution/exit_logic.py | **9** | HIGH | P1 — RC-4 (3 violations, pending strategy decision #2) |
 | execution/entry_logic.py | **3** | HIGH | P1 — RC-8 9 sites pending approval #1 |
 | strategy/run_cycle.py | **9** | MEDIUM | P2 — _base_min fix deployed S51 |
 

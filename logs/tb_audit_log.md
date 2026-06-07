@@ -1,5 +1,53 @@
 # Tech Board (TB) Master Audit Log
 
+---
+## 2026-06-07 S53 — exit_logic.py PDT Tier 2 Removal (commit 8fc0cd0)
+
+**Full read:** Explore subagent, 2435 lines (prior session S52/S53 continuation)
+**Board vote:** 2 parallel cold agents — APPROVE (unanimous)
+**DS/GAI:** APPROVE (prior session)
+**Static analysis:** py_compile ✅ | mypy ✅ | ruff ✅
+
+### RC checks (exit_logic.py post-patch)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all datetime.now() calls use ET/PT |
+| RC-2 | CWD-relative path | PASS — no log/ path construction in this file |
+| RC-3 | Silent exception | FIXED — L1847 bare except → logger.warning with _et_exc |
+| RC-4 | Estimated exit price | OPEN — 3 violations remain (pending approval #2) |
+| RC-5 | Non-atomic write | N/A — no state file writes in exit_logic.py |
+| RC-6 | Wrong API field | PASS — no Alpaca field lookups changed |
+| RC-7 | Zero-share sizing | PASS — not in this file |
+| RC-8 | Unbounded scan buffer | PASS — confirm_gate cleared on exit (L1934-1937) |
+
+### Changes applied (20 items, all verified zero residual PDT refs)
+1. Module docstring updated — deprecated _pdt_htf_gate note
+2. Removed _tr_rolling_dt + pdt_used= from trail ratchet GTC/DAY log events
+3. Removed PDT context block (_tranche_allowed, opened_today, rolling_dt, pdt_full) from check_partial_exits
+4. Removed if not _tranche_allowed(t_idx): block (PDT-gated GTC partial path)
+5. Removed pdt_used= from 3x stop_promotion + 1x gtc_stop_orphaned log events
+6. Removed "| PDT {rolling_dt}/3" from partial exit log string
+7. Removed pdt_used= from partial_exit log event
+8. Removed _be_pdt + "PDT={_be_pdt}/3" from overnight BE exit reason string
+9. Removed rolling_dt= assignment from check_exits outer loop
+10. Collapsed thesis-invalidation if/else: removed PDT=3/3 hold branch, promoted close unconditionally
+11. Removed hard-stop PDT=3/3 deferred GTC block (entire 63-line block deleted), promoted else body
+12. Removed record_day_trade + rolling count log from hard stop success path
+13. Removed pdt= from alert_stop_breach calls
+14. Removed target-hit PDT=3/3 deferred path (24 lines deleted)
+15. Removed record_day_trade + rolling count log from target exit success path
+16. Simplified pdt_forced_overnight branch: always uses OVERNIGHT_ scan params
+17. Removed bucket-B PDT exit gate block
+18. Fixed RC-3: bare except → except as _et_exc + logger.warning
+19. Removed record_day_trade + rolling count log from signal exit success path
+20. Replaced _pdt_htf_gate() body with pass-through stub (import compat: main.py, trade_engine.py)
+21. Removed AH target_hit_pending PDT-deferred path from _check_exits_extended_hours
+22. Removed 5 unused imports: add_both_macds, dual_macd_agreement, add_all_mas, ema_structure_bullish, submit_gtc_stop_close
+
+**Deployed:** OCI `8fc0cd0` | 4 services active post-restart | -397 lines +85 lines
+
+
+
 **Log updated:** 2026-06-05 S49 — INVESTIGATION SESSION (RTH active — no patches applied). GTC/DAY stop lifecycle confirmed correct-by-design. MSTR overnight=False gap identified. OCI git reset to origin/main (ae6d692→89ee635, 5 commits fast-forwarded). CCR 1 hit weekly usage limit — no quarterly_hold_manager.py output.
 
 **GTC/DAY stop lifecycle audit (execution/orphan_manager.py + execution/gtc_manager.py):**
@@ -3940,3 +3988,162 @@ POINT 3 — FORWARD-LOOKING (new issues)
 
 === END 3-POINT AI SUMMARY ===
 
+
+---
+## S50c — 2026-06-06 — GEX Layer 8 Shadow Integration
+
+**Files patched:** config.py, data/gex.py, strategy/run_cycle.py, execution/kelly.py
+**Commit:** 180d421
+
+### Full Read Gates
+- data/gex.py: Full read complete — 276 lines (1 chunk)
+- execution/kelly.py: Full read complete — 393 lines (2 chunks)
+- strategy/run_cycle.py: Full read complete — 1635 lines (Explore subagent, 6 chunks)
+- config.py: targeted read at insertion point (additions only)
+
+### Board Vote: S50b unanimous (all 28 members)
+- APPROVED: shadow mode first, GEX_ENABLED=False feature flag, stale guard, 0DTE carve-out, Kelly edge multiplier w/ 150-trade condition
+- REJECTED: hard entry gates, dynamic target changes
+
+### DS/GAI Code-Level Audit
+- DS: flagged Q2 (strptime) and Q4 (Kelly ordering) as P0 — both VERIFIED FALSE via live Python test and mathematical proof. No deployment blockers.
+- GAI: flagged Q2 (verify writer format) — CONFIRMED SAFE (writer uses literal "PT" not %Z).
+- Both: Q5 shadow mode zero impact PASS, Q6 NEAR-FLIP neutral PASS
+
+### RC Checks
+- RC-1: PASS (all datetimes tz-aware in new code)
+- RC-2: PASS (absolute paths via _SNAP_PATH/_PROJECT_ROOT)
+- RC-3: PASS (no bare pass; all except blocks log or return)
+- RC-4: N/A (no exit price recording)
+- RC-5: PASS (reads only; atomic write already in refresh_gex)
+- RC-6: N/A
+- RC-7: N/A
+- RC-8: N/A
+
+### Cold Second-Agent
+- Initial FAIL: (1) `or True` non-idiomatic, (2) exception path left _gex_label="DISABLED"
+- Both fixed: unconditional try block, _gex_label initialized to "UNKNOWN"
+- Re-check: PASS
+
+### Static Analysis (post-patch)
+- py_compile: PASS all 4
+- ruff: PASS all 4 (0 violations)
+- mypy: 2 pre-existing errors in run_cycle.py lines 448/1652 (date/None type) — NOT introduced by this patch. Flagged for follow-on fix.
+
+### Deployment
+- Rsync: ✅ 4 files to OCI 129.153.208.32
+- Services: mtf-bot/mtf-writer/mtf-http/nginx all active
+- Health: 401 (nginx auth) = correct
+
+---
+
+## Session S51 — 2026-06-07 Autonomous Overnight Audit
+
+### Files Audited (Full Read — Session S51)
+
+| File | Lines | Chunks | RC-1 | RC-2 | RC-3 | RC-4 | RC-5 | RC-6 | RC-7 | RC-8 |
+|------|-------|--------|------|------|------|------|------|------|------|------|
+| strategy/run_cycle.py | 1660 | 6 | PASS | PASS | PASS | N/A | PASS | PASS | N/A | SEE NOTE |
+| main.py | 980 | 4 | PASS | PASS | PASS | N/A | N/A | N/A | N/A | N/A |
+| execution/trade_engine.py | 291 | 1 | PASS | PASS | PASS | N/A | PASS | N/A | N/A | N/A |
+| execution/entry_logic.py | 1613 | 6 | PASS | PASS | PASS | PASS (12c path: CONDITIONAL) | N/A | N/A | PASS | FAIL — 9 sites |
+| execution/portfolio_tracker.py | 2122 | 8 | PASS | PASS | PASS | PASS | LOW-RISK | PASS | N/A | N/A |
+| execution/exit_logic.py | 2435 | 9 | N/A | N/A | VIOLATION L1996 | 3 VIOLATIONS | N/A | N/A | N/A | N/A |
+| execution/orphan_manager.py | 1368 | 5 | N/A | N/A | PASS | CLEAN | N/A | N/A | N/A | N/A |
+
+### Patches Applied This Session
+
+#### PATCH S51-1: strategy/run_cycle.py line 1129 — _base_min coherence fix
+- **Commit:** 43cb457
+- **Change:** `getattr(config, "MIN_CONFLUENCE_SCORE", 9)` → `config.MIN_LONG_SCORE`
+- **Board:** 26-0 APPROVE (prior session, reconfirmed S51 via DS/GAI)
+- **DS:** APPROVE for paper
+- **GAI:** APPROVE (MAX_TOKENS but complete)
+- **Cold second-agent:** PASS
+- **Static analysis:** py_compile PASS, mypy PASS (0 errors), ruff PASS
+- **3-Point AI Summary written:** Yes — race condition concern invalidated (function-scoped)
+- **OCI deployed:** Yes — services active
+
+### Findings Queued for Approval (logs/pending_approvals_2026-06-07.md)
+
+#### #1 — RC-8: entry_logic.py — 9 missing _rc8_clear_buffers() sites
+- **Sites:** Rule 1, Rule 2, SPY direction DOWN, SPY direction UP, ORB feed failure, ORB not computed, ORB long no-breakout, ORB short no-breakdown, BoD-2 3x ETF regime block
+- **Board:** Reliability APPROVE, Execution Risk (Harris) APPROVE
+- **DS:** REJECT — incorrect IO analysis (claimed 108 writes/cycle; symbol hits at most 1 block per cycle)
+- **GAI:** REJECT — same incorrect IO analysis
+- **Counter-evidence:** scoring.py:82-83 dict.pop before disk write (in-memory clear safe); `if _prev_buf or _prev_str` guard prevents spurious writes; each symbol exits loop on first `continue`
+- **Recommendation:** Board analysis supersedes DS/GAI structural misunderstanding. Approve.
+
+#### #2 — RC-4: exit_logic.py — 3 fallback violations
+- **Violations:** Lines 1345 (entry_price fallback), 1939 (stop/entry_price fallback), 2032 (current_price/0.0 fallback)
+- **Status:** Decision on fix strategy required before DS/GAI can proceed
+
+#### #3 — P1 QHM: orphan_manager.py — no QHM awareness in cancel_and_reconcile_gtc_stops()
+- **Risk:** AVGO/NVDA/ANET anchor stops cancelled every pre-market
+- **Status:** Needs board vote
+
+#### #4 — P1 PDT Cleanup: exit_logic.py — 6 DAY_TRADE_MAX_ROLLING references (absent post-S50)
+- **mypy errors:** Lines 527, 1383, 1505, 1637, 1851, 2109
+- **Status:** Blocks all patches to exit_logic.py (Rule C-4); decision on fix approach needed
+- **RC-3 fix ready:** DS APPROVE, GAI APPROVE, cold second-agent PASS — apply when #4 resolved
+
+### RC Bug Class Status Post-S51
+
+| RC | Count Before | Count After | Delta | Notes |
+|----|-------------|-------------|-------|-------|
+| RC-3 | 3 | 3 | 0 | 1 new violation found exit_logic.py L1996 — BLOCKED by #4 |
+| RC-4 | 10 | 10 | 0 | 3 violations in exit_logic.py — pending #2 decision |
+| RC-5 | 1 | 1 | 0 | manual_audit.jsonl append — low risk |
+| RC-7 | 2 | 2 | 0 | entry_logic.py PASS; counts may be stale |
+| RC-8 | 1 | 1 | 0 | Pending approval #1 |
+
+
+---
+## S52 — execution/portfolio_tracker.py — PDT Tier 2 Removal (2026-06-07)
+**Commit:** daabe80 | **Lines:** 2123 → ~2044
+
+### 10-Point Audit
+| Point | Result |
+|-------|--------|
+| 1 Static analysis | PASS — py_compile ✅ mypy ✅ ruff ✅ |
+| 2 Trade path trace | PASS — pdt_used removed from _log_event calls only; trade dict fields unchanged |
+| 3 Adversarial scenarios | PASS — pdt_used: int = 0 signature retained; callers passing pdt_used= still work |
+| 4 Full top-to-bottom read | PASS — Explore subagent, 2123 lines |
+| 5 Cross-references | PASS — compute_ functions: 0 callers confirmed. date import unused → removed |
+| 6 Conflicting directions | PASS — no cross-file conflicts |
+| 7 Redundancy scan | PASS — dead functions removed |
+| 8 State persistence | PASS — _load/_save day_trades deferred; no write paths changed |
+| 9 Data source tier | N/A |
+| 10 Timezone + logging | PASS — pdt_used removed from trade_events.jsonl logs only |
+
+### RC Audit
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — no naive datetime introduced |
+| RC-2 | PASS — no CWD-relative paths introduced |
+| RC-3 | PASS — no new bare pass/except introduced |
+| RC-4 | PASS — record_exit unchanged |
+| RC-5 | PASS — no write pattern changes |
+| RC-6 | PASS — no API field changes |
+| RC-7 | PASS — no sizing logic touched |
+| RC-8 | PASS — no scan buffer logic touched |
+
+### Changes Applied
+1. compute_rolling_pdt_count() DELETED (0 callers)
+2. compute_pdt_for_date() DELETED (0 callers)
+3. sync_pdt_with_alpaca() DELETED (0 callers)
+4. clear_pdt_gtc_stop_order_id() DELETED (0 callers)
+5. patch_exit_pnl: pdt_used removed from _log_event kwarg
+6. record_entry: pdt_used removed from _log_event kwarg (signature unchanged)
+7. promote_pending_to_active: pdt_used removed from _log_event kwarg (signature unchanged)
+8. date import removed (F401 — no longer referenced)
+9. Comments/docstring updated
+
+### Deferred (require exit_logic.py or main.py session)
+- record_day_trade stub — exit_logic.py 4 callers (L1405/1583/1695/2051)
+- get_rolling_day_trade_count stub — exit_logic.py 8 callers
+- set_pdt_gtc_stop_order_id — exit_logic.py 1 caller
+- _load_day_trades/_save_day_trades/self._day_trades — main.py dependency
+- pdt_slots_used in write_eod_summary — reporting/metrics.py dependency
+
+### Board: APPROVE | DS: APPROVE | GAI: APPROVE | Second-agent: PASS (after comment fixes)
