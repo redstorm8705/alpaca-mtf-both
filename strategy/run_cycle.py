@@ -1202,10 +1202,34 @@ def run_cycle(
     # Refreshed pre-market by run_ftd.py (cron); stale cache = neutral.
     _ftd_floor = _base_min + _main._ftd_min_score   # 0=no change, 1=+1
 
+    # Layer 8: GEX (Gamma Exposure) — board vote S50b
+    # NEGATIVE GEX = dealers short gamma = momentum amplified = require stronger signal.
+    # Raises MIN_SCORE +1 in negative regime (stricter confirmation, not a hard block).
+    # Shadow mode (GEX_ENABLED=False): logs regime only, does NOT modify _gex_min_score.
+    _gex_min_score = _base_min
+    _gex_label     = "UNKNOWN"
+    try:                                                  # always read for shadow logging
+        from data.gex import get_gex_regime as _get_gex
+        _gex_data  = _get_gex("SPY")
+        _gex_label = _gex_data.get("label", "UNKNOWN")
+        _gex_age   = _gex_data.get("age_minutes")
+        logger.debug(
+            "GEX Layer8: label=%s raw_gex_m=%.1f flip=%s age=%.0fmin",
+            _gex_label,
+            _gex_data.get("raw_gex_m", 0.0),
+            _gex_data.get("flip_strike"),
+            _gex_age if _gex_age is not None else -1,
+        )
+        if getattr(config, "GEX_ENABLED", False):
+            if _gex_label == "NEGATIVE":
+                _gex_min_score = _base_min + config.GEX_MIN_SCORE_NEG_BUMP  # +1
+    except Exception as _gex_err:
+        logger.warning("GEX Layer8 failed (non-fatal): %s", _gex_err)
+
     _dynamic_min_score = max(
         _spy_min_score, _vix_min_score, _mri_min_score,
         _pnl_min_score, _ath_min_score, _regime_min_score,
-        _ftd_floor,
+        _ftd_floor, _gex_min_score,
     )
     _score_reason = ""   # initialize before conditional assignment
     if _dynamic_min_score > _base_min:
@@ -1218,6 +1242,7 @@ def run_cycle(
             f"MTD={_main._market_top_score}/{_main._market_top_zone_tier} "
             f"Regime={_main._macro_regime_label or 'none'}/{_regime_min_score} "
             f"FTD={_main._ftd_combined_state or 'none'}/{_ftd_floor} "
+            f"GEX={_gex_label}/{_gex_min_score} "
             f"→ effective={_dynamic_min_score}/12"
         )
 

@@ -390,6 +390,16 @@ VOLUME_MIN_VALID_BARS        = 15      # min non-NaN bars in iloc[-21:-1] requir
 VOLUME_REQUIRE_TWO_BAR       = False   # Levitt C2: 2 consecutive above-threshold days (deferred)
 # VOLUME_GRADED_ENABLED = False        # reserved S25 — do not implement until 60-session shadow
 
+# ─── GEX (GAMMA EXPOSURE) ─────────────────────────────────────────────────────
+# Board unanimous S50b. GEX_ENABLED=False = shadow mode (log-only, no scoring).
+# Set True after 30-session shadow review + board vote.
+GEX_ENABLED             = False   # False = shadow mode; True = live scoring
+GEX_STALE_MINUTES       = 45      # treat snapshot as stale if older than this (reduce to 30 post-shadow)
+GEX_EDGE_MULT_MOMENTUM  = 1.30    # edge multiplier when GEX=NEGATIVE (momentum regime)
+GEX_EDGE_MULT_MR        = 1.15    # edge multiplier when GEX=POSITIVE (mean-reversion regime)
+GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN
+GEX_MIN_SCORE_NEG_BUMP  = 1       # MIN_SCORE +1 when GEX=NEGATIVE (requires stronger signal)
+
 # ─── TSMOM VOL-SCALING (board vote 2026-04-22, 17-0) ─────────────────────────
 # Vol-scaled sizing multiplier: target_vol / ewma_vol_60d, capped to [FLOOR, CAP].
 # Active at paper stage for sizing only. Scoring activation gated on 90-day log + CPCV.

@@ -313,6 +313,34 @@ class KellySizer:
             )
             return 0.0
 
+        # GEX edge multiplier — board vote S50b
+        # Scales kelly_risk proportionally — equivalent to multiplying the edge estimate
+        # (kelly_full = edge / avg_win_R, so kelly_risk * mult ≡ edge * mult in sizing).
+        # 0DTE carve-out: no multiplier on Fridays (board condition).
+        # Only active when GEX_ENABLED=True AND minimum sample size met.
+        _gex_edge_mult = 1.0
+        if getattr(config, "GEX_ENABLED", False) and total >= config.KELLY_MIN_SAMPLE_SIZE:
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                from datetime import datetime as _dt
+                _is_friday = _dt.now(_ZI("America/New_York")).weekday() == 4
+                if not _is_friday:
+                    from data.gex import get_gex_regime as _get_gex_kelly
+                    _gex_regime = _get_gex_kelly("SPY").get("label", "UNKNOWN")
+                    if _gex_regime == "NEGATIVE":
+                        _gex_edge_mult = getattr(config, "GEX_EDGE_MULT_MOMENTUM", 1.30)
+                    elif _gex_regime == "POSITIVE":
+                        _gex_edge_mult = getattr(config, "GEX_EDGE_MULT_MR", 1.15)
+                    # NEAR-FLIP / STALE / UNKNOWN: multiplier stays 1.0
+                    if _gex_edge_mult != 1.0:
+                        logger.debug(
+                            "Kelly [%s]: GEX=%s edge_mult=%.2fx",
+                            key, _gex_regime, _gex_edge_mult,
+                        )
+            except Exception as _gex_kelly_err:
+                logger.debug("Kelly GEX edge mult failed (non-fatal): %s", _gex_kelly_err)
+        kelly_risk *= _gex_edge_mult
+
         # Clamp — KELLY_MIN_RISK_PCT floor only when kelly_full > 0 (positive edge above)
         kelly_risk = max(config.KELLY_MIN_RISK_PCT, min(config.KELLY_MAX_RISK_PCT, kelly_risk))
 

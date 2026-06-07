@@ -274,3 +274,43 @@ def refresh_gex() -> None:
         f.write(json.dumps({"ts": ts_str, "symbols": results}) + "\n")
 
     logger.info("GEX snapshot written: %d symbols @ %s", len(results), ts_str)
+
+
+def get_gex_regime(symbol: str = "SPY") -> dict:
+    """Read cached GEX snapshot and return regime for given symbol.
+
+    Returns dict: label (POSITIVE/NEGATIVE/NEAR-FLIP/STALE/UNKNOWN),
+    raw_gex_m, flip_strike, age_minutes.
+    Stale guard: if snapshot > GEX_STALE_MINUTES old, returns label=STALE.
+    Called by run_cycle.py (Layer 8) and kelly.py (edge multiplier) during RTH.
+    """
+    import config as _cfg
+    stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 45)
+    try:
+        if not _SNAP_PATH.exists():
+            return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
+        snap = json.loads(_SNAP_PATH.read_text())
+        ts_str = snap.get("ts", "")
+        try:
+            ts_dt       = datetime.strptime(ts_str, "%Y-%m-%d %I:%M %p PT").replace(tzinfo=PT)
+            age_minutes = (datetime.now(PT) - ts_dt).total_seconds() / 60
+        except Exception:
+            age_minutes = 9999.0
+        if age_minutes > stale_minutes:
+            logger.debug(
+                "GEX [%s]: snapshot %.0f min old (> %d min stale threshold)",
+                symbol, age_minutes, stale_minutes,
+            )
+            return {"label": "STALE", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": age_minutes}
+        sym_data = snap.get("symbols", {}).get(symbol, {})
+        if not sym_data or "error" in sym_data:
+            return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": age_minutes}
+        return {
+            "label":       sym_data.get("label", "UNKNOWN"),
+            "raw_gex_m":   sym_data.get("raw_gex_m", 0.0),
+            "flip_strike": sym_data.get("flip_strike"),
+            "age_minutes": age_minutes,
+        }
+    except Exception as e:
+        logger.warning("GEX get_gex_regime failed: %s", e)
+        return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
