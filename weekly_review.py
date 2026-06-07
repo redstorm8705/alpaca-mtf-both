@@ -405,7 +405,10 @@ def _fmt_reason(r: str) -> str:
     return s
 
 
-def _strategy_validation_html(trade_log: "dict | None") -> str:
+def _strategy_validation_html(  # noqa: E501
+    trade_log: "dict | None",
+    lifetime_pnl: "float | None" = None,
+) -> str:
     """
     Build the Live Strategy Validation card from real closed trade data.
     Replaces the stale daily-bar backtest reference with a score→outcome matrix
@@ -423,7 +426,10 @@ def _strategy_validation_html(trade_log: "dict | None") -> str:
     all_wr    = len(all_wins) / total_trades * 100 if total_trades else 0
     avg_w     = sum(t["pnl"] for t in all_wins)  / len(all_wins)  if all_wins  else 0
     avg_l     = sum(t["pnl"] for t in all_losses) / len(all_losses) if all_losses else 0
-    total_pnl = compute_lifetime_stats().get("total_pnl", 0.0)
+    total_pnl = (
+        lifetime_pnl if lifetime_pnl is not None
+        else compute_lifetime_stats().get("total_pnl", 0.0)
+    )
     pf        = abs(avg_w / avg_l) if avg_l != 0 else float("inf")
 
     def _col(v, pos="#30d158", neg="#ff3b30", zero="#b8bdd4"):
@@ -1446,7 +1452,7 @@ def build_html(  # noqa: E501
     # Backtest data is still loaded and passed to the AI analysis prompt for
     # historical context, but is no longer the primary display. Live trade data
     # from trade_log.json is the authoritative signal.
-    bt_html = _strategy_validation_html(trade_log)
+    bt_html = _strategy_validation_html(trade_log, lifetime_pnl=_lt_pnl)
 
     # ── AI sections ──────────────────────────────────────────────────────────
     _det_stats = _exec_summary_stats(trade_log, monday)
