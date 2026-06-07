@@ -217,12 +217,7 @@ def _day_cell(d: date | None) -> str:
     pnl_cls   = _pnl_class(pnl)
     wr_color  = _wr_color(day_wr)
 
-    pdt_day   = len(eod.get("pdt_slots_used", []) or [])
-    pdt_badge = ""
-    if pdt_day:
-        pc = "#ff3b30" if pdt_day >= 3 else "#ff9f0a" if pdt_day >= 2 else "#ffd60a"
-        pdt_badge = f'<span class="pdt-badge" style="color:{pc}">PDT×{pdt_day}</span>'
-
+    # pdt_day/pdt_badge removed S52 — SEC/FINRA rule amendment, board vote S50 28-0.
     loss_driver = (eod.get("loss_driver") or "").lower()
     loss_badge  = ""
     if loss_driver:
@@ -234,7 +229,7 @@ def _day_cell(d: date | None) -> str:
     return (
         f'<td class="{cls}">'
         f'<div class="cell-header">'
-        f'<span class="cell-date">{day_num}</span>{pdt_badge}</div>'
+        f'<span class="cell-date">{day_num}</span></div>'
         f'<div class="cell-pnl {pnl_cls}">{_fmt_pnl(pnl)}</div>'
         f'<div class="cell-meta" style="color:{wr_color}">'
         f'{n} trade{"s" if n != 1 else ""} · {day_wr:.0f}% WR</div>'
@@ -277,7 +272,6 @@ def _stats_html(m: dict) -> str:
         + box("Profit Factor",    pf_str, pf_c)
         + box("Avg Score",        score_str)
         + box("Avg TQI",          tqi_str, tqi_c)
-        + box("PDT Used",         str(m["pdt_count"]))
         + box("Overnights",       str(m["overnight_count"]))
         + '</div>'
     )
@@ -404,7 +398,6 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         ".cell-meta{font-size:11px}"
         ".cell-empty{font-size:11px;color:#363a5a;font-style:italic;margin-top:4px}"
         ".pos{color:#30d158}.neg{color:#ff3b30}.zero{color:#636680}"
-        ".pdt-badge{font-size:10px;font-weight:600}"
         ".loss-badge{font-size:10px;font-weight:600;margin-top:4px;"
         "padding:2px 5px;border-radius:4px;display:inline-block}"
         ".loss-badge.mech{background:rgba(255,214,10,.13);color:#ffd60a}"
