@@ -165,14 +165,16 @@ def send_slack(message: str) -> None:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
+# PDT rule removed — accounts <$25K exempt (SEC/FINRA rule amendment, board vote S50 28-0).
+# pdt param defaulted to 0 here; Tier 2 callers (entry_logic, exit_logic) remove the kwarg in Tier 2 session.
 def alert_entry(symbol: str, direction: str, shares: int, price: float,
-                score: int, pdt: int, size_mult: float,
+                score: int, size_mult: float, pdt: int = 0,
                 overnight: bool = False, spy_ath_dist_pct: float | None = None,
                 mri_level: str | None = None) -> None:
     """Fire on confirmed entry order submission."""
     dir_arrow = "▲ LONG" if direction == "long" else "▼ SHORT"
     title = f"ENTRY {dir_arrow} {symbol}"
-    _ctx_parts = [f"Score: {score}/12", f"PDT: {pdt}/3", f"Size mult: {size_mult:.2f}x"]
+    _ctx_parts = [f"Score: {score}/12", f"Size mult: {size_mult:.2f}x"]  # pdt param kept for Tier 2 caller compat
     if overnight:
         _ctx_parts.append("🌙 FORCED OVERNIGHT")
     if spy_ath_dist_pct is not None:
@@ -237,8 +239,12 @@ def alert_spy_event(event_type: str, magnitude: float, scans_left: int) -> None:
 
 
 def alert_stop_breach(symbol: str, direction: str, current_price: float,
-                      stop: float, pdt: int, gtc_submitted: bool = True) -> None:
-    """Fire when stop is breached but PDT=3/3 blocks immediate close."""
+                      stop: float, gtc_submitted: bool = True, pdt: int = 0) -> None:
+    """Fire when stop is breached and position cannot be closed immediately:
+    GTC stop placed for next RTH open, or close_position() hard-failed.
+    PDT removed — SEC/FINRA rule amendment, board vote S50 28-0.
+    pdt param defaulted; Tier 2 session removes it from callers.
+    """
     title = f"⚠️ STOP BREACH BLOCKED — {symbol}"
     if gtc_submitted:
         action = "GTC stop placed — fires next RTH open."
@@ -246,7 +252,6 @@ def alert_stop_breach(symbol: str, direction: str, current_price: float,
         action = "⛔ GTC stop FAILED — MANUAL ACTION REQUIRED in Alpaca app."
     body  = (
         f"Price ${current_price:.2f} breached stop ${stop:.2f}\n"
-        f"PDT {pdt}/3 — cannot close same-day.\n"
         f"{action}"
     )
     _send(title, body, priority=5, tags=["warning", "lock"],
@@ -265,7 +270,7 @@ def alert_crash(reason: str, open_positions: list) -> None:
                 return
             os.remove(_sentinel)   # stale — clean up but send alert
         except FileNotFoundError:
-            pass   # sentinel not present — expected; proceed with crash alert
+            logger.debug("alert_crash: no restart sentinel found — expected; proceed with crash alert")
         except OSError as _sentinel_e:
             logger.warning("alert_crash: sentinel stat/remove failed — %s", _sentinel_e)
 
