@@ -1126,7 +1126,7 @@ def run_cycle(
 
     # Dynamic MIN_SCORE — raises entry bar when market is stressed
     # Applied as post-filter on run_scan() output (signal_generator is read-only)
-    _base_min = getattr(config, "MIN_CONFLUENCE_SCORE", 9)
+    _base_min = config.MIN_LONG_SCORE  # Paper=10 (board vote Apr 7 2026); Live=4
 
     # Layer 1: SPY event-type gate
     if _main._spy_event_type == "EXTREME":
