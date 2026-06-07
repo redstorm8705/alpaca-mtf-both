@@ -703,7 +703,15 @@ def main():
                 f"tracker count ({_tracker_count}). "
                 f"Overriding to Alpaca-authoritative count."
             )
-            risk.open_positions = _live_count
+            if _live_count > _tracker_count:
+                for _ in range(_live_count - _tracker_count):
+                    risk.register_open()
+            else:
+                logger.warning(
+                    "P0-STARTUP: Position count decreased Alpaca=%d tracker=%d — forcing direct sync.",
+                    _live_count, _tracker_count,
+                )
+                risk.open_positions = _live_count
             # Observability: surface which symbols are causing the discrepancy
             _alpaca_syms  = {pos.symbol for pos in _live_pos}
             _tracker_syms = {s for s, t in tracker.open_trades.items()
@@ -800,28 +808,6 @@ def main():
     if universe_override:
         logger.info(f"Universe override: {universe_override}")
 
-    # ── PDT counter sync — gated on PDT_ENFORCEMENT_ENABLED (S50 board) ─────────────────────
-    if getattr(config, "PDT_ENFORCEMENT_ENABLED", True):
-        try:
-            _account = get_account()
-            _alpaca_dt_count = int(getattr(_account, "daytrade_count", 0))
-            if _alpaca_dt_count > 0:
-                if not hasattr(tracker, "_day_trades"):
-                    tracker._day_trades = []
-                today = date.today().isoformat()
-                existing = sum(1 for t in tracker._day_trades if t["date"] == today)
-                for _ in range(_alpaca_dt_count - existing):
-                    tracker._day_trades.append(
-                        {"symbol": "SYNC", "timestamp": today, "date": today}
-                    )
-                logger.info(
-                    "PDT counter synced from Alpaca: %d day trades today", _alpaca_dt_count
-                )
-        except Exception as _e:
-            logger.warning("PDT sync failed: %s", _e)
-    else:
-        logger.info("PDT enforcement disabled (PDT_ENFORCEMENT_ENABLED=False) — sync skipped.")
-
     # ── Daily reset ───────────────────────────────────────────────────────────────────────────
     # H-1: use _sod_equity (Alpaca last_equity = SOD baseline) not current portfolio_value.
     # On mid-session restart, portfolio_value may already reflect intraday gains/losses —
@@ -855,7 +841,7 @@ def main():
                 _last_daily_reset_date = _today_et
                 _set_halt_entries(False)         # H-6: Phase 2 — events/handlers.py
                 _kill_switch_alerted  = False
-                gate_state.conviction_streak.clear()     # PDT=3/3 12/12 streak — never carry across days
+                gate_state.conviction_streak.clear()     # 12/12 conviction streak — never carry across days
                 gate_state.entry_confirm_buffer.clear()  # BoD-1 2-scan gate — stale streak = false entry
                 _last_weekly_review_spawn_date = None    # RC9: dedup guard must reset at day boundary
                 _reset_partial_fail_counts()     # RC11: Phase 2 — execution/lifecycle.py
