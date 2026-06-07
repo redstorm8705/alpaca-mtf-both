@@ -4,7 +4,7 @@ Tracks open trades, P&L, day trades, and trade history.
 
 Persistence:
   trade_log.json        — open + closed trades (atomic write with .bak)
-  logs/day_trades.json  — rolling PDT counter (atomic write, survives restarts)
+  logs/day_trades.json  — day-trade records (PDT removed S52; infra deferred)
   logs/kelly_stats.json — Kelly win/loss data (written by kelly.py)
 """
 
@@ -18,7 +18,7 @@ import tempfile
 import urllib.request
 import urllib.parse
 import time as _time_mod
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -663,7 +663,6 @@ class PortfolioTracker:
                 score=_trade.get("score", 0),
                 mri_level=_trade.get("mri_level", "NORMAL"),
                 data_source=fill_source,
-                pdt_used=self.get_rolling_day_trade_count(),
                 original_exit_price=_original_exit_px,
                 corrected_exit_price=exit_price,
                 original_pnl=_original_pnl,
@@ -1398,8 +1397,8 @@ class PortfolioTracker:
             # Logged when Bucket A same-day block fires on a stop breach
             "stop_breached":          False,
             "stop_breach_price":      None,
-            # Change 1: GTC stop-market order submitted when PDT=3/3 confirmed
-            # stop fires. Distinct from gtc_stop_order_id (overnight protection stop).
+            # GTC stop-market order ID — PDT enforcement path, deprecated S52.
+            # set_pdt_gtc_stop_order_id() kept for exit_logic.py compat (Tier 2).
             "_gtc_stop_order_id":     None,
         }
         self.traded_today.add(symbol)
@@ -1409,7 +1408,7 @@ class PortfolioTracker:
         )
         _log_event(
             "entry", symbol=symbol, price=entry_price, size=qty, score=score,
-            mri_level=mri_level, data_source=data_source, pdt_used=pdt_used,
+            mri_level=mri_level, data_source=data_source,
             direction=direction, stop=round(stop, 2), target=round(target, 2),
             trade_mode=trade_mode,
             **extra_log,
@@ -1428,12 +1427,6 @@ class PortfolioTracker:
             self.open_trades[symbol]["_gtc_stop_order_id"] = order_id
             self._save_log()
             logger.debug(f"[{symbol}] PDT GTC stop order ID stored: {order_id}")
-
-    def clear_pdt_gtc_stop_order_id(self, symbol: str):
-        """Clear the Change 1 PDT=3/3 GTC stop order ID after fill or cancel."""
-        if symbol in self.open_trades:
-            self.open_trades[symbol]["_gtc_stop_order_id"] = None
-            self._save_log()
 
     def clear_gtc_stop_order_id(self, symbol: str):
         """Clear GTC stop order ID after cancellation at market open."""
@@ -1545,7 +1538,6 @@ class PortfolioTracker:
                 mri_level   = mri_level,
                 price       = fill_price,
                 size        = _qty,
-                pdt_used    = pdt_used,
                 data_source = "overnight_limit_fill",
                 trade_mode  = t.get("trade_mode", "intraday"),
                 direction   = t.get("direction"),
@@ -1931,10 +1923,6 @@ class PortfolioTracker:
         """S50: PDT removed — stub returns 0. Callers cleaned in follow-on session."""
         return 0
 
-    def sync_pdt_with_alpaca(self, alpaca_daytrade_count: int):
-        """S50: PDT removed — no-op stub retained for callers in secondary files."""
-        pass  # S50 stub
-
     # ── Stats ─────────────────────────────────────────────────────────────────
 
     def get_stats(self) -> dict:
@@ -2047,76 +2035,10 @@ class PortfolioTracker:
         print("=" * 50 + "\n")
 
 
-# ── Module-level PDT helpers (importable by dashboard / weekly_review) ────────
-# These are thin wrappers around PortfolioTracker's canonical logic so that
-# generate_dashboard.py and weekly_review.py don't re-implement PDT counting.
-# Single source of truth: PortfolioTracker._market_holidays() + rolling window.
+# compute_rolling_pdt_count() deleted S52.
+# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
+# Sole importer (weekly_review.py) patched S52. Confirmed 0 callers remaining.
 
-def compute_rolling_pdt_count(day_trades: list) -> int:
-    """
-    Canonical rolling 5-trading-day PDT count — standalone for scripts that
-    don't hold a PortfolioTracker instance (generate_dashboard, weekly_review).
-    Excludes 'SYNC' (reconciliation marker). EXTERNAL counts as real PDT.
-    Holiday-aware via PortfolioTracker._market_holidays(). Caps at 3.
-    """
-    holidays = PortfolioTracker._market_holidays()
-
-    def _is_td(d: date) -> bool:
-        return d.weekday() < 5 and d.isoformat() not in holidays
-
-    anchor = datetime.now(_PT).date()
-    while not _is_td(anchor):
-        anchor -= timedelta(days=1)
-    window: list = []
-    d = anchor
-    while len(window) < 5:
-        if _is_td(d):
-            window.append(d.isoformat())
-        d -= timedelta(days=1)
-
-    def _eff(raw: str) -> str:
-        if not raw:
-            return ""
-        try:
-            d2 = date.fromisoformat(raw)
-            while not _is_td(d2):
-                d2 -= timedelta(days=1)
-            return d2.isoformat()
-        except Exception as _e:
-            logger.warning("_eff: date map failed for %r: %s", raw, _e)
-            return raw
-
-    return min(sum(1 for t in day_trades
-                   if isinstance(t, dict)
-                   and t.get("symbol") != "SYNC"
-                   and _eff(t.get("date", "")) in window), 3)
-
-
-def compute_pdt_for_date(day_trades: list, target_date: date) -> int:
-    """
-    Count PDT-qualifying day trades for one specific business date.
-    Excludes 'SYNC'. Maps weekend/holiday-stamped entries to prior trading day.
-    Holiday-aware via PortfolioTracker._market_holidays().
-    """
-    holidays = PortfolioTracker._market_holidays()
-
-    def _is_td(d: date) -> bool:
-        return d.weekday() < 5 and d.isoformat() not in holidays
-
-    def _eff(raw: str) -> str:
-        if not raw:
-            return ""
-        try:
-            d2 = date.fromisoformat(raw)
-            while not _is_td(d2):
-                d2 -= timedelta(days=1)
-            return d2.isoformat()
-        except Exception as _e:
-            logger.warning("_eff: date map failed for %r: %s", raw, _e)
-            return raw
-
-    ds = target_date.isoformat()
-    return sum(1 for t in day_trades
-               if isinstance(t, dict)
-               and t.get("symbol") != "SYNC"
-               and _eff(t.get("date", "")) == ds)
+# compute_pdt_for_date() deleted S52.
+# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
+# Sole importer (weekly_review.py) patched S52. Confirmed 0 callers remaining.
