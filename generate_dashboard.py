@@ -85,10 +85,6 @@ def _load_hybrid_state():
     return data
 
 
-def _load_day_trades():
-    return _load_json(LOG_DIR / "day_trades.json",[])
-
-
 def _load_today_eod():
     today = datetime.now(PT).date().isoformat()
     return _load_json(LOG_DIR / f"eod_{today}.json", {})
@@ -200,12 +196,6 @@ def _load_alpaca():
             "pdt_count": 0, "status": "unknown", "shorting": False,
             "positions": [], "orders": [],
         }
-
-
-def _pdt_rolling_count(day_trades: list) -> int:
-    """Delegate to canonical implementation in portfolio_tracker — single source of truth."""
-    from execution.portfolio_tracker import compute_rolling_pdt_count
-    return compute_rolling_pdt_count(day_trades)
 
 
 # ── HTML builder ─────────────────────────────────────────────────────────────
@@ -360,7 +350,7 @@ def _build_gex_section(gex_data: dict, open_pos: list) -> str:
     )
 
 
-def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, market_news=None, gex=None):
+def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=None, gex=None):
     if bot_status is None:
         bot_status = {}
     if market_news is None:
@@ -375,22 +365,6 @@ def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, mar
 
     equity   = alpaca.get("equity", 0)
     bp       = alpaca.get("buying_power", 0)
-    pdt_alp  = alpaca.get("pdt_count", 0)
-    pdt_roll = _pdt_rolling_count(day_trades)
-    pdt_col  = "#ff3b30" if pdt_roll >= 3 else ("#ffd60a" if pdt_roll >= 1 else "#30d158")
-    # P1-PDT-NEXT: compute next-slot and full-reset dates for KPI strip display.
-    try:
-        from scan_to_html import _pdt_reset_display as _pdt_disp
-        _pdt_info = _pdt_disp(day_trades if isinstance(day_trades, list) else [], pdt_roll)
-    except Exception as _pdt_disp_e:
-        logger.warning(
-            "_build_html: _pdt_reset_display import/call failed"
-            " — PDT slot display blank: %s",
-            _pdt_disp_e,
-        )
-        _pdt_info = {"next_slot": None, "full_reset": None}
-    _pdt_next   = _pdt_info.get("next_slot")
-    _pdt_full   = _pdt_info.get("full_reset")
 
     open_pos = alpaca.get("positions",[])
     orders   = alpaca.get("orders",[])
@@ -689,7 +663,7 @@ header{{display:flex;align-items:center;justify-content:space-between;padding:13
 .pill.closed{{border-color:var(--muted);color:var(--muted);background:rgba(99,102,128,.08)}}
 .pulse{{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite}}
 @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.2}}}}
-.kpi-grid{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:16px 24px;background:var(--bg);border-bottom:1px solid var(--border)}}
+.kpi-grid{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:16px 24px;background:var(--bg);border-bottom:1px solid var(--border)}}
 .kpi{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px}}
 .kpi-lbl{{font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin-bottom:6px}}
 .kpi-val{{font-size:22px;font-weight:700;color:var(--text);line-height:1.1}}
@@ -793,9 +767,9 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <div class="kpi-sub">{len(orders)} order(s) · BP: ${bp:,.0f}</div>
   </div>
   <div class="kpi">
-    <div class="kpi-lbl">PDT (rolling 5d)</div>
-    <div class="kpi-val" style="color:{pdt_col}">{pdt_roll}/3</div>
-    <div class="kpi-sub">Alpaca: {pdt_alp}/3 · KS limit: ${-ks_limit:,.2f}{"  ·  NEXT SLOT: " + _pdt_next if _pdt_next else ""}{"  ·  FULL RESET: " + _pdt_full if _pdt_full else ""}</div>
+    <div class="kpi-lbl">Win Rate (all-time)</div>
+    <div class="kpi-val" style="color:{_col(all_wr - 50)}">{all_wr:.0f}%</div>
+    <div class="kpi-sub">{all_trades} closed trades · KS limit: ${-ks_limit:,.2f}</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">SPY Regime / MRI</div>
@@ -949,13 +923,12 @@ def generate():
     alpaca      = _load_alpaca()
     trade_log   = _load_trade_log()
     hybrid      = _load_hybrid_state()
-    day_trades  = _load_day_trades()
     eod         = _load_today_eod()
     bot_status  = _load_bot_status()
     market_news = _load_market_news()
     gex         = _load_gex_snapshot()
 
-    html = _build_html(alpaca, trade_log, hybrid, day_trades, eod,
+    html = _build_html(alpaca, trade_log, hybrid, eod,
                        bot_status=bot_status, market_news=market_news, gex=gex)
 
     out_path = ROOT / "dashboard.html"
