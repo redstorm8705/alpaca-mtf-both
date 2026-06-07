@@ -399,7 +399,9 @@ def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, mar
     # Pass equity already fetched above so we skip the second Alpaca API call.
     # Per P&L sourcing rule: Alpaca equity is the sole source of truth for all-time P&L.
     try:
-        _lt        = compute_lifetime_stats(equity=float(equity))
+        # realized-only: skip Alpaca equity fetch — use EOD sum of closed trades only.
+        # equity-based (~$321) excluded per user mandate S52. Cache stores realized value.
+        _lt        = compute_lifetime_stats(skip_fetch=True)
     except Exception as _lt_e:
         logger.warning(
             "_build_html: compute_lifetime_stats failed"
@@ -426,6 +428,7 @@ def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, mar
                     "win_rate":     round(float(_lt.get("win_rate", 0.0)), 2),
                     "total_trades": int(_lt.get("total_trades", 0)),
                     "ts":           datetime.now(ET).isoformat(),
+                    "type":         "realized_eod",  # DS S52: consumers distinguish from prior equity-based cache
                 }, indent=2),
                 encoding="utf-8",
             )
@@ -448,8 +451,7 @@ def _build_html(alpaca, trade_log, hybrid, day_trades, eod, bot_status=None, mar
         p.get("unrealized_intraday_pl", 0) for p in open_pos
         if p.get("symbol") in _open_syms_in_log
     )
-    unrealized_pnl     = _open_unrealized
-    unrealized_pnl_col = _col(unrealized_pnl)
+    unrealized_pnl     = _open_unrealized  # still used: realized_pnl calc + kill switch gauge
 
     # Today P&L — Alpaca's authoritative account-level number.
     # equity - last_equity captures ALL realized gains (manual closes on Alpaca,
@@ -786,9 +788,9 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <div class="kpi-sub">{len(eod.get('trades', []))} closed trade(s)</div>
   </div>
   <div class="kpi">
-    <div class="kpi-lbl">Unrealized P&L (today)</div>
-    <div class="kpi-val" style="color:{unrealized_pnl_col}">{_pnl_str(unrealized_pnl)}</div>
-    <div class="kpi-sub">{len(open_pos)} position(s) · {len(orders)} order(s)</div>
+    <div class="kpi-lbl">Open Positions</div>
+    <div class="kpi-val" style="color:var(--accent)">{len(open_pos)}</div>
+    <div class="kpi-sub">{len(orders)} order(s) · BP: ${bp:,.0f}</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">PDT (rolling 5d)</div>
@@ -826,7 +828,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <table>
       <thead><tr>
         <th>Symbol</th><th>Side</th><th>Qty</th><th>Current Price</th><th>Entry Price</th>
-        <th>Total P&L</th><th>Stop</th><th>Target</th><th>Score</th>
+        <th>Float P&L</th><th>Stop</th><th>Target</th><th>Score</th>
       </tr></thead>
       <tbody>{pos_rows}</tbody>
     </table>
