@@ -7,8 +7,9 @@ Contains all exit-related logic:
   - check_partial_exits()         — trailing stop / partial tranche logic
   - check_exits()                 — hard stop / reversal exit logic
   - _check_exits_extended_hours() — AH/PM exit monitoring
-  - _pdt_htf_gate()               — PDT higher-timeframe confirmation gate
   - TQI helpers: _compute_tqi, _record_partial_tqi, _record_tqi
+  - _pdt_htf_gate()               — PDT removed S52 (SEC/FINRA rule amendment, board S50 28-0);
+                                    stub retained for import compat (main.py/trade_engine.py)
 
 H1 DPE Integration (2026-05-11):
   - check_exits() overnight_atr_buffer_exit now calls get_be_buffer_mult(symbol, last_vix)
@@ -48,14 +49,11 @@ from execution.fill_helpers import fetch_actual_fill_price as _fetch_actual_fill
 from execution.lifecycle import (
     get_partial_fail_counts as _get_partial_fail_counts,
     set_shorts_banned as _set_shorts_banned,
-    submit_gtc_stop_close as _submit_gtc_stop_close,
 )
 from execution.orphan_manager import get_tod_phase as _get_tod_phase
 from execution.param_engine import get_be_buffer_mult
 from execution.portfolio_tracker import PortfolioTracker
 from execution.risk_manager import RiskManager
-from indicators.macd import add_both_macds, dual_macd_agreement
-from indicators.moving_averages import add_all_mas, ema_structure_bullish
 from strategy.scoring import get_live_score as _get_live_score
 from strategy.signal_generator import get_exit_signal
 from trade_logger import log_event as _log_trade_event
@@ -438,7 +436,6 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     # overnight=True → GTC stop (persists through close).
                     # overnight=False → DAY stop (expires at close).
                     # datetime.now(ET).hour >= 16 is dead code during RTH (BoD ruling).
-                    _tr_rolling_dt = tracker.get_rolling_day_trade_count()
                     if _tr_submit:
                         if trade.get("overnight"):
                             logger.debug(
@@ -455,7 +452,6 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                                     size=_qty_left, score=trade.get("score", 0),
                                     mri_level=mri.level() if mri else "NORMAL",
                                     data_source="alpaca_data",
-                                    pdt_used=_tr_rolling_dt,
                                     stop_type="trail_ratchet_gtc",
                                 )
                                 logger.info(
@@ -496,7 +492,6 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                                     size=_qty_left, score=trade.get("score", 0),
                                     mri_level=mri.level() if mri else "NORMAL",
                                     data_source="alpaca_data",
-                                    pdt_used=_tr_rolling_dt,
                                     stop_type="trail_ratchet_day",
                                 )
                                 logger.info(
@@ -520,23 +515,6 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
         target_dist = (target - entry_price) if direction == "long" else (entry_price - target)
         if target_dist <= 0:
             continue
-
-        # ── PDT context ───────────────────────────────────────────────────────
-        opened_today = tracker.opened_today(symbol)
-        rolling_dt   = tracker.get_rolling_day_trade_count()
-        pdt_full     = rolling_dt >= config.DAY_TRADE_MAX_ROLLING
-
-        def _tranche_allowed(t_idx: int) -> bool:
-            """Return True if this tranche may execute today given PDT state."""
-            if not opened_today:
-                return True           # overnight → no PDT concern
-            if pdt_full:
-                return False          # 3/3 → defer all
-            if rolling_dt == 2:
-                return t_idx == 1     # T2 only (0-indexed 1)
-            if rolling_dt == 1:
-                return t_idx in (0, 1)  # T1 + T2
-            return True               # 0 PDT → all allowed
 
         # ── AB-6R: stressed-regime T2 threshold ──────────────────────────────
         # Sinclair/Thorp/Tudor Jones: in BROAD_* / EXTREME regimes or VIX > 30,
@@ -603,37 +581,6 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     f"— skipping remaining tranches to prevent watchdog SIGKILL."
                 )
                 break
-
-            if not _tranche_allowed(t_idx):
-                # PDT blocks same-day close — submit GTC limit so profit is locked
-                # if price holds or continues overnight into next session.
-                _gtc_partials = trade.setdefault("gtc_partial_order_ids", {})
-                _tk = f"t{t_idx + 1}"
-                if _tk not in _gtc_partials:
-                    _gtc_side    = "sell" if direction == "long" else "buy"
-                    _gtc_qty     = min(max(1, round(qty_orig * TRANCHE_SHARE)), qty_rem - 1)
-                    if _gtc_qty >= 1:
-                        _gtc_order = _submit_gtc_limit_partial(
-                            symbol, _gtc_qty, _gtc_side, round(t_price, 2)
-                        )
-                        if _gtc_order:
-                            _gtc_partials[_tk] = str(_gtc_order.id)
-                            tracker._save_log()
-                            logger.info(
-                                f"[{symbol}] T{t_idx + 1} GTC partial placed: "
-                                f"{_gtc_qty} @ ${t_price:.2f} | PDT {rolling_dt}/3"
-                            )
-                    else:
-                        logger.info(
-                            f"[{symbol}] T{t_idx + 1} (${t_price:.2f}) reached — "
-                            f"PDT {rolling_dt}/3: qty too small for GTC partial, deferring."
-                        )
-                else:
-                    logger.info(
-                        f"[{symbol}] T{t_idx + 1} GTC partial already placed "
-                        f"(order {_gtc_partials[_tk]}) — skipping."
-                    )
-                continue   # price is here but PDT blocks same-day close; check next tranche
 
             # ── Execute partial close ─────────────────────────────────────
             qty_each   = max(1, round(qty_orig * TRANCHE_SHARE))
@@ -870,7 +817,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                                 _log_trade_event(
                                     "stop_promotion", symbol=symbol, price=_stop_px, size=_new_rem,
                                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data", pdt_used=rolling_dt,
+                                    data_source="alpaca_data",
                                     stop_type="gtc_resubmit_after_partial",
                                 )
                                 logger.info(
@@ -886,7 +833,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                                 _log_trade_event(
                                     "gtc_stop_orphaned", symbol=symbol, price=0.0, size=_new_rem,
                                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data", pdt_used=rolling_dt,
+                                    data_source="alpaca_data",
                                     stop_price=_stop_px,
                                 )
                                 try:
@@ -908,7 +855,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                                 _log_trade_event(
                                     "stop_promotion", symbol=symbol, price=_stop_px, size=_new_rem,
                                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data", pdt_used=rolling_dt,
+                                    data_source="alpaca_data",
                                     stop_type="breakeven" if t_idx == 0 else "trail",
                                 )
                                 logger.info(
@@ -937,14 +884,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     f"[{symbol}] T{t_idx + 1} PARTIAL EXIT: {qty_to_cls} shares "
                     f"@ ${current_price:.2f} | tranche P&L ${pnl:.2f} "
                     f"| cumulative partial_pnl ${trade['partial_pnl']:.2f} "
-                    f"| Level {t_idx + 1}/3 | PDT {rolling_dt}/3"
+                    f"| Level {t_idx + 1}/3"
                 )
                 alert_partial(symbol=symbol, tranche=t_idx + 1, pnl=pnl,
                               qty=qty_to_cls, price=current_price)
                 _log_trade_event(
                     "partial_exit", symbol=symbol, price=fill_price, size=qty_to_cls,
                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                    data_source="alpaca_data", pdt_used=rolling_dt,
+                    data_source="alpaca_data",
                     tranche=t_idx + 1, pnl=round(pnl, 2),
                     atr_value=trade.get("atr_value"),
                 )
@@ -1096,7 +1043,6 @@ def check_exits(
         trade_mode    = trade["trade_mode"]
         is_overnight  = trade.get("overnight", False)
         is_bucket_a   = symbol in config.BUCKET_A_TICKERS
-        rolling_dt    = tracker.get_rolling_day_trade_count()
         entry_price   = trade.get("entry_price", 0)
         current_price = None
         _cur_bar_ts   = None
@@ -1211,10 +1157,9 @@ def check_exits(
                         f"— breach count {_be_count} → {_new_count}/9"
                     )
                     if _new_count >= 9:
-                        _be_pdt = tracker.get_rolling_day_trade_count()
                         _be_atr_tag = f"ATR={_be_atr:.3f}" if _be_atr else "ATR=unavailable"
                         _be_reason_detail = (
-                            f"{_new_count}-scan breach | PDT={_be_pdt}/3 | "
+                            f"{_new_count}-scan breach | "
                             f"entry=${_be_entry:.2f} thresh=${_be_thresh:.2f} "
                             f"({_be_atr_tag} Tier_adj={_be_mult:.3f})"
                         )
@@ -1380,48 +1325,34 @@ def check_exits(
             )
         )
         if current_price is not None and _ti_conflict:
-            if tracker.opened_today(symbol) and rolling_dt >= config.DAY_TRADE_MAX_ROLLING:
-                logger.warning(
-                    f"[{symbol}] THESIS INVALIDATED ({_main._spy_event_type}, "
-                    f"SPY {_main._spy_risk_magnitude:+.2f}%) — {direction} conflicts with "
-                    f"broad {'down' if _main._spy_risk_direction == 'down' else 'up'} move. "
-                    f"PDT=3/3, cannot close same-day. Holding — monitor manually."
+            logger.warning(
+                f"[{symbol}] THESIS INVALIDATED: {_main._spy_event_type} "
+                f"SPY {_main._spy_risk_magnitude:+.2f}% — closing {direction} immediately."
+            )
+            _ti_gtc_ok = _cancel_open_gtc_orders(symbol, trade, tracker)
+            if not _ti_gtc_ok:
+                logger.critical(
+                    f"[{symbol}] GTC cancel unconfirmed before thesis invalidation close — "
+                    f"proceeding to prevent exposure. Verify GTC manually."
                 )
-            else:
-                logger.warning(
-                    f"[{symbol}] THESIS INVALIDATED: {_main._spy_event_type} "
-                    f"SPY {_main._spy_risk_magnitude:+.2f}% — closing {direction} immediately."
+            _ti_ts  = time.time()
+            success = close_position(symbol)
+            if success:
+                _ti_fill = _fetch_actual_fill_price(
+                    symbol, trade, poll_secs=0.3, submitted_after=_ti_ts
                 )
-                _ti_gtc_ok = _cancel_open_gtc_orders(symbol, trade, tracker)
-                if not _ti_gtc_ok:
-                    logger.critical(
-                        f"[{symbol}] GTC cancel unconfirmed before thesis invalidation close — "
-                        f"proceeding to prevent exposure. Verify GTC manually."
-                    )
-                _ti_ts  = time.time()
-                success = close_position(symbol)
-                if success:
-                    if tracker.opened_today(symbol):
-                        tracker.record_day_trade(symbol)
-                        logger.info(
-                            f"[{symbol}] Day trade recorded (thesis invalidation). "
-                            f"Rolling count: {tracker.get_rolling_day_trade_count()}/3"
-                        )
-                    _ti_fill = _fetch_actual_fill_price(
-                        symbol, trade, poll_secs=0.3, submitted_after=_ti_ts
-                    )
-                    pnl = tracker.record_exit(
-                        symbol, _ti_fill, reason="thesis_invalidation",
-                        mri_level=mri_level
-                    )
-                    if tracker.closed_trades:
-                        _record_tqi(tracker.closed_trades[-1], kelly)
-                    risk.register_close(pnl or 0.0)
-                    closed.append(symbol)
-                    alert_exit(symbol=symbol, direction=direction,
-                               pnl=pnl or 0.0, reason="thesis_invalidation",
-                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
-                continue
+                pnl = tracker.record_exit(
+                    symbol, _ti_fill, reason="thesis_invalidation",
+                    mri_level=mri_level
+                )
+                if tracker.closed_trades:
+                    _record_tqi(tracker.closed_trades[-1], kelly)
+                risk.register_close(pnl or 0.0)
+                closed.append(symbol)
+                alert_exit(symbol=symbol, direction=direction,
+                           pnl=pnl or 0.0, reason="thesis_invalidation",
+                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+            continue
 
         # ── 0C. Break-even stop promotion ────────────────────────────────────
         if (
@@ -1502,117 +1433,46 @@ def check_exits(
                     )
                     tracker._save_log()
                     continue
-                if tracker.opened_today(symbol) and rolling_dt >= config.DAY_TRADE_MAX_ROLLING:
-                    _gtc_stop_placed = bool(trade.get("_gtc_stop_order_id"))
-                    if not _gtc_stop_placed:
-                        _price_through_stop = (
-                            (direction == "long"  and current_price <= active_stop) or
-                            (direction == "short" and current_price >= active_stop)
-                        )
-                        if _price_through_stop:
-                            trade["target_hit_pending"] = True
-                            tracker._save_log()
-                            logger.warning(
-                                f"[{symbol}] PDT=3/3 stop confirmed but price ${current_price:.2f} "
-                                f"already through stop ${active_stop:.2f} — GTC would instant-fill "
-                                f"(PDT violation). target_hit_pending=True, deferring to pre-market."
-                            )
-                            alert_stop_breach(symbol=symbol, direction=direction,
-                                              current_price=current_price, stop=active_stop,
-                                              pdt=rolling_dt, gtc_submitted=False)
-                        else:
-                            _gtc_side = "sell" if direction == "long" else "buy"
-                            _gtc_qty  = int(trade.get("qty_remaining", trade.get("qty", 0)))
-                            _gtc_ord  = None
-                            if _gtc_qty >= 1:
-                                for _gtc_attempt in range(3):
-                                    _gtc_ord = _submit_gtc_stop_close(
-                                        symbol, _gtc_qty, _gtc_side, round(active_stop, 2)
-                                    )
-                                    if _gtc_ord:
-                                        break
-                                    time.sleep(0.5)
-                                if _gtc_ord:
-                                    tracker.set_pdt_gtc_stop_order_id(symbol, str(_gtc_ord.id))
-                                    logger.warning(
-                                        f"[{symbol}] Hard stop confirmed ({_breach} scans, "
-                                        f"${current_price:.2f} vs ${active_stop:.2f}) — PDT=3/3, "
-                                        f"GTC stop placed (ID: {_gtc_ord.id}). Fires next session."
-                                    )
-                                    alert_stop_breach(symbol=symbol, direction=direction,
-                                                      current_price=current_price, stop=active_stop,
-                                                      pdt=rolling_dt, gtc_submitted=True)
-                                else:
-                                    trade["target_hit_pending"] = True
-                                    tracker._save_log()
-                                    logger.warning(
-                                        f"[{symbol}] Hard stop confirmed ({_breach} scans, "
-                                        f"${current_price:.2f} vs ${active_stop:.2f}) — PDT=3/3 "
-                                        f"and GTC stop submission FAILED after 3 attempts. "
-                                        f"target_hit_pending=True. ⚠️ MANUAL ACTION REQUIRED."
-                                    )
-                                    alert_stop_breach(symbol=symbol, direction=direction,
-                                                      current_price=current_price, stop=active_stop,
-                                                      pdt=rolling_dt, gtc_submitted=False)
-                            else:
-                                logger.warning(
-                                    f"[{symbol}] PDT=3/3 hard stop: qty_remaining=0 — "
-                                    f"position already closed or fully partial-exited. "
-                                    f"Skipping GTC stop submission."
-                                )
-                    else:
-                        logger.info(
-                            f"[{symbol}] Stop confirmed — PDT=3/3 GTC stop already active "
-                            f"(ID: {trade.get('_gtc_stop_order_id')}), no duplicate submitted."
+                logger.warning(
+                    f"[{symbol}] HARD STOP CONFIRMED ({_breach} scans): ${current_price:.2f} "
+                    f"({'<=' if direction == 'long' else '>='} ${active_stop:.2f}) — closing."
+                )
+                _hs_gtc_ok = _cancel_open_gtc_orders(symbol, trade, tracker)
+                if not _hs_gtc_ok:
+                    logger.critical(
+                        f"[{symbol}] GTC cancel unconfirmed before hard stop close — "
+                        f"proceeding to prevent unlimited loss. Verify GTC manually."
+                    )
+                _hs_ts  = time.time()
+                success = close_position(symbol)
+                if success:
+                    _hs_fill = _fetch_actual_fill_price(
+                        symbol, trade, poll_secs=0.3, submitted_after=_hs_ts
+                    )
+                    pnl = tracker.record_exit(symbol, _hs_fill, reason="hard_stop",
+                                              mri_level=mri_level)
+                    if tracker.closed_trades:
+                        _record_tqi(tracker.closed_trades[-1], kelly)
+                    risk.register_close(pnl or 0.0)
+                    closed.append(symbol)
+                    alert_exit(symbol=symbol, direction=direction,
+                               pnl=pnl or 0.0, reason="hard_stop",
+                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                    if direction == "short":
+                        _eod_ts = datetime.now(
+                            ZoneInfo("America/New_York")
+                        ).replace(hour=23, minute=59, second=59, microsecond=0).timestamp()
+                        _set_shorts_banned(
+                            until_ts=_eod_ts,
+                            trigger=f"hard_stop:{symbol}",
                         )
                 else:
-                    logger.warning(
-                        f"[{symbol}] HARD STOP CONFIRMED ({_breach} scans): ${current_price:.2f} "
-                        f"({'<=' if direction == 'long' else '>='} ${active_stop:.2f}) — closing."
+                    logger.critical(
+                        f"[{symbol}] Hard stop close_position() FAILED — position may be naked. "
+                        f"⚠️ MANUAL INTERVENTION REQUIRED."
                     )
-                    _hs_gtc_ok = _cancel_open_gtc_orders(symbol, trade, tracker)
-                    if not _hs_gtc_ok:
-                        logger.critical(
-                            f"[{symbol}] GTC cancel unconfirmed before hard stop close — "
-                            f"proceeding to prevent unlimited loss. Verify GTC manually."
-                        )
-                    _hs_ts  = time.time()
-                    success = close_position(symbol)
-                    if success:
-                        if tracker.opened_today(symbol):
-                            tracker.record_day_trade(symbol)
-                            logger.info(
-                                f"[{symbol}] Day trade recorded. "
-                                f"Rolling count: {tracker.get_rolling_day_trade_count()}/3"
-                            )
-                        _hs_fill = _fetch_actual_fill_price(
-                            symbol, trade, poll_secs=0.3, submitted_after=_hs_ts
-                        )
-                        pnl = tracker.record_exit(symbol, _hs_fill, reason="hard_stop",
-                                                  mri_level=mri_level)
-                        if tracker.closed_trades:
-                            _record_tqi(tracker.closed_trades[-1], kelly)
-                        risk.register_close(pnl or 0.0)
-                        closed.append(symbol)
-                        alert_exit(symbol=symbol, direction=direction,
-                                   pnl=pnl or 0.0, reason="hard_stop",
-                                   tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
-                        if direction == "short":
-                            _eod_ts = datetime.now(
-                                ZoneInfo("America/New_York")
-                            ).replace(hour=23, minute=59, second=59, microsecond=0).timestamp()
-                            _set_shorts_banned(
-                                until_ts=_eod_ts,
-                                trigger=f"hard_stop:{symbol}",
-                            )
-                    else:
-                        logger.critical(
-                            f"[{symbol}] Hard stop close_position() FAILED — position may be naked. "
-                            f"⚠️ MANUAL INTERVENTION REQUIRED."
-                        )
-                        alert_stop_breach(symbol=symbol, direction=direction,
-                                          current_price=current_price, stop=active_stop,
-                                          pdt=rolling_dt, gtc_submitted=False)
+                    alert_stop_breach(symbol=symbol, direction=direction,
+                                      current_price=current_price, stop=active_stop)
             else:
                 if trade.get("stop_breach_count", 0) > 0:
                     logger.info(
@@ -1633,30 +1493,6 @@ def check_exits(
                 trade.get("exit_pending_reason") == "target"
             )
             if _target_hit:
-                _opened_today = tracker.opened_today(symbol)
-                _pdt_full     = rolling_dt >= config.DAY_TRADE_MAX_ROLLING
-                if _opened_today and _pdt_full:
-                    if not trade.get("target_hit_pending"):
-                        _t1_target_dist = (
-                            (target_price - entry_price) if direction == "long"
-                            else (entry_price - target_price)
-                        )
-                        _t1_stop = (
-                            round(entry_price + 0.20 * _t1_target_dist, 2)
-                            if direction == "long"
-                            else round(entry_price - 0.20 * _t1_target_dist, 2)
-                        )
-                        trade["target_hit_pending"] = True
-                        trade["stop"]               = _t1_stop
-                        tracker._save_log()
-                        logger.info(
-                            f"[{symbol}] TARGET HIT: ${current_price:.2f} vs "
-                            f"${target_price:.2f} — PDT=3/3, force-overnight entry. "
-                            f"target_hit_pending=True, hard stop ratcheted to T1 "
-                            f"${_t1_stop:.2f} (was ${active_stop:.2f}). "
-                            f"Deferring exit to AH cycle."
-                        )
-                    continue
                 _op = ">=" if direction == "long" else "<="
                 logger.info(
                     f"[{symbol}] TARGET HIT: ${current_price:.2f} {_op} "
@@ -1691,12 +1527,6 @@ def check_exits(
                 if success:
                     trade.pop("exit_pending_reason", None)
                     trade.pop("_gtc_cancel_defer_count", None)
-                    if _opened_today:
-                        tracker.record_day_trade(symbol)
-                        logger.info(
-                            f"[{symbol}] Day trade recorded (target exit). "
-                            f"Rolling count: {tracker.get_rolling_day_trade_count()}/3"
-                        )
                     _tgt_fill = _fetch_actual_fill_price(
                         symbol, trade, poll_secs=0.3, submitted_after=_tgt_ts
                     )
@@ -1724,12 +1554,8 @@ def check_exits(
             count = trade["reversal_scan_count"]
 
             if is_overnight:
-                if trade.get("pdt_forced_overnight"):
-                    scan_min = config.RTH_REVERSAL_SCAN_MIN
-                    scan_max = config.OVERNIGHT_REVERSAL_SCAN_MAX
-                else:
-                    scan_min = config.OVERNIGHT_REVERSAL_SCAN_MIN
-                    scan_max = config.OVERNIGHT_REVERSAL_SCAN_MAX
+                scan_min = config.OVERNIGHT_REVERSAL_SCAN_MIN
+                scan_max = config.OVERNIGHT_REVERSAL_SCAN_MAX
                 if count < scan_min:
                     logger.info(
                         f"[{symbol}] Overnight reversal signal: scan {count}/{scan_min} "
@@ -1845,15 +1671,6 @@ def check_exits(
                         )
                         trade["score_drop_count"] = 0
                         tracker._save_log()
-
-            # ── PDT exit gate ────────────────────────────────────────────────
-            is_bucket_b_trade = not is_bucket_a
-            if is_bucket_b_trade and tracker.opened_today(symbol) and rolling_dt >= config.DAY_TRADE_MAX_ROLLING:
-                logger.warning(
-                    f"[{symbol}] Exit blocked — opened today and PDT slots exhausted. "
-                    f"Will close tomorrow when indicators confirm."
-                )
-                continue
 
             if symbol in closed:
                 logger.warning(
@@ -1993,7 +1810,12 @@ def check_exits(
                                         _et_ts = datetime.fromisoformat(
                                             str(_et).replace("Z", "+00:00")
                                         ).timestamp()
-                                    except Exception:
+                                    except Exception as _et_exc:
+                                        logger.warning(
+                                            f"[{symbol}] external_close: entry_time parse "
+                                            f"failed ({_et_exc}) — using fallback _et_ts=0.0 "
+                                            f"(may include stale orders)"
+                                        )
                                         _et_ts = 0.0
                                 _ep = _fetch_actual_fill_price(
                                     symbol, trade, poll_secs=0, submitted_after=_et_ts
@@ -2047,12 +1869,6 @@ def check_exits(
                 _sig_fill = _fetch_actual_fill_price(
                     symbol, trade, poll_secs=0.3, submitted_after=_sig_ts
                 )
-                if tracker.opened_today(symbol):
-                    tracker.record_day_trade(symbol)
-                    logger.info(
-                        f"[{symbol}] Day trade recorded. "
-                        f"Rolling count: {tracker.get_rolling_day_trade_count()}/3"
-                    )
                 pnl = tracker.record_exit(symbol, _sig_fill, reason="signal",
                                           mri_level=mri_level)
                 if tracker.closed_trades:
@@ -2090,109 +1906,14 @@ def check_exits(
     return closed
 
 
-# ─── PDT HIGHER-TIMEFRAME GATE ───────────────────────────────────────────────
+# ─── PDT HIGHER-TIMEFRAME GATE — deprecated S52 ──────────────────────────────
+# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
+# Stub retained for import compatibility (main.py, trade_engine.py).
+# Full deletion deferred to main.py / trade_engine.py Tier 2 sessions.
 
 def _pdt_htf_gate(signals: list, tracker: "PortfolioTracker", now_et=None) -> list:
-    """
-    Post-scan, pre-execution filter that activates ONLY when rolling_dt >= 3.
-
-    Time windows (ET):
-      9:30 AM – 3:00 PM  → 1H gate: ema_structure_bullish(1H) AND
-                                      dual_macd_agreement(1H, dir).agreement_score >= 2
-      3:00 PM – 3:30 PM  → 30M gate: same checks on 30M bars
-      After 3:30 PM      → No gate — power hour / into close entries are allowed
-
-    Returns the filtered signal list (signals that passed), or full list if
-    rolling_dt < 3.
-    """
-    rolling_dt = tracker.get_rolling_day_trade_count()
-    if rolling_dt < config.DAY_TRADE_MAX_ROLLING:
-        return signals
-
-    if now_et is None:
-        now_et = datetime.now(ET)
-    mins_et = now_et.hour * 60 + now_et.minute
-
-    _OPEN      = 9 * 60 + 30
-    _MIDDAY    = 15 * 60
-    _POWER_END = 15 * 60 + 30
-
-    if mins_et >= _POWER_END:
-        logger.info(
-            f"PDT gate: rolling_dt={rolling_dt}/3 but after 3:30 PM ET — "
-            f"power-hour/close entries permitted, gate inactive"
-        )
-        return signals
-
-    if _OPEN <= mins_et < _MIDDAY:
-        gate_tf   = config.TF_1H
-        gate_name = "1H"
-    elif _MIDDAY <= mins_et < _POWER_END:
-        gate_tf   = config.TF_30M
-        gate_name = "30M"
-    else:
-        return signals
-
-    logger.info(
-        f"PDT gate ACTIVE (rolling_dt={rolling_dt}/3) — "
-        f"applying {gate_name} HTF confirmation filter to {len(signals)} signal(s)"
-    )
-
-    passed  = []
-    blocked = []
-
-    for sig in signals:
-        symbol    = sig["symbol"]
-        direction = sig["direction"]
-
-        try:
-            df_htf = fetch_bars(symbol, gate_tf, num_bars=60)
-            if df_htf.empty or len(df_htf) < 30:
-                logger.warning(
-                    f"[{symbol}] PDT gate: insufficient {gate_name} bars "
-                    f"({len(df_htf)}) — BLOCKED (fail-safe)"
-                )
-                blocked.append(symbol)
-                continue
-
-            df_htf = add_all_mas(df_htf)
-            df_htf = add_both_macds(df_htf)
-
-            ema_ok   = ema_structure_bullish(df_htf) if direction == "long" else not ema_structure_bullish(df_htf)
-            macd_res = dual_macd_agreement(df_htf, direction)
-            macd_ok  = macd_res["agreement_score"] >= 2
-
-            if ema_ok and macd_ok:
-                logger.info(
-                    f"[{symbol}] PDT gate PASS ({gate_name}): "
-                    f"ema_structure={'bullish' if direction=='long' else 'bearish'} ✓  "
-                    f"macd_agreement={macd_res['agreement_score']}/4 ✓"
-                )
-                passed.append(sig)
-            else:
-                fail_reasons = []
-                if not ema_ok:
-                    fail_reasons.append(f"EMA structure not {'bullish' if direction=='long' else 'bearish'}")
-                if not macd_ok:
-                    fail_reasons.append(f"MACD agreement={macd_res['agreement_score']}/4 (<2)")
-                logger.info(
-                    f"[{symbol}] PDT gate BLOCKED ({gate_name}): {' | '.join(fail_reasons)}"
-                )
-                blocked.append(symbol)
-
-        except Exception as _e:
-            logger.warning(
-                f"[{symbol}] PDT gate check error — BLOCKED (fail-safe): {_e}"
-            )
-            blocked.append(symbol)
-
-    if blocked:
-        logger.info(
-            f"PDT gate ({gate_name}): {len(passed)}/{len(signals)} signals passed. "
-            f"Blocked: {blocked}"
-        )
-
-    return passed
+    """PDT removed S52 — pass-through stub. Returns signals unchanged."""
+    return signals
 
 
 # ─── EXTENDED HOURS EXIT CHECKS ──────────────────────────────────────────────
@@ -2300,39 +2021,6 @@ def _check_exits_extended_hours(
                 continue
         except Exception as _e:
             logger.warning(f"[{symbol}] EH price fetch failed: {_e}")
-            continue
-
-        # ── C-3: AH target_hit_pending — deferred from RTH PDT=3/3 block ───
-        if trade.get("target_hit_pending") and not trade.get("pm_exit_order_id"):
-            if tracker.opened_today(symbol) and is_afterhours:
-                logger.info(
-                    f"[{symbol}] AH target_hit_pending: opened today + AH = same-day close "
-                    f"= day trade. Deferring to pre-market."
-                )
-                continue
-            exit_side   = "sell" if direction == "long" else "buy"
-            limit_price = round(
-                current_price * (0.999 if direction == "long" else 1.001), 2
-            )
-            try:
-                order = submit_limit_order(
-                    symbol, qty_rem, exit_side, limit_price, extended_hours=use_extended
-                )
-            except Exception as _the:
-                logger.warning(
-                    f"[{symbol}] AH target exit order submit failed: {_the}"
-                )
-                continue
-            if order:
-                trade["pm_exit_order_id"]  = order.id  # type: ignore[attr-defined]
-                trade["pm_exit_type"]      = "full"
-                trade["target_hit_pending"] = False
-                tracker._save_log()
-                logger.info(
-                    f"[{symbol}] AH TARGET EXIT (deferred from RTH PDT=3/3 block): "
-                    f"limit {exit_side.upper()} {qty_rem} @ ${limit_price:.2f} "
-                    f"extended_hours={use_extended}"
-                )
             continue
 
         # ── Post-partial: trail stop + breakeven floor ────────────────────
