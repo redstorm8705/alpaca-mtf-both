@@ -490,18 +490,7 @@ def execute_entries(
         # ── Bucket routing ───────────────────────────────────────────────
         is_bucket_a = symbol in config.BUCKET_A_TICKERS
 
-        # ── conviction_streak: update every cycle, every symbol ──────────
-        # Tracks consecutive scans at ≥12/12 (CONVICTION_PDT_FULL_MIN).
-        # Runs before any gate so the counter reflects real scan history.
-        # Reset to 0 on ANY sub-12 scan — streak must be unbroken.
-        if score >= config.CONVICTION_PDT_FULL_MIN:
-            gate_state.conviction_streak[symbol] = gate_state.conviction_streak.get(symbol, 0) + 1
-        else:
-            gate_state.conviction_streak[symbol] = 0
-        logger.debug(
-            f"[{symbol}] conviction_streak={gate_state.conviction_streak[symbol]} "
-            f"(score={score}/{config.CONVICTION_PDT_FULL_MIN})"
-        )
+        # S50: conviction_streak tracking removed (was PDT=3/3 gate only)
 
         # ── BoD-1: Entry confirmation buffer — PDT 0-2/3 ─────────────────
         # Simons: single qualifying scans can be noise; require 2 consecutive
@@ -531,63 +520,31 @@ def execute_entries(
             continue
 
         # ── Conviction gate ──────────────────────────────────────────────
-        # PDT counter check:
-        #   PDT 0-2/3 → need ≥10 to enter (10=½ size, 11-12=full size)
-        #   PDT 3/3   → need ≥12/12 × 3 consecutive scans (forced overnight — highest bar)
-        rolling_dt = tracker.get_rolling_day_trade_count()
-        # S50 board unanimous: PDT removed for accounts <$25K. Feature flag.
-        pdt_slots_exhausted = (
-            rolling_dt >= config.DAY_TRADE_MAX_ROLLING
-            if getattr(config, "PDT_ENFORCEMENT_ENABLED", True) else False
-        )
-
-        # ── PDT=3/3 entry gate — ALL buckets ─────────────────────────────
-        # At PDT=3/3, every new entry is a forced overnight regardless of bucket.
-        # Bug 5 fix (Apr 14 2026): relaxed from 3 → 2 consecutive 12/12 scans.
-        # Board Option A — lower risk: reduces entry delay from ~45 min to ~30 min
-        # while still requiring unbroken confirmation.  Score floor stays at 12/12.
-        if pdt_slots_exhausted:
-            # ATH proximity block moved to after price fetch — see below.
-            _streak = gate_state.conviction_streak.get(symbol, 0)
-            if score < config.CONVICTION_PDT_FULL_MIN or _streak < 2:
-                logger.info(
-                    f"[{symbol}] PDT=3/3 gate BLOCKED: score={score}/12 "
-                    f"streak={_streak}/2 consecutive ≥{config.CONVICTION_PDT_FULL_MIN}/12 "
-                    f"scans required (ALL buckets) — not entering."
-                )
-                continue
-        else:
-            # PDT 0-2/3: normal session trading — applies to ALL buckets
-            if score < config.CONVICTION_SKIP_BELOW:
-                logger.info(
-                    f"[{symbol}] Score {score}/12 below minimum "
-                    f"(need ≥{config.CONVICTION_SKIP_BELOW}) — skipping"
-                )
-                # H5 REJECTED by board 2026-05-16 (Harris/Brandt + Thorp/Taleb): MIN_SCORE static.
-                # VIX-adjusted entry rigor lives in H4 (scan count), not score threshold.
-                continue
-            # BoD-1: 2-scan confirmation gate — PDT 0-2/3, ALL buckets
-            # Bug B fix: Bucket A (leveraged ETFs) was bypassing this gate entirely.
-            # Leveraged tickers are MORE volatile — they need at least as much
-            # confirmation as Bucket B, not less.
-            _confirm = gate_state.entry_confirm_buffer.get(symbol, 0)
-            _min_confirm = _param_engine.h4_entry_confirm_scans(vix, is_bucket_a)  # H4: VIX-adjusted
-            if _confirm < _min_confirm:
-                logger.info(
-                    f"[{symbol}] BoD-1 CONFIRM GATE: scan {_confirm}/{_min_confirm} qualifying "
-                    f"(score={score}/12 ≥{config.CONVICTION_SKIP_BELOW}) — "
-                    f"need {_min_confirm - _confirm} more consecutive qualifying scan(s) before entry."
-                )
-                continue
+        # S50: PDT removed. Universal conviction gate (was PDT 0-2/3 path).
+        if score < config.CONVICTION_SKIP_BELOW:
+            logger.info(
+                f"[{symbol}] Score {score}/12 below minimum "
+                f"(need ≥{config.CONVICTION_SKIP_BELOW}) — skipping"
+            )
+            continue
+        # BoD-1: 2-scan confirmation gate — ALL buckets (unchanged)
+        _confirm = gate_state.entry_confirm_buffer.get(symbol, 0)
+        _min_confirm = _param_engine.h4_entry_confirm_scans(vix, is_bucket_a)
+        if _confirm < _min_confirm:
+            logger.info(
+                f"[{symbol}] BoD-1 CONFIRM GATE: scan {_confirm}/{_min_confirm} qualifying "
+                f"(score={score}/12 ≥{config.CONVICTION_SKIP_BELOW}) — "
+                f"need {_min_confirm - _confirm} more scan(s) before entry."
+            )
+            continue
 
         # ── Position limit check ─────────────────────────────────────────
         # Standard RTH limit: BUCKET_B_MAX_POSITIONS (3)
         # Power-hour expansion (≥TOD_EXPANSION_WINDOW_START=3:30 PM ET): BUCKET_B_MAX_POSITIONS_POWER (5)
-        #   Power-hour (PDT 0-2/3 only): score ≥ CONVICTION_FULL_MIN (11) required for slots 4-5
-        #   PDT=3/3: expansion DISABLED — forced overnight hold impairs exit (BoD 3-0)
+        #   Power-hour: score ≥ CONVICTION_FULL_MIN (11) required for slots 4-5
         #   Kill-switch active: expansion unconditionally blocked
+        #   S50: PDT=3/3 expansion block removed (PDT removed)
         _is_ph         = _is_ph_cyc                               # pre-computed once per cycle (DI board fix)
-        _pdt_exhausted = rolling_dt >= config.DAY_TRADE_MAX_ROLLING
         _open_count    = risk.open_positions                       # FIX BUG-PH-3: authoritative counter
         _std_limit     = config.BUCKET_B_MAX_POSITIONS            # 3
         _ph_limit      = config.BUCKET_B_MAX_POSITIONS_POWER      # 5
@@ -601,14 +558,7 @@ def execute_entries(
                     f"[{symbol}] Kill switch active — stopping entries (expansion blocked)."
                 )
                 break
-            # FIX BUG-PH-5 (BoD 3-0): expansion disabled at PDT=3/3.
-            # Forced overnight hold impairs exit optionality — score gate does not compensate.
-            if _pdt_exhausted:
-                logger.info(
-                    f"[{symbol}] Power-hour expansion blocked at PDT=3/3 — "
-                    f"forced overnight hold. Position limit reached."
-                )
-                break
+            # S50: PDT=3/3 power-hour expansion block removed (PDT removed)
             # Standard position-limit (not kill-switch, not PDT=3/3).
             # Power-hour expansion: allow up to _ph_limit slots with score gate.
             if _is_ph and _open_count < _ph_limit:
@@ -790,25 +740,7 @@ def execute_entries(
             logger.warning(f"[{symbol}] Could not get entry price: {e}")
             continue
 
-        # ── ATH proximity block (Board P1, Apr 15 2026) — evaluated per-symbol ──
-        # Moved here (after price fetch) so each symbol is checked against its own
-        # 52w high, not SPY's.  Bug 3: the prior check at the PDT gate used
-        # _main._spy_52w_high / _main._spy_last_close universally, blocking QQQ/AMD when SPY
-        # was near ATH even if those names were far from their own 52w highs.
-        # _main._sym_52w_high_cache is built pre-market for all watchlist symbols (T1).
-        # Safe default: 99.0% distance (allow) when the symbol's 52w high is missing.
-        if pdt_slots_exhausted:
-            _sym_52w_hi   = _main._sym_52w_high_cache.get(symbol, 0)
-            _pdt_ath_dist = (_sym_52w_hi - entry_price) / _sym_52w_hi * 100 \
-                if _sym_52w_hi > 0 and entry_price > 0 else 99.0
-            if _pdt_ath_dist < config.ATH_PDT_BLOCK_PCT:
-                logger.info(
-                    f"[{symbol}] ATH+PDT=3/3 BLOCKED: {symbol} is {_pdt_ath_dist:.2f}% from "
-                    f"own 52w high ${_sym_52w_hi:.2f} (threshold {config.ATH_PDT_BLOCK_PCT}%) — "
-                    f"forced overnight at ATH is unacceptable tail risk. Skipping."
-                )
-                _rc8_clear_buffers(symbol, "ath-pdt-block")
-                continue
+        # S50: ATH+PDT block removed (PDT removed — no forced overnight constraint)
 
         # Fetch daily ATR for dynamic stop sizing (Finding 7: per-symbol cache, 4h TTL)
         # Cache stores daily_df so FVG scoring, HTF earnings check, and ATR-compression
@@ -1062,44 +994,23 @@ def execute_entries(
                 _rc8_clear_buffers(symbol, "bucket-a-zero-cap")
                 continue
         else:
-            # Rank 2: conviction sizing — PDT-state-aware step/linear function.
-            #
-            # PDT 0-2/3 (normal session):
+            # Rank 2: conviction sizing — linear (S50: PDT tiers removed)
             #   score 10  → ½ size  (47.5%)
-            #   score 11+ → full    (95%)   [linear interpolation 10→11]
-            #
-            # PDT 3/3 (forced overnight, higher bar):
-            #   score 11  → ½ size  (47.5%)
-            #   score 12  → full    (95%)
+            #   score 11+ → full    (95%)
             _pct_min  = config.BUCKET_B_ALLOCATION_PCT * 0.5   # 47.5%
             _pct_max  = config.BUCKET_B_ALLOCATION_PCT          # 95%
-
-            if pdt_slots_exhausted:
-                # PDT=3/3 tier: 11=½, 12=full
-                if score >= config.CONVICTION_PDT_FULL_MIN:
-                    dollar_cap = risk.portfolio_value * _pct_max
-                elif score >= config.CONVICTION_PDT_HALF_MIN:
-                    dollar_cap = risk.portfolio_value * _pct_min
-                    logger.info(
-                        f"[{symbol}] PDT=3/3 ½-size: score {score}/12 → "
-                        f"47.5% of ${risk.portfolio_value:,.2f} = ${dollar_cap:,.2f}"
-                    )
-                else:
-                    dollar_cap = 0.0
+            if score < _main._LINEAR_SCORE_MIN:
+                dollar_cap = 0.0
+            elif score >= _main._LINEAR_SCORE_MAX:
+                dollar_cap = risk.portfolio_value * _pct_max
             else:
-                # PDT 0-2/3: linear between score 10 (½) and 11+ (full)
-                if score < _main._LINEAR_SCORE_MIN:
-                    dollar_cap = 0.0
-                elif score >= _main._LINEAR_SCORE_MAX:
-                    dollar_cap = risk.portfolio_value * _pct_max
-                else:
-                    _fraction  = (score - _main._LINEAR_SCORE_MIN) / (_main._LINEAR_SCORE_MAX - _main._LINEAR_SCORE_MIN)
-                    _pct       = _pct_min + _fraction * (_pct_max - _pct_min)
-                    dollar_cap = risk.portfolio_value * _pct
-                    logger.info(
-                        f"[{symbol}] Linear sizing: score {score}/12 → "
-                        f"{_pct:.1%} of ${risk.portfolio_value:,.2f} = ${dollar_cap:,.2f}"
-                    )
+                _fraction  = (score - _main._LINEAR_SCORE_MIN) / (_main._LINEAR_SCORE_MAX - _main._LINEAR_SCORE_MIN)
+                _pct       = _pct_min + _fraction * (_pct_max - _pct_min)
+                dollar_cap = risk.portfolio_value * _pct
+                logger.info(
+                    f"[{symbol}] Linear sizing: score {score}/12 → "
+                    f"{_pct:.1%} of ${risk.portfolio_value:,.2f} = ${dollar_cap:,.2f}"
+                )
 
             if dollar_cap == 0:
                 logger.info(f"[{symbol}] Score {score}/12 — no allocation. Skipping.")
@@ -1175,18 +1086,7 @@ def execute_entries(
                 f"(vol_ratio={_sig_vol_ratio:.2f}x avg) | dollar_cap → ${dollar_cap:,.2f}"
             )
 
-        # ── VOTE-4: SPY 200d MA overnight size reduction (board-approved 2026-04-20) ──
-        # When SPY < 200d MA AND entry will be forced overnight (PDT=3/3), halve size.
-        # Shaw: drawdown risk on overnight holds increases materially in downtrend regimes.
-        # Only applies to PDT-forced overnights — intraday entries in bear regime are unchanged.
-        if pdt_slots_exhausted and _main._spy_200d_ma > 0 and _main._spy_last_close > 0:
-            if _main._spy_last_close < _main._spy_200d_ma:
-                dollar_cap *= 0.5
-                logger.info(
-                    f"[{symbol}] VOTE-4 overnight bear-regime: SPY ${_main._spy_last_close:.2f} "
-                    f"< 200dMA ${_main._spy_200d_ma:.2f} → 0.5x overnight size | "
-                    f"dollar_cap → ${dollar_cap:,.2f}"
-                )
+        # S50: VOTE-4 PDT-forced overnight bear-regime reduction removed (PDT removed)
 
         # ── Build #15: FVG confluence multiplier ─────────────────────────────
         # Per-symbol size adjustment based on proximity to unfilled Fair Value Gaps.
@@ -1303,48 +1203,7 @@ def execute_entries(
         # Dynamic cap:
         #   60% base  |  80% if zone_tier=0 (Green, no distribution)
         #   40% if macro_regime_tier=2 (Contraction / High-risk)
-        if pdt_slots_exhausted:
-            # WARNING-2 fix: gate on _main.OVERNIGHT_ENTRIES_ENABLED FIRST so the cap
-            # check never logs "Proceeding" before an immediately-following block.
-            if not _main.OVERNIGHT_ENTRIES_ENABLED:
-                logger.warning(
-                    f"[{symbol}] _main.OVERNIGHT_ENTRIES_ENABLED=False — PDT=3/3 entry BLOCKED "
-                    f"(cannot day-trade out; position would be a forced overnight hold). Skipping."
-                )
-                _rc8_clear_buffers(symbol, "overnight-entries-disabled")
-                continue
-            _overnight_cap_pct = 0.60
-            if _main._market_top_zone_tier == 0:      # Green — no distribution days
-                _overnight_cap_pct = 0.80
-            if _main._macro_regime_tier == 2:          # Contraction/High-risk — most restrictive
-                _overnight_cap_pct = 0.40
-            # Count ALL open positions — PDT=3/3 means none can be day-traded out,
-            # so every existing position is effectively an overnight hold.
-            # Filter out zero-qty stale entries (zombie tracker records) to prevent
-            # inflating the notional sum with already-closed positions.
-            _overnight_notional = sum(
-                t.get("entry_price", 0) * max(0, t.get("qty_remaining", t.get("qty", 0)))
-                for t in tracker.open_trades.values()
-                if max(0, t.get("qty_remaining", t.get("qty", 0))) > 0
-            )
-            _new_notional = entry_price * shares
-            _cap_dollars  = risk.portfolio_value * _overnight_cap_pct
-            if (_overnight_notional + _new_notional) > _cap_dollars:
-                logger.warning(
-                    f"[{symbol}] OVERNIGHT CAP ({_overnight_cap_pct:.0%}): "
-                    f"existing ${_overnight_notional:.0f} + new ${_new_notional:.0f} "
-                    f"= ${_overnight_notional + _new_notional:.0f} > cap ${_cap_dollars:.0f} "
-                    f"(zone_tier={_main._market_top_zone_tier} regime_tier={_main._macro_regime_tier}). "
-                    f"PDT=3/3 forces overnight — entry blocked."
-                )
-                _rc8_clear_buffers(symbol, "overnight-cap-exceeded")
-                continue
-            logger.info(
-                f"[{symbol}] OVERNIGHT CAP OK ({_overnight_cap_pct:.0%}): "
-                f"existing ${_overnight_notional:.0f} + new ${_new_notional:.0f} "
-                f"= ${_overnight_notional + _new_notional:.0f} ≤ cap ${_cap_dollars:.0f}. "
-                f"Proceeding with overnight entry (GTC stop submitted immediately)."
-            )
+        # S50: PDT overnight cap block removed (PDT removed — no forced overnights)
 
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
@@ -1403,7 +1262,7 @@ def execute_entries(
                     # Guardrail 7: pass full context for trade_events.jsonl
                     mri_level=mri.level(),
                     data_source="alpaca_data",
-                    pdt_used=rolling_dt,
+                    pdt_used=0,  # S50: PDT removed
                     # TSMOM fields — logged for 90-day gate tracking (Gate 3)
                     tsmom_12m=sig.get("tsmom_12m"),
                     tsmom_6m=sig.get("tsmom_6m"),
@@ -1411,54 +1270,39 @@ def execute_entries(
                     tsmom_vol_mult=sig.get("tsmom_vol_mult"),
                     tsmom_direction=sig.get("tsmom_direction"),
                 )
-                # Tag overnight: PDT=3/3 entries are ALWAYS overnight (cannot be closed same day)
+                # Tag overnight: AH entries (after 3:30 PM ET) are overnight holds
                 entry_time = datetime.now(ET)
                 entry_mins = entry_time.hour * 60 + entry_time.minute
-                is_overnight_entry = entry_mins >= (15 * 60 + 30) or pdt_slots_exhausted
+                is_overnight_entry = entry_mins >= (15 * 60 + 30)
                 if is_overnight_entry and symbol in tracker.open_trades:
                     tracker.open_trades[symbol]["overnight"] = True
                     tracker.open_trades[symbol]["overnight_since"] = entry_time.isoformat()
-                    tracker.open_trades[symbol]["overnight_reason"] = "pdt" if pdt_slots_exhausted else "ah_entry"
-                    if pdt_slots_exhausted:
-                        # P5-H1: flag PDT-forced overnights so reversal scan uses RTH
-                        # gate (6 scans) not overnight gate (10 scans). These are
-                        # same-day entries, not genuine prior-session holds.
-                        tracker.open_trades[symbol]["pdt_forced_overnight"] = True
-                    _ovnt_reason = "PDT=3/3 forced overnight" if pdt_slots_exhausted else "entry after 3:30 PM ET"
-                    logger.info(f"[{symbol}] Tagged overnight=True ({_ovnt_reason})")
+                    tracker.open_trades[symbol]["overnight_reason"] = "ah_entry"
+                    logger.info(f"[{symbol}] Tagged overnight=True (entry after 3:30 PM ET)")
                     tracker._save_log()
-                    # P5-H5: Alpaca rejects GTC stops on same-day-opened positions when
-                    # PDT=3/3 (error 40310100). Skip submission; next-morning restart
-                    # reconcile submits the GTC once the PDT window has rolled forward.
-                    if pdt_slots_exhausted and tracker.opened_today(symbol):
-                        logger.warning(
-                            f"[{symbol}] PDT=3/3 + opened_today — skipping GTC stop "
-                            f"(Alpaca rejects as day trade #4). Internal stop @ ${stop:.2f} "
-                            f"active. GTC submits at next-morning restart."
+                    # S50: GTC submitted for all overnight positions (PDT skip removed)
+                    gtc_side  = "sell" if direction == "long" else "buy"
+                    gtc_order = submit_gtc_stop_order(
+                        symbol=symbol, qty=shares,
+                        side=gtc_side, stop_price=stop,
+                    )
+                    if gtc_order:
+                        tracker.set_gtc_stop_order_id(symbol, str(gtc_order.id))  # type: ignore[attr-defined]
+                        logger.info(
+                            f"[{symbol}] GTC stop submitted (overnight): "
+                            f"{shares}sh {gtc_side} @ ${stop:.2f} | order {gtc_order.id}"  # type: ignore[attr-defined]
                         )
                     else:
-                        gtc_side  = "sell" if direction == "long" else "buy"
-                        gtc_order = submit_gtc_stop_order(
-                            symbol=symbol, qty=shares,
-                            side=gtc_side, stop_price=stop,
+                        logger.warning(
+                            f"[{symbol}] GTC stop order failed — overnight position "
+                            f"has NO exchange-level stop. Monitor manually."
                         )
-                        if gtc_order:
-                            tracker.set_gtc_stop_order_id(symbol, str(gtc_order.id))  # type: ignore[attr-defined]
-                            logger.info(
-                                f"[{symbol}] GTC stop submitted (overnight): "
-                                f"{shares}sh {gtc_side} @ ${stop:.2f} | order {gtc_order.id}"  # type: ignore[attr-defined]
-                            )
-                        else:
-                            logger.warning(
-                                f"[{symbol}] GTC stop order failed — overnight position "
-                                f"has NO exchange-level stop. Monitor manually."
-                            )
-                            alert_gtc_failed(
-                                symbol=symbol,
-                                side=gtc_side,
-                                stop_px=stop,
-                                reason="submit_gtc_stop_order() returned None at entry",
-                            )
+                        alert_gtc_failed(
+                            symbol=symbol,
+                            side=gtc_side,
+                            stop_px=stop,
+                            reason="submit_gtc_stop_order() returned None at entry",
+                        )
                 risk.register_open()
                 logger.info(
                     f"[{symbol}] {direction.upper()} {shares} shares | "

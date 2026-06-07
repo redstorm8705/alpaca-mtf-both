@@ -1884,27 +1884,9 @@ class PortfolioTracker:
     # ── PDT counter ───────────────────────────────────────────────────────────
 
     def record_day_trade(self, symbol: str):
-        """
-        Record a same-day round-trip (day trade) with timestamp.
-        Persisted to logs/day_trades.json so it survives bot restarts.
-        S50: gated on PDT_ENFORCEMENT_ENABLED — skips recording when PDT disabled.
-        """
-        import config as _cfg_pdt
-        if not getattr(_cfg_pdt, "PDT_ENFORCEMENT_ENABLED", True):
-            logger.debug(
-                "[%s] PDT enforcement disabled — day trade not recorded.", symbol
-            )
-            return
-        self._day_trades.append({
-            "symbol":    symbol,
-            "timestamp": datetime.now(_PT).isoformat(),
-            "date":      datetime.now(_PT).strftime("%Y-%m-%d"),
-        })
-        self._save_day_trades()
-        logger.info(
-            f"[{symbol}] Day trade recorded. "
-            f"Rolling count: {self.get_rolling_day_trade_count()}/3"
-        )
+        """S50: PDT removed — no-op stub retained for callers in secondary files.
+        Follow-on session removes callers in exit_logic.py, lifecycle.py, etc."""
+        pass  # S50 stub
 
     @staticmethod
     def _market_holidays() -> set:
@@ -1946,174 +1928,12 @@ class PortfolioTracker:
             }
 
     def get_rolling_day_trade_count(self) -> int:
-        """
-        Count day trades in the last 5 TRADING days (rolling window).
-        Excludes weekends AND NYSE market holidays (Good Friday, etc.).
-        Anchors on most recent trading day so weekend/holiday runs count correctly.
-        Maps holiday/weekend-stamped EXTERNAL entries back to prior trading day
-        (Alpaca reconciliation happens after close, sometimes stamped next day).
-        """
-        holidays = self._market_holidays()
-
-        def _is_trading_day(d: date) -> bool:
-            return d.weekday() < 5 and d.isoformat() not in holidays
-
-        anchor = datetime.now(_PT).date()
-        while not _is_trading_day(anchor):
-            anchor -= timedelta(days=1)
-
-        trading_days: list[str] = []
-        d = anchor
-        while len(trading_days) < 5:
-            if _is_trading_day(d):
-                trading_days.append(d.isoformat())
-            d -= timedelta(days=1)
-
-        def _eff(raw: str) -> str:
-            """Map a date string back to the nearest prior trading day."""
-            if not raw:
-                return ""
-            try:
-                d2 = date.fromisoformat(raw)
-                while not _is_trading_day(d2):
-                    d2 -= timedelta(days=1)
-                return d2.isoformat()
-            except Exception as _e:
-                logger.warning("_eff: date map failed for %r: %s", raw, _e)
-                return raw
-
-        return min(sum(1 for t in self._day_trades
-                       if t.get("symbol") != "SYNC"
-                       and _eff(t.get("date", "")) in trading_days), 3)
-
-    def _real_rolling_count(self) -> int:
-        """
-        Count only bot-recorded (non-phantom) day trades in the rolling window.
-        Excludes EXTERNAL and SYNC entries — used to determine if a downward
-        PDT reconciliation is safe (i.e. excess is purely phantom noise).
-        """
-        holidays = self._market_holidays()
-
-        def _is_td(d: date) -> bool:
-            return d.weekday() < 5 and d.isoformat() not in holidays
-
-        anchor = datetime.now(_PT).date()
-        while not _is_td(anchor):
-            anchor -= timedelta(days=1)
-
-        tdays: list[str] = []
-        d = anchor
-        while len(tdays) < 5:
-            if _is_td(d):
-                tdays.append(d.isoformat())
-            d -= timedelta(days=1)
-
-        def _eff(raw: str) -> str:
-            if not raw:
-                return ""
-            try:
-                d2 = date.fromisoformat(raw)
-                while not _is_td(d2):
-                    d2 -= timedelta(days=1)
-                return d2.isoformat()
-            except Exception as _e:
-                logger.warning("_eff: date map failed for %r: %s", raw, _e)
-                return raw
-
-        _phantom = {"EXTERNAL", "SYNC"}
-        return min(sum(1 for t in self._day_trades
-                       if t.get("symbol") not in _phantom
-                       and _eff(t.get("date", "")) in tdays), 3)
+        """S50: PDT removed — stub returns 0. Callers cleaned in follow-on session."""
+        return 0
 
     def sync_pdt_with_alpaca(self, alpaca_daytrade_count: int):
-        """
-        Compare our rolling day trade count with Alpaca's reported count.
-        - Alpaca > local  → pad with EXTERNAL entries (existing behaviour)
-        - Alpaca < local  → trim phantom (EXTERNAL/SYNC) entries if safe to do so;
-                            never touch bot-recorded real trades
-        - Alpaca == local → in sync, log info
-        """
-        our_count = self.get_rolling_day_trade_count()
-
-        if alpaca_daytrade_count == our_count:
-            logger.info(f"PDT counter in sync with Alpaca: {our_count}/3")
-            return
-
-        logger.warning(
-            f"PDT count mismatch — Alpaca reports {alpaca_daytrade_count}, "
-            f"tracker has {our_count} in rolling window. "
-            f"Trades may have occurred outside this bot instance."
-        )
-
-        if alpaca_daytrade_count > our_count:
-            # Alpaca knows about more day trades — pad with EXTERNAL entries
-            gap = alpaca_daytrade_count - our_count
-            for _ in range(gap):
-                self._day_trades.append({
-                    "symbol":    "EXTERNAL",
-                    "timestamp": datetime.now(_PT).isoformat(),
-                    "date":      datetime.now(_PT).strftime("%Y-%m-%d"),
-                })
-            self._save_day_trades()
-            logger.warning(
-                f"Added {gap} EXTERNAL entry/entries to PDT counter to match Alpaca."
-            )
-
-        else:
-            # Alpaca has fewer — only safe to trim if excess is purely phantom entries
-            real_count = self._real_rolling_count()
-            if alpaca_daytrade_count >= real_count:
-                # Excess is phantom noise — trim phantom entries from the tail.
-                # Two-pass order: EXTERNAL first, SYNC second.
-                # EXTERNAL entries ARE counted by get_rolling_day_trade_count(), so
-                # removing them actually reduces the rolling count. SYNC entries are
-                # already excluded from the count — removing SYNC alone is a no-op and
-                # leaves the count artificially high (root cause of PDT lock bug).
-                # Cap at 2 removals per sync call to prevent runaway
-                # trimming (Finding 3)
-                excess       = our_count - alpaca_daytrade_count
-                _removal_cap = min(excess, 2)
-                new_trades   = list(self._day_trades)
-                removed      = 0
-                _removed_syms = []
-                for _priority in ("EXTERNAL", "SYNC"):
-                    for i in range(len(new_trades) - 1, -1, -1):
-                        if removed >= _removal_cap:
-                            break
-                        if new_trades[i].get("symbol") == _priority:
-                            _removed_syms.append(_priority)
-                            new_trades.pop(i)
-                            removed += 1
-                    if removed >= _removal_cap:
-                        break
-                self._day_trades = new_trades
-                self._save_day_trades()
-                logger.info(
-                    f"PDT reconciled down: removed {removed} phantom entry/entries "
-                    f"({', '.join(_removed_syms)}) "
-                    f"(Alpaca={alpaca_daytrade_count}, was {our_count}). "
-                    f"New rolling count: {self.get_rolling_day_trade_count()}/3"
-                )
-            else:
-                # Alpaca < real bot trades — data integrity issue, keep local (safe)
-                logger.critical(
-                    f"PDT INTEGRITY: Alpaca reports {alpaca_daytrade_count} but bot "
-                    f"recorded {real_count} real trades in rolling window. "
-                    f"Manual review required. Keeping local count"
-                    f" ({our_count}) for safety."
-                )
-                try:
-                    from alerts import send_slack as _sl_pdt
-                    _sl_pdt(
-                        f":rotating_light: *PDT COUNT INTEGRITY MISMATCH*\n"
-                        f"Alpaca reports {alpaca_daytrade_count} day trades, "
-                        f"bot recorded {real_count} real trades in rolling window.\n"
-                        f"Keeping local count ({our_count}/3). Manual review required."
-                    )
-                except Exception as _slack_err:
-                    logger.warning(
-                        f"Slack PDT mismatch alert could not be sent: {_slack_err}"
-                    )
+        """S50: PDT removed — no-op stub retained for callers in secondary files."""
+        pass  # S50 stub
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 

@@ -61,22 +61,8 @@ CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade       (PDT 0-2/3)
 
 # ── Conviction tiers (PDT exhausted, 3/3 day trades used) ────────────────────
 # At PDT=3/3 any new entry cannot be closed same-day without a 4th PDT violation.
-# It is a forced overnight hold — raise the entry bar accordingly.
-#   score 9-10:  floor — no trade (not worth the overnight commitment)
-#   score 11:    ½ size  (some conviction, but overnight risk = half allocation)
-#   score 12:    full size
-CONVICTION_PDT_SOFT_MIN  = 10     # PDT=3 entry floor — scores below 10 always skipped
-CONVICTION_PDT_HALF_MIN  = 11     # PDT=3, score 11 = ½ size
-CONVICTION_PDT_FULL_MIN  = 12     # PDT=3, score 12 = full size
-
-# ─── DAY-TRADE COUNTER ───────────────────────────────────────────────────────
-# Tracks same-day round-trips (buy and sell same security same day)
-# PDT rule: S50 board unanimous — PDT removed for accounts <$25K.
-# Feature flag preserves reversibility for live accounts + future rule changes.
-PDT_ENFORCEMENT_ENABLED  = False  # True = enforce 3-trade rolling window
-                                  # False = unlimited day trades (accounts <$25K)
-DAY_TRADE_MAX_ROLLING    = 3      # max day trades per rolling window (used when enabled)
-DAY_TRADE_ROLLING_DAYS   = 5      # rolling window in business days
+# S50: PDT rule removed (SEC, board 28-0). All PDT conviction tiers removed.
+# Entry conviction uses CONVICTION_SKIP_BELOW / CONVICTION_FULL_MIN only.
 
 # ─── PRE-MARKET MOVER FILTER ────────────────────────────────────────────────────────────
 
@@ -298,12 +284,9 @@ VOL_TIER_HIGH_STOP_OVERNIGHT    = 2.5
 VOL_TIER_STD_STOP_INTRADAY      = 1.25  # AAPL, AMZN, META, NFLX, CRM, etc.
 VOL_TIER_STD_STOP_OVERNIGHT     = 2.0
 
-# ATH proximity gates — Board P1 (Apr 15 2026)
-# At PDT=3/3, any new entry is forced overnight. At ATH, overnight tail risk is
-# asymmetric (fat left tail, compressed right tail). These two conditions together
-# warrant a binary block independent of score.
-ATH_PDT_BLOCK_PCT      = 1.0   # block ALL new PDT=3/3 entries when SPY is within 1% of 52w high
-ATH_MIN_SCORE_RAISE_PCT = 2.0  # raise dynamic MIN_SCORE +1 when SPY is within 2% (but > 1%) of 52w high
+# ATH proximity gate — dynamic MIN_SCORE raise near 52w high
+ATH_MIN_SCORE_RAISE_PCT = 2.0  # raise dynamic MIN_SCORE +1 when SPY within 2% of 52w high
+# S50: ATH_PDT_BLOCK_PCT removed (PDT removed — no forced overnight entries)
 
 # VIX-based stop widening — replaces size reduction
 # Size multiplier removed: high VIX validates directional conviction

@@ -99,15 +99,12 @@ def run_cycle(
 
     now = datetime.now(ET)
     tod_phase = _get_tod_phase(now)
-    # AB-1: Include rolling PDT count in every scan header — Harris/Levitt:
-    # operators need PDT state at-a-glance; it affects every downstream gate.
-    _hdr_pdt  = tracker.get_rolling_day_trade_count()
+    # S50: PDT removed — header no longer shows PDT count
     _hdr_spy  = f" | SPY:{_main._spy_event_type}" if _main._spy_event_type else ""
     _hdr_tqi  = f" | TQI:{sum(kelly._tqi_history)/len(kelly._tqi_history):.0f}" if kelly._tqi_history else ""
     logger.info(
         f"─── MTF cycle @ {now.strftime('%H:%M:%S')} ET | "
-        f"Mode: {trade_mode} | TOD: {tod_phase} | "
-        f"PDT: {_hdr_pdt}/3{_hdr_spy}{_hdr_tqi} ───"
+        f"Mode: {trade_mode} | TOD: {tod_phase}{_hdr_spy}{_hdr_tqi} ───"
     )
 
     # ── Build #9: Restore hybrid engine state on first cycle after restart ──────
@@ -164,16 +161,7 @@ def run_cycle(
         _touch_cycle_ts()
         return
 
-    # ── Hourly PDT sync — gated on PDT_ENFORCEMENT_ENABLED (S50 board) ──────
-    if getattr(config, "PDT_ENFORCEMENT_ENABLED", True):
-        _last_pdt_sync = getattr(run_cycle, "_last_pdt_sync_hour", -1)
-        if now.hour != _last_pdt_sync:
-            try:
-                _acct = get_account()
-                tracker.sync_pdt_with_alpaca(int(getattr(_acct, "daytrade_count", 0)))
-                run_cycle._last_pdt_sync_hour = now.hour  # type: ignore[attr-defined]
-            except Exception as _e:
-                logger.warning("Hourly PDT sync failed: %s", _e)
+    # S50: PDT removed — hourly PDT sync removed
 
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.
@@ -504,18 +492,7 @@ def run_cycle(
                 # P5-H5: Skip AH GTC if PDT=3/3 and position opened today.
                 # Alpaca rejects same-day-opened GTC stops when rolling dt is exhausted
                 # (HTTP 422, code 40310100). Closing an AH GTC stop on a
-                # today-opened position is itself a day trade — Alpaca blocks it.
-                # Safe path: skip entirely; next-morning restart places GTC on a
-                # fresh PDT day (rolling window will have dropped by then).
-                _grolling_dt = tracker.get_rolling_day_trade_count()
-                if _grolling_dt >= config.DAY_TRADE_MAX_ROLLING and tracker.opened_today(_gsym):
-                    logger.warning(
-                        f"[{_gsym}] AH GTC skipped — PDT={_grolling_dt}/"
-                        f"{config.DAY_TRADE_MAX_ROLLING} and opened today. "
-                        f"Alpaca will reject (code 40310100). "
-                        f"Relying on next-morning restart."
-                    )
-                    continue
+                # S50: PDT removed — AH GTC PDT skip removed; all overnight positions get GTC
                 _gdir        = _gtr["direction"]
                 _gentry      = _gtr.get("entry_price", 0)
                 _gatr_stop   = _gtr.get("trail_stop") or _gtr.get("stop")
@@ -1205,7 +1182,7 @@ def run_cycle(
     _spy_ath_dist_pct = 99.0   # default: no data = treat as not at ATH
     if _main._spy_52w_high > 0 and _main._spy_last_close > 0:
         _spy_ath_dist_pct = (_main._spy_52w_high - _main._spy_last_close) / _main._spy_52w_high * 100
-        if _spy_ath_dist_pct < config.ATH_PDT_BLOCK_PCT:          # < 1% from ATH
+        if _spy_ath_dist_pct < 1.0:                                # < 1% from ATH (S50: ATH_PDT_BLOCK_PCT removed)
             _ath_min_score = _base_min + 2   # 11/12 — near ATH
         elif _spy_ath_dist_pct < config.ATH_MIN_SCORE_RAISE_PCT:   # 1–2% from ATH
             _ath_min_score = _base_min + 1   # 10/12 — approaching ATH
@@ -1481,25 +1458,7 @@ def run_cycle(
     # ── PDT HTF Gate ─────────────────────────────────────────────────────────
     # Filters signals to require higher-TF confirmation when rolling_dt >= 3.
     # After 3:30 PM ET the gate is off (power-hour entries allowed).
-    signals = _main._pdt_htf_gate(signals, tracker, now_et=now)
-    if not signals:
-        logger.info("No signals passed PDT HTF gate this cycle.")
-        _touch_cycle_ts()
-        return
-
-    # ── 2:30 PM forced-overnight gate ────────────────────────────────────
-    _cur_rolling_dt = tracker.get_rolling_day_trade_count()
-    _now_mins = now.hour * 60 + now.minute   # now is timezone-aware ET
-    _late_cutoff = 14 * 60 + 30              # 2:30 PM ET = 870 min
-    if _cur_rolling_dt >= config.DAY_TRADE_MAX_ROLLING and _now_mins >= _late_cutoff:
-        logger.info(
-            f"2:30 PM gate: PDT={_cur_rolling_dt}/"
-            f"{config.DAY_TRADE_MAX_ROLLING} and "
-            f"time {now.strftime('%H:%M')} ET ≥ 14:30 — "
-            f"no new entries (forced overnight)."
-        )
-        _touch_cycle_ts()
-        return
+    # S50: PDT HTF gate removed; 2:30 PM forced-overnight gate removed
 
     logger.info(f"{len(signals)} signals found. Top 3:")
     for s in signals[:3]:
