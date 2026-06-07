@@ -47,7 +47,7 @@ BUCKET_A_ALLOCATION_PCT  = 0.05   # 5% of current portfolio value
 BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 
 BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
-BUCKET_B_MAX_POSITIONS         = 3      # max 3 simultaneous Bucket B positions (standard RTH)
+BUCKET_B_MAX_POSITIONS         = 999    # PDT artifact removed S52 (PDT rule off per S50 board 28-0); MAX_OPEN_POSITIONS=4 is real global cap
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 
@@ -229,14 +229,15 @@ PROFILES = {
         "MAX_PORTFOLIO_RISK_PCT":  0.04,   # fallback only — bucket sizing overrides this
         "MAX_OPEN_POSITIONS":      4,      # paper validation — expanded for multi-position stress testing
         "MAX_DAILY_LOSS_PCT":      0.07,   # 7% kill switch — board vote 2026-04-22 (25-1, Thorp dissent 0.10)
-        "INTRADAY_STOP_ATR_MULT":  1.25,  # Bucket B base — tiered up by volatility class
+        "INTRADAY_STOP_ATR_MULT":  1.20,  # tightened 1.25→1.20 S52 — DS/GAI floor for 2x ETF universe; board floor was 1.10
         "INTRADAY_TARGET_ATR_MULT":2.5,   # 2:1 R:R minimum
         "SWING_STOP_ATR_MULT":     1.2,
         "SWING_TARGET_ATR_MULT":   5.0,
         "SCAN_INTERVAL_INTRADAY":  5,      # every 5 min — safe for 22 tickers
         "MIN_LONG_SCORE":          10,     # raised 9→10 — board vote 7-0-1, Apr 7 2026
         "MIN_SHORT_SCORE":         10,
-        "KELLY_FRACTION":          0.25,   # raised 0.15→0.25 — board vote S23 2026-05-16, aggressive paper phase
+        "KELLY_FRACTION":          0.35,   # raised 0.25→0.35 — board vote S52 unanimous, aggressive paper phase
+        "KELLY_MAX_RISK_PCT":      0.045,  # 4.5% hard cap — board vote S52 (down from global 0.06)
         "PARTIAL_EXIT_ENABLED":    True,
         "PARTIAL_EXIT_RATIO":      0.5,
         "PARTIAL_EXIT_ATR_MULT":   0.8,
@@ -415,6 +416,16 @@ PARTIAL_EXIT_ENABLED         = True
 PARTIAL_EXIT_RATIO           = 0.5    # close this fraction at first target (50%)
 PARTIAL_EXIT_ATR_MULT        = 1.0    # first target = 1x ATR from entry
 TRAIL_STOP_ATR_MULT          = 0.5    # trailing stop = 0.5x ATR behind current price
+
+# ─── TRADING BEHAVIOR FLAGS (S52) ────────────────────────────────────────────
+# Defined here; set True ONLY after the enforcing logic lands in entry/exit_logic.py
+
+SQQQ_TQQQ_MUTUAL_EXCLUDE    = False  # DS P1: prevent simultaneous SQQQ+TQQQ (inverse ETF blowup risk)
+                                      # Set True after entry_logic.py mutual exclusion guard added
+RUNNER_MODE_MOMENTUM_CHECK  = False  # Derman gate: EMA13>EMA30 required at +20% to activate trailing runner
+                                      # Set True after exit_logic.py runner gate added
+MIN_POSITION_VALUE_ADVISORY  = 200   # Advisory floor for non-fractionable symbols (whole-share only)
+                                      # Warning logged when 1 share risk < this; does not block entry
 
 
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
