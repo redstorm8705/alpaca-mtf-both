@@ -48,11 +48,11 @@ class GateState:
 
 # _SHORTING_ENABLED moved to execution/lifecycle.py (Phase 2 B1 fix)
 _premarket_movers_cache: list = []  # H-2: persists pre-market mover list into RTH
-_last_weekly_review_spawn_date = None  # H-7: spawn weekly_review only once per day
-_last_eod_summary_date = None          # AH dedup: write_eod_summary fires once per calendar day
+_last_weekly_review_spawn_date: date | None = None  # H-7: spawn weekly_review only once per day
+_last_eod_summary_date: date | None = None          # AH dedup: write_eod_summary fires once per calendar day
 # _rth_day_stops_submitted_dates moved to execution/gtc_manager.py (Phase 2)
 # _halt_entries_for_session moved to events/handlers.py (Phase 2)
-_last_daily_reset_date = None       # C-4: track ET date of last daily kill-switch reset
+_last_daily_reset_date: date | None = None       # C-4: track ET date of last daily kill-switch reset
 
 # ── SPY Market Reaction Gate ──────────────────────────────────────────────────
 # Source of truth for intraday risk. Driven by SPY 5-min bar-over-bar movement.
