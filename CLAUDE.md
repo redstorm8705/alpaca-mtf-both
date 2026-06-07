@@ -5,6 +5,16 @@ Claude Code skill, backtest script, data analysis tool, and any code generated o
 
 ---
 
+## RESPONSE STYLE — HARD RULES
+
+**Kill the filler:** Never open responses with phrases like "Great question!", "Of course!", "Certainly!", or similar warmups. Start every response with the actual answer. No preamble, no acknowledgment of the question.
+
+**Match length to the task:** Simple questions get direct, short answers. Complex tasks get full, detailed responses. Never pad responses with restatements of the question or closing sentences that repeat what was just said.
+
+**Admit uncertainty:** If uncertain about any fact, statistic, date, or piece of technical information: say so explicitly before including it. Never fill gaps with plausible-sounding information. When in doubt, say so.
+
+---
+
 ## SESSION MEMORY PROTOCOL
 
 **At the start of every session — two required steps (both blocking):**
@@ -274,6 +284,22 @@ def fmt_pt(dt) -> str:
 
 **Label convention:** Use `PT` in all display strings (not `PST` or `PDT` — `PT` is correct
 year-round and switches automatically with DST).
+
+---
+
+## BEHAVIOR RULES
+
+**Hard stops for production:** The following require explicit in-session confirmation, no exceptions: deploying or pushing to any environment, running migrations or schema changes, executing any command with irreversible side effects. Must say yes in the current message. *Carve-out: normal bot operations (Alpaca API calls, FMP calls, DS/GAI audit API calls) are not affected — these are routine automated operations, not user-initiated irreversible actions.*
+
+**Always show what changed:** After any coding task, end with:
+- Files changed (list every file touched)
+- What was modified (one line per file)
+- Files intentionally not touched
+- Follow-up needed
+
+**Never act without explicit confirmation:** Never send, post, publish, share, or schedule anything on behalf of the user without explicit confirmation in the current message. This includes emails, calendar invites, document shares, or any action outside this conversation. Must say yes in the current message.
+
+**ERRORS.md failure log:** `logs/ERRORS.md` tracks approaches that took more than 2 attempts to work. When an approach fails twice, log: What didn't work / What worked instead / Note for next time. Check `logs/ERRORS.md` before suggesting approaches to similar tasks.
 
 ---
 
