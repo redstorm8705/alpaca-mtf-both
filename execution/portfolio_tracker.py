@@ -71,7 +71,6 @@ except ImportError:
     def _log_event(*a, **kw): pass   # type: ignore[misc]  # fail-safe: logging never breaks the bot
     _LOG_STOP_REASONS = frozenset()
 TRADE_LOG_FILE     = _ROOT / "trade_log.json"
-DAY_TRADES_FILE    = _ROOT / "logs" / "day_trades.json"
 
 # Phase 2: Alpaca fills as EOD P&L authority (board vote 2026-04-19, 26-0)
 _ALPACA_PAPER_BASE = "https://paper-api.alpaca.markets"
@@ -91,7 +90,6 @@ def _load_drift_alert_date() -> str:
 
 
 _last_eod_drift_alert_date: str = _load_drift_alert_date()  # persisted across restarts
-_market_holidays_fallback_logged: bool = False  # one-time CRITICAL on import failure
 
 
 # ── Atomic JSON write helper ──────────────────────────────────────────────────
@@ -393,11 +391,9 @@ class PortfolioTracker:
         self.closed_trades = []
         self.traded_today  = set()
         self._traded_today_date = datetime.now(_PT).strftime("%Y-%m-%d")
-        self._day_trades   = []    # rolling PDT records — persisted to disk
         # RC-4: symbol → list of live trade refs
         self._unverified_exits: dict[str, list[dict]] = {}
         self._load_log()
-        self._load_day_trades()
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -723,61 +719,6 @@ class PortfolioTracker:
                 f"will not re-queue on next restart"
             )
         return found
-
-    def _load_day_trades(self):
-        """Load persisted day trades from disk. Called at startup.
-
-        S47 Bug8: removed TOCTOU exists()→open() race (GAI); added 100ms retry
-        for transient write-lock collisions (DS+GAI); CRITICAL+Slack on genuine
-        corruption; self._day_trades=[] set before Slack call (DS).
-        """
-        for _attempt in range(2):
-            try:
-                with open(DAY_TRADES_FILE) as f:
-                    self._day_trades = json.load(f)
-                count = self.get_rolling_day_trade_count()
-                logger.info(
-                    f"PDT counter loaded from disk: {count} day trades"
-                    f" in rolling window "
-                    f"({len(self._day_trades)} total records)"
-                )
-                return
-            except FileNotFoundError:
-                self._day_trades = []
-                return  # fresh install — correct, no alert needed
-            except Exception as e:
-                if _attempt == 0:
-                    _time_mod.sleep(0.1)   # 100ms retry: transient write-lock collision
-                    continue
-                # Second attempt failed — file is genuinely corrupt
-                self._day_trades = []   # set first: state consistent before Slack
-                logger.critical(
-                    "PDT day_trades file corrupt or unreadable after retry: %s — "
-                    "resetting PDT counter to empty. "
-                    "PDT state is UNKNOWN. Verify manually before next trade.",
-                    e,
-                )
-                try:
-                    from alerts import send_slack as _dt_slack
-                    _dt_slack(
-                        f":rotating_light: CRITICAL: PDT day_trades file unreadable "
-                        f"({e}). PDT counter reset to empty. "
-                        f"PDT state UNKNOWN — verify manually."
-                    )
-                except Exception as _dt_slack_err:
-                    logger.warning(
-                        "PDT corruption Slack alert failed: %s", _dt_slack_err
-                    )
-
-    def _save_day_trades(self):
-        """Atomically save day trades to disk."""
-        # Prune entries older than 7 business days to keep file small
-        cutoff = datetime.now(_PT).date() - timedelta(days=10)
-        self._day_trades = [
-            t for t in self._day_trades
-            if t.get("date", "1970-01-01") >= cutoff.isoformat()
-        ]
-        _atomic_write(DAY_TRADES_FILE, self._day_trades)
 
     # ── EOD summary ───────────────────────────────────────────────────────────
 
@@ -1173,11 +1114,6 @@ class PortfolioTracker:
                 )
 
         summary["signals_skipped"]  = getattr(self, "_signals_skipped_today", [])
-        # Exclude SYNC (reconciliation markers) from display —
-        # they don't consume PDT slots.
-        summary["pdt_slots_used"]   = [
-            t for t in self._day_trades if t.get("symbol") != "SYNC"
-        ]
         # ── S47f Phase 2a.5: FIFO-driven overnight reconciliation ────────────────
         # Detects overnight positions that closed on Alpaca while the bot was down
         # (e.g. GTC stop fired) by comparing self.open_trades against _alpaca_lots
@@ -1397,9 +1333,6 @@ class PortfolioTracker:
             # Logged when Bucket A same-day block fires on a stop breach
             "stop_breached":          False,
             "stop_breach_price":      None,
-            # GTC stop-market order ID — PDT enforcement path, deprecated S52.
-            # set_pdt_gtc_stop_order_id() kept for exit_logic.py compat (Tier 2).
-            "_gtc_stop_order_id":     None,
         }
         self.traded_today.add(symbol)
         self._save_log()
@@ -1420,13 +1353,6 @@ class PortfolioTracker:
             self.open_trades[symbol]["gtc_stop_order_id"] = order_id
             self._save_log()
             logger.debug(f"[{symbol}] GTC stop order ID stored: {order_id}")
-
-    def set_pdt_gtc_stop_order_id(self, symbol: str, order_id: str):
-        """Store the Change 1 PDT=3/3 confirmed-stop GTC order ID."""
-        if symbol in self.open_trades:
-            self.open_trades[symbol]["_gtc_stop_order_id"] = order_id
-            self._save_log()
-            logger.debug(f"[{symbol}] PDT GTC stop order ID stored: {order_id}")
 
     def clear_gtc_stop_order_id(self, symbol: str):
         """Clear GTC stop order ID after cancellation at market open."""
@@ -1879,45 +1805,6 @@ class PortfolioTracker:
         """S50: PDT removed — no-op stub retained for callers in secondary files.
         Follow-on session removes callers in exit_logic.py, lifecycle.py, etc."""
         pass  # S50 stub
-
-    @staticmethod
-    def _market_holidays() -> set:
-        """
-        Return set of ISO date strings that are NYSE market holidays.
-        Pulled from events/calendar.py BLACKOUT entries — single source of truth.
-        Falls back to a hardcoded minimal set if the calendar cannot be imported.
-        """
-        global _market_holidays_fallback_logged
-        try:
-            from events.calendar import STATIC_EVENTS as EVENTS, EventRisk
-            holidays = {
-                e["date"] for e in EVENTS
-                if e.get("risk") == EventRisk.BLACKOUT and "date" in e
-            }
-            if _market_holidays_fallback_logged:
-                logger.info(
-                    "_market_holidays: events.calendar import succeeded — "
-                    "restored from hardcoded fallback."
-                )
-                _market_holidays_fallback_logged = False
-            return holidays
-        except Exception as _e:
-            if not _market_holidays_fallback_logged:
-                logger.critical(
-                    "_market_holidays: events.calendar import failed (%s) — "
-                    "falling back to hardcoded 2026 NYSE holidays. "
-                    "PDT holiday counting is degraded. Investigate calendar.py import.",
-                    _e,
-                )
-                _market_holidays_fallback_logged = True
-            # NYSE-observed full-day market closures for 2026.
-            # Early closes (half days) are NOT included — they remain trading days.
-            return {
-                "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03",
-                "2026-05-25", "2026-06-19",  # Juneteenth — added 2026-05-06 S9
-                "2026-07-03", "2026-09-07", "2026-11-26",
-                "2026-12-25",
-            }
 
     def get_rolling_day_trade_count(self) -> int:
         """S50: PDT removed — stub returns 0. Callers cleaned in follow-on session."""
