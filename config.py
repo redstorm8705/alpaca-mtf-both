@@ -40,29 +40,26 @@ LEVERAGED_3X_TARGET_MULTIPLIER = 3.0   # maintain 1:1 R:R
 
 # ─── BUCKET ALLOCATION ───────────────────────────────────────────────────────
 # Bucket A: leveraged ETF swing holds — 5% of portfolio, min 1-day hold
-# Bucket B: swing trades — 95% of portfolio, PDT-aware, conviction-sized
+# Bucket B: swing trades — 95% of portfolio, conviction-sized
 
 BUCKET_A_TICKERS         = {"TSLL", "NVDL", "TQQQ", "SQQQ"}
 BUCKET_A_ALLOCATION_PCT  = 0.05   # 5% of current portfolio value
 BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 
 BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
-BUCKET_B_MAX_POSITIONS         = 999    # PDT artifact removed S52 (PDT rule off per S50 board 28-0); MAX_OPEN_POSITIONS=4 is real global cap
+BUCKET_B_MAX_POSITIONS         = 999    # PDT artifact (S50 board 28-0 removed PDT); MAX_OPEN_POSITIONS=4 is the operative cap
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 
-# ── Conviction tiers (non-PDT, 0–2/3 day trades used) ────────────────────────
+# ── Conviction tiers ─────────────────────────────────────────────────────────
 # 11-12: full allocation (up to 95% of portfolio as dollar risk cap)
 # 10:    half allocation (up to 47.5% of portfolio as dollar risk cap)
 # below 10: skip — not enough confluence
-CONVICTION_FULL_MIN      = 11     # 11/12 or 12/12 = full size  (PDT 0-2/3)
-CONVICTION_HALF_MIN      = 10     # 10/12 = half size            (PDT 0-2/3)
-CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade       (PDT 0-2/3)
+CONVICTION_FULL_MIN      = 11     # 11/12 or 12/12 = full size
+CONVICTION_HALF_MIN      = 10     # 10/12 = half size
+CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade
 
-# ── Conviction tiers (PDT exhausted, 3/3 day trades used) ────────────────────
-# At PDT=3/3 any new entry cannot be closed same-day without a 4th PDT violation.
-# S50: PDT rule removed (SEC, board 28-0). All PDT conviction tiers removed.
-# Entry conviction uses CONVICTION_SKIP_BELOW / CONVICTION_FULL_MIN only.
+# S50: PDT exhausted tiers removed — board 28-0. Entry uses CONVICTION_SKIP_BELOW / CONVICTION_FULL_MIN only.
 
 # ─── PRE-MARKET MOVER FILTER ────────────────────────────────────────────────────────────
 
@@ -225,7 +222,7 @@ PROFILES = {
         "PARTIAL_EXIT_ATR_MULT":   1.0,    # take first half at 1x ATR
     },
     "paper": {
-        # Bucket-aware paper profile — K account, PDT-constrained
+        # Bucket-aware paper profile
         "MAX_PORTFOLIO_RISK_PCT":  0.04,   # fallback only — bucket sizing overrides this
         "MAX_OPEN_POSITIONS":      4,      # paper validation — expanded for multi-position stress testing
         "MAX_DAILY_LOSS_PCT":      0.07,   # 7% kill switch — board vote 2026-04-22 (25-1, Thorp dissent 0.10)
@@ -287,7 +284,7 @@ VOL_TIER_STD_STOP_OVERNIGHT     = 2.0
 
 # ATH proximity gate — dynamic MIN_SCORE raise near 52w high
 ATH_MIN_SCORE_RAISE_PCT = 2.0  # raise dynamic MIN_SCORE +1 when SPY within 2% of 52w high
-# S50: ATH_PDT_BLOCK_PCT removed (PDT removed — no forced overnight entries)
+
 
 # VIX-based stop widening — replaces size reduction
 # Size multiplier removed: high VIX validates directional conviction
