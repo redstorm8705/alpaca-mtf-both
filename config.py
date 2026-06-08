@@ -47,7 +47,7 @@ BUCKET_A_ALLOCATION_PCT  = 0.05   # 5% of current portfolio value
 BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 
 BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
-BUCKET_B_MAX_POSITIONS         = 999    # PDT artifact (S50 board 28-0 removed PDT); MAX_OPEN_POSITIONS=4 is the operative cap
+BUCKET_B_MAX_POSITIONS         = 999    # placeholder (PDT removed S50); actual cap is MAX_OPEN_POSITIONS=4
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 
@@ -58,8 +58,6 @@ TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expan
 CONVICTION_FULL_MIN      = 11     # 11/12 or 12/12 = full size
 CONVICTION_HALF_MIN      = 10     # 10/12 = half size
 CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade
-
-# S50: PDT exhausted tiers removed — board 28-0. Entry uses CONVICTION_SKIP_BELOW / CONVICTION_FULL_MIN only.
 
 # ─── PRE-MARKET MOVER FILTER ────────────────────────────────────────────────────────────
 
