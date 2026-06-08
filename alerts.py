@@ -165,16 +165,14 @@ def send_slack(message: str) -> None:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-# PDT rule removed — accounts <$25K exempt (SEC/FINRA rule amendment, board vote S50 28-0).
-# pdt param defaulted to 0 here; Tier 2 callers (entry_logic, exit_logic) remove the kwarg in Tier 2 session.
 def alert_entry(symbol: str, direction: str, shares: int, price: float,
-                score: int, size_mult: float, pdt: int = 0,
+                score: int, size_mult: float,
                 overnight: bool = False, spy_ath_dist_pct: float | None = None,
                 mri_level: str | None = None) -> None:
     """Fire on confirmed entry order submission."""
     dir_arrow = "▲ LONG" if direction == "long" else "▼ SHORT"
     title = f"ENTRY {dir_arrow} {symbol}"
-    _ctx_parts = [f"Score: {score}/12", f"Size mult: {size_mult:.2f}x"]  # pdt param kept for Tier 2 caller compat
+    _ctx_parts = [f"Score: {score}/12", f"Size mult: {size_mult:.2f}x"]
     if overnight:
         _ctx_parts.append("🌙 FORCED OVERNIGHT")
     if spy_ath_dist_pct is not None:
@@ -239,11 +237,9 @@ def alert_spy_event(event_type: str, magnitude: float, scans_left: int) -> None:
 
 
 def alert_stop_breach(symbol: str, direction: str, current_price: float,
-                      stop: float, gtc_submitted: bool = True, pdt: int = 0) -> None:
+                      stop: float, gtc_submitted: bool = True) -> None:
     """Fire when stop is breached and position cannot be closed immediately:
     GTC stop placed for next RTH open, or close_position() hard-failed.
-    PDT removed — SEC/FINRA rule amendment, board vote S50 28-0.
-    pdt param defaulted; Tier 2 session removes it from callers.
     """
     title = f"⚠️ STOP BREACH BLOCKED — {symbol}"
     if gtc_submitted:
