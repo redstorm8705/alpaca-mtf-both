@@ -1801,11 +1801,6 @@ class PortfolioTracker:
 
     # ── PDT counter ───────────────────────────────────────────────────────────
 
-    def record_day_trade(self, symbol: str):
-        """S50: PDT removed — no-op stub retained for callers in secondary files.
-        Follow-on session removes callers in exit_logic.py, lifecycle.py, etc."""
-        pass  # S50 stub
-
     def get_rolling_day_trade_count(self) -> int:
         """S50: PDT removed — stub returns 0. Callers cleaned in follow-on session."""
         return 0
