@@ -5,6 +5,21 @@ Claude Code skill, backtest script, data analysis tool, and any code generated o
 
 ---
 
+## EXPLORE SUBAGENT — HARD RULE (NO SUMMARIES EVER)
+
+**Explore subagents MUST return verbatim file content — every line, every character, every function. Summaries are NEVER accepted under any circumstances.**
+
+This rule exists because summarized Explore output caused missed bugs, false "full read complete" declarations, and audit invalidations across multiple sessions. A summary is not a read.
+
+**Mandatory prompt language for every Explore subagent that reads a file:**
+> "Return ALL content verbatim — every line, every character. Do NOT summarize, paraphrase, skip, or abbreviate any section. I need the complete raw content of every function. Declaring a total line count is required but does NOT substitute for returning the full content."
+
+**If an Explore agent returns a summary instead of verbatim content:** The full read gate is NOT satisfied. Spawn a second agent with explicit anti-summary language, or switch to direct Read tool in ≤300-line chunks. Never proceed to analysis on summarized output.
+
+**This applies to ALL file reads, ALL sessions, with ZERO exceptions.**
+
+---
+
 ## RESPONSE STYLE — HARD RULES
 
 **Kill the filler:** Never open responses with phrases like "Great question!", "Of course!", "Certainly!", or similar warmups. Start every response with the actual answer. No preamble, no acknowledgment of the question.
