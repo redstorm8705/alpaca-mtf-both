@@ -4,7 +4,6 @@ Tracks open trades, P&L, day trades, and trade history.
 
 Persistence:
   trade_log.json        — open + closed trades (atomic write with .bak)
-  logs/day_trades.json  — day-trade records (PDT removed S52; infra deferred)
   logs/kelly_stats.json — Kelly win/loss data (written by kelly.py)
 """
 
@@ -1302,7 +1301,7 @@ class PortfolioTracker:
         # Guardrail 7 context — passed from main.py where full context is available
         mri_level: str = "NORMAL",
         data_source: str = "alpaca_data",
-        pdt_used: int = 0,
+        pdt_used: int = 0,  # TODO: remove after entry_logic.py Tier 2 cleanup (L1263)
         **extra_log,
     ):
         self.open_trades[symbol] = {
@@ -1428,7 +1427,6 @@ class PortfolioTracker:
         fill_price: float,
         filled_qty: int = 0,
         mri_level: str = "NORMAL",
-        pdt_used: int = 0,
     ):
         """Convert pending_overnight → open after Alpaca confirms fill."""
         if symbol not in self.open_trades:
@@ -1798,12 +1796,6 @@ class PortfolioTracker:
         return (
             trade.get("entry_time", "")[:10] == datetime.now(_PT).strftime("%Y-%m-%d")
         )
-
-    # ── PDT counter ───────────────────────────────────────────────────────────
-
-    def get_rolling_day_trade_count(self) -> int:
-        """S50: PDT removed — stub returns 0. Callers cleaned in follow-on session."""
-        return 0
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 
