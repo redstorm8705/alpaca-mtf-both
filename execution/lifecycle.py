@@ -7,7 +7,6 @@ Owns:
                _partial_fail_counts — previously main.py module globals
   - Accessors: get_shorting_enabled, set_shorting_enabled,
                get_partial_fail_counts, reset_partial_fail_counts
-  - _submit_gtc_stop_close()     GTC stop-market for PDT=3/3 position exit
   - apply_mri_breakeven_push()   T3: push profitable stops to breakeven on MRI≥STRESSED
 
 Pending (next session — require full verbatim read + param-extension surgery):
@@ -20,8 +19,7 @@ B1 fix: _SHORTING_ENABLED, _feed_age_history, _systemic_stale_alerted moved here
         execute_entries/check_exits/check_partial_exits reference these
         via module state. Pending full body move + global decl removal (next session).
 
-Broker imports: get_trading_client, cancel_order, submit_day_stop_order
-                from execution.broker.
+Broker imports: cancel_order, submit_day_stop_order from execution.broker.
 Data imports: fetch_bars from data.fetcher; get_latest_trade from data.alpaca_data.
 """
 
@@ -34,7 +32,6 @@ from data.fetcher import fetch_bars
 from data.alpaca_data import get_latest_trade
 from execution.broker import (
     cancel_order,
-    get_trading_client,
     submit_day_stop_order,
 )
 from trade_logger import log_event as _log_trade_event
@@ -109,47 +106,6 @@ def clear_shorts_banned() -> None:
     if _shorts_banned_until > 0.0:
         logger.info("Session short ban cleared.")
     _shorts_banned_until = 0.0
-
-
-# ---------------------------------------------------------------------------
-# GTC stop-market submission for PDT=3/3 exits
-# ---------------------------------------------------------------------------
-
-def submit_gtc_stop_close(symbol: str, qty: int, side: str,
-                           stop_price: float):
-    """Submit a GTC stop-market order to close a PDT=3/3 stopped position.
-
-    Alpaca rejects same-day close at PDT=3/3 — GTC fires at next RTH open
-    when stop_price is reached, consuming no same-day PDT slot.
-    side: "sell" for long positions, "buy" for short positions.
-    Returns order object or None on failure.
-    """
-    from alpaca.trading.requests import StopOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    if qty <= 0 or not (0 < stop_price < 99_999):
-        logger.warning(
-            f"[{symbol}] GTC stop close skipped: qty={qty}, stop={stop_price}"
-        )
-        return None
-    try:
-        client     = get_trading_client()
-        order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
-        order_data = StopOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=order_side,
-            stop_price=round(stop_price, 2),
-            time_in_force=TimeInForce.GTC,
-        )
-        order = client.submit_order(order_data)
-        logger.info(
-            f"[{symbol}] GTC STOP CLOSE submitted: {side.upper()} {qty} "
-            f"stop @ ${stop_price:.2f} | Order ID: {getattr(order, 'id', 'unknown')}"
-        )
-        return order
-    except Exception as e:
-        logger.error(f"[{symbol}] GTC stop close submission failed: {e}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +223,6 @@ def apply_mri_breakeven_push(tracker, mri) -> None:
                     "breakeven_push", symbol=symbol, price=current_price,
                     size=_qty, score=trade.get("score", 0),
                     mri_level=mri.level(), data_source="alpaca_data",
-                    pdt_used=tracker.get_rolling_day_trade_count(),
                     be_price=entry_price, stop_order=str(getattr(_new_ord, "id", "")),
                 )
             else:
