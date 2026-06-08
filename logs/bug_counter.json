@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-08 S54 (cont) \u2014 portfolio_tracker.py PDT Tier 2 removal. 9 items removed: DAY_TRADES_FILE, _market_holidays_fallback_logged, self._day_trades, _load_day_trades() call+method, _save_day_trades(), pdt_slots_used in write_eod_summary, _gtc_stop_order_id field+setter, _market_holidays(). 2045\u21921931L (-114). Board 3/3 APPROVE, DS APPROVE, GAI APPROVE. All static analysis PASS. OCI deployed, all 4 services active. commit caf6a32."
+    "last_updated": "2026-06-08 S54 \u2014 broker.py PDT Tier 2 removal + static analysis. All P0 Tier 2 PDT files COMPLETE. commit 4b35638."
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -329,11 +329,12 @@
       "risk_rating": "MEDIUM \u2014 8 bugs in 2 sessions; clean since 4/20."
     },
     "execution/broker.py": {
-      "patch_count": 6,
-      "sessions": 4,
-      "last_patched": "2026-04-28",
+      "patch_count": 7,
+      "sessions": 5,
+      "last_patched": "2026-06-08 S54",
       "open_rc_violations": [],
-      "risk_rating": "MEDIUM \u2014 2026-04-28 session 2: +2 patches (BR-ORDERS-1 get_open_orders None, BR-IDEM-2 idempotency key). External audit sourced from DeepSeek + Google AI Studio."
+      "risk_rating": "MEDIUM \u2014 2026-04-28 session 2: +2 patches (BR-ORDERS-1 get_open_orders None, BR-IDEM-2 idempotency key). External audit sourced from DeepSeek + Google AI Studio.",
+      "notes": "S54 PDT Tier 2 + static analysis cleanup: removed OrderType unused import + import config, updated log messages for PDT error codes, removed stale docstring ref. RULE C-4: 44 E501 ruff noqa header, 23 mypy type: ignore per-line (Alpaca SDK Union types). DS/GAI APPROVE (kept 40310100+text fallback). commit 4b35638."
     },
     "events/macro_risk_index.py": {
       "patch_count": 19,
