@@ -4447,3 +4447,34 @@ PDT enforcement fires. Should these remain as broker-layer defenses?
 - GAI: APPROVE A1-A3, REJECT A4, APPROVE B1+B3+B5, REJECT B2+B4
 - OCI: deployed, 4 services active, HEALTH OK
 
+
+## S55 — 2026-06-08 — exit_logic.py RC-4 + RC-3
+
+**File:** execution/exit_logic.py (2123L → 2129L)
+**Commit:** 334e7aa
+**Full read:** 2123 lines, 8 chunks (direct Read tool)
+
+### RC audit results
+- RC-1: PASS (all datetime.now() use ET tz)
+- RC-2: PASS (no CWD-relative paths)
+- RC-3: FIXED — L1818 `_et_ts=0.0` → `time.time()-3600`; 1 site remaining (unlocalized)
+- RC-4: FIXED — 3 sites (L1282/L1748/L1846); all replaced with `_fill_unverified=True + 0.0 + CRITICAL + Slack`; 7 remaining
+- RC-5: PASS (all writes via tracker._save_log())
+- RC-6: PASS (filled_avg_price/status confirmed against Alpaca API)
+- RC-7: N/A (exit-only module)
+- RC-8: PASS (gate buffer cleanup at L1901-1903 correct)
+
+### Board + DS/GAI
+- Board: Harris APPROVE, Kyle APPROVE (both RC-4 + RC-3)
+- DS: RC-4 APPROVE; RC-3 APPROVE (revised after counter-prompt — 1h window safe when Alpaca confirms close this cycle)
+- GAI: RC-4 APPROVE, RC-3 APPROVE
+
+### Post-patch static
+- py_compile: PASS (local + OCI)
+- mypy: PASS
+- ruff: PASS
+- Cold second-agent: PASS
+- OCI: all 4 services active, RAM: 258MB used / 551MB avail
+
+### RC counts after patch
+- RC-4: 10 → 7 | RC-3: 2 → 1
