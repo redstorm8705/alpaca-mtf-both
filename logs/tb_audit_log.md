@@ -4478,3 +4478,31 @@ PDT enforcement fires. Should these remain as broker-layer defenses?
 
 ### RC counts after patch
 - RC-4: 10 → 7 | RC-3: 2 → 1
+
+## S55 — config.py — PDT comment cleanup (2026-06-08)
+
+### 10-Point Audit
+| Point | Result |
+|-------|--------|
+| 1 | Static analysis — run at Step 5a |
+| 2 | Trade path: pure constants + validate_config(). No trade logic. PASS |
+| 3 | Adversarial: validate_config() raises SystemExit(1) on errors. PASS |
+| 4 | Full read: 527 lines in 2 chunks. COMPLETE |
+| 5 | Imports inside validate_config() only (os, logging). PASS |
+| 6 | No cross-file state mutation. PASS |
+| 7 | Dead PDT references at L50, L53-64, L227, L289 — PDT comment cleanup targets |
+| 8 | No file I/O. N/A |
+| 9 | No data fetches. N/A |
+| 10 | No timestamps. N/A |
+
+### RC Checks
+RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PASS | RC-8 PASS
+
+### Patch Items (all comment-only, RULE C-5 — DS/GAI not required)
+1. L42: Remove "PDT-aware, " from bucket allocation comment
+2. L50: Simplify BUCKET_B_MAX_POSITIONS comment (remove PDT artifact language)
+3. L53: Change section header to "# ── Conviction tiers"
+4. L57-59: Remove "(PDT 0-2/3)" from CONVICTION_FULL/HALF/SKIP comments
+5. L62: Remove single-line PDT exhausted tiers note
+6. L227: Remove "PDT-constrained" from paper profile comment
+7. L289: Remove stale ATH_PDT_BLOCK_PCT historical note line
