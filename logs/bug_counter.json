@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-07 S53 \u2014 exit_logic.py PDT Tier 2 removal (commit 8fc0cd0). RC-3 count 3\u21922 (L1996 bare except fixed). RC-4 3 violations remain pending strategy decision #2."
+    "last_updated": "2026-06-07 S54 \u2014 orphan_manager.py QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). Pending Approval #3 CLOSED. All RC PASS. mypy clean."
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -281,9 +281,9 @@
       "notes": "S21: P2 \u2014 tracker.mark_fill_expired(sym) call added in expired loop. Breaks RC-4 restart CRITICAL loop."
     },
     "execution/orphan_manager.py": {
-      "patch_count": 3,
-      "last_patched": "2026-05-21",
-      "notes": "S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard \u2014 batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS."
+      "patch_count": 4,
+      "last_patched": "2026-06-07 S54",
+      "notes": "S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard \u2014 batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS. | S54: QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). cancel_and_reconcile_gtc_stops() reads quarterly_holds.json at startup to protect AVGO/NVDA/ANET GTC stops \u2014 avoids empty-frozenset startup-order bug by reading state file directly instead of get_quarterly_hold_symbols(). PDT Tier 2: removed DAY_TRADE_MAX_ROLLING + CONVICTION_PDT_SOFT_MIN refs (4 mypy errors, RULE C-4). Orphan overnight=True always. GTC stop submission no longer gated on PDT. Board split 1 APPROVE (Execution Risk) / 1 REJECT (Reliability) + DS APPROVE / GAI REJECT \u2014 state file approach adopted to resolve startup-order objection. py_compile/mypy/ruff PASS. Pending Approval #3 CLOSED."
     },
     "execution/risk_manager.py": {
       "patch_count": 4,
