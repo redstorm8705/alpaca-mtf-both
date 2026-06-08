@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 execution/broker.py
 Alpaca order execution layer. All buy/sell logic lives here.
@@ -16,8 +17,7 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     LimitOrderRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderType, QueryOrderStatus
-import config
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # One TradingClient for the entire bot session — same pattern as data/fetcher.py
 # Saves 5-10 auth round-trips per scan cycle and reduces failure surface.
 
-_trading_client: TradingClient = None
+_trading_client: "TradingClient | None" = None
 
 # Per-symbol short block cache — populated when Alpaca returns 40310000
 # (shorting not enabled for this specific security, not account-wide).
@@ -72,7 +72,7 @@ def get_portfolio_value() -> float:
 def get_open_positions() -> list:
     """Return list of all currently open positions."""
     client = _get_trading_client()
-    return client.get_all_positions()
+    return client.get_all_positions()  # type: ignore[return-value]
 
 
 def get_open_position(symbol: str):
@@ -89,7 +89,7 @@ def get_open_position(symbol: str):
         raise  # activates fail-open logic already written in main.py callers
 
 
-def get_open_orders(symbol: str = None) -> list:
+def get_open_orders(symbol: str | None = None) -> "list | None":
     """
     Return list of open (pending) orders, optionally filtered by symbol.
     Used by position reconciliation to detect pending orders before entry.
@@ -100,8 +100,8 @@ def get_open_orders(symbol: str = None) -> list:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         orders = client.get_orders(filter=request)
         if symbol:
-            return [o for o in orders if o.symbol == symbol]
-        return orders
+            return [o for o in orders if o.symbol == symbol]  # type: ignore[union-attr]
+        return orders  # type: ignore[return-value]
     except Exception as e:
         logger.error(f"get_open_orders failed — API error, cannot confirm order state: {e}")
         return None  # None = unknown state; callers must not treat this as empty
@@ -196,7 +196,7 @@ def submit_market_order(
             )
             order = client.submit_order(order_data)
             logger.info(
-                f"[{symbol}] {side.upper()} {qty} shares @ MARKET | Order ID: {order.id}"
+                f"[{symbol}] {side.upper()} {qty} shares @ MARKET | Order ID: {order.id}"  # type: ignore[union-attr]
             )
             return order
 
@@ -223,7 +223,7 @@ def submit_market_order(
                 )
                 return None
             elif "40310100" in err or "pattern day trading" in err.lower():
-                logger.warning(f"[{symbol}] Skipping — PDT protection active")
+                logger.warning(f"[{symbol}] Order rejected by Alpaca platform PDT enforcement (40310100) — non-retryable")
                 return None
             elif not _is_retryable(err):
                 logger.error(f"[{symbol}] Order failed (non-retryable): {e}")
@@ -274,7 +274,7 @@ def submit_limit_order(
             order = client.submit_order(order_data)
             logger.info(
                 f"[{symbol}] LIMIT {side.upper()} {qty} @ ${limit_price:.2f} | "
-                f"extended_hours={extended_hours} | Order ID: {order.id}"
+                f"extended_hours={extended_hours} | Order ID: {order.id}"  # type: ignore[union-attr]
             )
             return order
         except Exception as e:
@@ -283,7 +283,7 @@ def submit_limit_order(
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
                 return None
             elif "40310100" in err or "pattern day trading" in err.lower():
-                logger.warning(f"[{symbol}] Limit order rejected — PDT protection active")
+                logger.warning(f"[{symbol}] Limit order rejected by Alpaca platform PDT enforcement (40310100) — non-retryable")
                 return None
             elif not _is_retryable(err):
                 # H-7: non-retryable errors (buying power, auth) must not burn 2s sleep × 3
@@ -297,6 +297,7 @@ def submit_limit_order(
             else:
                 logger.error(f"[{symbol}] submit_limit_order failed after 3 attempts: {e}")
                 return None
+    return None  # exhausted retries without exception path firing
 
 
 def submit_gtc_stop_order(
@@ -334,7 +335,7 @@ def submit_gtc_stop_order(
         order = client.submit_order(order_data)
         logger.info(
             f"[{symbol}] GTC STOP submitted: {side.upper()} {qty} @ ${stop_price:.2f} | "
-            f"Order ID: {order.id}"
+            f"Order ID: {order.id}"  # type: ignore[union-attr]
         )
         return order
     except Exception as e:
@@ -392,7 +393,7 @@ def submit_gtc_stop_order(
                     order = client.submit_order(order_data)
                     logger.info(
                         f"[{symbol}] GTC STOP submitted (after {3 + _poll + 1}s hold-clear): "
-                        f"{side.upper()} {qty} @ ${stop_price:.2f} | Order ID: {order.id}"
+                        f"{side.upper()} {qty} @ ${stop_price:.2f} | Order ID: {order.id}"  # type: ignore[union-attr]
                     )
                     return order
                 except Exception as _pe:
@@ -426,7 +427,7 @@ def submit_day_stop_order(
     """
     Submit a DAY stop-market order for RTH session protection.
     Expires at 4:00 PM ET — no AH conflict with tonight's GTC submission.
-    Used when overnight GTC stops were blocked last AH (e.g. P5-H5 PDT guard).
+    Used when overnight GTC stops were blocked last AH.
     Tracked in rth_day_stop_order_id; cleared at next pre-market.
 
     Returns order object or None on failure.
@@ -449,7 +450,7 @@ def submit_day_stop_order(
         order = client.submit_order(order_data)
         logger.info(
             f"[{symbol}] DAY STOP submitted: {side.upper()} {qty} @ ${stop_price:.2f} | "
-            f"Order ID: {order.id}"
+            f"Order ID: {order.id}"  # type: ignore[union-attr]
         )
         return order
     except Exception as e:
@@ -470,7 +471,7 @@ def submit_day_stop_order(
                 order = client.submit_order(order_data)
                 logger.info(
                     f"[{symbol}] DAY STOP submitted (retry): {side.upper()} {qty} @ ${stop_price:.2f} | "
-                    f"Order ID: {order.id}"
+                    f"Order ID: {order.id}"  # type: ignore[union-attr]
                 )
                 return order
             except Exception as retry_e:
@@ -535,9 +536,9 @@ def partial_close_position(symbol: str, qty: int) -> bool:
     try:
         pos = client.get_open_position(symbol)
         if pos is None:
-            logger.warning(f"[{symbol}] No open position for partial close")
+            logger.warning(f"[{symbol}] No open position for partial close")  # type: ignore[unreachable]
             return False
-        side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY
+        side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY  # type: ignore[union-attr]
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -545,7 +546,7 @@ def partial_close_position(symbol: str, qty: int) -> bool:
             time_in_force=TimeInForce.DAY,
         )
         order = client.submit_order(order_data)
-        logger.info(f"[{symbol}] Partial close: {qty} shares | Order ID: {order.id}")
+        logger.info(f"[{symbol}] Partial close: {qty} shares | Order ID: {order.id}")  # type: ignore[union-attr]
         return True
     except Exception as e:
         err = str(e)
@@ -559,7 +560,7 @@ def partial_close_position(symbol: str, qty: int) -> bool:
             try:
                 order = client.submit_order(order_data)
                 logger.info(
-                    f"[{symbol}] Partial close retry OK: {qty} shares | Order ID: {order.id}"
+                    f"[{symbol}] Partial close retry OK: {qty} shares | Order ID: {order.id}"  # type: ignore[union-attr]
                 )
                 return True
             except Exception as retry_e:
@@ -655,7 +656,7 @@ def is_market_open() -> bool:
     """Check if the market is currently open."""
     client = _get_trading_client()
     clock  = client.get_clock()
-    return clock.is_open
+    return clock.is_open  # type: ignore[union-attr]
 
 
 def get_clock() -> dict:
@@ -663,9 +664,9 @@ def get_clock() -> dict:
     client = _get_trading_client()
     clock  = client.get_clock()
     return {
-        "is_open":    clock.is_open,
-        "next_open":  clock.next_open,
-        "next_close": clock.next_close,
+        "is_open":    clock.is_open,  # type: ignore[union-attr]
+        "next_open":  clock.next_open,  # type: ignore[union-attr]
+        "next_close": clock.next_close,  # type: ignore[union-attr]
     }
 
 
