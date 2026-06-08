@@ -1,6 +1,45 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-08 S54 (cont2) — alerts.py P2 PDT param cleanup
+
+**File:** `alerts.py` (362L → 357L, -5 lines)
+**Commit:** `312089c`
+
+### Changes
+- Removed `pdt: int = 0` from `alert_entry()` signature
+- Removed stale comment block above `alert_entry` re: PDT/Tier 2 compat
+- Removed inline comment `# pdt param kept for Tier 2 caller compat`
+- Removed `pdt: int = 0` from `alert_stop_breach()` signature
+- Cleaned `alert_stop_breach` docstring (removed PDT references)
+
+### RC Audit
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — all datetime.now(PT)/timezone.utc |
+| RC-2 | PASS — _HERE = Path(__file__).resolve().parent |
+| RC-3 | PASS — all except blocks log |
+| RC-4 | N/A |
+| RC-5 | PASS — _atomic_write uses tmp→replace |
+| RC-6 | N/A |
+| RC-7 | N/A |
+| RC-8 | N/A |
+
+### Board: 2/2 APPROVE
+- Harris (Execution Risk): APPROVE — no pdt= callers, alert-only functions, zero execution risk
+- Beck (Reliability): APPROVE — confirmed no callers pass pdt= by grep; dead param removal is correct
+
+### DS/GAI: APPROVE / APPROVE
+- DS: APPROVE — parameters unused in bodies, no callers pass pdt=, zero execution risk
+- GAI: APPROVE — confirms caller audit exhaustive; test coverage P3 advisory only
+
+### Static Analysis: PASS
+- py_compile: PASS | mypy: 0 errors | ruff: 0 violations
+
+### Cold Second-Agent: PASS — all 4 threats clear
+### OCI: deployed, 4 services active, import PASS
+
+---
 ## 2026-06-08 S54 (cont) — execution/portfolio_tracker.py Tier 2 PDT Removal
 
 **Full read:** 2045 lines in 7 chunks (Read tool, S54 cont)
@@ -4334,4 +4373,77 @@ POINT 3 — FORWARD-LOOKING (new issues)
 | RC-4 | OPEN (pre-existing #12c fallback L617) | No change |
 | RC-8 | OPEN (9 sites, pending approval #1) | No change |
 | All others | PASS | No change |
+
+
+## config.py — S54 Tier 2 PDT Comment Cleanup (2026-06-08)
+
+**Patch:** Remove ~9 stale PDT references (all comment/docstring only — zero active code changes)
+
+**10-Point Audit:**
+1. Static analysis — run Step 5a
+2. Trade path trace — PASS: config.py is import-time read-only; no execution logic
+3. Adversarial scenarios — PASS: comment removal has zero runtime impact
+4. Full read — COMPLETE: 527 lines in 2 chunks
+5. Cross-references — PASS: all constants remain untouched; comments only removed
+6. Conflicting execution directions — PASS: N/A
+7. Redundancy scan — L61-64 PDT exhausted comment block is confirmed dead documentation
+8. State persistence — PASS: no I/O in config.py
+9. Data source tier — PASS: no data calls
+10. Timezone/logging — PASS: no timestamps
+
+**RC Audit:**
+- RC-1: PASS (no datetime.now() calls)
+- RC-2: PASS (no file I/O)
+- RC-3: PASS (no try/except)
+- RC-4: PASS (no record_exit calls)
+- RC-5: PASS (no file writes)
+- RC-6: PASS (no API field access)
+- RC-7: PASS (no sizing logic)
+- RC-8: PASS (no scan buffers)
+
+**Items to patch:**
+1. L42: Remove "PDT-aware, " from bucket allocation comment
+2. L49: Simplify BUCKET_B_MAX_POSITIONS comment
+3. L53: Simplify conviction tiers section header
+4-6. L57-59: Remove "(PDT 0-2/3)" from CONVICTION_* inline comments
+7-10. L61-64: Remove entire PDT exhausted conviction block (4 lines)
+11. L227: Remove "PDT-constrained" from paper profile comment
+12. L289: Remove stale ATH_PDT_BLOCK_PCT historical note
+
+**DS/GAI:** NOT REQUIRED (RULE C-5 — all changes are comment-only, zero RTH execution impact)
+
+
+**Result:** APPLIED — commit 45572da. All 9 steps complete.
+- py_compile: PASS | mypy: PASS | ruff: PASS
+- Cold second-agent: PASS
+- Board: Harris APPROVE ALL, Beck APPROVE (7-10 collapsed to tombstone)
+- DS/GAI: NOT REQUIRED (RULE C-5 — comment-only)
+- OCI: deployed, 4 services active, health check OK
+
+
+## broker.py — S54 Tier 2 PDT Removal (2026-06-08)
+
+**Patch scope:** Remove/clean PDT references. Hotspot file — DS/GAI required.
+
+**PDT refs found (4 total):**
+1. L144: `"40310100", "pattern day trading"` in `_NON_RETRYABLE` tuple
+2. L224-226: `elif "40310100" in err or "pattern day trading" ...` in `submit_market_order()`
+3. L284-286: `elif "40310100" in err or "pattern day trading" ...` in `submit_limit_order()`
+4. L429: `Used when overnight GTC stops were blocked last AH (e.g. P5-H5 PDT guard).` — stale docstring
+
+**Key question for board/DS/GAI:** Items 1-3 are defensive guards against Alpaca API error 40310100.
+PDT was removed from the BOT's logic but Alpaca paper API may still return 40310100 if platform-level
+PDT enforcement fires. Should these remain as broker-layer defenses?
+
+**10-Point Audit:** PASS all 10 points — see analysis above.
+**RC audit:** All 8 RC classes PASS.
+
+
+**Result broker.py:** APPLIED — commit 4b35638. All 9 steps complete.
+- py_compile: PASS | mypy: PASS (0 errors) | ruff: PASS (0 errors)
+- Cold second-agent: PASS
+- Board: Harris+Peterffy KEEP items 1-3, REMOVE item 4
+- DS: APPROVE A1-A3, REJECT A4 (per-line type:ignore used), APPROVE B1+B3+B5, REJECT B2+B4 (kept OR match)
+- GAI: APPROVE A1-A3, REJECT A4, APPROVE B1+B3+B5, REJECT B2+B4
+- OCI: deployed, 4 services active, HEALTH OK
 
