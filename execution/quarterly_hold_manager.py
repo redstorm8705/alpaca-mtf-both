@@ -74,8 +74,11 @@ _TRANCHE_DAYS = [1, 3, 5]            # calendar trading days since entry_day
 _ENTRY_START_HOUR_ET = 10
 _ENTRY_START_MIN_ET = 5   # 10:05 AM ET
 
-# Thesis freshness gate — McKinney/Derman
-_THESIS_MAX_DATA_AGE_DAYS = 30
+# Config path — JSON written by CCR, read at init
+_CONFIG_PATH = _ROOT / "data" / "state" / "quarterly_holds_config.json"
+
+# Max hold duration backstop (13 weeks × 7 calendar days)
+_MAX_HOLD_CALENDAR_DAYS = 13 * 7  # 91 calendar days
 
 # DAY order expiry detection — Katsuyama
 _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
@@ -103,41 +106,6 @@ def _deregister_symbol(symbol: str) -> None:
     _quarterly_hold_symbols.discard(symbol)
 
 
-# ---------------------------------------------------------------------------
-# Per-symbol thesis configuration — board-approved S48b
-# ---------------------------------------------------------------------------
-_THESIS_CONFIG: dict[str, dict] = {
-    "AVGO": {
-        "direction": "long",
-        "target_equity_pct": 0.20,
-        "thesis_metric": "ai_revenue_guidance",
-        "thesis_fail_threshold": 13_600_000_000,   # $13.6B (>15% miss vs $16B guide)
-        "thesis_fail_operator": "lt",
-        "thesis_secondary": "put_call_ratio",
-        "thesis_secondary_threshold": 2.0,          # reduce 50% if > 2.0 for 3+ days
-        "entry_day_gate_pct": 0.85,
-        "day3_reconfirm_pct": 0.02,  # López de Prado: skip Day3 if price < P1 - 2%
-    },
-    "NVDA": {
-        "direction": "long",
-        "target_equity_pct": 0.15,
-        "thesis_metric": "data_center_revenue",
-        "thesis_fail_threshold": 0.10,              # >10% miss from guidance
-        "thesis_fail_operator": "guide_down_and_miss",  # BOTH required
-        "entry_day_gate_pct": 0.85,
-        "day3_reconfirm_pct": 0.02,
-    },
-    "ANET": {
-        "direction": "long",
-        "target_equity_pct": 0.10,
-        "thesis_metric": "ai_networking_revenue",
-        "thesis_fail_threshold": 2_800_000_000,     # $2.8B FY2026
-        "thesis_fail_operator": "lt",
-        "entry_day_gate_pct": 0.85,
-        "day3_reconfirm_pct": 0.02,
-    },
-}
-
 
 # ---------------------------------------------------------------------------
 # State Machine
@@ -149,13 +117,6 @@ class HoldState(str, Enum):
     PENDING_STOP_REPLACE = "PENDING_STOP_REPLACE"  # GTC stop missing; AH loop resubmits
     PENDING_EXIT         = "PENDING_EXIT"          # Exit order submitted
     CLOSED               = "CLOSED"                # Fully exited — normal close
-    THESIS_INVALIDATED   = "THESIS_INVALIDATED"    # Thesis check failed; exit initiated
-
-
-class ThesisCheckResult(str, Enum):
-    PASS             = "PASS"
-    FAIL             = "FAIL"
-    DATA_UNAVAILABLE = "DATA_UNAVAILABLE"  # FMP null or stale → no action (Beck Test 3)
 
 
 # ---------------------------------------------------------------------------
@@ -300,26 +261,7 @@ def _run_beck_tests(qhm: "QuarterlyHoldManager") -> None:
         f"got {pos2.state}"
     )
 
-    # ── Test 3: FMP null → DATA_UNAVAILABLE; state must remain unchanged ──
-    pos3 = HoldPosition(
-        symbol="__BECK_TEST_3__",  # DS+GAI S49: must not use live symbol
-        direction="long",
-        target_equity_pct=0.20,
-        state=HoldState.ACTIVE,
-        qty_total=5,
-        qty_filled=5,
-    )
-    original_state = pos3.state
-    result3 = qhm._check_thesis(pos3, fmp_data=None)
-    assert result3 == ThesisCheckResult.DATA_UNAVAILABLE, (
-        f"Beck Test 3 FAIL: FMP null must → DATA_UNAVAILABLE, got {result3}"
-    )
-    assert pos3.state == original_state, (
-        f"Beck Test 3 FAIL: state must remain ACTIVE on DATA_UNAVAILABLE, "
-        f"got {pos3.state}"
-    )
-
-    logger.info("QuarterlyHoldManager: Beck's 3 tests PASS ✓")
+    logger.info("QuarterlyHoldManager: Beck's 2 tests PASS ✓")
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +299,7 @@ class QuarterlyHoldManager:
         self._clock = clock  # injected for deterministic testing
         self._dispatcher = OrderDispatcher()
         self._positions: dict[str, HoldPosition] = {}
+        self._thesis_config: dict[str, dict] = self._load_thesis_config()
 
         self._load_state()
 
@@ -430,37 +373,35 @@ class QuarterlyHoldManager:
         return result
 
     def run_weekly_check(self) -> None:
-        """Once per RTH cycle: thesis check + external close for ACTIVE positions.
-        DATA_UNAVAILABLE → no action (Beck Test 3). FAIL → initiate exit.
+        """Once per RTH cycle: external close detection + resync + max-hold exit.
+        GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
         """
         for symbol, pos in list(self._positions.items()):
             if pos.state != HoldState.ACTIVE:
                 continue
             try:
-                # External close detection on every cycle
                 if self._detect_external_close(pos, ReconcileResult()):
-                    continue  # position was closed externally — skip thesis check
+                    continue
 
-                # DS+GAI S49: resync qty/avg_entry_price from Alpaca (authoritative)
                 self._resync_from_alpaca(pos)
 
-                fmp_data = self._fetch_thesis_data(symbol)
-                result = self._check_thesis(pos, fmp_data)
-                pos.thesis_check_last = self._now_et().isoformat()  # RC-1
-                pos.thesis_check_result = result.value
-
-                if result == ThesisCheckResult.FAIL:
-                    logger.warning(
-                        "QuarterlyHoldManager: %s thesis FAILED — initiating exit",
-                        symbol
-                    )
-                    self._initiate_exit(pos, reason="thesis_invalidated")
-                elif result == ThesisCheckResult.DATA_UNAVAILABLE:
-                    logger.info(
-                        "QuarterlyHoldManager: %s thesis data unavailable — no action",
-                        symbol
-                    )
-                # PASS → continue holding
+                if pos.entry_day:
+                    try:
+                        entry_dt = datetime.strptime(pos.entry_day, "%Y-%m-%d").date()
+                        days_held = (self._now_et().date() - entry_dt).days  # RC-1
+                        if days_held >= _MAX_HOLD_CALENDAR_DAYS:
+                            logger.warning(
+                                "QuarterlyHoldManager: %s held %d days (>= %d) "
+                                "— initiating max-hold exit",
+                                symbol, days_held, _MAX_HOLD_CALENDAR_DAYS,
+                            )
+                            self._initiate_exit(pos, reason="max_hold_duration")
+                    except ValueError:
+                        logger.warning(
+                            "QuarterlyHoldManager: %s entry_day unparseable (%r) "
+                            "— skipping max-hold check",
+                            symbol, pos.entry_day,
+                        )
 
             except Exception as e:  # RC-3
                 logger.warning(
@@ -538,7 +479,7 @@ class QuarterlyHoldManager:
         """Structured status for dashboard tile."""
         statuses: list[QuarterlyHoldStatus] = []
         for symbol, pos in self._positions.items():
-            if pos.state in (HoldState.CLOSED, HoldState.THESIS_INVALIDATED):
+            if pos.state == HoldState.CLOSED:
                 continue
             try:
                 live_price = self._get_live_price(symbol)
@@ -613,13 +554,14 @@ class QuarterlyHoldManager:
         """Register a new quarterly hold candidate in PENDING_ENTRY state.
         Called from setup script or config init to prime the entry queue.
         """
-        if symbol not in _THESIS_CONFIG:
+        if symbol not in self._thesis_config:
             logger.warning(
-                "QuarterlyHoldManager: %s not in _THESIS_CONFIG — skipping", symbol
+                "QuarterlyHoldManager: %s not in quarterly_holds_config — skipping",
+                symbol,
             )
             return
         if symbol in self._positions and self._positions[symbol].state not in (
-            HoldState.CLOSED, HoldState.THESIS_INVALIDATED
+            HoldState.CLOSED,
         ):
             logger.info(
                 "QuarterlyHoldManager: %s already tracked in state %s — skipping add",
@@ -864,7 +806,7 @@ class QuarterlyHoldManager:
 
     def _passes_entry_gate(self, symbol: str, pos: HoldPosition) -> bool:
         """Day-1 gate: 30-min bar close > prior_close × gate_pct."""
-        cfg = _THESIS_CONFIG.get(symbol, {})
+        cfg = self._thesis_config.get(symbol, {})
         gate_pct = cfg.get("entry_day_gate_pct", 0.85)
 
         if self.dry_run:
@@ -898,7 +840,7 @@ class QuarterlyHoldManager:
 
     def _passes_day3_reconfirm(self, symbol: str, pos: HoldPosition) -> bool:
         """López de Prado Day-3 re-confirm: skip if price < tranche1 × (1 - 2%)."""
-        cfg = _THESIS_CONFIG.get(symbol, {})
+        cfg = self._thesis_config.get(symbol, {})
         reconfirm_pct = cfg.get("day3_reconfirm_pct", 0.02)
 
         if self.dry_run or pos.tranche1_price <= 0:
@@ -1142,128 +1084,19 @@ class QuarterlyHoldManager:
             )
             self._handle_missing_stop(pos)
 
-    # -----------------------------------------------------------------------
-    # Thesis checking
-    # -----------------------------------------------------------------------
-
-    def _fetch_thesis_data(self, symbol: str) -> Optional[dict]:
-        """Fetch earnings guidance + income statement from FMP.
-        McKinney: use guidance (not segment revenue); enforce 30-day freshness.
-        Returns None on failure → DATA_UNAVAILABLE (Beck Test 3).
-        """
-        if self.dry_run or not self.fmp_client:
-            return None
-        try:
-            data: dict = {}
-
-            # Try earnings call transcript for guidance keywords (freshness-checked)
-            try:
-                stmt = self.fmp_client.get_income_statement(symbol, limit=1)
-                if stmt and isinstance(stmt, list) and stmt[0]:
-                    record = stmt[0]
-                    # Freshness gate (McKinney): reject if filing > 30 days old
-                    filing_date_str = record.get("date") or record.get("fillingDate")
-                    if filing_date_str:
-                        try:
-                            filing_dt = datetime.strptime(
-                                str(filing_date_str)[:10], "%Y-%m-%d"
-                            ).replace(tzinfo=ET)
-                            age_days = (
-                                datetime.now(ET) - filing_dt  # RC-1
-                            ).days
-                            if age_days > _THESIS_MAX_DATA_AGE_DAYS:
-                                logger.info(
-                                    "QuarterlyHoldManager: %s income stmt %d days old "
-                                    "(> %d) — returning DATA_UNAVAILABLE",
-                                    symbol, age_days, _THESIS_MAX_DATA_AGE_DAYS,
-                                )
-                                return None
-                        except ValueError:
-                            pass
-                    data.update(record)
-            except Exception as e:  # RC-3
-                logger.warning(
-                    "QuarterlyHoldManager: FMP income statement failed for %s: %s",
-                    symbol, e,
-                )
-
-            return data if data else None
-
-        except Exception as e:  # RC-3
-            logger.warning(
-                "QuarterlyHoldManager: _fetch_thesis_data failed for %s: %s", symbol, e
-            )
-            return None
-
-    def _check_thesis(
-        self, pos: HoldPosition, fmp_data: Optional[dict]
-    ) -> ThesisCheckResult:
-        """Evaluate thesis against FMP data.
-        Beck Test 3: fmp_data=None → DATA_UNAVAILABLE, no state change.
-        """
-        if fmp_data is None:
-            return ThesisCheckResult.DATA_UNAVAILABLE
-
-        cfg = _THESIS_CONFIG.get(pos.symbol)
-        if not cfg:
-            return ThesisCheckResult.DATA_UNAVAILABLE
-
-        try:
-            metric = cfg.get("thesis_metric")
-            operator = cfg.get("thesis_fail_operator")
-            threshold = cfg.get("thesis_fail_threshold")
-
-            # Null guard — McKinney
-            if metric not in fmp_data:
-                logger.info(
-                    "QuarterlyHoldManager: %s thesis metric '%s' absent from FMP data",
-                    pos.symbol, metric,
-                )
-                return ThesisCheckResult.DATA_UNAVAILABLE
-
-            value = fmp_data.get(metric)
-            if value is None:
-                return ThesisCheckResult.DATA_UNAVAILABLE
-
-            # Magnitude guard — McKinney
-            if not isinstance(value, (int, float)) or float(value) <= 0:
-                return ThesisCheckResult.DATA_UNAVAILABLE
-
-            if operator == "lt":
-                fails = float(value) < float(threshold)  # type: ignore[arg-type]
-            elif operator == "guide_down_and_miss":
-                # NVDA: BOTH data center miss AND guide-down required (board S48b)
-                dc_rev = fmp_data.get("data_center_revenue")
-                guide = fmp_data.get("guide_down")
-                if dc_rev is None or guide is None:
-                    return ThesisCheckResult.DATA_UNAVAILABLE
-                fails = bool(guide) and float(dc_rev) < float(threshold)  # type: ignore[arg-type]
-            else:
-                logger.warning(
-                    "QuarterlyHoldManager: unknown operator '%s' for %s",
-                    operator, pos.symbol,
-                )
-                return ThesisCheckResult.DATA_UNAVAILABLE
-
-            return ThesisCheckResult.FAIL if fails else ThesisCheckResult.PASS
-
-        except Exception as e:  # RC-3
-            logger.warning(
-                "QuarterlyHoldManager: thesis eval error for %s: %s", pos.symbol, e
-            )
-            return ThesisCheckResult.DATA_UNAVAILABLE
-
     def _initiate_exit(
-        self, pos: HoldPosition, reason: str = "thesis_invalidated"
+        self, pos: HoldPosition, reason: str = "max_hold_duration"
     ) -> None:
-        """Submit broker.close_position() and transition state."""
+        """Submit broker.close_position() and transition to PENDING_EXIT.
+        Called for max-hold-duration exits (13 weeks). GTC stop is primary exit.
+        """
         if self.dry_run:
             return
         try:
             success = self._dispatcher.close(self.broker, pos.symbol)
             pos.state = (
                 HoldState.PENDING_EXIT if success
-                else HoldState.THESIS_INVALIDATED
+                else HoldState.CLOSED
             )
             pos.updated_at = self._now_et().isoformat()  # RC-1
             _deregister_symbol(pos.symbol)
@@ -1282,6 +1115,37 @@ class QuarterlyHoldManager:
             )
 
     # -----------------------------------------------------------------------
+    # Config loading — reads quarterly_holds_config.json written by CCR
+    # -----------------------------------------------------------------------
+
+    def _load_thesis_config(self) -> dict[str, dict]:
+        """Load per-symbol config from quarterly_holds_config.json.
+        Fail-open at init (warns + returns {}); fail-closed at add_candidate().
+        """
+        if not _CONFIG_PATH.exists():
+            logger.warning(
+                "QuarterlyHoldManager: config not found at %s "
+                "— no candidates will be added until config is present",
+                _CONFIG_PATH,
+            )
+            return {}
+        try:
+            with open(_CONFIG_PATH) as f:
+                cfg = json.load(f)
+            logger.info(
+                "QuarterlyHoldManager: loaded config from %s (%d picks)",
+                _CONFIG_PATH, len(cfg.get("picks", {})),
+            )
+            return cfg.get("picks", {})
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "QuarterlyHoldManager: config malformed at %s: %s "
+                "— no candidates will be added",
+                _CONFIG_PATH, e,
+            )
+            return {}
+
+    # -----------------------------------------------------------------------
     # State persistence — RC-5: atomic tmp→replace with os.fsync
     # -----------------------------------------------------------------------
 
@@ -1298,6 +1162,14 @@ class QuarterlyHoldManager:
                 raw = json.load(f)
             for sym, d in raw.items():
                 try:
+                    # Migration: THESIS_INVALIDATED → CLOSED (S54 enum removal)
+                    if d.get("state") == "THESIS_INVALIDATED":
+                        d["state"] = "CLOSED"
+                        logger.info(
+                            "QuarterlyHoldManager: migrated %s "
+                            "THESIS_INVALIDATED → CLOSED",
+                            sym,
+                        )
                     self._positions[sym] = HoldPosition.from_dict(d)
                 except Exception as e:  # RC-3
                     logger.warning(
