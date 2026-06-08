@@ -638,8 +638,6 @@ def execute_entries(
                                 f"[{symbol}] #12c exit_price is 0 — P&L recorded as $0, "
                                 f"kill switch may not reflect actual loss. Manual review required."
                             )
-                        if tracker.opened_today(symbol):
-                            tracker.record_day_trade(symbol)
                         pnl_12c = tracker.record_exit(symbol, _exit_price, reason="opposite_signal",
                                                       mri_level=mri.level() if mri else "NORMAL")
                         risk.register_close(pnl_12c or 0.0)
@@ -1317,7 +1315,6 @@ def execute_entries(
                     shares=shares,
                     price=fill_price,
                     score=sig["score"],
-                    pdt=tracker.get_rolling_day_trade_count(),
                     size_mult=size_multiplier,
                     overnight=is_overnight_entry,
                     spy_ath_dist_pct=_ae_ath or 0.0,

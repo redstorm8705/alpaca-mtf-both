@@ -4186,3 +4186,124 @@ POINT 3 — FORWARD-LOOKING (new issues)
 - pdt_slots_used in write_eod_summary — reporting/metrics.py dependency
 
 ### Board: APPROVE | DS: APPROVE | GAI: APPROVE | Second-agent: PASS (after comment fixes)
+
+---
+## 2026-06-07 S54 — quarterly_hold_manager.py QHM Redesign (FMP→JSON config)
+
+**Full read:** 1433 lines in 5 chunks (Explore subagent + Read tool, S54)
+**Board vote:** APPROVE with conditions (all addressed in revised patch)
+**DS/GAI:** REJECT (2 critical) → all resolved. 3-Point AI Summary produced.
+**Static analysis:** py_compile PASS | mypy PASS | ruff PASS
+**Cold second-agent:** FAIL (4 threats) → all 4 resolved in final patch
+**Commit:** 1873e44
+
+### Changes Applied (13 total)
+1. Removed `_THESIS_MAX_DATA_AGE_DAYS` + `_THESIS_CONFIG` (hardcoded AVGO/NVDA/ANET picks)
+2. Removed `THESIS_INVALIDATED` from `HoldState` enum
+3. Removed `ThesisCheckResult` enum entirely
+4. Added `_load_thesis_config()` — reads `data/state/quarterly_holds_config.json`
+5. Added `self._thesis_config` init before `_load_state()`
+6. Removed Beck Test 3 (depended on `_check_thesis`); updated to "2 tests PASS ✓"
+7. Rewrote `run_weekly_check()` — external close + resync + 91-day max-hold backstop
+8. `add_candidate()` — replaced `_THESIS_CONFIG` ref + removed `THESIS_INVALIDATED` tuple
+9. `_passes_entry_gate()` + `_passes_day3_reconfirm()` — use `self._thesis_config`
+10. `_initiate_exit()` — repurposed for max_hold_duration; CLOSED fallback (not THESIS_INVALIDATED)
+11. `_load_state()` — migration remap: THESIS_INVALIDATED → CLOSED on load
+12. Removed `_fetch_thesis_data()` + `_check_thesis()` (106 lines) — FMP v3 deprecated Aug 2025
+13. Created `data/state/quarterly_holds_config.json` with Q3-2026 picks (LLY/GE/GS/GEV)
+14. Fixed stray `THESIS_INVALIDATED` ref in `get_status()` (found by mypy post-patch)
+
+### RC Checks
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — `_now_et()` used in run_weekly_check days_held calc |
+| RC-2 | PASS — `_CONFIG_PATH` uses `_ROOT / "data" / "state" / ...` |
+| RC-3 | PASS — all except blocks log |
+| RC-4 | N/A |
+| RC-5 | PASS — state file unchanged, atomic write preserved |
+| RC-6 | PASS — no new field accesses |
+| RC-7 | PASS — no sizing changes |
+| RC-8 | N/A |
+
+---
+## 2026-06-08 S54 (cont) — entry_logic.py PDT Tier 2 Removal
+
+**Full read:** 1614 lines in 6 chunks — Read tool, direct (S54, NO Explore agent)
+**Board vote:** Pending (Step 3)
+**DS/GAI:** Pending (Step 4)
+**Static analysis:** Pending (Step 5a)
+
+### 10-Point Audit (entry_logic.py)
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis (pylint/pyflakes) | Pending Step 5a |
+| 2 | End-to-end trade path trace | signal→execute_entries()→submit_market_order()→record_entry()→alert_entry(). #12c opposite-signal exit path also calls record_day_trade() at L642. |
+| 3 | Adversarial scenarios | L642 remove: if opened_today() is True, record_day_trade() is a no-op stub — removing it is safe. L1320 remove: alert_entry() has pdt:int=0 default — removing kwarg is safe. |
+| 4 | Full top-to-bottom read | COMPLETE — 1614 lines, 6 chunks, every line read |
+| 5 | Cross-references | record_day_trade(symbol) at L642: stub in portfolio_tracker.py (no-op). get_rolling_day_trade_count() at L1320: stub returns 0. alert_entry(pdt=): alerts.py has pdt:int=0 default. All safe to remove. |
+| 6 | Conflicting directions | None. pdt_used=0 kwarg at L1265 in record_entry() left in place — portfolio_tracker.py still accepts this parameter; removing it now would cause TypeError at runtime. |
+| 7 | Redundancy scan | Multiple S50 comments document prior PDT removal — leave as historical notes. Functional PDT residue: 2 live callers (L642, L1320). |
+| 8 | State persistence | _write_confirm_gate_json() uses state.persistence.write_confirm_gate — not in this file's I/O. No CWD-relative paths detected. |
+| 9 | Data source tier | All data calls use T1 (fetch_bars, get_latest_trade, get_latest_quote). No raw requests. No yfinance for equities. ✅ |
+| 10 | Timezone + logging | All datetime.now() calls use ET. alert_entry and trade_events.jsonl produce PT-formatted output. ✅ |
+
+### RC checks (entry_logic.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all datetime.now() calls use ET (L372, L403, L447, L711, L1274, L1436) |
+| RC-2 | CWD-relative path | PASS — no log/state path construction in this file |
+| RC-3 | Silent exception | PASS — all except blocks log (debug/warning/error/critical). No bare pass. |
+| RC-4 | Estimated exit price | OPEN — L617 #12c exit uses entry_price as fallback if 3-poll fill fetch fails (explicit logger.warning). Pre-existing; not in patch scope. |
+| RC-5 | Non-atomic write | N/A — no direct file writes in this file |
+| RC-6 | Wrong API field | PASS — filled_avg_price, buying_power, shorting_enabled are correct Alpaca fields |
+| RC-7 | Zero-share sizing | PASS — _can_afford_one guard at L1127-1148 prevents int() truncation floor when unaffordable |
+| RC-8 | Unbounded scan buffer | OPEN (pre-existing) — 9 missing clear_buffers() calls at L391/413/434/441/455/462/470/476/488 (Board APPROVE, DS/GAI REJECT — pending approval #1; NOT in this patch scope) |
+
+### PDT Items — Scope of This Patch (2 functional changes)
+| # | Location | Item | Action |
+|---|----------|------|--------|
+| 1 | L642 | `tracker.record_day_trade(symbol)` | REMOVE — stub, no-op, no callers in non-PDT code |
+| 2 | L1320 | `pdt=tracker.get_rolling_day_trade_count(),` | REMOVE — alerts.py has pdt:int=0 default |
+| - | L1265 | `pdt_used=0,  # S50: PDT removed` | DEFER — portfolio_tracker.py still accepts pdt_used kwarg; removing now causes TypeError |
+
+
+### Board Vote (Step 3)
+- Reliability agent: **APPROVE** — no stranding risk, no RC-3 introduced, record_day_trade() had no reconciliation role
+- Execution Risk agent: **APPROVE** — P&L integrity intact, record_exit() independent of record_day_trade(), trade_events.jsonl unaffected
+- Data Integrity agent: **APPROVE** — pdt_used still written by record_entry() at L1265, alert_entry() schema intact
+
+### DS/GAI (Step 4)
+- DS: **APPROVE** — no state inconsistency, no hidden callers, no RC-8 interaction
+- GAI: Partial — overall REJECT on P2 cleanliness grounds (partial cleanup), Q3 APPROVE (pdt=0 default safe). No safety blocker. Rafael's call per AUTHORITY RULE.
+
+### 3-Point AI Summary
+- P1 Alignment: All 5 findings 3/3 agreement across Claude/DS/GAI
+- P2 Claude Missed: Nothing — DS+GAI agreed with board
+- P3 Forward-looking: GAI flagged partial cleanup (P2, no board vote required) — resolved when portfolio_tracker.py Tier 2 deletes record_day_trade() stub
+
+### Static Analysis (Step 5a)
+- py_compile: **PASS**
+- mypy: **PASS** (no issues)
+- ruff: **PASS** (all checks passed)
+
+### Cold Second-Agent (Step 5b)
+- Verdict: **CONDITIONAL PASS → PASS** (condition: pdt: int = 0 default confirmed in alerts.py by Reliability board)
+
+### code-review-graph Impact (Step 5c)
+- 0 downstream nodes affected — changes purely subtractive
+
+### Patch Applied
+- Changes: 3 lines removed (L641-642: record_day_trade block, L1320: pdt= kwarg)
+- entry_logic.py: 1614 → 1611 lines
+- Rsync: ✅ deployed to OCI
+- Services restart: ✅ all 4 active (mtf-bot, mtf-writer, mtf-http, nginx)
+- Health: ✅ (401 on dashboard = auth-protected, expected)
+
+### Post-Patch RC Summary
+| RC | entry_logic.py | Change |
+|----|----------------|--------|
+| RC-3 | PASS | No change |
+| RC-4 | OPEN (pre-existing #12c fallback L617) | No change |
+| RC-8 | OPEN (9 sites, pending approval #1) | No change |
+| All others | PASS | No change |
+
