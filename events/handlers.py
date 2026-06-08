@@ -89,14 +89,6 @@ def safe_close_all(tracker, risk=None,
                 # instead of fabricating the stored stop level as exit price.
                 exit_price = fetch_actual_fill_price(sym, trade, poll_secs=1.2,
                                                      submitted_after=_close_ts)
-                # Build #13: record day trade before exit
-                # HALT was skipping PDT accounting
-                if tracker.opened_today(sym):
-                    tracker.record_day_trade(sym)
-                    logger.info(
-                        f"[{sym}] Day trade recorded (safe_close_all/HALT). "
-                        f"Rolling count: {tracker.get_rolling_day_trade_count()}/3"
-                    )
                 pnl = tracker.record_exit(sym, exit_price, reason="safe_close_all",
                                           mri_level=mri_level)
                 if risk is not None:
