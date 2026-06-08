@@ -1,6 +1,34 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-08 S54 (cont) — execution/portfolio_tracker.py Tier 2 PDT Removal
+
+**Full read:** 2045 lines in 7 chunks (Read tool, S54 cont)
+**Scope:** 9 items removed — DAY_TRADES_FILE constant, _market_holidays_fallback_logged global, self._day_trades init, _load_day_trades() call + method (L727-770), _save_day_trades() method (L772-780), pdt_slots_used from write_eod_summary() (L1176-1180), _gtc_stop_order_id field + comment from record_entry() (L1400-1402), set_pdt_gtc_stop_order_id() method (L1424-1429), _market_holidays() static method (L1883-1920). Net: 2045→1931L (-114).
+**KEPT (blocked):** record_day_trade() stub (handlers.py L95 caller), get_rolling_day_trade_count() stub (lifecycle.py:270, trade_engine.py:246), pdt_used params (entry_logic.py L1265)
+
+**RC Audit (post-patch):**
+- RC-1 (Naive datetime): PASS — all datetime.now(_PT)
+- RC-2 (CWD-relative path): PASS — _ROOT anchored
+- RC-3 (Silent exception): PASS — no bare pass/silent blocks
+- RC-4 (Estimated exit price): PASS — patch_exit_pnl() corrects, tracker doesn't control price source
+- RC-5 (Non-atomic write): PASS — _atomic_write used; manual_audit.jsonl append is log-only (low risk, known)
+- RC-6 (Wrong API field): PASS
+- RC-7 (Zero-share sizing): N/A
+- RC-8 (Unbounded scan buffer): N/A
+
+**10-Point Audit:** All 10 points checked. No new bugs introduced.
+**Board:** 4 independent cold subagents (Reliability, Execution Risk, Data Integrity, Quant Logic) — APPROVE 9/10. Item #9 (record_day_trade stub) FLAGGED by Execution Risk agent — handlers.py L95 caller confirmed by direct file read. Correctly blocked.
+**DS:** APPROVE — confirmed self._day_trades completely eliminated, no race condition, no log monitoring regression, _gtc_stop_order_id backward compat safe.
+**GAI:** APPROVE — pdt_used parameter no interaction with _gtc_stop_order_id, pdt_slots_used removal schema-safe via .get() fallback, cancel_order on stale IDs won't block exit path, _load_day_trades() removal has no __init__ side-effect dependencies.
+**Static analysis:** py_compile PASS | mypy PASS | ruff PASS
+**Cold second-agent:** PASS — self._day_trades completely gone, no init dependencies, pruning function never called, _market_holidays_fallback_logged exclusively internal.
+**code-review-graph:** 92 files in blast radius (hotspot); actual behavioral impact = zero (dead code removal only).
+**Applied:** commit caf6a32 | OCI deployed | all 4 services active | dashboard 401 (auth-gated, expected)
+
+**Follow-on P0:** handlers.py L94-99 — remove record_day_trade() + get_rolling_day_trade_count()/3 log call. Then remove record_day_trade() stub from portfolio_tracker.py.
+
+---
 ## 2026-06-07 S54 — orphan_manager.py QHM GTC Stop Exclusion
 
 **Full read:** 1369 lines in 5 chunks (Explore subagent, S54)
