@@ -1260,7 +1260,6 @@ def execute_entries(
                     # Guardrail 7: pass full context for trade_events.jsonl
                     mri_level=mri.level(),
                     data_source="alpaca_data",
-                    pdt_used=0,  # S50: PDT removed
                     # TSMOM fields — logged for 90-day gate tracking (Gate 3)
                     tsmom_12m=sig.get("tsmom_12m"),
                     tsmom_6m=sig.get("tsmom_6m"),

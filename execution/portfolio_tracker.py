@@ -1301,7 +1301,6 @@ class PortfolioTracker:
         # Guardrail 7 context — passed from main.py where full context is available
         mri_level: str = "NORMAL",
         data_source: str = "alpaca_data",
-        pdt_used: int = 0,  # TODO: remove after entry_logic.py Tier 2 cleanup (L1263)
         **extra_log,
     ):
         self.open_trades[symbol] = {
