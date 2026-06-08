@@ -182,8 +182,6 @@ def _submit_rth_day_stops(tracker) -> None:
 
 
 
-# _submit_gtc_stop_close extracted to execution/lifecycle.py (Phase 2 Extraction 7).
-# Imported at module level as: submit_gtc_stop_close as _submit_gtc_stop_close
 
 
 
@@ -243,7 +241,6 @@ def _reconcile_pending_overnight_orders(tracker: PortfolioTracker, risk: "RiskMa
             if "filled" in status:
                 fill_price = float(getattr(order, "filled_avg_price", None) or trade["limit_price"])
                 filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
-                pdt_count    = tracker.get_rolling_day_trade_count()
                 # S47d: Capture pre-promote status so register_open() fires exactly once
                 # per genuine pending_overnight→open transition.
                 # promote_pending_to_active() is idempotent (status guard): if already
@@ -255,7 +252,6 @@ def _reconcile_pending_overnight_orders(tracker: PortfolioTracker, risk: "RiskMa
                 tracker.promote_pending_to_active(
                     symbol, fill_price,
                     filled_qty=filled_qty,
-                    pdt_used=pdt_count,
                 )
                 _post_status = tracker.open_trades.get(symbol, {}).get("status", "")
                 if _pre_status == "pending_overnight" and _post_status == "open":
