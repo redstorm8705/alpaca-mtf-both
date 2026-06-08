@@ -1280,13 +1280,18 @@ def check_exits(
                                         symbol, trade, poll_secs=0.3, submitted_after=_after_ts
                                     )
                                 if _ep is None:  # type: ignore[unreachable]
-                                    _ep = trade.get("entry_price", 0.0)  # type: ignore[unreachable]
+                                    trade["_fill_unverified"] = True  # type: ignore[unreachable]
+                                    _ep = 0.0
                                     logger.critical(
                                         "[%s] ATR exit (else): fill lookup exhausted — "
-                                        "using entry_price=$%.2f to prevent false P&L. "
-                                        "Verify in Alpaca.",
-                                        symbol, _ep,
+                                        "recording 0.0 (fill unverified). Verify in Alpaca.",
+                                        symbol,
                                     )
+                                    try:
+                                        from alerts import send_slack
+                                        send_slack(f":rotating_light: [{symbol}] RC-4: ATR exit fill unverified — exit recorded at $0.00. Manual P&L review required.")
+                                    except Exception as _slack_e:
+                                        logger.error("[%s] RC-4 Slack alert failed: %s", symbol, _slack_e)
                                 pnl = tracker.record_exit(
                                     symbol, _ep,
                                     reason=f"overnight_atr_buffer_exit | gtc_stop_executed | {_be_reason_detail}",
@@ -1746,12 +1751,18 @@ def check_exits(
                             if _raw_fill > 0:
                                 _ext_ep = _raw_fill
                         if _ext_ep is None:
-                            _ext_ep = float(trade.get("stop") or trade.get("entry_price", 0.0))
+                            trade["_fill_unverified"] = True
+                            _ext_ep = 0.0
                             logger.critical(
                                 "[%s] Defer GTC close: fill lookup exhausted — "
-                                "RC-4 fallback to stop/entry_price=$%.2f. Verify in Alpaca.",
-                                symbol, _ext_ep,
+                                "recording 0.0 (fill unverified). Verify in Alpaca.",
+                                symbol,
                             )
+                            try:
+                                from alerts import send_slack
+                                send_slack(f":rotating_light: [{symbol}] RC-4: Defer GTC fill unverified — exit recorded at $0.00. Manual P&L review required.")
+                            except Exception as _slack_e:
+                                logger.error("[%s] RC-4 Slack alert failed: %s", symbol, _slack_e)
                         if symbol in tracker.open_trades:
                             pnl = tracker.record_exit(
                                 symbol, _ext_ep,
@@ -1812,11 +1823,12 @@ def check_exits(
                                         ).timestamp()
                                     except Exception as _et_exc:
                                         logger.warning(
-                                            f"[{symbol}] external_close: entry_time parse "
-                                            f"failed ({_et_exc}) — using fallback _et_ts=0.0 "
-                                            f"(may include stale orders)"
+                                            "[%s] external_close: entry_time parse failed (%s) "
+                                            "— fill query using t-1h as lower bound "
+                                            "(epoch=0 has crosstalk risk; safe: handler fires only when Alpaca confirmed close this cycle).",
+                                            symbol, _et_exc,
                                         )
-                                        _et_ts = 0.0
+                                        _et_ts = time.time() - 3600  # safe: only fires when close confirmed this cycle; RC-4 backstop if missed
                                 _ep = _fetch_actual_fill_price(
                                     symbol, trade, poll_secs=0, submitted_after=_et_ts
                                 )
@@ -1832,24 +1844,18 @@ def check_exits(
                                     f"Proceeding to price fallback."
                                 )
                         if not _ep:
-                            _ep = (
-                                trade.get("trail_stop")
-                                or trade.get("stop")
-                                or current_price
-                            )
-                            if _ep:
-                                logger.critical(
-                                    f"[{symbol}] external_close: fill price unknown "
-                                    f"— using price fallback ({_ep}). "
-                                    f"P&L estimate unreliable. Slack alert required."
-                                )
-                        if not _ep:
-                            logger.critical(
-                                f"[{symbol}] external_close: ALL fill price sources "
-                                f"exhausted. Recording exit at 0 — P&L corrupted. "
-                                f"Manual review required."
-                            )
+                            trade["_fill_unverified"] = True
                             _ep = 0.0
+                            logger.critical(
+                                "[%s] external_close: fill price unknown — "
+                                "recording 0.0 (fill unverified). Manual P&L review required.",
+                                symbol,
+                            )
+                            try:
+                                from alerts import send_slack
+                                send_slack(f":rotating_light: [{symbol}] RC-4: External close fill unverified — exit recorded at $0.00. Manual P&L review required.")
+                            except Exception as _slack_e:
+                                logger.error("[%s] RC-4 Slack alert failed: %s", symbol, _slack_e)
                         if symbol in tracker.open_trades:
                             pnl = tracker.record_exit(
                                 symbol, _ep, reason="external_close", mri_level=mri_level
