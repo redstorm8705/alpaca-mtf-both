@@ -142,7 +142,6 @@ def get_order(order_id: str):
 
 _NON_RETRYABLE = (
     "40310000", "not allowed to short",    # shorting disabled
-    "40310100", "pattern day trading",      # PDT violation
     "403",                                  # auth failure
     "insufficient", "buying power",         # not enough capital
 )
@@ -170,7 +169,7 @@ def submit_market_order(
     """
     Submit a plain market order with retry (max 3 attempts, 1s / 2s / 4s backoff).
     Distinguishes retryable errors (rate limits, transient network) from
-    non-retryable (PDT, shorting disabled, insufficient funds).
+    non-retryable (shorting disabled, insufficient funds).
     Returns order object or None on failure.
     """
     if qty <= 0:
@@ -221,9 +220,6 @@ def submit_market_order(
                     f"[{symbol}] Shorting blocked (40310000) — "
                     f"added to session short-block cache. Will not retry this symbol."
                 )
-                return None
-            elif "40310100" in err or "pattern day trading" in err.lower():
-                logger.warning(f"[{symbol}] Order rejected by Alpaca platform PDT enforcement (40310100) — non-retryable")
                 return None
             elif not _is_retryable(err):
                 logger.error(f"[{symbol}] Order failed (non-retryable): {e}")
@@ -281,9 +277,6 @@ def submit_limit_order(
             err = str(e)
             if "40310000" in err or "not allowed to short" in err:
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
-                return None
-            elif "40310100" in err or "pattern day trading" in err.lower():
-                logger.warning(f"[{symbol}] Limit order rejected by Alpaca platform PDT enforcement (40310100) — non-retryable")
                 return None
             elif not _is_retryable(err):
                 # H-7: non-retryable errors (buying power, auth) must not burn 2s sleep × 3
