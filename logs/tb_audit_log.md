@@ -1,6 +1,45 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-07 S54 — orphan_manager.py QHM GTC Stop Exclusion
+
+**Full read:** 1369 lines in 5 chunks (Explore subagent, S54)
+**Board vote:** Pending (Step 3)
+**DS/GAI:** Pending (Step 4)
+**Static analysis:** Pending (Step 5a)
+
+### 10-Point Audit (orphan_manager.py)
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis (pylint/pyflakes) | PASS — no syntax errors, no unused imports |
+| 2 | End-to-end trade path trace | BUG: cancel_and_reconcile_gtc_stops() L258 calls cancel_order() with no QHM exclusion — will cancel protective stops for AVGO/NVDA/ANET quarterly holds before RTH |
+| 3 | Adversarial scenarios | Empty tracker.open_trades → safe. QHM symbol with live GTC stop → BUG: stop cancelled. reconcile_positions with QHM symbol → tolerable (no cancels in that path) |
+| 4 | Full top-to-bottom read | COMPLETE — all 5 functions, all branches read |
+| 5 | Cross-references | get_quarterly_hold_symbols NOT imported anywhere. cancel_order imported from execution.broker ✅. All other imports verified |
+| 6 | Conflicting execution directions | orphan_manager assumes ALL GTC stops before RTH should be cancelled. QHM assumes its GTC stops persist overnight and ARE NOT cancelled. Direct conflict |
+| 7 | Redundancy scan | No dead code. Patch-2 GTC partial reconciliation is separate and not affected |
+| 8 | State persistence | tracker._save_log() called after mutations. Atomic via tracker internals |
+| 9 | Data source tier | No direct data fetches in cancel path. ATR fetch in reconcile_positions uses fetch_bars T1 ✅ |
+| 10 | Timezone + logging | PT display ✅. All exceptions logged with context ✅ |
+
+### RC checks (orphan_manager.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS |
+| RC-2 | CWD-relative path | PASS |
+| RC-3 | Silent exception | PASS — all exceptions logged |
+| RC-4 | Estimated exit price | PASS — uses fetch_actual_fill_price |
+| RC-5 | Non-atomic write | PASS — delegates to tracker._save_log() |
+| RC-6 | Wrong API field | PASS |
+| RC-7 | Zero-share sizing | PASS — N/A |
+| RC-8 | Unbounded scan buffer | PASS — N/A |
+
+### Proposed Fix
+In `cancel_and_reconcile_gtc_stops()` — add QHM exclusion check before `else:` cancel branch (~L246):
+- Import `get_quarterly_hold_symbols` from `execution.quarterly_hold_manager` (lazy, inside function)
+- If `symbol in _qhm_symbols`: log adoption, `continue` — do NOT cancel or clear GTC stop ID
+
+---
 ## 2026-06-07 S53 — exit_logic.py PDT Tier 2 Removal (commit 8fc0cd0)
 
 **Full read:** Explore subagent, 2435 lines (prior session S52/S53 continuation)

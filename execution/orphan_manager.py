@@ -19,8 +19,10 @@ Helper imports: fetch_actual_fill_price from execution.fill_helpers;
 Alert imports: alert_gtc_failed, send_slack from alerts.
 """
 
+import json as _json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
 
@@ -119,6 +121,32 @@ def cancel_and_reconcile_gtc_stops(
     # TB2: confirmed called at startup AND premarket — docstring accurate
     # Startup call: main() startup reconciliation block (~line 6194)
     # Premarket call: run_cycle() premarket phase (~line 3423)
+
+    # ── QHM protected symbols — read from state file, not module variable ──
+    # get_quarterly_hold_symbols() returns empty frozenset before QHM.__init__
+    # runs (module-level set, populated only after instantiation). Reading the
+    # state file directly avoids startup-order dependency.
+    _qhm_protected: frozenset[str] = frozenset()
+    try:
+        _qhm_state_path = (
+            Path(__file__).resolve().parent.parent
+            / "data" / "state" / "quarterly_holds.json"
+        )
+        if _qhm_state_path.exists():
+            _raw = _json.loads(_qhm_state_path.read_text())
+            _active_states = {
+                "AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT",
+            }
+            _qhm_protected = frozenset(
+                sym for sym, pos in _raw.items()
+                if isinstance(pos, dict) and pos.get("state") in _active_states
+            )
+    except Exception as _qhm_e:
+        logger.warning(
+            "QHM state file read failed — treating all symbols as unprotected: %s",
+            _qhm_e,
+        )
+
     gtc_positions = tracker.get_overnight_gtc_positions()
     if not gtc_positions:
         return
@@ -251,6 +279,16 @@ def cancel_and_reconcile_gtc_stops(
             # previously used to skip this cancel, which was wrong: level
             # comparison governs resubmission (AH), not cancellation.
             # Cancel unconditionally so the bot has full share availability.
+
+            # QHM symbols retain their protective GTC stops — do not cancel.
+            if symbol in _qhm_protected:
+                logger.info(
+                    "[%s] QHM symbol — retaining GTC stop %s"
+                    " (not cancelling before RTH).",
+                    symbol, order_id,
+                )
+                continue
+
             logger.info(
                 f"[{symbol}] Cancelling GTC stop {order_id} before RTH "
                 f"(status={status})."
@@ -437,8 +475,6 @@ def cancel_and_reconcile_gtc_stops(
         # reasoning still applies: the position is protected by the internal
         # stop; the GTC will be placed cleanly after the rolling PDT window
         # refreshes tomorrow.
-        _p1_rolling_dt  = tracker.get_rolling_day_trade_count()
-        _p1_pdt_full    = _p1_rolling_dt >= config.DAY_TRADE_MAX_ROLLING
         # OM-RACE-1 (2026-05-21 S28): batch-fetch all open orders once before the
         # loop. A just-cancelled GTC stop may still be PENDING_CANCEL on Alpaca's
         # backend for minutes to hours (AH/weekend propagation). Submitting a new
@@ -480,24 +516,6 @@ def cancel_and_reconcile_gtc_stops(
                     f"[{_sym}] Patch 1: skipping GTC re-submission — "
                     f"internal_hard_stop_active=True (persisted from prior run)."
                 )
-                continue
-            # P5-H5 parity: same check as AH GTC loop at main.py:3394
-            if _p1_pdt_full and tracker.opened_today(_sym):
-                logger.warning(
-                    f"[{_sym}] Patch 1: GTC stop skipped — "
-                    f"PDT={_p1_rolling_dt}/3 and opened today (Alpaca would "
-                    f"reject with 40310100). AH loop already deferred this "
-                    f"intentionally. Internal stop active; GTC will be placed"
-                    f" tomorrow."
-                )
-                _trade.pop("gtc_p1_defer_cycles", None)  # OM-RACE-1: PDT exit resets
-                try:
-                    tracker._save_log()
-                except Exception as _p1_sl_err:
-                    logger.debug(
-                        "[%s] OM-RACE-1: save_log failed after PDT reset: %s",
-                        _sym, _p1_sl_err,
-                    )
                 continue
             # OM-RACE-1 guard: placed AFTER PDT check intentionally. PDT-deferred
             # positions are intentionally skipped — they must not increment the
@@ -759,8 +777,6 @@ def reconcile_positions(
     # No stop/target — reversal counter manages exit.
     # If PDT=3/3, mark overnight=True so same-day stop block applies.
     orphans = alpaca_symbols - tracker_symbols
-    _rolling_dt_now    = tracker.get_rolling_day_trade_count()
-    _pdt_exhausted_now = _rolling_dt_now >= config.DAY_TRADE_MAX_ROLLING
     for sym in orphans:
         pos = alpaca_positions[sym]
         _entry_px  = float(pos.avg_entry_price)
@@ -827,9 +843,7 @@ def reconcile_positions(
             f" @ ${_entry_px:.2f} ({_direction}). "
             f"Stop=${_orph_stop:.2f} "
             f"target={'$'+str(_orph_tgt) if _orph_tgt else 'None'} "
-            f"[{_stop_src}]. "
-            f"overnight={_pdt_exhausted_now} "
-            f"(PDT={_rolling_dt_now}/3)."
+            f"[{_stop_src}]. overnight=True"
         )
         # P4-1: attempt live re-score before writing dict
         # (fail-open: 0 if unavailable)
@@ -859,9 +873,8 @@ def reconcile_positions(
             "status":                 "open",
             "reversal_scan_count":    0,
             "reversal_confirm_count": 0,
-            "overnight":              _pdt_exhausted_now,
-            "overnight_since":        _now_iso if _pdt_exhausted_now
-                                      else None,
+            "overnight":              True,
+            "overnight_since":        _now_iso,
             "gtc_stop_order_id":      None,
             "stop_breached":          False,
             "stop_breach_price":      None,
@@ -917,8 +930,7 @@ def reconcile_positions(
         # positions have zero exchange-level protection.
         _orph_trade = tracker.open_trades[sym]
         if (
-            _pdt_exhausted_now
-            and _orph_trade.get("gtc_stop_order_id") is None
+            _orph_trade.get("gtc_stop_order_id") is None
             and _orph_trade.get("rth_day_stop_order_id") is None
             and _orph_stop is not None
             and not _orph_trade.get("internal_hard_stop_active")
@@ -1008,19 +1020,6 @@ def reconcile_positions(
 
         if _orph_score is not None:
             logger.info(f"[{sym}] Orphan re-scored: {_orph_score}/12")
-            if (
-                _pdt_exhausted_now
-                and _orph_score < config.CONVICTION_PDT_SOFT_MIN
-            ):
-                logger.critical(
-                    f"[{sym}] Orphan adopted BELOW PDT conviction floor: "
-                    f"score={_orph_score}/12 < "
-                    f"CONVICTION_PDT_SOFT_MIN="
-                    f"{config.CONVICTION_PDT_SOFT_MIN} "
-                    f"(PDT={_rolling_dt_now}/3). Position managed but "
-                    f"scored below forced-overnight entry threshold. "
-                    f"Tighten stop or manual exit if macro worsens."
-                )
         else:
             logger.info(
                 f"[{sym}] Orphan score unavailable at adoption — "
