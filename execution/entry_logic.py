@@ -388,6 +388,7 @@ def execute_entries(
                     f"[{symbol}] Rule 1 BLOCKED: no longs in premarket red session "
                     f"(≥75% of movers red). Short or inverse ETF signals only."
                 )
+                _rc8_clear_buffers(symbol, "rule1-pm-red")
                 continue
 
         # ── Rule 2: Gap-Down Settling Window ─────────────────────────────
@@ -410,6 +411,7 @@ def execute_entries(
                         f"{_settle_end.strftime('%I:%M %p ET')}. "
                         f"Bounce entry in gap-down structure has negative expected return."
                     )
+                    _rc8_clear_buffers(symbol, "rule2-gap-down-settle")
                     continue
 
         # ── SPY Direction Gate (Market Reaction Engine) ───────────────────
@@ -431,6 +433,7 @@ def execute_entries(
                 f"[{symbol}] SPY DIRECTION GATE [DOWN]: SPY moved "
                 f"{_main._spy_risk_magnitude:+.2f}% — no new longs while tape is selling off."
             )
+            _rc8_clear_buffers(symbol, "spy-direction-down")
             continue
 
         if spy_risk_direction == "up" and direction == "short":
@@ -438,6 +441,7 @@ def execute_entries(
                 f"[{symbol}] SPY DIRECTION GATE [UP]: SPY moved "
                 f"{_main._spy_risk_magnitude:+.2f}% — no new shorts while tape is surging."
             )
+            _rc8_clear_buffers(symbol, "spy-direction-up")
             continue
 
         # ── ORB Gate: SPY must have confirmed a breakout above/below opening range ──
@@ -452,6 +456,7 @@ def execute_entries(
                 logger.warning(
                     f"[{symbol}] ORB gate BLOCK: SPY feed failure — BLOCK_ALL entries for session (fail-closed)"
                 )
+                _rc8_clear_buffers(symbol, "orb-feed-failure")
                 continue
             if not _orb_computed:
                 # Before 9:55 AM: opening window already blocks entries; this is defence-in-depth.
@@ -459,6 +464,7 @@ def execute_entries(
                 logger.warning(
                     f"[{symbol}] ORB gate BLOCK: ORB not yet computed — fail-closed"
                 )
+                _rc8_clear_buffers(symbol, "orb-not-computed")
                 continue
             if _orb_computed and not _main._orb_feed_failed:
                 _spy_cls = _main._spy_last_close
@@ -467,12 +473,14 @@ def execute_entries(
                         f"[{symbol}] ORB gate BLOCK (long): SPY {_spy_cls:.2f} ≤ ORB_H {_main._orb_high:.2f}"
                         f" — no confirmed breakout above range"
                     )
+                    _rc8_clear_buffers(symbol, "orb-long-no-breakout")
                     continue
                 if direction == "short" and _spy_cls >= _main._orb_low:
                     logger.info(
                         f"[{symbol}] ORB gate BLOCK (short): SPY {_spy_cls:.2f} ≥ ORB_L {_main._orb_low:.2f}"
                         f" — no confirmed breakdown below range"
                     )
+                    _rc8_clear_buffers(symbol, "orb-short-no-breakdown")
                     continue
 
         # ── BoD-2: Block 3x leveraged ETF longs during EXTREME / BROAD_GEO_CONFLICT ──
@@ -485,6 +493,7 @@ def execute_entries(
                 f"[{symbol}] 3x ETF LONG BLOCKED [{_main._spy_event_type}]: "
                 f"SPY {_main._spy_risk_magnitude:+.2f}% — refusing leveraged long in panic regime."
             )
+            _rc8_clear_buffers(symbol, "bod2-3x-etf-extreme-regime")
             continue
 
         # ── Bucket routing ───────────────────────────────────────────────
