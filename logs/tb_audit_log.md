@@ -1,6 +1,40 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-10 S57 — config.py VOL_TIER_HIGH_STOP_INTRADAY 1.75→2.0
+
+**File:** `config.py` (521L, 1 line changed)
+**Commit:** `9e6b4e7`
+
+### Change
+- `VOL_TIER_HIGH_STOP_INTRADAY`: 1.75 → 2.0 (HIGH-tier intraday stop multiplier)
+- HIGH tier = rvol_20d 50–80% annualized (TSLA, NVDA, PLTR, SMCI, AMD)
+- Target scales proportionally: 3.646x → 4.167x ATR (R:R preserved at 2.08x)
+- STD (1.25x) and EXTREME (2.5x) tiers unchanged
+- Leveraged ETF guard unaffected (checks base INTRADAY_STOP_ATR_MULT only)
+
+### Motivation
+Live trade data 4/6–5/15: SMCI, AMD, PANW, MU stopped at +0.8-0.9% while running +3.9-7.3%. $2,082 left on table. 1.75x ATR was inside noise band for 60-70% rvol names.
+
+### RC Audit (config.py — constants file, no execution logic)
+| RC | Result |
+|----|--------|
+| RC-1 | N/A — no datetime calls |
+| RC-2 | N/A — no file I/O |
+| RC-3 | N/A — no exception handling |
+| RC-4 | N/A — no exit price logic |
+| RC-5 | N/A — no file writes |
+| RC-6 | N/A — no API field access |
+| RC-7 | N/A — no sizing logic |
+| RC-8 | N/A — no scan buffers |
+
+### Board: 18/19 APPROVE (Simons: blunt instrument on measurement lag)
+### DS: APPROVE | GAI: APPROVE (Round 2)
+### Static analysis: py_compile PASS | mypy PASS | ruff PASS
+### Cold second-agent: PASS
+### Services restarted on OCI: all 4 active post-deploy
+
+---
 ## 2026-06-08 S54 (cont2) — alerts.py P2 PDT param cleanup
 
 **File:** `alerts.py` (362L → 357L, -5 lines)
@@ -4506,3 +4540,48 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 5. L62: Remove single-line PDT exhausted tiers note
 6. L227: Remove "PDT-constrained" from paper profile comment
 7. L289: Remove stale ATH_PDT_BLOCK_PCT historical note line
+
+---
+## S56 — autonomous_review.py — 2026-06-10
+
+### Full Read: 433 lines (2 chunks)
+
+### RC Audit
+- RC-1: PASS — all datetime.now() use PT
+- RC-2: PASS — OCI absolute path by design (_REPO_DIR = Path("/home/ubuntu/mtf-bot"))
+- RC-3: PASS — no bare except pass
+- RC-4: N/A — no trading logic
+- RC-5: PASS — atomic writes for JSON; append-mode for log files (acceptable)
+- RC-6: PASS — DS/GAI field names match documented APIs
+- RC-7: N/A
+- RC-8: N/A
+
+### Pre-existing Issues Fixed (RULE C-4)
+- mypy L375: processed/failed missing list[str] type annotations — FIXED
+- ruff: 22 E501 violations (line too long) — FIXED
+
+### Bugs Found and Fixed (commit fd4df2b)
+1. L38: _GEMINI_MODEL = "gemini-3.1-pro-preview" → "gemini-2.5-flash" (invalid model — Gemini never worked)
+2. SDK + REST fallback: missing maxOutputTokens → added _GEMINI_MAX_TOKENS = 16384 to both paths
+3. L228-229: verdict detection window [:200] → [:500] (too narrow for concise model outputs)
+
+### Board: A=PASS, B=FAIL→fixed, C=FAIL→fixed | second-agent: PASS | static: all PASS
+### DS/GAI: NOT REQUIRED (non-RTH script, no RTH import chain)
+
+---
+## S56 — autonomous_patch_generator.py (new file) — 2026-06-10
+
+### New file — no prior version to read
+### RC Compliance (by design)
+- RC-1: PASS — all datetime.now() use PT/ET
+- RC-2: PASS — all paths via _REPO_DIR = Path("/home/ubuntu/mtf-bot") (OCI absolute)
+- RC-3: PASS — only bare pass is in _log() fallback for log file write failure (non-fatal, intentional)
+- RC-4/RC-7/RC-8: N/A — no trading logic
+- RC-5: PASS — all JSON/jsonl writes use _write_atomic()
+- RC-6: N/A
+- RTH block: PRESENT at module load — refuses 9:30 AM–4:00 PM ET weekdays
+
+### Static: py_compile PASS | mypy PASS | ruff PASS
+### Board: S56 unanimous 6-0 (Option A) — Peterffy, Minsky, Gene Kim, Beck, Majors, Katsuyama
+### DS/GAI: NOT REQUIRED (non-RTH new file, no RTH import chain)
+### OCI cron: 0 23 * * * (6 PM ET / 3 PM PT)
