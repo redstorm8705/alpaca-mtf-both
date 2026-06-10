@@ -26,19 +26,21 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_REPO_DIR     = Path("/home/ubuntu/mtf-bot")
-_LOGS_DIR     = _REPO_DIR / "logs"
-_LOCKFILE     = "/tmp/mtf_autonomous_review.lock"
-_GIT_LOCKFILE = "/tmp/mtf_git.lock"          # shared with auto_deploy.sh
-_SLACK_URL    = None  # loaded from .env
-_MAX_RETRIES  = 3
-_API_TIMEOUT  = 180   # seconds, matches auto_ai_audit.py
-_DS_BASE_URL  = None  # loaded from .env
-_DS_MODEL     = "deepseek-chat"
-_GEMINI_MODEL = "gemini-3.1-pro-preview"
+_REPO_DIR          = Path("/home/ubuntu/mtf-bot")
+_LOGS_DIR          = _REPO_DIR / "logs"
+_LOCKFILE          = "/tmp/mtf_autonomous_review.lock"
+_GIT_LOCKFILE      = "/tmp/mtf_git.lock"   # shared with auto_deploy.sh
+_SLACK_URL         = None  # loaded from .env
+_MAX_RETRIES       = 3
+_API_TIMEOUT       = 180   # seconds, matches auto_ai_audit.py
+_DS_BASE_URL       = None  # loaded from .env
+_DS_MODEL          = "deepseek-chat"
+_GEMINI_MODEL      = "gemini-2.5-flash"
+# explicit cap — flash default 8192 causes mid-response truncation
+_GEMINI_MAX_TOKENS = 16384
 
-ET  = ZoneInfo("America/New_York")
-PT  = ZoneInfo("America/Los_Angeles")
+ET = ZoneInfo("America/New_York")
+PT = ZoneInfo("America/Los_Angeles")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 def _log(msg: str) -> None:
@@ -79,40 +81,55 @@ def _slack(msg: str) -> None:
         _log(f"Slack delivery failed: {exc}")
         _log(f"Undelivered message: {msg}")
 
-# ── DS call (copied from auto_ai_audit.py) ────────────────────────────────────
+# ── DS call ───────────────────────────────────────────────────────────────────
 def _call_deepseek(prompt: str) -> dict:
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
         return {"text": None, "error": "DEEPSEEK_API_KEY not set", "model": _DS_MODEL}
-    import requests
+    import requests  # type: ignore[import-untyped]
     t0 = time.monotonic()
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.post(
                 f"{_DS_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": _DS_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": _DS_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                },
                 timeout=_API_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
-            return {"text": data["choices"][0]["message"]["content"],
-                    "model": _DS_MODEL,
-                    "tokens": data.get("usage", {}).get("total_tokens"),
-                    "elapsed_s": round(time.monotonic() - t0, 2),
-                    "error": None}
+            return {
+                "text": data["choices"][0]["message"]["content"],
+                "model": _DS_MODEL,
+                "tokens": data.get("usage", {}).get("total_tokens"),
+                "elapsed_s": round(time.monotonic() - t0, 2),
+                "error": None,
+            }
         except Exception as exc:
             _log(f"DeepSeek attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 5)
-    return {"text": None, "model": _DS_MODEL, "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": f"All {_MAX_RETRIES} attempts failed"}
+    return {
+        "text": None,
+        "model": _DS_MODEL,
+        "elapsed_s": round(time.monotonic() - t0, 2),
+        "error": f"All {_MAX_RETRIES} attempts failed",
+    }
 
-# ── Gemini call (copied from auto_ai_audit.py) ────────────────────────────────
+# ── Gemini call ───────────────────────────────────────────────────────────────
 def _call_gemini(prompt: str) -> dict:
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        return {"text": None, "error": "GEMINI_API_KEY not set", "model": _GEMINI_MODEL}
+        return {
+            "text": None, "error": "GEMINI_API_KEY not set", "model": _GEMINI_MODEL,
+        }
     t0 = time.monotonic()
     for attempt in range(_MAX_RETRIES):
         try:
@@ -122,56 +139,91 @@ def _call_gemini(prompt: str) -> dict:
             response = client.models.generate_content(
                 model=_GEMINI_MODEL,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1),
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=_GEMINI_MAX_TOKENS,
+                ),
             )
             text = response.text if hasattr(response, "text") else str(response)
             usage = getattr(response, "usage_metadata", None)
-            return {"text": text, "model": _GEMINI_MODEL,
-                    "tokens": getattr(usage, "total_token_count", None) if usage else None,
-                    "elapsed_s": round(time.monotonic() - t0, 2), "error": None}
+            return {
+                "text": text,
+                "model": _GEMINI_MODEL,
+                "tokens": (
+                    getattr(usage, "total_token_count", None) if usage else None
+                ),
+                "elapsed_s": round(time.monotonic() - t0, 2),
+                "error": None,
+            }
         except ImportError:
             return _call_gemini_rest(prompt, api_key, t0)
         except Exception as exc:
             _log(f"Gemini attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 5)
-    return {"text": None, "model": _GEMINI_MODEL, "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": f"All {_MAX_RETRIES} attempts failed"}
+    return {
+        "text": None,
+        "model": _GEMINI_MODEL,
+        "elapsed_s": round(time.monotonic() - t0, 2),
+        "error": f"All {_MAX_RETRIES} attempts failed",
+    }
 
 def _call_gemini_rest(prompt: str, api_key: str, t0: float) -> dict:
-    import requests
+    import requests  # type: ignore[import-untyped]
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent?key={api_key}"
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models"
+            f"/{_GEMINI_MODEL}:generateContent?key={api_key}"
+        )
         resp = requests.post(
             url,
-            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": _GEMINI_MAX_TOKENS,
+                },
+            },
             timeout=_API_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return {"text": text, "model": f"{_GEMINI_MODEL}-rest",
-                "elapsed_s": round(time.monotonic() - t0, 2), "error": None}
+        return {
+            "text": text,
+            "model": f"{_GEMINI_MODEL}-rest",
+            "elapsed_s": round(time.monotonic() - t0, 2),
+            "error": None,
+        }
     except Exception as exc:
-        return {"text": None, "model": f"{_GEMINI_MODEL}-rest",
-                "elapsed_s": round(time.monotonic() - t0, 2), "error": str(exc)}
+        return {
+            "text": None,
+            "model": f"{_GEMINI_MODEL}-rest",
+            "elapsed_s": round(time.monotonic() - t0, 2),
+            "error": str(exc),
+        }
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
 def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["git"] + list(args), cwd=_REPO_DIR,
-                          capture_output=True, text=True, check=check)
+    return subprocess.run(
+        ["git"] + list(args), cwd=_REPO_DIR,
+        capture_output=True, text=True, check=check,
+    )
 
 def _git_push_with_retry() -> bool:
     for attempt in range(_MAX_RETRIES):
         result = _git("push", "origin", "main", check=False)
         if result.returncode == 0:
             return True
-        _log(f"Push attempt {attempt+1}/{_MAX_RETRIES} failed: {result.stderr.strip()}")
+        _log(
+            f"Push attempt {attempt+1}/{_MAX_RETRIES} failed:"
+            f" {result.stderr.strip()}"
+        )
         _git("pull", "--rebase", "origin", "main", check=False)
         time.sleep(3)
     return False
 
-# ── Atomic write (RC-5 compliance) ───────────────────────────────────────────
+# ── Atomic write (RC-5 compliance) ────────────────────────────────────────────
 def _write_atomic(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
@@ -207,43 +259,73 @@ def _process_pending_item(json_path: Path) -> bool:
     ds_result = _call_deepseek(prompt)
     if ds_result["error"]:
         _log(f"DeepSeek failed: {ds_result['error']}")
-        _slack(f"⚠️ autonomous_review.py: DeepSeek API failed for {target_file}. Will retry next night.")
+        _slack(
+            f"⚠️ autonomous_review.py: DeepSeek API failed for {target_file}."
+            " Will retry next night."
+        )
         return False  # leave status as awaiting_ds_gai, retry tomorrow
 
-    _log(f"DeepSeek OK — {ds_result.get('tokens', '?')} tokens, {ds_result.get('elapsed_s', '?')}s")
+    _log(
+        f"DeepSeek OK — {ds_result.get('tokens', '?')} tokens,"
+        f" {ds_result.get('elapsed_s', '?')}s"
+    )
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
     _log("Calling Gemini...")
     gai_result = _call_gemini(prompt)
     if gai_result["error"]:
         _log(f"Gemini failed: {gai_result['error']}")
-        _slack(f"⚠️ autonomous_review.py: Gemini API failed for {target_file}. Will retry next night.")
+        _slack(
+            f"⚠️ autonomous_review.py: Gemini API failed for {target_file}."
+            " Will retry next night."
+        )
         return False  # leave status as awaiting_ds_gai, retry tomorrow
 
-    _log(f"Gemini OK — {gai_result.get('tokens', '?')} tokens, {gai_result.get('elapsed_s', '?')}s")
+    _log(
+        f"Gemini OK — {gai_result.get('tokens', '?')} tokens,"
+        f" {gai_result.get('elapsed_s', '?')}s"
+    )
 
     # ── DS/GAI conflict check ─────────────────────────────────────────────────
     ds_text  = ds_result["text"] or ""
     gai_text = gai_result["text"] or ""
-    ds_verdict  = "APPROVE" if "APPROVE" in ds_text.upper()[:200]  else "REJECT" if "REJECT" in ds_text.upper()[:200]  else "UNCLEAR"
-    gai_verdict = "APPROVE" if "APPROVE" in gai_text.upper()[:200] else "REJECT" if "REJECT" in gai_text.upper()[:200] else "UNCLEAR"
+    # scan 500 chars — 200 was too narrow for concise model outputs
+    ds_head  = ds_text.upper()[:500]
+    gai_head = gai_text.upper()[:500]
+    ds_verdict = (
+        "APPROVE" if "APPROVE" in ds_head
+        else "REJECT" if "REJECT" in ds_head
+        else "UNCLEAR"
+    )
+    gai_verdict = (
+        "APPROVE" if "APPROVE" in gai_head
+        else "REJECT" if "REJECT" in gai_head
+        else "UNCLEAR"
+    )
 
     if ds_verdict == "REJECT" or gai_verdict == "REJECT":
-        _log(f"REJECT detected: DS={ds_verdict}, GAI={gai_verdict} — routing to queued_for_review")
+        _log(
+            f"REJECT detected: DS={ds_verdict}, GAI={gai_verdict}"
+            " — routing to queued_for_review"
+        )
         # Write to queue file instead of approvals
-        date_str  = datetime.now(PT).strftime("%Y-%m-%d")
+        date_str   = datetime.now(PT).strftime("%Y-%m-%d")
+        time_str   = datetime.now(PT).strftime("%Y-%m-%d %H:%M PT")
         queue_path = _LOGS_DIR / f"queued_for_review_{date_str}.md"
         queue_entry = (
-            f"\n## {target_file} — DS/GAI REJECT — {datetime.now(PT).strftime('%Y-%m-%d %H:%M PT')}\n"
+            f"\n## {target_file} — DS/GAI REJECT — {time_str}\n"
             f"REASON: DS verdict={ds_verdict}, GAI verdict={gai_verdict}\n"
             f"FINDING: {finding}\n"
-            f"ACTION: User review required — see raw responses below\n\n"
+            "ACTION: User review required — see raw responses below\n\n"
             f"### DeepSeek Response\n{ds_text}\n\n"
             f"### Gemini Response\n{gai_text}\n"
         )
         with open(queue_path, "a", encoding="utf-8") as f:
             f.write(queue_entry)
-        _slack(f"⚠️ DS/GAI REJECT: {target_file} — {ds_verdict}/{gai_verdict}. See queued_for_review_{date_str}.md")
+        _slack(
+            f"⚠️ DS/GAI REJECT: {target_file} — {ds_verdict}/{gai_verdict}."
+            f" See queued_for_review_{date_str}.md"
+        )
         data["ds_response"]  = ds_text
         data["gai_response"] = gai_text
         data["status"]       = "rejected_ds_gai"
@@ -251,15 +333,21 @@ def _process_pending_item(json_path: Path) -> bool:
         return True
 
     # ── Write pending_approvals_*.md ──────────────────────────────────────────
-    date_str     = datetime.now(PT).strftime("%Y-%m-%d")
+    date_str       = datetime.now(PT).strftime("%Y-%m-%d")
     approvals_path = _LOGS_DIR / f"pending_approvals_{date_str}.md"
-    patch_content = ""
+    patch_content  = ""
     patch_file_path = _REPO_DIR / data.get("patch_file", "")
     if patch_file_path.exists():
         patch_content = patch_file_path.read_text()
 
-    board = data.get("board", {})
+    board  = data.get("board", {})
     static = data.get("static_analysis", {})
+
+    # pre-compute board verdict strings to keep f-string lines ≤88 chars
+    board_a   = f"{board.get('A_strict_parser', '?')} — {board.get('A_notes', '')}"
+    board_b   = f"{board.get('B_red_teamer', '?')} — {board.get('B_notes', '')}"
+    board_c   = f"{board.get('C_quant_risk', '?')} — {board.get('C_notes', '')}"
+    patch_ref = data.get("patch_file", "")
 
     approval_entry = f"""
 ## {target_file} — READY FOR APPROVAL
@@ -268,9 +356,9 @@ def _process_pending_item(json_path: Path) -> bool:
 **RC class:** {rc_class}
 
 ### Board Verdicts
-- Agent A (Strict Parser): {board.get('A_strict_parser', '?')} — {board.get('A_notes', '')}
-- Agent B (Red Teamer): {board.get('B_red_teamer', '?')} — {board.get('B_notes', '')}
-- Agent C (Quant Risk): {board.get('C_quant_risk', '?')} — {board.get('C_notes', '')}
+- Agent A (Strict Parser): {board_a}
+- Agent B (Red Teamer): {board_b}
+- Agent C (Quant Risk): {board_c}
 
 ### Static Analysis
 - py_compile: {static.get('py_compile', '?')}
@@ -281,7 +369,7 @@ def _process_pending_item(json_path: Path) -> bool:
 ### Integrity Anchors
 - SHA256 at draft: `{data.get('sha256_at_draft', 'unknown')}`
 - Base commit: `{data.get('base_commit_sha', 'unknown')}`
-- Patch file: `{data.get('patch_file', 'unknown')}`
+- Patch file: `{patch_ref}`
 
 ### DS/GAI Verdicts
 - DeepSeek: **{ds_verdict}**
@@ -307,7 +395,8 @@ def _process_pending_item(json_path: Path) -> bool:
 ```
 
 **STATUS: ready_for_approval**
-**To apply:** verify SHA256 matches, then run `git apply {data.get('patch_file', '')}` (NOT the Edit tool)
+**To apply:** verify SHA256 matches, then run:
+`git apply {patch_ref}` (NOT the Edit tool)
 
 ---
 """
@@ -316,7 +405,7 @@ def _process_pending_item(json_path: Path) -> bool:
 
     _log(f"Wrote approval entry to {approvals_path}")
 
-    # ── Update JSON status ─────────────────────────────────────────────────────
+    # ── Update JSON status ────────────────────────────────────────────────────
     data["ds_response"]  = ds_text
     data["gai_response"] = gai_text
     data["status"]       = "ready_for_approval"
@@ -350,7 +439,10 @@ def main() -> None:
             fcntl.flock(git_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             _log("ERROR: Cannot acquire git lock after 60s wait. Aborting.")
-            _slack("⚠️ autonomous_review.py: Cannot acquire git lock — skipping tonight. Will retry tomorrow.")
+            _slack(
+                "⚠️ autonomous_review.py: Cannot acquire git lock"
+                " — skipping tonight. Will retry tomorrow."
+            )
             sys.exit(1)
 
     # ── Pull latest ───────────────────────────────────────────────────────────
@@ -361,8 +453,10 @@ def main() -> None:
 
     # ── Find pending items ────────────────────────────────────────────────────
     pending_files = sorted(glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json")))
-    awaiting = [p for p in pending_files
-                if json.loads(Path(p).read_text()).get("status") == "awaiting_ds_gai"]
+    awaiting = [
+        p for p in pending_files
+        if json.loads(Path(p).read_text()).get("status") == "awaiting_ds_gai"
+    ]
 
     if not awaiting:
         _log("No items awaiting DS/GAI review. Exiting.")
@@ -372,7 +466,8 @@ def main() -> None:
     _log(f"Found {len(awaiting)} item(s) awaiting DS/GAI review")
 
     # ── Process each pending item ─────────────────────────────────────────────
-    processed, failed = [], []
+    processed: list[str] = []
+    failed: list[str] = []
     for path_str in awaiting:
         path = Path(path_str)
         _log(f"--- Processing {path.name} ---")
@@ -381,7 +476,10 @@ def main() -> None:
 
     if not processed:
         _log("No items successfully processed tonight.")
-        _slack("⚠️ autonomous_review.py: All DS/GAI API calls failed tonight. Will retry tomorrow.")
+        _slack(
+            "⚠️ autonomous_review.py: All DS/GAI API calls failed tonight."
+            " Will retry tomorrow."
+        )
         fcntl.flock(git_lock_fd, fcntl.LOCK_UN)
         sys.exit(1)
 
@@ -389,26 +487,30 @@ def main() -> None:
     _log("Committing DS/GAI results...")
     date_str = datetime.now(PT).strftime("%Y-%m-%d")
     files_to_add = (
-        list(glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json"))) +
-        list(glob.glob(str(_LOGS_DIR / f"pending_approvals_{date_str}.md"))) +
-        list(glob.glob(str(_LOGS_DIR / f"queued_for_review_{date_str}.md")))
+        list(glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json")))
+        + list(glob.glob(str(_LOGS_DIR / f"pending_approvals_{date_str}.md")))
+        + list(glob.glob(str(_LOGS_DIR / f"queued_for_review_{date_str}.md")))
     )
     # Add each file individually (no wildcards — per DS/GAI audit recommendation)
     for f in files_to_add:
         if Path(f).exists():
             _git("add", str(Path(f).relative_to(_REPO_DIR)))
 
+    failed_note = ("\n\nFailed: " + ", ".join(failed)) if failed else ""
     commit_msg = (
         f"DS/GAI responses received: {len(processed)} item(s) ready for approval\n\n"
         + "\n".join(f"- {p}" for p in processed)
-        + ("\n\nFailed: " + ", ".join(failed) if failed else "")
+        + failed_note
         + "\n\nCo-Authored-By: autonomous_review.py <noreply@anthropic.com>"
     )
     _git("commit", "-m", commit_msg)
 
     if not _git_push_with_retry():
         _log("ERROR: git push failed after 3 retries")
-        _slack("⚠️ autonomous_review.py: git push failed — DS/GAI results saved locally but not pushed. Check OCI.")
+        _slack(
+            "⚠️ autonomous_review.py: git push failed"
+            " — DS/GAI results saved locally but not pushed. Check OCI."
+        )
         fcntl.flock(git_lock_fd, fcntl.LOCK_UN)
         sys.exit(1)
 
@@ -417,16 +519,22 @@ def main() -> None:
 
     # ── Final Slack summary ───────────────────────────────────────────────────
     ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    items_summary = "\n".join(f"• {p.replace('pending_ds_gai_', '').replace('.json', '')}" for p in processed)
+    items_summary = "\n".join(
+        f"• {p.replace('pending_ds_gai_', '').replace('.json', '')}"
+        for p in processed
+    )
     msg = (
         f"🎯 *Patches ready for approval — {ts_pt}*\n\n"
         f"*READY (DS+GAI reviewed):*\n{items_summary}\n\n"
-        f"Start a session and the pending approvals will be presented automatically.\n"
-        f"auto_deploy.sh deploys at 11:30 PM ET after your approval."
+        "Start a session and the pending approvals will be presented automatically.\n"
+        "auto_deploy.sh deploys at 11:30 PM ET after your approval."
     )
     _slack(msg)
 
-    _log(f"=== autonomous_review.py complete: {len(processed)} processed, {len(failed)} failed ===")
+    _log(
+        f"=== autonomous_review.py complete:"
+        f" {len(processed)} processed, {len(failed)} failed ==="
+    )
 
 
 if __name__ == "__main__":
