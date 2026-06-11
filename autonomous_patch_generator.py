@@ -64,8 +64,10 @@ def _log(msg: str) -> None:
     try:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
-    except Exception:
-        pass  # log file write failure is non-fatal; stdout is the primary log
+    except Exception as exc:
+        # RC-3 fix (S58): non-fatal but never silent — stdout remains primary log
+        print(f"[autonomous_patch_generator] log file write failed: {exc}",
+              file=sys.stderr)
 
 # ── Environment ───────────────────────────────────────────────────────────────
 def _load_env() -> None:
@@ -315,21 +317,26 @@ def _build_ds_gai_prompt(
     )
 
 # ── Process one directive ─────────────────────────────────────────────────────
-def _process_directive(directive: dict) -> bool:
-    """Process one audit directive. Returns True on success."""
+# Status outcomes (S58 state machine):
+#   "processed"        — pipeline succeeded, pending_ds_gai JSON + patch written
+#   "failed_permanent" — structural failure (missing file, board reject,
+#                        non-diff output); never retried
+#   "retry"            — transient failure (API down); status left pending_review
+def _process_directive(directive: dict) -> str:
+    """Process one directive → 'processed' | 'failed_permanent' | 'retry'."""
     file_rel  = directive.get("file", "")
     finding   = directive.get("finding", "")
     rec_fix   = directive.get("recommended_fix", "")
     rc_class  = directive.get("rc_class", "RC-?")
 
     if not file_rel or not finding:
-        _log(f"SKIP: directive missing file or finding: {directive}")
-        return False
+        _log(f"SKIP (permanent): directive missing file or finding: {directive}")
+        return "failed_permanent"
 
     file_path = _REPO_DIR / file_rel
     if not file_path.exists():
-        _log(f"SKIP: target file not found: {file_path}")
-        return False
+        _log(f"SKIP (permanent): target file not found: {file_path}")
+        return "failed_permanent"
 
     _log(f"Processing: {file_rel} | {rc_class} | {finding[:60]}...")
 
@@ -343,16 +350,24 @@ def _process_directive(directive: dict) -> bool:
         board["B_red_teamer"],
         board["C_quant_risk"],
     ]
+    if board_verdicts.count("UNCLEAR") == 3:
+        # all 3 agents UNCLEAR = API failure (each agent returns UNCLEAR on
+        # _call_deepseek None) — transient, retry tomorrow
+        _log(f"Board vote inconclusive (3x UNCLEAR / API down) on {file_rel} — retry")
+        return "retry"
     reject_count = board_verdicts.count("REJECT")
     if reject_count >= 2:
-        _log(f"Board rejected {file_rel}: {board_verdicts} — skipping diff generation")
-        return False
+        _log(f"Board rejected {file_rel}: {board_verdicts} — permanent, no diff")
+        return "failed_permanent"
 
     # ── Diff generation ───────────────────────────────────────────────────────
     diff = _generate_diff(file_path, file_content, finding, rec_fix)
-    if not diff or not diff.strip().startswith("---"):
-        _log(f"SKIP {file_rel}: diff generation failed or returned non-diff output")
-        return False
+    if diff is None:
+        _log(f"Diff generation API failure on {file_rel} — will retry")
+        return "retry"
+    if not diff.strip().startswith("---"):
+        _log(f"SKIP (permanent) {file_rel}: model returned non-diff output")
+        return "failed_permanent"
 
     # ── Static analysis on target file ───────────────────────────────────────
     static = _run_static_analysis(file_path)
@@ -413,7 +428,7 @@ def _process_directive(directive: dict) -> bool:
     _write_atomic(json_path, json.dumps(payload, indent=2))
     _log(f"Wrote pending JSON: {json_path.name}")
 
-    return True
+    return "processed"
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
@@ -434,6 +449,8 @@ def main() -> None:
         _log("No audit_directives.jsonl found. Exiting.")
         sys.exit(0)
 
+    # S58: only actionable directives — status pending_review with file+finding.
+    # context_only (weekly compliance blobs) and terminal states are never queued.
     directives: list[dict] = []
     for line in directives_path.read_text().splitlines():
         line = line.strip()
@@ -441,62 +458,83 @@ def main() -> None:
             continue
         try:
             d = json.loads(line)
-            if d.get("status") != "processed":
+            if (d.get("status") == "pending_review"
+                    and d.get("file") and d.get("finding")):
                 directives.append(d)
         except json.JSONDecodeError as exc:
             _log(f"WARN: Cannot parse directive line: {exc}")
 
     if not directives:
-        _log("No unprocessed directives found. Exiting.")
+        _log("No pending_review directives found. Exiting.")
+        _slack(
+            "🔧 *autonomous_patch_generator.py* — ✅ clean run: "
+            "no pending directives, no work required."
+        )
         sys.exit(0)
 
-    _log(f"Found {len(directives)} unprocessed directive(s)")
+    _log(f"Found {len(directives)} pending directive(s)")
 
     # ── Process each directive ────────────────────────────────────────────────
+    outcomes: dict[str, str] = {}  # key(file+finding) → new status
     processed_count = 0
-    failed_count    = 0
+    permanent_count = 0
+    retry_count     = 0
     for directive in directives:
-        success = _process_directive(directive)
-        if success:
-            directive["status"] = "processed"
+        result = _process_directive(directive)
+        key = directive.get("file", "") + "\x1f" + directive.get("finding", "")
+        if result == "processed":
+            outcomes[key] = "processed"
             processed_count += 1
-        else:
-            failed_count += 1
+        elif result == "failed_permanent":
+            outcomes[key] = "failed_permanent"
+            permanent_count += 1
+        else:  # retry — leave status pending_review
+            retry_count += 1
 
     # ── Write updated audit_directives.jsonl (atomic) ────────────────────────
     all_lines: list[str] = []
     raw_lines = directives_path.read_text().splitlines()
-    processed_findings = {
-        d["finding"] for d in directives if d.get("status") == "processed"
-    }
     for line in raw_lines:
         line = line.strip()
         if not line:
-            all_lines.append(line)
             continue
         try:
             d = json.loads(line)
-            if d.get("finding") in processed_findings:
-                d["status"] = "processed"
-            all_lines.append(json.dumps(d))
+            key = d.get("file", "") + "\x1f" + d.get("finding", "")
+            if key in outcomes:
+                d["status"] = outcomes[key]
+            all_lines.append(json.dumps(d, ensure_ascii=False))
         except json.JSONDecodeError:
             all_lines.append(line)
 
     _write_atomic(directives_path, "\n".join(all_lines) + "\n")
-    _log(f"Updated audit_directives.jsonl ({processed_count} marked processed)")
-
-    # ── Slack summary ─────────────────────────────────────────────────────────
-    ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    _slack(
-        f"🔧 *autonomous_patch_generator.py — {ts_pt}*\n\n"
-        f"Processed: {processed_count} directive(s) → pending_ds_gai_*.json written\n"
-        f"Failed/skipped: {failed_count}\n\n"
-        "autonomous_review.py runs at 11 PM ET to call DS/GAI on these items."
+    _log(
+        f"Updated audit_directives.jsonl "
+        f"({processed_count} processed, {permanent_count} failed_permanent, "
+        f"{retry_count} left for retry)"
     )
+
+    # ── Slack summary (Majors: distinguish silent failure from clean run) ────
+    ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
+    if processed_count == 0 and (permanent_count + retry_count) > 0:
+        _slack(
+            f"🚨 *autonomous_patch_generator.py — {ts_pt}*\n\n"
+            f"SILENT FAILURE: {len(directives)} pending, ZERO processed.\n"
+            f"failed_permanent: {permanent_count} | retry: {retry_count}\n"
+            f"Review logs/autonomous_patch_generator.log — human attention needed."
+        )
+    else:
+        _slack(
+            f"🔧 *autonomous_patch_generator.py — {ts_pt}*\n\n"
+            f"Processed: {processed_count} → pending_ds_gai_*.json written\n"
+            f"failed_permanent: {permanent_count} | retry next run: {retry_count}\n\n"
+            "autonomous_review.py runs at 7:30 PM ET to call DS/GAI on these items."
+        )
 
     _log(
         f"=== autonomous_patch_generator.py complete:"
-        f" {processed_count} processed, {failed_count} failed ==="
+        f" {processed_count} processed, {permanent_count} permanent-failed,"
+        f" {retry_count} retry ==="
     )
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
