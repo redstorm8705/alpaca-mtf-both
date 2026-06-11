@@ -34,7 +34,7 @@
   },
   "RC-3": {
     "label": "Silent exception (except: pass with no logging)",
-    "count": 1,
+    "count": 0,
     "patch_ids": [
       "RC3-ENTRY-LOGIC-KELLY-TQI-L1072-S39",
       "RC3-ENTRY-LOGIC-PHANTOM-ALERT-L1453-S39",
@@ -161,7 +161,9 @@
     ],
     "first_seen": "2026-04-22",
     "last_patched": "2026-05-29 S44",
-    "notes": "exit_logic.py L1818 fixed S55 (commit 334e7aa) \u2014 1 remaining unlocalized"
+    "notes": "exit_logic.py L1818 fixed S55 (commit 334e7aa) \u2014 1 remaining unlocalized",
+    "history": null,
+    "last_fix": "S58 2026-06-11: unlocalized RC-3 localized+fixed \u2014 autonomous_patch_generator.py _log() except-pass \u2192 stderr (commit 2c4552d)"
   },
   "RC-4": {
     "label": "Estimated exit price / fill unverified not cleared",
@@ -1411,6 +1413,15 @@
       "severity": "P2",
       "fix": "Removed TF_WEEKLY from TIMEFRAMES_FOR_CONFLUENCE list and from import. 25% API call reduction per scan cycle. confluence.py confirmed zero TF_WEEKLY refs.",
       "rc_classes": "none introduced"
+    },
+    {
+      "date": "2026-06-11",
+      "session": "S58",
+      "rc": "RC-3",
+      "file": "autonomous_patch_generator.py",
+      "line": 67,
+      "fix": "except-pass in _log \u2192 print to stderr",
+      "commit": "2c4552d"
     }
   ],
   "flagged_preexisting": [

@@ -4585,3 +4585,31 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 ### Board: S56 unanimous 6-0 (Option A) — Peterffy, Minsky, Gene Kim, Beck, Majors, Katsuyama
 ### DS/GAI: NOT REQUIRED (non-RTH new file, no RTH import chain)
 ### OCI cron: 0 23 * * * (6 PM ET / 3 PM PT)
+
+---
+
+## S58 — 2026-06-11 — execution/kelly.py negative-Kelly fallback
+
+**File:** execution/kelly.py L307-314 (KellySizer negative-Kelly guard)
+**Change:** `return 0.0` → `return config.KELLY_MIN_RISK_PCT`; log message updated from "Blocking %s entries" to "falling back to KELLY_MIN_RISK_PCT" (removed unused 7th format arg).
+**Motivation:** User mandate — do not suppress short entries. short_intraday (n=34, WR=26.5%, kelly_full=-0.49) was fully blocked via kelly_scale=0 → dollar_cap=0.
+**Sequence:** Full read complete (436 lines, prior turn). Board 5-0 APPROVE (Thorp/Taleb/Harris/Beck/Peterffy). DS APPROVE (Round 2 — retracted 17.8% oversizing claim after hard-notional-cap proof at entry_logic.py L1159). GAI APPROVE (Round 3 — conceded entry_price<=stop_distance edge case requires atr_pct≥50%, structurally impossible). Static: py_compile/mypy/ruff PASS pre+post. Cold second-agent: PASS (format args verified 6/6). Impact: single caller kelly.get_risk_pct → entry_logic.py L1029.
+**Effective risk at floor:** ≈0.5%/trade (hard notional cap binds). Identical to warmup path.
+**Deployed:** commit a7f2a89, rsync + restart, health OK.
+**RC check:** no RC classes implicated (no datetime/path/except/price/write/API/sizing-truncation/buffer changes).
+
+## S58 — 2026-06-11 — Autonomous pipeline repair (auto_ai_audit.py + autonomous_patch_generator.py)
+
+**Break 2 (OCI git frozen):** OCI HEAD stuck at 3b9f8ac (S54) — nightly git pulls failed on rsync-dirtied tree since ~6/3. Fixed: stash + reset --hard origin/main; checksums verified vs local; clean pull confirmed. Deploy model going forward: git pull for tracked files, not rsync-then-pull.
+
+**Break 1 (directive format mismatch):** auto_ai_audit.py wrote weekly free-text blobs; autonomous_patch_generator.py required {file, finding} — 13/13 directives skipped, 0 patches ever generated. Fixed (commit 1830fe9): DS/GAI meta-audit prompts now require fenced JSON findings array (section 6), parsed natively; midday/nightly Gemini "NEW BUGS" pipe-rows parsed deterministically; validation (file-in-repo) + sha256(file+finding[:120]) dedup; zero-findings Slack alert. Board: Kim REJECT + Beck REJECT of original LLM-extraction-hop design → adopted native-contract design; Majors APPROVE w/ instrumentation. Golden-tested vs real 6/10 nightly report (3/3 extracted). Cold second-agent: PASS. Static: all PASS.
+
+**Generator state machine (commit 2c4552d):** tri-state processed/failed_permanent/retry — no infinite re-fails; only pending_review with file+finding queued; Slack distinguishes clean run vs silent failure; RC-3 fixed in _log() (was except-pass — flagged by 6/10 nightly Gemini audit). Cold second-agent: PASS. Static: all PASS.
+
+**Break 3 (auto_deploy never ran):** cron 00:00 UTC = 8 PM EDT vs gate 10 PM–6 AM ET → aborted nightly since 6/3. Fixed: cron moved to 03:00 UTC (11 PM EDT / 10 PM EST — inside gate both DST regimes).
+
+**Break 4 (Slack-only findings):** midday/nightly report NEW BUGS sections now feed audit_directives.jsonl via the pipe-parser (same commit as Break 1).
+
+**Migration:** 13 legacy blobs → context_only. Live state after seeding: 2 pending_review (autonomous_review.py co-author attribution; config.py BUCKET_B_MAX_POSITIONS) + 1 processed (the _log RC-3, fixed directly this session).
+
+**RC counter:** RC-3 count 1 → 0 localized instances fixed this session in autonomous_patch_generator.py L67 (the previously unlocalized RC-3 violation — now confirmed it was this one per Gemini 6/10 audit).
