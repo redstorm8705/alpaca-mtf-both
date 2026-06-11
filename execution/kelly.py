@@ -300,18 +300,20 @@ class KellySizer:
             self._ath_updated_at = datetime.now(timezone.utc).isoformat()
             self._save()
 
-        # S49 board + meta-audit (Thorp/Taleb/Asness unanimous):
-        # Negative Kelly = this stratum has no edge. KELLY_MIN_RISK_PCT floor must NOT
-        # apply here — forcing a 0.75% bet on negative expectancy destroys capital.
-        # Thorp (Fortune's Formula): f* < 0 means expected value is negative; optimal bet = 0.
+        # S58 board 5-0 (Thorp/Taleb/Harris/Beck/Peterffy) + DS/GAI APPROVE — user mandate:
+        # do not suppress entries on negative Kelly. At small N (n=34), negative kelly_full
+        # may reflect variance, not absence of edge (Thorp: Kelly needs valid estimates).
+        # Fall back to KELLY_MIN_RISK_PCT floor — mirrors warmup-path behavior. Effective
+        # risk ≈0.5%/trade after the hard notional cap (entry_logic.py shares=min(...,
+        # dollar_cap/entry_price)) binds for all names with atr_pct*mult < 1.
         if kelly_full <= 0:
             logger.warning(
                 "Kelly [%s]: NEGATIVE EXPECTANCY — kelly_full=%.3f "
                 "(WR=%.1%%, avg_win=%.2fR, avg_loss=%.2fR, n=%d). "
-                "Blocking %s entries until edge improves (kelly_full > 0).",
-                key, kelly_full, win_rate, avg_win_r, avg_loss_r, total, key,
+                "Edge unconfirmed — falling back to KELLY_MIN_RISK_PCT (minimum floor sizing).",
+                key, kelly_full, win_rate, avg_win_r, avg_loss_r, total,
             )
-            return 0.0
+            return config.KELLY_MIN_RISK_PCT
 
         # GEX edge multiplier — board vote S50b
         # Scales kelly_risk proportionally — equivalent to multiplying the edge estimate
