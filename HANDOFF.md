@@ -54,6 +54,22 @@ Note: NFLX position from S54 is closed.
 - orphan_manager.py: closed-phase restarts now ADOPT matching GTC stops instead of cancel+resubmit. Verified live: TOST/UBER adopted, zero churn. Stops placed once, survive restarts. First use of the DS/GAI tie-breaker protocol (GAI REJECT overruled board 3-0; side check still incorporated).
 - P3 queued: reorder reconcile_positions() before GTC reconciliation (Minsky).
 
+### Queue sweep S58c (afternoon) ✅
+- **trade_engine.py CRITICAL — STALE, CLOSED** (fixed 4f58c85/S47d; register_open pattern confirmed by full read).
+- **run_movers.py P5-C2 — FIXED** (60bf9ee): reset_day→reset_daily(sod_equity); lxml installed in OCI venv.
+- **RC-8 — CLOSED (0)**: 9 sites were already applied (b2e61f7, 6/8); DS+GAI retracted IO rejection via tie-breaker counter-prompt. pending_approvals #1 resolved.
+- **pending #3 (QHM GTC) — STALE, CLOSED**: _qhm_protected check already implemented in orphan_manager.
+- **pending #4 (exit_logic PDT refs) — STALE, CLOSED**: mypy clean, 0 refs (S55 Tier 2 did it). NOTE: the June-7 RC-3 diff for exit_logic L1996 is now unblocked but its DS/GAI gates EXPIRED (RULE C-2) — needs fresh full sequence; also re-verify whether that instance still exists (RC-3 counter currently 0; possible undercount).
+- **RAM**: rss_trend.csv sampler live (10-min cron). Chain should analyze the curve after ≥6h data and propose the leak fix.
+- **pending #2 (RC-4 fallback strategy)**: Open Question Protocol run — DS=A, GAI=A, McKinney=A, Thorp=A-leaning. Awaiting Rafael's choice; on approval, full sequence on exit_logic.py implementing Option A at L1345/L1939/L2032.
+
+### Next queue (for chain / next session)
+1. RC-4 Option A implementation in exit_logic.py (after Rafael approves strategy) — full sequence + DS/GAI
+2. RC-2 ×7 (run_cycle.py, entry_logic.py) — full sequence
+3. RC-7 ×2 (main.py, hotspot) — full sequence + DS/GAI
+4. RAM leak analysis from rss_trend.csv
+5. MRI-HALT buffer-clear follow-up; reconcile_positions-before-GTC reorder (P3, board vote)
+
 ### Scheduled automation (new)
 - **five-hour-work-resumption** cron (every 5h, local scheduled task): resumes in-progress work per HANDOFF.md/tb_audit_log.md, else works non-RTH queue. Proposes patches to logs/pending_claude_session_*.md — never applies without Rafael's approval.
 - **verify-pipeline-first-run** one-time 5 PM PT 2026-06-11.
