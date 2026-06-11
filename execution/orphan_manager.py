@@ -272,13 +272,18 @@ def cancel_and_reconcile_gtc_stops(
             tracker.clear_gtc_stop_order_id(symbol)
 
         else:
-            # Order is still live (new/accepted/pending) — always cancel
-            # before RTH. GTC stops hold all shares in "held_for_orders",
-            # blocking partial closes and any exits that aren't a full market
-            # order against the locked qty. The stop-level comparison was
-            # previously used to skip this cancel, which was wrong: level
-            # comparison governs resubmission (AH), not cancellation.
-            # Cancel unconditionally so the bot has full share availability.
+            # Order is still live (new/accepted/pending). Behavior is
+            # phase-gated (S58 board: Peterffy + Kim):
+            #   premarket/RTH → cancel unconditionally. GTC stops hold all
+            #     shares in "held_for_orders", blocking partial closes and any
+            #     exits that aren't a full market order against the locked qty.
+            #   closed (overnight/AH/weekend) → ADOPT the live stop when its
+            #     parameters still match tracker intent. The old unconditional
+            #     cancel here + Patch 1's emergency resubmit (same pass, phase
+            #     "closed") created a cancel/resubmit pair on EVERY overnight
+            #     restart — order-log churn with a nonzero protection gap.
+            #     Mirrors the Apr-14 fix that closed the identical loop for
+            #     the premarket phase.
 
             # QHM symbols retain their protective GTC stops — do not cancel.
             if symbol in _qhm_protected:
@@ -288,6 +293,64 @@ def cancel_and_reconcile_gtc_stops(
                     symbol, order_id,
                 )
                 continue
+
+            if get_tod_phase() == "closed":
+                # Idempotent adoption: order was fetched BY the stored ID, so
+                # identity is established — only check the params are current.
+                # Stop comparator matches submission source (trail_stop or
+                # stop); qty comparator mirrors Patch 1's qty_remaining
+                # semantics (0 after full partial exit is respected, None
+                # falls back to original qty). Any parse failure → _matches
+                # stays False → conservative cancel + Patch 1 resubmit.
+                _adopt_stop = trade.get("trail_stop") or trade.get("stop")
+                _qty_rem_raw = trade.get("qty_remaining")
+                _adopt_qty = abs(int(
+                    trade.get("qty", 0)
+                    if _qty_rem_raw is None
+                    else _qty_rem_raw
+                ))
+                # Side check (GAI integrity audit): protective side derived
+                # from tracked direction — long protects with sell, short
+                # with buy. Mismatch → cancel/resubmit (board 3-0 note: the
+                # direction-mismatch handler in reconcile_positions() is the
+                # authoritative fix for reversals; this is defense-in-depth).
+                _adopt_side = (
+                    "sell" if trade.get("direction") == "long" else "buy"
+                )
+                _matches = False
+                try:
+                    _matches = (
+                        _adopt_stop is not None
+                        and abs(
+                            float(order.stop_price or 0) - float(_adopt_stop)
+                        ) < 0.01
+                        and abs(int(float(order.qty or 0))) == _adopt_qty
+                        and _adopt_qty > 0
+                        and str(getattr(order, "side", "")).lower().endswith(
+                            _adopt_side
+                        )
+                    )
+                except (TypeError, ValueError, AttributeError) as _adopt_err:
+                    logger.warning(
+                        "[%s] GTC adoption param check failed (%s) — "
+                        "falling back to cancel/resubmit.",
+                        symbol, _adopt_err,
+                    )
+                if _matches:
+                    logger.info(
+                        f"[{symbol}] GTC stop {order_id} adopted (idempotent "
+                        f"restart): params current "
+                        f"(${float(order.stop_price):.2f} x {_adopt_qty}) — "
+                        f"no cancel/resubmit."
+                    )
+                    continue
+                logger.info(
+                    f"[{symbol}] GTC stop {order_id} params stale "
+                    f"(tracker stop={_adopt_stop} qty={_adopt_qty} vs live "
+                    f"stop={getattr(order, 'stop_price', '?')} "
+                    f"qty={getattr(order, 'qty', '?')}) — cancelling; "
+                    f"Patch 1 resubmits at current stop this pass."
+                )
 
             logger.info(
                 f"[{symbol}] Cancelling GTC stop {order_id} before RTH "
