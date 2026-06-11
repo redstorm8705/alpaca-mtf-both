@@ -516,7 +516,10 @@ def _append_directives_log(
         "ts_pt": datetime.now(_PT).strftime("%Y-%m-%d %I:%M %p PT"),
         "ds_directives_preview": (ds_text or "")[:2000],
         "gai_directives_preview": (gai_text or "")[:2000],
-        "status": "pending_review",
+        # context_only: compliance-tracking record — NOT processable by the patch
+        # generator (no file/finding keys). Structured findings are written
+        # separately by _append_structured_directives() with status pending_review.
+        "status": "context_only",
     }
     try:
         _LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -539,6 +542,141 @@ def _append_directives_log(
         print(f"[auto_ai_audit] 📋 Directives log updated ({len(existing)} total entries): {path.name}")
     except Exception as exc:  # noqa: BLE001
         print(f"[auto_ai_audit] ⚠️  Directives log write failed: {exc}", file=sys.stderr)
+
+
+# ── Structured directive extraction (S58 — Stage 1 → Stage 1.5 contract fix) ─
+# Board design (Kim/Beck): producer satisfies the consumer's contract natively.
+# DS/GAI return a fenced JSON findings array (section 6 of the prompt) parsed
+# here; midday/nightly Gemini reports' pipe-delimited NEW BUGS rows are parsed
+# deterministically. No extra LLM hop in the critical path.
+
+def _parse_json_findings(text: str | None) -> list[dict]:
+    """Extract the LAST fenced ```json array from an LLM response. [] on any failure."""
+    if not text:
+        return []
+    import re
+    blocks = re.findall(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+    if not blocks:
+        # fall back: bare JSON array at end of response
+        m = re.search(r"(\[\s*\{.*\}\s*\])\s*$", text, re.DOTALL)
+        blocks = [m.group(1)] if m else []
+    for raw in reversed(blocks):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return [d for d in data if isinstance(d, dict)]
+        except json.JSONDecodeError:
+            continue
+    return []
+
+
+def _parse_pipe_findings(report_path: Path | None) -> list[dict]:
+    """Parse 'NEW BUGS FOUND' pipe-delimited rows from a Gemini report file.
+    Row format: '*   CATEGORY | SEVERITY | file.py | title | description'
+    Deterministic — no LLM call. [] if file missing or section absent."""
+    if report_path is None or not report_path.exists():
+        return []
+    import re
+    try:
+        text = report_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    m = re.search(r"NEW BUGS[^\n]*\n(.*?)(?:\n#{2,}|\n[A-Z ]{8,}\n|\Z)", text, re.DOTALL)
+    if not m:
+        return []
+    findings: list[dict] = []
+    for line in m.group(1).splitlines():
+        line = line.strip().lstrip("*").strip()
+        parts = [p.strip().strip("`") for p in line.split("|")]
+        if len(parts) < 4:
+            continue
+        category, severity, file_field = parts[0], parts[1], parts[2]
+        rest = " — ".join(parts[3:])
+        if not file_field or "." not in file_field:
+            continue  # not a real file reference
+        findings.append({
+            "file": file_field,
+            "finding": rest[:500],
+            "recommended_fix": "",
+            "rc_class": f"{category}/{severity}"[:40],
+        })
+    return findings
+
+
+def _append_structured_directives(
+    week: str, ds_text: str | None, gai_text: str | None
+) -> dict:
+    """Validate + dedup structured findings from all 4 sources and append each as
+    its own pending_review line in audit_directives.jsonl. Returns per-source counts."""
+    path = _LOGS_DIR / "audit_directives.jsonl"
+    import hashlib
+    sources = {
+        "ds_meta": _parse_json_findings(ds_text),
+        "gai_meta": _parse_json_findings(gai_text),
+        "nightly_report": _parse_pipe_findings(
+            _find_latest_audit_file("gemini_audit_{date}.txt")),
+        "midday_report": _parse_pipe_findings(
+            _find_latest_audit_file("midday_gemini_{date}.txt")),
+    }
+    # existing dedup keys (any status — never re-add a finding once seen)
+    seen: set = set()
+    if path.exists():
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                d = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if d.get("file") and d.get("finding"):
+                seen.add(hashlib.sha256(
+                    (d["file"] + d["finding"][:120]).encode()).hexdigest())
+    counts: dict = {}
+    new_entries: list[dict] = []
+    rejects = 0
+    for src, items in sources.items():
+        kept = 0
+        for it in items:
+            f, finding = str(it.get("file", "")).strip(), str(it.get("finding", "")).strip()
+            if not f or not finding:
+                rejects += 1
+                continue
+            if not (_HERE / f).exists():
+                rejects += 1
+                print(f"[auto_ai_audit] ⚠️  Directive rejected — file not in repo: {f}",
+                      file=sys.stderr)
+                continue
+            key = hashlib.sha256((f + finding[:120]).encode()).hexdigest()
+            if key in seen:
+                continue
+            seen.add(key)
+            new_entries.append({
+                "file": f,
+                "finding": finding[:500],
+                "recommended_fix": str(it.get("recommended_fix", ""))[:500],
+                "rc_class": str(it.get("rc_class", "uncategorized"))[:40],
+                "source": src,
+                "week": week,
+                "ts_pt": datetime.now(_PT).strftime("%Y-%m-%d %I:%M %p PT"),
+                "status": "pending_review",
+            })
+            kept += 1
+        counts[src] = kept
+    if new_entries:
+        try:
+            existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                existing + "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in new_entries),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[auto_ai_audit] ⚠️  Structured directives write failed: {exc}",
+                  file=sys.stderr)
+            return {**counts, "write_error": 1}
+    counts["validation_rejects"] = rejects
+    counts["total_new"] = len(new_entries)
+    print(f"[auto_ai_audit] 📋 Structured directives: {counts}")
+    return counts
 
 
 def _build_meta_audit_data_context() -> tuple[dict, dict]:
@@ -791,6 +929,14 @@ def _format_meta_audit_body(ctx: dict) -> str:
         "",
         "5. FINAL VERDICT",
         "   PASS / WARN / FAIL — one sentence rationale.",
+        "",
+        "6. STRUCTURED FINDINGS (MANDATORY — machine-parsed by the patch pipeline)",
+        "   End your response with a fenced ```json code block containing a JSON array.",
+        '   Each element: {"file": "<repo-relative path>", "finding": "<specific code-level issue>",',
+        '   "recommended_fix": "<concrete fix>", "rc_class": "<RC-1..RC-8 or category>"}.',
+        "   ONLY include findings that name a specific repository file with a code-level bug.",
+        "   Parameter-tuning ideas, regime observations, and strategy commentary do NOT belong",
+        "   here — those go in section 4. If no code-level findings, output [].",
         "",
     ]
     return "\n".join(parts)
@@ -1290,6 +1436,32 @@ def main() -> None:
             ds_result.get("text") if ds_result else None,
             gai_result.get("text") if gai_result else None,
         )
+        # S58: extract structured findings → pending_review directives for Stage 1.5
+        _counts = _append_structured_directives(
+            _week_label,
+            ds_result.get("text") if ds_result else None,
+            gai_result.get("text") if gai_result else None,
+        )
+        # Majors instrumentation: zero extracted findings across ALL sources while
+        # DS/GAI both succeeded = likely format drift, not a clean week. Alert.
+        _src_total = sum(
+            v for k, v in _counts.items()
+            if k not in ("validation_rejects", "total_new", "write_error")
+        )
+        if _src_total == 0 and ds_result.get("text") and gai_result.get("text"):
+            _wh = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+            if _wh:
+                import requests  # type: ignore[import-untyped]
+                try:
+                    requests.post(_wh, json={"text": (
+                        "⚠️ *Directive extraction yielded 0 findings from all 4 sources* "
+                        "while DS+GAI both responded. Possible format drift — check "
+                        "section-6 JSON blocks in ai_audit_meta output and NEW BUGS "
+                        "sections in gemini_audit/midday_gemini reports."
+                    )}, timeout=10)
+                except Exception as _se:  # noqa: BLE001
+                    print(f"[auto_ai_audit] ⚠️  Zero-findings alert failed: {_se}",
+                          file=sys.stderr)
     else:
         # ── Patch-gate mode ───────────────────────────────────────────────
         prompt = _resolve_prompt(args)
