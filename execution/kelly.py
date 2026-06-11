@@ -388,6 +388,11 @@ class KellySizer:
         self._stats = {}
         rebuilt = 0
         for t in closed_trades:
+            # S58: exit price unconfirmed/estimated — exclude from sizing stats,
+            # mirroring get_stats() (S47). Re-enters automatically once
+            # patch_exit_pnl() verifies the fill and clears the flag.
+            if t.get("_fill_unverified"):
+                continue
             direction  = t.get("direction", "")
             trade_mode = t.get("trade_mode", "intraday")
             entry      = float(t.get("entry_price") or 0)
