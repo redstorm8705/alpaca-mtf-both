@@ -1,3 +1,5 @@
+# ruff: noqa: E402, E501  — E402: load_dotenv() must precede project imports
+# (they read env keys at import time). E501: pre-existing long argparse/log lines.
 # run_movers.py — Standalone Movers Bot runner
 # Usage:
 #   python run_movers.py                  → full universe, 5-min loop
@@ -201,7 +203,9 @@ def main():
     else:
         universe = fetcher.get_universe()
 
-    risk.reset_day()
+    # S58c: was risk.reset_day() — method never existed (AttributeError crash on
+    # every cron run; flagged P5-C2). RiskManager API is reset_daily(portfolio_value).
+    risk.reset_daily(sod_equity)
     use_confluence = not args.no_confluence
 
     if args.once:
