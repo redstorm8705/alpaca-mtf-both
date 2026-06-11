@@ -20,6 +20,14 @@ This rule exists because summarized Explore output caused missed bugs, false "fu
 
 ---
 
+## WRAP-UP — NEVER AUTO-TRIGGER
+
+**Do NOT run `/wrap-up` unless Rafael explicitly asks for it.**
+
+The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the end of a task, after completing a patch sequence, or when context is high. Offering it once is acceptable; running it without being asked is not.
+
+---
+
 ## RESPONSE STYLE — HARD RULES
 
 **Kill the filler:** Never open responses with phrases like "Great question!", "Of course!", "Certainly!", or similar warmups. Start every response with the actual answer. No preamble, no acknowledgment of the question.
@@ -563,11 +571,11 @@ The goal is to find WHY a class keeps recurring and fix the structural cause, no
 table below MUST be updated in the SAME TURN. Updating the JSON file without updating this table is
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
-#### Live RC Counts (as of 2026-06-07 S53)
+#### Live RC Counts (as of 2026-06-11 S58)
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
-| RC-3 | Silent exception (bare `pass` / `debug` swallowing errors) | **2** | OPEN — 2 unknown-other-files still unlocalized | exit_logic.py L1996 FIXED S53 (8fc0cd0) |
+| RC-3 | Silent exception (bare `pass` / `debug` swallowing errors) | **0** | CLOSED — last unlocalized instance found+fixed S58: autonomous_patch_generator.py L67 `_log()` (commit 2c4552d) | — |
 | RC-4 | Estimated exit price (non-fill price passed to record_exit) | **10** | OPEN — 3 violations in exit_logic.py | exit_logic.py L1345, L1939, L2032 (strategy decision pending #2) |
 | RC-2 | CWD-relative path (logs/ not anchored to `__file__`) | **7** | OPEN | run_cycle.py, entry_logic.py |
 | RC-1 | Naive datetime (tz-unaware `datetime.now()`) | **4** | CLOSED (all 16 instances fixed 2026-04-28) | — |
