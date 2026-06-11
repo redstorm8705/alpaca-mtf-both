@@ -39,7 +39,29 @@ Note: NFLX position from S54 is closed.
 - [x] ~~**Bridge missing**~~ ✅ FIXED S56 — `autonomous_patch_generator.py` built and deployed
 - [x] ~~**alerts.py PDT cleanup**~~ ✅ Already done S54 (commit `312089c`)
 
-## Last Session (2026-06-11 S58)
+## Last Session (2026-06-11 S58b — same day continuation)
+
+### Pipeline pre-flight + Slack webhook fix ✅ (commit 4d2036f)
+- All 8 pre-flight checks passed for tonight's first end-to-end autonomous run (DS+GAI APIs live from OCI, compile clean, git clean, 2 directives staged).
+- Found+fixed: generator + review read env key SLACK_WEBHOOK but .env has SLACK_WEBHOOK_URL — all Stage 1.5/2 Slack posts were silently dead. Both accept either key now. Live Slack test: HTTP 200.
+- One-time scheduled session 5:00 PM PT today verifies tonight's run (read-only).
+
+### Kelly data hygiene fix ✅ (commit 63264b0)
+- kelly.rebuild_from_trades() now excludes _fill_unverified trades (mirrors get_stats S47 guard). The "P&L=0.0 corrupts stats" audit finding traced here — record_exit/get_stats were already clean (live-data audit: 0 corrupt $0 external_close trades in 81 closed). Board Peterffy+LdP, DS+GAI APPROVE. Deployed, services healthy.
+- Deferred P3: 0R-trades counted as losses in Kelly vs excluded in get_stats — definitional, board vote needed.
+
+### Scheduled automation (new)
+- **five-hour-work-resumption** cron (every 5h, local scheduled task): resumes in-progress work per HANDOFF.md/tb_audit_log.md, else works non-RTH queue. Proposes patches to logs/pending_claude_session_*.md — never applies without Rafael's approval.
+- **verify-pipeline-first-run** one-time 5 PM PT 2026-06-11.
+
+### NOTHING IN PROGRESS — next priorities (for 5h cron / next session)
+1. trade_engine.py L252-254 CYCLE-SYNC-GUARD bypass — CRITICAL, full sequence + DS/GAI
+2. RAM pressure on 1GB OCI box (repeated off-hours CRITICAL restarts, 12-min RTH hang 6/9)
+3. run_movers.py ImportError (P5-C2)
+4. RC-2 ×7 (run_cycle.py, entry_logic.py), RC-7 ×2 (main.py)
+5. Review tonight's pipeline outputs (pending_approvals_2026-06-11.md expected)
+
+## Prior (2026-06-11 S58)
 
 ### kelly.py negative-Kelly fallback ✅ (commit a7f2a89)
 - `return 0.0` → `return config.KELLY_MIN_RISK_PCT` — short_intraday entries re-enabled at floor sizing (~0.5% effective risk after hard notional cap). Board 5-0, DS APPROVE R2, GAI APPROVE R3. Deployed, services healthy.

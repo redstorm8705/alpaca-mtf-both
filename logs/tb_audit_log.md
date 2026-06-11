@@ -4613,3 +4613,21 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 **Migration:** 13 legacy blobs → context_only. Live state after seeding: 2 pending_review (autonomous_review.py co-author attribution; config.py BUCKET_B_MAX_POSITIONS) + 1 processed (the _log RC-3, fixed directly this session).
 
 **RC counter:** RC-3 count 1 → 0 localized instances fixed this session in autonomous_patch_generator.py L67 (the previously unlocalized RC-3 violation — now confirmed it was this one per Gemini 6/10 audit).
+
+## S58b — 2026-06-11 — portfolio_tracker.py P&L=0.0 audit (IN PROGRESS)
+
+**Step 1:** Full read complete: 1917 lines (Explore verbatim).
+**Step 2 — 10-point + RC findings:**
+- P1: static analysis pending (Step 5a)
+- P2 trade path: record_exit() qty==0 + not partial_exited + reason=external_close (L1628-1636) records pnl=$0.00 WITHOUT `_fill_unverified=True` → enters get_stats() pnls AND r_multiples as r=0 → depresses avg_r_multiple (Gemini 6/9-6/10 finding "avg_r=-0.06"). All other $0-P&L paths (entry<=0 L1658, breakeven push) are either flagged-unverified or legitimate outcomes.
+- P3 adversarial: breakeven (0R) trades are REAL outcomes — must NOT be excluded; only the external_close-zero-qty corruption path needs flagging.
+- RC-1 PASS (all datetime.now tz-aware) | RC-2 PASS (all paths _ROOT-anchored) | RC-3 PASS (no bare pass) | RC-4 N/A this change | RC-5 PRE-EXISTING manual_audit.jsonl append L1716 (known, low-risk) | RC-6 PASS (after_id pagination confirmed) | RC-7 N/A | RC-8 N/A.
+**Proposed fix (pending board + DS/GAI):** in the external_close zero-qty branch, set `trade["_fill_unverified"] = True` before close so get_stats() excludes the $0 record, matching the entry<=0 guard's behavior. RC-4 index append at L1723 then auto-routes it for reconciliation.
+**Status:** Step 3 (board) next. If session ends, resume from Step 1 per RULE C-7.
+
+## S58b — RESOLVED — P&L=0.0 finding → kelly.py rebuild_from_trades fix (commit 63264b0)
+
+**Outcome of investigation:** The hypothesized record_exit external_close corruption path has NEVER fired in live data (0 of 81 closed trades). The SPY/NVDA 6/2 $0 trades flagged by the nightly Gemini audit are already _fill_unverified=True and excluded from get_stats() (S47 guard working as designed). REAL defect: kelly.rebuild_from_trades() lacked the same exclusion — unverified/estimated exit prices fed kelly_stats.json R-multiples (sizing layer dirtier than reporting layer).
+**Fix:** one guard at top of rebuild loop: `if t.get("_fill_unverified"): continue`. Board: Peterffy REJECT-as-is + LdP REJECT-as-is on the original portfolio_tracker proposal → redirected to this fix (both lenses satisfied: no reconciliation-queue dead-end; LdP bias audit run on live data — 6/81 excluded, outcome-mixed, no survivorship skew). DS APPROVE R1, GAI APPROVE R1. Static: all PASS. Cold second-agent: PASS. Deployed, services healthy.
+**Deferred (P3, DS+GAI both):** r_multiple==0 counted as loss in Kelly buckets vs excluded as scratch in get_stats — definitional inconsistency, needs policy decision + board vote.
+**portfolio_tracker.py:** NO change applied — investigation cleared it. Full read (1917 lines) + 10-pt/RC audit on record stand for this session.
