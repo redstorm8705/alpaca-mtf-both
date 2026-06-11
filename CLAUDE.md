@@ -608,7 +608,7 @@ The goal is to find WHY a class keeps recurring and fix the structural cause, no
 table below MUST be updated in the SAME TURN. Updating the JSON file without updating this table is
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
-#### Live RC Counts (as of 2026-06-11 S58)
+#### Live RC Counts (as of 2026-06-11 S58c)
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
@@ -619,7 +619,7 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 | RC-5 | Non-atomic write (no tmp→replace pattern) | **1** | OPEN — manual_audit.jsonl append in portfolio_tracker.py L1796 (low risk — log file) | portfolio_tracker.py |
 | RC-6 | Wrong API field name (Alpaca field assumed not confirmed) | **3** | OPEN | portfolio_tracker.py |
 | RC-7 | Zero-share sizing (int truncation before floor guard) | **2** | OPEN | main.py |
-| RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **1** | OPEN — 9 missing sites in entry_logic.py | entry_logic.py L391/413/434/441/455/462/470/476/488 (Board APPROVE, DS/GAI REJECT on IO grounds — see pending_approvals_2026-06-07.md #1) |
+| RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **0** | CLOSED — 9 sites applied b2e61f7 (2026-06-08); DS/GAI IO objection retracted via tie-breaker S58c | — |
 
 #### Top Hotspot Files by Patch Count (as of 2026-06-07 S53)
 

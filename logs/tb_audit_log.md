@@ -4640,3 +4640,11 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 **Verification:** live restart on OCI: both positions ADOPTED, zero cancel/resubmit. First post-deploy restart churned once (import raced git checkout by 2s — not a code defect).
 **Forward (P3):** Minsky — reorder reconcile_positions() before GTC reconciliation (architectural, board vote).
 **RC check:** no RC classes implicated (logging-only additions + guarded comparisons; no datetime/path/except-pass/price/write/API-field/sizing/buffer changes).
+
+## S58c — queue triage results (2026-06-11 PM)
+
+- **trade_engine.py L252-254 CRITICAL — STALE, CLOSED.** Full read (287 lines): code uses risk.register_open() with status-transition gate; fixed in 4f58c85 (S47d). Handoff item was leftover text.
+- **run_movers.py P5-C2 — FIXED (commit 60bf9ee).** Real error was AttributeError reset_day→reset_daily(sod_equity), not ImportError. Also installed missing lxml in OCI venv (universe fetch). Full read 239 lines, statics PASS, second-agent PASS.
+- **RC-8 pending approval #1 — STALE + DEADLOCK RESOLVED, CLOSED.** The 9 buffer-clear sites were already applied 2026-06-08 (b2e61f7) and are live on OCI (25 total rc8 call sites in HEAD). Tie-breaker protocol round: DS and GAI both retracted the IO-grounds rejection when counter-prompted with the one-gate-per-symbol + write-only-when-nonzero structural argument — both APPROVE. RC-8 count → 0 CLOSED.
+- **RAM pressure — instrumented.** rss_trend.csv sampler installed (10-min cron on OCI: bot/writer RSS, available, swap, uptime). Leak analysis scheduled for the work chain once ≥6h of data accumulates. Watchdog verified to read the correct 'available' column — overnight alerts were genuine.
+- **MRI-HALT buffer-clear follow-up (from #1's DS/GAI notes)** — still open, queued P2.

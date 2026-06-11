@@ -238,7 +238,7 @@
   },
   "RC-8": {
     "label": "Unbounded scan buffer (confirm_gate/conviction not cleared on non-fill exits)",
-    "count": 1,
+    "count": 0,
     "patch_ids": [
       "RC8-v1",
       "RC8-v2-DSGAIremediation"
@@ -248,7 +248,8 @@
     ],
     "first_seen": "2026-04-22",
     "last_patched": "2026-04-30",
-    "notes": "CLOSED \u2705 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed \u2014 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 \u2014 prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1."
+    "notes": "CLOSED \u2705 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed \u2014 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 \u2014 prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1.",
+    "last_fix": "S58c 2026-06-11: 9 sites confirmed applied in b2e61f7 (2026-06-08); DS/GAI deadlock resolved via tie-breaker counter-prompt \u2014 both APPROVE. CLOSED."
   },
   "file_hotspot": {
     "_meta": {
@@ -1422,6 +1423,14 @@
       "line": 67,
       "fix": "except-pass in _log \u2192 print to stderr",
       "commit": "2c4552d"
+    },
+    {
+      "date": "2026-06-11",
+      "session": "S58c",
+      "rc": "RC-8",
+      "file": "execution/entry_logic.py",
+      "fix": "9 buffer-clear sites (b2e61f7) \u2014 deadlock resolved, item closed",
+      "commit": "b2e61f7"
     }
   ],
   "flagged_preexisting": [
