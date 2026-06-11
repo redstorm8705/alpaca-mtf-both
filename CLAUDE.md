@@ -38,6 +38,43 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 ---
 
+## 5-HOUR AUTONOMOUS WORK CHAIN — SESSION START DUTY (Rafael mandate 2026-06-11)
+
+Rafael's usage limit is a ROLLING 5-hour window — a static daily cron schedule drifts out of
+alignment. The autonomous work chain is therefore a SELF-PERPETUATING ROLLING CHAIN:
+
+1. **The scheduled task `five-hour-work-resumption`** (local scheduled-tasks registry) re-arms
+   itself: each run's Step 0 schedules the next one-time fire exactly +5h from its own start.
+2. **At every interactive session start**: check the task exists and is armed
+   (`list_scheduled_tasks`). If missing or stale, re-create/re-arm it with fireAt = Rafael's
+   next usage reset (ask him, or +5h from session start if unknown). Never set a fixed
+   daily cron for this — rolling fireAt chain only.
+3. Chain prompt content: resume mid-flight work first (RULE C-7: restart from Step 1) → RTH
+   items from Gemini midday/post-market reports via the TWO-PHASE FLOW → only if no RTH items,
+   non-RTH queue. Compaction summaries trusted 0% — verify transcript + git + disk + OCI at 100%.
+4. Scheduled sessions NEVER apply patches — everything stops at a fully-prepped approval-queue
+   package (`logs/pending_claude_session_YYYY-MM-DD.md`).
+
+### Two-Phase Flow for RTH-affecting items (autonomous sessions)
+- **Phase 1 — Diagnostic:** full read → 10-pt audit → 3-Point AI audit diagnostic on the ISSUE
+  (board cold subagents + DS + GAI, same prompt) → 3-Point Summary → board reviews DS/GAI
+  responses → patch drafted FROM THE ALIGNMENT only.
+- **Phase 2 — Integrity:** drafted diff back to board + DS + GAI → SECOND 3-Point Summary →
+  statics + cold second-agent + impact → all 3 voices agree → approval queue, fully prepped.
+
+### DS/GAI Tie-Breaker Protocol (applies to ALL sessions)
+When DS and GAI split (one APPROVE, one REJECT):
+1. The **board is the tie-breaker** — but it must NOT just vote. First counter-prompt the
+   dissenting voice via direct API to extract the full technical logic behind its position
+   (specific failure scenario, exact lines, reproducing conditions). The board may counter-prompt
+   DS/GAI for additional context at ANY point in either phase.
+2. Board agents (cold subagents) receive BOTH sides' full reasoning, then decide by
+   **simple majority** — a narrow majority decides.
+3. Document the split, counter-prompt exchanges, and majority decision in the proposal.
+   Only a true board deadlock (even split) escalates to Rafael as UNRESOLVED-SPLIT.
+
+---
+
 ## SESSION MEMORY PROTOCOL
 
 **At the start of every session — two required steps (both blocking):**
