@@ -59,7 +59,12 @@ def _load_env() -> dict:
                 k, _, v = line.partition("=")
                 env[k.strip()] = v.strip()
                 os.environ.setdefault(k.strip(), v.strip())
-    _SLACK_URL = env.get("SLACK_WEBHOOK") or os.environ.get("SLACK_WEBHOOK", "")
+    # S58: .env defines SLACK_WEBHOOK_URL (not SLACK_WEBHOOK) — accept both
+    _SLACK_URL = (
+        env.get("SLACK_WEBHOOK") or env.get("SLACK_WEBHOOK_URL")
+        or os.environ.get("SLACK_WEBHOOK", "")
+        or os.environ.get("SLACK_WEBHOOK_URL", "")
+    )
     _DS_BASE_URL = env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     return env
 

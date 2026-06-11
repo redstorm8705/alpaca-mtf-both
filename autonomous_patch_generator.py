@@ -80,7 +80,11 @@ def _load_env() -> None:
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
-    _SLACK_URL = os.environ.get("SLACK_WEBHOOK", "")
+    # S58: .env defines SLACK_WEBHOOK_URL (not SLACK_WEBHOOK) — accept both
+    _SLACK_URL = (
+        os.environ.get("SLACK_WEBHOOK", "")
+        or os.environ.get("SLACK_WEBHOOK_URL", "")
+    )
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
 def _slack(msg: str) -> None:
