@@ -4631,3 +4631,12 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 **Fix:** one guard at top of rebuild loop: `if t.get("_fill_unverified"): continue`. Board: Peterffy REJECT-as-is + LdP REJECT-as-is on the original portfolio_tracker proposal → redirected to this fix (both lenses satisfied: no reconciliation-queue dead-end; LdP bias audit run on live data — 6/81 excluded, outcome-mixed, no survivorship skew). DS APPROVE R1, GAI APPROVE R1. Static: all PASS. Cold second-agent: PASS. Deployed, services healthy.
 **Deferred (P3, DS+GAI both):** r_multiple==0 counted as loss in Kelly buckets vs excluded as scratch in get_stats — definitional inconsistency, needs policy decision + board vote.
 **portfolio_tracker.py:** NO change applied — investigation cleared it. Full read (1917 lines) + 10-pt/RC audit on record stand for this session.
+
+## S58c — 2026-06-11 — orphan_manager.py GTC adoption (commit 1639e91) — APPLIED + VERIFIED
+
+**Issue:** every bot restart cancelled + resubmitted overnight GTC stops (cancel branch ran unconditionally; Patch 1 resubmitted in same pass when phase=closed) — 8-10 order pairs/day/position on Alpaca, nonzero protection gap per restart. Same loop was fixed for premarket Apr-14 but the closed-phase variant remained.
+**Fix:** phase-gated adoption — when phase==closed and live order matches tracker (stop ±$0.01 vs trail_stop-or-stop; qty==qty_remaining semantics >0; protective side matches direction) → adopt, no cancel. Mismatch/parse error → original cancel + Patch 1 resubmit. Premarket/RTH unchanged.
+**Sequence:** Full reads: gtc_manager.py (319) + orphan_manager.py (1367, Explore verbatim). Board design 2-0 (Peterffy/Kim). DS APPROVE. GAI REJECT ×2 → side check incorporated → TIE-BREAKER protocol (first use): board 3-0 APPROVE (Harris/Schneier/Minsky — ordering concern pre-existing, not regression). Statics PASS. Second-agent PASS.
+**Verification:** live restart on OCI: both positions ADOPTED, zero cancel/resubmit. First post-deploy restart churned once (import raced git checkout by 2s — not a code defect).
+**Forward (P3):** Minsky — reorder reconcile_positions() before GTC reconciliation (architectural, board vote).
+**RC check:** no RC classes implicated (logging-only additions + guarded comparisons; no datetime/path/except-pass/price/write/API-field/sizing/buffer changes).

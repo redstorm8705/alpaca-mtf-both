@@ -50,6 +50,10 @@ Note: NFLX position from S54 is closed.
 - kelly.rebuild_from_trades() now excludes _fill_unverified trades (mirrors get_stats S47 guard). The "P&L=0.0 corrupts stats" audit finding traced here — record_exit/get_stats were already clean (live-data audit: 0 corrupt $0 external_close trades in 81 closed). Board Peterffy+LdP, DS+GAI APPROVE. Deployed, services healthy.
 - Deferred P3: 0R-trades counted as losses in Kelly vs excluded in get_stats — definitional, board vote needed.
 
+### GTC stop churn fix ✅ (commit 1639e91 — S58c)
+- orphan_manager.py: closed-phase restarts now ADOPT matching GTC stops instead of cancel+resubmit. Verified live: TOST/UBER adopted, zero churn. Stops placed once, survive restarts. First use of the DS/GAI tie-breaker protocol (GAI REJECT overruled board 3-0; side check still incorporated).
+- P3 queued: reorder reconcile_positions() before GTC reconciliation (Minsky).
+
 ### Scheduled automation (new)
 - **five-hour-work-resumption** cron (every 5h, local scheduled task): resumes in-progress work per HANDOFF.md/tb_audit_log.md, else works non-RTH queue. Proposes patches to logs/pending_claude_session_*.md — never applies without Rafael's approval.
 - **verify-pipeline-first-run** one-time 5 PM PT 2026-06-11.
