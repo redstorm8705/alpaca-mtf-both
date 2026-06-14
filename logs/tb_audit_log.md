@@ -4648,3 +4648,49 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 - **RC-8 pending approval #1 — STALE + DEADLOCK RESOLVED, CLOSED.** The 9 buffer-clear sites were already applied 2026-06-08 (b2e61f7) and are live on OCI (25 total rc8 call sites in HEAD). Tie-breaker protocol round: DS and GAI both retracted the IO-grounds rejection when counter-prompted with the one-gate-per-symbol + write-only-when-nonzero structural argument — both APPROVE. RC-8 count → 0 CLOSED.
 - **RAM pressure — instrumented.** rss_trend.csv sampler installed (10-min cron on OCI: bot/writer RSS, available, swap, uptime). Leak analysis scheduled for the work chain once ≥6h of data accumulates. Watchdog verified to read the correct 'available' column — overnight alerts were genuine.
 - **MRI-HALT buffer-clear follow-up (from #1's DS/GAI notes)** — still open, queued P2.
+
+---
+## S59 — 2026-06-14 — strategy/run_cycle.py BV-5 demotion (STRESSED → soft-only)
+
+**File:** `strategy/run_cycle.py` (1651 lines)
+**Change:** L1385-1407 — demote BV-5 so STRESSED no longer triggers hard block; only HIGH/CRITICAL hard-block remains. STRESSED now handled by pre-existing soft gates (0.70x size floor + MIN_SCORE +2 wired at L1104-1109, L1157).
+
+### 10-Point Audit
+
+| Point | Result |
+|-------|--------|
+| 1 Static analysis (pre-patch) | py_compile PASS / ruff PASS / mypy PASS — zero violations |
+| 2 Trade path trace | BV-5 gate (L1385-1407) sits between EXTREME block (L1376-1383) and run_scan() (L1409). Removing STRESSED allows run_scan() + execute_entries() to fire. Soft handling (size floor L1104-1109 + MIN_SCORE L1157-1229) fires unconditionally before BV-5 for all MRI levels — no code change needed there. |
+| 3 Adversarial scenarios | mri=None: already handled (`mri.level() if mri else "NORMAL"` → "NORMAL", not in tuple). STRESSED with score <12: signals filtered by _dynamic_min_score post-filter (L1419) before execute_entries. |
+| 4 Full read | COMPLETE — 1651 lines, 6 chunks |
+| 5 Cross-references | _touch_cycle_ts(), run_scan(), execute_entries() — all present. mri.level(), mri.size_floor(), mri.min_score_floor() confirmed wired. |
+| 6 Conflicting directions | MRI soft handling (L1104-1109, L1157) is unconditional — always fires before BV-5. After demotion, STRESSED falls through to these gates rather than being hard-blocked. No contradiction. |
+| 7 Redundancy | None. _bv5_mri variable used only in one conditional. |
+| 8 State persistence | No state file writes in this block. _touch_cycle_ts() call preserved. |
+| 9 Data source tier | No data calls in BV-5 block. |
+| 10 Timezone/logging | logger.critical() call retained — log message updated to reflect HIGH/CRITICAL scope. |
+
+### RC Audit
+
+| RC | Result |
+|----|--------|
+| RC-1 Naive datetime | PASS — all datetime.now() calls use ET or PT throughout |
+| RC-2 CWD-relative path | Pre-existing: L1503 `Path(_main.LOG_DIR).mkdir(exist_ok=True)` — LOG_DIR source (main.py) not read this session; flagged as needing verification. Not in BV-5 block. |
+| RC-3 Silent exception | PASS — no bare pass in except blocks; all have logger.warning/critical |
+| RC-4 Estimated exit price | N/A — no record_exit calls in run_cycle.py |
+| RC-5 Non-atomic write | N/A — no state file writes in BV-5 block |
+| RC-6 Wrong API field | N/A — no Alpaca field access in BV-5 block |
+| RC-7 Zero-share sizing | N/A — no sizing in BV-5 block |
+| RC-8 Unbounded scan buffer | N/A — BV-5 fires before run_scan(); no buffer involvement |
+
+### Board / DS / GAI
+- Board vote: 17 voices, consensus Option C (2026-06-12 S59 — prior session, decision locked)
+- GAI external audit: APPROVE (2026-06-13 — prior session transcript)
+- DS: blocked by egress; GAI authorized as stand-in for both (Rafael approval 2026-06-13)
+
+### Static analysis (pre-patch): py_compile PASS | ruff PASS | mypy PASS
+### Cold second-agent: PASS (no threats identified)
+### Code-review-graph: MCP tools unavailable this session; manual impact analysis substituted
+### Impact: run_scan() + execute_entries() fire at STRESSED; soft gates (0.70x size, MIN_SCORE+2) apply automatically
+
+**STATUS: AWAITING RAFAEL APPROVAL (Step 6)**
