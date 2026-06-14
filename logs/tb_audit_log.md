@@ -4806,3 +4806,51 @@ found_monitor = [k for k in KEYWORDS_MONITOR if re.search(r'\b' + re.escape(k) +
 ### Board / DS / GAI
 (pending — see session notes)
 
+
+---
+## 2026-06-14 S60 (overnight) — macro_risk_index.py DIAGNOSTIC full-read audit (NO PATCH)
+
+**File:** `events/macro_risk_index.py` (866 lines, 3 chunks) — read-only diagnostic, no edit.
+**Trigger:** Prepare D1 (stale-level fail-closed) for Rafael approval. Full read surfaced a
+higher-priority deploy interaction (D5).
+
+### Full Read Declaration
+Full read complete: 866 lines in 3 chunks (L0-299, L300-599, L600-865).
+
+### Findings
+
+**D5 (NEW, HIGH — deploy-relevant): startup CRITICAL default + no force-refresh.**
+- `_restore()` L807-808: missing state file → `_level = "CRITICAL"`.
+- `_restore()` L826-828: state >20h stale → `_level = "CRITICAL"`.
+- main.py L437 instantiates MRI with no `force=True` refresh; first refresh is run_cycle.py L862.
+- BV-5 (shipped this session) hard-blocks at CRITICAL. → If first post-restart refresh fails,
+  `level()` returns CRITICAL restore-default and the bot stays dark despite the BV-5 fix.
+- Happy path: first refresh succeeds (VIX ~19.5) → NORMAL → trades. Verify via mtf_bot.log.
+
+**D1 (CONFIRMED, MEDIUM): no staleness ceiling on cached level.**
+- `level()` L178-183 returns `_last_known_good_level` while `_refresh_failed` is True, unbounded.
+- `_compute()` L705-712 raises ConnectionError only when ALL feeds None; individual helpers
+  swallow errors and score 0 (graceful partial degradation — good).
+- `_last_known_good_at` (L114) tracked but never consulted by `level()`. Design fork: fail-open
+  (NORMAL) vs fail-closed (conservative) on sustained outage. GAI prior suggestion: 12h ceiling.
+
+**D6 (doc-only): stale docstrings post-a44e2cc.**
+- `inject_news_state` L250-256 says bonus 10/20/35 (code 15/10/5); L239-249 gate says
+  `price_score == 0` (code `_ps < 10`). Module docstring L37-38 says ">20h → VIX-only estimate"
+  (code → CRITICAL).
+
+### RC Audit (diagnostic)
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — datetime.now(ET) throughout |
+| RC-2 | PASS — ROOT = Path(__file__).parent.parent.resolve(); MRI_STATE anchored |
+| RC-3 | BORDERLINE — L141-142 `except Exception: pass` in __del__ (documented best-effort cleanup); L864 restore has logger.debug. __del__ acceptable. |
+| RC-4 | N/A — no exit price logic |
+| RC-5 | PASS — _persist() L792-795 atomic tmp→os.replace |
+| RC-6 | PASS — FMP fields data[0]["price"], q.get("previousClose") verified shape |
+| RC-7 | N/A | RC-8 | N/A |
+
+### Action: NO patch applied. D1/D5/D6 → approval queue (pending_claude_session_2026-06-14.md
++ handoff.md). D5 verification step added to handoff deploy instructions. RTH-hotspot file →
+full board + DS/GAI + Rafael approval required before any edit. DS blocked (egress).
+

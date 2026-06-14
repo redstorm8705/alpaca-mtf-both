@@ -36,8 +36,29 @@ git checkout claude/vibrant-cannon-ppodcr   # or merge into the branch OCI track
 ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 \
   'cd /home/ubuntu/mtf-bot && pkill -9 -f "main\.py"; nohup ./launch_bots.sh >/dev/null 2>&1 &'
 ```
-Then confirm in `logs/launcher.log` / `logs/bot.log` on OCI that the scan loop is live
-and MRI is no longer hard-blocking at STRESSED.
+### ⚠️ POST-DEPLOY VERIFICATION — confirm the first MRI refresh SUCCEEDS
+There is a startup interaction that can keep the bot dark even with the fix deployed:
+
+- `MacroRiskIndex.__init__` calls `_restore()`. If `logs/mri_state.json` on OCI is
+  missing or **>20h stale** (very likely after 6 days dark), `_restore()` initializes
+  level = **CRITICAL** (macro_risk_index.py L807-808, L826-828).
+- main.py instantiates MRI with **no startup `force=True` refresh** (main.py L437). The
+  first real refresh runs on the first `run_cycle()` (run_cycle.py L862).
+- BV-5 hard-blocks at CRITICAL. So until the first refresh SUCCEEDS, the bot is blocked.
+- If that first `refresh()` **fails** (any feed hiccup → `_compute()` raises ConnectionError
+  at L709), `level()` returns the CRITICAL restore-default and **the bot stays dark despite the fix.**
+
+**After deploy+restart, grep `logs/mtf_bot.log` for the first MRI line:**
+```bash
+ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 \
+  'tail -n 200 /home/ubuntu/mtf-bot/logs/mtf_bot.log | grep -E "MRI refreshed|MRI refresh failed"'
+```
+- `MRI refreshed: score=… level=NORMAL` → ✅ fixed, bot will trade.
+- `MRI refresh failed: …` → ❌ stuck at CRITICAL default; investigate feeds (FMP_API_KEY,
+  Alpaca Data) before expecting entries. This is the most likely reason the bot stays dark
+  post-deploy. (See deferred item D1/D5 — the fail-closed-to-CRITICAL default is the design fork.)
+
+Then confirm the scan loop is live and MRI is no longer hard-blocking at STRESSED.
 
 ---
 
@@ -68,14 +89,29 @@ All three: full-read gate ✓, 10-pt + RC audit ✓, board vote ✓, GAI audit �
 2. **Merge `claude/vibrant-cannon-ppodcr` → main** — or confirm which branch OCI tracks.
 3. **DS egress block** — resolution options in pending package (new env with allowlist,
    or keep GAI-as-DS-standin). Both DS+GAI API keys appeared in transcript; rotate when convenient.
-4. **macro_risk_index.py stale-level fail-closed** (GAI flag, prior session) — `level()`
-   can return stale data on feed failure; GAI proposed a 12h staleness ceiling. Needs board + patch.
-5. **news_monitor.py RC-3** — L329-330 `except Exception: pass` in `_load_seen_hashes()`
+4. **D1 — macro_risk_index.py stale-level, NO staleness ceiling** (CONFIRMED via full read).
+   `level()` (L178-183) returns `_last_known_good_level` whenever `_refresh_failed` is True,
+   with NO time bound. The restart-time decay (`_restore`, -10pts/hr, fresh after 20h) does
+   NOT apply to a live process whose feed keeps failing — it stays on the last good level forever.
+   `_last_known_good_at` is tracked but never consulted by `level()`. **Design fork (Rafael's call):**
+   on sustained outage, fail to NORMAL (permissive, trades through a blackout) or to a conservative
+   level (blocks)? GAI earlier suggested a 12h ceiling. RTH-affecting hotspot → full board + DS/GAI + approval.
+5. **D5 — MRI startup defaults to CRITICAL + no force-refresh** (NEW, found this session).
+   `_restore()` sets level=CRITICAL on missing/>20h-stale state file; main.py does no startup
+   `force=True` refresh. With BV-5 hard-blocking at CRITICAL, a failed first refresh = bot dark.
+   See POST-DEPLOY VERIFICATION above. Candidate fixes (design fork, Rafael's call): add
+   `mri.refresh(force=True)` at main.py startup; and/or change restore default CRITICAL→NORMAL;
+   and/or staleness ceiling (overlaps D1). Same hotspot gate applies.
+6. **D2 — news_monitor.py RC-3** — L329-330 `except Exception: pass` in `_load_seen_hashes()`
    inner loop (per-entry malformed-ISO skip, no log). Low severity. Reopens RC-3 (was CLOSED).
-6. **Derman keyword plural-expansion** (board minority) — word-boundary now misses "rate cuts"
+7. **D3 — Derman keyword plural-expansion** (board minority) — word-boundary now misses "rate cuts"
    vs "rate cut" etc. Accepted as trade-off under market-reaction-first; logged for a future pass.
-7. **CLAUDE.md invariant #9** — says "MRI does not gate entries directly"; code DOES hard-block
+8. **D4 — CLAUDE.md invariant #9** — says "MRI does not gate entries directly"; code DOES hard-block
    at HIGH/CRITICAL. Doc catch-up to the board-approved BV-5 behavior. Proposed text in pending pkg.
+9. **D6 — macro_risk_index.py stale docstrings** (doc-only, found this session). After the prior
+   a44e2cc patch: `inject_news_state` docstring L250-256 still says bonus 10/20/35 (code: 15/10/5)
+   and L239-249 gate says `price_score == 0` (code: `_ps < 10`). Module docstring L37-38 says ">20h
+   → VIX-only estimate" (code: → CRITICAL). Safe cleanup, no logic change.
 
 ## STATE I DO NOT HAVE AUTHORITATIVE DATA ON (verify on OCI)
 - Current open positions (audit preview 06-12 referenced MSTR short stopped out 06-08,
