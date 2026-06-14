@@ -1382,11 +1382,11 @@ def run_cycle(
         _touch_cycle_ts()
         return
 
-    # ── BV-5: Block entries when MRI=STRESSED, HIGH, or CRITICAL ────────
-    # Intentional: MRI blocks entries (not just adjusts size/score).
-    # STRESSED/HIGH/CRITICAL = 0% WR per live trade log (23 exits, 2026-05-05).
+    # ── BV-5: Block entries only when MRI=HIGH or CRITICAL ───────────────
+    # STRESSED → soft handling only (size floor + MIN_SCORE floor already wired above).
+    # HIGH/CRITICAL: hard block preserved (board vote 2026-06-12).
     _bv5_mri = mri.level() if mri else "NORMAL"
-    if _bv5_mri in ("STRESSED", "HIGH", "CRITICAL"):
+    if _bv5_mri in ("HIGH", "CRITICAL"):
         logger.critical(
             f"⛔ BV-5: MRI={_bv5_mri} — no new entries until regime improves. "
             f"Exits and partials managed normally."

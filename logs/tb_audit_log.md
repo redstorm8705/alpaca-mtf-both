@@ -4693,4 +4693,5 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 ### Code-review-graph: MCP tools unavailable this session; manual impact analysis substituted
 ### Impact: run_scan() + execute_entries() fire at STRESSED; soft gates (0.70x size, MIN_SCORE+2) apply automatically
 
-**STATUS: AWAITING RAFAEL APPROVAL (Step 6)**
+**Static analysis (post-patch):** py_compile PASS | ruff PASS | mypy PASS — zero regressions
+**STATUS: APPLIED + VERIFIED (2026-06-14 S59)**
