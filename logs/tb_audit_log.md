@@ -4695,3 +4695,48 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 
 **Static analysis (post-patch):** py_compile PASS | ruff PASS | mypy PASS — zero regressions
 **STATUS: APPLIED + VERIFIED (2026-06-14 S59)**
+
+---
+## S59 — 2026-06-14 — events/macro_risk_index.py news cap fix (APPLIED)
+
+**File:** `events/macro_risk_index.py` (866 lines)
+**Change:** L267-317 — reduce news alert bonus (35/20/10 → 15/10/5) and tighten gate (_ps==0 → alert_count>=5 AND _ps<10) to prevent false positives.
+
+### 10-Point Audit
+
+| Point | Result |
+|-------|--------|
+| 1 Static analysis (pre-patch) | py_compile PASS / ruff PASS / mypy PASS |
+| 2 Trade path trace | inject_news_state() called every cycle (L870-873 run_cycle.py). Modifies _raw_score/_level which drives size_floor/min_score_floor downstream. News bonus RAISES MRI → RAISES MIN_SCORE (entry bar, not easier). |
+| 3 Adversarial scenarios | alert_count=0: clears bonus (unchanged). alert_count=1-4: no gate applies. alert_count=5 with _ps=9: gated→10. alert_count=5 with _ps=10: not gated→15. |
+| 4 Full read | 866 lines, 4 chunks (prior session) |
+| 5 Cross-references | Called only in run_cycle.py. price_score() called internally. Thread lock correct. |
+| 6 Conflicting directions | None. Idempotent subtract-prior logic (L312) unchanged. |
+| 7 Redundancy | None in modified section. |
+| 8 State persistence | _persist() atomic tmp→replace unchanged. inject doesn't persist (by design). |
+| 9 Data source tier | N/A — alert_count from news_monitor. |
+| 10 Timezone/logging | All datetime.now(ET) confirmed. Logger message fixed. |
+
+### RC Audit
+
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — all datetime.now(ET) |
+| RC-2 | PASS — ROOT anchored |
+| RC-3 | Pre-existing L141 except-pass in __del__ (destructor, acceptable) |
+| RC-4–RC-8 | N/A — no affected logic in modified section |
+
+### Board / DS / GAI
+
+- Board: 3/3 APPROVE (this session)
+- GAI: **REJECT on initial diff** — flagged critical `gated` flag semantic shift. **APPROVE with fixes:**
+  - `gated` must be `(raw_bonus > bonus)` not `(gate_condition)` — preserves semantic "was bonus capped?"
+  - Logger message wording fixed to show actual bonus cap
+  - Both fixes applied ✓
+- DS: blocked by egress
+
+### Static analysis (post-patch): py_compile PASS | ruff PASS | mypy PASS
+### Cold second-agent: PASS
+### Impact: News bonus reduced 35/20/10 → 15/10/5; gate tightened; semantic correctness restored
+
+**STATUS: APPLIED + VERIFIED (2026-06-14 S59)**

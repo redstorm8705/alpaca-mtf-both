@@ -266,21 +266,21 @@ class MacroRiskIndex:
         _ps = price_score if price_score is not None else self.price_score()
 
         if alert_count >= 5:
-            raw_bonus = 35
+            raw_bonus = 15
         elif alert_count >= 3:
-            raw_bonus = 20
-        elif alert_count > 0:
             raw_bonus = 10
+        elif alert_count > 0:
+            raw_bonus = 5
         else:
             raw_bonus = 0  # alert_count == 0: clears stale bonus below
 
-        # Market-reaction-first gate: cap bonus when price components are silent
-        if alert_count > 0 and _ps == 0 and raw_bonus > 10:
+        # Market-reaction-first gate: cap top-tier bonus when price confirmation is weak
+        if alert_count >= 5 and _ps < 10:
             bonus = 10
             logger.info(
                 f"MRI news injection GATED: {alert_count} alert(s) would add "
-                f"+{raw_bonus}pts but price_score=0 (no market reaction) — "
-                f"capped at +10pts. VIX/TLT/JPY/credit all silent."
+                f"+{raw_bonus}pts but price_score={_ps} < 10 (weak confirmation) — "
+                f"capped at +{bonus}pts."
             )
         else:
             bonus = raw_bonus
@@ -314,7 +314,7 @@ class MacroRiskIndex:
             self._components["news_alerts"] = {
                 "value": alert_count,
                 "pts":   bonus,
-                "gated": (_ps == 0 and raw_bonus > bonus),
+                "gated": (raw_bonus > bonus),
             }
             self._last_known_good_level = self._level
             self._last_known_good_at    = datetime.now(ET)
