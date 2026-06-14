@@ -26,11 +26,11 @@ SCORING (price-based binary flags — no fitted weights per López de Prado rule
   Raw max: ~111 → capped at 100
 
 LEVELS:
-  0–20   NORMAL    → 1.00x size, MIN_SCORE base (9)
-  21–40  ELEVATED  → 0.85x size, MIN_SCORE base+1 (10)
-  41–60  STRESSED  → 0.70x size, MIN_SCORE base+2 (11)
-  61–80  HIGH      → 0.55x size, MIN_SCORE base+3 (12)
-  81–100 CRITICAL  → 0.40x size, MIN_SCORE base+3 + 2-scan confirmation
+  0–20   NORMAL    → 1.00x size, MIN_SCORE base (paper: 10)
+  21–40  ELEVATED  → 0.85x size, MIN_SCORE base+1 (paper: 11)
+  41–60  STRESSED  → 0.70x size, MIN_SCORE base+2 (paper: 12 — max on 12-pt system)
+  61–80  HIGH      → 0.55x size, hard-blocked by BV-5 (run_cycle.py)
+  81–100 CRITICAL  → 0.40x size, hard-blocked by BV-5 + 2-scan confirmation
 
 PERSISTENCE:
   Refreshed every 10 minutes (configurable).
@@ -113,8 +113,10 @@ class MacroRiskIndex:
         self._level                          = "NORMAL"
         self._last_known_good_level          = "NORMAL"
         self._last_known_good_at: datetime | None = None
-        self._refresh_failed                 = False
-        self._event_type                     = "TECHNICAL"
+        self._refresh_failed                          = False
+        self._refresh_failed_since: datetime | None   = None   # staleness ceiling clock
+        self._ceiling_alert_sent                      = False  # once per failure streak
+        self._event_type                              = "TECHNICAL"
         # P2-INJECT-NEWS-LOCK: protects _raw_score/_level in inject_news_state
         self._lock = threading.Lock()
         self._yf_executor = _cf.ThreadPoolExecutor(max_workers=1)
@@ -155,7 +157,9 @@ class MacroRiskIndex:
         try:
             self._compute()
             with self._lock:
-                self._refresh_failed = False
+                self._refresh_failed       = False
+                self._refresh_failed_since = None   # reset staleness clock on success
+                self._ceiling_alert_sent   = False  # allow alert on next failure streak
             self._last_refresh = now
             self._persist()
             logger.info(
@@ -165,6 +169,8 @@ class MacroRiskIndex:
         except Exception as e:
             with self._lock:
                 self._refresh_failed = True
+                if self._refresh_failed_since is None:  # D1: record first failure time
+                    self._refresh_failed_since = datetime.now(ET)
             logger.warning(
                 f"MRI refresh failed: {e} — "
                 f"returning last-known-good level={self._last_known_good_level} "
@@ -180,6 +186,23 @@ class MacroRiskIndex:
         """NORMAL / ELEVATED / STRESSED / HIGH / CRITICAL."""
         with self._lock:
             if self._refresh_failed:
+                if (
+                    self._refresh_failed_since is not None
+                    and (datetime.now(ET) - self._refresh_failed_since).total_seconds()
+                        >= 6 * 3600
+                ):
+                    if not self._ceiling_alert_sent:
+                        self._ceiling_alert_sent = True
+                        _good_at = (
+                            str(self._last_known_good_at)
+                            if self._last_known_good_at else "never"
+                        )
+                        logger.critical(
+                            "MRI STALENESS CEILING: no successful refresh in 6h+ — "
+                            "forcing CRITICAL. Last good level was "
+                            f"{self._last_known_good_level} (at {_good_at})."
+                        )
+                    return "CRITICAL"
                 return self._last_known_good_level
             return self._level
 
@@ -199,13 +222,14 @@ class MacroRiskIndex:
         return self._event_type
 
     def size_floor(self) -> float:
-        """Position size floor (0.40–1.00) based on current level."""
-        return _SIZE_FLOOR.get(self._level, 1.0)
+        """Position size floor (0.40–1.00) based on current effective level."""
+        return _SIZE_FLOOR.get(self.level(), 1.0)
 
     def min_score_floor(self, base: int = 9) -> int:
         """
         Minimum MIN_SCORE based on current level.
-        Pass the configured base MIN_SCORE (default 9 for paper profile).
+        Pass config.MIN_LONG_SCORE as base. Paper profile: 10; legacy default=9
+        preserved for backward compatibility.
         """
         return base + _SCORE_FLOOR_DELTA.get(self._level, 0)
 
