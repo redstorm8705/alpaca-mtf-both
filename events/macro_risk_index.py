@@ -116,6 +116,7 @@ class MacroRiskIndex:
         self._refresh_failed                          = False
         self._refresh_failed_since: datetime | None   = None   # staleness ceiling clock
         self._ceiling_alert_sent                      = False  # once per failure streak
+        self._startup_stale                           = True   # D5b
         self._event_type                              = "TECHNICAL"
         # P2-INJECT-NEWS-LOCK: protects _raw_score/_level in inject_news_state
         self._lock = threading.Lock()
@@ -160,6 +161,7 @@ class MacroRiskIndex:
                 self._refresh_failed       = False
                 self._refresh_failed_since = None   # reset staleness clock on success
                 self._ceiling_alert_sent   = False  # allow alert on next failure streak
+                self._startup_stale        = False  # D5b: startup gate cleared
             self._last_refresh = now
             self._persist()
             logger.info(
@@ -186,6 +188,8 @@ class MacroRiskIndex:
         """NORMAL / ELEVATED / STRESSED / HIGH / CRITICAL."""
         with self._lock:
             if self._refresh_failed:
+                if self._startup_stale:
+                    return "CRITICAL"   # D5b: unverified startup data
                 if (
                     self._refresh_failed_since is not None
                     and (datetime.now(ET) - self._refresh_failed_since).total_seconds()
@@ -210,6 +214,12 @@ class MacroRiskIndex:
         """False if the last refresh() raised — level() is returning cached data."""
         with self._lock:
             return not self._refresh_failed
+
+    def startup_stale(self) -> bool:
+        """True until the first successful refresh() call this session.
+        Cleared to False by refresh() success (never by _restore()).
+        Used by main.py D5 to decide whether a blocking startup refresh is needed."""
+        return self._startup_stale
 
     def event_type(self) -> str:
         """
@@ -823,8 +833,9 @@ class MacroRiskIndex:
     def _restore(self) -> None:
         """
         Restore MRI state from disk on startup.
-        Applies time-decay: -10 pts per hour since last save (max 20 hours).
-        After >20 hours downtime, starts fresh (stale macro state is noise).
+        Applies time-decay: -10 pts per hour since last save, 30% score floor.
+        Runs for any downtime duration — no upper cutoff.
+        _startup_stale is NOT modified here; only refresh() success clears it.
         """
         try:
             if not MRI_STATE.exists():
@@ -842,15 +853,6 @@ class MacroRiskIndex:
             saved_at   = datetime.fromisoformat(saved_at_str)
             now        = datetime.now(ET)
             hours_down = (now - saved_at).total_seconds() / 3600
-
-            if hours_down > 20.0:
-                logger.warning(
-                    f"MRI state {hours_down:.1f}h stale (>20h) — starting fresh."
-                )
-                self._level                 = "CRITICAL"
-                self._last_known_good_level = "CRITICAL"
-                self._last_known_good_at    = datetime.now(ET)
-                return
 
             # C-1: round() not int() — int() truncates, understating decay for
             # fractional hours.
@@ -886,4 +888,4 @@ class MacroRiskIndex:
                 f"level={self._level}"
             )
         except Exception as e:
-            logger.debug(f"MRI restore failed: {e}")
+            logger.warning(f"MRI restore failed — starting with defaults: {e}")
