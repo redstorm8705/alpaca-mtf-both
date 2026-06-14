@@ -1,7 +1,25 @@
 # OPEN QUESTION — BV-5 MRI Hard Block vs. Invariant #9
-**Date:** 2026-06-12 | **Session:** remote (claude/vibrant-cannon-ppodcr)
+**Date:** 2026-06-12 (decisions locked 2026-06-13) | **Session:** remote (claude/vibrant-cannon-ppodcr)
 **Status:** Board vote COMPLETE (3 cold parallel subagents: BoD/AB/TB lenses). DS + GAI **NOT RUN** — API keys unavailable in remote container (keys live in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env` and on OCI). Prepared same-prompt below.
 **Authority:** Rafael is sole mandate authority. No code has been edited. Any patch requires a fresh full Steps 1–9 sequence (RULE C-2/C-7) including DS/GAI in the live patch session (RULE C-3).
+
+---
+
+## RAFAEL'S DECISIONS — LOCKED 2026-06-13
+
+1. **Option C** — demote BV-5 AND fix the news_alerts component. ✅
+2. **Residual hard block: HIGH + CRITICAL** (score ≥ 61). Claude recommendation accepted. Rationale: once the news component is capped (decision 3), the score reaches HIGH only on genuine multi-component price stress; the week-long dark period occurred at STRESSED (41–60), which Option C makes tradeable again at 0.70x size + MIN_SCORE +2.
+3. **News cap: 15** (down from 35), graduated, **plus** a real price-confirmation gate (top tier unlocks only when price_score ≥ 10, not the current "any non-zero component"). Claude/board blend (AB 15 + TB/Dalio/Taleb gate-strengthening). Conservative alternative (cap 10) noted but not chosen.
+
+**Deferred to patch session (needs Mac/keys):** DS/GAI external audit (RULE C-3/C-4), OCI deploy. Decisions above are inputs to the full Steps 1–9 sequence — they do NOT substitute for it.
+
+**Patch order (RULE C-6, each file its own full sequence):**
+- (a) `events/macro_risk_index.py` — news cap 15 + price_score ≥ 10 gate in `inject_news_state()`
+- (b) `events/news_monitor.py` — word-boundary keyword matching (`\b`) + market-scope filter for ambiguous tokens
+- (c) `strategy/run_cycle.py` — narrow BV-5 tuple `("STRESSED","HIGH","CRITICAL")` → `("HIGH","CRITICAL")`
+- (d) `CLAUDE.md` invariant #9 wording update (reflect HIGH/CRITICAL hard block + size/score floors below)
+
+Recommend (a)+(b) land before (c): fix the signal before relaxing the gate that reads it (Kyle/Schneier concern).
 
 ---
 
