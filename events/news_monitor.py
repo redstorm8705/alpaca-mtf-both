@@ -51,6 +51,7 @@ import hashlib
 import logging
 import threading
 import requests
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -101,7 +102,7 @@ PRICE_CONFIRM_THRESHOLD = 0.5   # 0.5% SPY move confirms the news risk
 
 KEYWORDS_HALT = {
     # True exchange / systemic emergencies — these and only these pause entries
-    "national emergency", "market circuit breaker", "trading halt",
+    "national emergency", "market circuit breaker", "trading halt", "trading halts",
     "federal reserve emergency", "systemic risk",
     "nuclear strike", "nuclear attack", "world war iii",
 }
@@ -197,6 +198,11 @@ MACRO_RISK_KEYWORDS = (
 
 MACRO_RISK_THRESHOLD = 3   # 3+ CAUTION macro alerts in 24h → macro risk state active
 
+# Pre-compiled word-boundary patterns for _classify() — one-time cost at module load
+_WB_HALT    = {k: re.compile(r'\b' + re.escape(k) + r'\b') for k in KEYWORDS_HALT}
+_WB_CAUTION = {k: re.compile(r'\b' + re.escape(k) + r'\b') for k in KEYWORDS_CAUTION}
+_WB_MONITOR = {k: re.compile(r'\b' + re.escape(k) + r'\b') for k in KEYWORDS_MONITOR}
+
 # ── Finnhub event type mapping ────────────────────────────────────────────────
 FINNHUB_EVENT_MAP = {
     "CPI":                  (EventType.CPI,        EventRisk.HIGH_RISK),
@@ -224,7 +230,7 @@ def _content_hash(text: str) -> str:
 class BreakingNewsAlert:
     """Represents a detected breaking news event."""
     def __init__(self, source: str, headline: str, keywords: list,
-                 risk_level: str, size_mult: float, timestamp: datetime):
+                 risk_level: str | None, size_mult: float, timestamp: datetime):
         self.source     = source
         self.headline   = headline[:120]
         self.keywords   = keywords
@@ -428,7 +434,7 @@ class NewsMonitor:
 
     # ── Keyword classifier ────────────────────────────────────────────────────
 
-    def _classify(self, text: str) -> tuple[str, list, float]:
+    def _classify(self, text: str) -> tuple[str | None, list, float]:
         """
         Returns (risk_level, matched_keywords, size_multiplier).
 
@@ -442,9 +448,9 @@ class NewsMonitor:
           MONITOR → 1.0  (logged only)
         """
         lower = text.lower()
-        found_halt    = [k for k in KEYWORDS_HALT    if k in lower]
-        found_caution = [k for k in KEYWORDS_CAUTION if k in lower]
-        found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
+        found_halt    = [k for k in KEYWORDS_HALT    if _WB_HALT[k].search(lower)]
+        found_caution = [k for k in KEYWORDS_CAUTION if _WB_CAUTION[k].search(lower)]
+        found_monitor = [k for k in KEYWORDS_MONITOR if _WB_MONITOR[k].search(lower)]
 
         if found_halt:
             return "HALT",    found_halt[:3],    0.0
@@ -1548,7 +1554,7 @@ class NewsMonitor:
         now = datetime.now(ET)
 
         # Build task list — only include sources whose rate-limit window has elapsed
-        tasks: list[tuple[str, callable]] = [
+        tasks: list[tuple[str, Callable[[], list]]] = [
             ("truth_social", self.check_truth_social),
         ]
         if self._last_news_check is None or (now - self._last_news_check).total_seconds() > 300:

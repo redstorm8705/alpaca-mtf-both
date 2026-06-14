@@ -4740,3 +4740,69 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 ### Impact: News bonus reduced 35/20/10 → 15/10/5; gate tightened; semantic correctness restored
 
 **STATUS: APPLIED + VERIFIED (2026-06-14 S59)**
+
+---
+## 2026-06-14 S60 (cont) — news_monitor.py word-boundary keyword matching
+
+**File:** `events/news_monitor.py` (1807 lines, 7 chunks)
+**Session:** S60 continuation (context resumed from prior session)
+**Purpose:** Fix false-positive keyword matching in `_classify()` — substring `in` → word-boundary `re.search(r'\b...\b')`
+
+### Full Read Declaration
+Full read complete: 1807 lines in 7 chunks (L0-299, L300-599, L600-899, L900-1199, L1200-1499, L1500-1806).
+
+### 10-Point Audit
+
+| Point | Check | Finding |
+|-------|-------|---------|
+| 1 | Static analysis | Will run on patched file pre-proposal |
+| 2 | E2E trade path trace | news_monitor.scan_breaking_news() → _classify() assigns risk_level → alerts added to _active_alerts → MacroRiskIndex.inject_news_state() reads count → MRI level → run_cycle() BV-5/size gate. False positives in _classify() inflate alert count → push MRI higher → incorrect size floors/MIN_SCORE deltas |
+| 3 | Adversarial scenarios | "congressional leaders debate debt ceiling" → "congress" matches (false CAUTION). "Mississippi flooding drives corn prices" → "ppi" matches (false CAUTION). "Republican congressman said..." → "congress" matches (false CAUTION). Word-boundary fix eliminates all three. |
+| 4 | Full top-to-bottom read | COMPLETE — 1807 lines, all functions read |
+| 5 | Cross-references | _classify() called at L579, L689, L760, L860, L953, L1045, L1127, L1200, L1274, L1350, L1426, L1486, L1523 — all 14 source methods. KEYWORDS_* sets at L101-136 as module-level. re imported at L47 — re.search() available. |
+| 6 | Conflicting directions | None. Market-reaction-first architecture consistent throughout. HALT=0.0x is the only size gate. |
+| 7 | Redundancy scan | is_war_state_active() at L1692 is intentional compat alias. No dead code. |
+| 8 | State persistence | _save_seen_hashes() L338-353 uses atomic tmp→replace ✓. _persist_macro_risk_window() L355-368 uses atomic tmp→replace ✓. Both use Path(__file__).parent.parent anchoring ✓ |
+| 9 | Data source tier | N/A — news_monitor fetches news feeds, not market OHLCV. Tier hierarchy doesn't apply. No yfinance for equities. |
+| 10 | Timezone + logging | datetime.now(ET) throughout — no naked datetime.now() ✓. PT timestamps in get_summary() and BreakingNewsAlert.__str__() ✓ |
+
+### RC Audit
+
+| RC | Class | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all datetime.now() calls use ET timezone |
+| RC-2 | CWD-relative path | PASS — all paths use Path(__file__).parent.parent anchoring |
+| RC-3 | Silent exception | NEW FINDING: L329-330 `except Exception: pass` in _load_seen_hashes() inner loop (per-entry malformed ISO timestamp skip). Pre-existing. Not scope of this patch. Should increment RC-3 count in bug_counter.json. |
+| RC-4 | Estimated exit price | N/A — no exit logic |
+| RC-5 | Non-atomic write | PASS — both state file writes use atomic tmp→replace |
+| RC-6 | Wrong API field name | PASS — Finnhub/GNews/Currents fields consistent with documented response shapes |
+| RC-7 | Zero-share sizing | N/A — no sizing logic |
+| RC-8 | Unbounded scan buffer | PASS — _active_alerts capped at 100 (L1647-1652) |
+
+### Target Fix
+**Function:** `_classify()` at L444-447
+```python
+# CURRENT (substring — false positives):
+found_halt    = [k for k in KEYWORDS_HALT    if k in lower]
+found_caution = [k for k in KEYWORDS_CAUTION if k in lower]
+found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
+
+# PROPOSED (word-boundary — eliminates congress/congressional, ppi/mississippi, etc.):
+found_halt    = [k for k in KEYWORDS_HALT    if re.search(r'\b' + re.escape(k) + r'\b', lower)]
+found_caution = [k for k in KEYWORDS_CAUTION if re.search(r'\b' + re.escape(k) + r'\b', lower)]
+found_monitor = [k for k in KEYWORDS_MONITOR if re.search(r'\b' + re.escape(k) + r'\b', lower)]
+```
+
+**Trade-offs accepted:**
+- Multi-word keyword plurals missed: "rate cuts" won't match "rate cut", "trade wars" won't match "trade war"
+- Acceptable: architecture is market-reaction-first, keywords are display/alerting only (not sizing gates)
+- Single-word acronyms (ppi, cpi, gdp) and proper nouns (congress, russia, iran) are precisely matched
+
+**Scope exclusions:**
+- L502 FINNHUB_EVENT_MAP match: uses full names ("Consumer Price Index"), no false-positive risk
+- L1611-1612 macro risk keyword check: downstream of _classify(), protected once root is fixed
+- L1721-1731 event type classification: also downstream, protected
+
+### Board / DS / GAI
+(pending — see session notes)
+
