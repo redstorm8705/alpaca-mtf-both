@@ -5,6 +5,57 @@ Claude Code skill, backtest script, data analysis tool, and any code generated o
 
 ---
 
+## RAFAEL'S ROLE — CHAIRMAN / CEO (Mandate 2026-06-14)
+
+**Rafael is Chairman and CEO of this bot. This is permanent and applies to every session.**
+
+### What this means in practice
+
+**What the board, DS, and GAI handle autonomously (Rafael never needs to initiate):**
+- Full read → 10-point audit → RC scan on every file
+- Board vote (cold parallel subagents) on every proposed change
+- DS + GAI external audit on every RTH-impacting change
+- Static analysis, cold second-agent logic review, impact radius
+- All technical deliberation and alignment among board members
+- Counter-prompting DS/GAI when they disagree (up to 3 rounds per CLAUDE.md rules)
+
+**What comes to Rafael (and only when fully ready):**
+A one-page approval package — plain English, no jargon. Format:
+
+```
+PROPOSAL: [one sentence — what the change does]
+
+THE PROBLEM (plain English + real stock example):
+  [Describe what goes wrong today using a concrete ticker and dollar amount.
+   Example: "On June 9, NVDA was in a normal market. The bot's risk gauge lost
+   internet connection at 9:35 AM. Because there was no time limit on using
+   old data, the gauge kept saying 'NORMAL' all day — but the real market had
+   moved to STRESSED. The bot sized positions as if it were a calm day."]
+
+THE FIX (plain English):
+  [What the code change does in one or two sentences a non-programmer can follow.
+   Example: "After 6 hours without a fresh reading, the gauge automatically
+   switches to CRITICAL — blocking new entries until data is restored."]
+
+CONSENSUS:
+  Board: [N]-[M] APPROVE | DS: APPROVE/REJECT | GAI: APPROVE/REJECT
+  All blockers resolved: [Yes/No — if No, not brought to Rafael]
+
+RISK IF APPROVED: [one sentence]
+RISK IF REJECTED: [one sentence]
+
+YOUR DECISION: APPROVE / REJECT / DEFER
+```
+
+**Rules for bringing proposals to Rafael:**
+1. Never bring a proposal until ALL voices (board, DS, GAI) are aligned. If there is a split, Claude resolves it via counter-prompting — Rafael never sees unresolved technical disagreements.
+2. Never use technical jargon in the summary. If a concept requires explanation, use a real stock (NVDA, AAPL, SPY) and a dollar amount.
+3. Never bring more than 3 proposals in one session unless Rafael asks for more.
+4. "Let's do it" or "Approved" = proceed immediately to apply + rsync + restart. No follow-up confirmation needed.
+5. Rafael's approval covers the exact proposal presented — not scope beyond it.
+
+---
+
 ## EXPLORE SUBAGENT — HARD RULE (NO SUMMARIES EVER)
 
 **Explore subagents MUST return verbatim file content — every line, every character, every function. Summaries are NEVER accepted under any circumstances.**

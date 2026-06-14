@@ -136,6 +136,9 @@ Note: NFLX position from S54 is closed.
 | RC-8 Unbounded scan buffer | **1** | entry_logic.py (9 sites, deadlocked) |
 | RC-1 Naive datetime | **0** | CLOSED |
 
+## Rafael's Role — CHAIRMAN / CEO (Mandate 2026-06-14)
+Rafael sees proposals ONLY when board + DS + GAI are fully aligned. Every approval package delivered in plain English with a real stock example. "Let's do it" = apply immediately. See CLAUDE.md §RAFAEL'S ROLE for full format. Board/DS/GAI handle all technical deliberation autonomously — Rafael decides, not deliberates.
+
 ## Full Read Gate — ZERO TOLERANCE
 Every file requires FULL read before ANY analysis. Files >1,000 lines → Read tool in ≤300-line chunks. Declare "Full read complete: N lines" before findings. No grep/search/partial reads as file exploration — EVER.
 
