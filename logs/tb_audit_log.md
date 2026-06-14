@@ -4648,3 +4648,118 @@ RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PAS
 - **RC-8 pending approval #1 — STALE + DEADLOCK RESOLVED, CLOSED.** The 9 buffer-clear sites were already applied 2026-06-08 (b2e61f7) and are live on OCI (25 total rc8 call sites in HEAD). Tie-breaker protocol round: DS and GAI both retracted the IO-grounds rejection when counter-prompted with the one-gate-per-symbol + write-only-when-nonzero structural argument — both APPROVE. RC-8 count → 0 CLOSED.
 - **RAM pressure — instrumented.** rss_trend.csv sampler installed (10-min cron on OCI: bot/writer RSS, available, swap, uptime). Leak analysis scheduled for the work chain once ≥6h of data accumulates. Watchdog verified to read the correct 'available' column — overnight alerts were genuine.
 - **MRI-HALT buffer-clear follow-up (from #1's DS/GAI notes)** — still open, queued P2.
+
+---
+## S60 (2026-06-14) — DS AUDIT LOOP CLOSE — BV-5 Patches (commits 56a2575 / a44e2cc / 0bd0b8f)
+
+DS was blocked by egress in the prior session. DS access confirmed live this session (HTTP 200
+to api.deepseek.com). Same prompt sent to DS for all three patches. GAI APPROVED all three in
+prior session; DS results below complete the DS/GAI gate.
+
+---
+### 3-POINT AI SUMMARY — strategy/run_cycle.py — BV-5 STRESSED demote (commit 56a2575)
+
+**DS verdict: APPROVE** (with monitoring recommendation)
+**GAI verdict: APPROVE** (prior session — no conditions)
+**Board verdict: 17-voice consensus Option C** (2026-06-12)
+
+```
+POINT 1 — ALIGNMENT
+  STRESSED demoted from hard-block to soft handling: 3/3 — Claude ✓  DS ✓  GAI ✓
+  Soft gates (0.70x size + MIN_SCORE+2) adequate protection at STRESSED: 3/3 — Claude ✓  DS ✓  GAI ✓
+  Race condition risk (NORMAL→STRESSED mid-cycle bypasses soft gates): 1/3 — Claude ✗  DS ✓  GAI ✗
+
+POINT 2 — CLAUDE MISSED (DS + GAI consensus)
+  None. Race condition flagged by DS only; GAI did not independently flag it. No DS+GAI consensus
+  items missed by Claude.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  Race condition (DS only): mri.size_floor() and mri.min_score_floor() snapshots are taken at
+  top-of-cycle. BV-5 uses a second mri.level() snapshot. If MRI transitions NORMAL→STRESSED between
+  the two snapshots (window ~50ms, MRI updates on 60s timer), an entry could proceed at 1.0x size
+  (no floor, no score bump) despite STRESSED level. DS assessed probability <0.1% per cycle,
+  dollar impact $0 to $35 max (1.0x vs 0.70x on ~$35 max-risk trade). — P3 — board vote N —
+  DS recommendation: add log line on STRESSED entry to make these visible.
+```
+
+**STATUS: AUDIT LOOP CLOSED — DS APPROVE / GAI APPROVE / Board APPROVE**
+
+---
+### 3-POINT AI SUMMARY — events/macro_risk_index.py — news bonus cap (commit a44e2cc)
+
+**DS verdict: REJECT** — oscillation risk (see Point 3 below; escalated to Rafael per task instructions)
+**GAI verdict: APPROVE** (prior session — with gated-flag semantic fix, already incorporated)
+**Board verdict: 3/3 APPROVE** (prior session)
+
+```
+POINT 1 — ALIGNMENT
+  News bonus schedule reduced (35/20/10 → 15/10/5): 3/3 — Claude ✓  DS ✓  GAI ✓
+  Gate scope narrowed to alert_count≥5 AND _ps<10: DS ✗  GAI ✓  (split — DS REJECT on this)
+  gated flag semantic fix (raw_bonus > bonus): 3/3 — Claude ✓  DS ✓  GAI ✓
+  Idempotent subtract-prior logic still correct with new values: 3/3 — Claude ✓  DS ✓  GAI ✓
+  Max news push +15 pts appropriate for 5+ confirmed alerts: 2/3 — Claude ✓  DS ✓  GAI ✓
+
+POINT 2 — CLAUDE MISSED (DS + GAI consensus)
+  None. DS's oscillation concern was not flagged by GAI. No DS+GAI consensus items missed by Claude.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  MRI oscillation risk (DS only — basis for DS REJECT): When base MRI (without news) is in the
+  40–49 range and _ps oscillates around the new 10-pt threshold across consecutive 5-min cycles,
+  the news bonus toggles between 10 and 15 pts. This can flip the MRI level between STRESSED
+  (score 30–49, entries allowed with soft gates) and HIGH (score 50+, BV-5 hard block) on
+  alternating cycles. DS called this a P0 execution concern — inconsistent allow/block pattern
+  could create orphan partial fills. DS proposed hysteresis: if prior gated bonus=10 and _ps
+  is within 3pts of threshold, hold the cap for one cycle. — P1 — board vote Y (modifies
+  RTH gate logic) — ESCALATED TO RAFAEL, awaiting decision.
+
+  Mid-tier gap (DS only): alert_count=3-4 with _ps=0 (complete market silence) still injects
+  +10 (no gate at mid-tier). DS notes this is no worse than the old code. DS suggests optional
+  secondary gate: `elif alert_count >= 3 and _ps < 5: bonus = 5`. — P3 — board vote Y.
+```
+
+**STATUS: DS/GAI SPLIT — GAI APPROVE / DS REJECT — ESCALATED TO RAFAEL**
+**No further changes to macro_risk_index.py until Rafael decides on hysteresis approach.**
+
+---
+### 3-POINT AI SUMMARY — events/news_monitor.py — word-boundary regex (commit 0bd0b8f)
+
+**DS verdict: APPROVE** (with conditions — all assessed below)
+**GAI verdict: APPROVE** (prior session)
+**Board verdict: 4/5 APPROVE** (conditions met) (prior session)
+
+```
+POINT 1 — ALIGNMENT
+  Word-boundary regex eliminates congress/ppi false positives: 3/3 — Claude ✓  DS ✓  GAI ✓
+  Multi-word phrase matching correct (\bnational emergency\b works): 3/3 — Claude ✓  DS ✓  GAI ✓
+  "trading halts" addition is NECESSARY (not redundant): 3/3 — Claude ✓  DS ✓  GAI ✓
+  Type annotations str|None correct for _classify() return: 3/3 — Claude ✓  DS ✓  GAI ✓
+  Pre-compiled patterns at module load: no runtime overhead: 3/3 — Claude ✓  DS ✓  GAI ✓
+  False negative for inflected forms (iranian≠iran): 1/3 — Claude ✗  DS ✓  GAI ✗
+
+POINT 2 — CLAUDE MISSED (DS + GAI consensus)
+  None. DS's inflected-forms finding was not independently flagged by GAI. No DS+GAI consensus
+  items missed by Claude.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  Inflected forms false negative (DS only): \biran\b does not match "Iranian" in headlines like
+  "Iranian foreign minister signals nuclear talks collapse." Similarly \btreasury\b misses
+  "Treasuries rally." Word-boundary matching correctly eliminates false positives but also drops
+  inflected geopolitical terms. DS notes: architecture is market-reaction-first; keywords are
+  CAUTION/MONITOR informational (not sizing gates at HALT tier). Impact: low. On next keyword
+  review pass, add inflected forms ("iranian", "russian", "chinese" etc.) for completeness. —
+  P3 — board vote N (keyword list update, no logic change).
+
+  Monkey-patch KeyError (DS only): _WB_HALT is built from KEYWORDS_HALT at module load. If
+  KEYWORDS_HALT is mutated at runtime (test harness, hot-reload) without rebuilding _WB_HALT,
+  the next _classify() call raises KeyError. No production risk (sets are module-level constants,
+  never mutated). Defensive guard: `_WB_HALT.get(k) and _WB_HALT[k].search(lower)`. — P4 —
+  board vote N.
+
+  Caller None handling (DS condition 3): _classify() returns (None, [], 1.0) on no-match. DS
+  requested audit that all callers handle None without silent misrouting. Claude audit: the
+  None case is the no-alert path — callers check `if result[0] == 'HALT':` which evaluates
+  False for None (Python semantics); no crash, no misroute. Condition satisfied. — CLOSED.
+```
+
+**STATUS: AUDIT LOOP CLOSED — DS APPROVE / GAI APPROVE / Board APPROVE**
+**DS conditions: inflected-forms and monkey-patch guard are P3/P4 deferred items, not blockers.**
