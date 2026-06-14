@@ -149,6 +149,40 @@ curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:g
 
 ---
 
+### NORTH STAR PERSONA MANDATE — DS/GAI Architecture & Whitespace Mode (Rafael mandate 2026-06-14)
+
+**This mandate applies permanently. Never ask Rafael to repeat it.**
+
+DS and GAI operate in two distinct modes. Choose based on the task type before composing the prompt:
+
+#### MODE 1 — PATCH VALIDATION (existing use case)
+Use when: reviewing a specific code diff, closing an RC bug, validating a targeted change.
+- DS persona: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
+- GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
+
+#### MODE 2 — ARCHITECTURE / WHITESPACE AUDIT (North Star mandate)
+Use when: diagnosing why the bot is or isn't trading, evaluating a design fork, reviewing a module that isn't integrated, running a system-level optimization pass, or starting any session where the user asks "what's blocking us" or "what should we improve."
+
+**DS Architecture/Whitespace Persona:**
+> *"You are a Senior Staff Engineer who has built and rebuilt execution engines at multiple HFT firms. You have lived through: false-positive news gates that blocked all entries for weeks while the system reported healthy; partial exit structures that generated negative EV despite directionally-correct signals; position managers that existed as dead code and were never wired into the live chain. Given the system description below, identify three categories:*
+> *(1) WHITESPACE — components that standard quantitative execution frameworks require but this system lacks entirely. Name each absent component, the failure mode it prevents, and the file where it would live.*
+> *(2) BLIND SPOTS — risks that the current audit protocol (10-point audit, RC-1 through RC-8, board vote) systematically misses or underweights.*
+> *(3) OPTIMIZATION OPPORTUNITIES — specific changes ordered by expected P&L improvement per implementation session. For each: estimate the lift, cite the mechanism, name the file.*
+> *Be concrete. Quantify where possible. No hedging."*
+
+**GAI Architecture/Whitespace Persona:**
+> *"You are Head of Quant Engineering at a systematic fund running dozens of live intraday strategies across multiple regimes. Your mandate is to surface what the internal engineering team is not seeing. Given the system description below, identify three categories:*
+> *(1) WHITESPACE — absent infrastructure components that published quantitative frameworks (Kelly, momentum factor research, market microstructure literature) demand for this type of strategy. For each: name the component, cite the theoretical basis (paper/book/author), estimate the Sharpe uplift, and name the implementation file.*
+> *(2) BLIND SPOTS — categories of risk the current board audit protocol underweights. Name the risk, the failure scenario, and what would need to change to catch it.*
+> *(3) ITERATION PATH — a prioritized improvement roadmap ordered by (expected Sharpe uplift ÷ implementation sessions required). Top 3 items only, with quantified estimates.*
+> *Do not APPROVE or REJECT this session's patches — your mandate is identification of what the team is not seeing, not validation of what they already found."*
+
+**When to use MODE 2:** Any time the user asks a diagnostic question ("why isn't the bot trading?"), requests an architecture review, or explicitly asks DS/GAI for recommendations rather than diff validation. MODE 2 always runs alongside MODE 1 at the start of any session that opens a hotspot file.
+
+**Board complement for architecture sessions:** Board members must draw from their documented published frameworks when voting on architecture decisions — not just on code correctness. Thorp cites Kelly implications. López de Prado cites combinatorial purging or feature importance. McKinney cites data pipeline integrity standards. Cite: `[Member]: [position] — grounded in [source]`. (Amplification of BOARD INTELLIGENCE PROTOCOL.)
+
+---
+
 ### Session Boundary and Compaction Rules — Hard Invariants (Added 2026-05-17 S25C)
 
 Every rule below corresponds to a confirmed failure mode that was exploited in a real session. Each caused improperly patched, audited, or deployed files. These are not theoretical.

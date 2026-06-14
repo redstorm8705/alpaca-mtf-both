@@ -4763,3 +4763,250 @@ POINT 3 — FORWARD-LOOKING (new issues)
 
 **STATUS: AUDIT LOOP CLOSED — DS APPROVE / GAI APPROVE / Board APPROVE**
 **DS conditions: inflected-forms and monkey-patch guard are P3/P4 deferred items, not blockers.**
+
+---
+
+## 2026-06-14 S59 — Architecture Decision Audit: D5, D1, T1 Tranche, QHM Integration
+
+**Session:** S59 | **Branch:** `claude/ds-audit-bv5-patches-dqqaqm`
+**Source:** Board (parallel Explore subagents, cold) + DS API (architecture/whitespace mode) from prior session window; captured here per compaction. Fresh DS/GAI calls required before any patch is applied (RULE C-2).
+
+---
+
+### 3-POINT AI SUMMARY — events/macro_risk_index.py — D5: MRI startup defaults to CRITICAL
+
+**Issue:** `_restore()` at L807-828: if state file is missing (fresh deploy, first run) OR state is >20h stale, `_level` is set to `"CRITICAL"`. Bot starts every restart in CRITICAL MRI — all entries blocked by BV-5 hard gate until first successful refresh (typically 5-15 min into RTH). Confirmed root cause of "bot not trading" pattern on fresh deploys and restarts.
+
+**Options evaluated:**
+- A: Change default from CRITICAL to NORMAL (fail-open) — rejected unanimously
+- B: Force `mri.refresh()` at startup before first `run_cycle()` call, timeout 30s — board 3-2 + DS RECOMMEND
+- C: Accept CRITICAL default; add Slack alert "MRI COLD START" so Rafael knows manually — rejected
+
+**Board verdict (Reliability domain, 5 cold subagents):** 3-2 for Option B
+- Peterffy (BoD): B preserves fail-closed on actual outage while eliminating cold-start penalty — grounded in IBKR production startup sequencing principles
+- Katsuyama (TB): Fresh deploy + IEX-style pre-market data fetch pattern supports B — validates data before opening the gate, not after
+- Minsky (TB): B is equivalent to Jane Street "warm-up phase" before serving — explicit initialization sequenced before live traffic
+- Beck (TB), Kim (TB): Minority — preferred CRITICAL + alert (Option C) to make cold-start explicit rather than auto-resolved
+
+**DS verdict (architecture/whitespace mode):** Option B. Rationale: a 30s blocking startup refresh eliminates the CRITICAL default without any logic change to the guard itself. Fail-closed invariant preserved because actual refresh failures still return CRITICAL. Zero RTH risk — refresh completes before first `run_cycle()` call by design. DS noted: if startup refresh itself hangs (API timeout), the timeout guard is critical.
+
+**GAI verdict:** Not captured in prior session window (compaction). Fresh GAI call required before D5 patch sequence begins (RULE C-2).
+
+```
+POINT 1 — ALIGNMENT
+  CRITICAL default on cold start is the confirmed blocking issue: 3/3 — Claude ✓  DS ✓  Board ✓
+  Option A (fail-open default) is wrong: 3/3 — Claude ✓  DS ✓  Board ✓
+  Option B (force refresh at startup) is the correct fix: 2/3 — Claude ✓  DS ✓  Board minority ✗ (Beck/Kim preferred C)
+  Option B requires 30s timeout guard to avoid RTH hang: 3/3 — Claude ✓  DS ✓  Board ✓
+
+POINT 2 — CLAUDE MISSED (DS consensus — GAI pending)
+  Timeout guard is mandatory (DS finding): Without a hard timeout on the startup refresh,
+  a slow API response can block `run_cycle()` from starting entirely — worse than CRITICAL
+  default. Must wrap `mri.refresh()` in `concurrent.futures` 30s wall-clock timeout,
+  same pattern as yfinance safe_fetch. This is a required addition to the D5 patch.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  Startup sequencing gap (DS/Board): If MRI refresh is added to startup but fails silently
+  (connection refused, DNS failure), the bot proceeds with CRITICAL level and no alert.
+  Add: Slack alert if startup refresh fails, separate from the normal staleness alert. — P2.
+
+  Beck/Kim minority concern: Auto-resolving CRITICAL on startup removes an explicit signal
+  that the bot is relying on cached/stale MRI. If OCI has intermittent API issues, the bot
+  may enter positions on stale data without operator awareness. Mitigation: log "MRI COLD
+  START REFRESH" prominently at INFO level + Slack on refresh success (not just failure). — P2.
+```
+
+**DECISION: Option B — force `mri.refresh()` at startup, 30s timeout, Slack on failure.**
+**STATUS: Board 3-2 + DS RECOMMEND. GAI pending (required before patch per RULE C-2).**
+
+---
+
+### 3-POINT AI SUMMARY — events/macro_risk_index.py — D1: MRI staleness ceiling
+
+**Issue:** `level()` at L179-184: when `_refresh_failed` is True, returns `_last_known_good_level` indefinitely. A bot that loses MRI refresh connectivity at 9:35 AM trades all session on stale MRI state — potentially NORMAL level from prior day while actual stress regime is HIGH.
+
+**Options evaluated:**
+- A: Return CRITICAL immediately on any refresh failure (too aggressive — transient blips cause false blocks)
+- B: Keep `_last_known_good_level` indefinitely (current — confirmed bug)
+- X (consensus): Staleness ceiling — after N hours of consecutive refresh failures, escalate to CRITICAL regardless of last known level
+  - 6h: Board + DS consensus
+  - 12h: Also proposed as conservative alternative
+
+**Board verdict (Reliability domain):** 5-0 for Option X at 6h ceiling
+- Peterffy: 6h is the boundary between transient connectivity issue and structural API failure — grounded in IBKR fault-tolerance design (secondary data sources kick in at 4h)
+- Minsky: 6h matches Jane Street's "stale data window" before hard failure escalation in async pipelines
+- Schneier (TB): Security/audit perspective — indefinite stale data is a silent failure; 6h ceiling makes the failure observable
+- McKinney (TB): Data integrity requires explicit staleness bounds; indefinite stale is equivalent to corrupted data
+- Majors (TB): Observability requires the system to self-declare degraded state; 6h ceiling + CRITICAL achieves this
+
+**DS verdict (architecture/whitespace mode):** 6h ceiling → CRITICAL. Implementation: `_refresh_failed_since` timestamp set on first failure; `level()` checks `(now - _refresh_failed_since) > timedelta(hours=6)` and returns CRITICAL if true. DS noted: `_refresh_failed_since` must be reset to None on any successful refresh.
+
+**GAI verdict:** Not captured in prior session window (compaction). Fresh GAI call required before D1 patch sequence begins (RULE C-2).
+
+```
+POINT 1 — ALIGNMENT
+  Indefinite stale level is a confirmed bug: 3/3 — Claude ✓  DS ✓  Board ✓
+  6h ceiling is the correct threshold: 2/3 — Claude ✓  DS ✓  Board ✓ (unanimous 5-0)
+  _refresh_failed_since must reset on successful refresh: 3/3 — Claude ✓  DS ✓  Board ✓
+
+POINT 2 — CLAUDE MISSED (DS finding — GAI pending)
+  Reset guard required (DS): `_refresh_failed_since = None` must be explicitly called on
+  successful refresh. Without this, a bot that recovers connectivity after 8h will
+  continue returning CRITICAL for the rest of the session because the timestamp persists.
+  Must add reset to the `_refresh()` success path.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  Clock skew on OCI (DS): OCI VM time may drift; `datetime.now()` vs `_refresh_failed_since`
+  comparison should use `datetime.now(ET)` (timezone-aware) to prevent RC-1 violation in
+  the new code. — P1 (RC-1 check mandatory before patch goes in).
+
+  Slack alert on ceiling breach (DS/Board): When staleness crosses 6h and CRITICAL escalates,
+  fire a Slack alert: "MRI STALENESS CEILING REACHED — 6h without successful refresh —
+  entering CRITICAL mode." Without this, Rafael has no visibility that the bot is in
+  forced-CRITICAL rather than measured-CRITICAL. — P1.
+```
+
+**DECISION: Option X — 6h staleness ceiling → CRITICAL, with `_refresh_failed_since` reset on success + Slack alert on ceiling breach.**
+**STATUS: Board 5-0 + DS RECOMMEND. GAI pending (required before patch per RULE C-2).**
+
+---
+
+### 3-POINT AI SUMMARY — execution/exit_logic.py — T1 tranche structure (EV analysis)
+
+**Issue:** Current partial exit structure (hardcoded in `check_partial_exits()`):
+- `TRANCHE_FRACS = [0.20, 0.40, 0.60]` — T1 at 20% of 2.5x ATR target = 0.50 ATR from entry
+- `TRANCHE_SHARE = 0.25` — each tranche closes 25% of original qty
+- After T1 fill: trailing stop activates at `current_price - (0.5 ATR)` = immediately at entry price
+- Net result: 25% of position exits at +0.50 ATR; 75% is stopped at breakeven. EV ≈ negative on commission + slippage.
+- Dead config: `PARTIAL_EXIT_ATR_MULT = 0.8` in config.py is not wired into this logic.
+
+**Options evaluated:**
+- A: Keep T1 at 0.20 but raise TRANCHE_SHARE to 0.33 (minor improvement)
+- B: Move T1 to 0.30 of full target = 0.75 ATR (moderate improvement)
+- C: Eliminate T1 entirely; start at T2. `TRANCHE_FRACS = [0.40, 0.60, 1.0]`, `TRANCHE_SHARE = 0.33`. Exits at 1.0 / 1.5 / 2.5 ATR. Trail activates only at 1.0 ATR from entry (meaningful profit cushion).
+- D: Eliminate all partials; hold full position to target with trailing stop after 1.5 ATR
+
+**Board verdict (Quant/Exit domain):** Board subagent declined attributed votes for real individuals on live trading decisions. DS provided equivalent quantitative analysis.
+
+**DS verdict (architecture/whitespace mode):** Option C strongly preferred. Quantified:
+- Current structure (Option A baseline): EV per signal ≈ −$18.65 (25% × (+0.50 ATR × dollar_per_ATR) − 75% × commission_per_leg × 2 ± slippage)
+- Option C: EV per signal ≈ +$31.40 (33% × 1.0 ATR + 33% × 1.5 ATR + 34% × 2.5 ATR or trail exit) assuming ~40% of positions run to T2 or beyond
+- Net EV swing from current to Option C: +$50.05 per signal on average
+- Trail activation at 1.0 ATR gives position room to breathe; false trail-outs reduced ~60%
+- TRANCHE_SHARE = 0.33 (not 0.25) ensures full position is closed by T3 (3 × 0.33 = 0.99 ≈ 1.0)
+- Dead config `PARTIAL_EXIT_ATR_MULT` should be deleted — it creates a false impression that the config drives tranche distances
+
+**DS architecture finding:** Trail stop should be re-anchored at T2 fill price (not T1 fill price). Current code activates trail at `_t1_price - 0.5 ATR` — with T1 eliminated, trail must activate at `_t2_price - 0.75 ATR` (TRAIL_STOP_ATR_MULT=0.5 → but T2 is at 1.0 ATR, so trail should give back 0.5 ATR from T2 = entry + 0.50 ATR still). Full analysis needed in exit_logic.py full read.
+
+**GAI verdict:** Not captured in prior session window. Fresh GAI call required before T1 patch sequence begins (RULE C-2).
+
+```
+POINT 1 — ALIGNMENT
+  Current T1 at 0.50 ATR → immediate breakeven trail → negative EV: 2/3 — Claude ✓  DS ✓  Board ✗ (declined attributed vote)
+  Option C (eliminate T1, start at T2) is the correct structural fix: 2/3 — Claude ✓  DS ✓
+  TRANCHE_SHARE must be 0.33 (not 0.25) to fully close position: 2/3 — Claude ✓  DS ✓
+  Dead config PARTIAL_EXIT_ATR_MULT=0.8 should be deleted: 2/3 — Claude ✓  DS ✓
+
+POINT 2 — CLAUDE MISSED (DS finding — GAI pending)
+  Trail re-anchor required (DS): With T1 eliminated, the trail stop activation logic must be
+  updated to anchor at T2 fill price (not the old T1 price variable). If exit_logic.py uses
+  `_t1_price` or a T1-indexed variable as the trail anchor, deleting T1 breaks the trail
+  entirely. Full read of exit_logic.py trail logic required before patch is proposed.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  Target recalibration (DS whitespace): 2.5x ATR full target may also be too aggressive for
+  HIGH-vol names at current INTRADAY_STOP_ATR_MULT=1.20. DS suggested evaluating 1.8x ATR
+  as full target (Option C at T3 = 1.8 ATR rather than 2.5 ATR) — shorter runway, higher
+  hit rate. Board vote required before changing TARGET. — P2, separate decision.
+
+  Option D risk (DS noted): Full-position hold with trail only. DS analysis shows this reduces
+  EV variance but increases max-adverse-excursion exposure on trending losses. Not recommended
+  for current 4-position max with intraday holds. — Deferred.
+```
+
+**DECISION: Option C — eliminate T1, TRANCHE_FRACS=[0.40, 0.60, 1.0], TRANCHE_SHARE=0.33, delete dead PARTIAL_EXIT_ATR_MULT.**
+**CAUTION: Trail re-anchor must be verified in full read of exit_logic.py before patch. Full sequence (Steps 1-9) required.**
+**STATUS: Board declined attributed vote; DS RECOMMEND Option C. GAI pending (required before patch per RULE C-2).**
+
+---
+
+### 3-POINT AI SUMMARY — execution/quarterly_hold_manager.py — QHM Integration Decision
+
+**Issue:** `quarterly_hold_manager.py` (1432L, DS+GAI APPROVE on module S49) exists but is NOT integrated. `grep "quarterly\|qhm" main.py` → 0 results. Q3 2026 picks (LLY/GE/GEV) confirmed by Rafael; GS window passed (Jul 7-14). GEV entry Jul 22, GE entry Jul 25. No integration = zero quarterly hold positions taken.
+
+**Integration points required:**
+1. `main.py` startup: instantiate QHM, call `reconcile_on_startup()`
+2. `run_cycle.py`: call `qhm.maybe_enter_positions()` + `qhm.run_weekly_check()`
+3. `entry_logic.py`: import `get_quarterly_hold_symbols()` to block same-symbol intraday crossovers
+4. `_THESIS_CONFIG` in `quarterly_hold_manager.py`: update with Q3 picks (LLY/GE/GEV, skip GS)
+
+**Sizing decision:** Original S49 board sized QHM at 45% of account equity. Current account = ~$2,814. At 45%, QHM consumes ~$1,266 — leaves only $1,548 for intraday bot (55%). Board and DS both flagged this as over-allocated.
+
+**Board verdict (Portfolio/QHM domain, cold subagents):** 
+- Unanimous: Skip GS (window Jul 7-14 passed; it is Jun 14, window is closed)
+- 4-1 for 25% max QHM allocation (~$700 across 3 positions ≈ $233/position): preserves 75% intraday capital
+- QHM integration sequence: full mandatory sequence (Steps 1-9 per file) for main.py, run_cycle.py, entry_logic.py — all RTH hotspot files
+- Time-critical: begin integration immediately to be ready for GEV Jul 22 (38 days) and GE Jul 25 (41 days)
+- Thorp (AB): at <30 QHM trades, Kelly has no reliable estimate; floor-size all QHM positions at KELLY_MIN_RISK_PCT
+- López de Prado (AB): correlation between QHM longs (LLY pharma / GE industrial / GEV energy) is low; cross-QHM correlation not a blocking concern at 3-position max
+
+**DS verdict (architecture/whitespace mode):**
+- QHM integration is OVERDUE — GS window already missed because integration was never done
+- Recommended integration order: (1) _THESIS_CONFIG Q3 update first (no RTH impact, low risk), (2) entry_logic.py import (read-only, adds cross-trade block), (3) run_cycle.py call (medium complexity), (4) main.py startup (highest complexity — reconcile_on_startup touches broker)
+- Sizing: 20-25% QHM max. At $2,814 equity, 25% = $703 ≈ $234/position. Per-position Kelly floor sizing means ~3-4 shares of LLY ($700+) or 7-8 shares of GEV (~$90) — reasonable
+- DS whitespace finding: No correlation cap between QHM longs and intraday bot positions in same sector. If bot goes long GEV intraday while QHM holds GEV, combined exposure could breach 100% in one name. `get_quarterly_hold_symbols()` cross-trade block must also block INTRADAY longs in QHM symbols (not just intraday entries via QHM itself)
+
+**GAI verdict:** Not captured in prior session window. Fresh GAI call required before QHM integration patch sequences begin (RULE C-2).
+
+```
+POINT 1 — ALIGNMENT
+  QHM is unintegrated — zero quarterly positions taken: 3/3 — Claude ✓  DS ✓  Board ✓
+  GS window is closed (Jul 7-14); skip GS for Q3: 3/3 — Claude ✓  DS ✓  Board ✓ (unanimous)
+  25% max QHM allocation (not 45%): 2/3 — Claude ✓  DS ✓  Board 4-1 ✓
+  Integration order: _THESIS_CONFIG → entry_logic → run_cycle → main: 2/3 — Claude ✓  DS ✓
+
+POINT 2 — CLAUDE MISSED (DS finding — GAI pending)
+  Intraday same-symbol block must cover INTRADAY LONGS too (DS): `get_quarterly_hold_symbols()`
+  currently blocks same-symbol via the QHM entry path. But if the intraday bot initiates a
+  LONG in GEV while QHM already holds GEV long, combined long exposure is unguarded. The
+  cross-trade block in entry_logic.py must refuse intraday LONG entries in QHM symbols,
+  not just QHM entries in intraday symbols. Bidirectional block required.
+
+POINT 3 — FORWARD-LOOKING (new issues)
+  LLY entry Aug 7 — 54 days from today (Jun 14): DS notes LLY is T1 pick with entry Day 3 =
+  Aug 7. With integration taking ~2-3 sessions across 4 files, there is time pressure but not
+  an immediate crisis. Prioritize GEV (Jul 22) and GE (Jul 25) integration paths. — P1.
+
+  QHM position reconciliation on restart (DS): reconcile_on_startup() adopts existing GTC stops.
+  If OCI restarts during an ACTIVE QHM position, the reconciler must correctly identify the
+  position as QHM-managed (not intraday) to avoid orphan_manager.py attempting to cancel the
+  GTC stop. The QHM stop exclusion patch (commit 436e1ad) confirmed this works — but must be
+  re-verified after any orphan_manager.py changes. — P1 ongoing.
+
+  Kelly floor for QHM (Thorp, AB): With <30 QHM trades, KELLY_MIN_RISK_PCT=0.0075 is the
+  mandatory floor. At $2,814 equity: 0.0075 × $2,814 = ~$21 risk per QHM position. With 14wk
+  ATR stop at 2.5x ATR, position size ≈ $21 / (2.5 × ATR_per_share). Ensure QHM sizing
+  path uses KELLY_MIN_RISK_PCT when Kelly sample < 30. — P1 (verify in quarterly_hold_manager.py
+  full read during integration sequence).
+```
+
+**DECISION: Begin QHM integration sequence. Order: _THESIS_CONFIG (Q3: LLY/GE/GEV, skip GS) → entry_logic.py cross-trade block → run_cycle.py calls → main.py startup. Max 25% QHM allocation. All RTH-impacting files require full Steps 1-9 + fresh DS/GAI per RULE C-2.**
+**STATUS: Board 4-1 + DS RECOMMEND. GAI pending (required before patch per RULE C-2). Time-critical: GEV Jul 22, GE Jul 25.**
+
+---
+
+### DS Architecture Whitespace Findings — S59 (2026-06-14)
+
+**Source:** DS API, architecture/whitespace mode (North Star mandate), from prior session window.
+
+**Finding W-1 (P1 — HIGH): Order Flow Imbalance as 13th confluence component**
+Current 12-point scoring system has no microstructure component. DS identified real-time bid/ask imbalance (bid_size / (bid_size + ask_size) > 0.65 for longs) as the highest single-session ROI addition. Alpaca Data real-time quotes (`data/alpaca_data.py`) already provide bid/ask sizes — no new data source required. Estimated +0.8 pts to Sharpe ratio on backtested signals with score ≥ 10. Implementation file: `strategy/signal_generator.py` (new component) + `config.py` (weight). Board vote required (scoring change).
+
+**Finding W-2 (P2 — MEDIUM): No correlation matrix cap between concurrent intraday positions**
+Bot allows up to 4 simultaneous positions (MAX_OPEN_POSITIONS=4). Architecture invariant #10 states: no more than 2 positions with beta correlation >0.7. But there is no runtime enforcement — the check is design-time only. DS recommends: in `entry_logic.py` or `risk_manager.py`, compute rolling 20-day beta correlation between candidate symbol and all open positions before entry. Block if >2 open positions already have correlation >0.7 to candidate. Implementation: `data/fetcher.py` (correlation fetch) + `execution/risk_manager.py` (guard). Board vote required.
+
+**Finding W-3 (P3 — LOW): Adaptive MRI sizing ramp within STRESSED band**
+Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ramp within the STRESSED band (MRI 30-49). At MRI=30: 0.95x. At MRI=49: 0.70x. Eliminates cliff-edge at the STRESSED/NORMAL boundary. Implementation: `events/macro_risk_index.py` `size_floor()` function. Board vote required.
+
+**Note:** W-1 is the highest-priority whitespace finding from DS and should be queued for next available session after D5/D1/T1/QHM sequences complete.
+
