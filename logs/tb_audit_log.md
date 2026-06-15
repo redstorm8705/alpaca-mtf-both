@@ -5171,3 +5171,38 @@ Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ram
 **Cold second-agent:** PASS
 **Changes:** import concurrent.futures (line 17). send_slack added to alerts import. Blocking startup mri.refresh(True) with 60s ceiling, success/failure logging, Slack alert on failure.
 **Post-patch:** All 3 static tools PASS. No regressions.
+
+---
+## 2026-06-15 S59 cont — DS/GAI MODE 2 items #3 and #4 board votes
+
+### ITEM #3: Breadth → MRI Integration
+
+**Quant/Signal board (Simons, Asness, Jegadeesh+Titman, Tulchinsky):** 4 CONDITIONAL-APPROVE
+- Key condition: Single-path consolidation required. Don't run breadth through two independent valves (size_floor + MRI score). Reduce pts allocation to 4 max (not 8).
+- Asness strongest objection: "Factor integration cardinal rule: no redundancy in regime classification."
+
+**Execution/Risk board (Peterffy, Katsuyama, Beck, Kim, Schneier):** 3 REJECT / 2 CONDITIONAL
+- Core objection: MRI refreshes every 10 minutes (price signals); breadth is 24h EOD data. Mixing incompatible refresh rates without explicit staleness handling is an architectural violation.
+- Schneier: unvalidated external CSV (TraderMonty T3) now on critical path to entry permission — adversarial risk (CSV injection, CDN DDoS).
+- Katsuyama: 24h stale breadth cannot drive intraday gating decisions — temporal lag destroys signal fidelity.
+
+**VERDICT: Item #3 CLOSED — current design is correct.**
+The existing breadth-as-size-floor architecture (breadth size_floor applied to _spy_risk_mult in run_cycle.py:1114-1120) is the architecturally sound path. DO NOT add breadth as a 9th MRI component. The DS/GAI MODE 2 recommendation for "breadth → MRI integration" was already satisfied by the size_floor approach, which is decoupled from MRI's 10-min refresh cycle.
+
+### ITEM #4: Portfolio Correlation Aggregator
+
+**Board recommendation:** Design revision required before implementation.
+- Proposed (20-day Pearson, fail-open): **REJECT** — 4/6 board members object
+- Revised design approved (Harris + Dalio): 60-day Spearman + fail-closed + directional-aware
+- López de Prado: recommends feature importance clustering as alternative
+- Taleb: correlations break down precisely during stress (when gate is needed most)
+
+**Revised design for approval queue:**
+- 60-day rolling daily returns (Spearman rank correlation)
+- fail-closed: on data unavailability, assume max correlation (do not allow entry)
+- directional-aware: only block same-direction pairs (long+long or short+short)
+- Threshold: 0.7 (per Invariant #10)
+- New file: `risk/correlation_matrix.py`
+- Integration: `execute_entries()` in `entry_logic.py`, before position count check
+
+**VERDICT: Item #4 DEFERRED — pending DS/GAI validation of revised design + full patch sequence (entry_logic.py full re-read required as it was patched this session).**
