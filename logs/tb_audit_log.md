@@ -5010,3 +5010,24 @@ Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ram
 
 **Note:** W-1 is the highest-priority whitespace finding from DS and should be queued for next available session after D5/D1/T1/QHM sequences complete.
 
+
+---
+## S59 — 2026-06-15
+
+### D5b — events/macro_risk_index.py (commits 9f8ac4a, 0cfeaea)
+**Full read:** 890 lines complete.
+**10-pt audit + RC scan:** All 8 RC classes PASS on changed functions.
+**Board:** 3-0 APPROVE | DS: APPROVE | GAI: APPROVE (2 rounds, Option B)
+**Static:** py_compile PASS · mypy PASS · ruff PASS
+**Cold second-agent:** PASS
+**Changes:** Removed >20h hard-CRITICAL in _restore() (lines 846-853). Added _startup_stale=True (default, cleared by refresh() success only). level() returns ELEVATED when _refresh_failed + _startup_stale. startup_stale() public accessor added. RC-3 upgraded: logger.debug → logger.warning in _restore() exception handler.
+**Post-patch:** All 3 static tools PASS. No regressions.
+
+### D5 — main.py (commit 0e597a8)
+**Full read:** 966 lines complete.
+**10-pt audit + RC scan:** All 8 RC classes PASS on changed area (lines 17, 204-208, 439-473).
+**Board:** 2-1 APPROVE | DS: APPROVE (1 counter-prompt) | GAI: APPROVE
+**Static:** py_compile PASS · mypy PASS · ruff PASS
+**Cold second-agent:** PASS
+**Changes:** import concurrent.futures (line 17). send_slack added to alerts import. Blocking startup mri.refresh(True) with 60s ceiling, success/failure logging, Slack alert on failure.
+**Post-patch:** All 3 static tools PASS. No regressions.
