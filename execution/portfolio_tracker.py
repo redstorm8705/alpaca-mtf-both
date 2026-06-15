@@ -1710,10 +1710,23 @@ class PortfolioTracker:
                 )
                 with open(_audit_path, "a") as _af:
                     _af.write(_json_audit.dumps(_audit_record) + "\n")
+                    _af.flush()
+                    os.fsync(_af.fileno())  # durability: rare path (<1/week)
             except Exception as _audit_err:
                 logger.warning(
                     f"[{symbol}] manual_audit.jsonl write failed: {_audit_err}"
                 )
+                try:
+                    from alerts import send_slack as _audit_slack
+                    _audit_slack(
+                        f"[RC-5] manual_audit.jsonl fsync FAILED for {symbol} "
+                        f"({_audit_err}) — external_close record may not be on disk."
+                    )
+                except Exception as _as_err:
+                    logger.warning(
+                        "[%s] audit fsync Slack alert failed: %s",
+                        symbol, _as_err,
+                    )
         # RC-4: populate index BEFORE _save_log() — ordering guard (DS F9)
         if trade.get("_fill_unverified"):
             self._unverified_exits.setdefault(symbol, []).append(trade)

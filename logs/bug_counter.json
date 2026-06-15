@@ -186,16 +186,16 @@
   },
   "RC-5": {
     "label": "Non-atomic write (open(path,'w') without tmp+replace pattern)",
-    "count": 1,
+    "count": 0,
     "patch_ids": [
-      "MRI-RC5-ENCODING"
+      "MRI-RC5-ENCODING",
+      "PT-RC5-FSYNC-S59"
     ],
-    "files": [
-      "events/macro_risk_index.py"
-    ],
+    "files": [],
     "first_seen": "2026-04-29",
-    "last_patched": "2026-04-29",
-    "notes": "MRI-RC5-ENCODING (2026-04-29): open() calls in _persist() and _restore() missing encoding='utf-8'. On OCI Linux, default locale encoding can be ASCII, causing silent corruption if JSON contains non-ASCII characters (e.g., emoji in global_note). Fixed: all open() calls in macro_risk_index.py now use encoding='utf-8' per RFC 8259."
+    "last_patched": "2026-06-15",
+    "notes": "MRI-RC5-ENCODING (2026-04-29): open() calls in _persist() and _restore() missing encoding='utf-8'. Fixed: encoding='utf-8' added to all open() calls in macro_risk_index.py. | PT-RC5-FSYNC-S59 (2026-06-15): manual_audit.jsonl append in record_exit() external_close branch missing flush+fsync. Fixed: added _af.flush() + os.fsync(_af.fileno()) inside with block; Slack escalation in except when fsync fails. Board 3/3 APPROVE (McKinney/Majors/Beck). DS APPROVE. GAI APPROVE (Round 3). RC-5 count=0 CLOSED.",
+    "status": "CLOSED"
   },
   "RC-6": {
     "label": "Wrong API field name (dict.get() on external API response without schema verification)",
@@ -284,8 +284,8 @@
       "notes": "S21: P6 \u2014 sync_from_tracker() added. S22: H2 VIX step-function if/elif. S27: BUG-B FIFO 4-way (sell_short/buy_to_cover explicit branches + _unknown_sides WARNING) + RC-3 x2 (kill state load/save) + RULE C-4 pre-existing mypy/ruff fixes (Optional, E501 x16, type: ignore requests). Kill switch now sees short P&L."
     },
     "execution/portfolio_tracker.py": {
-      "patch_count": 45,
-      "last_patched": "2026-06-08 S54",
+      "patch_count": 46,
+      "last_patched": "2026-06-15 S59",
       "audit_s35": "S35 RC-3 x4 PATCHED. All 8 RC PASS post-patch.",
       "audit_s44": "S44 5-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. OCI deployed.",
       "audit_s47": "S47 4-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. DS+GAI both APPROVE. OCI deployed. Commit 0f3aa58.",

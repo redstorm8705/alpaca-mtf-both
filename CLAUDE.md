@@ -693,7 +693,7 @@ The goal is to find WHY a class keeps recurring and fix the structural cause, no
 table below MUST be updated in the SAME TURN. Updating the JSON file without updating this table is
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
-#### Live RC Counts (as of 2026-06-15 S59)
+#### Live RC Counts (as of 2026-06-15 S59 post-RC5-fix)
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
@@ -701,7 +701,7 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 | RC-4 | Estimated exit price (non-fill price passed to record_exit) | **≤4** | OPEN — upper bound; confirmed unaudited sites: portfolio_tracker.py L1200/L1753, run_cycle.py L583. All other files confirmed clean S59. | portfolio_tracker.py, run_cycle.py |
 | RC-2 | CWD-relative path (logs/ not anchored to `__file__`) | **0** | CLOSED — kelly.py fixed 2026-04-18; run_cycle.py fixed 2026-05-03; both confirmed via full read S58c. entry_logic.py was wrong path in prior HANDOFF (file is at execution/entry_logic.py, no CWD paths). | — |
 | RC-1 | Naive datetime (tz-unaware `datetime.now()`) | **4** | CLOSED (all 16 instances fixed 2026-04-28) | — |
-| RC-5 | Non-atomic write (no tmp→replace pattern) | **1** | OPEN — manual_audit.jsonl append in portfolio_tracker.py L1711 (low risk — log file, external-close only) | portfolio_tracker.py |
+| RC-5 | Non-atomic write (no tmp→replace pattern) | **0** | CLOSED — portfolio_tracker.py L1711 fixed S59: flush+fsync+Slack escalation added to manual_audit.jsonl append (commit pending). Board 3/3, DS APPROVE, GAI APPROVE (Round 3). | — |
 | RC-6 | Wrong API field name (Alpaca field assumed not confirmed) | **0** | CLOSED — queued_for_review_2026-06-12 confirmed all 3 historical patches applied; "3 OPEN" was stale. | — |
 | RC-7 | Zero-share sizing (int truncation before floor guard) | **0** | CLOSED — guard at entry_logic.py L1127-1190 confirmed via full read S59. main.py reference was STALE (sizing extracted to entry_logic.py Phase 2). | — |
 | RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **0** | CLOSED — 9 sites applied b2e61f7 (2026-06-08) + L663 bonus site. pending_approval #1 confirmed STALE via full read S59. DS/GAI IO objection retracted via tie-breaker S58c. | — |
@@ -710,7 +710,7 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 
 | File | Patch Count | Risk Rating | Debug Session Priority |
 |------|-------------|-------------|----------------------|
-| execution/portfolio_tracker.py | **36** | CRITICAL | P0 — RC-4 (L1200/L1753), RC-5 (L1711 fsync) |
+| execution/portfolio_tracker.py | **46** | CRITICAL | P0 — RC-4 (L1200/L1753); RC-5 CLOSED S59 |
 | main.py | **33** | CRITICAL | P0 — D5 applied S59; no open RC items |
 | execution/exit_logic.py | **9** | HIGH | P2 — RC-4 all confirmed fixed S58c |
 | execution/entry_logic.py | **3** | HIGH | P2 — RC-8 closed, RC-7 closed |
