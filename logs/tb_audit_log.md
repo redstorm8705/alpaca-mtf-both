@@ -1,6 +1,100 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-15 S59 cont — execution/entry_logic.py full audit (adaptive MIN_SCORE floor)
+
+**Session:** S59 (adaptive MIN_SCORE architecture item — DS/GAI MODE 2 audit result)
+**Target change:** Adaptive MIN_SCORE floor: `floor = CONVICTION_SKIP_BELOW + int(mri.score() // 25)`, clamped [9, 12]
+
+### Full Read
+| File | Lines | Method |
+|------|-------|--------|
+| execution/entry_logic.py | 1,618 | Explore subagent (anti-summary language), cross-verified |
+
+Full read complete: 1,618 lines — DECLARED
+
+### 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | TBD — run on proposed patch |
+| 2 | End-to-end trade path | MIN_SCORE gate is at `config.CONVICTION_SKIP_BELOW` — used in TWO places: (a) confirm buffer accumulation and (b) hard skip gate. Both must change to use `_adaptive_min_score`. |
+| 3 | Adversarial scenarios | `mri is None` at runtime (pattern `mri.level() if mri else "NORMAL"` found in tracker.record_entry). Must fallback to `config.CONVICTION_SKIP_BELOW` when mri is None. MRI=100 → floor=13 before cap → capped to 12 by min(). Edge case handled. |
+| 4 | Full read | COMPLETE — all 1,618 lines read |
+| 5 | Cross-references | `config.CONVICTION_SKIP_BELOW` used in 2 gate sites within execute_entries(). `mri.score()` confirmed at events/macro_risk_index.py L182 (returns int, 0–100). |
+| 6 | Conflicting directions | No conflicts. MRI already sets `size_multiplier` via size_floor. Adaptive MIN_SCORE floor is ADDITIVE to existing MRI effects — it raises quality threshold, not size. Consistent with Architecture Invariant #9. |
+| 7 | Redundancy | No dead code in scoring gate. The `_adaptive_min_score` variable replaces static constant; no duplication. |
+| 8 | State persistence | Entry confirm buffer is in-memory (dict) + end-of-cycle disk persist via `_write_confirm_gate_json`. Adaptive floor auto-resets buffer to 0 at Site 1 (`else: buffer = 0`) when score < adaptive floor. No additional disk write needed (consistent with existing score minimum gate behavior — does NOT call _rc8_clear_buffers). |
+| 9 | Data source tier | No new data calls. `mri.score()` uses existing in-memory MRI object — no new API calls. |
+| 10 | Timezone compliance | No new timezone logic needed. `_adaptive_min_score` computed from MRI score int, no datetime operations. |
+
+### RC Checks (entry_logic.py — adaptive MIN_SCORE floor change only)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — existing datetime.now(ET) calls unmodified |
+| RC-2 | CWD-relative path | PASS — no file I/O in this patch |
+| RC-3 | Silent exception | PASS — mri is None fallback handled by explicit `if mri is not None:` check |
+| RC-4 | Estimated exit price | PASS — no exit price logic in this change |
+| RC-5 | Non-atomic write | PASS — no new file writes |
+| RC-6 | Wrong API field | PASS — mri.score() confirmed via macro_risk_index.py L182 |
+| RC-7 | Zero-share sizing | PASS — no sizing logic touched |
+| RC-8 | Unbounded scan buffer | NOTE — adaptive floor is a new "external block" category. Buffer auto-resets to 0 via Site 1 `else` branch (same pattern as existing score minimum gate). No _rc8_clear_buffers call needed (consistent with CLAUDE.md comment: "NOT called on: score minimum gate (auto-resets)"). |
+
+### Key Design Decisions for Board Vote
+1. Adaptive floor computed ONCE before the per-symbol for loop (MRI doesn't refresh mid-cycle)
+2. Both gate sites must change — confirm buffer accumulation AND hard skip gate
+3. mri=None fallback: `if mri is not None:` guard → static floor preserved
+4. Cap at 12: `min(_adaptive_min_score, 12)` prevents floor > max score
+5. RC-8 buffer handling: Site 1 (buffer accumulation) already resets to 0 when score < adaptive floor — no additional clear needed
+
+---
+## 2026-06-15 S59 autonomous overnight — orphan_manager.py full audit + stale sweep
+
+**Session:** S59 autonomous overnight (post-RC sweep)
+
+### Files fully read this session (continuation)
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/orphan_manager.py | 1,430 | All RC classes PASS. QHM fix at L125-148/L288-295 CONFIRMED PRESENT — pending_approval #3 STALE |
+| execution/exit_logic.py (mypy check) | — | DAY_TRADE_MAX_ROLLING references ABSENT — mypy PASS. pending_approval #4 STALE |
+
+### orphan_manager.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | PASS — py_compile PASS, mypy PASS, ruff PASS |
+| 2 | End-to-end trade path | All paths present: cancel flow, QHM exclusion L288-295, Patch 1 emergency GTC, Patch 2 partial recon, Patch 3 DAY stop clear |
+| 3 | Adversarial scenarios | QHM state file missing → fails open, all symbols unprotected (safe). Patch 1 qty_remaining=0 guard present. SF-01 entry_price=None guard present. OM-RACE-1 batch-fetch guard present. |
+| 4 | Full read | COMPLETE — 1,430 lines in 5 chunks (Explore subagent) + 6 direct Read chunks, cross-verified |
+| 5 | Cross-references | All imports verified: cancel_order, get_open_position, get_open_orders, get_open_positions, get_order, submit_gtc_stop_order from execution.broker; fetch_actual_fill_price from execution.fill_helpers; fetch_bars from data.fetcher; calculate_atr from data.premarket; get_live_score from strategy.scoring; send_slack, alert_gtc_failed from alerts |
+| 6 | Conflicting execution directions | No conflicts. QHM exclusion at L288-295 is consistent with QHM's GTC lifecycle design |
+| 7 | Redundancy scan | No dead code. All patches (1/2/3) are reachable and active |
+| 8 | State persistence | tracker._save_log() called after all mutations. Patches 2 and 3 save when changed |
+| 9 | Data source tier | fetch_bars via data.fetcher T1 — PASS |
+| 10 | Timezone + logging | datetime.now(ET) at L63, datetime.now(PT) at L1378 — PASS. All exceptions logged |
+
+### RC checks (orphan_manager.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — datetime.now(ET) at L63, datetime.now(PT) at L1378 |
+| RC-2 | CWD-relative path | PASS — State file read at L132-134 anchored via Path(__file__).resolve().parent.parent |
+| RC-3 | Silent exception | PASS — All exception blocks log via logger.warning/critical/debug |
+| RC-4 | Estimated exit price | PASS — L650, L1132, L1356 all use fetch_actual_fill_price() |
+| RC-5 | Non-atomic write | PASS — Delegates to tracker._save_log() (atomic) |
+| RC-6 | Wrong API field | PASS — order.filled_avg_price, order.status, order.stop_price, order.qty — all verified |
+| RC-7 | Zero-share sizing | N/A |
+| RC-8 | Unbounded scan buffer | N/A |
+
+### QHM fix confirmation (pending_approval #3 STALE)
+The QHM GTC stop exclusion was implemented in a prior session using a more robust approach than proposed:
+- L125-148: Reads quarterly_holds.json state file DIRECTLY (avoids startup-order dependency vs get_quarterly_hold_symbols())
+- L288-295: `if symbol in _qhm_protected: logger.info(...); continue` — skips cancel for all AWAITING_FILL/ACTIVE/PENDING_STOP_REPLACE/PENDING_EXIT states
+- Pending_approval #3 is STALE. No patch required.
+
+### Stale item closures (this continuation)
+- pending_approvals #3 (QHM orphan_manager.py): STALE — fix already present at L125-148/L288-295
+- pending_approvals #4 (exit_logic.py DAY_TRADE_MAX_ROLLING): STALE — mypy PASS, no references remain
+
+---
+
 ## 2026-06-15 S59 — Stale item sweep + RC-4 file list cleanup
 
 **Session:** S59 (pre-RTH audit sweep)
