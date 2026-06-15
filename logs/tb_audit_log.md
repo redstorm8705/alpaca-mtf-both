@@ -1,6 +1,45 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-15 S59 — Stale item sweep + RC-4 file list cleanup
+
+**Session:** S59 (pre-RTH audit sweep)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/entry_logic.py | 1,618 | RC-8: all 9 buffer-clear sites confirmed present; pending_approval #1 STALE |
+| execution/trade_engine.py | 287 | RC-4: 0 record_exit() calls — pure re-export shim; stale in RC-4 files list |
+| events/handlers.py | 120 | RC-4: 1 call at L92, COMPLIANT (fetch_actual_fill_price + submitted_after) |
+
+### RC-4 global audit (all call sites via codebase grep)
+All record_exit() call sites verified across full codebase:
+- trade_engine.py, fill_helpers.py, fill_reconciler.py, reconcile_eod.py: **0 calls each** (stale in files list)
+- main.py: comment only, not a call
+- events/handlers.py L92: COMPLIANT — fetch_actual_fill_price + submitted_after
+- orphan_manager.py L652, L1138: COMPLIANT — both use fetch_actual_fill_price
+- entry_logic.py L650: BORDERLINE — 3 fill retries + WARNING log; no _fill_unverified flag but not raw bar estimate
+- Remaining UNAUDITED: portfolio_tracker.py L1200/L1753, run_cycle.py L583
+
+### bug_counter.json changes
+- RC-2: 7 → 0 (kelly.py fixed 2026-04-18; run_cycle.py fixed 2026-05-03; both confirmed S58c)
+- RC-4 files: pruned to ['execution/portfolio_tracker.py', 'strategy/run_cycle.py']
+- RC-7: stale closure confirmed (guard at entry_logic.py L1127-1190)
+- RC-8: pending_approval #1 confirmed stale (all 9 sites present + L663 bonus site)
+- RC-4 count=4 remains as upper bound pending portfolio_tracker.py + run_cycle.py full reads
+
+### Static analysis (all files read this session)
+| File | py_compile | mypy | ruff |
+|------|-----------|------|------|
+| execution/entry_logic.py | PASS | PASS | PASS |
+| execution/trade_engine.py | PASS | PASS | PASS |
+| events/handlers.py | PASS | PASS | PASS |
+
+### Pending approvals closure
+- pending_approvals_2026-06-07.md #1 (RC-8): CLOSED — stale, already applied commit b2e61f7
+- pending_approvals_2026-06-07.md #2 (RC-4 exit_logic.py): CLOSED — stale, confirmed S58c
+
+---
 ## 2026-06-10 S57 — config.py VOL_TIER_HIGH_STOP_INTRADAY 1.75→2.0
 
 **File:** `config.py` (521L, 1 line changed)

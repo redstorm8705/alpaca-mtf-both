@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-12 nightly"
+    "last_updated": "2026-06-15 S59"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -20,14 +20,14 @@
   },
   "RC-2": {
     "label": "CWD-relative path (Path('logs') or open('logs/...'))",
-    "count": 7,
+    "count": 0,
     "patch_ids": [
       "RC2-RUN-CYCLE-2026-05-03"
     ],
     "files": [],
     "first_seen": "2026-04-18",
-    "last_patched": "2026-05-03",
-    "notes": "2026-04-18: kelly.py fixed. 2026-05-03: 6 violations found in strategy/run_cycle.py \u2014 os.path.dirname(os.path.abspath(__file__)) resolves to strategy/ not project root. Lines 333, 383-384, 398-401, 1339, 1418-1419, 1431-1432. All broken: strategy/logs/mtf_bot.log, strategy/logs/eod_*.json, strategy/weekly_review.py. Fix: added _PROJECT_ROOT = Path(__file__).resolve().parent.parent module constant, replaced all 6 path constructions. NOTE: prior note 'Resolved \u2014 all files use _ROOT anchors' was WRONG \u2014 run_cycle.py had been extracted to strategy/ subdir without updating paths. | S58c nightly 2026-06-12: kelly.py RC-2 confirmed stale (full read 444L \u2014 both paths use __file__.resolve anchor). run_cycle.py already confirmed stale (queued_for_review_2026-06-11). Files list now empty \u2014 RC-2 count correction deferred to Rafael (CLAUDE.md live count update requires session-level decision)."
+    "last_patched": "2026-06-15",
+    "notes": "2026-04-18: kelly.py fixed. 2026-05-03: 6 violations found in strategy/run_cycle.py \u2014 os.path.dirname(os.path.abspath(__file__)) resolves to strategy/ not project root. Lines 333, 383-384, 398-401, 1339, 1418-1419, 1431-1432. All broken: strategy/logs/mtf_bot.log, strategy/logs/eod_*.json, strategy/weekly_review.py. Fix: added _PROJECT_ROOT = Path(__file__).resolve().parent.parent module constant, replaced all 6 path constructions. NOTE: prior note 'Resolved \u2014 all files use _ROOT anchors' was WRONG \u2014 run_cycle.py had been extracted to strategy/ subdir without updating paths. | S58c nightly 2026-06-12: kelly.py RC-2 confirmed stale (full read 444L \u2014 both paths use __file__.resolve anchor). run_cycle.py already confirmed stale (queued_for_review_2026-06-11). Files list now empty \u2014 RC-2 count correction deferred to Rafael (CLAUDE.md live count update requires session-level decision). | S59 2026-06-15: count corrected 7\u21920 (kelly.py fixed 2026-04-18, run_cycle.py fixed 2026-05-03, both confirmed via full read S58c). Files list already empty. RC-2 CLOSED."
   },
   "RC-3": {
     "label": "Silent exception (except: pass with no logging)",
@@ -177,17 +177,12 @@
       "RC4-ENTRY-LOGIC-12C-L644-S39"
     ],
     "files": [
-      "main.py",
-      "execution/fill_helpers.py",
-      "execution/orphan_manager.py",
-      "execution/trade_engine.py",
-      "reconcile_eod.py",
-      "execution/fill_reconciler.py",
-      "execution/portfolio_tracker.py"
+      "execution/portfolio_tracker.py",
+      "strategy/run_cycle.py"
     ],
     "first_seen": "2026-04-20",
     "last_patched": "2026-05-25 S39",
-    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa) \u2014 10 remaining: 7 other | S58c nightly 2026-06-12: exit_logic.py 3 violations confirmed stale (queued_for_review_2026-06-11.md full read). Count corrected 7\u21924. Remaining: portfolio_tracker.py, trade_engine.py, and others."
+    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa) \u2014 10 remaining: 7 other | S58c nightly 2026-06-12: exit_logic.py 3 violations confirmed stale (queued_for_review_2026-06-11.md full read). Count corrected 7\u21924. Remaining: portfolio_tracker.py, trade_engine.py, and others. | S59 2026-06-15: RC-4 file list pruned. Confirmed clean: trade_engine.py (0 calls, re-export shim), fill_helpers.py (0 calls), fill_reconciler.py (0 calls), reconcile_eod.py (0 calls), main.py (comment only), events/handlers.py (fetch_actual_fill_price+submitted_after, compliant), orphan_manager.py L652+L1138 (both use fetch_actual_fill_price, compliant). Remaining unaudited sites: portfolio_tracker.py L1200+L1753, run_cycle.py L583. Count=4 remains upper bound."
   },
   "RC-5": {
     "label": "Non-atomic write (open(path,'w') without tmp+replace pattern)",
@@ -228,7 +223,7 @@
     "files": [],
     "first_seen": "2026-04-22",
     "last_patched": "2026-04-28",
-    "notes": "PT-004 (2026-04-23): max(1,_sized) floor with _can_afford_one guard. MN-RC7-SIZING (2026-04-28 session 3): board vote (3 CONDITION / 1 REJECT of one-liner) \u2014 replaced with 3-branch form: size_multiplier=0.0 \u2192 shares=0 (explicit blockade), _can_afford_one + _sized>0 \u2192 max(1,_sized), _can_afford_one + _sized=0 \u2192 1 (RC-7 floor), else \u2192 0. SIZING-0-D open finding CLOSED by this fix. | S58c nightly 2026-06-12: CLOSED \u2014 both violations confirmed stale by full read (entry_logic.py has the guard; queued_for_review_2026-06-11.md confirmed). Count corrected 2\u21920.",
+    "notes": "PT-004 (2026-04-23): max(1,_sized) floor with _can_afford_one guard. MN-RC7-SIZING (2026-04-28 session 3): board vote (3 CONDITION / 1 REJECT of one-liner) \u2014 replaced with 3-branch form: size_multiplier=0.0 \u2192 shares=0 (explicit blockade), _can_afford_one + _sized>0 \u2192 max(1,_sized), _can_afford_one + _sized=0 \u2192 1 (RC-7 floor), else \u2192 0. SIZING-0-D open finding CLOSED by this fix. | S58c nightly 2026-06-12: CLOSED \u2014 both violations confirmed stale by full read (entry_logic.py has the guard; queued_for_review_2026-06-11.md confirmed). Count corrected 2\u21920. | S59 2026-06-15: RC-7 confirmed closed \u2014 guard at entry_logic.py L1127-1190 verified via full read (1618L). S58c nightly was correct.",
     "status": "CLOSED"
   },
   "RC-8": {
@@ -243,7 +238,7 @@
     ],
     "first_seen": "2026-04-22",
     "last_patched": "2026-04-30",
-    "notes": "CLOSED \u2705 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed \u2014 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 \u2014 prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1.",
+    "notes": "CLOSED \u2705 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed \u2014 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 \u2014 prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1. | S59 2026-06-15: pending_approvals_2026-06-07.md #1 confirmed stale \u2014 all 9 sites verified present via full read of entry_logic.py (1618L). Additional site at L663 (12c-exit) also present. RC-8 CLOSED.",
     "last_fix": "S58c 2026-06-11: 9 sites confirmed applied in b2e61f7 (2026-06-08); DS/GAI deadlock resolved via tie-breaker counter-prompt \u2014 both APPROVE. CLOSED."
   },
   "file_hotspot": {
