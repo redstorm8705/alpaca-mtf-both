@@ -991,6 +991,21 @@ def execute_entries(
                 _rc8_clear_buffers(symbol, "sector-correlation")
                 continue
 
+        # ── Invariant #10: Portfolio correlation gate ─────────────────────
+        from risk.correlation_matrix import would_breach_correlation_limit
+        _open_pos_list = [
+            {"symbol": s, "direction": t.get("direction", "")}
+            for s, t in tracker.open_trades.items()
+            if t.get("status") != "closed"
+        ]
+        if would_breach_correlation_limit(symbol, direction, _open_pos_list):
+            logger.info(
+                f"[{symbol}] CORRELATION GATE: would create >2 same-direction pairs "
+                f"with ρ≥0.7 — skipping (Invariant #10)"
+            )
+            _rc8_clear_buffers(symbol, "correlation-gate")
+            continue
+
         # ── Bucket-aware position sizing ────────────────────────────────
         if is_bucket_a:
             # Rank 1: leverage-adjusted notional cap for Bucket A.
