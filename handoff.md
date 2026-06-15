@@ -1,0 +1,103 @@
+# Handoff — S59 Autonomous Overnight (2026-06-15)
+
+## Current Bot State
+
+| Item | Value |
+|------|-------|
+| Branch | main |
+| HEAD | d9251b8 |
+| Mode | Paper trading, PDT enforcement disabled (S50) |
+| Profile active | paper (MIN_SCORE=9/12, STOP=1.25×ATR, TARGET=2.5×ATR) |
+| Kill switch | 7% (config.py paper profile) |
+| OCI cron | 03:00 UTC daily — git pull origin main + restart 4 services |
+
+---
+
+## RC Bug Class Status (all CLOSED as of S59)
+
+| RC | Class | Status |
+|----|-------|--------|
+| RC-1 | Naive datetime | CLOSED — 16 instances fixed 2026-04-28 |
+| RC-2 | CWD-relative path | CLOSED — kelly.py fixed 2026-04-18, run_cycle.py fixed 2026-05-03 |
+| RC-3 | Silent exception | CLOSED — last instance fixed S58 (autonomous_patch_generator.py L67) |
+| RC-4 | Estimated exit price | CLOSED — all sites audited S59: exit_logic.py (S58c), portfolio_tracker.py, run_cycle.py, orphan_manager.py all compliant |
+| RC-5 | Non-atomic write | CLOSED — portfolio_tracker.py L1711 fixed S59 (flush+fsync+Slack escalation, commit 5cca62c) |
+| RC-6 | Wrong API field | CLOSED — 3 historical patches applied, confirmed S59 |
+| RC-7 | Zero-share sizing | CLOSED — guard at entry_logic.py L1127-1190 confirmed S59 |
+| RC-8 | Unbounded scan buffer | CLOSED — 9+1 sites cleared (commit b2e61f7 + L663 bonus site) |
+
+---
+
+## Hotspot Files (as of S59)
+
+| File | Patch Count | Risk | Open Items |
+|------|-------------|------|------------|
+| execution/portfolio_tracker.py | 46 | CRITICAL | NONE — RC-5 CLOSED S59 |
+| main.py | 33 | CRITICAL | NONE — D5 applied S59 |
+| execution/exit_logic.py | 9 | HIGH | NONE — RC-4 CLOSED S58c |
+| execution/entry_logic.py | 3 | HIGH | NONE — RC-8 CLOSED S59 |
+| strategy/run_cycle.py | 10 | MEDIUM | NONE — RC-4 confirmed compliant S59 |
+| execution/orphan_manager.py | 0 | LOW | NONE — QHM fix confirmed present S59 |
+
+---
+
+## Recent Key Changes (S59)
+
+### RC-5 fix — portfolio_tracker.py L1711 (commit 5cca62c)
+Added `_af.flush()` + `os.fsync(_af.fileno())` inside the `manual_audit.jsonl` write block for external_close events. Added Slack escalation in except block. DS/GAI: 3-round consensus APPROVE.
+
+### RC-4 closure (commit d9251b8)
+Full audit of run_cycle.py (1,500 lines) confirmed L583 uses `_fetch_actual_fill_price` with poll_secs=0 — compliant. Combined with prior session's audit of portfolio_tracker.py L1200/L1753 (both compliant), RC-4 closed at 0.
+
+### D5 — MRI startup blocking refresh (commit 0e597a8)
+main.py startup now blocks on MRI refresh instead of using stale cached data. Prevents STALE MRI level from gating first RTH entries.
+
+---
+
+## Pending Approvals Status (all STALE)
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | RC-8 entry_logic.py 9 sites | STALE — all 9 sites confirmed present via full read S59 |
+| 2 | RC-4 exit_logic.py 3 violations | STALE — all 3 fixed in prior session (confirmed S58c) |
+| 3 | QHM orphan_manager.py GTC exclusion | STALE — fix confirmed present at L125-148/L288-295 (S59 autonomous) |
+| 4 | exit_logic.py PDT DAY_TRADE_MAX_ROLLING | STALE — mypy PASS, references removed in prior session |
+
+---
+
+## Services (OCI)
+
+4 services expected active post-cron:
+- `mtf-bot` (main trading loop)
+- `mtf-writer` (trade_events.jsonl writer)
+- `mtf-http` (dashboard HTTP server)
+- `mtf-watchdog` (process watchdog)
+
+Verify post-deploy: `systemctl is-active mtf-bot mtf-writer mtf-http`
+Expected HEAD on OCI: `d9251b8` (after 03:00 UTC cron)
+
+---
+
+## Open Architecture Items (no active patches needed)
+
+- **QHM quarterly holds** — board vote complete (S48b). Reconcile_on_startup() and weekly check in run_cycle.py. GTC exclusion in orphan_manager.py confirmed present. Eligible for live QHM positions after 2026-07-01 Q3 start.
+- **MRI startup staleness** — D5 applied (commit 0e597a8). Blocking refresh at startup. Weekend gap returns ELEVATED (not CRITICAL) per D5b.
+- **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired into scoring. Board vote required before integration.
+
+---
+
+## Prior Session Context (do not re-derive)
+
+- `trade_engine.py` CRITICAL desync (S47d bug): CONFIRMED FIXED — `risk.register_open()` with pre/post status guard at L251-276. Not a desync.
+- `exit_logic.py` PDT references: CONFIRMED REMOVED — mypy PASS, grep finds no DAY_TRADE_MAX_ROLLING.
+- `orphan_manager.py` QHM fix: CONFIRMED PRESENT — state-file direct read approach (better than module variable approach).
+- All 4 pending_approvals_2026-06-07.md items: STALE — no action required.
+
+---
+
+## Next Session Priorities
+
+1. **Verify OCI deployment** — check HEAD=d9251b8 post-03:00 UTC cron
+2. **Monitor RTH** — bot should trade normally. All RC classes clear. No known blocking bugs.
+3. **Architecture/whitespace audit** (when bandwidth) — DS/GAI MODE 2 to identify what the current audit protocol underweights
+4. **handlers.py P0 follow-on** — S54 audit: remove record_day_trade() + get_rolling_day_trade_count() stub (tb_audit_log.md entry 2026-06-08 S54 cont)

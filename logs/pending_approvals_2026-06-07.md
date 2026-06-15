@@ -139,8 +139,15 @@ Awaiting Rafael's direction on strategy before spawning board vote + DS/GAI.
 
 ## #3 — P1 QHM Check: execution/orphan_manager.py
 
-**Status:** Confirmed open item — needs board vote before fix  
-**Full read complete: 1368 lines**
+**Status:** ~~Confirmed open item — needs board vote before fix~~ **CLOSED — STALE (S59 autonomous 2026-06-15)**
+
+Full read of orphan_manager.py (1,430 lines, 5 Explore chunks + 6 direct Read chunks, cross-verified) confirms QHM fix ALREADY PRESENT:
+- L125-148: Reads quarterly_holds.json directly (more robust than proposed — avoids startup-order dependency)
+- L288-295: `if symbol in _qhm_protected: logger.info(...); continue` — present and active
+
+Static analysis: py_compile PASS | mypy PASS | ruff PASS. All 8 RC classes PASS.
+
+**Full read complete: 1,430 lines**
 
 ### Finding
 `cancel_and_reconcile_gtc_stops()` cancels ALL GTC stops pre-RTH with no QHM awareness. GTC stops on QHM-managed anchor positions (AVGO, NVDA, ANET) are cancelled every pre-market startup. QHM module (`execution/quarterly_hold_manager.py`) is never imported in orphan_manager.py.
@@ -169,7 +176,14 @@ This requires board vote (touches overnight/exit execution path).
 
 ## #4 — P1 Secondary PDT Cleanup: execution/exit_logic.py (blocks RC-3 fix)
 
-**Status:** Pre-existing mypy errors block all patches to exit_logic.py (Rule C-4)  
+**Status:** ~~Pre-existing mypy errors block all patches to exit_logic.py (Rule C-4)~~ **CLOSED — STALE (S59 autonomous 2026-06-15)**
+
+`python3 -m mypy --warn-unreachable execution/exit_logic.py` → "Success: no issues found in 1 source file"
+`grep -n "DAY_TRADE_MAX_ROLLING\|PDT_ENFORCEMENT_ENABLED" execution/exit_logic.py` → (no output — references removed)
+
+The 6 `config.DAY_TRADE_MAX_ROLLING` references were removed in a prior session. exit_logic.py is fully clean. No patch required.
+
+**Previously:** Pre-existing mypy errors block all patches to exit_logic.py (Rule C-4)  
 **Must be resolved before #1 RC-8 or RC-3 fixes in exit_logic.py can be applied**
 
 ### Finding

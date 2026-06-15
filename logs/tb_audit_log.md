@@ -1,6 +1,53 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-15 S59 autonomous overnight — orphan_manager.py full audit + stale sweep
+
+**Session:** S59 autonomous overnight (post-RC sweep)
+
+### Files fully read this session (continuation)
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/orphan_manager.py | 1,430 | All RC classes PASS. QHM fix at L125-148/L288-295 CONFIRMED PRESENT — pending_approval #3 STALE |
+| execution/exit_logic.py (mypy check) | — | DAY_TRADE_MAX_ROLLING references ABSENT — mypy PASS. pending_approval #4 STALE |
+
+### orphan_manager.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | PASS — py_compile PASS, mypy PASS, ruff PASS |
+| 2 | End-to-end trade path | All paths present: cancel flow, QHM exclusion L288-295, Patch 1 emergency GTC, Patch 2 partial recon, Patch 3 DAY stop clear |
+| 3 | Adversarial scenarios | QHM state file missing → fails open, all symbols unprotected (safe). Patch 1 qty_remaining=0 guard present. SF-01 entry_price=None guard present. OM-RACE-1 batch-fetch guard present. |
+| 4 | Full read | COMPLETE — 1,430 lines in 5 chunks (Explore subagent) + 6 direct Read chunks, cross-verified |
+| 5 | Cross-references | All imports verified: cancel_order, get_open_position, get_open_orders, get_open_positions, get_order, submit_gtc_stop_order from execution.broker; fetch_actual_fill_price from execution.fill_helpers; fetch_bars from data.fetcher; calculate_atr from data.premarket; get_live_score from strategy.scoring; send_slack, alert_gtc_failed from alerts |
+| 6 | Conflicting execution directions | No conflicts. QHM exclusion at L288-295 is consistent with QHM's GTC lifecycle design |
+| 7 | Redundancy scan | No dead code. All patches (1/2/3) are reachable and active |
+| 8 | State persistence | tracker._save_log() called after all mutations. Patches 2 and 3 save when changed |
+| 9 | Data source tier | fetch_bars via data.fetcher T1 — PASS |
+| 10 | Timezone + logging | datetime.now(ET) at L63, datetime.now(PT) at L1378 — PASS. All exceptions logged |
+
+### RC checks (orphan_manager.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — datetime.now(ET) at L63, datetime.now(PT) at L1378 |
+| RC-2 | CWD-relative path | PASS — State file read at L132-134 anchored via Path(__file__).resolve().parent.parent |
+| RC-3 | Silent exception | PASS — All exception blocks log via logger.warning/critical/debug |
+| RC-4 | Estimated exit price | PASS — L650, L1132, L1356 all use fetch_actual_fill_price() |
+| RC-5 | Non-atomic write | PASS — Delegates to tracker._save_log() (atomic) |
+| RC-6 | Wrong API field | PASS — order.filled_avg_price, order.status, order.stop_price, order.qty — all verified |
+| RC-7 | Zero-share sizing | N/A |
+| RC-8 | Unbounded scan buffer | N/A |
+
+### QHM fix confirmation (pending_approval #3 STALE)
+The QHM GTC stop exclusion was implemented in a prior session using a more robust approach than proposed:
+- L125-148: Reads quarterly_holds.json state file DIRECTLY (avoids startup-order dependency vs get_quarterly_hold_symbols())
+- L288-295: `if symbol in _qhm_protected: logger.info(...); continue` — skips cancel for all AWAITING_FILL/ACTIVE/PENDING_STOP_REPLACE/PENDING_EXIT states
+- Pending_approval #3 is STALE. No patch required.
+
+### Stale item closures (this continuation)
+- pending_approvals #3 (QHM orphan_manager.py): STALE — fix already present at L125-148/L288-295
+- pending_approvals #4 (exit_logic.py DAY_TRADE_MAX_ROLLING): STALE — mypy PASS, no references remain
+
+---
 ## 2026-06-15 S59 — Stale item sweep + RC-4 file list cleanup
 
 **Session:** S59 (pre-RTH audit sweep)
