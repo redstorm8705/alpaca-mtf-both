@@ -977,6 +977,24 @@ individually, a full debug session should map all 22 instances, find the structu
 logging standard in exception handlers + no linter rule), and eliminate the pattern permanently.
 Candidate fix: add a custom ruff/flake8 rule that rejects bare `except: pass` and bare `except Exception: pass`.
 
+**[2026-06-15 S59] TCA / Execution Quality Monitoring — DS+GAI consensus P0 whitespace (architecture audit)**
+Bot runs completely blind to slippage, fill latency, and whether Alpaca executes at NBBO. Every trade since launch has unmeasured execution cost. DS estimates 5–15% of P&L silently lost. GAI cites O'Hara (1995) and Almgren & Chriss (2001). File: `execution/execution_quality.py` (new, ~600L). Requires: order-level fill data from Alpaca API, benchmark (arrival price, VWAP), slippage/latency alert. Board vote required (touches broker.py). Blocked by: paper trading makes slippage measurement artificial — prioritize at live launch.
+
+**[2026-06-15 S59] Portfolio Correlation Aggregator — DS+GAI consensus P0 whitespace (architecture audit)**
+Beta>0.7 check is insufficient. Two positions can have beta<0.7 to SPY but 0.9 to each other. In tail events, all correlations converge to 1. DS calls this "existential" (50% single-day loss scenario). GAI cites Markowitz (1952) and risk parity. File: `risk/correlation_matrix.py` (new). Requires: rolling 20-day pairwise correlation across all open positions, portfolio VaR/CVaR, reject entry if portfolio VaR >2.5% equity. Board vote required (touches risk_manager.py). P1 — implement before scaling beyond 3 concurrent positions.
+
+**[2026-06-15 S59] Alpha Decay & Walk-Forward Validation — DS+GAI consensus P1 blind spot (architecture audit)**
+12-point scoring weights are static. DS estimates 20–40% edge evaporation over 3–6 months in factor regime changes. GAI cites Aronson (2007). Shadow 16-point system logged but never analyzed — no pipeline to detect stale signals. File: `research/walk_forward_optimizer.py` (new). Requires: IC monitoring per factor, quarterly re-validation run, adaptive weight suggestions. Board vote required before any weight changes. Note: the 16-point shadow log is the raw material for this — start by analyzing it.
+
+**[2026-06-15 S59] Bar-end adverse selection — DS-only P1 blind spot (architecture audit)**
+50–70% of entries occur in the last 20% of the 5-min bar's range, paying 10–25bp adverse selection. At 250 trades/year with 2.5× ATR targets, DS estimates 500–1250bp of gross P&L lost annually to entry timing. Fix candidates: (a) mid-bar check at 2.5 min into bar with limit order, (b) sub-bar tick data confirmation. File: `execution/entry_logic.py`. Requires: 1-sec quote stream from data/alpaca_data.py. Board vote required. Prioritize after walk-forward validation confirms which factors drive the adverse selection.
+
+**[2026-06-15 S59] Score-weighted Kelly pre-warm — DS-only P2 optimization (architecture audit)**
+First 30 trades use flat fixed sizing. Replace with `min(flat_size × (score/12)², flat_size)`. Gives higher sizing to high-conviction entries before Kelly warms. DS estimates $240–450 additional EV over the 30-trade warmup. File: `execution/kelly.py` — add `score_weighted_prewarm()`, modify `get_position_size()`. No board vote required (sizing logic, bounded). 1-session implementation. Already in PENDING as "score-weighted warmup sizing deferred."
+
+**[2026-06-15 S59] Adaptive MIN_SCORE floor — DS-only P2 optimization (architecture audit)**
+Static 9/12 floor is suboptimal across regimes. DS proposes: `MIN_SCORE = 9 + floor(MRI_score / 25)` (MRI 0–100). High MRI → higher floor, reducing false entries in volatile regimes. Low MRI → floor stays at 9. DS estimates 6–8% P&L lift (20–25% fewer false entries in high-vol, 15–20% more entries in low-vol). Files: `execution/entry_logic.py`, `events/macro_risk_index.py`. Board vote required (changes entry gate). 2-session implementation.
+
 ---
 
 ## PENDING / DEFERRED
