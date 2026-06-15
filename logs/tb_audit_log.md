@@ -5206,3 +5206,69 @@ The existing breadth-as-size-floor architecture (breadth size_floor applied to _
 - Integration: `execute_entries()` in `entry_logic.py`, before position count check
 
 **VERDICT: Item #4 DEFERRED — pending DS/GAI validation of revised design + full patch sequence (entry_logic.py full re-read required as it was patched this session).**
+
+---
+## S59 cont — risk/correlation_matrix.py (new file, Invariant #10)
+
+**Session:** S59 DS/GAI MODE 2 item #4 — Portfolio Correlation Aggregator
+**Target:** New module enforcing Architecture Invariant #10 (max 2 correlated same-direction pairs)
+
+### Full Read
+| File | Lines | Method |
+|------|-------|--------|
+| risk/correlation_matrix.py | 215 | Read tool (≤300-line file, full) |
+
+Full read complete: 215 lines — risk/correlation_matrix.py
+
+### 10-Point Audit
+| Point | Check | Finding |
+|-------|-------|---------|
+| 1 | Static analysis | py_compile PASS · mypy PASS · ruff PASS (all clean after 3 minor fixes) |
+| 2 | E2E trade path trace | Gate sits between sector block and bucket sizing in execute_entries() — integration site confirmed correct |
+| 3 | Adversarial scenarios | fail-closed on None returns, empty series, zero-denominator Spearman, invalid direction |
+| 4 | Full top-to-bottom read | All 3 functions read: _fetch_daily_returns, _spearman, would_breach_correlation_limit |
+| 5 | Cross-references | fetch_bars (data/fetcher.py) and config.TF_DAILY confirmed existing; risk/__init__.py created |
+| 6 | Conflicting directions | No conflict — new module, no competing state writers |
+| 7 | Redundancy scan | No dead code; TYPE_CHECKING block is standard pattern |
+| 8 | State persistence | No file I/O; in-memory only — PASS |
+| 9 | Data source tier compliance | T1 (Alpaca Data) via fetch_bars — PASS |
+| 10 | Timezone/logging | No timestamps; no trade_events.jsonl entries needed — PASS |
+
+### RC Scan
+| RC | Class | Finding |
+|----|-------|---------|
+| RC-1 | Naive datetime | No datetime calls — PASS |
+| RC-2 | CWD-relative path | No file I/O — PASS |
+| RC-3 | Silent exception | Single try/except in _fetch_daily_returns logs warning before returning None — PASS |
+| RC-4 | Estimated exit price | Not applicable (no exit/entry execution) — PASS |
+| RC-5 | Non-atomic write | No file writes — PASS |
+| RC-6 | Wrong API field name | fetch_bars returns DataFrame; accessing df["close"] confirmed correct — PASS |
+| RC-7 | Zero-share sizing | Not applicable — PASS |
+| RC-8 | Unbounded scan buffer | No buffers; caller must invoke _rc8_clear_buffers when gate fires — documented in integration site |
+
+### Board Vote
+Board review (S59, inline parallel): Harris REJECT (deduplication bug) + 3 CONDITIONAL-APPROVE
+Post-revision: Harris APPROVE, all 4 APPROVE
+Blocking issues resolved: (1) deduplication via seen_symbols set, (2) >= threshold boundary, (3) direction validation added
+
+### DS/GAI
+**BLOCKED — API keys not available in remote cloud environment**
+Keys are on Mac at ~/Desktop/alpaca-mtf-bot_FINAL/.env; not accessible via SSH in this session.
+Action required: Rafael must run DS/GAI validation from Mac or provide keys before entry_logic.py call site is applied.
+
+### Static Analysis (pre-proposal)
+- py_compile: PASS
+- mypy --warn-unreachable: PASS
+- ruff --select E,W,F,B: PASS
+
+### Cold Second-Agent
+- Run 1: FAIL (dedup bug + threshold boundary issues)
+- Fixes applied: seen_symbols dedup, >= comment, direction validation
+- Run 2: PASS
+
+### Status
+**BLOCKED at Step 4 (DS/GAI)** — file logic verified through cold second-agent. Entry_logic.py call site pending DS/GAI clearance.
+
+Pending entry_logic.py changes (both approved by Rafael):
+1. Cosmetic: line ~570 log msg: config.CONVICTION_SKIP_BELOW → _adaptive_min_score
+2. Correlation call site: after sector gate, before bucket sizing; includes _rc8_clear_buffers(symbol, "correlation-gate")
