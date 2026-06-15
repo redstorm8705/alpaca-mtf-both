@@ -16,7 +16,7 @@ Full read complete: 1,618 lines — DECLARED
 ### 10-Point Audit
 | Point | Check | Result |
 |-------|-------|--------|
-| 1 | Static analysis | TBD — run on proposed patch |
+| 1 | Static analysis | PASS — py_compile ✓, mypy ✓, ruff ✓ (pre and post-patch on actual file) |
 | 2 | End-to-end trade path | MIN_SCORE gate is at `config.CONVICTION_SKIP_BELOW` — used in TWO places: (a) confirm buffer accumulation and (b) hard skip gate. Both must change to use `_adaptive_min_score`. |
 | 3 | Adversarial scenarios | `mri is None` at runtime (pattern `mri.level() if mri else "NORMAL"` found in tracker.record_entry). Must fallback to `config.CONVICTION_SKIP_BELOW` when mri is None. MRI=100 → floor=13 before cap → capped to 12 by min(). Edge case handled. |
 | 4 | Full read | COMPLETE — all 1,618 lines read |
@@ -26,6 +26,13 @@ Full read complete: 1,618 lines — DECLARED
 | 8 | State persistence | Entry confirm buffer is in-memory (dict) + end-of-cycle disk persist via `_write_confirm_gate_json`. Adaptive floor auto-resets buffer to 0 at Site 1 (`else: buffer = 0`) when score < adaptive floor. No additional disk write needed (consistent with existing score minimum gate behavior — does NOT call _rc8_clear_buffers). |
 | 9 | Data source tier | No new data calls. `mri.score()` uses existing in-memory MRI object — no new API calls. |
 | 10 | Timezone compliance | No new timezone logic needed. `_adaptive_min_score` computed from MRI score int, no datetime operations. |
+
+### Post-Patch Verification (Step 9)
+- py_compile: PASS ✓
+- mypy: PASS (no issues) ✓
+- ruff: PASS (all checks passed) ✓
+- Commit: da13ad7 — pushed to claude/ds-audit-bv5-patches-dqqaqm
+- Follow-up logged: line 559 log message references config.CONVICTION_SKIP_BELOW (cosmetic inaccuracy — not a gate condition, separate approval needed)
 
 ### RC Checks (entry_logic.py — adaptive MIN_SCORE floor change only)
 | RC | Check | Result |
