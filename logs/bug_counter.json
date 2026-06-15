@@ -164,7 +164,7 @@
   },
   "RC-4": {
     "label": "Estimated exit price / fill unverified not cleared",
-    "count": 4,
+    "count": 0,
     "patch_ids": [
       "RC4-FILL-HELPERS-2026-05-04",
       "RC4-ORPHAN-2026-05-04",
@@ -176,13 +176,11 @@
       "EL-RC4-EXITS-S30",
       "RC4-ENTRY-LOGIC-12C-L644-S39"
     ],
-    "files": [
-      "execution/portfolio_tracker.py",
-      "strategy/run_cycle.py"
-    ],
+    "files": [],
     "first_seen": "2026-04-20",
     "last_patched": "2026-05-25 S39",
-    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa) \u2014 10 remaining: 7 other | S58c nightly 2026-06-12: exit_logic.py 3 violations confirmed stale (queued_for_review_2026-06-11.md full read). Count corrected 7\u21924. Remaining: portfolio_tracker.py, trade_engine.py, and others. | S59 2026-06-15: RC-4 file list pruned. Confirmed clean: trade_engine.py (0 calls, re-export shim), fill_helpers.py (0 calls), fill_reconciler.py (0 calls), reconcile_eod.py (0 calls), main.py (comment only), events/handlers.py (fetch_actual_fill_price+submitted_after, compliant), orphan_manager.py L652+L1138 (both use fetch_actual_fill_price, compliant). Remaining unaudited sites: portfolio_tracker.py L1200+L1753, run_cycle.py L583. Count=4 remains upper bound."
+    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa). S58c: count corrected 7\u21924 (exit_logic.py stale). S59: all remaining sites confirmed clean via full read. portfolio_tracker.py L1200 (VWAP from Alpaca FIFO fills, compliant). portfolio_tracker.py L1753 (Alpaca filled_avg_price via orphan_manager, compliant). run_cycle.py L583 (fetch_actual_fill_price with poll_secs=0 \u2014 position already closed by Alpaca, compliant). Also clean: trade_engine.py (0 record_exit calls), fill_helpers.py (0 calls), fill_reconciler.py (0 calls), reconcile_eod.py (0 calls), main.py (comment only), events/handlers.py (fetch_actual_fill_price+submitted_after best pattern), orphan_manager.py L652+L1138 (both fetch_actual_fill_price). RC-4 count=0 CLOSED S59 2026-06-15.",
+    "status": "CLOSED"
   },
   "RC-5": {
     "label": "Non-atomic write (open(path,'w') without tmp+replace pattern)",

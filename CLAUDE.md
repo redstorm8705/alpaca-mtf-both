@@ -693,12 +693,12 @@ The goal is to find WHY a class keeps recurring and fix the structural cause, no
 table below MUST be updated in the SAME TURN. Updating the JSON file without updating this table is
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
-#### Live RC Counts (as of 2026-06-15 S59 post-RC5-fix)
+#### Live RC Counts (as of 2026-06-15 S59 autonomous overnight)
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
 | RC-3 | Silent exception (bare `pass` / `debug` swallowing errors) | **0** | CLOSED — last unlocalized instance found+fixed S58: autonomous_patch_generator.py L67 `_log()` (commit 2c4552d) | — |
-| RC-4 | Estimated exit price (non-fill price passed to record_exit) | **≤4** | OPEN — upper bound; confirmed unaudited sites: portfolio_tracker.py L1200/L1753, run_cycle.py L583. All other files confirmed clean S59. | portfolio_tracker.py, run_cycle.py |
+| RC-4 | Estimated exit price (non-fill price passed to record_exit) | **0** | CLOSED — all sites audited S59: PT L1200 (VWAP FIFO, compliant), PT L1753 (filled_avg_price, compliant), run_cycle.py L583 (fetch_actual_fill_price poll_secs=0, compliant). Full read of run_cycle.py (1,500 lines) confirmed. | — |
 | RC-2 | CWD-relative path (logs/ not anchored to `__file__`) | **0** | CLOSED — kelly.py fixed 2026-04-18; run_cycle.py fixed 2026-05-03; both confirmed via full read S58c. entry_logic.py was wrong path in prior HANDOFF (file is at execution/entry_logic.py, no CWD paths). | — |
 | RC-1 | Naive datetime (tz-unaware `datetime.now()`) | **4** | CLOSED (all 16 instances fixed 2026-04-28) | — |
 | RC-5 | Non-atomic write (no tmp→replace pattern) | **0** | CLOSED — portfolio_tracker.py L1711 fixed S59: flush+fsync+Slack escalation added to manual_audit.jsonl append (commit pending). Board 3/3, DS APPROVE, GAI APPROVE (Round 3). | — |
@@ -714,7 +714,7 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 | main.py | **33** | CRITICAL | P0 — D5 applied S59; no open RC items |
 | execution/exit_logic.py | **9** | HIGH | P2 — RC-4 all confirmed fixed S58c |
 | execution/entry_logic.py | **3** | HIGH | P2 — RC-8 closed, RC-7 closed |
-| strategy/run_cycle.py | **9** | MEDIUM | P1 — RC-4 unaudited at L583 |
+| strategy/run_cycle.py | **10** | MEDIUM | P2 — RC-4 CLOSED S59; all RC classes PASS |
 
 #### What to Do in a Dedicated Debug Session
 
