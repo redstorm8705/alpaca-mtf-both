@@ -556,7 +556,7 @@ def execute_entries(
         if _confirm < _min_confirm:
             logger.info(
                 f"[{symbol}] BoD-1 CONFIRM GATE: scan {_confirm}/{_min_confirm} qualifying "
-                f"(score={score}/12 ≥{config.CONVICTION_SKIP_BELOW}) — "
+                f"(score={score}/12 ≥{_adaptive_min_score}) — "
                 f"need {_min_confirm - _confirm} more scan(s) before entry."
             )
             continue
