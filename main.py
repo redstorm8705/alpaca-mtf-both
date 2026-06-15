@@ -14,6 +14,7 @@ import gc
 import time
 import fcntl
 import socket
+import concurrent.futures
 # threading removed — watchdog thread extracted to monitoring/watchdog.py (Phase 2)
 import argparse
 import json
@@ -205,6 +206,7 @@ OVERNIGHT_ENTRIES_ENABLED = bool(getattr(config, "OVERNIGHT_ENTRIES_ENABLED", Fa
 from alerts import (
     alert_crash,
     alert_startup_test,
+    send_slack,
 )
 
 
@@ -435,6 +437,39 @@ def main():
     kelly    = KellySizer()
     news     = NewsMonitor()
     mri      = MacroRiskIndex()   # T1-B: cross-asset background stress score
+
+    # D5: blocking startup refresh — ensures first run_cycle() uses live MRI level,
+    # not a decayed-from-disk estimate. 60s ceiling covers yfinance edge-case hangs.
+    logger.info("MRI startup refresh: blocking up to 60s for initial level verification.")
+    _mri_t0 = time.monotonic()
+    _mri_startup_err: Exception | None = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _mri_exec:
+        _mri_fut = _mri_exec.submit(mri.refresh, True)
+        try:
+            _mri_fut.result(timeout=60)
+        except concurrent.futures.TimeoutError as _te:
+            _mri_startup_err = _te
+        except Exception as _ex:
+            _mri_startup_err = _ex
+    _elapsed = time.monotonic() - _mri_t0
+    _final_level = mri.level()
+    if _mri_startup_err is None:
+        logger.info(
+            "MRI startup refresh complete: level=%s score=%s elapsed=%.1fs",
+            _final_level, mri.score(), _elapsed,
+        )
+    else:
+        _is_timeout = isinstance(_mri_startup_err, concurrent.futures.TimeoutError)
+        logger.error(
+            "MRI startup refresh %s after %.1fs — level=%s. "
+            "Will self-correct on first scan cycle.",
+            "timed out" if _is_timeout else f"failed: {_mri_startup_err!r}",
+            _elapsed, _final_level,
+        )
+        send_slack(
+            f":warning: MRI STARTUP {'TIMED OUT' if _is_timeout else 'FAILED'}. "
+            f"Bot level={_final_level} — will self-correct on first scan cycle."
+        )
 
     # SCHNEIER-FIX (GTC-PENDING-CANCEL 2026-04-30): Reset pending_cancel cycle counters
     # at every session start. The counter survives os.execv() restarts (persisted via
