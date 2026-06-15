@@ -189,7 +189,7 @@ class MacroRiskIndex:
         with self._lock:
             if self._refresh_failed:
                 if self._startup_stale:
-                    return "CRITICAL"   # D5b: unverified startup data
+                    return "ELEVATED"   # D5b: unverified startup data
                 if (
                     self._refresh_failed_since is not None
                     and (datetime.now(ET) - self._refresh_failed_since).total_seconds()
