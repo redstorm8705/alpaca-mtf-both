@@ -373,6 +373,20 @@ def execute_entries(
     _mins_ph_cyc  = _now_ph_cyc.hour * 60 + _now_ph_cyc.minute
     _is_ph_cyc    = _mins_ph_cyc >= config.TOD_EXPANSION_WINDOW_START
 
+    # Adaptive MIN_SCORE floor — scales with MRI regime (S59 DS MODE 2 recommendation)
+    # Formula: CONVICTION_SKIP_BELOW + floor(mri_score/25), clamped [CONVICTION_SKIP_BELOW, 12]
+    # Each 25-point MRI band raises the floor by +1 (max +3 raise, hard ceiling at 12).
+    _adaptive_min_score = config.CONVICTION_SKIP_BELOW
+    if mri is not None:
+        _adaptive_min_score = config.CONVICTION_SKIP_BELOW + int(mri.score() // 25)
+        # Enforce ceiling=12 as outer operation so it holds even if CONVICTION_SKIP_BELOW > 12
+        _adaptive_min_score = min(max(_adaptive_min_score, config.CONVICTION_SKIP_BELOW), 12)
+    if _adaptive_min_score != config.CONVICTION_SKIP_BELOW:
+        logger.info(
+            f"Adaptive MIN_SCORE: {_adaptive_min_score}/12 "
+            f"(MRI={mri.score()}/100 → +{_adaptive_min_score - config.CONVICTION_SKIP_BELOW} floor raise)"
+        )
+
     for sig in signals:
         symbol    = sig["symbol"]
         direction = sig["direction"]
@@ -506,13 +520,13 @@ def execute_entries(
         # qualifying scans (≥CONVICTION_SKIP_BELOW) before committing a day
         # trade.  Counter resets on any sub-threshold scan — streak unbroken.
         # PDT=3/3 already requires 3×12/12 (conviction_streak gate above).
-        if score >= config.CONVICTION_SKIP_BELOW:
+        if score >= _adaptive_min_score:
             gate_state.entry_confirm_buffer[symbol] = gate_state.entry_confirm_buffer.get(symbol, 0) + 1
         else:
             gate_state.entry_confirm_buffer[symbol] = 0
         logger.debug(
             f"[{symbol}] entry_confirm={gate_state.entry_confirm_buffer[symbol]}/2 "
-            f"(score={score}/{config.CONVICTION_SKIP_BELOW})"
+            f"(score={score}/{_adaptive_min_score})"
         )
         # Bucket A is LONG ONLY — leveraged ETFs not shortable on Alpaca
         if is_bucket_a and direction == "short":
@@ -530,10 +544,10 @@ def execute_entries(
 
         # ── Conviction gate ──────────────────────────────────────────────
         # S50: PDT removed. Universal conviction gate (was PDT 0-2/3 path).
-        if score < config.CONVICTION_SKIP_BELOW:
+        if score < _adaptive_min_score:
             logger.info(
-                f"[{symbol}] Score {score}/12 below minimum "
-                f"(need ≥{config.CONVICTION_SKIP_BELOW}) — skipping"
+                f"[{symbol}] Score {score}/12 below adaptive minimum "
+                f"(need ≥{_adaptive_min_score} | MRI={mri.score() if mri else 'N/A'}/100) — skipping"
             )
             continue
         # BoD-1: 2-scan confirmation gate — ALL buckets (unchanged)
