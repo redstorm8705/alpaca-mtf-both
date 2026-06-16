@@ -5117,3 +5117,30 @@ Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ram
 **Cold second-agent:** PASS
 **Changes:** import concurrent.futures (line 17). send_slack added to alerts import. Blocking startup mri.refresh(True) with 60s ceiling, success/failure logging, Slack alert on failure.
 **Post-patch:** All 3 static tools PASS. No regressions.
+
+---
+## S60 Nightly — 2026-06-16
+
+### Nightly Agent Run — Open Item Triage
+
+**Slack:** 403 Forbidden (webhook may be expired or rate-limited). All output to stdout.
+**AI Audit (Gist):** Unavailable.
+**Source:** handoff.md + tb_audit_log.md S59 entries.
+
+**Items verified COMPLETE (no action needed):**
+- P0 handlers.py PDT stub removal: DONE (confirmed by grep — no record_day_trade(), get_rolling_day_trade_count(), pdt_used, DAY_TRADE_MAX anywhere in codebase)
+- D1 MRI 6h staleness ceiling: DONE (commit 6d95d03 — _refresh_failed_since at L117, reset at L162, 6h check at L194-196, CRITICAL at L209, Slack alert via logger.critical L204-208)
+- All RC classes (RC-1 through RC-8): CLOSED per handoff.md S59
+- D5/D5b: DONE (commits 0e597a8, 9f8ac4a, 0cfeaea)
+- QHM: data/state/ write is forbidden category — integration deferred; quarterly_hold_manager.py module has ds_gai_complete status (pending_ds_gai_2026-06-05_quarterly_hold_manager.json)
+
+**Item QUEUED (Board FAIL, Step 6):**
+- execution/exit_logic.py — T1 tranche restructure (TRANCHE_FRACS/TRANCHE_SHARE/trail activation)
+- Board: A=FAIL (forbidden category — trail activation) | B=FAIL (trail_stop typo in test diff, actual code correct) | C=FAIL (T3 skip for qty_orig=3, trail re-anchor)
+- Commit: 8b3ad7f | File: logs/queued_for_review_2026-06-16.md
+- 3 decisions needed from Rafael before proceeding (see queue file)
+
+**Full read completed this session:** execution/exit_logic.py — 2129 lines in 8 chunks via Explore subagent ✓
+
+**Static analysis (exit_logic.py current file):**
+py_compile: PASS | mypy: PASS (0 errors) | ruff: PASS (0 violations)
