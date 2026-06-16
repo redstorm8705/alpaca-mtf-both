@@ -1,11 +1,11 @@
-# Handoff — S59 Autonomous Overnight (2026-06-15)
+# Handoff — S60 Nightly Autonomous (2026-06-16)
 
 ## Current Bot State
 
 | Item | Value |
 |------|-------|
 | Branch | main |
-| HEAD | d9251b8 |
+| HEAD | 8afaad8 |
 | Mode | Paper trading, PDT enforcement disabled (S50) |
 | Profile active | paper (MIN_SCORE=9/12, STOP=1.25×ATR, TARGET=2.5×ATR) |
 | Kill switch | 7% (config.py paper profile) |
@@ -97,7 +97,12 @@ Expected HEAD on OCI: `d9251b8` (after 03:00 UTC cron)
 
 ## Next Session Priorities
 
-1. **Verify OCI deployment** — check HEAD=d9251b8 post-03:00 UTC cron
+1. **Verify OCI deployment** — check HEAD=8afaad8 post-03:00 UTC cron
 2. **Monitor RTH** — bot should trade normally. All RC classes clear. No known blocking bugs.
-3. **Architecture/whitespace audit** (when bandwidth) — DS/GAI MODE 2 to identify what the current audit protocol underweights
-4. **handlers.py P0 follow-on** — S54 audit: remove record_day_trade() + get_rolling_day_trade_count() stub (tb_audit_log.md entry 2026-06-08 S54 cont)
+3. **T1 tranche restructure — QUEUED, 3 decisions needed** (logs/queued_for_review_2026-06-16.md):
+   - A: Is enabling trail activation at new T1 (TRANCHE_FRACS[0]=0.40) a forbidden "stop-loss calculation logic" change?
+   - B: T3 silent skip for qty_orig=3 positions: acceptable (check_exits handles final close) or fix L587?
+   - C: GAI sign-off still required per RULE C-2 before patch can be applied
+4. **QHM integration** — config file (data/state/quarterly_holds_config.json) must be written by Rafael (data/state/ writes are forbidden autonomous). Then integration into entry_logic.py → run_cycle.py → main.py (all RTH-chain, draft-only). GEV entry Jul 22, GE Jul 25.
+5. ~~handlers.py P0 follow-on~~ ✅ DONE — stubs already removed in prior session (confirmed by grep, no record_day_trade/get_rolling_day_trade_count anywhere)
+6. ~~D1 MRI staleness ceiling~~ ✅ DONE — commit 6d95d03, verified in production code (L117, L162, L194-210)
