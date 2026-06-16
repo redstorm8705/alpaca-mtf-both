@@ -5353,3 +5353,54 @@ No regressions introduced. Audit points 1, 2, 4, 5 re-confirmed clean for both f
 End-to-end live on branch `claude/ds-audit-bv5-patches-dqqaqm`: gate module committed, wired into
 execute_entries(), all 9 patch sequence steps complete, DS/GAI/board consensus reached for paper
 trading. No open blockers. Phase 2 items logged above for future sessions.
+
+---
+
+## Item #6 — tca_logger.py (Transaction Cost Analysis logger) — 2026-06-16 S60
+
+**File:** `tca_logger.py` (new, repo root, 133 lines) — observational slippage logger,
+mirrors `trade_logger.py` pattern. Called from `execution/entry_logic.py` and
+`execution/exit_logic.py` post-fill-confirmation only. Read-only/additive — no control
+flow impact.
+
+### Step 1 — Full Read Gate
+Full read complete: 133 lines, 1 chunk (file ≤1000 lines, direct Read tool). Declared
+prior to any analysis per protocol.
+
+### Step 2 — 10-Point Audit + RC-1–RC-8 Scan (cold Explore subagent, agentId aaa37c64968950c94)
+All 10 points: **PASS**. Sign/direction logic explicitly verified on all 8 long/short ×
+entry/exit cases — **PASS** (entry: paying more on long / getting less on short = adverse;
+exit: filling lower on long / filling higher on short = adverse). No other file writes to
+`logs/tca_metrics.jsonl`. No dead code. Path anchored via `Path(__file__).resolve().parent`.
+
+RC scan mapped to actual CLAUDE.md classes (agent used its own generic RC-1–8 labels;
+remapped here for audit-log consistency):
+- RC-1 (naive datetime): PASS — `datetime.now(PT)`, PT-aware throughout.
+- RC-2 (CWD-relative path): PASS — anchored to `__file__`.
+- RC-3 (silent exception): PASS — `except Exception as e: logger.warning(...)`, no bare pass.
+- RC-4 (estimated exit price): N/A — module never calls `record_exit`; only logs
+  caller-supplied fill prices gated by `fill_confirmed`/`_fill_unverified`.
+- RC-5 (non-atomic write): PASS (carve-out) — plain `open(path, "a")` append, same accepted
+  pattern as `trade_logger.py` for non-critical log files.
+- RC-6 (wrong API field name): N/A — no API field consumption, caller passes plain floats/strings.
+- RC-7 (zero-share sizing): N/A — no sizing logic in this module.
+- RC-8 (unbounded scan buffer): N/A — no persistent dict/buffer state held.
+
+### Step 3 — Board Vote (cold parallel Explore subagents — Harris/microstructure,
+McKinney/data integrity, Beck/QA)
+**2-1 APPROVE/CONDITIONAL-APPROVE — "APPROVED FOR PAPER TRADING. Implement as-is. No
+changes required."** Non-blocking v2 pre-live checklist logged (VWAP reference price,
+time-of-day bucket, VIX regime tag, unit tests, integration test, participation-rate
+vote) — none required for current paper-trading scope.
+
+### Step 4 — DS/GAI External Audit: **BLOCKED — deferred**
+This remote session has no `.env` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` access (keys live
+on the Mac/OCI box only). RULE C-5 applies (file will be imported by RTH-running
+entry_logic.py/exit_logic.py) — gate is not waived. User explicitly chose "defer to next
+Mac/OCI session" over pasting keys into this session or skipping the gate. **No edit tool
+will be called on tca_logger.py or its integration sites until Step 4 completes.**
+
+### STATUS — Item #6 (TCA logger): Steps 1-3 COMPLETE, Step 4 BLOCKED (env access), Steps 5-9 NOT STARTED.
+File exists on disk (`tca_logger.py`, untracked, not committed) but is NOT integrated into
+entry_logic.py/exit_logic.py and NOT yet approved for write. Queued in
+`logs/pending_approvals_2026-06-16.md` for the next session with Mac/OCI `.env` access.
