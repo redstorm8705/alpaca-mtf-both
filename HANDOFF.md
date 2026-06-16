@@ -1,16 +1,24 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-06-11 S58
+**Updated:** 2026-06-16 S60
 
-## Bot Status
-- **Running:** YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
+## ⚠️ THIS SESSION WAS REMOTE CLOUD SANDBOX — OCI/DEPLOY STATUS UNVERIFIED
+S59 and S60 (this entry) ran in a remote cloud sandbox (`/home/user/alpaca-mtf-both`,
+GitHub repo `redstorm8705/alpaca-mtf-both`, branch `claude/ds-audit-bv5-patches-dqqaqm`)
+with **no SSH/OCI access and no `.env` access**. All fields below marked "last confirmed
+S58" are STALE — the next session with OCI/Mac access must re-verify before trusting them.
+Code commits below ARE real and on the remote branch — they just haven't been confirmed
+pulled+running on OCI yet.
+
+## Bot Status (fields below last CONFIRMED at S58 — re-verify on OCI access)
+- **Running:** last confirmed YES — OCI Phoenix `129.153.208.32` | all 4 services active (mtf-bot, mtf-writer, mtf-http, nginx)
 - **SSH:** `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32` (Ed25519 key)
 - **Bot CWD on OCI:** `/home/ubuntu/mtf-bot/` — always rsync to this path
-- **Account:** Paper ~$2,500 start → **$2,813.82** equity | $2,932.64 cash
-- **Profile:** paper | MIN_SCORE=9/12 | KELLY_FRACTION=0.35 | KELLY_MAX_RISK_PCT=4.5% | INTRADAY_STOP_ATR_MULT=1.20 | TARGET=2.5x | **VOL_TIER_HIGH_STOP=2.0** (was 1.75, S57)
-- **OCI git:** ✅ latest commit `9e6b4e7` deployed and running
+- **Account:** Paper ~$2,500 start → **$2,813.82** equity | $2,932.64 cash (S58 snapshot — stale)
+- **Profile:** paper | MIN_SCORE=9/12 (now **adaptive**, see S59 below) | KELLY_FRACTION=0.35 | KELLY_MAX_RISK_PCT=4.5% | INTRADAY_STOP_ATR_MULT=1.20 | TARGET=2.5x | VOL_TIER_HIGH_STOP=2.0
+- **OCI git:** last CONFIRMED commit `9e6b4e7` (S58). **NOT YET VERIFIED on OCI:** `da13ad7`, `3087360`, `ad9c239`, `216192e`, `231d093`, `5fbad86`, `b4f09af` (S59 — adaptive MIN_SCORE floor + Invariant #10 correlation gate), `b06fcd1`, `88ef84c` (S60 — tca_logger.py draft, not wired). **Run the OCI verification command below before doing anything else next session.**
 - **Dashboard:** `http://129.153.208.32:8080/dashboard.html`
 - **PDT:** REMOVED — all PDT code eliminated from entire codebase (Tier 2 complete S55)
-- **RAM:** 251MB used / 559MB avail (healthy — improved from S54 713MB)
+- **RAM:** 251MB used / 559MB avail (S58 snapshot — stale, healthy as of then)
 
 ## Open Positions (live as of S55 end)
 | Symbol | Side | Shares | Entry | Unrealized |
@@ -22,12 +30,28 @@ Note: NFLX position from S54 is closed.
 
 ## Open Items (require action next session)
 
-### P1 — Known CRITICAL Bug (deferred, needs DS/GAI)
-- [ ] **trade_engine.py L252-254**: Direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` — bypasses CYCLE-SYNC-GUARD monotonic-UP constraint from S42. Fires every RTH cycle when pending overnight entries exist.
+### P0 — IMMEDIATE NEXT ACTION (S60, this session)
+- [ ] **tca_logger.py — Step 4 (DS/GAI external audit)**: file is built, Steps 1-3 complete
+  and clean (full read, 10-point audit + RC scan, board vote 2-1 APPROVE — see
+  `logs/tb_audit_log.md` "Item #6" section). **Blocked in remote sandbox — needs
+  `.env` access for `DEEPSEEK_API_KEY`/`GEMINI_API_KEY`.** Run DS/GAI MODE 1 (patch
+  validation persona) with the exact same prompt used for the 10-point audit (see
+  `logs/pending_approvals_2026-06-16.md` for full context), then continue Steps 5-9
+  and wire into `execution/entry_logic.py` + `execution/exit_logic.py` per RULE C-6
+  (each file's full Steps 1-9 independently).
+- [ ] **Item #7 — bar-end adverse selection**: design locked (post-hoc analysis script,
+  no runtime hook, no DS/GAI gate needed per RULE C-5) but NOT YET STARTED. See
+  `logs/pending_approvals_2026-06-16.md`.
+- [ ] **OCI verification**: `ssh oci 'cd ~/alpaca-mtf-bot_FINAL && git pull && git log --oneline -5'`
+  — confirm S59+S60 commits (see Bot Status above) are pulled and services are healthy.
 
-### P1 — Pending Approvals (logs/pending_approvals_2026-06-07.md)
-- [ ] **#1** — RC-8: 9 missing `_rc8_clear_buffers()` in entry_logic.py (Board APPROVE, DS/GAI deadlocked)
-- [ ] **#2** — RC-4: exit_logic.py L1345/L1939/L2032 — strategy decision on fallback price source
+### P1 — Known CRITICAL Bug (deferred, needs DS/GAI)
+- [ ] **trade_engine.py L252-254**: Direct `risk.open_positions = len(...)` assignment instead of `risk.register_open()` — bypasses CYCLE-SYNC-GUARD monotonic-UP constraint from S42. Fires every RTH cycle when pending overnight entries exist. (STALE per S58c queue sweep note below — re-verify before acting.)
+
+### P1 — Pending Approvals
+- `logs/pending_approvals_2026-06-16.md` — **current** — items #6 (TCA, blocked Step 4) and #7 (adverse selection, not started)
+- `logs/pending_approvals_2026-06-15.md` — item #4 (correlation gate) now DEPLOYED (S59, see below) — rest of file's items #1/#3/#5 closed/deferred per that file's table
+- `logs/pending_approvals_2026-06-07.md` — **STALE**, both items resolved per S58c queue sweep (#1 RC-8 CLOSED, #3/#4 closed-stale) — do not re-action without re-verifying first
 
 ### P1 — RC Bug Fixes (unlocalized)
 - [ ] **RC-4**: 7 remaining violations (3 fixed in exit_logic.py S55; 7 remain in unknown files)
@@ -38,6 +62,60 @@ Note: NFLX position from S54 is closed.
 ### P2 — Post-Market Pipeline
 - [x] ~~**Bridge missing**~~ ✅ FIXED S56 — `autonomous_patch_generator.py` built and deployed
 - [x] ~~**alerts.py PDT cleanup**~~ ✅ Already done S54 (commit `312089c`)
+
+## Last Session (2026-06-16 S60 — remote sandbox, this entry)
+
+### tca_logger.py — Item #6 (TCA Execution Quality) — IN PROGRESS, blocked
+- New file `tca_logger.py` (repo root, 133 lines): observational entry/exit slippage
+  logger, mirrors `trade_logger.py` pattern, writes `logs/tca_metrics.jsonl`. Zero
+  control-flow impact — caller passes already-confirmed fill prices in.
+- Steps 1-3 of Mandatory Patch Sequence COMPLETE and clean: full read (133 lines),
+  10-point audit + RC-1–8 scan (all PASS, sign/direction logic verified correct on
+  all 8 long/short × entry/exit cases), board vote (Harris/McKinney/Beck) 2-1 APPROVE
+  for paper trading. Full detail: `logs/tb_audit_log.md` "Item #6" section.
+- Step 4 (DS/GAI) BLOCKED — remote sandbox has no `.env`/API key access. Rafael chose
+  to defer to next Mac/OCI session rather than paste keys or skip the gate.
+- Committed as inert draft (`88ef84c`) — confirmed zero callers anywhere in the
+  codebase, so committing has no RTH impact. NOT wired into entry_logic.py/exit_logic.py.
+- Planned integration sites already documented (see `logs/pending_approvals_2026-06-16.md`):
+  entry_logic.py after the fill-confirmation poll loop (~L1249-1282); exit_logic.py at
+  each of the 9 `record_exit()` sites, gated on `not trade.get("_fill_unverified")`.
+
+### Item #7 (bar-end adverse selection) — design locked, not started
+- User-approved mechanism: standalone post-hoc analysis script (no runtime hook into
+  entry_logic.py/exit_logic.py) — reads `trade_events.jsonl` + retroactively calls
+  `fetch_bars()`. Avoids DS/GAI gate per RULE C-5 (not RTH-imported). Nothing built yet.
+
+### Item #5 (Alpha Decay/Walk-Forward) — explicitly out of scope this session
+- Remains BLOCKED — shadow 16-pt log lives on OCI only, not accessible from remote sandbox.
+
+## Prior Session (2026-06-15 S59)
+
+### Adaptive MIN_SCORE floor ✅ (commit `da13ad7`)
+- `entry_logic.py` patched — MIN_SCORE entry threshold now scales with MRI regime
+  instead of a fixed 9/12. Full sequence (Steps 1-9) complete, DS/GAI + board aligned,
+  deployed. Audit log updated (`3087360`).
+
+### Portfolio Correlation Aggregator — Invariant #10 ✅ DEPLOYED (commits `216192e`, `231d093`, `5fbad86`, `b4f09af`)
+- New module `risk/correlation_matrix.py`: `would_breach_correlation_limit()` — 60-day
+  rolling Spearman rank correlation, fail-CLOSED on data unavailability, directional-aware
+  (only blocks same-direction pairs), threshold 0.7, max 2 correlated pairs per
+  Invariant #10. Wired into `execute_entries()` in `entry_logic.py` (after sector gate,
+  before position count check).
+- Full Steps 1-9 complete: board vote, DS/GAI (one DS↔GAI split resolved via tie-breaker
+  counter-prompt — Finding 6 pair-counting interpretation reached 3/3 consensus after
+  counter-prompt), static analysis clean, cold second-agent PASS, impact radius confirmed
+  (`execute_entries()` only caller is `strategy/run_cycle.py:1490`).
+- Cosmetic fix bundled: BoD-1 confirmation gate log string now correctly shows
+  `_adaptive_min_score` instead of stale `CONVICTION_SKIP_BELOW` reference.
+- Phase 2 items logged (not blockers): pre-scan caching of daily returns, pre-scan
+  open_positions snapshot to eliminate intra-cycle staleness, 20-day Pearson eval
+  alongside 60-day Spearman.
+
+### Item #3 (Breadth → MRI) — CLOSED, no action needed
+- Board reviewed: current design (breadth not wired into MRI) is correct as-is —
+  10-min breadth refresh vs 24h MRI window is a temporal mismatch that would corrupt
+  the signal if wired in naively. REJECT on wiring it in; no further action.
 
 ## Last Session (2026-06-11 S58b — same day continuation)
 
@@ -124,17 +202,19 @@ Note: NFLX position from S54 is closed.
 - PDT REMOVED per SEC/FINRA rule amendment, board S50 28-0 — NO PDT CODE ANYWHERE
 - BUCKET_B_MAX_POSITIONS = 999 (unlimited; MAX_OPEN_POSITIONS=4 is the operative cap)
 
-## RC Bug Counts (live after S55)
-| RC | Count | Top File |
-|----|-------|---------|
-| RC-4 Estimated exit price | **7** | unlocalized (exit_logic.py fixed) |
-| RC-2 CWD-relative path | **7** | run_cycle.py, entry_logic.py |
-| RC-3 Silent exception | **1** | unlocalized |
-| RC-7 Zero-share sizing | **2** | main.py |
-| RC-5 Non-atomic write | **1** | portfolio_tracker.py |
-| RC-6 Wrong API field | **3** | portfolio_tracker.py |
-| RC-8 Unbounded scan buffer | **1** | entry_logic.py (9 sites, deadlocked) |
-| RC-1 Naive datetime | **0** | CLOSED |
+## RC Bug Counts (live as of 2026-06-15 S59 — matches CLAUDE.md + bug_counter.json; S58 table below was stale)
+| RC | Count | Status | Top File(s) |
+|----|-------|--------|-------------|
+| RC-1 Naive datetime | **0** | CLOSED (all 16 fixed 2026-04-28) | — |
+| RC-2 CWD-relative path | **0** | CLOSED (kelly.py 4/18, run_cycle.py 5/3, confirmed S58c) | — |
+| RC-3 Silent exception | **0** | CLOSED (last instance S58: autonomous_patch_generator.py L67) | — |
+| RC-4 Estimated exit price | **≤4** | OPEN — upper bound; confirmed unaudited: portfolio_tracker.py L1200/L1753, run_cycle.py L583 | portfolio_tracker.py, run_cycle.py |
+| RC-5 Non-atomic write | **1** | OPEN — manual_audit.jsonl append, low risk | portfolio_tracker.py L1711 |
+| RC-6 Wrong API field name | **0** | CLOSED (3 historical patches confirmed applied) | — |
+| RC-7 Zero-share sizing | **0** | CLOSED (guard confirmed entry_logic.py L1127-1190) | — |
+| RC-8 Unbounded scan buffer | **0** | CLOSED (9 sites b2e61f7 + L663 bonus, DS/GAI IO objection retracted) | — |
+
+**Top hotspot files (patch count, S59):** `execution/portfolio_tracker.py` (36, CRITICAL — RC-4/RC-5 open), `main.py` (33, CRITICAL — no open RC items), `execution/exit_logic.py` (9, HIGH — RC-4 confirmed fixed), `execution/entry_logic.py` (3, HIGH — RC-7/RC-8 closed), `strategy/run_cycle.py` (9, MEDIUM — RC-4 unaudited L583).
 
 ## Rafael's Role — CHAIRMAN / CEO (Mandate 2026-06-14)
 Rafael sees proposals ONLY when board + DS + GAI are fully aligned. Every approval package delivered in plain English with a real stock example. "Let's do it" = apply immediately. See CLAUDE.md §RAFAEL'S ROLE for full format. Board/DS/GAI handle all technical deliberation autonomously — Rafael decides, not deliberates.
@@ -153,14 +233,16 @@ Every file requires FULL read before ANY analysis. Files >1,000 lines → Read t
 ## Session Start Checklist
 - [ ] Read this handoff.md first (blocking)
 - [ ] Query Master Brain: `notebooklm use 0203f312-f285-4f20-8b8d-ca6fde65acf7`
-- [ ] Check pending_approvals_2026-06-07.md for items #1-#2
-- [ ] Verify OCI services active + RAM usage
-- [ ] Confirm next action: P1 — trade_engine.py L252-254 CRITICAL bug (Steps 1-9 + DS/GAI)
+- [ ] Verify branch: `git fetch origin claude/ds-audit-bv5-patches-dqqaqm && git checkout claude/ds-audit-bv5-patches-dqqaqm && git pull` (repo `redstorm8705/alpaca-mtf-both`) — confirm latest commit is `88ef84c` or later
+- [ ] Run OCI verification: `ssh oci 'cd ~/alpaca-mtf-bot_FINAL && git pull && git log --oneline -5'` — confirm S59+S60 commits pulled, services healthy, RAM normal
+- [ ] Check `logs/pending_approvals_2026-06-16.md` (current) for item #6 (TCA, Step 4 blocked) and #7 (adverse selection, not started)
+- [ ] Confirm next action: **P0 — tca_logger.py Step 4 (DS/GAI)** — file ready, audit/board clean, only blocked on `.env` access (now available on Mac/OCI session)
 
 ## References
-- Pending approvals: `logs/pending_approvals_2026-06-07.md`
+- Pending approvals: `logs/pending_approvals_2026-06-16.md` (current), `logs/pending_approvals_2026-06-15.md` (item #4 now deployed), `logs/pending_approvals_2026-06-07.md` (stale)
 - Session history: `logs/session_summary_*.md`
-- Audit log: `logs/tb_audit_log.md`
-- Bug counts: `logs/bug_counter.json`
+- Audit log: `logs/tb_audit_log.md` (see "Item #6" section, end of file, for tca_logger.py status)
+- Bug counts: `logs/bug_counter.json` (last_updated: 2026-06-15 S59)
 - CLAUDE.md: full rules, guardrails, board protocol, RC live counts
+- New file this session: `tca_logger.py` (repo root, draft, uncalled)
 - Master Brain: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
