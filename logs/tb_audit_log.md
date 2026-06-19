@@ -5144,3 +5144,47 @@ Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ram
 
 **Static analysis (exit_logic.py current file):**
 py_compile: PASS | mypy: PASS (0 errors) | ruff: PASS (0 violations)
+
+---
+## S61 Nightly Autonomous — 2026-06-19
+
+### Preamble
+- Git remote: authenticated ✓
+- Slack: 403 Forbidden (webhook expired/revoked) — output to stdout only
+- AI Audit Gist: unavailable — continuing from handoff.md
+
+### Step 0–1: Triage
+- Gist: unavailable
+- handoff.md: read complete (S60, 2026-06-16)
+- tb_audit_log.md: read last 200 lines (S60 section reviewed)
+- All RC classes: CLOSED (per handoff.md S59 confirmation)
+- queued_for_review_2026-06-16.md: exit_logic.py T1 tranche — BLOCKED (3 Rafael decisions required)
+
+### Step 2: RTH Classification
+- quarterly_hold_manager.py: NON-RTH (AST confirmed — not imported by any RTH entrypoint)
+- entry_logic.py: RTH-CHAIN (transitive: main.py → execution.trade_engine → execution.entry_logic)
+- NON-RTH: 1 item | RTH-CHAIN: QHM integration sequence (not drafted this session — see below)
+
+### NON-RTH APPLY — execution/quarterly_hold_manager.py (docstring update)
+**Full read:** 1305 lines in 5 chunks (Explore returned summary → switched to Read tool chunks). Complete.
+**10-pt audit:** All 10 points checked. All 8 RC classes: RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 N/A | RC-5 PASS | RC-6 PASS | RC-7 PASS | RC-8 N/A
+**Finding:** L2 module docstring + L270 class docstring referenced stale Q2 picks (AVGO/NVDA/ANET). Q3 2026 board-approved picks: LLY/GE/GEV (GS window closed).
+**Board:** A PASS | B PASS | C PASS (3/3)
+**Static:** py_compile PASS | mypy PASS | ruff PASS (initial E501 on first attempt → fixed with line wrap)
+**Second-agent:** PASS
+**Impact radius:** Zero (docstring only; no callers affected)
+**Applied:** commit 93cd5fb — 2 lines changed (L2, L270 docstrings)
+**Post-patch:** py_compile PASS | mypy PASS | ruff PASS
+
+### RTH-Chain Items (draft deferred this session)
+- entry_logic.py QHM cross-trade block: not drafted — deferred to next autonomous session
+  Reason: full read of entry_logic.py (1618 lines) + 10-pt audit + board vote + diff + DS/GAI prompt = substantial multi-step work; prioritized completing non-RTH apply cleanly tonight.
+
+### Git State
+- origin/main was at fce6a63 (S60) — local main was stale at 4faad91
+- Fast-forward merge + cherry-pick brought local main current
+- Pushed 93cd5fb to origin/main (1 commit, docstring only)
+
+### Slack Status
+- 403 Forbidden — all notifications logged to stdout only
+- Webhook appears expired; Rafael should check Slack integration
