@@ -1,6 +1,7 @@
 """
 execution/quarterly_hold_manager.py
-Multi-week long hold manager for AVGO/NVDA/ANET quarterly anchor positions.
+Multi-week long hold manager for quarterly anchor positions.
+Q3 2026 picks: LLY/GE/GEV (GS window closed — entry passed).
 
 Architecture: Board vote COMPLETE (25 members BoD+AB+TB, S48b 2026-06-04).
 See handoff.md §BOARD VOTE COMPLETE — quarterly_hold_manager.py for full spec.
@@ -268,7 +269,9 @@ def _run_beck_tests(qhm: "QuarterlyHoldManager") -> None:
 # Main class
 # ---------------------------------------------------------------------------
 class QuarterlyHoldManager:
-    """Manages multi-week long hold positions for AVGO/NVDA/ANET.
+    """Manages multi-week long hold positions for quarterly hold candidates.
+
+    Q3 2026 picks: LLY/GE/GEV (GS window closed — entry window passed).
 
     Lifecycle per session:
       startup  → reconcile_on_startup()     # verify orders/stops vs Alpaca
