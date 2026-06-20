@@ -60,6 +60,7 @@ from strategy.scoring import (
 )
 from strategy.signal_generator import run_scan
 from execution.exit_logic import _cancel_open_gtc_orders  # noqa: F401
+from execution.quarterly_hold_manager import get_quarterly_hold_symbols
 
 if TYPE_CHECKING:
     from events.calendar import EventCalendar
@@ -350,8 +351,10 @@ def execute_entries(
     # This prevents a stale tracker (0 entries) from wiping a correct high risk count.
     # Status filter matches sync_from_tracker() — excludes zombie closed entries.
     if risk is not None:
+        _qhm_syms = get_quarterly_hold_symbols()
         _tracker_open_count = sum(
-            1 for t in (tracker.open_trades or {}).values() if t.get("status") != "closed"
+            1 for sym, t in (tracker.open_trades or {}).items()
+            if t.get("status") != "closed" and sym not in _qhm_syms
         )
         if _tracker_open_count > risk.open_positions:
             logger.warning(
@@ -378,6 +381,11 @@ def execute_entries(
         direction = sig["direction"]
         trade_mode = sig["trade_mode"]
         score      = sig["score"]
+
+        # QHM exclusion: skip intraday entries for buy-and-hold held symbols
+        if symbol in get_quarterly_hold_symbols():
+            _rc8_clear_buffers(symbol, "qhm-hold")
+            continue
 
         # ── Rule 1 enforcement ───────────────────────────────────────────
         if _longs_blocked_rule1 and direction == "long":
