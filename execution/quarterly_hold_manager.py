@@ -1,6 +1,7 @@
 """
 execution/quarterly_hold_manager.py
-Multi-week long hold manager for AVGO/NVDA/ANET quarterly anchor positions.
+Multi-week long hold manager for quarterly anchor positions.
+Q3 2026 picks: LLY/GE/GEV (GS window closed — entry passed).
 
 Architecture: Board vote COMPLETE (25 members BoD+AB+TB, S48b 2026-06-04).
 See handoff.md §BOARD VOTE COMPLETE — quarterly_hold_manager.py for full spec.
@@ -117,6 +118,7 @@ class HoldState(str, Enum):
     PENDING_STOP_REPLACE = "PENDING_STOP_REPLACE"  # GTC stop missing; AH loop resubmits
     PENDING_EXIT         = "PENDING_EXIT"          # Exit order submitted
     CLOSED               = "CLOSED"                # Fully exited — normal close
+    PENDING_EARNINGS     = "PENDING_EARNINGS"       # GTC stop cancelled pre-earnings
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +140,7 @@ class HoldPosition:
     stop_order_id: Optional[str] = None
     entry_order_id: Optional[str] = None
     entry_day: Optional[str] = None       # YYYY-MM-DD of Day-1 gate trigger
+    earnings_gate_date: Optional[str] = None  # YYYY-MM-DD expected earnings date
     thesis_check_last: Optional[str] = None   # ISO timestamp
     thesis_check_result: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(ET).isoformat())
@@ -268,7 +271,9 @@ def _run_beck_tests(qhm: "QuarterlyHoldManager") -> None:
 # Main class
 # ---------------------------------------------------------------------------
 class QuarterlyHoldManager:
-    """Manages multi-week long hold positions for AVGO/NVDA/ANET.
+    """Manages multi-week long hold positions for quarterly hold candidates.
+
+    Q3 2026 picks: LLY/GE/GEV (GS window closed — entry window passed).
 
     Lifecycle per session:
       startup  → reconcile_on_startup()     # verify orders/stops vs Alpaca
@@ -358,6 +363,10 @@ class QuarterlyHoldManager:
                     self._reconcile_pending_exit(pos, result)
                     result.symbols_reconciled.append(symbol)
 
+                elif pos.state == HoldState.PENDING_EARNINGS:
+                    self._reconcile_pending_earnings(pos, result)
+                    result.symbols_reconciled.append(symbol)
+
             except Exception as e:  # RC-3: log, never swallow
                 logger.warning(
                     "QuarterlyHoldManager reconcile error for %s: %s",
@@ -384,6 +393,10 @@ class QuarterlyHoldManager:
                     continue
 
                 self._resync_from_alpaca(pos)
+
+                self._maybe_enter_earnings_hold(pos)
+                if pos.state == HoldState.PENDING_EARNINGS:
+                    continue  # type: ignore[unreachable]  # mypy: side-effect changes state
 
                 if pos.entry_day:
                     try:
@@ -753,7 +766,9 @@ class QuarterlyHoldManager:
         """McKinney: Alpaca is authoritative. Detect GTC stop fills or manual closes."""
         if self.dry_run:
             return False
-        if pos.state not in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE):
+        if pos.state not in (
+            HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS
+        ):
             return False
         try:
             alpaca_pos = self.broker.get_position(pos.symbol)
@@ -768,6 +783,40 @@ class QuarterlyHoldManager:
                     "State → CLOSED.",
                     pos.symbol,
                 )
+                # trade_events.jsonl — CLAUDE.md §7 structured exit event (Change B)
+                try:
+                    _te_path = _ROOT / "logs" / "trade_events.jsonl"  # RC-2
+                    _hold_days = 0
+                    if pos.entry_day:
+                        try:
+                            from datetime import date as _date
+                            _hold_days = (
+                                self._now_et().date()
+                                - _date.fromisoformat(pos.entry_day)
+                            ).days
+                        except (ValueError, TypeError):
+                            pass
+                    _te = {
+                        "ts": datetime.now(PT).isoformat(),  # RC-1: PT (CLAUDE.md §8)
+                        "event": "exit",
+                        "exit_reason": "external_close_detected",
+                        "symbol": pos.symbol,
+                        "price": None,  # reconcile via Alpaca fills API
+                        "price_pending": True,
+                        "size": pos.qty_filled,
+                        "mri_level": "N/A",
+                        "score": 0,
+                        "data_source": "qhm_external_close",
+                        "hold_days": _hold_days,
+                        "pdt_used": 0,
+                    }
+                    with open(_te_path, "a") as _f:
+                        _f.write(json.dumps(_te) + "\n")
+                except Exception as _te_e:  # RC-3
+                    logger.warning(
+                        "QuarterlyHoldManager: trade_events write failed for %s: %s",
+                        pos.symbol, _te_e,
+                    )
                 self._alert(
                     f"📊 QHM: {pos.symbol} CLOSED externally (GTC stop or manual). "
                     f"Review P&L via Alpaca fills API."
@@ -780,6 +829,219 @@ class QuarterlyHoldManager:
                 pos.symbol, e,
             )
         return False
+
+    # -----------------------------------------------------------------------
+    # Earnings protection helpers
+    # -----------------------------------------------------------------------
+
+    def _maybe_enter_earnings_hold(self, pos: HoldPosition) -> None:
+        """Cancel GTC stop if earnings within 5 calendar days. Gate on confirmed cancel.
+        Harris: cancel failure must not advance state.
+        DS: verify position still exists after cancel (cancel-fill race guard).
+        """
+        if pos.state != HoldState.ACTIVE:
+            return
+        try:
+            from data.fmp_client import get_cached_earnings_dates
+            today = self._now_et().date()
+            earnings_dates = get_cached_earnings_dates(pos.symbol)
+            upcoming = sorted([d for d in earnings_dates if d >= today])
+            if not upcoming or (upcoming[0] - today).days > 5:
+                return
+            logger.info(
+                "QuarterlyHoldManager: %s earnings on %s (%d days away) — "
+                "attempting GTC stop cancel, state→PENDING_EARNINGS",
+                pos.symbol, upcoming[0], (upcoming[0] - today).days,
+            )
+            if pos.stop_order_id and not self.dry_run:
+                try:
+                    from execution.broker import cancel_order
+                    cancel_order(pos.stop_order_id)
+                    logger.info(
+                        "QuarterlyHoldManager: %s GTC stop %s cancelled pre-earnings",
+                        pos.symbol, pos.stop_order_id,
+                    )
+                    # DS: cancel-fill race guard — verify position still exists
+                    verify_pos = self.broker.get_position(pos.symbol)
+                    if verify_pos is None:
+                        logger.warning(
+                            "QuarterlyHoldManager: %s stop filled during cancel "
+                            "window — external close; will catch on next cycle",
+                            pos.symbol,
+                        )
+                        return
+                except Exception as _ce:  # RC-3 — Harris: cancel failure gates state
+                    logger.warning(
+                        "QuarterlyHoldManager: %s pre-earnings stop cancel FAILED — "
+                        "staying ACTIVE with existing stop: %s",
+                        pos.symbol, _ce,
+                    )
+                    self._alert(
+                        f"⚠️ QHM: {pos.symbol} pre-earnings stop cancel FAILED — "
+                        f"stays ACTIVE with existing stop."
+                    )
+                    return  # Do NOT transition if cancel failed
+            pos.stop_order_id = None
+            pos.earnings_gate_date = upcoming[0].isoformat()
+            pos.state = HoldState.PENDING_EARNINGS
+            pos.updated_at = self._now_et().isoformat()  # RC-1
+            self._alert(
+                f"⏳ QHM: {pos.symbol} earnings on {upcoming[0]} — GTC stop cancelled. "
+                f"State→PENDING_EARNINGS. Stop resubmits post-earnings at startup."
+            )
+            self._save_state()
+        except Exception as e:  # RC-3
+            logger.warning(
+                "QuarterlyHoldManager: _maybe_enter_earnings_hold error for %s: %s",
+                pos.symbol, e,
+            )
+
+    def _reconcile_pending_earnings(
+        self, pos: HoldPosition, result: ReconcileResult
+    ) -> None:
+        """Resubmit GTC stop after earnings pass. Called from reconcile_on_startup().
+        Derman: FMP empty ambiguous — use earnings_gate_date fallback.
+        Beck: restore _register_symbol on all paths after restart.
+        """
+        try:
+            from data.fmp_client import get_cached_earnings_dates
+            from datetime import date as _date
+            today = self._now_et().date()
+            earnings_dates = get_cached_earnings_dates(pos.symbol)
+            upcoming = [d for d in earnings_dates if d >= today]
+
+            if upcoming:
+                # FMP confirms earnings still ahead
+                _register_symbol(pos.symbol)  # Beck: restore block after restart
+                logger.info(
+                    "QuarterlyHoldManager: %s PENDING_EARNINGS — "
+                    "next earnings %s still ahead",
+                    pos.symbol, min(upcoming),
+                )
+                return
+
+            # FMP returned empty — disambiguate failure vs. genuine clear (Derman)
+            if not earnings_dates and pos.earnings_gate_date:
+                try:
+                    gate_dt = _date.fromisoformat(pos.earnings_gate_date)
+                    if today <= gate_dt:
+                        # Earnings date not yet reached — FMP likely failing; stay safe
+                        _register_symbol(pos.symbol)
+                        logger.warning(
+                            "QuarterlyHoldManager: %s FMP empty, gate_date %s not yet "
+                            "passed — staying PENDING_EARNINGS (FMP may be down)",
+                            pos.symbol, pos.earnings_gate_date,
+                        )
+                        return
+                    # today > gate_dt: earnings date passed — fall through to resubmit
+                except (ValueError, TypeError):
+                    pass
+
+            # Earnings confirmed passed (or gate_date exceeded) — resubmit
+            logger.info(
+                "QuarterlyHoldManager: %s earnings passed — resubmitting GTC stop",
+                pos.symbol,
+            )
+            success = self._resubmit_post_earnings_stop(pos)
+            if success:
+                result.orders_verified += 1
+        except Exception as e:  # RC-3
+            logger.warning(
+                "QuarterlyHoldManager: _reconcile_pending_earnings error for %s: %s",
+                pos.symbol, e,
+            )
+            _register_symbol(pos.symbol)  # always restore intraday block on error
+
+    def _resubmit_post_earnings_stop(self, pos: HoldPosition) -> bool:
+        """Post-earnings GTC stop anchored to current market price.
+        LdP: entry price wrong anchor post-earnings gap — use live price.
+        GAI: long only — short buy-stop requires price + X, not price - X.
+        Returns True on successful GTC stop submission.
+        """
+        if self.dry_run:
+            return False
+        if pos.direction != "long":
+            logger.error(
+                "QuarterlyHoldManager: _resubmit_post_earnings_stop: "
+                "direction=%r on %s unsupported — only 'long'. Stays PENDING_EARNINGS.",
+                pos.direction, pos.symbol,
+            )
+            _register_symbol(pos.symbol)
+            return False
+        current_price = self._get_live_price(pos.symbol)
+        if not current_price or current_price <= 0:
+            logger.warning(
+                "QuarterlyHoldManager: %s no live price post-earnings — "
+                "PENDING_STOP_REPLACE",
+                pos.symbol,
+            )
+            self._handle_missing_stop(pos)
+            _register_symbol(pos.symbol)
+            return False
+        try:
+            from data.fetcher import fetch_bars
+            import config as _cfg
+            tf = getattr(_cfg, "TF_WEEKLY", "1Week")
+            bars = fetch_bars(pos.symbol, tf, num_bars=_ATR_BARS + 5)
+            if not bars.empty and len(bars) >= _ATR_PERIOD_WEEKS + 1:
+                trs = []
+                for i in range(1, len(bars)):
+                    h = float(bars.iloc[i]["high"])
+                    lo = float(bars.iloc[i]["low"])
+                    pc = float(bars.iloc[i - 1]["close"])
+                    trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+                atr = sum(trs[-_ATR_PERIOD_WEEKS:]) / _ATR_PERIOD_WEEKS
+                atr_stop = current_price - atr * _ATR_MULT
+            else:
+                logger.warning(
+                    "QuarterlyHoldManager: %s insufficient weekly bars post-earnings — "
+                    "using hard floor only",
+                    pos.symbol,
+                )
+                atr_stop = current_price * (1 - _HARD_FLOOR_PCT)
+            floor_stop = current_price * (1 - _HARD_FLOOR_PCT)
+            stop_price = max(atr_stop, floor_stop)
+            stop_price = round(stop_price, 2)
+            if stop_price <= 0:
+                stop_price = round(floor_stop, 2)
+            pos.stop_price = stop_price
+            stop_side = "sell"  # direction == "long" confirmed above
+            order = self._dispatcher.submit_gtc_stop(
+                self.broker, pos.symbol, pos.qty_filled, stop_side, stop_price
+            )
+            if order and hasattr(order, "id"):
+                pos.stop_order_id = order.id
+                pos.state = HoldState.ACTIVE
+                pos.earnings_gate_date = None
+                pos.updated_at = self._now_et().isoformat()  # RC-1
+                _register_symbol(pos.symbol)
+                self._save_state()
+                logger.info(
+                    "QuarterlyHoldManager: %s post-earnings GTC stop @ $%.2f "
+                    "(anchored to current $%.2f, entry was $%.2f)",
+                    pos.symbol, stop_price, current_price, pos.avg_entry_price,
+                )
+                self._alert(
+                    f"✅ QHM: {pos.symbol} earnings passed — "
+                    f"GTC stop @ ${stop_price:.2f} (current ${current_price:.2f})."
+                )
+                return True
+            else:
+                logger.warning(
+                    "QuarterlyHoldManager: %s post-earnings stop submit failed — "
+                    "PENDING_STOP_REPLACE",
+                    pos.symbol,
+                )
+                self._handle_missing_stop(pos)
+                _register_symbol(pos.symbol)  # restore intraday block even on failure
+                return False
+        except Exception as e:  # RC-3
+            logger.warning(
+                "QuarterlyHoldManager: _resubmit_post_earnings_stop error for %s: %s",
+                pos.symbol, e,
+            )
+            _register_symbol(pos.symbol)  # always restore intraday block on error
+            return False
 
     # -----------------------------------------------------------------------
     # Entry helpers

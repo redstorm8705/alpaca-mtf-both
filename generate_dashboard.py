@@ -373,9 +373,12 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     # Pass equity already fetched above so we skip the second Alpaca API call.
     # Per P&L sourcing rule: Alpaca equity is the sole source of truth for all-time P&L.
     try:
-        # realized-only: skip Alpaca equity fetch — use EOD sum of closed trades only.
-        # equity-based (~$321) excluded per user mandate S52. Cache stores realized value.
-        _lt        = compute_lifetime_stats(skip_fetch=True)
+        # equity-based: pass already-fetched Alpaca equity (avoids second API call).
+        # Falls back to EOD sum when equity=0 (API error) via skip_fetch guard.
+        _lt = compute_lifetime_stats(
+            equity=equity if equity > 0 else None,
+            skip_fetch=bool(alpaca.get("error")) or equity <= 0,
+        )
     except Exception as _lt_e:
         logger.warning(
             "_build_html: compute_lifetime_stats failed"

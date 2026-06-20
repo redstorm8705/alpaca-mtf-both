@@ -95,6 +95,7 @@ _orb_high:            float = 0.0    # SPY opening-range high (9:30–9:44 ET), 
 _orb_low:             float = 0.0    # SPY opening-range low (9:30–9:44 ET), set at 9:55 AM
 _orb_computed_date:   str   = ""     # "YYYY-MM-DD" on which ORB was computed this session
 _orb_feed_failed:     bool  = False  # True if SPY bar fetch failed → BLOCK_ALL entries
+qhm: object                 = None   # QuarterlyHoldManager — set in main(); module-level for run_cycle.py access via _main.qhm
 # Cycle watchdog — extracted to monitoring/watchdog.py (Phase 2)
 from monitoring.watchdog import touch_cycle_ts as _touch_cycle_ts
 
@@ -191,6 +192,7 @@ from execution.broker import (
 )
 from execution.risk_manager import RiskManager
 from execution.portfolio_tracker import PortfolioTracker
+from execution.quarterly_hold_manager import QuarterlyHoldManager, get_quarterly_hold_symbols
 from events.calendar import EventCalendar
 from events.earnings_fetcher import fetch_upcoming_earnings
 from events.news_monitor import NewsMonitor
@@ -247,7 +249,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)   # P3-3: suppress yfin
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main():
-    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date, OVERNIGHT_ENTRIES_ENABLED  # module-level state mutated by main()
+    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date, OVERNIGHT_ENTRIES_ENABLED, qhm  # module-level state mutated by main()
     # _fill_fallback_count moved to execution/fill_helpers.py; _rth_day_stop_failure_counts to gtc_manager.py
     parser = argparse.ArgumentParser(description="Alpaca MTF Confluence Bot")
     parser.add_argument("--mode",    default="intraday", choices=["intraday", "swing"])
@@ -438,6 +440,33 @@ def main():
     news     = NewsMonitor()
     mri      = MacroRiskIndex()   # T1-B: cross-asset background stress score
 
+    # ── QHM: broker adapter + instantiation ──────────────────────────────────
+    from execution.broker import (
+        get_open_position as _qhm_get_pos,
+        submit_limit_order as _qhm_submit_limit,
+        submit_gtc_stop_order as _qhm_submit_gtc_stop,
+        close_position as _qhm_close_pos,
+    )
+    class _QHMBroker:
+        """Thin adapter: maps QHM broker protocol to module-level broker functions."""
+        def get_position(self, sym): return _qhm_get_pos(sym)
+        def submit_limit_order(self, s, q, side, price, ext=False):
+            return _qhm_submit_limit(s, q, side, price, ext)
+        def submit_gtc_stop_order(self, s, q, side, price):
+            return _qhm_submit_gtc_stop(s, q, side, price)
+        def close_position(self, sym): return _qhm_close_pos(sym)
+
+    class _QHMSlackAlerter:
+        """Thin adapter: routes QHM alerts to send_slack."""
+        def send(self, msg): send_slack(msg)
+
+    qhm = QuarterlyHoldManager(
+        broker=_QHMBroker(),
+        fmp_client=None,
+        alerter=_QHMSlackAlerter(),
+        config={},
+    )
+
     # D5: blocking startup refresh — ensures first run_cycle() uses live MRI level,
     # not a decayed-from-disk estimate. 60s ceiling covers yfinance edge-case hangs.
     logger.info("MRI startup refresh: blocking up to 60s for initial level verification.")
@@ -597,6 +626,10 @@ def main():
         except Exception as _ste:
             logger.warning(f"State save on SIGTERM failed: {_ste}")
             _state_save_failed = True
+        try:
+            qhm.safe_stop(circuit_breaker=False)  # persist QHM state; SIGTERM may be restart
+        except Exception as _qhm_sigterm_e:
+            logger.warning("QHM safe_stop failed on SIGTERM: %s", _qhm_sigterm_e)
 
         if _open_syms or _state_save_failed:
             _reason = f"SIGTERM (signal {signum})"
@@ -721,7 +754,36 @@ def main():
         logger.error(f"Pending order reconciliation failed — proceeding without it: {_rec_e}")
     # 4. Sync risk.open_positions to actual tracker state after reconciliation
     risk.sync_from_tracker(tracker)
-    # 5. P0-STARTUP: Validate risk count against Alpaca live ledger.
+    # 5. QHM: reconcile quarterly hold positions vs Alpaca after risk sync
+    try:
+        _qhm_result = qhm.reconcile_on_startup()
+        logger.info(
+            "QHM reconcile: %d symbol(s), %d order(s) verified, "
+            "%d stop(s) resubmitted, %d closed externally, %d day orders expired",
+            len(_qhm_result.symbols_reconciled), _qhm_result.orders_verified,
+            _qhm_result.stops_resubmitted, _qhm_result.positions_closed_externally,
+            _qhm_result.day_orders_expired,
+        )
+        for _rec_err in _qhm_result.errors:
+            logger.warning("QHM reconcile error: %s", _rec_err)
+    except Exception as _qhm_rec_e:
+        logger.error("QHM reconcile_on_startup failed: %s", _qhm_rec_e)
+    # 6. QHM: add candidates with not_before_date gate (idempotent; skips already-tracked)
+    _today_qhm = datetime.now(ET).date()
+    for _sym, _pick_cfg in qhm._thesis_config.items():
+        _nbf = _pick_cfg.get("not_before_date", "")
+        try:
+            _tgt = float(_pick_cfg.get("target_equity_pct", 0.10))
+            if _nbf and _today_qhm >= date.fromisoformat(_nbf):
+                qhm.add_candidate(_sym, target_equity_pct=_tgt)
+        except (ValueError, TypeError) as _nbf_e:
+            logger.warning("QHM: not_before_date parse for %s (value=%r) failed: %s",
+                           _sym, _nbf, _nbf_e)
+    # Log registry after candidates added — shows accurate post-add state
+    _qhm_registered = sorted(get_quarterly_hold_symbols())
+    if _qhm_registered:
+        logger.info("QHM registry: %s blocked for intraday entries", _qhm_registered)
+    # 7. P0-STARTUP: Validate risk count against Alpaca live ledger.
     #    sync_from_tracker() reads local JSON — may be stale after crash/external close.
     #    This block is the authoritative override: Alpaca position count wins.
     #    Amendment A-1 (marking individual stale entries) was rejected by board (S42):
@@ -982,6 +1044,10 @@ def main():
             logger.info("Bot stopped by user.")
             _safe_close_all(tracker, risk, circuit_breaker=True,
                             mri_level=mri.level() if mri else "NORMAL")  # H-6 / C-2: user shutdown = close all
+            try:
+                qhm.safe_stop(circuit_breaker=False)  # persist QHM state on user shutdown
+            except Exception as _qhm_kb_e:
+                logger.warning("QHM safe_stop failed on shutdown: %s", _qhm_kb_e)
             try:
                 tracker.write_eod_summary(kelly_sizer=kelly)
                 logger.info("EOD snapshot written on shutdown.")

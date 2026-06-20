@@ -5144,3 +5144,171 @@ Current design: STRESSED = 0.70x size floor (binary). DS recommended: linear ram
 
 **Static analysis (exit_logic.py current file):**
 py_compile: PASS | mypy: PASS (0 errors) | ruff: PASS (0 violations)
+
+---
+## S61 Nightly Autonomous — 2026-06-19
+
+### Preamble
+- Git remote: authenticated ✓
+- Slack: 403 Forbidden (webhook expired/revoked) — output to stdout only
+- AI Audit Gist: unavailable — continuing from handoff.md
+
+### Step 0–1: Triage
+- Gist: unavailable
+- handoff.md: read complete (S60, 2026-06-16)
+- tb_audit_log.md: read last 200 lines (S60 section reviewed)
+- All RC classes: CLOSED (per handoff.md S59 confirmation)
+- queued_for_review_2026-06-16.md: exit_logic.py T1 tranche — BLOCKED (3 Rafael decisions required)
+
+### Step 2: RTH Classification
+- quarterly_hold_manager.py: NON-RTH (AST confirmed — not imported by any RTH entrypoint)
+- entry_logic.py: RTH-CHAIN (transitive: main.py → execution.trade_engine → execution.entry_logic)
+- NON-RTH: 1 item | RTH-CHAIN: QHM integration sequence (not drafted this session — see below)
+
+### NON-RTH APPLY — execution/quarterly_hold_manager.py (docstring update)
+**Full read:** 1305 lines in 5 chunks (Explore returned summary → switched to Read tool chunks). Complete.
+**10-pt audit:** All 10 points checked. All 8 RC classes: RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 N/A | RC-5 PASS | RC-6 PASS | RC-7 PASS | RC-8 N/A
+**Finding:** L2 module docstring + L270 class docstring referenced stale Q2 picks (AVGO/NVDA/ANET). Q3 2026 board-approved picks: LLY/GE/GEV (GS window closed).
+**Board:** A PASS | B PASS | C PASS (3/3)
+**Static:** py_compile PASS | mypy PASS | ruff PASS (initial E501 on first attempt → fixed with line wrap)
+**Second-agent:** PASS
+**Impact radius:** Zero (docstring only; no callers affected)
+**Applied:** commit 93cd5fb — 2 lines changed (L2, L270 docstrings)
+**Post-patch:** py_compile PASS | mypy PASS | ruff PASS
+
+### RTH-Chain Items (draft deferred this session)
+- entry_logic.py QHM cross-trade block: not drafted — deferred to next autonomous session
+  Reason: full read of entry_logic.py (1618 lines) + 10-pt audit + board vote + diff + DS/GAI prompt = substantial multi-step work; prioritized completing non-RTH apply cleanly tonight.
+
+### Git State
+- origin/main was at fce6a63 (S60) — local main was stale at 4faad91
+- Fast-forward merge + cherry-pick brought local main current
+- Pushed 93cd5fb to origin/main (1 commit, docstring only)
+
+### Slack Status
+- 403 Forbidden — all notifications logged to stdout only
+- Webhook appears expired; Rafael should check Slack integration
+
+---
+
+## generate_dashboard.py — Task E P&L Sourcing Fix (2026-06-20 S61 overnight chain)
+
+**Full read:** 947 lines in 4 chunks ✓
+**reporting/metrics.py full read:** 191 lines ✓
+
+### 10-Point Audit
+1. Static analysis: will run after patch proposed
+2. Trade path: Called by main.py post-run_cycle (RTH display, not trading logic). DS/GAI required (RTH import chain).
+3. Adversarial scenarios: API down (equity=0) — current patch handles via skip_fetch guard. No edge case missed.
+4. Full read: ✓ complete (both files)
+5. Cross-references: `compute_lifetime_stats` from `reporting.metrics` verified. All imports valid.
+6. **BUG FOUND**: Lines 372-374 say "Alpaca authoritative" but line 378 uses `skip_fetch=True` (EOD tracker sum). Direct contradiction. The S52 mandate that put this in place is superseded by HANDOFF (S61) which explicitly requires equity-based calculation.
+7. Redundancy: None.
+8. State persistence: `tmp.replace()` pattern used at L409, L447, L939 ✓
+9. Data source tier: T1 Alpaca via direct REST (not SDK) ✓
+10. Timezone: PT throughout ✓
+
+### RC Class Scan
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — `datetime.now(ET)`, `datetime.now(PT)` throughout |
+| RC-2 | PASS — `ROOT = Path(__file__).parent.resolve()` anchors all paths |
+| RC-3 | PASS — all except blocks log (debug/warning/error), none silent |
+| RC-4 | N/A — no record_exit calls |
+| RC-5 | PASS — atomic tmp→replace for all 3 cache writes |
+| RC-6 | PASS — Alpaca fields confirmed against API docs |
+| RC-7 | N/A — no sizing logic |
+| RC-8 | N/A — no scan buffers |
+
+### Proposed Fix (generate_dashboard.py L373-379)
+BEFORE:
+    # realized-only: skip Alpaca equity fetch — use EOD sum of closed trades only.
+    # equity-based (~$321) excluded per user mandate S52. Cache stores realized value.
+    _lt = compute_lifetime_stats(skip_fetch=True)
+
+AFTER:
+    # equity-based: pass already-fetched Alpaca equity (avoids second API call).
+    # Falls back to EOD sum when equity=0 (API error) via skip_fetch guard.
+    _lt = compute_lifetime_stats(
+        equity=equity if equity > 0 else None,
+        skip_fetch=bool(alpaca.get("error")) or equity <= 0,
+    )
+
+
+### Post-Patch Verification (Step 9) — 2026-06-20
+- py_compile: PASS
+- mypy: PASS (0 errors)
+- ruff: PASS (0 violations)
+- Cold second-agent: PASS (all 4 checks)
+- Impact radius: live_data_writer.py (caller), monthly_review.py (reads cache), weekly_review.py (direct call, unaffected)
+- OCI deploy: rsync complete, services restarted (active x4), dashboard.html regenerated
+- lifetime_pnl_cache.json confirms: total_pnl=307.38 (was 142.83) — FIXED
+- Commit: eb6a5ac — pushed to origin/claude/gracious-keller-j1rvhl
+- Task E: DONE
+
+---
+## 2026-06-20 S61 — quarterly_hold_manager.py FILE 2 QHM Wiring (Earnings State Machine + trade_events write)
+
+**Session:** S61 (QHM wiring task, FILE 2 of 4)
+**Branch:** claude/gracious-keller-j1rvhl | Base commit: c12658a
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/quarterly_hold_manager.py | 1,308 | Full read complete (prior session); 7 edits applied this session |
+| data/fetcher.py | ~230 | fetch_bars returns pd.DataFrame — confirmed dict key access bug |
+
+### 10-Point Audit — execution/quarterly_hold_manager.py (FILE 2 changes)
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | py_compile PASS, mypy PASS (1 type:ignore[unreachable] for mypy false positive), ruff PASS |
+| 2 | End-to-end trade path | PENDING_EARNINGS → reconcile_on_startup → _resubmit_post_earnings_stop → ACTIVE path verified. External close in PENDING_EARNINGS → CLOSED + deregister verified at L777/L779. |
+| 3 | Adversarial scenarios | FMP down (empty list) + gate_date past → resubmit ✓; FMP down + gate_date future → stay gated ✓; cancel-fill race → verify_pos None check ✓; no price post-earnings → PENDING_STOP_REPLACE ✓; short direction (unsupported) → early return with error log ✓ |
+| 4 | Full read | COMPLETE — prior session full read, all 7 edits verified by line inspection |
+| 5 | Cross-references | get_cached_earnings_dates (data/fmp_client.py L392) ✓; fetch_bars (data/fetcher.py, returns DataFrame) ✓; cancel_order (execution/broker.py) ✓; _handle_missing_stop, _get_live_price, _dispatcher.submit_gtc_stop all existing methods ✓ |
+| 6 | Conflicting execution directions | None — new methods are private helpers, no cross-module state conflicts |
+| 7 | Redundancy scan | No dead code; _register_symbol called on all error paths (intentional — restore intraday block) |
+| 8 | State persistence | _save_state() called after PENDING_EARNINGS transition and after successful stop resubmission. Atomic write via existing implementation. |
+| 9 | Data source tier | fetch_bars uses T1 (Alpaca StockHistoricalDataClient). get_cached_earnings_dates uses T2 (FMP). trade_events.jsonl write is non-authoritative correlation log only (P&L invariant: Alpaca fills API authoritative). |
+| 10 | Timezone + logging | datetime.now(PT) for trade_events ts ✓ (CLAUDE.md §8). self._now_et().isoformat() for pos.updated_at ✓ (internal RC-1 compliant). |
+
+### RC Scan
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all new datetimes use ET or PT |
+| RC-2 | CWD-relative path | PASS — `_ROOT / "logs" / "trade_events.jsonl"` uses module-level _ROOT anchor |
+| RC-3 | Silent exception | PASS — every except block logs or re-raises; no bare pass |
+| RC-4 | Estimated exit price | PASS — trade_events write uses price=None + price_pending=True; no RC-4 exposure (P&L from Alpaca fills API) |
+| RC-5 | Non-atomic write | PASS — trade_events.jsonl append-only (not critical state file); state file uses existing atomic write |
+| RC-6 | Wrong API field | PASS — no new Alpaca API field access |
+| RC-7 | Zero-share sizing | N/A — no sizing logic in this patch |
+| RC-8 | Unbounded scan buffer | N/A — no entry_confirm_buffer access |
+
+### Board Vote Summary
+Full board vote via cold parallel subagents (prior session). Findings addressed:
+- Katsuyama/LdP: PENDING_EARNINGS added to _detect_external_close state guard ✓
+- Harris: cancel failure gates transition (exception path returns before state change) ✓
+- Derman: FMP empty list disambiguation via earnings_gate_date fallback ✓
+- Beck: _register_symbol restored on all paths after restart ✓
+- GAI: short position guard added (direction != "long" → early return with error log) ✓
+- McKinney: date subtraction TypeError guard (ValueError, TypeError) ✓
+
+### DS/GAI Code Review (actual diff — per user process feedback S61)
+DS: REJECT Round 1 — 2 critical bugs found
+- Bug #2 CONFIRMED: bars[i]["high"] on DataFrame → KeyError. FIXED: bars.iloc[i]["high"] ✓
+- Bug #4 FALSE ALARM: DS claimed no CLOSED transition for PENDING_EARNINGS — L777 pos.state=HoldState.CLOSED already present before trade_events block. Verified by reading actual code.
+GAI: REJECT (MAX_TOKENS on Q2+) — Q1 confirmed correct; Q2 bug confirmed (DataFrame access)
+
+3-Point AI Summary:
+- POINT 1: Q1 (FMP all-past falls through) 3/3 ALIGN; Q2 (DataFrame access) 2/3 — Claude missed, DS+GAI confirmed
+- POINT 2: bars.iloc[i] fix and `not bars.empty` truthiness fix — both applied ✓
+- POINT 3: DS Bug #3 (no stop during transition window) MEDIUM non-blocking; no new board vote required
+
+Cold Second-Agent: Two findings — both dismissed (dry_run false alarm, boundary design choice). PASS.
+Impact radius: contained within QHM module — all three new methods private, no new public API.
+
+### Bugs Fixed This Session
+| ID | Severity | Location | Fix |
+|----|----------|----------|-----|
+| QHM-F2-1 | CRITICAL | _resubmit_post_earnings_stop | bars[i]["high"] → bars.iloc[i]["high"]; `if bars` → `if not bars.empty` |
+
