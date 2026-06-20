@@ -30,6 +30,8 @@ build/
 # ── Runtime state (position data, session state) ───────────────────────────────
 data/state/
 data/cache/
+# Config is stable quarterly configuration, not volatile runtime state — track it
+!data/state/quarterly_holds_config.json
 
 # ── Trade data (P&L history, open positions) ───────────────────────────────────
 trade_log.json

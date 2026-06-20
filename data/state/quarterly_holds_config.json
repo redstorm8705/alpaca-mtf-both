@@ -1,0 +1,51 @@
+{
+  "quarter": "Q3 2026",
+  "research_date": "2026-06-20",
+  "session": "S60 CCR",
+  "board_approved": true,
+  "notes": [
+    "GS excluded: entry window Jul 7-14 ends on earnings day (Jul 14). QHM docstring says 'window closed'.",
+    "GE+GEV correlation: BoD 4-0 vote — treat as ONE position for risk. Stagger GEV entry 2+ trading days after GE Day-1.",
+    "not_before_date: CCR metadata for local session. QHM does NOT enforce this natively.",
+    "LOCAL SESSION ACTION REQUIRED: Add not_before_date gate to _is_tranche_due() OR",
+    "time add_candidate() calls to fire only after each symbol's not_before_date.",
+    "target_equity_pct here is the call-site value for add_candidate(symbol, target_equity_pct=X)."
+  ],
+  "picks": {
+    "GE": {
+      "tier": "T1",
+      "target_equity_pct": 0.20,
+      "not_before_date": "2026-07-25",
+      "earnings_exit_before": "2026-10-21",
+      "entry_day_gate_pct": 0.85,
+      "day3_reconfirm_pct": 0.02,
+      "fallback_symbol": "CEG",
+      "fallback_condition": "FMP data staleness > 30 days at Jul 25 pre-entry check",
+      "board_score": "8.25/10",
+      "thesis": "GE Aerospace spin-off; LEAP engine backlog; defense + commercial aviation convergence post-pandemic"
+    },
+    "GEV": {
+      "tier": "T2",
+      "target_equity_pct": 0.15,
+      "not_before_date": "2026-07-22",
+      "earnings_exit_before": "2026-10-28",
+      "entry_day_gate_pct": 0.85,
+      "day3_reconfirm_pct": 0.02,
+      "fallback_symbol": "FCX",
+      "fallback_condition": "Parser confidence < 80% at Jul 22 pre-entry check",
+      "board_score": "9.25/10",
+      "correlation_note": "BoD 4-0: treat as ONE position with GE for risk. Stagger entry 2+ trading days after GE Day-1.",
+      "thesis": "GE Vernova energy transition; grid modernization; gas turbine + wind + electrification secular tailwind"
+    },
+    "LLY": {
+      "tier": "T1",
+      "target_equity_pct": 0.20,
+      "not_before_date": "2026-08-07",
+      "earnings_exit_before": "2026-10-29",
+      "entry_day_gate_pct": 0.85,
+      "day3_reconfirm_pct": 0.02,
+      "board_score": "9.75/10",
+      "thesis": "GLP-1 monopoly; tirzepatide obesity + T2D superiority; Alzheimer pipeline optionality; pricing power"
+    }
+  }
+}
