@@ -95,6 +95,7 @@ _orb_high:            float = 0.0    # SPY opening-range high (9:30–9:44 ET), 
 _orb_low:             float = 0.0    # SPY opening-range low (9:30–9:44 ET), set at 9:55 AM
 _orb_computed_date:   str   = ""     # "YYYY-MM-DD" on which ORB was computed this session
 _orb_feed_failed:     bool  = False  # True if SPY bar fetch failed → BLOCK_ALL entries
+qhm: object                 = None   # QuarterlyHoldManager — set in main(); module-level for run_cycle.py access via _main.qhm
 # Cycle watchdog — extracted to monitoring/watchdog.py (Phase 2)
 from monitoring.watchdog import touch_cycle_ts as _touch_cycle_ts
 
@@ -248,7 +249,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)   # P3-3: suppress yfin
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
 def main():
-    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date, OVERNIGHT_ENTRIES_ENABLED  # module-level state mutated by main()
+    global _kill_switch_alerted, _last_daily_reset_date, _last_weekly_review_spawn_date, OVERNIGHT_ENTRIES_ENABLED, qhm  # module-level state mutated by main()
     # _fill_fallback_count moved to execution/fill_helpers.py; _rth_day_stop_failure_counts to gtc_manager.py
     parser = argparse.ArgumentParser(description="Alpaca MTF Confluence Bot")
     parser.add_argument("--mode",    default="intraday", choices=["intraday", "swing"])

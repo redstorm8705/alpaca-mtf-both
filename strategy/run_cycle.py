@@ -1296,6 +1296,13 @@ def run_cycle(
     # ── Partial exits + trailing stops on open positions ─────────────────────
     _main.check_partial_exits(tracker, kelly, risk, mri, last_vix=_main._last_vix)
 
+    # ── QHM: weekly check — earnings gate, stop reconciliation ───────────────
+    if _main.qhm is not None:
+        try:
+            _main.qhm.run_weekly_check()  # type: ignore[attr-defined]
+        except Exception as _qhm_wk_e:
+            logger.warning("QHM run_weekly_check failed: %s", _qhm_wk_e)
+
     # ── T3: MRI STRESSED+ breakeven push ─────────────────────────────────────
     if mri and mri.level() in ("STRESSED", "HIGH", "CRITICAL") and tracker.open_trades:
         _apply_mri_breakeven_push(tracker, mri)
@@ -1372,6 +1379,15 @@ def run_cycle(
             )
     except Exception as _anomaly_err:
         logger.warning("Anomaly checks failed (non-critical): %s", _anomaly_err)
+
+    # ── QHM: quarterly hold entries — orthogonal to intraday gates ───────────
+    # Pre-planned 3-13 week positions; not blocked by EXTREME/BV-5 (intraday only)
+    # Harris/Brandt: 10:05 AM ET gate (liquidity settled) — QHM does not enforce internally
+    if _main.qhm is not None and (now.hour * 60 + now.minute) >= (10 * 60 + 5):
+        try:
+            _main.qhm.maybe_enter_positions()  # type: ignore[attr-defined]
+        except Exception as _qhm_entry_e:
+            logger.warning("QHM maybe_enter_positions failed: %s", _qhm_entry_e)
 
     # ── EXTREME: block all new entries ────────────────────────────────────────
     if _main._spy_event_type == "EXTREME":
