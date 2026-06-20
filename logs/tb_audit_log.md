@@ -5188,3 +5188,60 @@ py_compile: PASS | mypy: PASS (0 errors) | ruff: PASS (0 violations)
 ### Slack Status
 - 403 Forbidden — all notifications logged to stdout only
 - Webhook appears expired; Rafael should check Slack integration
+
+---
+
+## generate_dashboard.py — Task E P&L Sourcing Fix (2026-06-20 S61 overnight chain)
+
+**Full read:** 947 lines in 4 chunks ✓
+**reporting/metrics.py full read:** 191 lines ✓
+
+### 10-Point Audit
+1. Static analysis: will run after patch proposed
+2. Trade path: Called by main.py post-run_cycle (RTH display, not trading logic). DS/GAI required (RTH import chain).
+3. Adversarial scenarios: API down (equity=0) — current patch handles via skip_fetch guard. No edge case missed.
+4. Full read: ✓ complete (both files)
+5. Cross-references: `compute_lifetime_stats` from `reporting.metrics` verified. All imports valid.
+6. **BUG FOUND**: Lines 372-374 say "Alpaca authoritative" but line 378 uses `skip_fetch=True` (EOD tracker sum). Direct contradiction. The S52 mandate that put this in place is superseded by HANDOFF (S61) which explicitly requires equity-based calculation.
+7. Redundancy: None.
+8. State persistence: `tmp.replace()` pattern used at L409, L447, L939 ✓
+9. Data source tier: T1 Alpaca via direct REST (not SDK) ✓
+10. Timezone: PT throughout ✓
+
+### RC Class Scan
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — `datetime.now(ET)`, `datetime.now(PT)` throughout |
+| RC-2 | PASS — `ROOT = Path(__file__).parent.resolve()` anchors all paths |
+| RC-3 | PASS — all except blocks log (debug/warning/error), none silent |
+| RC-4 | N/A — no record_exit calls |
+| RC-5 | PASS — atomic tmp→replace for all 3 cache writes |
+| RC-6 | PASS — Alpaca fields confirmed against API docs |
+| RC-7 | N/A — no sizing logic |
+| RC-8 | N/A — no scan buffers |
+
+### Proposed Fix (generate_dashboard.py L373-379)
+BEFORE:
+    # realized-only: skip Alpaca equity fetch — use EOD sum of closed trades only.
+    # equity-based (~$321) excluded per user mandate S52. Cache stores realized value.
+    _lt = compute_lifetime_stats(skip_fetch=True)
+
+AFTER:
+    # equity-based: pass already-fetched Alpaca equity (avoids second API call).
+    # Falls back to EOD sum when equity=0 (API error) via skip_fetch guard.
+    _lt = compute_lifetime_stats(
+        equity=equity if equity > 0 else None,
+        skip_fetch=bool(alpaca.get("error")) or equity <= 0,
+    )
+
+
+### Post-Patch Verification (Step 9) — 2026-06-20
+- py_compile: PASS
+- mypy: PASS (0 errors)
+- ruff: PASS (0 violations)
+- Cold second-agent: PASS (all 4 checks)
+- Impact radius: live_data_writer.py (caller), monthly_review.py (reads cache), weekly_review.py (direct call, unaffected)
+- OCI deploy: rsync complete, services restarted (active x4), dashboard.html regenerated
+- lifetime_pnl_cache.json confirms: total_pnl=307.38 (was 142.83) — FIXED
+- Commit: eb6a5ac — pushed to origin/claude/gracious-keller-j1rvhl
+- Task E: DONE

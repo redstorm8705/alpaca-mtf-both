@@ -1,3 +1,20 @@
+# Handoff — S61 Rolling Chain (2026-06-20 overnight)
+
+## LATEST CHANGES (2026-06-20 autonomous session)
+
+| Commit | File | Fix |
+|--------|------|-----|
+| `eb6a5ac` | `generate_dashboard.py` | Task E: Dashboard lifetime P&L now uses equity-based sourcing (equity − $2,500 = **+$307.38** vs old tracker math +$142.83). Board 6/6 + DS R2 + GAI R2 APPROVE. |
+
+**Branch:** `claude/gracious-keller-j1rvhl`
+**Equity:** $2,807.38 | PDT: 0/3 | Open positions: MSTR short 1sh, SMCI short 3sh, TOST short 5sh
+**Next rolling chain:** armed for 9:48 AM PT (16:48 UTC) 2026-06-20
+
+**Queued for Rafael (3 decisions needed):** `logs/queued_for_review_2026-06-16.md` — exit_logic.py T1 tranche restructure.
+**Deferred:** monthly_review.py month-over-month from Alpaca fills (DS flagged, low priority).
+
+---
+
 # Handoff — S60 Nightly Autonomous (2026-06-16)
 
 ## Current Bot State
