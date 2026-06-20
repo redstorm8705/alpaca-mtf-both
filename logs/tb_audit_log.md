@@ -5245,3 +5245,70 @@ AFTER:
 - lifetime_pnl_cache.json confirms: total_pnl=307.38 (was 142.83) — FIXED
 - Commit: eb6a5ac — pushed to origin/claude/gracious-keller-j1rvhl
 - Task E: DONE
+
+---
+## 2026-06-20 S61 — quarterly_hold_manager.py FILE 2 QHM Wiring (Earnings State Machine + trade_events write)
+
+**Session:** S61 (QHM wiring task, FILE 2 of 4)
+**Branch:** claude/gracious-keller-j1rvhl | Base commit: c12658a
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/quarterly_hold_manager.py | 1,308 | Full read complete (prior session); 7 edits applied this session |
+| data/fetcher.py | ~230 | fetch_bars returns pd.DataFrame — confirmed dict key access bug |
+
+### 10-Point Audit — execution/quarterly_hold_manager.py (FILE 2 changes)
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | py_compile PASS, mypy PASS (1 type:ignore[unreachable] for mypy false positive), ruff PASS |
+| 2 | End-to-end trade path | PENDING_EARNINGS → reconcile_on_startup → _resubmit_post_earnings_stop → ACTIVE path verified. External close in PENDING_EARNINGS → CLOSED + deregister verified at L777/L779. |
+| 3 | Adversarial scenarios | FMP down (empty list) + gate_date past → resubmit ✓; FMP down + gate_date future → stay gated ✓; cancel-fill race → verify_pos None check ✓; no price post-earnings → PENDING_STOP_REPLACE ✓; short direction (unsupported) → early return with error log ✓ |
+| 4 | Full read | COMPLETE — prior session full read, all 7 edits verified by line inspection |
+| 5 | Cross-references | get_cached_earnings_dates (data/fmp_client.py L392) ✓; fetch_bars (data/fetcher.py, returns DataFrame) ✓; cancel_order (execution/broker.py) ✓; _handle_missing_stop, _get_live_price, _dispatcher.submit_gtc_stop all existing methods ✓ |
+| 6 | Conflicting execution directions | None — new methods are private helpers, no cross-module state conflicts |
+| 7 | Redundancy scan | No dead code; _register_symbol called on all error paths (intentional — restore intraday block) |
+| 8 | State persistence | _save_state() called after PENDING_EARNINGS transition and after successful stop resubmission. Atomic write via existing implementation. |
+| 9 | Data source tier | fetch_bars uses T1 (Alpaca StockHistoricalDataClient). get_cached_earnings_dates uses T2 (FMP). trade_events.jsonl write is non-authoritative correlation log only (P&L invariant: Alpaca fills API authoritative). |
+| 10 | Timezone + logging | datetime.now(PT) for trade_events ts ✓ (CLAUDE.md §8). self._now_et().isoformat() for pos.updated_at ✓ (internal RC-1 compliant). |
+
+### RC Scan
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all new datetimes use ET or PT |
+| RC-2 | CWD-relative path | PASS — `_ROOT / "logs" / "trade_events.jsonl"` uses module-level _ROOT anchor |
+| RC-3 | Silent exception | PASS — every except block logs or re-raises; no bare pass |
+| RC-4 | Estimated exit price | PASS — trade_events write uses price=None + price_pending=True; no RC-4 exposure (P&L from Alpaca fills API) |
+| RC-5 | Non-atomic write | PASS — trade_events.jsonl append-only (not critical state file); state file uses existing atomic write |
+| RC-6 | Wrong API field | PASS — no new Alpaca API field access |
+| RC-7 | Zero-share sizing | N/A — no sizing logic in this patch |
+| RC-8 | Unbounded scan buffer | N/A — no entry_confirm_buffer access |
+
+### Board Vote Summary
+Full board vote via cold parallel subagents (prior session). Findings addressed:
+- Katsuyama/LdP: PENDING_EARNINGS added to _detect_external_close state guard ✓
+- Harris: cancel failure gates transition (exception path returns before state change) ✓
+- Derman: FMP empty list disambiguation via earnings_gate_date fallback ✓
+- Beck: _register_symbol restored on all paths after restart ✓
+- GAI: short position guard added (direction != "long" → early return with error log) ✓
+- McKinney: date subtraction TypeError guard (ValueError, TypeError) ✓
+
+### DS/GAI Code Review (actual diff — per user process feedback S61)
+DS: REJECT Round 1 — 2 critical bugs found
+- Bug #2 CONFIRMED: bars[i]["high"] on DataFrame → KeyError. FIXED: bars.iloc[i]["high"] ✓
+- Bug #4 FALSE ALARM: DS claimed no CLOSED transition for PENDING_EARNINGS — L777 pos.state=HoldState.CLOSED already present before trade_events block. Verified by reading actual code.
+GAI: REJECT (MAX_TOKENS on Q2+) — Q1 confirmed correct; Q2 bug confirmed (DataFrame access)
+
+3-Point AI Summary:
+- POINT 1: Q1 (FMP all-past falls through) 3/3 ALIGN; Q2 (DataFrame access) 2/3 — Claude missed, DS+GAI confirmed
+- POINT 2: bars.iloc[i] fix and `not bars.empty` truthiness fix — both applied ✓
+- POINT 3: DS Bug #3 (no stop during transition window) MEDIUM non-blocking; no new board vote required
+
+Cold Second-Agent: Two findings — both dismissed (dry_run false alarm, boundary design choice). PASS.
+Impact radius: contained within QHM module — all three new methods private, no new public API.
+
+### Bugs Fixed This Session
+| ID | Severity | Location | Fix |
+|----|----------|----------|-----|
+| QHM-F2-1 | CRITICAL | _resubmit_post_earnings_stop | bars[i]["high"] → bars.iloc[i]["high"]; `if bars` → `if not bars.empty` |
+
