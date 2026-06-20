@@ -835,6 +835,7 @@ the board output in plain language without losing the directional conclusion.
 - **Strategy changes** (MIN_SCORE, stops, targets, exit logic): Full board vote — all 3 boards weigh in.
 - **Feature-specific reviews**: Call the relevant domain board(s) only.
 - **Data source changes**: TB (McKinney, Katsuyama) + AB (Harris) required.
+- **Quarterly hold pick selection** (stock ranking, entry thesis, conviction scoring): **BoD + AB only.** TB and Execution boards handle integration design and execution mechanics but do NOT vote on pick selection or ranking. (Rafael mandate 2026-06-20)
 - Board must review actual data/logs before providing analysis — no fabricated facts.
 
 ### Domain → Board Mapping (real verified members only)
