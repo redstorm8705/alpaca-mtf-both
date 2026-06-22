@@ -33,8 +33,8 @@ _GIT_LOCKFILE      = "/tmp/mtf_git.lock"   # shared with auto_deploy.sh
 _SLACK_URL         = None  # loaded from .env
 _MAX_RETRIES       = 3
 _API_TIMEOUT       = 180   # seconds, matches auto_ai_audit.py
-_DS_BASE_URL       = None  # loaded from .env
-_DS_MODEL          = "deepseek-chat"
+_GRO_BASE_URL      = "https://api.groq.com/openai/v1"
+_GRO_MODEL         = "llama-3.3-70b-versatile"
 _GEMINI_MODEL      = "gemini-2.5-flash"
 # explicit cap — flash default 8192 causes mid-response truncation
 _GEMINI_MAX_TOKENS = 16384
@@ -49,7 +49,7 @@ def _log(msg: str) -> None:
 
 # ── Environment ───────────────────────────────────────────────────────────────
 def _load_env() -> dict:
-    global _SLACK_URL, _DS_BASE_URL
+    global _SLACK_URL
     env: dict = {}
     env_path = _REPO_DIR / ".env"
     if env_path.exists():
@@ -65,7 +65,6 @@ def _load_env() -> dict:
         or os.environ.get("SLACK_WEBHOOK", "")
         or os.environ.get("SLACK_WEBHOOK_URL", "")
     )
-    _DS_BASE_URL = env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     return env
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
@@ -86,23 +85,23 @@ def _slack(msg: str) -> None:
         _log(f"Slack delivery failed: {exc}")
         _log(f"Undelivered message: {msg}")
 
-# ── DS call ───────────────────────────────────────────────────────────────────
-def _call_deepseek(prompt: str) -> dict:
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+# ── Groq call ─────────────────────────────────────────────────────────────────
+def _call_groq(prompt: str) -> dict:
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
-        return {"text": None, "error": "DEEPSEEK_API_KEY not set", "model": _DS_MODEL}
+        return {"text": None, "error": "GROQ_API_KEY not set", "model": _GRO_MODEL}
     import requests  # type: ignore[import-untyped]
     t0 = time.monotonic()
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.post(
-                f"{_DS_BASE_URL}/chat/completions",
+                f"{_GRO_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": _DS_MODEL,
+                    "model": _GRO_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                 },
@@ -112,18 +111,18 @@ def _call_deepseek(prompt: str) -> dict:
             data = resp.json()
             return {
                 "text": data["choices"][0]["message"]["content"],
-                "model": _DS_MODEL,
+                "model": _GRO_MODEL,
                 "tokens": data.get("usage", {}).get("total_tokens"),
                 "elapsed_s": round(time.monotonic() - t0, 2),
                 "error": None,
             }
         except Exception as exc:
-            _log(f"DeepSeek attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
+            _log(f"Groq attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 5)
     return {
         "text": None,
-        "model": _DS_MODEL,
+        "model": _GRO_MODEL,
         "elapsed_s": round(time.monotonic() - t0, 2),
         "error": f"All {_MAX_RETRIES} attempts failed",
     }
@@ -249,8 +248,8 @@ def _process_pending_item(json_path: Path) -> bool:
     prompt      = data.get("ds_gai_prompt", "")
     status      = data.get("status", "")
 
-    if status != "awaiting_ds_gai":
-        _log(f"SKIP {target_file}: status={status} (not awaiting_ds_gai)")
+    if status not in ("awaiting_ds_gai", "awaiting_gro_gai"):
+        _log(f"SKIP {target_file}: status={status} (not awaiting Gro/GAI review)")
         return True  # not an error, just already processed
 
     if not prompt:
@@ -259,20 +258,20 @@ def _process_pending_item(json_path: Path) -> bool:
 
     _log(f"Processing: {target_file} | {rc_class} | {finding[:60]}...")
 
-    # ── Call DeepSeek ─────────────────────────────────────────────────────────
-    _log("Calling DeepSeek...")
-    ds_result = _call_deepseek(prompt)
-    if ds_result["error"]:
-        _log(f"DeepSeek failed: {ds_result['error']}")
+    # ── Call Groq ─────────────────────────────────────────────────────────────
+    _log("Calling Groq...")
+    gro_result = _call_groq(prompt)
+    if gro_result["error"]:
+        _log(f"Groq failed: {gro_result['error']}")
         _slack(
-            f"⚠️ autonomous_review.py: DeepSeek API failed for {target_file}."
+            f"⚠️ autonomous_review.py: Groq API failed for {target_file}."
             " Will retry next night."
         )
-        return False  # leave status as awaiting_ds_gai, retry tomorrow
+        return False  # leave status, retry tomorrow
 
     _log(
-        f"DeepSeek OK — {ds_result.get('tokens', '?')} tokens,"
-        f" {ds_result.get('elapsed_s', '?')}s"
+        f"Groq OK — {gro_result.get('tokens', '?')} tokens,"
+        f" {gro_result.get('elapsed_s', '?')}s"
     )
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
@@ -284,22 +283,22 @@ def _process_pending_item(json_path: Path) -> bool:
             f"⚠️ autonomous_review.py: Gemini API failed for {target_file}."
             " Will retry next night."
         )
-        return False  # leave status as awaiting_ds_gai, retry tomorrow
+        return False  # leave status, retry tomorrow
 
     _log(
         f"Gemini OK — {gai_result.get('tokens', '?')} tokens,"
         f" {gai_result.get('elapsed_s', '?')}s"
     )
 
-    # ── DS/GAI conflict check ─────────────────────────────────────────────────
-    ds_text  = ds_result["text"] or ""
+    # ── Gro/GAI conflict check ────────────────────────────────────────────────
+    gro_text = gro_result["text"] or ""
     gai_text = gai_result["text"] or ""
     # scan 500 chars — 200 was too narrow for concise model outputs
-    ds_head  = ds_text.upper()[:500]
-    gai_head = gai_text.upper()[:500]
-    ds_verdict = (
-        "APPROVE" if "APPROVE" in ds_head
-        else "REJECT" if "REJECT" in ds_head
+    gro_head  = gro_text.upper()[:500]
+    gai_head  = gai_text.upper()[:500]
+    gro_verdict = (
+        "APPROVE" if "APPROVE" in gro_head
+        else "REJECT" if "REJECT" in gro_head
         else "UNCLEAR"
     )
     gai_verdict = (
@@ -308,9 +307,9 @@ def _process_pending_item(json_path: Path) -> bool:
         else "UNCLEAR"
     )
 
-    if ds_verdict == "REJECT" or gai_verdict == "REJECT":
+    if gro_verdict == "REJECT" or gai_verdict == "REJECT":
         _log(
-            f"REJECT detected: DS={ds_verdict}, GAI={gai_verdict}"
+            f"REJECT detected: Gro={gro_verdict}, GAI={gai_verdict}"
             " — routing to queued_for_review"
         )
         # Write to queue file instead of approvals
@@ -318,22 +317,22 @@ def _process_pending_item(json_path: Path) -> bool:
         time_str   = datetime.now(PT).strftime("%Y-%m-%d %H:%M PT")
         queue_path = _LOGS_DIR / f"queued_for_review_{date_str}.md"
         queue_entry = (
-            f"\n## {target_file} — DS/GAI REJECT — {time_str}\n"
-            f"REASON: DS verdict={ds_verdict}, GAI verdict={gai_verdict}\n"
+            f"\n## {target_file} — Gro/GAI REJECT — {time_str}\n"
+            f"REASON: Gro verdict={gro_verdict}, GAI verdict={gai_verdict}\n"
             f"FINDING: {finding}\n"
             "ACTION: User review required — see raw responses below\n\n"
-            f"### DeepSeek Response\n{ds_text}\n\n"
+            f"### Groq Response\n{gro_text}\n\n"
             f"### Gemini Response\n{gai_text}\n"
         )
         with open(queue_path, "a", encoding="utf-8") as f:
             f.write(queue_entry)
         _slack(
-            f"⚠️ DS/GAI REJECT: {target_file} — {ds_verdict}/{gai_verdict}."
+            f"⚠️ Gro/GAI REJECT: {target_file} — {gro_verdict}/{gai_verdict}."
             f" See queued_for_review_{date_str}.md"
         )
-        data["ds_response"]  = ds_text
+        data["gro_response"] = gro_text
         data["gai_response"] = gai_text
-        data["status"]       = "rejected_ds_gai"
+        data["status"]       = "rejected_gro_gai"
         _write_atomic(json_path, json.dumps(data, indent=2))
         return True
 
@@ -376,15 +375,15 @@ def _process_pending_item(json_path: Path) -> bool:
 - Base commit: `{data.get('base_commit_sha', 'unknown')}`
 - Patch file: `{patch_ref}`
 
-### DS/GAI Verdicts
-- DeepSeek: **{ds_verdict}**
+### Gro/GAI Verdicts
+- Groq (Gro): **{gro_verdict}**
 - Gemini: **{gai_verdict}**
 
 ---
 
-### DeepSeek Full Response
+### Groq Full Response
 
-{ds_text}
+{gro_text}
 
 ---
 
@@ -411,7 +410,7 @@ def _process_pending_item(json_path: Path) -> bool:
     _log(f"Wrote approval entry to {approvals_path}")
 
     # ── Update JSON status ────────────────────────────────────────────────────
-    data["ds_response"]  = ds_text
+    data["gro_response"] = gro_text
     data["gai_response"] = gai_text
     data["status"]       = "ready_for_approval"
     _write_atomic(json_path, json.dumps(data, indent=2))
@@ -456,19 +455,23 @@ def main() -> None:
     if result.returncode != 0:
         _log(f"git pull failed: {result.stderr.strip()}")
 
-    # ── Find pending items ────────────────────────────────────────────────────
-    pending_files = sorted(glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json")))
+    # ── Find pending items (accept both old ds_gai and new gro_gai filenames) ──
+    pending_files = sorted(
+        glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json"))
+        + glob.glob(str(_LOGS_DIR / "pending_gro_gai_*.json"))
+    )
+    _pending_statuses = {"awaiting_ds_gai", "awaiting_gro_gai"}
     awaiting = [
         p for p in pending_files
-        if json.loads(Path(p).read_text()).get("status") == "awaiting_ds_gai"
+        if json.loads(Path(p).read_text()).get("status") in _pending_statuses
     ]
 
     if not awaiting:
-        _log("No items awaiting DS/GAI review. Exiting.")
+        _log("No items awaiting Gro/GAI review. Exiting.")
         fcntl.flock(git_lock_fd, fcntl.LOCK_UN)
         sys.exit(0)
 
-    _log(f"Found {len(awaiting)} item(s) awaiting DS/GAI review")
+    _log(f"Found {len(awaiting)} item(s) awaiting Gro/GAI review")
 
     # ── Process each pending item ─────────────────────────────────────────────
     processed: list[str] = []
@@ -493,6 +496,7 @@ def main() -> None:
     date_str = datetime.now(PT).strftime("%Y-%m-%d")
     files_to_add = (
         list(glob.glob(str(_LOGS_DIR / "pending_ds_gai_*.json")))
+        + list(glob.glob(str(_LOGS_DIR / "pending_gro_gai_*.json")))
         + list(glob.glob(str(_LOGS_DIR / f"pending_approvals_{date_str}.md")))
         + list(glob.glob(str(_LOGS_DIR / f"queued_for_review_{date_str}.md")))
     )
@@ -503,7 +507,7 @@ def main() -> None:
 
     failed_note = ("\n\nFailed: " + ", ".join(failed)) if failed else ""
     commit_msg = (
-        f"DS/GAI responses received: {len(processed)} item(s) ready for approval\n\n"
+        f"Gro/GAI responses received: {len(processed)} item(s) ready for approval\n\n"
         + "\n".join(f"- {p}" for p in processed)
         + failed_note
         + "\n\nCo-Authored-By: autonomous_review.py <noreply@anthropic.com>"
@@ -524,10 +528,10 @@ def main() -> None:
 
     # ── Final Slack summary ───────────────────────────────────────────────────
     ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    items_summary = "\n".join(
-        f"• {p.replace('pending_ds_gai_', '').replace('.json', '')}"
-        for p in processed
-    )
+    def _strip_prefix(name: str) -> str:
+        return name.replace("pending_gro_gai_", "").replace(
+            "pending_ds_gai_", "").replace(".json", "")
+    items_summary = "\n".join(f"• {_strip_prefix(p)}" for p in processed)
     msg = (
         f"🎯 *Patches ready for approval — {ts_pt}*\n\n"
         f"*READY (DS+GAI reviewed):*\n{items_summary}\n\n"

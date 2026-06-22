@@ -43,10 +43,9 @@ Use --no-rth-block for testing only — never during live trading.
 
 ENVIRONMENT VARIABLES
 ─────────────────────
-    DEEPSEEK_API_KEY    — DeepSeek API key (sk-...)
+    GROQ_API_KEY        — Groq API key (gsk_...)
     GEMINI_API_KEY      — Google Gemini API key
     SLACK_WEBHOOK_URL   — Slack incoming webhook (meta-audit Slack post)
-    DEEPSEEK_BASE_URL   — optional override (default: https://api.deepseek.com)
 """
 
 from __future__ import annotations
@@ -74,8 +73,8 @@ _ET = ZoneInfo("America/New_York")
 _PT = ZoneInfo("America/Los_Angeles")
 
 # ── API constants ─────────────────────────────────────────────────────────────
-_DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-_DEEPSEEK_MODEL = "deepseek-chat"
+_GRO_BASE_URL = "https://api.groq.com/openai/v1"
+_GRO_MODEL = "llama-3.3-70b-versatile"
 _GEMINI_MODEL = "gemini-3.1-pro-preview"  # matches Google AI Studio selection
 _API_TIMEOUT_S = 180  # 3-minute wall-clock limit per API call
 
@@ -88,7 +87,7 @@ _DIRECTIVES_HISTORY_WEEKS = 4      # prior audit entries to include for complian
 _MIN_FILLS_FOR_DIRECTIVES = 20     # N < this → observe only, NO parameter directives
 
 # ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
-_DS_ROLE_PREAMBLE = (
+_GRO_ROLE_PREAMBLE = (
     "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\n"
     "YOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\n"
     "DEFAULT STANCE: Assume the worst interpretation of ambiguous data. "
@@ -507,14 +506,14 @@ def _load_prior_directives(n: int = _DIRECTIVES_HISTORY_WEEKS) -> list[dict]:
 
 
 def _append_directives_log(
-    week: str, ds_text: str | None, gai_text: str | None
+    week: str, gro_text: str | None, gai_text: str | None
 ) -> None:
     """Append this week's audit output to audit_directives.jsonl (atomic write, RC-5 compliant)."""
     path = _LOGS_DIR / "audit_directives.jsonl"
     entry = {
         "week": week,
         "ts_pt": datetime.now(_PT).strftime("%Y-%m-%d %I:%M %p PT"),
-        "ds_directives_preview": (ds_text or "")[:2000],
+        "gro_directives_preview": (gro_text or "")[:2000],
         "gai_directives_preview": (gai_text or "")[:2000],
         # context_only: compliance-tracking record — NOT processable by the patch
         # generator (no file/finding keys). Structured findings are written
@@ -604,14 +603,14 @@ def _parse_pipe_findings(report_path: Path | None) -> list[dict]:
 
 
 def _append_structured_directives(
-    week: str, ds_text: str | None, gai_text: str | None
+    week: str, gro_text: str | None, gai_text: str | None
 ) -> dict:
     """Validate + dedup structured findings from all 4 sources and append each as
     its own pending_review line in audit_directives.jsonl. Returns per-source counts."""
     path = _LOGS_DIR / "audit_directives.jsonl"
     import hashlib
     sources = {
-        "ds_meta": _parse_json_findings(ds_text),
+        "gro_meta": _parse_json_findings(gro_text),
         "gai_meta": _parse_json_findings(gai_text),
         "nightly_report": _parse_pipe_findings(
             _find_latest_audit_file("gemini_audit_{date}.txt")),
@@ -777,7 +776,7 @@ def _format_meta_audit_body(ctx: dict) -> str:
         for d in prior:
             parts += [
                 f"Week {d.get('week', '?')} | {d.get('ts_pt', '')} | Status: {d.get('status', '?')}",
-                f"  DS directives: {d.get('ds_directives_preview', 'N/A')[:600]}",
+                f"  Gro directives: {d.get('gro_directives_preview', 'N/A')[:600]}",
                 f"  GAI directives: {d.get('gai_directives_preview', 'N/A')[:600]}",
                 "",
             ]
@@ -942,9 +941,9 @@ def _format_meta_audit_body(ctx: dict) -> str:
     return "\n".join(parts)
 
 
-def _build_ds_prompt(ctx: dict) -> str:
-    """Build DeepSeek prompt: skeptical risk auditor role + shared data context."""
-    return _DS_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
+def _build_gro_prompt(ctx: dict) -> str:
+    """Build Groq prompt: skeptical risk auditor role + shared data context."""
+    return _GRO_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
 
 
 def _build_gai_prompt(ctx: dict) -> str:
@@ -954,7 +953,7 @@ def _build_gai_prompt(ctx: dict) -> str:
 
 # ── Slack post (meta-audit results) ──────────────────────────────────────────
 def _post_slack_summary(
-    ds_result: dict,
+    gro_result: dict,
     gai_result: dict,
     out_path: Path,
     mode_label: str = "meta-audit",
@@ -970,7 +969,7 @@ def _post_slack_summary(
 
     import requests  # type: ignore[import-untyped]
 
-    ds_ok = ds_result["error"] is None
+    gro_ok = gro_result["error"] is None
     gai_ok = gai_result["error"] is None
     now_pt = datetime.now(_PT)
     ts = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
@@ -984,9 +983,9 @@ def _post_slack_summary(
 
     text = (
         f":robot_face: *Auto AI {mode_label.title()} — {ts}*\n"
-        f"DS: {'✅' if ds_ok else '❌'}  |  "
+        f"Gro: {'✅' if gro_ok else '❌'}  |  "
         f"GAI: {'✅' if gai_ok else '❌'}\n\n"
-        f"{_excerpt(ds_result, 'DeepSeek')}\n\n"
+        f"{_excerpt(gro_result, 'Groq')}\n\n"
         f"{_excerpt(gai_result, 'Gemini')}\n\n"
         f"Full report: `{out_path.name}`"
     )
@@ -1006,20 +1005,20 @@ def _post_slack_summary(
         )
 
 
-# ── DeepSeek call (OpenAI-compatible REST, no SDK required) ──────────────────
-def _call_deepseek(prompt: str) -> dict:
-    """Submit prompt to DeepSeek API.
+# ── Groq call (OpenAI-compatible REST, no SDK required) ──────────────────────
+def _call_groq(prompt: str) -> dict:
+    """Submit prompt to Groq API.
 
     Returns {text, model, tokens, elapsed_s, error}.
     """
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         return {
             "text": None,
-            "model": _DEEPSEEK_MODEL,
+            "model": _GRO_MODEL,
             "tokens": None,
             "elapsed_s": 0,
-            "error": "DEEPSEEK_API_KEY not set in environment",
+            "error": "GROQ_API_KEY not set in environment",
         }
 
     import requests  # type: ignore[import-untyped]  # always available
@@ -1027,13 +1026,13 @@ def _call_deepseek(prompt: str) -> dict:
     t0 = time.monotonic()
     try:
         resp = requests.post(
-            f"{_DEEPSEEK_BASE_URL}/chat/completions",
+            f"{_GRO_BASE_URL}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": _DEEPSEEK_MODEL,
+                "model": _GRO_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
             },
@@ -1045,7 +1044,7 @@ def _call_deepseek(prompt: str) -> dict:
         usage = data.get("usage", {})
         return {
             "text": text,
-            "model": _DEEPSEEK_MODEL,
+            "model": _GRO_MODEL,
             "tokens": usage.get("total_tokens"),
             "elapsed_s": round(time.monotonic() - t0, 2),
             "error": None,
@@ -1053,7 +1052,7 @@ def _call_deepseek(prompt: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         return {
             "text": None,
-            "model": _DEEPSEEK_MODEL,
+            "model": _GRO_MODEL,
             "tokens": None,
             "elapsed_s": round(time.monotonic() - t0, 2),
             "error": str(exc),
@@ -1215,44 +1214,44 @@ def _run_audit(
     out_path: Path,
     mode_label: str,
     post_slack: bool = False,
-    ds_prompt: str | None = None,
+    gro_prompt: str | None = None,
     gai_prompt: str | None = None,
 ) -> tuple[dict, dict]:
-    """Submit prompt to DS + Gemini, write JSON, print responses.
+    """Submit prompt to Groq + Gemini, write JSON, print responses.
 
-    ds_prompt / gai_prompt: adversarial-mode overrides (meta-audit).
-    When provided, DS gets ds_prompt and Gemini gets gai_prompt (different roles).
+    gro_prompt / gai_prompt: adversarial-mode overrides (meta-audit).
+    When provided, Groq gets gro_prompt and Gemini gets gai_prompt (different roles).
     When None, both get the shared `prompt` (patch-gate mode).
 
-    Returns (ds_result, gai_result).
+    Returns (gro_result, gai_result).
     """
     now_pt = datetime.now(_PT)
     ts_display = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
     print(f"[auto_ai_audit] [{mode_label}] — {ts_display}")
-    if ds_prompt is not None or gai_prompt is not None:
+    if gro_prompt is not None or gai_prompt is not None:
         print(
             f"[auto_ai_audit] Adversarial mode: "
-            f"DS={len(ds_prompt or ''):,} chars (skeptic) | "
+            f"Gro={len(gro_prompt or ''):,} chars (skeptic) | "
             f"GAI={len(gai_prompt or ''):,} chars (optimizer)"
         )
     else:
         print(f"[auto_ai_audit] Prompt: {len(prompt):,} chars")
 
-    # ── DeepSeek (uses ds_prompt override in adversarial mode) ───────────
-    _ds_call_prompt = ds_prompt if ds_prompt is not None else prompt
-    print("[auto_ai_audit] ⏳ Calling DeepSeek ...")
-    ds_result = _call_deepseek(_ds_call_prompt)
-    if ds_result["error"]:
+    # ── Groq (uses gro_prompt override in adversarial mode) ──────────────
+    _gro_call_prompt = gro_prompt if gro_prompt is not None else prompt
+    print("[auto_ai_audit] ⏳ Calling Groq ...")
+    gro_result = _call_groq(_gro_call_prompt)
+    if gro_result["error"]:
         print(
-            f"[auto_ai_audit] ⚠️  DeepSeek FAILED "
-            f"({ds_result['elapsed_s']}s): {ds_result['error']}",
+            f"[auto_ai_audit] ⚠️  Groq FAILED "
+            f"({gro_result['elapsed_s']}s): {gro_result['error']}",
             file=sys.stderr,
         )
     else:
         print(
-            f"[auto_ai_audit] ✅ DeepSeek OK "
-            f"({ds_result['elapsed_s']}s, {ds_result['tokens']} tokens)"
+            f"[auto_ai_audit] ✅ Groq OK "
+            f"({gro_result['elapsed_s']}s, {gro_result['tokens']} tokens)"
         )
 
     # ── Gemini (uses gai_prompt override in adversarial mode) ────────────
@@ -1272,28 +1271,28 @@ def _run_audit(
         )
 
     # ── Build output dict ─────────────────────────────────────────────────
-    ds_ok = ds_result["error"] is None
+    gro_ok = gro_result["error"] is None
     gai_ok = gai_result["error"] is None
 
-    _effective_prompt = ds_prompt or prompt
+    _effective_prompt = gro_prompt or prompt
     output = {
         "schema_version": "1.0",
         "mode": mode_label,
-        "adversarial_mode": ds_prompt is not None,
+        "adversarial_mode": gro_prompt is not None,
         "ts_pt": ts_display,
         "ts_iso": now_pt.isoformat(),
         "prompt_chars": len(_effective_prompt),
         "prompt_preview": _effective_prompt[:300] + ("…" if len(_effective_prompt) > 300 else ""),
-        "ds_prompt_chars": len(ds_prompt) if ds_prompt is not None else None,
+        "gro_prompt_chars": len(gro_prompt) if gro_prompt is not None else None,
         "gai_prompt_chars": len(gai_prompt) if gai_prompt is not None else None,
-        "deepseek": ds_result,
+        "gro": gro_result,
         "gemini": gai_result,
         "summary": {
-            "ds_ok": ds_ok,
+            "gro_ok": gro_ok,
             "gai_ok": gai_ok,
-            "both_ok": ds_ok and gai_ok,
-            "partial": ds_ok != gai_ok,
-            "both_failed": not ds_ok and not gai_ok,
+            "both_ok": gro_ok and gai_ok,
+            "partial": gro_ok != gai_ok,
+            "both_failed": not gro_ok and not gai_ok,
         },
     }
 
@@ -1338,12 +1337,12 @@ def _run_audit(
     # ── Print raw responses ───────────────────────────────────────────────
     print()
     print("=" * 72)
-    print("DEEPSEEK RESPONSE:")
+    print("GROQ RESPONSE:")
     print("=" * 72)
-    if ds_result["text"]:
-        print(ds_result["text"])
+    if gro_result["text"]:
+        print(gro_result["text"])
     else:
-        print(f"[FAILED — {ds_result['error']}]")
+        print(f"[FAILED — {gro_result['error']}]")
 
     print()
     print("=" * 72)
@@ -1358,9 +1357,9 @@ def _run_audit(
     print(f"[auto_ai_audit] Done. Full JSON: {out_path}")
 
     if post_slack:
-        _post_slack_summary(ds_result, gai_result, out_path, mode_label)
+        _post_slack_summary(gro_result, gai_result, out_path, mode_label)
 
-    return ds_result, gai_result
+    return gro_result, gai_result
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1412,34 +1411,34 @@ def main() -> None:
         for k, v in sources.items():
             label = "✅" if "⚠️" not in str(v) and "NOT FOUND" not in str(v) else "⚠️ "
             print(f"  {label} {k}: {v}")
-        ds_p = _build_ds_prompt(context)
+        gro_p = _build_gro_prompt(context)
         gai_p = _build_gai_prompt(context)
-        if not ds_p.strip() or not gai_p.strip():
+        if not gro_p.strip() or not gai_p.strip():
             print(
                 "ERROR: Meta-audit prompts are empty — no data context available.",
                 file=sys.stderr,
             )
             sys.exit(2)
         out_path = _LOGS_DIR / f"ai_audit_meta_{ts_file}_PT.json"
-        ds_result, gai_result = _run_audit(
+        gro_result, gai_result = _run_audit(
             "",                          # base prompt unused in adversarial mode
             out_path,
             mode_label="meta-audit",
             post_slack=not args.no_slack,
-            ds_prompt=ds_p,
+            gro_prompt=gro_p,
             gai_prompt=gai_p,
         )
         # Append this week's directives to the running log for future compliance tracking
         _week_label = datetime.now(_PT).strftime("%Y-W%W")
         _append_directives_log(
             _week_label,
-            ds_result.get("text") if ds_result else None,
+            gro_result.get("text") if gro_result else None,
             gai_result.get("text") if gai_result else None,
         )
         # S58: extract structured findings → pending_review directives for Stage 1.5
         _counts = _append_structured_directives(
             _week_label,
-            ds_result.get("text") if ds_result else None,
+            gro_result.get("text") if gro_result else None,
             gai_result.get("text") if gai_result else None,
         )
         # Majors instrumentation: zero extracted findings across ALL sources while
@@ -1448,7 +1447,7 @@ def main() -> None:
             v for k, v in _counts.items()
             if k not in ("validation_rejects", "total_new", "write_error")
         )
-        if _src_total == 0 and ds_result.get("text") and gai_result.get("text"):
+        if _src_total == 0 and gro_result.get("text") and gai_result.get("text"):
             _wh = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
             if _wh:
                 import requests  # type: ignore[import-untyped]
@@ -1469,7 +1468,7 @@ def main() -> None:
             print("ERROR: Empty prompt.", file=sys.stderr)
             sys.exit(1)
         out_path = _LOGS_DIR / f"ai_audit_{ts_file}_PT.json"
-        ds_result, gai_result = _run_audit(
+        gro_result, gai_result = _run_audit(
             prompt,
             out_path,
             mode_label="patch-gate",
@@ -1477,11 +1476,11 @@ def main() -> None:
         )
 
     # ── Exit code ─────────────────────────────────────────────────────────
-    ds_ok = ds_result["error"] is None
+    gro_ok = gro_result["error"] is None
     gai_ok = gai_result["error"] is None
-    if not ds_ok and not gai_ok:
+    if not gro_ok and not gai_ok:
         sys.exit(2)
-    elif not ds_ok or not gai_ok:
+    elif not gro_ok or not gai_ok:
         sys.exit(1)
     # exit 0 implied
 
