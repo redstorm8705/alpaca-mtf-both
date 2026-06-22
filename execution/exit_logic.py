@@ -209,8 +209,9 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
     # B1 fix: _partial_fail_counts now in execution/lifecycle.py — get live reference
     _partial_fail_counts = _get_partial_fail_counts()
 
-    TRANCHE_FRACS = [0.20, 0.40, 0.60]   # T1, T2, T3 as fraction of full target dist
+    TRANCHE_FRACS = [0.40, 0.60, 1.00]   # T1, T2, T3 as fraction of full target dist
     TRANCHE_SHARE = 0.25                  # each tranche closes 25% of original qty
+    TRAIL_PHASE_MULTS = {1: 0.75, 2: 0.50, 3: 0.25}  # trail dist multiplier per phase
 
     for symbol, trade in list(tracker.open_trades.items()):
         direction   = trade["direction"]
@@ -264,7 +265,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 
         # ── Trail stop: ratchet every scan, close remainder if hit ───────────
         if trade.get("trail_stop") and atr_value > 0:
-            trail_dist  = atr_value * config.TRAIL_STOP_ATR_MULT
+            _phase_mult = TRAIL_PHASE_MULTS.get(trade.get("trail_phase"), config.TRAIL_STOP_ATR_MULT)
+            trail_dist  = atr_value * _phase_mult
             _stop_floor = trade.get("stop", 0.0)
             new_trail   = (
                 max(round(current_price - trail_dist, 2), _stop_floor) if direction == "long"
@@ -280,6 +282,54 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 (direction == "short" and current_price >= trail_stop)
             )
             if trail_hit:
+                _trail_phase = trade.get("trail_phase")
+                if _trail_phase in (1, 2) and atr_value > 0:
+                    _qty_to_adv = (
+                        min(max(1, round(qty_orig * TRANCHE_SHARE)), qty_rem - 1)
+                        if qty_rem > 1 else 0
+                    )
+                    if _qty_to_adv >= 1:
+                        for _skey in ("rth_day_stop_order_id", "gtc_stop_order_id"):
+                            _soid = trade.get(_skey)
+                            if _soid:
+                                cancel_order(_soid)
+                                trade[_skey] = None
+                        time.sleep(0.1)
+                        _tph_ts = time.time()
+                        _tph_ok = partial_close_position(symbol, _qty_to_adv)
+                        if _tph_ok:
+                            _tph_fill = _fetch_actual_fill_price(
+                                symbol, trade, poll_secs=0.3, submitted_after=_tph_ts
+                            )
+                            _tph_pnl = (
+                                (_tph_fill - entry_price) * _qty_to_adv if direction == "long"
+                                else (entry_price - _tph_fill) * _qty_to_adv
+                            )
+                            trade["qty_remaining"] = qty_rem - _qty_to_adv
+                            trade["partial_pnl"]   = round(trade.get("partial_pnl", 0.0) + _tph_pnl, 2)
+                            trade["trail_phase"]   = _trail_phase + 1
+                            _new_ph_mult  = TRAIL_PHASE_MULTS[_trail_phase + 1]
+                            _new_ph_dist  = atr_value * _new_ph_mult
+                            _new_ph_trail = (
+                                max(round(current_price - _new_ph_dist, 2), entry_price)
+                                if direction == "long"
+                                else min(round(current_price + _new_ph_dist, 2), entry_price)
+                            )
+                            trade["trail_stop"] = _new_ph_trail
+                            tracker._save_log()
+                            logger.info(
+                                f"[{symbol}] Trail phase {_trail_phase} hit @ ${current_price:.2f} "
+                                f"— partial {_qty_to_adv}sh @ ${_tph_fill:.2f} P&L ${_tph_pnl:.2f}, "
+                                f"phase → {_trail_phase + 1} trail={_new_ph_trail:.2f} "
+                                f"({_new_ph_mult}×ATR)"
+                            )
+                            continue
+                        else:
+                            logger.warning(
+                                f"[{symbol}] Trail phase {_trail_phase} partial close FAILED "
+                                f"({_qty_to_adv}sh) — falling through to full close. "
+                                f"GTC stop already cancelled. Verify Alpaca."
+                            )
                 logger.info(
                     f"[{symbol}] Trail stop hit @ ${current_price:.2f} "
                     f"(stop ${trail_stop:.2f}) — closing remainder"
@@ -584,7 +634,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 
             # ── Execute partial close ─────────────────────────────────────
             qty_each   = max(1, round(qty_orig * TRANCHE_SHARE))
-            qty_to_cls = min(qty_each, qty_rem - 1)   # always leave ≥ 1 share
+            qty_to_cls = qty_rem if t_idx == len(TRANCHE_FRACS) - 1 else min(qty_each, qty_rem - 1)
             if qty_to_cls < 1:
                 trade["profit_tranche_level"] = t_idx + 1
                 # BUG-1 fix: qty too small for a real partial close (e.g. 1-share position).
@@ -685,8 +735,18 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 # so line 2121 (_stop_px) uses entry_price, not a stale trail level.
                 # T2/T3: activate ATR trail floored at the promoted stop.
                 if t_idx == 0:
-                    trade["stop"]       = entry_price
-                    trade["trail_stop"] = None   # disable trail; hard breakeven only
+                    trade["stop"]        = entry_price
+                    trade["trail_phase"] = 1
+                    if atr_value > 0:
+                        trail_dist  = atr_value * TRAIL_PHASE_MULTS[1]
+                        _stop_floor = entry_price
+                        trail_stop  = (
+                            max(round(current_price - trail_dist, 2), _stop_floor) if direction == "long"
+                            else min(round(current_price + trail_dist, 2), _stop_floor)
+                        )
+                        tracker.update_trail_stop(symbol, trail_stop)
+                    else:
+                        trade["trail_stop"] = None
                 elif atr_value > 0:
                     trail_dist  = atr_value * config.TRAIL_STOP_ATR_MULT
                     _stop_floor = trade.get("stop", 0.0)
