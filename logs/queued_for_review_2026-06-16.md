@@ -53,3 +53,26 @@ DECISIONS NEEDED BEFORE PATCH CAN PROCEED:
 BASE_COMMIT: fad88b3334125e3d8914b2f76449f6afa48f32e4
 
 ACTION: Rafael decision required on items 1-3. Revisit in next interactive session.
+
+---
+## STATUS UPDATE — S63 (2026-06-22)
+
+All 3 Rafael decisions RESOLVED:
+1. Trail activation at T1 → NOT forbidden (formula unchanged, tb_audit_log.md L5013 confirms Option C decision)
+2. T3 silent skip for qty_orig=3 → ACCEPTABLE (check_exits handles final close)
+3. GAI sign-off → Rafael requested DS/GAI; pending API key access in interactive session
+
+Board counter-prompt: 3/3 PASS (T1 trigger impossibility proof — current_price < entry_price at T1 is physically impossible given T1 fires only at current_price >= entry+1.0 ATR)
+Static analysis: PASS (py_compile, mypy, ruff all clean)
+Cold second-agent: PASS (after T2/T3 no-ATR comment added and T3=1.00 design note reclassified)
+Impact radius: check_partial_exits callers: run_cycle.py:762, run_cycle.py:1297, main.py:182
+
+BLOCKED AT: Step 4 (DS/GAI) — API keys unavailable in OCI remote session
+PENDING FILES:
+  logs/pending_patch_2026-06-22_exit_logic_t1_tranche.patch
+  logs/pending_ds_gai_2026-06-22_exit_logic_t1_tranche.json
+  logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt
+
+NEXT ACTION (interactive session):
+  python3 /home/user/alpaca-mtf-both/auto_ai_audit.py \
+    --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt

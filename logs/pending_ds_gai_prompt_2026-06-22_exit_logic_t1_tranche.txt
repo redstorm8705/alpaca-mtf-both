@@ -1,0 +1,117 @@
+AUDIT REQUEST: T1 TRANCHE RESTRUCTURE — execution/exit_logic.py
+================================================================
+This is the SAME prompt sent to both DS and GAI simultaneously per project protocol.
+
+SYSTEM CONTEXT:
+- Paper trading bot, ~$2.5K Alpaca paper account
+- PDT constraints exist but disabled for paper; bot enforces STOP=1.25×ATR, TARGET=2.5×ATR
+- 12-point confluence scoring, MIN_SCORE=9/12
+- Tranche partial exit system: exits partial position at T1, T2, T3 price levels to lock profit
+- Config constants: TRAIL_STOP_ATR_MULT=0.5, TARGET_ATR_MULT=2.5, INTRADAY_STOP_ATR_MULT=1.25
+- File: execution/exit_logic.py, 2131 lines
+
+THE PROBLEM (why old T1 was negative EV):
+Current TRANCHE_FRACS[0]=0.20 fires T1 at current_price >= entry + 0.20×2.5 ATR = entry+0.5 ATR.
+At T1 trigger, trail_stop = max(current_price − 0.5 ATR, entry_price) = max(entry_price, entry_price) = entry_price.
+Gap = 0. Trail immediately equals the hard stop. The code correctly set trail_stop=None (breakeven hard stop only).
+EV outcome: T1 at 0.50 ATR + 25% close → EV ≈ −$18.65/signal (premature partial forces stop-out on remainder).
+
+THE PROPOSED FIX (Option C, DS-recommended prior session):
+Move T1 to 0.40×target_dist=1.0 ATR, close 33% per tranche, enable trail at new T1.
+
+SAFETY MATH (long position, new T1):
+- T1 trigger: current_price >= entry + 0.40×2.5×ATR = entry+1.0 ATR
+- trail_dist = TRAIL_STOP_ATR_MULT×ATR = 0.5×ATR
+- trail_stop = max(round(current_price−0.5 ATR, 2), entry_price)
+- At T1: current_price−0.5 ATR >= entry+0.5 ATR > entry_price → floor never binds
+- Gap = current_price − trail_stop = 0.5 ATR — strictly positive, no immediate stop-out
+- Breakeven protection: trade["stop"]=entry_price always set at T1 before ATR check
+
+EXISTING PRECEDENT (already in production, unchanged):
+Small-qty path at L594-612 (BUG-1 fix) already enables trail at T1 when ATR available:
+  if t_idx == 0 and not trade.get("trail_stop"):
+      trade["stop"] = entry_price
+      if atr_value > 0:
+          _ts_val = max(round(current_price - _ts_dist, 2), _ts_floor)
+          tracker.update_trail_stop(symbol, _ts_val)
+Patch makes the normal-qty path consistent with this existing behavior.
+
+EXACT UNIFIED DIFF (final version, static analysis PASS):
+--- execution/exit_logic.py
++++ proposed_exit_logic.py
+@@ -209,8 +209,8 @@
+-    TRANCHE_FRACS = [0.20, 0.40, 0.60]   # T1, T2, T3 as fraction of full target dist
+-    TRANCHE_SHARE = 0.25                  # each tranche closes 25% of original qty
++    TRANCHE_FRACS = [0.40, 0.60, 1.00]   # T1, T2, T3 as fraction of full target dist
++    TRANCHE_SHARE = 0.33                  # each tranche closes 33% of original qty
+
+@@ -681,13 +681,12 @@
+-                # T1: pin stop at entry_price (breakeven) and clear any prior trail
+-                # so line 2121 (_stop_px) uses entry_price, not a stale trail level.
+-                # T2/T3: activate ATR trail floored at the promoted stop.
++                # T1+: pin stop to breakeven; activate ATR trail above it if ATR available.
++                # Trail is floored at breakeven — position locks in profit above entry after T1.
++                # No ATR at T1 → hard breakeven stop only (unchanged from prior behavior).
+                 if t_idx == 0:
+-                    trade["stop"]       = entry_price
+-                    trade["trail_stop"] = None   # disable trail; hard breakeven only
+-                elif atr_value > 0:
++                    trade["stop"] = entry_price
++                if atr_value > 0:
+                     trail_dist  = atr_value * config.TRAIL_STOP_ATR_MULT
+                     _stop_floor = trade.get("stop", 0.0)
+                     trail_stop  = (
+                         max(round(current_price - trail_dist, 2), _stop_floor) if direction == "long"
+                         else (min(round(current_price + trail_dist, 2), _stop_floor)
+                               if _stop_floor else round(current_price + trail_dist, 2))
+                     )
+                     tracker.update_trail_stop(symbol, trail_stop)
++                elif t_idx == 0:
++                    trade["trail_stop"] = None   # no ATR at T1 — hard breakeven only
++                # T2/T3, atr_value==0: trail from T1 retained if set (entry+0.5 ATR >= breakeven).
+
+BOARD STATUS: 3/3 PASS (after counter-prompt). All concerns resolved with T1 trigger math proof.
+STATIC ANALYSIS: py_compile PASS | mypy PASS (0 issues) | ruff PASS (0 violations)
+COLD SECOND-AGENT: PASS (after comment addition for T2/T3 no-ATR case documentation)
+
+TRANCHE_SHARE=0.33 ARITHMETIC VERIFICATION:
+qty_orig=2: round(2×0.33)=1 → T1 closes 1, T2 closes 1, done ✓
+qty_orig=3: round(3×0.33)=1 → T1 closes 1, T2 closes 1, T3: qty_to_cls=min(1,0)=0 SKIP → check_exits handles last share ✓ (ACCEPTABLE per Rafael)
+qty_orig=4: round(4×0.33)=1 → T1 closes 1, T2 closes 1, T3 closes 1, 1 remaining → check_exits ✓
+qty_orig=5: round(5×0.33)=2 → T1 closes 2, T2 closes 2, T3: qty_rem=1, skip → check_exits ✓
+qty_orig=6: round(6×0.33)=2 → T1 closes 2, T2 closes 2, T3 closes 2, 0 remaining ✓
+
+NOTE on PARTIAL_EXIT_ATR_MULT: This config constant was initially flagged as "dead code" but is ACTIVELY
+used at L2107 in _check_exits_extended_hours(). The patch does NOT delete it.
+
+AUDIT QUESTIONS — please respond to each:
+
+Q1: Is trail activation at new T1 (gap=0.5 ATR between trail and current_price) safe? Specifically:
+    at the minimum T1 trigger (current_price = entry+1.0 ATR), trail_stop = entry+0.5 ATR,
+    gap = 0.5 ATR. For the stop to trigger an immediate exit, price must drop 0.5 ATR back below
+    the trail — which is the same protection as having a 0.5 ATR hard stop above entry. Is this acceptable?
+
+Q2: For short positions: at T1, trade["stop"]=entry_price, then if atr_value>0, the short trail
+    branch is: min(round(current_price + trail_dist, 2), _stop_floor) where _stop_floor=entry_price.
+    At T1 short: current_price <= entry−1.0 ATR. trail_stop = min(entry−1.0+0.5 ATR, entry_price)
+    = min(entry−0.5 ATR, entry_price) = entry−0.5 ATR. Gap = 0.5 ATR in the favorable direction.
+    Is this correct for shorts?
+
+Q3: T3 at 1.00×target_dist fires at the same price as check_exits. The call order is deterministic:
+    check_partial_exits runs before check_exits each cycle. T3 closes all-but-1 share (-1 guard),
+    then check_exits closes the last share. Two orders instead of one. Is this acceptable design,
+    or would you recommend T3=0.80 to add a partial exit before the full target?
+
+Q4: T2/T3 with no ATR (atr_value==0): trail from T1 is retained if it was set (entry+0.5 ATR).
+    Old behavior: trail was always None after T1, so L724 fell back to hard stop at entry_price.
+    New behavior: stale T1 trail (entry+0.5 ATR) is higher than old hard stop (entry_price).
+    Better for the trader. Is this acceptable, or should T2/T3 no-ATR explicitly clear trail_stop?
+
+Q5: Any concern about AB-6R T2 override (L543-550): at T2 in stressed regime, t_price is set to
+    0.85×stop_dist instead of 0.60×target_dist. The trail activation at T2 uses current_price
+    at the time of the partial fill (L672: current_price = fill_price). No interaction with T1
+    trail expected (trail is re-computed at T2 regardless). Confirm no issue.
+
+RETURN FORMAT:
+For each question: APPROVE, REJECT (with specific failure condition and line number), or FLAG.
+Final verdict: APPROVE or REJECT (single word on its own line at end of response).

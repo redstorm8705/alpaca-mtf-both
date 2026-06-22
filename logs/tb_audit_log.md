@@ -5387,3 +5387,80 @@ All roadmap items in RTH chain are either BLOCKED or explicitly DEFERRED.
 
 **Action required from Rafael:**
 1. T1 tranche restructure — answer 3 questions in queued_for_review_2026-06-16.md before this can proceed.
+
+---
+## S63 Continuation — T1 Tranche Restructure (2026-06-22)
+
+### Rafael Decisions Received (S63 interactive session)
+1. **Trail activation at T1**: "check the latest .md files for the answer" → tb_audit_log.md L5013 confirms "DECISION: Option C" — trail activation NOT a forbidden stop-loss CALCULATION change (formula unchanged). RESOLVED.
+2. **T3 silent skip for qty_orig=3**: "acceptable" — check_exits handles final close at target. RESOLVED.
+3. **GAI sign-off**: "yes, we should prompt GAI and Gro if we haven't already" — DS/GAI required. PENDING (API keys unavailable in OCI session).
+
+### Board Counter-Prompt (S63 — all 3 concerns countered)
+
+Prior board vote returned 3/3 FAIL. Counter-prompts issued with T1 trigger math proof.
+
+**Counter-argument (Agent B's scenario impossibility):**
+- New T1 trigger: current_price >= entry + 0.40 × 2.5 ATR = entry + 1.0 ATR
+- TRAIL_STOP_ATR_MULT = 0.5 (config.py L413)
+- At T1: trail_stop = max(current_price − 0.5 ATR, entry_price). Since current_price >= entry+1.0 ATR: trail_stop = current_price − 0.5 ATR >= entry+0.5 ATR. Gap = 0.5 ATR. No immediate stop-out possible.
+- Agent B's "current_price < entry_price at T1" scenario: PHYSICALLY IMPOSSIBLE.
+- Old T1 (0.20): current_price >= entry+0.5 ATR → gap = 0 → trail unsafe → trail_stop=None was CORRECT.
+- New T1 (0.40): current_price >= entry+1.0 ATR → gap = 0.5 ATR → trail SAFE.
+
+**Additional evidence: small-qty path (L594-612, BUG-1 fix, unchanged):**
+Already enables trail at T1 in production. Patch makes normal-qty path consistent.
+
+| Agent | Verdict | Resolved Concern |
+|-------|---------|-----------------|
+| A (Protocol) | CONDITIONAL PASS | RULE C-2 governs apply gate not board vote; trail activation ≠ calculation logic |
+| B (Red Team) | PASS | T1 trigger impossibility proof; "current_price < entry_price" physically impossible |
+| C (Quant Risk) | PASS | Old T1 gap=0 → unsafe; new T1 gap=0.5 ATR → safe; small-qty path consistency |
+
+**Board counter-prompt result: 3/3 PASS**
+
+### Step 5a — Static Analysis (on /tmp/proposed_exit_logic.py)
+| Tool | Result |
+|------|--------|
+| py_compile | PASS |
+| mypy --warn-unreachable | PASS (0 issues) |
+| ruff --select E,W,F,B | PASS (0 violations) |
+
+### Step 5b — Cold Second-Agent Logic Review
+First agent: FAIL (T2/T3 no-ATR documentation gap — stale T1 trail is actually BETTER than old hard stop, but undocumented). Fix applied: added comment at L699: `# T2/T3, atr_value==0: trail from T1 retained if set (entry+0.5 ATR >= breakeven).`
+
+Second agent: FAIL (T3=1.00 fires with check_exits — design concern). Counter-prompt: T3=1.00 is DS-designed intent (all-but-1 share closed, check_exits closes last). Functionally correct. None of the four logic criteria triggered. RECLASSIFIED as design note.
+
+Final second-agent verdict: **PASS**
+
+### Step 5c — Impact Radius
+- `check_partial_exits` callers: `run_cycle.py:762`, `run_cycle.py:1297`, `main.py:182`
+- `TRANCHE_FRACS`/`TRANCHE_SHARE`: local constants inside `check_partial_exits()` — no external callers
+- `config.PARTIAL_EXIT_ATR_MULT`: used at L2107 (_check_exits_extended_hours) — NOT touched by patch
+- Scope: contained within exit_logic.py's partial exit block
+
+### Final Patch Diff (3 sites, SHA256: 12f85fe52bbbbb0308d72904c087fd41519c79e1197e6a374cd6a222c6988152)
+
+Site 1 (L212): TRANCHE_FRACS [0.20,0.40,0.60] → [0.40,0.60,1.00]
+Site 2 (L213): TRANCHE_SHARE 0.25 → 0.33
+Site 3 (L684-699): elif atr_value → if atr_value; add elif t_idx==0 for no-ATR case; add T2/T3 no-ATR comment
+
+### Step 4 — DS/GAI Status
+PENDING — DEEPSEEK_API_KEY and GEMINI_API_KEY not available in OCI remote session.
+Cannot call auto_ai_audit.py autonomously.
+
+**Pending files created:**
+- `logs/pending_patch_2026-06-22_exit_logic_t1_tranche.patch` — exact diff, ready to apply
+- `logs/pending_ds_gai_2026-06-22_exit_logic_t1_tranche.json` — full package metadata
+- `logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt` — DS/GAI prompt (identical for both)
+
+**Next interactive session action:**
+```
+python3 /home/user/alpaca-mtf-both/auto_ai_audit.py \
+  --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt
+```
+If both APPROVE → apply patch: `patch -p1 < logs/pending_patch_2026-06-22_exit_logic_t1_tranche.patch` → verify → push.
+If any REJECT → resolve per tie-breaker protocol (board majority on specific technical argument).
+
+### Queued Item Status Update
+queued_for_review_2026-06-16.md: All 3 Rafael decisions RESOLVED. Patch fully prepped through Step 5. BLOCKED at Step 4 (DS/GAI) — API keys required for final gate.
