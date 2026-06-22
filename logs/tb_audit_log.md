@@ -5312,3 +5312,78 @@ Impact radius: contained within QHM module — all three new methods private, no
 |----|----------|----------|-----|
 | QHM-F2-1 | CRITICAL | _resubmit_post_earnings_stop | bars[i]["high"] → bars.iloc[i]["high"]; `if bars` → `if not bars.empty` |
 
+
+---
+## S63 Nightly Autonomous — 2026-06-22
+
+### Preamble
+- Git remote: authenticated ✓
+- Slack: 403 Forbidden (webhook expired/revoked) — output to stdout only
+- AI Audit Gist: unavailable — continuing from handoff.md
+
+### Step 0–1: Triage
+- Gist: unavailable
+- handoff.md: read complete (S62, 2026-06-20) — 105 lines ✓
+- tb_audit_log.md: last 200 lines reviewed ✓
+- All RC classes: CLOSED (per handoff.md S62 confirmation)
+- queued_for_review_2026-06-16.md: exit_logic.py T1 tranche — BLOCKED (3 Rafael decisions required)
+- queued_for_review_2026-06-12.md: portfolio_tracker.py RC-5 — STALE (fixed S59, L1713-1714 confirmed)
+- queued_for_review_2026-06-11.md: all items — STALE (confirmed closed)
+- pending_patch_2026-06-05_quarterly_hold_manager.patch: STALE (QHM fully wired S62)
+
+### Step 2: RTH Classification
+- reporting/metrics.py: NON-RTH (not imported by any RTH entrypoint)
+- execution/kelly.py: RTH-CHAIN (main.py → execution.trade_engine)
+- generate_dashboard.py: RTH-CHAIN (run_cycle.py → generate_dashboard)
+- data/breadth.py: RTH-CHAIN (main.py → data.market_breadth)
+- weekly_review.py: NON-RTH
+
+NON-RTH: reporting/metrics.py | RTH-CHAIN: kelly.py, generate_dashboard.py, data/breadth.py
+
+### NON-RTH Apply — reporting/metrics.py
+
+Full read complete: 191 lines in 1 chunk — reporting/metrics.py ✓
+
+#### 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | py_compile PASS · mypy PASS (0 issues) · ruff PASS (0 violations) |
+| 2 | Trade path trace | Read-only module. Called by generate_dashboard.py + weekly_review.py. No trading logic. |
+| 3 | Adversarial scenarios | API key missing → None ✓; Alpaca down → None ✓; EOD files missing → empty ✓; equity=0 → None ✓; all losses → pf=None ✓ |
+| 4 | Full read | COMPLETE ✓ |
+| 5 | Cross-references | _BASE, _LOGS anchored. All functions defined. dotenv optional import handled. |
+| 6 | Conflicting directions | None — purely read-only, no state mutations |
+| 7 | Redundancy | None found |
+| 8 | State persistence | No writes — N/A |
+| 9 | Data source tier | T1 Alpaca REST (urllib.request) for equity fetch ✓ |
+| 10 | Timezone + logging | No user-facing timestamps. Date extraction via [:10] on ISO strings. ✓ |
+
+#### RC Scan
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — no datetime.now() calls |
+| RC-2 | PASS — `_BASE = Path(__file__).resolve().parent.parent`; all paths anchored |
+| RC-3 | PASS — `except ImportError: pass` (L37) is idiomatic optional-import pattern, not error-swallowing. All error paths log. |
+| RC-4 | N/A — no record_exit calls |
+| RC-5 | PASS — no writes |
+| RC-6 | PASS — `acct.get("equity")` confirmed against Alpaca v2/account API |
+| RC-7 | N/A — no sizing logic |
+| RC-8 | N/A — no scan buffers |
+
+**FINDING: NONE — file is clean. No patch required.**
+
+### Step 3: RTH-Chain Items
+- exit_logic.py T1 tranche: BLOCKED — 3 Rafael decisions required (queued_for_review_2026-06-16.md)
+- kelly.py score-weighted prewarm: explicitly DEFERRED in PENDING (board vote required per Rafael S52 mandate)
+- data/breadth.py TraderMonty wiring: needs board vote before wiring into scoring
+- generate_dashboard.py: just fixed S61 (eb6a5ac), clean per last audit
+
+No eligible RTH-chain items for draft tonight.
+
+### Outcome: STEP 7 — No eligible items
+All RC classes CLOSED. Only queued item (exit_logic.py T1 tranche) is BLOCKED pending Rafael decisions.
+No new violations found in reporting/metrics.py full audit.
+All roadmap items in RTH chain are either BLOCKED or explicitly DEFERRED.
+
+**Action required from Rafael:**
+1. T1 tranche restructure — answer 3 questions in queued_for_review_2026-06-16.md before this can proceed.
