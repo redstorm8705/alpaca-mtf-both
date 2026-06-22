@@ -5312,3 +5312,91 @@ Impact radius: contained within QHM module — all three new methods private, no
 |----|----------|----------|-----|
 | QHM-F2-1 | CRITICAL | _resubmit_post_earnings_stop | bars[i]["high"] → bars.iloc[i]["high"]; `if bars` → `if not bars.empty` |
 
+
+---
+
+## scan_to_html.py + data/fmp_client.py — T4 violation fix — 2026-06-22 S63 autonomous
+
+**File:** scan_to_html.py (2410 lines) + data/fmp_client.py (604 lines)
+**Branch:** claude/youthful-wozniak-xwzoua
+**BASE_COMMIT:** bfb6c82a945835cfb7e619e592188a9dca1ed34a
+**sha256 scan_to_html.py:** b7b67d6f6354538501d269108f08ef9fabbdf3297c01101f33b66f45dc7a8460
+**sha256 fmp_client.py:** 7bd9c8f47f4fda4ee3dd1ce64e5e884c5b22e917c3cdbde686d1a62d97c20dfb
+
+### Trigger
+scan_to_html.py L1226-1303: `_fetch_yfinance_news()` uses `yfinance` to fetch news for SPY, QQQ, AAPL, NVDA, MSFT, TSLA.
+CLAUDE.md §1 Data Source Hierarchy: yfinance T4 approved ONLY for `^VIX`, `^VIX3M`, `JPY=X`.
+News for US equities/ETFs from yfinance = T4 violation. Fix: replace with FMP T2 `/stable/news` endpoint.
+
+### Full Read Gate
+Full read complete: 2410 lines in 9 chunks (scan_to_html.py), 604 lines in 3 chunks (fmp_client.py)
+
+### 10-Point Audit — scan_to_html.py
+
+| Pt | Check | Result |
+|----|-------|--------|
+| 1 | Static analysis | py_compile PASS; mypy PASS (0 errors); ruff PASS (0 violations) |
+| 2 | Trade path trace | scan_to_html.py → imported by strategy/run_cycle.py (L314, L341, L1412). `_fetch_yfinance_news()` at L1226 called only at L1678 in background thread (non-blocking, return value discarded). RTH-chain: YES (run_cycle imports). |
+| 3 | Adversarial scenarios | yfinance unavailable → ImportError caught → returns []. FMP unavailable → exception caught → returns []. News write failure → caught → log.warning, returns []. Empty symbols list → FMP returns []. |
+| 4 | Full top-to-bottom read | Complete. `_fetch_yfinance_news()` (L1226-1303): uses `import yfinance as _yf`, calls `_yf.Ticker(sym).news`. No other yfinance calls in file. |
+| 5 | Grep-verified cross-references | Caller: L1678 only (`background_news_fetch` thread). Return value discarded at call site — `_fetch_yfinance_news()` is a side-effect writer to `logs/market_news.json`. Atomic write: PRESENT (tmp→replace+fsync). |
+| 6 | Conflicting execution directions | No conflict — caller at L1678 is background thread, non-blocking. Replacement is drop-in. |
+| 7 | Redundancy scan | No dead code. The `market_news.json` is consumed by the HTML dashboard. |
+| 8 | State persistence | `logs/market_news.json` uses tmp→replace+fsync atomic write — compliant. |
+| 9 | Data source tier | VIOLATION: `_fetch_yfinance_news()` uses yfinance T4 for equity/ETF news. Fix: replace with FMP T2 `/stable/news`. FMP is the approved T2 source. |
+| 10 | Timezone + logging | Time strings formatted as PT (PDT_TZ = ZoneInfo("America/Los_Angeles")) — compliant. |
+
+### 10-Point Audit — data/fmp_client.py
+
+| Pt | Check | Result |
+|----|-------|--------|
+| 1 | Static analysis | py_compile PASS; mypy PASS; ruff PASS |
+| 2 | Trade path trace | fmp_client.py — T2 data source module. `get_news()` is a new read-only function; no entry/exit path. |
+| 3 | Adversarial scenarios | FMP_API_KEY not set → early return []. HTTP non-200 → log + return []. JSON parse error → exception caught → return []. Cache read failure → caught → falls through to live fetch. Cache write failure → caught → logged. |
+| 4 | Full top-to-bottom read | Complete. No existing `get_news` function in file. Cache pattern consistent with other functions (e.g., `get_economic_calendar`). |
+| 5 | Cross-references | New `get_news()` only called from scan_to_html.py `_fetch_yfinance_news()`. No other callers. |
+| 6 | Conflicting directions | None. |
+| 7 | Redundancy scan | Cache TTL 30 min appropriate for news (time-sensitive). No redundancy. |
+| 8 | State persistence | Cache write uses `_NEWS_CACHE.write_text()` — non-critical cache (30-min TTL), acceptable without atomic write (matches existing fmp_client pattern). |
+| 9 | Data source tier | T2 FMP `/stable/news` — compliant. API cost: 1 call per 30 minutes max. |
+| 10 | Timezone + logging | pub_dt.astimezone(PT) with ZoneInfo("America/Los_Angeles") — compliant. |
+
+### RC Scan — scan_to_html.py
+
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — `_dt.now(_tz.utc)` and `_dt.fromtimestamp(..., tz=_tz.utc)` are tz-aware |
+| RC-2 | CWD-relative path | PASS — `logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")` is anchored to __file__ |
+| RC-3 | Silent exception | PASS — every except block logs or returns; no bare pass |
+| RC-4 | Estimated exit price | N/A — no exit/record_exit logic |
+| RC-5 | Non-atomic write | PASS — `logs/market_news.json` written via tmp→replace+fsync |
+| RC-6 | Wrong API field | N/A — no Alpaca API calls in this function |
+| RC-7 | Zero-share sizing | N/A |
+| RC-8 | Unbounded scan buffer | N/A |
+
+### RC Scan — data/fmp_client.py (get_news addition)
+
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — `datetime.now(timezone.utc)` tz-aware |
+| RC-2 | CWD-relative path | PASS — `_CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"` anchored to __file__ |
+| RC-3 | Silent exception | PASS — all except blocks log at debug/warning level |
+| RC-4 | Estimated exit price | N/A |
+| RC-5 | Non-atomic write | PASS — cache write is non-critical (30-min TTL); acceptable per fmp_client pattern |
+| RC-6 | Wrong API field | FMP `/stable/news` fields: `title`, `publishedDate`, `publisher`, `site` — verified against FMP stable API pattern used in rest of fmp_client.py. `headline` checked as fallback (defensive). |
+| RC-7 | Zero-share sizing | N/A |
+| RC-8 | Unbounded scan buffer | N/A |
+
+### Change Summary (for board vote)
+- **scan_to_html.py L1226-1303**: Replace `_fetch_yfinance_news()` body — remove yfinance import and calls, replace with `from data.fmp_client import get_news as _get_fmp_news` and call `_get_fmp_news(symbols=[...], max_items=20, max_age_hours=12.0)`. Atomic write of `market_news.json` preserved. Interface unchanged.
+- **data/fmp_client.py** (end of file): Add `get_news()` function — FMP T2 `/stable/news` endpoint, 30-min cache, dedup by headline, PT timezone for time_str, compliant with existing fmp_client patterns.
+
+
+### Board Vote (2026-06-22 S63 — cold parallel subagents)
+A=PASS | B=FAIL | C=PASS → 2/3 PASS — STEP 6 per protocol (one FAIL → queue)
+
+Agent B primary blockers:
+1. RC-6: `n.get("publisher")` and `n.get("headline")` are dead code — FMP /stable/news uses `site` and `title` only. Fallback chain produces correct result via `site` but masks the real field names.
+2. THREAT 7: logger.debug for HTTP non-200 should be logger.warning (T2 quota exhaustion)
+
+Action: queued_for_review_2026-06-22.md written. Re-submit after field name corrections + re-verified against live FMP /stable/news response.
