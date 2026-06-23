@@ -209,8 +209,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
     # B1 fix: _partial_fail_counts now in execution/lifecycle.py — get live reference
     _partial_fail_counts = _get_partial_fail_counts()
 
-    TRANCHE_FRACS = [0.20, 0.40, 0.60]   # T1, T2, T3 as fraction of full target dist
-    TRANCHE_SHARE = 0.25                  # each tranche closes 25% of original qty
+    TRANCHE_FRACS = [0.40, 0.60, 1.00]   # T1, T2, T3 as fraction of full target dist
+    TRANCHE_SHARE = 0.33                  # each tranche closes 33% of original qty
 
     for symbol, trade in list(tracker.open_trades.items()):
         direction   = trade["direction"]
@@ -520,7 +520,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
         # Sinclair/Thorp/Tudor Jones: in BROAD_* / EXTREME regimes or VIX > 30,
         # T2 drops to 0.85R (measured from entry in stop_distance units) rather
         # than 1.0R.  Captures profit before mean reversion completes.
-        # Normal regime keeps T2 at 1.0R (TRANCHE_FRACS[1] = 0.40 of target_dist).
+        # Normal regime keeps T2 at 1.2R (TRANCHE_FRACS[1] = 0.60 of target_dist).
         _ab6r_stressed = (
             _main._spy_event_type in ("EXTREME", "BROAD_GEO_CONFLICT", "BROAD_GEO_ENERGY",
                                 "BROAD_MACRO_MONETARY", "BROAD_MACRO_CREDIT", "BROAD_MACRO_FX",
@@ -549,8 +549,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     f"(VIX={last_vix:.1f} SPY={_main._spy_event_type or 'CLEAR'})"
                 )
             # Simons: T3 at 50% in stressed regimes (BROAD_*/VIX>30) — alpha
-            # decays above 1.2x ATR in high-vol; mean reversion faster than 60%.
-            # Normal regimes keep T3 at 60% (TRANCHE_FRACS[2]).
+            # decays above 1.2x ATR in high-vol; captures profit before full target.
+            # Normal regimes keep T3 at 100% of target (TRANCHE_FRACS[2] = 1.00).
             elif t_idx == 2 and _ab6r_stressed:
                 _t3_frac = 0.50
                 t_price = (entry_price + _t3_frac * target_dist if direction == "long"
@@ -681,13 +681,12 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 # and record_exit() see the correct running total.
                 trade["partial_pnl"]          = round(trade.get("partial_pnl", 0.0) + pnl, 2)
 
-                # T1: pin stop at entry_price (breakeven) and clear any prior trail
-                # so line 2121 (_stop_px) uses entry_price, not a stale trail level.
-                # T2/T3: activate ATR trail floored at the promoted stop.
+                # T1+: pin stop to breakeven; activate ATR trail above it if ATR available.
+                # Trail is floored at breakeven — position locks in profit above entry after T1.
+                # No ATR at T1 → hard breakeven stop only (unchanged from prior behavior).
                 if t_idx == 0:
-                    trade["stop"]       = entry_price
-                    trade["trail_stop"] = None   # disable trail; hard breakeven only
-                elif atr_value > 0:
+                    trade["stop"] = entry_price
+                if atr_value > 0:
                     trail_dist  = atr_value * config.TRAIL_STOP_ATR_MULT
                     _stop_floor = trade.get("stop", 0.0)
                     trail_stop  = (
@@ -696,6 +695,9 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                               if _stop_floor else round(current_price + trail_dist, 2))
                     )
                     tracker.update_trail_stop(symbol, trail_stop)
+                elif t_idx == 0:
+                    trade["trail_stop"] = None   # no ATR at T1 — hard breakeven only
+                # T2/T3, atr_value==0: trail from T1 retained if set (entry+0.5 ATR ≥ breakeven).
 
                 # Re-protect remaining shares after partial fill.
                 # GAI Q9: DAY and GTC stops lock the same shares — submit only one.

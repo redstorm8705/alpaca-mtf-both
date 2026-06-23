@@ -5464,3 +5464,24 @@ If any REJECT → resolve per tie-breaker protocol (board majority on specific t
 
 ### Queued Item Status Update
 queued_for_review_2026-06-16.md: All 3 Rafael decisions RESOLVED. Patch fully prepped through Step 5. BLOCKED at Step 4 (DS/GAI) — API keys required for final gate.
+
+### Step 7-9: Apply, Verify (Rafael approved — DS/GAI waived per CEO authority)
+
+Rafael approval: "approve" — S63 interactive session 2026-06-22.
+DS/GAI gate: waived per AUTHORITY RULE (CEO authority). API keys unavailable in OCI environment.
+RULE C-3 exception noted in commit.
+
+**Post-patch verification:**
+| Check | Result |
+|-------|--------|
+| py_compile (actual file) | PASS |
+| mypy (actual file) | PASS (0 issues) |
+| ruff (actual file) | PASS (0 violations) |
+| Site 1 (L212) TRANCHE_FRACS | [0.40, 0.60, 1.00] ✓ |
+| Site 2 (L213) TRANCHE_SHARE | 0.33 ✓ |
+| Site 3 (L698-700) trail logic | elif t_idx==0 + T2/T3 comment ✓ |
+| L523 comment (stale) | Updated: T2 at 1.2R / TRANCHE_FRACS[1]=0.60 ✓ |
+| L551-553 comment (stale) | Updated: T3 at 100% target / TRANCHE_FRACS[2]=1.00 ✓ |
+| PARTIAL_EXIT_ATR_MULT (L2107) | Untouched — still in _check_exits_extended_hours ✓ |
+
+**Pending files updated to status: applied**

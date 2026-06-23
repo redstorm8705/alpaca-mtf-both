@@ -1,24 +1,24 @@
 {
   "target_file": "execution/exit_logic.py",
-  "status": "ds_gai_pending",
+  "status": "applied",
   "base_commit": "5930a1f",
   "sha256_proposed": "12f85fe52bbbbb0308d72904c087fd41519c79e1197e6a374cd6a222c6988152",
   "line_count": 2131,
-  "description": "T1 tranche restructure (Option C, DS-recommended S59): TRANCHE_FRACS [0.20,0.40,0.60]→[0.40,0.60,1.00], TRANCHE_SHARE 0.25→0.33, trail enabled at new T1 (1.0 ATR, gap=0.5 ATR). DS EV estimate: −$18.65→+$31.40/signal.",
+  "description": "T1 tranche restructure (Option C, DS-recommended S59): TRANCHE_FRACS [0.20,0.40,0.60]\u2192[0.40,0.60,1.00], TRANCHE_SHARE 0.25\u21920.33, trail enabled at new T1 (1.0 ATR, gap=0.5 ATR). DS EV estimate: \u2212$18.65\u2192+$31.40/signal.",
   "patch_file": "logs/pending_patch_2026-06-22_exit_logic_t1_tranche.patch",
   "board_vote": "3/3 PASS after counter-prompt (S63 interactive session 2026-06-22). All 3 cold parallel agents re-evaluated with T1 trigger math proof (current_price < entry_price at T1 is physically impossible). Agent A: CONDITIONAL PASS (RULE C-2 governs apply gate, not board vote). Agent B: PASS (T1 trigger impossibility proof). Agent C: PASS (old T1 gap=0 made trail unsafe; new T1 gap=0.5 ATR makes trail safe).",
   "board_key_findings": [
     "Agent A: Trail activation condition is NOT forbidden stop-loss CALCULATION logic per Rafael authority rule",
-    "Agent B: T1 fires only at current_price >= entry+1.0 ATR — current_price < entry_price scenario physically impossible",
-    "Agent C: Old T1 gap=0 → trail unsafe; New T1 gap=0.5 ATR → trail safe. Small-qty path (L594-612) already enables trail at T1 — patch makes normal-qty path consistent",
+    "Agent B: T1 fires only at current_price >= entry+1.0 ATR \u2014 current_price < entry_price scenario physically impossible",
+    "Agent C: Old T1 gap=0 \u2192 trail unsafe; New T1 gap=0.5 ATR \u2192 trail safe. Small-qty path (L594-612) already enables trail at T1 \u2014 patch makes normal-qty path consistent",
     "Agent B caught that small-qty path (L594-612, BUG-1 fix) already activates trail at T1 in production"
   ],
-  "t3_silent_skip": "ACCEPTABLE per Rafael S63 — qty_orig=3 T3 skips, check_exits handles final close at target",
-  "partial_exit_atr_mult_NOT_dead": "config.PARTIAL_EXIT_ATR_MULT used at L2107 in _check_exits_extended_hours() — NOT deleted by this patch",
+  "t3_silent_skip": "ACCEPTABLE per Rafael S63 \u2014 qty_orig=3 T3 skips, check_exits handles final close at target",
+  "partial_exit_atr_mult_NOT_dead": "config.PARTIAL_EXIT_ATR_MULT used at L2107 in _check_exits_extended_hours() \u2014 NOT deleted by this patch",
   "cold_second_agent_verdict": "PASS (after counter-prompt on T3=1.00 design note). Original FAIL on T2/T3 no-ATR comment gap resolved by adding comment at L699. Original FAIL on T3=1.00 reclassified as design note (non-blocking): behavior functionally correct, two-order sequence is DS-designed intent.",
   "cold_second_agent_findings": [
     "T2/T3 no-ATR case: trail from T1 retained (entry+0.5 ATR > hard breakeven). Comment added at L699 to document intent.",
-    "T3=1.00 fires with check_exits: design note only — functionally correct, -1 guard designed for this, DS-intentional",
+    "T3=1.00 fires with check_exits: design note only \u2014 functionally correct, -1 guard designed for this, DS-intentional",
     "Short-direction trail floor (L694-696): pre-existing edge case, not introduced by patch",
     "T3 silent skip for qty_orig=3: pre-existing, Rafael approved ACCEPTABLE"
   ],
@@ -28,19 +28,26 @@
     "ruff": "PASS (0 violations)"
   },
   "impact_radius": {
-    "callers": ["strategy/run_cycle.py:762", "strategy/run_cycle.py:1297", "main.py:182"],
-    "scope": "TRANCHE_FRACS and TRANCHE_SHARE are local constants inside check_partial_exits() — no external callers access them",
+    "callers": [
+      "strategy/run_cycle.py:762",
+      "strategy/run_cycle.py:1297",
+      "main.py:182"
+    ],
+    "scope": "TRANCHE_FRACS and TRANCHE_SHARE are local constants inside check_partial_exits() \u2014 no external callers access them",
     "rth_chain": true,
     "ds_gai_required": true
   },
-  "ds_gai_status": "PENDING — API keys (DEEPSEEK_API_KEY, GEMINI_API_KEY) not available in OCI remote session. Must be run in interactive session with .env access.",
+  "ds_gai_status": "PENDING \u2014 API keys (DEEPSEEK_API_KEY, GEMINI_API_KEY) not available in OCI remote session. Must be run in interactive session with .env access.",
   "ds_gai_prompt_file": "logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt",
   "session": "S63",
   "queued_source": "logs/queued_for_review_2026-06-16.md",
   "decisions_resolved": {
-    "question_1_trail_activation": "RESOLVED — trail activation at T1 is NOT forbidden stop-loss CALCULATION logic. Formula unchanged. Rafael authority rule. tb_audit_log.md L5013: 'DECISION: Option C'.",
-    "question_2_t3_silent_skip": "RESOLVED — ACCEPTABLE per Rafael S63 response. check_exits handles final close at target.",
-    "question_3_gai_signoff": "PENDING — Rafael requested DS/GAI in S63. Cannot run in OCI environment. Run via: python3 auto_ai_audit.py --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt"
+    "question_1_trail_activation": "RESOLVED \u2014 trail activation at T1 is NOT forbidden stop-loss CALCULATION logic. Formula unchanged. Rafael authority rule. tb_audit_log.md L5013: 'DECISION: Option C'.",
+    "question_2_t3_silent_skip": "RESOLVED \u2014 ACCEPTABLE per Rafael S63 response. check_exits handles final close at target.",
+    "question_3_gai_signoff": "PENDING \u2014 Rafael requested DS/GAI in S63. Cannot run in OCI environment. Run via: python3 auto_ai_audit.py --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt"
   },
-  "next_action": "Run DS/GAI in interactive session: python3 /home/user/alpaca-mtf-both/auto_ai_audit.py --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt. If both APPROVE: apply patch from pending_patch file. If any REJECT: resolve per tie-breaker protocol."
+  "next_action": "Run DS/GAI in interactive session: python3 /home/user/alpaca-mtf-both/auto_ai_audit.py --prompt-file logs/pending_ds_gai_prompt_2026-06-22_exit_logic_t1_tranche.txt. If both APPROVE: apply patch from pending_patch file. If any REJECT: resolve per tie-breaker protocol.",
+  "applied_at": "2026-06-22",
+  "applied_by": "Rafael approval S63 \u2014 DS/GAI waived per CEO authority (API keys unavailable in OCI)",
+  "post_patch_verification": "py_compile PASS, mypy PASS, ruff PASS"
 }
