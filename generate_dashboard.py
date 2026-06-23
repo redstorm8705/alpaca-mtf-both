@@ -9,7 +9,6 @@ Reads:
   - Alpaca /account + /positions + /orders (live)
   - trade_log.json (open/closed trades, stats)
   - logs/hybrid_state.json (SPY event type, scans_left)
-  - logs/day_trades.json (PDT rolling count)
   - logs/eod_YYYY-MM-DD.json (today's P&L baseline)
 
 Writes:
@@ -131,7 +130,7 @@ def _load_alpaca():
                 "Restart the bot — main.py loads them at startup."
             ),
             "equity": 0, "cash": 0, "buying_power": 0, "last_equity": 0,
-            "pdt_count": 0, "status": "unknown", "shorting": False,
+            "status": "unknown", "shorting": False,
             "positions": [], "orders":[],
         }
     try:
@@ -193,7 +192,7 @@ def _load_alpaca():
         return {
             "error": str(e), "equity": 0, "last_equity": 0,
             "cash": 0, "buying_power": 0,
-            "pdt_count": 0, "status": "unknown", "shorting": False,
+            "status": "unknown", "shorting": False,
             "positions": [], "orders": [],
         }
 

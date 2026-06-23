@@ -391,8 +391,7 @@ in addition to `logs/mtf_bot.log`. Minimum fields per event:
   "mri_level": "NORMAL",
   "data_source": "alpaca_data|yfinance_fallback",
   "price": 236.78,
-  "size": 4,
-  "pdt_used": 3
+  "size": 4
 }
 ```
 
@@ -622,7 +621,7 @@ Never mark this "complete" — it resets for every file, every session.
 |-------|-------|-------|
 | 1 | **Static analysis** — run pylint + pyflakes on the file | Syntax errors, unused imports, undefined names |
 | 2 | **End-to-end trade path trace** — follow the file's role in signal→entry→exit→P&L | Any function in the trading path; flag broken handoffs |
-| 3 | **Adversarial scenario testing** — enumerate edge cases: None inputs, empty lists, zero values, weekend gaps, PDT=3/3, VIX>30 | All public functions |
+| 3 | **Adversarial scenario testing** — enumerate edge cases: None inputs, empty lists, zero values, weekend gaps, VIX>30 | All public functions |
 | 4 | **Full top-to-bottom read** — read every function in the file, not just changed lines | 100% of file content before writing a single line |
 | 5 | **Grep-verified cross-references** — confirm all imports, callers, and callees exist and match signatures | All `import` statements and function calls |
 | 6 | **Conflicting execution directions** — check for logic contradictions with other modules (e.g., two systems setting the same state variable) | Cross-file data flow |
@@ -867,7 +866,7 @@ the board output in plain language without losing the directional conclusion.
 ## PROJECT CONTEXT
 
 - **Bot type:** Alpaca Markets paper trading bot (MTF confluence scoring)
-- **Account:** Paper account (~$2.5K), PDT-constrained (max 3 day trades / 5-day window)
+- **Account:** Paper account (~$2.5K)
 - **Scoring:** 12-point confluence system (live), 16-point system (log only, validation)
 - **Profile active:** paper (INTRADAY_STOP_ATR_MULT=1.25, TARGET=2.5x, MIN_SCORE=9/12)
 - **MRI active:** MacroRiskIndex — 8-component cross-asset score, 0–100, 5 levels
@@ -896,9 +895,8 @@ the board output in plain language without losing the directional conclusion.
 1. **SPY 5-min bar-over-bar is the SOLE entry gate.** MRI and Macro Regime Detector only adjust
    quality bar and size floor.
 2. **Keywords are display-only.** CAUTION/MONITOR = zero size impact. Only HALT = 0.0x.
-3. **PDT enforcement disabled (S50, 2026-06-06, board unanimous).** PDT rule removed for accounts <$25K.
-   `PDT_ENFORCEMENT_ENABLED=False` in config.py gates all PDT logic. Feature flag preserves reversibility
-   for live accounts. GTC stops submit for ALL overnight positions regardless of PDT state.
+3. **PDT abolished (SEC permanent rule change).** All PDT enforcement code deleted from codebase (S63 sweep).
+   GTC stops submit for ALL overnight positions unconditionally.
 4. **Bar staleness uses CLOSE-based age.** `_bar_ts_et + timedelta(minutes=15)` — do not revert to open-based.
 5. **Entry price = Alpaca Data real-time last trade + bar close fallback.** Replaces yfinance fast_info.
    Source logged with every entry event in `trade_events.jsonl`.
