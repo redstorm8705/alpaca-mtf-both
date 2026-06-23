@@ -6,7 +6,7 @@ Writes newline-delimited JSON to logs/trade_events.jsonl.
 All timestamps are PT (America/Los_Angeles) per Guardrail 8.
 
 Minimum fields per event (board-approved schema):
-  ts, event, symbol, score, mri_level, data_source, price, size, pdt_used
+  ts, event, symbol, score, mri_level, data_source, price, size
 
 Event types:
   entry         — position opened
@@ -19,7 +19,7 @@ Event types:
 Usage:
   from trade_logger import log_event
   log_event("entry", symbol="AMZN", price=236.78, size=4, score=11,
-            mri_level="NORMAL", data_source="alpaca_data", pdt_used=2)
+            mri_level="NORMAL", data_source="alpaca_data")
 """
 
 import json
@@ -51,7 +51,6 @@ def log_event(
     score: int = 0,
     mri_level: str = "NORMAL",
     data_source: str = "alpaca_data",
-    pdt_used: int = 0,
     **extra,
 ) -> None:
     """
@@ -65,7 +64,6 @@ def log_event(
       score       — confluence score (0 for non-signal events)
       mri_level   — MRI level at time of event ("NORMAL"/"ELEVATED"/…)
       data_source — "alpaca_data" or "yfinance_fallback"
-      pdt_used    — rolling day trade count at time of event
 
     Any additional kwargs are written through for richer postmortem queries.
     """
@@ -78,7 +76,6 @@ def log_event(
         "data_source": data_source,
         "price":       round(float(price), 4),
         "size":        int(size),
-        "pdt_used":    int(pdt_used),
     }
     if extra:
         record.update(extra)

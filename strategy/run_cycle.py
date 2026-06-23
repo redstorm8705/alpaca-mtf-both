@@ -99,7 +99,6 @@ def run_cycle(
 
     now = datetime.now(ET)
     tod_phase = _get_tod_phase(now)
-    # S50: PDT removed — header no longer shows PDT count
     _hdr_spy  = f" | SPY:{_main._spy_event_type}" if _main._spy_event_type else ""
     _hdr_tqi  = f" | TQI:{sum(kelly._tqi_history)/len(kelly._tqi_history):.0f}" if kelly._tqi_history else ""
     logger.info(
@@ -160,8 +159,6 @@ def run_cycle(
                               portfolio=portfolio_value)
         _touch_cycle_ts()
         return
-
-    # S50: PDT removed — hourly PDT sync removed
 
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.
@@ -228,7 +225,7 @@ def run_cycle(
             _log_trade_event(
                 "breadth_refresh", symbol="BREADTH", price=0.0, size=0,
                 mri_level=mri.level() if mri else "NORMAL", score=_main._last_breadth["score"],
-                data_source="tradermonty_csv", pdt_used=0,
+                data_source="tradermonty_csv",
                 zone=_main._last_breadth["zone"], breadth_8ma=_main._last_breadth.get("breadth_8ma", 0),
                 bearish_signal=_main._last_breadth.get("bearish_signal", False),
             )
@@ -237,7 +234,7 @@ def run_cycle(
 
         # ── SPY 52-week high refresh (T1 Alpaca Data) — ATH proximity gate ──────
         # Fetched once per pre-market window, cached in _main._spy_52w_high global.
-        # Used by: Layer 5 dynamic MIN_SCORE + PDT=3/3 ATH entry block.
+        # Used by: Layer 5 dynamic MIN_SCORE (ATH proximity gate).
         # T1 source: Alpaca Data daily bars (252 bars = 1 trading year).
         # (globals accessed via _main)
         try:
@@ -358,7 +355,7 @@ def run_cycle(
             _err_count = 0; _warn_count = 0; _err_samples: list[str] = []
             _NOISE = ("Finnhub", "TruthSocial", "Truth Social", "news_monitor", "Shorting:",
                       "too many requests", "not allowed to short", "position size < 1",
-                      "PDT protection", "already has Alpaca")
+                      "already has Alpaca")
             _log_path = str(_PROJECT_ROOT / "logs" / "mtf_bot.log")  # RC-2 fix
             with open(_log_path) as _lf:
                 for _line in _lf:
@@ -485,10 +482,6 @@ def run_cycle(
                     continue
                 if _gtr.get("gtc_stop_order_id"):
                     continue  # already submitted this session
-                # P5-H5: Skip AH GTC if PDT=3/3 and position opened today.
-                # Alpaca rejects same-day-opened GTC stops when rolling dt is exhausted
-                # (HTTP 422, code 40310100). Closing an AH GTC stop on a
-                # S50: PDT removed — AH GTC PDT skip removed; all overnight positions get GTC
                 _gdir        = _gtr["direction"]
                 _gentry      = _gtr.get("entry_price", 0)
                 _gatr_stop   = _gtr.get("trail_stop") or _gtr.get("stop")
@@ -653,12 +646,12 @@ def run_cycle(
                         tracker.open_trades[_gsym]["gtc_stop_order_id"] = None
                         tracker._save_log()
                         # Escalate only if the AH window is closing (after 9 PM ET).
-                        # Before 9 PM: this is a PDT retry — the bot will attempt again
-                        # next cycle. After 9 PM: no more retries tonight, manual action needed.
+                        # Before 9 PM: GTC failed — the bot will attempt again next cycle.
+                        # After 9 PM: no more retries tonight, manual action needed.
                         _ah_retry_msg = (
                             "AH window closing — MANUAL STOP REQUIRED in Alpaca."
                             if _mins_ah >= (21 * 60)
-                            else f"PDT block — will retry next cycle. Internal stop=${_gstop_price:.2f} active."
+                            else f"GTC failed — will retry next cycle. Internal stop=${_gstop_price:.2f} active."
                         )
                         logger.warning(
                             f"[{_gsym}] AH GTC stop attempt failed — gtc_stop_order_id cleared. "
@@ -684,8 +677,7 @@ def run_cycle(
         return
 
     # ── RTH session start: submit DAY stops for overnight positions missing exchange-level stop ──
-    # Fires once per calendar date. Covers the P5-H5 case where last night's AH GTC
-    # submission was blocked (PDT=3/3 + opened today). DAY orders expire at 4 PM ET —
+    # Fires once per calendar date. DAY orders expire at 4 PM ET —
     # no conflict with tonight's AH GTC submission.
     _main._submit_rth_day_stops(tracker)
 
@@ -874,7 +866,7 @@ def run_cycle(
     _log_trade_event(
         "mri_refresh", symbol="MRI", price=0.0, size=0,
         mri_level=mri.level(), score=mri.score(),
-        data_source="alpaca_data", pdt_used=0,
+        data_source="alpaca_data",
         components=mri.components(),
     )
 
@@ -918,7 +910,7 @@ def run_cycle(
         _qqq_5m_df = fetch_bars("QQQ", config.TF_5M, num_bars=100)
         if _spy_5m_df is not None and len(_spy_5m_df) >= 2:
             _sc0 = float(_spy_5m_df["close"].values[-1])
-            _main._spy_last_close = _sc0   # persist for ATH Layer 5 and PDT=3/3 gate
+            _main._spy_last_close = _sc0   # persist for ATH Layer 5
             _sc1 = float(_spy_5m_df["close"].values[-2])
             if _sc1 > 0:
                 _spy_5m_pct = (_sc0 - _sc1) / _sc1 * 100
@@ -1178,7 +1170,7 @@ def run_cycle(
     _spy_ath_dist_pct = 99.0   # default: no data = treat as not at ATH
     if _main._spy_52w_high > 0 and _main._spy_last_close > 0:
         _spy_ath_dist_pct = (_main._spy_52w_high - _main._spy_last_close) / _main._spy_52w_high * 100
-        if _spy_ath_dist_pct < 1.0:                                # < 1% from ATH (S50: ATH_PDT_BLOCK_PCT removed)
+        if _spy_ath_dist_pct < 1.0:                                # < 1% from ATH
             _ath_min_score = _base_min + 2   # 11/12 — near ATH
         elif _spy_ath_dist_pct < config.ATH_MIN_SCORE_RAISE_PCT:   # 1–2% from ATH
             _ath_min_score = _base_min + 1   # 10/12 — approaching ATH
@@ -1490,11 +1482,6 @@ def run_cycle(
             _touch_cycle_ts()
             return
 
-    # ── PDT HTF Gate ─────────────────────────────────────────────────────────
-    # Filters signals to require higher-TF confirmation when rolling_dt >= 3.
-    # After 3:30 PM ET the gate is off (power-hour entries allowed).
-    # S50: PDT HTF gate removed; 2:30 PM forced-overnight gate removed
-
     logger.info(f"{len(signals)} signals found. Top 3:")
     for s in signals[:3]:
         logger.info(
@@ -1526,7 +1513,7 @@ def run_cycle(
         _err_samples = []
         _NOISE = ("Finnhub", "Truth Social", "news_monitor", "Shorting:",  # type: ignore[assignment]
                   "too many requests", "not allowed to short", "position size < 1",
-                  "PDT protection", "already has Alpaca")
+                  "already has Alpaca")
         try:
             _log_path = str(_PROJECT_ROOT / "logs" / "mtf_bot.log")  # RC-2 fix
             with open(_log_path) as _lf:

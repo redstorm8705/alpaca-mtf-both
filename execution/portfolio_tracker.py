@@ -1921,10 +1921,3 @@ class PortfolioTracker:
         print("=" * 50 + "\n")
 
 
-# compute_rolling_pdt_count() deleted S52.
-# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
-# Sole importer (weekly_review.py) patched S52. Confirmed 0 callers remaining.
-
-# compute_pdt_for_date() deleted S52.
-# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
-# Sole importer (weekly_review.py) patched S52. Confirmed 0 callers remaining.

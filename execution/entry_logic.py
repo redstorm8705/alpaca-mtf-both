@@ -338,7 +338,7 @@ def execute_entries(
     # Includes immediate atomic JSON persistence (DS Condition 1): prevents stale disk state
     # from being restored after a watchdog restart, which would allow a blocked symbol to
     # re-enter on the next cycle before its buffers have been legitimately rebuilt.
-    # NOT called on: PDT conviction gate (intentional accumulation), BoD-1 confirm gate
+    # NOT called on: BoD-1 confirm gate
     # (intentional accumulation), or score minimum gate (auto-resets at lines 813-816).
     # _rc8_clear_buffers extracted to strategy/scoring.py (Phase 2 B2 fix).
     # Calls below use _rc8_clear_buffers_fn(sym, reason, gate_state) — same semantics.
@@ -507,13 +507,10 @@ def execute_entries(
         # ── Bucket routing ───────────────────────────────────────────────
         is_bucket_a = symbol in config.BUCKET_A_TICKERS
 
-        # S50: conviction_streak tracking removed (was PDT=3/3 gate only)
-
-        # ── BoD-1: Entry confirmation buffer — PDT 0-2/3 ─────────────────
+        # ── BoD-1: Entry confirmation buffer ─────────────────────────────
         # Simons: single qualifying scans can be noise; require 2 consecutive
         # qualifying scans (≥CONVICTION_SKIP_BELOW) before committing a day
         # trade.  Counter resets on any sub-threshold scan — streak unbroken.
-        # PDT=3/3 already requires 3×12/12 (conviction_streak gate above).
         if score >= config.CONVICTION_SKIP_BELOW:
             gate_state.entry_confirm_buffer[symbol] = gate_state.entry_confirm_buffer.get(symbol, 0) + 1
         else:
@@ -537,7 +534,6 @@ def execute_entries(
             continue
 
         # ── Conviction gate ──────────────────────────────────────────────
-        # S50: PDT removed. Universal conviction gate (was PDT 0-2/3 path).
         if score < config.CONVICTION_SKIP_BELOW:
             logger.info(
                 f"[{symbol}] Score {score}/12 below minimum "
@@ -560,7 +556,6 @@ def execute_entries(
         # Power-hour expansion (≥TOD_EXPANSION_WINDOW_START=3:30 PM ET): BUCKET_B_MAX_POSITIONS_POWER (5)
         #   Power-hour: score ≥ CONVICTION_FULL_MIN (11) required for slots 4-5
         #   Kill-switch active: expansion unconditionally blocked
-        #   S50: PDT=3/3 expansion block removed (PDT removed)
         _is_ph         = _is_ph_cyc                               # pre-computed once per cycle (DI board fix)
         _open_count    = risk.open_positions                       # FIX BUG-PH-3: authoritative counter
         _std_limit     = config.BUCKET_B_MAX_POSITIONS            # 3
@@ -575,8 +570,7 @@ def execute_entries(
                     f"[{symbol}] Kill switch active — stopping entries (expansion blocked)."
                 )
                 break
-            # S50: PDT=3/3 power-hour expansion block removed (PDT removed)
-            # Standard position-limit (not kill-switch, not PDT=3/3).
+            # Standard position-limit (not kill-switch).
             # Power-hour expansion: allow up to _ph_limit slots with score gate.
             if _is_ph and _open_count < _ph_limit:
                 _ph_score_req = config.CONVICTION_FULL_MIN
@@ -754,8 +748,6 @@ def execute_entries(
         except Exception as e:
             logger.warning(f"[{symbol}] Could not get entry price: {e}")
             continue
-
-        # S50: ATH+PDT block removed (PDT removed — no forced overnight constraint)
 
         # Fetch daily ATR for dynamic stop sizing (Finding 7: per-symbol cache, 4h TTL)
         # Cache stores daily_df so FVG scoring, HTF earnings check, and ATR-compression
@@ -1009,7 +1001,7 @@ def execute_entries(
                 _rc8_clear_buffers(symbol, "bucket-a-zero-cap")
                 continue
         else:
-            # Rank 2: conviction sizing — linear (S50: PDT tiers removed)
+            # Rank 2: conviction sizing — linear
             #   score 10  → ½ size  (47.5%)
             #   score 11+ → full    (95%)
             _pct_min  = config.BUCKET_B_ALLOCATION_PCT * 0.5   # 47.5%
@@ -1101,8 +1093,6 @@ def execute_entries(
                 f"(vol_ratio={_sig_vol_ratio:.2f}x avg) | dollar_cap → ${dollar_cap:,.2f}"
             )
 
-        # S50: VOTE-4 PDT-forced overnight bear-regime reduction removed (PDT removed)
-
         # ── Build #15: FVG confluence multiplier ─────────────────────────────
         # Per-symbol size adjustment based on proximity to unfilled Fair Value Gaps.
         # Reuses daily_df (already fetched above); fetches 1h separately via yfinance.
@@ -1119,7 +1109,7 @@ def execute_entries(
         # After all multipliers are applied, sub-$50 notional orders have
         # negative expectancy after commissions — Peterffy: commission drag
         # exceeds the edge at that size.  Skip cleanly rather than submitting
-        # a noise trade that wastes a PDT slot.
+        # a noise trade below minimum lot.
         if dollar_cap < 50.0:
             logger.info(
                 f"[{symbol}] BoD-5R MINIMUM-LOT: dollar_cap ${dollar_cap:.2f} < $50 "
@@ -1210,15 +1200,10 @@ def execute_entries(
             continue
 
         # ── Overnight exposure cap (Patch 2, Apr 15 2026) ───────────────────
-        # PDT=3/3 forces every new entry to be an overnight hold: Alpaca rejects
-        # GTC stops on same-day-opened positions (error 40310100).  The position
-        # carries software-only stop protection until the next morning's reconcile,
-        # at which point the orphan-adoption path submits a GTC stop.
         # Cap total overnight notional to avoid dangerous concentration.
         # Dynamic cap:
         #   60% base  |  80% if zone_tier=0 (Green, no distribution)
         #   40% if macro_regime_tier=2 (Contraction / High-risk)
-        # S50: PDT overnight cap block removed (PDT removed — no forced overnights)
 
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
@@ -1294,7 +1279,6 @@ def execute_entries(
                     tracker.open_trades[symbol]["overnight_reason"] = "ah_entry"
                     logger.info(f"[{symbol}] Tagged overnight=True (entry after 3:30 PM ET)")
                     tracker._save_log()
-                    # S50: GTC submitted for all overnight positions (PDT skip removed)
                     gtc_side  = "sell" if direction == "long" else "buy"
                     gtc_order = submit_gtc_stop_order(
                         symbol=symbol, qty=shares,
