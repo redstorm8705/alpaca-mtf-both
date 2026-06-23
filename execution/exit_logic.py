@@ -8,8 +8,6 @@ Contains all exit-related logic:
   - check_exits()                 — hard stop / reversal exit logic
   - _check_exits_extended_hours() — AH/PM exit monitoring
   - TQI helpers: _compute_tqi, _record_partial_tqi, _record_tqi
-  - _pdt_htf_gate()               — PDT removed S52 (SEC/FINRA rule amendment, board S50 28-0);
-                                    stub retained for import compat (main.py/trade_engine.py)
 
 H1 DPE Integration (2026-05-11):
   - check_exits() overnight_atr_buffer_exit now calls get_be_buffer_mult(symbol, last_vix)
@@ -185,18 +183,11 @@ def _record_tqi(trade: dict, kelly: "KellySizer") -> None:
 
 def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: "RiskManager" = None, mri: "MacroRiskIndex" = None, last_vix: float = 0.0):  # type: ignore[assignment]
     """
-    4-tranche scaled profit taking (Item 3) with PDT-dynamic behavior.
+    4-tranche scaled profit taking (Item 3).
 
     Tranches T1-T3 are partial exits at 20/40/60% of full target distance.
     T4 (100% = full target) is handled by C-3 in check_exits — not here.
     Each tranche closes 25% of the original position qty.
-
-    PDT-dynamic rules (same-day positions only):
-      0 PDT used  : aggressive   — T1 + T2 + T3 same day
-      1 PDT used  : moderate     — T1 + T2 same day; T3 defer
-      2 PDT used  : conservative — T2 only same day; T1/T3 skip
-      3/3 PDT     : hold         — no same-day partial closes; defer all
-    Overnight positions (entry on prior day): execute all tranches freely.
 
     State field: profit_tranche_level (0–3) in trade dict.
     Backward compat: partial_exited=True without profit_tranche_level → level 1.
@@ -1009,7 +1000,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 
 def _submit_gtc_limit_partial(symbol: str, qty: int, side: str, limit_price: float):
     """
-    Submit a GTC limit order for PDT-deferred tranche partial exits.
+    Submit a GTC limit order for tranche partial exits.
     broker.py's submit_limit_order only supports DAY TIF — this uses
     get_trading_client() directly for GTC+limit.
     side: "sell" for long positions, "buy" for short positions.
@@ -1066,7 +1057,6 @@ def check_exits(
 
     Two exit paths per position:
       1. Hard stop    — immediate exit when price breaches trade["stop"] (or trail_stop).
-                        PDT-gated for same-day Bucket B positions.
       2. Reversal scan counter:
            Overnight  — exit when reversal_scan_count >= OVERNIGHT_REVERSAL_SCAN_MIN (10)
                         force-exit when count >= OVERNIGHT_REVERSAL_SCAN_MAX (15).
@@ -1971,15 +1961,6 @@ def check_exits(
 
     return closed
 
-
-# ─── PDT HIGHER-TIMEFRAME GATE — deprecated S52 ──────────────────────────────
-# PDT removed per SEC/FINRA rule amendment (board vote S50 28-0).
-# Stub retained for import compatibility (main.py, trade_engine.py).
-# Full deletion deferred to main.py / trade_engine.py Tier 2 sessions.
-
-def _pdt_htf_gate(signals: list, tracker: "PortfolioTracker", now_et=None) -> list:
-    """PDT removed S52 — pass-through stub. Returns signals unchanged."""
-    return signals
 
 
 # ─── EXTENDED HOURS EXIT CHECKS ──────────────────────────────────────────────

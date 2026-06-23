@@ -181,7 +181,7 @@ from execution.trade_engine import (  # noqa: F401
     _compute_tqi, _record_partial_tqi, _write_confirm_gate_json, _record_tqi,
     execute_entries, check_partial_exits,
     _submit_gtc_limit_partial, _submit_rth_day_stops, _cancel_open_gtc_orders,
-    check_exits, _pdt_htf_gate,
+    check_exits,
     _check_exits_extended_hours, _reconcile_pending_overnight_orders, _overnight_entry_check,
 )
 from strategy.volatility_regime import RegimeDetector

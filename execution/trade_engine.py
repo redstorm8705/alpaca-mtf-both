@@ -43,7 +43,6 @@ from execution.exit_logic import (  # noqa: F401
     _submit_gtc_limit_partial,
     _cancel_open_gtc_orders,
     check_exits,
-    _pdt_htf_gate,
     _check_exits_extended_hours,
 )
 
