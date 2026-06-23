@@ -1079,7 +1079,7 @@ class QuarterlyHoldManager:
             import config as _cfg
             tf = getattr(_cfg, "TF_30MIN", "30Min")
             bars = fetch_bars(symbol, tf, num_bars=2)
-            if not bars or len(bars) < 2:
+            if bars is None or len(bars) < 2:
                 logger.warning(
                     "QuarterlyHoldManager: %s entry gate — insufficient bars",
                 )

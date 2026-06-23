@@ -12,6 +12,26 @@
     "target_equity_pct here is the call-site value for add_candidate(symbol, target_equity_pct=X)."
   ],
   "picks": {
+    "NVDA": {
+      "tier": "T1",
+      "target_equity_pct": 0.20,
+      "not_before_date": "2026-06-23",
+      "earnings_exit_before": "2026-08-19",
+      "entry_day_gate_pct": 0.85,
+      "day3_reconfirm_pct": 0.02,
+      "board_score": "9.0/10",
+      "thesis": "Pre-earnings long; Blackwell ramp, sovereign AI spend, data center capex cycle. Hold through Q2 2026 earnings ~Aug 19. Board 9-1 APPROVE 2026-06-23."
+    },
+    "GOOGL": {
+      "tier": "T1",
+      "target_equity_pct": 0.15,
+      "not_before_date": "2026-06-23",
+      "earnings_exit_before": "2026-07-28",
+      "entry_day_gate_pct": 0.85,
+      "day3_reconfirm_pct": 0.02,
+      "board_score": "8.5/10",
+      "thesis": "Pre-earnings long; Search AI integration, YouTube growth, cloud margin expansion. Hold through Q2 2026 earnings ~Jul 28. Board 9-1 APPROVE 2026-06-23."
+    },
     "GE": {
       "tier": "T1",
       "target_equity_pct": 0.20,
