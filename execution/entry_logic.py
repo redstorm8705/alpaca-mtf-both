@@ -1038,7 +1038,7 @@ def execute_entries(
             sym for sym, trd in tracker.open_trades.items()
             if trd.get("status") != "closed" and sym != symbol
         ]
-        _corr_threshold = 0.55 if vix >= 25.0 else 0.70
+        _corr_threshold = max(0.40, 0.55 - (vix - 25.0) * 0.010) if vix >= 25.0 else 0.70
         if _open_active_syms and _check_portfolio_correlation(
             symbol, _open_active_syms, threshold=_corr_threshold
         ):
