@@ -1032,14 +1032,16 @@ def execute_entries(
                 continue
 
         # ── Portfolio pairwise correlation gate ─────────────────────────
-        # Block if candidate rho(daily,20d) > 0.70 with any open position.
-        # Supplements sector gate: cross-sector pairs can still be highly correlated.
+        # threshold: 0.70 (VIX < 25, normal) | 0.55 (VIX >= 25, stress)
         # Fail-closed: block on data errors or NaN. Source: T1 Alpaca daily bars.
         _open_active_syms = [
             sym for sym, trd in tracker.open_trades.items()
             if trd.get("status") != "closed" and sym != symbol
         ]
-        if _open_active_syms and _check_portfolio_correlation(symbol, _open_active_syms):
+        _corr_threshold = 0.55 if vix >= 25.0 else 0.70
+        if _open_active_syms and _check_portfolio_correlation(
+            symbol, _open_active_syms, threshold=_corr_threshold
+        ):
             _rc8_clear_buffers(symbol, "portfolio-correlation")
             continue
 
