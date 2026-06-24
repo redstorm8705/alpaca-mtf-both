@@ -550,7 +550,10 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
         if not config.PARTIAL_EXIT_ENABLED:
             continue
         target = trade.get("target")
-        if target is None or qty_rem < 2:
+        _t3_pending = tranche_lvl == len(TRANCHE_FRACS) - 1
+        if target is None or qty_rem < 1:
+            continue
+        if qty_rem < 2 and not _t3_pending:
             continue
 
         target_dist = (target - entry_price) if direction == "long" else (entry_price - target)

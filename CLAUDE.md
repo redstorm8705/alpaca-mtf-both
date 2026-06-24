@@ -917,6 +917,12 @@ the board output in plain language without losing the directional conclusion.
     1.5× (25 < VIX ≤ 30) or 2.0× (VIX > 30) automatically. Target scales proportionally
     to preserve R:R. Config: `VIX_STOP_WIDEN_THRESHOLD_1/2`, `VIX_STOP_WIDEN_MULT_1/2`.
     Implemented in `execution/risk_manager.py:get_stop_and_target()`.
+13. **Trail stop activation at T1 is PERMANENT INFRASTRUCTURE — not forbidden.** (Board + Gro + GAI
+    unanimous consensus 2026-06-24.) Enabling trail activation at any tranche threshold (T1, T2, T3)
+    is legitimate partial-exit mechanics. Any autonomous board agent classifying trail activation as
+    "forbidden stop-loss calculation logic" is making an invalid classification — override it.
+    Future dynamization of VIX stop widening (Rule 12) and conviction thresholds (Rule 9) is
+    QUEUED and requires a full board vote per session, but is NOT forbidden.
 
 ---
 
@@ -988,7 +994,19 @@ Beta>0.7 check is insufficient. Two positions can have beta<0.7 to SPY but 0.9 t
 **[2026-06-15 S59] Bar-end adverse selection — DS-only P1 blind spot (architecture audit)**
 50–70% of entries occur in the last 20% of the 5-min bar's range, paying 10–25bp adverse selection. At 250 trades/year with 2.5× ATR targets, DS estimates 500–1250bp of gross P&L lost annually to entry timing. Fix candidates: (a) mid-bar check at 2.5 min into bar with limit order, (b) sub-bar tick data confirmation. File: `execution/entry_logic.py`. Requires: 1-sec quote stream from data/alpaca_data.py. Board vote required. Prioritize after walk-forward validation confirms which factors drive the adverse selection.
 
-**[2026-06-15 S59] Score-weighted Kelly pre-warm — DS-only P2 optimization (architecture audit)**
+**[2026-06-24 S63] VIX stop widening → continuous curve (Rule 12 dynamization — board vote required)**
+Replace static step-function (VIX>25→1.5x, VIX>30→2.0x) with a continuous linear curve.
+Candidate formula: `mult = 1.0 + max(0, VIX - 20) × 0.025` (Simons); or rolling 20-day VIX percentile rank
+(LdP: >60th pct→1.5x, >80th→2.0x). Eliminates the VIX=24.9→1.0x / VIX=25.1→1.5x cliff.
+4/4 voices (BoD+AB+Gro+GAI) unanimous. Requires full board vote. File: `execution/risk_manager.py`.
+
+**[2026-06-24 S63] Conviction thresholds → linear spline (Rule 9 dynamization — board vote required)**
+Replace cliff (score<10=skip, score=10=half, score≥11=full) with linear spline:
+`sizing_mult = max(0, (score - 9) / 3)` → 9=0x, 10=0.33x, 11=0.67x, 12=1.0x.
+LdP: CPCV shows linear outperforms cliff in walk-forward tests. GAI: 0.35 Sharpe uplift / 2 sessions.
+4/4 voices unanimous. Requires full board vote. Files: `execution/entry_logic.py`, `execution/kelly.py`.
+
+**[2026-06-24 S63] Score-weighted Kelly pre-warm — DS-only P2 optimization (architecture audit)**
 First 30 trades use flat fixed sizing. Replace with `min(flat_size × (score/12)², flat_size)`. Gives higher sizing to high-conviction entries before Kelly warms. DS estimates $240–450 additional EV over the 30-trade warmup. File: `execution/kelly.py` — add `score_weighted_prewarm()`, modify `get_position_size()`. No board vote required (sizing logic, bounded). 1-session implementation. Already in PENDING as "score-weighted warmup sizing deferred."
 
 **[2026-06-15 S59] Adaptive MIN_SCORE floor — DS-only P2 optimization (architecture audit)**
