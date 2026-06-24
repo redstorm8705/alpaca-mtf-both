@@ -446,9 +446,11 @@ def main():
         submit_limit_order as _qhm_submit_limit,
         submit_gtc_stop_order as _qhm_submit_gtc_stop,
         close_position as _qhm_close_pos,
+        get_account as _qhm_get_account,
     )
     class _QHMBroker:
         """Thin adapter: maps QHM broker protocol to module-level broker functions."""
+        def get_account(self): return _qhm_get_account()
         def get_position(self, sym): return _qhm_get_pos(sym)
         def submit_limit_order(self, s, q, side, price, ext=False):
             return _qhm_submit_limit(s, q, side, price, ext)
