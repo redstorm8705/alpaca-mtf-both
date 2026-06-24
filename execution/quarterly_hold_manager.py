@@ -1528,7 +1528,7 @@ class QuarterlyHoldManager:
         return total
 
     def _get_live_price(self, symbol: str) -> Optional[float]:
-        """Get current price via broker.get_position(). RC-6: field names verified."""
+        """Get current price via broker position; fallback to Alpaca Data."""
         try:
             pos = self.broker.get_position(symbol)
             if pos:
@@ -1540,6 +1540,12 @@ class QuarterlyHoldManager:
                 price = getattr(pos, "lastday_price", None)
                 if price:
                     return float(price)
+            # No position yet (PENDING_ENTRY) — fetch live trade price from Alpaca Data
+            from data.alpaca_data import get_latest_trade as _glt
+            trade_price = _glt(symbol)
+            if trade_price:
+                logger.debug("QHM: live price %s via data: %.4f", symbol, trade_price)
+                return float(trade_price)
             return None
         except Exception as e:  # RC-3
             logger.warning(
