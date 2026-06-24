@@ -201,7 +201,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
     _partial_fail_counts = _get_partial_fail_counts()
 
     TRANCHE_FRACS = [0.40, 0.60, 1.00]   # T1, T2, T3 as fraction of full target dist
-    TRANCHE_SHARE = 0.25                  # each tranche closes 25% of original qty
+    TRANCHE_SHARE = 0.33                  # each tranche closes 33% of original qty
     TRAIL_PHASE_MULTS = {1: 0.75, 2: 0.50, 3: 0.25}  # trail dist multiplier per phase
 
     for symbol, trade in list(tracker.open_trades.items()):
@@ -401,7 +401,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 if not _tr_cancel_ok:
                     continue
 
-                time.sleep(0.1)  # allow cancel propagation before resubmit
+                time.sleep(0.2)  # allow cancel propagation before resubmit
 
                 _qty_left = trade.get("qty_remaining", trade.get("qty", 0))
                 _stop_side = "sell" if direction == "long" else "buy"
@@ -736,6 +736,10 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                             else min(round(current_price + trail_dist, 2), _stop_floor)
                         )
                         tracker.update_trail_stop(symbol, trail_stop)
+                        logger.info(
+                            f"[{symbol}] T1 partial: trail activated (phase 1) @ ${trail_stop:.2f} "
+                            f"({TRAIL_PHASE_MULTS[1]}×ATR=${atr_value:.2f}) floor=${entry_price:.2f}"
+                        )
                     else:
                         trade["trail_stop"] = None
                 elif atr_value > 0:
