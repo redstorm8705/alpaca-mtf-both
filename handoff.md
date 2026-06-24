@@ -4,14 +4,16 @@
 
 | Commit | File | Fix |
 |--------|------|-----|
+| `ebb8f47` | `execution/quarterly_hold_manager.py` | `_get_live_price()` Alpaca Data fallback for PENDING_ENTRY sizing |
+| `c74cc68` | `main.py` | `_QHMBroker` missing `get_account` method — unblocked equity lookup |
 | `be779ba` | `execution/quarterly_hold_manager.py` | pandas `.iloc` fix — `bars[-2]`, `bars[i]`, `if bars and` bugs causing NVDA/GOOGL entry failures |
 | `ea9fa0c` | `execution/quarterly_hold_manager.py` + `data/state/quarterly_holds_config.json` | NVDA + GOOGL added as quarterly holds |
 | `3cab1db` | `execution/exit_logic.py` + `CLAUDE.md` | T3 explicit close for qty_rem=1; CLAUDE.md Rule 13; Rules 7+9 roadmap |
 | `625f751` | `config.py`, `events/handlers.py`, `execution/gtc_manager.py`, `weekly_review.py` | PDT comment cleanup |
 
 **Branch:** `main`
-**OCI HEAD:** `be779ba` (full rsync — all Python files in sync, all services active)
-**QHM status:** LIVE — NVDA/GOOGL entry gate bug FIXED. Will retry at 10:05 AM ET Jun 25.
+**OCI HEAD:** `ebb8f47`
+**QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55) SUBMITTED 18:39 UTC Jun 24. Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
 **OCI note:** Post-`3cab1db` deploy, OCI drifted (main.py/trade_engine.py still had `_pdt_htf_gate` import; exit_logic.py had it removed). Full rsync at S63 restored sync. All 4 services active.
 
 ---
