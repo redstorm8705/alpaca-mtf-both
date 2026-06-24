@@ -4,13 +4,15 @@
 
 | Commit | File | Fix |
 |--------|------|-----|
-| `ea9fa0c` | `execution/quarterly_hold_manager.py` + `data/state/quarterly_holds_config.json` | NVDA + GOOGL added as quarterly holds, DataFrame fix for `fetch_bars` return |
-| `3cab1db` | `execution/exit_logic.py` + `CLAUDE.md` | T3 explicit close for qty_rem=1; CLAUDE.md Rule 13 (trail activation = permanent infra); Rules 7+9 dynamization logged to roadmap |
-| `625f751` | `config.py`, `events/handlers.py`, `execution/gtc_manager.py`, `weekly_review.py`, `logs/tb_audit_log.md` | PDT comment cleanup (no logic changes) |
+| `be779ba` | `execution/quarterly_hold_manager.py` | pandas `.iloc` fix — `bars[-2]`, `bars[i]`, `if bars and` bugs causing NVDA/GOOGL entry failures |
+| `ea9fa0c` | `execution/quarterly_hold_manager.py` + `data/state/quarterly_holds_config.json` | NVDA + GOOGL added as quarterly holds |
+| `3cab1db` | `execution/exit_logic.py` + `CLAUDE.md` | T3 explicit close for qty_rem=1; CLAUDE.md Rule 13; Rules 7+9 roadmap |
+| `625f751` | `config.py`, `events/handlers.py`, `execution/gtc_manager.py`, `weekly_review.py` | PDT comment cleanup |
 
 **Branch:** `main`
-**OCI HEAD:** `3cab1db` (exit_logic.py rsynced, all services active)
-**QHM status:** LIVE — 6 picks: GEV (Jul 22), GE (Jul 25), LLY (Aug 7), NVDA (not_before Jun 23), GOOGL (not_before Jun 23)
+**OCI HEAD:** `be779ba` (full rsync — all Python files in sync, all services active)
+**QHM status:** LIVE — NVDA/GOOGL entry gate bug FIXED. Will retry at 10:05 AM ET Jun 25.
+**OCI note:** Post-`3cab1db` deploy, OCI drifted (main.py/trade_engine.py still had `_pdt_htf_gate` import; exit_logic.py had it removed). Full rsync at S63 restored sync. All 4 services active.
 
 ---
 

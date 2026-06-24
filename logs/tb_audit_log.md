@@ -1,6 +1,56 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-24 S63 — quarterly_hold_manager.py pandas iloc fix
+
+**Session:** S63 (QHM entry gate fix — NVDA/GOOGL failed to enter Jun 24)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| execution/quarterly_hold_manager.py | 1,549 | 3 pandas indexing bugs — `bars[-2]`, `bars[i]`, `if bars and` patterns |
+
+### quarterly_hold_manager.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | PASS — py_compile PASS, mypy PASS, ruff PASS (post-patch) |
+| 2 | End-to-end trade path | `maybe_enter_positions` → `_passes_entry_gate` → `fetch_bars` → `bars.iloc[-2]` fix confirmed |
+| 3 | Adversarial scenarios | None input: `if bars is None or len(bars) < 2` guard present. Empty DataFrame: `if not bars.empty` guard added |
+| 4 | Full read | COMPLETE — 1,549 lines in 6 chunks |
+| 5 | Cross-references | `fetch_bars` confirmed returns pandas DataFrame, not list. `.iloc` correct accessor. Matches `_resubmit_post_earnings_stop` existing pattern |
+| 6 | Conflicting execution directions | None |
+| 7 | Redundancy scan | No dead code |
+| 8 | State persistence | RC-5 atomic write confirmed at `_save_state()` |
+| 9 | Data source tier | `fetch_bars` via `data.fetcher` T1 — PASS |
+| 10 | Timezone + logging | `_now_et()` used throughout — PASS |
+
+### RC checks (quarterly_hold_manager.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — `_now_et()` throughout |
+| RC-2 | CWD-relative path | PASS — `_ROOT = Path(__file__).resolve().parent.parent` |
+| RC-3 | Silent exception | PASS — all except blocks log; 1 bare `pass` fixed in this session (L1524) |
+| RC-4 | Estimated exit price | N/A — exits use GTC stop orders, not record_exit() |
+| RC-5 | Non-atomic write | PASS — tmp→replace with fsync at `_save_state()` |
+| RC-6 | Wrong API field | PASS — `avg_entry_price`, `qty`, `current_price` verified against Alpaca fields |
+| RC-7 | Zero-share sizing | PASS — `max(int(raw_qty), 1)` at `_submit_tranche` L1168 |
+| RC-8 | Unbounded scan buffer | N/A — QHM manages multi-day hold positions, not intraday scan buffers |
+
+### Patch applied
+| Change | Location | Fix |
+|--------|----------|-----|
+| `bars[-2]["close"]` → `bars.iloc[-2]["close"]` | `_passes_entry_gate` L1087 | KeyError: -2 fix — active production bug |
+| `bars[-1]["close"]` → `bars.iloc[-1]["close"]` | `_passes_entry_gate` L1088 | Same |
+| `if bars and` → `if not bars.empty and` | `_compute_and_submit_stop` L1279 | ValueError on DataFrame bool |
+| `bars[i]["high/low/close"]` → `bars.iloc[i][...]` | `_compute_and_submit_stop` L1282-1284 | KeyError latent bug |
+| Log refactor + `_atr_valid`/`_atr` locals | `_compute_and_submit_stop` L1322-1326 | E501 fix + same pattern |
+| `except Exception: pass` → debug log | `_get_quarterly_notional_excl` L1524 | RC-3 fix |
+
+Board: 3/3 APPROVE (Harris, Thorp, Beck) | Gro: APPROVE | GAI: APPROVE
+Static: py_compile PASS, mypy PASS, ruff PASS | Cold second-agent: PASS
+Commit: `be779ba` | OCI: deployed + healthy
+
+---
 ## 2026-06-15 S59 autonomous overnight — orphan_manager.py full audit + stale sweep
 
 **Session:** S59 autonomous overnight (post-RC sweep)
