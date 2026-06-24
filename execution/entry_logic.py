@@ -1017,6 +1017,8 @@ def execute_entries(
             for _open_sym, _open_trade in tracker.open_trades.items():
                 if _open_sym == symbol:
                     continue
+                if _open_trade.get("status") == "closed":
+                    continue
                 if _SECTOR_MAP.get(_open_sym) == _this_sector:
                     _sector_conflict = _open_sym
                     break
