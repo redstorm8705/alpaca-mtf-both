@@ -467,6 +467,8 @@ class QuarterlyHoldManager:
                     # Check if previous tranche filled; if so advance
                     filled = self._check_fill_and_advance(pos)
                     if filled and pos.tranche <= len(_TRANCHE_DAYS):
+                        if not self._is_tranche_due(pos, today_str):
+                            continue
                         if pos.tranche > 1 and pos.tranche1_price > 0:
                             if not self._passes_day3_reconfirm(symbol, pos):
                                 logger.info(
@@ -1082,6 +1084,7 @@ class QuarterlyHoldManager:
             if bars is None or len(bars) < 2:
                 logger.warning(
                     "QuarterlyHoldManager: %s entry gate — insufficient bars",
+                    symbol,
                 )
                 return False
             prior_close = float(bars.iloc[-2]["close"])
@@ -1092,6 +1095,7 @@ class QuarterlyHoldManager:
             logger.info(
                 "QuarterlyHoldManager: %s Day-1 gate: %.2f > %.2f × %.2f → %s",
                 symbol, current_close, prior_close, gate_pct,
+                "PASS" if passes else "FAIL",
             )
             return passes
         except Exception as e:  # RC-3
