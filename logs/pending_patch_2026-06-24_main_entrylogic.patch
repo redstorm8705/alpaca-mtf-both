@@ -1,0 +1,34 @@
+--- a/main.py
++++ b/main.py
+@@ -158,7 +158,7 @@
+ # ── Rank 2: Linear position sizing bounds ───────────────────────────────────
+-# Replaces the binary 47.5%/95% cliff with smooth interpolation across scores 9→11.
+-# Score 9 → 47.5% | Score 10 → 71.25% | Score 11+ → 95%
+-_LINEAR_SCORE_MIN = 10  # maps to BUCKET_B_ALLOCATION_PCT * 0.5  (raised from 9 → 10)
+-_LINEAR_SCORE_MAX = 11  # maps to BUCKET_B_ALLOCATION_PCT * 1.0
++# Linear spline: score 9→0%, 10→33%, 11→67%, 12→100% of full allocation.
++# Formula: fraction = (score - MIN) / (MAX - MIN), applied to [0, BUCKET_B_ALLOCATION_PCT].
++_LINEAR_SCORE_MIN = 9   # score < 9 → skip; score = 9 → 0% (formula floor)
++_LINEAR_SCORE_MAX = 12  # score >= 12 → 100% of BUCKET_B_ALLOCATION_PCT
+
+--- a/execution/entry_logic.py
++++ b/execution/entry_logic.py
+@@ -1072,7 +1072,7 @@
+-            # Rank 2: conviction sizing — linear
+-            #   score 10  → ½ size  (47.5%)
+-            #   score 11+ → full    (95%)
+-            _pct_min  = config.BUCKET_B_ALLOCATION_PCT * 0.5   # 47.5%
++            # Rank 2: conviction sizing — linear spline: 9=0%, 10=33%, 11=67%, 12=100%
++            _pct_min  = 0.0                                      # formula yields 0 at score==MIN (skip)
+
+# ── COMPANION CHANGE (BLOCKED — config.py forbidden in autonomous mode) ──────
+# config.py L60:
+# -CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade
+# +CONVICTION_SKIP_BELOW    = 9      # align with _LINEAR_SCORE_MIN (board vote required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# NET EFFECT (main.py + entry_logic.py only, CONVICTION_SKIP_BELOW stays at 10):
+#   score < 10: rejected at entry_logic.py L589 (CONVICTION_SKIP_BELOW gate)
+#   score = 10: fraction = 1/3 → pct ≈ 31.7% → dollar_cap ≈ $792  (was 47.5% / $1,188)
+#   score = 11: fraction = 2/3 → pct ≈ 63.3% → dollar_cap ≈ $1,583 (was 95.0% / $2,375)
+#   score >= 12: full → dollar_cap = $2,375                          (was same as 11)
