@@ -19,6 +19,7 @@ import logging
 import os
 import time
 import uuid
+import numpy as _np
 from datetime import datetime, timedelta, date  # noqa: F401
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -214,6 +215,57 @@ def _write_confirm_gate_json(ecb: dict, cs: dict) -> None:
         write_confirm_gate(ecb, cs)
     except Exception as _e_cg:
         logger.warning(f"[confirm_gate] Failed to persist gate state: {_e_cg}")
+
+
+def _check_portfolio_correlation(
+    symbol: str,
+    open_syms: list,
+    threshold: float = 0.70,
+    lookback: int = 20,
+) -> bool:
+    """Block if candidate rho(daily,20d) > threshold with any open position. Fail-closed."""
+    if not open_syms:
+        return False
+    try:
+        bars_new = fetch_bars(symbol, config.TF_DAILY, num_bars=lookback + 3)
+    except Exception as _corr_e_new:
+        logger.warning("[%s] correlation gate: fetch failed for candidate — BLOCK: %s", symbol, _corr_e_new)
+        return True
+    if bars_new is None or bars_new.empty or len(bars_new) < (lookback + 1):
+        logger.warning("[%s] correlation gate: insufficient data (%d bars) — BLOCK", symbol, len(bars_new) if bars_new is not None else 0)
+        return True
+    try:
+        ret_new = bars_new["close"].pct_change().dropna().iloc[-lookback:]
+    except Exception as _corr_e_ret:
+        logger.warning("[%s] correlation gate: returns failed for candidate — BLOCK: %s", symbol, _corr_e_ret)
+        return True
+    for open_sym in open_syms:
+        try:
+            bars_open = fetch_bars(open_sym, config.TF_DAILY, num_bars=lookback + 3)
+        except Exception as _corr_e_open:
+            logger.warning("[%s] correlation gate: fetch failed for %s — BLOCK: %s", symbol, open_sym, _corr_e_open)
+            return True
+        if bars_open is None or bars_open.empty or len(bars_open) < (lookback + 1):
+            logger.warning("[%s] correlation gate: insufficient data for %s — BLOCK", symbol, open_sym)
+            return True
+        try:
+            ret_open = bars_open["close"].pct_change().dropna().iloc[-lookback:]
+        except Exception as _corr_e_reto:
+            logger.warning("[%s] correlation gate: returns failed for %s — BLOCK: %s", symbol, open_sym, _corr_e_reto)
+            return True
+        aligned_new, aligned_open = ret_new.align(ret_open, join="inner")
+        if len(aligned_new) < max(lookback // 2, 10):
+            logger.warning("[%s] correlation gate: too few aligned bars with %s (%d) — BLOCK", symbol, open_sym, len(aligned_new))
+            return True
+        rho = float(_np.corrcoef(aligned_new.values, aligned_open.values)[0, 1])
+        if _np.isnan(rho):
+            logger.warning("[%s] correlation gate: NaN rho with %s — BLOCK", symbol, open_sym)
+            return True
+        if rho > threshold:
+            logger.warning("[%s] CORRELATION GATE BLOCK: rho(daily,20d)=%.2f > %.2f with %s — skipping entry.", symbol, rho, threshold, open_sym)
+            return True
+        logger.debug("[%s] correlation gate: rho=%.2f with %s (threshold=%.2f)", symbol, rho, open_sym, threshold)
+    return False
 
 
 def execute_entries(
@@ -976,6 +1028,18 @@ def execute_entries(
                 )
                 _rc8_clear_buffers(symbol, "sector-correlation")
                 continue
+
+        # ── Portfolio pairwise correlation gate ─────────────────────────
+        # Block if candidate rho(daily,20d) > 0.70 with any open position.
+        # Supplements sector gate: cross-sector pairs can still be highly correlated.
+        # Fail-closed: block on data errors or NaN. Source: T1 Alpaca daily bars.
+        _open_active_syms = [
+            sym for sym, trd in tracker.open_trades.items()
+            if trd.get("status") != "closed" and sym != symbol
+        ]
+        if _open_active_syms and _check_portfolio_correlation(symbol, _open_active_syms):
+            _rc8_clear_buffers(symbol, "portfolio-correlation")
+            continue
 
         # ── Bucket-aware position sizing ────────────────────────────────
         if is_bucket_a:
