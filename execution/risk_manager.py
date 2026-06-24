@@ -245,12 +245,11 @@ class RiskManager:
             if h2_scalar is not None:
                 stop_mult   *= h2_scalar
                 target_mult *= h2_scalar
-            elif vix >= config.VIX_STOP_WIDEN_THRESHOLD_2:
-                stop_mult   *= config.VIX_STOP_WIDEN_MULT_2
-                target_mult *= config.VIX_STOP_WIDEN_MULT_2
-            elif vix >= config.VIX_STOP_WIDEN_THRESHOLD_1:
-                stop_mult   *= config.VIX_STOP_WIDEN_MULT_1
-                target_mult *= config.VIX_STOP_WIDEN_MULT_1
+            elif vix > 0:
+                _vix_scalar = 1.0 + max(0.0, vix - 20.0) * 0.1
+                _vix_scalar = min(_vix_scalar, 2.0)
+                stop_mult   *= _vix_scalar
+                target_mult *= _vix_scalar
 
             if is_leveraged_3x:
                 stop_mult   *= config.LEVERAGED_3X_STOP_MULTIPLIER
