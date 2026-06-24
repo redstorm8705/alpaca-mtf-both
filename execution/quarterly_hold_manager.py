@@ -1084,8 +1084,8 @@ class QuarterlyHoldManager:
                     "QuarterlyHoldManager: %s entry gate — insufficient bars",
                 )
                 return False
-            prior_close = float(bars[-2]["close"])
-            current_close = float(bars[-1]["close"])
+            prior_close = float(bars.iloc[-2]["close"])
+            current_close = float(bars.iloc[-1]["close"])
             if prior_close <= 0:
                 return False
             passes = current_close > prior_close * gate_pct
@@ -1276,12 +1276,12 @@ class QuarterlyHoldManager:
 
             # Need >= _ATR_PERIOD_WEEKS + 1 bars to produce _ATR_PERIOD_WEEKS TR values.
             # (TR requires prior close, so N bars → N-1 TRs; need N-1 >= 14 → N >= 15)
-            if bars and len(bars) >= _ATR_PERIOD_WEEKS + 1:
+            if not bars.empty and len(bars) >= _ATR_PERIOD_WEEKS + 1:
                 trs = []
                 for i in range(1, len(bars)):
-                    h = float(bars[i]["high"])
-                    lo = float(bars[i]["low"])
-                    pc = float(bars[i - 1]["close"])
+                    h = float(bars.iloc[i]["high"])
+                    lo = float(bars.iloc[i]["low"])
+                    pc = float(bars.iloc[i - 1]["close"])
                     tr = max(h - lo, abs(h - pc), abs(lo - pc))
                     trs.append(tr)
                 atr = sum(trs[-_ATR_PERIOD_WEEKS:]) / _ATR_PERIOD_WEEKS
@@ -1290,7 +1290,7 @@ class QuarterlyHoldManager:
                 logger.warning(
                     "QuarterlyHoldManager: %s insufficient weekly bars (%d) for ATR — "
                     "using hard floor only",
-                    pos.symbol, len(bars) if bars else 0,
+                    pos.symbol, len(bars) if not bars.empty else 0,
                 )
                 atr_stop = pos.avg_entry_price * (1 - _HARD_FLOOR_PCT)
 
@@ -1319,12 +1319,12 @@ class QuarterlyHoldManager:
                 pos.state = HoldState.ACTIVE
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 _register_symbol(pos.symbol)
+                _atr_valid = not bars.empty and len(bars) >= _ATR_PERIOD_WEEKS
+                _atr = atr_stop if _atr_valid else 0
                 logger.info(
                     "QuarterlyHoldManager: %s GTC stop @ $%.2f submitted "
                     "(ATR=%.2f, floor=%.2f, entry=%.2f)",
-                    pos.symbol, stop_price,
-                    atr_stop if bars and len(bars) >= _ATR_PERIOD_WEEKS else 0,
-                    floor_stop, pos.avg_entry_price,
+                    pos.symbol, stop_price, _atr, floor_stop, pos.avg_entry_price,
                 )
                 self._alert(
                     f"✅ QHM: {pos.symbol} tranche 1 filled — "
@@ -1523,8 +1523,8 @@ class QuarterlyHoldManager:
                     p = self._get_live_price(sym)
                     if p and p > 0 and pos.qty_filled > 0:
                         total += p * pos.qty_filled
-                except Exception:  # RC-3: non-critical; default to 0
-                    pass
+                except Exception:  # RC-3
+                    logger.debug("QHM: notional fetch error for %s — using 0", sym)
         return total
 
     def _get_live_price(self, symbol: str) -> Optional[float]:
