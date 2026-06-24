@@ -222,6 +222,7 @@ class KellySizer:
         direction: str,
         trade_mode: str,
         portfolio_value: float,
+        score: int = 12,
     ) -> float:
         """
         Returns the recommended risk % of portfolio for this signal type.
@@ -236,19 +237,25 @@ class KellySizer:
         losses = stats["losses"]
         total  = len(wins) + len(losses)
 
-        # Not enough data yet — use default; still track ATH for A2 readiness
+        # Not enough data yet — score-weighted prewarm; still track ATH for A2 readiness
         if total < config.KELLY_MIN_SAMPLE_SIZE:
-            remaining = config.KELLY_MIN_SAMPLE_SIZE - total
+            remaining    = config.KELLY_MIN_SAMPLE_SIZE - total
             if portfolio_value > self._ath_equity:
                 self._ath_equity     = portfolio_value
                 self._ath_updated_at = datetime.now(timezone.utc).isoformat()
                 self._save()
-            logger.debug(
-                f"Kelly [{key}]: {total}/{config.KELLY_MIN_SAMPLE_SIZE} trades — "
-                f"using default {config.MAX_PORTFOLIO_RISK_PCT:.1%} "
-                f"({remaining} more needed)"
+            score_weight = (min(12, max(0, score)) / 12.0) ** 2
+            warmup_risk  = max(
+                config.KELLY_MIN_RISK_PCT,
+                config.MAX_PORTFOLIO_RISK_PCT * score_weight,
             )
-            return config.MAX_PORTFOLIO_RISK_PCT
+            logger.debug(
+                "Kelly [%s]: %d/%d trades — warmup score-weighted risk %.3f%% "
+                "(score=%d/12, weight=%.3f, %d more needed)",
+                key, total, config.KELLY_MIN_SAMPLE_SIZE,
+                warmup_risk * 100, score, score_weight, remaining,
+            )
+            return warmup_risk
 
         win_rate  = len(wins) / total
         loss_rate = 1 - win_rate

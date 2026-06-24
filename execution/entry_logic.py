@@ -1092,7 +1092,7 @@ def execute_entries(
             # H-8: Kelly scaling on top of linear allocation
             try:
                 _portfolio_val = get_portfolio_value()
-                kelly_risk_pct = kelly.get_risk_pct(direction, trade_mode, _portfolio_val)
+                kelly_risk_pct = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)
                 kelly_scale    = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
                 dollar_cap     = dollar_cap * kelly_scale
                 logger.debug(
