@@ -1,36 +1,27 @@
-# Handoff — S62 QHM Wiring Complete (2026-06-20)
+# Handoff — S63 T3 Fix + Forbidden Logic Audit (2026-06-24)
 
-## LATEST CHANGES (this session — QHM 4-file wiring)
+## LATEST CHANGES (this session)
 
 | Commit | File | Fix |
 |--------|------|-----|
-| `002a38f` | `execution/entry_logic.py` | FILE 1: QHM symbol registry gate — blocks intraday entries on QHM symbols |
-| `c24bcd8` | `execution/quarterly_hold_manager.py` | FILE 2: Full earnings protection state machine (PENDING_EARNINGS), DataFrame access fix (bars.iloc), FMP earnings gate |
-| `eb316e4` | `main.py` | FILE 3: QHM instantiation, reconcile_on_startup, not_before_date candidate gate, SIGTERM/KB safe_stop |
-| `f88caa8` | `main.py` + `strategy/run_cycle.py` | FILE 4: RTH loop wiring — run_weekly_check() each cycle, maybe_enter_positions() with 10:05 AM ET gate |
+| `ea9fa0c` | `execution/quarterly_hold_manager.py` + `data/state/quarterly_holds_config.json` | NVDA + GOOGL added as quarterly holds, DataFrame fix for `fetch_bars` return |
+| `3cab1db` | `execution/exit_logic.py` + `CLAUDE.md` | T3 explicit close for qty_rem=1; CLAUDE.md Rule 13 (trail activation = permanent infra); Rules 7+9 dynamization logged to roadmap |
+| `625f751` | `config.py`, `events/handlers.py`, `execution/gtc_manager.py`, `weekly_review.py`, `logs/tb_audit_log.md` | PDT comment cleanup (no logic changes) |
 
-**Branch:** `claude/gracious-keller-j1rvhl`
-**OCI HEAD:** `f88caa8` — all 4 files rsynced and services restarted (confirmed active)
-**QHM status:** LIVE — loaded 4 picks from `data/state/quarterly_holds_config.json`, 0 positions (all not_before_date future-dated, first entries start Jul 22)
-
-### QHM startup log (confirmed working):
-```
-QuarterlyHoldManager: loaded config from ...quarterly_holds_config.json (4 picks)
-QuarterlyHoldManager init: 0 positions loaded, dry_run=False
-QHM reconcile: 0 symbol(s), 0 order(s) verified, ...
-```
-
-### What QHM does each RTH cycle now:
-- `run_weekly_check()` after check_partial_exits — monitors earnings gate for ACTIVE positions
-- `maybe_enter_positions()` at 10:05 AM ET gate, before EXTREME block — places Day limit tranches for due candidates (GEV Jul 22, GE Jul 25, LLY Aug 7)
+**Branch:** `main`
+**OCI HEAD:** `3cab1db` (exit_logic.py rsynced, all services active)
+**QHM status:** LIVE — 6 picks: GEV (Jul 22), GE (Jul 25), LLY (Aug 7), NVDA (not_before Jun 23), GOOGL (not_before Jun 23)
 
 ---
 
-## Prior Session Changes (S61 autonomous)
+## Prior Session Changes (S62 — QHM Wiring)
 
 | Commit | File | Fix |
 |--------|------|-----|
-| `eb6a5ac` | `generate_dashboard.py` | Dashboard lifetime P&L uses equity-based sourcing (equity − $2,500 = **+$307.38**) |
+| `002a38f` | `execution/entry_logic.py` | QHM symbol registry gate |
+| `c24bcd8` | `execution/quarterly_hold_manager.py` | Earnings protection state machine (PENDING_EARNINGS) |
+| `eb316e4` | `main.py` | QHM instantiation, reconcile_on_startup, not_before_date gate |
+| `f88caa8` | `main.py` + `strategy/run_cycle.py` | RTH loop wiring — run_weekly_check(), maybe_enter_positions() with 10:05 AM ET gate |
 
 ---
 
@@ -38,12 +29,13 @@ QHM reconcile: 0 symbol(s), 0 order(s) verified, ...
 
 | Item | Value |
 |------|-------|
-| Branch | `claude/gracious-keller-j1rvhl` |
-| HEAD | `f88caa8` |
+| Branch | `main` |
+| HEAD | `625f751` (local) / `3cab1db` (OCI — exit_logic.py) |
 | Mode | Paper trading, PDT enforcement disabled |
-| Profile active | paper (MIN_SCORE=9/12, STOP=1.25×ATR, TARGET=2.5×ATR) |
+| Profile active | paper (MIN_SCORE=9/12, STOP=1.20×ATR, TARGET=2.5×ATR) |
 | Kill switch | 7% |
 | OCI services | mtf-bot active, mtf-writer active, mtf-http active, nginx active |
+| Tranche system | TRANCHE_FRACS=[0.40, 0.60, 1.00], TRANCHE_SHARE=0.33, trail at T1 active |
 
 ---
 
@@ -67,33 +59,31 @@ QHM reconcile: 0 symbol(s), 0 order(s) verified, ...
 | File | Patch Count | Risk | Open Items |
 |------|-------------|------|------------|
 | execution/portfolio_tracker.py | 46 | CRITICAL | NONE |
-| main.py | 35 | CRITICAL | NONE — QHM wiring complete |
-| execution/exit_logic.py | 9 | HIGH | NONE |
-| execution/entry_logic.py | 4 | HIGH | NONE — QHM gate added |
-| strategy/run_cycle.py | 11 | MEDIUM | NONE — QHM wired |
-| execution/quarterly_hold_manager.py | 7 | MEDIUM | NONE — earnings state machine complete |
+| main.py | 35 | CRITICAL | NONE |
+| execution/exit_logic.py | 10 | HIGH | NONE — T3 fix applied 3cab1db |
+| execution/entry_logic.py | 4 | HIGH | NONE |
+| strategy/run_cycle.py | 11 | MEDIUM | NONE |
+| execution/quarterly_hold_manager.py | 7 | MEDIUM | NONE |
 | execution/orphan_manager.py | 0 | LOW | NONE |
 
 ---
 
 ## Open Architecture Items
 
-- **QHM quarterly holds** — FULLY WIRED as of f88caa8. Next entries: GEV Jul 22, GE Jul 25, LLY Aug 7. config at data/state/quarterly_holds_config.json (4 picks — Rafael already created). Short-direction support deferred (only long in _resubmit_post_earnings_stop).
+- **QHM quarterly holds** — FULLY WIRED. NVDA/GOOGL added (not_before Jun 23 — entries attempted at 10:05 AM ET if not yet filled). GEV Jul 22, GE Jul 25, LLY Aug 7. Config: `data/state/quarterly_holds_config.json`.
+- **VIX stop widening → continuous curve** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace static 25/30 thresholds with continuous linear function. Board vote required. File: `execution/risk_manager.py`.
+- **Conviction thresholds → linear spline** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace cliff (10=half, 11=full) with `max(0, (score-9)/3)`. Board vote required. Files: `execution/entry_logic.py`, `execution/kelly.py`.
 - **MRI startup staleness** — D5 applied (commit 0e597a8). Blocking refresh at startup.
-- **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired into scoring. Board vote required.
+- **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired. Board vote required.
 
 ---
 
 ## Open Items / Pending Decisions
 
-1. **T1 tranche restructure — QUEUED** (`logs/queued_for_review_2026-06-16.md`):
-   - A: Is enabling trail activation at new T1 (TRANCHE_FRACS[0]=0.40) a forbidden "stop-loss calculation logic" change?
-   - B: T3 silent skip for qty_orig=3 positions: acceptable or fix L587?
-   - C: GAI sign-off still required per RULE C-2
-
-2. **Merge branch** — `claude/gracious-keller-j1rvhl` has all QHM commits. Merge to main when ready.
-
-3. **Deferred:** monthly_review.py month-over-month from Alpaca fills (DS flagged, low priority).
+1. **VIX stop widening dynamization** — board vote session needed (Rules 7 dynamization).
+2. **Conviction linear spline** — board vote session needed (Rule 9 dynamization).
+3. **Merge `claude/gracious-keller-j1rvhl` → main** — STALE. All QHM commits are already on main. No separate branch exists locally.
+4. **Deferred:** monthly_review.py month-over-month from Alpaca fills (DS flagged, low priority P3).
 
 ---
 
@@ -102,4 +92,6 @@ QHM reconcile: 0 symbol(s), 0 order(s) verified, ...
 - `trade_engine.py` CRITICAL desync: CONFIRMED FIXED
 - `exit_logic.py` PDT references: CONFIRMED REMOVED
 - `orphan_manager.py` QHM fix: CONFIRMED PRESENT (L125-148/L288-295)
-- All pending_approvals_2026-06-07.md items: STALE — no action required
+- T3 silent skip (exit_logic.py L553): FIXED in 3cab1db — `_t3_pending` guard now allows qty_rem=1 through when tranche_lvl == len(TRANCHE_FRACS)-1
+- Trail activation at T1: NOT FORBIDDEN — CLAUDE.md Rule 13 documents this permanently
+- D1 forbidden logic audit: COMPLETE — board+Gro+GAI consensus documented; Rules 7+9 queued for dynamization
