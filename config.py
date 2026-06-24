@@ -47,7 +47,7 @@ BUCKET_A_ALLOCATION_PCT  = 0.05   # 5% of current portfolio value
 BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 
 BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
-BUCKET_B_MAX_POSITIONS         = 999    # placeholder (PDT removed S50); actual cap is MAX_OPEN_POSITIONS=4
+BUCKET_B_MAX_POSITIONS         = 999    # placeholder; actual cap is MAX_OPEN_POSITIONS=4
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 

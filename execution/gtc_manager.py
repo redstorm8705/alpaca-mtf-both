@@ -187,8 +187,8 @@ def cancel_open_gtc_orders(symbol: str, trade: dict, tracker) -> bool:
     position is gone and open a reverse trade.
 
     Cancels:
-      - gtc_partial_order_ids  — PDT-deferred tranche limit orders (best-effort)
-      - _gtc_stop_order_id     — PDT=3/3 confirmed-stop market order
+      - gtc_partial_order_ids  — tranche limit orders (best-effort)
+      - _gtc_stop_order_id     — confirmed-stop market order
       - gtc_stop_order_id      — overnight protection stop order
 
     Returns True if ALL stop orders are confirmed gone (cancelled, terminal, or

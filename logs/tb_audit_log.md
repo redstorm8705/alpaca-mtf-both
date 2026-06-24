@@ -5312,3 +5312,23 @@ Impact radius: contained within QHM module — all three new methods private, no
 |----|----------|----------|-----|
 | QHM-F2-1 | CRITICAL | _resubmit_post_earnings_stop | bars[i]["high"] → bars.iloc[i]["high"]; `if bars` → `if not bars.empty` |
 
+
+## 2026-06-23 S63 — exit_logic.py tranche restructure
+
+**Commit:** 327539b
+**Full read:** 2171 lines, 8 chunks (RULE C-7 re-read after compaction)
+**Board:** 11-1 APPROVE (Katsuyama FORBID conditional on sleep 0.2 — condition met in patch)
+**GRO:** APPROVE | **GAI:** APPROVE
+**Static analysis:** py_compile PASS | mypy PASS | ruff PASS (pre and post)
+**Cold second-agent:** PASS — all 6 logic checks verified
+**Impact radius:** low, 0 dependent files
+
+**Changes:**
+- L204: TRANCHE_SHARE 0.25 → 0.33
+- L404: time.sleep(0.1) → 0.2 (Katsuyama async settle condition)
+- L740: Add INFO log when T1 trail activates
+
+**T3 silent skip:** already resolved in bfb6c82 — qty_rem guard confirmed at L628.
+**Trail-at-T1 classification:** activation timing (parameter), NOT stop-loss formula. Forbidden category now documented: formula changes, floor logic changes, new exit type introduction, kill switch threshold changes.
+
+**RC audit:** RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PASS | RC-8 PASS

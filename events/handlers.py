@@ -48,8 +48,8 @@ def safe_close_all(tracker, risk=None,
 
     circuit_breaker=False (default — routine news/HALT signal):
       Bucket A (TQQQ/SQQQ/TSLL) same-day opens are protected from closure.
-      These are intended hedges; closing them into a news spike burns a PDT slot
-      on the hedge leg. The internal stop continues to manage risk.
+      These are intended hedges; closing them into a news spike is unnecessary.
+      The internal stop continues to manage risk.
 
     circuit_breaker=True (exchange halt, news_size_mult==0.0, or user shutdown):
       No exemptions. All positions closed unconditionally.

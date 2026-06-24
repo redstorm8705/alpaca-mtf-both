@@ -143,10 +143,6 @@ def _load_day_trades() -> list:
         return []
 
 
-# _pdt_for_date() and _rolling_pdt_count() deleted S52.
-# PDT removed — SEC/FINRA rule amendment, board vote S50 28-0.
-
-
 def _load_patch_data(monday: date, friday: date) -> dict:
     """Load patch_log.jsonl (week filter) and bug_counter.json for Patch Health section."""  # noqa: E501
     patch_log_path = os.path.join(LOGS_DIR, "patch_log.jsonl")
