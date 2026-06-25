@@ -1394,7 +1394,7 @@ def run_cycle(
     # Intentional: MRI blocks entries (not just adjusts size/score).
     # STRESSED/HIGH/CRITICAL = 0% WR per live trade log (23 exits, 2026-05-05).
     _bv5_mri = mri.level() if mri else "NORMAL"
-    if _bv5_mri in ("STRESSED", "HIGH", "CRITICAL"):
+    if _bv5_mri in ("HIGH", "CRITICAL"):
         logger.critical(
             f"⛔ BV-5: MRI={_bv5_mri} — no new entries until regime improves. "
             f"Exits and partials managed normally."
