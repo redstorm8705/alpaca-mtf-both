@@ -13,7 +13,7 @@ import config
 from indicators.moving_averages import add_all_mas, ema_structure_bullish
 from indicators.macd import add_both_macds, dual_macd_agreement
 from indicators.rsi import add_rsi, rsi_in_range
-from indicators.vwap import add_vwap, price_near_vwap, price_above_vwap, vwap_reclaim
+from indicators.vwap import add_vwap
 from strategy.trend_filter import get_daily_bias, swing_bias_score
 from indicators.momentum import momentum_bullish, momentum_bearish
 
@@ -211,18 +211,37 @@ def score_long_signal(
                     f"[{symbol}] VOLSHADOW long compute error: {_e}"
                 )
 
-    # ── 5. VWAP (intraday only) ───────────────────────────────────────────────
+    # ── 5. VWAP SD bands (intraday only) ─────────────────────────────────────
+    # 2pt = ideal zone (VWAP to VWAP+1SD), 1pt = discount zone (VWAP-1SD to VWAP),
+    # 0pt = extended (>+1SD) or breakdown (<-1SD). Swing: no free point.
+    _vwap_pts = 0
     if trade_mode == config.TradeMode.INTRADAY and entry_df is not None:
-        conditions["price_near_vwap"] = (
-            price_near_vwap(entry_df) or
-            price_above_vwap(entry_df) or
-            vwap_reclaim(entry_df)
-        )
-        if conditions["price_near_vwap"]:
-            score += weights["price_near_vwap"]
-    else:
-        conditions["price_near_vwap"] = True   # Not required for swings
-        score += weights["price_near_vwap"]    # Give free point on swings
+        try:
+            _row   = entry_df.iloc[-1]
+            _vwap  = _row["vwap"]  if "vwap"  in entry_df.columns else None
+            _price = _row["close"] if "close" in entry_df.columns else None
+            if (_vwap is not None and _price is not None
+                    and _vwap == _vwap and _price == _price and _vwap > 0):
+                _devs    = (entry_df["close"] - entry_df["vwap"]).dropna()
+                _vwap_sd = float(_devs.std()) if len(_devs) > 1 else 0.0
+                if _vwap_sd == 0.0:
+                    _vwap_pts = 1   # insufficient SD — neutral fallback
+                else:
+                    _upper_1sd = _vwap + _vwap_sd
+                    _lower_1sd = _vwap - _vwap_sd
+                    if _vwap <= _price <= _upper_1sd:
+                        _vwap_pts = 2   # ideal zone: at or just above VWAP
+                    elif _lower_1sd <= _price < _vwap:
+                        _vwap_pts = 1   # discount zone: near but below VWAP
+                    # extended (>+1SD) or breakdown (<-1SD) = 0
+            else:
+                _vwap_pts = 1   # VWAP missing — neutral fallback
+        except Exception as _ve:
+            logger.debug(f"[{symbol}] VWAP SD error: {_ve}")
+            _vwap_pts = 1
+    # swing: VWAP is intraday anchor — not required, no free point
+    conditions["price_near_vwap"] = bool(_vwap_pts)
+    score += _vwap_pts
 
     # ── 6. MOMENTUM FILTER (Jegadeesh-Titman 12-1 month) ─────────────────────
     # 30+ years peer-reviewed evidence. Uses daily data, +2 weight (equal to SMA)
@@ -417,13 +436,34 @@ def score_short_signal(
                     f"[{symbol}] VOLSHADOW short compute error: {_e}"
                 )
 
+    _vwap_pts = 0
     if trade_mode == config.TradeMode.INTRADAY and entry_df is not None:
-        conditions["price_near_vwap"] = not price_above_vwap(entry_df)
-        if conditions["price_near_vwap"]:
-            score += weights["price_near_vwap"]
-    else:
-        conditions["price_near_vwap"] = True
-        score += weights["price_near_vwap"]
+        try:
+            _row   = entry_df.iloc[-1]
+            _vwap  = _row["vwap"]  if "vwap"  in entry_df.columns else None
+            _price = _row["close"] if "close" in entry_df.columns else None
+            if (_vwap is not None and _price is not None
+                    and _vwap == _vwap and _price == _price and _vwap > 0):
+                _devs    = (entry_df["close"] - entry_df["vwap"]).dropna()
+                _vwap_sd = float(_devs.std()) if len(_devs) > 1 else 0.0
+                if _vwap_sd == 0.0:
+                    _vwap_pts = 1
+                else:
+                    _upper_1sd = _vwap + _vwap_sd
+                    _lower_1sd = _vwap - _vwap_sd
+                    if _lower_1sd <= _price <= _vwap:
+                        _vwap_pts = 2   # ideal short zone: at or below VWAP
+                    elif _vwap < _price <= _upper_1sd:
+                        _vwap_pts = 1   # mild extension — marginal short
+                    # far extension or breakdown = 0
+            else:
+                _vwap_pts = 1
+        except Exception as _ve:
+            logger.debug(f"[{symbol}] VWAP SD error (short): {_ve}")
+            _vwap_pts = 1
+    # swing: no free point
+    conditions["price_near_vwap"] = bool(_vwap_pts)
+    score += _vwap_pts
 
     # ── MOMENTUM FILTER (short) ──────────────────────────────────────────────
     _min_mom_bars = config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK

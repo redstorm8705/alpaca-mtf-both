@@ -129,14 +129,14 @@ MIN_SHORT_SCORE = 4   # lowered from 5 — mirrors long threshold
 
 SCORE_WEIGHTS = {
     "daily_above_150sma":  2,
-    "daily_above_200sma":  2,
+    "daily_above_200sma":  1,
     "ema13_above_ema30":   2,
     "macd_bullish_cross":  2,
     # Shadow mode (VOLUME_CONFIRMATION_ENABLED=False): RSI scores using this key.
     # Live toggle: change "rsi_in_range": 1 -> "volume_confirmed": 1 simultaneously
     # with setting VOLUME_CONFIRMATION_ENABLED = True (two-step atomic toggle, Kim R2).
     "rsi_in_range":        1,
-    "price_near_vwap":     1,
+    "price_near_vwap":     2,
     # Jegadeesh-Titman (1993, 2023): 30+ years of peer-reviewed evidence
     # 12-month minus 1-month lookback — proven factor, equal weight to SMA conditions
     "momentum_12_1":       2,

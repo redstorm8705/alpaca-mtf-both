@@ -29,7 +29,8 @@ _STATE_FILE   = _PROJECT_ROOT / "data" / "state" / "hybrid_state.json"
 _SNAP_PATH    = _LOGS_DIR / "gex_snapshot.json"
 _HIST_PATH    = _LOGS_DIR / "gex_history.jsonl"
 
-_BASE    = "https://data.alpaca.markets"
+_BASE_DATA    = "https://data.alpaca.markets"     # market data: stocks, options snapshots
+_BASE_TRADING = "https://paper-api.alpaca.markets"  # trading API: contract listings
 _TIMEOUT = 8.0
 
 PT = ZoneInfo("America/Los_Angeles")
@@ -57,7 +58,7 @@ def _get_spot(symbol: str) -> float | None:
     """Fetch latest trade price for underlying. T1 — Alpaca Data REST."""
     try:
         resp = requests.get(
-            f"{_BASE}/v2/stocks/{symbol}/trades/latest",
+            f"{_BASE_DATA}/v2/stocks/{symbol}/trades/latest",
             headers=_headers(),
             timeout=4.0,
         )
@@ -82,7 +83,7 @@ def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> list[str]:
     """Return OCC contract symbols for the underlying within the expiry window."""
     try:
         resp = requests.get(
-            f"{_BASE}/v2/options/contracts",
+            f"{_BASE_TRADING}/v2/options/contracts",
             headers=_headers(),
             params={
                 "underlying_symbols": symbol,
@@ -114,7 +115,7 @@ def _fetch_snapshots(contract_symbols: list[str]) -> dict:
         batch = contract_symbols[i : i + 100]
         try:
             resp = requests.get(
-                f"{_BASE}/v2/snapshots/options",
+                f"{_BASE_DATA}/v1beta1/options/snapshots",
                 headers=_headers(),
                 params={"symbols": ",".join(batch), "feed": "indicative"},
                 timeout=_TIMEOUT,
