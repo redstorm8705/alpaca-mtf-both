@@ -120,6 +120,11 @@ class MacroRiskIndex:
         self._event_type                              = "TECHNICAL"
         # P2-INJECT-NEWS-LOCK: protects _raw_score/_level in inject_news_state
         self._lock = threading.Lock()
+        # VIX fallback cache — last-valid FMP VIX with 30-min staleness window
+        self._vix_cache:     float | None    = None
+        self._vix_cache_ts:  datetime | None = None
+        # Written under self._lock in _compute(); read under lock in inject_news_state.
+        self._vix_confirmed: bool            = False
         self._yf_executor = _cf.ThreadPoolExecutor(max_workers=1)
 
         # Restore from disk if available (handles bot restarts)
@@ -308,21 +313,11 @@ class MacroRiskIndex:
         else:
             raw_bonus = 0  # alert_count == 0: clears stale bonus below
 
-        # Market-reaction-first gate: cap bonus when price components are silent
-        if alert_count > 0 and _ps == 0 and raw_bonus > 10:
-            bonus = 10
-            logger.info(
-                f"MRI news injection GATED: {alert_count} alert(s) would add "
-                f"+{raw_bonus}pts but price_score=0 (no market reaction) — "
-                f"capped at +10pts. VIX/TLT/JPY/credit all silent."
-            )
-        else:
-            bonus = raw_bonus
-
-        # P2-INJECT-NEWS-LOCK: atomic write of _raw_score and _level
+        # P2-INJECT-NEWS-LOCK: atomic write of _raw_score and _level.
+        # Gate logic reads _vix_confirmed under lock to eliminate TOCTOU.
         with self._lock:
             _prior_news = self._components.get("news_alerts", {}).get("pts", 0)
-            old_score = self._raw_score
+            old_score   = self._raw_score
 
             # MRI-ZERO-ALERT: clear stale news contribution when alerts subside
             if alert_count == 0:
@@ -339,6 +334,28 @@ class MacroRiskIndex:
                     )
                 return
 
+            # Market-reaction-first gate (inside lock — _vix_confirmed read atomically).
+            # price_score=0 → cap 10pts (no market confirmation at all)
+            # price_score≥1 and VIX absent → cap 20pts (weak directional signal only)
+            # VIX confirmed → full bonus
+            _vix_ok = self._vix_confirmed
+            if alert_count > 0 and _ps == 0 and raw_bonus > 10:
+                bonus = 10
+                logger.info(
+                    "MRI news injection GATED: %d alert(s) → +%dpts capped at "
+                    "+10pts (price_score=0, no market confirmation).",
+                    alert_count, raw_bonus,
+                )
+            elif alert_count > 0 and not _vix_ok and raw_bonus > 20:
+                bonus = 20
+                logger.info(
+                    "MRI news injection PARTIAL-GATED: %d alert(s) → +%dpts "
+                    "capped at +20pts (VIX unavailable, weak confirmation only).",
+                    alert_count, raw_bonus,
+                )
+            else:
+                bonus = raw_bonus
+
             # MRI-INJECT-OSCILLATION fix: idempotent subtract-prior + add-new.
             # _prior_news = self._components["news_alerts"]["pts"] from last inject.
             # Proof: inject(N) twice → score = (s - prior + bonus); second call:
@@ -348,7 +365,7 @@ class MacroRiskIndex:
             self._components["news_alerts"] = {
                 "value": alert_count,
                 "pts":   bonus,
-                "gated": (_ps == 0 and raw_bonus > bonus),
+                "gated": bonus < raw_bonus,
             }
             self._last_known_good_level = self._level
             self._last_known_good_at    = datetime.now(ET)
@@ -561,7 +578,34 @@ class MacroRiskIndex:
                     return None, None
 
             # ── 1. VIX LEVEL (0–30 pts) ───────────────────────────────────────
-            vix_val = _fmp_quote("^VIX")   # T2 — FMP stable/quote
+            _vix_live           = _fmp_quote("^VIX")   # T2 — FMP stable/quote
+            _vix_cached_flag    = False
+            _vix_confirmed_next = False
+            if _vix_live is not None:
+                vix_val             = _vix_live
+                self._vix_cache     = vix_val
+                self._vix_cache_ts  = datetime.now(ET)
+                _vix_confirmed_next = True
+            else:
+                # Fallback: use cached VIX if within 30-minute staleness window
+                _cache_age = (
+                    (datetime.now(ET) - self._vix_cache_ts).total_seconds()
+                    if self._vix_cache_ts is not None else float("inf")
+                )
+                if self._vix_cache is not None and _cache_age <= 1800:
+                    vix_val          = self._vix_cache
+                    _vix_cached_flag = True
+                    logger.warning(
+                        "MRI VIX: FMP returned None — using cached %.1f "
+                        "(age=%.0fs). news_alerts capped at 20pts this cycle.",
+                        vix_val, _cache_age,
+                    )
+                else:
+                    vix_val = None
+                    logger.error(
+                        "MRI VIX: FMP returned None, no usable cache "
+                        "(age=%.0fs) — VIX scoring 0pts.", _cache_age
+                    )
             if vix_val is not None:
                 if vix_val > 30:
                     vix_pts = 30
@@ -579,7 +623,13 @@ class MacroRiskIndex:
                     )
                 else:
                     vix_pts = 0
-                components["vix"] = {"value": round(vix_val, 1), "pts": vix_pts}
+                components["vix"] = {
+                    "value": round(vix_val, 1), "pts": vix_pts,
+                    **(
+                        {"cached": True, "age_mins": round(_cache_age / 60, 1)}
+                        if _vix_cached_flag else {}
+                    ),
+                }
                 raw += vix_pts
             else:
                 components["vix"] = {"value": None, "pts": 0}
@@ -757,9 +807,10 @@ class MacroRiskIndex:
                 if "news_alerts" in self._components:
                     components["news_alerts"] = self._components["news_alerts"]
                 self._components = components
-                self._event_type = self._classify_event_type()
-                self._last_known_good_level = self._level
-                self._last_known_good_at    = datetime.now(ET)
+                self._event_type             = self._classify_event_type()
+                self._vix_confirmed          = _vix_confirmed_next
+                self._last_known_good_level  = self._level
+                self._last_known_good_at     = datetime.now(ET)
         finally:
             _mri_sock.setdefaulttimeout(_mri_old_to)
 
