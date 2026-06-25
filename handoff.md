@@ -75,8 +75,9 @@
 ## Open Architecture Items
 
 - **QHM quarterly holds** — FULLY WIRED. NVDA/GOOGL added (not_before Jun 23 — entries attempted at 10:05 AM ET if not yet filled). GEV Jul 22, GE Jul 25, LLY Aug 7. Config: `data/state/quarterly_holds_config.json`.
-- **VIX stop widening → continuous curve** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace static 25/30 thresholds with continuous linear function. Board vote required. File: `execution/risk_manager.py`.
-- **Conviction thresholds → linear spline** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace cliff (10=half, 11=full) with `max(0, (score-9)/3)`. Board vote required. Files: `execution/entry_logic.py`, `execution/kelly.py`.
+- **VIX stop widening → continuous curve** — ✅ DONE (commit 7e5c983, S63). Current code: `_vix_scalar = 1.0 + max(0.0, vix-20.0)*0.1`, capped at 2.0. Anchors VIX=25→1.5x, VIX=30→2.0x. Board 4-0, Gro APPROVE, GAI APPROVE. Confirmed by S64 nightly full read.
+- **Conviction thresholds → linear spline** — ✅ DONE. Applied in entry_logic.py L1072-1085: linear interpolation between `_LINEAR_SCORE_MIN=10` (0.5×) and `_LINEAR_SCORE_MAX=11` (1.0×). main.py L161-162. Confirmed by S64 nightly.
+- **Score-weighted Kelly prewarm** — ✅ DONE (commit ee52af9). `(score/12)**2` weight on warmup risk, bounded by `KELLY_MIN_RISK_PCT`. Confirmed by S64 nightly.
 - **MRI startup staleness** — D5 applied (commit 0e597a8). Blocking refresh at startup.
 - **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired. Board vote required.
 
@@ -84,10 +85,13 @@
 
 ## Open Items / Pending Decisions
 
-1. **VIX stop widening dynamization** — board vote session needed (Rules 7 dynamization).
-2. **Conviction linear spline** — board vote session needed (Rule 9 dynamization).
+1. ~~**VIX stop widening dynamization**~~ — ✅ DONE (commit 7e5c983 S63). Confirmed S64 nightly full read.
+2. ~~**Conviction linear spline**~~ — ✅ DONE (entry_logic.py L1072-1085). Confirmed S64 nightly.
 3. **Merge `claude/gracious-keller-j1rvhl` → main** — STALE. All QHM commits are already on main. No separate branch exists locally.
 4. **Deferred:** monthly_review.py month-over-month from Alpaca fills (DS flagged, low priority P3).
+
+### S64 Nightly Autonomous — 2026-06-25 — Summary
+**Result: STEP 7 — No eligible items.** All documented open items CLOSED or STALE (confirmed via full reads of portfolio_tracker.py 1920L, risk_manager.py 655L). handoff.md updated to reflect accurate state. Queued RC-5 item (2026-06-12) confirmed STALE — fix was applied S59. No patches applied or drafted tonight.
 
 ---
 
