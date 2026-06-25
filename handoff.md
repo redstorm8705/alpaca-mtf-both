@@ -1,23 +1,24 @@
-# Handoff — S65 Layer 9: 16pt gate for score-10 signals (2026-06-25)
+# Handoff — S66 Autonomous: MRI VIX cache + BV-5 STRESSED fix (2026-06-25)
 
-## LATEST CHANGES (this session)
+## LATEST CHANGES (S66 Autonomous)
+
+| Commit | File | Fix |
+|--------|------|-----|
+| `ee7496a` | `events/macro_risk_index.py` | VIX 30-min fallback cache + _vix_confirmed flag + news_alerts cap 20pts when VIX absent + TOCTOU fix (gate inside lock) |
+| `d81e060` | `strategy/run_cycle.py` | BV-5: remove STRESSED from hard-block — restores 2026-06-13 board decision accidentally reverted in f88caa8 |
+
+**Root cause fixed:** Jun 25 GEO_ENERGY event — FMP VIX=None → oil5+gold5+news35=45=STRESSED → BV-5 blocked ALL entries including shorts. Both patches together prevent recurrence.
+
+## Prior Session Changes (S65 — Layer 9: 16pt confirmation gate)
 
 | Commit | File | Fix |
 |--------|------|-----|
 | `73b2bc0` | `strategy/run_cycle.py` | Layer 9: 16pt confirmation gate — score-10 signals require score_16pt >= 11; score-11/12 unaffected |
 
-## Prior Session Changes (S64 — VWAP SD Bands + GEX URL Fix)
-
-| Commit | File | Fix |
-|--------|------|-----|
-| `00b216d` | `config.py` | SCORE_WEIGHTS: daily_above_200sma 2→1pt, price_near_vwap 1→2pt (max stays 12) |
-| `00b216d` | `strategy/confluence.py` | VWAP SD bands: replace binary VWAP (1pt) with graduated 0/1/2pt; remove swing free point |
-| `00b216d` | `data/gex.py` | Fix two URL bugs — contracts→paper-api.alpaca.markets; snapshots→v1beta1/options/snapshots |
-
 **Branch:** `main`
-**OCI HEAD:** `73b2bc0`
+**OCI HEAD:** `d81e060`
 **QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55). Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
-**OCI note:** All 3 patched files hash-verified on OCI. All 4 services active post-restart.
+**OCI note:** All services active post-restart. Both patched files deployed.
 
 ---
 
