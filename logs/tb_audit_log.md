@@ -5457,3 +5457,42 @@ RC-6 (Wrong API field): WAS FAIL (wrong base URL), NOW PASS after fix
 - ruff: PASS all 3
 - OCI hash match: CONFIRMED (all 3 files)
 - Services: HEALTH OK (mtf-bot, mtf-writer, mtf-http, nginx)
+
+---
+## S65 — Layer 9: 16pt confirmation gate (2026-06-25)
+
+**File:** strategy/run_cycle.py (1,655 lines)
+**Commit:** 73b2bc0
+**Full read:** Complete (1,655 lines via Explore subagent)
+
+### 10-Point Audit
+1. Static analysis — py_compile PASS, mypy PASS, ruff PASS
+2. Trade path trace — Layer 9 inserts between Dynamic MIN_SCORE filter and execute_entries; pure signal filter, no execution side effects
+3. Adversarial scenarios — score_16pt missing→defaults 0→filtered (conservative); all score-11/12 in stressed conditions→Layer 9 no-op; empty signals→early return unchanged
+4. Full read — COMPLETE
+5. Cross-references — SCORE_16PT_MIN confirmed at signal_generator.py:46; score_16pt tagged at L740
+6. Conflicting directions — none; additive filter only
+7. Redundancy — when _dynamic_min_score > _base_min, Layer 9 is correctly redundant (no-op)
+8. State persistence — no file I/O
+9. Data tier — no data fetching
+10. Timezone — no timestamps
+
+### RC Classes
+RC-1: PASS (no datetime calls)
+RC-2: PASS (no file paths)
+RC-3: PASS (no bare except)
+RC-4: PASS (no record_exit)
+RC-5: PASS (no file writes)
+RC-6: PASS (no API field reads)
+RC-7: PASS (no sizing changes)
+RC-8: PASS (confirm_gate untouched)
+
+### Board/DS/GAI
+Board: 3-2 APPROVE (TB Reliability, AB Execution Risk → APPROVE; AB Quant Logic, TB Data Integrity → REJECT)
+Gro/DS: UNAVAILABLE (Cloudflare 403)
+GAI: APPROVE
+Rafael: APPROVED
+
+### Changes
+- L59: added `SCORE_16PT_MIN as _16PT_MIN` to signal_generator import
+- L1434-1447: Layer 9 filter block — gates score-10 signals on score_16pt >= 11

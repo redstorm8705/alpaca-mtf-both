@@ -1,6 +1,12 @@
-# Handoff — S64 VWAP SD Bands + GEX URL Fix (2026-06-25)
+# Handoff — S65 Layer 9: 16pt gate for score-10 signals (2026-06-25)
 
 ## LATEST CHANGES (this session)
+
+| Commit | File | Fix |
+|--------|------|-----|
+| `73b2bc0` | `strategy/run_cycle.py` | Layer 9: 16pt confirmation gate — score-10 signals require score_16pt >= 11; score-11/12 unaffected |
+
+## Prior Session Changes (S64 — VWAP SD Bands + GEX URL Fix)
 
 | Commit | File | Fix |
 |--------|------|-----|
@@ -9,7 +15,7 @@
 | `00b216d` | `data/gex.py` | Fix two URL bugs — contracts→paper-api.alpaca.markets; snapshots→v1beta1/options/snapshots |
 
 **Branch:** `main`
-**OCI HEAD:** `00b216d`
+**OCI HEAD:** `73b2bc0`
 **QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55). Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
 **OCI note:** All 3 patched files hash-verified on OCI. All 4 services active post-restart.
 
@@ -73,9 +79,10 @@
 
 - **QHM quarterly holds** — FULLY WIRED. NVDA/GOOGL added. GEV Jul 22, GE Jul 25, LLY Aug 7. Config: `data/state/quarterly_holds_config.json`.
 - **VWAP SD bands** — LIVE as of S64 (00b216d). Extended entries now score 0pt VWAP → drop below 10pt threshold → blocked. Shadow score_comparison data will show impact going forward.
+- **16pt confirmation gate (Layer 9)** — LIVE as of S65 (73b2bc0). Score-10 signals require score_16pt >= 11 to proceed. Score-11/12 unaffected. Data: score-10 WR=0% (0W/4L), 61% rejected by 16pt. 30-day P1 review: if score-10+16pt signals show WR < 35%, re-evaluate threshold.
 - **Volume confirmation (Fix A)** — ON HOLD until ~Jul 11 (60-session CPCV condition: 27/60 sessions met). Board 4/4 REJECT premature activation.
 - **GEX greeks/OI** — URLs fixed (S64). Greeks still absent from v1beta1 snapshots (OPRA agreement required). GEX computation returns zero/neutral until resolved. GEX_ENABLED=False unchanged.
-- **VIX stop widening → continuous curve** — QUEUED. Board vote required. File: `execution/risk_manager.py`.
+- **VIX stop widening → continuous curve** — LIVE as of S64 (commit `7e5c983`). Continuous `mult = 1.0 + max(0, vix-20) * 0.1`, capped at 2.0x.
 - **Conviction thresholds → linear spline** — REJECTED by board 4-0 + GAI (S64). Board: Kelly double-count; score measures confluence not edge. Archived from roadmap.
 - **MRI startup staleness** — D5 applied (commit 0e597a8).
 - **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired. Board vote required.
