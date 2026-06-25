@@ -1,20 +1,17 @@
-# Handoff — S63 T3 Fix + Forbidden Logic Audit (2026-06-24)
+# Handoff — S64 VWAP SD Bands + GEX URL Fix (2026-06-25)
 
 ## LATEST CHANGES (this session)
 
 | Commit | File | Fix |
 |--------|------|-----|
-| `ebb8f47` | `execution/quarterly_hold_manager.py` | `_get_live_price()` Alpaca Data fallback for PENDING_ENTRY sizing |
-| `c74cc68` | `main.py` | `_QHMBroker` missing `get_account` method — unblocked equity lookup |
-| `be779ba` | `execution/quarterly_hold_manager.py` | pandas `.iloc` fix — `bars[-2]`, `bars[i]`, `if bars and` bugs causing NVDA/GOOGL entry failures |
-| `ea9fa0c` | `execution/quarterly_hold_manager.py` + `data/state/quarterly_holds_config.json` | NVDA + GOOGL added as quarterly holds |
-| `3cab1db` | `execution/exit_logic.py` + `CLAUDE.md` | T3 explicit close for qty_rem=1; CLAUDE.md Rule 13; Rules 7+9 roadmap |
-| `625f751` | `config.py`, `events/handlers.py`, `execution/gtc_manager.py`, `weekly_review.py` | PDT comment cleanup |
+| `00b216d` | `config.py` | SCORE_WEIGHTS: daily_above_200sma 2→1pt, price_near_vwap 1→2pt (max stays 12) |
+| `00b216d` | `strategy/confluence.py` | VWAP SD bands: replace binary VWAP (1pt) with graduated 0/1/2pt; remove swing free point |
+| `00b216d` | `data/gex.py` | Fix two URL bugs — contracts→paper-api.alpaca.markets; snapshots→v1beta1/options/snapshots |
 
 **Branch:** `main`
-**OCI HEAD:** `ebb8f47`
-**QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55) SUBMITTED 18:39 UTC Jun 24. Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
-**OCI note:** Post-`3cab1db` deploy, OCI drifted (main.py/trade_engine.py still had `_pdt_htf_gate` import; exit_logic.py had it removed). Full rsync at S63 restored sync. All 4 services active.
+**OCI HEAD:** `00b216d`
+**QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55). Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
+**OCI note:** All 3 patched files hash-verified on OCI. All 4 services active post-restart.
 
 ---
 
@@ -74,10 +71,13 @@
 
 ## Open Architecture Items
 
-- **QHM quarterly holds** — FULLY WIRED. NVDA/GOOGL added (not_before Jun 23 — entries attempted at 10:05 AM ET if not yet filled). GEV Jul 22, GE Jul 25, LLY Aug 7. Config: `data/state/quarterly_holds_config.json`.
-- **VIX stop widening → continuous curve** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace static 25/30 thresholds with continuous linear function. Board vote required. File: `execution/risk_manager.py`.
-- **Conviction thresholds → linear spline** — QUEUED (CLAUDE.md roadmap 2026-06-24). Replace cliff (10=half, 11=full) with `max(0, (score-9)/3)`. Board vote required. Files: `execution/entry_logic.py`, `execution/kelly.py`.
-- **MRI startup staleness** — D5 applied (commit 0e597a8). Blocking refresh at startup.
+- **QHM quarterly holds** — FULLY WIRED. NVDA/GOOGL added. GEV Jul 22, GE Jul 25, LLY Aug 7. Config: `data/state/quarterly_holds_config.json`.
+- **VWAP SD bands** — LIVE as of S64 (00b216d). Extended entries now score 0pt VWAP → drop below 10pt threshold → blocked. Shadow score_comparison data will show impact going forward.
+- **Volume confirmation (Fix A)** — ON HOLD until ~Jul 11 (60-session CPCV condition: 27/60 sessions met). Board 4/4 REJECT premature activation.
+- **GEX greeks/OI** — URLs fixed (S64). Greeks still absent from v1beta1 snapshots (OPRA agreement required). GEX computation returns zero/neutral until resolved. GEX_ENABLED=False unchanged.
+- **VIX stop widening → continuous curve** — QUEUED. Board vote required. File: `execution/risk_manager.py`.
+- **Conviction thresholds → linear spline** — REJECTED by board 4-0 + GAI (S64). Board: Kelly double-count; score measures confluence not edge. Archived from roadmap.
+- **MRI startup staleness** — D5 applied (commit 0e597a8).
 - **TraderMonty breadth CSV** — data/breadth.py stub exists, not wired. Board vote required.
 
 ---

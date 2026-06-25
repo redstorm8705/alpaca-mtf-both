@@ -5382,3 +5382,78 @@ Impact radius: contained within QHM module — all three new methods private, no
 **Trail-at-T1 classification:** activation timing (parameter), NOT stop-loss formula. Forbidden category now documented: formula changes, floor logic changes, new exit type introduction, kill switch threshold changes.
 
 **RC audit:** RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 PASS | RC-5 PASS | RC-6 PASS | RC-7 PASS | RC-8 PASS
+
+---
+
+## S64 — 2026-06-25 — Fix B (VWAP SD bands) + Fix C repair (gex.py URLs)
+
+### Files patched: config.py, strategy/confluence.py, data/gex.py
+### Commit: 00b216d
+
+#### 10-Point Audit — config.py
+| Point | Result |
+|-------|--------|
+| 1 Static analysis | PASS — py_compile, mypy, ruff all clean |
+| 2 Trade path trace | SCORE_WEIGHTS used in confluence.py scoring only — no execution path |
+| 3 Adversarial | max_score=12 preserved; all weights positive; no key removed |
+| 4 Full read | COMPLETE (521 lines, this session) |
+| 5 Cross-refs | SCORE_WEIGHTS consumed in confluence.py and signal_generator.py (read-only) |
+| 6 Conflicts | None |
+| 7 Redundancy | SMA200 reduced from 2→1 (redundant with SMA150, fires together 95%) |
+| 8 State persistence | N/A |
+| 9 Data tier | N/A |
+| 10 Timezone | N/A |
+
+RC-1 through RC-8: PASS (config.py is not an execution file)
+
+#### 10-Point Audit — strategy/confluence.py
+| Point | Result |
+|-------|--------|
+| 1 Static analysis | PASS — py_compile, mypy, ruff all clean (3 unused imports removed) |
+| 2 Trade path trace | score_long_signal / score_short_signal — VWAP section only |
+| 3 Adversarial | SD=0 guard added; VWAP missing fallback=1pt; NaN check via _vwap==_vwap |
+| 4 Full read | COMPLETE (454 lines, this session) |
+| 5 Cross-refs | Removed price_near_vwap/price_above_vwap/vwap_reclaim imports (no longer called) |
+| 6 Conflicts | None |
+| 7 Redundancy | Old binary VWAP + swing free-point removed cleanly |
+| 8 State persistence | N/A |
+| 9 Data tier | N/A |
+| 10 Timezone | N/A |
+
+RC checks: PASS all (not an execution file, no datetime/path/exception/api-field issues)
+
+#### 10-Point Audit — data/gex.py
+| Point | Result |
+|-------|--------|
+| 1 Static analysis | PASS — py_compile, mypy, ruff all clean |
+| 2 Trade path trace | Display-only shadow mode — no scoring/sizing impact |
+| 3 Adversarial | URL fix confirmed via live API tests; greeks still return None (neutral fallback) |
+| 4 Full read | COMPLETE (316 lines, this session) |
+| 5 Cross-refs | _BASE_DATA / _BASE_TRADING — 3 call sites updated, no orphaned references |
+| 6 Conflicts | None |
+| 7 Redundancy | Old _BASE removed |
+| 8 State persistence | PASS — tmp→replace for gex_snapshot.json unchanged |
+| 9 Data tier | PASS — contracts now on correct trading API tier |
+| 10 Timezone | PASS — ET/PT throughout unchanged |
+
+RC-6 (Wrong API field): WAS FAIL (wrong base URL), NOW PASS after fix
+
+#### Board
+- Fix B: Thorp APPROVE / Harris APPROVE / Asness APPROVE (3/3)
+- Fix C: Beck APPROVE / Schneier APPROVE (2/2)
+
+#### DS/GAI
+- Gro (DS substitute): APPROVE both
+- GAI: APPROVE both (partial response but direction confirmed)
+
+#### Cold Second-Agent
+- Diff 1 (config.py): PASS
+- Diff 2 (confluence.py): FAIL → fixed (SD=0 guard added; bool() type cast added) → PASS
+- Diff 3 (gex.py): PASS
+
+#### Post-patch verification
+- py_compile: PASS all 3
+- mypy: PASS all 3
+- ruff: PASS all 3
+- OCI hash match: CONFIRMED (all 3 files)
+- Services: HEALTH OK (mtf-bot, mtf-writer, mtf-http, nginx)
