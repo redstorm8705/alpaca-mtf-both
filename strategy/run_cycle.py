@@ -56,7 +56,7 @@ from execution.orphan_manager import (
 )
 from monitoring.watchdog import touch_cycle_ts as _touch_cycle_ts
 from strategy.scoring import clear_live_score_cache as _clear_live_score_cache
-from strategy.signal_generator import run_scan
+from strategy.signal_generator import run_scan, SCORE_16PT_MIN as _16PT_MIN
 from trade_logger import log_event as _log_trade_event
 
 if TYPE_CHECKING:
@@ -1431,6 +1431,21 @@ def run_cycle(
                 f"[{_score_reason}] — "
                 f"{_pre_filter_count - len(signals)} signal(s) filtered out."
             )
+
+    # Layer 9: 16pt confirmation gate — marginal signals (score == _base_min) require 16pt agreement
+    # Data (9 days): score-10 WR=0% (0W/4L), 61% rejected by 16pt system. Score-11/12 unaffected.
+    # score_16pt tagged on every signal dict at signal_generator.py:L740 — guaranteed present.
+    _pre_16pt = len(signals)
+    signals = [
+        s for s in signals
+        if s.get("score", 0) > _base_min          # score-11/12: pass unconditionally
+        or s.get("score_16pt", 0) >= _16PT_MIN     # score-10: require 16pt >= 11
+    ]
+    if len(signals) < _pre_16pt:
+        logger.info(
+            "16pt gate (Layer 9): %d marginal signal(s) filtered (score=%d, score_16pt<%d).",
+            _pre_16pt - len(signals), _base_min, _16PT_MIN,
+        )
 
     if not signals:
         logger.info("No signals this cycle.")
