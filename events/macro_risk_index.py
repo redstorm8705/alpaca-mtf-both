@@ -601,11 +601,22 @@ class MacroRiskIndex:
                         vix_val, _cache_age,
                     )
                 else:
-                    vix_val = None
-                    logger.error(
-                        "MRI VIX: FMP returned None, no usable cache "
-                        "(age=%.0fs) — VIX scoring 0pts.", _cache_age
-                    )
+                    # T4 last resort: yfinance ^VIX (delayed EOD — not confirmed)
+                    _vix_yf = _yf_last_close_safe("^VIX")
+                    if _vix_yf is not None:
+                        vix_val = _vix_yf
+                        logger.warning(
+                            "MRI VIX: FMP None + cache stale (age=%.0fs) — "
+                            "T4 yfinance ^VIX fallback=%.1f. "
+                            "_vix_confirmed=False, news capped at 20pts.",
+                            _cache_age, vix_val,
+                        )
+                    else:
+                        vix_val = None
+                        logger.error(
+                            "MRI VIX: all sources failed "
+                            "(FMP + cache + yfinance) — VIX scoring 0pts.",
+                        )
             if vix_val is not None:
                 if vix_val > 30:
                     vix_pts = 30
@@ -674,7 +685,21 @@ class MacroRiskIndex:
                 }
                 raw += jpy_pts
             else:
-                components["jpy"] = {"value": None, "pts": 0}
+                # T4 fallback: yfinance JPY=X spot (single close, no prior close)
+                _jpy_yf = _yf_last_close_safe("JPY=X")
+                if _jpy_yf is not None and _jpy_yf > 0:
+                    logger.warning(
+                        "MRI JPY: FMP USDJPY failed — yfinance JPY=X=%.4f. "
+                        "No prior close available — JPY scoring 0pts (safe default).",
+                        _jpy_yf,
+                    )
+                    components["jpy"] = {
+                        "value": round(_jpy_yf, 4),
+                        "pts":   0,
+                        "note":  "yfinance snapshot — no prior close for %% chg",
+                    }
+                else:
+                    components["jpy"] = {"value": None, "pts": 0}
 
             # ── 4. TLT FLIGHT TO SAFETY (0–15 pts) ───────────────────────────
             # TLT rising while equities sell off = classic risk-off flight.
