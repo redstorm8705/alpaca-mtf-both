@@ -5574,3 +5574,25 @@ Rafael: APPROVED
 **RC Scan:** RC-1 PASS (12 tz-aware instances), RC-2 PASS (_PROJECT_ROOT anchor L74), RC-3–RC-8 PASS
 
 **Board vote pending**
+
+---
+## S68 Autonomous Overnight — 2026-06-26
+
+### scan_to_html.py — T4 yfinance equity news violation (DRAFT QUEUED)
+
+**Source:** logs/queued_for_review_2026-05-28.md
+**Full Read:** COMPLETE (2,410 lines, prior session Explore subagent — verbatim)
+**RC Scan:** RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 N/A | RC-5 PASS | RC-6 N/A | RC-7 N/A | RC-8 N/A
+**Static Analysis (original):** py_compile PASS | mypy PASS (0 issues) | ruff PASS
+**Static Analysis (proposed):** py_compile PASS | mypy PASS (0 issues) | ruff PASS
+
+**Finding:** `_fetch_yfinance_news()` L1226-1303 uses `yf.Ticker(sym).news` for equity tickers [SPY, QQQ, AAPL, NVDA, MSFT, TSLA]. T4 rule: yfinance approved ONLY for ^VIX, ^VIX3M, JPY=X.
+
+**Board Vote:** 3/3 PASS (Agent A: Strict Parser PASS, Agent B: Red Teamer PASS, Agent C: Quant Risk PASS)
+**Cold Second-Agent:** PASS (empty threat list)
+
+**Action:** RTH-chain file — not applied autonomously. Pending files written:
+- `logs/pending_patch_scan_to_html_t4_news_2026-06-26.patch`
+- `logs/pending_gro_gai_scan_to_html_t4_news_2026-06-26.json`
+
+**DECISION NEEDED:** DS + GAI audit required (RULE C-5 — RTH chain). Apply in next interactive session after both APPROVE.

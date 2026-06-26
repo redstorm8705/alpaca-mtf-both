@@ -1,0 +1,89 @@
+--- a/scan_to_html.py	2026-06-14 17:17:18.761525242 +0000
++++ /tmp/proposed_a/scan_to_html.py	2026-06-26 22:22:50.937016212 +0000
+@@ -1225,82 +1225,11 @@
+ 
+ def _fetch_yfinance_news() -> list:
+     """
+-    Fetch recent market news via yfinance for SPY + major tickers.
+-    Writes logs/market_news.json and returns list of items.
+-    Items: [{"headline": str, "time": str, "source": str}]
+-    Only last 12 hours; deduped; capped at 20 items.
++    T4 compliance stub. yfinance is approved only for ^VIX, ^VIX3M, JPY=X -
++    not for equity news. Returns empty list; market_news.json updated by
++    dashboard if a compliant news source is wired in the future.
+     """
+-    import json as _json
+-    from datetime import datetime as _dt, timezone as _tz
+-    try:
+-        import yfinance as _yf
+-    except ImportError:
+-        return []
+-
+-    PDT_TZ   = ZoneInfo("America/Los_Angeles")
+-    items    = []
+-    seen     = set()
+-    now_utc  = _dt.now(_tz.utc)
+-
+-    for sym in ["SPY", "QQQ", "AAPL", "NVDA", "MSFT", "TSLA"]:
+-        try:
+-            news = _yf.Ticker(sym).news or []
+-            for n in news[:6]:
+-                title = (n.get("content", {}).get("title") or
+-                         n.get("title") or n.get("headline") or "")
+-                title = title.strip()
+-                if not title or title in seen:
+-                    continue
+-                seen.add(title)
+-                ts = (n.get("content", {}).get("pubDate") or
+-                      n.get("providerPublishTime") or
+-                      n.get("publishedAt") or 0)
+-                if isinstance(ts, str):
+-                    try:
+-                        pub_dt = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+-                    except Exception as _pdt_e:
+-                        logger.debug(
+-                            "_fetch_yfinance_news: pub_dt parse failed — %s", _pdt_e
+-                        )
+-                        pub_dt = None
+-                elif ts:
+-                    pub_dt = _dt.fromtimestamp(int(ts), tz=_tz.utc)
+-                else:
+-                    pub_dt = None
+-                if pub_dt:
+-                    age_hrs = (now_utc - pub_dt).total_seconds() / 3600
+-                    if age_hrs > 12:
+-                        continue
+-                    time_str = pub_dt.astimezone(PDT_TZ).strftime("%-I:%M %p PT")
+-                else:
+-                    time_str = "—"
+-                publisher = (n.get("content", {}).get("provider", {}).get("displayName") or
+-                             n.get("publisher") or sym)
+-                items.append({"headline": title, "time": time_str, "source": publisher})
+-        except Exception as _art_e:
+-            logger.debug("_fetch_yfinance_news: article parse failed — %s", _art_e)
+-            continue
+-        if len(items) >= 20:
+-            break
+-
+-    items = items[:20]
+-
+-    # Write to logs/market_news.json atomically
+-    try:
+-        import os as _os
+-        logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+-        out_path = _os.path.join(logs_dir, "market_news.json")
+-        tmp_path = out_path + ".tmp"
+-        with open(tmp_path, "w") as _f:
+-            _json.dump({"generated": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+-                        "items": items}, _f)
+-            _f.flush()
+-            _os.fsync(_f.fileno())
+-        _os.replace(tmp_path, out_path)
+-    except Exception as _mce:
+-        logger.warning(f"Movers/news cache write failed — next scan will re-fetch: {_mce}")
+-
+-    return items
++    return []
+ 
+ 
+ def _load_dte_prev() -> dict:

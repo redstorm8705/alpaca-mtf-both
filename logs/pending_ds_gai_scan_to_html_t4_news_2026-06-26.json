@@ -1,0 +1,53 @@
+{
+  "created": "2026-06-26",
+  "session": "S68 autonomous overnight",
+  "status": "PENDING_DS_GAI",
+  "file": "scan_to_html.py",
+  "item_source": "logs/queued_for_review_2026-05-28.md",
+  "finding": {
+    "class": "T4-equity-news",
+    "description": "_fetch_yfinance_news() at L1226-1303 uses yf.Ticker(sym).news for [SPY, QQQ, AAPL, NVDA, MSFT, TSLA]. T4 data tier rule: yfinance approved ONLY for ^VIX, ^VIX3M, JPY=X. Equity news via yfinance is a T4 violation.",
+    "function": "_fetch_yfinance_news",
+    "lines": "1226-1303",
+    "severity": "P2 (display-only, no P&L impact)",
+    "rth_chain": true,
+    "chain_path": "main.py -> run_cycle.py -> scan_to_html.write_scan_html"
+  },
+  "proposed_fix": {
+    "description": "Replace 78-line yfinance equity news function with 7-line no-op stub returning []. Dashboard consumer (generate_dashboard.py) already has {\"items\":[]} fallback for missing market_news.json.",
+    "stub": "def _fetch_yfinance_news() -> list:\n    \"\"\"\n    T4 compliance stub. yfinance is approved only for ^VIX, ^VIX3M, JPY=X -\n    not for equity news. Returns empty list; market_news.json updated by\n    dashboard if a compliant news source is wired in the future.\n    \"\"\"\n    return []",
+    "patch_file": "logs/pending_patch_scan_to_html_t4_news_2026-06-26.patch"
+  },
+  "board_vote": {
+    "result": "3/3 PASS",
+    "agent_a": "PASS — Strict Protocol Parser: all 9 mandatory steps verified, zero forbidden categories touched, finding confirmed real",
+    "agent_b": "PASS — Malicious Red Teamer: no exploit path found, scan_to_html is display-only, market_news.json has dashboard fallback, no P&L/execution risk",
+    "agent_c": "PASS — Quant Risk Manager: no sizing/scoring/execution/P&L paths affected, stub returns correct type, call site wraps in try/except"
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS — 0 issues",
+    "ruff": "PASS — 0 violations",
+    "file_analyzed": "/tmp/proposed_scan_to_html.py"
+  },
+  "cold_second_agent": {
+    "result": "PASS",
+    "threat_list": "empty",
+    "checks": {
+      "logic_inversion": "PASS — stub returns [] matching -> list annotation",
+      "off_by_one": "PASS — missing market_news.json handled by dashboard fallback {\"items\":[]}",
+      "missing_conditions": "PASS — all equity news yfinance calls removed; ^VIX/options calls remain (compliant)",
+      "branch_completeness": "PASS — try/except call site handles empty return gracefully"
+    }
+  },
+  "integrity": {
+    "original_sha256": "b7b67d6f6354538501d269108f08ef9fabbdf3297c01101f33b66f45dc7a8460",
+    "proposed_sha256": "783206c5c7715d7f128092dea9892865a3c4873165e1ccde286ee7bcfb97750e",
+    "base_commit": "0d5cd48a7cf0c2303c52c2b870cef76faddc9b09",
+    "original_lines": 2410,
+    "proposed_lines": 2339,
+    "lines_removed": 71
+  },
+  "ds_gai_prompt": "You are auditing a proposed change to scan_to_html.py in an Alpaca paper trading bot.\n\nFINDING: _fetch_yfinance_news() at L1226-1303 uses yfinance to fetch equity news for [SPY, QQQ, AAPL, NVDA, MSFT, TSLA]. Project rules (CLAUDE.md Data Source Hierarchy) require that yfinance be used ONLY for ^VIX, ^VIX3M, JPY=X — never for equity news or OHLCV.\n\nPROPOSED FIX: Replace the 78-line yfinance equity news function with a 7-line no-op stub returning [].\n\nCONTEXT:\n- scan_to_html.py is imported by run_cycle.py (write_scan_html), which is imported by main.py. It is in the RTH execution chain but is display-only — reads trade state, writes HTML + market_news.json.\n- The stub's return value [] is discarded at the call site (L1678 in proposed), which wraps in try/except.\n- market_news.json consumer is generate_dashboard.py: _load_json(path, {\"items\":[]}) — explicit fallback for missing file.\n- No execution, sizing, scoring, or P&L paths are affected.\n\nPROPOSED STUB:\n```python\ndef _fetch_yfinance_news() -> list:\n    \"\"\"\n    T4 compliance stub. yfinance is approved only for ^VIX, ^VIX3M, JPY=X -\n    not for equity news. Returns empty list; market_news.json updated by\n    dashboard if a compliant news source is wired in the future.\n    \"\"\"\n    return []\n```\n\nBOARD VOTE: 3/3 PASS (Strict Parser, Red Teamer, Quant Risk)\nSTATIC ANALYSIS: py_compile PASS, mypy PASS, ruff PASS\nCOLD SECOND-AGENT: PASS\n\nQUESTIONS FOR YOUR AUDIT:\n1. Is the T4 finding correct — does yfinance equity news violate the data source tier rules?\n2. Is the stub approach correct, or should a compliant replacement (FMP news endpoint?) be drafted instead of a stub?\n3. Any risk in market_news.json becoming perpetually absent — does any other consumer besides generate_dashboard.py read this file?\n4. APPROVE or REJECT with reasoning.",
+  "action_required": "Rafael: run DS + GAI audit using ds_gai_prompt above via direct API (CLAUDE.md DS/GAI DIRECT API PROTOCOL). Both must APPROVE before patch is applied. If both APPROVE, apply logs/pending_patch_scan_to_html_t4_news_2026-06-26.patch in next interactive session."
+}
