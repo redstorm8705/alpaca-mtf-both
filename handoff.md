@@ -1,13 +1,19 @@
-# Handoff — S66 Autonomous: MRI VIX cache + BV-5 STRESSED fix (2026-06-25)
+# Handoff — S67: MRI yfinance T4 fallbacks for VIX + JPY (2026-06-25)
 
-## LATEST CHANGES (S66 Autonomous)
+## LATEST CHANGES (S67)
+
+| Commit | File | Fix |
+|--------|------|-----|
+| `98f704e` | `events/macro_risk_index.py` | yfinance T4 fallbacks: VIX (when FMP None + cache stale >30min) and JPY (when FMP USDJPY fails). VIX scored but _vix_confirmed=False → news still capped 20pts. JPY scores 0pts, stores snapshot for observability. |
+
+## Prior Session Changes (S66 Autonomous)
 
 | Commit | File | Fix |
 |--------|------|-----|
 | `ee7496a` | `events/macro_risk_index.py` | VIX 30-min fallback cache + _vix_confirmed flag + news_alerts cap 20pts when VIX absent + TOCTOU fix (gate inside lock) |
 | `d81e060` | `strategy/run_cycle.py` | BV-5: remove STRESSED from hard-block — restores 2026-06-13 board decision accidentally reverted in f88caa8 |
 
-**Root cause fixed:** Jun 25 GEO_ENERGY event — FMP VIX=None → oil5+gold5+news35=45=STRESSED → BV-5 blocked ALL entries including shorts. Both patches together prevent recurrence.
+**Root cause fixed (S66):** Jun 25 GEO_ENERGY event — FMP VIX=None → oil5+gold5+news35=45=STRESSED → BV-5 blocked ALL entries including shorts. Both patches together prevent recurrence.
 
 ## Prior Session Changes (S65 — Layer 9: 16pt confirmation gate)
 

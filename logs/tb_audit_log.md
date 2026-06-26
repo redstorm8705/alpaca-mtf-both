@@ -1,6 +1,43 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-06-25 S67 — macro_risk_index.py yfinance T4 fallbacks (VIX + JPY)
+
+**Session:** S67 (MRI backup sources — yfinance fallbacks for FMP-silent scenarios)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| events/macro_risk_index.py | 943 | Full read — VIX: FMP-only with 30-min cache. JPY: FMP-only, no fallback. Both gaps addressed this session. |
+
+### macro_risk_index.py patch (VIX + JPY T4 fallbacks)
+| Change | Location | Fix |
+|--------|----------|-----|
+| VIX T4 fallback | `_compute()` stale-cache else branch (~L603) | When FMP None AND cache >30min stale → `_yf_last_close_safe("^VIX")`. `_vix_confirmed` stays False → news capped 20pts. |
+| JPY T4 fallback | `_compute()` JPY else branch (~L677) | When FMP USDJPY fails → `_yf_last_close_safe("JPY=X")`. Score 0pts (no prior close). Stores value in components for observability. |
+
+### Consensus
+| Voice | VIX fallback | JPY fallback |
+|-------|-------------|-------------|
+| Board A1 | APPROVE (conditional — JPY dict store yf value) | APPROVE |
+| Board A2 | APPROVE | APPROVE (0pts safe default) |
+| Gro | APPROVE | APPROVE |
+| GAI | APPROVE (round 2, after board counter-prompt) | APPROVE |
+
+### Static analysis (post-patch)
+| Tool | Result |
+|------|--------|
+| py_compile | PASS |
+| mypy --warn-unreachable | PASS — 0 errors |
+| ruff E,W,F,B | PASS — 0 violations |
+
+### Cold second-agent logic review
+PASS — all 4 branch paths covered, no inversions, _vix_confirmed correctly stays False for T4.
+
+### Commit
+`98f704e` — deployed OCI, HEALTH OK.
+
+---
 ## 2026-06-24 S63 — quarterly_hold_manager.py pandas iloc fix
 
 **Session:** S63 (QHM entry gate fix — NVDA/GOOGL failed to enter Jun 24)
