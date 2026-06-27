@@ -5633,3 +5633,39 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 - Point 5 (cross-references): byte-diff confirms local repo == OCI deployed file, no drift.
 
 **Item CLOSED.** Next priority logged: `resubmit_stop_if_needed()` dead code (defined, never called) — separate scope, not addressed this patch.
+
+## 2026-06-27 — P0 FINDING (Phase 1 diagnostic only, NOT yet patched): FIFO lot-duplication in portfolio_tracker.py
+
+**Triggered by:** user request to review midday/post-market/Gemini AI audit reports for 2026-06-26.
+
+**Triage of Gemini's reported findings (most were misattributed/conflated, verified against real code/data):**
+| Gemini claim | Verdict | Evidence |
+|---|---|---|
+| MIN_SCORE=7 entry violation (NVDA/GOOGL) | NOT A BUG — misread | The "score=7" trade_events records are EXIT events (overnight_atr_buffer_exit, safe_close_all) for QHM positions, not new scored entries. QHM doesn't use the 12pt score; the field is a leftover/default on exit records. |
+| NVDA stop-hit slippage $13.31 vs stop $206.54 | NOT A BUG — conflated trades | Gemini paired Jun 26's QHM exit (entry=$198.17) against an unrelated May 8 intraday trade's stop ($206.54) — different trades, 7 weeks apart, same symbol. |
+| NVDA entry price drift $198.17 (tracker) vs $215.76 (Alpaca) | NOT A BUG — same conflation | Same two unrelated historical records paired incorrectly by Gemini. |
+| "HALTED for session" repeatedly, attributed to PDT=3/3 | Real log, wrong cause — PDT was deleted (CLAUDE.md invariant #3). Confirmed via entry_logic.py:301 the actual gate is `_get_halt_entries()`, a news-halt flag set by `safe_close_all` — i.e., correct behavior during the Jun 26 GEO_ENERGY/STRESSED event, not a bug. |
+| QHM overnight-ATR-buffer exit (root incident) | ALREADY FIXED — commit b9f2f87 (this session), verified live 19:11 ET tonight. |
+| GEO_ENERGY VIX=None → STRESSED → blocked entries | ALREADY FIXED this week — commits ee7496a, d81e060, 98f704e. |
+| GC pauses 2-3.6s, slow cycles | Real, ongoing, LOW-MEDIUM priority — recurring post-restart too (confirmed in live logs tonight, 2.0-3.0s pauses every ~10min). Not yet root-caused. Queued for a dedicated profiling session — not chased further this session given P0 finding below took priority. |
+| reconcile_eod.py subprocess stderr=DEVNULL | Real code pattern, confirmed via Gemini's cited line — LOW priority (visibility gap, not a correctness bug). Queued. |
+| ATH gate inf-sentinel on fetch failure | Real, but explicitly intentional fail-open design (comment confirms) — not a new bug. No action needed. |
+| socket.setdefaulttimeout global side effect in macro_risk_index.py | Real, LOW severity anti-pattern. Queued, not urgent. |
+
+**P0 FINDING — genuinely new, confirmed, NOT YET PATCHED:**
+
+`write_eod_summary()` in `execution/portfolio_tracker.py` is called from 6 distinct sites in one trading day (main.py: SIGTERM L626, heartbeat-recovery L1003, user-shutdown L1054; run_cycle.py: AH cycle L396, market-close L779, 1:30PM flush L1624) with no working idempotency guard across all of them (the two partial guards that exist only block repeat calls from their own codepath, not cross-path). Every call re-fetches ALL of today's Alpaca fills and re-runs FIFO reconstruction (`_fifo_reconstruct()`) against the already-updated `open_lots_prior_day.json`, with no per-fill-ID deduplication. Any position that opens and doesn't close same-day gets a duplicate lot appended on every call that day, compounding forever since the file is never pruned.
+
+**Live evidence (confirmed by direct read of OCI's `data/state/open_lots_prior_day.json`):** AMD 36 duplicate lots (qty=1 @ $348.93), PANW 77 lots, SMCI 60 lots/430sh, NVDA 34-35 lots/54sh spanning 4 historical prices including a 6-week-stale $215.76 from a long-closed May 8 position. This stale lot is what got FIFO-matched (lots consumed oldest-first) against the real Jun 26 NVDA QHM close, producing a phantom $22.53/share loss instead of the real $4.94/share — fully explaining the recurring "EOD P&L DRIFT: Alpaca=$-25.56 tracker=$-7.97 drift=$-17.59" warning.
+
+**3-Point AI Summary:**
+- Point 1 (alignment): 3/3 — Board (cold Explore, Reliability+Data Integrity lens) CONFIRMED BUG, found a 6th call site I'd missed; Gro CONFIRMED, recommends purge+rebuild; GAI CONFIRMED, recommends purge+rebuild + flags the comparison is currently circular (drift check compares Alpaca truth against a tracker P&L derived from the same corrupted lot file).
+- Point 2 (Gro+GAI caught, board/Claude missed): GAI's point that the EOD drift metric itself is untrustworthy until state is rebuilt — the "drift" partly measures the bug's own corruption, not a real Alpaca/tracker mismatch.
+- Point 3 (forward-looking, new): GAI recommends migrating this state off flat JSON to a proper ACID datastore with an immutable fill-processing audit log, given it's financial bookkeeping. Logged to FUTURE ROADMAP LOG, not actioned.
+
+**Remediation path (both Gro and GAI independently agree, NOT applied — awaiting Rafael):**
+1. Backup `open_lots_prior_day.json` before touching it.
+2. Rebuild the file from a single, clean FIFO pass over a long (90+ day) Alpaca fills history pull, run offline/one-time — NOT a live incremental dedup of the existing corrupted file (both voices flagged incremental dedup as high-risk: ambiguous which duplicates are "real" given varying prices/quantities).
+3. Fix `write_eod_summary()`'s lack of idempotency before the next live run, or the rebuilt file will start corrupting again the same day it's restored. Candidate approaches (per board+Gro+GAI): track processed fill IDs, OR gate the Alpaca-FIFO section to run at most once per calendar day across ALL 6 call sites (current 2 partial guards don't cover this), OR separate "current-day working state" from "persisted prior-day state" so only one clean write happens per day.
+
+**Status:** Phase 1 diagnostic complete (full read, 10pt-adjacent audit, board+Gro+GAI consensus on root cause). Phase 2 (drafting the actual code fix + remediation script) NOT started — per explicit Rafael mandate this session ("changes are approved only after 3pt audit AND Gro/GAI review of the proposed patch"), no patch exists yet to review, and this touches live financial state — holding for Rafael's return before drafting/applying anything.
