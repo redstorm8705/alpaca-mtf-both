@@ -1,11 +1,12 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-15 S59"
+    "last_updated": "2026-06-26 S68"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
-    "count": 4,
+    "count": 0,
+    "status": "CLOSED",
     "patch_ids": [
       "PT-TZ-1"
     ],
@@ -197,7 +198,8 @@
   },
   "RC-6": {
     "label": "Wrong API field name (dict.get() on external API response without schema verification)",
-    "count": 3,
+    "count": 0,
+    "status": "CLOSED",
     "patch_ids": [
       "PT-001",
       "PT-FIFO-2",
@@ -260,9 +262,7 @@
       "patch_count": 4,
       "sessions": 1,
       "last_patched": "2026-05-16",
-      "open_rc_violations": [
-        "TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252 (CRITICAL \u2014 _reconcile_pending_overnight_orders() at L252-254 directly assigns risk.open_positions = len([t...]) instead of calling risk.register_open(); bypasses CYCLE-SYNC-GUARD monotonic-UP-only constraint from S42; fires every RTH cycle at run_cycle.py L824 when pending overnight entries exist; patch pending DS/GAI post-RTH)"
-      ],
+      "open_rc_violations": [],
       "risk_rating": "HIGH \u2014 265 lines post-decomp (shim/re-export). S47d CRITICAL FINDING: direct risk.open_positions assignment at L252-254. S16: RC-4 (pm_exit fill price) + RC-6 (analyst sentiment isinstance). All 8 RC classes otherwise PASS.",
       "notes": " S47d: CRITICAL desync bug found at L252-254 \u2014 direct assignment instead of risk.register_open(). Patch queued post-RTH (DS/GAI required, RTH-chain). | S22 BUG-#6: _reconcile_pending_overnight_orders() call site \u2014 added filled_qty extraction (getattr order.filled_qty), pdt_count=tracker.get_rolling_day_trade_count(), passed as kwargs to promote_pending_to_active(). py_compile PASS. Startup clean PID 1019546."
     },

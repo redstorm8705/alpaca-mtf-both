@@ -914,6 +914,19 @@ def _exec_summary_stats(trade_log: "dict | None", monday: date) -> str:
             print(f"WARN [exec_stats] bad exit_time: {_e}", file=sys.stderr)
 
     if not week_closed:
+        # Cross-check: do EOD files exist for this week? If so, records are
+        # incomplete (external close path) — warn instead of misleading fallback.
+        _eod_exists = any(
+            os.path.exists(os.path.join(LOGS_DIR, f"eod_{(monday + timedelta(days=_d)).strftime('%Y-%m-%d')}.json"))
+            for _d in range(5)
+        )
+        if _eod_exists:
+            return (
+                '<div style="color:#f5a623;font-style:italic">'
+                "Trade records incomplete — some exits may have closed externally. "
+                "See stats row for P&amp;L summary."
+                "</div>"
+            )
         return (
             '<div style="color:#8e92a4;font-style:italic">'
             "No closed trades this week.</div>"
