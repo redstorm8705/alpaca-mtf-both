@@ -926,7 +926,7 @@ def reconcile_positions(
             "original_stop":          _orph_stop,
             "target":                 _orph_tgt,
             "trail_stop":             None,
-            "trade_mode":             "intraday",
+            "trade_mode":             "quarterly_hold" if sym in _get_qhm_syms() else "intraday",
             "score":                  _orph_score if _orph_score is not None
                                       else 0,
             "score_16pt":             None,
@@ -943,6 +943,18 @@ def reconcile_positions(
             "stop_breach_price":      None,
             "_adopted_orphan":        True,
         }
+        # QHM stop linkage: restore QHM GTC stop_order_id so exit_logic sees it
+        if sym in _get_qhm_syms():
+            try:
+                _qhm_state_path = Path(__file__).resolve().parent.parent / "data" / "state" / "quarterly_holds.json"
+                if _qhm_state_path.exists():
+                    _qhm_raw = _json.loads(_qhm_state_path.read_text())
+                    _qhm_stop_id = (_qhm_raw.get(sym) or {}).get("stop_order_id")
+                    if _qhm_stop_id:
+                        tracker.open_trades[sym]["gtc_stop_order_id"] = _qhm_stop_id
+                        logger.info("[%s] QHM stop linked at adoption: %s", sym, _qhm_stop_id)
+            except Exception as _qe:
+                logger.warning("[%s] QHM stop linkage failed: %s", sym, _qe)
         # P5-H3: adopt any existing Alpaca GTC or DAY stop so restarts don't
         # submit duplicate stops. Prior session's live stop orders are stored
         # here so _submit_rth_day_stops() and the AH loop will skip

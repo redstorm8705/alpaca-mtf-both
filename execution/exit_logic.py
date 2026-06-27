@@ -50,6 +50,7 @@ from execution.lifecycle import (
 )
 from execution.orphan_manager import get_tod_phase as _get_tod_phase
 from execution.param_engine import get_be_buffer_mult
+from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _get_qhm_syms
 from execution.portfolio_tracker import PortfolioTracker
 from execution.risk_manager import RiskManager
 from strategy.scoring import get_live_score as _get_live_score
@@ -1157,6 +1158,10 @@ def check_exits(
         if (current_price is not None
                 and _is_prior_session
                 and not tracker.opened_today(symbol)):
+            # QHM positions use their own wide GTC stop — exempt from intraday buffer
+            if symbol in _get_qhm_syms():
+                logger.info('[%s] QHM-protected: overnight ATR buffer suppressed', symbol)
+                continue
             _be_now   = datetime.now(ET)
             _be_mins  = _be_now.hour * 60 + _be_now.minute
             _be_grace = _be_mins < (10 * 60)
