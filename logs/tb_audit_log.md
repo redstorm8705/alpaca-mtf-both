@@ -5574,3 +5574,28 @@ Rafael: APPROVED
 **RC Scan:** RC-1 PASS (12 tz-aware instances), RC-2 PASS (_PROJECT_ROOT anchor L74), RC-3–RC-8 PASS
 
 **Board vote pending**
+
+## 2026-06-27 — Log cleanup + queued-review triage (session start)
+
+**Action:** Triaged all `queued_for_review_*.md` and `pending_approvals_*.md` files (local + OCI) by cross-checking each cited finding against current code state (not file age).
+
+**Confirmed RESOLVED and DELETED (8 files, both local + OCI where present):**
+| File | Item | Resolution verified |
+|------|------|---------------------|
+| queued_for_review_2026-06-16.md | exit_logic.py T1 tranche restructure / trail-at-T1 forbidden-category dispute | CLAUDE.md Rule 13 resolved this 2026-06-24 (board+Gro+GAI unanimous: trail activation at T1 is permanent infrastructure, not forbidden). TRANCHE_FRACS=[0.40,0.60,1.00], TRANCHE_SHARE=0.33 confirmed LIVE in current exit_logic.py. |
+| queued_for_review_2026-06-12.md | portfolio_tracker.py RC-5 fsync, kelly.py RC-2 | RC-5 closed S59 (flush+fsync applied to manual_audit.jsonl). RC-2 already confirmed stale within the file itself. |
+| queued_for_review_2026-06-11.md | 5 stale-item confirmations (trade_engine, run_cycle, entry_logic, main.py, exit_logic RC checks) | File itself documents these as already-stale; all RC counts now 0 in bug_counter.json. |
+| queued_for_review_2026-06-10.md | "no work needed" nightly verification note | Historical, no actionable content. |
+| queued_for_review_2026-06-03.md | reconcile_eod.py MSTR `_fifo_reconstruct` phantom; main.py BoD-3 MAX_DAILY_LOSS_PCT comment stale | Function confirmed never existed (phantom). main.py L308-310 comment now explicitly states "BoD-3 dead-code removed... paper profile is 0.07" — resolved. |
+| queued_for_review_2026-06-02.md | trade_engine.py risk.open_positions desync (3 rejected approaches); monthly_review.py dead code; generate_dashboard.py P/L cache write | trade_engine.py L252-261 now uses pre/post status guard + register_open() (S47d) — resolved differently than any queued option but functionally correct. monthly_review.py `_load_lifetime_pnl()` now called at L308 — no longer dead code. generate_dashboard.py L399-418 now writes lifetime_pnl_cache.json — resolved. |
+| queued_for_review_2026-06-01.md | reconcile_eod.py RC-3 logging level; reporting/metrics.py avg_r_multiple phantom; fill_helpers.py sort tie-breaker (2 failed attempts); main.py OVERNIGHT_ENTRIES_ENABLED orphaned comment | reconcile_eod.py L213/236 now logger.warning with skip-count (matches board's revision request). fill_helpers.py L116-135 now uses `after` filter + (created_at, id) tuple sort — addresses both GTC-interference and UUID-randomness objections. main.py L131-206 fully resolved per original proposal (comment relocated, startup log added, getattr from config.py). |
+| pending_approvals_2026-06-07.md | superseded by 06-11 stale-confirmation sweep | All 3 items already closed per that file. |
+
+**Confirmed STILL OPEN — kept, not deleted:**
+| File | Item | Status |
+|------|------|--------|
+| queued_for_review_2026-05-28.md | scan_to_html.py `_fetch_yfinance_news()` — RC-9 T4 tier violation (yfinance used for news, not in approved T4 list: ^VIX/^VIX3M/JPY=X only) | **CONFIRMED STILL PRESENT** at scan_to_html.py L1226-1281, called at L1678. Genuine open architecture violation. RTH-chain (strategy/run_cycle.py imports scan_to_html directly) — DS/GAI gate applies. Carried forward as next priority item. |
+
+**Also deleted (OCI only):** `logs/CLAUDE.md` — stale duplicate snapshot of project rules from 2026-05-01, superseded by root CLAUDE.md; risked being read as authoritative by a future session.
+
+**Method note:** Resolution was verified by reading current file content at the cited line numbers — not inferred from commit messages or file age, per Full Read Gate / No-Grep rules (targeted grep used only to locate already-known line numbers, followed by Read-tool confirmation).
