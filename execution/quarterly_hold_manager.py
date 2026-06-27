@@ -351,6 +351,13 @@ class QuarterlyHoldManager:
                     result.symbols_reconciled.append(symbol)
 
                 elif pos.state == HoldState.PENDING_STOP_REPLACE:
+                    # External-close check first: a position can be closed (GTC
+                    # fired pre-replace, manual close, or external bug) while stuck
+                    # here with no stop to detect via Alpaca. Without this check
+                    # the position is stranded forever.
+                    if self._detect_external_close(pos, result):
+                        result.symbols_reconciled.append(symbol)
+                        continue
                     # Peterffy: mark for AH loop to resubmit; don't resubmit at startup
                     logger.info(
                         "QuarterlyHoldManager: %s PENDING_STOP_REPLACE — "
@@ -386,6 +393,18 @@ class QuarterlyHoldManager:
         GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
         """
         for symbol, pos in list(self._positions.items()):
+            _stuck = (HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS)
+            if pos.state in _stuck:
+                # Same external-close gap as reconcile_on_startup(): these states
+                # were never checked against broker truth on any per-cycle basis.
+                try:
+                    self._detect_external_close(pos, ReconcileResult())
+                except Exception as e:  # RC-3
+                    logger.warning(
+                        "QuarterlyHoldManager weekly_check external-close check "
+                        "error for %s: %s", symbol, e, exc_info=True,
+                    )
+                continue
             if pos.state != HoldState.ACTIVE:
                 continue
             try:
