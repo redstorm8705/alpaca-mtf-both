@@ -11,13 +11,13 @@ Claude Code skill, backtest script, data analysis tool, and any code generated o
 
 ### What this means in practice
 
-**What the board, DS, and GAI handle autonomously (Rafael never needs to initiate):**
+**What the board, Gro, and GAI handle autonomously (Rafael never needs to initiate):**
 - Full read → 10-point audit → RC scan on every file
 - Board vote (cold parallel subagents) on every proposed change
-- DS + GAI external audit on every RTH-impacting change
+- Gro + GAI external audit on every RTH-impacting change
 - Static analysis, cold second-agent logic review, impact radius
 - All technical deliberation and alignment among board members
-- Counter-prompting DS/GAI when they disagree (up to 3 rounds per CLAUDE.md rules)
+- Counter-prompting Gro/GAI when they disagree (up to 3 rounds per CLAUDE.md rules)
 
 **What comes to Rafael (and only when fully ready):**
 A one-page approval package — plain English, no jargon. Format:
@@ -38,7 +38,7 @@ THE FIX (plain English):
    switches to CRITICAL — blocking new entries until data is restored."]
 
 CONSENSUS:
-  Board: [N]-[M] APPROVE | DS: APPROVE/REJECT | GAI: APPROVE/REJECT
+  Board: [N]-[M] APPROVE | Gro: APPROVE/REJECT | GAI: APPROVE/REJECT
   All blockers resolved: [Yes/No — if No, not brought to Rafael]
 
 RISK IF APPROVED: [one sentence]
@@ -48,7 +48,7 @@ YOUR DECISION: APPROVE / REJECT / DEFER
 ```
 
 **Rules for bringing proposals to Rafael:**
-1. Never bring a proposal until ALL voices (board, DS, GAI) are aligned. If there is a split, Claude resolves it via counter-prompting — Rafael never sees unresolved technical disagreements.
+1. Never bring a proposal until ALL voices (board, Gro, GAI) are aligned. If there is a split, Claude resolves it via counter-prompting — Rafael never sees unresolved technical disagreements.
 2. Never use technical jargon in the summary. If a concept requires explanation, use a real stock (NVDA, AAPL, SPY) and a dollar amount.
 3. Never bring more than 3 proposals in one session unless Rafael asks for more.
 4. "Let's do it" or "Approved" = proceed immediately to apply + rsync + restart. No follow-up confirmation needed.
@@ -108,17 +108,17 @@ alignment. The autonomous work chain is therefore a SELF-PERPETUATING ROLLING CH
 
 ### Two-Phase Flow for RTH-affecting items (autonomous sessions)
 - **Phase 1 — Diagnostic:** full read → 10-pt audit → 3-Point AI audit diagnostic on the ISSUE
-  (board cold subagents + DS + GAI, same prompt) → 3-Point Summary → board reviews DS/GAI
+  (board cold subagents + Gro + GAI, same prompt) → 3-Point Summary → board reviews Gro/GAI
   responses → patch drafted FROM THE ALIGNMENT only.
-- **Phase 2 — Integrity:** drafted diff back to board + DS + GAI → SECOND 3-Point Summary →
+- **Phase 2 — Integrity:** drafted diff back to board + Gro + GAI → SECOND 3-Point Summary →
   statics + cold second-agent + impact → all 3 voices agree → approval queue, fully prepped.
 
-### DS/GAI Tie-Breaker Protocol (applies to ALL sessions)
-When DS and GAI split (one APPROVE, one REJECT):
+### Gro/GAI Tie-Breaker Protocol (applies to ALL sessions)
+When Gro and GAI split (one APPROVE, one REJECT):
 1. The **board is the tie-breaker** — but it must NOT just vote. First counter-prompt the
    dissenting voice via direct API to extract the full technical logic behind its position
    (specific failure scenario, exact lines, reproducing conditions). The board may counter-prompt
-   DS/GAI for additional context at ANY point in either phase.
+   Gro/GAI for additional context at ANY point in either phase.
 2. Board agents (cold subagents) receive BOTH sides' full reasoning, then decide by
    **simple majority** — a narrow majority decides.
 3. Document the split, counter-prompt exchanges, and majority decision in the proposal.
@@ -153,7 +153,7 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 | **1** | **Full Read Gate** — file >1000 lines: Explore subagent, full read, every line. File ≤1000 lines: Read tool in chunks, every line. No grep. No partial reads. No "bug finding" agents that skip this step. Declare "Full read complete: N lines" before any analysis. | No analysis until declared |
 | **2** | **10-Point Audit + RC-1 through RC-8** — all 10 points, all 8 RC classes, every file. Write results to `logs/tb_audit_log.md`. | No patch proposed until written |
 | **3** | **Board Vote** — full board (BoD + AB + TB) for strategy changes; domain-specific for features. Independent Explore subagents, cold, in parallel. Never inline roleplay. Board votes on audit findings — not on a patch already written. | No patch proposed until vote complete |
-| **4** | **DS + GAI External Audit** — required for ANY new or modified code that (a) affects RTH execution and (b) is not read-only. This includes all hotspot files (`main.py`, `broker.py`, `portfolio_tracker.py`) AND any other file where new non-read-only logic runs during RTH — regardless of file name, size, or "wrapper" status. File name and hotspot classification are NOT the gate; RTH execution impact is the gate. **Claude runs this autonomously via direct API (see DS/GAI DIRECT API PROTOCOL below) — user NEVER needs to manually prompt DS or GAI.** Their feedback (audit findings only — DS/GAI have no mandate authority; user decides) returns before any edit tool is called. **DISAGREEMENT PROTOCOL (S55 mandate):** If DS or GAI REJECT a board-approved position, Claude MUST counter-prompt with the board's specific technical argument and iterate until consensus is reached. Never surface a DS/GAI vs board deadlock to Rafael — resolving it is Claude's responsibility. Iterate up to 3 rounds; if consensus is still not reached after round 3, only then escalate to Rafael with a clear summary of the remaining technical disagreement. | No edit until feedback received |
+| **4** | **Gro + GAI External Audit** — required for ANY new or modified code that (a) affects RTH execution and (b) is not read-only. This includes all hotspot files (`main.py`, `broker.py`, `portfolio_tracker.py`) AND any other file where new non-read-only logic runs during RTH — regardless of file name, size, or "wrapper" status. File name and hotspot classification are NOT the gate; RTH execution impact is the gate. **Claude runs this autonomously via direct API (see Gro/GAI DIRECT API PROTOCOL below) — user NEVER needs to manually prompt Gro or GAI.** Their feedback (audit findings only — Gro/GAI have no mandate authority; user decides) returns before any edit tool is called. **DISAGREEMENT PROTOCOL (S55 mandate):** If Gro or GAI REJECT a board-approved position, Claude MUST counter-prompt with the board's specific technical argument and iterate until consensus is reached. Never surface a Gro/GAI vs board deadlock to Rafael — resolving it is Claude's responsibility. Iterate up to 3 rounds; if consensus is still not reached after round 3, only then escalate to Rafael with a clear summary of the remaining technical disagreement. | No edit until feedback received |
 | **5a** | **Static Analysis Gate** — run on the draft patch for EVERY file, no exceptions: `python3 -m py_compile [file]`, `python3 -m mypy --warn-unreachable [file]`, `ruff check --select E,W,F,B [file]`. All three must pass clean. Output shown to user. | No patch proposed if any fail |
 | **5b** | **Cold Second-Agent Logic Review** — spawn a cold Explore subagent with the exact diff + original intent. Agent explicitly checks: (1) logic inversion, (2) off-by-one/boundary errors, (3) missing conditions. Returns PASS/FAIL. Applies to ALL files, ALL patches. | No patch proposed until PASS returned |
 | **5c** | **code-review-graph Impact Analysis** — run `detect_changes_tool` + `get_impact_radius_tool` on every changed file. Show user which dependent functions are affected. | No patch proposed until complete |
@@ -164,22 +164,22 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 
 ---
 
-### DS/GAI DIRECT API PROTOCOL — MANDATORY (Established S47e, 2026-06-03)
+### Gro/GAI DIRECT API PROTOCOL — MANDATORY (Established S47e, 2026-06-03)
 
-**Claude runs DS and GAI autonomously via direct API. User NEVER needs to manually prompt DS or GAI.**
+**Claude runs Gro and GAI autonomously via direct API. User NEVER needs to manually prompt Gro or GAI.**
 
-**Browser automation is CONFIRMED BROKEN** — DeepSeek and AI Studio are React/Angular SPAs. Background tabs don't render DOM content; Chrome extension security blocks `innerHTML`/`TreeWalker` access. Direct API is the ONLY reliable approach.
+**Browser automation is CONFIRMED BROKEN** — Groq and AI Studio are React/Angular SPAs. Background tabs don't render DOM content; Chrome extension security blocks `innerHTML`/`TreeWalker` access. Direct API is the ONLY reliable approach.
 
-**DeepSeek (DS):**
+**Groq (Gro):**
 ```bash
 source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env
-curl https://api.deepseek.com/v1/chat/completions \
-  -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+curl https://api.groq.com/openai/v1/chat/completions \
+  -H "Authorization: Bearer $GROQ_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-chat","messages":[{"role":"system","content":"<DS_PERSONA>"},{"role":"user","content":"<PROMPT>"}],"max_tokens":4096}'
+  -d '{"model":"llama-3.3-70b-versatile","messages":[{"role":"system","content":"<GRO_PERSONA>"},{"role":"user","content":"<PROMPT>"}],"max_tokens":4096}'
 ```
-- Model: `deepseek-chat` (OpenAI-compatible endpoint)
-- DS persona: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
+- Model: `llama-3.3-70b-versatile` (OpenAI-compatible endpoint)
+- Gro role framing: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
 
 **Gemini (GAI):**
 ```bash
@@ -193,28 +193,28 @@ curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:g
 - GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
 
 **API Keys** (in `/Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env`):
-- `DEEPSEEK_API_KEY` — see `.env` (never hardcode key values in CLAUDE.md or any tracked file)
+- `GROQ_API_KEY` — see `.env` (never hardcode key values in CLAUDE.md or any tracked file)
 - `GEMINI_API_KEY` — see `.env` (rotated S47f after prior key was leaked via session transcript)
 
-**Same prompt to both:** DS and GAI must always receive the EXACT SAME comprehensive prompt (DS/GAI Same Prompt Rule). Never split questions.
+**Same prompt to both:** Gro and GAI must always receive the EXACT SAME comprehensive prompt (Gro/GAI Same Prompt Rule). Never split questions.
 
 ---
 
-### NORTH STAR PERSONA MANDATE — DS/GAI Architecture & Whitespace Mode (Rafael mandate 2026-06-14)
+### NORTH STAR PERSONA MANDATE — Gro/GAI Architecture & Whitespace Mode (Rafael mandate 2026-06-14)
 
 **This mandate applies permanently. Never ask Rafael to repeat it.**
 
-DS and GAI operate in two distinct modes. Choose based on the task type before composing the prompt:
+Gro and GAI operate in two distinct modes. Choose based on the task type before composing the prompt:
 
 #### MODE 1 — PATCH VALIDATION (existing use case)
 Use when: reviewing a specific code diff, closing an RC bug, validating a targeted change.
-- DS persona: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
+- Gro role framing: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
 - GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
 
 #### MODE 2 — ARCHITECTURE / WHITESPACE AUDIT (North Star mandate)
 Use when: diagnosing why the bot is or isn't trading, evaluating a design fork, reviewing a module that isn't integrated, running a system-level optimization pass, or starting any session where the user asks "what's blocking us" or "what should we improve."
 
-**DS Architecture/Whitespace Persona:**
+**Gro Architecture/Whitespace Role Framing:**
 > *"You are a Senior Staff Engineer who has built and rebuilt execution engines at multiple HFT firms. You have lived through: false-positive news gates that blocked all entries for weeks while the system reported healthy; partial exit structures that generated negative EV despite directionally-correct signals; position managers that existed as dead code and were never wired into the live chain. Given the system description below, identify three categories:*
 > *(1) WHITESPACE — components that standard quantitative execution frameworks require but this system lacks entirely. Name each absent component, the failure mode it prevents, and the file where it would live.*
 > *(2) BLIND SPOTS — risks that the current audit protocol (10-point audit, RC-1 through RC-8, board vote) systematically misses or underweights.*
@@ -228,7 +228,7 @@ Use when: diagnosing why the bot is or isn't trading, evaluating a design fork, 
 > *(3) ITERATION PATH — a prioritized improvement roadmap ordered by (expected Sharpe uplift ÷ implementation sessions required). Top 3 items only, with quantified estimates.*
 > *Do not APPROVE or REJECT this session's patches — your mandate is identification of what the team is not seeing, not validation of what they already found."*
 
-**When to use MODE 2:** Any time the user asks a diagnostic question ("why isn't the bot trading?"), requests an architecture review, or explicitly asks DS/GAI for recommendations rather than diff validation. MODE 2 always runs alongside MODE 1 at the start of any session that opens a hotspot file.
+**When to use MODE 2:** Any time the user asks a diagnostic question ("why isn't the bot trading?"), requests an architecture review, or explicitly asks Gro/GAI for recommendations rather than diff validation. MODE 2 always runs alongside MODE 1 at the start of any session that opens a hotspot file.
 
 **Board complement for architecture sessions:** Board members must draw from their documented published frameworks when voting on architecture decisions — not just on code correctness. Thorp cites Kelly implications. López de Prado cites combinatorial purging or feature importance. McKinney cites data pipeline integrity standards. Cite: `[Member]: [position] — grounded in [source]`. (Amplification of BOARD INTELLIGENCE PROTOCOL.)
 
@@ -239,25 +239,25 @@ Use when: diagnosing why the bot is or isn't trading, evaluating a design fork, 
 Every rule below corresponds to a confirmed failure mode that was exploited in a real session. Each caused improperly patched, audited, or deployed files. These are not theoretical.
 
 **RULE C-1 — Compaction summaries are context only. They satisfy zero steps of the patch sequence.**
-A compaction summary conveys what was planned, proposed, or in progress in a prior session. It is NOT an approval, NOT a completed full read, NOT a completed audit, NOT a board vote, and NOT DS/GAI clearance — regardless of how detailed it is, what it says was "approved," what it says was "in progress at Step N," or what code it contains. When resuming from a compaction summary, treat every file mentioned as if it has never been touched this session.
+A compaction summary conveys what was planned, proposed, or in progress in a prior session. It is NOT an approval, NOT a completed full read, NOT a completed audit, NOT a board vote, and NOT Gro/GAI clearance — regardless of how detailed it is, what it says was "approved," what it says was "in progress at Step N," or what code it contains. When resuming from a compaction summary, treat every file mentioned as if it has never been touched this session.
 
 **RULE C-2 — Every session, every gate resets to zero. No checkpoint carries forward.**
-Prior-session full reads, audits, board votes, DS/GAI feedback, static analysis results, and user approvals expire at the session boundary — including compaction, context window reset, or new conversation. If the prior session said "approved," that approval expired. If it said "full read complete," that read expired. Step 1 is always the first step.
+Prior-session full reads, audits, board votes, Gro/GAI feedback, static analysis results, and user approvals expire at the session boundary — including compaction, context window reset, or new conversation. If the prior session said "approved," that approval expired. If it said "full read complete," that read expired. Step 1 is always the first step.
 
-**RULE C-3 — DS/GAI feedback must exist in the current live session's conversation.**
-If a prior session prepared a DS/GAI prompt but the user had not yet received and returned feedback before the session ended or compacted, DS/GAI has not been completed. A prepared prompt is not a completed audit. The actual feedback must appear in the current live conversation before any edit tool is called on any file it covers.
+**RULE C-3 — Gro/GAI feedback must exist in the current live session's conversation.**
+If a prior session prepared a Gro/GAI prompt but the user had not yet received and returned feedback before the session ended or compacted, Gro/GAI has not been completed. A prepared prompt is not a completed audit. The actual feedback must appear in the current live conversation before any edit tool is called on any file it covers.
 
 **RULE C-4 — "Pre-existing" static analysis errors are not exempt. They must be fixed before any patch is proposed.**
 If a file has ruff, mypy, or py_compile failures that existed before your change, those failures must be fixed as part of the patch — not dismissed or noted as "pre-existing." There is no pre-existing carve-out in the static analysis gate. The gate is: all three tools pass clean on the entire file. A broken file that was already broken is more dangerous to patch, not less.
 
-**RULE C-5 — DS/GAI gate is triggered by import chain, not by file name or hotspot classification.**
-If you modify file A, and file A is imported (directly or transitively) by any file that runs during RTH, the DS/GAI gate applies to your change to file A. Trace the full import chain before deciding DS/GAI is not required. "It's not a hotspot file," "it's just a helper/utility," and "it's a small change" are not valid exemptions. File name and hotspot classification are not the gate — RTH execution impact is.
+**RULE C-5 — Gro/GAI gate is triggered by import chain, not by file name or hotspot classification.**
+If you modify file A, and file A is imported (directly or transitively) by any file that runs during RTH, the Gro/GAI gate applies to your change to file A. Trace the full import chain before deciding Gro/GAI is not required. "It's not a hotspot file," "it's just a helper/utility," and "it's a small change" are not valid exemptions. File name and hotspot classification are not the gate — RTH execution impact is.
 
 **RULE C-6 — Multi-file patches: each file's full sequence completes independently before the next file begins.**
 When multiple files must be patched in one session, each file requires its own complete Steps 1–9 before the next file's Step 1 begins. You cannot run Steps 1–5 across all files simultaneously and batch-apply them. Sequence: complete all 9 steps for File A, verify, then begin Step 1 for File B.
 
 **RULE C-7 — "Resuming in-progress work" from a prior session means restarting from Step 1 — not continuing from the step where you stopped.**
-There is no checkpoint system in the patch sequence. A compaction summary that says "we were at Step 5" means you are at Step 0. The mandatory sequence does not have a save state. Resuming requires: full read → 10-point audit → board vote → DS/GAI (if RTH-impacting) → static analysis → cold second-agent → code-review-graph impact → propose → approve → apply → verify. Every time. From the beginning.
+There is no checkpoint system in the patch sequence. A compaction summary that says "we were at Step 5" means you are at Step 0. The mandatory sequence does not have a save state. Resuming requires: full read → 10-point audit → board vote → Gro/GAI (if RTH-impacting) → static analysis → cold second-agent → code-review-graph impact → propose → approve → apply → verify. Every time. From the beginning.
 
 **RULE C-8 — "Simple," "small," "obvious," or "low-risk" are not valid modifiers for the patch sequence.**
 These words do not appear in the mandatory patch sequence. Patch size, diff complexity, apparent obviousness, and prior familiarity with a file are not gating factors. Every patch requires every step. Most of the bugs in this project's history came from patches that seemed obvious and routine.
@@ -433,7 +433,7 @@ year-round and switches automatically with DST).
 
 ## BEHAVIOR RULES
 
-**Hard stops for production:** The following require explicit in-session confirmation, no exceptions: deploying or pushing to any environment, running migrations or schema changes, executing any command with irreversible side effects. Must say yes in the current message. *Carve-out: normal bot operations (Alpaca API calls, FMP calls, DS/GAI audit API calls) are not affected — these are routine automated operations, not user-initiated irreversible actions.*
+**Hard stops for production:** The following require explicit in-session confirmation, no exceptions: deploying or pushing to any environment, running migrations or schema changes, executing any command with irreversible side effects. Must say yes in the current message. *Carve-out: normal bot operations (Alpaca API calls, FMP calls, Gro/GAI audit API calls) are not affected — these are routine automated operations, not user-initiated irreversible actions.*
 
 **Always show what changed:** After any coding task, end with:
 - Files changed (list every file touched)
@@ -456,7 +456,7 @@ indicators/, utility scripts, and any new files created here.
 
 ---
 
-## OPEN QUESTION PROTOCOL — Mandatory Board + DS + GAI on Decision Forks
+## OPEN QUESTION PROTOCOL — Mandatory Board + Gro + GAI on Decision Forks
 
 **When to trigger:** Any time a patch, config change, or design decision has two or more
 viable options and Claude cannot resolve it from first principles, Claude MUST gather
@@ -465,8 +465,8 @@ all three voices before presenting to Rafael:
 1. **Board vote** — relevant domain agents (≥2 cold parallel Explore subagents). For
    strategy/architecture changes: full board (BoD + AB + TB). For feature-specific changes:
    domain-specific boards per the domain mapping in BOARD AUDIT PROTOCOL.
-2. **DS audit** — via direct curl API (DEEPSEEK_API_KEY from .env). Same prompt as GAI.
-3. **GAI audit** — via direct curl API (GEMINI_API_KEY from .env). Same prompt as DS.
+2. **Gro audit** — via direct curl API (GROQ_API_KEY from .env). Same prompt as GAI.
+3. **GAI audit** — via direct curl API (GEMINI_API_KEY from .env). Same prompt as Gro.
 
 **Format — present as a decision table:**
 ```
@@ -490,10 +490,10 @@ votes. Open questions are surfaced immediately when encountered, not deferred to
 
 **The user (Rafael) is the sole mandate authority for this project.**
 
-DS (DeepSeek) and GAI (Google AI Studio) are external audit voices only. They surface
+Gro (Groq) and GAI (Google AI Studio) are external audit voices only. They surface
 risks, flag bugs, and provide recommendations. They have zero authority to block, defer,
-or mandate any work. Never use language like "DS mandated X" or "GAI requires X."
-Correct phrasing: "DS recommended X," "DS flagged X as a risk," "GAI audit found X."
+or mandate any work. Never use language like "Gro mandated X" or "GAI requires X."
+Correct phrasing: "Gro recommended X," "Gro flagged X as a risk," "GAI audit found X."
 
 The user decides:
 - When work starts
@@ -557,7 +557,7 @@ RC bug classes recurred across 8+ sessions because the board could not catch its
 2. Each agent gets: the full file content path + a domain-specific analytical lens
 3. Each agent runs cold — it cannot see any other agent's output before forming conclusions
 4. Report ALL findings including contradictions — never smooth disagreements into false consensus
-5. External AI audits (DeepSeek, Google AI Studio) remain mandatory for hotspot files
+5. External AI audits (Groq, Google AI Studio) remain mandatory for hotspot files
    (portfolio_tracker.py, main.py, broker.py) — different models catch model-level blind spots
 
 **Domain breakdown for standard audit:**
@@ -573,36 +573,36 @@ RC bug classes recurred across 8+ sessions because the board could not catch its
 - `main.py` (866 lines post-decomposition — Read tool in ≤300-line chunks; no Explore subagent needed)
 - `execution/broker.py`
 
-### 3-Point AI Summary — Mandatory Format for DS/GAI Audit Review
+### 3-Point AI Summary — Mandatory Format for Gro/GAI Audit Review
 
-Every time DS and GAI external audit results are returned, Claude must produce a
+Every time Gro and GAI external audit results are returned, Claude must produce a
 **3-Point AI Summary** before proceeding to Step 5 of the patch sequence. No patch
 may be proposed until this summary is written.
 
 **Point 1 — Alignment Score (1/3–3/3):**
-For each finding, state how many of the 3 agents (Claude/board, DS, GAI) agree.
-Format: `Finding: X/3 — [Claude ✓/✗] [DS ✓/✗] [GAI ✓/✗]`
-Conflicts between DS and GAI must be explicitly resolved before the patch is proposed.
+For each finding, state how many of the 3 agents (Claude/board, Gro, GAI) agree.
+Format: `Finding: X/3 — [Claude ✓/✗] [Gro ✓/✗] [GAI ✓/✗]`
+Conflicts between Gro and GAI must be explicitly resolved before the patch is proposed.
 
-**Point 2 — What DS/GAI Both Agree On That Claude Missed:**
-List every finding where DS and GAI independently flagged a gap that Claude and the
+**Point 2 — What Gro/GAI Both Agree On That Claude Missed:**
+List every finding where Gro and GAI independently flagged a gap that Claude and the
 board did not surface. These are the highest-priority additions to the patch.
-If DS and GAI agree and Claude missed it, treat it as a confirmed bug — not optional.
+If Gro and GAI agree and Claude missed it, treat it as a confirmed bug — not optional.
 
-**Point 3 — New Forward-Looking Issues DS/GAI Brought to Light:**
+**Point 3 — New Forward-Looking Issues Gro/GAI Brought to Light:**
 List novel risks, architectural concerns, or edge cases that neither Claude nor the
 board raised. These may require a separate board vote before they can be fixed.
-Flag each with the source (DS only / GAI only / both) and a priority (P0–P3).
+Flag each with the source (Gro only / GAI only / both) and a priority (P0–P3).
 
 **Format template:**
 ```
 === 3-POINT AI SUMMARY — [file] [function] ===
 
 POINT 1 — ALIGNMENT
-  [finding]: X/3 — Claude [✓/✗] DS [✓/✗] GAI [✓/✗]
+  [finding]: X/3 — Claude [✓/✗] Gro [✓/✗] GAI [✓/✗]
   ...
 
-POINT 2 — CLAUDE MISSED (DS + GAI consensus)
+POINT 2 — CLAUDE MISSED (Gro + GAI consensus)
   [finding]: [description] — [action required]
   ...
 
@@ -700,10 +700,10 @@ a protocol violation. This is the authoritative live view for scheduling debug s
 | RC-4 | Estimated exit price (non-fill price passed to record_exit) | **0** | CLOSED — all sites audited S59: PT L1200 (VWAP FIFO, compliant), PT L1753 (filled_avg_price, compliant), run_cycle.py L583 (fetch_actual_fill_price poll_secs=0, compliant). Full read of run_cycle.py (1,500 lines) confirmed. | — |
 | RC-2 | CWD-relative path (logs/ not anchored to `__file__`) | **0** | CLOSED — kelly.py fixed 2026-04-18; run_cycle.py fixed 2026-05-03; both confirmed via full read S58c. entry_logic.py was wrong path in prior HANDOFF (file is at execution/entry_logic.py, no CWD paths). | — |
 | RC-1 | Naive datetime (tz-unaware `datetime.now()`) | **4** | CLOSED (all 16 instances fixed 2026-04-28) | — |
-| RC-5 | Non-atomic write (no tmp→replace pattern) | **0** | CLOSED — portfolio_tracker.py L1711 fixed S59: flush+fsync+Slack escalation added to manual_audit.jsonl append (commit pending). Board 3/3, DS APPROVE, GAI APPROVE (Round 3). | — |
+| RC-5 | Non-atomic write (no tmp→replace pattern) | **0** | CLOSED — portfolio_tracker.py L1711 fixed S59: flush+fsync+Slack escalation added to manual_audit.jsonl append (commit pending). Board 3/3, Gro APPROVE, GAI APPROVE (Round 3). | — |
 | RC-6 | Wrong API field name (Alpaca field assumed not confirmed) | **0** | CLOSED — queued_for_review_2026-06-12 confirmed all 3 historical patches applied; "3 OPEN" was stale. | — |
 | RC-7 | Zero-share sizing (int truncation before floor guard) | **0** | CLOSED — guard at entry_logic.py L1127-1190 confirmed via full read S59. main.py reference was STALE (sizing extracted to entry_logic.py Phase 2). | — |
-| RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **0** | CLOSED — 9 sites applied b2e61f7 (2026-06-08) + L663 bonus site. pending_approval #1 confirmed STALE via full read S59. DS/GAI IO objection retracted via tie-breaker S58c. | — |
+| RC-8 | Unbounded scan buffer (confirm_gate not cleared on block) | **0** | CLOSED — 9 sites applied b2e61f7 (2026-06-08) + L663 bonus site. pending_approval #1 confirmed STALE via full read S59. Gro/GAI IO objection retracted via tie-breaker S58c. | — |
 
 #### Top Hotspot Files by Patch Count (as of 2026-06-15 S59)
 

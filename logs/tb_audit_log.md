@@ -5599,3 +5599,15 @@ Rafael: APPROVED
 **Also deleted (OCI only):** `logs/CLAUDE.md` — stale duplicate snapshot of project rules from 2026-05-01, superseded by root CLAUDE.md; risked being read as authoritative by a future session.
 
 **Method note:** Resolution was verified by reading current file content at the cited line numbers — not inferred from commit messages or file age, per Full Read Gate / No-Grep rules (targeted grep used only to locate already-known line numbers, followed by Read-tool confirmation).
+
+## 2026-06-27 — CLAUDE.md DS→Gro migration (user-flagged staleness)
+
+**Issue:** CLAUDE.md still documented DeepSeek (DS) as the second external audit voice throughout the DS/GAI DIRECT API PROTOCOL, NORTH STAR PERSONA MANDATE, OPEN QUESTION PROTOCOL, AUTHORITY RULE, and 3-Point AI Summary sections. The user flagged that the project moved to Groq ("Gro") and this was never reflected in the docs.
+
+**Verification:** `grep -ril groq .` confirmed `auto_ai_audit.py` and `autonomous_review.py` already call Groq (`_call_groq()`, model `llama-3.3-70b-versatile`, env var `GROQ_API_KEY`) — the live autonomous audit pipeline had already migrated; only CLAUDE.md was stale. This also explains why my DeepSeek curl call this session failed with "Insufficient Balance" — I was hitting a deprecated/unfunded key instead of the live Groq pipeline.
+
+**Fix applied:** Renamed DS→Gro and DeepSeek→Groq throughout CLAUDE.md lines 1–928 (everything before the FUTURE ROADMAP LOG, which is historical record and intentionally left untouched — those entries accurately describe what DS said at the time). Updated the curl example to `api.groq.com/openai/v1/chat/completions`, model `llama-3.3-70b-versatile`, key `GROQ_API_KEY`. Left the Gemini side unchanged except noting the autonomous pipeline uses `gemini-3.1-pro-preview` (separate from the manual in-session `gemini-2.5-flash` curl pattern).
+
+**Memory updated:** `feedback_ds_gai_direct_api.md` rewritten with the migration note, plus two new operational findings: (1) Gemini's `thinkingBudget` can consume the output token budget before producing an answer — add `"thinkingConfig":{"thinkingBudget":0}` to avoid silent truncation; (2) Gemini hallucinated a nonexistent state name (`PENDING_LIQUIDATION_SELL`) during this session's QHM audit — confirmed not in the actual `HoldState` enum, dismissed. Documented as a recurring Gemini failure mode (consistent with prior `_fifo_reconstruct` phantom from S46).
+
+**Not changed:** Historical references to DS in the Live RC Counts table and FUTURE ROADMAP LOG (lines 929+) — these document what DS actually said/found at past sessions and remain accurate as written.
