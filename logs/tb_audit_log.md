@@ -5611,3 +5611,25 @@ Rafael: APPROVED
 **Memory updated:** `feedback_ds_gai_direct_api.md` rewritten with the migration note, plus two new operational findings: (1) Gemini's `thinkingBudget` can consume the output token budget before producing an answer — add `"thinkingConfig":{"thinkingBudget":0}` to avoid silent truncation; (2) Gemini hallucinated a nonexistent state name (`PENDING_LIQUIDATION_SELL`) during this session's QHM audit — confirmed not in the actual `HoldState` enum, dismissed. Documented as a recurring Gemini failure mode (consistent with prior `_fifo_reconstruct` phantom from S46).
 
 **Not changed:** Historical references to DS in the Live RC Counts table and FUTURE ROADMAP LOG (lines 929+) — these document what DS actually said/found at past sessions and remain accurate as written.
+
+## 2026-06-27 — QHM external-close fix: deployed and verified live (post-patch verification)
+
+**Deploy:** commit dff0704 applied → rsync'd to OCI → mtf-bot/mtf-writer/mtf-http restarted → all 4 services active.
+
+**Live confirmation (mtf_bot.log, 2026-06-27 19:11:01–02 ET):**
+```
+NVDA external close detected State → CLOSED.
+GOOGL external close detected State → CLOSED.
+reconcile_on_startup: 2 reconciled, 0 errors
+added candidate NVDA (20% target equity)
+added candidate GOOGL (15% target equity)
+```
+Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED → fresh PENDING_ENTRY exactly as predicted by board + GAI review. No manual state edit required.
+
+**Post-patch verification (points 1, 2, 4, 5):**
+- Point 1 (static analysis): py_compile/mypy/ruff re-run clean on deployed file.
+- Point 2 (trade path trace): confirmed live via log — reconcile_on_startup → _detect_external_close → CLOSED → add_candidate → PENDING_ENTRY. No phantom orders observed.
+- Point 4 (full read): N/A — no further changes to re-read this cycle.
+- Point 5 (cross-references): byte-diff confirms local repo == OCI deployed file, no drift.
+
+**Item CLOSED.** Next priority logged: `resubmit_stop_if_needed()` dead code (defined, never called) — separate scope, not addressed this patch.
