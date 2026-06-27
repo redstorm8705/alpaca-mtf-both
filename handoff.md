@@ -1,6 +1,18 @@
-# Handoff — S67: MRI yfinance T4 fallbacks for VIX + JPY (2026-06-25)
+# Handoff — S68: QHM external-close fix + DS→Gro migration (2026-06-27)
 
-## LATEST CHANGES (S67)
+## LATEST CHANGES (S68)
+
+| Commit | File | Fix |
+|--------|------|-----|
+| `dff0704` | `execution/quarterly_hold_manager.py` | QHM external-close detection gap: `_detect_external_close()` supported PENDING_STOP_REPLACE/PENDING_EARNINGS but was never called for them by `reconcile_on_startup()` or `run_weekly_check()`. NVDA/GOOGL were stranded at stale PENDING_STOP_REPLACE (qty_filled=1) while Alpaca showed 0 shares. Fix verified live 19:11 ET — both self-healed CLOSED→PENDING_ENTRY automatically on restart, no manual edit needed. |
+| `6457394` | `CLAUDE.md` | DS/DeepSeek→Gro/Groq migration. Live audit pipeline (`auto_ai_audit.py`, `autonomous_review.py`) already moved to Groq (`llama-3.3-70b-versatile`); CLAUDE.md was stale and caused a failed DeepSeek curl call this session ("Insufficient Balance" — deprecated/unfunded key). Renamed throughout protocol sections (lines 1–928); historical roadmap log entries left untouched as accurate history. |
+| `967b550` | `logs/` | Triaged and deleted 8 confirmed-resolved `queued_for_review_*`/`pending_approvals_*` files (cross-checked against current code, not file age). Kept 1 genuinely open item: `scan_to_html.py` RC-9 yfinance-news violation, still present at L1226-1281. |
+
+**Also found, not yet fixed (next priority):** `resubmit_stop_if_needed()` in `quarterly_hold_manager.py` is dead code — defined, never called from `main.py` or `run_cycle.py`. No mechanism currently resubmits a missing QHM GTC stop. Needs its own scope decision (which AH window, what cadence) before patching.
+
+**NotebookLM Master Brain:** still unauthenticated — `notebooklm login` requires Rafael to complete Google OAuth in the CLI's own Playwright browser profile (`~/.notebooklm/browser_profile`, separate from regular Chrome) and press Enter in terminal. Cannot be done by Claude.
+
+## Prior Session (S67): MRI yfinance T4 fallbacks for VIX + JPY (2026-06-25)
 
 | Commit | File | Fix |
 |--------|------|-----|
@@ -22,9 +34,9 @@
 | `73b2bc0` | `strategy/run_cycle.py` | Layer 9: 16pt confirmation gate — score-10 signals require score_16pt >= 11; score-11/12 unaffected |
 
 **Branch:** `main`
-**OCI HEAD:** `d81e060`
-**QHM status:** LIVE — NVDA tranche 1/3 (1 sh @ $198.37) + GOOGL tranche 1/3 (1 sh @ $345.55). Tranche 2 due Jun 27 (Day 3), Tranche 3 due Jul 1 (Day 5).
-**OCI note:** All services active post-restart. Both patched files deployed.
+**OCI HEAD:** `dff0704`
+**QHM status:** NVDA + GOOGL both CLOSED (external close, pre-dated the Jun 27 fix) → re-added fresh as PENDING_ENTRY (0 shares, no thesis state) as of 2026-06-27 19:11 ET. Both eligible for a normal Day-1 gate entry attempt on the next qualifying day; tranche history reset to 0/3.
+**OCI note:** All 4 services active post-restart (mtf-bot, mtf-writer, mtf-http, nginx). quarterly_hold_manager.py deployed and byte-verified identical to repo.
 
 ---
 
