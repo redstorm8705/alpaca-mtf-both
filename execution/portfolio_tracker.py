@@ -862,16 +862,18 @@ class PortfolioTracker:
 
         global _eod_fifo_in_progress
         if _eod_fifo_in_progress:
-            # GAI audit 2026-06-27: _fetch_alpaca_fills_for_date() below blocks
-            # on a urllib network call. If SIGTERM arrives mid-call, Python
-            # delivers the signal by interrupting the blocking syscall and
-            # running the registered handler in the SAME thread before the
-            # original call resumes — genuine same-thread reentrancy, not a
-            # theoretical race. Without this guard, the reentrant call's
-            # _save_open_lots_state would persist first, then the original
-            # (resumed) call would overwrite it with its now-stale result,
-            # silently discarding the reentrant call's work. Plain bool, not
-            # threading.Lock — this is same-thread reentrancy, not cross-thread.
+            # Historical note: this guard was added under the assumption that
+            # Python resumes the interrupted call after the SIGTERM handler
+            # returns. Re-verified 2026-06-28 (MTF FULL BOT AUDIT, Gro+GAI
+            # both reversed their original position after rigorous review):
+            # main.py's _handle_sigterm() ends with sys.exit(0), which raises
+            # SystemExit and unwinds the entire call stack rather than
+            # returning — the interrupted call does NOT resume, so the
+            # specific same-thread-resumption race this comment used to
+            # describe is not reachable via SIGTERM in this codebase. Left in
+            # place as harmless defense-in-depth; do not widen further based
+            # on the original (incorrect) rationale. Plain bool, not
+            # threading.Lock — there was never a cross-thread concern here.
             logger.warning(
                 "write_eod_summary: Alpaca-FIFO section already in progress "
                 "(signal-handler reentrancy) — skipping to avoid clobbering "
