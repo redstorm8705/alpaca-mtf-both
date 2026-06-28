@@ -5757,3 +5757,34 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 **Sequencing — both Gro and GAI independently recommended the same thing without prompting:** do NOT layer this refactor on top of the P0 idempotency fix that landed in this exact file earlier today. GAI's specific recommendation: monitor the P0 fix's stability in production for 3-5 trading days before starting Phase 1, and treat each phase as its own separate, atomic deployment — never combine them into one large change.
 
 **Decision: PLAN COMPLETE, EXECUTION DEFERRED.** Not executed this session — both external reviewers and my own judgment converge on waiting for the P0 fix to prove stable first, plus this file has already had two patches land today. Presenting the reviewed plan to Rafael for his decision on timing (proceed now vs. wait for the stabilization window).
+
+---
+
+## 2026-06-28 — MTF FULL BOT AUDIT consolidated fix batch (commit `a41e7ce`)
+
+**Context:** the standing "MTF FULL BOT AUDIT — JUNE 26" initiative (see `logs/mtf_full_bot_audit/MTF_FULL_BOT_AUDIT_2026-06-26.md` for the full multi-session line-by-line audit) completed Phase 1 (all 10 files importing `portfolio_tracker.py`, plus `portfolio_tracker.py` itself — 13,239 lines total). Per Rafael's instruction, paused Phase 2 expansion to consolidate and apply the ready-to-fix findings before continuing.
+
+**10 fixes applied across 3 files** — full detail in the audit doc above; summary:
+
+| File | Fixes | Patch count |
+|---|---|---|
+| `execution/portfolio_tracker.py` | 6 (cumulative P&L loop, record_entry guard, record_partial_exit guard, update_trail_stop self-persist, write_eod_summary _fill_unverified ×3, get_stats defensive fallback) | 46→52 |
+| `execution/kelly.py` | 1 (rebuild_from_trades exit_price guard) | 0→1 |
+| `execution/exit_logic.py` | 2 (EH partial-exit risk.register_close, signal-exit close-failure escalation) | 10→12 |
+
+**Two HIGH-severity findings closed:** the kill-switch P&L gap on extended-hours partial exits (`exit_logic.py`), and the cascading Kelly-stats corruption from missing exit_price (`kelly.py`) — both traced to the same root cause in `write_eod_summary()`'s FIFO-reconciliation-failure paths.
+
+**Sequence:** full read (prior sessions) → 10-point audit (prior sessions) → board vote (4/4 domains APPROVE — Peterffy/Katsuyama reliability, Harris/Brandt execution risk, McKinney data integrity, Thorp quant logic) → Gro+GAI external audit (GAI APPROVE on both rounds; Gro APPROVE on the 9-fix batch, hit its daily 100K-token limit before re-reviewing the board-discovered 10th addition) → static analysis (`py_compile`/`mypy`/`ruff` all PASS) → cold second-agent (PASS, no logic inversion/off-by-one/missing-condition defects across all 9 original fixes) → applied.
+
+**Board caught a real gap during its own review:** Thorp's quant-logic domain identified that fix #3 (`record_partial_exit()`'s entry_price guard) forced `pnl=0.0` but didn't set `_fill_unverified=True`, unlike the matching `write_eod_summary()` pattern — meaning the trade would silently understate realized P&L without being excluded from win-rate/Sharpe stats. Fixed before commit (this is fix #10 in the audit doc's numbering).
+
+**Gro/GAI status note:** not a disagreement requiring the tie-breaker protocol — Gro hit a daily token-budget wall (rate-limit exhaustion, not a substantive objection) before reviewing the final small addition. GAI and all 4 board domains independently confirmed it correct. Per the Authority Rule, proceeded on unanimous remaining-voice consensus rather than waiting ~70 minutes for Gro's quota to reset.
+
+**RC class impact:** none of these 10 fixes map cleanly onto the existing RC-1 through RC-8 taxonomy (all CLOSED per the live count table in CLAUDE.md) — these are novel findings from this audit, not recurrences of the 8 documented classes. No RC count changes.
+
+**Remaining open items (not in this batch, logged in the audit doc for a future session):**
+- Disputed `write_eod_summary()` reentrancy-guard scope (Gro HIGH vs GAI MEDIUM split) — needs a board tie-breaker.
+- 2 design-fork candidates in `run_cycle.py` (multiplicative size-multiplier compounding; event-severity-downgrade gap) — flagged for board review, not resolved.
+- `run_movers.py` dual-process race — pending an OCI crontab check.
+- 10 instances of a stale-comment pattern across files — cosmetic.
+- Dead PDT-era code (`get_rolling_day_trade_count`, `compute_pdt_for_date` in `portfolio_tracker.py`, zero callers) discovered incidentally via impact-radius analysis — candidate for a future dead-code sweep.

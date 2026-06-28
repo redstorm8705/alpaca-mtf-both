@@ -532,6 +532,35 @@ Final Phase 1 file. Covers: process-singleton lockfile (`fcntl.flock`), profile 
 
 ---
 
+## CONSOLIDATED FIX BATCH — APPLIED (commit `a41e7ce`, 2026-06-28)
+
+Per Rafael's instruction to pause Phase 2 expansion and address the outstanding ready-to-fix findings, 10 fixes were applied across `portfolio_tracker.py`, `kelly.py`, and `exit_logic.py`. Full sequence run: full read (already complete via this audit) → 10-point audit (already complete) → board vote (4/4 domains APPROVE: Peterffy/Katsuyama reliability, Harris/Brandt execution risk, McKinney data integrity, Thorp quant logic) → Gro+GAI external audit → static analysis (py_compile/mypy/ruff all clean) → cold second-agent (PASS) → applied.
+
+**Fixes closed:**
+1. `portfolio_tracker.py` cumulative P&L lookback loop — `break` moved inside `try`, no longer gives up on the first unreadable prior-day file.
+2. `portfolio_tracker.py` `record_entry()` — duplicate-open-position guard added (mirrors `promote_pending_to_active()`).
+3. `portfolio_tracker.py` `record_partial_exit()` — entry_price validation added (BUG-5 mirror): forces $0.00 + CRITICAL + Slack + `_fill_unverified=True` on invalid entry, instead of phantom P&L.
+4. `portfolio_tracker.py` `update_trail_stop()` — now self-persists (`self._save_log()`) in both ratchet branches.
+5. `portfolio_tracker.py` `write_eod_summary()` — all 3 `_fifo_reconciled_closed`-without-`record_exit()` paths now also set `_fill_unverified=True` (root-cause fix for the most severe Block 5 finding AND the kelly.py cascading-corruption finding).
+6. `portfolio_tracker.py` `get_stats()` — `t["pnl"]` → `t.get("pnl", 0.0)` defensive fallback (belt-and-suspenders alongside fix #5).
+7. `kelly.py` `rebuild_from_trades()` — skips trades with missing/zero `exit_price` instead of treating as `0.0` (closes the HIGH-severity phantom-loss/phantom-win Kelly corruption finding).
+8. `exit_logic.py` EH partial-exit reconciliation — added `risk.register_close(pnl or 0.0)` (closes the HIGH-severity kill-switch P&L gap finding).
+9. `exit_logic.py` signal-exit close-failure path — added the missing `else:` branch with escalating log/alert (closes the Medium-High asymmetric-alerting finding).
+10. **Board-discovered during review (not in the original audit findings list):** `record_partial_exit()`'s new entry_price guard (fix #3) was forcing `pnl=0.0` but not setting `_fill_unverified=True`, unlike fix #5's pattern — Thorp/quant-logic domain caught this gap during the board vote itself. Fixed before commit by adding `trade["_fill_unverified"] = True` inside that branch.
+
+**Gro availability note:** Gro (Groq) hit its daily 100K-token-per-day limit partway through this review — it APPROVED the original 9-fix diff, but was rate-limited (full exhaustion, ~70min cooldown) before it could independently re-review fix #10. Per the Authority Rule (Gro/GAI are audit voices, zero blocking authority) and given GAI + all 4 board domains independently confirmed fix #10 correct, the fix was applied without re-querying Gro. Not a Gro/GAI disagreement requiring the tie-breaker protocol — purely a rate-limit availability gap, logged for transparency.
+
+**Remaining open items NOT addressed in this batch (require further discussion, not unilateral fixes):**
+- The disputed `write_eod_summary()` reentrancy-guard scope finding from Block 2/3 (Gro HIGH vs GAI MEDIUM disagreement on severity AND fix approach) — still needs a board tie-breaker session.
+- The 2 design-fork candidates from `run_cycle.py` (multiplicative size-multiplier compounding; event-severity-downgrade gap in the hybrid market-reaction engine) — both explicitly flagged for board review, not resolved.
+- `run_movers.py`'s potential dual-process race on `trade_log.json` — still pending an OCI crontab check to determine if it's even live in production.
+- 10 instances of the stale-comment pattern found across files — cosmetic, not yet cleaned up.
+- Dead PDT-era code discovered incidentally during impact analysis (`get_rolling_day_trade_count`, `compute_pdt_for_date` in `portfolio_tracker.py` — zero callers anywhere) — not part of this batch's scope, logged as a candidate for a future dead-code sweep.
+
+**Phase 2 (mapping the rest of the bot beyond `portfolio_tracker.py`'s direct dependency graph) remains paused, by Rafael's instruction, in favor of this consolidation pass.**
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
@@ -540,3 +569,7 @@ flagged. Dependency graph mapped for Phase 0/1 (11 files, 11,239 lines). Block 1
 `portfolio_tracker.py` (lines 1-439) completed this session — see Findings Log above.
 Blocks 2-5 of this same file, plus all 10 Phase-1 files, remain. This is a multi-session
 effort by design — flagging explicitly rather than implying false completeness.
+
+**2026-06-28:** Phase 1 completed (all 10 files). Per Rafael's instruction, paused before
+Phase 2 to consolidate and apply the ready-to-fix findings — see "CONSOLIDATED FIX BATCH"
+above. 10 fixes applied across 3 files, full sequence run, committed `a41e7ce`.
