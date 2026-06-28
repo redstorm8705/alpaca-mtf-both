@@ -6,6 +6,7 @@
 from datetime import datetime
 from events.calendar import EventRisk
 from data.alpaca_data import get_latest_quote
+from trade_logger import log_event as _log_event
 import logging
 
 logger = logging.getLogger("movers_strategy")
@@ -222,7 +223,15 @@ class MoversStrategy:
                 break
 
             # ── Gate: already in this symbol ──────────────────────────────
-            if sym in self._active_movers or self.risk.already_in_position(sym):
+            # RiskManager has no already_in_position() — it tracks only an
+            # open_positions COUNT, not per-symbol state. self._active_movers
+            # is the correct (and only) source of truth here: it's kept
+            # accurate by reconcile_on_startup() at every restart (2026-06-28
+            # redesign), so checking it alone is equivalent to checking the
+            # broker directly. (P0 fix: the old call raised AttributeError on
+            # every single candidate, crashing the script under the new
+            # fail-loud exception policy.)
+            if sym in self._active_movers:
                 continue
 
             # ── Gate: event blackout ──────────────────────────────────────
@@ -258,9 +267,17 @@ class MoversStrategy:
                     continue
 
             # ── Gate: portfolio risk ──────────────────────────────────────
-            can_trade, reason = self.risk.can_open_trade()
-            if not can_trade:
-                logger.warning(f"Risk gate blocked: {reason}")
+            # RiskManager's real method is can_open_position() -> bool (no
+            # reason string; it already logs internally — INFO on max-
+            # positions, CRITICAL via check_kill_switch() on a kill-switch
+            # block). P0 fix: can_open_trade() doesn't exist, raised
+            # AttributeError on every candidate once the prior gate stopped
+            # blocking it.
+            if not self.risk.can_open_position():
+                logger.warning(
+                    f"Risk gate blocked entry for {sym} — see RiskManager "
+                    f"log above for reason."
+                )
                 break
 
             # ── Calculate exits ───────────────────────────────────────────
@@ -272,7 +289,9 @@ class MoversStrategy:
                 take_profit = round(price * (1 - TAKE_PROFIT_PCT), 2)
                 stop_loss   = round(price * (1 + STOP_LOSS_PCT),   2)
 
-            base_qty = self.risk.get_position_size(price, stop_loss)
+            # P0 fix: get_position_size() doesn't exist on RiskManager — the
+            # real method is calculate_position_size(entry, stop, trade_mode).
+            base_qty = self.risk.calculate_position_size(price, stop_loss, mode)
             qty = max(1, int(base_qty * size_mult))
 
             # ── Execute ───────────────────────────────────────────────────
@@ -308,20 +327,33 @@ class MoversStrategy:
                 "stop_order_id": stop_order_id,
             }
 
-            # Log to portfolio tracker
-            signal_mock = {
-                "symbol":    sym,
-                "action":    "buy" if direction == "long" else "sell_short",
-                "mode":      mode,
-                "direction": direction,
-                "score":     mover.get("confluence_score", 0) or 0,
-                "reason":    (
+            # P0 fix (2026-06-28, AWP): self.tracker.log_entry() never existed
+            # on PortfolioTracker — would have crashed run_movers.py on the
+            # first successful entry (evaluate_entries() has no internal
+            # try/except). Gro+GAI both APPROVE logging via the independent
+            # trade_logger.log_event() append-only event log rather than
+            # PortfolioTracker.record_entry(), which would write into the
+            # SAME trade_log.json main.py's separate process also writes to
+            # — reintroducing the exact cross-process file-conflict hazard
+            # fixed earlier tonight (main.py's _save_log() would silently
+            # overwrite/drop a Movers entry it has no in-memory knowledge of).
+            _log_event(
+                "entry",
+                symbol=sym,
+                price=price,
+                size=qty,
+                score=mover.get("confluence_score", 0) or 0,
+                data_source="alpaca_data",
+                strategy="movers",
+                direction=direction,
+                mode=mode,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                reason=(
                     f"Movers strategy | {direction} | "
                     f"{mover['pct_change']:+.2f}% | vol {vol_ratio:.1f}x"
                 ),
-                "stops":     {"stop_loss": stop_loss, "take_profit": take_profit},
-            }
-            self.tracker.log_entry(signal_mock, qty, price)
+            )
 
             executed.append(sym)
             logger.info(
@@ -378,7 +410,20 @@ class MoversStrategy:
                     self._cancel_stop_if_present(sym, trade)
                     result = self.broker.close_position(sym)
                     if result["success"]:
-                        self.tracker.log_exit(sym, curr_price, reason)
+                        # P0 fix (2026-06-28, AWP): see entry-side comment —
+                        # log via the independent trade_logger event log, not
+                        # PortfolioTracker.record_exit() (cross-process
+                        # trade_log.json conflict with main.py).
+                        _exit_pnl = (
+                            (curr_price - trade["entry_price"]) * trade["qty"]
+                            if direction == "long"
+                            else (trade["entry_price"] - curr_price) * trade["qty"]
+                        )
+                        _log_event(
+                            "exit", symbol=sym, price=curr_price,
+                            size=trade["qty"], data_source="alpaca_data",
+                            strategy="movers", reason=reason, pnl=round(_exit_pnl, 2),
+                        )
                         self._active_movers.pop(sym)
                         closed.append(sym)
                         emoji = "💰" if hit_tp else "🛑"
@@ -445,7 +490,18 @@ class MoversStrategy:
                 if result["success"]:
                     pos = self.broker.get_position(sym)
                     price = float(pos.current_price) if pos else trade["entry_price"]
-                    self.tracker.log_exit(sym, price, "EOD flatten")
+                    # P0 fix (2026-06-28, AWP): see check_exits()'s matching
+                    # comment — independent event log, not a shared-file write.
+                    _flat_pnl = (
+                        (price - trade["entry_price"]) * trade["qty"]
+                        if trade["direction"] == "long"
+                        else (trade["entry_price"] - price) * trade["qty"]
+                    )
+                    _log_event(
+                        "exit", symbol=sym, price=price, size=trade["qty"],
+                        data_source="alpaca_data", strategy="movers",
+                        reason="EOD flatten", pnl=round(_flat_pnl, 2),
+                    )
                     self._active_movers.pop(sym)
                     closed.append(sym)
                 else:
