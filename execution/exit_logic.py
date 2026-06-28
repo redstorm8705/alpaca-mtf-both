@@ -1925,6 +1925,40 @@ def check_exits(
                             risk.register_close(pnl or 0.0)
                             trade.pop("_gtc_sig_defer_count", None)
                             closed.append(symbol)
+                    else:
+                        # MTF FULL BOT AUDIT — JUNE 26 (Gro+GAI consensus,
+                        # Medium-High): close failed AND position confirmed
+                        # to still exist. Unlike the hard_stop path, this
+                        # case previously had zero logging or alerting —
+                        # silent retry next cycle. Mirrors the defer-counter
+                        # escalation pattern already used elsewhere in this
+                        # file (_gtc_sig_defer_count, _gtc_cancel_defer_count).
+                        _sig_close_fails = trade.get("_signal_close_fail_count", 0) + 1
+                        trade["_signal_close_fail_count"] = _sig_close_fails
+                        tracker._save_log()
+                        if _sig_close_fails >= 3:
+                            logger.critical(
+                                f"[{symbol}] Signal-exit close FAILED {_sig_close_fails} "
+                                f"consecutive cycles — position remains open. "
+                                f"Verify in Alpaca manually."
+                            )
+                            try:
+                                from alerts import send_slack as _sce_slack
+                                _sce_slack(
+                                    f":warning: [{symbol}] Signal-exit close has failed "
+                                    f"{_sig_close_fails} consecutive cycles — position "
+                                    f"still open. Check Alpaca for a stuck order or API issue."
+                                )
+                            except Exception as _sce_e:
+                                logger.warning(
+                                    f"[{symbol}] Signal-exit close-fail alert failed: {_sce_e}"
+                                )
+                        else:
+                            logger.warning(
+                                f"[{symbol}] Signal-exit close_position() failed — "
+                                f"position confirmed still open (cycle {_sig_close_fails}/3). "
+                                f"Will retry next scan."
+                            )
                 except Exception as _gp_err:
                     logger.warning(
                         f"[{symbol}] Could not verify Alpaca position "
@@ -1932,6 +1966,7 @@ def check_exits(
                     )
             if success:
                 trade.pop("_gtc_sig_defer_count", None)
+                trade.pop("_signal_close_fail_count", None)
                 if not _sig_gtc_ok:
                     _cancel_open_gtc_orders(symbol, trade, tracker)
                 _sig_fill = _fetch_actual_fill_price(
@@ -2049,6 +2084,14 @@ def _check_exits_extended_hours(
                         else round(fill_price + trail_dist, 2)
                     )
                     pnl = tracker.record_partial_exit(symbol, fill_price, filled_qty, trail_stop)
+                    # MTF FULL BOT AUDIT — JUNE 26 (Gro HIGH/GAI CRITICAL,
+                    # consensus fix): every other partial-exit path in this
+                    # file calls risk.register_close() immediately after the
+                    # P&L is known. This EH reconciliation branch was the one
+                    # exception — a loss taken on an extended-hours partial
+                    # exit was invisible to the daily kill-switch total.
+                    if risk is not None:
+                        risk.register_close(pnl or 0.0)
                     kelly.record_trade(
                         direction, trade.get("trade_mode", "swing"),
                         entry_price, fill_price, trade.get("stop"), filled_qty,

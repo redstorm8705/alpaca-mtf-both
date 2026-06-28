@@ -995,13 +995,12 @@ class PortfolioTracker:
                                 ).get("total_pnl") or 0.0
                             )
                             _alpaca_cumulative = round(_prev_total + _alpaca_pnl, 2)
+                            break
                         except Exception as _load_err:
                             logger.warning(
                                 f"Failed to load prior EOD file {_prev_eod_path} — "
-                                f"cumulative P&L will default to today only: "
-                                f"{_load_err}"
+                                f"trying an earlier day: {_load_err}"
                             )
-                        break
                 if _alpaca_cumulative is None:
                     _alpaca_cumulative = _alpaca_pnl  # first trading day
 
@@ -1249,11 +1248,21 @@ class PortfolioTracker:
                                 self.open_trades[_sym_r][
                                     "_fifo_reconciled_closed"
                                 ] = True
+                                # MTF FULL BOT AUDIT — JUNE 26 (Gro+GAI consensus):
+                                # this trade never goes through record_exit(), so
+                                # exit_price/pnl are never set. _load_log() later
+                                # routes it directly into closed_trades. Without
+                                # _fill_unverified=True, get_stats() (direct
+                                # t["pnl"] indexing) raises KeyError, and kelly.py's
+                                # rebuild_from_trades() treats the missing
+                                # exit_price as 0.0 — a phantom catastrophic
+                                # loss (long) or phantom huge win (short).
+                                self.open_trades[_sym_r]["_fill_unverified"] = True
                                 self._save_log()
                                 logger.error(
                                     "write_eod_summary: %s has no valid FIFO exit"
                                     " prices (all 0.0) — marked"
-                                    " _fifo_reconciled_closed."
+                                    " _fifo_reconciled_closed + _fill_unverified."
                                     " Manual P&L reconciliation required.",
                                     _sym_r,
                                 )
@@ -1313,11 +1322,15 @@ class PortfolioTracker:
                                     self.open_trades[_sym_r][
                                         "_fifo_reconciled_closed"
                                     ] = True
+                                    # MTF FULL BOT AUDIT — JUNE 26: see matching
+                                    # comment above — record_exit() failed here,
+                                    # so exit_price/pnl were never set either.
+                                    self.open_trades[_sym_r]["_fill_unverified"] = True
                                     self._save_log()
                             logger.error(
                                 "write_eod_summary: record_exit() failed for %s"
                                 " during FIFO reconciliation — marked"
-                                " _fifo_reconciled_closed: %s",
+                                " _fifo_reconciled_closed + _fill_unverified: %s",
                                 _sym_r,
                                 _recon_err,
                             )
@@ -1327,11 +1340,15 @@ class PortfolioTracker:
                             self.open_trades[_sym_r][
                                 "_fifo_reconciled_closed"
                             ] = True
+                            # MTF FULL BOT AUDIT — JUNE 26: see matching comment
+                            # above — no record_exit() call on this path either.
+                            self.open_trades[_sym_r]["_fill_unverified"] = True
                             self._save_log()
                             logger.warning(
                                 "write_eod_summary: %s has no remaining FIFO lots"
                                 " and no per_trade entry — marked"
-                                " _fifo_reconciled_closed and persisted.",
+                                " _fifo_reconciled_closed + _fill_unverified"
+                                " and persisted.",
                                 _sym_r,
                             )
         # ── end Phase 2a.5 ──────────────────────────────────────────────────────
@@ -1382,6 +1399,16 @@ class PortfolioTracker:
         data_source: str = "alpaca_data",
         **extra_log,
     ):
+        _existing = self.open_trades.get(symbol)
+        if _existing is not None and _existing.get("status") == "open":
+            logger.warning(
+                f"[{symbol}] record_entry() called while an OPEN position already "
+                f"exists (entry=${_existing.get('entry_price', 0):.2f}, "
+                f"qty_remaining={_existing.get('qty_remaining', '?')}) — "
+                f"refusing to overwrite. Mirrors promote_pending_to_active()'s "
+                f"duplicate-status guard."
+            )
+            return
         self.open_trades[symbol] = {
             "symbol":                 symbol,
             "direction":              direction,
@@ -1600,10 +1627,43 @@ class PortfolioTracker:
             return 0.0
         trade["partial_exit_qty_last"] = qty_closed  # track for idempotency
         direction = trade["direction"]
-        entry     = trade["entry_price"]
-
-        pnl = (exit_price - entry) * qty_closed if direction == "long" \
-              else (entry - exit_price) * qty_closed
+        # BUG-5 mirror (record_exit() pattern): validate entry_price before using
+        # it in P&L math. A None/zero entry would otherwise produce a phantom
+        # P&L of roughly ±(exit_price * qty_closed) — the same corruption class
+        # found in kelly.py's rebuild_from_trades() missing exit_price guard.
+        _raw_entry = trade.get("entry_price")
+        if _raw_entry is None or float(_raw_entry or 0.0) <= 0:
+            logger.critical(
+                "[%s] record_partial_exit: entry_price=%r is None/zero — "
+                "partial P&L forced to $0.00. Check pending_overnight promotion "
+                "and fill logs.",
+                symbol, _raw_entry,
+            )
+            try:
+                from alerts import send_slack as _pep_slack
+                _pep_slack(
+                    f"🚨 CRITICAL: {symbol} partial exit with missing/zero "
+                    f"entry_price. P&L forced to $0.00. Check OCI logs immediately."
+                )
+            except Exception as _pep_slack_err:
+                logger.warning(
+                    "[%s] partial-exit entry_price Slack alert failed: %s",
+                    symbol, _pep_slack_err,
+                )
+            # Board vote (Thorp/quant-logic domain, MTF FULL BOT AUDIT — JUNE 26):
+            # mirror the write_eod_summary() _fill_unverified pattern so this
+            # trade is excluded from get_stats() win-rate/Sharpe math and from
+            # kelly.py's rebuild_from_trades() — without this flag, the forced
+            # $0.00 partial leg would silently understate realized P&L without
+            # ever being excluded from edge/win-rate statistics the way a
+            # FIFO-reconciliation failure already is.
+            trade["_fill_unverified"] = True
+            entry = 0.0
+            pnl   = 0.0
+        else:
+            entry = float(_raw_entry)
+            pnl = (exit_price - entry) * qty_closed if direction == "long" \
+                  else (entry - exit_price) * qty_closed
 
         trade["qty_remaining"]    -= qty_closed
         # Guard: qty_remaining must be [0, qty] —
@@ -1628,7 +1688,16 @@ class PortfolioTracker:
         return pnl
 
     def update_trail_stop(self, symbol: str, new_trail_stop: float):
-        """Ratchet the trailing stop in the favorable direction."""
+        """Ratchet the trailing stop in the favorable direction.
+
+        Self-persists (calls self._save_log()) like every other state-mutating
+        method on this class. Two call sites in exit_logic.py's trail-ratchet
+        branches (check_partial_exits, _check_exits_extended_hours) had no
+        unconditional save downstream of this call — several reachable
+        early-exit paths (stop-cancel failure, GTC resubmit failure, position
+        not found) left a ratcheted trail_stop unpersisted. Gro+GAI consensus
+        fix, MTF FULL BOT AUDIT — JUNE 26.
+        """
         if symbol not in self.open_trades:
             return
         trade     = self.open_trades[symbol]
@@ -1636,8 +1705,10 @@ class PortfolioTracker:
         direction = trade["direction"]
         if direction == "long" and (old is None or new_trail_stop > old):
             trade["trail_stop"] = new_trail_stop
+            self._save_log()
         elif direction == "short" and (old is None or new_trail_stop < old):
             trade["trail_stop"] = new_trail_stop
+            self._save_log()
 
     def record_exit(
         self, symbol: str, exit_price: float, reason: str = "signal",
@@ -1900,8 +1971,16 @@ class PortfolioTracker:
         # Unverified fills have pnl=$0.00 (forced by entry=None guard in record_exit
         # or by fetch_actual_fill_price fallback) — including them inflates total_trades
         # and skews win_rate/Sharpe without contributing real signal (DS+GAI S47).
+        # MTF FULL BOT AUDIT — JUNE 26: defensive .get() fallback, belt-and-
+        # suspenders alongside the write_eod_summary() root-cause fix (which
+        # now sets _fill_unverified=True on every _fifo_reconciled_closed path).
+        # Covers any trade that reaches closed_trades without "pnl" ever set —
+        # historical records pre-dating that fix, or any future path that's
+        # missed. Direct t["pnl"] indexing previously raised KeyError here,
+        # which is called from inside _save_log() — meaning every subsequent
+        # mutating call would also fail until restart.
         pnls   = [
-            t["pnl"] for t in self.closed_trades
+            t.get("pnl", 0.0) for t in self.closed_trades
             if not t.get("_fill_unverified")
         ]
         wins   = [p for p in pnls if p > 0]

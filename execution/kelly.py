@@ -400,6 +400,14 @@ class KellySizer:
             # patch_exit_pnl() verifies the fill and clears the flag.
             if t.get("_fill_unverified"):
                 continue
+            # MTF FULL BOT AUDIT — JUNE 26 (Gro+GAI consensus, belt-and-suspenders
+            # alongside the write_eod_summary() root-cause fix): a missing
+            # exit_price must be excluded, not defaulted to 0.0. exit_p=0.0 on
+            # a real entry_price produces a phantom catastrophic loss (long) or
+            # phantom huge win (short) — the latter would inflate Kelly into
+            # over-sizing future short positions based on a fictitious trade.
+            if t.get("exit_price") is None or float(t.get("exit_price") or 0) <= 0:
+                continue
             direction  = t.get("direction", "")
             trade_mode = t.get("trade_mode", "intraday")
             entry      = float(t.get("entry_price") or 0)
