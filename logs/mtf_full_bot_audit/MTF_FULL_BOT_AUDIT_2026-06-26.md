@@ -470,6 +470,27 @@ Structured trade-event logging to `logs/trade_events.jsonl` (Guardrail 7). Simpl
 
 ---
 
+## `strategy/run_cycle.py` (1669 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+The main scan-cycle orchestrator: kill-switch check, premarket phase, AH/overnight phase (GTC stop submission + VIX widening, 24/7 exit monitoring), RTH phase (ORB gate, the 9-layer dynamic MIN_SCORE system, the hybrid SPY/QQQ market-reaction engine), signal scanning/filtering, entry execution, dashboard/HTML writes, periodic EOD flush.
+
+**Stale comments — 3 more instances of the recurring pattern (8th-10th confirmed this audit), all low severity, documentation debt only:**
+1. ~Line 851: "Fetches TLT, JPY=X, HYG/LQD, USO, GLD, EWJ/EWG... via yfinance" describing `mri.refresh()`'s internals — already flagged via the earlier grep sweep; confirmed in-context here.
+2. ~Lines 1393-1395: comment says "MRI=STRESSED, HIGH, or CRITICAL" blocks entries, but the actual conditional (line 1397) only checks `("HIGH", "CRITICAL")` — confirmed this matches a deliberate, board-approved fix (commit `d81e060`, per S66 handoff: "remove STRESSED from hard-block — restores 2026-06-13 board decision"). Code is correct; comment was never updated after the fix — notable because this one describes risk-gating logic, where a future reader trusting the comment could misjudge the bot's actual behavior.
+3. ~Line 1628: header comment says "once after 1:05 PM PST" but the actual gate (line 1638-1641) checks 1:15 PM PST, with its own separate inline comment correctly explaining the 1:15 timing rationale ("after EOD writes"). Minor drift between header and implementation.
+
+**Two candidate findings flagged for board review (design forks, not unilateral bugs — per CLAUDE.md's Open Question Protocol):**
+
+**Candidate 1 — multiplicative size-multiplier compounding (Gro + GAI both confirm the mechanism, both stop short of calling it a definitive bug):** `size_multiplier = event_size_mult × regime_size_mult × tod_size_mult × _spy_risk_mult × _pnl_size_mult × _overnight_size_mult` (line 1286) directly multiplies 6 independent stress factors. GAI ran a concrete example: 6 individually-reasonable factors (0.8, 0.75, 0.85, 0.6, 0.7, 0.9) compound to **0.193x** — under 20% of intended size — even though no single factor implied anything close to that severe a reduction. GAI's framing: "the system effectively de-risks more aggressively than any single factor implies... not a bug, but a significant risk of unintended behavior." Candidate fixes proposed (not applied): a floor on the final compounded multiplier, or replacing some subset of independent multiplication with a different combination strategy (e.g., min() of the worst few rather than the product of all). **Needs board input — is this the intended "extra caution when many signals align" behavior, or an unintended interaction nobody designed for?**
+
+**Candidate 2 — hybrid market-reaction engine: a lower-severity event can prematurely override a higher-severity event's persistence countdown (verified directly against the literal code, lines 1010-1054):** the event-detection block is unconditional — any cycle where `_new_event` is truthy (ANY new trigger, regardless of severity vs. the currently active one) overwrites `_main._spy_event_type`, resets `_main._spy_risk_scans_left` to the NEW event type's persistence value, and updates direction/magnitude (lines 1045-1050) — with zero comparison against the currently active event's severity or remaining countdown. Concrete scenario: an EXTREME event is active with 2 scans left (of an original persistence of 3); the very next cycle's SPY/QQQ bar only triggers a SECTOR-level signal (not another EXTREME) — the code unconditionally downgrades the state to SECTOR with SECTOR's own (shorter) persistence count, discarding EXTREME's remaining 2 scans and its associated +3 MIN_SCORE / 0.50x size protections early. **This defeats the apparent design intent of the persistence mechanism** (sticky protection that should outlast a single quiet bar) for the specific case where a NEW, milder trigger fires before the prior, more severe one's countdown naturally expires. **Needs board input — should a new lower-severity event detection be prevented from downgrading an active higher-severity event's state until that event's own countdown reaches zero?** This is the kind of decision-fork CLAUDE.md's Open Question Protocol exists for — not resolved unilaterally here.
+
+**Decision: both candidates logged as OPEN ITEMS requiring board/Gro/GAI alignment before any patch — NOT applied this session,** consistent with "audit first, consolidated fix later."
+
+**Next Phase-1 file:** `main.py` (1068 lines) — the final Phase 1 file, and where the open SIGTERM-reentrancy cross-file question from `entry_logic.py`'s audit gets resolved — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
