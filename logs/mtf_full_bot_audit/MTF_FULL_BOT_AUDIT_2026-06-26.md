@@ -314,7 +314,32 @@ Owns: overnight breakeven exit, thesis-invalidation exit, breakeven-stop promoti
 
 **REFUTED (not logged as confirmed) — GAI speculative "Finding 3":** GAI proposed a "zombie GTC-cancel-defer counter" scenario where a stale non-zero defer count could delay future valid exit attempts after a `close_position()` failure. On inspection this conflates two distinct mechanisms: the defer counters (`_gtc_cancel_defer_count`/`_gtc_sig_defer_count`) gate the **pre-close** "GTC order not yet confirmed cancelled" retry step — they are not read or incremented anywhere in the **post-close-failure** code paths GAI's scenario describes. Not pinned to a concrete line/call site. Not logged as a confirmed finding — flagged as unverified speculation, consistent with this audit's standing practice of not trusting AI claims without source verification.
 
-**Status: `check_exits()` (Block 2) COMPLETE.** Remaining in `exit_logic.py`: `_check_exits_extended_hours()` (lines 1980-2182, ~200 lines) — the trail-stop ratchet branch (line ~2125) was already covered resolving the cross-file persistence question; the rest of this function (AH/PM price fetch, breakeven/trail hit detection, hard-stop check) NOT YET READ.
+**Status: `check_exits()` (Block 2) COMPLETE.**
+
+### Block 3: `_check_exits_extended_hours()` (lines 1980-2182, ~200 lines) — full read complete.
+
+24/7 exit monitoring during pre-market (4:00-9:30am ET) and after-hours (4:00-8:00pm ET). Handles: PM-exit order reconciliation, post-partial trail-stop/breakeven-stop hit detection + ratcheting (already covered resolving the cross-file persistence question), pre-partial hard-stop breach, and first-partial-exit-target detection — all via limit orders (`submit_limit_order`) rather than market closes, appropriate for thin EH liquidity.
+
+**Finding — missing kill-switch P&L registration on EH partial-exit fills (real, CONFIRMED HIGH by Gro + GAI independently):** When a pending extended-hours partial-exit limit order reconciles as filled (~line 2045-2060), the code calls `tracker.record_partial_exit()` and `kelly.record_trade()` but never `risk.register_close(pnl or 0.0)`. Every other partial-exit path in this file (3 sites in `check_partial_exits()`, confirmed via grep) and the FULL-exit reconciliation branch immediately below this one in the same function (line 2064) all call `risk.register_close()`. Grep across the whole file confirms exactly 10 `register_close()` calls, none near line 2051 — this is a real, isolated omission, not a different-pattern false alarm.
+- Gro: confirmed the gap; rated **High** — kill switch (7% daily loss, paper profile) could undercount a day's realized loss, permitting further entries that should have been blocked.
+- GAI: confirmed independently, same **High** rating, same concrete scenario — an EH partial exit taken at a meaningful loss (e.g., an overnight gap-down) is invisible to the daily kill-switch total, so the bot could continue trading later that day believing it's under the 7% threshold when it is not.
+- **Fix (both voices converge):** add `risk.register_close(pnl or 0.0)` immediately after the `pnl = tracker.record_partial_exit(...)` line, mirroring every sibling exit/partial-exit path in this file.
+- **Decision: NOT FIXED THIS SESSION** — logged per "audit first, consolidated fix later." This is now the highest-severity unfixed finding from `exit_logic.py` (kill-switch integrity, not just a logging/persistence gap) and should be prioritized near the top of the eventual consolidated fix batch.
+
+**`execution/exit_logic.py` (2182 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE.**
+
+### Summary of `exit_logic.py` findings (for the eventual consolidated fix batch)
+
+| # | Finding | Lines | Severity | Source |
+|---|---|---|---|---|
+| 1 | `update_trail_stop()` not self-persisting — real gap in 2 of 5 call sites (trail-ratchet-only branches in `check_partial_exits()` and `_check_exits_extended_hours()`) | ~362, ~2125 | Moderate-High (GAI escalated) | Gro+GAI consensus; fix targets `portfolio_tracker.py`, not this file |
+| 2 | Signal-exit close failure (position confirmed still exists) has no log/alert, unlike hard-stop's CRITICAL+alert for the same condition | ~1845-1932 | Medium-High | Gro+GAI consensus |
+| 3 | EH partial-exit fill reconciliation never calls `risk.register_close()` — kill switch can undercount realized loss | ~2051 | **High** | Gro+GAI consensus |
+| — | `_forced_close_pending` dead flag, never read anywhere — zero functional impact | ~1237-1382 | None (cosmetic) | Confirmed, not actionable |
+
+**Refuted this file:** 1 Gro hallucination (GTC-defer counters falsely claimed never reset — directly contradicted by 4 separate pop() call sites), 1 GAI speculative claim not pinned to a real code path (conflated pre-close defer counters with post-close-failure scenario).
+
+**Next Phase-1 file:** `kelly.py` (450 lines) — proceed?
 
 ---
 
