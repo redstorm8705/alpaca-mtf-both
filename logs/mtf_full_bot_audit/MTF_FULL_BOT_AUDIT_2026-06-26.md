@@ -128,6 +128,16 @@ finding | severity | board/Gro/GAI alignment.)
 
 **Decision: NOT FIXED THIS SESSION.** This needs explicit resolution of the Gro/GAI disagreement (board counter-prompt + majority per CLAUDE.md's tie-breaker protocol) and careful design of whichever fix direction wins, before any patch is drafted — exactly the kind of finding that justifies doing this audit properly rather than assuming today's P0 fix was complete. Logged here as the audit's first concrete vindication of slowing down.
 
+### RESOLVED — 2026-06-28, via Gro/GAI counter-prompt (the disagreement above is moot; the underlying premise was wrong)
+
+Rather than resolving "which fix wins" (widen the guard vs. GAI's emergency-EOD-path alternative), counter-prompted both Gro and GAI with a deeper question while auditing `main.py`: does the original interrupted call to `write_eod_summary()` actually ever "resume" after the SIGTERM handler runs, as the scenario in point 1 above assumes?
+
+**Answer: no.** `main.py`'s `_handle_sigterm()` ends with `sys.exit(0)`, which raises `SystemExit` — a `BaseException` subclass, not caught by any of the `except Exception` clauses anywhere in the call chain (verified via grep: zero bare `except:`/`except BaseException:` in `portfolio_tracker.py`). Under CPython's signal-handling model, a handler that raises (rather than returns normally) does not let the originally-interrupted code resume — the exception unwinds the *entire* stack of whatever was executing when the signal was noticed, terminating the process. **Both Gro and GAI, independently, reversed their original positions after this analysis** and agreed: the "original call resumes and could overwrite the reentrant call's work" scenario this finding (and the original P0 guard) was built around is not reachable via SIGTERM in this codebase. Both recommended removing the guard entirely as solving a non-problem.
+
+**Decision (Rafael, 2026-06-28): keep the guard as harmless defense-in-depth, fix the misleading comment rather than remove protective code on AI reasoning alone.** Applied in commit `1cc7509` — the comment now accurately states that `sys.exit(0)` prevents resumption, rather than asserting the (incorrect) original premise. No functional code change; the boolean check remains in place.
+
+**Net effect on the original dispute:** Gro's "widen to whole function" vs. GAI's "surgical emergency-path" disagreement is no longer relevant — both proposed fixes were solving for a race that doesn't exist via this mechanism. The deterministic (not probabilistic) sub-finding that DOES still stand: if SIGTERM interrupts an original `write_eod_summary()` call mid-FIFO-fetch, the SIGTERM handler's own call to the same function — running to completion in the same signal-handler invocation before `sys.exit(0)` — will *always* persist a tracker-fallback-only (less authoritative) EOD report for that day, since the original call never gets a chance to finish and overwrite it with the more complete Alpaca-FIFO version. This is a known, accepted limitation of process termination mid-report rather than a reentrancy bug — not pursued further this session.
+
 ---
 
 ### MAJOR FINDING #2 — cumulative P&L lookback loop breaks on file-exists, not on successful-parse (CONSENSUS, no debate — fix not yet applied)
@@ -214,12 +224,12 @@ finding | severity | board/Gro/GAI alignment.)
 **Summary of confirmed findings, this file only:**
 | # | Finding | Severity | Status |
 |---|---|---|---|
-| 1 | `write_eod_summary()` reentrancy guard incomplete (pre-FIFO reload + final write exposed) | DISPUTED (Gro: HIGH / GAI: MEDIUM) — fix approach also disputed | Logged, not fixed |
-| 2 | Cumulative P&L lookback loop breaks on file-exists not successful-parse | CRITICAL (Gro) / HIGH (GAI) — consensus fix | Logged, not fixed |
-| 3 | `record_entry()` no overwrite guard for existing open/pending trade | HIGH — consensus | Logged, not fixed |
-| 4 | `update_trail_stop()` doesn't self-persist | MEDIUM — consensus, needs exit_logic.py cross-check | Logged, not fixed |
-| 5 | `record_partial_exit()` missing entry-price guard `record_exit()` already has | MEDIUM — consensus | Logged, not fixed |
-| 6 | `get_stats()` `KeyError` cascade silently breaks all future persistence | **CRITICAL — consensus, GAI's top priority of the day** | Logged, not fixed |
+| 1 | `write_eod_summary()` reentrancy guard incomplete (pre-FIFO reload + final write exposed) | RESOLVED 2026-06-28 — premise was wrong (sys.exit(0) prevents the resumption scenario); both Gro/GAI reversed; comment fixed (`1cc7509`), guard kept as harmless defense-in-depth | **CLOSED** |
+| 2 | Cumulative P&L lookback loop breaks on file-exists not successful-parse | CRITICAL (Gro) / HIGH (GAI) — consensus fix | **FIXED `a41e7ce`** |
+| 3 | `record_entry()` no overwrite guard for existing open/pending trade | HIGH — consensus | **FIXED `a41e7ce`** |
+| 4 | `update_trail_stop()` doesn't self-persist | MEDIUM — consensus, needs exit_logic.py cross-check | **FIXED `a41e7ce`** |
+| 5 | `record_partial_exit()` missing entry-price guard `record_exit()` already has | MEDIUM — consensus | **FIXED `a41e7ce`** |
+| 6 | `get_stats()` `KeyError` cascade silently breaks all future persistence | **CRITICAL — consensus, GAI's top priority of the day** | **FIXED `a41e7ce`** (root cause: `write_eod_summary()` now sets `_fill_unverified` on all 3 unreconciled-exit paths; `get_stats()` also got a defensive fallback) |
 | 7 | Silent `trade_logger` import fallback (no warning) | LOW-MEDIUM — consensus | Logged, not fixed |
 | 8 | `_atomic_write()` orphaned `.tmp` file on double failure | LOW | Logged, not fixed |
 | 9 | `record_stop_breach_blocked()` possible `TypeError` if both stop fields are `None` | LOW | Logged, not fixed |
