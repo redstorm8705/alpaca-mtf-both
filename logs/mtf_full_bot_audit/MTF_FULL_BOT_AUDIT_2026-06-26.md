@@ -576,8 +576,8 @@ Per Rafael's instruction to pause Phase 2 expansion and address the outstanding 
 - The disputed `write_eod_summary()` reentrancy-guard scope finding from Block 2/3 (Gro HIGH vs GAI MEDIUM disagreement on severity AND fix approach) — still needs a board tie-breaker session.
 - The 2 design-fork candidates from `run_cycle.py` (multiplicative size-multiplier compounding; event-severity-downgrade gap in the hybrid market-reaction engine) — both explicitly flagged for board review, not resolved.
 - `run_movers.py`'s potential dual-process race on `trade_log.json` — still pending an OCI crontab check to determine if it's even live in production.
-- 10 instances of the stale-comment pattern found across files — cosmetic, not yet cleaned up.
-- Dead PDT-era code discovered incidentally during impact analysis (`get_rolling_day_trade_count`, `compute_pdt_for_date` in `portfolio_tracker.py` — zero callers anywhere) — not part of this batch's scope, logged as a candidate for a future dead-code sweep.
+- ~~10 instances of the stale-comment pattern found across files~~ **CLOSED 2026-06-28, commit `46d1fba`.** All 11 physical locations (entry_logic.py x2, run_cycle.py x3, orphan_manager.py x6 PDT references) fixed. One genuine bug surfaced as a side effect of the cleanup: `orphan_manager.py` called `_get_qhm_syms()` without ever importing it — a real `NameError` risk on QHM-orphan adoption, now fixed too.
+- ~~Dead PDT-era code (`get_rolling_day_trade_count`, `compute_pdt_for_date`)~~ **CLOSED 2026-06-28 — false positive.** Re-checked via direct grep across the entire codebase: these functions do not exist anywhere, in `portfolio_tracker.py` or any other file. The code-review-graph's impact-radius result that originally flagged them was reading a stale cached index — the functions had already been removed in an earlier session (likely the S63 PDT sweep itself), and the graph's cache hadn't caught up. No action needed.
 
 **Phase 2 (mapping the rest of the bot beyond `portfolio_tracker.py`'s direct dependency graph) remains paused, by Rafael's instruction, in favor of this consolidation pass.**
 
