@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP -- macro_risk_index.py audit + clamp fix)"
+    "last_updated": "2026-06-28 (AWP -- signal_generator.py + calendar.py audits)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -317,10 +317,9 @@
     },
     "strategy/signal_generator.py": {
       "patch_count": 8,
-      "sessions": 2,
-      "last_patched": "2026-04-20",
-      "open_rc_violations": [],
-      "risk_rating": "MEDIUM — 8 bugs in 2 sessions; clean since 4/20."
+      "last_patched": "2026-06-28 (AWP: full audit, clean, no patch needed)",
+      "lines": 937,
+      "notes": "AWP full audit: weekly-bias gate, intraday override, ADDV liquidity filter, Phase-1 timeout handling all verified correct. 16pt log-only system has minor small-universe edge cases (zero real-trading impact, not fixed). No functional bug in the live 12pt-driving path. Surfaced one RULE C-4 mypy error whose root cause was in events/calendar.py."
     },
     "execution/broker.py": {
       "patch_count": 9,
@@ -405,6 +404,12 @@
       "last_patched": "2026-06-28 (AWP: _initiate_exit() exit-state inversion fix)",
       "lines": 1620,
       "notes": "AWP commit c39863b: _initiate_exit() marked a position CLOSED and deregistered it on a FAILED broker.close_position() call (success=False means genuine failure, not 'already closed' -- that's folded into success=True). Stranded QHM tracking of a still-open position + freed the symbol for a conflicting intraday entry. Fixed with early return, no state/dereg mutation on failure. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI, checksum-verified."
+    },
+    "events/calendar.py": {
+      "patch_count": 1,
+      "last_patched": "2026-06-28 (AWP: full audit + RULE C-4 static-analysis cleanup)",
+      "lines": 384,
+      "notes": "AWP commit 1f7b7f9: full audit found no functional bug. Cleaned 4 dead imports + 6 Optional[] annotation fixes (all pre-existing, surfaced via downstream mypy error at signal_generator.py's call site). Noted but not patched: shared-mutable STATIC_EVENTS/EARNINGS_BLACKOUTS list aliasing in __init__ -- ambiguous (may be intentional for options_scanner.py's direct STATIC_EVENTS import), zero practical risk in current separate-process architecture. Cold second-agent PASS, Gro APPROVE, GAI APPROVE."
     }
   },
   "sessions": [
