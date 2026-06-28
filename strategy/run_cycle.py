@@ -848,7 +848,9 @@ def run_cycle(
     news_size_mult = news.get_news_size_multiplier()   # returns 1.0 always, 0.0 on HALT
 
     # ── MRI refresh — cross-asset background stress score ─────────────────────
-    # Fetches TLT, JPY=X, HYG/LQD, USO, GLD, EWJ/EWG every 10 min via yfinance.
+    # Fetches TLT/HYG/LQD/USO/GLD/EWJ/EWG via fetch_bars (Alpaca Data T1).
+    # yfinance is used only as a T4 fallback: ^VIX3M (not on Alpaca/FMP free
+    # tier) always, plus VIX/JPY when FMP fails. See macro_risk_index.py.
     # Score 0–100 → size floor + MIN_SCORE floor applied below (market-reaction-first).
     # Does NOT gate entries — SPY 5-min trigger is still required.
     mri.refresh()
@@ -1426,9 +1428,13 @@ def run_cycle(
         _touch_cycle_ts()
         return
 
-    # ── BV-5: Block entries when MRI=STRESSED, HIGH, or CRITICAL ────────
+    # ── BV-5: Block entries when MRI=HIGH or CRITICAL ───────────────────
     # Intentional: MRI blocks entries (not just adjusts size/score).
-    # STRESSED/HIGH/CRITICAL = 0% WR per live trade log (23 exits, 2026-05-05).
+    # STRESSED removed from this hard block 2026-06-25 (commit d81e060,
+    # restoring the 2026-06-13 board decision) — STRESSED still raises
+    # MIN_SCORE/lowers size via the dynamic-floor layers above, just no
+    # longer hard-blocks. HIGH/CRITICAL = 0% WR per live trade log
+    # (23 exits, 2026-05-05).
     _bv5_mri = mri.level() if mri else "NORMAL"
     if _bv5_mri in ("HIGH", "CRITICAL"):
         logger.critical(
@@ -1661,7 +1667,7 @@ def run_cycle(
     except Exception as _e:
         logger.warning(f"Periodic EOD flush failed — state may not survive crash: {_e}")
 
-    # ── Spawn weekly_review.html — once after 1:05 PM PST per day (H-7) ──────
+    # ── Spawn weekly_review.html — once after 1:15 PM PST per day (H-7) ──────
     try:
         import subprocess as _sp
         from zoneinfo import ZoneInfo as _ZI
@@ -1670,7 +1676,7 @@ def run_cycle(
         _pdt = _ZI("America/Los_Angeles")
         _now_pdt = _dt.now(_pdt)
         _today_pst = _now_pdt.date()
-        # Only spawn after 1:05 PM PST and only once per calendar day
+        # Only spawn after 1:15 PM PST and only once per calendar day
         _past_spawn_window = (
             (_now_pdt.hour > 13) or
             (_now_pdt.hour == 13 and _now_pdt.minute >= 15)   # 1:15 PM PST = 4:15 PM ET (after EOD writes)

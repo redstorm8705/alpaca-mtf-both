@@ -871,7 +871,7 @@ def execute_entries(
         stop = risk.get_news_adjusted_stop(stop, entry_price, direction, news_size_mult)
 
         # ── Earnings HTF directional check ────────────────────────────────
-        # yfinance calendar check at entry time.
+        # FMP earnings calendar check at entry time (T2 — see DATA-4 below).
         # No hard block — instead: evaluate weekly+daily HTF technicals.
         #   HTF strongly aligns with signal direction → 0.5x size, enter.
         #   HTF neutral or conflicts with signal      → skip.
@@ -1163,7 +1163,8 @@ def execute_entries(
 
         # ── Build #15: FVG confluence multiplier ─────────────────────────────
         # Per-symbol size adjustment based on proximity to unfilled Fair Value Gaps.
-        # Reuses daily_df (already fetched above); fetches 1h separately via yfinance.
+        # Reuses daily_df (already fetched above); fetches 1h separately via
+        # fetch_bars() (Alpaca Data T1) inside _compute_fvg_mult().
         _fvg_mult, _fvg_reason = _compute_fvg_mult(symbol, direction, entry_price, daily_df)
         if _fvg_mult != 1.0:
             dollar_cap *= _fvg_mult

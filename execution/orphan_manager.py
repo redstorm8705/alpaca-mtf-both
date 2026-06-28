@@ -43,6 +43,7 @@ from execution.broker import (
     submit_gtc_stop_order,
 )
 from execution.fill_helpers import fetch_actual_fill_price
+from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _get_qhm_syms
 from strategy.scoring import get_live_score
 
 ET = ZoneInfo("America/New_York")
@@ -387,8 +388,10 @@ def cancel_and_reconcile_gtc_stops(
                     )
 
     # ── Patch 2: Reconcile GTC partial order fills ───────────────────────────
-    # For each open trade that has pending GTC partial orders (PDT-deferred
-    # tranche exits placed last session), check their fill status:
+    # For each open trade that has pending GTC partial orders (tranche exits
+    # placed via GTC last session — historically deferred under PDT rules,
+    # which were abolished S63; GTC tranche exits remain unconditional now),
+    # check their fill status:
     #   FILLED    → decrement qty_remaining, advance profit_tranche_level
     #   CANCELLED → clear key (will be re-placed if price is still at level)
     #   LIVE      → cancel before RTH so normal scan manages partials cleanly
@@ -530,14 +533,13 @@ def cancel_and_reconcile_gtc_stops(
     # block immediately re-submits them, creating an endless cancel/re-submit
     # loop every 10 min that burns rate limits and locks held_for_orders flags.
     if get_tod_phase() == "closed":
-        # Bug 6 fix (Apr 14 2026): add PDT=3/3 + opened_today guard to match
-        # the AH GTC loop (main.py:3394). Without this, Patch 1 would try to
-        # submit a GTC stop for today-opened PDT=3/3 positions that the AH
-        # loop already deliberately skipped — Alpaca rejects with 40310100
-        # and the CRITICAL log fires a false-alarm Slack alert. The AH loop's
-        # reasoning still applies: the position is protected by the internal
-        # stop; the GTC will be placed cleanly after the rolling PDT window
-        # refreshes tomorrow.
+        # Historical note (Bug 6 fix, Apr 14 2026): this block originally added
+        # a PDT=3/3 + opened_today guard to match the AH GTC loop, avoiding a
+        # 40310100 rejection + false-alarm Slack alert for today-opened
+        # PDT-limited positions. PDT enforcement was abolished S63 (SEC rule
+        # change) and all PDT-counter code removed from the codebase — there
+        # is no live PDT check here anymore, this comment is retained only as
+        # historical context for why the surrounding structure exists.
         # OM-RACE-1 (2026-05-21 S28): batch-fetch all open orders once before the
         # loop. A just-cancelled GTC stop may still be PENDING_CANCEL on Alpaca's
         # backend for minutes to hours (AH/weekend propagation). Submitting a new
@@ -580,9 +582,10 @@ def cancel_and_reconcile_gtc_stops(
                     f"internal_hard_stop_active=True (persisted from prior run)."
                 )
                 continue
-            # OM-RACE-1 guard: placed AFTER PDT check intentionally. PDT-deferred
-            # positions are intentionally skipped — they must not increment the
-            # blocking counter (would fire false CRITICAL at cycle 5).
+            # OM-RACE-1 guard. (Historical: originally placed after a PDT-defer
+            # check that no longer exists post-S63 PDT removal — the ordering
+            # rationale is moot, but the guard itself is still needed to avoid
+            # incrementing the blocking counter incorrectly.)
             _p1_blocking_ids = _get_blocking_ids(_p1_open_orders.get(_sym, []))
             if _p1_blocking_ids:
                 _p1_defer = _trade.get("gtc_p1_defer_cycles", 0) + 1
@@ -739,7 +742,8 @@ def cancel_and_reconcile_gtc_stops(
                     )
                     alert_gtc_failed(
                         _sym, _gtc_side, _stop_px,
-                        "Order rejected by broker (possible PDT block)",
+                        "Order rejected by broker (PDT no longer applicable "
+                        "post-S63 — check Alpaca for the actual rejection reason)",
                     )
             except Exception as _gtc_em_err:
                 logger.critical(
@@ -754,8 +758,11 @@ def cancel_and_reconcile_gtc_stops(
 def _fetch_fill_timestamp(symbol: str) -> str | None:
     """Recover actual entry fill timestamp from Alpaca closed orders.
 
-    Corrects opened_today() for overnight orphans — prevents phantom PDT slot
-    consumption on RTH closes of adopted positions. Returns ISO string in PT
+    Corrects opened_today() for overnight orphans — historically prevented
+    phantom PDT slot consumption on RTH closes of adopted positions (PDT
+    removed S63; opened_today() is still used by other same-day-close logic,
+    e.g. Bucket A, so the timestamp correction itself remains relevant).
+    Returns ISO string in PT
     (matches tracker entry_time convention: portfolio_tracker.py stores
     entry_time as PT throughout). 14-day lookback covers holiday/extended-
     downtime restarts. Returns None on any failure — caller falls back to
@@ -838,7 +845,9 @@ def reconcile_positions(
     # ── Orphaned positions (in Alpaca, not in tracker) ──────────────────────
     # Adopt into tracker with Alpaca's entry price + direction.
     # No stop/target — reversal counter manages exit.
-    # If PDT=3/3, mark overnight=True so same-day stop block applies.
+    # Historical: this comment previously described a PDT=3/3 condition for
+    # marking overnight=True; PDT removed S63 — overnight=True is now set
+    # unconditionally for every orphan-adopted position below.
     orphans = alpaca_symbols - tracker_symbols
     for sym in orphans:
         pos = alpaca_positions[sym]
@@ -926,7 +935,9 @@ def reconcile_positions(
             "original_stop":          _orph_stop,
             "target":                 _orph_tgt,
             "trail_stop":             None,
-            "trade_mode":             "quarterly_hold" if sym in _get_qhm_syms() else "intraday",
+            "trade_mode":             (
+                "quarterly_hold" if sym in _get_qhm_syms() else "intraday"
+            ),
             "score":                  _orph_score if _orph_score is not None
                                       else 0,
             "score_16pt":             None,
@@ -946,13 +957,18 @@ def reconcile_positions(
         # QHM stop linkage: restore QHM GTC stop_order_id so exit_logic sees it
         if sym in _get_qhm_syms():
             try:
-                _qhm_state_path = Path(__file__).resolve().parent.parent / "data" / "state" / "quarterly_holds.json"
+                _qhm_state_path = (
+                    Path(__file__).resolve().parent.parent
+                    / "data" / "state" / "quarterly_holds.json"
+                )
                 if _qhm_state_path.exists():
                     _qhm_raw = _json.loads(_qhm_state_path.read_text())
                     _qhm_stop_id = (_qhm_raw.get(sym) or {}).get("stop_order_id")
                     if _qhm_stop_id:
                         tracker.open_trades[sym]["gtc_stop_order_id"] = _qhm_stop_id
-                        logger.info("[%s] QHM stop linked at adoption: %s", sym, _qhm_stop_id)
+                        logger.info(
+                            "[%s] QHM stop linked at adoption: %s", sym, _qhm_stop_id
+                        )
             except Exception as _qe:
                 logger.warning("[%s] QHM stop linkage failed: %s", sym, _qe)
         # P5-H3: adopt any existing Alpaca GTC or DAY stop so restarts don't
