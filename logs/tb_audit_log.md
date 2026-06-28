@@ -5788,3 +5788,25 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 - `run_movers.py` dual-process race — pending an OCI crontab check.
 - 10 instances of a stale-comment pattern across files — cosmetic.
 - Dead PDT-era code (`get_rolling_day_trade_count`, `compute_pdt_for_date` in `portfolio_tracker.py`, zero callers) discovered incidentally via impact-radius analysis — candidate for a future dead-code sweep.
+
+---
+
+## 2026-06-28 (same-day continuation) — run_movers.py zombie-process P0 + Movers strategy restart-safety redesign (commit `519f369`)
+
+**Trigger:** resolving the long-standing `run_movers.py` dual-process-race open item required SSH access to the live OCI server (granted this session). Direct investigation found something far more severe than the original question.
+
+**Confirmed live in production:** 11 zombie `run_movers.py` processes, accumulated since June 12, none ever terminated. Each held an independent `PortfolioTracker` instance writing to the same `trade_log.json` the main bot continuously writes to.
+
+**Root cause:** `run_movers.py` called `tracker.print_summary()` (nonexistent — `PortfolioTracker` has `print_stats()`) at its 9:28 AM ET daily termination point. The `AttributeError` was swallowed by the main loop's broad `except Exception: log; sleep(60)` handler, so the `break` statement meant to exit the loop was never reached. Confirmed via the actual rotated log on OCI showing the exact failure signature repeating every ~60s.
+
+**Fix chain (full mandatory sequence on each stage):**
+1. `print_summary()` → `print_stats()`, 3 call sites.
+2. Exception handler changed to fail-loud (`raise`) per Rafael decision — board (Peterffy/Harris) endorsed, contingent on reconciliation existing.
+3. Built `reconcile_on_startup()` (mirrors `orphan_manager.py`), switched `place_stop()` DAY→GTC, added cancel-before-close + resubmit-on-failure to every exit path (mirrors `exit_logic.py`'s CRITICAL-1 pattern).
+4. **Separate P0 found mid-redesign by cold second-agent:** `AlpacaBroker.buy()/sell_short()/close_position()` returned raw objects/None/bool but `strategy.py` consumed them as dicts — guaranteed `TypeError` on every trade attempt, meaning this strategy likely never completed a round-tripped trade. Fixed via return-shape normalization.
+
+**Verification:** 2 cold second-agents (1st blocked on the dict-shape bug, 2nd re-verified PASS) → board (Peterffy + Harris APPROVE, 2 confirmation items verified clean: stop-discovery fallback always over-protects; zero open Movers positions confirmed via live Alpaca query) → Gro APPROVE → GAI APPROVE → static analysis clean (`py_compile`/`mypy`/`ruff`, both locally and on OCI's actual Python env) → deployed via targeted rsync (3 files, checksum-verified) → confirmed `mtf-bot` systemd service unaffected, no restart needed.
+
+**Files:** `execution/broker.py`, `strategy/movers/strategy.py`, `run_movers.py`.
+
+**2 P2 follow-ups logged, not blockers:** fragile order-side string match in stop-discovery; a state-clearing edge case on cancel-API failure in `_cancel_stop_if_present()`.

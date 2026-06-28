@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (MTF FULL BOT AUDIT consolidated fix batch)"
+    "last_updated": "2026-06-28 (run_movers.py P0 + Movers restart-safety redesign)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -322,12 +322,9 @@
       "risk_rating": "MEDIUM — 8 bugs in 2 sessions; clean since 4/20."
     },
     "execution/broker.py": {
-      "patch_count": 7,
-      "sessions": 5,
-      "last_patched": "2026-06-08 S54",
-      "open_rc_violations": [],
-      "risk_rating": "MEDIUM — 2026-04-28 session 2: +2 patches (BR-ORDERS-1 get_open_orders None, BR-IDEM-2 idempotency key). External audit sourced from DeepSeek + Google AI Studio.",
-      "notes": "S54 PDT Tier 2 + static analysis cleanup: removed OrderType unused import + import config, updated log messages for PDT error codes, removed stale docstring ref. RULE C-4: 44 E501 ruff noqa header, 23 mypy type: ignore per-line (Alpaca SDK Union types). DS/GAI APPROVE (kept 40310100+text fallback). commit 4b35638."
+      "patch_count": 9,
+      "last_patched": "2026-06-28 (P0: AlpacaBroker return-shape fix + GTC stop migration)",
+      "notes": "P0 commit 519f369: AlpacaBroker.buy()/sell_short()/close_position() returned raw order-objects/None/bool but strategy/movers/strategy.py consumed them as dicts (result['success'], result.get('error')) -- guaranteed TypeError on every single Movers entry/exit attempt, found by a cold second-agent mid-redesign. Fixed by normalizing all 3 methods to return {'success': bool, 'error': str|None, 'order': object|None}. Also: place_stop() switched from DAY to GTC stop (Rafael mandate -- Movers positions must survive a script restart/crash, not just until 4pm close); added cancel_stop_order(), get_open_positions(), get_open_orders() wrapper methods. Board+Gro+GAI APPROVE."
     },
     "events/macro_risk_index.py": {
       "patch_count": 19,
@@ -385,6 +382,18 @@
       "last_patched": "2026-06-28 (MTF FULL BOT AUDIT consolidated fix batch)",
       "lines": 458,
       "notes": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): rebuild_from_trades() now skips trades with missing/zero exit_price instead of defaulting to 0.0 — closes HIGH-severity finding where a missing exit_price produced a phantom catastrophic loss (long trades) or phantom huge win (short trades), the latter risking Kelly over-sizing future short positions on a fictitious trade. Traces to the same root cause as portfolio_tracker.py's write_eod_summary() fix. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
+    },
+    "run_movers.py": {
+      "patch_count": 2,
+      "last_patched": "2026-06-28 (P0: zombie-process fix + Movers restart-safety redesign)",
+      "lines": 264,
+      "notes": "P0 commit 519f369: tracker.print_summary() (nonexistent method) called at the 9:28 AM ET daily termination point -- AttributeError swallowed by a broad except Exception handler (log+sleep(60)+retry), so the break statement was never reached. Confirmed live: 11 zombie processes accumulated on OCI since June 12, each writing to the same trade_log.json as the main bot. Fixed: renamed to print_stats() (3 sites); changed the handler to fail-loud (raise) per Rafael decision; added strategy.reconcile_on_startup() call before the main loop. Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents PASS. Deployed to OCI via targeted rsync, checksum-verified."
+    },
+    "strategy/movers/strategy.py": {
+      "patch_count": 1,
+      "last_patched": "2026-06-28 (P0: restart-safety redesign -- GTC stops, cancel-before-close, reconciliation)",
+      "lines": 419,
+      "notes": "P0 commit 519f369: full restart-safety redesign. _active_movers was pure in-memory state with zero persistence -- unsafe once the run_movers.py main loop was changed to fail-loud on any exception. Added: stop_order_id tracking on every entry; _cancel_stop_if_present() helper called before close_position() in check_exits() and flatten_intraday() (avoids Alpaca's 40310000 held_for_orders rejection, mirrors exit_logic.py's CRITICAL-1 pattern) with resubmit-on-close-failure safety net; new reconcile_on_startup() method querying Alpaca directly for open positions + open orders to rebuild tracking on every restart (mirrors orphan_manager.py in miniature), defaulting mode='intraday' for any recovered position and always resubmitting a fresh GTC stop when no existing one is found (over-protects, never under-protects). Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents (1st found+blocked on the AlpacaBroker dict-shape bug, 2nd PASSed the corrected diff)."
     }
   },
   "sessions": [
