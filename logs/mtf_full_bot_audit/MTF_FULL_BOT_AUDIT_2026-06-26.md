@@ -389,6 +389,20 @@ Position reconciliation and GTC stop lifecycle (extracted from main.py Phase 2).
 
 ---
 
+## `execution/trade_engine.py` (286 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Phase 2 decomposition shim file — most original logic (`check_partial_exits`, `check_exits`, `execute_entries`, etc.) has been extracted to `exit_logic.py`/`entry_logic.py` and is only re-exported here for caller compatibility. Live logic remaining: hybrid-engine-state persistence (`_save_hybrid_state()`/`_load_hybrid_state()`), a thin `_submit_rth_day_stops()` shim delegating to `gtc_manager`, and `_reconcile_pending_overnight_orders()` (polls Alpaca for pending overnight limit-order status, promotes/cancels accordingly, gates `risk.register_open()` to fire exactly once per genuine transition).
+
+**Investigated and CONFIRMED SAFE — `trade["limit_price"]` direct-dict-indexing (~line 241):** both Gro and GAI flagged this as a stylistic KeyError risk (direct indexing vs `.get()`). Verified against the actual construction site in `portfolio_tracker.py` (~lines 1459, 1476): `limit_price` is a required, non-optional constructor parameter for every `pending_overnight` trade record, set unconditionally at creation. No code path creates a `pending_overnight` trade without it — the risk is theoretical, not reachable. Not logged as a finding.
+
+**No other findings.** GAI raised several minor style/verbosity opinions (debug- vs warning-level logging for hybrid-state save failures; a slightly redundant `float()`-then-`int()` conversion on `filled_qty`) — these are preferences, not bugs, and don't meet this audit's bar for a logged finding. GAI's note on `_main._hybrid_state_loaded = True` being set before the restore guards run is, per the function's own comment ("set regardless — only attempt once"), confirmed intentional design, not a bug.
+
+This is the smallest and cleanest Phase-1 file audited so far — almost entirely re-exports, with the small amount of live logic well-guarded (atomic hybrid-state persistence, idempotent register_open() gating with an explicit undercount warning on unexpected transitions).
+
+**Next Phase-1 file:** `run_movers.py` (242 lines) — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
