@@ -5844,3 +5844,24 @@ This is now the **third** round of nonexistent-method bugs found in this single 
 **Deploy note:** `risk_manager.py` is imported by the continuously-running `mtf-bot` systemd service — the fix won't take effect in the live process until its next restart. The existing "Nightly RAM reset" cron (2 AM ET, Mon-Fri) will pick it up automatically before Monday's market open; did not force a manual restart (a distinct production action beyond AWP's patch-authority scope).
 
 **Auto Work Protocol (AWP) established this session:** Rafael granted standing authority to apply patches when (1) board+Gro+GAI have audited the file, (2) Gro+GAI agree on the specific proposed patch (counter-prompt if split, BoD tie-breaks if still deadlocked), with the 3-Point AI Summary and 10-point audit as standing framework components.
+
+---
+
+## 2026-06-28 (AWP) — execution/broker.py full audit: clean, no severe findings (Gro rate-limited)
+
+**Phase 2 of MTF FULL BOT AUDIT.** Full read of `execution/broker.py` (718 lines) — the central Alpaca order-execution layer every buy/sell/stop/cancel routes through. Never previously audited in this initiative despite being touched by tonight's patches.
+
+**Gro unavailable** — daily 100K-token limit exhausted (~39min cooldown at time of audit). Proceeded with GAI + my own direct reading, per the established practice of not blocking on a rate-limit gap when the remaining voices (GAI + direct verification) provide sufficient coverage.
+
+**My own pass:** no new RC-class violations found. File is consistently well-hardened — idempotency keys on market orders, exponential-backoff retry with retryable/non-retryable error classification, the 40310000 (held_for_orders) detect-and-clear-then-retry-once pattern applied correctly at every relevant call site, not-found-treated-as-success semantics on `close_position()` (deliberately, to prevent a 16x retry loop after a watchdog restart).
+
+**GAI surfaced 18 candidate findings — independently verified each against the literal code:**
+- 6 "potential None dereference on order.id" claims (lines 198/244/279/337/379/400) — speculative, not grounded in confirmed Alpaca SDK behavior (the SDK raises on failure rather than returning `None` silently; no evidence presented otherwise). Not actioned.
+- "get_open_position non-404 exceptions re-raise without retry" — **refuted**: this is intentional, documented design ("activates fail-open logic already written in main.py callers") and confirmed multiple fail-open call sites exist elsewhere in the codebase implementing exactly this pattern.
+- Import-inside-function style nits, zero-qty/price silent-skip guards, env-var None handling, "unreachable" type-ignore confusion — all either pre-existing intentional patterns consistent with the rest of the codebase, or low-priority style preferences. Not actioned.
+- **3 legitimate but minor findings, logged for a future low-priority session (not fixed tonight — no capital-risk or crash exposure):**
+  1. `AlpacaBroker.buy()`/`sell_short()` lose the specific error reason when `submit_market_order()` returns `None` — the real failure cause is still visible in the logs (submit_market_order logs it before returning), just not surfaced into the structured `result["error"]` field `strategy.py` reads.
+  2. `get_open_orders()` returning `None` on API failure vs. an empty list (by design, per its own docstring) means `cancel_open_orders_for_symbol()`'s `None` branch logs the failure but can't distinguish "API down" from "genuinely 0 orders" in its own return value to callers.
+  3. The `related_orders` regex parse in `submit_gtc_stop_order()`'s 40310000 handler is brittle against Alpaca error-message format changes — degrades gracefully (falls through to polling without targeted force-cancel) rather than crashing, so not urgent.
+
+**Status: `execution/broker.py` audited, no severe findings, no patch applied this pass.**
