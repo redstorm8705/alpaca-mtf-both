@@ -99,7 +99,38 @@ finding | severity | board/Gro/GAI alignment.)
 
 **This refutation step is itself a finding worth recording: 2 of Gro's 4 "new findings" this round were hallucinated against code that directly contradicts them, and 1 of GAI's findings had its severity overstated relative to the bot's actual operating constraints. Every AI-sourced claim in this audit will continue to be independently verified against the literal source before being logged as a confirmed finding — consistent with the hallucination pattern already documented twice elsewhere this session (the Gemini-prompt audit work).**
 
-**Remaining in `portfolio_tracker.py`:** Block 2 (lines 440-776, class init + trade log I/O + unverified-exit handling), Block 3 (lines 777-1367, `write_eod_summary` — already heavily audited today but due for a fresh non-bug-hunting pass per the mandate's "whole file" requirement), Block 4 (lines 1368-1872, core trade lifecycle API — record_entry/record_exit/etc., NOT YET touched by today's fix, highest-value remaining target since it's the most-called public surface), Block 5 (lines 1872-2002, stats/reporting). **NOT YET STARTED.**
+### `execution/portfolio_tracker.py` — Block 2 (lines 440-776): class init + trade log I/O + unverified-exit handling
+
+| Lines | Block | Classification | Notes |
+|---|---|---|---|
+| 441-448 | `__init__` | DYNAMIC (per-instance state) | `self._traded_today_date` (line 445) captured once at construction in PT — note this is only re-synced elsewhere (need to check Block 4) since the bot process is long-running and `__init__` runs once at startup, not daily. Not a finding by itself — flagging for cross-check during Block 4/5 review of whatever resets `traded_today`. |
+| 452-508 | `_load_log()` | DYNAMIC, read-only (loads from disk, never writes). Verified: the `len(_disk_closed) >= len(self.closed_trades)` guard (line 458) is NOT dead code — confirmed via grep that `_load_log()` is called a second time, inside `write_eod_summary()` (line 791), specifically as a forced reload. The guard protects against a reload regressing a longer in-memory list to a shorter disk one. **This second call site is the origin of the major Block 2/3 finding below.** |
+| 510-516 | `_save_log()` | DYNAMIC, atomic write via `_atomic_write`. No new finding. |
+| 518-566 | `get_unverified_exits()` | DYNAMIC, time-windowed filtering with a documented eviction fix (T1). Division-free, no new finding. |
+| 568-731 | `patch_exit_pnl()` | DYNAMIC. Well-guarded: explicit `is not None` sentinel handling for legitimate-zero vs absent fields (BUG-1 fix, documented), explicit zero/negative entry-price guard before any division (line 653, 683) — **verified no unguarded division exists in this function**, contradicting the pattern of unverified claims seen in Block 1. No new finding. |
+| 733-773 | `mark_fill_expired()` | DYNAMIC, time-windowed, consistent with `get_unverified_exits()`'s cutoff logic. No new finding. |
+
+### MAJOR FINDING — `write_eod_summary()` reentrancy guard is incomplete (spans Block 2→3 boundary)
+
+**Severity: DISPUTED — Gro rates HIGH, GAI rates MEDIUM. Both confirm the finding is real; they disagree on severity AND on the correct fix. This is a genuine board-tie-breaker situation, logged as such rather than resolved unilaterally.**
+
+**The finding:** today's P0 fix added a reentrancy guard (`_eod_fifo_in_progress`) around ONLY the Alpaca-FIFO subsection of `write_eod_summary()` (~lines 857-1032 of the ~590-line method). Two other reentrancy-exposed regions exist in the SAME method, untouched by today's guard:
+
+1. **Lines 791-855 (before the guard):** `self._load_log()` force-reloads `self.closed_trades`/`self.open_trades` — shared mutable state on the same `PortfolioTracker` instance across an original call and any SIGTERM-triggered reentrant call (confirmed real reentrancy mechanism, not theoretical: `_fetch_alpaca_fills_for_date()` blocks on network I/O; Python delivers signals by interrupting blocking syscalls and running the handler in the same thread before the original call resumes).
+2. **Lines 1034-1337 (after the guard, "Phase 2a.5" reconciliation):** calls `self.record_exit()` and `self._save_log()` multiple times — but verified via the gate condition at line 1206 (`if _alpaca_pnl is not None and not _a4_gap:`) that this block is **unreachable by a reentrant call** (reentrant calls always have `_alpaca_pnl = None` since they skip the guarded FIFO section that's the only place it's set). Both Gro and GAI independently confirmed this gating analysis — this part of the original concern is refuted as non-exploitable.
+3. **Line 1351, unconditional:** `_atomic_write(eod_path, summary)` — reached by BOTH the original and any reentrant call. The reentrant call's `summary` contains only tracker-fallback P&L (`_pnl_today = _tracker_pnl`, since `_alpaca_pnl is None`) — a strictly less-authoritative number than what the original call will eventually compute once its blocked network call resolves.
+
+**The scenario:** `main.py`'s SIGTERM handler calls `tracker.write_eod_summary()` then proceeds with other shutdown steps and the process exits shortly after. If the SIGTERM arrives while the original call is blocked inside `_fetch_alpaca_fills_for_date()`, the reentrant call runs to completion first (inside the signal handler) and writes a tracker-fallback-only `eod_{today}.json`. If the process exits before the original (interrupted) call ever resumes and writes its more complete version, **the degraded tracker-fallback summary becomes the final persisted EOD report for that day** — not data corruption (the lot-state file itself remains protected), but a real accuracy/completeness compromise in a daily financial report.
+
+**Where Gro and GAI disagree:**
+- **Gro:** severity HIGH; recommends widening the reentrancy guard to wrap the ENTIRE `write_eod_summary()` method body.
+- **GAI:** severity MEDIUM (no data corruption, lot-state integrity preserved, only a report-accuracy issue); explicitly identifies that Gro's recommended fix would **make things worse**: a full-function guard means a SIGTERM-triggered reentrant call would hit the guard immediately and skip everything — including the final `_atomic_write` — meaning **no `eod_{today}.json` would be written at all** during that shutdown path if the original call hasn't finished. GAI rates "missing EOD file" as worse than "degraded EOD file" and proposes a more surgical alternative instead (a minimal, disk-load-free "emergency EOD" path for the reentrant case, or a short bounded wait for the original call to finish before falling back).
+
+**Decision: NOT FIXED THIS SESSION.** This needs explicit resolution of the Gro/GAI disagreement (board counter-prompt + majority per CLAUDE.md's tie-breaker protocol) and careful design of whichever fix direction wins, before any patch is drafted — exactly the kind of finding that justifies doing this audit properly rather than assuming today's P0 fix was complete. Logged here as the audit's first concrete vindication of slowing down.
+
+---
+
+**Remaining in `portfolio_tracker.py`:** Block 3 (lines 777-1367, `write_eod_summary` — the reentrancy-gap finding above already covers its most important property; still due a fresh line-by-line STATIC/DYNAMIC pass for the rest of its logic, e.g. the score_16pt_buckets and score_comparison sections not yet reviewed), Block 4 (lines 1368-1872, core trade lifecycle API — record_entry/record_exit/etc., NOT YET touched by today's fix or this audit, highest-value remaining target since it's the most-called public surface in the whole codebase), Block 5 (lines 1872-2002, stats/reporting). **NOT YET STARTED.**
 
 ---
 
