@@ -174,6 +174,63 @@ finding | severity | board/Gro/GAI alignment.)
 
 **Pattern emerging across 3 blocks now:** Gro tends toward generic "add more validation here" suggestions without demonstrating a concrete trigger, and both reviewers occasionally assert something is missing or broken when it's actually already guarded a few lines away — this audit's per-claim verification step continues to be load-bearing, not ceremonial.
 
+### `execution/portfolio_tracker.py` — Block 5 (lines 1879-2002, FINAL BLOCK): stats/reporting
+
+| Lines | Block | Classification | Notes |
+|---|---|---|---|
+| 1879-1889 | `get_trade()`, `opened_today()` | DYNAMIC, no findings. |
+| 1893-1985 | `get_stats()` | DYNAMIC. All standard divisions (Sharpe, Sortino, win_rate, avg_win/loss, profit_factor, avg_r_multiple) are explicitly guarded against zero-denominator — verified clean. **See MAJOR FINDING #3 below — a different, non-division class of crash risk in this function.** |
+| 1987-2000 | `attach_news_summary()`, `get_news_summary()`, `print_stats()` | DYNAMIC, trivial, no findings. |
+
+### MAJOR FINDING #3 (MOST SEVERE OF THE AUDIT SO FAR) — `get_stats()` can crash on a trade with no `"pnl"` key, permanently breaking ALL persistence for the rest of the process
+
+**Severity: CRITICAL. Confirmed by Gro and GAI independently; GAI explicitly ranks this above every other finding logged today, including the reentrancy gap and the cumulative P&L bug.**
+
+**The chain, fully traced and verified at each link:**
+
+1. In `write_eod_summary()`'s Phase 2a.5 reconciliation (already covered under Block 3's reentrancy investigation), two branches mark an externally-closed position `_fifo_reconciled_closed = True` directly on `self.open_trades[_sym_r]` and `continue` — **without** calling `self.record_exit()` and **without** ever setting a `"pnl"` field on that trade dict. The position stays in `open_trades`, just flagged.
+2. On the bot's next restart, `_load_log()` reads the persisted state and explicitly routes any trade with `_fifo_reconciled_closed=True` straight into `self.closed_trades` — again **without** going through `record_exit()` (the only code path that ever sets `"pnl"`). The routing code's own log message admits it: *"P&L needs manual verification."* This trade also does **not** get `_fill_unverified=True` set anywhere in this path.
+3. `get_stats()` — called from inside **every single `_save_log()` call** (`"stats": self.get_stats()` is part of the atomic-write payload) — filters `self.closed_trades` with `if not t.get("_fill_unverified")` (which the routed trade passes, since that flag was never set on it) and then indexes `t["pnl"]` directly, not `.get("pnl")`. **`KeyError` on the very next `get_stats()` call after such a trade exists.**
+
+**Why this is the worst finding of the day — the cascade, not just the crash:**
+- `record_exit()` appends to `self.closed_trades` (line ~1766) **before** calling `self._save_log()` (line ~1812) — so the in-memory mutation always completes even when the subsequent save fails.
+- `main.py`'s main loop wraps each cycle in `try: ... except Exception: log + sleep(60)`, so the bot **process does not crash** — confirmed via direct read of `main.py`'s `while True:` loop (lines 931-1064).
+- But `self.closed_trades` is append-only — nothing in the codebase ever removes a bad entry from it. Once the malformed trade is in the list, **every subsequent `_save_log()` call, from any state-mutating method, for the rest of that process's life, raises the same `KeyError` and silently fails to persist.** The bot keeps trading correctly in-memory; it simply stops writing `trade_log.json` at all from that point forward, with each individual failure quietly absorbed by main.py's outer handler (logged as "Loop error," nothing louder).
+- On the next restart (this codebase restarts itself routinely — nightly heartbeat-triggered `os.execv`), the bot loads `trade_log.json` reflecting whatever was **last successfully saved before the corruption** — silently losing every entry/exit/partial-exit that happened during the broken window, and very plausibly producing exactly the kind of stale-tracker-vs-real-Alpaca-state divergence this project has already been bitten by once today (the QHM external-close gap fixed earlier this session is structurally the same failure shape).
+
+**GAI's explicit re-ranking of today's findings by priority, given this:**
+1. **This persistence-cascade bug** (new) — highest priority, guarantees silent data loss once triggered.
+2. The `record_entry()` overwrite gap / reentrancy gap (Blocks 2 & 4) — high priority, but more localized (single trade or specific race window).
+3. The cumulative P&L lookback bug (Block 3) — medium priority, a reporting/decision-input issue, not a persistence-destroying one.
+
+**Proposed fix (Gro and GAI both converge on the same two-part shape):** (a) make `get_stats()` defensive — `t.get("pnl", 0)` instead of `t["pnl"]`, so a single malformed record can never break every future save; (b) close the root cause — when a trade is marked `_fifo_reconciled_closed` without a recoverable exit price, set `"pnl": 0.0` and `"_fill_unverified": True` on it at that exact point, consistent with how `record_exit()` already handles the entry-price-invalid case (BUG-5 pattern) — so the trade is correctly excluded from stats denominators instead of silently missing a required field.
+
+**Decision: NOT FIXED THIS SESSION** — logged per Rafael's "audit first, consolidated fix once we have the full picture" instruction. Flagging explicitly that this one may warrant priority sequencing ahead of the other logged findings once fixes are scheduled, given GAI's severity ranking — noted for Rafael's decision, not unilaterally escalated out of the queue.
+
+---
+
+## `execution/portfolio_tracker.py` — FULL FILE AUDIT STATUS: **COMPLETE** (all 5 blocks, 2002 lines)
+
+**Summary of confirmed findings, this file only:**
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 1 | `write_eod_summary()` reentrancy guard incomplete (pre-FIFO reload + final write exposed) | DISPUTED (Gro: HIGH / GAI: MEDIUM) — fix approach also disputed | Logged, not fixed |
+| 2 | Cumulative P&L lookback loop breaks on file-exists not successful-parse | CRITICAL (Gro) / HIGH (GAI) — consensus fix | Logged, not fixed |
+| 3 | `record_entry()` no overwrite guard for existing open/pending trade | HIGH — consensus | Logged, not fixed |
+| 4 | `update_trail_stop()` doesn't self-persist | MEDIUM — consensus, needs exit_logic.py cross-check | Logged, not fixed |
+| 5 | `record_partial_exit()` missing entry-price guard `record_exit()` already has | MEDIUM — consensus | Logged, not fixed |
+| 6 | `get_stats()` `KeyError` cascade silently breaks all future persistence | **CRITICAL — consensus, GAI's top priority of the day** | Logged, not fixed |
+| 7 | Silent `trade_logger` import fallback (no warning) | LOW-MEDIUM — consensus | Logged, not fixed |
+| 8 | `_atomic_write()` orphaned `.tmp` file on double failure | LOW | Logged, not fixed |
+| 9 | `record_stop_breach_blocked()` possible `TypeError` if both stop fields are `None` | LOW | Logged, not fixed |
+| 10 | PT/ET date-string ambiguity in `write_eod_summary`/`_fetch_alpaca_fills_for_date` | MEDIUM (downgraded from GAI's initial CRITICAL after verifying against actual AH cutoff hours) | Logged, not fixed |
+| 11 | `_fetch_alpaca_fills_for_date()` pagination ignores `after_id` combined with date params | P2, latent (already logged earlier today during the data remediation work) | Logged, not fixed |
+| 12 | FIFO buy/sell synthetic-lot asymmetry (S49 board decision, undocumented on sell side) | MEDIUM, architectural, needs board re-confirmation not necessarily a code fix | Logged, not fixed |
+
+**9 AI-sourced claims refuted** during this file's audit (4 from Gro, 4 from GAI, 1 retracted-after-evidence) — logged with the specific contradicting evidence in each case, demonstrating the verification step is catching real hallucinations, not just adding ceremony.
+
+**Next:** Phase 1 begins — the 10 files that import `portfolio_tracker.py` (`entry_logic.py`, `exit_logic.py`, `kelly.py`, `orphan_manager.py`, `trade_engine.py`, `main.py`, `run_movers.py`, `state/persistence.py`, `run_cycle.py`, `trade_logger.py` — ~9,200 lines). Several cross-file verification items are already queued from this file's findings (the `update_trail_stop()` persistence question needs checking in `exit_logic.py`; `main.py`'s exception-handling structure around the main loop was already partially traced during Finding #6's investigation).
+
 ---
 
 ## Session Log
