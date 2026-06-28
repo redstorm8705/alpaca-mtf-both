@@ -271,6 +271,35 @@ After finding the stale-yfinance-comment pattern twice in `entry_logic.py`, Rafa
 
 ---
 
+## `execution/exit_logic.py` (2182 lines, largest Phase 1 file) — IN PROGRESS
+
+**Block 1: `check_partial_exits()` (lines 185-1054, ~870 lines) — full read complete.** Owns trail-stop ratcheting, trailing-stop-hit closure, and the 3-tranche scaled profit-taking logic.
+
+### RESOLVED — cross-file question queued from `portfolio_tracker.py` Block 4: is `update_trail_stop()`'s lack of self-persistence actually exploitable?
+
+**Answer: yes, precisely — narrower than originally feared, but real and (per GAI) routine rather than rare.**
+
+Traced all 5 call sites of `tracker.update_trail_stop()` across the codebase (2 in `check_partial_exits()`, 1 in `_check_exits_extended_hours()` covered here; 2 more inside the tranche-execution flow):
+
+| Site | Context | Persistence outcome |
+|---|---|---|
+| ~line 362 | `check_partial_exits()`'s "trail stop not hit — ratchet if price moved" branch | **GAP CONFIRMED.** Multiple early-exit paths (old-stop-cancel failure → immediate `continue`; held-for-orders poll never clearing; GTC/DAY resubmit failure) fall through to the next trade with zero save covering this trail_stop mutation. |
+| ~line 648 | Inside the tranche-execution flow, "qty too small for a real partial close" branch | SAFE — an unconditional `tracker._save_log()` follows a few lines later (~line 658) before the loop continues. |
+| ~line 742, ~757 | Inside the tranche-execution flow, after an actual partial close fires | SAFE — an unconditional `tracker._save_log()` (~line 941) executes after the stop-resubmission logic regardless of whether that resubmission succeeded or failed, covering both sites. |
+| ~line 2125 | `_check_exits_extended_hours()`'s own separate "trail stop not hit — ratchet" branch | **GAP CONFIRMED.** Immediately followed by a bare `continue` — same failure pattern as line 362, in a different function. |
+
+**Refined finding:** the persistence gap is real but confined specifically to the two "ratchet the trail stop without also triggering a tranche or exit this cycle" code paths (one in each of two functions) — NOT throughout every use of `update_trail_stop()` as originally broadly suspected from `portfolio_tracker.py` alone.
+
+**Severity — escalated from the original MEDIUM:** Gro: significant ("any data loss in a trading system can have significant consequences... should be addressed"). **GAI: Moderate-High, and explicitly states this is NOT a narrow edge case — ratcheting happens routinely whenever a trending trade moves favorably without hitting the next tranche threshold, meaning intermediate ratchets are lost on every restart/crash that happens between ratchet events, reverting risk management to a stale, less-protective stop level until the next successful tranche or exit event.** Concrete consequence per GAI: on a restart, the bot resumes with an outdated, wider stop than the market conditions actually warranted, increasing realized loss if price reverses before the next ratchet/save cycle.
+
+**Fix — Gro and GAI both converge, independently, on the same recommendation:** make `update_trail_stop()` self-persistent (call `self._save_log()` internally, matching every other state-mutating method in `PortfolioTracker`) rather than relying on callers to remember to save afterward — exactly the same "encapsulate persistence, don't trust the caller" principle already applied to every sibling method in that class. This also structurally prevents the same class of bug from recurring at any FUTURE call site of `update_trail_stop()`, not just the two found today.
+
+**Decision: NOT FIXED THIS SESSION** — logged per the "audit first, consolidated fix later" instruction. This finding is now considered a candidate fix for the future `portfolio_tracker.py` patch batch (it's a one-line change to that file, not to `exit_logic.py`), alongside the Block 2/3/4/5 findings already logged there.
+
+**Status: `check_partial_exits()` (Block 1 of `exit_logic.py`) — STATIC/DYNAMIC pass + Gro/GAI review on the trail-stop persistence question COMPLETE. Remaining in this file: `check_exits()` (lines 1055-1979, ~925 lines) and `_check_exits_extended_hours()`'s remaining logic outside the trail-stop branch already covered (lines 1980-2182). NOT YET STARTED.**
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
