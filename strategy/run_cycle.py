@@ -1007,7 +1007,39 @@ def run_cycle(
 
     _dir_now = "down" if _spy_5m_pct < 0 else "up"
 
-    if _new_event:
+    # MTF FULL BOT AUDIT — JUNE 26 (Rafael decision 2026-06-28): severity rank,
+    # mirrors the existing MIN_SCORE bump tiering a few lines below (EXTREME=+3,
+    # the 3 hardest macro BROAD types=+2, all other BROAD/SECTOR=+1). Used to
+    # prevent a newly-detected MILDER event from prematurely overwriting a
+    # currently-active MORE SEVERE event's persistence countdown — e.g. an
+    # EXTREME block with 2 scans still owed should not be silently downgraded
+    # to a 2-scan SECTOR event just because the very next bar's move was small.
+    _EVENT_SEVERITY_RANK = {
+        "EXTREME": 3,
+        "BROAD_GEO_CONFLICT": 2, "BROAD_MACRO_SYSTEMIC": 2, "BROAD_MACRO_CREDIT": 2,
+        "BROAD_GEO_ENERGY": 1, "BROAD_MACRO_MONETARY": 1, "BROAD_MACRO_FX": 1,
+        "BROAD_GLOBAL_ASIA": 1, "BROAD_GLOBAL_EU": 1, "BROAD_TECHNICAL": 1,
+        "SECTOR": 1,
+    }
+
+    _new_rank        = _EVENT_SEVERITY_RANK.get(_new_event, 1) if _new_event else 0
+    _active_rank     = _EVENT_SEVERITY_RANK.get(_main._spy_event_type, 0)
+    _would_downgrade = bool(
+        _new_event
+        and _main._spy_risk_active
+        and _new_event != _main._spy_event_type
+        and _new_rank < _active_rank
+    )
+    if _would_downgrade:
+        logger.info(
+            f"📊 Severity-downgrade BLOCKED: new {_new_event} (rank {_new_rank}) "
+            f"would have overwritten active {_main._spy_event_type} "
+            f"(rank {_active_rank}, {_main._spy_risk_scans_left} scan(s) left) — "
+            f"keeping the more severe event's countdown intact and ticking it "
+            f"down normally instead."
+        )
+
+    if _new_event and not _would_downgrade:
         _persist = _PERSIST.get(_new_event, 3)
         _state_changed = (not _main._spy_risk_active) or (_new_event != _main._spy_event_type)
         if _state_changed:
@@ -1053,6 +1085,10 @@ def run_cycle(
                             scans_left=_persist)
 
     elif _main._spy_risk_active:
+        # Reached when there's no new trigger this cycle, OR a milder new
+        # trigger was just blocked from downgrading the active event above
+        # (_would_downgrade) — both cases tick the active event's own
+        # countdown down normally rather than resetting it.
         # Build #11: suppress countdown during a data outage — don't let yfinance
         # downtime silently clear an EXTREME or BROAD_GEO_CONFLICT block.
         if _main._spy_fetch_failures >= 3:
