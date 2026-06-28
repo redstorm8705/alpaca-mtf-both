@@ -1,8 +1,8 @@
+# ruff: noqa: E501  — long prompt strings and analysis text are intentionally long
 """
 midday_audit.py
 Post-market decision quality audit — runs once daily after RTH closes.
 Reads today's trade_events.jsonl + last 4h of bot.log. Flags:
-  - PDT=3/3 forced-overnight entries (especially at ATH)
   - High-MRI entries (STRESSED / CRISIS level at entry)
   - Stop-hit rate and partial exit rate for the session
   - Error and warning counts from the live log
@@ -19,18 +19,18 @@ import sys
 import json
 import ssl
 import logging
+import importlib
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv  # must precede module-level os.getenv() calls (E402 fix)
+
+load_dotenv()
 
 PT = ZoneInfo("America/Los_Angeles")
 ET = ZoneInfo("America/New_York")
 _now = datetime.now(PT)
-
-# ── Load .env ────────────────────────────────────────────────────────────────
-from dotenv import load_dotenv
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +54,6 @@ GEMINI_REPORT  = LOGS_DIR / f"midday_gemini_{AUDIT_DATE}.txt"
 
 # Risk thresholds
 ATH_WARN_PCT    = 2.0   # flag entries taken within 2% of ATH
-PDT_WARN        = 3     # flag entries taken at PDT=3/3
 MRI_WARN_LEVELS = {"STRESSED", "CRISIS"}
 STOP_HIT_WARN   = 0.5   # flag if >50% of today's entries hit their stop
 
@@ -108,7 +107,7 @@ def read_today_trade_events() -> list[dict]:
         # Walk all events chronologically; keep the last prior-day entry per symbol
         prior_entries: dict[str, dict] = {}
         for e in all_events:
-            sym = e.get("symbol")
+            sym = e.get("symbol", "")
             if e.get("event") == "entry" and sym in overnight_syms:
                 ts = e.get("ts", "")
                 if not (ts.startswith(AUDIT_DATE) or ts.startswith(AUDIT_DATE_ET)):
@@ -160,7 +159,6 @@ def analyse_entries(events: list[dict]) -> dict:
     for e in entries:
         sym      = e.get("symbol", "?")
         score    = e.get("score", 0)
-        pdt_used = e.get("pdt_used", 0)
         mri_lvl  = e.get("mri_level", "NORMAL")
         price    = e.get("price", 0)
         ts       = e.get("ts", "")[:19].replace("T", " ")
@@ -168,10 +166,6 @@ def analyse_entries(events: list[dict]) -> dict:
 
         entry_symbols.append(sym)
         entry_flags = []
-
-        # PDT=3/3 forced overnight
-        if pdt_used >= PDT_WARN:
-            entry_flags.append("PDT=3/3 forced-overnight")
 
         # High-stress MRI at entry
         if mri_lvl in MRI_WARN_LEVELS:
@@ -186,7 +180,6 @@ def analyse_entries(events: list[dict]) -> dict:
                 "symbol": sym,
                 "ts":     ts,
                 "score":  score,
-                "pdt":    pdt_used,
                 "mri":    mri_lvl,
                 "price":  price,
                 "source": data_src,
@@ -224,7 +217,7 @@ def analyse_pnl(events: list[dict]) -> dict:
         key=lambda e: e.get("ts", ""),
     )
     # Match each entry to the next chronological exit for the same symbol.
-    _exit_queue: dict[str, list] = {}
+    _exit_queue: dict[str, list[dict]] = {}
     for ex in _raw_exits:
         _exit_queue.setdefault(ex["symbol"], []).append(ex)
 
@@ -232,9 +225,9 @@ def analyse_pnl(events: list[dict]) -> dict:
     for en in _raw_entries:
         sym = en["symbol"]
         ex_list = _exit_queue.get(sym, [])
-        ex = ex_list.pop(0) if ex_list else None
-        if ex is None:
+        if not ex_list:
             continue
+        ex = ex_list.pop(0)
         ep  = float(en.get("price") or 0)
         xp  = float(ex.get("price") or 0)
         qty = float((ex.get("size") if ex.get("event") == "partial_exit" else en.get("size")) or 0)
@@ -437,7 +430,8 @@ def _slack(title: str, body: str, emoji: str = ":bar_chart:") -> None:
 
 
 def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dict,
-                     pnl_analysis: dict = None, postmortem: list = None) -> str:
+                     pnl_analysis: "dict | None" = None,
+                     postmortem: "list | None" = None) -> str:
     lines = []
     pnl = pnl_analysis or {}
 
@@ -456,7 +450,7 @@ def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dic
             f"PF {pf_str} | "
             f"Avg W ${pnl['avg_win']:.2f} / Avg L ${pnl['avg_loss']:.2f}"
         )
-        if best:
+        if best and worst:
             lines.append(
                 f"  Best: {best['symbol']} +${best['pnl']:.2f} "
                 f"(score {best['score']}/12, MRI={best['mri_level']}) | "
@@ -510,7 +504,7 @@ def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dic
             flag_str = ", ".join(fe["flags"])
             lines.append(
                 f"  • {fe['symbol']} @ {fe['ts']} PT — "
-                f"score {fe['score']}/12 | PDT={fe['pdt']}/3 | "
+                f"score {fe['score']}/12 | "
                 f"MRI={fe['mri']} | {flag_str}"
             )
     else:
@@ -548,13 +542,52 @@ def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dic
 # Gemini integration
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_config_constants_block() -> str:
+    """Resolve live config values at audit-build time instead of hand-typing a
+    snapshot. S68 fix (2026-06-27, board+Gro+GAI) — see nightly_audit.py's
+    identical helper for the full incident writeup (stale PDT framing, wrong
+    constant names/values silently drifting for months). Duplicated here
+    rather than imported since these two scripts are independently standalone
+    by design (each can run with only its own file present)."""
+    try:
+        sys.path.insert(0, str(BASE_DIR))
+        import config as _live_cfg
+        importlib.reload(_live_cfg)
+    except Exception as e:
+        return f"(config.py import failed: {e} — constants below are UNVERIFIED, do not audit against them)"
+
+    profile = _live_cfg.PROFILES.get("paper", {}) if hasattr(_live_cfg, "PROFILES") else {}
+
+    def _resolve(name: str) -> str:
+        if name in profile:
+            return f"{name} = {profile[name]!r}  (paper profile)"
+        if hasattr(_live_cfg, name):
+            return f"{name} = {getattr(_live_cfg, name)!r}  (module-level default)"
+        return f"{name} = NOT FOUND in config.py — do not assert a value for this"
+
+    names = [
+        "MIN_LONG_SCORE", "MIN_SHORT_SCORE", "KELLY_FRACTION", "MAX_OPEN_POSITIONS",
+        "BUCKET_B_MAX_POSITIONS_POWER",
+        "INTRADAY_STOP_ATR_MULT", "INTRADAY_TARGET_ATR_MULT", "MAX_DAILY_LOSS_PCT",
+        "VIX_BE_WIDEN_THRESHOLD_1", "VIX_BE_WIDEN_THRESHOLD_2",
+        "VIX_STOP_WIDEN_THRESHOLD_1", "VIX_STOP_WIDEN_THRESHOLD_2",
+        "VIX_STOP_WIDEN_MULT_1", "VIX_STOP_WIDEN_MULT_2",
+        "VOLATILITY_TIER_HIGH_THRESHOLD", "VOLATILITY_TIER_EXTREME_THRESHOLD",
+        "VOL_TIER_STD_STOP_INTRADAY", "VOL_TIER_HIGH_STOP_INTRADAY",
+        "VOL_TIER_EXTREME_STOP_INTRADAY",
+        "OVERNIGHT_ENTRIES_ENABLED", "BUCKET_A_ALLOCATION_PCT",
+        "TOD_MARKET_OPEN_BUFFER_MINS", "TOD_EOD_NO_ENTRY_MINS",
+    ]
+    return "\n".join(_resolve(n) for n in names)
+
+
 def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
                          pnl_anal: dict, log_lines: list[str]) -> str:
     flagged_str = ""
     for fe in entry_anal.get("flagged_entries", []):
         flagged_str += (
             f"  - {fe['symbol']} @ {fe['ts']} PT | score {fe['score']}/12 | "
-            f"PDT={fe['pdt']}/3 | MRI={fe['mri']} | flags: {', '.join(fe['flags'])}\n"
+            f"MRI={fe['mri']} | flags: {', '.join(fe['flags'])}\n"
         )
     if not flagged_str:
         flagged_str = "  None\n"
@@ -580,27 +613,42 @@ def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
     log_sample = "\n".join(log_lines[-200:]) if log_lines else "(no log data)"
 
     return f"""You are an adversarial intraday decision quality auditor for a live Alpaca
-paper-trading bot (MTF confluence scoring, $2.5K paper account, PDT-constrained).
+paper-trading bot (MTF confluence scoring, $2.5K paper account).
 Your job is to find problems — bad entries, bad exits, logic errors, and anything
 that indicates systematic degradation in decision quality.
 
-Before flagging any bug: (1) state the exact variable or metric involved, (2) explain
-what the value is vs. what it should be and why that constitutes a failure, (3) state
-the exact condition under which this occurs. Do NOT flag something as a bug if you
-cannot complete step (2). Do not hallucinate code not shown to you — if source is
-not provided, say "source not provided."
+## VERIFICATION DISCIPLINE — MANDATORY, READ FIRST
+
+1. Before flagging any bug: (1) state the exact variable or metric involved, (2) explain
+   what the value is vs. what it should be and why that constitutes a failure, (3) state
+   the exact condition under which this occurs. Do NOT flag something as a bug if you
+   cannot complete step (2). Do not hallucinate code not shown to you — if source is
+   not provided, say "source not provided."
+2. Do not invent function names, state/enum names, or variable names not shown in the
+   data below. If you cannot find verbatim evidence for a claim, say "not found in
+   provided source" — do not guess a plausible-sounding name.
+3. When citing any numeric field for a specific trade (price, stop, score, P&L), pull
+   every field for that citation from the SAME entry in CLOSED TRADE DETAILS or FLAGGED
+   ENTRIES below — never combine fields from two different trades for the same symbol.
+4. Check CONFIG CONSTANTS below before flagging any violation — these are resolved
+   live from config.py at report-build time, not a hand-typed snapshot. If a constant
+   shows "NOT FOUND," do not assert any value for it.
+5. If you disagree with a prior audit finding or a proposed fix: (a) trace the exact
+   code path that disproves the finding, (b) cite the relevant CONFIG CONSTANT with
+   its actual resolved value, (c) provide an alternative fix with file name and line
+   context, (d) flag it as "METHODOLOGY DISAGREEMENT" — not as a new bug.
+
+## ARCHITECTURE INVARIANT — PDT DOES NOT EXIST
+
+Pattern Day Trader (PDT) enforcement was PERMANENTLY DELETED from this codebase
+(SEC rule change, S63 sweep). There is zero PDT logic anywhere in execution code.
+NEVER attribute any halt, block, or anomaly to PDT — find the actual cause in the
+provided data instead.
 
 Separate all findings by category:
   EXECUTION BUG — code logic that produces wrong runtime behavior (wrong price recorded, wrong exit triggered)
   ALPHA ISSUE   — strategy quality (entries in bad conditions, exits mistimed vs. stated TP/SL)
   INFRASTRUCTURE — memory, network, watchdog, API quirks
-
-Check CONFIG CONSTANTS below before flagging any violation.
-
-If you disagree with a prior audit finding or a proposed fix: (a) trace the exact code
-path that disproves the finding, (b) cite the relevant CONFIG CONSTANT with its actual
-value, (c) provide an alternative fix with file name and line context, (d) flag it as
-"METHODOLOGY DISAGREEMENT" in your output — not as a new bug.
 
 ---
 
@@ -631,31 +679,8 @@ Level distribution: {mri_anal.get('levels', {})}
 
 ---
 
-## BOT CONFIG CONSTANTS (verify against these before flagging a violation)
-MIN_SCORE = 9                        # min confluence score to enter
-KELLY_FRACTION = 0.25                # Kelly fraction for position sizing
-MAX_POSITIONS = 4                    # standard concurrent position limit
-BUCKET_B_MAX_POSITIONS_POWER = 5     # power-hour expansion (9:35–10:00 AM ET) — NOT a bug
-TARGET_ATR_MULT = 2.5                # profit target = 2.5× stop distance
-INTRADAY_STOP_ATR_MULT = 1.25        # stop distance = 1.25× ATR
-VIX_BE_WIDEN_THRESHOLD_1 = 20.0     # VIX level where breakeven buffer widens
-OVERNIGHT_ENTRIES_ENABLED = True     # overnight holds are permitted by design
-MAX_DAILY_LOSS_PCT = 0.07            # 7% kill switch (paper profile)
-VIX_BE_WIDEN_THRESHOLD_2 = 30.0     # VIX ≥ 30 → breakeven buffer widens further
-VIX_STOP_WIDEN_THRESHOLD_1 = 25.0   # VIX > 25: stops widen to 1.5×
-VIX_STOP_WIDEN_THRESHOLD_2 = 30.0   # VIX > 30: stops widen to 2.0×
-VIX_STOP_WIDEN_MULT_1 = 1.5         # stop multiplier at VIX > 25
-VIX_STOP_WIDEN_MULT_2 = 2.0         # stop multiplier at VIX > 30
-BUCKET_A_ALLOCATION_PCT = 0.05       # leveraged ETF bucket = 5% of portfolio
-VOLATILITY_TIER_HIGH_THRESHOLD = 0.50    # rvol > 50% = high tier → stop 1.75× (overrides base)
-VOLATILITY_TIER_EXTREME_THRESHOLD = 0.80 # rvol > 80% = extreme tier → stop 2.5× (overrides base)
-VOL_TIER_STD_STOP_INTRADAY = 1.25   # std vol tier stop mult (AAPL, AMZN, META)
-VOL_TIER_HIGH_STOP_INTRADAY = 1.75  # high vol tier stop mult (TSLA, NVDA, PLTR)
-VOL_TIER_EXTREME_STOP_INTRADAY = 2.5 # extreme vol tier stop mult (MSTR, COIN, NVDL)
-TOD_MARKET_OPEN_BUFFER_MINS = 30    # no entries 9:30–10:00 ET (opening noise window)
-TOD_EOD_NO_ENTRY_MINS = 15          # no new entries 15 min before close
-# NOTE: VOL_TIER_*_STOP_INTRADAY overrides INTRADAY_STOP_ATR_MULT when volatility
-# regime is detected. The vol-tier multiplier takes precedence.
+## BOT CONFIG CONSTANTS (resolved live from config.py at report-build time — verify against these before flagging a violation; "NOT FOUND" means do not assert a value)
+{_build_config_constants_block()}
 
 ---
 
@@ -699,7 +724,7 @@ CONTEXT: 5 concurrent open positions during 9:35–10:00 AM ET = power-hour expa
    - Flag any partial exit that doesn't reduce position size correctly.
 
 2. **Entry quality**: Were entries taken under conditions that systematically reduce edge?
-   (High MRI, low score, PDT pressure, thin volume, bad timing)
+   (High MRI, low score, thin volume, bad timing)
 
 3. **Exit quality**: Did the bot hold winners too long or cut losers too slowly?
    Compare exit reason vs. actual price vs. stated TP/SL levels.
@@ -720,8 +745,19 @@ CONTEXT: 5 concurrent open positions during 9:35–10:00 AM ET = power-hour expa
 
 ## OUTPUT FORMAT
 
+Respond in this exact structure. CATASTROPHIC ALERT comes FIRST, before
+anything else, so it cannot be missed — this report feeds an unattended
+overnight review pipeline.
+
+### CATASTROPHIC ALERT: [count]
+List ONLY items meeting this bar, or write "None — no catastrophic conditions
+detected." One line each: exact failure condition | impacted symbol/trade.
+  CATASTROPHIC = position left naked (no stop), silent trading halt, P&L
+  corruption affecting live risk decisions, kill switch triggered but not
+  respected.
+
 ### VERDICT: [PASS | WARN | FAIL]
-(PASS = session clean; WARN = issues found but manageable; FAIL = data corruption or systematic failure)
+(PASS = session clean; WARN = issues found but manageable; FAIL = CATASTROPHIC count > 0, OR data corruption, OR systematic failure)
 
 ### PERFORMANCE AUDIT
 (entry/exit integrity, P&L sign checks, score→outcome correlation, stop rate analysis)
@@ -742,7 +778,9 @@ CONTEXT: 5 concurrent open positions during 9:35–10:00 AM ET = power-hour expa
 For each: CATEGORY | SEVERITY | description | exact condition
 CATEGORY: EXECUTION BUG | ALPHA ISSUE | INFRASTRUCTURE
 SEVERITY: CRITICAL | HIGH | MEDIUM | LOW
-  CRITICAL = position left naked, silent trading halt, P&L corruption
+  (CATASTROPHIC-tier items belong in CATASTROPHIC ALERT above — do not
+   duplicate them here.)
+  CRITICAL = silent trading halt risk, P&L corruption in a non-live-risk path
   HIGH = incorrect fill price, failed stop submission, wrong exit triggered
   MEDIUM = missing cleanup/reset, edge-case state error, logging gap
   LOW = cosmetic logging issue, minor redundancy
@@ -756,7 +794,8 @@ For any bug you flag for which a fix was proposed (in a prior session or report)
 (or "No prior fixes to validate")
 
 ### RECOMMENDED ACTIONS
-(ordered by urgency — max 3 items; tag each as EXECUTION, ALPHA, or INFRA)
+(ordered by urgency — max 3 items; tag each as EXECUTION, ALPHA, or INFRA;
+if CATASTROPHIC count > 0, item #1 must address it)
 """
 
 
@@ -771,7 +810,7 @@ def _call_gemini(prompt: str) -> str:
             logger.info(f"  Trying model: {model}")
             response = client.models.generate_content(model=model, contents=prompt)
             logger.info(f"  Success with {model}")
-            return response.text
+            return response.text or ""
         except Exception as e:
             logger.warning(f"  {model} failed: {e}")
             last_err = e
@@ -873,8 +912,24 @@ def main() -> None:
             "PASS": ":white_check_mark:", "WARN": ":warning:",
             "FAIL": ":rotating_light:", "UNKNOWN": ":grey_question:",
         }[gemini_verdict]
+        # CATASTROPHIC ALERT is requested first in the prompt's OUTPUT FORMAT
+        # (S68 redesign) — surface a loud prefix in Slack if it's non-empty so
+        # it can't be missed even if Slack truncation cuts off the rest.
+        _catastrophic_count = 0
+        for _line in gemini_report.splitlines():
+            if "CATASTROPHIC ALERT" in _line and ":" in _line:
+                try:
+                    _catastrophic_count = int(_line.split(":")[-1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+                break
+        catastrophic_prefix = (
+            ":rotating_light::rotating_light: *CATASTROPHIC FINDING(S) — IMMEDIATE REVIEW* :rotating_light::rotating_light:\n"
+            if _catastrophic_count > 0 else ""
+        )
         gemini_slack_body = (
-            f"{gemini_emoji} *Verdict: {gemini_verdict}*\n"
+            catastrophic_prefix
+            + f"{gemini_emoji} *Verdict: {gemini_verdict}*\n"
             + "\n".join(
                 line for line in gemini_report.splitlines()
                 if line.strip() and not line.startswith("```")

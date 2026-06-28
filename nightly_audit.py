@@ -14,6 +14,7 @@ import sys
 import json
 import ssl
 import logging
+import importlib
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -63,7 +64,9 @@ CRITICAL:
          | Will crash on any premarket movers scan — UNRESOLVED
 
 HIGH:
-  P5-H1 | PDT=3/3 confirm buffer stale at RTH open | daily reset may not clear it → false PDT lockout
+  P5-H1 | OBSOLETE — PDT enforcement permanently deleted from codebase (S63 sweep,
+         SEC rule change). This item no longer applies to anything. Do NOT investigate
+         or flag PDT-related causes for any event — the mechanism does not exist.
   P5-H2 | Fill price crosstalk | order fill price ambiguity when multiple orders in flight simultaneously
   P5-H3 | Orphan GTC 404 path | order-not-found returns WARNING but doesn't clear tracker → stranded stops
   P5-H4 | Rule 2 dead code | TOD_MARKET_OPEN_BUFFER_MINS referenced but possibly overridden to no-op
@@ -96,7 +99,7 @@ def _collect_log_lines() -> str:
     cutoff = datetime.now(PT) - timedelta(hours=24)
     keep_keywords = ("WARNING", "ERROR", "CRITICAL", "KILL SWITCH",
                      "ENTRY", "EXIT", "STOP", "HALT", "position size",
-                     "Daily reset", "PDT", "score", "SKIPPED", "BLOCKED",
+                     "Daily reset", "score", "SKIPPED", "BLOCKED",
                      "Exception", "Traceback", "stale", "rejected")
     lines = []
     try:
@@ -194,6 +197,51 @@ def _collect_modified_files() -> dict[str, str]:
     return modified
 
 
+def _build_config_constants_block() -> str:
+    """Resolve live config values at audit-build time instead of hand-typing a
+    snapshot. S68 fix (2026-06-27, board+Gro+GAI): the prior hardcoded block
+    silently drifted from reality for months — MIN_SCORE doesn't exist as a flat
+    constant (it's MIN_LONG_SCORE/MIN_SHORT_SCORE inside PROFILES["paper"], value
+    10 not the claimed 9), KELLY_FRACTION was claimed 0.25 but paper profile is
+    0.35, INTRADAY_STOP_ATR_MULT was claimed 1.25 but paper profile is 1.20, and
+    OVERNIGHT_ENTRIES_ENABLED was claimed True but isn't defined in config.py at
+    all (resolves to False via getattr default in main.py). A wrong "ground
+    truth" fed to an LLM auditor is worse than no ground truth — it can cite a
+    real-looking number to justify a false finding. Resolve live; if a name
+    can't be found, say so explicitly rather than asserting a guessed value.
+    """
+    try:
+        sys.path.insert(0, str(BASE_DIR))
+        import config as _live_cfg
+        importlib.reload(_live_cfg)
+    except Exception as e:
+        return f"(config.py import failed: {e} — constants below are UNVERIFIED, do not audit against them)"
+
+    profile = _live_cfg.PROFILES.get("paper", {}) if hasattr(_live_cfg, "PROFILES") else {}
+
+    def _resolve(name: str) -> str:
+        if name in profile:
+            return f"{name} = {profile[name]!r}  (paper profile)"
+        if hasattr(_live_cfg, name):
+            return f"{name} = {getattr(_live_cfg, name)!r}  (module-level default)"
+        return f"{name} = NOT FOUND in config.py — do not assert a value for this"
+
+    names = [
+        "MIN_LONG_SCORE", "MIN_SHORT_SCORE", "KELLY_FRACTION", "MAX_OPEN_POSITIONS",
+        "BUCKET_B_MAX_POSITIONS_POWER",
+        "INTRADAY_STOP_ATR_MULT", "INTRADAY_TARGET_ATR_MULT", "MAX_DAILY_LOSS_PCT",
+        "VIX_BE_WIDEN_THRESHOLD_1", "VIX_BE_WIDEN_THRESHOLD_2",
+        "VIX_STOP_WIDEN_THRESHOLD_1", "VIX_STOP_WIDEN_THRESHOLD_2",
+        "VIX_STOP_WIDEN_MULT_1", "VIX_STOP_WIDEN_MULT_2",
+        "VOLATILITY_TIER_HIGH_THRESHOLD", "VOLATILITY_TIER_EXTREME_THRESHOLD",
+        "VOL_TIER_STD_STOP_INTRADAY", "VOL_TIER_HIGH_STOP_INTRADAY",
+        "VOL_TIER_EXTREME_STOP_INTRADAY",
+        "OVERNIGHT_ENTRIES_ENABLED", "BUCKET_A_ALLOCATION_PCT",
+        "TOD_MARKET_OPEN_BUFFER_MINS", "TOD_EOD_NO_ENTRY_MINS",
+    ]
+    return "\n".join(_resolve(n) for n in names)
+
+
 def _build_prompt(log_lines: str, trade_events: str, eod: str,
                   modified_files: dict[str, str]) -> str:
     files_section = ""
@@ -204,23 +252,42 @@ def _build_prompt(log_lines: str, trade_events: str, eod: str,
         files_section = "\n(No source files modified in last 24h)"
 
     return f"""You are an adversarial code and trading-behaviour auditor for a live
-Alpaca paper-trading bot (MTF confluence scoring system, 12-point score, PDT-constrained
-$2.5K paper account). Your job is to find problems — bugs, logic errors, P&L recording
+Alpaca paper-trading bot (MTF confluence scoring system, 12-point score, $2.5K
+paper account). Your job is to find problems — bugs, logic errors, P&L recording
 issues, risk management gaps, silent failures, and anything that looks wrong.
 
-Before flagging any bug: (1) state the exact function name and variable involved,
-(2) trace the code path — what does the runtime produce vs. what is intended,
-(3) state the exact failure condition. Do NOT flag something as a bug if you cannot
-complete step (2). Do not hallucinate code not shown to you — if you don't have the
-source, say "source not provided."
+## VERIFICATION DISCIPLINE — MANDATORY, READ FIRST
 
-Check CONFIG CONSTANTS below before flagging any configuration violation. Intentional
-behaviors documented in KNOWN BENIGN PATTERNS must not be flagged as bugs.
+1. Before flagging any bug: (1) state the exact function name and variable involved,
+   (2) trace the code path — what does the runtime produce vs. what is intended,
+   (3) state the exact failure condition. Do NOT flag something as a bug if you
+   cannot complete step (2).
+2. Do not hallucinate code, function names, or state/enum names not shown to you.
+   If you reference a state name, function, or variable, it MUST appear verbatim
+   in the source provided below. If you cannot find it, say "not found in provided
+   source" — do not guess a plausible-sounding name.
+3. When citing any numeric field (price, stop, score, P&L) for a specific trade,
+   you MUST pull every field for that citation from the SAME trade_events JSON
+   record (matched by its exact "ts" timestamp). Never combine a price/stop/score
+   from one record with a price/stop/score from a different record for the same
+   symbol, even if they look related — different timestamps mean different trades.
+4. Check CONFIG CONSTANTS below before flagging any configuration violation —
+   these are resolved live from config.py at the moment this report was built,
+   not a hand-typed snapshot. If a constant shows "NOT FOUND," do not assert any
+   value for it. Intentional behaviors in KNOWN BENIGN PATTERNS must not be flagged.
+5. If you disagree with a prior audit finding or a proposed fix: (a) trace the exact
+   code path that disproves the finding, (b) cite the relevant CONFIG CONSTANT with
+   its actual resolved value, (c) provide an alternative fix with file name and line
+   context, (d) flag it as "METHODOLOGY DISAGREEMENT" — not as a new bug.
 
-If you disagree with a prior audit finding or a proposed fix: (a) trace the exact code
-path that disproves the finding, (b) cite the relevant CONFIG CONSTANT with its actual
-value, (c) provide an alternative fix with file name and line context, (d) flag it as
-"METHODOLOGY DISAGREEMENT" in your output — not as a new bug.
+## ARCHITECTURE INVARIANT — PDT DOES NOT EXIST
+
+Pattern Day Trader (PDT) enforcement was PERMANENTLY DELETED from this codebase
+(SEC rule change, S63 sweep). There is zero PDT logic anywhere in execution code.
+Any "pdt_used" field you see in trade data is a dead/legacy field hardcoded to 0 —
+it is not a live signal. NEVER attribute any halt, block, or anomaly to PDT. If you
+see something that superficially resembles a day-trade-count pattern, the actual
+cause is something else — find it in the provided log/code, do not default to PDT.
 
 ---
 
@@ -236,9 +303,10 @@ value, (c) provide an alternative fix with file name and line context, (d) flag 
 ---
 
 ## TRADE EVENTS (last 7 days — entries/exits/stops with stop/T1/T2/T3 levels)
-Entry events include: price, stop, T1, T2, T3 (target) levels, score, MRI level, PDT used.
+Entry events include: price, stop, T1, T2, T3 (target) levels, score, MRI level.
 Use these to verify: exit prices relative to stated stop/target levels, whether partial
 exits fired at T1/T2, whether stop was moved after partial exit, P&L sign correctness.
+Remember: cite all fields for one trade from ONE record (same "ts"), never mix records.
 ```json
 {trade_events}
 ```
@@ -252,31 +320,8 @@ exits fired at T1/T2, whether stop was moved after partial exit, P&L sign correc
 
 ---
 
-## BOT CONFIG CONSTANTS (verify against these before flagging a violation)
-MIN_SCORE = 9                        # min confluence score to enter a trade
-KELLY_FRACTION = 0.25                # Kelly fraction for position sizing
-MAX_POSITIONS = 4                    # standard concurrent position limit
-BUCKET_B_MAX_POSITIONS_POWER = 5     # power-hour expansion (9:35–10:00 AM ET) — NOT a bug
-TARGET_ATR_MULT = 2.5                # profit target = 2.5× stop distance
-INTRADAY_STOP_ATR_MULT = 1.25        # stop distance = 1.25× ATR
-VIX_BE_WIDEN_THRESHOLD_1 = 20.0     # VIX level where breakeven buffer widens
-VIX_STOP_WIDEN_THRESHOLD_1 = 25.0   # VIX level where stop widens 1.5×
-OVERNIGHT_ENTRIES_ENABLED = True     # overnight holds are permitted by design
-MAX_DAILY_LOSS_PCT = 0.07            # 7% kill switch (paper profile)
-VIX_BE_WIDEN_THRESHOLD_2 = 30.0     # VIX ≥ 30 → breakeven buffer widens further
-VIX_STOP_WIDEN_THRESHOLD_2 = 30.0   # VIX > 30: stops widen to 2.0×
-VIX_STOP_WIDEN_MULT_1 = 1.5         # stop multiplier at VIX > 25
-VIX_STOP_WIDEN_MULT_2 = 2.0         # stop multiplier at VIX > 30
-BUCKET_A_ALLOCATION_PCT = 0.05       # leveraged ETF bucket = 5% of portfolio
-VOLATILITY_TIER_HIGH_THRESHOLD = 0.50    # rvol > 50% = high tier → stop 1.75× (overrides base)
-VOLATILITY_TIER_EXTREME_THRESHOLD = 0.80 # rvol > 80% = extreme tier → stop 2.5× (overrides base)
-VOL_TIER_STD_STOP_INTRADAY = 1.25   # std vol tier stop mult (AAPL, AMZN, META)
-VOL_TIER_HIGH_STOP_INTRADAY = 1.75  # high vol tier stop mult (TSLA, NVDA, PLTR)
-VOL_TIER_EXTREME_STOP_INTRADAY = 2.5 # extreme vol tier stop mult (MSTR, COIN, NVDL)
-TOD_MARKET_OPEN_BUFFER_MINS = 30    # no entries 9:30–10:00 ET (opening noise window)
-TOD_EOD_NO_ENTRY_MINS = 15          # no new entries 15 min before close
-# NOTE: VOL_TIER_*_STOP_INTRADAY overrides INTRADAY_STOP_ATR_MULT when volatility
-# regime is detected. The vol-tier multiplier takes precedence.
+## BOT CONFIG CONSTANTS (resolved live from config.py at report-build time — verify against these before flagging a violation; "NOT FOUND" means do not assert a value)
+{_build_config_constants_block()}
 
 ---
 
@@ -304,7 +349,8 @@ TOD_EOD_NO_ENTRY_MINS = 15          # no new entries 15 min before close
 
 1. **Log anomalies**: Identify any ERROR/WARNING/CRITICAL patterns that indicate a
    recurring or unresolved problem. Flag any KILL SWITCH triggers, stale data events,
-   PDT violations, or entry blocks that seem suspicious.
+   or entry blocks that seem suspicious — trace the actual gating condition in the
+   log/code, do not assume a cause.
 
 2. **Performance audit — entry/exit/P&L**: Review the last 10 trades for:
    - P&L sign correctness (long: exit > entry = profit; short: entry > exit = profit)
@@ -342,11 +388,21 @@ TOD_EOD_NO_ENTRY_MINS = 15          # no new entries 15 min before close
 
 ## OUTPUT FORMAT
 
-Respond in this exact structure:
+Respond in this exact structure. The CATASTROPHIC ALERT section comes FIRST,
+before anything else, so it cannot be missed or buried under lower-severity
+findings — this report feeds an unattended overnight review pipeline.
+
+### CATASTROPHIC ALERT: [count]
+List ONLY items meeting the CATASTROPHIC bar below, or write "None — no
+catastrophic conditions detected." One line each: file/function | exact
+failure condition | impacted symbol/trade if applicable.
+  CATASTROPHIC = position left naked (no stop), silent trading halt, P&L
+  corruption affecting live risk decisions, kill switch triggered but not
+  respected, any order lifecycle break (submitted but never tracked).
 
 ### VERDICT: [PASS | WARN | FAIL]
 (PASS = no new issues, P5 stable; WARN = issues found but bot operational;
-FAIL = active data corruption, kill switch triggered, or critical bug confirmed active)
+FAIL = CATASTROPHIC count > 0, OR active data corruption, OR critical bug confirmed active)
 
 ### LOG ANOMALIES
 (bullet list, or "None detected")
@@ -367,7 +423,9 @@ FAIL = active data corruption, kill switch triggered, or critical bug confirmed 
 For each: CATEGORY | SEVERITY | file | description | exact failure condition
 CATEGORY: EXECUTION BUG | ALPHA ISSUE | INFRASTRUCTURE
 SEVERITY: CRITICAL | HIGH | MEDIUM | LOW
-  CRITICAL = position left naked, silent trading halt, P&L corruption
+  (CATASTROPHIC-tier items belong in CATASTROPHIC ALERT above, not here —
+   do not duplicate them in this list.)
+  CRITICAL = silent trading halt risk, P&L corruption in a non-live-risk path
   HIGH = incorrect fill price, failed stop submission, wrong exit triggered
   MEDIUM = missing cleanup/reset, edge-case state error, logging gap
   LOW = cosmetic logging issue, minor redundancy
@@ -381,7 +439,8 @@ For any bug you flag for which a fix was proposed (in a prior session or report)
 (or "No prior fixes to validate")
 
 ### RECOMMENDED ACTIONS
-(ordered by urgency — max 5 items)
+(ordered by urgency — max 5 items; if CATASTROPHIC count > 0, item #1 must
+address it)
 """
 
 
@@ -449,8 +508,11 @@ def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
              f"Modified files audited: {modified_count}",
              ""]
 
-    # Pull each section header + first 8 lines of content
-    sections = ["LOG ANOMALIES", "PERFORMANCE AUDIT", "TRADE INTEGRITY", "NEW BUGS FOUND", "RECOMMENDED ACTIONS"]
+    # CATASTROPHIC ALERT is pulled first and uncapped — it must never be
+    # truncated or buried behind lower-severity sections (S68 redesign).
+    sections = ["CATASTROPHIC ALERT", "LOG ANOMALIES", "PERFORMANCE AUDIT",
+                "TRADE INTEGRITY", "NEW BUGS FOUND", "RECOMMENDED ACTIONS"]
+    section_caps = {"CATASTROPHIC ALERT": 50}  # everything else defaults to 8 below
     in_section = None
     section_lines: dict[str, list[str]] = {s: [] for s in sections}
 
@@ -463,9 +525,17 @@ def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
             if line.startswith("###") and not any(line.strip("# ").startswith(s) for s in sections):
                 in_section = None
                 continue
-            if len(section_lines[in_section]) < 8:
+            cap = section_caps.get(in_section, 8)
+            if len(section_lines[in_section]) < cap:
                 if line.strip():
                     section_lines[in_section].append(line.strip())
+
+    catastrophic = section_lines.get("CATASTROPHIC ALERT", [])
+    has_catastrophic = bool(catastrophic) and not any(
+        ln.lower().startswith("none") for ln in catastrophic
+    )
+    if has_catastrophic:
+        lines.insert(0, ":rotating_light::rotating_light: *CATASTROPHIC FINDING(S) — IMMEDIATE REVIEW* :rotating_light::rotating_light:")
 
     for section in sections:
         content = section_lines[section]
