@@ -403,6 +403,26 @@ This is the smallest and cleanest Phase-1 file audited so far — almost entirel
 
 ---
 
+## `run_movers.py` (242 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Standalone "Movers Bot" script — a separate momentum strategy distinct from the main MTF confluence bot, with its own scan-evaluate-exit loop, designed to terminate at 9:28 AM ET and hand off to `main.py` for RTH.
+
+**Finding — potential dual-process race on shared `trade_log.json` (real risk pattern, severity disputed pending infra verification, Gro: High / GAI: Critical):** `run_movers.py` instantiates its own independent `PortfolioTracker()` (line 174), and `PortfolioTracker`'s state file is a fixed, module-level absolute path (`TRADE_LOG_FILE = _ROOT / "trade_log.json"`) — identical regardless of which OS process instantiates it. Separately confirmed via `orphan_manager.py`'s own docstring (read earlier in this audit): `main.py`'s `cancel_and_reconcile_gtc_stops()` runs "at startup AND at the start of every premarket cycle" — meaning `main.py` is itself active and writing to the same tracker file during the same premarket window `run_movers.py` operates in, right up until its 9:28 AM ET self-termination check.
+
+**Both Gro and GAI confirm the underlying mechanism is a genuine "last writer wins" race** if the two processes are ever concurrently alive: each holds an independent in-memory snapshot loaded at its own startup, and neither coordinates `_save_log()` calls — a later atomic write from one process would silently overwrite an update the other process made in the interim (lost position records, vanished GTC stop IDs, phantom duplicate entries, or stale P&L). GAI rates this **Critical** (trade_log.json is the single source of truth for position/order state — corruption here cascades everywhere); Gro rates **High**.
+
+**Investigated the deployment-level mitigation:** `launch_bots.sh` (the production launcher) explicitly kills any running `run_movers.py` process (line 46, grouped with other "stale companion processes") every time the launcher itself starts — but this is a **one-time pre-flight cleanup at launch time only**, not an ongoing runtime guard. `main.py` runs as an always-on restart-looped service once launched. If `run_movers.py` is independently triggered later (e.g., via a separate cron entry — `run_ftd.py`'s own docstring references "before run_movers.py at 6:30" AM PT, implying such a schedule exists or once existed), nothing in the codebase itself would prevent it from running concurrently with the already-active `main.py` for the remainder of premarket.
+
+**Asked Rafael directly whether `run_movers.py` is still actively cron-scheduled on the OCI deployment — answer: not sure, needs to be checked directly on the OCI host.** This finding cannot be fully closed from the codebase alone — it depends on infrastructure state outside this repo.
+
+**Decision: OPEN ITEM, not a code fix — needs an OCI crontab check before severity can be finalized.** If `run_movers.py` is confirmed dead/unscheduled in production, this finding downgrades to "legacy code, no live risk, candidate for deletion or explicit deprecation marking." If it's confirmed still scheduled, this becomes one of the higher-priority items in the eventual consolidated fix batch — Gro/GAI's suggested fixes (single shared tracker service via IPC, or strict OS-level mutual exclusion) are both more involved than a simple patch and would need their own design discussion.
+
+**No other findings in `run_movers.py`** — the rest of the file (CLI argument parsing, scan-cycle merge/dedup logic, market-hours/window guards, RiskManager initialization) was read in full and is straightforward, consistent with its role as a relatively simple standalone script.
+
+**Next Phase-1 file:** `state/persistence.py` (132 lines) — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
