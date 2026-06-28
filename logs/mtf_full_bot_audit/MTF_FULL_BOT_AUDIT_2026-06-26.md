@@ -252,6 +252,25 @@ finding | severity | board/Gro/GAI alignment.)
 
 ---
 
+## Methodology note — targeted grep sweeps (Rafael question, 2026-06-27)
+
+After finding the stale-yfinance-comment pattern twice in `entry_logic.py`, Rafael asked why this audit isn't already using grep sweeps to optimize the process. Clarifying the distinction from CLAUDE.md's No-Grep rule: that rule exists to stop grep from substituting for full-file reads when auditing a file's actual logic — the exact failure mode that caused this project's recurring bug cycles historically. It does NOT prohibit a narrowly-scoped pattern sweep used to surface *candidate locations* across files not yet in sequence, provided each candidate still gets fully read and verified when its file comes up for its real audit turn (consistent with the rule's own carve-out: grep is permitted "to verify a specific line number already identified," after a full read of the immediate context around that line).
+
+**Sweep run:** `grep -n "yfinance"` across all remaining Phase 1 files. Results triaged by reading the actual surrounding context at each hit (not just trusting the grep match):
+
+| File:Line | Verdict |
+|---|---|
+| `exit_logic.py:229` | Historical changelog comment ("DATA-2c: replaced yfinance..."), accurately describes a past migration — not misleading. No finding. |
+| `main.py:24,77,243,363,473` | All either historical changelog comments or accurate documentation of the *approved* T4 yfinance fallback (VIX/JPY) — not misleading. No finding. |
+| `strategy/run_cycle.py:532-535` | Verified via direct read: `yfinance.Ticker("^VIX")` — approved T4 use (VIX is explicitly whitelisted). Not a violation. |
+| `strategy/run_cycle.py:851` | **THIRD instance of the stale-comment pattern.** Comment claims `mri.refresh()` "Fetches TLT, JPY=X, HYG/LQD, USO, GLD, EWJ/EWG... via yfinance" — but this session's own prior history (S67/S68 handoff notes, confirmed earlier today) shows `macro_risk_index.py` was already migrated to Alpaca T1 `fetch_bars()` for those ETFs in an earlier session, with yfinance now reserved only as a T4 fallback for VIX and JPY specifically. The comment in `run_cycle.py` describing `mri.refresh()`'s internals was never updated to match. **Flagged as a candidate finding for `run_cycle.py`'s own full audit turn** — not independently re-verified against `macro_risk_index.py`'s current literal source in this session (that file isn't in the Phase 0/1 dependency list; this is circumstantial-but-strong evidence from documented project history, to be confirmed when `run_cycle.py` is fully read). |
+| `strategy/run_cycle.py:906,1056` | Historical changelog / outage-handling comments — not misleading. No finding. |
+| `trade_logger.py:66` | Documents a legitimate field value (`"yfinance_fallback"` as a valid `data_source` tag) — accurate, not stale. No finding. |
+
+**Net result of the sweep: 1 new candidate finding (run_cycle.py:851, queued for that file's full turn), 8 locations cleared as non-issues without needing a full audit pass.** This is the intended use of a sweep in this audit — triage, not verdict. Will repeat this kind of targeted sweep opportunistically when a clear pattern emerges (like today's recurring stale-comment issue), not as a blanket substitute for the sequential full-file methodology.
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
