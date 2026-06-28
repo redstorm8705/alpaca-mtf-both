@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP -- quarterly_hold_manager.py exit-state fix)"
+    "last_updated": "2026-06-28 (AWP -- news_monitor.py full audit + cleanup)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -340,11 +340,10 @@
       "notes": "S21: RC-4 PATH A/B _fill_unverified never cleared — P1 fix. S29 #12: _compute_trade_pnl() Harris/Kyle condition — _weighted_avg_exit_price() now returns tuple(price,actual_qty); _compute_trade_pnl() accepts actual_qty param; reconcile() loop: min cap + _qty_at_close audit field + ghost-share Slack alert + overshoot WARNING. RULE C-4: mypy 0, ruff 0. All RC PASS."
     },
     "events/news_monitor.py": {
-      "patch_count": 4,
-      "sessions": 1,
-      "last_patched": "2026-04-20",
-      "open_rc_violations": [],
-      "risk_rating": "LOW — clean since 4/20."
+      "patch_count": 5,
+      "last_patched": "2026-06-28 (AWP: full audit + RULE C-4 static-analysis cleanup)",
+      "lines": 1830,
+      "notes": "AWP commit c51ae3b: full audit found one low-severity documentation bug (stale comment describing non-existent executor shutdown behavior, masking a latent thread-pool-exhaustion risk -- mitigated by nightly restart, logged to Future Roadmap). Plus mandatory RULE C-4 cleanup: 85 pre-existing E501 violations (noqa, matches 21-file convention), _classify() Optional[str] return-type fix (resolved 7 false-positive mypy unreachable warnings), callable->Callable type-hint fix, 4x in-tuple->is/== rewrite for mypy narrowing. File now mypy-clean for the first time. Cold second-agent PASS, Gro APPROVE, GAI APPROVE."
     },
     "midday_audit.py": {
       "patch_count": 7,

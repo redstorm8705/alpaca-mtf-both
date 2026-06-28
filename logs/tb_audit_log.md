@@ -5889,3 +5889,17 @@ Fixed: early return on failure, leaving state/registration untouched so `run_wee
 Also noted (documentation-only, not fixed): `_run_beck_tests()`'s section header says "3 Required Tests," only 2 are implemented — stale comment, logged for future cleanup pass, no functional impact.
 
 **This file's RC self-audit claims (RC-1 through RC-8, all stated PASS in its own header docstring) were spot-checked during the read and held up** — datetime calls, path anchoring, atomic writes with fsync, exception logging, qty guards all verified correct in the body.
+
+---
+
+## 2026-06-28 (AWP) — events/news_monitor.py: full audit + static-analysis cleanup (commit `c51ae3b`)
+
+**Phase 2 of MTF FULL BOT AUDIT.** Full read of `events/news_monitor.py` (1807 lines, 14-source news intelligence layer, called once per RTH scan cycle, never previously audited). Highly repetitive per-source boilerplate (fetch → age-filter → dedup → classify → mark-seen → alert) across all 14 sources — no logic divergence found between sources.
+
+**One real, low-severity finding (documentation-only fix):** `scan_breaking_news()`'s timeout-handling comment claimed it calls `shutdown(wait=False, cancel_futures=True)` on a `ThreadPoolExecutor` timeout. It doesn't — confirmed the actual code just logs and moves on. This is the *safer* choice (the executor is persistent/instance-level, reused every cycle — calling `shutdown()` on it would break every future cycle's `.submit()`), but the stale comment masked a real latent risk: a hung thread bypassing its request-level timeout permanently occupies one of only 6 `max_workers` slots until the next bot restart. Not capital-risk (news is informational-only per this module's own MARKET-REACTION-FIRST architecture doc — SPY price action is the sole sizing trigger), mitigated by the nightly restart cron. Comment corrected; structural fix (periodic executor health-check) logged to CLAUDE.md's Future Roadmap Log rather than rushed under time pressure.
+
+**RULE C-4 cleanup (pre-existing, unrelated to any behavior change):** 85x E501 line-length violations → added `# ruff: noqa: E501` (established convention, 21 other files already use it). `_classify()`'s return type was `tuple[str, ...]` but it genuinely returns `None` in one branch — fixed to `tuple[Optional[str], ...]`, which also resolved 7 mypy "unreachable" false-positives on real `if risk_level is None` guards elsewhere in the file (these false positives could have masked a genuinely unreachable branch in the future). `callable` (builtin function) used as a type annotation, invalid — fixed to `typing.Callable`. 4x `if risk_level in (None, "MONITOR")` rewritten to `is None or == "MONITOR"` (semantically identical) to let mypy narrow the type, clearing 4 real arg-type errors at `BreakingNewsAlert(...)` call sites.
+
+**AWP verification:** cold second-agent PASS (confirmed `in`/`==` equivalence holds for this function's literal-only value space, confirmed annotations have zero runtime effect, confirmed no import collisions, confirmed no conditional logic anywhere changed) → Gro APPROVE → GAI APPROVE → static analysis clean (py_compile/mypy/ruff all pass with zero errors — file had never been mypy-clean before this session). Also installed `types-requests` system-wide (resolved a missing-stub mypy warning affecting every file in this codebase that imports `requests`, zero behavior change).
+
+Deployed to OCI — confirmed zero local divergence, checksum-verified.
