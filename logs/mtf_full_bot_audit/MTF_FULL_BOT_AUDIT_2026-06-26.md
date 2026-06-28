@@ -233,6 +233,25 @@ finding | severity | board/Gro/GAI alignment.)
 
 ---
 
+# PHASE 1
+
+## `execution/entry_logic.py` (1678 lines) — owns `execute_entries()` (RTH signal→order) and `_overnight_entry_check()` (AH swing scanner). Full read complete.
+
+**Confirmed findings (Gro + GAI both reviewed, both confirmed all 3 of mine plus GAI added one elaboration):**
+
+| # | Finding | Lines | Severity | Source |
+|---|---|---|---|---|
+| 1 | **Stale comments, 2 instances** — both describe a yfinance data source that was migrated to Alpaca T1/FMP T2, comment never updated: (a) earnings gate comment says "yfinance calendar check" but code uses `data.fmp_client.get_cached_earnings_dates` (FMP T2); (b) FVG multiplier comment says "fetches 1h separately via yfinance" but code uses `fetch_bars(symbol, config.TF_1H, ...)` (Alpaca T1). Same failure pattern as today's Gemini PDT hallucination — a stale comment priming a false data-tier-violation belief in a future reader (human or AI). | ~874, ~1166 | LOW (documentation hygiene), but the *pattern* itself (2 instances in 1 file) is worth a project-wide grep sweep eventually | Claude, confirmed by both Gro and GAI |
+| 2 | **"PHANTOM ENTRY" exception handler scope is too broad.** The try block wrapping `tracker.record_entry()` also wraps the overnight-tagging logic, GTC stop submission, and `alert_entry()` — all the way to `entered.append(symbol)`. If `record_entry()` succeeds (trade genuinely tracked) but a LATER step raises (e.g. `submit_gtc_stop_order()` throws instead of returning `None`), the except block fires the full "PHANTOM ENTRY" response: CRITICAL log asserting "Position is LIVE and UNTRACKED" (false — it IS tracked), `alert_crash()`, and `sys.exit(1)` forcing a bot restart — for what may just be a failed Slack alert or a transient GTC submission error. | ~1318-1436 | GAI: HIGH / Gro: MEDIUM | Claude, confirmed by both — GAI additionally traced a concrete sub-scenario: if `submit_gtc_stop_order()` succeeds but `tracker.set_gtc_stop_order_id()`'s own persistence fails, the result is a real position with an orphaned/unrecorded GTC order ID, mischaracterized by the same broad handler as a full phantom position |
+| 3 | **Dead/always-False conditional in `_overnight_entry_check()`.** `_use_extended = _mins < _main._OVERNIGHT_ENTRY_START`, comment: "True only if before 8 PM (edge case)". But Gate 1 at the top of the same function already requires `_mins >= _main._OVERNIGHT_ENTRY_START` to reach this line at all — the condition is structurally guaranteed False every time it's evaluated. `submit_limit_order(..., extended_hours=_use_extended, ...)` always receives `False`; the comment describes a scenario the function's own gating makes unreachable. | ~1665 | LOW-MEDIUM | Claude, confirmed by both Gro and GAI |
+| 4 (new, GAI) | **Redundant `_save_log()` call.** `tracker._save_log()` is called explicitly at ~line 1349 right before `tracker.set_gtc_stop_order_id()` is called a few lines later — and `set_gtc_stop_order_id()` already calls `self._save_log()` internally (confirmed in Block 4 of the `portfolio_tracker.py` audit). The explicit call is redundant double-saving. | ~1349 | LOW — pure inefficiency, not a bug | GAI (new), verified accurate against the already-audited `portfolio_tracker.py` Block 4 findings |
+
+**Cross-file question raised, queued for `main.py`'s own audit pass (not resolved here):** does `entry_logic.py`'s own control flow adequately protect against `portfolio_tracker.py`'s `record_entry()` overwrite gap (Block 4 Finding #3)? Verified: within a single `execute_entries()` call, `is_in_trade(symbol)` (line 661) gates entry — every path through that check leads to `continue` before `record_entry()` is ever reached for an already-tracked symbol, so normal iteration cannot trigger the overwrite. **Open question:** `write_eod_summary()`'s reentrancy gap (Block 2/3 finding) was exploitable specifically because `main.py`'s SIGTERM handler directly re-invokes that same function while the original call is blocked on network I/O. Does the SIGTERM handler (or any other forced-restart/reentrant path) ever re-invoke `execute_entries()` or `_overnight_entry_check()` while an original call is mid-flight on one of ITS OWN blocking calls (`fetch_bars`, the 3x 1-second fill-price polling sleeps, FMP earnings lookups)? If so, the same reentrancy class of bug could cause a double order submission and a `record_entry()` overwrite for the same symbol. **Not verified either way yet — requires reading `main.py`'s SIGTERM handler and the full calling chain into `execute_entries()`, which is on the Phase 1 list.**
+
+**Status: `execution/entry_logic.py` — STATIC/DYNAMIC pass + Gro/GAI review COMPLETE.**
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
