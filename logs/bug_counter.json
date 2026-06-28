@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP round 2 -- Movers strategy RiskManager/tracker call fixes)"
+    "last_updated": "2026-06-28 (AWP -- risk_manager.py zero-width stop fix)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -277,9 +277,10 @@
       "notes": "S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard — batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS. | S54: QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). cancel_and_reconcile_gtc_stops() reads quarterly_holds.json at startup to protect AVGO/NVDA/ANET GTC stops — avoids empty-frozenset startup-order bug by reading state file directly instead of get_quarterly_hold_symbols(). PDT Tier 2: removed DAY_TRADE_MAX_ROLLING + CONVICTION_PDT_SOFT_MIN refs (4 mypy errors, RULE C-4). Orphan overnight=True always. GTC stop submission no longer gated on PDT. Board split 1 APPROVE (Execution Risk) / 1 REJECT (Reliability) + DS APPROVE / GAI REJECT — state file approach adopted to resolve startup-order objection. py_compile/mypy/ruff PASS. Pending Approval #3 CLOSED."
     },
     "execution/risk_manager.py": {
-      "patch_count": 4,
-      "last_patched": "2026-05-20",
-      "notes": "S21: P6 — sync_from_tracker() added. S22: H2 VIX step-function if/elif. S27: BUG-B FIFO 4-way (sell_short/buy_to_cover explicit branches + _unknown_sides WARNING) + RC-3 x2 (kill state load/save) + RULE C-4 pre-existing mypy/ruff fixes (Optional, E501 x16, type: ignore requests). Kill switch now sees short P&L."
+      "patch_count": 5,
+      "last_patched": "2026-06-28 (AWP: zero-width stop/target fix)",
+      "lines": 666,
+      "notes": "AWP commit 85950c3: get_stop_and_target()'s H2 VIX-scalar guard (`if h2_scalar is not None:`) didn't account for h2_stop_atr_mult() mathematically returning exactly 0.0 (not None) when a symbol's realized vol computes to zero variance -- reachable at every VIX level, produces stop=target=entry_price (zero-width). Fixed: `h2_scalar is not None and h2_scalar > 0`, falls through to the bounded native VIX-only step-function. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI; takes effect at the next mtf-bot restart (nightly 2AM ET cron, before Monday open)."
     },
     "execution/portfolio_tracker.py": {
       "patch_count": 52,

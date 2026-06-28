@@ -5824,3 +5824,23 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 **1 pre-existing (not newly introduced) gap flagged, not a blocker:** `register_open()`/`register_close()` are never called anywhere in this file, so `RiskManager.open_positions` never reflects Movers positions — though `MAX_POSITIONS_MOVERS` already enforces an independent per-strategy cap. Logged for a future session.
 
 This is now the **third** round of nonexistent-method bugs found in this single file tonight (after `print_summary→print_stats` and the `result["success"]` dict-shape mismatch) — strongly suggesting this strategy has never been exercised end-to-end before tonight's audit.
+
+---
+
+## 2026-06-28 (AWP) — execution/risk_manager.py full audit: zero-width stop/target fix (commit `85950c3`)
+
+**Phase 2 of MTF FULL BOT AUDIT.** First full-file audit of `execution/risk_manager.py` (655 lines) — never previously covered in this initiative. Per its own docstring: "The most important file in the bot — protects capital above everything else."
+
+**AWP file-level audit:** Gro's response was low-quality/generic (wrong line numbers, non-falsifiable checklist items — not logged as findings). GAI's response (truncated at MAX_TOKENS but substantive) surfaced several items; most were GAI's own analysis concluding they were intentional design, not bugs (kill-switch daily-reset date logic, the `reset_daily()` manual-clear requirement, the `daily_start_value<=0` fail-safe). Two were concrete and independently verified:
+- A `None`-value `TypeError` risk in `calculate_position_size()` — checked reachability via the only actual caller (`strategy/movers/strategy.py`) and confirmed NOT reachable (inputs are always valid floats by construction at that call site). Not fixed — no real caller can trigger it.
+- **A real, confirmed, reachable zero-width-stop/target bug** in `get_stop_and_target()`'s VIX/H2-scalar guard — see below.
+
+**The confirmed bug:** the H2 continuous-curve VIX scalar (`h2_stop_atr_mult()` in `execution/param_engine.py`) can mathematically return exactly `0.0` (not `None`) when a symbol's realized volatility computes to zero variance — traced through `_compute_rv()`'s actual standard-deviation math (a fully flat/halted stock's 20 daily log returns are all `0`, giving `variance=0`, `rv=0.0`). The old guard `if h2_scalar is not None:` would then multiply `stop_mult`/`target_mult` by `0.0`, producing `stop = target = entry_price` — a zero-width stop AND target, the same "penny-stop" bug class already guarded against elsewhere (C-1's 0.5R breakeven guard). Confirmed reachable at **every** VIX level, not a narrow corner case.
+
+**Fix:** `if h2_scalar is not None and h2_scalar > 0:` — falls through to the native VIX-only step-function (confirmed bounded `[1.0, 2.0]`, never zero) instead of zeroing out risk management.
+
+**AWP verification:** cold second-agent PASS (independently re-derived the math, confirmed reachability and the fallback's safety, confirmed only one caller passes `atr_mult_override` at all) → Gro APPROVE → GAI APPROVE (both explicitly confirmed the fix cannot produce a worse outcome than the bug — degenerate case goes from zero protection to VIX-only protection; all non-degenerate cases unchanged) → static analysis clean → deployed to OCI via targeted rsync.
+
+**Deploy note:** `risk_manager.py` is imported by the continuously-running `mtf-bot` systemd service — the fix won't take effect in the live process until its next restart. The existing "Nightly RAM reset" cron (2 AM ET, Mon-Fri) will pick it up automatically before Monday's market open; did not force a manual restart (a distinct production action beyond AWP's patch-authority scope).
+
+**Auto Work Protocol (AWP) established this session:** Rafael granted standing authority to apply patches when (1) board+Gro+GAI have audited the file, (2) Gro+GAI agree on the specific proposed patch (counter-prompt if split, BoD tie-breaks if still deadlocked), with the 3-Point AI Summary and 10-point audit as standing framework components.
