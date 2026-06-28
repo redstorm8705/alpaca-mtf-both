@@ -130,7 +130,23 @@ finding | severity | board/Gro/GAI alignment.)
 
 ---
 
-**Remaining in `portfolio_tracker.py`:** Block 3 (lines 777-1367, `write_eod_summary` — the reentrancy-gap finding above already covers its most important property; still due a fresh line-by-line STATIC/DYNAMIC pass for the rest of its logic, e.g. the score_16pt_buckets and score_comparison sections not yet reviewed), Block 4 (lines 1368-1872, core trade lifecycle API — record_entry/record_exit/etc., NOT YET touched by today's fix or this audit, highest-value remaining target since it's the most-called public surface in the whole codebase), Block 5 (lines 1872-2002, stats/reporting). **NOT YET STARTED.**
+### MAJOR FINDING #2 — cumulative P&L lookback loop breaks on file-exists, not on successful-parse (CONSENSUS, no debate — fix not yet applied)
+
+**Severity: Gro rates CRITICAL, GAI rates HIGH. Both independently propose the IDENTICAL fix. No disagreement this time — logged as ready-to-fix, held pending a consolidated batch per Rafael's "audit first, fix once we have the full picture" call.**
+
+**Location:** `write_eod_summary()`, the 7-day cumulative-total lookback loop (~lines 982-1006).
+
+**The bug, verified via exact indentation measurement (not just visual read):** the loop walks backward up to 7 days looking for the most recent prior-day `eod_{date}.json`. The `break` statement sits inside the `if _prev_eod_path.exists():` block but OUTSIDE the `try/except` — meaning the loop exits as soon as it finds a file that **exists on disk**, regardless of whether that file successfully parses. If the most recent existing prior-day file is present but corrupted/unparseable, the `except` only logs a warning (doesn't re-raise, doesn't `continue`), and the unconditional `break` still fires — so `_alpaca_cumulative` stays `None` through loop exit, and the post-loop fallback (`if _alpaca_cumulative is None: _alpaca_cumulative = _alpaca_pnl`) silently resets the cumulative figure to just that single day's P&L, as if it were the first trading day ever — discarding months of history, with only a warning log (no Slack alert, no escalation), and never trying any of the up-to-6 older files still within the lookback budget.
+
+**Why this matters concretely:** this is the exact same `all_time_stats.total_pnl` field that needed a manual $9.33 correction earlier today during the P0 data remediation (the stale $292.22 → $301.55 fix). This loop is the mechanism that propagates that field forward day to day — a single bad file anywhere in the chain silently breaks the chain going forward, with no loud failure signal.
+
+**Fix (Gro and GAI both proposed, independently, identically):** move the `break` to inside the `try` block, immediately after the successful `_alpaca_cumulative = round(...)` assignment, so the loop only stops on a *successful* load — a corrupted file is skipped (loop continues to older files) rather than treated as a terminal "no history exists" signal.
+
+**Decision: finding confirmed by consensus, fix NOT applied this session** — held for a consolidated fix batch once the audit has a fuller picture, per Rafael's explicit instruction.
+
+---
+
+**Remaining in `portfolio_tracker.py`:** Block 3's remaining unreviewed logic (score_16pt_buckets and score_comparison parsing sections, lines ~1107-1193 — reviewed this pass, both confirmed properly guarded against empty-list division by zero, no new finding there), Block 4 (lines 1368-1872, core trade lifecycle API — record_entry/record_exit/etc., NOT YET touched by today's fix or this audit, highest-value remaining target since it's the most-called public surface in the whole codebase), Block 5 (lines 1872-2002, stats/reporting). **Block 3 STATIC/DYNAMIC pass + Gro/GAI review: COMPLETE. Blocks 4-5: NOT YET STARTED.**
 
 ---
 
