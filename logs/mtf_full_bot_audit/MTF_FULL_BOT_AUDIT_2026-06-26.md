@@ -437,6 +437,39 @@ Atomic JSON write helpers extracted from `main.py` — owns `confirm_gate.json` 
 
 ---
 
+## `trade_logger.py` (88 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Structured trade-event logging to `logs/trade_events.jsonl` (Guardrail 7). Simple append-only writer, `_STOP_REASONS` frozenset for substring classification.
+
+**Investigated and CONFIRMED SAFE — `_STOP_REASONS` cross-file consistency:** verified `portfolio_tracker.py:68` imports this exact frozenset (aliased `_LOG_STOP_REASONS`) rather than maintaining a separate hardcoded list, with a graceful empty-frozenset fallback on import failure. Single source of truth, no drift risk.
+
+**Confirmed acceptable — non-atomic `open(path, "a")` append write:** intentional per this project's RC-5 carve-out (atomic tmp+replace required for critical state files; non-critical/append-only logs are explicitly exempt). Standard, correct pattern for a JSONL event log.
+
+**No real findings.** Both Gro and GAI suggested adding input/event-type validation to `log_event()` (e.g., enforcing `stop_reason` presence for `stop_hit` events, type-checking parameters) — these are design/robustness preferences, not bugs: the function works correctly as designed for its actual purpose (writing through whatever the caller passes). Doesn't meet this audit's bar for a logged finding, consistent with the standing distinction between real defects and style suggestions.
+
+**`trade_logger.py` — clean, no action needed.**
+
+---
+
+## PHASE 1 STATUS: 8 of 10 files complete
+
+| File | Lines | Status | Key findings |
+|---|---|---|---|
+| `entry_logic.py` | 1678 | ✅ DONE | Stale yfinance comments ×2, PHANTOM ENTRY exception scope too broad (Gro MEDIUM/GAI HIGH), dead conditional |
+| `exit_logic.py` | 2182 | ✅ DONE | `update_trail_stop()` persistence gap (Moderate-High), signal-exit silent-retry asymmetry (Medium-High), **EH partial-exit kill-switch P&L gap (HIGH)** |
+| `kelly.py` | 450 | ✅ DONE | **Cascading Kelly-stats corruption from missing exit_price (HIGH)** — traces to portfolio_tracker.py root cause |
+| `orphan_manager.py` | 1442 | ✅ DONE | Cleanest file — only a 5th stale-PDT-comment instance |
+| `trade_engine.py` | 286 | ✅ DONE | Clean — 1 theoretical (non-reachable) concern investigated and cleared |
+| `run_movers.py` | 242 | ✅ DONE | **OPEN ITEM: potential dual-process race on trade_log.json (Gro HIGH/GAI CRITICAL) — pending OCI crontab verification** |
+| `state/persistence.py` | 132 | ✅ DONE | Cleanest file in the whole audit — no findings |
+| `trade_logger.py` | 88 | ✅ DONE | Clean — no findings |
+| `strategy/run_cycle.py` | 1669 | ⏳ QUEUED | (1 candidate flagged from earlier grep sweep — stale MRI yfinance comment at L851) |
+| `main.py` | 1068 | ⏳ QUEUED | Also resolves the open SIGTERM-reentrancy cross-file question from `entry_logic.py` |
+
+**Next Phase-1 file:** `strategy/run_cycle.py` (1669 lines) — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
