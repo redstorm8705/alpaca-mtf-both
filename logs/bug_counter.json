@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP -- news_monitor.py full audit + cleanup)"
+    "last_updated": "2026-06-28 (AWP -- macro_risk_index.py audit + clamp fix)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -328,11 +328,10 @@
       "notes": "P0 commit 519f369: AlpacaBroker.buy()/sell_short()/close_position() returned raw order-objects/None/bool but strategy/movers/strategy.py consumed them as dicts (result['success'], result.get('error')) -- guaranteed TypeError on every single Movers entry/exit attempt, found by a cold second-agent mid-redesign. Fixed by normalizing all 3 methods to return {'success': bool, 'error': str|None, 'order': object|None}. Also: place_stop() switched from DAY to GTC stop (Rafael mandate -- Movers positions must survive a script restart/crash, not just until 4pm close); added cancel_stop_order(), get_open_positions(), get_open_orders() wrapper methods. Board+Gro+GAI APPROVE."
     },
     "events/macro_risk_index.py": {
-      "patch_count": 19,
-      "sessions": 4,
-      "last_patched": "2026-05-17",
-      "open_rc_violations": [],
-      "risk_rating": "MEDIUM — S25D: #14 VIX3M ThreadPoolExecutor 8s timeout + #15 FMP migration (^VIX→_fmp_quote, JPY=X→_fmp_last_two_closes) + RC-3 x6 (6 nested helper bare-except fixed) + mypy 0 errors + ruff 0 violations. 837L post-patch. DS+GAI external audit COMPLETE. Board 3/3 CONDITIONAL APPROVE. Cold second-agent FAIL→PASS (isinstance guard). All RC PASS."
+      "patch_count": 20,
+      "last_patched": "2026-06-28 (AWP: defensive restore clamp)",
+      "lines": 975,
+      "notes": "AWP commit 3b8c675: full audit found the file already well-defended and static-analysis clean. One theoretical edge case (negative raw_saved on corrupted mri_state.json) fixed with a one-line clamp, confirmed by both Gro and GAI against the literal code (GAI also hallucinated an unrelated fabricated 'findings' section referencing nonexistent functions -- disregarded). Cold second-agent PASS."
     },
     "reconcile_eod.py": {
       "patch_count": 2,

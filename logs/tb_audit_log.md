@@ -5903,3 +5903,15 @@ Also noted (documentation-only, not fixed): `_run_beck_tests()`'s section header
 **AWP verification:** cold second-agent PASS (confirmed `in`/`==` equivalence holds for this function's literal-only value space, confirmed annotations have zero runtime effect, confirmed no import collisions, confirmed no conditional logic anywhere changed) → Gro APPROVE → GAI APPROVE → static analysis clean (py_compile/mypy/ruff all pass with zero errors — file had never been mypy-clean before this session). Also installed `types-requests` system-wide (resolved a missing-stub mypy warning affecting every file in this codebase that imports `requests`, zero behavior change).
 
 Deployed to OCI — confirmed zero local divergence, checksum-verified.
+
+---
+
+## 2026-06-28 (AWP) — events/macro_risk_index.py: full audit + defensive restore clamp (commit `3b8c675`)
+
+**Phase 2 of MTF FULL BOT AUDIT.** Full read of `events/macro_risk_index.py` (967 lines, cross-asset 0-100 stress score refreshed every 10 min, sets size floor + MIN_SCORE floor for the live entry gate, never previously audited). File was already static-analysis clean before this session and is exceptionally well-defended throughout — atomic persistence, lock-protected concurrent access (`MRI-THREAD-4/5`, `P2-INJECT-NEWS-LOCK`), idempotent news-injection math (`MRI-INJECT-OSCILLATION` fix verified correct by re-deriving the algebra), staleness ceiling forcing CRITICAL after 6h with no successful refresh, market-reaction-first gating on news bonuses (caps news contribution when no cross-asset price component confirms).
+
+No reachable functional bug found in normal operation. Per AWP's file-level audit gate (board/Gro/GAI must review even when no patch is initially proposed), sent the file to Gro+GAI for a second opinion on one theoretical edge case spotted during the read: `_restore()`'s decay math (`raw_saved = score - news_pts`, then floor/decay) has no clamp preventing a negative result if a corrupted/manually-edited `mri_state.json` had `news_alerts.pts > score`. Both Gro and GAI independently confirmed this is worth a defensive guard. **Note:** GAI's response also fabricated an extensive "other findings" section referencing function names that don't exist anywhere in this file (`_recalculate_mri()`, `_handle_stale_data()`, `_process_event()`, etc.) — a clear hallucination, disregarded entirely. Only the one finding grounded in code quoted verbatim to it was acted on.
+
+Fix: added `raw_saved = max(raw_saved, 0)` before the floor/decay computation.
+
+**AWP verification:** cold second-agent PASS (traced the corrupted-state math end to end confirming the fix closes the gap, confirmed zero behavioral change in the normal case, confirmed nothing downstream depends on negative raw_saved/raw_decayed) → static analysis clean. Deployed to OCI — confirmed OCI's stale git HEAD + working-tree content was functionally identical to current upstream modulo this one fix, via direct file diff.
