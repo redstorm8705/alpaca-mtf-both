@@ -90,6 +90,10 @@ def _load_drift_alert_date() -> str:
 
 _last_eod_drift_alert_date: str = _load_drift_alert_date()  # persisted across restarts
 
+# Same-thread reentrancy guard for write_eod_summary()'s Alpaca-FIFO section
+# (GAI audit 2026-06-27 — see write_eod_summary for full rationale).
+_eod_fifo_in_progress: bool = False
+
 
 # ── Atomic JSON write helper ──────────────────────────────────────────────────
 
@@ -224,12 +228,24 @@ def _fetch_alpaca_fills_for_date(date_str: str) -> list:
     ]
 
 
-def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
+def _fifo_reconstruct(
+    fills: list, prior_lots: dict, processed_fill_ids: "set | None" = None,
+) -> tuple:
     """
     FIFO P&L reconstruction from Alpaca fills.
 
     prior_lots: {symbol: [{"qty": N, "price": P, "side": "long"|"short"}]}
                 Open lots carried forward from the prior trading day.
+
+    processed_fill_ids: fill IDs already folded into prior_lots earlier
+        TODAY (see _load_prior_day_lots). Fills whose ID is in this set are
+        skipped — without this, calling write_eod_summary() more than once
+        per day (it's called from 6 sites: SIGTERM, heartbeat recovery,
+        user shutdown, AH cycle, market-close, periodic flush) re-applies
+        every still-open same-day fill on every call, appending a duplicate
+        lot each time. Confirmed in production 2026-06-27 (AMD/PANW/SMCI/
+        NVDA each had 30-80 duplicate lots; a stale NVDA lot caused a real
+        EOD P&L drift). Board + Gro + GAI consensus fix.
 
     Handles mixed buy/buy_to_cover labels via net-position-aware matching:
     a "buy" that arrives when net position is short is treated as a cover.
@@ -238,13 +254,18 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
         today_realized_pnl (float)
         remaining_lots     (dict)  — end-of-day open lot structure
         per_trade          (list)  — [{symbol, side, qty, entry, exit, pnl, filled_at}]
+        seen_fill_ids       (set)   — processed_fill_ids plus every fill ID
+                                       processed this call (persist via
+                                       _save_open_lots_state)
     """
     import copy
     lots      = copy.deepcopy(prior_lots)
     today_pnl = 0.0
     per_trade = []
+    seen_fill_ids = set(processed_fill_ids or set())
 
     for fill in fills:
+        fill_id   = fill.get("id", "")
         sym       = fill.get("symbol", "")
         side      = fill.get("side", "")
         qty       = int(float(fill.get("qty", 0)))
@@ -253,6 +274,10 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
 
         if not sym or qty <= 0:
             continue
+        if fill_id and fill_id in seen_fill_ids:
+            continue  # already folded into lots by an earlier call today
+        if fill_id:
+            seen_fill_ids.add(fill_id)
 
         if sym not in lots:
             lots[sym] = []
@@ -342,21 +367,36 @@ def _fifo_reconstruct(fills: list, prior_lots: dict) -> tuple:
                 current.append({"qty": qty, "price": price, "side": "short"})
 
     remaining_lots = {sym: lts for sym, lts in lots.items() if lts}
-    return round(today_pnl, 2), remaining_lots, per_trade
+    return round(today_pnl, 2), remaining_lots, per_trade, seen_fill_ids
 
 
-def _load_prior_day_lots() -> dict:
-    """Load open lot structure from end of the previous trading day."""
+def _load_prior_day_lots() -> tuple:
+    """Load open lot structure from end of the previous trading day.
+
+    Returns (open_lots, processed_fill_ids). processed_fill_ids is only
+    non-empty when the file's stored date matches today — it tracks which
+    of TODAY's fills have already been folded into open_lots, so repeat
+    same-day calls to write_eod_summary() (SIGTERM, heartbeat recovery,
+    AH cycle, market-close, periodic flush) don't re-append a duplicate
+    lot for the same fill every time they run. Confirmed bug 2026-06-27:
+    with no fill-level dedup, any position that opened but stayed open
+    same-day accumulated one duplicate lot per call — AMD/PANW/SMCI/NVDA
+    each had 30-80 duplicate lots in production. A stale 6-week-old NVDA
+    lot got matched ahead of a real same-day close, producing a phantom
+    P&L drift. Board + Gro + GAI all confirmed this root cause 2026-06-27.
+    """
     try:
         if _LOTS_STATE_FILE.exists():
             with open(_LOTS_STATE_FILE) as f:
                 data = json.load(f)
             stored_date = data.get("date", "")
+            today_dt = datetime.now(_PT).date()
+            is_same_day = False
             if stored_date:
                 try:
                     stored_dt = datetime.strptime(stored_date, "%Y-%m-%d").date()
-                    today_dt = datetime.now(_PT).date()
                     age_days = (today_dt - stored_dt).days
+                    is_same_day = age_days == 0
                     if age_days > 1:
                         logger.warning(
                             "[lots] Prior lots file is %d days old "
@@ -368,17 +408,30 @@ def _load_prior_day_lots() -> dict:
                     logger.warning(
                         "[lots] Cannot parse stored date %r: %s", stored_date, _de
                     )
-            return data.get("open_lots", {})
+            _processed_ids = (
+                set(data.get("processed_fill_ids", [])) if is_same_day else set()
+            )
+            return data.get("open_lots", {}), _processed_ids
     except Exception as exc:
         logger.warning(f"Could not load prior day lots state: {exc}")
-    return {}
+    return {}, set()
 
 
-def _save_open_lots_state(lots: dict, date_str: str):
-    """Persist end-of-day open lot structure for the next day's FIFO seeding."""
+def _save_open_lots_state(
+    lots: dict, date_str: str, processed_fill_ids: "set | None" = None,
+):
+    """Persist end-of-day open lot structure for the next day's FIFO seeding.
+
+    processed_fill_ids: fill IDs already folded into `lots` for `date_str` —
+    persisted so a later same-day call can skip them (see _load_prior_day_lots).
+    """
     try:
         _LOTS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(_LOTS_STATE_FILE, {"date": date_str, "open_lots": lots})
+        _atomic_write(_LOTS_STATE_FILE, {
+            "date": date_str,
+            "open_lots": lots,
+            "processed_fill_ids": sorted(processed_fill_ids or set()),
+        })
         logger.info(f"Open lots state saved for {date_str}: {len(lots)} symbol(s)")
     except Exception as exc:
         logger.warning(f"Could not save open lots state: {exc}")
@@ -807,150 +860,176 @@ class PortfolioTracker:
         _alpaca_per_trade = []
         _alpaca_cumulative = None
 
-        try:
-            _prior_lots       = _load_prior_day_lots()
-            _day_fills        = _fetch_alpaca_fills_for_date(today)
-
-            # ── FIFO Orphan Lot Seeding ──────────────────────────────────────
-            # Seed prior lots for positions whose opening fills are absent from
-            # today's Alpaca fills (externally purchased before bot tracking).
-            # Without seeding, FIFO treats closing sells as new short openings
-            # → P&L = $0.
-            #
-            # Guard 1: skip if symbol already in prior_lots (normal carry).
-            # Guard 2: skip if Alpaca has an opening fill today — intraday
-            #           trades are handled natively by FIFO.
-            # Guard 3: accumulate ALL closing fills before seeding
-            #           (partial-fill sequence safety).
-            # Guard 4: direction-aware — only accumulate fills that close
-            #           the tracked side.
-            _long_opened_today  = {
-                f["symbol"] for f in _day_fills if f.get("side") == "buy"
-            }
-            _short_opened_today = {
-                f["symbol"] for f in _day_fills
-                if f.get("side") == "sell_short"
-            }
-            _orphan_seed_map: dict = {}
-            for _fill in _day_fills:
-                _fsym  = _fill.get("symbol", "")
-                _fside = _fill.get("side", "")
-                if not _fsym or _fsym in _prior_lots:
-                    continue
-                _fqty = int(float(_fill.get("qty") or 0))
-                if _fqty <= 0:
-                    continue
-                if _fsym not in _orphan_seed_map:
-                    _tr = next(
-                        (t for t in today_trades if t.get("symbol") == _fsym),
-                        None,
-                    ) or next(
-                        (v for v in self.open_trades.values()
-                         if v.get("symbol") == _fsym),
-                        None,
-                    )
-                    if _tr is None:
-                        logger.warning(
-                            f"FIFO orphan: closing fill for {_fsym} has no "
-                            f"prior lot and no tracker record — fill unmatched."
-                        )
-                        _orphan_seed_map[_fsym] = None  # sentinel
-                        continue
-                    _entry = float(_tr.get("entry_price") or 0.0)
-                    if _entry <= 0:
-                        logger.warning(
-                            f"FIFO orphan: {_fsym} entry_price not confirmed"
-                            f" — deferring seed."
-                        )
-                        _orphan_seed_map[_fsym] = None  # sentinel
-                        continue
-                    _dir = _tr.get("direction", "long")
-                    # Guard 2: intraday — opening fill exists today
-                    if ((_dir == "long" and _fsym in _long_opened_today) or
-                            (_dir == "short" and _fsym in _short_opened_today)):
-                        _orphan_seed_map[_fsym] = None  # sentinel: intraday
-                        continue
-                    _orphan_seed_map[_fsym] = {
-                        "qty": 0, "direction": _dir, "entry": _entry,
-                    }
-                _seed = _orphan_seed_map.get(_fsym)
-                if _seed is None:
-                    continue  # sentinel — skip all fills for this symbol
-                _dir = _seed["direction"]
-                # Guard 4: only closing fills for the tracked direction
-                _is_closing = (
-                    (_dir == "long"
-                     and _fside in {"sell", "sell_short"}) or
-                    (_dir == "short"
-                     and _fside in {"buy", "buy_to_cover"})
-                )
-                if _is_closing:
-                    _seed["qty"] += _fqty
-            for _fsym, _seed in _orphan_seed_map.items():
-                if _seed is None or _seed["qty"] <= 0:
-                    continue
-                _prior_lots[_fsym] = [{
-                    "qty":   _seed["qty"],
-                    "price": _seed["entry"],
-                    "side":  _seed["direction"],
-                }]
-                logger.info(
-                    f"FIFO orphan lot seeded: {_fsym} {_seed['qty']}sh "
-                    f"@ ${_seed['entry']:.2f} ({_seed['direction']}) — "
-                    f"no prior lot found (orphan/legacy entry)"
-                )
-            # ── end orphan seeding ───────────────────────────────────────────
-
-            _alpaca_pnl, _alpaca_lots, _alpaca_per_trade = _fifo_reconstruct(
-                _day_fills, _prior_lots
+        global _eod_fifo_in_progress
+        if _eod_fifo_in_progress:
+            # GAI audit 2026-06-27: _fetch_alpaca_fills_for_date() below blocks
+            # on a urllib network call. If SIGTERM arrives mid-call, Python
+            # delivers the signal by interrupting the blocking syscall and
+            # running the registered handler in the SAME thread before the
+            # original call resumes — genuine same-thread reentrancy, not a
+            # theoretical race. Without this guard, the reentrant call's
+            # _save_open_lots_state would persist first, then the original
+            # (resumed) call would overwrite it with its now-stale result,
+            # silently discarding the reentrant call's work. Plain bool, not
+            # threading.Lock — this is same-thread reentrancy, not cross-thread.
+            logger.warning(
+                "write_eod_summary: Alpaca-FIFO section already in progress "
+                "(signal-handler reentrancy) — skipping to avoid clobbering "
+                "the in-flight lot-state save. Falling back to tracker P&L "
+                "for this call only."
             )
-            _save_open_lots_state(_alpaca_lots, today)
-
-            # Cumulative total = prior EOD total + today's Alpaca P&L
-            for _back in range(1, 8):
-                _prev_date = (
-                    datetime.strptime(today, "%Y-%m-%d") - timedelta(days=_back)
-                ).strftime("%Y-%m-%d")
-                _prev_eod_path = _ROOT / "logs" / f"eod_{_prev_date}.json"
-                if _prev_eod_path.exists():
-                    try:
-                        with open(_prev_eod_path) as _f:
-                            _prev_data = json.load(_f)
-                        _prev_total = float(
-                            _prev_data.get("all_time_stats", {}).get("total_pnl") or 0.0
-                        )
-                        _alpaca_cumulative = round(_prev_total + _alpaca_pnl, 2)
-                    except Exception as _load_err:
-                        logger.warning(
-                            f"Failed to load prior EOD file {_prev_eod_path} — "
-                            f"cumulative P&L will default to today only: {_load_err}"
-                        )
-                    break
-            if _alpaca_cumulative is None:
-                _alpaca_cumulative = _alpaca_pnl  # first trading day
-
-            logger.info(
-                f"Alpaca FIFO EOD: pnl_today=${_alpaca_pnl:.2f} | "
-                f"cumulative=${_alpaca_cumulative:.2f} | "
-                f"tracker=${_tracker_pnl:.2f} | "
-                f"fills={len(_day_fills)} lots_closed={len(_alpaca_per_trade)}"
-            )
-        except Exception as _fifo_err:
-            logger.critical(
-                f"Alpaca fills FIFO failed — falling back to tracker P&L: {_fifo_err}"
-            )
+        else:
+            _eod_fifo_in_progress = True
             try:
-                from alerts import send_slack as _sl_fifo
-                _sl_fifo(
-                    ":rotating_light: *EOD P&L: Alpaca FIFO failed"
-                    " — using tracker math*\n"
-                    f"Error: `{str(_fifo_err)[:200]}`\n"
-                    f"Tracker P&L: ${_tracker_pnl:.2f}. Verify fills manually."
+                _prior_lots, _processed_fill_ids = _load_prior_day_lots()
+                _day_fills        = _fetch_alpaca_fills_for_date(today)
+
+                # ── FIFO Orphan Lot Seeding ──────────────────────────────────────
+                # Seed prior lots for positions whose opening fills are absent from
+                # today's Alpaca fills (externally purchased before bot tracking).
+                # Without seeding, FIFO treats closing sells as new short openings
+                # → P&L = $0.
+                #
+                # Guard 1: skip if symbol already in prior_lots (normal carry).
+                # Guard 2: skip if Alpaca has an opening fill today — intraday
+                #           trades are handled natively by FIFO.
+                # Guard 3: accumulate ALL closing fills before seeding
+                #           (partial-fill sequence safety).
+                # Guard 4: direction-aware — only accumulate fills that close
+                #           the tracked side.
+                _long_opened_today  = {
+                    f["symbol"] for f in _day_fills if f.get("side") == "buy"
+                }
+                _short_opened_today = {
+                    f["symbol"] for f in _day_fills
+                    if f.get("side") == "sell_short"
+                }
+                _orphan_seed_map: dict = {}
+                for _fill in _day_fills:
+                    _fsym  = _fill.get("symbol", "")
+                    _fside = _fill.get("side", "")
+                    if not _fsym or _fsym in _prior_lots:
+                        continue
+                    _fqty = int(float(_fill.get("qty") or 0))
+                    if _fqty <= 0:
+                        continue
+                    if _fsym not in _orphan_seed_map:
+                        _tr = next(
+                            (t for t in today_trades if t.get("symbol") == _fsym),
+                            None,
+                        ) or next(
+                            (v for v in self.open_trades.values()
+                             if v.get("symbol") == _fsym),
+                            None,
+                        )
+                        if _tr is None:
+                            logger.warning(
+                                f"FIFO orphan: closing fill for {_fsym} has no "
+                                f"prior lot and no tracker record — fill unmatched."
+                            )
+                            _orphan_seed_map[_fsym] = None  # sentinel
+                            continue
+                        _entry = float(_tr.get("entry_price") or 0.0)
+                        if _entry <= 0:
+                            logger.warning(
+                                f"FIFO orphan: {_fsym} entry_price not confirmed"
+                                f" — deferring seed."
+                            )
+                            _orphan_seed_map[_fsym] = None  # sentinel
+                            continue
+                        _dir = _tr.get("direction", "long")
+                        # Guard 2: intraday — opening fill exists today
+                        if ((_dir == "long" and _fsym in _long_opened_today) or
+                                (_dir == "short" and _fsym in _short_opened_today)):
+                            _orphan_seed_map[_fsym] = None  # sentinel: intraday
+                            continue
+                        _orphan_seed_map[_fsym] = {
+                            "qty": 0, "direction": _dir, "entry": _entry,
+                        }
+                    _seed = _orphan_seed_map.get(_fsym)
+                    if _seed is None:
+                        continue  # sentinel — skip all fills for this symbol
+                    _dir = _seed["direction"]
+                    # Guard 4: only closing fills for the tracked direction
+                    _is_closing = (
+                        (_dir == "long"
+                         and _fside in {"sell", "sell_short"}) or
+                        (_dir == "short"
+                         and _fside in {"buy", "buy_to_cover"})
+                    )
+                    if _is_closing:
+                        _seed["qty"] += _fqty
+                for _fsym, _seed in _orphan_seed_map.items():
+                    if _seed is None or _seed["qty"] <= 0:
+                        continue
+                    _prior_lots[_fsym] = [{
+                        "qty":   _seed["qty"],
+                        "price": _seed["entry"],
+                        "side":  _seed["direction"],
+                    }]
+                    logger.info(
+                        f"FIFO orphan lot seeded: {_fsym} {_seed['qty']}sh "
+                        f"@ ${_seed['entry']:.2f} ({_seed['direction']}) — "
+                        f"no prior lot found (orphan/legacy entry)"
+                    )
+                # ── end orphan seeding ───────────────────────────────────────────
+
+                _alpaca_pnl, _alpaca_lots, _alpaca_per_trade, _seen_fill_ids = (
+                    _fifo_reconstruct(_day_fills, _prior_lots, _processed_fill_ids)
                 )
-            except Exception as _slack_err:
-                logger.warning(
-                    f"Slack alert for FIFO failure could not be sent: {_slack_err}"
+                _save_open_lots_state(_alpaca_lots, today, _seen_fill_ids)
+
+                # Cumulative total = prior EOD total + today's Alpaca P&L
+                for _back in range(1, 8):
+                    _prev_date = (
+                        datetime.strptime(today, "%Y-%m-%d") - timedelta(days=_back)
+                    ).strftime("%Y-%m-%d")
+                    _prev_eod_path = _ROOT / "logs" / f"eod_{_prev_date}.json"
+                    if _prev_eod_path.exists():
+                        try:
+                            with open(_prev_eod_path) as _f:
+                                _prev_data = json.load(_f)
+                            _prev_total = float(
+                                _prev_data.get(
+                                    "all_time_stats", {}
+                                ).get("total_pnl") or 0.0
+                            )
+                            _alpaca_cumulative = round(_prev_total + _alpaca_pnl, 2)
+                        except Exception as _load_err:
+                            logger.warning(
+                                f"Failed to load prior EOD file {_prev_eod_path} — "
+                                f"cumulative P&L will default to today only: "
+                                f"{_load_err}"
+                            )
+                        break
+                if _alpaca_cumulative is None:
+                    _alpaca_cumulative = _alpaca_pnl  # first trading day
+
+                logger.info(
+                    f"Alpaca FIFO EOD: pnl_today=${_alpaca_pnl:.2f} | "
+                    f"cumulative=${_alpaca_cumulative:.2f} | "
+                    f"tracker=${_tracker_pnl:.2f} | "
+                    f"fills={len(_day_fills)} lots_closed={len(_alpaca_per_trade)}"
                 )
+            except Exception as _fifo_err:
+                logger.critical(
+                    f"Alpaca fills FIFO failed — falling back to tracker P&L: "
+                    f"{_fifo_err}"
+                )
+                try:
+                    from alerts import send_slack as _sl_fifo
+                    _sl_fifo(
+                        ":rotating_light: *EOD P&L: Alpaca FIFO failed"
+                        " — using tracker math*\n"
+                        f"Error: `{str(_fifo_err)[:200]}`\n"
+                        f"Tracker P&L: ${_tracker_pnl:.2f}. Verify fills manually."
+                    )
+                except Exception as _slack_err:
+                    logger.warning(
+                        f"Slack alert for FIFO failure could not be sent: {_slack_err}"
+                    )
+            finally:
+                _eod_fifo_in_progress = False
 
         # Authoritative P&L — Alpaca wins; tracker is fallback.
         # A-4 paper-API gap: Alpaca paper fills endpoint sometimes returns 0 fills for
