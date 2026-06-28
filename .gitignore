@@ -57,6 +57,9 @@ logs/*
 !logs/quarterly_holds_research_*.md
 # Whitelisted for failure log (approach history across sessions):
 !logs/ERRORS.md
+# Whitelisted for MTF FULL BOT AUDIT — JUNE 26 (standing multi-session audit initiative):
+!logs/mtf_full_bot_audit/
+!logs/mtf_full_bot_audit/*
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
