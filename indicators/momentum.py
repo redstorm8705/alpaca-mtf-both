@@ -22,9 +22,10 @@ For intraday confluence scoring:
 import pandas as pd
 import numpy as np
 import config
+from typing import Optional
 
 
-def calculate_momentum_12_1(df: pd.DataFrame) -> float:
+def calculate_momentum_12_1(df: pd.DataFrame) -> Optional[float]:
     """
     Calculate 12-1 month momentum return.
 
@@ -35,7 +36,8 @@ def calculate_momentum_12_1(df: pd.DataFrame) -> float:
         Float: momentum return as decimal (e.g., 0.15 = +15% momentum)
         None if insufficient data
     """
-    if df.empty or len(df) < config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK:
+    _min_bars = config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK
+    if df.empty or len(df) < _min_bars:
         return None
 
     # Price at the start of the formation period (12 months ago)
@@ -94,7 +96,7 @@ def momentum_strength(df: pd.DataFrame) -> str:
         return "strong_bear"
 
 
-def calculate_ewma_vol_60d(df: pd.DataFrame) -> float:
+def calculate_ewma_vol_60d(df: pd.DataFrame) -> Optional[float]:
     """EWMA annualized vol, center-of-mass=60 days (MOP 2012 Eq. 4).
     Superior to simple std for detecting vol-regime changes."""
     try:
@@ -107,7 +109,7 @@ def calculate_ewma_vol_60d(df: pd.DataFrame) -> float:
         return None
 
 
-def calculate_tsmom(df: pd.DataFrame, lookback_days: int) -> float:
+def calculate_tsmom(df: pd.DataFrame, lookback_days: int) -> Optional[float]:
     """Time-series momentum: own past return over lookback_days (MOP 2012).
     No skip period — MOP confirmed results do not depend on excluding last month."""
     try:
@@ -122,7 +124,7 @@ def calculate_tsmom(df: pd.DataFrame, lookback_days: int) -> float:
         return None
 
 
-def pct_from_52wk_high(df: pd.DataFrame) -> float:
+def pct_from_52wk_high(df: pd.DataFrame) -> Optional[float]:
     """
     Distance from 52-week high as a percentage.
     Clenow uses this as a trend strength proxy:
@@ -131,6 +133,15 @@ def pct_from_52wk_high(df: pd.DataFrame) -> float:
       -30%+ = broken trend
     """
     try:
+        # AWP audit fix (2026-06-28): every sibling lookback function in this
+        # file (calculate_momentum_12_1, calculate_ewma_vol_60d,
+        # calculate_tsmom, realized_vol_20d) enforces a minimum-bar-count
+        # guard and returns None on insufficient data. This function had no
+        # such guard — tail(252) silently returns whatever's available with
+        # fewer bars, so e.g. a 5-day high would be mislabeled as a "52-week
+        # high" with no indication the data was insufficient.
+        if df is None or len(df) < 252:
+            return None
         high_252 = float(df["high"].tail(252).max())
         current  = float(df["close"].iloc[-1])
         if high_252 <= 0:
@@ -140,7 +151,7 @@ def pct_from_52wk_high(df: pd.DataFrame) -> float:
         return None
 
 
-def realized_vol_20d(df: pd.DataFrame) -> float:
+def realized_vol_20d(df: pd.DataFrame) -> Optional[float]:
     """
     20-day realized (historical) volatility, annualized.
     Chan: >40% annualized = high-risk regime, reduce position size.
@@ -180,11 +191,14 @@ def get_momentum_summary(df: pd.DataFrame) -> dict:
         _tsmom_mult = round(
             min(max(_raw, config.TSMOM_VOL_MULT_FLOOR), config.TSMOM_VOL_MULT_CAP), 3
         )
+    _tsmom_12m_pct = round(_tsmom_12m * 100, 2) if _tsmom_12m is not None else None
+    _tsmom_6m_pct  = round(_tsmom_6m  * 100, 2) if _tsmom_6m  is not None else None
+    _tsmom_dir     = (1 if _tsmom_12m > 0 else -1) if _tsmom_12m is not None else None
     summary.update({
         "ewma_vol_60d":    _ewma_vol,
-        "tsmom_12m":       round(_tsmom_12m * 100, 2) if _tsmom_12m is not None else None,
-        "tsmom_6m":        round(_tsmom_6m  * 100, 2) if _tsmom_6m  is not None else None,
-        "tsmom_direction": (1 if _tsmom_12m > 0 else -1) if _tsmom_12m is not None else None,
+        "tsmom_12m":       _tsmom_12m_pct,
+        "tsmom_6m":        _tsmom_6m_pct,
+        "tsmom_direction": _tsmom_dir,
         "tsmom_vol_mult":  _tsmom_mult,
     })
     return summary
