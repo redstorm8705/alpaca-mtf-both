@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 events/news_monitor.py
 Real-time news intelligence for the MTF bot.
@@ -54,6 +55,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 from events.calendar import EventCalendar, EventRisk, EventType
 
@@ -428,7 +430,7 @@ class NewsMonitor:
 
     # ── Keyword classifier ────────────────────────────────────────────────────
 
-    def _classify(self, text: str) -> tuple[str, list, float]:
+    def _classify(self, text: str) -> tuple[Optional[str], list, float]:
         """
         Returns (risk_level, matched_keywords, size_multiplier).
 
@@ -1125,7 +1127,7 @@ class NewsMonitor:
                     continue
                 risk_level, keywords, size_mult = self._classify(text)
                 self._mark_seen(text)
-                if risk_level in (None, "MONITOR"):
+                if risk_level is None or risk_level == "MONITOR":
                     if risk_level == "MONITOR":
                         logger.debug(f"[MarketWatch] MONITOR: {title[:80]}")
                     continue
@@ -1199,7 +1201,7 @@ class NewsMonitor:
                     continue
                 risk_level, keywords, size_mult = self._classify(text)
                 self._mark_seen(text)
-                if risk_level in (None, "MONITOR"):
+                if risk_level is None or risk_level == "MONITOR":
                     continue
                 new_alerts.append(BreakingNewsAlert(
                     source="CNBC", headline=title[:120],
@@ -1425,7 +1427,7 @@ class NewsMonitor:
                     continue
                 risk_level, keywords, size_mult = self._classify(text)
                 self._mark_seen(text)
-                if risk_level in (None, "MONITOR"):
+                if risk_level is None or risk_level == "MONITOR":
                     continue
                 new_alerts.append(BreakingNewsAlert(
                     source="SEC-EDGAR", headline=title[:120],
@@ -1485,7 +1487,7 @@ class NewsMonitor:
                     continue
                 risk_level, keywords, size_mult = self._classify(text)
                 self._mark_seen(text)
-                if risk_level in (None, "MONITOR"):
+                if risk_level is None or risk_level == "MONITOR":
                     continue
                 new_alerts.append(BreakingNewsAlert(
                     source="Marketaux", headline=title[:120],
@@ -1548,7 +1550,7 @@ class NewsMonitor:
         now = datetime.now(ET)
 
         # Build task list — only include sources whose rate-limit window has elapsed
-        tasks: list[tuple[str, callable]] = [
+        tasks: list[tuple[str, Callable]] = [
             ("truth_social", self.check_truth_social),
         ]
         if self._last_news_check is None or (now - self._last_news_check).total_seconds() > 300:
@@ -1580,8 +1582,27 @@ class NewsMonitor:
         # HANG FIX: Do NOT use `with ThreadPoolExecutor` — its __exit__ calls
         # shutdown(wait=True) which blocks until ALL threads complete. If any
         # feedparser/RSS thread hangs (no socket timeout), run_cycle() freezes
-        # indefinitely and the watchdog fires. Use explicit shutdown(wait=False,
-        # cancel_futures=True) to abandon stuck threads after the timeout.
+        # indefinitely and the watchdog fires.
+        #
+        # AWP audit correction (2026-06-28): this comment previously claimed
+        # we call shutdown(wait=False, cancel_futures=True) on timeout — that
+        # call does NOT exist below, and must not be added against
+        # self._executor specifically: it is a persistent, instance-level pool
+        # reused every scan_breaking_news() cycle, and shutdown() permanently
+        # disables a ThreadPoolExecutor (every subsequent .submit() raises
+        # RuntimeError). What actually happens on timeout: we log the skipped
+        # source names and move on, leaving the stuck future's thread to
+        # finish in the background whenever it finishes. This is safe but not
+        # free — a thread that hangs past the 12s as_completed() window
+        # without ever returning permanently occupies one of the 6
+        # max_workers slots until the bot's next restart. Known latent risk,
+        # not fixed here: a periodic executor health check/recreation would
+        # close this gap; logged to CLAUDE.md Future Roadmap Log instead of a
+        # rushed structural change. Not a capital-risk bug — this module is
+        # informational-only (MARKET-REACTION-FIRST architecture, SPY price
+        # action is the sole sizing trigger), so a degraded news feed reduces
+        # dashboard/HALT-detection coverage over very long uptimes, it does
+        # not corrupt P&L or sizing.
         from concurrent.futures import TimeoutError as _FutTimeout
         new_alerts = []
         _pool = self._executor
