@@ -339,7 +339,35 @@ Owns: overnight breakeven exit, thesis-invalidation exit, breakeven-stop promoti
 
 **Refuted this file:** 1 Gro hallucination (GTC-defer counters falsely claimed never reset — directly contradicted by 4 separate pop() call sites), 1 GAI speculative claim not pinned to a real code path (conflated pre-close defer counters with post-close-failure scenario).
 
-**Next Phase-1 file:** `kelly.py` (450 lines) — proceed?
+---
+
+## `execution/kelly.py` (450 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Kelly Criterion dynamic position sizing — per-signal-type win/loss R-multiple tracking, fractional Kelly with CV penalty + ATH-drawdown (A2) scaling + GEX edge multiplier, atomic stats persistence.
+
+**Finding — `rebuild_from_trades()` has no guard against missing `exit_price`, creating a direct cascading consequence of the `portfolio_tracker.py` Block 5 finding (real, CONFIRMED HIGH by Gro + GAI independently):**
+
+`rebuild_from_trades()` (lines 388-435) is called by `write_eod_summary()` specifically to rebuild Kelly's stats from `closed_trades` after FIFO reconciliation. It filters out `_fill_unverified` trades and validates `direction`/`entry`/`stop`/`qty`, but reads `exit_p = float(t.get("exit_price") or 0)` — silently defaulting to `0.0` if missing, rather than skipping.
+
+**Cross-file trace confirms this is reachable, not theoretical:** verified directly in `portfolio_tracker.py`'s `write_eod_summary()` (Phase 2a.5, ~lines 1246-1260 and ~1324-1336) — both the "no valid FIFO exit prices" branch and the "no FIFO match" branch set `_fifo_reconciled_closed=True` directly on the trade dict **without ever calling `record_exit()`** (the only place `exit_price`/`pnl` get set) and **without setting `_fill_unverified=True`** either. On the next restart, `_load_log()` routes these trades into `closed_trades` exactly as the earlier portfolio_tracker.py Block 5 finding described — valid `entry_price`/`stop`/`qty`/`direction` (it was a real, legitimately-opened trade), but no `exit_price` and no `pnl` ever set.
+
+**Concrete consequence:**
+- LONG trade: `pnl_per_share = 0 - entry = -entry` → an extreme phantom **loss** R-multiple (e.g. -75R on a $150 stock with $2/share risk) injected into that signal type's `losses` list.
+- SHORT trade: `pnl_per_share = entry - 0 = +entry` → an extreme phantom **win** R-multiple injected into `wins` — inflating win_rate and avg_win_r for that signal type.
+
+**Both Gro and GAI independently identify the SHORT/phantom-win direction as the more dangerous one:** a fictitious extreme win inflates Kelly into *over-sizing* future real short positions based on statistics that never happened — direct capital risk. The phantom-loss (long) direction skews toward under-sizing/avoidance, which is the safer failure direction by comparison but still a data-integrity violation.
+
+**Severity: High (Gro + GAI both, independently).** GAI: "directly corrupts the core statistical foundation used for position sizing... the silent nature of the data corruption... makes it difficult to detect without careful auditing."
+
+**Fix — both voices converge on doing BOTH, not either/or:**
+1. Defensive guard in `rebuild_from_trades()`: skip if `t.get("exit_price") or 0 <= 0` (mirroring the existing `_fill_unverified` skip) — immediate, low-risk patch.
+2. Root-cause fix in `portfolio_tracker.py`'s `write_eod_summary()`: the two `_fifo_reconciled_closed=True`-without-`record_exit()` branches should not leave a closed-trade-shaped record with missing exit data — either call `record_exit()` with a defensible price (consistent with the `_fill_unverified` pattern already used elsewhere in that file for unknown-price exits) or explicitly tag these records so `rebuild_from_trades()` (and anything else reading `closed_trades`) can recognize and exclude them deterministically, not via an accidental `or 0` fallback.
+
+**Decision: NOT FIXED THIS SESSION** — logged per "audit first, consolidated fix later." This finding is closely related to the existing portfolio_tracker.py Block 5 finding (`get_stats()` KeyError risk) — both stem from the same two root-cause code paths in `write_eod_summary()`, so the eventual fix batch should address both consequences with a single root-cause patch plus the two respective defensive guards.
+
+**No other findings in `kelly.py`** — the rest of the file (Kelly formula, CV penalty, A2 drawdown multiplier, GEX edge multiplier, atomic persistence, TQI history) was read in full and is consistent, well-guarded (division-by-zero avoided via `avg_win_r`/`avg_loss_r` fallback to 0.001, `stdev()` requires len>=2 already satisfied by the len>=30 gate, `rebuild_from_trades()`'s other field validations are all `.get()`-based and correctly bounded).
+
+**Next Phase-1 file:** `orphan_manager.py` (1442 lines) — proceed?
 
 ---
 
