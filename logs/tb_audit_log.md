@@ -5669,3 +5669,21 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 3. Fix `write_eod_summary()`'s lack of idempotency before the next live run, or the rebuilt file will start corrupting again the same day it's restored. Candidate approaches (per board+Gro+GAI): track processed fill IDs, OR gate the Alpaca-FIFO section to run at most once per calendar day across ALL 6 call sites (current 2 partial guards don't cover this), OR separate "current-day working state" from "persisted prior-day state" so only one clean write happens per day.
 
 **Status:** Phase 1 diagnostic complete (full read, 10pt-adjacent audit, board+Gro+GAI consensus on root cause). Phase 2 (drafting the actual code fix + remediation script) NOT started — per explicit Rafael mandate this session ("changes are approved only after 3pt audit AND Gro/GAI review of the proposed patch"), no patch exists yet to review, and this touches live financial state — holding for Rafael's return before drafting/applying anything.
+
+## 2026-06-27 — P0 fix deployed and verified: FIFO idempotency + reentrancy guard
+
+**Patch sequence completed in full** (full read done earlier session; this turn: drafted exact diff, ran board cold-review on root cause AND separately on the actual patch, Gro+GAI on the actual patch per explicit Rafael mandate this session — not substituted, both ran against the real diff this time since GROQ_API_KEY works).
+
+**Round 1 review:** Cold second-agent PASS, Gro APPROVE — but GAI REJECTED, correctly identifying a same-thread reentrancy gap (SIGTERM handler can re-enter write_eod_summary() while an earlier call is blocked inside _fetch_alpaca_fills_for_date()'s network I/O; Python delivers signals by interrupting blocking syscalls and running the handler in the same thread before the original call resumes — genuine reentrancy, not theoretical). Verified this independently against the actual codebase (signal handler registration in main.py, blocking urllib call in portfolio_tracker.py) before accepting the rejection — confirmed exploitable, not a false alarm.
+
+**Fix added:** module-level `_eod_fifo_in_progress` bool (same-thread reentrancy guard, not threading.Lock — correctly scoped to same-thread signal-handler reentrancy per GAI's own confirmation in Round 2 that GIL + same-thread signal delivery makes a plain bool sufficient).
+
+**Round 2 review (revised diff):** Cold second-agent PASS, Gro APPROVE, GAI APPROVE. All 3 voices aligned. GAI's one remaining note (don't persist `processed_fill_ids` when date_str != today) is cosmetic — already harmless since `_load_prior_day_lots()` discards them on a new day regardless — logged as a minor follow-up, not blocking.
+
+**Static analysis:** py_compile/mypy/ruff all PASS, both before and after Round 2 revision. 3 line-length violations introduced by the reindentation were caught by ruff and fixed before proposing.
+
+**Impact radius:** grep-confirmed zero other callers of `_load_prior_day_lots`, `_fifo_reconstruct`, `_save_open_lots_state` anywhere in the codebase — blast radius fully contained to this one call chain inside `write_eod_summary()`.
+
+**Deployed:** commit d74726d → rsync'd to OCI → mtf-bot/mtf-writer/mtf-http restarted → all 4 services active, clean startup, no exceptions in journalctl. Byte-diff confirms OCI file identical to repo.
+
+**Explicitly NOT done this patch:** remediation of the EXISTING corrupted lot-state data already in `open_lots_prior_day.json` (AMD 36 dup lots, PANW 77, SMCI 60, NVDA 34 spanning stale historical prices). This requires a separate one-time offline rebuild from a clean historical FIFO pass, per board+Gro+GAI consensus from the earlier root-cause diagnostic — too risky to improvise without its own dedicated review. Queued as next item.
