@@ -242,7 +242,17 @@ class RiskManager:
             # native step-function runs unchanged — zero regression on existing callers.
             vix = kwargs.get("vix", 0) or 0
             h2_scalar = kwargs.get("atr_mult_override", None)
-            if h2_scalar is not None:
+            # AWP audit finding (2026-06-28): h2_stop_atr_mult() returns a pure
+            # scalar that can mathematically be exactly 0.0 (not None) when a
+            # symbol's realized vol computes to zero variance — e.g. a halted
+            # or completely flat stock over the lookback window. Multiplying
+            # stop_mult/target_mult by 0.0 produces a zero-width stop AND
+            # target (stop = target = entry_price) — the same "penny-stop"
+            # class of bug already guarded against elsewhere in this codebase
+            # (see C-1's 0.5R breakeven guard). Treat <= 0 the same as None —
+            # fall through to the native step-function rather than zeroing
+            # out risk management entirely.
+            if h2_scalar is not None and h2_scalar > 0:
                 stop_mult   *= h2_scalar
                 target_mult *= h2_scalar
             elif vix > 0:
