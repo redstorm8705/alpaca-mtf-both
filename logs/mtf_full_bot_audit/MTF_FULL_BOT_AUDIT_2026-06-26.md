@@ -371,6 +371,24 @@ Kelly Criterion dynamic position sizing — per-signal-type win/loss R-multiple 
 
 ---
 
+## `execution/orphan_manager.py` (1442 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Position reconciliation and GTC stop lifecycle (extracted from main.py Phase 2). Owns: TOD phase classification, pre-market GTC stop reconciliation (`cancel_and_reconcile_gtc_stops()`, ~600 lines — PENDING_CANCEL handling with escalating defer counters, idempotent GTC adoption on restart, Patches 1/2/3 for emergency stops / GTC partial-fill reconciliation / stale DAY-stop cleanup), and startup position reconciliation (`reconcile_positions()`, ~650 lines — orphan adoption, externally-closed detection, size-mismatch and direction-mismatch correction). This is one of the most heavily-iterated, well-hardened files in the codebase — extensive named historical fixes (BUG-1/2/3, OM-RACE-1, OM-BUG-1/2, Patch 1/2/3, P1-2 through P5-H3, SF-01/02/03), each with a detailed comment explaining the specific failure mode it prevents.
+
+**Finding — stale PDT comments (5th instance of the pattern this audit, low severity):** Comments at ~lines 390, 533-539, 583, 742, 757, 841 reference "PDT" checks/guards (e.g. "If PDT=3/3, mark overnight=True", "OM-RACE-1 guard: placed AFTER PDT check intentionally") describing logic from before PDT enforcement was permanently abolished (S63 sweep, per CLAUDE.md). **Verified via grep that every PDT reference in this file is a comment or log-message string only — zero live conditional logic checks a PDT counter anywhere in the file.** Documentation debt only, zero functional impact. Logged for completeness alongside the other 4 instances of this same pattern found earlier in this audit (entry_logic.py ×2, run_cycle.py ×1 via the grep sweep, now this file).
+
+**Investigated and CONFIRMED SAFE — line 1144's `fetch_actual_fill_price()` call in the externally-closed-position branch:** checked whether this could reproduce the `kelly.py` missing-exit-price corruption pattern found earlier in this audit. Verified directly in `execution/fill_helpers.py`: on failure, `fetch_actual_fill_price()` falls back to `entry_price` (never 0.0) and explicitly sets `trade["_fill_unverified"] = True` + CRITICAL log + Slack alert — the standard RC-4 pattern already used everywhere else in the codebase. This IS checked by `kelly.py`'s `rebuild_from_trades()` filter. Not a repeat of the earlier bug — confirmed clean.
+
+**Investigated and REFUTED — GAI's speculative "double-counting P&L on restart" concern (qty-mismatch banking block, ~lines 1356-1419):** GAI raised (explicitly caveated as speculative, "without seeing the actual code") a scenario where a crash between P&L-banking and persistence could cause the same external-close to be banked twice on restart. Checked against the literal code: all banking mutations (`partial_pnl`, `profit_tranche_level`, `qty_remaining`) happen in memory, with a single atomic `tracker._save_log()` call at the very end (line 1419) — critically, `qty_remaining` is set to `alpaca_qty` in that SAME save (line 1418). This makes the operation self-correcting: crash before the save → nothing persists → the same mismatch re-triggers the same (correct, not duplicated) calculation on restart. Save succeeds → `qty_remaining` now equals `alpaca_qty` → the mismatch check (line 1356) is false on every subsequent pass → no re-trigger. **Does not hold up against the literal code — refuted, not logged as a finding.**
+
+**Gro's review** (given a condensed prompt without the full 1442-line source, consistent with this audit's rate-limit-driven approach for Gro): explicitly declined to invent findings without the literal code, stating plainly it had no further findings beyond what was already identified — an honest abstention rather than fabricated confidence, consistent with this audit's standing practice of treating "I don't know" as an acceptable and preferable answer to a guess.
+
+**No other findings.** This is the cleanest Phase-1 file audited so far — the extensive historical hardening appears to have genuinely closed the gaps that earlier sessions found, with no new logic-level bug surfaced by either AI voice or by direct reading.
+
+**Next Phase-1 file:** `trade_engine.py` (286 lines) — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
