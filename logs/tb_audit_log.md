@@ -5687,3 +5687,32 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 **Deployed:** commit d74726d → rsync'd to OCI → mtf-bot/mtf-writer/mtf-http restarted → all 4 services active, clean startup, no exceptions in journalctl. Byte-diff confirms OCI file identical to repo.
 
 **Explicitly NOT done this patch:** remediation of the EXISTING corrupted lot-state data already in `open_lots_prior_day.json` (AMD 36 dup lots, PANW 77, SMCI 60, NVDA 34 spanning stale historical prices). This requires a separate one-time offline rebuild from a clean historical FIFO pass, per board+Gro+GAI consensus from the earlier root-cause diagnostic — too risky to improvise without its own dedicated review. Queued as next item.
+
+## 2026-06-27 — P0 DATA REMEDIATION deployed: open_lots_prior_day.json rebuilt clean
+
+**Action:** One-time offline rebuild of the corrupted FIFO lot-state file, per the consensus plan from the earlier root-cause diagnostic (board+Gro+GAI).
+
+**Method:** Backed up the live corrupted file (OCI: `open_lots_prior_day.json.BACKUP_2026-06-27_S68`, plus local copy). Wrote a standalone script (not part of the bot) that pulled the account creation date (2026-04-05) and looped day-by-day through every calendar day to 2026-06-26, reusing the unmodified `_fetch_alpaca_fills_for_date()` and `_fifo_reconstruct()` functions, refusing to proceed if any single day's fetch failed. Collected 307 fills across 51 active trading days, ran ONE clean FIFO pass from empty starting lots.
+
+**Result:** 0 remaining open lots across all 23 previously-corrupted symbols — exactly matching the live account's confirmed-flat state (0 positions). Total realized P&L: $302.08.
+
+**Approval round 1:** Board APPROVE WITH CONDITIONS, Gro APPROVE WITH CONDITIONS, **GAI REJECTED** — correctly demanding (a) an independent fill-count completeness check beyond simple per-day abort-on-error, and (b) cross-verification of the $302.08 figure against a third source before treating it as authoritative (trade_log.json was attempted but is empty — 0 closed_trades on both local and OCI, not a usable cross-check).
+
+**Investigation triggered by GAI's rejection — found a genuinely new bug:** attempting an independent fill-count cross-check via a single wide-date-range paginated query revealed that Alpaca's `/v2/account/activities/FILL` endpoint **silently ignores `after_id` when combined with `after`/`until` timestamp params** — confirmed via a bounded test (page 2 was byte-for-byte identical to page 1). This means the existing, unmodified `_fetch_alpaca_fills_for_date()` has a **latent pagination bug**: any single calendar day with >100 fills would cause its pagination loop to never terminate (repeating the same first page forever). **NEW FINDING — not fixed this session** (out of scope of this remediation; this bot has never traded near 100 fills/day). Logged as a new P2 ticket for a future session: fix `_fetch_alpaca_fills_for_date()`'s pagination to not rely on `after_id` co-existing with the date-range params, or pull a fresh `after` timestamp from each page's last fill instead.
+
+**Why the rebuild's data is unaffected:** the day-by-day script's own run log shows the maximum fills on any single day was 18 (2026-04-08) — every day terminated correctly on page 1, never reaching the broken multi-page code path. The 307-fill total is reliable for this account's actual history.
+
+**Independent ground-truth cross-check (addresses GAI's condition 3):** pulled Alpaca's own `/v2/account/portfolio/history` endpoint — NOT derived from fills reconstruction. `base_value` (starting capital) = exactly $2,500.00. Current equity (account fully flat, zero unrealized noise) = $2,801.55. True realized P&L per Alpaca's own ledger = **$301.55**. Rebuild's figure: $302.08. Difference: $0.53 (0.02% of equity, ~$0.0027/trade across 200 trades) — consistent with timing/rounding noise, not a structural error.
+
+**Approval round 2:** Gro APPROVE, GAI **APPROVE FOR DEPLOY**, conditioned on (1) opening a tracked finding for the pagination defect (done, this entry) and (2) logging the "closing sell with no open long lots" warning-clarity ambiguity as a low-priority future item (done — these warnings fire identically for genuine bugs and for normal `sell_short` opens; not distinguished in current logging; cosmetic, not blocking).
+
+**Deployed:**
+1. Rebuilt `open_lots_prior_day.json` → OCI (clean state, 0 lots, `processed_fill_ids: []`, `_rebuild_meta` documenting the rebuild).
+2. Corrected the stale cumulative baseline in `logs/eod_2026-06-27.json`: `all_time_stats.total_pnl` was $292.22 (computed under the corrupted-lot regime) → corrected to $301.55 (Alpaca ground truth). Backed up original as `eod_2026-06-27.json.BACKUP_S68_preremediation` before editing. Without this correction, every future day's cumulative P&L would still be anchored ~$9 below true value even with clean lot state going forward.
+3. Services restarted, all 4 active, clean startup.
+
+**Rollback path if anything looks wrong:** `open_lots_prior_day.json.BACKUP_2026-06-27_S68` and `eod_2026-06-27.json.BACKUP_S68_preremediation` both preserved on OCI indefinitely.
+
+**Monitoring recommendation (per board/Gro round-1 review):** watch the next 2-3 trading days' EOD logs for any `EOD P&L DRIFT` warnings — should now be silent/near-zero given the lot state is clean and idempotent going forward (code fix from earlier this session) and the cumulative baseline is corrected.
+
+**NEW TRACKED ITEM for future session:** `_fetch_alpaca_fills_for_date()` pagination defect (after_id ignored when combined with after/until params) — P2, not urgent given current trading volume, but should be fixed before any scenario with >100 fills/day becomes possible.
