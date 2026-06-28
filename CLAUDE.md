@@ -942,6 +942,9 @@ scan this log first alongside the open items list.
 
 ### Logged Items
 
+**[2026-06-28 MTF FULL BOT AUDIT] Sizing-dial redesign — sustain-window + 3-bucket framework (Rafael mandate)**
+`strategy/run_cycle.py`'s `size_multiplier` directly multiplies 6 independent stress factors (event/regime/TOD/SPY-risk/P&L/overnight) every cycle off a single momentary snapshot. Audit found this can compound to ~19% of intended size from individually-mild factors (none of which alone implied that severe a cut). Rafael's decision: this needs two structural changes, not a quick patch — (1) require risk dials to be **sustained across multiple consecutive 5-min scans** before they compound, rather than reacting to one momentary snapshot (exact scan-count threshold deferred to a dedicated board + Gro/GAI design session — not guessed); (2) split sizing logic into 3 buckets: **A) intraday** (current dial set, with the sustain-window added), **B) 1-2 week swing holds** (Rafael: needs an **entirely separate framework** built around higher-timeframe confluence indicators — do not reuse/filter the intraday dials), **C) quarterly QHM holds** (already structurally separate — confirmed during this audit that `qhm.maybe_enter_positions()` never receives `size_multiplier` at all, so this bucket already exists in practice). Requires: a dedicated design session (Feature Design Protocol gate first), board + Gro/GAI on the sustain-window threshold, full Open Question Protocol given the architectural scope. File: `strategy/run_cycle.py` (Bucket A), new module TBD for Bucket B.
+
 **[2026-05-17 S25B] After-close STOD volume normalization for swing pre-filter (DS insight)**
 Compute `today's total volume / 20-day avg` at 4:05 PM ET as an after-close computation.
 Eliminates the partial bar problem entirely (full bar vs full bar, apples-to-apples).
