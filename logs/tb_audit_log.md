@@ -5865,3 +5865,13 @@ This is now the **third** round of nonexistent-method bugs found in this single 
   3. The `related_orders` regex parse in `submit_gtc_stop_order()`'s 40310000 handler is brittle against Alpaca error-message format changes — degrades gracefully (falls through to polling without targeted force-cancel) rather than crashing, so not urgent.
 
 **Status: `execution/broker.py` audited, no severe findings, no patch applied this pass.**
+
+---
+
+## 2026-06-28 (AWP) — execution/gtc_manager.py: qty_remaining=0 falsy-fallback bug fixed (commit `34d13e3`)
+
+**Phase 2 of MTF FULL BOT AUDIT.** Full read of `execution/gtc_manager.py` (319 lines) — GTC/DAY stop submission and cancel helpers. Found a real, reachable instance of a bug class already fixed twice elsewhere tonight: `submit_rth_day_stops()`'s `_qty = abs(int(t.get("qty_remaining") or t.get("qty", 0)))` treats a legitimate `qty_remaining=0` (fully exited via partials) as falsy, falling back to the original full quantity. The function's own `needs_stop` candidate filter doesn't check `qty_remaining` at all, so a fully-flat-but-still-`overnight`-flagged trade reaches this line. Fixed with the established explicit-`None`-check pattern (mirrors `orphan_manager.py`'s Patch 1, `exit_logic.py`'s trail-ratchet path).
+
+**AWP verification:** cold second-agent PASS (traced both branches, confirmed genuinely reachable, confirmed cleanup didn't drop any logic) → Gro APPROVE → GAI APPROVE → static analysis clean → deployed to OCI via targeted rsync (confirmed OCI's own local divergence on this file was itself an already-applied stale-PDT-comment cleanup, matching this session's pattern elsewhere — no conflict, safe overwrite).
+
+**Status this AWP session:** 3 files fully audited (`risk_manager.py`, `broker.py`, `gtc_manager.py`), 2 confirmed bugs fixed and deployed (zero-width stop/target; qty_remaining=0 falsy fallback), 1 file clean with only minor non-blocking observability gaps logged. Plus the earlier 2-round Movers strategy P0 (zombie process + 5 nonexistent-method calls). Pausing here for this session's time window.
