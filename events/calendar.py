@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 # events/calendar.py — Market-moving event tracker
 # All risk days trade at 50% capital deployment vs normal days.
 # Only true market holidays (BLACKOUT) result in no trading.
@@ -7,11 +8,9 @@
 #   - OPPORTUNITY: 50% size — tech conferences, known catalysts
 #   - CLEAR:       100% size — no known events
 
-import os
-import json
-import requests
-from datetime import datetime, date, timedelta
+from datetime import date, timedelta
 from enum import Enum
+from typing import Optional
 
 
 class EventRisk(Enum):
@@ -230,7 +229,7 @@ _MACRO_EVENT_TYPES = {
 }
 
 
-def is_macro_event_day(date_str: str = None) -> bool:
+def is_macro_event_day(date_str: Optional[str] = None) -> bool:
     """
     Returns True if the given date (YYYY-MM-DD, default today ET) is a FOMC/CPI/NFP day.
     Checks STATIC_EVENTS only — does not require an EventCalendar instance.
@@ -250,7 +249,7 @@ class EventCalendar:
         self._events = STATIC_EVENTS
         self._earnings = EARNINGS_BLACKOUTS
 
-    def get_day_risk(self, check_date: date = None, symbol: str = None) -> dict:
+    def get_day_risk(self, check_date: Optional[date] = None, symbol: Optional[str] = None) -> dict:
         """
         Returns the highest risk level for a given date (and optionally symbol).
 
@@ -304,7 +303,7 @@ class EventCalendar:
             "note":   " | ".join(notes) if notes else "Clear",
         }
 
-    def get_week_ahead(self, symbol: str = None) -> list:
+    def get_week_ahead(self, symbol: Optional[str] = None) -> list:
         """Returns all events in the next 7 days."""
         today = date.today()
         results = []
@@ -333,10 +332,10 @@ class EventCalendar:
                 "note": note,
             })
 
-    def is_blackout(self, symbol: str = None) -> bool:
+    def is_blackout(self, symbol: Optional[str] = None) -> bool:
         return self.get_day_risk(symbol=symbol)["risk"] == EventRisk.BLACKOUT
 
-    def get_size_multiplier(self, symbol: str = None, now_et=None) -> float:
+    def get_size_multiplier(self, symbol: Optional[str] = None, now_et=None) -> float:
         """
         Returns position size multiplier based on today's event risk.
 
@@ -379,6 +378,6 @@ class EventCalendar:
 
         return base
 
-    def is_tradeable(self, symbol: str = None) -> bool:
+    def is_tradeable(self, symbol: Optional[str] = None) -> bool:
         """Returns True if trading is allowed today (any non-holiday day)."""
         return self.get_day_risk(symbol=symbol)["risk"] != EventRisk.BLACKOUT
