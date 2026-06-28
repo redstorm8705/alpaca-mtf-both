@@ -423,6 +423,20 @@ Standalone "Movers Bot" script — a separate momentum strategy distinct from th
 
 ---
 
+## `state/persistence.py` (132 lines) — FULL READ AND GRO/GAI REVIEW COMPLETE
+
+Atomic JSON write helpers extracted from `main.py` — owns `confirm_gate.json` and `bot_status.json` only (trade_log.json, tqi_history.json, hybrid_state.json, kill_switch_state.json each remain owned by their respective domain classes per this file's own docstring). Standard mkstemp + fsync + os.replace atomic-write pattern.
+
+**Gro: no genuine bugs found** after full-source review — confirmed clean.
+
+**REFUTED — GAI's claimed double-close bug in `_atomic_write()`:** GAI claimed the explicit `os.close(fd)` inside the inner `except` block conflicts with `with os.fdopen(fd, "w") as f:` already owning `fd`'s closure, predicting a `ValueError: I/O operation on closed file`. **Does not hold up against Python's actual context-manager semantics:** when an exception occurs inside the `with` block, `f.__exit__()` (calling `f.close()`, which closes `fd`) runs BEFORE the exception reaches the outer `except` clause — by the time `os.close(fd)` executes, `fd` is already closed, so the call would raise `OSError: Bad file descriptor`, not `ValueError`. **This is exactly the case the code already anticipates and handles**: `except OSError as _fd_e: logger.debug(...)` immediately wraps the `os.close(fd)` call. This is intentional defensive double-close handling, not a bug. Refuted.
+
+**No other findings.** This is the cleanest file audited in this entire initiative so far — a small, focused utility module with no logic beyond atomic file I/O, and both AI reviewers either found nothing or were refuted on inspection.
+
+**Next Phase-1 file:** `trade_logger.py` (88 lines, smallest remaining file) — proceed?
+
+---
+
 ## Session Log
 
 **2026-06-27 (S68 continuation):** Initiative created. Scope confirmed with Rafael, board,
