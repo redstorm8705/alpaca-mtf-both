@@ -176,6 +176,13 @@ def main():
     scanner    = MoversScanner(fetcher, calendar)
     strategy   = MoversStrategy(broker, risk, tracker, calendar, scanner)
 
+    # ── Startup reconciliation (2026-06-28 redesign) ──────────────────────────
+    # MoversStrategy's _active_movers is in-memory only — a restart (including
+    # the new fail-loud crash path) would otherwise leave the script blind to
+    # positions it already opened. Rebuild from Alpaca's actual account state
+    # before the first cycle runs.
+    strategy.reconcile_on_startup()
+
     # ── Check today's events ──────────────────────────────────────────────────
     day_risk = calendar.get_day_risk()
     if not calendar.is_tradeable():
@@ -211,7 +218,7 @@ def main():
     if args.once:
         run_movers_cycle(scanner, strategy, fetcher, broker, universe,
                          args.mode, args.top, use_confluence)
-        tracker.print_summary()
+        tracker.print_stats()
         return
 
     # ── Main loop ─────────────────────────────────────────────────────────────
@@ -223,7 +230,7 @@ def main():
             if _now_et.weekday() < 5 and _now_et.hour * 60 + _now_et.minute >= 9 * 60 + 28:
                 logger.info("9:28 AM ET — terminating before RTH open, handing off to main.py")
                 strategy.flatten_intraday()
-                tracker.print_summary()
+                tracker.print_stats()
                 break
             run_movers_cycle(scanner, strategy, fetcher, broker, universe,
                              args.mode, args.top, use_confluence)
@@ -231,11 +238,18 @@ def main():
         except KeyboardInterrupt:
             logger.info("Movers bot stopped")
             strategy.flatten_intraday()
-            tracker.print_summary()
+            tracker.print_stats()
             break
         except Exception as e:
+            # Fail loud rather than retry-forever (Rafael decision, 2026-06-28):
+            # this swallow-and-sleep pattern previously masked a phantom-method
+            # AttributeError at the 9:28 AM termination call site, letting the
+            # process become a permanent zombie that never reached the break
+            # below it. Re-raising means any future bug crashes the process
+            # immediately and visibly instead of retrying silently forever;
+            # the daily cron relaunches it fresh the next session.
             logger.error(f"Loop error: {e}", exc_info=True)
-            time.sleep(60)
+            raise
 
 
 if __name__ == "__main__":

@@ -674,17 +674,45 @@ class AlpacaBroker:
     def is_market_open(self) -> bool:
         return is_market_open()
 
-    def buy(self, symbol: str, qty: int, price: float = 0):
-        return submit_market_order(symbol, qty, "buy")
+    def buy(self, symbol: str, qty: int, price: float = 0) -> dict:
+        """Normalizes submit_market_order()'s order-object-or-None return into
+        the {"success": bool, "error": str|None, "order": object|None} shape
+        MoversStrategy expects throughout (P0 fix, 2026-06-28 — confirmed via
+        cold second-agent review that strategy.py's `result["success"]` /
+        `result.get("error")` calls would TypeError on every entry attempt
+        against the raw order-object-or-None return that existed before)."""
+        order = submit_market_order(symbol, qty, "buy")
+        if order is None:
+            return {"success": False, "error": "submit_market_order returned None", "order": None}
+        return {"success": True, "error": None, "order": order}
 
-    def sell_short(self, symbol: str, qty: int, price: float = 0):
-        return submit_market_order(symbol, qty, "sell")
+    def sell_short(self, symbol: str, qty: int, price: float = 0) -> dict:
+        order = submit_market_order(symbol, qty, "sell")
+        if order is None:
+            return {"success": False, "error": "submit_market_order returned None", "order": None}
+        return {"success": True, "error": None, "order": order}
 
     def place_stop(self, symbol: str, qty: int, stop_price: float, side: str):
-        return submit_day_stop_order(symbol, qty, side, stop_price)
+        """GTC (not DAY) — Movers positions must stay protected across a
+        script restart/crash, since MoversStrategy has no in-memory state
+        persistence. 2026-06-28 redesign (Rafael mandate)."""
+        return submit_gtc_stop_order(symbol, qty, side, stop_price)
+
+    def cancel_stop_order(self, order_id: str) -> bool:
+        return cancel_order(order_id)
+
+    def get_open_positions(self) -> list:
+        return get_open_positions()
+
+    def get_open_orders(self, symbol: str | None = None) -> "list | None":
+        return get_open_orders(symbol)
 
     def get_position(self, symbol: str):
         return get_open_position(symbol)
 
-    def close_position(self, symbol: str):
-        return close_position(symbol)
+    def close_position(self, symbol: str) -> dict:
+        """Normalizes close_position()'s plain-bool return into the
+        {"success": bool} shape MoversStrategy expects (same P0 fix as
+        buy()/sell_short() above)."""
+        ok = close_position(symbol)
+        return {"success": ok}
