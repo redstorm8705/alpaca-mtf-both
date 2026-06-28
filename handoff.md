@@ -1,16 +1,20 @@
-# Handoff — S68: QHM external-close fix + DS→Gro migration (2026-06-27)
+# Handoff — S68: P0 FIFO lot-duplication fix + data remediation (2026-06-27)
 
 ## LATEST CHANGES (S68)
 
 | Commit | File | Fix |
 |--------|------|-----|
-| `dff0704` | `execution/quarterly_hold_manager.py` | QHM external-close detection gap: `_detect_external_close()` supported PENDING_STOP_REPLACE/PENDING_EARNINGS but was never called for them by `reconcile_on_startup()` or `run_weekly_check()`. NVDA/GOOGL were stranded at stale PENDING_STOP_REPLACE (qty_filled=1) while Alpaca showed 0 shares. Fix verified live 19:11 ET — both self-healed CLOSED→PENDING_ENTRY automatically on restart, no manual edit needed. |
-| `6457394` | `CLAUDE.md` | DS/DeepSeek→Gro/Groq migration. Live audit pipeline (`auto_ai_audit.py`, `autonomous_review.py`) already moved to Groq (`llama-3.3-70b-versatile`); CLAUDE.md was stale and caused a failed DeepSeek curl call this session ("Insufficient Balance" — deprecated/unfunded key). Renamed throughout protocol sections (lines 1–928); historical roadmap log entries left untouched as accurate history. |
-| `967b550` | `logs/` | Triaged and deleted 8 confirmed-resolved `queued_for_review_*`/`pending_approvals_*` files (cross-checked against current code, not file age). Kept 1 genuinely open item: `scan_to_html.py` RC-9 yfinance-news violation, still present at L1226-1281. |
+| `d74726d` | `execution/portfolio_tracker.py` | **P0 CRITICAL**: `write_eod_summary()` had no idempotency across its 6 daily call sites — every call re-ran FIFO lot reconstruction over the full day's fills with no fill-ID dedup, so any same-day-unclosed position accumulated a duplicate lot on every call. Confirmed live: AMD 36 dup lots, PANW 77, SMCI 60, NVDA had a 6-week-stale lot that caused a real EOD P&L drift. Fixed with fill-ID dedup + same-thread reentrancy guard (GAI caught a real gap Gro missed in round 1; round 2 approved by both). |
+| (data remediation, no code commit) | `data/state/open_lots_prior_day.json` (OCI) + `logs/eod_2026-06-27.json` (OCI) | Rebuilt the corrupted lot file from a clean 83-day historical FIFO pass (307 fills, 0 remaining lots — matches live account's confirmed-flat 0 positions). Cross-checked against Alpaca's own equity ledger (base_value=$2,500.00, equity=$2,801.55 → true P&L=$301.55) — rebuild's $302.08 within $0.53. Corrected the stale cumulative baseline ($292.22 → $301.55) so future days don't inherit the old error. GAI rejected round 1 (demanded independent verification), approved round 2 after the equity cross-check + a pagination-defect investigation. Both originals backed up on OCI before any edit. |
+| `dff0704` | `execution/quarterly_hold_manager.py` | QHM external-close detection gap fixed — NVDA/GOOGL self-healed CLOSED→PENDING_ENTRY automatically, verified live. |
+| `6457394` | `CLAUDE.md` | DS/DeepSeek→Gro/Groq migration — live pipeline already used Groq, docs were stale. |
+| `967b550` | `logs/` | Deleted 8 confirmed-resolved stale to-do files. |
 
-**Also found, not yet fixed (next priority):** `resubmit_stop_if_needed()` in `quarterly_hold_manager.py` is dead code — defined, never called from `main.py` or `run_cycle.py`. No mechanism currently resubmits a missing QHM GTC stop. Needs its own scope decision (which AH window, what cadence) before patching.
+**NEW finding, not yet fixed (P2, logged):** `_fetch_alpaca_fills_for_date()` in `portfolio_tracker.py` has a latent pagination bug — Alpaca's `/v2/account/activities/FILL` endpoint ignores `after_id` when combined with `after`/`until` params, so any single day with >100 fills would loop forever (confirmed via bounded test: page 2 was byte-for-byte identical to page 1). Did not affect this remediation (max daily fill count in this account's history was 18). Not urgent at current trading volume, but should be fixed before volume could ever approach 100 fills/day.
 
-**NotebookLM Master Brain:** still unauthenticated — `notebooklm login` requires Rafael to complete Google OAuth in the CLI's own Playwright browser profile (`~/.notebooklm/browser_profile`, separate from regular Chrome) and press Enter in terminal. Cannot be done by Claude.
+**Still open from S67:** `resubmit_stop_if_needed()` in `quarterly_hold_manager.py` is dead code — never called from `main.py` or `run_cycle.py`. No mechanism resubmits a missing QHM GTC stop.
+
+**NotebookLM Master Brain:** RESOLVED — Rafael completed `notebooklm login` this session. Stale `project-state.md` duplicates (6 of them) cleaned up; fresh state pushed.
 
 ## Prior Session (S67): MRI yfinance T4 fallbacks for VIX + JPY (2026-06-25)
 
