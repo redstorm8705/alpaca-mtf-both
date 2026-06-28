@@ -123,9 +123,17 @@ def submit_rth_day_stops(tracker) -> None:
         if not _stop:
             logger.warning(f"[{sym}] RTH DAY stop: no stop price in tracker — skipping.")
             continue
-        _qty = abs(int(t.get("qty_remaining") or t.get("qty", 0)))
+        # AWP audit fix (2026-06-28): use qty_remaining when explicitly set
+        # (including 0 after a full partial exit); fall back to the original
+        # qty only when the field is absent (None). The old `or` treated
+        # qty_remaining=0 as falsy and fell through to the full original
+        # size, submitting a stop for more shares than actually remain —
+        # the same bug class already fixed elsewhere in this codebase
+        # (orphan_manager.py Patch 1, exit_logic.py's trail-ratchet path).
+        _qty_rem_raw = t.get("qty_remaining")
+        _qty = abs(int(t.get("qty", 0) if _qty_rem_raw is None else _qty_rem_raw))
         if _qty <= 0:
-            logger.warning(f"[{sym}] RTH DAY stop: qty=0 — skipping.")
+            logger.info(f"[{sym}] RTH DAY stop: qty_remaining=0 — position already flat, skipping.")
             continue
         _offset     = round(random.uniform(0.01, 0.05), 2)
         _stop_price = (round(_stop + _offset, 2) if _dir == "short"
