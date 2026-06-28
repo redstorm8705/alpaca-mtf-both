@@ -943,6 +943,14 @@ class MacroRiskIndex:
             )
             raw_saved   = int(state.get("score", 0)) - _prior_news_pts
             # P5-M2: retain ≥30% — preserves directional signal overnight
+            # AWP audit guard (2026-06-28): clamp to 0 before computing the
+            # floor. raw_saved should never be negative in normal operation
+            # (the running code always maintains score = price_components +
+            # news_bonus, both >= 0), but a corrupted/manually-edited state
+            # file with news_pts > score could otherwise restore a negative
+            # _raw_score with no clamp afterward. Gro + GAI independently
+            # confirmed this edge case against the literal code.
+            raw_saved   = max(raw_saved, 0)
             _floor      = int(raw_saved * 0.30)
             raw_decayed = max(_floor, raw_saved - decay)
 
