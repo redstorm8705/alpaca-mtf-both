@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (run_movers.py P0 + Movers restart-safety redesign)"
+    "last_updated": "2026-06-28 (AWP round 2 -- Movers strategy RiskManager/tracker call fixes)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -390,10 +390,10 @@
       "notes": "P0 commit 519f369: tracker.print_summary() (nonexistent method) called at the 9:28 AM ET daily termination point -- AttributeError swallowed by a broad except Exception handler (log+sleep(60)+retry), so the break statement was never reached. Confirmed live: 11 zombie processes accumulated on OCI since June 12, each writing to the same trade_log.json as the main bot. Fixed: renamed to print_stats() (3 sites); changed the handler to fail-loud (raise) per Rafael decision; added strategy.reconcile_on_startup() call before the main loop. Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents PASS. Deployed to OCI via targeted rsync, checksum-verified."
     },
     "strategy/movers/strategy.py": {
-      "patch_count": 1,
-      "last_patched": "2026-06-28 (P0: restart-safety redesign -- GTC stops, cancel-before-close, reconciliation)",
+      "patch_count": 2,
+      "last_patched": "2026-06-28 (AWP round 2: RiskManager + tracker call corrections)",
       "lines": 419,
-      "notes": "P0 commit 519f369: full restart-safety redesign. _active_movers was pure in-memory state with zero persistence -- unsafe once the run_movers.py main loop was changed to fail-loud on any exception. Added: stop_order_id tracking on every entry; _cancel_stop_if_present() helper called before close_position() in check_exits() and flatten_intraday() (avoids Alpaca's 40310000 held_for_orders rejection, mirrors exit_logic.py's CRITICAL-1 pattern) with resubmit-on-close-failure safety net; new reconcile_on_startup() method querying Alpaca directly for open positions + open orders to rebuild tracking on every restart (mirrors orphan_manager.py in miniature), defaulting mode='intraday' for any recovered position and always resubmitting a fresh GTC stop when no existing one is found (over-protects, never under-protects). Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents (1st found+blocked on the AlpacaBroker dict-shape bug, 2nd PASSed the corrected diff)."
+      "notes": "P0 commit 519f369: full restart-safety redesign. _active_movers was pure in-memory state with zero persistence -- unsafe once the run_movers.py main loop was changed to fail-loud on any exception. Added: stop_order_id tracking on every entry; _cancel_stop_if_present() helper called before close_position() in check_exits() and flatten_intraday() (avoids Alpaca's 40310000 held_for_orders rejection, mirrors exit_logic.py's CRITICAL-1 pattern) with resubmit-on-close-failure safety net; new reconcile_on_startup() method querying Alpaca directly for open positions + open orders to rebuild tracking on every restart (mirrors orphan_manager.py in miniature), defaulting mode='intraday' for any recovered position and always resubmitting a fresh GTC stop when no existing one is found (over-protects, never under-protects). Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents (1st found+blocked on the AlpacaBroker dict-shape bug, 2nd PASSed the corrected diff). | AWP round 2 (commit 64572b4): evaluate_entries() called 3 nonexistent RiskManager methods (already_in_position, can_open_trade, get_position_size) and self.tracker.log_entry()/log_exit() also don't exist on PortfolioTracker. Fixed: corrected to can_open_position()/calculate_position_size(); replaced log_entry/log_exit with trade_logger.log_event() (Gro+GAI both APPROVE, avoids cross-process trade_log.json conflict). Third round of nonexistent-method bugs found in this file in one session."
     }
   },
   "sessions": [

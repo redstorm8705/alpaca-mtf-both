@@ -5810,3 +5810,17 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 **Files:** `execution/broker.py`, `strategy/movers/strategy.py`, `run_movers.py`.
 
 **2 P2 follow-ups logged, not blockers:** fragile order-side string match in stop-discovery; a state-clearing edge case on cancel-API failure in `_cancel_stop_if_present()`.
+
+---
+
+## 2026-06-28 (AWP — Auto Work Protocol established) — Movers strategy round 2: 5 more nonexistent-method bugs (commit `64572b4`)
+
+**Trigger:** beginning Phase 2 of the MTF FULL BOT AUDIT, started full-reading `execution/risk_manager.py` (never previously audited). Cross-referencing its real method signatures against `strategy/movers/strategy.py`'s calls (the file redesigned earlier tonight in commit `519f369`) surfaced 3 more nonexistent-method calls in `evaluate_entries()`: `already_in_position()`, `can_open_trade()`, `get_position_size()` — none exist on `RiskManager`. Given `evaluate_entries()` has zero internal exception handling, this would have crashed `run_movers.py` on the first real mover candidate tomorrow, undoing tonight's earlier fail-loud fix. Separately found `self.tracker.log_entry()`/`log_exit()` also don't exist on `PortfolioTracker` — `log_entry()` would crash on the first successful entry; `log_exit()` (try/except-wrapped) would silently leak a tracking slot on every successful exit.
+
+**Fix:** corrected the 3 RiskManager calls to the real `can_open_position()`/`calculate_position_size()` methods; replaced `log_entry()`/`log_exit()` with `trade_logger.log_event()` — a decision fork explicitly run through Gro+GAI (both independently APPROVED the independent append-only event log over `PortfolioTracker.record_entry()`/`record_exit()`, to avoid reintroducing the cross-process `trade_log.json` conflict fixed earlier tonight).
+
+**AWP verification:** cold second-agent PASS (exhaustively re-verified every `self.risk`/`self.tracker`/`self.broker` call in the file against real class definitions — no 4th bug found) → Gro APPROVE → GAI APPROVE → static analysis clean → deployed to OCI via targeted rsync, checksum-verified, OCI compile-verified.
+
+**1 pre-existing (not newly introduced) gap flagged, not a blocker:** `register_open()`/`register_close()` are never called anywhere in this file, so `RiskManager.open_positions` never reflects Movers positions — though `MAX_POSITIONS_MOVERS` already enforces an independent per-strategy cap. Logged for a future session.
+
+This is now the **third** round of nonexistent-method bugs found in this single file tonight (after `print_summary→print_stats` and the `result["success"]` dict-shape mismatch) — strongly suggesting this strategy has never been exercised end-to-end before tonight's audit.
