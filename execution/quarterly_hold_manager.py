@@ -1379,10 +1379,34 @@ class QuarterlyHoldManager:
             return
         try:
             success = self._dispatcher.close(self.broker, pos.symbol)
-            pos.state = (
-                HoldState.PENDING_EXIT if success
-                else HoldState.CLOSED
-            )
+            if not success:
+                # AWP audit fix (2026-06-28): close_position() already treats
+                # "position not found" as success=True (see execution/broker.py)
+                # — a False here means a REAL failure (rejected order, API
+                # error), and the position is still actually open at the
+                # broker. The old code marked it CLOSED anyway and
+                # unconditionally deregistered the symbol, which would (a)
+                # permanently stop QHM from ever managing/reconciling this
+                # position again (CLOSED positions are skipped by
+                # _detect_external_close() and run_weekly_check()), and (b)
+                # immediately unblock the symbol for the intraday MTF bot to
+                # enter a SEPARATE position in the same name while this
+                # quarterly hold was still actually open. Leave state and
+                # registration untouched so the next run_weekly_check() cycle
+                # naturally retries (days_held >= _MAX_HOLD_CALENDAR_DAYS
+                # will still be true).
+                logger.error(
+                    "QuarterlyHoldManager: %s exit attempt (%s) FAILED — "
+                    "position remains open and managed. Will retry next cycle.",
+                    pos.symbol, reason,
+                )
+                self._alert(
+                    f"⚠️ QHM: {pos.symbol} exit attempt FAILED ({reason}) — "
+                    f"position still open. Will retry next cycle. "
+                    f"Manual review if this persists."
+                )
+                return
+            pos.state = HoldState.PENDING_EXIT
             pos.updated_at = self._now_et().isoformat()  # RC-1
             _deregister_symbol(pos.symbol)
             logger.warning(
