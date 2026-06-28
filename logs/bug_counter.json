@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP -- gtc_manager.py qty fix, Phase 2 session pause)"
+    "last_updated": "2026-06-28 (AWP -- quarterly_hold_manager.py exit-state fix)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -401,6 +401,12 @@
       "last_patched": "2026-06-28 (AWP: qty_remaining=0 falsy-fallback fix)",
       "lines": 327,
       "notes": "AWP commit 34d13e3: submit_rth_day_stops()'s qty computation treated qty_remaining=0 as falsy via `or`, falling back to the full original qty -- same bug class already fixed in orphan_manager.py Patch 1 and exit_logic.py's trail-ratchet path. Fixed with explicit None-check. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI, checksum-verified."
+    },
+    "execution/quarterly_hold_manager.py": {
+      "patch_count": 1,
+      "last_patched": "2026-06-28 (AWP: _initiate_exit() exit-state inversion fix)",
+      "lines": 1620,
+      "notes": "AWP commit c39863b: _initiate_exit() marked a position CLOSED and deregistered it on a FAILED broker.close_position() call (success=False means genuine failure, not 'already closed' -- that's folded into success=True). Stranded QHM tracking of a still-open position + freed the symbol for a conflicting intraday entry. Fixed with early return, no state/dereg mutation on failure. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI, checksum-verified."
     }
   },
   "sessions": [

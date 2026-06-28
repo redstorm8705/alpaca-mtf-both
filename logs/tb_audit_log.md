@@ -5875,3 +5875,17 @@ This is now the **third** round of nonexistent-method bugs found in this single 
 **AWP verification:** cold second-agent PASS (traced both branches, confirmed genuinely reachable, confirmed cleanup didn't drop any logic) → Gro APPROVE → GAI APPROVE → static analysis clean → deployed to OCI via targeted rsync (confirmed OCI's own local divergence on this file was itself an already-applied stale-PDT-comment cleanup, matching this session's pattern elsewhere — no conflict, safe overwrite).
 
 **Status this AWP session:** 3 files fully audited (`risk_manager.py`, `broker.py`, `gtc_manager.py`), 2 confirmed bugs fixed and deployed (zero-width stop/target; qty_remaining=0 falsy fallback), 1 file clean with only minor non-blocking observability gaps logged. Plus the earlier 2-round Movers strategy P0 (zombie process + 5 nonexistent-method calls). Pausing here for this session's time window.
+
+---
+
+## 2026-06-28 (AWP) — execution/quarterly_hold_manager.py: exit-state inversion fixed (commit `c39863b`)
+
+**Phase 2 of MTF FULL BOT AUDIT.** Full read of `execution/quarterly_hold_manager.py` (1620 lines) — multi-week quarterly hold position manager (LLY/GE/GEV). Found a severe logic inversion in `_initiate_exit()` (the 13-week max-hold backstop exit path): on a **failed** `broker.close_position()` call, the old code set `pos.state = HoldState.CLOSED` anyway and unconditionally called `_deregister_symbol()`. Verified `close_position()` already treats "position not found" as success internally, so `success=False` here means a genuine failure — the position is still actually open. Marking it CLOSED would permanently strand QHM's tracking of it (CLOSED positions are skipped by `_detect_external_close()` and `run_weekly_check()`) and immediately free the symbol for the intraday MTF bot to open a conflicting second position in the same name.
+
+Fixed: early return on failure, leaving state/registration untouched so `run_weekly_check()` naturally retries next cycle, plus a new error log + Slack alert for operator visibility.
+
+**AWP verification:** cold second-agent PASS (independently confirmed `close_position()`'s not-found-is-success semantics directly from `broker.py` rather than trusting the description, confirmed no other cleanup is skipped by the early return, traced `run_weekly_check()` to confirm the retry condition genuinely re-fires) → Gro APPROVE → GAI APPROVE → static analysis clean → deployed to OCI (confirmed OCI's stale git HEAD + uncommitted local edits were functionally identical to current upstream content via direct file diff; the only real delta was this fix).
+
+Also noted (documentation-only, not fixed): `_run_beck_tests()`'s section header says "3 Required Tests," only 2 are implemented — stale comment, logged for future cleanup pass, no functional impact.
+
+**This file's RC self-audit claims (RC-1 through RC-8, all stated PASS in its own header docstring) were spot-checked during the read and held up** — datetime calls, path anchoring, atomic writes with fsync, exception logging, qty guards all verified correct in the body.
