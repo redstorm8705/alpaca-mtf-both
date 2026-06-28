@@ -5734,3 +5734,26 @@ Both symbols self-healed PENDING_STOP_REPLACE (stale qty_filled=1) → CLOSED �
 **Deployed:** commit 2f479bb → rsync'd to OCI → py_compile verified clean → dynamic config resolver re-verified against OCI's live config.py (same correct output as local).
 
 **Non-blocking follow-up logged:** `midday_audit.py:332` `pdt_at_entry` field in `run_signal_postmortem()` — harmless (always 0, never reaches Gemini), not fixed this session pending verification of the external postmortem-skill consumer's schema expectations.
+
+## 2026-06-27 — portfolio_tracker.py decomposition: PLAN reviewed, execution deferred
+
+**Triggered by:** explicit user directive — "I want this decomposed into smaller files. +1900 is far too large and is likely the reason we continue to deal with hot spot issues."
+
+**Current structure (mapped via full function/method listing):**
+| Lines | Content | Size |
+|---|---|---|
+| 1-142 | module setup, `_BotEncoder`, `_atomic_write`, `_load_drift_alert_date` | ~142 |
+| 143-439 | FIFO/Alpaca-fills helpers — `_fill_et_date`, `_fetch_alpaca_fills_for_date`, `_fifo_reconstruct`, `_load_prior_day_lots`, `_save_open_lots_state`. ALL standalone, zero `self`, confirmed single-caller each. | ~297 |
+| 452-776 | trade log I/O + unverified-exit handling | ~325 |
+| 777-1367 | `write_eod_summary()` — a SINGLE 590-line method, the largest chunk in the file | ~590 |
+| 1368-1872 | core trade lifecycle API (`record_entry`, `record_exit`, `record_partial_exit`, GTC stop tracking, etc.) — the class's primary public surface, called via `tracker.method_name()` from main.py, entry_logic.py, exit_logic.py, quarterly_hold_manager.py, and others | ~504 |
+| 1872-1993 | stats/reporting (`get_stats`, `opened_today`, etc.) | ~121 |
+
+**Proposed plan reviewed by Gro + GAI (cold, independent):**
+- **Phase 1 (low risk):** extract FIFO/fills helpers → `execution/eod_fifo.py`, and trade log I/O (`_load_log`/`_save_log`) → `execution/trade_log_io.py`. Both are GO per both reviewers — pure functions / simple data-access boundary, single caller each, no `self` coupling, no import-cycle risk (unidirectional: `portfolio_tracker.py` imports the new modules, not vice versa).
+- **Phase 2 (medium-high risk, do later, separately):** extract `write_eod_summary()`'s 590-line body into parameterized standalone functions in `execution/eod_summary.py`, with `PortfolioTracker.write_eod_summary()` becoming a thin wrapper. Both reviewers flagged the real risk: every implicit `self.*` access inside that method must be identified and explicitly threaded as a parameter or return value — a missed one could silently corrupt P&L. GAI's specific requirement before this phase: a full dependency audit listing every `self.attribute`/`self.method()` call in the method, prefer stateless functions returning new state rather than mutating `self` directly, and a dedicated test suite for the extracted module before merging.
+- **Explicitly rejected:** splitting the `PortfolioTracker` class itself across files via mixins — both reviewers flagged MRO risk and unnecessary danger to the public API surface that dozens of call sites depend on. The core trade lifecycle API (record_entry/record_exit/etc.) stays in the main file, signatures unchanged, zero caller impact.
+
+**Sequencing — both Gro and GAI independently recommended the same thing without prompting:** do NOT layer this refactor on top of the P0 idempotency fix that landed in this exact file earlier today. GAI's specific recommendation: monitor the P0 fix's stability in production for 3-5 trading days before starting Phase 1, and treat each phase as its own separate, atomic deployment — never combine them into one large change.
+
+**Decision: PLAN COMPLETE, EXECUTION DEFERRED.** Not executed this session — both external reviewers and my own judgment converge on waiting for the P0 fix to prove stable first, plus this file has already had two patches land today. Presenting the reviewed plan to Rafael for his decision on timing (proceed now vs. wait for the stabilization window).
