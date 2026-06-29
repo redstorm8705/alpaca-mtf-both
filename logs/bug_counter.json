@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- quarterly_hold_manager.py resubmit fix, most severe gap this session)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- news_monitor.py full board redo, no fix needed)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -340,7 +340,7 @@
     },
     "events/news_monitor.py": {
       "patch_count": 5,
-      "last_patched": "2026-06-28 (AWP: full audit + RULE C-4 static-analysis cleanup)",
+      "last_patched": "2026-06-28 (AWP: full audit + RULE C-4 static-analysis cleanup) | Phase 2 redo 2026-06-28: full board re-audit, no fix needed (2 CRITICAL claims refuted, 3 design questions logged to roadmap)",
       "lines": 1830,
       "notes": "AWP commit c51ae3b: full audit found one low-severity documentation bug (stale comment describing non-existent executor shutdown behavior, masking a latent thread-pool-exhaustion risk -- mitigated by nightly restart, logged to Future Roadmap). Plus mandatory RULE C-4 cleanup: 85 pre-existing E501 violations (noqa, matches 21-file convention), _classify() Optional[str] return-type fix (resolved 7 false-positive mypy unreachable warnings), callable->Callable type-hint fix, 4x in-tuple->is/== rewrite for mypy narrowing. File now mypy-clean for the first time. Cold second-agent PASS, Gro APPROVE, GAI APPROVE."
     },

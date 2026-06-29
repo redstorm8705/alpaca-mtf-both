@@ -6043,3 +6043,19 @@ Fix: wrapped the previously-unprotected loop body in its own try/except, CRITICA
 3. **Fixed a missing logging format arg** in `resubmit_stop_if_needed()` — would have raised `TypeError` at log-emit time, now more reachable since fix 1 wires this function into the every-cycle path.
 
 Verification (AWP): cold second-agent PASS on fixes 1+2 (confirmed no double-fire risk within or across cycles, confirmed `_register_symbol()` idempotency, confirmed no other state-list shares the gap) → GAI APPROVE. Gro hit its daily TPD rate limit during this round (effectively exhausted) — proceeded per established practice. Static analysis clean. Deployed to git, not yet to OCI (batched with broader OCI sync decision).
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — events/news_monitor.py: full board redo, no code fix (false positives refuted)
+
+**4 cold parallel domain agents.** This redo is a useful counter-example to the gtc_manager.py/quarterly_hold_manager.py redos: the fuller process surfaced LOUD "CRITICAL" claims that, on rigorous direct verification, turned out to be false positives — and the genuinely real findings turned out to be documented design choices requiring board input, not bugs.
+
+**Two "CRITICAL" race-condition claims, both REFUTED by direct tracing:**
+- "`_macro_risk_window` unprotected concurrent mutation, can crash bot mid-cycle" — refuted: the mutation loop, purge, and persist all run sequentially in the main thread, *after* `as_completed()` has already collected every worker-thread result. The claimed concurrent writers (`_restore_macro_risk_window()` from "Thread B", `_persist_macro_risk_window()` from "Thread C") don't correspond to any real call pattern — `_restore_macro_risk_window()` only runs once at `__init__`, single-threaded, before `scan_breaking_news()` is ever first called.
+- "`_seen_hashes` use-after-free / data corruption" — refuted: both real mutation sites (`_mark_seen()`, `_purge_expired_hashes()`) are protected by the same `_scan_lock`. The one unlocked read (`_save_seen_hashes()`, called from within a worker thread) sees an atomically-consistent dict object under the GIL regardless of timing — at worst a sub-60-second staleness in the *persisted* copy, self-healing on the next throttled save, with zero impact on in-memory dedup correctness.
+
+**RC-6 findings dismissed as generic, not actionable:** the Data-integrity agent's report consisted almost entirely of "field X is unverified, what if the vendor renames it" across all 14 source APIs — this is a generic concern applicable to any API integration, not a confirmed, specific bug.
+
+**Three related, real, but governance-level findings (not bugs) logged to the Future Roadmap Log as one consolidated item:** `get_active_event_type()`'s recency-over-domain-severity classification (confirmed by direct read — it's a documented 2026-04-06 design choice, not an oversight), the `_macro_risk_active` threshold's lack of hysteresis, and the hardcoded `GEO_CONFLICT` fallback. All three stem from the same underlying design tradeoff and have a real (if narrow) downstream consequence on `MacroRiskIndex`'s scan-persistence-duration selection — but changing the design requires board input on whether recency or domain-severity should win, not a unilateral patch.
+
+**Disposition: no code fix this round.** Static analysis was already clean from the original lighter pass; nothing here warranted a change to that state.
