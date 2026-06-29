@@ -11,6 +11,9 @@
 from datetime import date, timedelta
 from enum import Enum
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 
 class EventRisk(Enum):
@@ -111,7 +114,10 @@ STATIC_EVENTS = [
     {"date": "2026-04-03", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Mar 2026 — 50% size"},
     {"date": "2026-05-08", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Apr 2026 — 50% size"},
     {"date": "2026-06-05", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP May 2026 — 50% size"},
-    {"date": "2026-07-02", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Jun 2026 — 50% size"},
+    # AWP audit fix (2026-06-28): was "2026-07-02" -- confirmed a Thursday,
+    # not the first Friday of July (NFP always releases first Friday of the
+    # month following the reporting month; June 2026 NFP releases 2026-07-03).
+    {"date": "2026-07-03", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Jun 2026 — 50% size"},
     {"date": "2026-08-07", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Jul 2026 — 50% size"},
     {"date": "2026-09-04", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Aug 2026 — 50% size"},
     {"date": "2026-10-02", "type": EventType.JOBS_REPORT, "risk": EventRisk.HIGH_RISK, "note": "NFP Sep 2026 — 50% size"},
@@ -236,8 +242,14 @@ def is_macro_event_day(date_str: Optional[str] = None) -> bool:
     Used by signal_generator for c12 score (NEW-1, board-approved 2026-04-20).
     """
     if date_str is None:
-        from datetime import date as _date
-        date_str = _date.today().isoformat()
+        # AWP audit fix (2026-06-28): was date.today() (system-local), not
+        # ET-anchored as the docstring above claims. OCI's server runs UTC,
+        # not ET -- during ET evening hours, date.today() on a UTC host
+        # already reads as the next calendar day, causing macro-event
+        # lookups to silently check the wrong date (RC-1 class, confirmed
+        # reachable on this deployment).
+        from datetime import datetime as _datetime
+        date_str = _datetime.now(_ET).date().isoformat()
     for event in STATIC_EVENTS:
         if event["date"] == date_str and event.get("type") in _MACRO_EVENT_TYPES:
             return True
@@ -261,7 +273,10 @@ class EventCalendar:
             }
         """
         if check_date is None:
-            check_date = date.today()
+            # AWP audit fix (2026-06-28): same RC-1 fix as is_macro_event_day()
+            # above -- date.today() is system-local; this server runs UTC.
+            from datetime import datetime as _datetime
+            check_date = _datetime.now(_ET).date()
 
         date_str = check_date.strftime("%Y-%m-%d")
         matching = []
@@ -305,7 +320,10 @@ class EventCalendar:
 
     def get_week_ahead(self, symbol: Optional[str] = None) -> list:
         """Returns all events in the next 7 days."""
-        today = date.today()
+        # AWP audit fix (2026-06-28): same RC-1 fix as is_macro_event_day()/
+        # get_day_risk() above.
+        from datetime import datetime as _datetime
+        today = _datetime.now(_ET).date()
         results = []
         for i in range(7):
             d = today + timedelta(days=i)
@@ -318,7 +336,7 @@ class EventCalendar:
         """Dynamically add an earnings date."""
         self._earnings.append((date_str, symbol))
 
-    def add_event_dynamic(self, date_str: str, event_type, risk: EventRisk, note: str):
+    def add_event_dynamic(self, date_str: str, event_type: "EventType", risk: EventRisk, note: str):
         """
         Dynamically add a macro event (used by NewsMonitor / Finnhub calendar).
         Deduplicates by date+type to avoid double-adding the same event.
