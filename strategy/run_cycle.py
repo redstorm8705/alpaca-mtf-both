@@ -534,12 +534,20 @@ def run_cycle(
                             _yf_gtc.Ticker("^VIX").fast_info.get("lastPrice") or
                             _yf_gtc.Ticker("^VIX").history(period="1d")["Close"].iloc[-1]
                         )
-                        if _vix_gtc >= config.VIX_STOP_WIDEN_THRESHOLD_2:
-                            _vix_mult_gtc = config.VIX_STOP_WIDEN_MULT_2      # 2.0x
-                        elif _vix_gtc >= config.VIX_STOP_WIDEN_THRESHOLD_1:
-                            _vix_mult_gtc = config.VIX_STOP_WIDEN_MULT_1      # 1.5x
-                        else:
-                            _vix_mult_gtc = 1.0
+                        # AWP audit fix (2026-06-28): this block's own comment
+                        # claims parity with risk_manager.py's RTH VIX-widening
+                        # logic, but risk_manager.py switched from this exact
+                        # discrete step function to a continuous curve on
+                        # 2026-06-24 (commit 7e5c983, board 4-0 + Gro + GAI) —
+                        # this AH mirror was never updated, so the parity claim
+                        # was false (e.g. VIX=27 got 1.5x here vs ~1.7x RTH).
+                        # Restored to the same formula. Board (BoD tie-break
+                        # 4-0 after a 2-2 domain split) + Gro + GAI all
+                        # independently confirmed this as a genuine bug
+                        # requiring a fix, not an intentional design choice.
+                        _vix_mult_gtc = min(
+                            1.0 + max(0.0, _vix_gtc - 20.0) * 0.1, 2.0
+                        )
                         if _vix_mult_gtc > 1.0:
                             _gdist_gtc   = abs(_gentry - _gstop_price)
                             _gstop_price = (
