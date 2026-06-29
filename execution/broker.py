@@ -255,6 +255,14 @@ def submit_limit_order(
 
     client     = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+    # AWP audit fix (2026-06-28): same idempotency pattern as
+    # submit_market_order() — generated once, reused on every retry so
+    # Alpaca deduplicates a retry that fires after a timeout/connection
+    # error where the original order may have actually been accepted.
+    # _is_retryable() (used below) explicitly includes "timeout" and
+    # "connection" as retryable, so this is a genuinely reachable
+    # ambiguous-success scenario, not theoretical.
+    _idem_id   = f"mtf-{symbol}-{side}-{uuid.uuid4().hex[:12]}"
 
     order_data = LimitOrderRequest(
         symbol=symbol,
@@ -263,6 +271,7 @@ def submit_limit_order(
         limit_price=round(limit_price, 2),
         time_in_force=TimeInForce.DAY,
         extended_hours=extended_hours,
+        client_order_id=_idem_id,
     )
 
     for _attempt in range(3):
@@ -275,6 +284,18 @@ def submit_limit_order(
             return order
         except Exception as e:
             err = str(e)
+            if "40910000" in err or "duplicate client order" in err.lower():
+                # AWP audit fix (2026-06-28): mirrors submit_market_order's
+                # handling — Alpaca rejecting the idempotency key as a
+                # duplicate means attempt 1 likely filled but the response
+                # timed out before reaching us. Order may already be live;
+                # do not retry. Manual verification required.
+                logger.warning(
+                    f"[{symbol}] Duplicate client_order_id on limit order retry "
+                    f"(attempt {_attempt + 1}) — order may already be live. "
+                    f"Manual verification required. idem_id={_idem_id}"
+                )
+                return None
             if "40310000" in err or "not allowed to short" in err:
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
                 return None
@@ -543,6 +564,30 @@ def partial_close_position(symbol: str, qty: int) -> bool:
         return True
     except Exception as e:
         err = str(e)
+        # AWP audit fix (2026-06-28): apply the same not-found-as-success
+        # handling close_position() already has (added for the watchdog
+        # os.execv() restart race — see that function's docstring). The
+        # exact same race applies here: if the bot restarts between this
+        # partial close succeeding and record_exit() recording it, the new
+        # process reloads the tracker entry as open and retries the partial
+        # close, hitting "position not found." Without this check that fell
+        # through to `return False`, leaving the tracker permanently stuck
+        # believing the position is still open with stale qty.
+        _not_found_signals = (
+            "40410000",
+            "position does not exist",
+            "position not found",
+            "no open position",
+        )
+        if any(sig in err.lower() for sig in _not_found_signals) or (
+            "404" in err and "position" in err.lower()
+        ):
+            logger.warning(
+                f"[{symbol}] partial_close_position: position not found on Alpaca — "
+                f"already closed externally or by concurrent process. "
+                f"Returning True so the caller's exit-recording path runs."
+            )
+            return True
         if "40310000" in err:
             logger.warning(
                 f"[{symbol}] Partial close blocked (40310000 held_for_orders) — "
