@@ -6169,3 +6169,44 @@ Verification (AWP): cold second-agent PASS (independently recomputed both dates,
 Fix landed in `indicators/macd.py` (a dependency, not this file): added the missing guard to both functions, matching the established sibling pattern exactly. Also cleaned up 7 pre-existing E501 violations in that same file per RULE C-4.
 
 Verification (AWP): cold second-agent PASS (confirmed guard placement, fail-safe direction, zero behavior change for normal-length data, narrow noqa scope) → GAI APPROVE. Static analysis clean. **Deployed to OCI** — zero conflicting local divergence, checksum-verified.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — indicators/momentum.py: 2 fixes, 1 false positive refuted, deployed (commit `3f2ab0e`) — FINAL FILE OF 10-FILE PHASE 2 REDO
+
+**4 cold parallel domain agents.**
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- `calculate_momentum_12_1()` missing the try/except every sibling function in the file already has: found by the Reliability agent via direct comparison against 4 sibling functions, confirmed reachable (a malformed `close` value would raise unhandled `ValueError`).
+- `momentum_strength()`'s 0.0-momentum boundary mislabel ("weak_bear" instead of "weak_bull"): found by the Quant-logic agent via worked example, confirmed real but purely cosmetic — this function is logging/dashboard-only, confirmed via grep to have exactly one caller and never consumed by the live scoring gate (`momentum_bullish()`/`momentum_bearish()` call `calculate_momentum_12_1()` directly).
+- A "CRITICAL BREACH" claim from the Execution-risk agent (`tsmom_vol_mult` sizing in `execution/entry_logic.py` allegedly violating this file's "scoring activation gated" comment) was REFUTED: this file's own comment explicitly distinguishes "logged and used for vol-scaling" (sizing, already board-approved 2026-04-22 17-0) from "scoring activation" (the separate 12pt confluence integration, still gated) — both files cite the identical board vote and fully agree; the reporting agent misread its own quoted text. Confirmed directly by reading both files' comments side by side.
+- A generic "no column-existence guard" complaint (Data-integrity agent) was the same non-actionable pattern dismissed repeatedly throughout this session — applies to virtually every DataFrame consumer in the codebase, not a specific confirmed bug.
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — GAI confirmed both fixes without raising anything new (Gro unavailable, daily budget exhausted for the entire redo).
+
+**Point 3 — Forward-looking:** cold second-agent noted a latent observability gap (the new except block, like its 4 siblings, logs nothing on exception — a systematic data-corruption scenario for one symbol would be indistinguishable from "insufficient data"). Confirmed this matches the existing file-wide convention exactly (none of the 5 except blocks in this file log) — not a new inconsistency, not fixed, not logged as a separate roadmap item since it's purely a logging enhancement, not a correctness defect.
+
+Verification (AWP): cold second-agent PASS (confirmed original logic unchanged inside the try block, confirmed the final return correctly inside try, confirmed zero behavior change for the success path, confirmed the boundary fix touches only the 0.0 case, confirmed the single logging-only caller via grep, confirmed fail-safe direction) → GAI APPROVE. Static analysis clean. **Deployed to OCI** — zero conflicting local divergence, checksum-verified.
+
+---
+
+## PHASE 2 REDO — COMPLETE (2026-06-28)
+
+All 10 files re-audited with full board rigor (4 cold parallel domain agents per file: Reliability, Execution-risk, Data-integrity, Quant-logic) + Gro/GAI external audit, matching Phase 1's standard exactly. Gro hit its daily 100K-token rate limit repeatedly and was unavailable for the back half of this redo — GAI + cold second-agent + direct verification used as the established fallback throughout, documented transparently in every commit.
+
+| # | File | Real fixes found | Deployed |
+|---|------|-------------------|----------|
+| 1 | execution/risk_manager.py | Leveraged-multiplier validation guard | ✅ |
+| 2 | execution/broker.py | partial_close_position() not-found-signal check; submit_limit_order() idempotency key | ✅ |
+| 3 | execution/gtc_manager.py | Per-symbol exception isolation in submit_rth_day_stops() | ✅ |
+| 4 | execution/quarterly_hold_manager.py | PENDING_STOP_REPLACE/PENDING_EARNINGS auto-recovery wired into weekly check; registry-restoration gap | ✅ |
+| 5 | events/news_monitor.py | None (2 false positives refuted; 1 governance question logged) | n/a |
+| 6 | events/macro_risk_index.py | Lock protection on 3 unprotected methods; dashboard min_score_floor base-value bug | ✅ |
+| 7 | strategy/signal_generator.py | Residual-momentum self-inclusion bug; non-atomic write | ✅ |
+| 8 | events/calendar.py | NFP date factual error; RC-1 naive datetime at 3 call sites | ✅ |
+| 9 | strategy/confluence.py | None within file itself (1 real fix landed in dependency indicators/macd.py) | ✅ |
+| 10 | indicators/momentum.py | Missing try/except guard; 0.0-boundary mislabel | ✅ |
+
+**Total real bugs found and fixed across the 10-file redo: 13** (plus 1 in the macd.py dependency surfaced during file 9's audit). **False positives caught and refuted: 9+** across the full redo (documented per-file above and in prior log entries). **Governance/design questions logged to CLAUDE.md roadmap, not unilaterally fixed: 5.**
