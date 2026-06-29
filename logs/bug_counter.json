@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- calendar.py 3 fixes, deployed)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- confluence.py clean, macd.py fix deployed)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -414,6 +414,18 @@
       "last_patched": "2026-06-28 (AWP: min-bar guard for pct_from_52wk_high)",
       "lines": 200,
       "notes": "AWP commit 15d190c: pct_from_52wk_high() lacked the min-bar-count guard every sibling function in this file has -- fixed to match. Isolated to dashboard/logging field, confirmed not used in live 12pt scoring. Plus RULE C-4 cleanup (Optional[float] annotations, E501 fixes). Cold second-agent PASS, GAI APPROVE (Gro rate-limited)."
+    },
+    "strategy/confluence.py": {
+      "patch_count": 0,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: confirmed clean, fix landed in dependency macd.py)",
+      "lines": 494,
+      "notes": "Phase 2 redo with full board (4 domain agents): no functional bug within confluence.py itself -- LONG/SHORT mirror logic verified line-by-line, no sign errors. One real fix surfaced and applied to a dependency (indicators/macd.py's missing len(df)<2 guard). Refuted a naive-datetime claim. Logged a config.py toggle-fragility finding to the roadmap. GAI APPROVE (Gro exhausted)."
+    },
+    "indicators/macd.py": {
+      "patch_count": 1,
+      "last_patched": "2026-06-28 (AWP: missing len(df)<2 guard added)",
+      "lines": 106,
+      "notes": "AWP commit d11dc32: macd_histogram_rising()/macd_histogram_falling() lacked the len(df)<2 guard their sibling functions already had -- found during confluence.py's board redo. Fixed + RULE C-4 noqa cleanup. Cold second-agent PASS, GAI APPROVE. Deployed to OCI."
     }
   },
   "sessions": [

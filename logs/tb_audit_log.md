@@ -6149,3 +6149,23 @@ Takes effect at the bot's next restart (nightly cron, 2 AM ET) — no manual res
 Fixes: (1) NFP date corrected. (2) `is_macro_event_day()`, `get_day_risk()`, `get_week_ahead()` all now use `datetime.now(ET).date()` instead of `date.today()`. (3) trivial missing type annotation on `add_event_dynamic()`.
 
 Verification (AWP): cold second-agent PASS (independently recomputed both dates, confirmed no other file references the wrong date, confirmed module ordering/no import shadowing, confirmed type compatibility) → GAI APPROVE. Static analysis clean. **Deployed to OCI** — confirmed zero conflicting local divergence via direct file diff, checksum-verified, `py_compile` clean on OCI.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — strategy/confluence.py: clean, real fix landed in dependency (commit `d11dc32`), deployed
+
+**4 cold parallel domain agents.** No functional bug found WITHIN confluence.py itself — the file remains static-analysis clean and structurally correct (LONG/SHORT mirror logic verified line-by-line by the Execution-risk agent: no sign errors, VWAP zone boundaries correctly mirrored, zero-deviation fallback correctly mirrored).
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- Missing `len(df) < 2` guard in `indicators/macd.py`'s `macd_histogram_rising()`/`macd_histogram_falling()` (a dependency of confluence.py, not confluence.py itself): found by the Reliability domain agent via direct comparison against 2 sibling functions in the same file that already have the guard. Confirmed the blast radius was already contained by `signal_generator.py`'s exception handling (one symbol skipped per cycle, not a scan-wide crash) before applying the fix at its source.
+- VOLUME_CONFIRMATION_ENABLED toggle fragility (real, but a `config.py` concern, not `confluence.py`): found by the Quant-logic domain agent, logged to roadmap.
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — GAI confirmed the fix without raising anything new (Gro unavailable, daily budget exhausted).
+
+**Point 3 — Refuted:** a Data-integrity agent's claim about naive-datetime causing a `TypeError` in the `bar_age_min` VOLSHADOW logging computation was investigated and refuted — the subtraction is already gated behind a `tzinfo is not None` check (a naive timestamp just skips it, leaving `_bar_age_min = None`), and the whole block is additionally wrapped in its own try/except. A cosmetic finding (the "macd_bullish_cross" key being used for short signals too, plus 3 newly-noted analogous cases — `daily_above_150sma`, `ema13_above_ema30`, `rsi_in_range` all keep generic names regardless of direction) was reconfirmed as already-logged, zero-functional-impact, not worth the risk of renaming keys consumed elsewhere.
+
+Fix landed in `indicators/macd.py` (a dependency, not this file): added the missing guard to both functions, matching the established sibling pattern exactly. Also cleaned up 7 pre-existing E501 violations in that same file per RULE C-4.
+
+Verification (AWP): cold second-agent PASS (confirmed guard placement, fail-safe direction, zero behavior change for normal-length data, narrow noqa scope) → GAI APPROVE. Static analysis clean. **Deployed to OCI** — zero conflicting local divergence, checksum-verified.
