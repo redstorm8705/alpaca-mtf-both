@@ -6019,3 +6019,27 @@ A second domain agent (Execution-risk) independently reached the same conclusion
 **Point 3 — Forward-looking:** none new; the file's other defensive patterns (qty_remaining fix, gap-open pre-flight checks, ANOMALY-1 failure tracking) were all re-verified as correct and intact.
 
 Fix: wrapped the previously-unprotected loop body in its own try/except, CRITICAL log + Slack alert on catch, continue to next symbol. Verification (AWP): cold second-agent PASS → Gro APPROVE → GAI APPROVE → static analysis clean.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — execution/quarterly_hold_manager.py: 3 fixes, 1 the most severe gap found this session (commit `f6bc565`)
+
+**4 cold parallel domain agents.** This redo found the most severe gap surfaced anywhere in this AWP session.
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- `resubmit_stop_if_needed()` dead-code wiring gap: 2/4 domain agents (Reliability, Execution-risk) independently traced this exact failure mode with full risk-cascade analysis. GAI ✓. Gro had already weighed in on a related _initiate_exit() fix earlier in this file's audit but hit its daily rate limit before this specific round — proceeded per established practice.
+- `PENDING_EARNINGS` missing from `__init__`'s registry-restoration tuple: 1/4 domain agents (Quant-logic) found it via a dedicated state-list cross-check. GAI ✓.
+- Logging format-string bug in `resubmit_stop_if_needed()`: found by the cold second-agent reviewing the above two fixes, not by any domain agent — a good example of the verification layer catching something the discovery layer missed.
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — all 3 fixes were found by the board/cold-agent layers before Gro/GAI review.
+
+**Point 3 — Forward-looking, not yet fixed:** `_get_quarterly_notional_excl()`'s Kelly-sizing exclusion list may be too narrow (excludes `PENDING_STOP_REPLACE`/`PENDING_EARNINGS`/`PENDING_EXIT`, all economically equivalent to ACTIVE) — logged to Future Roadmap Log as a governance question, not patched, since it's a sizing-policy choice rather than an unambiguous bug.
+
+### Fixes applied
+1. **`run_weekly_check()` now actually attempts recovery** for `PENDING_STOP_REPLACE`/`PENDING_EARNINGS` positions every 5-minute cycle, instead of only on a bot restart. Before this fix, a position that lost its GTC stop had zero automatic recovery path — bounded only by the 91-day max-hold backstop or a lucky external close. This closes the previously-logged S67 open item.
+2. **`PENDING_EARNINGS` added to the registry-restoration tuple** in `__init__` — closes a cross-trade-conflict risk where a restart during an earnings-pause window would silently unblock the symbol for the intraday MTF bot.
+3. **Fixed a missing logging format arg** in `resubmit_stop_if_needed()` — would have raised `TypeError` at log-emit time, now more reachable since fix 1 wires this function into the every-cycle path.
+
+Verification (AWP): cold second-agent PASS on fixes 1+2 (confirmed no double-fire risk within or across cycles, confirmed `_register_symbol()` idempotency, confirmed no other state-list shares the gap) → GAI APPROVE. Gro hit its daily TPD rate limit during this round (effectively exhausted) — proceeded per established practice. Static analysis clean. Deployed to git, not yet to OCI (batched with broader OCI sync decision).

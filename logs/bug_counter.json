@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- gtc_manager.py exception guard fix)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- quarterly_hold_manager.py resubmit fix, most severe gap this session)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -398,10 +398,10 @@
       "notes": "Phase 2 redo with full board (4 domain agents) found 1 real bug: submit_rth_day_stops()'s per-symbol loop body had no exception guard beyond a narrow pre-check wrapper -- one bad symbol's exception would abort the whole function with no same-day retry (gate set before the loop). Fixed with a wrapping try/except. Two OTHER 'critical' claims from one domain agent were refuted -- both were deliberate, already-documented fail-safe designs, not bugs. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 3f6fa6f."
     },
     "execution/quarterly_hold_manager.py": {
-      "patch_count": 1,
-      "last_patched": "2026-06-28 (AWP: _initiate_exit() exit-state inversion fix)",
+      "patch_count": 2,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: resubmit wiring + registry + logging fix)",
       "lines": 1620,
-      "notes": "AWP commit c39863b: _initiate_exit() marked a position CLOSED and deregistered it on a FAILED broker.close_position() call (success=False means genuine failure, not 'already closed' -- that's folded into success=True). Stranded QHM tracking of a still-open position + freed the symbol for a conflicting intraday entry. Fixed with early return, no state/dereg mutation on failure. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI, checksum-verified."
+      "notes": "Phase 2 redo with full board (4 domain agents) found the most severe gap of this AWP session: resubmit_stop_if_needed() was dead code, only ever called on bot restart -- a position that lost its GTC stop had zero automatic recovery path. Wired into run_weekly_check()'s every-cycle path. Also fixed a missing PENDING_EARNINGS state in the registry-restoration tuple (cross-trade-conflict risk) and a trivial logging format-arg bug. This closes the previously-logged S67 open item. Cold second-agent PASS, GAI APPROVE (Gro rate-limited). Commit f6bc565."
     },
     "events/calendar.py": {
       "patch_count": 1,
