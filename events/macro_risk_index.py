@@ -234,7 +234,16 @@ class MacroRiskIndex:
           MACRO_FX | MACRO_SYSTEMIC | GLOBAL_ASIA | GLOBAL_EU | TECHNICAL
         Used by main.py hybrid engine to classify price triggers when fired.
         """
-        return self._event_type
+        # AWP audit fix (2026-06-28): _event_type is written under self._lock
+        # in _compute()/_restore() but was read here without it -- every
+        # other accessor in this class (score(), level(), price_score(),
+        # components()) locks the same class of attribute. No call site
+        # currently reaches this from a different thread than refresh()/
+        # inject_news_state() (verified: only caller is run_cycle.py, same
+        # thread), so this closes a defensive-consistency gap rather than a
+        # currently-reachable bug.
+        with self._lock:
+            return self._event_type
 
     def size_floor(self) -> float:
         """Position size floor (0.40–1.00) based on current effective level."""
@@ -246,11 +255,16 @@ class MacroRiskIndex:
         Pass config.MIN_LONG_SCORE as base. Paper profile: 10; legacy default=9
         preserved for backward compatibility.
         """
-        return base + _SCORE_FLOOR_DELTA.get(self._level, 0)
+        # AWP audit fix (2026-06-28): same defensive-consistency gap as
+        # event_type() above -- _level is lock-protected elsewhere in this
+        # class.
+        with self._lock:
+            return base + _SCORE_FLOOR_DELTA.get(self._level, 0)
 
     def requires_confirmation(self) -> bool:
         """CRITICAL level requires 2-scan confirmation before entry."""
-        return self._level == "CRITICAL"
+        with self._lock:
+            return self._level == "CRITICAL"
 
     def price_score(self) -> int:
         """
@@ -384,13 +398,42 @@ class MacroRiskIndex:
 
     def summary(self) -> dict:
         """Full state dict for bot_status.json and dashboard."""
+        # AWP audit fix (2026-06-28): every field below was read without
+        # self._lock, while _compute() atomically rewrites _raw_score,
+        # _level, _event_type, and _components together under that same
+        # lock -- a caller could observe a torn snapshot (e.g. a score from
+        # the new cycle paired with a level from the old one). Snapshot
+        # everything under one lock acquisition; compute size_floor/
+        # min_score_floor from that SAME snapshotted level directly
+        # (threading.Lock is not reentrant, so this must not call back into
+        # self.size_floor()/self.min_score_floor(), which acquire the lock
+        # themselves) to keep the whole dict consistent with one read.
+        # Verified: this method is currently only ever called from
+        # run_cycle.py, the same single thread as refresh()/
+        # inject_news_state(), so today this closes a defensive-consistency
+        # gap rather than a currently-reachable bug.
+        with self._lock:
+            _score      = self._raw_score
+            _level      = self._level
+            _event      = self._event_type
+            _components = dict(self._components)
         return {
-            "mri_score":       self._raw_score,
-            "mri_level":       self._level,
-            "mri_event":       self._event_type,
-            "size_floor":      self.size_floor(),
-            "min_score_floor": self.min_score_floor(),
-            "components":      self._components,
+            "mri_score":       _score,
+            "mri_level":       _level,
+            "mri_event":       _event,
+            "size_floor":      _SIZE_FLOOR.get(_level, 1.0),
+            # AWP audit fix (2026-06-28): this previously hardcoded base=9
+            # (matching the pre-existing self.min_score_floor() zero-arg
+            # call) -- but the REAL entry-gate floor computed in
+            # run_cycle.py:1195 uses config.MIN_LONG_SCORE as base (10 for
+            # the paper profile), not 9. The dashboard has been displaying
+            # the wrong min-score floor since before this session (cosmetic
+            # only -- summary() output never gates real entries, which read
+            # min_score_floor(_base_min) directly). Now matches the real gate.
+            "min_score_floor": (
+                config.MIN_LONG_SCORE + _SCORE_FLOOR_DELTA.get(_level, 0)
+            ),
+            "components":      _components,
             "last_refresh": (
                 self._last_refresh.isoformat() if self._last_refresh else None
             ),
