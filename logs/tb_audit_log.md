@@ -6107,3 +6107,24 @@ Verification (AWP): cold second-agent PASS (zero deadlock risk traced line-by-li
 Fixes: (1) residual momentum now correctly excludes self from its own sector peer average (matching the docstring's explicit formula), with single-member sectors falling back to no-adjustment instead of an always-zero residual. (2) score_comparison log write now uses the established tmp+fsync+replace atomic pattern.
 
 Verification (AWP): cold second-agent PASS (independently re-derived the worked example with a second stock, confirmed no division-by-zero, confirmed exact atomic-write pattern match against `quarterly_hold_manager.py`) → GAI APPROVE. Static analysis clean.
+
+---
+
+## 2026-06-28 (AWP) — OCI deployment of Phase 2 full-board-redo fixes (7 files)
+
+Deployed all confirmed fixes from tonight's Phase 2 redo to OCI, on Rafael's explicit instruction ("deploy now"). Verified each file's OCI-side divergence is purely a stale-git-history artifact (OCI's git log was 106 commits behind) by direct file-content diff before deploying — confirmed in every case the only real delta was exactly the intended fix, no conflicting OCI-side edits.
+
+**Also discovered during verification (pre-existing, unrelated to tonight's redo, NOT a new fix):** `strategy/run_cycle.py`'s OCI copy was still running the OLD BV-5 logic (hard-blocking entries at MRI=STRESSED), even though that restriction was removed by board decision on 2026-06-25 (commit `d81e060`, restoring an earlier 2026-06-13 board decision) — several days before tonight's session. This gap is now closed as a side effect of deploying tonight's `run_cycle.py` VIX-mirror fix (the full current file was pushed, not a targeted diff).
+
+**Files deployed (checksum + py_compile verified on OCI):**
+1. `execution/risk_manager.py`
+2. `strategy/run_cycle.py` (also closes the pre-existing BV-5/STRESSED staleness gap above)
+3. `execution/broker.py`
+4. `execution/gtc_manager.py`
+5. `execution/quarterly_hold_manager.py`
+6. `events/macro_risk_index.py`
+7. `strategy/signal_generator.py`
+
+Not deployed (no code change this round): `events/news_monitor.py`.
+
+Takes effect at the bot's next restart (nightly cron, 2 AM ET) — no manual restart forced.
