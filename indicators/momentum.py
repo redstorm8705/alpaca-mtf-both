@@ -36,22 +36,33 @@ def calculate_momentum_12_1(df: pd.DataFrame) -> Optional[float]:
         Float: momentum return as decimal (e.g., 0.15 = +15% momentum)
         None if insufficient data
     """
-    _min_bars = config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK
-    if df.empty or len(df) < _min_bars:
+    # AWP audit fix (2026-06-28): wrapped in try/except matching the same
+    # pattern every sibling function in this file already uses
+    # (calculate_ewma_vol_60d, calculate_tsmom, pct_from_52wk_high,
+    # realized_vol_20d) -- found during the indicators/momentum.py board
+    # redo. Without it, a malformed "close" value (e.g. a non-numeric
+    # string from a corrupted data source) at the exact bar this function
+    # reads would raise an unhandled ValueError instead of failing safe
+    # like every other function in this file.
+    try:
+        _min_bars = config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK
+        if df.empty or len(df) < _min_bars:
+            return None
+
+        # Price at the start of the formation period (12 months ago)
+        start_idx = -(config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK)
+        # Price at end of formation period (1 month ago, skipping recent month)
+        end_idx   = -config.MOMENTUM_SHORT_LOOKBACK
+
+        price_start = float(df["close"].iloc[start_idx])
+        price_end   = float(df["close"].iloc[end_idx])
+
+        if price_start <= 0:
+            return None
+
+        return (price_end - price_start) / price_start
+    except Exception:
         return None
-
-    # Price at the start of the formation period (12 months ago)
-    start_idx = -(config.MOMENTUM_LONG_LOOKBACK + config.MOMENTUM_SHORT_LOOKBACK)
-    # Price at end of formation period (1 month ago, skipping recent month)
-    end_idx   = -config.MOMENTUM_SHORT_LOOKBACK
-
-    price_start = float(df["close"].iloc[start_idx])
-    price_end   = float(df["close"].iloc[end_idx])
-
-    if price_start <= 0:
-        return None
-
-    return (price_end - price_start) / price_start
 
 
 def momentum_bullish(df: pd.DataFrame) -> bool:
@@ -86,7 +97,7 @@ def momentum_strength(df: pd.DataFrame) -> str:
         return "strong_bull"
     elif mom > 0.10:
         return "bull"
-    elif mom > 0.0:
+    elif mom >= 0.0:
         return "weak_bull"
     elif mom > -0.10:
         return "weak_bear"
