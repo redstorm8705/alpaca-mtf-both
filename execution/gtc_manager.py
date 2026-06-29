@@ -118,68 +118,96 @@ def submit_rth_day_stops(tracker) -> None:
         except Exception as _day_chk_err:
             logger.debug(f"[{sym}] DAY stop pre-check failed: {_day_chk_err}")
 
-        _dir  = t["direction"]
-        _stop = t.get("trail_stop") or t.get("stop")
-        if not _stop:
-            logger.warning(f"[{sym}] RTH DAY stop: no stop price in tracker — skipping.")
-            continue
-        # AWP audit fix (2026-06-28): use qty_remaining when explicitly set
-        # (including 0 after a full partial exit); fall back to the original
-        # qty only when the field is absent (None). The old `or` treated
-        # qty_remaining=0 as falsy and fell through to the full original
-        # size, submitting a stop for more shares than actually remain —
-        # the same bug class already fixed elsewhere in this codebase
-        # (orphan_manager.py Patch 1, exit_logic.py's trail-ratchet path).
-        _qty_rem_raw = t.get("qty_remaining")
-        _qty = abs(int(t.get("qty", 0) if _qty_rem_raw is None else _qty_rem_raw))
-        if _qty <= 0:
-            logger.info(f"[{sym}] RTH DAY stop: qty_remaining=0 — position already flat, skipping.")
-            continue
-        _offset     = round(random.uniform(0.01, 0.05), 2)
-        _stop_price = (round(_stop + _offset, 2) if _dir == "short"
-                       else round(_stop - _offset, 2))
-        _side = "buy" if _dir == "short" else "sell"
-
-        # Pre-flight: if stop is already above/below market, Alpaca will reject.
+        # AWP audit fix (2026-06-28): the per-calendar-day gate above
+        # (_rth_day_stops_submitted_dates.add(today)) is set BEFORE this
+        # loop runs, so it fires exactly once per day regardless of how
+        # this iteration ends. Without a guard here, an unhandled exception
+        # for ONE symbol (malformed trade dict, broker SDK raise) would
+        # propagate up and terminate the whole function — abandoning every
+        # symbol still queued in `needs_stop` for the rest of THIS pass,
+        # with no possibility of retry today since the gate is already
+        # set. Wrapping the per-symbol body lets one bad symbol fail loudly
+        # without blocking DAY stop protection for every other overnight
+        # position. Confirmed reachable by 2 independent board domain
+        # agents during the Phase 2 full-board redo.
         try:
-            _pos = get_open_position(sym)
-            _mkt = float(_pos.current_price) if _pos else None
-        except Exception as _pos_e:
-            logger.debug("[%s] RTH DAY stop pre-flight price check failed — %s", sym, _pos_e)
-            _mkt = None
-        if _mkt is not None:
-            if _dir == "long" and _stop_price >= _mkt:
-                logger.warning(
-                    f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
-                    f">= market ${_mkt:.2f} (gap-up open). Set manual stop if needed."
-                )
+            _dir  = t["direction"]
+            _stop = t.get("trail_stop") or t.get("stop")
+            if not _stop:
+                logger.warning(f"[{sym}] RTH DAY stop: no stop price in tracker — skipping.")
                 continue
-            if _dir == "short" and _stop_price <= _mkt:
-                logger.warning(
-                    f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
-                    f"<= market ${_mkt:.2f} (gap-down open). Set manual stop if needed."
-                )
+            # use qty_remaining when explicitly set (including 0 after a
+            # full partial exit); fall back to the original qty only when
+            # the field is absent (None). The old `or` treated
+            # qty_remaining=0 as falsy and fell through to the full original
+            # size, submitting a stop for more shares than actually remain —
+            # the same bug class already fixed elsewhere in this codebase
+            # (orphan_manager.py Patch 1, exit_logic.py's trail-ratchet path).
+            _qty_rem_raw = t.get("qty_remaining")
+            _qty = abs(int(t.get("qty", 0) if _qty_rem_raw is None else _qty_rem_raw))
+            if _qty <= 0:
+                logger.info(f"[{sym}] RTH DAY stop: qty_remaining=0 — position already flat, skipping.")
                 continue
+            _offset     = round(random.uniform(0.01, 0.05), 2)
+            _stop_price = (round(_stop + _offset, 2) if _dir == "short"
+                           else round(_stop - _offset, 2))
+            _side = "buy" if _dir == "short" else "sell"
 
-        _order = submit_day_stop_order(symbol=sym, qty=_qty, side=_side,
-                                       stop_price=_stop_price)
-        if _order:
-            t["rth_day_stop_order_id"] = str(getattr(_order, "id", ""))
-            _rth_day_stop_failure_counts[sym] = 0   # ANOMALY-1: reset on success
-            logger.info(
-                f"[{sym}] RTH DAY stop active: {_side.upper()} {_qty} @ "
-                f"${_stop_price:.2f} (tracker stop={_stop:.2f} + offset={_offset:.2f}) | "
-                f"order {getattr(_order, 'id', 'unknown')}"
+            # Pre-flight: if stop is already above/below market, Alpaca will reject.
+            try:
+                _pos = get_open_position(sym)
+                _mkt = float(_pos.current_price) if _pos else None
+            except Exception as _pos_e:
+                logger.debug("[%s] RTH DAY stop pre-flight price check failed — %s", sym, _pos_e)
+                _mkt = None
+            if _mkt is not None:
+                if _dir == "long" and _stop_price >= _mkt:
+                    logger.warning(
+                        f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
+                        f">= market ${_mkt:.2f} (gap-up open). Set manual stop if needed."
+                    )
+                    continue
+                if _dir == "short" and _stop_price <= _mkt:
+                    logger.warning(
+                        f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
+                        f"<= market ${_mkt:.2f} (gap-down open). Set manual stop if needed."
+                    )
+                    continue
+
+            _order = submit_day_stop_order(symbol=sym, qty=_qty, side=_side,
+                                           stop_price=_stop_price)
+            if _order:
+                t["rth_day_stop_order_id"] = str(getattr(_order, "id", ""))
+                _rth_day_stop_failure_counts[sym] = 0   # ANOMALY-1: reset on success
+                logger.info(
+                    f"[{sym}] RTH DAY stop active: {_side.upper()} {_qty} @ "
+                    f"${_stop_price:.2f} (tracker stop={_stop:.2f} + offset={_offset:.2f}) | "
+                    f"order {getattr(_order, 'id', 'unknown')}"
+                )
+            else:
+                _rth_day_stop_failure_counts[sym] = (
+                    _rth_day_stop_failure_counts.get(sym, 0) + 1
+                )  # ANOMALY-1
+                logger.error(
+                    f"[{sym}] RTH DAY stop FAILED "
+                    f"(attempt #{_rth_day_stop_failure_counts[sym]}) — "
+                    f"position unprotected. Set manual stop in Alpaca immediately."
+                )
+        except Exception as _sym_err:
+            logger.critical(
+                f"[{sym}] RTH DAY stop: unexpected error processing this symbol — "
+                f"{_sym_err!r}. Position may be unprotected; skipping to next "
+                f"symbol rather than aborting the remaining queue. Set manual "
+                f"stop in Alpaca if needed."
             )
-        else:
-            _rth_day_stop_failure_counts[sym] = (
-                _rth_day_stop_failure_counts.get(sym, 0) + 1
-            )  # ANOMALY-1
-            logger.error(
-                f"[{sym}] RTH DAY stop FAILED "
-                f"(attempt #{_rth_day_stop_failure_counts[sym]}) — "
-                f"position unprotected. Set manual stop in Alpaca immediately."
-            )
+            try:
+                send_slack(
+                    f":rotating_light: [{sym}] RTH DAY stop: unexpected error "
+                    f"({_sym_err!r}) — position may be unprotected. Verify "
+                    f"manually in Alpaca."
+                )
+            except Exception as _sl_e:
+                logger.debug("[%s] RTH DAY stop unexpected-error Slack alert failed — %s", sym, _sl_e)
     tracker._save_log()
 
 
