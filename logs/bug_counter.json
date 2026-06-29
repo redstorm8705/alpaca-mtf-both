@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- signal_generator.py 2 fixes, 2 refuted)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- calendar.py 3 fixes, deployed)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -404,10 +404,10 @@
       "notes": "Phase 2 redo with full board (4 domain agents) found the most severe gap of this AWP session: resubmit_stop_if_needed() was dead code, only ever called on bot restart -- a position that lost its GTC stop had zero automatic recovery path. Wired into run_weekly_check()'s every-cycle path. Also fixed a missing PENDING_EARNINGS state in the registry-restoration tuple (cross-trade-conflict risk) and a trivial logging format-arg bug. This closes the previously-logged S67 open item. Cold second-agent PASS, GAI APPROVE (Gro rate-limited). Commit f6bc565."
     },
     "events/calendar.py": {
-      "patch_count": 1,
-      "last_patched": "2026-06-28 (AWP: full audit + RULE C-4 static-analysis cleanup)",
+      "patch_count": 2,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: NFP date fix + RC-1 ET-anchoring, deployed)",
       "lines": 384,
-      "notes": "AWP commit 1f7b7f9: full audit found no functional bug. Cleaned 4 dead imports + 6 Optional[] annotation fixes (all pre-existing, surfaced via downstream mypy error at signal_generator.py's call site). Noted but not patched: shared-mutable STATIC_EVENTS/EARNINGS_BLACKOUTS list aliasing in __init__ -- ambiguous (may be intentional for options_scanner.py's direct STATIC_EVENTS import), zero practical risk in current separate-process architecture. Cold second-agent PASS, Gro APPROVE, GAI APPROVE."
+      "notes": "Phase 2 redo with full board (4 domain agents) found a real, factual NFP date error (2026-07-02 -> 2026-07-03, confirmed via direct date computation) and a genuinely-reachable RC-1 violation (date.today() not ET-anchored, confirmed materially impactful since OCI runs UTC). Refuted a 'midnight rollover' framing for a different time-math concern. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit c4bcdf0, deployed to OCI same session."
     },
     "indicators/momentum.py": {
       "patch_count": 1,

@@ -6128,3 +6128,24 @@ Deployed all confirmed fixes from tonight's Phase 2 redo to OCI, on Rafael's exp
 Not deployed (no code change this round): `events/news_monitor.py`.
 
 Takes effect at the bot's next restart (nightly cron, 2 AM ET) — no manual restart forced.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — events/calendar.py: 3 fixes, 1 false positive refuted, deployed (commit `c4bcdf0`)
+
+**4 cold parallel domain agents.**
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- NFP date error (2026-07-02 should be 2026-07-03): found by the Data-integrity domain agent, confirmed via direct Python date computation (genuinely a Thursday, not the first Friday).
+- RC-1 naive datetime (date.today() not ET-anchored at 3 call sites): found by the Data-integrity agent, confirmed materially reachable by checking OCI's actual server timezone (UTC, not ET) — ET evenings already read as "tomorrow" in UTC.
+- A "midnight rollover bug" claim from the Execution-risk agent (regarding the SEPARATE post-release-normalization time math) was REFUTED — `get_day_risk()` re-evaluates `date.today()` fresh every call, so there's no "stuck" state once midnight passes; the agent's worked example assumed a stale-date scenario that doesn't actually occur.
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — GAI confirmed all 3 fixes without raising anything new (Gro unavailable, daily budget exhausted).
+
+**Point 3 — Forward-looking:** two governance-level findings from the Quant-logic agent logged to Future Roadmap, not patched — CAUTION/HIGH_RISK sharing the same 0.5x multiplier without empirical justification, and a theoretical multi-HIGH_RISK-same-day note-aggregation ambiguity (confirmed this never actually occurs in the calendar's current 2026 dates).
+
+Fixes: (1) NFP date corrected. (2) `is_macro_event_day()`, `get_day_risk()`, `get_week_ahead()` all now use `datetime.now(ET).date()` instead of `date.today()`. (3) trivial missing type annotation on `add_event_dynamic()`.
+
+Verification (AWP): cold second-agent PASS (independently recomputed both dates, confirmed no other file references the wrong date, confirmed module ordering/no import shadowing, confirmed type compatibility) → GAI APPROVE. Static analysis clean. **Deployed to OCI** — confirmed zero conflicting local divergence via direct file diff, checksum-verified, `py_compile` clean on OCI.
