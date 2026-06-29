@@ -1,0 +1,176 @@
+--- a/scan_to_html.py
++++ b/scan_to_html.py
+@@ -1223,82 +1223,98 @@
+         return None
+ 
+ 
+-def _fetch_yfinance_news() -> list:
++def _fetch_market_news() -> list:
+     """
+-    Fetch recent market news via yfinance for SPY + major tickers.
++    Fetch recent market news via FMP T2 /v3/stock_news.
++    Replaces the former yfinance-based _fetch_yfinance_news() (RC-9 T4 violation).
+     Writes logs/market_news.json and returns list of items.
+     Items: [{"headline": str, "time": str, "source": str}]
+     Only last 12 hours; deduped; capped at 20 items.
++    On FMP key absent or API failure: return [] (fail-closed) + log WARNING.
++    Data source tag: fmp_news_t2
+     """
+     import json as _json
+     from datetime import datetime as _dt, timezone as _tz
+     try:
+-        import yfinance as _yf
++        import requests as _req
+     except ImportError:
++        logger.warning("[scan] requests library not installed — news data absent this cycle [T4-guard]")
+         return []
+ 
+-    PDT_TZ   = ZoneInfo("America/Los_Angeles")
+-    items    = []
+-    seen     = set()
+-    now_utc  = _dt.now(_tz.utc)
++    _fmp_key = os.getenv("FMP_API_KEY", "")
++    if not _fmp_key:
++        logger.warning("[scan] FMP_API_KEY not set — news data absent this cycle [T4-guard]")
++        return []
+ 
+-    for sym in ["SPY", "QQQ", "AAPL", "NVDA", "MSFT", "TSLA"]:
+-        try:
+-            news = _yf.Ticker(sym).news or []
+-            for n in news[:6]:
+-                title = (n.get("content", {}).get("title") or
+-                         n.get("title") or n.get("headline") or "")
+-                title = title.strip()
+-                if not title or title in seen:
+-                    continue
+-                seen.add(title)
+-                ts = (n.get("content", {}).get("pubDate") or
+-                      n.get("providerPublishTime") or
+-                      n.get("publishedAt") or 0)
+-                if isinstance(ts, str):
+-                    try:
+-                        pub_dt = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+-                    except Exception as _pdt_e:
+-                        logger.debug(
+-                            "_fetch_yfinance_news: pub_dt parse failed — %s", _pdt_e
+-                        )
+-                        pub_dt = None
+-                elif ts:
+-                    pub_dt = _dt.fromtimestamp(int(ts), tz=_tz.utc)
+-                else:
+-                    pub_dt = None
+-                if pub_dt:
+-                    age_hrs = (now_utc - pub_dt).total_seconds() / 3600
+-                    if age_hrs > 12:
+-                        continue
+-                    time_str = pub_dt.astimezone(PDT_TZ).strftime("%-I:%M %p PT")
+-                else:
+-                    time_str = "—"
+-                publisher = (n.get("content", {}).get("provider", {}).get("displayName") or
+-                             n.get("publisher") or sym)
+-                items.append({"headline": title, "time": time_str, "source": publisher})
+-        except Exception as _art_e:
+-            logger.debug("_fetch_yfinance_news: article parse failed — %s", _art_e)
++    PDT_TZ  = ZoneInfo("America/Los_Angeles")
++    items   = []
++    seen    = set()
++    now_utc = _dt.now(_tz.utc)
++
++    try:
++        resp = _req.get(
++            "https://financialmodelingprep.com/v3/stock_news",
++            params={"tickers": "SPY,QQQ,AAPL,NVDA,MSFT,TSLA", "limit": 50, "apikey": _fmp_key},
++            timeout=6.0,
++        )
++        resp.raise_for_status()
++        articles = resp.json()
++        if not isinstance(articles, list):
++            logger.warning("[scan] FMP news returned non-list — news absent this cycle")
++            return []
++    except Exception as _fmp_err:
++        logger.warning("[scan] FMP news fetch failed — news data absent this cycle: %s", _fmp_err)
++        return []
++
++    _parse_warned = False
++    for n in articles:
++        title = (n.get("title") or "").strip()
++        if not title or title in seen:
+             continue
++        seen.add(title)
++        pub_str = n.get("publishedDate") or ""
++        pub_dt = None
++        if pub_str:
++            try:
++                pub_dt = _dt.strptime(pub_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
++            except Exception as _pdate_e:
++                if not _parse_warned:
++                    logger.warning(
++                        "[scan] FMP news publishedDate format unexpected — timestamps shown as '—': %s",
++                        _pdate_e,
++                    )
++                    _parse_warned = True
++                else:
++                    logger.debug("[scan] FMP news publishedDate parse failed — %s", _pdate_e)
++        if pub_dt:
++            age_hrs = (now_utc - pub_dt).total_seconds() / 3600
++            if age_hrs > 12:
++                continue
++            time_str = pub_dt.astimezone(PDT_TZ).strftime("%-I:%M %p PT")
++        else:
++            time_str = "—"
++        source = n.get("site") or n.get("symbol") or "FMP"
++        items.append({"headline": title, "time": time_str, "source": source})
+         if len(items) >= 20:
+             break
+ 
+-    items = items[:20]
+-
+-    # Write to logs/market_news.json atomically
++    # Write to logs/market_news.json atomically (RC-5 compliant: tmp→fsync→replace)
+     try:
+         import os as _os
+         logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+         out_path = _os.path.join(logs_dir, "market_news.json")
+         tmp_path = out_path + ".tmp"
+         with open(tmp_path, "w") as _f:
+-            _json.dump({"generated": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+-                        "items": items}, _f)
++            _json.dump({
++                "generated": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
++                "data_source": "fmp_news_t2",
++                "items": items,
++            }, _f)
+             _f.flush()
+             _os.fsync(_f.fileno())
+         _os.replace(tmp_path, out_path)
+     except Exception as _mce:
+-        logger.warning(f"Movers/news cache write failed — next scan will re-fetch: {_mce}")
++        logger.warning(f"News cache write failed — next scan will re-fetch: {_mce}")
+ 
+     return items
+ 
+@@ -1395,7 +1411,7 @@
+             direction = prev_dir   # hold previous direction — insufficient conviction to flip
+             _stickiness_locked = True   # VWAP cannot override a stickiness-protected direction
+ 
+-    # ── VWAP filter: 1-min yfinance SPY for real-time direction ─────────────
++    # ── VWAP filter: 1-min T1 Alpaca SPY for real-time direction ────────────
+     # VWAP is a confirmation signal, NOT an unconditional override.
+     # Rules: (1) blocked when stickiness guard is active — prevents double-whipsaw;
+     #        (2) SPY must be >0.10% away from VWAP — filters noise hugging VWAP midline.
+@@ -1673,11 +1689,11 @@
+     vix_val             = fetch_vix()
+     vix_lbl, vix_col, vix_sub = vix_regime(vix_val)
+ 
+-    # Fetch yfinance news → logs/market_news.json (background, non-blocking)
++    # Fetch market news (FMP T2) → logs/market_news.json (background, non-blocking)
+     try:
+-        _fetch_yfinance_news()
+-    except Exception as _yfe:
+-        logger.warning(f"yfinance news fetch failed — news data absent this cycle: {_yfe}")
++        _fetch_market_news()
++    except Exception as _newse:
++        logger.warning(f"Market news fetch failed — news data absent this cycle: {_newse}")
+ 
+     results_by_sym   = {r["symbol"]: r for r in results}
+     # Filter pinned symbols (SPY/QQQ) from active rows — they display in the pinned

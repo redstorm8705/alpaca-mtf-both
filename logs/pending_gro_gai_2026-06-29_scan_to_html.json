@@ -1,0 +1,97 @@
+{
+  "target_file": "scan_to_html.py",
+  "status": "pending_gro_gai",
+  "session": "S69-nightly",
+  "created_at": "2026-06-29T22:00:00-07:00",
+  "base_commit": "1cc7509",
+  "base_sha256": "b7b67d6f6354538501d269108f08ef9fabbdf3297c01101f33b66f45dc7a8460",
+  "proposed_sha256": "946913400122cbb43fcfea4d8c5893a1cfc7ebbd1da723e8fd72244ab712a608",
+  "line_count": 2410,
+  "patch_file": "logs/pending_patch_2026-06-29_scan_to_html.patch",
+  "description": "RC-9 T4 violation fix — replace _fetch_yfinance_news() with _fetch_market_news() using FMP T2 /v3/stock_news. Also fixes stale comment at L1398 ('1-min yfinance SPY' → '1-min T1 Alpaca SPY' — code already uses fetch_bars T1). Display-only change: logs/market_news.json is a HTML dashboard cache only, not consumed by any execution/scoring/sizing path.",
+  "classification": "RTH-CHAIN",
+  "rth_chain_reason": "strategy/run_cycle.py imports scan_to_html.write_scan_html directly (lines 311, 338, 1454, 1637)",
+  "violation_found": {
+    "id": "RC-9 T4",
+    "function": "_fetch_yfinance_news()",
+    "lines": "1226-1303",
+    "description": "Uses yfinance to fetch news for SPY, QQQ, AAPL, NVDA, MSFT, TSLA. News is not on the T4 approved list (^VIX, ^VIX3M, JPY=X only). Documented in logs/queued_for_review_2026-05-28.md.",
+    "caller": "write_html() at L1676-1680 (background, non-blocking, wrapped in try/except)"
+  },
+  "proposed_changes": [
+    {
+      "what": "Replace _fetch_yfinance_news() with _fetch_market_news() using FMP T2 /v3/stock_news",
+      "lines_before": "1226-1303",
+      "lines_after": "1226-1319 (approx)",
+      "key_additions": [
+        "try/except ImportError guard around 'import requests as _req' (Agent A fix)",
+        "FMP_API_KEY guard: return [] + WARNING if key absent",
+        "FMP endpoint: https://financialmodelingprep.com/v3/stock_news?tickers=SPY,QQQ,AAPL,NVDA,MSFT,TSLA&limit=50",
+        "6s timeout on HTTP call",
+        "isinstance(articles, list) guard catches FMP error dicts like {\"Error Message\": ...}",
+        "Date parse format: '%Y-%m-%d %H:%M:%S' with first-failure WARNING, subsequent failures DEBUG",
+        "data_source: 'fmp_news_t2' added to market_news.json output",
+        "RC-5 atomic write (tmp→fsync→replace) preserved identically"
+      ]
+    },
+    {
+      "what": "Update call site: _fetch_yfinance_news() → _fetch_market_news()",
+      "lines": "L1676-1680 area",
+      "note": "Comment and exception variable also updated for clarity"
+    },
+    {
+      "what": "Fix stale comment L1398",
+      "from": "# ── VWAP filter: 1-min yfinance SPY for real-time direction ─────────────",
+      "to":   "# ── VWAP filter: 1-min T1 Alpaca SPY for real-time direction ────────────",
+      "note": "Code already uses fetch_bars('SPY', ...) T1 Alpaca API with inline T1 comment. Outer comment was stale."
+    }
+  ],
+  "board_vote": {
+    "result": "2/3 PASS before fix; 3/3 PASS with fix incorporated",
+    "agent_a": {
+      "domain": "Reliability",
+      "verdict": "FAIL → PASS after fix",
+      "finding": "RC-3: 'import requests as _req' had no try/except ImportError guard. Fix: 3-line guard added. Agent A: 'with that one-line fix, recommend APPROVE'",
+      "fix_incorporated": true
+    },
+    "agent_b": {
+      "domain": "Data Integrity",
+      "verdict": "PASS",
+      "finding": "T4 violation correctly eliminated. FMP date parse format ('%Y-%m-%d %H:%M:%S') unverified but graceful fallback (time_str='—') prevents crashes. Recommended upgrading first parse failure from DEBUG to WARNING for observability.",
+      "recommendation_incorporated": true
+    },
+    "agent_c": {
+      "domain": "Quant Logic",
+      "verdict": "PASS",
+      "finding": "Execution-isolated: logs/market_news.json not consumed by scoring/sizing/entry/exit/P&L. Exception propagation blocked at call site and write_scan_html wrapper. FMP budget 116/250 calls/day (46%). All failure modes return [] correctly."
+    }
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS (0 errors)",
+    "ruff": "PASS (0 violations)",
+    "tested_on": "proposed file (scratchpad copy)"
+  },
+  "cold_second_agent_verdict": "PASS — all 4 checks: no logic inversion, no boundary errors, all edge cases handled (empty FMP list, falsy title, missing publishedDate), all branches complete",
+  "impact_radius": "LOCAL — _fetch_market_news is internal to scan_to_html.py only; zero external callers; options_scanner.py imports only _get_composite_regime_display (unaffected); run_cycle.py calls write_scan_html() (unchanged signature and behavior)",
+  "fmp_api_budget": "~78 calls/day (RTH, every 5 min) + ~38 existing calls = ~116/day, well within 250/day free limit",
+  "execution_isolation": "CONFIRMED — logs/market_news.json is display-only cache, not read by any execution/, strategy/, execution/entry_logic.py, kelly.py, or P&L recording path",
+  "rc_classes": {
+    "RC-1": "PASS",
+    "RC-2": "PASS",
+    "RC-3": "PASS (import guard added per board finding)",
+    "RC-4": "N/A",
+    "RC-5": "PASS (tmp→fsync→replace preserved)",
+    "RC-6": "N/A",
+    "RC-7": "N/A",
+    "RC-8": "N/A"
+  },
+  "gro_gai_prompt": "See below — same prompt to both per Gro/GAI Same Prompt Rule",
+  "gro_gai_prompt_text": "PATCH VALIDATION MODE — scan_to_html.py — RC-9 T4 news violation fix\n\nYou are reviewing a proposed patch to scan_to_html.py in a Python paper trading bot.\n\n== CONTEXT ==\nThe function _fetch_yfinance_news() (lines 1226-1303) uses yfinance to fetch market news for SPY, QQQ, AAPL, NVDA, MSFT, TSLA. The bot's data tier rules (T4) permit yfinance ONLY for ^VIX, ^VIX3M, and JPY=X. News via yfinance is a T4 violation.\n\nThis is a DISPLAY-ONLY change: the function writes only to logs/market_news.json, which is a dashboard display cache. This file is NOT read by any execution, scoring, sizing, entry gate, stop/target calculation, or P&L recording path. It cannot affect trades under any failure scenario.\n\n== THE PATCH ==\n1. Replace _fetch_yfinance_news() with _fetch_market_news() using FMP T2 /v3/stock_news\n   - Same tickers: SPY, QQQ, AAPL, NVDA, MSFT, TSLA\n   - Same output: [{\"headline\": str, \"time\": str (PT format), \"source\": str}]\n   - Same 12h age filter, 20-item cap, dedup by title\n   - Same atomic write (tmp→fsync→replace) to logs/market_news.json\n   - Added: data_source: 'fmp_news_t2' to JSON output\n   - Added: FMP_API_KEY guard (return [] + WARNING if key absent)\n   - Added: try/except ImportError on 'import requests as _req'\n   - Added: first date-parse failure logged at WARNING, subsequent at DEBUG\n2. Update call site L1676-1680: _fetch_yfinance_news() → _fetch_market_news()\n3. Fix stale comment L1398: '1-min yfinance SPY' → '1-min T1 Alpaca SPY' (code already uses fetch_bars T1)\n\n== KEY PROPOSED CODE ==\n```python\ndef _fetch_market_news() -> list:\n    import json as _json\n    from datetime import datetime as _dt, timezone as _tz\n    try:\n        import requests as _req\n    except ImportError:\n        logger.warning('[scan] requests library not installed — news data absent this cycle [T4-guard]')\n        return []\n    _fmp_key = os.getenv('FMP_API_KEY', '')\n    if not _fmp_key:\n        logger.warning('[scan] FMP_API_KEY not set — news data absent this cycle [T4-guard]')\n        return []\n    PDT_TZ = ZoneInfo('America/Los_Angeles')\n    items = []\n    seen = set()\n    now_utc = _dt.now(_tz.utc)\n    try:\n        resp = _req.get(\n            'https://financialmodelingprep.com/v3/stock_news',\n            params={'tickers': 'SPY,QQQ,AAPL,NVDA,MSFT,TSLA', 'limit': 50, 'apikey': _fmp_key},\n            timeout=6.0,\n        )\n        resp.raise_for_status()\n        articles = resp.json()\n        if not isinstance(articles, list):\n            logger.warning('[scan] FMP news returned non-list — news absent this cycle')\n            return []\n    except Exception as _fmp_err:\n        logger.warning('[scan] FMP news fetch failed — news data absent this cycle: %s', _fmp_err)\n        return []\n    _parse_warned = False\n    for n in articles:\n        title = (n.get('title') or '').strip()\n        if not title or title in seen:\n            continue\n        seen.add(title)\n        pub_str = n.get('publishedDate') or ''\n        pub_dt = None\n        if pub_str:\n            try:\n                pub_dt = _dt.strptime(pub_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=_tz.utc)\n            except Exception as _pdate_e:\n                if not _parse_warned:\n                    logger.warning('[scan] FMP news publishedDate format unexpected — timestamps shown as dash: %s', _pdate_e)\n                    _parse_warned = True\n                else:\n                    logger.debug('[scan] FMP news publishedDate parse failed — %s', _pdate_e)\n        if pub_dt:\n            age_hrs = (now_utc - pub_dt).total_seconds() / 3600\n            if age_hrs > 12:\n                continue\n            time_str = pub_dt.astimezone(PDT_TZ).strftime('%-I:%M %p PT')\n        else:\n            time_str = '—'\n        source = n.get('site') or n.get('symbol') or 'FMP'\n        items.append({'headline': title, 'time': time_str, 'source': source})\n        if len(items) >= 20:\n            break\n    try:\n        import os as _os\n        logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'logs')\n        out_path = _os.path.join(logs_dir, 'market_news.json')\n        tmp_path = out_path + '.tmp'\n        with open(tmp_path, 'w') as _f:\n            _json.dump({'generated': now_utc.strftime('%Y-%m-%dT%H:%M:%SZ'), 'data_source': 'fmp_news_t2', 'items': items}, _f)\n            _f.flush()\n            _os.fsync(_f.fileno())\n        _os.replace(tmp_path, out_path)\n    except Exception as _mce:\n        logger.warning(f'News cache write failed — next scan will re-fetch: {_mce}')\n    return items\n```\n\n== PRE-AUDIT FINDINGS ==\nBoard: 3/3 PASS (Agent A found RC-3 import guard missing; fix incorporated; Agent A conditional APPROVE)\nStatic: py_compile PASS, mypy PASS, ruff PASS\nCold second-agent: PASS (all 4 checks)\nImpact: LOCAL — zero external callers of _fetch_market_news\nFMP budget: ~116 calls/day (well within 250/day free limit)\n\n== YOUR TASK ==\nYou are conducting a patch validation audit. Find what others missed. Specifically:\n1. Is the FMP /v3/stock_news endpoint the correct T2 source for news? Is it on FMP's free plan?\n2. Does the 'publishedDate' format '%Y-%m-%d %H:%M:%S' match FMP's actual API response format?\n3. Is there any scenario where this display-only change could have execution consequences (e.g., if the JSON file is read by another module we haven't checked)?\n4. Is the FMP API key correctly obtained from os.getenv('FMP_API_KEY', '')? Is this the same env var used by data/fmp_client.py?\n5. Any other risks you identify.\n\nRETURN: APPROVE or REJECT with specific findings. Be concrete.",
+  "notes": [
+    "This patch was queued for review since 2026-05-28 (logs/queued_for_review_2026-05-28.md) — the fix matches the proposed FMP T2 migration plan in that file",
+    "VWAP at L1398 was a prior-session false positive: grep found 'yfinance' in COMMENT but code uses fetch_bars() T1. Comment-only fix included.",
+    "options chain yfinance (L86-143 _fetch_implied_range, L1018-1044 _fetch_spy_0dte_data) NOT part of this patch — options data genuinely unavailable on T1/T2; separate future review item",
+    "fetch_vix() at L151-164 — T4 APPROVED (^VIX on T4 approved list)"
+  ]
+}
