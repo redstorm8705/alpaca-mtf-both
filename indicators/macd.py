@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 indicators/macd.py
 MACD with dual settings: Standard (12/26/9) for swings, Fast (3/15/3) for intraday.
@@ -59,6 +60,17 @@ def macd_bearish_cross(df: pd.DataFrame, settings: dict) -> bool:
 
 def macd_histogram_rising(df: pd.DataFrame, settings: dict) -> bool:
     """True if histogram is positive AND growing (momentum building)."""
+    # AWP audit fix (2026-06-28): missing the same len(df) < 2 guard that
+    # macd_bullish_cross()/macd_bearish_cross() (above) already have --
+    # without it, a df with fewer than 2 rows raises IndexError on the
+    # iloc[-2] access. Found during the strategy/confluence.py board redo:
+    # dual_macd_agreement() calls this unconditionally for both entry_df and
+    # confirm_df. Blast radius was already contained (caught by
+    # signal_generator.py's _analyze_symbol_full() try/except, skipping
+    # only the one symbol for one cycle), but this closes the gap at its
+    # actual source instead of relying on exception-based recovery.
+    if len(df) < 2:
+        return False
     lbl  = settings["label"]
     hist = df[f"{lbl}_histogram"]
     return hist.iloc[-1] > 0 and hist.iloc[-1] > hist.iloc[-2]
@@ -66,6 +78,10 @@ def macd_histogram_rising(df: pd.DataFrame, settings: dict) -> bool:
 
 def macd_histogram_falling(df: pd.DataFrame, settings: dict) -> bool:
     """True if histogram is negative AND falling (bearish momentum building)."""
+    # AWP audit fix (2026-06-28): same missing-guard fix as
+    # macd_histogram_rising() above.
+    if len(df) < 2:
+        return False
     lbl  = settings["label"]
     hist = df[f"{lbl}_histogram"]
     return hist.iloc[-1] < 0 and hist.iloc[-1] < hist.iloc[-2]
