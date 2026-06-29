@@ -5947,3 +5947,33 @@ Traced the long/short mirror symmetry (daily bias fail-closed gate, EMA structur
 Also fixed pre-existing RULE C-4 items: 5 functions' `-> float` return annotations corrected to `-> Optional[float]` (all 5 already returned `None` on failure paths), 2 E501 line-length violations resolved via variable extraction (zero logic change).
 
 **AWP verification:** cold second-agent PASS (confirmed both dashboard consumers already handle `None` safely, confirmed live-scoring isolation, confirmed the 252-bar window/current-bar overlap is unchanged — pre-existing design, not a regression) → GAI APPROVE. **Gro hit its daily TPD rate limit again this session** (third+ occurrence tonight) — proceeded per established practice with GAI + cold second-agent + direct source verification. Static analysis clean. Deployed to OCI — zero local divergence, checksum-verified.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full Phase 1 rigor) — execution/risk_manager.py: full board re-audit, 3 fixes (commits `3a7677b`, `89ded5b`, `e5a2967`)
+
+**Rafael's mandate:** redo Phase 2 with the same full vigor as Phase 1 — 4 cold parallel domain-board Explore subagents (Reliability/Execution-risk/Data-integrity/Quant-logic) per CLAUDE.md's Board Audit Protocol, plus Gro+GAI, not the lighter single-cold-agent process used in the original Phase 2 pass.
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- Leveraged-multiplier zero-guard gap: 3/3 — Reliability agent ✓, Execution-risk agent ✓ (independently, both found lines 264-269/294-299 unguarded), Quant-logic agent did not flag it (was checking composition coherence, not input validation) — Gro ✓, GAI ✓.
+- VIX-mirror parity divergence (run_cycle.py): found by Quant-logic agent only among the 4 domain agents (the lens specifically built for cross-file regime-coherence checks) — Claude/board 1/4 on first pass, but Gro ✓ and GAI ✓ both confirmed independently once raised.
+- Kill-state silent-exception-swallow and unvalidated Alpaca field names: found by Reliability + Data-integrity agents; assessed as informational/lower-priority (no live trading impact, equities-only bot), not patched this round.
+
+**Point 2 — Gro+GAI consensus Claude/board missed initially:** none on the leveraged-multiplier gap (board found it first, 2/4 agents independently); the cross-file VIX-mirror divergence was raised by one domain agent's careful trace of `run_cycle.py`'s "mirrors risk_manager.py" comment against the actual current code — Gro and GAI then independently confirmed it as a genuine, unambiguous bug (not a design question) once presented.
+
+**Point 3 — Forward-looking, not yet fixed:**
+- `strategy/run_cycle.py` AH GTC block has no H2-override awareness (logged to Future Roadmap Log, P3, informational).
+- Kill-state persistence silent-exception-swallow on logger failure (Reliability finding, P3, not patched — extremely low probability, no alerting path exists for this either way).
+- Unvalidated Alpaca position-response field names (`avg_entry_price`) for non-equity asset classes (Data-integrity finding, P3, not applicable — this bot trades equities/ETFs only).
+
+### Fixes applied (all via Open Question Protocol: domain board → BoD tie-break where needed → Gro → GAI, each separately re-confirmed against the actual diff)
+
+1. **`strategy/run_cycle.py` VIX-mirror parity restored** (commit `3a7677b`) — AH GTC overnight-stop block's discrete step function replaced with the same continuous curve `risk_manager.py` has used since 2026-06-24 (commit `7e5c983`), restoring the block's own "mirrors risk_manager.py RTH logic" comment to being true. Domain board split 2-2 on timing (Harris/Derman: study overnight execution costs first; Katsuyama/Thorp: fix now) — BoD tie-break 4-0 APPLY NOW (cost study recommended as non-blocking follow-up). Gro + GAI both independently confirmed this as a genuine bug in two separate rounds.
+2. **Leveraged-multiplier zero-guard added** (commit `89ded5b`) — new `_safe_lev_mult()` helper validates `LEVERAGED_3X_STOP_MULTIPLIER`/`LEVERAGED_3X_TARGET_MULTIPLIER`/`LEVERAGED_STOP_MULTIPLIER`/`LEVERAGED_TARGET_MULTIPLIER` are positive before multiplying into stop_mult/target_mult, falling back to 1.0 with a logged error otherwise — same bug class as the already-fixed `h2_scalar` zero-width-stop issue, found independently by 2 of 4 domain agents. Domain board 3-0 APPLY NOW, Gro + GAI both APPROVE.
+3. **CLAUDE.md documentation sync** (commit `e5a2967`) — Architecture Invariant #12 and the Future Roadmap Log entry both corrected; they had described the old discrete step-function as current for 4 days after the continuous-curve change shipped. Domain board 3-0 APPLY NOW, Gro + GAI both AGREE.
+
+**Process note:** one domain-board agent's own vote tally contained an arithmetic error (reported "3-1 APPLY NOW" while its own body showed a 2-2 split) — caught by checking the agent's work against itself rather than trusting its summary, consistent with this project's verify-before-logging discipline. The BoD tie-breaker resolved the actual 2-2 tie 4-0.
+
+All 3 fixes: static analysis clean (py_compile/mypy/ruff), cold second-agent PASS on each, committed and pushed. Not yet deployed to OCI — batched with the broader OCI sync decision per Rafael's instruction to address that separately.

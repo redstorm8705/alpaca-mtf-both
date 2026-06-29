@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP -- indicators/momentum.py guard fix)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- risk_manager.py full board + 3 fixes)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -277,10 +277,10 @@
       "notes": "S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard — batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS. | S54: QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). cancel_and_reconcile_gtc_stops() reads quarterly_holds.json at startup to protect AVGO/NVDA/ANET GTC stops — avoids empty-frozenset startup-order bug by reading state file directly instead of get_quarterly_hold_symbols(). PDT Tier 2: removed DAY_TRADE_MAX_ROLLING + CONVICTION_PDT_SOFT_MIN refs (4 mypy errors, RULE C-4). Orphan overnight=True always. GTC stop submission no longer gated on PDT. Board split 1 APPROVE (Execution Risk) / 1 REJECT (Reliability) + DS APPROVE / GAI REJECT — state file approach adopted to resolve startup-order objection. py_compile/mypy/ruff PASS. Pending Approval #3 CLOSED."
     },
     "execution/risk_manager.py": {
-      "patch_count": 5,
-      "last_patched": "2026-06-28 (AWP: zero-width stop/target fix)",
-      "lines": 666,
-      "notes": "AWP commit 85950c3: get_stop_and_target()'s H2 VIX-scalar guard (`if h2_scalar is not None:`) didn't account for h2_stop_atr_mult() mathematically returning exactly 0.0 (not None) when a symbol's realized vol computes to zero variance -- reachable at every VIX level, produces stop=target=entry_price (zero-width). Fixed: `h2_scalar is not None and h2_scalar > 0`, falls through to the bounded native VIX-only step-function. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI; takes effect at the next mtf-bot restart (nightly 2AM ET cron, before Monday open)."
+      "patch_count": 7,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: leveraged-mult guard + CLAUDE.md sync)",
+      "lines": 690,
+      "notes": "Phase 2 redo with full board (4 domain agents) + Gro/GAI surfaced a cross-file VIX-formula divergence the lighter original pass missed entirely: run_cycle.py's AH GTC mirror was 4 days stale relative to risk_manager.py's board-approved continuous curve (fixed, commit 3a7677b). Also added leveraged-multiplier zero-guard (commit 89ded5b, same bug class as h2_scalar, found independently by 2/4 domain agents) and synced CLAUDE.md docs (commit e5a2967, 4 days stale). Caught one domain-board agent's own vote-tally arithmetic error (claimed 3-1, was actually 2-2) -- BoD tie-break resolved 4-0."
     },
     "execution/portfolio_tracker.py": {
       "patch_count": 52,
@@ -353,13 +353,10 @@
       "risk_rating": "LOW — not in trading path. 2026-05-05: MA-PARTIAL-SIZE-1 — analyse_pnl used entry size instead of tranche size for partial_exit P&L calculation."
     },
     "strategy/run_cycle.py": {
-      "patch_count": 10,
-      "sessions": 4,
-      "last_patched": "2026-05-24 S36",
-      "open_rc_violations": [],
-      "risk_rating": "MEDIUM — S31 BUG-C: write_scan_html 10-min interim throttle (double-scan root cause). 1632L→1656L. All RC PASS. py_compile/mypy/ruff PASS.",
+      "patch_count": 11,
+      "last_patched": "2026-06-28 (AWP: VIX-mirror parity restored)",
       "lines": 1670,
-      "notes": " | S36: RC-3 x11 PATCHED — 11 silent exception handlers upgraded (bare pass/debug→warning/info). float(\"inf\") sentinel on 52w cache miss. Fail-open confirmed on shorting flag. yfinance T4 fallback deferred (blocking risk in RTH loop)."
+      "notes": "AWP commit 3a7677b: AH GTC overnight-stop block's 'mirrors risk_manager.py RTH logic' comment had been false since 2026-06-24 (risk_manager.py switched to a continuous VIX curve, this mirror didn't). Restored. Board split 2-2 on timing, BoD tie-break 4-0 apply now, Gro + GAI both confirmed it's a genuine bug. Cold second-agent flagged a separate pre-existing H2-awareness gap, logged to Future Roadmap, not fixed (out of scope)."
     },
     "data/fetcher.py": {
       "patch_count": 4,
