@@ -309,6 +309,16 @@ class QuarterlyHoldManager:
         self._load_state()
 
         # Rebuild shared registry from loaded state
+        # AWP audit fix (2026-06-28): PENDING_EARNINGS was missing from this
+        # list. A position reaches PENDING_EARNINGS with its GTC stop
+        # deliberately cancelled (earnings within 5 days) but the position
+        # itself is still fully open and alive -- if the bot restarts while
+        # in this state, the symbol was NOT re-registered in
+        # _quarterly_hold_symbols, meaning entry_logic.py's intraday scan
+        # would no longer see this symbol as blocked, allowing the MTF bot
+        # to open a conflicting second position in the same name while the
+        # quarterly hold is still open. Confirmed by board Quant-logic agent
+        # during the Phase 2 full-board redo.
         _quarterly_hold_symbols.clear()
         for sym, pos in self._positions.items():
             if pos.state in (
@@ -316,6 +326,7 @@ class QuarterlyHoldManager:
                 HoldState.ACTIVE,
                 HoldState.PENDING_STOP_REPLACE,
                 HoldState.PENDING_EXIT,
+                HoldState.PENDING_EARNINGS,
             ):
                 _quarterly_hold_symbols.add(sym)
 
@@ -395,14 +406,31 @@ class QuarterlyHoldManager:
         for symbol, pos in list(self._positions.items()):
             _stuck = (HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS)
             if pos.state in _stuck:
-                # Same external-close gap as reconcile_on_startup(): these states
-                # were never checked against broker truth on any per-cycle basis.
                 try:
-                    self._detect_external_close(pos, ReconcileResult())
+                    if self._detect_external_close(pos, ReconcileResult()):
+                        continue
+                    # AWP audit fix (2026-06-28): resubmit_stop_if_needed()
+                    # and _reconcile_pending_earnings() were previously only
+                    # ever called from reconcile_on_startup() — i.e. only on
+                    # a bot RESTART. Per this method's own docstring,
+                    # run_weekly_check() runs once per RTH cycle (every 5
+                    # minutes via run_cycle.py), but never actually attempted
+                    # recovery from either stuck state on that cadence — it
+                    # only checked for external close and otherwise left the
+                    # position stuck. Confirmed via full board audit (2 of 4
+                    # domain agents independently): a position that loses its
+                    # GTC stop had NO automatic resubmit path short of a bot
+                    # restart, which could be hours, days, or (with no
+                    # scheduled restart) indefinitely away. Now attempts
+                    # recovery every cycle instead of waiting for a restart.
+                    if pos.state == HoldState.PENDING_STOP_REPLACE:
+                        self.resubmit_stop_if_needed(symbol)
+                    elif pos.state == HoldState.PENDING_EARNINGS:
+                        self._reconcile_pending_earnings(pos, ReconcileResult())
                 except Exception as e:  # RC-3
                     logger.warning(
-                        "QuarterlyHoldManager weekly_check external-close check "
-                        "error for %s: %s", symbol, e, exc_info=True,
+                        "QuarterlyHoldManager weekly_check external-close/resubmit "
+                        "check error for %s: %s", symbol, e, exc_info=True,
                     )
                 continue
             if pos.state != HoldState.ACTIVE:
@@ -748,8 +776,14 @@ class QuarterlyHoldManager:
                 )
                 return True
             else:
+                # AWP audit fix (2026-06-28): missing format arg -- this %s
+                # placeholder had nothing supplied, which would raise
+                # TypeError at log-emit time. Now more reachable than before
+                # since this function is wired into run_weekly_check()'s
+                # every-cycle path, not just the bot-restart path.
                 logger.warning(
                     "QuarterlyHoldManager: %s GTC stop resubmit returned None",
+                    symbol,
                 )
                 return False
         except Exception as e:  # RC-3
