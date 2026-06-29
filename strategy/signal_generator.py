@@ -11,6 +11,7 @@ Two scoring systems run in parallel every cycle:
 import glob
 import json
 import logging
+import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutTimeout
 from datetime import datetime, date as _date, timedelta as _td
@@ -641,13 +642,33 @@ def run_scan(
             _sec = _SECTOR_MAP_SG.get(_fr["symbol"], "unknown")
             if _v is not None:
                 _sector_moms[_sec].append(_v)
-        _sector_avg = {s: sum(vs) / len(vs) for s, vs in _sector_moms.items() if vs}
+        _sector_sum_count = {s: (sum(vs), len(vs)) for s, vs in _sector_moms.items() if vs}
         _residuals: dict = {}
         for _fr in full_results:
             _v = _fr["_mom_12_1_val"]
             if _v is not None:
                 _sec = _SECTOR_MAP_SG.get(_fr["symbol"], "unknown")
-                _residuals[_fr["symbol"]] = _v - _sector_avg.get(_sec, 0.0)
+                # AWP audit fix (2026-06-28): the docstring above defines
+                # epsilon as mom_12_1(stock) - avg(mom_12_1(sector_PEERS)) --
+                # "peers" means other stocks, excluding self. The original
+                # code averaged in the stock's OWN momentum value alongside
+                # its peers, which systematically dampens the residual of
+                # any extreme mover (e.g. mom=50% in a 3-stock sector with
+                # peers at 10%/10%: self-inclusion gives avg=23.3% ->
+                # residual=26.7%; excluding self gives avg=10% ->
+                # residual=40%, matching the stated formula). Single-member
+                # sectors (no peers) now fall back to a 0.0 peer average --
+                # i.e. no sector adjustment, residual = raw momentum --
+                # rather than the old self-inclusion result of an always-
+                # exactly-zero residual regardless of the stock's actual
+                # momentum. Affects only the 16pt log-only validation
+                # system (residual_rank), never the live 12pt score.
+                _sum, _count = _sector_sum_count.get(_sec, (0.0, 0))
+                if _count > 1:
+                    _peer_avg = (_sum - _v) / (_count - 1)
+                else:
+                    _peer_avg = 0.0
+                _residuals[_fr["symbol"]] = _v - _peer_avg
         _ranked_res = sorted(_residuals, key=lambda s: _residuals[s], reverse=True)
         residual_ranks = {sym: (i + 1) for i, sym in enumerate(_ranked_res)}
     except Exception as _rr_e:
@@ -803,7 +824,13 @@ def run_scan(
     try:
         _LOGS_DIR.mkdir(exist_ok=True)
         comp_path = _LOGS_DIR / f"score_comparison_{_today_p3}.json"
-        with open(comp_path, "w") as f:
+        # AWP audit fix (2026-06-28): write via tmp + os.replace() (the same
+        # atomic pattern used throughout this codebase, e.g. state.py,
+        # quarterly_hold_manager.py) instead of a direct open(path, "w") --
+        # a crash mid-write previously could leave a truncated/corrupted
+        # JSON file for any downstream reader of this scan cycle's log.
+        _tmp_path = comp_path.with_suffix(".json.tmp")
+        with open(_tmp_path, "w") as f:
             json.dump({
                 "date":        _today_p3,
                 "scan_time":   _now_et.isoformat(),
@@ -811,6 +838,9 @@ def run_scan(
                 "universe":    universe_size,
                 "tickers":     score_comparison,
             }, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        _tmp_path.replace(comp_path)
     except Exception as e:
         logger.warning(f"Score comparison log write failed: {e}")
 
