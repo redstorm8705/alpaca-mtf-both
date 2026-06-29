@@ -11,7 +11,7 @@ import requests  # type: ignore[import-untyped]
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 import config
@@ -61,6 +61,32 @@ def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
             logger.debug("kill state save error: %s", _e)
         except Exception:
             pass  # logger broken; persistence failure must not break the trading loop
+
+
+def _safe_lev_mult(value: Any, config_name: str, symbol: str) -> float:
+    """AWP audit fix (2026-06-28): defense-in-depth guard, same bug class as
+    the h2_scalar zero-width-stop fix above. The four leveraged-ETF
+    multiplier config constants (LEVERAGED_3X_STOP_MULTIPLIER,
+    LEVERAGED_3X_TARGET_MULTIPLIER, LEVERAGED_STOP_MULTIPLIER,
+    LEVERAGED_TARGET_MULTIPLIER) were multiplied directly into
+    stop_mult/target_mult with zero validation — a future typo or bad edit
+    setting one to 0 or negative would zero out (or invert) stop/target
+    distance entirely. Current values are valid; this guards the future.
+    Returns 1.0 (no leverage adjustment, fail-safe) and logs an error if
+    the value is not a positive number.
+    """
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        fval = None
+    if fval is None or fval <= 0:
+        logger.error(
+            "[%s] Invalid %s=%r (must be > 0) — skipping leverage adjustment "
+            "(using 1.0x) to avoid a zero-width stop/target.",
+            symbol, config_name, value,
+        )
+        return 1.0
+    return fval
 
 
 class RiskManager:
@@ -262,11 +288,23 @@ class RiskManager:
                 target_mult *= _vix_scalar
 
             if is_leveraged_3x:
-                stop_mult   *= config.LEVERAGED_3X_STOP_MULTIPLIER
-                target_mult *= config.LEVERAGED_3X_TARGET_MULTIPLIER
+                stop_mult   *= _safe_lev_mult(
+                    config.LEVERAGED_3X_STOP_MULTIPLIER,
+                    "LEVERAGED_3X_STOP_MULTIPLIER", symbol,
+                )
+                target_mult *= _safe_lev_mult(
+                    config.LEVERAGED_3X_TARGET_MULTIPLIER,
+                    "LEVERAGED_3X_TARGET_MULTIPLIER", symbol,
+                )
             elif is_leveraged:
-                stop_mult   *= config.LEVERAGED_STOP_MULTIPLIER
-                target_mult *= config.LEVERAGED_TARGET_MULTIPLIER
+                stop_mult   *= _safe_lev_mult(
+                    config.LEVERAGED_STOP_MULTIPLIER,
+                    "LEVERAGED_STOP_MULTIPLIER", symbol,
+                )
+                target_mult *= _safe_lev_mult(
+                    config.LEVERAGED_TARGET_MULTIPLIER,
+                    "LEVERAGED_TARGET_MULTIPLIER", symbol,
+                )
 
             stop_dist   = atr_value * stop_mult
             target_dist = atr_value * target_mult
@@ -292,11 +330,23 @@ class RiskManager:
                 target_pct = config.SWING_TARGET_PCT
 
             if is_leveraged_3x:
-                stop_pct   *= config.LEVERAGED_3X_STOP_MULTIPLIER
-                target_pct *= config.LEVERAGED_3X_TARGET_MULTIPLIER
+                stop_pct   *= _safe_lev_mult(
+                    config.LEVERAGED_3X_STOP_MULTIPLIER,
+                    "LEVERAGED_3X_STOP_MULTIPLIER", symbol,
+                )
+                target_pct *= _safe_lev_mult(
+                    config.LEVERAGED_3X_TARGET_MULTIPLIER,
+                    "LEVERAGED_3X_TARGET_MULTIPLIER", symbol,
+                )
             elif is_leveraged:
-                stop_pct   *= config.LEVERAGED_STOP_MULTIPLIER
-                target_pct *= config.LEVERAGED_TARGET_MULTIPLIER
+                stop_pct   *= _safe_lev_mult(
+                    config.LEVERAGED_STOP_MULTIPLIER,
+                    "LEVERAGED_STOP_MULTIPLIER", symbol,
+                )
+                target_pct *= _safe_lev_mult(
+                    config.LEVERAGED_TARGET_MULTIPLIER,
+                    "LEVERAGED_TARGET_MULTIPLIER", symbol,
+                )
 
             stop_dist   = entry_price * stop_pct
             target_dist = entry_price * target_pct
