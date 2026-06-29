@@ -5977,3 +5977,26 @@ Also fixed pre-existing RULE C-4 items: 5 functions' `-> float` return annotatio
 **Process note:** one domain-board agent's own vote tally contained an arithmetic error (reported "3-1 APPLY NOW" while its own body showed a 2-2 split) — caught by checking the agent's work against itself rather than trusting its summary, consistent with this project's verify-before-logging discipline. The BoD tie-breaker resolved the actual 2-2 tie 4-0.
 
 All 3 fixes: static analysis clean (py_compile/mypy/ruff), cold second-agent PASS on each, committed and pushed. Not yet deployed to OCI — batched with the broader OCI sync decision per Rafael's instruction to address that separately.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — execution/broker.py: 2 real bugs fixed (commit `0d68f0a`)
+
+**4 cold parallel domain agents + Gro + GAI**, redoing the original lighter single-cold-agent pass (which had judged this file clean apart from 3 minor non-blocking items).
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- `partial_close_position()` missing not-found-as-success handling: 2/4 domain agents found this independently (Reliability + Execution-risk), both citing the exact same `close_position()` precedent — Claude independently verified by direct read before either agent's report was trusted. Gro ✓, GAI ✓.
+- `submit_limit_order()` missing idempotency key: 1/4 domain agents (Reliability) flagged it; Claude verified the claim by checking `_RETRYABLE` actually includes `"timeout"`/`"connection"`, confirming genuine reachability (not just theoretical). Gro ✓, GAI ✓.
+- Same agent's claim that `submit_gtc_stop_order()`/`submit_day_stop_order()` share the missing-idempotency-key gap: REFUTED by Claude directly against the code — their retries only fire on a confirmed rejection code, never an ambiguous timeout, so no duplicate-order risk exists there. Not logged as a finding.
+
+**Point 2 — Gro+GAI consensus Claude/board missed initially:** none — both confirmed bugs were independently surfaced by domain agents before Gro/GAI review; Gro/GAI's role here was confirming severity and sign-off on the fix, not first discovery.
+
+**Point 3 — Forward-looking, not yet fixed:** inconsistent retry-wait/escalation across the four sibling `40310000`-handling functions (Quant-logic domain agent finding) — logged to Future Roadmap Log, not actioned (speculative, no documented incident for 3 of the 4 functions).
+
+### Fixes applied
+1. **`partial_close_position()`** — added the same not-found-signal check `close_position()` already has (40410000/"position does not exist"/"position not found"/"no open position"/404+position → return True), closing the same watchdog-restart-race gap for partial exits that was already fixed for full exits.
+2. **`submit_limit_order()`** — added the same `client_order_id` idempotency pattern `submit_market_order()` already has, plus the matching "40910000"/duplicate-client-order detection, closing a genuine duplicate-order risk on timeout/connection-error retries.
+
+Verification (AWP): cold second-agent PASS (confirmed precedence ordering, no string-overlap collisions, `_idem_id` correctly scoped outside the retry loop, no copy-paste errors) → Gro APPROVE → GAI APPROVE → static analysis clean. Committed and pushed; not yet deployed to OCI (batched with the broader OCI sync decision).

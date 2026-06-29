@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- risk_manager.py full board + 3 fixes)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- broker.py 2 real fixes)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -322,9 +322,10 @@
       "notes": "AWP full audit: weekly-bias gate, intraday override, ADDV liquidity filter, Phase-1 timeout handling all verified correct. 16pt log-only system has minor small-universe edge cases (zero real-trading impact, not fixed). No functional bug in the live 12pt-driving path. Surfaced one RULE C-4 mypy error whose root cause was in events/calendar.py."
     },
     "execution/broker.py": {
-      "patch_count": 9,
-      "last_patched": "2026-06-28 (P0: AlpacaBroker return-shape fix + GTC stop migration)",
-      "notes": "P0 commit 519f369: AlpacaBroker.buy()/sell_short()/close_position() returned raw order-objects/None/bool but strategy/movers/strategy.py consumed them as dicts (result['success'], result.get('error')) -- guaranteed TypeError on every single Movers entry/exit attempt, found by a cold second-agent mid-redesign. Fixed by normalizing all 3 methods to return {'success': bool, 'error': str|None, 'order': object|None}. Also: place_stop() switched from DAY to GTC stop (Rafael mandate -- Movers positions must survive a script restart/crash, not just until 4pm close); added cancel_stop_order(), get_open_positions(), get_open_orders() wrapper methods. Board+Gro+GAI APPROVE."
+      "patch_count": 10,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: partial-close fix + limit-order idempotency)",
+      "lines": 718,
+      "notes": "Phase 2 redo with full board (4 domain agents) found 2 real bugs the original lighter pass missed: partial_close_position() lacked the same not-found-as-success handling close_position() already has (watchdog-restart-race gap, found independently by 2/4 agents); submit_limit_order() lacked the idempotency key submit_market_order() already has (genuine duplicate-order risk via timeout/connection retryable conditions). Refuted a related claim about GTC/DAY stop functions sharing the idempotency gap -- their retries only fire on confirmed rejections, not ambiguous timeouts. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 0d68f0a."
     },
     "events/macro_risk_index.py": {
       "patch_count": 20,
