@@ -913,10 +913,15 @@ the board output in plain language without losing the directional conclusion.
     to each other. Sector gate already enforces sector-level; this covers cross-sector beta overlap.
 11. **Overnight exposure budget:** Max 100% of account equity in overnight positions.
     Breach requires board review before next entry.
-12. **VIX-adjusted stop widening:** When VIX spot > 25, ATR stop multiplier widens
-    1.5× (25 < VIX ≤ 30) or 2.0× (VIX > 30) automatically. Target scales proportionally
-    to preserve R:R. Config: `VIX_STOP_WIDEN_THRESHOLD_1/2`, `VIX_STOP_WIDEN_MULT_1/2`.
-    Implemented in `execution/risk_manager.py:get_stop_and_target()`.
+12. **VIX-adjusted stop widening (continuous curve, since 2026-06-24):** ATR stop multiplier
+    widens via `scalar = min(1.0 + max(0, VIX - 20) × 0.1, 2.0)` — continuous, not a discrete
+    step function. Anchors preserved: VIX=25→1.5×, VIX=30→2.0× (hard cap). Target scales
+    proportionally to preserve R:R. Implemented in `execution/risk_manager.py:get_stop_and_target()`
+    (commit `7e5c983`, board 4-0 + Gro + GAI, replacing the prior discrete step function —
+    config constants `VIX_STOP_WIDEN_THRESHOLD_1/2`/`MULT_1/2` are retained only as the
+    anchor values cited above, not as live thresholds in this function). The after-hours
+    GTC overnight-stop mirror in `strategy/run_cycle.py` uses the identical formula
+    (parity restored 2026-06-28 AWP audit — see Future Roadmap Log "Completed" section).
 13. **Trail stop activation at T1 is PERMANENT INFRASTRUCTURE — not forbidden.** (Board + Gro + GAI
     unanimous consensus 2026-06-24.) Enabling trail activation at any tranche threshold (T1, T2, T3)
     is legitimate partial-exit mechanics. Any autonomous board agent classifying trail activation as
@@ -1000,11 +1005,18 @@ Beta>0.7 check is insufficient. Two positions can have beta<0.7 to SPY but 0.9 t
 **[2026-06-15 S59] Bar-end adverse selection — DS-only P1 blind spot (architecture audit)**
 50–70% of entries occur in the last 20% of the 5-min bar's range, paying 10–25bp adverse selection. At 250 trades/year with 2.5× ATR targets, DS estimates 500–1250bp of gross P&L lost annually to entry timing. Fix candidates: (a) mid-bar check at 2.5 min into bar with limit order, (b) sub-bar tick data confirmation. File: `execution/entry_logic.py`. Requires: 1-sec quote stream from data/alpaca_data.py. Board vote required. Prioritize after walk-forward validation confirms which factors drive the adverse selection.
 
-**[2026-06-24 S63] VIX stop widening → continuous curve (Rule 12 dynamization — board vote required)**
-Replace static step-function (VIX>25→1.5x, VIX>30→2.0x) with a continuous linear curve.
-Candidate formula: `mult = 1.0 + max(0, VIX - 20) × 0.025` (Simons); or rolling 20-day VIX percentile rank
-(LdP: >60th pct→1.5x, >80th→2.0x). Eliminates the VIX=24.9→1.0x / VIX=25.1→1.5x cliff.
-4/4 voices (BoD+AB+Gro+GAI) unanimous. Requires full board vote. File: `execution/risk_manager.py`.
+**[2026-06-24 S63] ✅ COMPLETED — VIX stop widening → continuous curve (Rule 12 dynamization)**
+Replaced static step-function (VIX>25→1.5x, VIX>30→2.0x) with a continuous linear curve.
+Formula shipped: `scalar = min(1.0 + max(0, VIX - 20) × 0.1, 2.0)` (Round 2 — Simons' candidate
+slope of 0.025 was rejected; 0.1 preserves all current policy anchors exactly: VIX=25→1.5x,
+VIX=30→2.0x). Eliminates the VIX=24.9→1.0x / VIX=25.1→1.5x cliff. Board 4-0, Gro APPROVE, GAI
+APPROVE. Commit `7e5c983`. File: `execution/risk_manager.py:get_stop_and_target()`.
+**Documentation note (2026-06-28 AWP audit):** this entry sat un-updated for 4 days after
+shipping — Architecture Invariant #12 also described the old step function as current the whole
+time. Both corrected 2026-06-28. Separately found and fixed in the same session: the after-hours
+GTC overnight-stop mirror in `strategy/run_cycle.py` (comment claimed "mirrors risk_manager.py
+RTH logic") had not been updated to the continuous curve either — parity restored, commit
+`3a7677b`.
 
 **[2026-06-24 S63] Conviction thresholds → linear spline (Rule 9 dynamization — board vote required)**
 Replace cliff (score<10=skip, score=10=half, score≥11=full) with linear spline:
