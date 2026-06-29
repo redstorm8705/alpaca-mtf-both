@@ -6000,3 +6000,22 @@ All 3 fixes: static analysis clean (py_compile/mypy/ruff), cold second-agent PAS
 2. **`submit_limit_order()`** — added the same `client_order_id` idempotency pattern `submit_market_order()` already has, plus the matching "40910000"/duplicate-client-order detection, closing a genuine duplicate-order risk on timeout/connection-error retries.
 
 Verification (AWP): cold second-agent PASS (confirmed precedence ordering, no string-overlap collisions, `_idem_id` correctly scoped outside the retry loop, no copy-paste errors) → Gro APPROVE → GAI APPROVE → static analysis clean. Committed and pushed; not yet deployed to OCI (batched with the broader OCI sync decision).
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — execution/gtc_manager.py: 1 real bug fixed (commit `3f6fa6f`)
+
+**4 cold parallel domain agents.** The first domain agent (Reliability) raised two "CRITICAL"/"HIGH" findings that, on direct verification against the literal code and its own inline documentation, turned out to be mischaracterizations of deliberate, already-incident-hardened, already-documented fail-safe behavior — not bugs:
+- "Infinite retry loop on network timeout" in `cancel_open_gtc_orders()` — actually a documented, deliberate safety gate (retain order ID + CRITICAL Slack alert fires immediately on the first unverifiable cancel, not after silent looping) that the function's own docstring says was specifically *strengthened* from a worse prior behavior.
+- "Partial order IDs cleared unconditionally" — actually a documented, accepted trade-off with an existing downstream safety net (`orphan_manager.py`'s reconciliation, audited earlier this session).
+
+A second domain agent (Execution-risk) independently reached the same conclusion — zero critical bugs, both patterns are intentional. This is logged as a process note: the first agent's framing initially looked like real findings; reading the surrounding comments and docstrings before trusting a "critical" claim is what surfaced the correction.
+
+**One real, confirmed bug** (independently found by 2 of 4 domain agents — Reliability and Quant-logic — and verified directly by Claude against the actual code structure): `submit_rth_day_stops()`'s per-symbol loop body had no enclosing try/except beyond a narrow one around the prior-DAY-stop pre-check. Since the per-calendar-day idempotency gate is set BEFORE the loop runs, an unhandled exception in any one symbol's iteration would terminate the whole function, abandoning every remaining queued symbol for that pass with no same-day retry possible. Confirmed the caller (`strategy/run_cycle.py:690`) has no guard either.
+
+### 3-Point AI Summary
+**Point 1 — Alignment:** 2/4 domain agents (Reliability, Quant-logic) independently found the per-symbol exception gap; Gro ✓, GAI ✓ on the fix.
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — board found it first.
+**Point 3 — Forward-looking:** none new; the file's other defensive patterns (qty_remaining fix, gap-open pre-flight checks, ANOMALY-1 failure tracking) were all re-verified as correct and intact.
+
+Fix: wrapped the previously-unprotected loop body in its own try/except, CRITICAL log + Slack alert on catch, continue to next symbol. Verification (AWP): cold second-agent PASS → Gro APPROVE → GAI APPROVE → static analysis clean.

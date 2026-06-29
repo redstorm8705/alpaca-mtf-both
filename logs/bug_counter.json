@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- broker.py 2 real fixes)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- gtc_manager.py exception guard fix)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -392,10 +392,10 @@
       "notes": "P0 commit 519f369: full restart-safety redesign. _active_movers was pure in-memory state with zero persistence -- unsafe once the run_movers.py main loop was changed to fail-loud on any exception. Added: stop_order_id tracking on every entry; _cancel_stop_if_present() helper called before close_position() in check_exits() and flatten_intraday() (avoids Alpaca's 40310000 held_for_orders rejection, mirrors exit_logic.py's CRITICAL-1 pattern) with resubmit-on-close-failure safety net; new reconcile_on_startup() method querying Alpaca directly for open positions + open orders to rebuild tracking on every restart (mirrors orphan_manager.py in miniature), defaulting mode='intraday' for any recovered position and always resubmitting a fresh GTC stop when no existing one is found (over-protects, never under-protects). Board (Peterffy+Harris) APPROVE, Gro APPROVE, GAI APPROVE, 2 cold second-agents (1st found+blocked on the AlpacaBroker dict-shape bug, 2nd PASSed the corrected diff). | AWP round 2 (commit 64572b4): evaluate_entries() called 3 nonexistent RiskManager methods (already_in_position, can_open_trade, get_position_size) and self.tracker.log_entry()/log_exit() also don't exist on PortfolioTracker. Fixed: corrected to can_open_position()/calculate_position_size(); replaced log_entry/log_exit with trade_logger.log_event() (Gro+GAI both APPROVE, avoids cross-process trade_log.json conflict). Third round of nonexistent-method bugs found in this file in one session."
     },
     "execution/gtc_manager.py": {
-      "patch_count": 1,
-      "last_patched": "2026-06-28 (AWP: qty_remaining=0 falsy-fallback fix)",
+      "patch_count": 2,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: per-symbol exception guard)",
       "lines": 327,
-      "notes": "AWP commit 34d13e3: submit_rth_day_stops()'s qty computation treated qty_remaining=0 as falsy via `or`, falling back to the full original qty -- same bug class already fixed in orphan_manager.py Patch 1 and exit_logic.py's trail-ratchet path. Fixed with explicit None-check. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Deployed to OCI, checksum-verified."
+      "notes": "Phase 2 redo with full board (4 domain agents) found 1 real bug: submit_rth_day_stops()'s per-symbol loop body had no exception guard beyond a narrow pre-check wrapper -- one bad symbol's exception would abort the whole function with no same-day retry (gate set before the loop). Fixed with a wrapping try/except. Two OTHER 'critical' claims from one domain agent were refuted -- both were deliberate, already-documented fail-safe designs, not bugs. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 3f6fa6f."
     },
     "execution/quarterly_hold_manager.py": {
       "patch_count": 1,
