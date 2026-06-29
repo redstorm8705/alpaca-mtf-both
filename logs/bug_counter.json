@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- macro_risk_index.py lock hardening + display fix)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- signal_generator.py 2 fixes, 2 refuted)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -316,10 +316,10 @@
       "notes": " | S26: SIGTERM handler spam fix. | S29: _spy_fetch_alert_sent bool flag for #16 P2 T1 fail-streak alert. | S37-autonomous: RC-3 x4 — L522 SIGTERM open_syms fallback; L555 SIGTERM lockfile close; L690 code version check; L838 heartbeat restart lockfile. All 4: added logger.debug() — no control flow change. py_compile/mypy/ruff PASS. OCI py_compile PASS. Bot restarted active."
     },
     "strategy/signal_generator.py": {
-      "patch_count": 8,
-      "last_patched": "2026-06-28 (AWP: full audit, clean, no patch needed)",
+      "patch_count": 9,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: residual-momentum self-exclusion + atomic write)",
       "lines": 937,
-      "notes": "AWP full audit: weekly-bias gate, intraday override, ADDV liquidity filter, Phase-1 timeout handling all verified correct. 16pt log-only system has minor small-universe edge cases (zero real-trading impact, not fixed). No functional bug in the live 12pt-driving path. Surfaced one RULE C-4 mypy error whose root cause was in events/calendar.py."
+      "notes": "Phase 2 redo with full board (4 domain agents). Real fixes: residual momentum (16pt log-only) was including the stock in its own sector average, contradicting its docstring formula; fixed to exclude self. Plus an atomic-write fix for the score_comparison diagnostic log. Refuted 2 false claims (missing-global, quartile off-by-one) via direct grep and calculation. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit 7da5d28."
     },
     "execution/broker.py": {
       "patch_count": 10,

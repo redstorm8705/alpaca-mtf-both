@@ -6086,3 +6086,24 @@ Verification (AWP): cold second-agent PASS on fixes 1+2 (confirmed no double-fir
 Fixes: (1) added `self._lock` protection to 3 single-attribute getters + restructured `summary()` to snapshot all 4 related attributes under one lock acquisition (true atomic snapshot, computing `size_floor`/`min_score_floor` inline to avoid a non-reentrant-lock deadlock). (2) Fixed `summary()`'s dashboard `min_score_floor` field to use `config.MIN_LONG_SCORE` (matching the real entry-gate base) instead of a hardcoded 9.
 
 Verification (AWP): cold second-agent PASS (zero deadlock risk traced line-by-line, inline computations confirmed byte-for-byte equivalent) → GAI APPROVE. Gro's daily budget remains exhausted. Static analysis clean.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — strategy/signal_generator.py: 2 fixes, 2 false positives refuted (commit `7da5d28`)
+
+**4 cold parallel domain agents.** Confirms the value of rigorous verification in both directions: real bugs found in code most agents declared clean, and confident-sounding "CRITICAL"/"off-by-one" claims refuted by direct calculation.
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- Residual-momentum self-inclusion (Phase 2b): found by the Quant-logic domain agent, verified directly against the docstring's own stated formula.
+- Non-atomic score_comparison write: found by the Data-integrity domain agent.
+- A claimed "missing global declaration" (Reliability agent) and a claimed quartile "off-by-one" (Quant-logic agent, same agent that correctly found Fix 1) were both REFUTED by direct verification — the first via grep (the agent quoted the correct line showing `global` present, then contradicted its own quote), the second via direct calculation (the existing formula produces a perfectly symmetric quartile split; the proposed "fix" would have broken that symmetry).
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — GAI confirmed both fixes without raising anything new (Gro unavailable, daily budget exhausted).
+
+**Point 3 — Forward-looking:** none new. Execution-risk agent's "intraday override cache TTL staleness" was a soft design-tradeoff observation, not escalated.
+
+Fixes: (1) residual momentum now correctly excludes self from its own sector peer average (matching the docstring's explicit formula), with single-member sectors falling back to no-adjustment instead of an always-zero residual. (2) score_comparison log write now uses the established tmp+fsync+replace atomic pattern.
+
+Verification (AWP): cold second-agent PASS (independently re-derived the worked example with a second stock, confirmed no division-by-zero, confirmed exact atomic-write pattern match against `quarterly_hold_manager.py`) → GAI APPROVE. Static analysis clean.
