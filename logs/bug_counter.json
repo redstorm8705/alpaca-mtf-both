@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- news_monitor.py full board redo, no fix needed)"
+    "last_updated": "2026-06-28 (AWP Phase 2 REDO -- macro_risk_index.py lock hardening + display fix)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -328,10 +328,10 @@
       "notes": "Phase 2 redo with full board (4 domain agents) found 2 real bugs the original lighter pass missed: partial_close_position() lacked the same not-found-as-success handling close_position() already has (watchdog-restart-race gap, found independently by 2/4 agents); submit_limit_order() lacked the idempotency key submit_market_order() already has (genuine duplicate-order risk via timeout/connection retryable conditions). Refuted a related claim about GTC/DAY stop functions sharing the idempotency gap -- their retries only fire on confirmed rejections, not ambiguous timeouts. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 0d68f0a."
     },
     "events/macro_risk_index.py": {
-      "patch_count": 20,
-      "last_patched": "2026-06-28 (AWP: defensive restore clamp)",
+      "patch_count": 21,
+      "last_patched": "2026-06-28 (AWP Phase 2 REDO: lock hardening + min_score_floor display fix)",
       "lines": 975,
-      "notes": "AWP commit 3b8c675: full audit found the file already well-defended and static-analysis clean. One theoretical edge case (negative raw_saved on corrupted mri_state.json) fixed with a one-line clamp, confirmed by both Gro and GAI against the literal code (GAI also hallucinated an unrelated fabricated 'findings' section referencing nonexistent functions -- disregarded). Cold second-agent PASS."
+      "notes": "Phase 2 redo with full board (4 domain agents) -- highest false-positive rate this session (RC-1 timezone claim refuted via empirical Python test, RC-5 TOCTOU self-rated negligible, JPY double-count self-refuted). Real findings: lock-consistency gap in 4 getters (zero reachable risk today, fixed as cheap defense) and a genuine pre-existing dashboard display bug (min_score_floor showed base=9 instead of the real base=10 paper-profile value) found by the cold second-agent, not a domain agent. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit c782954."
     },
     "reconcile_eod.py": {
       "patch_count": 2,

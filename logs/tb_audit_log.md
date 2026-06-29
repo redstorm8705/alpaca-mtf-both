@@ -6059,3 +6059,30 @@ Verification (AWP): cold second-agent PASS on fixes 1+2 (confirmed no double-fir
 **Three related, real, but governance-level findings (not bugs) logged to the Future Roadmap Log as one consolidated item:** `get_active_event_type()`'s recency-over-domain-severity classification (confirmed by direct read — it's a documented 2026-04-06 design choice, not an oversight), the `_macro_risk_active` threshold's lack of hysteresis, and the hardcoded `GEO_CONFLICT` fallback. All three stem from the same underlying design tradeoff and have a real (if narrow) downstream consequence on `MacroRiskIndex`'s scan-persistence-duration selection — but changing the design requires board input on whether recency or domain-severity should win, not a unilateral patch.
 
 **Disposition: no code fix this round.** Static analysis was already clean from the original lighter pass; nothing here warranted a change to that state.
+
+---
+
+## 2026-06-28 (AWP, Phase 2 REDO with full board rigor) — events/macro_risk_index.py: lock hardening + display bug fix (commit `c782954`)
+
+**4 cold parallel domain agents.** Highest false-positive rate of any file in this session's redo, alongside genuinely useful findings once verified.
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- Lock-consistency gap (`event_type()`/`min_score_floor()`/`requires_confirmation()`/`summary()`): 1/4 agents (Reliability). Verified by direct grep across the entire codebase that this class has exactly one caller (`run_cycle.py`), confirming zero currently-reachable risk — fixed anyway as cheap defensive consistency, matching the established pattern in the rest of the class.
+- `summary()` dashboard `min_score_floor` display bug (hardcoded base=9 vs. real base=10 for paper profile): found by the cold second-agent reviewing the lock fix, not by any domain agent — another example of the verification layer catching something the discovery layer missed.
+
+**Point 2 — Gro+GAI consensus Claude/board missed:** none — Gro unavailable (daily budget exhausted), GAI confirmed both fixes without raising anything new.
+
+**Point 3 — Forward-looking:** none new.
+
+**Refuted/non-actionable, for the record:**
+- RC-1 "naive datetime" claim — refuted via direct empirical Python test (`datetime.fromisoformat()` correctly restores timezone-aware datetimes when the source string includes a UTC offset; confirmed by actually running the round-trip).
+- RC-5 TOCTOU claim on `_persist()` — self-rated by the reporting agent as negligible (<1 score point drift over 24h).
+- Quant-logic "JPY double-counting" claim — self-refuted by the same agent as correct multi-domain scoring.
+- Several "thresholds lack backtested justification" complaints — generic, applicable to any hardcoded model parameter, not specific findings.
+- Execution-risk agent found zero issues (all checks rated CLEAN).
+
+Fixes: (1) added `self._lock` protection to 3 single-attribute getters + restructured `summary()` to snapshot all 4 related attributes under one lock acquisition (true atomic snapshot, computing `size_floor`/`min_score_floor` inline to avoid a non-reentrant-lock deadlock). (2) Fixed `summary()`'s dashboard `min_score_floor` field to use `config.MIN_LONG_SCORE` (matching the real entry-gate base) instead of a hardcoded 9.
+
+Verification (AWP): cold second-agent PASS (zero deadlock risk traced line-by-line, inline computations confirmed byte-for-byte equivalent) → GAI APPROVE. Gro's daily budget remains exhausted. Static analysis clean.
