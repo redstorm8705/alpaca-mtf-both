@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E702, E402
 """
 Pre-flight & RTH simulation diagnostic.
 Verifies bot readiness for tomorrow's session.
@@ -6,16 +7,15 @@ Output to logs/ only. Does NOT trade or submit orders.
 """
 from zoneinfo import ZoneInfo
 from datetime import datetime
-import sys, json, os, time
+import json
+import os
 
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# is read-only on trade_log.json/premarket_movers.json/eod_*.json and only
+# writes its own dedicated logs/preflight_*.txt report -- no write-contention
+# risk with the live bot's shared state.
 PDT = ZoneInfo("America/Los_Angeles")
 ET  = ZoneInfo("America/New_York")
-_now = datetime.now(PDT)
-if _now.weekday() < 5:
-    _mins = _now.hour * 60 + _now.minute
-    if (5 * 60 + 44) <= _mins < (13 * 60):
-        print("BLOCKED: Cannot run during RTH hours (5:44 AM–1:00 PM PDT weekdays).")
-        sys.exit(1)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(ROOT, "logs")
@@ -141,7 +141,7 @@ check("M3 patch present in main.py",
 # ── 6. GTC PARTIAL P&L FIX (M2 patch) ────────────────────────
 print("\n[6] GTC PARTIAL P&L RECORDING (M2 patch)")
 result2 = subprocess.run(
-    ["grep", "-n", "partial_pnl.*partial_exit_price\|FIX: Calculate and bank", os.path.join(ROOT, "main.py")],
+    ["grep", "-n", r"partial_pnl.*partial_exit_price\|FIX: Calculate and bank", os.path.join(ROOT, "main.py")],
     capture_output=True, text=True
 )
 found2 = "partial_pnl" in result2.stdout and "bank" in result2.stdout.lower()
