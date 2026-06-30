@@ -6460,3 +6460,23 @@ Per Rafael's direct mandate, removed the "RTH Block" guardrail in full: the docu
 | 14 | scripts/preflight_sim.py | GAI caught an incomplete E401 fix mid-review — corrected before sign-off | ✅ |
 
 **Process note:** every file's diff was sent to Gro + GAI independently (lean, non-leading prompts per the earlier-established correction). 4 files had an initial split verdict resolved via counter-prompt — in every case, the dissenting voice either (a) lacked context on this project's RULE C-4 mandate and reversed once informed, or (b) raised a genuine catch that was investigated and fixed before final sign-off (scripts/preflight_sim.py's E401 gap). Zero files were deployed without full Gro+GAI agreement.
+
+---
+
+## 2026-06-30 — ATH entry scalar + Movers/QHM guard + run_movers.py buffer fix (commits `8400ea7`, `67e669c`, `bf760c9`, `c09291b`), all deployed
+
+**ATH/market-top compounding gate fix (8400ea7):** Dynamic MIN_SCORE was hitting 12/12 all day blocking ALL entries. Two compounding signals: ATH_MIN_SCORE_RAISE_PCT=2.0 (SPY 1.7% from ATH → floor=11) + market_top zone_tier >=2 (Orange → +1 → floor=12). Board 4/4 + Gro + GAI unanimous: lowered ATH_MIN_SCORE_RAISE_PCT to 1.0, raised compound trigger to zone_tier>=3. Now floor=11 with MRI=ELEVATED only. Already deployed and bot restarted.
+
+**Movers/QHM cross-strategy collision fix (67e669c):** Movers strategy exiting NVDA/GOOGL positions was zeroing out Alpaca position count, triggering QHM external_close_detected and resetting the entire quarterly-hold tranche-averaging cycle. Added get_quarterly_hold_symbols() guard at both close_position() call sites in check_exits() and flatten_intraday(). Already deployed.
+
+**ATH entry scalar — 0.90x at <1% from ATH (c09291b):** Board 3-1 + Gro + GAI: when SPY within 1% of 52w high, apply 0.90x to both stop_mult AND target_mult in risk_manager.py:get_stop_and_target() — after VIX scalar, before leverage multipliers. Preserves R:R. Logged per entry. Board 3-1 voted AGAINST mid-trade trailing tightening at -5%/-10% (whipsaw cost too high); that is a separate board session item.
+
+**run_movers.py buffer fix (c09291b):** Hardcoded 9*60+45 (9:45 AM ET, 15-min buffer) replaced with config.TOD_MARKET_OPEN_BUFFER_MINS=30. Movers was entering 15 min earlier than main bot's configured gate. EOD no-entry also unified with config constant.
+
+All three deployed and verified on OCI (sha256 match, py_compile PASS). Bot restarted at each deployment step.
+
+**Pending still:**
+- Task #14: qhm_external_close missing pnl field in trade_events.jsonl
+- Task #16: autonomous_review.py git pull failures (cosmetic, non-blocking)
+- Cross-strategy Phase 3 audit: logged to CLAUDE.md Future Roadmap
+- ATH trailing tightening: requires separate board session + backtest before implementation
