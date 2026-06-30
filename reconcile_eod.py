@@ -18,8 +18,24 @@ Scheduling (OCI cron, 20:10 UTC = 4:10 PM ET Mon-Fri):
   10 20 * * 1-5 /usr/local/bin/python3 /home/ubuntu/mtf-bot/reconcile_eod.py \
       >> /home/ubuntu/mtf-bot/logs/reconcile.log 2>&1
 
-RTH block: 9:30 AM–4:00 PM ET / Mon-Fri (cron timing avoids this naturally).
 Data tier: T1 (Alpaca Paper Trading REST API).
+
+AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate) -- this script
+may now run at any time, including RTH. HOWEVER: a full domain audit (Harris/
+Brandt/Thorp/Taleb lens) found that naively removing the block alone would
+open a real data-corruption path. The live bot (strategy/run_cycle.py) writes
+this same eod_{date}.json file every ~5-minute cycle during RTH UNLESS the
+"_reconcile_ts" sentinel is already set -- write_eod_summary() itself has zero
+awareness of the sentinel; it's purely a caller-side gate. If this script ran
+mid-RTH and set the sentinel before the trading day's fills were complete
+(GTC/partial fills can land hours later), the live bot would stop writing
+fresh EOD snapshots for the rest of the session while this script's
+necessarily-incomplete reconciliation became "final." Fix: the sentinel is
+now only set if run after market close (16:00 ET) -- see _check_post_close()
+below. Before that, the script still runs and writes its best-effort
+reconciliation, but leaves the sentinel unset, so the live bot's periodic
+flush continues to refresh the EOD file every cycle until a complete,
+post-market reconciliation actually finalizes it.
 """
 
 import os
@@ -59,15 +75,18 @@ _DRIFT_THRESH = 0.50          # Slack alert threshold in dollars
 _FILL_WINDOW  = 120           # seconds: match fills within ±2 min of tracker exit_time
 
 # ---------------------------------------------------------------------------
-# RTH block (9:30 AM–4:00 PM ET, Mon–Fri)
+# Post-close check — gates the R-GUARD sentinel, not script execution
 # ---------------------------------------------------------------------------
-def _check_rth_block() -> None:
-    _now = datetime.now(_ET)
-    if _now.weekday() < 5:
-        _mins = _now.hour * 60 + _now.minute
-        if (9 * 60 + 30) <= _mins < (16 * 60):
-            logger.error("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET).")
-            sys.exit(1)
+def _is_post_close(now: datetime | None = None) -> bool:
+    """
+    True if it's at or after 4:00 PM ET (market close). Used to decide whether
+    this run's reconciliation is allowed to set the "_reconcile_ts" R-GUARD
+    sentinel (see module docstring for why: the sentinel tells the live bot
+    to stop overwriting the EOD file, which is only safe once the trading
+    day's fills are actually complete).
+    """
+    _now = now or datetime.now(_ET)
+    return (_now.hour * 60 + _now.minute) >= (16 * 60)
 
 # ---------------------------------------------------------------------------
 # Alpaca API helpers
@@ -555,8 +574,24 @@ def reconcile(date_str: str, suppress_slack: bool = False) -> None:
     if new_16pt_bkts:
         eod["score_16pt_buckets"] = new_16pt_bkts
     eod["trades"]               = trades  # closed trades updated in-place
-    # R-GUARD sentinel — bot will not overwrite after this timestamp is set
-    eod["_reconcile_ts"]        = datetime.now(_ET).isoformat()
+    # R-GUARD sentinel — bot will not overwrite after this timestamp is set.
+    # AWP audit fix (2026-06-30): only set once the trading day's fills are
+    # actually complete (post-close). Setting it mid-RTH would freeze the
+    # live bot's periodic EOD writes against a necessarily-incomplete
+    # reconciliation (GTC/partial fills can land hours later). If run before
+    # close, this reconciliation still writes its best-effort numbers, but
+    # leaves the sentinel unset so the live bot keeps refreshing the file.
+    if _is_post_close():
+        eod["_reconcile_ts"] = datetime.now(_ET).isoformat()
+    else:
+        logger.warning(
+            "Running before market close (%s ET) — _reconcile_ts NOT set. "
+            "This run's reconciliation may be based on incomplete fills "
+            "(GTC/partial orders can fill later today). The live bot will "
+            "continue overwriting this file each cycle until a post-close "
+            "run finalizes it.",
+            datetime.now(_ET).strftime("%H:%M"),
+        )
 
     _atomic_write(eod_path, eod)
     logger.info(
@@ -577,8 +612,6 @@ if __name__ == "__main__":
                 if _line and not _line.startswith("#") and "=" in _line:
                     _k, _, _v = _line.partition("=")
                     os.environ.setdefault(_k.strip(), _v.strip())
-
-    _check_rth_block()
 
     _flags = [a for a in sys.argv[1:] if a.startswith("--")]
     _positional = [a for a in sys.argv[1:] if not a.startswith("--")]
