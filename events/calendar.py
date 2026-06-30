@@ -1,12 +1,20 @@
 # ruff: noqa: E501
 # events/calendar.py — Market-moving event tracker
-# All risk days trade at 50% capital deployment vs normal days.
 # Only true market holidays (BLACKOUT) result in no trading.
 #   - BLACKOUT:    no trades — market holidays only
-#   - HIGH_RISK:   50% size — FOMC, CPI, NFP, earnings
-#   - CAUTION:     50% size — quad witching, early closes
-#   - OPPORTUNITY: 50% size — tech conferences, known catalysts
+#   - HIGH_RISK:   50% size — FOMC, CPI, NFP, earnings (binary, unknown-outcome shocks)
+#   - CAUTION:     65% size — quad witching, early closes (structural, known-mechanics events)
+#   - OPPORTUNITY: 80% size — tech conferences, known catalysts
 #   - CLEAR:       100% size — no known events
+#
+# AWP audit fix (2026-06-28): CAUTION was previously flat 50%, identical to
+# HIGH_RISK. OPEN QUESTION PROTOCOL ran on this -- board (Harris/Taleb,
+# Levitt/Derman) + Gro + GAI unanimously recommended differentiating, since
+# CAUTION events have known mechanics/predictable liquidity (quad witching,
+# early closes) while HIGH_RISK events are binary-outcome shocks (FOMC, NFP)
+# where the result is genuinely unknown until release. Numeric votes ranged
+# 0.60x-0.75x for CAUTION; Rafael approved 0.65x. HIGH_RISK kept at 0.50x
+# pre-release (all 5 voices agreed to leave it unchanged).
 
 from datetime import date, timedelta
 from enum import Enum
@@ -19,8 +27,8 @@ _ET = ZoneInfo("America/New_York")
 class EventRisk(Enum):
     BLACKOUT    = "blackout"    # No trades — market holidays, closed sessions only
     HIGH_RISK   = "high_risk"   # Trade at 50% size — FOMC, CPI, earnings, major events
-    CAUTION     = "caution"     # Trade at 50% size — quad witching, early closes
-    OPPORTUNITY = "opportunity" # Trade at 50% size — tech conferences, known catalysts
+    CAUTION     = "caution"     # Trade at 65% size — quad witching, early closes
+    OPPORTUNITY = "opportunity" # Trade at 80% size — tech conferences, known catalysts
     CLEAR       = "clear"       # Full size — no known events
 
 
@@ -135,18 +143,18 @@ STATIC_EVENTS = [
     # Last trading day of each quarter — institutional window dressing creates
     # unusual intraday flows (forced rebalancing, index reconstitution, fund
     # managers painting performance). Signals can be misleading near close.
-    # CAUTION all day: 50% size, no new entries after 3:00 PM ET.
-    {"date": "2026-03-31", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q1 Quarter-End / Window Dressing — 50% size, caution near close"},
-    {"date": "2026-06-30", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q2 Quarter-End / Window Dressing — 50% size, caution near close"},
-    {"date": "2026-09-30", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q3 Quarter-End / Window Dressing — 50% size, caution near close"},
-    {"date": "2026-12-31", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q4 Quarter-End / Window Dressing + Year-End — 50% size, caution near close"},
+    # CAUTION all day: 65% size, no new entries after 3:00 PM ET.
+    {"date": "2026-03-31", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q1 Quarter-End / Window Dressing — 65% size, caution near close"},
+    {"date": "2026-06-30", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q2 Quarter-End / Window Dressing — 65% size, caution near close"},
+    {"date": "2026-09-30", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q3 Quarter-End / Window Dressing — 65% size, caution near close"},
+    {"date": "2026-12-31", "type": EventType.OTHER, "risk": EventRisk.CAUTION,  "note": "Q4 Quarter-End / Window Dressing + Year-End — 65% size, caution near close"},
 
     # ── TECH CONFERENCES ──────────────────────────────────────────────────────
-    {"date": "2026-03-17", "type": EventType.NVDA_GTC,         "risk": EventRisk.OPPORTUNITY, "symbol": "NVDA", "note": "NVIDIA GTC 2026 Keynote — 50% size"},
-    {"date": "2026-03-18", "type": EventType.NVDA_GTC,         "risk": EventRisk.OPPORTUNITY, "symbol": "NVDA", "note": "NVIDIA GTC Day 2 — 50% size"},
-    {"date": "2026-06-08", "type": EventType.APPLE_WWDC,       "risk": EventRisk.OPPORTUNITY, "symbol": "AAPL", "note": "Apple WWDC 2026 Keynote — 50% size"},
-    {"date": "2026-05-19", "type": EventType.MSFT_BUILD,       "risk": EventRisk.OPPORTUNITY, "symbol": "MSFT", "note": "Microsoft Build 2026 — 50% size"},
-    {"date": "2026-05-20", "type": EventType.GOOGLE_IO,        "risk": EventRisk.OPPORTUNITY, "symbol": "GOOGL","note": "Google I/O 2026 — 50% size"},
+    {"date": "2026-03-17", "type": EventType.NVDA_GTC,         "risk": EventRisk.OPPORTUNITY, "symbol": "NVDA", "note": "NVIDIA GTC 2026 Keynote — 80% size"},
+    {"date": "2026-03-18", "type": EventType.NVDA_GTC,         "risk": EventRisk.OPPORTUNITY, "symbol": "NVDA", "note": "NVIDIA GTC Day 2 — 80% size"},
+    {"date": "2026-06-08", "type": EventType.APPLE_WWDC,       "risk": EventRisk.OPPORTUNITY, "symbol": "AAPL", "note": "Apple WWDC 2026 Keynote — 80% size"},
+    {"date": "2026-05-19", "type": EventType.MSFT_BUILD,       "risk": EventRisk.OPPORTUNITY, "symbol": "MSFT", "note": "Microsoft Build 2026 — 80% size"},
+    {"date": "2026-05-20", "type": EventType.GOOGLE_IO,        "risk": EventRisk.OPPORTUNITY, "symbol": "GOOGL","note": "Google I/O 2026 — 80% size"},
 
     # ── MARKET HOLIDAYS 2026 ──────────────────────────────────────────────────
     {"date": "2026-01-01", "type": EventType.MARKET_HOLIDAY,   "risk": EventRisk.BLACKOUT,    "note": "New Year's Day"},
@@ -364,9 +372,16 @@ class EventCalendar:
         Size table:
           CLEAR       → 1.00x
           OPPORTUNITY → 0.80x  (tech conferences — uncertainty, not fear)
-          CAUTION     → 0.50x  (quad witching, early close — all day, no release)
-          HIGH_RISK   → 0.50x pre-release  |  0.75x post-release (+30 min)
+          CAUTION     → 0.65x  (quad witching, early close — known mechanics, all day, no release)
+          HIGH_RISK   → 0.50x pre-release  |  0.75x post-release (+30 min)  (binary, unknown-outcome shock)
           BLACKOUT    → 0.00x  (market holidays only)
+
+        AWP audit fix (2026-06-28): CAUTION was previously flat 0.50x, identical
+        to HIGH_RISK, with no empirical basis for the equivalence. OPEN QUESTION
+        PROTOCOL ran -- board (Harris/Taleb, Levitt/Derman) + Gro + GAI
+        unanimously recommended differentiating CAUTION (known mechanics,
+        predictable liquidity) from HIGH_RISK (binary, unknown outcome).
+        Rafael approved 0.65x for CAUTION; HIGH_RISK kept at 0.50x pre-release.
 
         Pass now_et=datetime.now(ET) from the caller to enable normalization.
         Omitting now_et returns the conservative pre-release rate all day.
@@ -377,7 +392,7 @@ class EventCalendar:
         base = {
             EventRisk.CLEAR:       1.0,
             EventRisk.OPPORTUNITY: 0.8,
-            EventRisk.CAUTION:     0.5,
+            EventRisk.CAUTION:     0.65,
             EventRisk.HIGH_RISK:   0.5,
             EventRisk.BLACKOUT:    0.0,
         }[risk]
