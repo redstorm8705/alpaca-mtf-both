@@ -6320,3 +6320,15 @@ Cold review: PASS (after the dead-code fix). GAI: APPROVE (recommended a future 
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (10/14):** weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 5/14: weekly_perf_audit.py (commit `f8f8aef`), deployed
+
+1254 lines — full verbatim read via Explore subagent (over the 1000-line Full Read Gate threshold). Confirmed safe: writes only its own dedicated weekly output files, zero writes to live-bot shared state. Deliberately preserved `_ET`/`_PT` (used 6+/8+ times elsewhere) while removing only `_now_et` and the conditional itself.
+
+Cold review: PASS. GAI: APPROVE. Gro: APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (9/14):** autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
