@@ -6306,3 +6306,17 @@ Cold review: PASS. GAI: APPROVE. Gro: initially NEEDS-CHANGES on a commit-hygien
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (11/14):** backtest_12pt.py, weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 4/14: backtest_12pt.py (commit `8cb6c5a`), deployed
+
+Read-only standalone backtest tool, own dated output file, no write-contention. Cold review caught a real (trivial, zero-risk) leftover — `ET`/`_now` vestigial after the block removal — fixed and re-verified before sign-off. Also removed now-unused `import sys` and updated the docstring + embedded output-JSON metadata that previously asserted RTH blocking was active.
+
+Per RULE C-4, bundled: fixed a pre-existing mypy var-annotated error, suppressed 78 pre-existing ruff violations via documented noqa (confirmed identical before/after via git stash).
+
+Cold review: PASS (after the dead-code fix). GAI: APPROVE (recommended a future dedicated cleanup pass for the 78 suppressed violations — logged as a roadmap note, not a blocker). Gro: APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (10/14):** weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
