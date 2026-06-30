@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501, E701, E702, E741, F541
 """
 backtest_12pt.py — Standalone daily-bar backtest of the 12-point MTF confluence scoring system.
 
@@ -7,7 +8,7 @@ GUARDRAILS ENFORCED (applies to all plugins and Claude Code skills in this proje
   2. Read-only access to all bot files. Does not modify any bot file.
   3. All output written to logs/ directory only.
   4. Does NOT import execution.broker, execution.risk_manager, or any Alpaca client directly.
-  5. RTH-blocked: refuses to run weekdays between 9:30 AM and 4:00 PM ET.
+  5. RTH Block — REMOVED (Rafael mandate 2026-06-30). May now run at any time, including RTH.
 
 Scoring system replicated faithfully from:
   - strategy/confluence.py  (score_long_signal / score_short_signal)
@@ -26,7 +27,6 @@ Usage:
   python3 backtest_12pt.py
 """
 
-import sys
 import json
 import numpy as np
 import pandas as pd
@@ -36,16 +36,12 @@ from zoneinfo import ZoneInfo
 from data.fetcher import fetch_bars  # T1: Alpaca Data — sole approved bar source
 import config
 
-# ── Guardrail 5: Block during RTH on weekdays ─────────────────────────────────
-ET = ZoneInfo("America/New_York")
+# AWP audit fix (2026-06-30): Guardrail 5 (RTH block) removed (Rafael mandate).
+# This script is read-only (no execution imports, no bot file writes outside
+# logs/) and writes only its own dated output file, so removing the time
+# restriction carries no write-contention risk.
 PT = ZoneInfo("America/Los_Angeles")
 ROOT = Path(__file__).resolve().parent
-_now = datetime.now(ET)
-if _now.weekday() < 5:  # Monday–Friday
-    _mins = _now.hour * 60 + _now.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
 
 # ── Guardrail 4: No execution.broker or Alpaca client imports ─────────────────
 
@@ -490,7 +486,7 @@ def compute_metrics(trades: list) -> dict:
         weeks = 1
     sig_per_week = len(trades) / weeks
 
-    exit_counts = {}
+    exit_counts: dict[str, int] = {}
     for t in trades:
         exit_counts[t["exit_reason"]] = exit_counts.get(t["exit_reason"], 0) + 1
 
@@ -617,7 +613,7 @@ def main():
                 "2_file_access":          "read-only — no bot files modified",
                 "3_output_directory":     "logs/ only",
                 "4_no_execution_imports": "execution.broker / risk_manager not imported",
-                "5_rth_check":            "blocked weekdays 9:30 AM–4:00 PM ET (standard CLAUDE.md block)",
+                "5_rth_check":            "removed (Rafael mandate 2026-06-30) — may run at any time",
             },
         },
         "aggregate":  agg,
