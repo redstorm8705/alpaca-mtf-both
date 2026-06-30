@@ -6210,3 +6210,15 @@ All 10 files re-audited with full board rigor (4 cold parallel domain agents per
 | 10 | indicators/momentum.py | Missing try/except guard; 0.0-boundary mislabel | ✅ |
 
 **Total real bugs found and fixed across the 10-file redo: 13** (plus 1 in the macd.py dependency surfaced during file 9's audit). **False positives caught and refuted: 9+** across the full redo (documented per-file above and in prior log entries). **Governance/design questions logged to CLAUDE.md roadmap, not unilaterally fixed: 5.**
+
+---
+
+## 2026-06-29 (OPEN QUESTION PROTOCOL implementation) — 2 governance questions resolved, both deployed (commits `6353814`, `8460a19`)
+
+Both items were logged to the Future Roadmap during the Phase 2 redo (2026-06-28). Ran the full OPEN QUESTION PROTOCOL: 3 cold board votes + Gro + GAI, same prompt to both AI voices, decision table presented to Rafael, approved.
+
+**Q1 — events/calendar.py CAUTION/HIGH_RISK multiplier:** 5/5 voices unanimous for differentiation. Board (Harris/Taleb): CAUTION 0.60-0.65x, HIGH_RISK 0.40-0.50x. Board (Levitt/Derman): CAUTION ≤0.65x, HIGH_RISK ≤0.5x. Gro: CAUTION 0.7x, HIGH_RISK 0.3x. GAI: CAUTION 0.75x, HIGH_RISK 0.5x. Rafael approved CAUTION=0.65x, HIGH_RISK unchanged at 0.50x (all voices agreed to leave HIGH_RISK as-is). Implemented across the `base` dict, docstring, enum comments, file header, and all affected event "note" strings. Opportunistically fixed a separate pre-existing staleness on OPPORTUNITY-tier events (6 places said "50% size", actual value always 0.80x).
+
+**Q2 — config.py VOLUME_CONFIRMATION_ENABLED toggle hardening:** Board (Beck/McKinney), Gro, GAI unanimous: harden `validate_config()` rather than rely on documentation alone. Rafael approved. Added two checks rejecting startup on an incomplete two-step toggle.
+
+Verification: both diffs sent to Gro + GAI together with the exact same prompt — both APPROVE. Config.py's logic verified with 3 live Python executions (not just static analysis): current state passes silently, simulated incomplete toggle correctly raises SystemExit with both new messages, simulated complete toggle passes with no false positive. Static analysis clean on both files. **Deployed to OCI** — zero conflicting local divergence on either file, checksum-verified, py_compile clean.

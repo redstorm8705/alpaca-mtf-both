@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-28 (AWP Phase 2 REDO COMPLETE -- all 10 files, momentum.py deployed last)"
+    "last_updated": "2026-06-29 (OPEN QUESTION PROTOCOL implementation -- calendar.py + config.py deployed)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -405,9 +405,9 @@
     },
     "events/calendar.py": {
       "patch_count": 2,
-      "last_patched": "2026-06-28 (AWP Phase 2 REDO: NFP date fix + RC-1 ET-anchoring, deployed)",
+      "last_patched": "2026-06-29 (OPEN QUESTION PROTOCOL: CAUTION multiplier 0.5x->0.65x, deployed)",
       "lines": 384,
-      "notes": "Phase 2 redo with full board (4 domain agents) found a real, factual NFP date error (2026-07-02 -> 2026-07-03, confirmed via direct date computation) and a genuinely-reachable RC-1 violation (date.today() not ET-anchored, confirmed materially impactful since OCI runs UTC). Refuted a 'midnight rollover' framing for a different time-math concern. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit c4bcdf0, deployed to OCI same session."
+      "notes": "Phase 2 redo with full board (4 domain agents) found a real, factual NFP date error (2026-07-02 -> 2026-07-03, confirmed via direct date computation) and a genuinely-reachable RC-1 violation (date.today() not ET-anchored, confirmed materially impactful since OCI runs UTC). Refuted a 'midnight rollover' framing for a different time-math concern. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit c4bcdf0, deployed to OCI same session. | 2026-06-29: CAUTION differentiated from HIGH_RISK per unanimous board+Gro+GAI vote (commit 6353814), deployed."
     },
     "indicators/momentum.py": {
       "patch_count": 2,
@@ -426,6 +426,12 @@
       "last_patched": "2026-06-28 (AWP: missing len(df)<2 guard added)",
       "lines": 106,
       "notes": "AWP commit d11dc32: macd_histogram_rising()/macd_histogram_falling() lacked the len(df)<2 guard their sibling functions already had -- found during confluence.py's board redo. Fixed + RULE C-4 noqa cleanup. Cold second-agent PASS, GAI APPROVE. Deployed to OCI."
+    },
+    "config.py": {
+      "patch_count": 1,
+      "last_patched": "2026-06-29 (OPEN QUESTION PROTOCOL: validate_config() toggle hardening, deployed)",
+      "lines": 522,
+      "notes": "Added a hardened cross-check in validate_config() to reject startup if VOLUME_CONFIRMATION_ENABLED=True but SCORE_WEIGHTS wasn't correctly paired-edited. Board+Gro+GAI unanimous, Rafael approved. Verified with 3 live Python executions. Commit 8460a19, deployed to OCI."
     }
   },
   "sessions": [
