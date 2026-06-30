@@ -1220,9 +1220,15 @@ def run_cycle(
             _ath_min_score = _base_min + 2   # 11/12 — near ATH
         elif _spy_ath_dist_pct < config.ATH_MIN_SCORE_RAISE_PCT:   # 1–2% from ATH
             _ath_min_score = _base_min + 1   # 10/12 — approaching ATH
-    # market-top-detector supplement: zone_tier 2+ (Orange/Red/Critical) → +1 additional
-    # Compounds with 52w-high signal; capped so combined max is still +2 (11/12)
-    if _main._market_top_zone_tier >= 2 and _ath_min_score < _base_min + 2:
+    # market-top-detector supplement: zone_tier 3+ (Red/Critical only) → +1 additional
+    # AWP audit fix (2026-06-30): was >= 2 (Orange). Orange (score~47, VIX=16.5 bull
+    # market) combined with 1.7%-from-ATH to push the effective floor to 12/12,
+    # blocking all entries for an entire session. Orange is "moderate concern" in a
+    # normal bull market — it should not compound with ATH proximity to demand a
+    # perfect signal. Board 4/4 + Gro + GAI unanimous: only Red (3+) or Critical (4)
+    # should trigger the compound. Orange stands alone as its own +1 if it fires the
+    # ATH gate (which now requires within 1%, not 2%).
+    if _main._market_top_zone_tier >= 3 and _ath_min_score < _base_min + 2:
         _ath_min_score = min(_base_min + 2, _ath_min_score + 1)
 
     # Layer 6: Macro regime — structural 1-2 year signal (macro-regime-detector skill)

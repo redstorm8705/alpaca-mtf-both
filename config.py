@@ -281,7 +281,12 @@ VOL_TIER_STD_STOP_INTRADAY      = 1.25  # AAPL, AMZN, META, NFLX, CRM, etc.
 VOL_TIER_STD_STOP_OVERNIGHT     = 2.0
 
 # ATH proximity gate — dynamic MIN_SCORE raise near 52w high
-ATH_MIN_SCORE_RAISE_PCT = 2.0  # raise dynamic MIN_SCORE +1 when SPY within 2% of 52w high
+ATH_MIN_SCORE_RAISE_PCT = 1.0  # raise dynamic MIN_SCORE +1 when SPY within 1% of 52w high
+# AWP audit fix (2026-06-30): was 2.0. At 1.7% from ATH with VIX=16.5, the old
+# threshold combined with the market-top compound (+1 at Orange zone_tier 2) to
+# push the effective floor to 12/12, locking out all entries in a normal bull
+# market for an entire session. Board 4/4 + Gro + GAI unanimous: 1.7% from ATH
+# is normal bull market noise, not a meaningful distance constraint.
 
 
 # VIX-based stop widening — replaces size reduction
