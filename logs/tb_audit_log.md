@@ -6375,3 +6375,13 @@ Pure read-only diagnostic — zero file writes confirmed via full read. Cold rev
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (6/14):** run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 9/14: run_market_top.py (commit `fd264e7`), deployed
+
+Single-writer cache, same pattern as run_macro_regime.py. Bundled a trivial F541 fix + noqa for 3 pre-existing violations. Cold review PASS. Gro APPROVE. GAI APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (5/14):** run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
