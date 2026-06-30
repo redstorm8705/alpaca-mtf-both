@@ -6332,3 +6332,19 @@ Cold review: PASS. GAI: APPROVE. Gro: APPROVE.
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (9/14):** autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — autonomous_patch_generator.py: P0 DeepSeek->Gro migration + RTH Block removal, file 6/14 (commit `5afa539`), deployed
+
+This file was both Task #12's file 6/14 AND the separately-flagged broken autonomous routine (Task #15) — handled together in one patch sequence.
+
+**P0 finding (confirmed via OCI cron log):** every board-vote/diff-generation/second-agent-review call has been returning 402 Payment Required from DeepSeek for an unknown number of nights, every run ending "0 processed, 17 left for retry." The live interactive Claude pipeline migrated to Gro/Groq on 2026-06-27 (commit 6457394) but this standalone OCI script was never updated.
+
+**Fix:** renamed `_call_deepseek()` to `_call_gro()`, changed base URL/model/env-var-key to Groq's OpenAI-compatible equivalents (confirmed `GROQ_API_KEY` present in OCI's `.env` before deploying), updated all 3 call sites. Also removed the RTH block (confirmed this script only writes its own dedicated pipeline files, never applies patches itself — matches CLAUDE.md's "scheduled sessions never apply patches" rule).
+
+15-point reliability domain review: PASS (confirmed zero remaining `_call_deepseek` references, confirmed correct Groq endpoint construction, confirmed OpenAI-compatible payload shape, confirmed no dangling references from the RTH removal). Gro APPROVE. GAI APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified, py_compile clean. The pipeline should produce its first real output on tonight's 11 PM ET run.
+
+**Remaining RTH files (8/14):** earnings_preflight.py, audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
