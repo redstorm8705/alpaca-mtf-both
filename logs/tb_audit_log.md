@@ -6262,3 +6262,17 @@ User asked directly: did Gro/GAI audit the actual patch code, or just the concep
 **Counter-prompted Gro with this rebuttal.** Gro changed its verdict to **APPROVE**, conceding concerns 1-3 were already handled and concern 4 is low-priority given dormancy. No deadlock — resolved without escalating to Rafael.
 
 **Lesson for future patch-sequence sign-offs:** Gro/GAI prompts must present the diff + original problem statement WITHOUT pre-loading my own synthesized conclusions about board consensus or correctness. The first round technically satisfied "send them the diff" but violated the spirit of independent audit. This re-review is the one that counts; the original commit message's "Gro APPROVE, GAI APPROVE" claim was procedurally weak even though the underlying patch held up under a real independent pass.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal (Rafael mandate), file 1/14: preflight_simulation.py (commit `182634d`), deployed
+
+Rafael ordered full removal of the "RTH Block" guardrail (Section 4 of CLAUDE.md) — both the documented policy and the runtime code in all 14 affected scripts. Doc removal logged separately (commit `2f5a13b`). This entry covers script 1.
+
+Cold review (Peterffy/Beck lens): PASS — diff scope confirmed minimal (RTH block + comment only), no dangling references, noqa scope spot-checked accurate. Logged a separate, out-of-scope finding: 11 pre-existing mypy errors in this file's "GROUP B — PDT Logic" test section reference config constants deleted system-wide when PDT enforcement was abolished (Architecture Invariant #3) — that test section now tests dead functionality and needs a retire/rewrite decision, not bundled into this patch.
+
+GAI: APPROVE (independently confirmed the imports are used elsewhere in the file). Gro: initially NEEDS-CHANGES on a factually incorrect claim ("unused imports") — verified directly (ZoneInfo/datetime used at lines 31-33, 58, 245-246, 662, 673), counter-prompted per the Tie-Breaker Protocol, Gro reversed to APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified, py_compile clean.
+
+**Remaining files (13/14):** reconcile_eod.py, run_macro_regime.py, backtest_12pt.py, weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
