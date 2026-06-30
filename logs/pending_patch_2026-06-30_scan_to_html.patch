@@ -1,0 +1,173 @@
+--- a/scan_to_html.py	2026-06-29 22:03:47.426796087 +0000
++++ b/scan_to_html.py	2026-06-30 22:18:50.454187494 +0000
+@@ -1223,73 +1223,95 @@
+         return None
+ 
+ 
+-def _fetch_yfinance_news() -> list:
++def _fetch_fmp_news() -> list:
+     """
+-    Fetch recent market news via yfinance for SPY + major tickers.
++    Fetch recent market news via FMP T2 for SPY + major tickers.
+     Writes logs/market_news.json and returns list of items.
+-    Items: [{"headline": str, "time": str, "source": str}]
++    Items: [{"headline": str, "time": str, "source": str, "data_source": str}]
+     Only last 12 hours; deduped; capped at 20 items.
++    15-minute cache backed by logs/market_news.json (protects FMP 250/day free limit).
++    On FMP failure: returns cached data or empty list; logs WARNING.
++    Data tier: T2 (FMP). Replaces T4 (yfinance) per CLAUDE.md data source hierarchy.
+     """
+     import json as _json
++    import os as _os
++    import urllib.request as _ur
+     from datetime import datetime as _dt, timezone as _tz
+-    try:
+-        import yfinance as _yf
+-    except ImportError:
+-        return []
+ 
+     PDT_TZ   = ZoneInfo("America/Los_Angeles")
+-    items    = []
+-    seen     = set()
+     now_utc  = _dt.now(_tz.utc)
++    logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
++    out_path = _os.path.join(logs_dir, "market_news.json")
+ 
+-    for sym in ["SPY", "QQQ", "AAPL", "NVDA", "MSFT", "TSLA"]:
+-        try:
+-            news = _yf.Ticker(sym).news or []
+-            for n in news[:6]:
+-                title = (n.get("content", {}).get("title") or
+-                         n.get("title") or n.get("headline") or "")
+-                title = title.strip()
+-                if not title or title in seen:
+-                    continue
+-                seen.add(title)
+-                ts = (n.get("content", {}).get("pubDate") or
+-                      n.get("providerPublishTime") or
+-                      n.get("publishedAt") or 0)
+-                if isinstance(ts, str):
+-                    try:
+-                        pub_dt = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+-                    except Exception as _pdt_e:
+-                        logger.debug(
+-                            "_fetch_yfinance_news: pub_dt parse failed — %s", _pdt_e
+-                        )
+-                        pub_dt = None
+-                elif ts:
+-                    pub_dt = _dt.fromtimestamp(int(ts), tz=_tz.utc)
+-                else:
+-                    pub_dt = None
+-                if pub_dt:
+-                    age_hrs = (now_utc - pub_dt).total_seconds() / 3600
+-                    if age_hrs > 12:
+-                        continue
+-                    time_str = pub_dt.astimezone(PDT_TZ).strftime("%-I:%M %p PT")
+-                else:
+-                    time_str = "—"
+-                publisher = (n.get("content", {}).get("provider", {}).get("displayName") or
+-                             n.get("publisher") or sym)
+-                items.append({"headline": title, "time": time_str, "source": publisher})
+-        except Exception as _art_e:
+-            logger.debug("_fetch_yfinance_news: article parse failed — %s", _art_e)
++    # 15-min cache: return cached data if fresh enough
++    try:
++        if _os.path.exists(out_path):
++            with open(out_path) as _cf:
++                _cached = _json.load(_cf)
++            _gen_str = _cached.get("generated", "")
++            if _gen_str:
++                _gen_dt = _dt.fromisoformat(_gen_str.replace("Z", "+00:00"))
++                if (_dt.now(_tz.utc) - _gen_dt).total_seconds() < 900:
++                    return _cached.get("items", [])
++    except Exception as _cache_e:
++        logger.debug("_fetch_fmp_news: cache read failed — %s", _cache_e)
++
++    fmp_key = _os.getenv("FMP_API_KEY", "")
++    if not fmp_key:
++        logger.warning("_fetch_fmp_news: FMP_API_KEY not set — no news data this cycle")
++        return []
++
++    syms = "SPY,QQQ,AAPL,NVDA,MSFT,TSLA"
++    url  = (
++        "https://financialmodelingprep.com/api/v3/stock_news"
++        f"?tickers={syms}&limit=20&apikey={fmp_key}"
++    )
++
++    try:
++        with _ur.urlopen(_ur.Request(url), timeout=10) as _resp:
++            news_data = _json.loads(_resp.read().decode())
++    except Exception as _fmp_e:
++        # Log error type only — do not include url (contains apikey) in log output
++        logger.warning(
++            "_fetch_fmp_news: FMP news fetch failed — %s", type(_fmp_e).__name__
++        )
++        return []
++
++    if not isinstance(news_data, list):
++        logger.warning("_fetch_fmp_news: unexpected FMP response type — %s", type(news_data).__name__)
++        return []
++
++    items = []
++    seen  = set()
++    for n in news_data:
++        title = (n.get("title") or "").strip()
++        if not title or title in seen:
+             continue
++        seen.add(title)
++        pub_str = n.get("publishedDate", "")
++        try:
++            _pub_dt = _dt.fromisoformat(pub_str.replace("Z", "+00:00"))
++            if _pub_dt.tzinfo is None:
++                _pub_dt = _pub_dt.replace(tzinfo=ZoneInfo("America/New_York"))
++            age_hrs = (_dt.now(_tz.utc) - _pub_dt.astimezone(_tz.utc)).total_seconds() / 3600
++            if age_hrs > 12:
++                continue
++            time_str = _pub_dt.astimezone(PDT_TZ).strftime("%-I:%M %p PT")
++        except Exception as _pdt_e:
++            logger.debug("_fetch_fmp_news: pub_dt parse failed — %s", _pdt_e)
++            time_str = "—"
++        source = (n.get("site") or n.get("symbol") or "FMP")
++        items.append({
++            "headline":    title,
++            "time":        time_str,
++            "source":      source,
++            "data_source": "fmp_news_t2",  # T2 data tier tag per CLAUDE.md
++        })
+         if len(items) >= 20:
+             break
+ 
+-    items = items[:20]
+-
+     # Write to logs/market_news.json atomically
+     try:
+-        import os as _os
+-        logs_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+-        out_path = _os.path.join(logs_dir, "market_news.json")
+         tmp_path = out_path + ".tmp"
+         with open(tmp_path, "w") as _f:
+             _json.dump({"generated": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+@@ -1298,7 +1320,7 @@
+             _os.fsync(_f.fileno())
+         _os.replace(tmp_path, out_path)
+     except Exception as _mce:
+-        logger.warning(f"Movers/news cache write failed — next scan will re-fetch: {_mce}")
++        logger.warning("_fetch_fmp_news: market_news cache write failed — %s", _mce)
+ 
+     return items
+ 
+@@ -1673,11 +1695,11 @@
+     vix_val             = fetch_vix()
+     vix_lbl, vix_col, vix_sub = vix_regime(vix_val)
+ 
+-    # Fetch yfinance news → logs/market_news.json (background, non-blocking)
++    # Fetch FMP T2 news → logs/market_news.json (background, non-blocking)
+     try:
+-        _fetch_yfinance_news()
++        _fetch_fmp_news()
+     except Exception as _yfe:
+-        logger.warning(f"yfinance news fetch failed — news data absent this cycle: {_yfe}")
++        logger.warning("FMP news fetch failed — news data absent this cycle: %s", _yfe)
+ 
+     results_by_sym   = {r["symbol"]: r for r in results}
+     # Filter pinned symbols (SPY/QQQ) from active rows — they display in the pinned

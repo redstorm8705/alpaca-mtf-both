@@ -6460,3 +6460,61 @@ Per Rafael's direct mandate, removed the "RTH Block" guardrail in full: the docu
 | 14 | scripts/preflight_sim.py | GAI caught an incomplete E401 fix mid-review — corrected before sign-off | ✅ |
 
 **Process note:** every file's diff was sent to Gro + GAI independently (lean, non-leading prompts per the earlier-established correction). 4 files had an initial split verdict resolved via counter-prompt — in every case, the dissenting voice either (a) lacked context on this project's RULE C-4 mandate and reversed once informed, or (b) raised a genuine catch that was investigated and fixed before final sign-off (scripts/preflight_sim.py's E401 gap). Zero files were deployed without full Gro+GAI agreement.
+
+---
+
+## 2026-06-30 — Nightly Autonomous Audit — scan_to_html.py + portfolio_tracker.py + quarterly_hold_manager.py
+
+### scan_to_html.py (2410 lines — full read via Explore subagent)
+
+**10-Point Audit:**
+| Point | Finding |
+|-------|---------|
+| 1 Static analysis | py_compile PASS, mypy PASS, ruff PASS on proposed patch |
+| 2 Trade path trace | Display-only file — no role in signal→entry→exit→P&L |
+| 3 Adversarial scenarios | FMP outage: graceful fallback via 15-min cache + returns []. FMP_API_KEY absent: logs WARNING + returns []. Non-list FMP response: isinstance guard + returns []. |
+| 4 Full read | 2410 lines verbatim — Explore subagent, all functions read |
+| 5 Cross-references | run_cycle.py imports write_scan_html (lines 311, 338, 1460, 1643). _fetch_fmp_news() called at L1678 only. |
+| 6 Conflicting directions | None — display-only, no trading state writes |
+| 7 Redundancy | _fetch_yfinance_news (T4 violation) replaced by _fetch_fmp_news (T2) |
+| 8 State persistence | All writes to logs/market_news.json via atomic tmp→replace pattern with fsync |
+| 9 Data source tier | RC-9 VIOLATION FOUND + DRAFT PATCH PREPARED. Additional violations: L97 (_fetch_implied_range uses yfinance for options chain), L1035 (_fetch_spy_0dte_data uses yfinance for SPY options). Both queued separately pending board decision on T4 carve-out for unavailable options data. |
+| 10 Timezone + logging | All timestamps PT via ZoneInfo. No trade events (display only). |
+
+**RC Audit:**
+- RC-1: CLEAR — all datetime.now() calls use timezone
+- RC-2: CLEAR — all paths use __file__ anchor
+- RC-3: CLEAR — no silent exceptions
+- RC-4: N/A — no order fills in this file
+- RC-5: CLEAR — atomic write pattern used
+- RC-6: N/A — no Alpaca API field access
+- RC-7: N/A — no sizing logic
+- RC-8: N/A — no _entry_confirm_buffer or _conviction_streak
+- RC-9: VIOLATION at L1247 (_fetch_yfinance_news for US equities) — DRAFT PATCH PREPARED. Additional violations at L97 and L1035 (options chain) — QUEUED for board decision.
+
+**Action:** Draft patch written to logs/pending_patch_2026-06-30_scan_to_html.patch | Gro/GAI prompt in logs/pending_gro_gai_2026-06-30_scan_to_html.json | Status: awaiting_gro_gai
+
+---
+
+### execution/portfolio_tracker.py (2084 lines — full read via Explore subagent)
+
+**RC Audit (all 8 classes):**
+- RC-1: CLEAR — all datetime.now() use _PT
+- RC-2: CLEAR — all paths use _ROOT anchor
+- RC-3: CLEAR — no silent exceptions
+- RC-4: MECHANISM PRESENT — _fill_unverified flag + patch_exit_pnl()
+- RC-5: CLEAR — _atomic_write() used for critical writes
+- RC-6: ACCEPTABLE — .get() pattern is documented defensive design
+- RC-7: ACCEPTABLE — zero-clamps present downstream
+- RC-8: N/A — _entry_confirm_buffer/_conviction_streak not in this file
+
+**P2 Finding — Pagination infinite loop (latent):**
+_fetch_alpaca_fills_for_date() (L155-228): `after_id` ignored by Alpaca when `after`/`until` also present → page 2 = page 1 → infinite loop if >100 fills/day. Only caller: L887 in write_eod_summary(). Current max: 18 fills/day. Latent.
+
+**Action:** Queued for review (Agent A board FAIL on process grounds) — see logs/queued_for_review_2026-06-30.md. Proposed fix documented there. Recommend re-attempt next autonomous session.
+
+---
+
+### execution/quarterly_hold_manager.py (not fully read tonight)
+
+**Finding from handoff.md S67:** resubmit_stop_if_needed() is dead code — never called. Skipped tonight per nightly agent hard rules (order routing/submission category). Queued with decision options for Rafael.

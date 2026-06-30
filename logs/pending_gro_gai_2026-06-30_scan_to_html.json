@@ -1,0 +1,38 @@
+{
+  "file": "scan_to_html.py",
+  "finding": "_fetch_yfinance_news() uses yfinance T4 for US equity news (SPY/QQQ/AAPL/NVDA/MSFT/TSLA) \u2014 T4 forbidden for US equities per CLAUDE.md",
+  "rc_class": "RC-9",
+  "board": {
+    "A_strict_parser": "PASS",
+    "B_red_teamer": "CONDITIONAL_PASS",
+    "C_quant_risk": "PASS",
+    "A_notes": "No forbidden categories touched. Addresses documented RC-9 violation. Logic sound.",
+    "B_notes": "Found API key exposure risk in exception logs if URL included in error repr. Fixed: logging type(e).__name__ only. Not a blocker after fix applied.",
+    "C_notes": "Display-only function. Zero impact to sizing, P&L, scoring. FMP 250/day quota safe with 15-min cache (~40 calls/day). Bot trades normally if FMP unavailable."
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS",
+    "ruff": "PASS"
+  },
+  "second_agent": "PASS (Round 2 \u2014 Round 1 FAIL fixed: isinstance guard added + context manager for file read)",
+  "audit_findings": "RC-1 CLEAR. RC-2 CLEAR (all paths use __file__). RC-3 CLEAR (no silent exceptions). RC-8 N/A. Additional RC-9 violations found at L97 (_fetch_implied_range, options data) and L1035 (_fetch_spy_0dte_data, SPY options) \u2014 these fetch options chain data unavailable on Alpaca without OPRA. Queued as separate item for board review.",
+  "patch_file": "logs/pending_patch_2026-06-30_scan_to_html.patch",
+  "sha256_at_draft": "b7b67d6f6354538501d269108f08ef9fabbdf3297c01101f33b66f45dc7a8460",
+  "base_commit_sha": "8400ea7e7f26d3d2a4821d132f78a5aada86ff2f",
+  "rth_importers": [
+    "strategy/run_cycle.py: from scan_to_html import write_scan_html (lines 311, 338, 1460, 1643)"
+  ],
+  "callers": [
+    "scan_to_html.py:1678: write_html() calls _fetch_fmp_news() for side-effect only (return value discarded)"
+  ],
+  "gro_gai_prompt": "You are performing a security audit of a proposed code patch for a live paper trading bot before it is applied to production. This file is in the RTH execution chain \u2014 the bot runs during market hours and handles real order submission to Alpaca.\n\nSECTION 1: CONTEXT\nFile: scan_to_html.py\nBug class: RC-9 T4 data tier violation \u2014 yfinance used for US equities where it is forbidden\nFinding: `_fetch_yfinance_news()` uses yfinance for SPY, QQQ, AAPL, NVDA, MSFT, TSLA news; replaced with FMP T2 `/v3/stock_news`.\nFile size: 2410 lines\n\nSECTION 2: RTH IMPORT CHAIN\nstrategy/run_cycle.py \u2192 from scan_to_html import write_scan_html (lines 311, 338, 1460, 1643)\n\nSECTION 3: CALLERS OF THE MODIFIED CODE\nscan_to_html.py:1678: write_html() calls _fetch_fmp_news() for side-effect only (return value discarded)\n\nSECTION 4: FULL DIFF (see logs/pending_patch_2026-06-30_scan_to_html.patch)\nKey changes:\n- `_fetch_yfinance_news()` renamed to `_fetch_fmp_news()`\n- yfinance import removed; FMP T2 /v3/stock_news endpoint added via urllib\n- 15-min cache added (protects FMP 250/day limit)\n- isinstance(news_data, list) guard added before iteration\n- Context manager for cache file read (no file descriptor leak)\n- API key sanitized from exception logs (type(e).__name__ only)\n- Atomic write pattern preserved (tmp\u2192replace with fsync)\n- Caller in write_html() updated\n\nSECTION 5: BOARD VERDICTS\nAgent A (Strict Parser): PASS \u2014 no forbidden categories; RC-9 violation addressed; logic sound\nAgent B (Red Teamer): CONDITIONAL PASS \u2014 API key exposure risk found and fixed (type(e).__name__ only logged, not URL)\nAgent C (Quant Risk): PASS \u2014 display-only function; zero impact to sizing/P&L/scoring; FMP quota safe with 15-min cache\n\nSECTION 6: STATIC ANALYSIS\npy_compile: PASS\nmypy: PASS (no issues found in 1 source file)\nruff: PASS (all checks passed)\n\nSECTION 7: COLD SECOND-AGENT\nRound 1: FAIL \u2014 found (1) unprotected non-list FMP response, (2) file descriptor leak\nRound 2 (after fixes): PASS \u2014 all 8 checks pass\n\nSECTION 8: QUESTIONS\n1. Does the diff correctly address the RC-9 violation without introducing new bugs?\n2. Are there edge cases in the FMP API call that could cause silent failures during RTH?\n3. Does the 15-minute cache correctly protect FMP's 250 calls/day limit at typical scan frequency?\n4. Any forward-looking risks: the function also has two other yfinance T4 violations at lines 97 (_fetch_implied_range) and 1035 (_fetch_spy_0dte_data) for options chain data \u2014 these fetch options data unavailable on Alpaca without OPRA agreement. Are these also T4 violations requiring FMP migration, or are they acceptable T4 uses per the yfinance-only-for-unavailable-instruments carve-out?\n\nReturn: APPROVE or REJECT. For REJECT, name the exact failure condition and line numbers.",
+  "gro_response": null,
+  "gai_response": null,
+  "status": "awaiting_gro_gai",
+  "created_at": "2026-06-30T22:20:47Z",
+  "additional_findings": [
+    "L97: _fetch_implied_range() uses yf.Ticker(symbol).options + .option_chain() for ATM straddle pricing \u2014 options data unavailable on Alpaca/FMP without OPRA. Possible T4 carve-out. Queued for board vote.",
+    "L1035: _fetch_spy_0dte_data() uses yf.Ticker('SPY').fast_info + .options + .history() for 0DTE data \u2014 same OPRA dependency. Queued for board vote."
+  ]
+}
