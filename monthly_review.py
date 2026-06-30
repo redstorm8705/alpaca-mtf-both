@@ -32,13 +32,10 @@ PT = ZoneInfo("America/Los_Angeles")
 
 logger = logging.getLogger(__name__)
 
-# ── RTH block ─────────────────────────────────────────────────────────────────
-_now_et = datetime.now(ET)
-if _now_et.weekday() < 5:
-    _mins = _now_et.hour * 60 + _now_et.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET).")
-        sys.exit(1)
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# is read-only on logs/eod_*.json and only writes its own dedicated output
+# files (monthly_*.html, monthly_review.html) via atomic write -- no
+# write-contention risk with the live bot's shared state.
 
 ROOT     = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(ROOT, "logs")
