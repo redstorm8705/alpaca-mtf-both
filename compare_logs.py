@@ -24,17 +24,11 @@ import re
 import argparse
 import tempfile
 from pathlib import Path
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-# ─── RTH Block (9:30 AM–4:00 PM ET weekdays) ──────────────────────────────────
-_ET = ZoneInfo("America/New_York")
-_now_et = datetime.now(_ET)
-if _now_et.weekday() < 5:
-    _mins = _now_et.hour * 60 + _now_et.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET weekdays).")
-        sys.exit(1)
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# is read-only (mtf_bot.log*, trade_events.jsonl) and only writes its own
+# dedicated golden_logs/metrics_*.json snapshot file -- no write-contention
+# risk with the live bot's shared state.
 
 # ─── Paths (anchored to script location — never CWD-relative) ────────────────
 _BASE   = Path(__file__).resolve().parent
