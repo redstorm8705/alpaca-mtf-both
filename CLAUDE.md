@@ -330,29 +330,18 @@ All script output, JSON results, charts, CSVs, and logs must be written to the `
 - Market data caches may be written to `data/cache/` (e.g., `data/cache/premarket_movers.json`)
 - Runtime state files may be written to `data/state/` (e.g., `hybrid_state.json`)
 
-### 4. RTH Block
+### 4. RTH Block — REMOVED (Rafael mandate 2026-06-30)
 
-All backtest scripts, data analysis tools, and skill-driven scripts must refuse to run
-during Regular Trading Hours on weekdays.
+Previously required all backtest scripts, data analysis tools, and skill-driven scripts to
+refuse to run during Regular Trading Hours on weekdays (9:30 AM–4:00 PM ET). Rafael removed
+this guardrail in full — both the documented policy and the runtime guard code in every
+script that had it. Analysis/backtest scripts may now run at any time, including RTH.
 
-**Block window: 9:30 AM–4:00 PM ET (6:30 AM–1:00 PM PT), Monday–Friday**
-
-Pre-market (4:00–9:30 AM ET / 1:00–6:30 AM PT) is **explicitly allowed** for analysis
-scripts — this is the primary window for pre-market mover analysis, MRI refresh, and
-earnings calendar checks.
-
-```python
-from zoneinfo import ZoneInfo
-from datetime import datetime
-import sys
-ET = ZoneInfo("America/New_York")
-_now = datetime.now(ET)
-if _now.weekday() < 5:
-    _mins = _now.hour * 60 + _now.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
-```
+**Operator note:** since these scripts may now run during active trading hours, be aware
+they may read live/in-flight data (open positions, in-progress fills, mid-session state
+files) rather than a settled end-of-day snapshot. This was the original reason the block
+existed. No longer enforced — output from these scripts during RTH should be read with
+that context in mind.
 
 ### 5. Data Quality Contract
 
@@ -368,11 +357,11 @@ Every bar or quote used for signal generation must pass these checks before use:
 
 Trading environment is set via the `TRADING_ENV` environment variable:
 
-| Value | Execution | Data | RTH Block |
-|-------|-----------|------|-----------|
-| `development` | Paper (`paper=True`) | Cached data allowed | OFF |
-| `paper` | Paper (`paper=True`) | Live T1/T2 required | ON |
-| `live` | Live (`paper=False`) | Live T1/T2 required | ON |
+| Value | Execution | Data |
+|-------|-----------|------|
+| `development` | Paper (`paper=True`) | Cached data allowed |
+| `paper` | Paper (`paper=True`) | Live T1/T2 required |
+| `live` | Live (`paper=False`) | Live T1/T2 required |
 
 `paper=True` in `execution/broker.py` is hardcoded and locked until a full board vote approves `TRADING_ENV=live`.
 Never read `TRADING_ENV` inside `execution/broker.py` — the paper flag is a manual, auditable constant, not a runtime switch.
@@ -757,7 +746,6 @@ Specifically:
 - [ ] All callers of modified functions
 - [ ] All new files — imports, side effects, output paths
 - [ ] Pre-existing bug scan of every file opened this session
-- [ ] RTH block present in any new analysis/backtest script (9:30 AM–4:00 PM ET)
 - [ ] No direct yfinance calls for any US equity or ETF — must use `data/fetcher.py`
 - [ ] No raw `requests` calls to any market data endpoint
 - [ ] No execution imports in analysis/backtest scripts
