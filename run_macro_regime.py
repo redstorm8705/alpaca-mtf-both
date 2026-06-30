@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E402
 """
 run_macro_regime.py
 Weekly wrapper for the macro-regime-detector skill.
@@ -25,14 +26,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-# No RTH block — runs Sunday PM, but add weekday guard anyway.
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# only writes its own dedicated cache file (macro_regime_latest.json) -- the
+# live bot only reads it at startup, never writes to it, so there is no
+# write-contention risk like reconcile_eod.py had with eod_{date}.json.
 PT = ZoneInfo("America/Los_Angeles")
 _now = datetime.now(PT)
-if _now.weekday() < 5:
-    _mins = _now.hour * 60 + _now.minute
-    if (6 * 60 + 30) <= _mins < (13 * 60):
-        print("BLOCKED: Cannot run during RTH hours (6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -66,7 +65,7 @@ def _fetch_alpaca_data(symbols: list, days: int) -> dict:
     import config as _cfg
     from data.fetcher import fetch_bars
 
-    result = {}
+    result: dict[str, list] = {}
     for sym in symbols:
         logger.info(f"  Fetching {sym} ({days} bars, Alpaca T1)...")
         try:
