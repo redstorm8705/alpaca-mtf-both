@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 execution/risk_manager.py
 Position sizing, daily loss limits, and kill switch logic.
@@ -286,6 +287,24 @@ class RiskManager:
                 _vix_scalar = min(_vix_scalar, 2.0)
                 stop_mult   *= _vix_scalar
                 target_mult *= _vix_scalar
+
+            # ── ATH proximity scalar (board 3-1 + Gro + GAI, 2026-06-30) ─────
+            # When SPY is within 1% of its 52-week high, apply a 10% stop
+            # tightening at entry. Rationale: signal quality is noisier right
+            # at the ATH boundary; accepting a modestly tighter risk budget
+            # preserves R:R (both stop AND target scale by the same 0.90x).
+            # Applied AFTER VIX scalar, BEFORE leverage multipliers — fits the
+            # existing multiplication chain without disturbing dual-authority.
+            # Default spy_ath_dist_pct=99.0 (no data = no penalty).
+            _spy_ath_dist_pct = kwargs.get("spy_ath_dist_pct", 99.0) or 99.0
+            if _spy_ath_dist_pct < 1.0:
+                _ath_scalar  = 0.90
+                stop_mult   *= _ath_scalar
+                target_mult *= _ath_scalar
+                logger.info(
+                    f"[{symbol}] ATH proximity scalar applied: SPY {_spy_ath_dist_pct:.2f}%"
+                    f" from 52w high → stop/target ×0.90 (R:R preserved)"
+                )
 
             if is_leveraged_3x:
                 stop_mult   *= _safe_lev_mult(

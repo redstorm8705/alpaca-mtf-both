@@ -76,12 +76,23 @@ def run_movers_cycle(
         logger.info("Market closed — skipping scan")
         return
 
-    # Avoid first/last 15 minutes
+    # Avoid first N minutes (config.TOD_MARKET_OPEN_BUFFER_MINS) and last
+    # config.TOD_EOD_NO_ENTRY_MINS before close.
+    # AWP audit fix (2026-06-30): was hardcoded 9*60+45 (15-min buffer) —
+    # config.TOD_MARKET_OPEN_BUFFER_MINS is 30 min, so the movers strategy
+    # was entering 15 min earlier than the main bot's configured gate.
+    import config as _cfg_movers
     total_mins = now.hour * 60 + now.minute
-    if total_mins < (9 * 60 + 45):
-        logger.info("Waiting — first 15 mins (9:30-9:45)")
+    _open_buffer_mins  = getattr(_cfg_movers, "TOD_MARKET_OPEN_BUFFER_MINS", 30)
+    _eod_no_entry_mins = getattr(_cfg_movers, "TOD_EOD_NO_ENTRY_MINS", 15)
+    if total_mins < (9 * 60 + 30) + _open_buffer_mins:
+        logger.info(
+            "Waiting — first %d mins (9:30-%s)",
+            _open_buffer_mins,
+            f"{(9 * 60 + 30 + _open_buffer_mins) // 60}:{(9 * 60 + 30 + _open_buffer_mins) % 60:02d}",
+        )
         return
-    if total_mins > (15 * 60 + 45):
+    if total_mins > (16 * 60) - _eod_no_entry_mins:
         logger.info("EOD window — flattening intraday")
         strategy.flatten_intraday()
         return

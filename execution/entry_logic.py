@@ -860,11 +860,18 @@ def execute_entries(
 
         # Calculate ATR-based stop and target
         _h2_scalar = _param_engine.h2_stop_atr_mult(symbol, vix)  # None when VIX unavailable
+        # ATH proximity for the 0.90x scalar in get_stop_and_target()
+        _spy_ath_pct = (
+            (_main._spy_52w_high - _main._spy_last_close) / _main._spy_52w_high * 100
+            if _main._spy_52w_high > 0 and _main._spy_last_close > 0
+            else 99.0
+        )
         stop, target = risk.get_stop_and_target(
             entry_price, direction, trade_mode,
             atr_value=atr_value, symbol=symbol,
             rvol_20d=rvol_20d, vix=vix,
             atr_mult_override=_h2_scalar,
+            spy_ath_dist_pct=_spy_ath_pct,
         )
 
         # Tighten stop during HIGH_RISK news (reduces max loss on new trades)
@@ -1301,6 +1308,7 @@ def execute_entries(
                                 fill_price, direction, trade_mode,
                                 atr_value=atr_value, symbol=symbol,
                                 rvol_20d=rvol_20d, vix=vix,
+                                spy_ath_dist_pct=_spy_ath_pct,
                             )
                             stop = risk.get_news_adjusted_stop(stop, fill_price, direction, news_size_mult)
                             logger.info(
