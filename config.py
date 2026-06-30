@@ -484,6 +484,27 @@ def validate_config():
             f"MIN_SHORT_SCORE ({MIN_SHORT_SCORE}) > max possible score ({max_possible})"
         )
 
+    # AWP audit fix (2026-06-28): VOLUME_CONFIRMATION_ENABLED is a two-step
+    # atomic toggle -- flipping it to True requires SCORE_WEIGHTS to swap
+    # "rsi_in_range" for "volume_confirmed" in the same edit. The max_possible
+    # check above can't catch an incomplete toggle since the dict's sum is
+    # identical either way. OPEN QUESTION PROTOCOL ran: board (Beck/McKinney)
+    # + Gro + GAI unanimously recommended this hardened cross-check. Rafael
+    # approved. Found during the strategy/confluence.py board redo.
+    if VOLUME_CONFIRMATION_ENABLED:
+        if "volume_confirmed" not in SCORE_WEIGHTS:
+            errors.append(
+                "VOLUME_CONFIRMATION_ENABLED=True requires "
+                '"volume_confirmed" in SCORE_WEIGHTS — incomplete toggle '
+                '(missing the paired SCORE_WEIGHTS edit)'
+            )
+        if "rsi_in_range" in SCORE_WEIGHTS:
+            errors.append(
+                "VOLUME_CONFIRMATION_ENABLED=True requires removing "
+                '"rsi_in_range" from SCORE_WEIGHTS — incomplete toggle '
+                '(shadow RSI key still present)'
+            )
+
     # Kill switch range
     if not (0 < MAX_DAILY_LOSS_PCT < 1.0):
         errors.append(
