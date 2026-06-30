@@ -6348,3 +6348,20 @@ This file was both Task #12's file 6/14 AND the separately-flagged broken autono
 Deployed to OCI — zero conflicting local divergence, checksum-verified, py_compile clean. The pipeline should produce its first real output on tonight's 11 PM ET run.
 
 **Remaining RTH files (8/14):** earnings_preflight.py, audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — earnings_preflight.py: 2 real bugs found + fixed + RTH Block removal, file 7/14 (commit `6d72f1c`), deployed
+
+Found during static analysis (mypy flagged genuine type errors, not style) while doing the routine RTH removal — investigated and confirmed both were real, live, silently-failing bugs:
+
+1. **`preload_earnings_week()` missing required argument** — confirmed via OCI's `earnings_preflight_cron.log`: raised `TypeError` on every single Sunday run for at least 4 consecutive weeks (2026-06-07 through 2026-06-28), silently caught and falling back to a stale/empty cache every time.
+2. **Date-vs-string comparison bug** — `get_cached_earnings_dates()` returns `list[date]`, but the imminent-earnings check compared against a `list[str]`. `date_obj in list_of_strings` is never `True` in Python regardless of whether the dates match — confirmed via worked example. The "EARNINGS IMMINENT" Slack alert has never fired correctly since this script was written.
+
+Plus the standard RTH Block removal (confirmed safe — read-only + own-cache-only writes).
+
+Quant-logic domain review (Derman/McKinney lens): PASS, independently re-derived both bugs with own worked examples. Gro APPROVE. GAI APPROVE (after a follow-up — first response hit MAX_TOKENS before reaching a verdict; raised 2 non-blocking follow-up notes logged for awareness: stale-cache Slack messaging could be more explicit, RTH-removal mandate documentation).
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified. Next Sunday's cron run (7/5 or sooner if manually triggered) will be the first to actually exercise the fixed logic.
+
+**Remaining files (7/14):** audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
