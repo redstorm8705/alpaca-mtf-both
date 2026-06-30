@@ -6395,3 +6395,13 @@ Same single-writer cache pattern. Cold review PASS. Gro APPROVE. GAI APPROVE (af
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (4/14):** compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 11/14: compare_logs.py (commit `ab2e36c`), deployed
+
+Read-only log analysis tool, own dedicated output. Also removed 2 now-fully-unused imports (datetime, ZoneInfo) confirmed via grep. Cold review PASS. Gro APPROVE. GAI APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (3/14):** monthly_review.py, audit_final.py, scripts/preflight_sim.py.
