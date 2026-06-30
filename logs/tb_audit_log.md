@@ -6425,3 +6425,38 @@ Pure read-only AST/text checker, zero file writes. Bundled a pre-existing mypy f
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining file (1/14):** scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 14/14: scripts/preflight_sim.py (commit `f98e0c0`), deployed — BATCH COMPLETE
+
+Final file. Read-only on shared state, own dedicated report output. Cleaned up dead imports (sys newly unused, time pre-existing dead), fixed a W605 escape warning, and genuinely eliminated (not just suppressed) a pre-existing E401 by splitting a combined import line — caught by GAI's review correctly questioning why E401 was still in the noqa list after a "fix."
+
+Cold review PASS. Gro APPROVE. GAI initially flagged the E401-still-present gap (a real catch, not a false positive) — fixed properly, GAI APPROVE on the corrected diff.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+---
+
+## RTH BLOCK GUARDRAIL REMOVAL — COMPLETE (2026-06-30)
+
+Per Rafael's direct mandate, removed the "RTH Block" guardrail in full: the documented CLAUDE.md policy (commit `2f5a13b`) and the runtime enforcement code in all 14 scripts that had it.
+
+| # | File | Notable findings | Deployed |
+|---|------|-------------------|----------|
+| 1 | preflight_simulation.py | None beyond removal | ✅ |
+| 2 | reconcile_eod.py | **Modified removal** — write-contention risk with live bot identified via full domain audit; added post-close gate on the R-GUARD sentinel rather than bare removal | ✅ |
+| 3 | run_macro_regime.py | None beyond removal | ✅ |
+| 4 | backtest_12pt.py | Cold review caught a dead-code leftover (unused ET/_now), fixed | ✅ |
+| 5 | weekly_perf_audit.py | Full verbatim read (1254 lines, over Full Read Gate threshold) | ✅ |
+| 6 | autonomous_patch_generator.py | **Combined with Task #15** — P0 DeepSeek→Gro migration fixing a silently-broken nightly pipeline | ✅ |
+| 7 | earnings_preflight.py | **2 real, independently-confirmed bugs found and fixed**: missing required function argument (TypeError every Sunday for 4+ weeks), date-vs-string comparison bug (alert never fired correctly) | ✅ |
+| 8 | audit_signals.py | None beyond removal | ✅ |
+| 9 | run_market_top.py | Trivial F541 fix bundled | ✅ |
+| 10 | run_ftd.py | None beyond removal | ✅ |
+| 11 | compare_logs.py | Removed 2 fully-unused imports | ✅ |
+| 12 | monthly_review.py | None beyond removal | ✅ |
+| 13 | audit_final.py | Pre-existing mypy type-narrowing fix bundled | ✅ |
+| 14 | scripts/preflight_sim.py | GAI caught an incomplete E401 fix mid-review — corrected before sign-off | ✅ |
+
+**Process note:** every file's diff was sent to Gro + GAI independently (lean, non-leading prompts per the earlier-established correction). 4 files had an initial split verdict resolved via counter-prompt — in every case, the dissenting voice either (a) lacked context on this project's RULE C-4 mandate and reversed once informed, or (b) raised a genuine catch that was investigated and fixed before final sign-off (scripts/preflight_sim.py's E401 gap). Zero files were deployed without full Gro+GAI agreement.
