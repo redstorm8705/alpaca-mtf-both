@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E702, E401
 """
 audit_final.py
 Verifies that scan_to_html.py and dashboard.html are correctly wired
@@ -7,18 +8,11 @@ Usage:
     python3 audit_final.py
 """
 import sys, os, ast, re
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-# ── P5-M1: RTH block — CLAUDE.md Guardrail 5 ─────────────────────────────────
-_ET = ZoneInfo("America/New_York")
-_rth_now = datetime.now(_ET)
-if _rth_now.weekday() < 5:
-    _rth_mins = _rth_now.hour * 60 + _rth_now.minute
-    if (9 * 60 + 30) <= _rth_mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
-# ─────────────────────────────────────────────────────────────────────────────
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# is purely read-only -- parses scan_to_html.py and dashboard.html source as
+# text/AST, prints results, zero file writes anywhere -- so there is no
+# write-contention risk with the live bot's shared state.
 
 PASS = "\033[32m✓\033[0m"
 FAIL = "\033[31m✗\033[0m"
@@ -48,6 +42,7 @@ else:
     src = open(SCAN, encoding="utf-8").read()
 
     # Parse AST to check function scopes
+    tree: ast.Module | None
     try:
         tree = ast.parse(src)
     except SyntaxError as e:
