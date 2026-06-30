@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 # strategy/movers/strategy.py — Top Movers execution strategy
 # Fixed exits: +5% take profit / -1% stop loss
 # Supports both long (gainers) and short (losers)
@@ -7,6 +8,7 @@ from datetime import datetime
 from events.calendar import EventRisk
 from data.alpaca_data import get_latest_quote
 from trade_logger import log_event as _log_event
+from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhm_symbols
 import logging
 
 logger = logging.getLogger("movers_strategy")
@@ -401,6 +403,21 @@ class MoversStrategy:
 
                 if hit_tp or hit_sl:
                     reason = f"{'TAKE PROFIT +5%' if hit_tp else 'STOP LOSS -1%'}"
+                    # AWP audit fix (2026-06-30): if this symbol is a QHM quarterly
+                    # hold, the movers strategy must NOT close it. Both strategies
+                    # track the same Alpaca position. When movers closes its share,
+                    # Alpaca's position count drops to zero, the QHM detects
+                    # "external_close" on its own tracking, and the entire tranche-
+                    # averaging cycle resets -- confirmed happening repeatedly for
+                    # NVDA and GOOGL. Discard the movers record and skip the close.
+                    if sym in _qhm_symbols():
+                        logger.warning(
+                            "[%s] Movers %s SKIPPED — symbol is a QHM quarterly hold. "
+                            "Movers does not own this position; removing from movers book.",
+                            sym, reason,
+                        )
+                        self._active_movers.pop(sym, None)
+                        continue
                     # Cancel the resting GTC stop BEFORE closing — Alpaca holds
                     # the qty for an open stop order (held_for_orders); closing
                     # first risks a 40310000 rejection, and leaving the stop
@@ -485,6 +502,14 @@ class MoversStrategy:
         for sym in intraday:
             try:
                 trade = self._active_movers[sym]
+                # AWP audit fix (2026-06-30): same QHM guard as check_exits().
+                if sym in _qhm_symbols():
+                    logger.warning(
+                        "[%s] Movers EOD flatten SKIPPED — symbol is a QHM quarterly hold.",
+                        sym,
+                    )
+                    self._active_movers.pop(sym, None)
+                    continue
                 self._cancel_stop_if_present(sym, trade)
                 result = self.broker.close_position(sym)
                 if result["success"]:
