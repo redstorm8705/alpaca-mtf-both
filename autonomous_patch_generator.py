@@ -7,13 +7,22 @@ Runs on OCI at 6 PM ET (23:00 UTC) weeknights, between:
 
 For each unprocessed directive in audit_directives.jsonl:
   1. Full read of target file
-  2. 3-agent board vote (Strict Parser / Red Teamer / Quant Risk) via DeepSeek API
-  3. Diff generation via DeepSeek API
+  2. 3-agent board vote (Strict Parser / Red Teamer / Quant Risk) via Gro (Groq) API
+  3. Diff generation via Gro (Groq) API
   4. Static analysis (py_compile + mypy + ruff) on target file
-  5. Cold second-agent logic review via DeepSeek API
+  5. Cold second-agent logic review via Gro (Groq) API
   6. Write pending_ds_gai_*.json + .patch file (for autonomous_review.py to consume)
   7. Mark directive as processed (atomic write)
   8. Slack summary
+
+AWP audit fix (2026-06-30): migrated DeepSeek -> Gro (Groq). DeepSeek's
+account had gone unfunded (every call returned 402 Payment Required),
+silently producing zero processed directives every night for an unknown
+number of sessions before this was caught. The live interactive Claude
+pipeline migrated to Gro/Groq on 2026-06-27 (commit 6457394) but this
+standalone OCI cron script was never updated to match -- confirmed via the
+nightly cron log showing dozens of consecutive 402 errors with "0
+processed, 17 left for retry" every run.
 
 Author: autonomous pipeline (S56)
 """
@@ -37,23 +46,21 @@ _LOGS_DIR     = _REPO_DIR / "logs"
 _LOCKFILE     = "/tmp/mtf_autonomous_patch_generator.lock"
 _MAX_RETRIES  = 3
 _API_TIMEOUT  = 180
-_DS_BASE_URL  = "https://api.deepseek.com"
-_DS_MODEL     = "deepseek-chat"
+# AWP audit fix (2026-06-30): migrated DeepSeek -> Gro (Groq). See module
+# docstring for why. Matches CLAUDE.md's Gro/GAI DIRECT API PROTOCOL.
+_GRO_BASE_URL = "https://api.groq.com/openai/v1"
+_GRO_MODEL    = "llama-3.3-70b-versatile"
 _SLACK_URL    = None  # loaded from .env
 
 ET = ZoneInfo("America/New_York")
 PT = ZoneInfo("America/Los_Angeles")
 
-# ── RTH block (9:30 AM–4:00 PM ET weekdays) ──────────────────────────────────
-_now_et = datetime.now(ET)
-if _now_et.weekday() < 5:
-    _mins = _now_et.hour * 60 + _now_et.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print(
-            "BLOCKED: Cannot run during RTH hours"
-            " (9:30 AM–4:00 PM ET weekdays)."
-        )
-        sys.exit(1)
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# writes only its own dedicated pipeline files (audit_directives.jsonl,
+# pending_ds_gai_*.json, .patch files) -- no write-contention risk with the
+# live bot's shared state. It also never applies patches itself (only writes
+# them for autonomous_review.py / a human to act on), matching CLAUDE.md's
+# "scheduled sessions never apply patches" rule.
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 def _log(msg: str) -> None:
@@ -109,23 +116,23 @@ def _write_atomic(path: Path, content: str) -> None:
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
 
-# ── DeepSeek API ──────────────────────────────────────────────────────────────
-def _call_deepseek(prompt: str) -> str | None:
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+# ── Gro (Groq) API ────────────────────────────────────────────────────────────
+def _call_gro(prompt: str) -> str | None:
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
-        _log("ERROR: DEEPSEEK_API_KEY not set")
+        _log("ERROR: GROQ_API_KEY not set")
         return None
     import requests  # type: ignore[import-untyped]
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.post(
-                f"{_DS_BASE_URL}/chat/completions",
+                f"{_GRO_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": _DS_MODEL,
+                    "model": _GRO_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                     "max_tokens": 4096,
@@ -135,12 +142,12 @@ def _call_deepseek(prompt: str) -> str | None:
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
         except Exception as exc:
-            _log(f"DeepSeek attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
+            _log(f"Gro attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 5)
     return None
 
-# ── Board vote (3 cold independent agents via DS API) ────────────────────────
+# ── Board vote (3 cold independent agents via Gro API) ────────────────────────
 def _board_vote(
     file_content: str,
     finding: str,
@@ -187,7 +194,7 @@ def _board_vote(
     results: dict = {}
     for agent_key, prompt in prompts.items():
         _log(f"Board vote: calling agent {agent_key}...")
-        response = _call_deepseek(prompt)
+        response = _call_gro(prompt)
         if response is None:
             results[agent_key] = "UNCLEAR"
             results[f"{agent_key}_notes"] = "API call failed"
@@ -209,7 +216,7 @@ def _board_vote(
         "C_notes": results.get("C_quant_risk_notes", ""),
     }
 
-# ── Diff generation via DS API ────────────────────────────────────────────────
+# ── Diff generation via Gro API ────────────────────────────────────────────────
 def _generate_diff(
     file_path: Path,
     file_content: str,
@@ -225,8 +232,8 @@ def _generate_diff(
         f"Recommended fix: {recommended_fix}\n\n"
         f"File content:\n{file_content[:8000]}"
     )
-    _log("Generating diff via DeepSeek...")
-    response = _call_deepseek(prompt)
+    _log("Generating diff via Gro...")
+    response = _call_gro(prompt)
     if response is None:
         return None
     # Strip any accidental markdown fences
@@ -287,7 +294,7 @@ def _second_agent_review(diff: str, finding: str, recommended_fix: str) -> str:
         "Return PASS or FAIL as the first word, then a brief threat list."
     )
     _log("Running cold second-agent review...")
-    response = _call_deepseek(prompt)
+    response = _call_gro(prompt)
     if response is None:
         return "UNCLEAR: API call failed"
     return response[:200]
@@ -356,7 +363,7 @@ def _process_directive(directive: dict) -> str:
     ]
     if board_verdicts.count("UNCLEAR") == 3:
         # all 3 agents UNCLEAR = API failure (each agent returns UNCLEAR on
-        # _call_deepseek None) — transient, retry tomorrow
+        # _call_gro None) — transient, retry tomorrow
         _log(f"Board vote inconclusive (3x UNCLEAR / API down) on {file_rel} — retry")
         return "retry"
     reject_count = board_verdicts.count("REJECT")
