@@ -6415,3 +6415,13 @@ Read-only on eod_*.json, own dedicated HTML output via atomic write. Cold review
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (2/14):** audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 13/14: audit_final.py (commit `c6d8814`), deployed
+
+Pure read-only AST/text checker, zero file writes. Bundled a pre-existing mypy fix (explicit Optional type annotation) + noqa for 19 pre-existing ruff violations. Cold review PASS. Gro initially NEEDS-CHANGES on noqa justification (same RULE C-4 context gap as prior files), resolved via counter-prompt. GAI APPROVE (one tangential claim about sys/os being unused was self-corrected by GAI and independently refuted by direct grep — both genuinely used).
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining file (1/14):** scripts/preflight_sim.py.
