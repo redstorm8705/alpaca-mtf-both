@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E701, E702, E402, E401
 """
 preflight_simulation.py — RTH Pre-Flight Pressure Test
 =======================================================
@@ -11,19 +12,14 @@ Usage:
     python3 preflight_simulation.py
 """
 
-# ── RTH block ────────────────────────────────────────────────────────────────
-from zoneinfo import ZoneInfo
-from datetime import datetime
-import sys
-_ET = ZoneInfo("America/New_York")
-_now = datetime.now(_ET)
-if _now.weekday() < 5:
-    _mins = _now.hour * 60 + _now.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate) -- this
+# script may now run during RTH. Operator note: live/in-flight position
+# data (open_positions, trade_log.json) may reflect mid-session state
+# rather than a settled snapshot when run during active trading hours.
 
 # ── Imports ──────────────────────────────────────────────────────────────────
+from zoneinfo import ZoneInfo
+from datetime import datetime
 import json, sys
 from datetime import timedelta
 from pathlib import Path
