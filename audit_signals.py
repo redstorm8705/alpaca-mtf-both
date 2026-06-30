@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E402
 """
 audit_signals.py — Pre-flight signal audit
 Run this BEFORE market open to validate your confluence thresholds
@@ -25,16 +26,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-# ── P5-M1: RTH block — CLAUDE.md Guardrail 5 ─────────────────────────────────
-# Must not run during Regular Trading Hours — file conflicts with live bot.
-_ET = ZoneInfo("America/New_York")
-_rth_now = datetime.now(_ET)
-if _rth_now.weekday() < 5:
-    _rth_mins = _rth_now.hour * 60 + _rth_now.minute
-    if (9 * 60 + 30) <= _rth_mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
-# ─────────────────────────────────────────────────────────────────────────────
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# is purely read-only -- no file writes anywhere (output is print-to-stdout
+# only via the audit_log logger) -- so there is no write-contention risk with
+# the live bot's shared state.
 
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
