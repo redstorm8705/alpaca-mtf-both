@@ -8,7 +8,7 @@ Runs: Friday 4:15 PM ET via OCI cron
       15 20 * * 5 cd /home/ubuntu/mtf-bot && venv/bin/python3 weekly_perf_audit.py >> logs/weekly_audit_cron.log 2>&1
 
 NOT in RTH import chain → no DS/GAI code gate.
-RTH block: refuses to run Mon–Fri 9:30 AM–4:00 PM ET.
+RTH Block — REMOVED (Rafael mandate 2026-06-30). May now run at any time.
 Atomic write on all output files.
 Standalone: no imports from bot execution modules.
 """
@@ -39,15 +39,11 @@ try:
 except ImportError:
     _SCIPY_AVAILABLE = False
 
-# ── RTH block ─────────────────────────────────────────────────────────────────
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# writes only its own dedicated weekly output files (HTML tearsheet, JSON
+# cache) -- no write-contention risk with the live bot's shared state.
 _ET = ZoneInfo("America/New_York")
 _PT = ZoneInfo("America/Los_Angeles")
-_now_et = datetime.now(_ET)
-if _now_et.weekday() < 5:
-    _mins = _now_et.hour * 60 + _now_et.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET weekdays).")
-        sys.exit(1)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent
