@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """
 earnings_preflight.py
 Pre-flight earnings scanner — runs Sunday 5:55 PM ET before futures open.
@@ -53,18 +54,6 @@ def _fmt_pt(dt: datetime) -> str:
 
 
 # ---------------------------------------------------------------------------
-# RTH block — 9:30 AM–4:00 PM ET weekdays
-# ---------------------------------------------------------------------------
-def _check_rth_block() -> None:
-    _now = datetime.now(ET)
-    if _now.weekday() < 5:
-        _mins = _now.hour * 60 + _now.minute
-        if (9 * 60 + 30) <= _mins < (16 * 60):
-            logger.error("BLOCKED: Cannot run during RTH (9:30 AM–4:00 PM ET weekdays).")
-            sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
 # Load tracked symbols (open positions + watchlist if available)
 # ---------------------------------------------------------------------------
 def _load_tracked_symbols() -> set[str]:
@@ -107,8 +96,10 @@ def _next_n_trading_days(n: int = 3) -> list[str]:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    _check_rth_block()
-
+    # AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This
+    # script is read-only (trade_log.json, watchlist_state.json) and only
+    # refreshes its own FMP earnings cache (data/fmp_client.py owns that
+    # write) -- no write-contention risk with the live bot's shared state.
     now_pt = _fmt_pt(datetime.now(ET))
     logger.info(f"=== Earnings Pre-Flight — {now_pt} ===")
 
@@ -124,7 +115,16 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        preload_earnings_week()
+        # AWP audit fix (2026-06-30): preload_earnings_week() requires a
+        # `symbols: list[str]` positional argument (data/fmp_client.py:299-301)
+        # -- this call was missing it entirely, raising TypeError every single
+        # run and silently falling back to a stale/empty cache. Confirmed via
+        # OCI's earnings_preflight_cron.log: identical "missing 1 required
+        # positional argument: 'symbols'" error on every Sunday run since at
+        # least 2026-06-07 (4+ consecutive weeks). Masked operationally because
+        # tracked symbols happened to be 0 each of those weeks; would have
+        # left the earnings cache permanently stale once positions existed.
+        preload_earnings_week(sorted(symbols))
         logger.info("FMP earnings cache refreshed successfully.")
     except Exception as e:
         logger.error(f"preload_earnings_week() raised: {e} — will use stale cache if present.")
@@ -156,10 +156,19 @@ def main() -> None:
             dates = get_cached_earnings_dates(sym)
             if dates:
                 covered.append(sym)
+                # AWP audit fix (2026-06-30): get_cached_earnings_dates()
+                # returns date objects, but trading_days is a list[str] (from
+                # _next_n_trading_days()'s .isoformat() calls). `ed in
+                # trading_days` was comparing a date against strings -- this
+                # is never True in Python, so the "EARNINGS IMMINENT" alert
+                # has never fired correctly. Fixed to compare/store the ISO
+                # string form, matching the declared imminent: list[tuple[str,
+                # str]] type.
                 for ed in dates:
-                    if ed in trading_days:
-                        imminent.append((sym, ed))
-                        logger.warning(f"[{sym}] EARNINGS IMMINENT: {ed}")
+                    ed_str = ed.isoformat()
+                    if ed_str in trading_days:
+                        imminent.append((sym, ed_str))
+                        logger.warning(f"[{sym}] EARNINGS IMMINENT: {ed_str}")
                         break
                 else:
                     logger.info(f"[{sym}] earnings dates: {dates} — none within 3 trading days")
@@ -187,8 +196,8 @@ def main() -> None:
                 f":rotating_light: *EARNINGS WITHIN 3 TRADING DAYS "
                 f"({len(imminent)} symbol{'s' if len(imminent) != 1 else ''}):*"
             )
-            for sym, ed in imminent:
-                lines.append(f"  • `{sym}` — reports {ed}")
+            for sym, ed_str in imminent:
+                lines.append(f"  • `{sym}` — reports {ed_str}")
             lines.append(
                 "_Review open/pending positions in these symbols before Monday open._"
             )
