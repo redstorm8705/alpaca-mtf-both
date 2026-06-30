@@ -6385,3 +6385,13 @@ Single-writer cache, same pattern as run_macro_regime.py. Bundled a trivial F541
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (5/14):** run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 10/14: run_ftd.py (commit `aea6dd1`), deployed
+
+Same single-writer cache pattern. Cold review PASS. Gro APPROVE. GAI APPROVE (after a follow-up — first response hit MAX_TOKENS while deliberating the noqa question already settled by RULE C-4).
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (4/14):** compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
