@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-06-29 (OPEN QUESTION PROTOCOL implementation -- calendar.py + config.py deployed)"
+    "last_updated": "2026-06-29 (post-market audit follow-up: gtc_manager.py partial-detection fix deployed)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -393,9 +393,9 @@
     },
     "execution/gtc_manager.py": {
       "patch_count": 2,
-      "last_patched": "2026-06-28 (AWP Phase 2 REDO: per-symbol exception guard)",
+      "last_patched": "2026-06-29 (GTC partial-exit collateral-cancellation detection added, deployed)",
       "lines": 327,
-      "notes": "Phase 2 redo with full board (4 domain agents) found 1 real bug: submit_rth_day_stops()'s per-symbol loop body had no exception guard beyond a narrow pre-check wrapper -- one bad symbol's exception would abort the whole function with no same-day retry (gate set before the loop). Fixed with a wrapping try/except. Two OTHER 'critical' claims from one domain agent were refuted -- both were deliberate, already-documented fail-safe designs, not bugs. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 3f6fa6f."
+      "notes": "Phase 2 redo with full board (4 domain agents) found 1 real bug: submit_rth_day_stops()'s per-symbol loop body had no exception guard beyond a narrow pre-check wrapper -- one bad symbol's exception would abort the whole function with no same-day retry (gate set before the loop). Fixed with a wrapping try/except. Two OTHER 'critical' claims from one domain agent were refuted -- both were deliberate, already-documented fail-safe designs, not bugs. Cold second-agent PASS, Gro APPROVE, GAI APPROVE. Commit 3f6fa6f. | 2026-06-29: added detect+alert for collateral-cancelled GTC partial orders per nightly Gemini audit finding. Confirmed dormant today (gtc_partial_order_ids never populated) -- structural hardening, not an active-bug fix. Board 4/4 + Gro + GAI. Commit 52e36e5, deployed."
     },
     "execution/quarterly_hold_manager.py": {
       "patch_count": 2,

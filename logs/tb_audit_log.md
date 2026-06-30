@@ -6222,3 +6222,23 @@ Both items were logged to the Future Roadmap during the Phase 2 redo (2026-06-28
 **Q2 — config.py VOLUME_CONFIRMATION_ENABLED toggle hardening:** Board (Beck/McKinney), Gro, GAI unanimous: harden `validate_config()` rather than rely on documentation alone. Rafael approved. Added two checks rejecting startup on an incomplete two-step toggle.
 
 Verification: both diffs sent to Gro + GAI together with the exact same prompt — both APPROVE. Config.py's logic verified with 3 live Python executions (not just static analysis): current state passes silently, simulated incomplete toggle correctly raises SystemExit with both new messages, simulated complete toggle passes with no false positive. Static analysis clean on both files. **Deployed to OCI** — zero conflicting local divergence on either file, checksum-verified, py_compile clean.
+
+---
+
+## 2026-06-29 (Full patch sequence, post-market audit follow-up) — execution/gtc_manager.py: GTC partial-exit collateral-cancellation detection added (commit `52e36e5`), deployed
+
+**Trigger:** nightly Gemini audit (2026-06-29) flagged a HIGH-severity finding: broker.py's `submit_day_stop_order()` blanket-cancels ALL open orders for a symbol on a 40310000 error before retrying, which could collaterally cancel a tracked GTC partial-exit limit order with nothing detecting the loss.
+
+**Full board redo (4 cold parallel domain agents) on this specific finding** — not a file-wide redo, a targeted patch-sequence audit:
+- **Reliability:** confirmed the bug, flagged 2 critical amendments (sleep before post-check for Alpaca's async cancel propagation; handle `get_open_orders()`/`get_order()` returning None without false-clearing IDs).
+- **Execution-risk:** **independently discovered via grep that `trade["gtc_partial_order_ids"]` is currently NEVER populated anywhere in the codebase** — confirmed the bug is real but currently dormant (zero live impact today), reclassifying this from "active HIGH bug" to "structural hardening for a vestigial, pre-PDT-abolition feature." Confirmed alert-only (no auto-resubmit) is correct given the execution risk of stale tranche pricing.
+- **Data-integrity:** flagged a critical type-mismatch risk (inconsistent str()-cast conventions for order IDs across the codebase) and a critical staleness risk (a single bulk `get_open_orders()` snapshot can't be trusted given Alpaca's async cancel lag) — recommended per-order `get_order()` status verification instead, matching `cancel_open_gtc_orders()`'s existing pattern.
+- **Quant-logic:** confirmed losing the tranches is "medium-high, not catastrophic" — the hard stop/trail stop survive independently; confirmed alert-only is the correct EV tradeoff over auto-resubmit.
+
+I independently re-verified the "never populated" claim via my own fresh grep before implementing.
+
+**Fix:** in `submit_rth_day_stops()`, snapshot `trade["gtc_partial_order_ids"]` before calling `submit_day_stop_order()`. If the DAY stop succeeds and the snapshot was non-empty (never true today), wait 2s, then verify each snapshotted order ID individually via `get_order()` — 404 → pop + CRITICAL + Slack; status="filled" → pop silently (success, not loss); canceled/expired/done_for_day/replaced → pop + CRITICAL + Slack; anything else (still live) → no action. `get_order()` exceptions retain the ID for next-cycle retry rather than false-clearing.
+
+Verification: cold second-agent PASS (independently re-confirmed the dormancy claim via a third, fresh grep; confirmed reference-vs-copy semantics correct so the tracker mutation persists; confirmed the 2s sleep fires once per symbol not per tranche; confirmed exhaustive non-overlapping status branches) → Gro APPROVE, GAI APPROVE (Gro back online tonight after being exhausted all of last session). Static analysis clean. **Deployed to OCI** — zero conflicting local divergence, checksum-verified, py_compile clean.
+
+**Note for future sessions:** this fix is dead code until `gtc_partial_order_ids` is ever populated by a reactivated tranche-tracking feature. If that feature is built, re-verify this detection logic against the new write-site's actual ID-storage format (str vs UUID) before trusting it.
