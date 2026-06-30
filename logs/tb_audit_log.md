@@ -6276,3 +6276,21 @@ GAI: APPROVE (independently confirmed the imports are used elsewhere in the file
 Deployed to OCI — zero conflicting local divergence, checksum-verified, py_compile clean.
 
 **Remaining files (13/14):** reconcile_eod.py, run_macro_regime.py, backtest_12pt.py, weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 2/14: reconcile_eod.py (commit `dfded20`), deployed — modified removal, not bare deletion
+
+This file required a heavier full-board pass (Harris/Brandt/Thorp/Taleb lens), not the lighter cold-review used for file 1, because unlike the other 13 scripts this one writes logs/eod_{date}.json -- the same file strategy/run_cycle.py writes every ~5-minute cycle during RTH.
+
+**Finding (CONFIRMED via direct grep, not just agent claim):** the live bot's periodic EOD flush only skips writing if the file already has a `_reconcile_ts` key (run_cycle.py lines 135, 388, 1667-1674), but `write_eod_summary()` itself (execution/portfolio_tracker.py) has ZERO awareness of that key — it's purely a caller-side gate. Naive RTH-block removal would let reconcile_eod.py run mid-RTH, set the sentinel on a necessarily-incomplete day of fills (GTC/partial orders land hours later), and silently freeze the live bot's EOD writes against corrupted data for the rest of the session.
+
+**Fix:** RTH block still removed (script runs anytime now, satisfying Rafael's actual ask), but a new `_is_post_close()` gate (>=16:00 ET) controls whether the `_reconcile_ts` sentinel actually gets set. Pre-close runs still execute and write best-effort numbers, just leave the sentinel unset so the live bot keeps refreshing.
+
+Cold second-agent: PASS. Gro: APPROVE (flagged early-close days as a minor non-blocking edge case — conservative, not unsafe). GAI: initially NEEDS-CHANGES on a separate, legitimate concern (after-hours GTC fills could still land after the 4:10PM cron) — verified this risk predates the diff entirely and that the fix is a net improvement (adds a same-day recovery path that didn't exist while the block hard-blocked all daytime execution), GAI reversed to APPROVE after rebuttal.
+
+Logged separately to roadmap: the after-hours fill-completeness gap (pre-existing, out of scope for this task).
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified, py_compile clean.
+
+**Remaining files (12/14):** run_macro_regime.py, backtest_12pt.py, weekly_perf_audit.py, autonomous_patch_generator.py, earnings_preflight.py, audit_signals.py, weekly_review.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
