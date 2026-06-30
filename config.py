@@ -14,16 +14,20 @@ MIN_AVG_VOLUME = 1_000_000
 # ─── WATCHLIST ────────────────────────────────────────────────────────────────────────────
 
 # Core watchlist — always scanned every cycle regardless of premarket
-# High-liquidity, trend-friendly names that produce the cleanest signals
-# 24 tickers: 19 Bucket B (equities/ETFs) + 4 Bucket A (leveraged ETFs) + 1 SPY hedge
-# 24 tickers x 3 TFs x ~0.5s = ~36 seconds per scan — within Alpaca free tier limits
+# Expanded 2026-06-30 (board 5-0 + Gro + GAI): from 24→36 tickers.
+# Added high-volatility tech, semis, and EV names for more intraday signal
+# opportunities. Scan time estimate: ~54s per cycle — within Alpaca limits.
 WATCHLIST = [
-    # Bucket B — swing trade candidates
+    # Bucket B — original core
     "NVDA", "AAPL", "TSLA", "AMD",  "PLTR",
     "COIN", "SMCI", "TOST", "SOFI", "MSTR",
     "CRWD", "CRM",  "PANW", "UBER", "AMZN",
     "META", "NFLX", "SPY",  "QQQ",
-    # Bucket A — leveraged ETF swing holds (5% allocation, min 1-day hold)
+    # Bucket B — expansion (2026-06-30): high-vol momentum / vol arb names
+    "MSFT", "GOOGL", "NET",  "SNOW", "DDOG",
+    "ADBE", "AVGO",  "RBLX", "RIVN", "HOOD",
+    "MARA", "SOXL",  "SOXS",
+    # Bucket A — leveraged ETF swing holds (allocation PCT below)
     "TSLL", "NVDL", "TQQQ", "SQQQ",
 ]
 
@@ -43,10 +47,10 @@ LEVERAGED_3X_TARGET_MULTIPLIER = 3.0   # maintain 1:1 R:R
 # Bucket B: swing trades — 95% of portfolio, conviction-sized
 
 BUCKET_A_TICKERS         = {"TSLL", "NVDL", "TQQQ", "SQQQ"}
-BUCKET_A_ALLOCATION_PCT  = 0.05   # 5% of current portfolio value
+BUCKET_A_ALLOCATION_PCT  = 0.15   # 15% of portfolio (raised from 5% — board 5-0 + Gro + GAI 2026-06-30)
 BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
 
-BUCKET_B_ALLOCATION_PCT        = 0.95   # 95% of current portfolio value
+BUCKET_B_ALLOCATION_PCT        = 0.85   # 85% of portfolio (adjusted from 95% to keep A+B=100%)
 BUCKET_B_MAX_POSITIONS         = 999    # placeholder; actual cap is MAX_OPEN_POSITIONS=4
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
@@ -55,9 +59,9 @@ TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expan
 # 11-12: full allocation (up to 95% of portfolio as dollar risk cap)
 # 10:    half allocation (up to 47.5% of portfolio as dollar risk cap)
 # below 10: skip — not enough confluence
-CONVICTION_FULL_MIN      = 11     # 11/12 or 12/12 = full size
-CONVICTION_HALF_MIN      = 10     # 10/12 = half size
-CONVICTION_SKIP_BELOW    = 10     # below 10/12 = no trade
+CONVICTION_FULL_MIN      = 9      # 9+/12 = full size (lowered from 11 — board 5-0 2026-06-30)
+CONVICTION_HALF_MIN      = 8      # 8/12 = half size (lowered from 10)
+CONVICTION_SKIP_BELOW    = 8      # below 8/12 = no trade (lowered from 10)
 
 # ─── PRE-MARKET MOVER FILTER ────────────────────────────────────────────────────────────
 
@@ -222,17 +226,17 @@ PROFILES = {
     "paper": {
         # Bucket-aware paper profile
         "MAX_PORTFOLIO_RISK_PCT":  0.04,   # fallback only — bucket sizing overrides this
-        "MAX_OPEN_POSITIONS":      4,      # paper validation — expanded for multi-position stress testing
+        "MAX_OPEN_POSITIONS":      7,      # raised 4→7 — board 5-0 + Gro + GAI 2026-06-30 (max capital deployment)
         "MAX_DAILY_LOSS_PCT":      0.07,   # 7% kill switch — board vote 2026-04-22 (25-1, Thorp dissent 0.10)
         "INTRADAY_STOP_ATR_MULT":  1.20,  # tightened 1.25→1.20 S52 — DS/GAI floor for 2x ETF universe; board floor was 1.10
         "INTRADAY_TARGET_ATR_MULT":2.5,   # 2:1 R:R minimum
         "SWING_STOP_ATR_MULT":     1.2,
         "SWING_TARGET_ATR_MULT":   5.0,
-        "SCAN_INTERVAL_INTRADAY":  5,      # every 5 min — safe for 22 tickers
-        "MIN_LONG_SCORE":          10,     # raised 9→10 — board vote 7-0-1, Apr 7 2026
-        "MIN_SHORT_SCORE":         10,
-        "KELLY_FRACTION":          0.35,   # raised 0.25→0.35 — board vote S52 unanimous, aggressive paper phase
-        "KELLY_MAX_RISK_PCT":      0.045,  # 4.5% hard cap — board vote S52 (down from global 0.06)
+        "SCAN_INTERVAL_INTRADAY":  5,      # every 5 min — now scanning 36 tickers
+        "MIN_LONG_SCORE":          8,      # lowered 10→8 — board 5-0 + Gro + GAI 2026-06-30 (aggressiveness mandate)
+        "MIN_SHORT_SCORE":         8,      # mirrors long — board 5-0 2026-06-30
+        "KELLY_FRACTION":          0.50,   # raised 0.35→0.50 half-Kelly — board 5-0 + Gro + GAI 2026-06-30
+        "KELLY_MAX_RISK_PCT":      0.045,  # 4.5% hard cap — board vote S52 (unchanged)
         "PARTIAL_EXIT_ENABLED":    True,
         "PARTIAL_EXIT_RATIO":      0.5,
         "PARTIAL_EXIT_ATR_MULT":   0.8,
