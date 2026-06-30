@@ -17,6 +17,7 @@ Broker imports: cancel_order, get_open_orders, get_open_position,
 import logging
 import random
 import socket
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -174,6 +175,19 @@ def submit_rth_day_stops(tracker) -> None:
                     )
                     continue
 
+            # AWP audit fix (2026-06-29): submit_day_stop_order() (broker.py)
+            # does a BLANKET cancel_open_orders_for_symbol() on a 40310000
+            # (insufficient buying power) retry, which can collaterally
+            # cancel any tracked GTC partial-exit limit orders for this
+            # symbol. Snapshot before the call so a post-check can detect
+            # collateral loss. NOTE (board-confirmed, 2026-06-29 full audit):
+            # gtc_partial_order_ids is currently never populated anywhere in
+            # this codebase (vestigial post-PDT-abolition S63) -- this check
+            # is a no-op today and structural hardening for if that tranche-
+            # tracking feature is ever reactivated, not a fix for an active
+            # live bug.
+            _partials_before = dict(t.get("gtc_partial_order_ids") or {})
+
             _order = submit_day_stop_order(symbol=sym, qty=_qty, side=_side,
                                            stop_price=_stop_price)
             if _order:
@@ -184,6 +198,91 @@ def submit_rth_day_stops(tracker) -> None:
                     f"${_stop_price:.2f} (tracker stop={_stop:.2f} + offset={_offset:.2f}) | "
                     f"order {getattr(_order, 'id', 'unknown')}"
                 )
+
+                if _partials_before:
+                    # Alpaca's cancel is async (same GTC-RACE lesson as
+                    # broker.py's submit_gtc_stop_order() 40310000 path) --
+                    # brief wait before re-checking order state, then verify
+                    # each snapshotted ID individually via get_order() rather
+                    # than trusting a single get_open_orders() list snapshot,
+                    # matching the exact pattern cancel_open_gtc_orders()
+                    # already uses for this same class of ambiguity.
+                    time.sleep(2)
+                    for _tk, _oid in list(_partials_before.items()):
+                        if not _oid:
+                            continue
+                        _oid_str = str(_oid)
+                        try:
+                            _chk_ord = get_order(_oid_str)
+                        except Exception as _gpc_e:
+                            logger.warning(
+                                f"[{sym}] Could not verify partial-exit order "
+                                f"{_tk}={_oid_str} after RTH DAY stop submission "
+                                f"({_gpc_e!r}) — retaining ID, will re-check "
+                                f"next cycle."
+                            )
+                            continue
+                        if _chk_ord is None:
+                            # 404 — order confirmed gone. Ambiguous why (could
+                            # be the DAY stop's collateral cancel, or unrelated
+                            # prior cancellation) -- alert either way since the
+                            # tracker no longer reflects reality.
+                            t["gtc_partial_order_ids"].pop(_tk, None)
+                            logger.critical(
+                                f"[{sym}] Tracked partial-exit order {_tk}="
+                                f"{_oid_str} not found on Alpaca after RTH DAY "
+                                f"stop submission — likely collaterally "
+                                f"cancelled by the 40310000 retry path. "
+                                f"Partial-exit protection lost for this "
+                                f"position. Manual review required."
+                            )
+                            try:
+                                send_slack(
+                                    f":rotating_light: [{sym}] RTH DAY stop "
+                                    f"retry may have cancelled tracked "
+                                    f"partial-exit order {_tk} ({_oid_str}) — "
+                                    f"partial profit-taking disabled for this "
+                                    f"position. Review and resubmit manually "
+                                    f"if needed."
+                                )
+                            except Exception as _sl_e:
+                                logger.debug(
+                                    "[%s] partial-loss Slack alert failed — %s",
+                                    sym, _sl_e
+                                )
+                            continue
+                        _status = str(getattr(_chk_ord, "status", "")).lower()
+                        if _status == "filled":
+                            # Filled, not cancelled -- the goal was achieved.
+                            # Clear silently, no alert.
+                            t["gtc_partial_order_ids"].pop(_tk, None)
+                            continue
+                        if _status in ("canceled", "expired", "done_for_day", "replaced"):
+                            t["gtc_partial_order_ids"].pop(_tk, None)
+                            logger.critical(
+                                f"[{sym}] Tracked partial-exit order {_tk}="
+                                f"{_oid_str} is now {_status!r} after RTH DAY "
+                                f"stop submission — likely collaterally "
+                                f"cancelled by the 40310000 retry path. "
+                                f"Partial-exit protection lost for this "
+                                f"position. Manual review required."
+                            )
+                            try:
+                                send_slack(
+                                    f":rotating_light: [{sym}] RTH DAY stop "
+                                    f"retry may have cancelled tracked "
+                                    f"partial-exit order {_tk} ({_oid_str}, "
+                                    f"now {_status!r}) — partial profit-taking "
+                                    f"disabled for this position. Review and "
+                                    f"resubmit manually if needed."
+                                )
+                            except Exception as _sl_e:
+                                logger.debug(
+                                    "[%s] partial-loss Slack alert failed — %s",
+                                    sym, _sl_e
+                                )
+                        # else: still live (open/new/accepted/etc) — no action,
+                        # leave the tracked ID as-is.
             else:
                 _rth_day_stop_failure_counts[sym] = (
                     _rth_day_stop_failure_counts.get(sym, 0) + 1
