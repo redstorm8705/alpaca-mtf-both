@@ -6365,3 +6365,13 @@ Quant-logic domain review (Derman/McKinney lens): PASS, independently re-derived
 Deployed to OCI — zero conflicting local divergence, checksum-verified. Next Sunday's cron run (7/5 or sooner if manually triggered) will be the first to actually exercise the fixed logic.
 
 **Remaining files (7/14):** audit_signals.py, run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 8/14: audit_signals.py (commit `0e35c8e`), deployed
+
+Pure read-only diagnostic — zero file writes confirmed via full read. Cold review PASS, Gro APPROVE. GAI initially NEEDS-CHANGES on noqa bundling — resolved via counter-prompt citing RULE C-4 (same pattern as run_macro_regime.py earlier).
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (6/14):** run_market_top.py, run_ftd.py, compare_logs.py, monthly_review.py, audit_final.py, scripts/preflight_sim.py.
