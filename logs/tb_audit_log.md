@@ -6405,3 +6405,13 @@ Read-only log analysis tool, own dedicated output. Also removed 2 now-fully-unus
 Deployed to OCI — zero conflicting local divergence, checksum-verified.
 
 **Remaining files (3/14):** monthly_review.py, audit_final.py, scripts/preflight_sim.py.
+
+---
+
+## 2026-06-30 — RTH Block guardrail removal, file 12/14: monthly_review.py (commit `e325f51`), deployed
+
+Read-only on eod_*.json, own dedicated HTML output via atomic write. Cold review PASS (confirmed separate function-local now_et variables in 2 functions unaffected). Gro APPROVE. GAI APPROVE.
+
+Deployed to OCI — zero conflicting local divergence, checksum-verified.
+
+**Remaining files (2/14):** audit_final.py, scripts/preflight_sim.py.
