@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E402
 """
 run_ftd.py
 Pre-market wrapper for the ftd-detector skill (O'Neil Follow-Through Day).
@@ -21,14 +22,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-# RTH block — pre-market only (4:00–6:30 AM PT on weekdays is the target window)
+# AWP audit fix (2026-06-30): RTH Block removed (Rafael mandate). This script
+# only writes its own dedicated cache file (data/cache/ftd_state.json) -- the
+# live bot only reads it at startup, never writes to it, so there is no
+# write-contention risk.
 PT = ZoneInfo("America/Los_Angeles")
 _now = datetime.now(PT)
-if _now.weekday() < 5:
-    _mins = _now.hour * 60 + _now.minute
-    if (6 * 60 + 30) <= _mins < (13 * 60):
-        print("BLOCKED: Cannot run during RTH hours (6:30 AM–1:00 PM PT weekdays).")
-        sys.exit(1)
 
 from dotenv import load_dotenv
 load_dotenv()
