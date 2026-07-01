@@ -6480,3 +6480,30 @@ All three deployed and verified on OCI (sha256 match, py_compile PASS). Bot rest
 - Task #16: autonomous_review.py git pull failures (cosmetic, non-blocking)
 - Cross-strategy Phase 3 audit: logged to CLAUDE.md Future Roadmap
 - ATH trailing tightening: requires separate board session + backtest before implementation
+
+---
+## 2026-07-01 — RAM-DRAIN-2 (gc.freeze) + P0-STARTUP symmetric QHM exclusion
+
+### Patch 1 — main.py: gc.freeze() after startup (commit 0ab73d7)
+- **Bug:** per-cycle `gc.collect()` took 3.0–3.9s (peaks 12.8s) while collecting ~0–444 objects
+  = pure traversal of a large permanent live heap (imports/module code/config caches), not garbage.
+- **Fix:** `gc.freeze()` once after startup init, before `while True` (main.py L944). Moves the
+  permanent startup heap to a generation gc never re-scans; per-cycle collect walks only young objects.
+- **Full read:** 1091 lines. **10-pt + RC-1..8:** PASS. **Board+Gro+GAI:** APPROVE/APPROVE/APPROVE.
+  **Cold-agent:** PASS. **Static:** py_compile/ruff/mypy clean.
+- **Verified live:** boot froze **101,299 objects**; first post-freeze cycle produced NO gc>200ms
+  warning (baseline 3.0–3.9s) → per-cycle gc now <200ms. FIX CONFIRMED.
+
+### Patch 2 — main.py L823: symmetric QHM exclusion in P0-STARTUP (commit 701eb47)
+- **Bug (introduced by Option B step-2, self-caught):** `_live_pos`/`_alpaca_syms` excluded QHM
+  symbols but `_tracker_syms` did not, so QHM holds (GOOGL/NVDA) alive in Alpaca AND in
+  tracker.open_trades always landed in `_stale` → false CRITICAL "In tracker but NOT in Alpaca —
+  externally closed — manual intervention required" on every boot.
+- **Fix:** add `and s not in _qhm_syms` to the `_tracker_syms` comprehension (both sides QHM-clean).
+- **Full read:** 1091 lines. **10-pt + RC-1..8:** PASS. **Board reliability (Majors alert-hygiene):**
+  APPROVE. **Gro/GAI:** APPROVE/APPROVE. **Cold-logic:** PASS (no `_untracked` regression — `_alpaca_syms`
+  already QHM-clean; genuine non-QHM external closes still fire). **Static:** clean.
+- **Impact:** observability only — count override uses `_live_count` (unchanged). QHM external closes
+  still detected by `qhm.reconcile_on_startup()` (L761).
+- **Verified live:** fresh boot 701eb47 — count CRITICAL (6!=8) still fires correctly; false
+  `_stale` CRITICAL for GOOGL/NVDA GONE. FIX CONFIRMED.
