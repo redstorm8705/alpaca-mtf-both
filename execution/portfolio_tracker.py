@@ -918,13 +918,13 @@ class PortfolioTracker:
                     f["symbol"] for f in _day_fills
                     if f.get("side") == "sell_short"
                 }
-                from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _get_qhm_oseed
-                _qhm_oseed = _get_qhm_oseed()
+                from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+                _qhm_oseed = get_quarterly_hold_symbols()
                 _orphan_seed_map: dict = {}
                 for _fill in _day_fills:
                     _fsym  = _fill.get("symbol", "")
                     if _fsym in _qhm_oseed:
-                        continue   # QHM tracked separately — no orphan seed, no FIFO-orphan warning
+                        continue   # QHM tracked separately — skip orphan seed/warning
                     _fside = _fill.get("side", "")
                     if not _fsym or _fsym in _prior_lots:
                         continue
