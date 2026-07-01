@@ -492,10 +492,19 @@ class RiskManager:
         # ── Step 3: Seed FIFO lot queues from open positions ──────────────
         # avg_entry_price is Alpaca-authoritative and FIFO-equivalent for
         # single-tranche entries (no pyramiding in this bot).
+        # QHM ownership (Option B step 2, 2026-07-01): the Quarterly Hold Manager
+        # is tracked separately and its realized P&L must NOT count toward the
+        # intraday kill-switch daily_pnl. Exclude QHM symbols from both the
+        # position-seed and the fill-match loops below (lazy import avoids any
+        # circular-import risk in this foundational module).
+        from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+        _qhm_syms = get_quarterly_hold_symbols()
         long_lots: dict  = defaultdict(deque)
         short_lots: dict = defaultdict(deque)
         for pos in positions:
             sym   = pos.get("symbol", "")
+            if sym in _qhm_syms:
+                continue   # QHM tracked separately — exclude from intraday kill-switch P&L
             side  = pos.get("side", "")
             qty   = float(pos.get("qty", 0) or 0)
             price = float(pos.get("avg_entry_price", 0) or 0)
@@ -513,6 +522,8 @@ class RiskManager:
             all_fills, key=lambda f: f.get("transaction_time", "")
         ):
             sym    = fill.get("symbol", "")
+            if sym in _qhm_syms:
+                continue   # QHM fills excluded from intraday kill-switch daily_pnl
             _side  = fill.get("side", "")
             qty    = float(fill.get("qty", 0) or 0)
             price  = float(fill.get("price", 0) or 0)
