@@ -259,7 +259,17 @@ def _fifo_reconstruct(
                                        _save_open_lots_state)
     """
     import copy
+    # QHM ownership (Option B step 2, 2026-07-01): QHM is tracked separately (its
+    # own HoldPosition state machine) — exclude it from intraday EOD FIFO P&L.
+    # Purge any QHM lots carried in prior_lots (self-healing cleanup of stale QHM
+    # entries — board FIFO requirement) AND skip QHM fills in the loop below, so
+    # QHM never contributes to today_pnl / remaining_lots. Lazy import avoids
+    # circular-import risk in this foundational module.
+    from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+    _qhm_syms = get_quarterly_hold_symbols()
     lots      = copy.deepcopy(prior_lots)
+    for _qs in list(_qhm_syms):
+        lots.pop(_qs, None)
     today_pnl = 0.0
     per_trade = []
     seen_fill_ids = set(processed_fill_ids or set())
@@ -267,6 +277,8 @@ def _fifo_reconstruct(
     for fill in fills:
         fill_id   = fill.get("id", "")
         sym       = fill.get("symbol", "")
+        if sym in _qhm_syms:
+            continue   # QHM tracked separately — excluded from intraday EOD FIFO P&L
         side      = fill.get("side", "")
         qty       = int(float(fill.get("qty", 0)))
         price     = float(fill.get("price", 0))
@@ -906,9 +918,13 @@ class PortfolioTracker:
                     f["symbol"] for f in _day_fills
                     if f.get("side") == "sell_short"
                 }
+                from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _get_qhm_oseed
+                _qhm_oseed = _get_qhm_oseed()
                 _orphan_seed_map: dict = {}
                 for _fill in _day_fills:
                     _fsym  = _fill.get("symbol", "")
+                    if _fsym in _qhm_oseed:
+                        continue   # QHM tracked separately — no orphan seed, no FIFO-orphan warning
                     _fside = _fill.get("side", "")
                     if not _fsym or _fsym in _prior_lots:
                         continue
