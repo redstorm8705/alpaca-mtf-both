@@ -160,14 +160,15 @@ def _load_hybrid_state() -> None:
 # Re-exported above via the entry_logic import block.
 
 
-def _submit_rth_day_stops(tracker) -> None:
+def _submit_rth_day_stops(tracker, risk=None) -> None:
     """Shim — delegates to execution.gtc_manager (Phase 2 extraction).
 
-    Called by run_cycle.py via `_main._submit_rth_day_stops(tracker)`.
+    Called by run_cycle.py via `_main._submit_rth_day_stops(tracker, risk)`.
     Must remain in trade_engine.py so the _main proxy resolves correctly.
+    risk is threaded through so cover-on-breach can register_close (2026-07-01).
     """
     from execution.gtc_manager import submit_rth_day_stops
-    submit_rth_day_stops(tracker)
+    submit_rth_day_stops(tracker, risk)
 
 
 

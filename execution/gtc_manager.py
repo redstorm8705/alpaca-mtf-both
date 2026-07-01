@@ -24,11 +24,13 @@ from zoneinfo import ZoneInfo
 from alerts import send_slack
 from execution.broker import (
     cancel_order,
+    close_position,
     get_open_orders,
     get_open_position,
     get_order,
     submit_day_stop_order,
 )
+from execution.fill_helpers import fetch_actual_fill_price
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ def get_failure_counts() -> dict:
 # RTH DAY stop submission
 # ---------------------------------------------------------------------------
 
-def submit_rth_day_stops(tracker) -> None:
+def submit_rth_day_stops(tracker, risk=None) -> None:
     """Submit DAY stop-market orders at RTH open for overnight positions with no exchange stop.
 
     DAY orders expire at 4:00 PM ET — no conflict with tonight's AH GTC submission.
@@ -162,17 +164,57 @@ def submit_rth_day_stops(tracker) -> None:
                 logger.debug("[%s] RTH DAY stop pre-flight price check failed — %s", sym, _pos_e)
                 _mkt = None
             if _mkt is not None:
-                if _dir == "long" and _stop_price >= _mkt:
-                    logger.warning(
-                        f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
-                        f">= market ${_mkt:.2f} (gap-up open). Set manual stop if needed."
+                _breached = ((_dir == "long"  and _stop_price >= _mkt) or
+                             (_dir == "short" and _stop_price <= _mkt))
+                if _breached:
+                    # COVER-ON-BREACH (board + Gro + GAI unanimous, Rafael ratified
+                    # 2026-07-01): the protective stop is already breached — price
+                    # gapped PAST the exit level. A long's sell-stop >= market or a
+                    # short's buy-stop <= market is rejected by Alpaca (42210000),
+                    # leaving the position NAKED. The stop's purpose is met — close
+                    # now at market (RTH is open) rather than leave it unhedged.
+                    # Symmetric long/short. >3xATR-past logged as a sizing anomaly.
+                    _gap = "gap-up" if _dir == "long" else "gap-down"
+                    _atr = t.get("atr_value") or 0
+                    if _atr > 0 and abs(_mkt - _stop_price) > 3 * _atr:
+                        logger.critical(
+                            f"[{sym}] STOP BREACH >3xATR past stop (market ${_mkt:.2f} vs "
+                            f"stop ${_stop_price:.2f}, ATR ${_atr:.2f}) — sizing review flagged."
+                        )
+                    logger.critical(
+                        f"[{sym}] STOP BREACHED at RTH open ({_gap}): stop ${_stop_price:.2f} "
+                        f"vs market ${_mkt:.2f} — covering now (market close); no valid stop placeable."
                     )
-                    continue
-                if _dir == "short" and _stop_price <= _mkt:
-                    logger.warning(
-                        f"[{sym}] RTH DAY stop skipped — stop_price ${_stop_price:.2f} "
-                        f"<= market ${_mkt:.2f} (gap-down open). Set manual stop if needed."
-                    )
+                    _cov_ts = time.time()
+                    if close_position(sym):
+                        _cov_fill = fetch_actual_fill_price(sym, t, poll_secs=1.0,
+                                                            submitted_after=_cov_ts)
+                        _cov_pnl = tracker.record_exit(sym, _cov_fill, reason="stop_breach_cover")
+                        if risk is not None:
+                            risk.register_close(_cov_pnl or 0.0)
+                        logger.critical(
+                            f"[{sym}] Cover-on-breach filled @ ${_cov_fill:.2f} "
+                            f"(P&L ${_cov_pnl or 0.0:.2f})."
+                        )
+                        try:
+                            send_slack(
+                                f":rotating_light: [{sym}] stop breached at open — covered @ "
+                                f"${_cov_fill:.2f} (P&L ${_cov_pnl or 0.0:.2f})."
+                            )
+                        except Exception as _csl:
+                            logger.debug("[%s] cover Slack alert failed — %s", sym, _csl)
+                    else:
+                        logger.critical(
+                            f"[{sym}] STOP BREACH COVER FAILED — close_position rejected. "
+                            f"Position UNPROTECTED. Manual cover required NOW."
+                        )
+                        try:
+                            send_slack(
+                                f":rotating_light: [{sym}] STOP BREACH — cover FAILED. "
+                                f"Position naked. Cover manually NOW."
+                            )
+                        except Exception as _csl:
+                            logger.debug("[%s] cover-fail Slack alert failed — %s", sym, _csl)
                     continue
 
             # AWP audit fix (2026-06-29): submit_day_stop_order() (broker.py)

@@ -687,7 +687,7 @@ def run_cycle(
     # ── RTH session start: submit DAY stops for overnight positions missing exchange-level stop ──
     # Fires once per calendar date. DAY orders expire at 4 PM ET —
     # no conflict with tonight's AH GTC submission.
-    _main._submit_rth_day_stops(tracker)
+    _main._submit_rth_day_stops(tracker, risk)
 
     # ── ORB Gate: compute SPY 15-min opening range at 9:55 AM ET ─────────────────
     # Board vote 2026-05-17, 26/26 unanimous. Fail-closed: any feed error → BLOCK_ALL.
