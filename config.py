@@ -70,6 +70,13 @@ CONVICTION_SKIP_BELOW    = 8      # below 8/12 = no trade (lowered from 10)
 PREMARKET_MOVER_THRESHOLD_PCT = 2.0   # ±2% pre-market move qualifies
 PREMARKET_MOVE_MAX_PCT        = 35.0  # sanity cap — moves > ±35% treated as bad data, skip
 
+# Pre-market reversal-pause gate (board 2/2 + GAI, 2026-07-01; Gro deferred — TPD limit).
+# Consumed by run_premarket_gate.py (9:25 AM ET cron) and run_cycle.py 10:05 re-validation.
+PREMARKET_RETRACE_THRESHOLD  = 0.50  # gap must retrace ≥50% from pm_high toward prior_close
+PREMARKET_MIN_SCORE          = 8     # min MTF score at 10:05 re-validation (matches CONVICTION_HALF_MIN)
+PREMARKET_KELLY_MULT         = 0.50  # size = 50% of normal Kelly output (Rafael locked)
+PREMARKET_ATR_MULT           = 0.625 # stop = 0.625× normal ATR multiplier (Rafael locked)
+
 # ─── VOLATILITY FILTER (ATR-based expected move) ───────────────────────────────
 
 # Only scan stocks whose 14-day ATR is at least ATR_MIN_PCT of price.
