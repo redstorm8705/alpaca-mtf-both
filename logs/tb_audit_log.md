@@ -6507,3 +6507,39 @@ All three deployed and verified on OCI (sha256 match, py_compile PASS). Bot rest
   still detected by `qhm.reconcile_on_startup()` (L761).
 - **Verified live:** fresh boot 701eb47 — count CRITICAL (6!=8) still fires correctly; false
   `_stale` CRITICAL for GOOGL/NVDA GONE. FIX CONFIRMED.
+
+---
+## 2026-07-01 — AWP autonomous session (Rafael away; PREP ONLY, nothing applied)
+
+### Cross-strategy Phase 3 audit (roadmap P0) — COMPLETE
+Two cold domain agents (exit/close paths; QHM state machine) + verifications.
+- CONFIRMED complete Option-B guards: check_exits() L1112, check_partial_exits() L212,
+  safe_close_all() L77 (both routine + circuit-breaker), movers/strategy.py L413/L506.
+- GAP (P1) exit_logic.py `_check_exits_extended_hours()` L2075 — no QHM guard; EH exit paths
+  (L2180/2216/2247) can submit_limit_order on a QHM symbol during PM/AH. → Package 1 (approval-ready).
+- GAP (P0 defense-in-depth) quarterly_hold_manager.py `_detect_external_close()` ~L830 (only
+  checks is None, not partial qty) + `_check_fill_and_advance()` ~L1266 (assumes all live qty is
+  new fills) → partial external close corrupts tranche state. → Package 2 (needs board).
+- Policy fork: safe_close_all(circuit_breaker=True) excludes QHM vs Invariant 7. → decision fork.
+
+### Directive re-triage (audit_directives.jsonl, 79 rows: 43 failed_permanent, 9 pending_review)
+- ~12 RESOLVED THIS SESSION (all main.py gc.collect memory-leak rows → gc.freeze 0ab73d7;
+  run_cycle GTC-42210000-short → cover-on-breach cf10c9f/a53ce92; position-count-drift → Option B
+  step1/2 + P0-STARTUP override). Recommend reclassify `superseded`.
+- ~4 already CLOSED per CLAUDE.md RC table; ~5 cosmetic noise → `context_only`.
+- REAL-OPEN → Packages 3 (orphan fail-open) + 4 (ATH SPY fail-open) below; plus config coherence,
+  VOLSHADOW-not-enforced, ISO8601-Z parse, scan_to_html NaN (smaller, queued for later verify).
+
+### Verified findings (against current code)
+- orphan_manager.py `cancel_and_reconcile_gtc_stops` QHM fail-open — REAL CRITICAL. On corrupt
+  quarterly_holds.json, _qhm_protected=empty → all QHM GTC stops cancelled before RTH → naked.
+  → Package 3 (diff drafted, scratch-static clean, Gro+GAI converged fail-closed; needs board).
+- orphan_manager PENDING_CANCEL retention — NOT a bug (intentional, board 27-0 + GAI-fix, escalates
+  at ≥3 cycles). No action.
+- run_cycle.py + risk_manager.py ATH SPY-52w fail-open — REAL HIGH. fetch_bars fail → _spy_52w_high=0
+  → ATH floor-raise + 0.90x scalar both skipped (fail-open), unlike ORB's fail-closed BLOCK_ALL.
+  → Package 4 (needs board on posture).
+- open_lots_prior_day.json "P0 rebuild" — CLOSED; live OCI file healthy/current, only local dev copy
+  was stale/corrupt (refreshed).
+
+All items staged in logs/pending_claude_session_2026-07-01.md for Rafael's approval. No code applied.
