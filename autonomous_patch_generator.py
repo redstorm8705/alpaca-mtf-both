@@ -7,10 +7,10 @@ Runs on OCI at 6 PM ET (23:00 UTC) weeknights, between:
 
 For each unprocessed directive in audit_directives.jsonl:
   1. Full read of target file
-  2. 3-agent board vote (Strict Parser / Red Teamer / Quant Risk) via Gro (Groq) API
-  3. Diff generation via Gro (Groq) API
+  2. 3-agent board vote (Strict Parser / Red Teamer / Quant Risk) via LLM (Gemini→Groq)
+  3. Diff generation via LLM (Gemini→Groq)
   4. Static analysis (py_compile + mypy + ruff) on target file
-  5. Cold second-agent logic review via Gro (Groq) API
+  5. Cold second-agent logic review via LLM (Gemini→Groq)
   6. Write pending_ds_gai_*.json + .patch file (for autonomous_review.py to consume)
   7. Mark directive as processed (atomic write)
   8. Slack summary
@@ -50,6 +50,14 @@ _API_TIMEOUT  = 180
 # docstring for why. Matches CLAUDE.md's Gro/GAI DIRECT API PROTOCOL.
 _GRO_BASE_URL = "https://api.groq.com/openai/v1"
 _GRO_MODEL    = "llama-3.3-70b-versatile"
+# AWP audit fix (2026-07-01): Groq free-tier TPD (100K tokens/day) is exhausted
+# after ~3 directives (5 LLM calls each), leaving the rest 429'd → 0 processed.
+# Route drafting through Gemini (no TPD wall in our usage); keep Groq as fallback.
+# The independent DS/GAI cross-check remains a separate stage (autonomous_review.py),
+# so model-diversity is preserved where it matters. Rafael approved 2026-07-01.
+_GAI_MODEL    = "gemini-2.5-flash"
+_GAI_URL      = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                 "gemini-2.5-flash:generateContent")
 _SLACK_URL    = None  # loaded from .env
 
 ET = ZoneInfo("America/New_York")
@@ -147,7 +155,50 @@ def _call_gro(prompt: str) -> str | None:
                 time.sleep(2 ** attempt * 5)
     return None
 
-# ── Board vote (3 cold independent agents via Gro API) ────────────────────────
+# ── Gemini API (primary drafting model — no TPD wall) ─────────────────────────
+def _call_gai(prompt: str) -> str | None:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        _log("ERROR: GEMINI_API_KEY not set")
+        return None
+    import requests  # type: ignore[import-untyped]
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.post(
+                f"{_GAI_URL}?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 4096,
+                        "temperature": 0.1,
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    },
+                },
+                timeout=_API_TIMEOUT,
+            )
+            resp.raise_for_status()
+            cands = resp.json().get("candidates", [])
+            if cands and cands[0].get("content", {}).get("parts"):
+                return cands[0]["content"]["parts"][0]["text"]
+            return None
+        except Exception as exc:
+            _log(f"Gai attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(2 ** attempt * 5)
+    return None
+
+# ── LLM router — Gemini primary, Groq fallback ────────────────────────────────
+def _call_llm(prompt: str) -> str | None:
+    """Drafting calls route to Gemini (no daily-token wall); fall back to Groq
+    only if Gemini is unavailable. Returns None if both fail (caller → retry)."""
+    out = _call_gai(prompt)
+    if out is not None:
+        return out
+    _log("Gemini unavailable — falling back to Groq")
+    return _call_gro(prompt)
+
+# ── Board vote (3 cold independent agents via LLM: Gemini→Groq) ────────────────
 def _board_vote(
     file_content: str,
     finding: str,
@@ -194,7 +245,7 @@ def _board_vote(
     results: dict = {}
     for agent_key, prompt in prompts.items():
         _log(f"Board vote: calling agent {agent_key}...")
-        response = _call_gro(prompt)
+        response = _call_llm(prompt)
         if response is None:
             results[agent_key] = "UNCLEAR"
             results[f"{agent_key}_notes"] = "API call failed"
@@ -377,8 +428,12 @@ def _process_directive(directive: dict) -> str:
         _log(f"Diff generation API failure on {file_rel} — will retry")
         return "retry"
     if not diff.strip().startswith("---"):
-        _log(f"SKIP (permanent) {file_rel}: model returned non-diff output")
-        return "failed_permanent"
+        # AWP fix (2026-07-01): model format variance (prose instead of a diff) is
+        # TRANSIENT, not a structural failure — retry next run rather than burning
+        # the directive permanently. Groq's llama-3.3 frequently returned prose;
+        # Gemini produces cleaner diffs, so this path should now rarely fire.
+        _log(f"{file_rel}: model returned non-diff output — retry")
+        return "retry"
 
     # ── Static analysis on target file ───────────────────────────────────────
     static = _run_static_analysis(file_path)
