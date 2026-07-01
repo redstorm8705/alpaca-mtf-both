@@ -206,6 +206,12 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
     TRAIL_PHASE_MULTS = {1: 0.75, 2: 0.50, 3: 0.25}  # trail dist multiplier per phase
 
     for symbol, trade in list(tracker.open_trades.items()):
+        # QHM ownership guard (Option B, 2026-07-01): skip QHM-held symbols — the
+        # main bot must not partial-close/trail a QHM position. The collision
+        # alert is fired once by check_exits (same cycle); keep this a quiet skip.
+        if symbol in _get_qhm_syms():
+            logger.debug("[%s] QHM-held — skipped by main-bot partial-exit management.", symbol)
+            continue
         direction   = trade["direction"]
         entry_price = trade["entry_price"]
         atr_value   = trade.get("atr_value") or 0
@@ -1097,6 +1103,33 @@ def check_exits(
         _tr["_exit_tod_last"] = _cur_tod
 
     for symbol, trade in list(tracker.open_trades.items()):
+        # QHM ownership guard (Option B, 2026-07-01): the main bot must not exit a
+        # QHM-held symbol (QHM owns its Alpaca position + its own GTC stop).
+        # Entries are blocked in entry_logic, so a QHM symbol in the tracker is an
+        # ownership COLLISION (held before QHM entered, or a race) — suppress
+        # main-bot exit management and alert ONCE. Do NOT close here: at step 1 the
+        # position is shared net on Alpaca, so closing would flatten QHM too.
+        if symbol in _get_qhm_syms():
+            if not trade.get("_qhm_collision_alerted"):
+                trade["_qhm_collision_alerted"] = True
+                tracker._save_log()
+                logger.error(
+                    "[%s] QHM COLLISION: main-bot position present for a QHM-held "
+                    "symbol — main-bot exit management suppressed (Option B). "
+                    "Reconcile ownership.", symbol,
+                )
+                try:
+                    from alerts import send_slack as _qhm_slack
+                    _qhm_slack(
+                        f":warning: [{symbol}] QHM collision — main bot holds a "
+                        f"position in a QHM-held symbol; main-bot exits suppressed "
+                        f"(QHM owns it). Reconcile."
+                    )
+                except Exception as _qhm_ae:
+                    logger.warning(
+                        "[%s] QHM collision Slack alert failed: %s", symbol, _qhm_ae
+                    )
+            continue
         direction     = trade["direction"]
         trade_mode    = trade["trade_mode"]
         is_overnight  = trade.get("overnight", False)

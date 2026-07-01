@@ -61,6 +61,12 @@ def safe_close_all(tracker, risk=None,
     """
     global _halt_entries_for_session
 
+    # QHM ownership guard (Option B separation, 2026-07-01): the Quarterly Hold
+    # Manager owns its own Alpaca positions + wide GTC stops. The intraday
+    # mass-close (kill-switch, circuit-breaker, and news-halt all route here) must
+    # NEVER flatten a QHM-held symbol — even on a circuit-breaker.
+    from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+    _qhm_syms = get_quarterly_hold_symbols()
     # Bucket A exemption only applies to routine halts, never circuit-breakers
     protected = [] if circuit_breaker else [
         s for s in tracker.open_trades
@@ -68,8 +74,13 @@ def safe_close_all(tracker, risk=None,
     ]
     symbols_to_close = [
         s for s in list(tracker.open_trades)
-        if s not in protected
+        if s not in protected and s not in _qhm_syms
     ]
+    _qhm_skipped = [s for s in tracker.open_trades if s in _qhm_syms]
+    if _qhm_skipped:
+        logger.warning(
+            f"[QHM GUARD] mass-close skipped QHM-held {_qhm_skipped} — QHM owns these."
+        )
 
     if protected:
         logger.warning(
