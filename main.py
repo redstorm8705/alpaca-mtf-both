@@ -932,6 +932,22 @@ def main():
 
     logger.info(f"Bot running — scanning every {scan_interval // 60} min RTH | 10 min pre-market. Ctrl+C to stop.")
 
+    # ── RAM-DRAIN-2 (2026-07-01): freeze the startup heap ────────────────────────
+    # The per-cycle gc.collect() below was taking 3-12.8s while collecting ~0 objects
+    # — pure traversal cost of a large LIVE, long-lived heap (imports, module code,
+    # config/caches loaded at boot), NOT a garbage pile. gc.freeze() moves every
+    # currently-live object into a permanent generation gc never re-scans, so the
+    # per-cycle collect only walks young objects. Per-cycle DataFrames created AFTER
+    # this point are still collected normally; bar_cache is populated during cycles
+    # so it stays collectable. Standard fix for "gc.collect slow, collects little"
+    # (Board + Gro + GAI gate, Rafael approved 2026-07-01).
+    gc.freeze()
+    logger.info(
+        "gc.freeze(): %d objects frozen into the permanent generation — "
+        "per-cycle gc.collect() now skips the startup heap.",
+        gc.get_freeze_count(),
+    )
+
     # ── Connection heartbeat state ────────────────────────────────────────────
     _health_fail_count = 0
 
