@@ -37,6 +37,7 @@ from execution.broker import (
     get_portfolio_value,
     is_market_open,
     submit_gtc_stop_order,
+    submit_limit_order,
 )
 from execution.fill_helpers import (
     fetch_actual_fill_price as _fetch_actual_fill_price,
@@ -595,6 +596,72 @@ def run_cycle(
                         _gstop_price = round(_gstop_price - _goffset, 2)
                     _gside   = "sell" if _gdir == "long" else "buy"
                     _gqty    = abs(int(_gtr.get("qty_remaining", _gtr["qty"])))
+                    # COVER-ON-BREACH pre-flight (board + Gro + GAI unanimous, Rafael
+                    # ratified 2026-07-01): if the protective stop is already breached
+                    # (short buy-stop <= market / long sell-stop >= market) Alpaca rejects
+                    # it (42210000) and the position goes NAKED overnight. Cover now via a
+                    # marketable extended-hours limit (fills 4-8 PM ET); the fill is recorded
+                    # by cancel_and_reconcile_gtc_stops at next startup (it keys on order
+                    # status 'filled', not order type — verified). If the extended-hours cover
+                    # can't be placed (after 8 PM, no session), the RTH cover-on-breach in
+                    # gtc_manager.submit_rth_day_stops closes it at the 9:30 open.
+                    _gmkt = None
+                    try:
+                        if _galpaca_pos not in (None, True):
+                            _gmkt = float(getattr(_galpaca_pos, "current_price", 0)) or None
+                    except (TypeError, ValueError):
+                        _gmkt = None
+                    if _gmkt is not None and (
+                        (_gdir == "short" and _gstop_price <= _gmkt) or
+                        (_gdir == "long"  and _gstop_price >= _gmkt)
+                    ):
+                        _gcov_side  = "buy" if _gdir == "short" else "sell"
+                        _gcov_limit = round(_gmkt * (1.01 if _gdir == "short" else 0.99), 2)
+                        _gatr_n = _gtr.get("atr_value") or 0
+                        if _gatr_n > 0 and abs(_gmkt - _gstop_price) > 3 * _gatr_n:
+                            logger.critical(
+                                f"[{_gsym}] STOP BREACH >3xATR past stop (market ${_gmkt:.2f} "
+                                f"vs stop ${_gstop_price:.2f}, ATR ${_gatr_n:.2f}) — sizing review flagged."
+                            )
+                        logger.critical(
+                            f"[{_gsym}] STOP BREACHED overnight ({_gdir}): stop ${_gstop_price:.2f} "
+                            f"{'<=' if _gdir == 'short' else '>='} market ${_gmkt:.2f} — no valid stop "
+                            f"placeable; covering now (extended-hours marketable limit)."
+                        )
+                        _gcov_ord = submit_limit_order(
+                            _gsym, _gqty, _gcov_side, _gcov_limit, extended_hours=True
+                        )
+                        if _gcov_ord:
+                            tracker.set_gtc_stop_order_id(_gsym, str(getattr(_gcov_ord, "id", "")))
+                            logger.critical(
+                                f"[{_gsym}] Cover-on-breach limit submitted: {_gcov_side.upper()} "
+                                f"{_gqty} @ ${_gcov_limit:.2f} | order {getattr(_gcov_ord, 'id', '?')} "
+                                f"(exit recorded at next reconcile on fill)."
+                            )
+                            try:
+                                send_slack(
+                                    f":rotating_light: [{_gsym}] stop breached overnight — covering "
+                                    f"({_gcov_side} {_gqty} @ ${_gcov_limit:.2f}). Verify fill."
+                                )
+                            except Exception as _cse:
+                                logger.debug("[%s] cover Slack alert failed — %s", _gsym, _cse)
+                        elif not _gtr.get("_breach_cover_alerted"):
+                            _gtr["_breach_cover_alerted"] = True
+                            tracker._save_log()
+                            logger.critical(
+                                f"[{_gsym}] STOP BREACHED overnight but extended-hours cover could "
+                                f"not be placed (likely after 8 PM ET). Position naked until 9:30 open, "
+                                f"where the RTH cover-on-breach will close it. Cover manually if urgent."
+                            )
+                            try:
+                                send_slack(
+                                    f":rotating_light: [{_gsym}] stop breached overnight; AH cover "
+                                    f"unavailable — will cover at 9:30 open (RTH breach-cover). "
+                                    f"Cover manually if urgent."
+                                )
+                            except Exception as _cse:
+                                logger.debug("[%s] cover-defer Slack alert failed — %s", _gsym, _cse)
+                        continue
                     logger.info(
                         f"[{_gsym}] AH GTC stop submitting: {_gside.upper()} "
                         f"{_gqty} @ ${_gstop_price:.2f} (offset ${_goffset:.2f})"
