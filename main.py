@@ -821,7 +821,7 @@ def main():
             # Observability: surface which symbols are causing the discrepancy
             _alpaca_syms  = {pos.symbol for pos in _live_pos}
             _tracker_syms = {s for s, t in tracker.open_trades.items()
-                             if t.get("status") != "closed"}
+                             if t.get("status") != "closed" and s not in _qhm_syms}
             _untracked = _alpaca_syms - _tracker_syms
             _stale     = _tracker_syms - _alpaca_syms
             if _untracked:
