@@ -793,7 +793,14 @@ def main():
     #    reconcile_positions() above already handles entry-level cleanup.
     try:
         from execution.broker import get_open_positions as _broker_positions
-        _live_pos    = _broker_positions()
+        # QHM ownership (Option B step 2, 2026-07-01): QHM positions are tracked
+        # separately (its own HoldPosition state machine) and must NOT inflate the
+        # intraday risk.open_positions — entry_logic's cycle-sync already excludes
+        # them from the tracker count, so counting QHM's Alpaca positions here is
+        # the root of the recurring Tracker<RiskManager desync. Exclude QHM; the
+        # downstream _alpaca_syms observability (below) becomes QHM-clean too.
+        _qhm_syms    = get_quarterly_hold_symbols()
+        _live_pos    = [p for p in _broker_positions() if p.symbol not in _qhm_syms]
         _live_count  = len(_live_pos)
         _tracker_count = risk.open_positions
         if _live_count != _tracker_count:
