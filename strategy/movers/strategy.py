@@ -4,7 +4,9 @@
 # Supports both long (gainers) and short (losers)
 # Optionally gates entries on MTF confluence from main strategy
 
+import json
 from datetime import datetime
+from pathlib import Path
 from events.calendar import EventRisk
 from data.alpaca_data import get_latest_quote
 from trade_logger import log_event as _log_event
@@ -96,9 +98,48 @@ class MoversStrategy:
             )
             open_orders = []
 
+        # OWNERSHIP GUARD (2026-07-02 incident): movers must NEVER adopt a position
+        # owned by another strategy. Without this, reconcile_on_startup grabbed the
+        # ENTIRE shared Alpaca account (QHM holds + the main intraday bot's positions)
+        # into _active_movers on every restart, then check_exits/flatten dumped them —
+        # it flattened QHM NVDA/GOOGL + the main bot's book at the open. Exclude any
+        # symbol owned by QHM (get_quarterly_hold_symbols, now cross-process-safe) or
+        # held in the main bot's trade_log.json open book. Fail-safe: on read error,
+        # protect at least the QHM set (never widen adoption on error).
+        _protected: set = set(_qhm_symbols())
+        _ownership_known = True
+        try:
+            _tl_path = Path(__file__).resolve().parent.parent.parent / "trade_log.json"
+            if _tl_path.exists():
+                _tl = json.loads(_tl_path.read_text())
+                _protected |= {
+                    t.get("symbol") for t in _tl.get("open", [])
+                    if isinstance(t, dict) and t.get("symbol")
+                }
+        except Exception as _own_e:
+            # FAIL-CLOSED (Gro 2026-07-02): if we cannot read the main bot's book we
+            # cannot verify ownership, so adopt NOTHING new this run rather than risk
+            # re-adopting a main-bot position and flattening it. QHM stays protected
+            # (separate file). A non-adopted position keeps its Alpaca stop; the only
+            # cost is movers not managing it this cycle — safe for a closing strategy.
+            _ownership_known = False
+            logger.critical(
+                "reconcile_on_startup ownership guard: main-bot trade_log UNREADABLE "
+                "(%s) — FAIL-CLOSED, adopting no new positions this run.", _own_e,
+            )
+
         for pos in positions:
             sym = getattr(pos, "symbol", None)
             if not sym or sym in self._active_movers:
+                continue
+            if not _ownership_known:
+                continue  # fail-closed: ownership unverifiable → adopt nothing new
+            if sym in _protected:
+                logger.info(
+                    "[%s] reconcile_on_startup: NOT adopting — owned by another "
+                    "strategy (QHM or main bot); movers manages only its own book.",
+                    sym,
+                )
                 continue
             try:
                 raw_qty   = float(pos.qty)
