@@ -13,7 +13,7 @@ Phase 3 will break those remaining dependencies once the full body move is done.
 from __future__ import annotations
 
 import gc
-import json  # noqa: F401
+import json
 import logging
 import os
 import sys
@@ -73,6 +73,44 @@ if TYPE_CHECKING:
 ET = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # RC-2: this file lives in strategy/; root is one level up
+
+# ── SPY 52w-high persistence — ATH fail-open fix (board + Gro + GAI, 2026-07-01) ──
+# Previously: a fetch failure left _main._spy_52w_high at its 0.0 default for the
+# rest of the session, silently disabling the ATH MIN_SCORE floor-raise (this file,
+# Layer 5 below) AND the risk_manager 0.90x ATH stop/target scalar — the exact
+# opposite of the ORB gate's fail-CLOSED posture on the same class of failure.
+# A 52w high moves negligibly day-to-day, so the last-known value is a far better
+# estimate than "assume not near ATH." Board (Derman/Taleb, Thorp/Harris — all 4
+# APPROVE): persist + reuse on failure; true bootstrap (no cache ever) defaults
+# CONSERVATIVE (assume near-ATH) rather than fail-open.
+_SPY_52W_HIGH_CACHE = _PROJECT_ROOT / "data" / "state" / "spy_52w_high.json"
+
+
+def _save_spy_52w_high(value: float) -> None:
+    """Atomically persist today's SPY 52w high for fail-safe reuse on fetch failure."""
+    try:
+        _SPY_52W_HIGH_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _payload = {"value": value, "date": datetime.now(ET).strftime("%Y-%m-%d")}
+        _tmp = _SPY_52W_HIGH_CACHE.with_suffix(".tmp")
+        with open(_tmp, "w") as _f:
+            json.dump(_payload, _f)
+        os.replace(_tmp, _SPY_52W_HIGH_CACHE)
+    except Exception as _save_err:
+        logger.warning("SPY 52w high cache save failed (non-critical): %s", _save_err)
+
+
+def _load_spy_52w_high() -> dict | None:
+    """Return {"value": float, "age_days": int} from the last successful fetch, or None."""
+    try:
+        if not _SPY_52W_HIGH_CACHE.exists():
+            return None
+        _raw = json.loads(_SPY_52W_HIGH_CACHE.read_text())
+        _saved_date = date.fromisoformat(_raw["date"])
+        _age_days = (datetime.now(ET).date() - _saved_date).days
+        return {"value": float(_raw["value"]), "age_days": _age_days}
+    except Exception as _load_err:
+        logger.warning("SPY 52w high cache load failed: %s", _load_err)
+        return None
 
 
 def run_cycle(
@@ -246,8 +284,37 @@ def run_cycle(
                     f"SPY 52w high refreshed: ${_main._spy_52w_high:.2f} (T1 Alpaca Data, "
                     f"{len(_spy_daily_yr)} bars)"
                 )
+                _save_spy_52w_high(_main._spy_52w_high)
         except Exception as _ath_err:
             logger.warning(f"SPY 52w high refresh failed: {_ath_err}")
+            _ath_cached = _load_spy_52w_high()
+            if _ath_cached is not None:
+                _main._spy_52w_high = _ath_cached["value"]
+                logger.warning(
+                    "SPY 52w high: using cached value $%.2f (%d day(s) old) — "
+                    "ATH protective floor/scalar remain active.",
+                    _ath_cached["value"], _ath_cached["age_days"],
+                )
+            else:
+                # True bootstrap: no cache exists AND today's fetch failed. Default
+                # CONSERVATIVE (assume near-ATH) rather than fail-open — board mandate.
+                try:
+                    _spy_recent = fetch_bars("SPY", config.TF_DAILY, num_bars=2)
+                    if _spy_recent is not None and not _spy_recent.empty:
+                        _boot_close = float(_spy_recent["close"].iloc[-1])
+                        _main._spy_52w_high = round(_boot_close * 1.005, 2)
+                        logger.warning(
+                            "SPY 52w high: no cache + fetch failed — bootstrap "
+                            "conservative $%.2f (0.5%% above last close $%.2f), "
+                            "ATH protection ACTIVE this session.",
+                            _main._spy_52w_high, _boot_close,
+                        )
+                except Exception as _boot_err:
+                    logger.error(
+                        "SPY 52w high: no cache, fetch failed, bootstrap fallback "
+                        "ALSO failed (%s) — ATH gate inactive this session "
+                        "(self-heals next pre-market).", _boot_err,
+                    )
 
         # ── Per-symbol 52w high cache — ATH proximity gate (Bug 3 fix) ───────────
         # Bug 3: the ATH gate was comparing every symbol against SPY's 52w high.
