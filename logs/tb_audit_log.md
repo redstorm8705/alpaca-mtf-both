@@ -6581,3 +6581,27 @@ Cold-agent: PASS (fix complete, symmetric with 701eb47, other branches structura
 Static: py_compile PASS, ruff clean, mypy clean. Staged uncommitted in execution/orphan_manager.py.
 Non-blocking follow-up logged: mirror Package 3's fail-closed pattern here too (future session).
 Awaiting Rafael's "approve package 5".
+
+---
+## 2026-07-02 — Fixed two crashing routines (commit 8c60613, deployed + verified live)
+
+### autonomous_patch_generator.py — FileNotFoundError (pipeline blocker)
+- Root cause: safe_name (L468) built from rc_class raw category strings ("**ALPHA ISSUE/LOW",
+  "EXECUTION BUG/MEDIUM") without stripping '/', so patch_path targeted a non-existent subdir →
+  unhandled FileNotFoundError at _write_atomic → aborted the ENTIRE run, leaving all remaining
+  directives unprocessed (44 error hits in the cron log; findings→patch pipeline dead).
+- Fix: `re.sub(r"[^a-z0-9._]+","_",_raw_name)` basename sanitization + per-directive try/except in
+  main() loop so one bad directive can't kill the run. Added `import re`.
+- Full read: 609 lines. Static: py_compile/ruff/mypy clean. Not RTH/execution → no board/Gro-GAI gate.
+- VERIFIED live on OCI: exit 0, 4 processed / 7 failed_permanent / 0 retry (was crashing → 0 processed).
+
+### weekly_review.py — KeyError 'pnl' + stale RTH block
+- Root cause: _strategy_validation_html filtered closed trades with `(t.get("pnl") or 0)` but summed
+  with hard `t["pnl"]` at 4 sites (L397/398 + L431/432) → KeyError on any closed trade missing 'pnl'
+  → crashed every cron run (weekly HTML stale since ~Jul 1 06:06). Explore verbatim full-read
+  confirmed these 4 are the only unguarded hard trade-dict accesses (L711/713 filter-then-access
+  safe; L518/519/910/1069 in try/except).
+- Also removed the stale RTH-block guard (L30-38) — missed in the 2026-06-30 project-wide RTH removal
+  (it sys.exit(1)'d weekly_review during market hours). Kept PDT/_ET defs (used throughout).
+- Full read: 1658 lines (Explore verbatim). Static: py_compile/ruff/mypy clean.
+- VERIFIED live on OCI: exit 0, 83 closed trades processed, weekly_review.html + 26 archives written.
