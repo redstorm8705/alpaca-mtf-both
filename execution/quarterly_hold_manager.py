@@ -111,6 +111,23 @@ _QHM_ACTIVE_STATES = frozenset({
     "PENDING_EXIT", "PENDING_EARNINGS",
 })
 
+# Last successfully-parsed QHM symbol set (any process). First FAIL-CLOSED fallback
+# if the live state file later becomes present-but-corrupt.
+_last_good_qhm_symbols: frozenset[str] = frozenset()
+
+
+def _configured_qhm_symbols() -> frozenset[str]:
+    """The configured QHM pick universe from quarterly_holds_config.json. Used as a
+    FAIL-CLOSED fallback (deliberately over-protective) when the live state file is
+    present but corrupt — better to shield a few extra symbols than to sell a hold."""
+    try:
+        if _CONFIG_PATH.exists():
+            _cfg = json.loads(_CONFIG_PATH.read_text())
+            return frozenset((_cfg.get("picks") or {}).keys())
+    except Exception:
+        pass
+    return frozenset()
+
 
 def get_quarterly_hold_symbols() -> frozenset[str]:
     """Immutable snapshot of symbols currently in quarterly holds.
@@ -118,29 +135,38 @@ def get_quarterly_hold_symbols() -> frozenset[str]:
     by Kelly sizing to prevent same-symbol cross-trades, and by cross-strategy
     guards (movers, orphan reconciliation) to never touch a QHM-held symbol.
 
-    Returns the in-process registry when populated (main-bot process); otherwise
-    falls back to the persistent quarterly_holds.json so the guard works in a
-    SEPARATE process (e.g. run_movers.py) too — see _QHM_STATE_FILE note above.
+    Precedence: in-process registry (main-bot) → persistent quarterly_holds.json
+    (any process, incl. run_movers) → FAIL-CLOSED fallback on a corrupt file.
     """
+    global _last_good_qhm_symbols
     if _quarterly_hold_symbols:
         return frozenset(_quarterly_hold_symbols)
     try:
         if _QHM_STATE_FILE.exists():
             _raw = json.loads(_QHM_STATE_FILE.read_text())
-            return frozenset(
+            _syms = frozenset(
                 sym for sym, pos in _raw.items()
                 if isinstance(pos, dict) and pos.get("state") in _QHM_ACTIVE_STATES
             )
+            _last_good_qhm_symbols = _syms   # cache last-known-good
+            return _syms
+        # File ABSENT → QHM genuinely holds nothing → empty is correct.
+        return frozenset()
     except Exception as _qhm_read_err:
-        # Never raise into a guard caller — but do NOT fail silently: an empty
-        # return here re-opens the exact no-op that let run_movers flatten QHM
-        # holds (2026-07-02). Log CRITICAL so a corrupt state file is caught.
+        # File PRESENT but CORRUPT/unreadable. Returning empty here would make EVERY
+        # QHM guard a silent no-op — safe_close_all / movers / exit paths would treat
+        # QHM as unprotected and could SELL it (the 2026-07-02 flaw Gro+GAI flagged:
+        # empty-on-corrupt is a sell-all trigger). FAIL CLOSED: prefer last-known-good,
+        # else the configured pick universe (over-protective), else empty as an
+        # absolute last resort. Never raise into a guard caller.
+        _fallback = _last_good_qhm_symbols or _configured_qhm_symbols()
         logger.critical(
-            "get_quarterly_hold_symbols: QHM state file UNREADABLE (%s) — returning "
-            "EMPTY; cross-strategy QHM guards are UNPROTECTED until fixed.",
-            _qhm_read_err,
+            "get_quarterly_hold_symbols: QHM state file CORRUPT (%s) — FAIL-CLOSED to "
+            "%d protected symbol(s) %s (never returning empty, which would let a QHM "
+            "hold be sold). Restore data/state/quarterly_holds.json.",
+            _qhm_read_err, len(_fallback), sorted(_fallback),
         )
-    return frozenset()
+        return _fallback
 
 
 def _register_symbol(symbol: str) -> None:
