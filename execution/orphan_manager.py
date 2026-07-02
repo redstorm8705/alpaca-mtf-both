@@ -136,8 +136,13 @@ def cancel_and_reconcile_gtc_stops(
         )
         if _qhm_state_path.exists():
             _raw = _json.loads(_qhm_state_path.read_text())
+            # Must match QHM's in-process registration exactly (incl. PENDING_EARNINGS —
+            # a fully-open hold whose GTC stop is cancelled pre-earnings). Omitting it
+            # would let this reconcile cancel an earnings-paused QHM hold's stop. Mirrors
+            # quarterly_hold_manager._QHM_ACTIVE_STATES (2026-07-02 cold-agent catch).
             _active_states = {
-                "AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT",
+                "AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE",
+                "PENDING_EXIT", "PENDING_EARNINGS",
             }
             _qhm_protected = frozenset(
                 sym for sym, pos in _raw.items()
