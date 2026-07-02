@@ -2073,6 +2073,13 @@ def _check_exits_extended_hours(
     use_extended  = is_premarket or is_afterhours
 
     for symbol, trade in list(tracker.open_trades.items()):
+        # QHM ownership guard (Option B, 2026-07-01): the main bot must not manage
+        # exits for a QHM-held symbol during extended hours — QHM owns its Alpaca
+        # position + its own GTC stop, and the EH windows overlap QHM's active
+        # window. Quiet skip (RTH collision alert fires once via check_exits).
+        if symbol in _get_qhm_syms():
+            logger.debug("[%s] QHM-held — skipped by extended-hours exit management.", symbol)
+            continue
         if trade.get("status") != "open":
             continue
 
