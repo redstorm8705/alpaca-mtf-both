@@ -6641,3 +6641,19 @@ never fired today and is QHM-safe anyway.
 Also this session: RAM watcher installed (scripts/ram_watch.sh cron, alerts <80MB avail during RTH).
 Positions manually stabilized earlier (orphan stops PANW/MARA/SNOW cancelled; TSLA synthetic short
 flattened). Account clean: GOOGL+1, NVDA+1 with valid QHM stops.
+
+### FIX DEPLOYED (2026-07-02) — QHM cross-process guard (commit edbdc9b, verified live)
+execution/quarterly_hold_manager.py: get_quarterly_hold_symbols() now falls back to the persistent
+data/state/quarterly_holds.json when the in-memory registry is empty → the QHM guard is effective
+in ANY process (fixes run_movers flattening QHM holds). Corrupt-file path logs CRITICAL (never silent).
+Gates: Gro APPROVE + GAI APPROVE + cold-agent (CAUGHT a real gap: _QHM_ACTIVE_STATES omitted
+PENDING_EARNINGS → an earnings-paused hold would be unprotected out-of-process; FIXED to match the
+in-process registration exactly: AWAITING_FILL/ACTIVE/PENDING_STOP_REPLACE/PENDING_EXIT/PENDING_EARNINGS).
+Static clean. Functional proof: fresh process returns [GOOGL, NVDA].
+LESSON: the earlier cross-strategy audit verified guard PRESENCE (code exists) but not runtime EFFICACY
+across process boundaries — future cross-strategy audits must test the guard actually fires in the
+target process, not just that the code is present.
+STILL OPEN (resumption cron): (1) run_movers cron stays DISABLED until movers also (a) only acts on
+its OWN positions never the main bot's, (b) fixes its market-open determination. (2) orphan_manager's
+_active_states set (cancel_and_reconcile_gtc_stops) has the SAME latent PENDING_EARNINGS omission —
+fix to match. (3) main-bot RAM leak + HOOD phantom-exit/A-4.
