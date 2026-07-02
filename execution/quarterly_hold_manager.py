@@ -90,13 +90,51 @@ _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
 # ---------------------------------------------------------------------------
 _quarterly_hold_symbols: set[str] = set()
 
+# Persistent, cross-process source of truth for QHM symbols.
+# CROSS-PROCESS INCIDENT (2026-07-02): the in-process registry above is only
+# populated in the main-bot process (where QuarterlyHoldManager is instantiated).
+# A SEPARATE process — e.g. run_movers.py — never populates it, so
+# get_quarterly_hold_symbols() returned EMPTY there, turning every QHM guard in
+# that process into a silent no-op. run_movers then flattened the QHM holds
+# NVDA/GOOGL at the open. Fix: fall back to the on-disk state file (the same
+# authoritative source orphan_manager.cancel_and_reconcile_gtc_stops reads), so
+# the guard is effective in ANY process. Fail-safe: any error → empty frozenset
+# (never raise into a caller; matches prior behavior).
+_QHM_STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
+_QHM_ACTIVE_STATES = frozenset(
+    {"AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT"}
+)
+
 
 def get_quarterly_hold_symbols() -> frozenset[str]:
     """Immutable snapshot of symbols currently in quarterly holds.
-    Called by entry_logic.py before every scan to block intraday entries
-    and by Kelly sizing to prevent same-symbol cross-trades.
+    Called by entry_logic.py before every scan to block intraday entries,
+    by Kelly sizing to prevent same-symbol cross-trades, and by cross-strategy
+    guards (movers, orphan reconciliation) to never touch a QHM-held symbol.
+
+    Returns the in-process registry when populated (main-bot process); otherwise
+    falls back to the persistent quarterly_holds.json so the guard works in a
+    SEPARATE process (e.g. run_movers.py) too — see _QHM_STATE_FILE note above.
     """
-    return frozenset(_quarterly_hold_symbols)
+    if _quarterly_hold_symbols:
+        return frozenset(_quarterly_hold_symbols)
+    try:
+        if _QHM_STATE_FILE.exists():
+            _raw = json.loads(_QHM_STATE_FILE.read_text())
+            return frozenset(
+                sym for sym, pos in _raw.items()
+                if isinstance(pos, dict) and pos.get("state") in _QHM_ACTIVE_STATES
+            )
+    except Exception as _qhm_read_err:
+        # Never raise into a guard caller — but do NOT fail silently: an empty
+        # return here re-opens the exact no-op that let run_movers flatten QHM
+        # holds (2026-07-02). Log CRITICAL so a corrupt state file is caught.
+        logger.critical(
+            "get_quarterly_hold_symbols: QHM state file UNREADABLE (%s) — returning "
+            "EMPTY; cross-strategy QHM guards are UNPROTECTED until fixed.",
+            _qhm_read_err,
+        )
+    return frozenset()
 
 
 def _register_symbol(symbol: str) -> None:
