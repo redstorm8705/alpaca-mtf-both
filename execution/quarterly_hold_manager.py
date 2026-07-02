@@ -420,6 +420,21 @@ class QuarterlyHoldManager:
         Peterffy: reconcile ADOPTS existing stops; AH loop resubmits missing ones.
         """
         result = ReconcileResult()
+        # HOLE-2 guard (2026-07-02): before the per-symbol reconcile and before RTH,
+        # kill any stray SELL resting on a QHM-held symbol so an orphaned or
+        # cross-process sell cannot fill at the open and liquidate a quarterly hold.
+        try:
+            _stray = self.cancel_stray_sell_orders()
+            if _stray:
+                logger.critical(
+                    "QuarterlyHoldManager reconcile_on_startup: cancelled %d stray "
+                    "sell order(s) at startup", _stray,
+                )
+        except Exception as e:  # RC-3
+            logger.warning(
+                "QuarterlyHoldManager reconcile_on_startup: stray-sell guard "
+                "error: %s", e,
+            )
         for symbol, pos in list(self._positions.items()):
             try:
                 if pos.state == HoldState.AWAITING_FILL:
@@ -469,10 +484,137 @@ class QuarterlyHoldManager:
         )
         return result
 
+    def cancel_stray_sell_orders(self) -> int:
+        """HOLE-2 guard (2026-07-02, board + Gro + GAI): cancel any resting SELL
+        order on a QHM-held symbol that is NOT that hold's own registered protective
+        stop.
+
+        Incident context: on 2026-07-02 a separate process (run_movers.py) placed a
+        sell on QHM symbols and flattened NVDA/GOOGL at the open. A stray or orphaned
+        resting SELL from ANY source (another strategy's process, a manual order, an
+        adopted-but-unrecognized order) would fill at the open and liquidate a
+        quarterly hold. On a LONG hold the ONLY authorized sell is the protective GTC
+        stop (pos.stop_order_id); in PENDING_STOP_REPLACE / PENDING_EARNINGS the stop
+        is deliberately absent, so ANY resting sell there is unauthorized. Buy orders
+        are never touched (QHM entries are buys; other strategies' buys are theirs).
+
+        Called at startup (reconcile_on_startup) and once per RTH cycle
+        (run_weekly_check), so a stray sell resting at boot OR appearing mid-day is
+        cancelled before it can fill. FAILS OPEN: if the order API cannot be read
+        (_get_open_orders returns empty on error), nothing is cancelled — the guard
+        never risks cancelling a real protective stop on unreadable state. Returns
+        the number of stray sell orders cancelled.
+        """
+        if self.dry_run:
+            return 0
+        # Symbols QHM currently holds shares in (or is awaiting a fill on). A resting
+        # non-stop sell on any of these is unauthorized. PENDING_EXIT is excluded —
+        # QHM is deliberately exiting there. PENDING_ENTRY holds no shares yet.
+        _guard_states = (
+            HoldState.ACTIVE, HoldState.AWAITING_FILL,
+            HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS,
+        )
+        guarded: dict[str, Optional[str]] = {
+            sym: (pos.stop_order_id or None)  # normalize "" → None (unknown stop id)
+            for sym, pos in self._positions.items()
+            if pos.state in _guard_states
+        }
+        if not guarded:
+            return 0
+        # Distinguish an API error (None) from a genuinely-empty book ([]). broker's
+        # get_open_orders() returns None ONLY on API failure. We must NOT blindly
+        # cancel on unreadable state: a fail-CLOSED "cancel every sell on a guarded
+        # symbol" would cancel each hold's OWN protective GTC stop (a sell), leaving
+        # the hold unprotected — the opposite of this guard's purpose (board+Gro+GAI
+        # 2026-07-02). So we fail OPEN on the cancel action, but make the blindness
+        # LOUD (CRITICAL + Slack) so a human verifies holds while the API is degraded.
+        try:
+            from execution.broker import get_open_orders
+            open_orders = get_open_orders()
+        except Exception as e:  # RC-3
+            open_orders = None
+            logger.warning(
+                "QHM cancel_stray_sell_orders: get_open_orders raised: %s", e
+            )
+        if open_orders is None:
+            logger.critical(
+                "QHM cancel_stray_sell_orders: order API UNREADABLE — stray-sell "
+                "guard could NOT run; %d QHM hold(s) %s not verified this pass. "
+                "Failing OPEN (no blind cancels, which would kill the real stops). "
+                "Verify holds manually while the order API is degraded.",
+                len(guarded), sorted(guarded),
+            )
+            self._alert(
+                f"🚨 QHM GUARD BLIND: order API unreadable — could not check "
+                f"{sorted(guarded)} for stray sells this pass. Manual check advised."
+            )
+            return 0
+        if not open_orders:
+            return 0  # genuinely no open orders on the book
+        cancelled = 0
+        for o in open_orders:
+            try:
+                o_sym = getattr(o, "symbol", None)
+                if o_sym not in guarded:
+                    continue
+                _side_raw = getattr(o, "side", "")
+                o_side = str(getattr(_side_raw, "value", _side_raw)).lower()
+                if "sell" not in o_side:
+                    continue  # buy — never liquidates a long hold
+                o_id = getattr(o, "id", None)
+                if o_id is None:
+                    continue
+                legit_stop = guarded[o_sym]
+                if legit_stop is not None and str(o_id) == str(legit_stop):
+                    continue  # this IS the hold's own protective stop — keep it
+                from execution.broker import cancel_order
+                if cancel_order(str(o_id)):
+                    cancelled += 1
+                    logger.critical(
+                        "QHM cancel_stray_sell_orders: CANCELLED unauthorized SELL "
+                        "order %s on QHM-held %s (side=%s, legit stop=%s) — a stray "
+                        "sell would have liquidated a quarterly hold at the open.",
+                        o_id, o_sym, o_side, legit_stop,
+                    )
+                    self._alert(
+                        f"🛑 QHM GUARD: cancelled a stray SELL order on {o_sym} "
+                        f"(order {o_id}) that was NOT its protective stop — quarterly "
+                        f"hold protected from liquidation."
+                    )
+                else:
+                    logger.critical(
+                        "QHM cancel_stray_sell_orders: FAILED to cancel stray SELL "
+                        "order %s on QHM-held %s — hold may be at risk.",
+                        o_id, o_sym,
+                    )
+                    self._alert(
+                        f"🚨 QHM GUARD: FAILED to cancel a stray SELL order on {o_sym} "
+                        f"(order {o_id}). Manual intervention required."
+                    )
+            except Exception as e:  # RC-3
+                logger.warning(
+                    "QHM cancel_stray_sell_orders: error handling order on %s: %s",
+                    getattr(o, "symbol", "?"), e,
+                )
+        return cancelled
+
     def run_weekly_check(self) -> None:
         """Once per RTH cycle: external close detection + resync + max-hold exit.
         GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
         """
+        # HOLE-2 guard (2026-07-02): kill any stray SELL on a QHM-held symbol that
+        # appeared since the last cycle, before it can fill and liquidate a hold.
+        try:
+            _stray = self.cancel_stray_sell_orders()
+            if _stray:
+                logger.critical(
+                    "QuarterlyHoldManager run_weekly_check: cancelled %d stray sell "
+                    "order(s) mid-session", _stray,
+                )
+        except Exception as e:  # RC-3
+            logger.warning(
+                "QuarterlyHoldManager run_weekly_check: stray-sell guard error: %s", e
+            )
         for symbol, pos in list(self._positions.items()):
             _stuck = (HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS)
             if pos.state in _stuck:
