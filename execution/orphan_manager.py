@@ -128,6 +128,7 @@ def cancel_and_reconcile_gtc_stops(
     # runs (module-level set, populated only after instantiation). Reading the
     # state file directly avoids startup-order dependency.
     _qhm_protected: frozenset[str] = frozenset()
+    _qhm_load_failed = False
     try:
         _qhm_state_path = (
             Path(__file__).resolve().parent.parent
@@ -143,10 +144,25 @@ def cancel_and_reconcile_gtc_stops(
                 if isinstance(pos, dict) and pos.get("state") in _active_states
             )
     except Exception as _qhm_e:
-        logger.warning(
-            "QHM state file read failed — treating all symbols as unprotected: %s",
-            _qhm_e,
+        # FAIL-CLOSED (2026-07-01, board + Gro + GAI): the file EXISTS but is
+        # unreadable/corrupt — we KNOW there may be QHM holds but cannot enumerate
+        # them. Cancelling GTC stops now would strip protection from a QHM position
+        # (naked-QHM capital risk >> double-stop transactional risk). Retain ALL
+        # stops this cycle and escalate. A simply-ABSENT file does not raise, so this
+        # branch fires only on a present-but-corrupt file.
+        _qhm_load_failed = True
+        logger.critical(
+            "QHM state file UNREADABLE (%s) — GTC reconciliation FAIL-CLOSED: "
+            "retaining ALL overnight GTC stops this cycle to avoid stripping a "
+            "QHM position's protection. Manual review required.", _qhm_e,
         )
+        try:
+            send_slack(
+                f":rotating_light: QHM state file unreadable in GTC reconcile — "
+                f"FAIL-CLOSED, all GTC stops retained this cycle ({_qhm_e})."
+            )
+        except Exception as _ofc_e:
+            logger.warning("fail-closed Slack alert failed: %s", _ofc_e)
 
     gtc_positions = tracker.get_overnight_gtc_positions()
     if not gtc_positions:
@@ -287,11 +303,16 @@ def cancel_and_reconcile_gtc_stops(
             #     the premarket phase.
 
             # QHM symbols retain their protective GTC stops — do not cancel.
-            if symbol in _qhm_protected:
+            # FAIL-CLOSED: if the QHM state file was unreadable, we cannot classify
+            # any symbol, so retain ALL stops this cycle (board + Gro + GAI 2026-07-01).
+            if symbol in _qhm_protected or _qhm_load_failed:
+                _retain_reason = (
+                    "QHM symbol" if symbol in _qhm_protected
+                    else "QHM-load-failed fail-closed"
+                )
                 logger.info(
-                    "[%s] QHM symbol — retaining GTC stop %s"
-                    " (not cancelling before RTH).",
-                    symbol, order_id,
+                    "[%s] %s — retaining GTC stop %s (not cancelling before RTH).",
+                    symbol, _retain_reason, order_id,
                 )
                 continue
 
