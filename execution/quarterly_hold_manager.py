@@ -101,8 +101,13 @@ _quarterly_hold_symbols: set[str] = set()
 # the guard is effective in ANY process. Fail-safe: any error → empty frozenset
 # (never raise into a caller; matches prior behavior).
 _QHM_STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
+# MUST match the in-process registration set exactly (the HoldStates that add a
+# symbol to _quarterly_hold_symbols — see reconcile/init, incl. PENDING_EARNINGS,
+# a fully-open position whose GTC stop is cancelled pre-earnings). Excludes only
+# PENDING_ENTRY (no shares yet) and CLOSED (exited). Omitting PENDING_EARNINGS
+# would leave an earnings-paused hold unprotected out-of-process (cold-agent catch).
 _QHM_ACTIVE_STATES = frozenset(
-    {"AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT"}
+    {"AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT", "PENDING_EARNINGS"}
 )
 
 
