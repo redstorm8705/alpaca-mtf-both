@@ -493,10 +493,15 @@ class QuarterlyHoldManager:
         sell on QHM symbols and flattened NVDA/GOOGL at the open. A stray or orphaned
         resting SELL from ANY source (another strategy's process, a manual order, an
         adopted-but-unrecognized order) would fill at the open and liquidate a
-        quarterly hold. On a LONG hold the ONLY authorized sell is the protective GTC
-        stop (pos.stop_order_id); in PENDING_STOP_REPLACE / PENDING_EARNINGS the stop
-        is deliberately absent, so ANY resting sell there is unauthorized. Buy orders
-        are never touched (QHM entries are buys; other strategies' buys are theirs).
+        quarterly hold. On a LONG hold the authorized sell is the protective GTC stop
+        (pos.stop_order_id): the guard KEEPS any resting sell whose id matches
+        pos.stop_order_id and cancels every OTHER sell. Per state: ACTIVE keeps its
+        current stop id; PENDING_EARNINGS clears stop_order_id to None (any sell is
+        then unauthorized — stop deliberately cancelled for earnings);
+        PENDING_STOP_REPLACE RETAINS the last-known stop id (_handle_missing_stop does
+        not clear it), so a real stop still resting under that id is preserved while
+        genuine strays are cancelled. Buy orders are never touched (QHM entries are
+        buys; other strategies' buys are theirs).
 
         Called at startup (reconcile_on_startup) and once per RTH cycle
         (run_weekly_check), so a stray sell resting at boot OR appearing mid-day is
