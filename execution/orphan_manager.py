@@ -869,7 +869,17 @@ def reconcile_positions(
     # Historical: this comment previously described a PDT=3/3 condition for
     # marking overnight=True; PDT removed S63 — overnight=True is now set
     # unconditionally for every orphan-adopted position below.
-    orphans = alpaca_symbols - tracker_symbols
+    # QHM ownership guard (Option B, 2026-07-02): a QHM-held symbol looking
+    # "orphaned" here (in Alpaca, momentarily absent from the intraday tracker)
+    # is expected, not a bug — QHM owns it via its own state machine. Adopting
+    # it into tracker.open_trades was harmless for exit management (the L212/
+    # L1112/L2080 QHM guards already skip it downstream regardless of adoption
+    # path) but inflated risk.open_positions (L1143 below), blocking real
+    # intraday entries every restart. Excluding QHM symbols from the orphan
+    # set is safe here: _get_qhm_syms() is already called later in this same
+    # function (L960/L979 original numbering) at this identical call time,
+    # proven populated by production logs before this fix.
+    orphans = (alpaca_symbols - tracker_symbols) - _get_qhm_syms()
     for sym in orphans:
         pos = alpaca_positions[sym]
         _entry_px  = float(pos.avg_entry_price)
