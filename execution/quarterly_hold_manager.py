@@ -106,9 +106,10 @@ _QHM_STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
 # a fully-open position whose GTC stop is cancelled pre-earnings). Excludes only
 # PENDING_ENTRY (no shares yet) and CLOSED (exited). Omitting PENDING_EARNINGS
 # would leave an earnings-paused hold unprotected out-of-process (cold-agent catch).
-_QHM_ACTIVE_STATES = frozenset(
-    {"AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE", "PENDING_EXIT", "PENDING_EARNINGS"}
-)
+_QHM_ACTIVE_STATES = frozenset({
+    "AWAITING_FILL", "ACTIVE", "PENDING_STOP_REPLACE",
+    "PENDING_EXIT", "PENDING_EARNINGS",
+})
 
 
 def get_quarterly_hold_symbols() -> frozenset[str]:
