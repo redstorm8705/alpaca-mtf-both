@@ -6543,3 +6543,41 @@ Two cold domain agents (exit/close paths; QHM state machine) + verifications.
   was stale/corrupt (refreshed).
 
 All items staged in logs/pending_claude_session_2026-07-01.md for Rafael's approval. No code applied.
+
+---
+## 2026-07-02 — Package 5 (drafting) — orphan_manager.py reconcile_positions() unguarded QHM adoption
+
+### 10-Point Audit — reconcile_positions() (execution/orphan_manager.py L827-1141)
+| Point | Result |
+|---|---|
+| 1. Static | py_compile PASS pre-patch (baseline) |
+| 2. Trade path | Startup-only, called once (main.py L747) before RTH; affects risk.open_positions count → indirectly affects entry gate for the whole session until next restart |
+| 3. Adversarial | Empty _get_qhm_syms() (e.g. QHM never instantiated) → orphans unchanged from today's behavior, no regression |
+| 4. Full read | reconcile_positions() 827-1141 verbatim via Explore agent + confirmatory direct read L827-881 |
+| 5. Cross-refs | _get_qhm_syms imported L46, already called L960/L979 in same function — proven populated at this call time by tonight's live logs (QHM stop linked at adoption fired for NVDA) |
+| 6. Conflicts | None — mirrors the exact pattern already used later in the same function |
+| 7. Redundancy | Docstring L836-838 ("Do NOT auto-add to tracker") is STALE vs actual adoption behavior (P4-1 changed this) — pre-existing doc/code mismatch, out of scope for this patch, noted only |
+| 8. State persistence | No new I/O — set difference only |
+| 9. Data tier | N/A |
+| 10. Timezone | N/A |
+
+### RC scan: RC-1..RC-8 all PASS (no datetime/path/except/exit-price/write/API-field/sizing/buffer touched by this line)
+
+### Bug confirmed (verbatim-verified, live-log-corroborated)
+`orphans = alpaca_symbols - tracker_symbols` (L872) has no QHM exclusion. NVDA/GOOGL (QHM ACTIVE
+holds) get adopted into tracker.open_trades every restart where they're momentarily absent from
+the tracker. Downstream exit-management guards (check_exits L1112, check_partial_exits L212, EH
+L2080) correctly skip them once adopted (guards check _get_qhm_syms() at execution time regardless
+of adoption path) — so exit-management, EOD P&L (portfolio_tracker.py FIFO already QHM-filtered),
+and P0-STARTUP observability (main.py already QHM-filtered per this session's earlier fix) are all
+UNAFFECTED. The real, confirmed effect: `risk.open_positions = max(risk.open_positions,
+len(tracker.open_trades))` (orphan_manager.py ~L1143) counts the adopted QHM symbols, inflating the
+intraday position count and blocking real intraday entries for up to N QHM-symbol-worth of phantom
+slots per restart. MODERATE severity (not naked-position risk; functional entry-blocking bug).
+
+### Package 5 gates — ALL CLEARED (2026-07-02)
+Board: Katsuyama/Majors APPROVE, Thorp/Peterffy APPROVE (P2). Gro APPROVE (P1). GAI APPROVE (P1).
+Cold-agent: PASS (fix complete, symmetric with 701eb47, other branches structurally safe).
+Static: py_compile PASS, ruff clean, mypy clean. Staged uncommitted in execution/orphan_manager.py.
+Non-blocking follow-up logged: mirror Package 3's fail-closed pattern here too (future session).
+Awaiting Rafael's "approve package 5".
