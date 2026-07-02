@@ -6605,3 +6605,39 @@ Awaiting Rafael's "approve package 5".
   (it sys.exit(1)'d weekly_review during market hours). Kept PDT/_ET defs (used throughout).
 - Full read: 1658 lines (Explore verbatim). Static: py_compile/ruff/mypy clean.
 - VERIFIED live on OCI: exit 0, 83 closed trades processed, weekly_review.html + 26 archives written.
+
+---
+## 2026-07-02 RTH INCIDENT — mass position dump ROOT CAUSE = run_movers.py (NOT the main bot, NOT RAM)
+
+TRIGGER CONFIRMED + DISABLED: the run_movers.py cron (movers strategy, separate process) flattened
+ALL account positions at the open. Evidence: logs/movers.log (separate from mtf_bot.log — why the
+main log showed nothing) shows "[GOOGL/MARA/NVDA/PANW/RIVN/SNOW/TSLA] Position closed" at
+13:32:54-56 UTC (09:32 ET), right after "Market closed — skipping scan" (13:27:51). The run_movers
+cron is now COMMENTED OUT in the OCI crontab (protective; cannot refire today).
+
+ROOT CAUSE (cross-strategy collision):
+1. run_movers.py runs as a SEPARATE process. Its QHM guard in strategy/movers/strategy.py
+   (flatten_intraday L508, check_exits L~428) calls get_quarterly_hold_symbols() — but the QHM
+   registry is populated IN-PROCESS (main bot only). In the movers process it returns EMPTY, so the
+   guard `if sym in _qhm_symbols(): skip` is a NO-OP → movers flattened NVDA/GOOGL (QHM holds).
+2. Broken market-open determination: logged "Market closed" at 09:27 ET (market opens 09:30) then
+   flattened at 09:32 — a flatten fired at/after the open.
+3. movers flattened positions ACCOUNT-WIDE (main-bot's HOOD/RIVN/TSLA/PANW/MARA/SNOW too), not just
+   its own — no ownership check before closing.
+
+FIXES (for resumption — full board + Gro/GAI gate, cross-strategy hotspot):
+- movers must read QHM symbols from the PERSISTENT data/state/quarterly_holds.json (like
+  orphan_manager.cancel_and_reconcile_gtc_stops does), NOT the in-process registry — so its QHM
+  guard actually works out-of-process.
+- movers must only act on positions IT owns (its own book), never flatten main-bot/QHM positions.
+- fix the market-open check in run_movers.py (flatten fired at the open).
+- Rafael's principle: re-evaluate/reconcile ownership BEFORE any close decision.
+
+CORRECTION: earlier hypotheses that low RAM triggered the dump were WRONG. RAM degrades the MAIN
+bot (hangs/restarts/desync — separate issue). The mass dump was run_movers, a different cron.
+In-bot mass-close paths RULED OUT: broker.close_all_positions() has zero callers; safe_close_all
+never fired today and is QHM-safe anyway.
+
+Also this session: RAM watcher installed (scripts/ram_watch.sh cron, alerts <80MB avail during RTH).
+Positions manually stabilized earlier (orphan stops PANW/MARA/SNOW cancelled; TSLA synthetic short
+flattened). Account clean: GOOGL+1, NVDA+1 with valid QHM stops.
