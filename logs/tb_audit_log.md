@@ -6657,3 +6657,20 @@ STILL OPEN (resumption cron): (1) run_movers cron stays DISABLED until movers al
 its OWN positions never the main bot's, (b) fixes its market-open determination. (2) orphan_manager's
 _active_states set (cancel_and_reconcile_gtc_stops) has the SAME latent PENDING_EARNINGS omission —
 fix to match. (3) main-bot RAM leak + HOOD phantom-exit/A-4.
+
+### STILL-OPEN ITEMS — progress (2026-07-02)
+FIXED + DEPLOYED:
+- orphan_manager PENDING_EARNINGS gap (commit in this session) — GTC-stop-cancel reconcile now
+  matches QHM registration; won't cancel an earnings-paused hold's stop.
+- movers ownership guard (394d16e, Gro+GAI+cold-agent all PASS): reconcile_on_startup no longer
+  adopts QHM/main-bot positions — this was the actual mass-dump mechanism (it adopted the whole
+  shared account then check_exits/flatten dumped it). Fail-closed on trade_log read error (Gro).
+  MOVERS CRON REMAINS DISABLED pending: (a) resumption end-to-end validation, (b) review of
+  check_exits() running before the market-hours check in run_movers_cycle (secondary; the
+  ownership fix already neutralizes the mass-close since the book is now own-only).
+STILL OPEN (resumption cron, need profiling/bigger changes — before tomorrow RTH):
+- main-bot RAM leak (RSS growth → hangs/restarts/desync → phantom exits, $0 P&L). Needs
+  tracemalloc/objgraph profiling on a live instance. RAM watcher (scripts/ram_watch.sh) is live.
+- HOOD phantom exit: broker.partial_close_position returns True on "position not found" → records
+  a phantom exit; fix = return False + reconcile-to-flat. A-4 fallback records $0 P&L → mark
+  "pending settlement" + next-morning back-fill (unify with review Tier 3).
