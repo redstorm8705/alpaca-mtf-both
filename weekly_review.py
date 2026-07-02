@@ -27,15 +27,12 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), ov
 # Initialization/bootstrap output (RTH block, CLI progress) uses print(file=sys.stderr).
 logger = logging.getLogger(__name__)
 
-# ── RTH block (guardrail 5) ───────────────────────────────────────────────────
+# ── Timezones ─────────────────────────────────────────────────────────────────
+# RTH block removed 2026-07-02: the project-wide RTH-block removal (Rafael mandate
+# 2026-06-30) missed this leftover, which sys.exit(1)'d weekly_review during market
+# hours. PDT/_ET retained — used throughout for display + week rollover.
 PDT = ZoneInfo("America/Los_Angeles")
 _ET  = ZoneInfo("America/New_York")
-_now_et = datetime.now(_ET)
-if _now_et.weekday() < 5:
-    _mins = _now_et.hour * 60 + _now_et.minute
-    if (9 * 60 + 30) <= _mins < (16 * 60):
-        print("BLOCKED: Cannot run during RTH hours (9:30 AM–4:00 PM ET / 6:30 AM–1:00 PM PT weekdays).")  # noqa: E501
-        sys.exit(1)
 
 ROOT     = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(ROOT, "logs")
@@ -397,8 +394,8 @@ def _strategy_validation_html(  # noqa: E501
     all_wins  = [t for t in closed if (t.get("pnl") or 0) > 0]
     all_losses = [t for t in closed if (t.get("pnl") or 0) <= 0]
     all_wr    = len(all_wins) / total_trades * 100 if total_trades else 0
-    avg_w     = sum(t["pnl"] for t in all_wins)  / len(all_wins)  if all_wins  else 0
-    avg_l     = sum(t["pnl"] for t in all_losses) / len(all_losses) if all_losses else 0
+    avg_w     = sum((t.get("pnl") or 0) for t in all_wins)  / len(all_wins)  if all_wins  else 0   # noqa: E501
+    avg_l     = sum((t.get("pnl") or 0) for t in all_losses) / len(all_losses) if all_losses else 0  # noqa: E501
     total_pnl = (
         lifetime_pnl if lifetime_pnl is not None
         else compute_lifetime_stats().get("total_pnl", 0.0)
@@ -428,8 +425,8 @@ def _strategy_validation_html(  # noqa: E501
         wins   = [t for t in trades if (t.get("pnl") or 0) > 0]
         losses = [t for t in trades if (t.get("pnl") or 0) <= 0]
         wr     = len(wins) / n * 100 if n else 0
-        aw     = sum(t["pnl"] for t in wins)   / len(wins)   if wins   else 0
-        al     = sum(t["pnl"] for t in losses) / len(losses) if losses else 0
+        aw     = sum((t.get("pnl") or 0) for t in wins)   / len(wins)   if wins   else 0
+        al     = sum((t.get("pnl") or 0) for t in losses) / len(losses) if losses else 0
         tpnl   = sum(t.get("pnl") or 0 for t in trades)
         lbl    = f"{score}/12" if isinstance(score, int) else "pre-score"
         _row_bg = ("rgba(48,209,88,.07)" if wr >= 60
@@ -917,7 +914,7 @@ def _exec_summary_stats(trade_log: "dict | None", monday: date) -> str:
         # Cross-check: do EOD files exist for this week? If so, records are
         # incomplete (external close path) — warn instead of misleading fallback.
         _eod_exists = any(
-            os.path.exists(os.path.join(LOGS_DIR, f"eod_{(monday + timedelta(days=_d)).strftime('%Y-%m-%d')}.json"))
+            os.path.exists(os.path.join(LOGS_DIR, f"eod_{(monday + timedelta(days=_d)).strftime('%Y-%m-%d')}.json"))  # noqa: E501
             for _d in range(5)
         )
         if _eod_exists:

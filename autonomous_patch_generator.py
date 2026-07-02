@@ -33,6 +33,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -465,11 +466,17 @@ def _process_directive(directive: dict) -> str:
 
     # ── Write .patch file ─────────────────────────────────────────────────────
     date_str = datetime.now(PT).strftime("%Y-%m-%d")
-    safe_name = (
+    # Sanitize to a filesystem-safe basename. rc_class can be a raw category
+    # string like "**ALPHA ISSUE/LOW" or "CATEGORY: EXECUTION BUG/MEDIUM" — the
+    # embedded '/' was silently treated as a subdirectory, crashing _write_atomic
+    # with FileNotFoundError and killing the entire run (2026-07-02 fix). Collapse
+    # every char outside [a-z0-9._] to '_'.
+    _raw_name = (
         rc_class.lower().replace("-", "")
         + "_"
         + file_path.stem.replace("_", "")[:20]
     )
+    safe_name = re.sub(r"[^a-z0-9._]+", "_", _raw_name).strip("_")[:60] or "patch"
     patch_rel  = f"logs/pending_patch_{date_str}_{safe_name}.patch"
     patch_path = _REPO_DIR / patch_rel
     _write_atomic(patch_path, diff)
@@ -546,7 +553,17 @@ def main() -> None:
     permanent_count = 0
     retry_count     = 0
     for directive in directives:
-        result = _process_directive(directive)
+        try:
+            result = _process_directive(directive)
+        except Exception as _dir_exc:
+            # One malformed directive must never abort the whole run (a bad
+            # filename used to raise FileNotFoundError and skip every remaining
+            # directive). Log, mark failed_permanent, continue. (2026-07-02 fix)
+            _log(
+                f"ERROR processing directive {directive.get('file', '?')}: "
+                f"{type(_dir_exc).__name__}: {_dir_exc} — skipping"
+            )
+            result = "failed_permanent"
         key = directive.get("file", "") + "\x1f" + directive.get("finding", "")
         if result == "processed":
             outcomes[key] = "processed"
