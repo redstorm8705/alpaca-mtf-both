@@ -6674,3 +6674,19 @@ STILL OPEN (resumption cron, need profiling/bigger changes — before tomorrow R
 - HOOD phantom exit: broker.partial_close_position returns True on "position not found" → records
   a phantom exit; fix = return False + reconcile-to-flat. A-4 fallback records $0 P&L → mark
   "pending settlement" + next-morning back-fill (unify with review Tier 3).
+
+---
+
+## 2026-07-02 — QHM cross-strategy sell protection: HOLE 1 + HOLE 2 (Gro/GAI-surfaced)
+
+**File:** `execution/quarterly_hold_manager.py`. Full read: 1723 lines (6 chunks). Static clean (py_compile/ruff/mypy). Deployed: commit `16b5e4c` (HOLE 2) atop `5160735` (HOLE 1), docstring fix `291d51b`. Bot restarted 22:00 ET — holds NVDA/GOOGL intact, stops resting.
+
+**HOLE 1 — corrupt-state fail-closed** (`get_quarterly_hold_symbols`): a PRESENT-but-CORRUPT `quarterly_holds.json` previously returned empty → every cross-strategy QHM guard became a silent no-op → sell-all trigger. Fix: fail CLOSED to last-known-good, else configured pick universe (`_configured_qhm_symbols()`), never empty on corrupt. Cold-agent PASS (7 threat vectors). Runtime proof: corrupt file → `['GE','GEV','GOOGL','LLY','NVDA']`, never empty.
+
+**HOLE 2 — stray-sell guard** (`cancel_stray_sell_orders`): new method run at `reconcile_on_startup` + top of `run_weekly_check` (every RTH cycle). Cancels any resting SELL on a QHM-held symbol whose id != that hold's registered `stop_order_id`. Buys untouched; PENDING_EXIT excluded (QHM's own exit); PENDING_EARNINGS nulls stop → all sells stray; PENDING_STOP_REPLACE retains stop id → preserves still-resting real stop. Distinguishes API-error (None) from empty book ([]): fails OPEN on cancel (fail-closed blind-cancel would kill the real stop) + CRITICAL/Slack GUARD-BLIND alert.
+  - Board: reliability REJECT→APPROVE (conceded on counter-prompt: fail-closed cancels the real stop, strictly worse); execution-risk NEEDS-CHANGES (Defect B PENDING_EXIT rejected on merits — GAI confirms exclusion correct; Defect A pre-open timing = documented residual). Gro APPROVE, GAI APPROVE (round 2). Cold-agent PASS.
+  - Runtime proof (local + deployed OCI `16b5e4c`): stray sells cancelled; real stop/buy/non-QHM/PENDING_EXIT preserved; API-None → 0 cancels + alert; empty book silent.
+
+**Incident vector closed:** `run_movers` cron DISABLED (commented, incident note). Cross-process efficacy PROVEN: fresh process `get_quarterly_hold_symbols()` → `['GOOGL','NVDA']` (registry empty in-proc, on-disk fallback fires).
+
+**RESIDUAL (not this session):** (1) full cross-strategy path enumeration across all QHM-touching exit/close paths (Phase 1 audit restart, multi-session); (2) reconcile `_adopt_existing_stop` transiently marked live stops "not on Alpaca" (get_open_orders single-fetch, no retry) → PENDING_STOP_REPLACE churn (holds stay protected; HOLE 2 de-dupes any double-stop). (3) exec-risk Defect A: stray sell appearing in the pre-open window after startup-reconcile but before first RTH cycle — covered by nightly restart + every-cycle guard, but no dedicated pre-open call.
