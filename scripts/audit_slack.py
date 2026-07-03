@@ -75,6 +75,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
         realized_str = "⚠️ reconciliation mismatch — verify" if mismatch else _dollar(realized)
         if not mismatch:
             injected.append(_dollar(realized))
+        injected.append(_dollar(drift))  # drift appears in source_note — allowlist it
         closed = int(eod.get("trades_today", 0) or 0)
         today_fields = [
             {"type": "mrkdwn", "text": f"*Realized P&L*\n{realized_str}"},
@@ -202,7 +203,9 @@ def validate_no_pnl_rewrite(payload: dict, injected_numbers: list[str]) -> tuple
     injected set means the LLM narrative introduced a number — block the post.
     Returns (ok, reason).
     """
-    text = json.dumps(payload)
+    # ensure_ascii=False so the U+2212 minus survives as a literal character and
+    # negative amounts match their allowlisted form (default dumps escapes to −).
+    text = json.dumps(payload, ensure_ascii=False)
     found = set(re.findall(r"−?\$[0-9][0-9,]*\.[0-9]{2}", text))
     allowed = set(injected_numbers)
     rogue = found - allowed
