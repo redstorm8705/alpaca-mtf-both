@@ -1,0 +1,71 @@
+--- /home/user/alpaca-mtf-both/execution/orphan_manager.py	2026-07-03 22:02:10.792065443 +0000
++++ /tmp/proposed_orphan_manager.py	2026-07-03 22:23:45.857051887 +0000
+@@ -21,7 +21,7 @@
+ 
+ import json as _json
+ import logging
+-from datetime import datetime
++from datetime import date, datetime
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Optional
+ from zoneinfo import ZoneInfo
+@@ -51,6 +51,32 @@
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _configured_qhm_picks() -> frozenset:
++    """Fallback QHM symbol set when quarterly_holds.json is absent.
++    Reads quarterly_holds_config.json 'picks' keys, filtered to symbols
++    whose not_before_date has been reached — future picks are excluded
++    because QHM cannot have entered them yet.
++    Returns empty frozenset on any failure — caller treats as no protection.
++    """
++    _cfg_path = (
++        Path(__file__).resolve().parent.parent
++        / "data" / "state" / "quarterly_holds_config.json"
++    )
++    try:
++        _cfg = _json.loads(_cfg_path.read_text())
++        _today = date.today()
++        return frozenset(
++            sym for sym, meta in _cfg.get("picks", {}).items()
++            if isinstance(meta, dict)
++            and date.fromisoformat(
++                meta.get("not_before_date", "9999-01-01")
++            ) <= _today
++        )
++    except Exception as _e:
++        logger.warning("_configured_qhm_picks: config read failed: %s", _e)
++        return frozenset()
++
++
+ # ---------------------------------------------------------------------------
+ # Time-of-day phase utilities
+ # ---------------------------------------------------------------------------
+@@ -169,6 +195,26 @@
+         except Exception as _ofc_e:
+             logger.warning("fail-closed Slack alert failed: %s", _ofc_e)
+ 
++    # B4: absent-file fallback — fires ONLY when quarterly_holds.json does not
++    # exist on disk. Explicit .exists() check prevents false-positive when file
++    # is present but all holds are in CLOSED/PENDING_ENTRY state (A+B board fix).
++    # not_before_date filter prevents over-protection of future config picks (C fix).
++    if not _qhm_load_failed and not _qhm_protected and not _qhm_state_path.exists():
++        _qhm_protected = _configured_qhm_picks()
++        if _qhm_protected:
++            logger.warning(
++                "QHM state file ABSENT — retaining GTC stops for "
++                "configured picks (not_before_date reached): %s",
++                sorted(_qhm_protected),
++            )
++            try:
++                send_slack(
++                    f":warning: QHM state file ABSENT in GTC reconcile — "
++                    f"retaining stops for {sorted(_qhm_protected)}"
++                )
++            except Exception as _abs_e:
++                logger.warning("Absent-file Slack alert failed: %s", _abs_e)
++
+     gtc_positions = tracker.get_overnight_gtc_positions()
+     if not gtc_positions:
+         return

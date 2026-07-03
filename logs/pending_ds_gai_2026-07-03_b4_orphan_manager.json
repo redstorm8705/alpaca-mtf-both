@@ -1,0 +1,32 @@
+{
+  "date": "2026-07-03",
+  "session": "nightly-autonomous",
+  "file": "execution/orphan_manager.py",
+  "finding": "B4",
+  "rc_class": "RC-3",
+  "description": "cancel_and_reconcile_gtc_stops() fails-open when quarterly_holds.json is ABSENT — _qhm_protected stays empty, line-313 guard never fires, QHM GTC stops can be cancelled pre-market",
+  "status": "ready_for_gro_gai",
+  "board_verdict": {
+    "agent_a_strict_parser": "FAIL_on_draft_PASS_implied_on_corrected",
+    "agent_b_red_teamer": "FAIL_on_draft_PASS_implied_on_corrected",
+    "agent_c_quant_risk": "FAIL_on_draft_PASS_implied_on_corrected",
+    "corrections_applied": [
+      "A+B: added `and not _qhm_state_path.exists()` to ADDITION 2 condition",
+      "B+C: added `not_before_date <= date.today()` filter to _configured_qhm_picks()",
+      "C: added `date` to datetime import"
+    ]
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS",
+    "ruff": "PASS"
+  },
+  "cold_second_agent": "PASS",
+  "gro_verdict": "PENDING",
+  "gai_verdict": "PENDING",
+  "sha256_proposed": "a444613b17d5cdb8a8b69520514af22d62127c8c7be98fca5630d695056e4a9c",
+  "base_commit": "414b839",
+  "patch_file": "logs/pending_patch_2026-07-03_b4_orphan_manager.patch",
+  "approval_file": "logs/pending_approvals_2026-07-03.md",
+  "note": "Gro/GAI API keys not available in this execution environment. Rafael must run Gro+GAI using the prompt in pending_approvals_2026-07-03.md before applying. All other gates passed."
+}
