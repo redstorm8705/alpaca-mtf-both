@@ -7,11 +7,25 @@ Data tier: T1 (Alpaca Options Data — data.alpaca.markets)
 Output:
   logs/gex_snapshot.json   — current snapshot, atomic write
   logs/gex_history.jsonl   — rolling append
-
 Cadence: called by live_data_writer.py every 15 min during RTH.
 Display-only — no sizing or scoring impact (board vote required for that).
+
+GREEKS SOURCE (2026-07-03 fix — board 2/2 Kyle+McKinney, Gro APPROVE, GAI APPROVE):
+The free 'indicative' options feed returns ONLY latestQuote (bp/ap) — no greeks,
+no open interest, ever (OPRA feed = 403 without signed agreement). The original
+implementation read gamma/OI from the snapshot and therefore produced ZERO valid
+datapoints from 2026-04-27 through 2026-07-03 (1,269 snapshots, all count=0 or
+error). Fixed by:
+  1. OI read from the CONTRACT object (/v2/options/contracts open_interest) —
+     the field verified present on live response 2026-07-03 (RC-6 closed).
+  2. Gamma computed locally: implied vol from quote mid via Black-Scholes
+     bisection, then analytic BS gamma. Pure stdlib math — no new dependencies.
+  3. Zero valid contracts → label UNKNOWN (was: mislabeled POSITIVE).
+Model assumptions are module constants below and logged with every snapshot.
+Accuracy target is the 15-min REGIME LABEL only — not pricing or execution.
 """
 
+import math
 import os
 import json
 import logging
@@ -42,6 +56,16 @@ _MARKET_SYMBOLS = ["SPY", "QQQ"]
 # Near-flip threshold: net GEX is < 10% of total gross gamma exposure
 _NEAR_FLIP_RATIO = 0.10
 
+# ── Local-greeks model assumptions (2026-07-03 board conditions) ──────────────
+# Regime label is insensitive to ±100bp on either constant (Kyle board note);
+# both are logged with every snapshot so the shadow review can audit them.
+_RISK_FREE_RATE   = 0.045   # continuous r
+_DIV_YIELD        = 0.012   # SPY trailing dividend yield approx; acceptable for QQQ at label granularity
+_MAX_SPREAD_RATIO = 0.25    # skip quotes with (ask-bid)/mid above this (hygiene — zero-bid/wide filter)
+_IV_LO, _IV_HI    = 0.01, 3.0   # bisection bracket; mid outside bracket → contract skipped
+_MIN_T_YEARS      = 1.0 / (365.0 * 24.0)  # 1-hour floor on time-to-expiry
+_MAX_CONTRACT_PAGES = 2     # up to 2000 contracts per underlying (API-budget cap for mtf-writer)
+
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -71,7 +95,7 @@ def _get_spot(symbol: str) -> float | None:
     return None
 
 
-# ── Contract list ─────────────────────────────────────────────────────────────
+# ── Contract list (with open interest) ────────────────────────────────────────
 
 def _expiry_range() -> tuple[str, str]:
     """Nearest 3 weekly expiries — 21-day window from today ET."""
@@ -79,32 +103,55 @@ def _expiry_range() -> tuple[str, str]:
     return today.strftime("%Y-%m-%d"), (today + timedelta(days=21)).strftime("%Y-%m-%d")
 
 
-def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> list[str]:
-    """Return OCC contract symbols for the underlying within the expiry window."""
+def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, float]:
+    """Return {occ_symbol: open_interest} within the expiry window.
+
+    OI lives on the CONTRACT object (verified live 2026-07-03) — the snapshot
+    endpoint never carries it on the indicative feed. Contracts with missing or
+    zero OI (fresh weeklies before first T+1 OI report) are excluded here.
+    Paginates up to _MAX_CONTRACT_PAGES pages of 1000.
+    """
+    oi_map: dict[str, float] = {}
+    page_token: str | None = None
     try:
-        resp = requests.get(
-            f"{_BASE_TRADING}/v2/options/contracts",
-            headers=_headers(),
-            params={
+        for _page in range(_MAX_CONTRACT_PAGES):
+            params: dict = {
                 "underlying_symbols": symbol,
                 "expiration_date_gte": date_gte,
                 "expiration_date_lte": date_lte,
                 "status": "active",
                 "limit": 1000,
-            },
-            timeout=_TIMEOUT,
-        )
-        if resp.status_code != 200:
-            logger.warning("GEX contracts [%s]: HTTP %s", symbol, resp.status_code)
-            return []
-        contracts = resp.json().get("option_contracts", [])
-        return [c["symbol"] for c in contracts if c.get("symbol")]
+            }
+            if page_token:
+                params["page_token"] = page_token
+            resp = requests.get(
+                f"{_BASE_TRADING}/v2/options/contracts",
+                headers=_headers(),
+                params=params,
+                timeout=_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                logger.warning("GEX contracts [%s]: HTTP %s", symbol, resp.status_code)
+                break
+            body = resp.json()
+            for c in body.get("option_contracts", []):
+                _sym = c.get("symbol")
+                _oi  = c.get("open_interest")
+                if not _sym or _oi in (None, "0", 0):
+                    continue
+                try:
+                    oi_map[_sym] = float(_oi)
+                except (TypeError, ValueError):
+                    logger.debug("GEX [%s]: unparseable open_interest %r on %s", symbol, _oi, _sym)
+            page_token = body.get("next_page_token")
+            if not page_token:
+                break
     except Exception as e:
         logger.warning("GEX contracts [%s] failed: %s", symbol, e)
-        return []
+    return oi_map
 
 
-# ── Snapshots (greeks + OI) ───────────────────────────────────────────────────
+# ── Snapshots (quotes — indicative feed carries latestQuote only) ─────────────
 
 def _fetch_snapshots(contract_symbols: list[str]) -> dict:
     """Fetch option snapshots in batches of 100. T1 — Alpaca Options Data REST."""
@@ -129,52 +176,130 @@ def _fetch_snapshots(contract_symbols: list[str]) -> dict:
     return results
 
 
+# ── Black-Scholes helpers (stdlib only) ───────────────────────────────────────
+
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _bs_price(S: float, K: float, T: float, sigma: float, is_call: bool) -> float:
+    """Black-Scholes price with continuous dividend yield (_DIV_YIELD, _RISK_FREE_RATE)."""
+    d1 = (math.log(S / K) + (_RISK_FREE_RATE - _DIV_YIELD + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if is_call:
+        return S * math.exp(-_DIV_YIELD * T) * _norm_cdf(d1) - K * math.exp(-_RISK_FREE_RATE * T) * _norm_cdf(d2)
+    return K * math.exp(-_RISK_FREE_RATE * T) * _norm_cdf(-d2) - S * math.exp(-_DIV_YIELD * T) * _norm_cdf(-d1)
+
+
+def _bs_gamma(S: float, K: float, T: float, sigma: float) -> float:
+    d1 = (math.log(S / K) + (_RISK_FREE_RATE - _DIV_YIELD + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    return math.exp(-_DIV_YIELD * T) * _norm_pdf(d1) / (S * sigma * math.sqrt(T))
+
+
+def _implied_vol(mid: float, S: float, K: float, T: float, is_call: bool) -> float | None:
+    """Bisection on [_IV_LO, _IV_HI]. None if mid is outside the price bracket.
+
+    60 iterations halve the bracket to <1e-16 of its width — convergence is
+    guaranteed inside the bracket; the 1e-4 price tolerance just exits early.
+    """
+    lo, hi = _IV_LO, _IV_HI
+    p_lo = _bs_price(S, K, T, lo, is_call)
+    p_hi = _bs_price(S, K, T, hi, is_call)
+    if not (p_lo <= mid <= p_hi):
+        return None
+    for _ in range(60):
+        m = 0.5 * (lo + hi)
+        p = _bs_price(S, K, T, m, is_call)
+        if abs(p - mid) < 1e-4:
+            return m
+        if p < mid:
+            lo = m
+        else:
+            hi = m
+    return 0.5 * (lo + hi)
+
+
+def _parse_occ(occ_symbol: str) -> tuple[datetime, bool, float] | None:
+    """SPY260717C00620000 → (expiry 16:00 ET, is_call, strike). None on parse failure."""
+    try:
+        strike = int(occ_symbol[-8:]) / 1000.0
+        cp = occ_symbol[-9]
+        if cp not in ("C", "P"):
+            return None
+        yy = int(occ_symbol[-15:-13])
+        mm = int(occ_symbol[-13:-11])
+        dd = int(occ_symbol[-11:-9])
+        expiry = datetime(2000 + yy, mm, dd, 16, 0, tzinfo=ET)
+        return expiry, cp == "C", strike
+    except (ValueError, IndexError):
+        return None
+
+
 # ── GEX computation ───────────────────────────────────────────────────────────
 
-def _contract_type(occ_symbol: str) -> str:
-    """Extract 'C' or 'P' from OCC symbol (e.g. SPY240101C00500000)."""
-    for i, ch in enumerate(occ_symbol):
-        if ch in ("C", "P") and i > 0 and occ_symbol[i - 1].isdigit():
-            return ch
-    return "U"
-
-
-def _compute_gex(snapshots: dict, spot: float) -> dict:
+def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     """
     Net GEX = Σ_k [ sign_k × gamma_k × OI_k × 100 × spot² ]
     Calls → positive, Puts → negative (dealer long-call / short-put convention).
+    Gamma from local BS (IV implied from quote mid); OI from the contract object.
     NEAR-FLIP when |net| < 10% of total gross exposure.
+    Zero valid contracts → label UNKNOWN (never POSITIVE on empty — 2026-07-03 fix).
     """
     net_gex     = 0.0
     total_abs   = 0.0
     strike_gex: dict[float, float] = {}
     count       = 0
+    skips = {"no_quote": 0, "zero_bid": 0, "wide_spread": 0, "parse": 0, "expired": 0, "no_iv": 0}
+    now_et = datetime.now(ET)
 
     for sym, snap in snapshots.items():
-        greeks  = snap.get("greeks") or {}
-        gamma   = greeks.get("gamma")
-        oi      = snap.get("openInterest") or snap.get("open_interest")
-        if gamma is None or not oi:
+        oi = oi_map.get(sym)
+        if not oi:
+            continue   # snapshot for a contract we did not request OI for — ignore
+        quote = snap.get("latestQuote") or {}
+        bid = quote.get("bp")
+        ask = quote.get("ap")
+        if bid is None or ask is None:
+            skips["no_quote"] += 1
             continue
-
-        ctype = _contract_type(sym)
-        if ctype == "U":
+        if bid <= 0 or ask < bid:
+            skips["zero_bid"] += 1
             continue
+        mid = 0.5 * (float(bid) + float(ask))
+        if mid <= 0 or (float(ask) - float(bid)) / mid > _MAX_SPREAD_RATIO:
+            skips["wide_spread"] += 1
+            continue
+        parsed = _parse_occ(sym)
+        if parsed is None:
+            skips["parse"] += 1
+            logger.debug("GEX: unparseable OCC symbol %r — skipping", sym)
+            continue
+        expiry, is_call, strike = parsed
+        T = (expiry - now_et).total_seconds() / (365.0 * 24 * 3600)
+        if T < _MIN_T_YEARS:
+            skips["expired"] += 1
+            continue
+        iv = _implied_vol(mid, spot, strike, T, is_call)
+        if iv is None:
+            skips["no_iv"] += 1
+            continue
+        gamma = _bs_gamma(spot, strike, T, iv)
 
-        sign    = 1.0 if ctype == "C" else -1.0
-        contrib = sign * float(gamma) * float(oi) * 100.0 * spot ** 2
+        sign    = 1.0 if is_call else -1.0
+        contrib = sign * gamma * oi * 100.0 * spot ** 2
         net_gex   += contrib
         total_abs += abs(contrib)
         count     += 1
+        strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
 
-        try:
-            strike = int(sym[-8:]) / 1000.0
-            strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
-        except (ValueError, IndexError):
-            logger.debug("GEX: unparseable OCC symbol %r — skipping strike contribution", sym)
-
-    # Label
-    if total_abs > 0 and abs(net_gex) / total_abs < _NEAR_FLIP_RATIO:
+    # Label — UNKNOWN on zero valid contracts (fix: was POSITIVE via net_gex >= 0)
+    if count == 0:
+        label = "UNKNOWN"
+    elif total_abs > 0 and abs(net_gex) / total_abs < _NEAR_FLIP_RATIO:
         label = "NEAR-FLIP"
     elif net_gex >= 0:
         label = "POSITIVE"
@@ -199,6 +324,8 @@ def _compute_gex(snapshots: dict, spot: float) -> dict:
         "label":           label,
         "flip_strike":     flip_strike,
         "contract_count":  count,
+        "skips":           skips,
+        "model":           {"r": _RISK_FREE_RATE, "q": _DIV_YIELD, "max_spread": _MAX_SPREAD_RATIO},
     }
 
 
@@ -242,25 +369,28 @@ def refresh_gex() -> None:
             results[symbol] = {"error": "no_spot"}
             continue
 
-        contracts = _fetch_contracts(symbol, date_gte, date_lte)
-        if not contracts:
-            logger.warning("GEX [%s]: no active contracts in window — skipping", symbol)
+        oi_map = _fetch_contracts(symbol, date_gte, date_lte)
+        if not oi_map:
+            logger.warning("GEX [%s]: no contracts with open interest in window — skipping", symbol)
             results[symbol] = {"error": "no_contracts"}
             continue
 
-        snapshots = _fetch_snapshots(contracts)
+        snapshots = _fetch_snapshots(list(oi_map))
         if not snapshots:
             logger.warning("GEX [%s]: no snapshots returned — skipping", symbol)
             results[symbol] = {"error": "no_snapshots"}
             continue
 
-        gex = _compute_gex(snapshots, spot)
+        gex = _compute_gex(snapshots, oi_map, spot)
         gex["spot"]              = round(spot, 2)
-        gex["contracts_fetched"] = len(contracts)
+        gex["contracts_fetched"] = len(oi_map)
         results[symbol]          = gex
-        logger.debug(
-            "GEX [%s]: %s $%sM | flip=%s | contracts=%d",
-            symbol, gex["label"], gex["raw_gex_m"], gex["flip_strike"], gex["contract_count"],
+        # INFO (was debug): this line IS the shadow-review record — must be visible
+        # at production log level or the 30-session clock never accumulates evidence.
+        logger.info(
+            "GEX [%s]: %s $%sM | flip=%s | valid=%d/%d | skips=%s",
+            symbol, gex["label"], gex["raw_gex_m"], gex["flip_strike"],
+            gex["contract_count"], len(oi_map), gex["skips"],
         )
 
     snapshot = {"ts": ts_str, "symbols": results}

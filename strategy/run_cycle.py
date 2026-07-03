@@ -1387,7 +1387,9 @@ def run_cycle(
         _gex_data  = _get_gex("SPY")
         _gex_label = _gex_data.get("label", "UNKNOWN")
         _gex_age   = _gex_data.get("age_minutes")
-        logger.debug(
+        # INFO (was debug, 2026-07-03): this is the Layer-8 shadow record — the
+        # 30-session review requires it visible at production log level.
+        logger.info(
             "GEX Layer8: label=%s raw_gex_m=%.1f flip=%s age=%.0fmin",
             _gex_label,
             _gex_data.get("raw_gex_m", 0.0),
