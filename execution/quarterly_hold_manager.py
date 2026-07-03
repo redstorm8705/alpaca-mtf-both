@@ -885,6 +885,16 @@ class QuarterlyHoldManager:
 
         try:
             open_orders = self._get_open_orders()
+            if open_orders is None:
+                # B2 fix: unknown book — do NOT decide "expired → PENDING_ENTRY"
+                # (which could double-submit) or "filled". Keep AWAITING_FILL;
+                # next reconcile/cycle re-checks once the API is readable.
+                logger.warning(
+                    "QuarterlyHoldManager: %s AWAITING_FILL — order API "
+                    "unreadable; deferring order-state decision to next check.",
+                    pos.symbol,
+                )
+                return
             order_ids = {getattr(o, "id", None) for o in open_orders}
 
             if pos.entry_order_id not in order_ids:
@@ -934,6 +944,40 @@ class QuarterlyHoldManager:
             return
         try:
             open_orders = self._get_open_orders()
+            if open_orders is None:
+                # B2 fix: API unreadable ≠ stop missing. Retry once, then keep
+                # the position ACTIVE with its recorded stop id — NEVER flag a
+                # possibly-live stop missing on unknown state (that stranded
+                # both holds in PENDING_STOP_REPLACE on 2026-07-02). Loud so a
+                # genuinely-missing stop during an outage is caught by a human;
+                # run_weekly_check re-verifies every cycle once the API is back.
+                import time as _time
+                _time.sleep(2)
+                open_orders = self._get_open_orders()
+            if open_orders is None:
+                # GAI final-audit fix (2026-07-02): do NOT stay ACTIVE on double
+                # API failure — that would mask a GENUINELY missing stop with no
+                # automated recovery. Transition to PENDING_STOP_REPLACE, which
+                # now has a safe recovery both ways: resubmit_stop_if_needed
+                # (every cycle) RE-ADOPTS the stop if it is in fact resting
+                # (no duplicate submit), or resubmits if genuinely missing.
+                # stop_order_id is retained in this state, so the HOLE-2 guard
+                # still preserves the real resting stop meanwhile.
+                logger.critical(
+                    "QuarterlyHoldManager: %s — order API UNREADABLE at startup "
+                    "(after retry); state → PENDING_STOP_REPLACE with recorded "
+                    "stop %s retained. Recovery loop will re-adopt or resubmit "
+                    "once the API is readable.",
+                    pos.symbol, pos.stop_order_id,
+                )
+                self._alert(
+                    f"🚨 QHM: order API unreadable at startup — {pos.symbol} → "
+                    f"PENDING_STOP_REPLACE (stop id {pos.stop_order_id} retained; "
+                    f"auto re-adopt/resubmit when API recovers)."
+                )
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                pos.updated_at = self._now_et().isoformat()  # RC-1
+                return
             order_ids = {getattr(o, "id", None) for o in open_orders}
             if pos.stop_order_id in order_ids:
                 result.orders_verified += 1
@@ -974,6 +1018,30 @@ class QuarterlyHoldManager:
             return False
         if self.dry_run or pos.stop_price <= 0 or pos.qty_filled <= 0:
             return False
+        # B2 self-heal (2026-07-02, board+Gro+GAI): if the REGISTERED stop is in
+        # fact still resting on Alpaca (we got here via an adoption false-negative,
+        # not a genuinely missing stop), RE-ADOPT it instead of submitting a
+        # duplicate — Alpaca rejects the duplicate with 40310000 (held_for_orders)
+        # every cycle and the state never recovers to ACTIVE.
+        if pos.stop_order_id:
+            _book = self._get_open_orders()
+            if _book is None:
+                return False  # unknown book — never risk a duplicate submit blind
+            if any(str(getattr(o, "id", None)) == str(pos.stop_order_id)
+                   for o in _book):
+                pos.state = HoldState.ACTIVE
+                pos.updated_at = self._now_et().isoformat()  # RC-1
+                self._save_state()
+                logger.info(
+                    "QuarterlyHoldManager: %s stop %s found RESTING on Alpaca — "
+                    "re-adopted, state → ACTIVE (no resubmit needed).",
+                    pos.symbol, pos.stop_order_id,
+                )
+                self._alert(
+                    f"✅ QHM: {pos.symbol} protective stop verified resting — "
+                    f"re-adopted (state machine healed, no duplicate submitted)."
+                )
+                return True
         try:
             stop_side = "sell" if pos.direction == "long" else "buy"
             order = self._dispatcher.submit_gtc_stop(
@@ -1851,14 +1919,23 @@ class QuarterlyHoldManager:
             )
             return None
 
-    def _get_open_orders(self) -> list:
-        """Fetch open orders via broker module-level function."""
+    def _get_open_orders(self) -> "list | None":
+        """Fetch open orders via broker module-level function.
+
+        B2 fix (2026-07-02, board+Gro+GAI): returns None on API failure —
+        DISTINCT from [] (genuinely empty book). The old `or []` conversion
+        made a transient API error indistinguishable from "no orders", so
+        _adopt_existing_stop flagged LIVE stops as missing at restart and
+        stranded holds in PENDING_STOP_REPLACE (confirmed live 2026-07-02:
+        both QHM stops resting on Alpaca while state said stop-missing).
+        Callers must treat None as UNKNOWN and never change state on it.
+        """
         try:
             from execution.broker import get_open_orders
-            return get_open_orders() or []
+            return get_open_orders()  # broker returns None on API error
         except Exception as e:  # RC-3
             logger.warning("QuarterlyHoldManager: get_open_orders failed: %s", e)
-            return []
+            return None
 
     def _alert(self, message: str) -> None:
         """Fire Slack alert via injected alerter. Fail-soft (RC-3)."""
