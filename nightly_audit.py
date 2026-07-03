@@ -595,20 +595,49 @@ def main():
     _tmp_report.replace(report_path)
     logger.info(f"Full report written → {report_path}")
 
-    # ── Slack summary ────────────────────────────────────────────────────────
-    slack_body = _build_slack_summary(report, verdict, len(modified_files))
-    slack_emoji = {
-        "PASS": ":white_check_mark:",
-        "WARN": ":warning:",
-        "FAIL": ":rotating_light:",
-        "UNKNOWN": ":grey_question:",
-    }[verdict]
-    title = f"Nightly Audit {AUDIT_DATE} — {verdict}"
-    sent = _slack(title, slack_body, emoji=slack_emoji)
-    if sent:
-        logger.info("Slack summary posted.")
-    else:
-        logger.warning("Slack post failed — check logs for full report.")
+    # ── Slack summary — Block Kit card (Rafael format-lock 2026-07-02) ───────
+    # Card first; legacy text summary only as fallback so an audit never goes
+    # silent if the renderer or its import fails.
+    sent = False
+    try:
+        from scripts.audit_slack import (build_pnl_fields, render_card,
+                                         validate_no_pnl_rewrite, post_to_slack,
+                                         findings_from_report)
+        try:
+            eod_dict = json.loads(eod)
+            if not isinstance(eod_dict, dict):
+                eod_dict = {}
+        except (json.JSONDecodeError, TypeError):
+            eod_dict = {}  # "(No EOD snapshot found)" etc. → mismatch-free empty card
+        pnl = build_pnl_fields("nightly", eod_dict)
+        findings = findings_from_report(report)
+        dist = [f"✅ full report — logs/gemini_audit_{AUDIT_DATE}.txt",
+                f"✅ modified files audited — {len(modified_files)}"]
+        card_verdict = verdict if verdict != "UNKNOWN" else "WARN"
+        payload = render_card("nightly", AUDIT_DATE, card_verdict, pnl,
+                              findings, dist_footer=dist)
+        ok, reason = validate_no_pnl_rewrite(payload, pnl["injected_numbers"])
+        if not ok:
+            raise RuntimeError(f"P&L-rewrite validator blocked card: {reason}")
+        sent = post_to_slack(payload) in (200, 204)
+        if sent:
+            logger.info("Slack Block Kit card posted.")
+    except Exception as _card_err:
+        logger.warning(f"Card render/post failed ({_card_err}) — falling back to text summary.")
+    if not sent:
+        slack_body = _build_slack_summary(report, verdict, len(modified_files))
+        slack_emoji = {
+            "PASS": ":white_check_mark:",
+            "WARN": ":warning:",
+            "FAIL": ":rotating_light:",
+            "UNKNOWN": ":grey_question:",
+        }[verdict]
+        title = f"Nightly Audit {AUDIT_DATE} — {verdict}"
+        sent = _slack(title, slack_body, emoji=slack_emoji)
+        if sent:
+            logger.info("Slack summary posted (legacy text fallback).")
+        else:
+            logger.warning("Slack post failed — check logs for full report.")
 
     logger.info("=== Audit complete ===")
     return verdict

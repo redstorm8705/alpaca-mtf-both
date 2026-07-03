@@ -116,11 +116,58 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
             "source_note": source, "injected_numbers": injected, "mismatch": mismatch}
 
 
+# ── Gemini-report → findings mapper ──────────────────────────────────────────
+
+def findings_from_report(report: str) -> list[dict]:
+    """Map a Gemini audit report (### CATASTROPHIC ALERT / ### NEW BUGS sections)
+    onto the card's 3-severity model. CATASTROPHIC lines → critical; NEW BUGS
+    lines → high (CRITICAL/HIGH tag) or low (MEDIUM/LOW tag). Lenient by design:
+    unparseable lines are skipped, never raised — the audit must post regardless."""
+    _stop_headers = ("VERDICT", "LOG ANOMALIES", "PERFORMANCE AUDIT",
+                     "TRADE INTEGRITY", "MODIFIED FILE", "P5 STATUS",
+                     "FIX VALIDATION", "RECOMMENDED", "ENTRY QUALITY",
+                     "EXIT QUALITY", "MRI ALIGNMENT")
+    _tags = {"EXECUTION BUG", "ALPHA ISSUE", "INFRASTRUCTURE",
+             "CRITICAL", "HIGH", "MEDIUM", "LOW"}
+    findings: list[dict] = []
+    section = None
+    for raw in report.splitlines():
+        line = raw.strip()
+        s = line.lstrip("#* ").strip()
+        if s.upper().startswith("CATASTROPHIC ALERT"):
+            section = "cat"
+            continue
+        if s.upper().startswith("NEW BUGS"):
+            section = "bugs"
+            continue
+        if s.upper().startswith(_stop_headers):
+            section = None
+            continue
+        if not section or not line:
+            continue
+        body = line.lstrip("0123456789.•*->— ").strip().strip("*").strip()
+        if not body or body.lower().startswith("none"):
+            continue
+        parts = [p.strip().strip("*") for p in body.split("|")]
+        if section == "cat":
+            findings.append({
+                "severity": "critical",
+                "title": parts[0][:120],
+                "detail": (" — ".join(parts[1:]) or parts[0])[:300],
+            })
+        else:
+            up = body.upper()
+            sev = "high" if ("CRITICAL" in up or "HIGH" in up) else "low"
+            title = next((p for p in parts if p and p.upper() not in _tags), parts[0])
+            findings.append({"severity": sev, "title": title[:120], "detail": body[:300]})
+    return findings[:12]  # card stays scannable; full narrative lives in the report file
+
+
 # ── Card renderer ────────────────────────────────────────────────────────────
 
 def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
                 findings: list[dict], dist_footer: Optional[list] = None,
-                sample: bool = False) -> dict:
+                sample: bool = False, context_line: Optional[str] = None) -> dict:
     """
     findings: list of {"severity": "critical|high|low", "title": str, "detail": str}
               (detail already one-liner for low). Rendered per approved design.
@@ -163,6 +210,9 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
     tail = f"{n_act} item(s) to act on" if n_act else "no action needed"
     blocks.append({"type": "section", "text": {"type": "mrkdwn",
         "text": f"*Verdict: {v_emoji} {verdict.upper()}* — {tail}"}})
+    if context_line:
+        blocks.append({"type": "context",
+                       "elements": [{"type": "mrkdwn", "text": context_line}]})
 
     # FINDINGS — Critical, High, then Low (collapse >2)
     for f in crits:

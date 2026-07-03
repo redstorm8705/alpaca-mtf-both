@@ -830,6 +830,30 @@ def _extract_verdict(report: str) -> str:
     return "UNKNOWN"
 
 
+def _fetch_live_positions() -> "list | None":
+    """Live open positions via Alpaca REST (T1 account data, raw urllib — this
+    script is read-only by design and must not import execution/). The card's
+    midday P&L is UNREALIZED mark-to-market from these positions (design lock
+    2026-07-02): same-day realized numbers from trade events are unreliable on
+    paper accounts until overnight settlement. None on failure → caller falls
+    back to the legacy text summary."""
+    key = os.getenv("ALPACA_API_KEY", "").strip()
+    sec = os.getenv("ALPACA_SECRET_KEY", "").strip()
+    if not key or not sec:
+        return None
+    req = urllib.request.Request(
+        "https://paper-api.alpaca.markets/v2/positions",
+        headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+            return data if isinstance(data, list) else None
+    except Exception as e:
+        logger.warning(f"Live positions fetch failed: {e}")
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -885,14 +909,9 @@ def main() -> None:
         emoji = ":white_check_mark:"
         severity = "CLEAN"
 
-    _audit_label = "POST-MARKET AUDIT" if _now.hour >= 13 else "MIDDAY AUDIT"
-    title = f"{_audit_label} [{severity}] — {AUDIT_DATE} PT"
-    body  = build_slack_body(entry_anal, mri_anal, log_anal, pnl_anal, postmortem=postmortem)
-
-    _slack(title, body, emoji=emoji)
-    logger.info(f"Midday audit complete — severity={severity}")
-
-    # ── Gemini adversarial review ─────────────────────────────────────────────
+    # ── Gemini adversarial review (report file always written) ───────────────
+    gemini_report = ""
+    gemini_verdict = "UNKNOWN"
     if GEMINI_API_KEY:
         logger.info("Running Gemini decision quality review...")
         gemini_prompt  = _build_gemini_prompt(entry_anal, mri_anal, log_anal,
@@ -907,42 +926,83 @@ def main() -> None:
             encoding="utf-8",
         )
         logger.info(f"Gemini report → {GEMINI_REPORT} | Verdict: {gemini_verdict}")
-
-        gemini_emoji = {
-            "PASS": ":white_check_mark:", "WARN": ":warning:",
-            "FAIL": ":rotating_light:", "UNKNOWN": ":grey_question:",
-        }[gemini_verdict]
-        # CATASTROPHIC ALERT is requested first in the prompt's OUTPUT FORMAT
-        # (S68 redesign) — surface a loud prefix in Slack if it's non-empty so
-        # it can't be missed even if Slack truncation cuts off the rest.
-        _catastrophic_count = 0
-        for _line in gemini_report.splitlines():
-            if "CATASTROPHIC ALERT" in _line and ":" in _line:
-                try:
-                    _catastrophic_count = int(_line.split(":")[-1].strip().split()[0])
-                except (ValueError, IndexError):
-                    pass
-                break
-        catastrophic_prefix = (
-            ":rotating_light::rotating_light: *CATASTROPHIC FINDING(S) — IMMEDIATE REVIEW* :rotating_light::rotating_light:\n"
-            if _catastrophic_count > 0 else ""
-        )
-        gemini_slack_body = (
-            catastrophic_prefix
-            + f"{gemini_emoji} *Verdict: {gemini_verdict}*\n"
-            + "\n".join(
-                line for line in gemini_report.splitlines()
-                if line.strip() and not line.startswith("```")
-            )[:2000]
-            + f"\n_Full report: {GEMINI_REPORT.name}_"
-        )
-        _slack(
-            f"Midday Gemini Audit [{gemini_verdict}] — {AUDIT_DATE} PT",
-            gemini_slack_body,
-            emoji=gemini_emoji,
-        )
     else:
         logger.warning("GEMINI_API_KEY not set — skipping Gemini review.")
+
+    # ── Slack — single Block Kit card (Rafael format-lock 2026-07-02) ─────────
+    # One card replaces the previous two wall-of-text posts (stats + raw Gemini
+    # dump). Unrealized MTM P&L from live positions; findings parsed from the
+    # Gemini report; session stats in one context line. Legacy two-post path is
+    # kept strictly as fallback so the audit never goes silent.
+    sent = False
+    try:
+        from scripts.audit_slack import (build_pnl_fields, render_card,
+                                         validate_no_pnl_rewrite, post_to_slack,
+                                         findings_from_report)
+        positions = _fetch_live_positions()
+        if positions is None:
+            raise RuntimeError("live positions unavailable — cannot build MTM card")
+        eod_dict = {}
+        _eod_path = LOGS_DIR / f"eod_{AUDIT_DATE}.json"
+        if _eod_path.exists():
+            try:
+                eod_dict = json.loads(_eod_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                eod_dict = {}
+        pnl = build_pnl_fields("midday", eod_dict, positions=positions)
+
+        findings = findings_from_report(gemini_report) if gemini_report else []
+        for wl in log_anal["watchdog_lines"]:
+            findings.insert(0, {"severity": "high", "title": "Watchdog restart",
+                                "detail": wl[:200]})
+        card_verdict = gemini_verdict if gemini_verdict != "UNKNOWN" else {
+            "CLEAN": "PASS", "REVIEW": "WARN", "ACTION REQUIRED": "FAIL"}[severity]
+        mri_close = mri_anal.get("last_level", "?")
+        context_line = (
+            f"{entry_anal['entry_count']} entries · {entry_anal['exit_count']} exits · "
+            f"{entry_anal['partial_count']} partials · stop-rate "
+            f"{entry_anal['stop_hit_rate']:.0%} · MRI close {mri_close} · "
+            f"{log_anal['error_count']} err / {log_anal['warning_count']} warn (4h)")
+        dist = [f"✅ analysis — logs/{REPORT_PATH.name}"]
+        if gemini_report:
+            dist.append(f"✅ Gemini review — logs/{GEMINI_REPORT.name}")
+        payload = render_card("midday", AUDIT_DATE, card_verdict, pnl, findings,
+                              dist_footer=dist, context_line=context_line)
+        ok, reason = validate_no_pnl_rewrite(payload, pnl["injected_numbers"])
+        if not ok:
+            raise RuntimeError(f"P&L-rewrite validator blocked card: {reason}")
+        sent = post_to_slack(payload) in (200, 204)
+        if sent:
+            logger.info("Slack Block Kit card posted.")
+    except Exception as _card_err:
+        logger.warning(f"Card render/post failed ({_card_err}) — legacy text fallback.")
+
+    if not sent:
+        _audit_label = "POST-MARKET AUDIT" if _now.hour >= 13 else "MIDDAY AUDIT"
+        title = f"{_audit_label} [{severity}] — {AUDIT_DATE} PT"
+        body  = build_slack_body(entry_anal, mri_anal, log_anal, pnl_anal,
+                                 postmortem=postmortem)
+        _slack(title, body, emoji=emoji)
+        if gemini_report:
+            gemini_emoji = {
+                "PASS": ":white_check_mark:", "WARN": ":warning:",
+                "FAIL": ":rotating_light:", "UNKNOWN": ":grey_question:",
+            }[gemini_verdict]
+            gemini_slack_body = (
+                f"{gemini_emoji} *Verdict: {gemini_verdict}*\n"
+                + "\n".join(
+                    line for line in gemini_report.splitlines()
+                    if line.strip() and not line.startswith("```")
+                )[:2000]
+                + f"\n_Full report: {GEMINI_REPORT.name}_"
+            )
+            _slack(
+                f"Midday Gemini Audit [{gemini_verdict}] — {AUDIT_DATE} PT",
+                gemini_slack_body,
+                emoji=gemini_emoji,
+            )
+
+    logger.info(f"Midday audit complete — severity={severity}")
 
 
 if __name__ == "__main__":
