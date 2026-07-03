@@ -31,13 +31,55 @@ _KILL_STATE_FILE = (
 
 
 def _load_kill_state() -> dict:
-    """Load persisted kill switch state. Returns {} on any read error."""
+    """Load persisted kill switch state.
+
+    ABSENT file → {} (never killed / cleared — legitimate un-killed state).
+    PRESENT-but-CORRUPT file → FAIL CLOSED (B6 hardening 2026-07-03, board+
+    Gro+GAI; same doctrine as the QHM HOLE-1 fix): the old behavior returned
+    {} on parse error with a debug-level whisper, silently UN-KILLING the bot
+    if the state file was ever corrupted. A risk control must halt loudly on
+    unreadable state, not resume trading. Returns a synthetic same-day
+    killed=True record + CRITICAL log + Slack.
+
+    FileNotFoundError between exists() and read_text() (GAI audit catch: the
+    file can legitimately vanish in that window, e.g. reset/cleanup in another
+    process) → treated as ABSENT, never a false kill.
+
+    Recovery from fail-closed: the operator MUST remove/repair the corrupt
+    file, then restart (or wait for the next day's reset after removal). While
+    the corrupt file remains on disk, every load re-fails closed by design.
+    """
     try:
         if _KILL_STATE_FILE.exists():
-            return json.loads(_KILL_STATE_FILE.read_text())
+            try:
+                return json.loads(_KILL_STATE_FILE.read_text())
+            except FileNotFoundError:
+                # exists() → deleted-before-read race — genuinely absent.
+                logger.debug("kill state file vanished during load — treating as absent")
+                return {}
+        return {}
     except Exception as _e:
-        logger.debug("kill state load error: %s", _e)
-    return {}
+        logger.critical(
+            "KILL-SWITCH STATE FILE UNREADABLE/CORRUPT (%s) — FAILING CLOSED: "
+            "treating as killed=True for today. Remove/repair %s, then restart "
+            "to clear.",
+            _e, _KILL_STATE_FILE,
+        )
+        try:
+            from alerts import send_slack
+            send_slack(
+                "🚨 KILL-SWITCH state file CORRUPT — failing CLOSED (no new "
+                "entries today). Remove/repair data/state/kill_switch_state.json, "
+                "then restart to clear."
+            )
+        except Exception:
+            logger.warning("corrupt-kill-state Slack alert failed")
+        return {
+            "date": datetime.now(_ET).strftime("%Y-%m-%d"),
+            "killed": True,
+            "halt_entries": True,
+            "corrupt_state_fail_closed": True,
+        }
 
 
 def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
@@ -59,9 +101,21 @@ def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
         tmp.replace(_KILL_STATE_FILE)
     except Exception as _e:
         try:
-            logger.debug("kill state save error: %s", _e)
+            # B6 hardening: failing to persist a FIRED kill switch means the
+            # kill dies on the next restart — that is a CRITICAL event, not a
+            # debug whisper (old behavior). Still never raises.
+            logger.critical(
+                "KILL-SWITCH STATE PERSIST FAILED (%s) — a fired kill switch "
+                "will NOT survive a restart. Investigate disk/state dir now.",
+                _e,
+            )
+            from alerts import send_slack
+            send_slack(
+                "🚨 Kill-switch persist FAILED — a fired kill will not survive "
+                "restart. Check data/state/ write permissions/disk."
+            )
         except Exception:
-            pass  # logger broken; persistence failure must not break the trading loop
+            pass  # logger/alerts broken; persistence failure must not break the trading loop
 
 
 def _safe_lev_mult(value: Any, config_name: str, symbol: str) -> float:
@@ -139,6 +193,9 @@ class RiskManager:
                 "Manual reset or bot restart required."
             )
             self.killed = True
+            # B6 hardening: this kill previously did NOT persist — it silently
+            # died on the next restart while the drawdown kill (below) survived.
+            _save_kill_state(killed=True, halt_entries=True)
             return True
         worst_pnl = min(self.daily_pnl, self.equity_pnl)
         loss_pct = worst_pnl / self.daily_start_value
