@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-07-03 (16pt/TSMOM evidence-chain repair deployed: score_16pt->trade_events, tsmom signal tagging restored, staged clamp, score16_aggregator NEW)"
+    "last_updated": "2026-07-03 (GEX ACTIVATED: GEX_ENABLED=True staged 1.10/1.05, stale 30min, kelly INFO log + GAI R3 direct-access fix, gex_daily_audit NEW)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -376,8 +376,8 @@
       "risk_rating": "HIGH \u2014 RTH-chain (imported by portfolio_tracker.py \u2192 run_cycle.py \u2192 main.py). DS/GAI required for any non-read-only change."
     },
     "execution/kelly.py": {
-      "patch_count": 1,
-      "last_patched": "2026-06-28 (MTF FULL BOT AUDIT consolidated fix batch)",
+      "patch_count": 2,
+      "last_patched": "2026-07-03 (GEX edge-mult log debug\u2192INFO + GAI R3: getattr fallbacks 1.30/1.15 \u2192 direct config access, fail-neutral 1.0)",
       "lines": 458,
       "notes": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): rebuild_from_trades() now skips trades with missing/zero exit_price instead of defaulting to 0.0 \u2014 closes HIGH-severity finding where a missing exit_price produced a phantom catastrophic loss (long trades) or phantom huge win (short trades), the latter risking Kelly over-sizing future short positions on a fictitious trade. Traces to the same root cause as portfolio_tracker.py's write_eod_summary() fix. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
     },
@@ -430,8 +430,8 @@
       "notes": "AWP commit d11dc32: macd_histogram_rising()/macd_histogram_falling() lacked the len(df)<2 guard their sibling functions already had -- found during confluence.py's board redo. Fixed + RULE C-4 noqa cleanup. Cold second-agent PASS, GAI APPROVE. Deployed to OCI."
     },
     "config.py": {
-      "patch_count": 2,
-      "last_patched": "2026-07-03 (TSMOM clamp staged [0.75,1.25] per Thorp deployment condition; revert after 20-trade review)",
+      "patch_count": 3,
+      "last_patched": "2026-07-03 (GEX_ENABLED=True \u2014 Rafael mandate supersedes S50b 30-session condition; staged mults 1.10/1.05; GEX_STALE_MINUTES 45\u219230)",
       "lines": 522,
       "notes": "Added a hardened cross-check in validate_config() to reject startup if VOLUME_CONFIRMATION_ENABLED=True but SCORE_WEIGHTS wasn't correctly paired-edited. Board+Gro+GAI unanimous, Rafael approved. Verified with 3 live Python executions. Commit 8460a19, deployed to OCI."
     },
@@ -448,6 +448,13 @@
       "lines": 180,
       "notes": "Archives per-day score_comparison rows into logs/score16_history.jsonl before the 14-day prune deletes them; rebuilds logs/score16_report.json (agreement rates + trade outcomes by 12pt/16pt bucket from eod files). Standalone, local-files only, no execution imports. First run backfilled 11 days / 310 rows. Statics PASS.",
       "risk_rating": "LOW \u2014 standalone cron analytics, not in RTH chain"
+    },
+    "scripts/gex_daily_audit.py": {
+      "patch_count": 1,
+      "last_patched": "2026-07-03 (NEW \u2014 mandatory daily GEX impact audit, cron 20:30 UTC weekdays)",
+      "lines": 185,
+      "notes": "Compensating control for early GEX activation. Reads gex_history.jsonl + mtf_bot.log (Layer8 reads, floor raises, Kelly mults) + trade_events entries; writes logs/gex_daily_audit_YYYY-MM-DD.json (atomic) + Slack summary. Standalone, local files only.",
+      "risk_rating": "LOW \u2014 standalone cron analytics"
     }
   },
   "sessions": [

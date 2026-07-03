@@ -6771,3 +6771,12 @@ RC-1 PASS (all datetime.now calls tz-anchored in files read) | RC-2 PASS (all pa
 **Operational conditions logged:** Taleb kill-rule — at TSMOM-scaled trade #20, rolling WR < 35% → zero the multiplier (floor=cap=1.0 equivalent) and board model review. Thorp revert path — [0.75,1.25] → [0.50,1.50] after 20-trade review.
 
 **Deploy:** rsync ×4 → OCI, services restarted, all 4 active, HEALTH OK (validate_config passed in production — bot hard-exits otherwise). **Runtime verification pending next RTH session (Mon 2026-07-06):** first entry event must show score_16pt + non-null tsmom fields; first TSMOM log line "[SYM] TSMOM vol-scale: ..." — check via: grep "TSMOM vol-scale" logs/mtf_bot.log && grep score_16pt logs/trade_events.jsonl | tail -1
+
+---
+## 2026-07-03 03:44 PM PT — GEX ACTIVATION DEPLOYED (Rafael mandate — supersedes S50b 30-session shadow condition)
+
+**Files:** config.py (GEX_ENABLED=True; GEX_STALE_MINUTES 45→30 [Kyle+GAI]; edge mults STAGED 1.30/1.15→1.10/1.05 [Thorp+GAI] with documented revert at rolling 20-trade WR≥35% or board review; rebased onto TSMOM-staged config) | execution/kelly.py (GEX mult log debug→INFO; GAI R3: getattr full-value fallbacks replaced with direct config access — missing attr now fail-neutral 1.0) | scripts/gex_daily_audit.py (NEW 185L, cron 20:30 UTC weekdays — deployed BEFORE flag flip per Kyle condition)
+
+**Gates:** Board 2/2 (Kyle APPROVE-W/COND — Kyle 1985/Barbon-Buraschi, all conditions adopted incl. ≥5-snapshot pre-flip check: 13 valid today; Thorp APPROVE-W/COND — overbetting-unreliable-edge doctrine, staged mults adopted, warmup/Friday/stale gates verified) | Gro APPROVE | GAI REJECT ×3 rounds — every code-level + control-level finding adopted (staleness 30m, staged mults, R3 getattr fix); sole unresolved item = automated-parameter-lifecycle philosophy, which contradicts the project's human-approval governance → tie-breaker: board majority 2-0 APPROVE. Split documented, not smoothed. | Cold second-agent PASS (0 threats — Friday carve-out weekday()==4, clamp-after-mult order, STALE→1.0, no accidental constant changes) | Statics py_compile/mypy/ruff PASS ×3
+
+**Live effects from Mon 2026-07-06:** SPY GEX=NEGATIVE → MIN_SCORE +1 (Layer 8, INFO-logged every cycle); Kelly risk ×1.10 (NEGATIVE) / ×1.05 (POSITIVE) for both warmed signal types (n=45/35), capped 4.5%/trade, no mult Fridays; STALE >30min → neutral. Daily audit 4:30 PM ET → logs/gex_daily_audit_*.json + Slack.

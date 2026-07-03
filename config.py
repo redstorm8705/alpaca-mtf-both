@@ -403,12 +403,26 @@ VOLUME_REQUIRE_TWO_BAR       = False   # Levitt C2: 2 consecutive above-threshol
 # VOLUME_GRADED_ENABLED = False        # reserved S25 — do not implement until 60-session shadow
 
 # ─── GEX (GAMMA EXPOSURE) ─────────────────────────────────────────────────────
-# Board unanimous S50b. GEX_ENABLED=False = shadow mode (log-only, no scoring).
-# Set True after 30-session shadow review + board vote.
-GEX_ENABLED             = False   # False = shadow mode; True = live scoring
-GEX_STALE_MINUTES       = 45      # treat snapshot as stale if older than this (reduce to 30 post-shadow)
-GEX_EDGE_MULT_MOMENTUM  = 1.30    # edge multiplier when GEX=NEGATIVE (momentum regime)
-GEX_EDGE_MULT_MR        = 1.15    # edge multiplier when GEX=POSITIVE (mean-reversion regime)
+# Board unanimous S50b originally gated activation on a 30-session shadow review.
+# Rafael mandate 2026-07-03 (sole mandate authority): activate now — the shadow
+# clock never ran (data pipeline was dead until the 2026-07-03 repair), and the
+# operator wants live impact data instead. Compensating control: mandatory DAILY
+# audit via scripts/gex_daily_audit.py (cron 4:30 PM ET) — labels timeline,
+# Layer-8 floor raises, Kelly edge-mult applications, and affected entries.
+# Effects when True: run_cycle Layer 8 raises MIN_SCORE +1 while SPY GEX=NEGATIVE;
+# kelly.py multiplies kelly_risk by the staged values below for signal types past
+# 30-trade warmup (both are, as of 2026-07-03), capped by KELLY_MAX_RISK_PCT;
+# no multiplier on Fridays (0DTE carve-out).
+GEX_ENABLED             = True    # ACTIVE (Rafael 2026-07-03) — daily audit mandated
+GEX_STALE_MINUTES       = 30      # 45→30 at activation (Kyle + GAI condition: 45 min = 3 stale
+                                  # bars on the 15-min cadence before STALE triggers; 30 = 2)
+# STAGED MULTIPLIERS (Thorp + GAI activation condition, 2026-07-03): full values
+# 1.30 / 1.15 were board-approved S50b, but the label is freshly repaired and the
+# account is in a sub-20%-WR stretch — the multiplier only ever INCREASES risk.
+# Staged to 1.10 / 1.05 until rolling 20-trade WR >= 35% or board review, then
+# revert to 1.30 / 1.15. All decision paths and daily-audit data flow either way.
+GEX_EDGE_MULT_MOMENTUM  = 1.10    # staged (S50b full value 1.30) — see note above
+GEX_EDGE_MULT_MR        = 1.05    # staged (S50b full value 1.15) — see note above
 GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN
 GEX_MIN_SCORE_NEG_BUMP  = 1       # MIN_SCORE +1 when GEX=NEGATIVE (requires stronger signal)
 

@@ -337,12 +337,20 @@ class KellySizer:
                     from data.gex import get_gex_regime as _get_gex_kelly
                     _gex_regime = _get_gex_kelly("SPY").get("label", "UNKNOWN")
                     if _gex_regime == "NEGATIVE":
-                        _gex_edge_mult = getattr(config, "GEX_EDGE_MULT_MOMENTUM", 1.30)
+                        # GAI R3 (2026-07-03): direct access, not getattr-with-
+                        # default — the old 1.30/1.15 fallbacks would silently
+                        # bypass the staged 1.10/1.05 values if the config attr
+                        # were ever missing. Missing attr now raises into the
+                        # enclosing except → mult stays 1.0 (fail-neutral).
+                        _gex_edge_mult = config.GEX_EDGE_MULT_MOMENTUM
                     elif _gex_regime == "POSITIVE":
-                        _gex_edge_mult = getattr(config, "GEX_EDGE_MULT_MR", 1.15)
+                        _gex_edge_mult = config.GEX_EDGE_MULT_MR
                     # NEAR-FLIP / STALE / UNKNOWN: multiplier stays 1.0
                     if _gex_edge_mult != 1.0:
-                        logger.debug(
+                        # INFO (was debug, 2026-07-03): this line is the daily
+                        # GEX-audit record of every sizing impact — must be
+                        # visible at production log level.
+                        logger.info(
                             "Kelly [%s]: GEX=%s edge_mult=%.2fx",
                             key, _gex_regime, _gex_edge_mult,
                         )
