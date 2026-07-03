@@ -895,9 +895,11 @@ class QuarterlyHoldManager:
                     pos.symbol,
                 )
                 return
-            order_ids = {getattr(o, "id", None) for o in open_orders}
+            # B2 leg 2: str-normalize (SDK UUID vs JSON str) — raw membership
+            # false-negatived here too, causing false "DAY order expired" resets.
+            order_ids = {str(getattr(o, "id", "")) for o in open_orders}
 
-            if pos.entry_order_id not in order_ids:
+            if str(pos.entry_order_id) not in order_ids:
                 # DAY order not found — either filled or expired
                 alpaca_pos = self.broker.get_position(pos.symbol)
                 if alpaca_pos and float(getattr(alpaca_pos, "qty", 0)) > 0:
@@ -978,8 +980,13 @@ class QuarterlyHoldManager:
                 pos.state = HoldState.PENDING_STOP_REPLACE
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 return
-            order_ids = {getattr(o, "id", None) for o in open_orders}
-            if pos.stop_order_id in order_ids:
+            # B2 leg 2 (2026-07-03 runtime proof): SDK returns id as uuid.UUID;
+            # stop_order_id reloaded from JSON is str. Raw membership NEVER
+            # matched ("af11..." != UUID("af11...")), so every restart flagged
+            # live stops missing. str-normalize both sides (same idiom Gro/GAI
+            # approved in resubmit_stop_if_needed's re-adopt).
+            order_ids = {str(getattr(o, "id", "")) for o in open_orders}
+            if str(pos.stop_order_id) in order_ids:
                 result.orders_verified += 1
                 logger.info(
                     "QuarterlyHoldManager: %s GTC stop %s adopted at startup",
