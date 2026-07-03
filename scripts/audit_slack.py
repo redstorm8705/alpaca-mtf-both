@@ -148,17 +148,33 @@ def findings_from_report(report: str) -> list[dict]:
         body = line.lstrip("0123456789.•*->— ").strip().strip("*").strip()
         if not body or body.lower().startswith("none"):
             continue
-        parts = [p.strip().strip("*") for p in body.split("|")]
+        # Mask any dollar figure the LLM wrote — the card's only authoritative
+        # numbers are the code-injected P&L fields (validate_no_pnl_rewrite
+        # enforces this); full figures live in the report file.
+        body = re.sub(r"−?-?\$[0-9][0-9,]*(?:\.[0-9]{1,2})?", "$…", body)
+        parts = [p.strip().strip("*").strip("`") for p in body.split("|")]
+
+        def _is_tag(seg: str) -> bool:
+            u = seg.upper()
+            return (u.startswith(("CATEGORY:", "SEVERITY:")) or u in _tags)
+
         if section == "cat":
+            title = next((p for p in parts if p and not _is_tag(p)), parts[0])
             findings.append({
                 "severity": "critical",
-                "title": parts[0][:120],
-                "detail": (" — ".join(parts[1:]) or parts[0])[:300],
+                "title": title[:120],
+                "detail": (" — ".join(p for p in parts if p and p != title)
+                           or title)[:300],
             })
         else:
             up = body.upper()
-            sev = "high" if ("CRITICAL" in up or "HIGH" in up) else "low"
-            title = next((p for p in parts if p and p.upper() not in _tags), parts[0])
+            if "CATASTROPHIC" in up:
+                sev = "critical"
+            elif "CRITICAL" in up or "HIGH" in up:
+                sev = "high"
+            else:
+                sev = "low"
+            title = next((p for p in parts if p and not _is_tag(p)), parts[0])
             findings.append({"severity": sev, "title": title[:120], "detail": body[:300]})
     return findings[:12]  # card stays scannable; full narrative lives in the report file
 
