@@ -1,49 +1,47 @@
-# Handoff — Session 2026-06-30: Major session — ATH gate fix, Movers/QHM collision, Phase 2 redo, RTH Block removal
+# Handoff — Session 2026-07-03: GEX repair + activation, 16pt/TSMOM evidence chains, 12-pt confluence audit
 
-## LATEST CHANGES (this session)
+## LATEST CHANGES (this session — all deployed, OCI HEAD `6eb79f8`)
 
-| Commit | File | Fix |
-|--------|------|-----|
-| `8400ea7` | `config.py`, `strategy/run_cycle.py` | **ATH/market-top compound gate**: ATH_MIN_SCORE_RAISE_PCT 2.0→1.0; zone_tier >=2→>=3. Was blocking ALL entries all day (floor=12/12). Now floor=11. |
-| `67e669c` | `strategy/movers/strategy.py` | **Movers/QHM cross-strategy collision**: added `get_quarterly_hold_symbols()` guard at both `close_position()` call sites. QHM tranche cycles were being reset every time Movers exited the same symbol. |
-| `bf760c9` | `CLAUDE.md` | ATH stop-tightening + cross-strategy audit logged to Future Roadmap. |
-| `c09291b` | `execution/risk_manager.py`, `execution/entry_logic.py`, `run_movers.py` | ATH entry scalar (0.90x when SPY <1% from 52w high, preserves R:R) + run_movers.py buffer hardcoded 15min→config 30min. |
-| `2f5a13b` | `CLAUDE.md` | RTH Block policy removed (Rafael mandate 2026-06-30). |
-| `182634d`–`f98e0c0` (14 commits) | 14 scripts | RTH Block runtime code removed from all 14 analysis/backtest scripts. Also found 2 real bugs in `earnings_preflight.py` during this pass. |
-| `5afa539` | `execution/gtc_manager.py` | GTC partial-exit collateral-cancellation detection (dormant structural hardening). |
-| `6353814`, `8460a19` | `events/calendar.py`, `config.py` | CAUTION tier 0.50→0.65x; validate_config() toggle hardening for VOLUME_CONFIRMATION_ENABLED. |
-| `c4bcdf0` | `events/calendar.py` | NFP date error (2026-07-02 was Thursday) + RC-1 ET-anchor at 3 call sites. |
-| `d11dc32` | `indicators/macd.py` | Missing len(df)<2 guard in macd_histogram_rising/falling. |
-| `3f2ab0e` | `indicators/momentum.py` | Missing try/except + 0.0 boundary mislabel. |
-| `5afa539` | `autonomous_patch_generator.py` | **P0**: Migrated dead DeepSeek API (402 all calls for weeks) to Gro/Groq. |
-| Various | Phase 2 redo (10 files) | Full board (4 agents) + Gro/GAI redo: 13 bugs fixed across execution/, events/, strategy/, indicators/. |
+| Commit | Files | What |
+|--------|-------|------|
+| `414b839` | `data/gex.py`, `strategy/run_cycle.py` | **GEX pipeline repair (RC-6)**: indicative feed never carries greeks/OI — OI now read from contract objects, gamma computed locally (BS bisection IV from quote mids), UNKNOWN-on-empty label (was mislabeled POSITIVE), Layer-8 shadow log debug→INFO. 1,269 dataless snapshots since Apr 27 explained. Runtime-verified: SPY/QQQ real labels + flip strikes. |
+| `6513e44` | `execution/portfolio_tracker.py`, `strategy/signal_generator.py`, `config.py`, `scripts/score16_aggregator.py` (NEW) | **16pt/TSMOM evidence chains**: score_16pt now reaches trade_events entry records; TSMOM fields restored to signal dicts — **TSMOM vol-scaled sizing (board 17-0, Apr 22) live for the first time**, STAGED clamp [0.75x, 1.25x] until 20-trade review. Aggregator rescued 11 days / 310 rows from the 14-day prune; cron 4:20 PM ET weekdays. |
+| `6eb79f8` | `config.py`, `execution/kelly.py`, `scripts/gex_daily_audit.py` (NEW) | **GEX ACTIVATED (Rafael mandate, supersedes S50b 30-session shadow)**: GEX_ENABLED=True; STAGED multipliers 1.10 (NEGATIVE) / 1.05 (POSITIVE) until rolling 20-trade WR ≥ 35% (full S50b values 1.30/1.15); stale window 45→30 min; kelly GEX log at INFO + GAI R3 direct-config-access fix; daily GEX audit cron 4:30 PM ET. GAI dissented 3 rounds (all code findings adopted; governance-philosophy residual resolved by board 2-0 tie-break — documented in tb_audit_log). |
 
-## BOT STATUS RIGHT NOW
-- **Running:** YES — systemctl active on OCI
-- **Open positions:** None (NVDA/GOOGL QHM reset to PENDING_ENTRY tonight at 18:02 ET)
-- **Dynamic MIN_SCORE floor:** 11 (MRI=ELEVATED only; ATH compound fixed)
-- **ATH entry scalar:** 0.90x active when SPY <1% from 52w high
-- **autonomous_patch_generator:** NOW FIXED — tonight's 11 PM ET run should be the first to produce real output in weeks
+Also: audit-log entries for the 12-pt confluence integration audit (see below), bug_counter + CLAUDE.md RC-6 row updated, UX-redesign + evolution-mandate items logged to CLAUDE.md Future Roadmap, `scripts/ram_watch.sh` executable bit committed (was OCI-only drift blocking pulls).
 
-## OPEN ITEMS (require action next session)
-- [ ] **OCI git cleanup**: 106 uncommitted files (stray PDFs, zips, `Users/` dir). User asked for categorization before any reset.
-- [ ] **qhm_external_close pnl field**: trade_events.jsonl shows `price: null` for external_close exits — low priority since Alpaca fills are authoritative.
-- [ ] **Cross-strategy Phase 3 audit**: logged to CLAUDE.md Future Roadmap. Does `safe_close_all()` or main bot exit paths protect QHM positions?
-- [ ] **ATH trailing tightening** (-2.5x ATR from ATH, Taleb position): needs board session + 2-year SPY backtest.
-- [ ] **GE/GEV/LLY QHM entries**: auto-triggers July 22+ when `not_before_date` passes.
+## BOT STATUS
+- **Running:** all 4 services active on OCI, HEALTH OK, HEAD `6eb79f8` (clean tree)
+- **Open positions:** GOOGL 1sh + NVDA 1sh (QHM tranches), MSTR −1sh + RBLX −1sh (Movers) | Equity ~$2,844
+- **GEX live:** STALE label after hours (correct fail-neutral); first live Layer-8 INFO reads Monday
+- **Crons added:** score16_aggregator 20:20 UTC wkdays · gex_daily_audit 20:30 UTC wkdays
 
-## QHM PICKS (Q3 2026)
-NVDA (20%, hold →Aug 19) | GOOGL (15%, hold →Jul 28) | GE (20%, enter Jul 25) | GEV (15%, enter Jul 22) | LLY (20%, enter Aug 7)
+## ⚠️ MONDAY 2026-07-06 SESSION-START VERIFICATIONS (market closed Sat 7/4)
+1. `grep "GEX Layer8" logs/mtf_bot.log | tail` — INFO reads flowing every cycle
+2. First entry event in trade_events.jsonl must show `score_16pt` + non-null `tsmom_*` fields
+3. `grep "TSMOM vol-scale" logs/mtf_bot.log` — first real vol-scaled sizing
+4. `grep "edge_mult" logs/mtf_bot.log` — Kelly GEX boosts (none on Fridays by design)
+5. 4:20/4:30 PM ET cron outputs: logs/score16_report.json + logs/gex_daily_audit_*.json + Slack digests
 
-## HARD INVARIANTS
-- `paper=True` hardcoded in `execution/broker.py`
-- SPY 5-min bar-over-bar is the SOLE entry gate
-- PDT abolished (S63 sweep)
-- All P&L from Alpaca fills API only
-- Gro/GAI sign-off = lean prompts only (no synthesized conclusions in prompt)
+## STANDING CONDITIONS (board-logged, need Rafael approval to change)
+- TSMOM clamp [0.75, 1.25] → revert to [0.50, 1.50] after 20 scaled trades + review. **Taleb kill-rule:** WR < 35% at scaled-trade #20 → zero the multiplier + board model review.
+- GEX multipliers 1.10/1.05 → 1.30/1.15 when rolling 20-trade WR ≥ 35% or board review. **Kyle watch:** >40% weekly label flips → suspend + review.
 
-## SESSION START CHECKLIST
-- [ ] Read this handoff
-- [ ] Check autonomous pipeline logs (did tonight's patch_generator and review run?)
-- [ ] Check `logs/nightly_audit_*.txt` for today's audit
-- [ ] Bot is running: `systemctl is-active mtf-bot` on OCI
+## OPEN ITEMS / QUEUE (priority order)
+- [ ] **Exit-attribution diagnostic (P1)**: `external_close` = 16 of 32 recent closed trades and −$406 of −$440 total P&L; nightly Gemini FAIL flagged same. Where the next dollar lives.
+- [ ] **Walk-forward/IC recalibration engine** (S59 roadmap → Rafael evolution mandate 2026-07-03): weekly job proposing parameter updates for board approval. Raw material now accumulates (score16 history, TSMOM logs, GEX daily audits).
+- [ ] **UX total redesign** — 5 HTML pages (dashboard, weekly review, scanner, options, monthly). Queued by Rafael behind critical bugs. Wroblewski leads.
+- [ ] **Volume threshold derivation**: VOLSHADOW says static 1.5x passes 8.8% (median ratio 0.95); derive percentile-based threshold, board package (~32 of 60 LdP sessions elapsed).
+- [ ] **Power-hour expansion dead code**: BUCKET_B_MAX_POSITIONS_POWER=5 < MAX_OPEN_POSITIONS=7 since 06-30 — branch unreachable; board call: raise or remove.
+- [ ] **B4 orphan_manager draft**: prior-session proposal, never approved — parked in `git stash` ("B4 orphan_manager draft"). RULE C-7: restart from Step 1 to resume.
+- [ ] **Stale-docs sweep (P2)**: config conviction-tier comments (say 11/10, values 9/8/8); run_cycle "_base_min Paper=10" (actual 8); "16pt log-only" headers (Layer 9 gate is live); CLAUDE.md project context same.
+- [ ] Carry-over: OCI git cleanup (106 untracked files — bit us twice now via pull collisions), qhm external_close price:null, cross-strategy Phase 3 audit, GE/GEV/LLY QHM entries Jul 22+.
+
+## KEY AUDIT FINDINGS THIS SESSION (12-pt confluence integration audit — full detail in tb_audit_log 2026-07-03)
+- All 7 live scoring conditions healthy; dynamic floor (9 layers) working.
+- Fixed this session: GEX dataless 9 weeks; score_16pt never logged; TSMOM sizing silent no-op; 16pt data self-deleting at 14 days.
+- Still true: score-12 entries performed WORSE than score-10 in last 32 trades (both 12pt and 16pt non-monotonic, small n) — walk-forward engine is the structural answer.
+- c9_implied_range in 16pt system still hardcoded 0 ("data pending" since Apr 20) — real 16pt max is 19.
+
+## HARD INVARIANTS (unchanged)
+- `paper=True` hardcoded in broker.py | SPY 5-min bar-over-bar sole entry gate | PDT abolished | All P&L from Alpaca fills API | Gro/GAI lean prompts only
