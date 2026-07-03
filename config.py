@@ -416,8 +416,14 @@ GEX_MIN_SCORE_NEG_BUMP  = 1       # MIN_SCORE +1 when GEX=NEGATIVE (requires str
 # Vol-scaled sizing multiplier: target_vol / ewma_vol_60d, capped to [FLOOR, CAP].
 # Active at paper stage for sizing only. Scoring activation gated on 90-day log + CPCV.
 TSMOM_TARGET_VOL     = 0.25   # 25% annualized target vol/instrument (Taleb recommendation)
-TSMOM_VOL_MULT_FLOOR = 0.50   # min multiplier — prevents excessive size reduction
-TSMOM_VOL_MULT_CAP   = 1.50   # max multiplier — prevents over-leverage in low-vol names
+# 2026-07-03 STAGED ACTIVATION (Thorp board condition): the tsmom field tagging
+# fix makes this multiplier live for the first time (it was a silent no-op —
+# signal dicts never carried tsmom_vol_mult). Thorp's deployment rule: with the
+# rolling 30-trade precision below 45% (currently ~16% WR), gate the range to
+# [0.75, 1.25] for the first 20 TSMOM-scaled trades, then board-review reverting
+# to the original [0.50, 1.50].
+TSMOM_VOL_MULT_FLOOR = 0.75   # staged (original 0.50) — revert after 20-trade review
+TSMOM_VOL_MULT_CAP   = 1.25   # staged (original 1.50) — revert after 20-trade review
 
 # ─── PARTIAL EXITS ───────────────────────────────────────────────────────────
 # Take partial profits at first target, let remainder run with trailing stop.

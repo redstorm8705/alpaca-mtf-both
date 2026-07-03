@@ -1487,7 +1487,14 @@ class PortfolioTracker:
             mri_level=mri_level, data_source=data_source,
             direction=direction, stop=round(stop, 2), target=round(target, 2),
             trade_mode=trade_mode,
-            **extra_log,
+            # 2026-07-03: score_16pt is a NAMED param (stored on the trade dict
+            # above) so it never reached **extra_log — every entry event since
+            # inception logged without it, leaving the 16pt-vs-outcome validation
+            # dataset empty at trade level while Layer 9 traded on the score.
+            score_16pt=score_16pt,
+            # GAI R1 guard: if a future caller also passes score_16pt inside
+            # extra_log, drop it there — prevents duplicate-kwarg TypeError.
+            **{k: v for k, v in extra_log.items() if k != "score_16pt"},
         )
 
     def set_gtc_stop_order_id(self, symbol: str, order_id: str):

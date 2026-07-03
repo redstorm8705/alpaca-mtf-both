@@ -220,6 +220,7 @@ def _analyze_symbol_full(symbol: str, trade_mode: str):
             "long":          long_result,
             "short":         short_result,
             "_mom_12_1_val": mom_12_1_val,
+            "_mom_summary":  mom_summary,   # TSMOM fields — tagged onto signals in Phase 3
             "_entry_df":     entry_df,
             "_daily_df":     daily_df,
         }
@@ -720,6 +721,21 @@ def run_scan(
         long_r["sigma_20d"]  = _sigma_20d
         short_r["vol_ratio"] = _vol_ratio
         short_r["sigma_20d"] = _sigma_20d
+
+        # ── TSMOM fields → signal dicts (board 17-0, 2026-04-22) ─────────────
+        # 2026-07-03 fix: entry_logic.py sizes with sig.get("tsmom_vol_mult") and
+        # tracker logs sig.get("tsmom_12m") etc., but these keys were NEVER set —
+        # the tagging was lost in the main.py→signal_generator extraction. Result:
+        # TSMOM vol-scaling was a silent no-op (multiplier always 1.0) and the
+        # Gate-3 90-day activation log accumulated only nulls. get_momentum_summary
+        # already computes all five fields; attach scalar copies to both directions.
+        _ms = fr.get("_mom_summary") or {}
+        for _sig_r in (long_r, short_r):
+            _sig_r["tsmom_12m"]       = _ms.get("tsmom_12m")
+            _sig_r["tsmom_6m"]        = _ms.get("tsmom_6m")
+            _sig_r["ewma_vol_60d"]    = _ms.get("ewma_vol_60d")
+            _sig_r["tsmom_vol_mult"]  = _ms.get("tsmom_vol_mult")
+            _sig_r["tsmom_direction"] = _ms.get("tsmom_direction")
 
         # Compute 16pt for both directions using pre-ranked momentum + residual + PEAD + macro
         _pead_days_16, _pead_dir_16 = _get_pead_days(sym, _today_p3)

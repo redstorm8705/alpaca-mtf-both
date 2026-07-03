@@ -6758,3 +6758,16 @@ RC-1 PASS (all datetime.now calls tz-anchored in files read) | RC-2 PASS (all pa
 **Deploy + verify:** rsync both files → OCI; mtf-bot/mtf-writer/mtf-http restarted; all 4 services active; HEALTH OK. Runtime proof in production venv: SPY NEAR-FLIP $-59,981M flip=610 valid=706/1239; QQQ NEGATIVE $-99,489M flip=595 valid=754/1139 — first real datapoints in pipeline history. 30-session shadow clock starts next RTH session (2026-07-06). bug_counter.json + CLAUDE.md RC-6 row updated this turn.
 
 **Post-patch re-audit (points 1,2,4,5):** statics re-run PASS; gex.py not in trade path (display-only, GEX_ENABLED=False); full file content known (authored this session); cross-refs re-verified via grep (3 importers, unchanged).
+
+---
+## 2026-07-03 03:41 PM PT — 16PT/TSMOM EVIDENCE-CHAIN REPAIR APPLIED + DEPLOYED (Rafael approved)
+
+**Files:** execution/portfolio_tracker.py (+9L: score_16pt→_log_event + GAI dup-kwarg guard) | strategy/signal_generator.py (+18L: _mom_summary return + 5 tsmom fields onto both signal dicts) | config.py (TSMOM_VOL_MULT_FLOOR/CAP staged 0.50/1.50 → 0.75/1.25, Thorp deployment condition, revert after 20 scaled trades) | scripts/score16_aggregator.py (NEW 180L standalone; cron 20:20 UTC weekdays installed)
+
+**Gates:** Full reads ✓ (portfolio_tracker 2121L Explore-verbatim; signal_generator/config/kelly full-read earlier this session) | Board 2/2: Thorp DEPLOY-ACTIVE (MOP 2012 + Kelly nested-guardrail argument; staged-range condition adopted), Taleb APPROVE (fragility-surface reduction 3x→1.67x ratio; trade-20 kill-rule condition logged) | Gro APPROVE | GAI APPROVE (R2 — R1 REJECT resolved by adopting its duplicate-kwarg guard) | Cold second-agent PASS (0 threats; named-param collision analysis, None paths, attach-before-append ordering all verified) | Statics py_compile/mypy/ruff PASS ×4 files | Impact: consumers verified from full reads (entry_logic sig.get chain; trade_logger passthrough; eod buckets)
+
+**Effect:** TSMOM vol-scaled sizing LIVE for the first time (was a silent no-op since the extraction — board 17-0 decision of 2026-04-22 finally in force), staged [0.75x,1.25x]. score_16pt now reaches trade_events entry records. score16_aggregator first run rescued 11 days / 310 rows from the 14-day prune; report shows direction agreement 88.4%, would-differ 27.7%, and non-monotonic outcome buckets on both 12pt and 16pt (small n — the walk-forward engine's raw material now accumulates).
+
+**Operational conditions logged:** Taleb kill-rule — at TSMOM-scaled trade #20, rolling WR < 35% → zero the multiplier (floor=cap=1.0 equivalent) and board model review. Thorp revert path — [0.75,1.25] → [0.50,1.50] after 20-trade review.
+
+**Deploy:** rsync ×4 → OCI, services restarted, all 4 active, HEALTH OK (validate_config passed in production — bot hard-exits otherwise). **Runtime verification pending next RTH session (Mon 2026-07-06):** first entry event must show score_16pt + non-null tsmom fields; first TSMOM log line "[SYM] TSMOM vol-scale: ..." — check via: grep "TSMOM vol-scale" logs/mtf_bot.log && grep score_16pt logs/trade_events.jsonl | tail -1
