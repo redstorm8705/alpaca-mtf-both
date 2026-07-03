@@ -16,7 +16,8 @@ Also: audit-log entries for the 12-pt confluence integration audit (see below), 
 - **GEX live:** STALE label after hours (correct fail-neutral); first live Layer-8 INFO reads Monday
 - **Crons added:** score16_aggregator 20:20 UTC wkdays · gex_daily_audit 20:30 UTC wkdays
 
-## ⚠️ MONDAY 2026-07-06 SESSION-START VERIFICATIONS (market closed Sat 7/4)
+## ⚠️ MONDAY 2026-07-06 SESSION-START VERIFICATIONS
+(July 4th holiday was OBSERVED Friday 7/3 — market fully closed all day 7/3, per Alpaca calendar; zero RTH cycles ran after today's deployments. Next session: Mon 7/6, normal hours.)
 1. `grep "GEX Layer8" logs/mtf_bot.log | tail` — INFO reads flowing every cycle
 2. First entry event in trade_events.jsonl must show `score_16pt` + non-null `tsmom_*` fields
 3. `grep "TSMOM vol-scale" logs/mtf_bot.log` — first real vol-scaled sizing
