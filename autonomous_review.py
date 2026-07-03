@@ -326,10 +326,8 @@ def _process_pending_item(json_path: Path) -> bool:
         )
         with open(queue_path, "a", encoding="utf-8") as f:
             f.write(queue_entry)
-        _slack(
-            f"⚠️ Gro/GAI REJECT: {target_file} — {gro_verdict}/{gai_verdict}."
-            f" See queued_for_review_{date_str}.md"
-        )
+        # No per-item Slack here (2026-07-02 format-lock): 7 rejects used to fire
+        # 7 separate messages. Rejects are rolled into ONE digest line in main().
         data["gro_response"] = gro_text
         data["gai_response"] = gai_text
         data["status"]       = "rejected_gro_gai"
@@ -505,10 +503,29 @@ def main() -> None:
         if Path(f).exists():
             _git("add", str(Path(f).relative_to(_REPO_DIR)))
 
+    # Bucket by the ACTUAL post-review status (2026-07-02 fix): `processed` only
+    # means "handled without API failure" — it INCLUDES rejects. The old commit
+    # message and Slack summary called everything "ready for approval", which on
+    # 2026-07-02 announced 7 Gro/GAI-REJECTED patches as READY.
+    ready: list[str] = []
+    rejected: list[str] = []
+    for p in processed:
+        try:
+            st = json.loads((_LOGS_DIR / p).read_text()).get("status", "")
+        except Exception:
+            st = ""
+        if st == "ready_for_approval":
+            ready.append(p)
+        elif st == "rejected_gro_gai":
+            rejected.append(p)
+
     failed_note = ("\n\nFailed: " + ", ".join(failed)) if failed else ""
     commit_msg = (
-        f"Gro/GAI responses received: {len(processed)} item(s) ready for approval\n\n"
-        + "\n".join(f"- {p}" for p in processed)
+        f"Gro/GAI review: {len(ready)} ready, {len(rejected)} rejected,"
+        f" {len(failed)} failed\n\n"
+        + "\n".join(f"- READY: {p}" for p in ready)
+        + ("\n" if ready and rejected else "")
+        + "\n".join(f"- REJECTED: {p}" for p in rejected)
         + failed_note
         + "\n\nCo-Authored-By: autonomous_review.py <noreply@anthropic.com>"
     )
@@ -526,19 +543,31 @@ def main() -> None:
     fcntl.flock(git_lock_fd, fcntl.LOCK_UN)
     _log("git push OK")
 
-    # ── Final Slack summary ───────────────────────────────────────────────────
+    # ── Final Slack summary — ONE digest message, honest buckets ─────────────
     ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
     def _strip_prefix(name: str) -> str:
         return name.replace("pending_gro_gai_", "").replace(
             "pending_ds_gai_", "").replace(".json", "")
-    items_summary = "\n".join(f"• {_strip_prefix(p)}" for p in processed)
-    msg = (
-        f"🎯 *Patches ready for approval — {ts_pt}*\n\n"
-        f"*READY (DS+GAI reviewed):*\n{items_summary}\n\n"
-        "Start a session and the pending approvals will be presented automatically.\n"
-        "auto_deploy.sh deploys at 11:30 PM ET after your approval."
-    )
-    _slack(msg)
+    parts = [f"🤖 *Autonomous review — {ts_pt}*"]
+    if ready:
+        parts.append(
+            f"\n✅ *READY for your approval ({len(ready)})* — Gro+GAI both APPROVE:\n"
+            + "\n".join(f"• {_strip_prefix(p)}" for p in ready)
+            + "\nStart a session to review; auto_deploy.sh deploys after approval."
+        )
+    if rejected:
+        parts.append(
+            f"\n🛑 *REJECTED by Gro/GAI ({len(rejected)})* — NOT shippable; "
+            f"queued for your review in queued_for_review_"
+            f"{datetime.now(PT).strftime('%Y-%m-%d')}.md:\n"
+            + "\n".join(f"• {_strip_prefix(p)}" for p in rejected)
+        )
+    if failed:
+        parts.append(f"\n⚠️ API-failed, retrying next run ({len(failed)}): "
+                     + ", ".join(_strip_prefix(p) for p in failed))
+    if not ready and not rejected and not failed:
+        parts.append("\nNothing to review tonight.")
+    _slack("\n".join(parts))
 
     _log(
         f"=== autonomous_review.py complete:"
