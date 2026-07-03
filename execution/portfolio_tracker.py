@@ -9,6 +9,7 @@ Persistence:
 
 import json
 import os
+import re
 import sys
 import logging
 import shutil
@@ -140,12 +141,32 @@ def _atomic_write(filepath: Path, data: dict):
 
 # ── Phase 2: Alpaca fills FIFO helpers ───────────────────────────────────────
 
+def _parse_alpaca_ts(ts_str: str) -> datetime:
+    """Tolerant ISO-8601 parser for Alpaca timestamps (B1 fix 2026-07-03,
+    board+Gro+GAI). Python 3.10 fromisoformat accepts only exactly 3 or 6
+    fractional-second digits; Alpaca emits variable precision (live repro:
+    '2026-07-02T15:32:55.77875Z' — 5 digits — raised "Invalid isoformat
+    string" on every EOD flush). Normalize: Z→+00:00, fractional seconds
+    padded/truncated to 6 digits. Raises ValueError on genuinely malformed
+    input — caller decides the fallback."""
+    s = str(ts_str).strip().replace("Z", "+00:00")
+    m = re.match(r"^(.*?[T ]\d{2}:\d{2}:\d{2})\.(\d+)(.*)$", s)
+    if m:
+        head, frac, tail = m.groups()
+        s = f"{head}.{frac[:6].ljust(6, '0')}{tail}"
+    return datetime.fromisoformat(s)
+
+
 def _fill_et_date(ts_str: str) -> str:
     """Convert Alpaca transaction_time UTC ISO timestamp to ET date string."""
     try:
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        dt = _parse_alpaca_ts(ts_str)
         return dt.astimezone(_ET).strftime("%Y-%m-%d")
     except Exception as _e:
+        # Last-resort fallback: raw UTC date slice. WARNING (not silent) because
+        # for fills between 8 PM and midnight ET the UTC date is TOMORROW's ET
+        # date — such a fill can land on the wrong FIFO day. The tolerant parser
+        # above makes this path unreachable for every Alpaca format seen to date.
         logger.warning(
             "[fill_date] Could not parse timestamp %r: %s — using raw slice", ts_str, _e
         )
