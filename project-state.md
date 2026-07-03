@@ -22,7 +22,7 @@
 GEX Layer8 INFO reads flowing; first entry event carries score_16pt + non-null tsmom fields; first "TSMOM vol-scale" log; Kelly edge_mult lines (not Friday); both new cron outputs + Slack digests present.
 
 ## Queue (priority)
-1. Exit-attribution diagnostic (external_close dominance)
+1. P0 fill-matching bug (RC-4): orphan external-close path matches months-old fills → phantom P&L (PANW −$182.79 phantom; eod 07-02 alpaca=$0.00 vs tracker=−$251.12). Fix fill_helpers/orphan_manager, rebuild kelly_stats, relabel GTC-fill exits. Diagnostic complete 7/3 — see tb_audit_log.
 2. Walk-forward/IC recalibration engine (evolution mandate)
 3. UX redesign (5 pages)
 4. Volume threshold derivation (board package)

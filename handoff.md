@@ -29,14 +29,20 @@ Also: audit-log entries for the 12-pt confluence integration audit (see below), 
 - GEX multipliers 1.10/1.05 → 1.30/1.15 when rolling 20-trade WR ≥ 35% or board review. **Kyle watch:** >40% weekly label flips → suspend + review.
 
 ## OPEN ITEMS / QUEUE (priority order)
-- [ ] **Exit-attribution diagnostic (P1)**: `external_close` = 16 of 32 recent closed trades and −$406 of −$440 total P&L; nightly Gemini FAIL flagged same. Where the next dollar lives.
+- [ ] **P0 — Fill-matching bug (RC-4 class, found by exit-attribution diagnostic 7/3)**: orphan external-close path matches MONTHS-OLD fills as "actual close fills" (TSLA phantom exit $347 = April's short-entry fill; PANW phantom −$182.79). Suspect: no time lower-bound in the fills query and/or S47 `direction='asc'` oldest-first. Targets: `execution/fill_helpers.py` + `execution/orphan_manager.py`. Full patch sequence; then **rebuild kelly_stats** (contaminated with phantom R-multiples — phantom exits are NOT _fill_unverified because the wrong fill was a real fill). Also: pull 07-01 evening fills to explain why 5 positions left Alpaca overnight. eod 07-02 proof: alpaca=$0.00 vs tracker=−$251.12.
+- [ ] **Exit-reason labeling**: ~14 GTC-stop fills recorded as `external_close` instead of `gtc_stop_triggered` — attribution noise in all analytics. Fix alongside the above.
 - [ ] **Walk-forward/IC recalibration engine** (S59 roadmap → Rafael evolution mandate 2026-07-03): weekly job proposing parameter updates for board approval. Raw material now accumulates (score16 history, TSMOM logs, GEX daily audits).
 - [ ] **UX total redesign** — 5 HTML pages (dashboard, weekly review, scanner, options, monthly). Queued by Rafael behind critical bugs. Wroblewski leads.
 - [ ] **Volume threshold derivation**: VOLSHADOW says static 1.5x passes 8.8% (median ratio 0.95); derive percentile-based threshold, board package (~32 of 60 LdP sessions elapsed).
 - [ ] **Power-hour expansion dead code**: BUCKET_B_MAX_POSITIONS_POWER=5 < MAX_OPEN_POSITIONS=7 since 06-30 — branch unreachable; board call: raise or remove.
 - [ ] **B4 orphan_manager draft**: prior-session proposal, never approved — parked in `git stash` ("B4 orphan_manager draft"). RULE C-7: restart from Step 1 to resume.
 - [ ] **Stale-docs sweep (P2)**: config conviction-tier comments (say 11/10, values 9/8/8); run_cycle "_base_min Paper=10" (actual 8); "16pt log-only" headers (Layer 9 gate is live); CLAUDE.md project context same.
-- [ ] Carry-over: OCI git cleanup (106 untracked files — bit us twice now via pull collisions), qhm external_close price:null, cross-strategy Phase 3 audit, GE/GEV/LLY QHM entries Jul 22+.
+- [ ] Carry-over: OCI git cleanup — NOW CATEGORIZED (60 files, table in tb_audit_log 7/3 evening): 24 stale root .py duplicates, 12 downloaded repos, 7 PDFs, 7 loose docs, 7 keep-logs, 2 live ops scripts to COMMIT (memory_watchdog.sh, rss_sampler.sh), 1 Users/ stray. Rafael decides dispositions. Also: qhm external_close price:null, cross-strategy Phase 3 audit, GE/GEV/LLY QHM entries Jul 22+.
+- [ ] Volume threshold: derivation DONE (n=10,494: median 0.81, p75=1.08, 1.5x passes 5.9% vs RSI 80.9%) — board package options: graded ≥1.1x=1pt or rolling-percentile. Vote at 60 LdP sessions (~4 wks) or earlier for graded shadow.
+- [ ] Power-hour fix recommendation (board vote next session): raise BUCKET_B_MAX_POSITIONS_POWER 5→9 to restore original intent (was +2 over the standard cap) or delete the branch.
+
+## ⚠️ ANALYTICS CAVEAT (from exit-attribution diagnostic)
+Tracker-side loss figures are contaminated by phantom P&L (wrong-fill matching). The "external_close = 92% of losses / −$440" figure overstates real losses — Alpaca FIFO showed $0.00 on the worst day (07-02). Re-run all strategy stats on Alpaca-verified trades AFTER the fill-matching fix + Kelly rebuild. Score-monotonicity and shorts-WR conclusions are PROVISIONAL until then.
 
 ## KEY AUDIT FINDINGS THIS SESSION (12-pt confluence integration audit — full detail in tb_audit_log 2026-07-03)
 - All 7 live scoring conditions healthy; dynamic floor (9 layers) working.

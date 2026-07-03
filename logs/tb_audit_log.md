@@ -6780,3 +6780,32 @@ RC-1 PASS (all datetime.now calls tz-anchored in files read) | RC-2 PASS (all pa
 **Gates:** Board 2/2 (Kyle APPROVE-W/COND — Kyle 1985/Barbon-Buraschi, all conditions adopted incl. ≥5-snapshot pre-flip check: 13 valid today; Thorp APPROVE-W/COND — overbetting-unreliable-edge doctrine, staged mults adopted, warmup/Friday/stale gates verified) | Gro APPROVE | GAI REJECT ×3 rounds — every code-level + control-level finding adopted (staleness 30m, staged mults, R3 getattr fix); sole unresolved item = automated-parameter-lifecycle philosophy, which contradicts the project's human-approval governance → tie-breaker: board majority 2-0 APPROVE. Split documented, not smoothed. | Cold second-agent PASS (0 threats — Friday carve-out weekday()==4, clamp-after-mult order, STALE→1.0, no accidental constant changes) | Statics py_compile/mypy/ruff PASS ×3
 
 **Live effects from Mon 2026-07-06:** SPY GEX=NEGATIVE → MIN_SCORE +1 (Layer 8, INFO-logged every cycle); Kelly risk ×1.10 (NEGATIVE) / ×1.05 (POSITIVE) for both warmed signal types (n=45/35), capped 4.5%/trade, no mult Fridays; STALE >30min → neutral. Daily audit 4:30 PM ET → logs/gex_daily_audit_*.json + Slack.
+
+---
+## 2026-07-03 (evening PT) — EXIT-ATTRIBUTION DIAGNOSTIC (read-only; no patches)
+
+**Headline: the "external_close = 92% of losses" story is substantially PHANTOM P&L, and the mechanism is found.**
+
+Forensics on all 40 external_close trades (full eod history):
+1. **~14 trades exited within ~1% of their protective stop** — these are overnight GTC stop fills misattributed as external_close (reconciliation discovered them post-hoc). Attribution/labeling issue, not unexpected exits.
+2. **Batch clusters at identical timestamps** (3×04-30, 3×05-15/05-20, 2×06-01, 3×06-24, 5×07-02) — mass reconciliation sweeps, not market events.
+3. **SMOKING GUN — 07-02 cluster (5 positions, 10:20 ET):** log sequence: "GTC reconciliation complete" → orphan_manager "[SYM] Position in tracker but NOT in Alpaca — closed externally" → fill_helpers "Actual close fill: $347.00 (attempt 1, 63ms)" → record_exit(external_close). The "actual fills" matched are MONTHS-OLD fills for the same symbols: TSLA "exit" $347.00 = the 04-08 TSLA short entry fill; PANW "exit" $172.31 = the 04-26 PANW short entry fill (charged −$182.79 phantom loss against a $355 long); MARA/SNOW matched their own entry fills (P&L $0.00). **Suspected root cause: the fill-matching query in the orphan external-close path lacks a time lower-bound and/or the S47 P5-H2 `direction='asc'` (oldest-first) change causes it to select the OLDEST fill for the symbol.** File targets for next session's patch: `execution/fill_helpers.py` (_query_fills / fetch_actual_fill_price call path) + `execution/orphan_manager.py` external-close branch. RC-4 class.
+4. **Authoritative cross-check:** eod_2026-07-02: alpaca_pnl=$0.00, tracker_pnl=−$251.12, drift=$251.12, zero Alpaca per-trade rows for the cluster symbols. EOD correctly used Alpaca — but **closed_trades carries the phantom exits WITHOUT _fill_unverified (the wrong fill was a real fill), so kelly.rebuild_from_trades() and weekly stats are CONTAMINATED with phantom R-multiples.** Kelly stats need a rebuild after the fix.
+5. Open sub-question for next session: why the 07-01 entries were absent from Alpaca by 07-02 10:20 ET with no 07-02 fills — pull /v2/account/activities/FILL for 07-01 evening (likely GTC stop fills dated 07-01, or orders never filled).
+
+**Corrected strategy picture:** real (Alpaca-confirmed) losses are far smaller than the tracker's −$440; the score-monotonicity and shorts-0%-WR observations must be re-run on Alpaca-verified trades only after the fill-matching fix + Kelly rebuild.
+
+## 2026-07-03 (evening PT) — VOLUME THRESHOLD DERIVATION (data package, no patch)
+Full VOLSHADOW history n=10,494: median 0.81, p75=1.08, p80=1.13, p85=1.21, p90=1.37. Pass rates: 1.0x→27.4%, 1.1x→23.3%, 1.2x→17.5%, 1.3x→10.6%, 1.5x→5.9%. RSI (the point being replaced) would-score 80.9%. Board-package options per no-static-regimes rule: (a) graded (≥p75≈1.1x = 1pt) or (b) rolling-percentile dynamic threshold. n is large but LdP's 60-session clock is at ~32 — package ready for vote when reached, or earlier for the graded shadow variant.
+
+## 2026-07-03 (evening PT) — OCI UNTRACKED CATEGORIZATION (60 files, was 106 — no deletions per Rafael)
+| n | Category | Disposition recommendation (Rafael decides) |
+|---|----------|---------------------------------------------|
+| 24 | Loose root .py mirroring repo files (broker.py, entry_logic.py, bar_cache.py at ROOT) | Stale flat-layout duplicates from pre-reorg — diff-check then delete |
+| 12 | Downloaded repos/dirs (0dte-strategies-main/, alpaca-mcp-server-main/, "Token…") | Move out of repo dir or delete |
+| 7 | PDFs/zips (151AlgoStrats.pdf, CLAUDE.pdf…) | Move to ~/docs |
+| 7 | Loose docs/json (CLAUDE_CODE_HANDOFF.md, duplicate bug_counter.json copies) | Diff-check then delete duplicates |
+| 7 | logs/ patch artifacts | Keep (bot output) |
+| 2 | scripts/memory_watchdog.sh, scripts/rss_sampler.sh | LIVE ops scripts — commit to repo (same class as ram_watch.sh) |
+| 1 | Users/ stray dir | rsync accident — delete |
+These untracked files caused two pull collisions this session (project-state.md, score16_aggregator.py) — cleanup has real operational value.
