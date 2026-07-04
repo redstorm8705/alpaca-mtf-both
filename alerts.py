@@ -60,6 +60,50 @@ _NTFY_BASE        = "https://ntfy.sh"
 _HERE      = Path(__file__).resolve().parent
 _STATE_DIR = _HERE / "data" / "state"
 
+# ── Phase-1 Slack UX (2026-07-04, board+GAI; Gro waived by Rafael — TPD) ──────
+# Enriched-text-first (Block Kit deferred to Increment 2). Everything here is
+# feature-flagged and exception-safe: a formatting error must NEVER fail to
+# alert — it falls back to the raw text (GAI de-risk mandate for the RTH path).
+SLACK_V2_ENABLED = os.getenv("SLACK_V2_ENABLED", "1").strip() != "0"
+
+SEV_CRITICAL = "🚨 CRITICAL"   # immediate operator action / capital-risk
+SEV_WARNING  = "⚠️ WARNING"    # awareness; investigate
+SEV_INFO     = "ℹ️"            # routine (entries/exits/health) — existing emoji already signals this
+
+# Operator-hostile jargon → plain English. Applied centrally to EVERY outbound
+# Slack string so all ~32 message types benefit without touching call sites.
+# Deliberately conservative: only unambiguous internal terms (no risk of
+# garbling a symbol or a legitimate label).
+_JARGON = (
+    ("held_for_orders", "order still holding shares (awaiting fill)"),
+    ("fail-closed",     "kept protection on (did not drop the position)"),
+    ("PHANTOM ENTRY",   "UNVERIFIED ENTRY"),
+    ("phantom entry",   "unverified entry"),
+    ("GTC-RACE",        "GTC order conflict"),
+    ("RC-4",            "Position-Mismatch check"),
+)
+
+
+def _sanitize(text: object) -> str:
+    """De-jargon an outbound Slack string. NEVER raises — returns a sendable string on any input.
+
+    Param is typed `object`: a None/float can leak from an f-string, so we coerce
+    to str BEFORE any string op rather than relying on the except backstop
+    (Gro+GAI pre-ship consensus 2026-07-04 — hardening, not a correctness fix).
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    if not SLACK_V2_ENABLED:
+        return text
+    try:
+        for term, plain in _JARGON:
+            if term in text:
+                text = text.replace(term, plain)
+        return text
+    except Exception:
+        # Any unforeseen error — return the (already str-coerced) text. NEVER fail to alert.
+        return text
+
 
 def _atomic_write(path: Path, data: dict) -> None:
     """
@@ -103,6 +147,8 @@ def _slack(title: str, body: str, emoji: str = ":chart_with_upwards_trend:") -> 
     """POST to Slack incoming webhook. Returns True on success."""
     if not _SLACK_WEBHOOK:
         return False
+    title = _sanitize(title)
+    body  = _sanitize(body)
     payload = json.dumps({
         "text": f"{emoji} *{title}*\n{body}"
     }).encode()
@@ -147,6 +193,7 @@ def send_slack(message: str) -> None:
     if not _SLACK_WEBHOOK:
         logger.warning(f"[ALERT no-op] {message[:120]}")
         return
+    message = _sanitize(message)
     ts = datetime.now(PT).strftime("%H:%M PT")
     payload = json.dumps({"text": f"{message}\n— {ts}"}).encode()
     try:
@@ -212,7 +259,7 @@ def alert_partial(symbol: str, tranche: int, pnl: float, qty: int, price: float)
 
 def alert_kill_switch(daily_pnl: float, limit_pct: float, portfolio: float) -> None:
     """Fire when daily loss kill switch trips."""
-    title = "⛔ KILL SWITCH TRIPPED"
+    title = f"{SEV_CRITICAL} — KILL SWITCH TRIPPED"
     body  = (
         f"Daily PnL: ${daily_pnl:+.2f} ({daily_pnl/portfolio:.1%})\n"
         f"Limit: {limit_pct:.0%} of ${portfolio:,.2f}\n"
@@ -225,7 +272,10 @@ def alert_kill_switch(daily_pnl: float, limit_pct: float, portfolio: float) -> N
 def alert_spy_event(event_type: str, magnitude: float, scans_left: int) -> None:
     """Fire when hybrid engine triggers a new SPY risk event."""
     is_extreme = event_type == "EXTREME"
-    title = f"{'⛔' if is_extreme else '⚡'} SPY {event_type}: {magnitude:+.2f}%"
+    # GAI severity refinement: EXTREME and BROAD_* are both CRITICAL (market-wide
+    # risk); narrower SECTOR events are WARNING.
+    _is_critical = is_extreme or str(event_type).startswith("BROAD")
+    title = f"{SEV_CRITICAL if _is_critical else SEV_WARNING} — SPY {event_type}: {magnitude:+.2f}%"
     body  = (
         f"New entries {'ALL BLOCKED' if is_extreme else 'directionally gated'}.\n"
         f"Clears in {scans_left} clean scans."
@@ -241,7 +291,7 @@ def alert_stop_breach(symbol: str, direction: str, current_price: float,
     """Fire when stop is breached and position cannot be closed immediately:
     GTC stop placed for next RTH open, or close_position() hard-failed.
     """
-    title = f"⚠️ STOP BREACH BLOCKED — {symbol}"
+    title = f"{SEV_CRITICAL} — STOP BREACH BLOCKED — {symbol}"
     if gtc_submitted:
         action = "GTC stop placed — fires next RTH open."
     else:
@@ -270,7 +320,7 @@ def alert_crash(reason: str, open_positions: list) -> None:
         except OSError as _sentinel_e:
             logger.warning("alert_crash: sentinel stat/remove failed — %s", _sentinel_e)
 
-    title   = "💥 BOT SHUTDOWN"
+    title   = f"{SEV_CRITICAL} — BOT SHUTDOWN"
     pos_str = ", ".join(open_positions) if open_positions else "none"
     body    = (
         f"Reason: {reason}\n"
@@ -322,7 +372,7 @@ def alert_stale_bar(symbol: str, age_min: float) -> None:
 
 def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> None:
     """Fire when an overnight GTC stop order cannot be placed — position is unprotected."""
-    title = f"🚨 GTC STOP FAILED — {symbol}"
+    title = f"{SEV_CRITICAL} — GTC STOP FAILED — {symbol}"
     body  = (
         f"Could not place {side.upper()} stop @ ${stop_px:.2f}.\n"
         f"Reason: {reason}\n"
@@ -347,7 +397,7 @@ def alert_startup_test() -> bool:
 
 def alert_systemic_stale_feed(median_age: float, cycles: int) -> None:
     """Fire when median bar age > 20 min for 3 consecutive cycles — systemic yfinance degradation."""
-    title = "📡 SYSTEMIC FEED DEGRADATION"
+    title = f"{SEV_CRITICAL} — SYSTEMIC FEED DEGRADATION"
     body  = (
         f"Median bar age {median_age:.0f} min > 20 min threshold\n"
         f"for {cycles} consecutive cycles — yfinance feed degraded.\n"
