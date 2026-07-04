@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-07-03 evening (CROSS-STRATEGY COLLISION diagnosis: Movers closed main-bot shared Alpaca lots — HOOD + 7/2 8-position mass-dump; 7 bidirectional vectors; true root = main-bot false record_exit dropping a live position from trade_log.json open (RC-4/phantom-fill class); DECISION: Movers RETIRED, no code shipped. See tb_audit_log.md)"
+    "last_updated": "2026-07-04 (P0 FALSE-DROP ROOT CAUSE FIXED, shipped d8e08e1: reconcile_positions fail-OPEN on empty get_open_positions() batch dropped live positions via unverified record_exit — the HOOD root. Guards A (batch fail-closed+escalation), B (per-symbol re-verify), D (record_exit alpaca_confirmed_absent flag, all 5 external_close callers updated). Board+Gro+GAI+cold-agent+final pre-ship audit, statics clean. RC-4 class. See tb_audit_log.md)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
