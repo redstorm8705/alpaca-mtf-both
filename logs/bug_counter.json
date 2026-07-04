@@ -421,8 +421,8 @@
       "notes": "Final file of 10-file Phase 2 REDO. calculate_momentum_12_1() missing try/except matching 4 sibling functions -- fixed. momentum_strength()'s 0.0 boundary mislabeled 'weak_bear' -- fixed (logging-only, zero scoring impact, confirmed via grep). Refuted a 'CRITICAL BREACH' claim re: tsmom_vol_mult (agent misread its own quoted comment -- sizing vs scoring distinction already correctly documented and board-approved). Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit 3f2ab0e, deployed to OCI same session."
     },
     "strategy/confluence.py": {
-      "patch_count": 0,
-      "last_patched": "2026-06-28 (AWP Phase 2 REDO: confirmed clean, fix landed in dependency macd.py)",
+      "patch_count": 1,
+      "last_patched": "2026-07-03 (bias-free completed-bar VOLSHADOW metrics — volume recalibration Step 1)",
       "lines": 494,
       "notes": "Phase 2 redo with full board (4 domain agents): no functional bug within confluence.py itself -- LONG/SHORT mirror logic verified line-by-line, no sign errors. One real fix surfaced and applied to a dependency (indicators/macd.py's missing len(df)<2 guard). Refuted a naive-datetime claim. Logged a config.py toggle-fragility finding to the roadmap. GAI APPROVE (Gro exhausted)."
     },

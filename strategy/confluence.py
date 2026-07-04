@@ -20,6 +20,38 @@ from indicators.momentum import momentum_bullish, momentum_bearish
 logger = logging.getLogger("confluence")
 
 
+def _closed_bar_vol_metrics(daily_df, pctile_window: int = 60):
+    """Bias-free (completed-bar) volume metrics for VOLSHADOW recalibration
+    (board resolution 2026-07-03: the live vol_ratio compares today's still-
+    accumulating partial daily bar against completed-day averages, biasing it
+    downward all session). These use ONLY completed bars — today's partial bar
+    (iloc[-1]) is excluded.
+
+    Returns (vol_ratio_closed, vol_pctile_closed, window_n), or (None, None, 0)
+    on insufficient data / any error. NEVER raises.
+      vol_ratio_closed : last completed bar volume / mean(20 completed bars before it)
+      vol_pctile_closed: empirical percentile rank (0-1) of the last completed bar's
+                         volume within the trailing `pctile_window` completed bars —
+                         pre-stages the per-instrument rolling-percentile design.
+    """
+    try:
+        vol = daily_df["volume"].dropna()
+        if len(vol) < 22:
+            return None, None, 0
+        cur_closed = float(vol.iloc[-2])   # last completed bar (excl partial)
+        avg_closed = float(vol.iloc[-22:-2].mean())   # 20 completed bars before
+        ratio = round(cur_closed / avg_closed, 3) if avg_closed > 0 else None
+        pctile = None
+        window = vol.iloc[-(pctile_window + 1):-1]     # trailing completed bars
+        n = len(window)
+        if n >= 20:
+            pctile = round(float((window <= cur_closed).mean()), 3)
+        return ratio, pctile, n
+    except Exception as _cbm_e:
+        logger.debug("_closed_bar_vol_metrics failed (non-critical): %s", _cbm_e)
+        return None, None, 0
+
+
 def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     """Add all indicators to a DataFrame."""
     df = add_all_mas(df)
@@ -189,6 +221,7 @@ def score_long_signal(
                             _bar_age_min = round(_secs / 60.0, 1)
                     except Exception as _bae:
                         logger.debug(f"[{symbol}] bar_age_min compute failed: {_bae}")
+                    _vr_closed, _vp_closed, _pw = _closed_bar_vol_metrics(daily_df)
                     logger.info(
                         f"[{symbol}] VOLSHADOW "
                         + __import__("json").dumps({
@@ -204,6 +237,10 @@ def score_long_signal(
                             )),
                             "bar_age_min": _bar_age_min,
                             "valid_bars": len(_vol_series),
+                            # bias-free completed-bar metrics (Step 1)
+                            "vol_ratio_closed": _vr_closed,
+                            "vol_pctile_closed": _vp_closed,
+                            "pctile_window": _pw,
                         })
                     )
             except Exception as _e:
@@ -414,6 +451,7 @@ def score_short_signal(
                             _bar_age_min = round(_secs / 60.0, 1)
                     except Exception as _bae:
                         logger.debug(f"[{symbol}] bar_age_min compute failed: {_bae}")
+                    _vr_closed, _vp_closed, _pw = _closed_bar_vol_metrics(daily_df)
                     logger.info(
                         f"[{symbol}] VOLSHADOW "
                         + __import__("json").dumps({
@@ -429,6 +467,10 @@ def score_short_signal(
                             )),
                             "bar_age_min": _bar_age_min,
                             "valid_bars": len(_vol_series),
+                            # bias-free completed-bar metrics (Step 1)
+                            "vol_ratio_closed": _vr_closed,
+                            "vol_pctile_closed": _vp_closed,
+                            "pctile_window": _pw,
                         })
                     )
             except Exception as _e:
