@@ -89,6 +89,12 @@ def archive_comparisons() -> int:
                     "direction_agreement": t.get("direction_agreement"),
                     "would_differ": t.get("16pt_would_differ"),
                     "mom_rank": t.get("mom_rank"),
+                    # Per-factor breakdown for the walk-forward/IC engine
+                    # (2026-07-03). .get() -> None on pre-change rows (older
+                    # score_comparison files lack these keys) — the IC engine
+                    # skips null-component rows for factor analysis.
+                    "long_16_components": t.get("long_16_components"),
+                    "short_16_components": t.get("short_16_components"),
                 }
                 out.write(json.dumps(rec) + "\n")
                 seen.add((day, sym))

@@ -800,6 +800,13 @@ def run_scan(
                                   or short_16_signal != short_r["signal"]),
             "mom_rank":         rank,
             "16pt_notes":       long_16["notes"],
+            # Per-factor breakdown (c1-c13) for the walk-forward/IC recalibration
+            # engine (2026-07-03). Additive log-only field — the raw material for
+            # measuring each factor's out-of-sample Information Coefficient vs
+            # realized R. calculate_score_16pt already computes these; previously
+            # only the total survived to the log.
+            "long_16_components":  long_16["conditions"],
+            "short_16_components": short_16["conditions"],
         })
 
         # ── Weekly bias gate (mandatory pre-filter, not a scoring point) ────

@@ -6861,3 +6861,12 @@ Follow-on to the fill-matching fix. Rafael approved Fork B (exclude, not re-pric
 - **Impact:** long_intraday fullKelly +0.074→+0.295 (avgL 0.79→0.38R — bot was under-sizing longs ~75%); short_intraday −1.095→−0.684 (avgL 0.82→0.58R). ath_equity preserved 2868.39.
 - **Ops lesson (ERRORS.md):** first attempt edited state files while bot was live → running process flushed stale in-memory closed_trades, clobbering markers (reload showed 80, 0 markers). Redo with mtf-bot+mtf-writer STOPPED → stuck (reload 76, 4 markers). Stop-before-edit for any live-state file.
 - Verified: OCI reload "Kelly: loaded 76 historical trades", 4 markers persisted, all 4 services active, HEALTH OK.
+
+### Phase 0 — Walk-forward evidence chain: per-factor 16pt logging — 2026-07-03 evening (AUTO-SHIPPED)
+Rafael evolution-mandate roadmap. Scope: expose the per-factor breakdown the 16pt scorer already computes (calculate_score_16pt "conditions" c1-c13) into the logs, as raw material for the future walk-forward/IC recalibration engine. Chosen mechanism: the existing per-scan score_comparison log (not the entry-records/portfolio_tracker hotspot — Rafael switched from Fork A to the scan-log approach after full read showed it was smaller + captures more).
+- signal_generator.py: added long_16_components/short_16_components (= long_16/short_16["conditions"]) to the score_comparison.append record. Additive, zero logic/control-flow change, JSON-safe (bool/int), existing atomic write + try/except intact.
+- scripts/score16_aggregator.py: added the two fields to the archived rec (t.get()->None on pre-change rows) so they persist to score16_history.jsonl.
+- Full reads: signal_generator.py (937L), score16_aggregator.py (181L). Statics PASS (py_compile/ruff/mypy).
+- Gauntlet: board data-integrity PASS-WITH-CHANGES (changes = Phase-1 IC-engine notes only: join on (symbol,date); cast bool->int for c1-c5), cold second-agent PASS (no threats), Gro APPROVE, GAI APPROVE ("merge"). 3-Point AI Summary 5/5 aligned.
+- AUTO-SHIPPED per Rafael auto-apply mandate (full gauntlet + alignment). Deployed OCI, restarted, HEALTH OK, imports OK.
+- Phase 1 (deferred, after data accrues): the CPCV/IC recalibration engine (research/walk_forward_optimizer.py). Small-N CPCV method, multiple-testing correction, integer-vs-ranked output → board.

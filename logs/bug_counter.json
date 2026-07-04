@@ -321,8 +321,8 @@
       "notes": " | S26: SIGTERM handler spam fix. | S29: _spy_fetch_alert_sent bool flag for #16 P2 T1 fail-streak alert. | S37-autonomous: RC-3 x4 — L522 SIGTERM open_syms fallback; L555 SIGTERM lockfile close; L690 code version check; L838 heartbeat restart lockfile. All 4: added logger.debug() — no control flow change. py_compile/mypy/ruff PASS. OCI py_compile PASS. Bot restarted active."
     },
     "strategy/signal_generator.py": {
-      "patch_count": 10,
-      "last_patched": "2026-07-03 (TSMOM field tagging restored — vol-scaled sizing live for the first time, staged)",
+      "patch_count": 11,
+      "last_patched": "2026-07-03 (per-factor 16pt component logging — walk-forward evidence chain, auto-shipped)",
       "lines": 937,
       "notes": "2026-07-03: _analyze_symbol_full computed the momentum summary but tsmom_12m/6m/ewma_vol_60d/tsmom_vol_mult/tsmom_direction were never attached to signal dicts (lost in main.py extraction) — entry_logic's sig.get('tsmom_vol_mult') was always None, so the board-approved (17-0, 2026-04-22) TSMOM vol-scaling was a silent no-op and the Gate-3 90-day log held only nulls. Fixed: _mom_summary returned + 5 fields attached to both directions in Phase 3. | Phase 2 redo with full board (4 domain agents). Real fixes: residual momentum (16pt log-only) was including the stock in its own sector average, contradicting its docstring formula; fixed to exclude self. Plus an atomic-write fix for the score_comparison diagnostic log. Refuted 2 false claims (missing-global, quartile off-by-one) via direct grep and calculation. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit 7da5d28."
     },
@@ -446,8 +446,8 @@
       "risk_rating": "LOW — display-only behind GEX_ENABLED=False; runs in mtf-writer process, not the trading loop"
     },
     "scripts/score16_aggregator.py": {
-      "patch_count": 1,
-      "last_patched": "2026-07-03 (NEW — shadow-scoring evidence archiver, cron 20:20 UTC weekdays)",
+      "patch_count": 2,
+      "last_patched": "2026-07-03 (archive per-factor 16pt components)",
       "lines": 180,
       "notes": "Archives per-day score_comparison rows into logs/score16_history.jsonl before the 14-day prune deletes them; rebuilds logs/score16_report.json (agreement rates + trade outcomes by 12pt/16pt bucket from eod files). Standalone, local-files only, no execution imports. First run backfilled 11 days / 310 rows. Statics PASS.",
       "risk_rating": "LOW — standalone cron analytics, not in RTH chain"
