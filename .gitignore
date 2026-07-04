@@ -93,3 +93,16 @@ _external/
 
 # ── OCI deployment scripts (contain Slack webhook URL — never commit) ──────────
 auto_deploy.sh
+
+# ── Tool caches (re-created every lint/type-check run) ─────────────────────────
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# ── Archive & doc dumps (bloated the tree to 235MB — 2026-07-03 cleanup) ───────
+*.zip
+*.pdf
+
+# ── trade_log backups (retained on disk, never tracked) ────────────────────────
+trade_log.json.bak*
+trade_log.json.pre*
