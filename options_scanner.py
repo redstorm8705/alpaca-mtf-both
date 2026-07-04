@@ -1886,6 +1886,32 @@ def generate_html(data: dict) -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomic text write (RC-5): tmp in same dir -> fsync -> os.replace.
+
+    Prevents a truncated/half-written options.html if the process crashes
+    mid-write or a watch-mode scan overlaps a manual run. The pid-scoped tmp
+    name stops two concurrent writers clobbering each other's temp file;
+    os.replace is atomic on POSIX. Mirrors run_scan()'s OPTIONS_SCAN_JSON write.
+    """
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp), str(path))
+    except Exception:
+        # Never orphan the tmp; the original file is untouched because os.replace
+        # is the last step. Re-raise so callers handle it exactly as the old
+        # write_text failure (watch-mode try/except; single-run propagation).
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as _cleanup_err:
+            logger.debug("options.html tmp cleanup failed: %s", _cleanup_err)
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description="Options chain scanner")
     parser.add_argument("--watch", action="store_true", help="Refresh every 15 min during market hours")
@@ -1901,7 +1927,7 @@ def main():
                 try:
                     data = run_scan()
                     html = generate_html(data)
-                    OPTIONS_HTML.write_text(html, encoding="utf-8")
+                    _atomic_write_text(OPTIONS_HTML, html)
                     logger.info(
                         f"options.html updated → {len(data['recommendations'])} weekly, "
                         f"{len(data.get('recs_0dte', []))} 0DTE → {OPTIONS_HTML}"
@@ -1914,7 +1940,7 @@ def main():
     else:
         data = run_scan()
         html = generate_html(data)
-        OPTIONS_HTML.write_text(html, encoding="utf-8")
+        _atomic_write_text(OPTIONS_HTML, html)
         logger.info(
             f"Done — {len(data['recommendations'])} weekly recs, "
             f"{len(data.get('recs_0dte', []))} 0DTE recs → {OPTIONS_HTML}"
