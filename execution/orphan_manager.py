@@ -678,9 +678,14 @@ def cancel_and_reconcile_gtc_stops(
                 )
                 _p1_exit_px = fetch_actual_fill_price(_sym, _trade,
                                                        poll_secs=0)
+                # Use the detected close reason (gtc_stop_triggered vs external)
+                # when fetch_actual_fill_price matched a stop-type close order.
+                _p1_reason = _trade.pop(
+                    "_recovered_close_reason", "external_close_at_startup"
+                )
                 _p1_pnl = tracker.record_exit(
                     _sym, _p1_exit_px,
-                    reason="external_close_at_startup",
+                    reason=_p1_reason,
                     mri_level="UNKNOWN",
                 )
                 if risk is not None:
@@ -1194,12 +1199,15 @@ def reconcile_positions(
         # left the kill switch blind to external liquidation losses).
         # poll_secs=0 — position is already gone, no need to wait.
         exit_price = fetch_actual_fill_price(sym, trade, poll_secs=0)
+        # Label gtc_stop_triggered vs external_close from the matched close
+        # order's type (fixes ~14 stop fills mislabeled external_close).
+        _close_reason = trade.pop("_recovered_close_reason", "external_close")
         logger.warning(
             f"[{sym}] Position in tracker but NOT in Alpaca — closed "
-            f"externally. Recording exit at ${exit_price:.2f} "
+            f"externally ({_close_reason}). Recording exit at ${exit_price:.2f} "
             f"(entry was ${trade.get('entry_price', 0):.2f})."
         )
-        pnl = tracker.record_exit(sym, exit_price, reason="external_close",
+        pnl = tracker.record_exit(sym, exit_price, reason=_close_reason,
                                    mri_level="UNKNOWN")
         if risk is not None:                                      # C-2
             risk.register_close(pnl or 0.0)
@@ -1420,7 +1428,18 @@ def reconcile_positions(
                 _fill_px   = fetch_actual_fill_price(
                     sym, tracker.open_trades[sym], poll_secs=0
                 )
+                tracker.open_trades[sym].pop("_recovered_close_reason", None)
                 _entry_px  = tracker.open_trades[sym].get("entry_price", 0)
+                # Guard: entry_price<=0 (SF-01 unfilled/pending) would make the
+                # partial P&L math treat the full fill as profit. Fall back to
+                # the fill price -> $0 banked instead of an inflated figure.
+                if not _entry_px or _entry_px <= 0:
+                    logger.critical(
+                        f"[{sym}] Qty-mismatch partial P&L: entry_price="
+                        f"{_entry_px} invalid (<=0) — using fill_price "
+                        f"${_fill_px:.2f} to avoid inflated P&L."
+                    )
+                    _entry_px = _fill_px
                 _dir       = tracker.open_trades[sym].get(
                     "direction", "long"
                 )

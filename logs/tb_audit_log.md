@@ -6809,3 +6809,55 @@ Full VOLSHADOW history n=10,494: median 0.81, p75=1.08, p80=1.13, p85=1.21, p90=
 | 2 | scripts/memory_watchdog.sh, scripts/rss_sampler.sh | LIVE ops scripts — commit to repo (same class as ram_watch.sh) |
 | 1 | Users/ stray dir | rsync accident — delete |
 These untracked files caused two pull collisions this session (project-state.md, score16_aggregator.py) — cleanup has real operational value.
+
+---
+
+## 2026-07-03 (evening S-P0) — Phantom P&L / fill-matching diagnostic (RC-4/RC-6 class)
+**Files:** execution/fill_helpers.py (221L, full read), execution/orphan_manager.py (1494L, full read)
+**Trigger:** P0 handoff item + nightly Gemini CATASTROPHIC (HOOD trade_events contradiction). Diagnostic phase (no patch written).
+
+### Confirmed root cause
+`fetch_actual_fill_price()` with `submitted_after=None` (3 sites: orphan_manager L679/L1196/L1420) queries Alpaca CLOSED orders with `direction="asc"`, `limit=5`, NO `after` bound → sorts ASC by created_at → returns the OLDEST historical fill for the symbol. For a previously-traded symbol this is a months-old fill (TSLA ~$347 = April short-entry; PANW −$182.79) → phantom exit price → contaminates record_exit(), kelly_stats R-multiples, 7% kill-switch realized-loss.
+
+### Board (4 cold subagents) + Gro + GAI — all 6 returned
+- Execution-risk (Harris/Brandt): PASS-WITH-CHANGES — **side filter MANDATORY** (re-entry BUY mistaken for close); partial-close-across-multiple-orders residual; cancel-status guard.
+- Reliability (Peterffy/Kim): PASS-WITH-CHANGES — robust entry_time parse guard (RC-1/2/3/4/5: naive/unparseable/wrong-zone/None/future); **fail-closed to _fill_unverified when entry_time missing**; mirror proven _fetch_fill_timestamp pattern.
+- Data-integrity (McKinney/Katsuyama): FAIL — **RC-6 CRITICAL: sort by `filled_at` DESC, not `created_at`** (order created early can fill late); limit 5→20 (pagination truncation); **±50% sanity band** on recovered fill → _fill_unverified.
+- Quant-logic (Thorp/Taleb/LdP): PASS-WITH-CHANGES — **Kelly rebuild MANDATORY** from Alpaca FIFO; kill-switch phantom-loss(false-halt)/phantom-gain(masks-drawdown) both removed if bound correct; guard `entry_price<=0` at L1427; validate PT-zone; reject fills `filled_at < entry_time-60s`.
+- Gro: entry_time bound + DESC correct but incomplete; raise limit; RC-1 naive datetime; use order_type/stop_price to label gtc_stop_triggered.
+- GAI: same-symbol re-entry residual; overnight_since fallback then bounded window; created_at→datetime sort; limit 50-100; return (price, reason) for exit labeling.
+
+### Resolved design (Claude synthesis, split resolved)
+1. When submitted_after=None: derive UTC lower-bound from entry_time (guarded parse) → fallback overnight_since → else fail-closed _fill_unverified.
+2. Sort by **filled_at DESC** (mirror _fetch_fill_timestamp); return most-recent.
+3. **Side filter**: returned order side must match expected close side (sell=long, buy=short).
+4. limit 5→20 on the submitted_after=None path.
+5. **±50% sanity band** vs entry_price → _fill_unverified (universal backstop; would have caught TSLA $347 regardless).
+6. Return (price, reason): order_type==STOP + stop_price → "gtc_stop_triggered" else "external_close".
+7. L1427 partial: guard entry_price<=0; WARNING if filled_qty < _closed_n (multi-order residual).
+8. Follow-on: kelly_stats rebuild from Alpaca FIFO (separate task).
+
+### Split resolved (entry_time-missing fallback)
+Reliability=fail-closed vs GAI=derived-window. Merged: entry_time → overnight_since → fail-closed only when both absent; ±50% sanity band bounds residual risk either way. Board majority (reliability fail-closed + data-integrity sanity band) governs.
+
+**Status:** Phase 1 diagnostic COMPLETE. Phase 2 (draft diff → integrity re-review → statics → cold agent → impact) pending Rafael go-ahead. No code written.
+
+### Phase 2 — Integrity (drafted diff) — 2026-07-03 evening
+Diff: fill_helpers.py +228/-64 (fetch_actual_fill_price rewrite + _derive_close_lower_bound + _fill_unverified_fallback helpers), orphan_manager.py 3 call sites (+reason labeling, +entry_price<=0 guard).
+- Static: py_compile PASS · ruff (E,W,F,B) PASS · mypy --warn-unreachable PASS (both files). Fixed 3 mypy errors introduced by direct-kwarg style: Sort enum from alpaca.common.enums, assert-narrow submitted_after.
+- Cold second-agent: **PASS** — no threats. Verified side filter (long=sell/short=buy), sanity band direction, DESC/ASC not swapped, assert cannot fire in legacy branch, key lifecycle clean at all 3 sites, entry_price<=0 guard correct.
+- Gro (integrity): APPROVE — no logic inversion, legacy path unchanged, fail-closed sound.
+- GAI (integrity): APPROVE ("Approved for deployment") — line-by-line confirmed; flagged entry_price<=0 guard as positive addition.
+- Impact radius: code-review-graph STALE (indexes pre-extraction main.py). Manually verified: return type stays float; the 3 non-reconcile callers (check_partial_exits, _safe_close_all, run_cycle) pass submitted_after → legacy path → never touch new key. No caller breakage.
+**Consensus: Board 4/4 PASS-WITH-CHANGES (all adopted) + Gro APPROVE + GAI APPROVE + cold-agent PASS. Ready for Rafael final approval. NOT applied.**
+Follow-on (separate task, not this patch): kelly_stats rebuild from Alpaca FIFO (phantom R-multiples already written).
+
+### Kelly-stats rebuild (Fork B — phantom exclusion) — 2026-07-03 evening
+Follow-on to the fill-matching fix. Rafael approved Fork B (exclude, not re-price).
+- Pulled OCI trade_log.json (89 closed). Isolated 8 trades |R|>2.0; 4 legit target-hit winners kept (QQQ/QCOM/TQQQ +2.0-2.65R, CRWD external_close +2.6R @ 9.9% dev).
+- 4 confirmed phantom vs Alpaca fills API (authoritative, symbols param ignored → client-side filter): NFLX exit $93.19 (real 76-77), MSTR $164.55 (real 100/98/120), TSLA $347.00 (real sell $425.32), PANW $172.31 (real sell $348.55). None present in Alpaca fill history.
+- Marked the 4 in trade_log.json: _fill_unverified=True + _patch_applied_ts (keeps out of re-patch queue) + _phantom_excluded note. Backups: trade_log.json.pre_phantom_fix, kelly_stats.json.pre_phantom_fix.
+- rebuild_from_trades (board-approved machinery, unchanged) → kelly_stats.json 80→76 R-multiples.
+- **Impact:** long_intraday fullKelly +0.074→+0.295 (avgL 0.79→0.38R — bot was under-sizing longs ~75%); short_intraday −1.095→−0.684 (avgL 0.82→0.58R). ath_equity preserved 2868.39.
+- **Ops lesson (ERRORS.md):** first attempt edited state files while bot was live → running process flushed stale in-memory closed_trades, clobbering markers (reload showed 80, 0 markers). Redo with mtf-bot+mtf-writer STOPPED → stuck (reload 76, 4 markers). Stop-before-edit for any live-state file.
+- Verified: OCI reload "Kelly: loaded 76 historical trades", 4 markers persisted, all 4 services active, HEALTH OK.

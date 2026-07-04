@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-07-03 (GEX ACTIVATED: GEX_ENABLED=True staged 1.10/1.05, stale 30min, kelly INFO log + GAI R3 direct-access fix, gex_daily_audit NEW)"
+    "last_updated": "2026-07-03 (PHANTOM-FILL FIX: fetch_actual_fill_price entry_time-bounded + filled_at DESC + side filter + sanity band + fail-closed; RC-4/RC-6 class, found+fixed same session)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
@@ -17,7 +17,7 @@
     ],
     "first_seen": "2026-04-18",
     "last_patched": "2026-04-28",
-    "notes": "16 violations in portfolio_tracker.py CLOSED 2026-04-28 (PATCH 1): lines 312,338,361,661,764,768,783,877,962,976,987,988,1027,1063,1113,1114 \u2014 includes date.today() and datetime.now(_ET) cases. External audit still pending for this patch."
+    "notes": "16 violations in portfolio_tracker.py CLOSED 2026-04-28 (PATCH 1): lines 312,338,361,661,764,768,783,877,962,976,987,988,1027,1063,1113,1114 — includes date.today() and datetime.now(_ET) cases. External audit still pending for this patch."
   },
   "RC-2": {
     "label": "CWD-relative path (Path('logs') or open('logs/...'))",
@@ -28,7 +28,7 @@
     "files": [],
     "first_seen": "2026-04-18",
     "last_patched": "2026-06-15",
-    "notes": "2026-04-18: kelly.py fixed. 2026-05-03: 6 violations found in strategy/run_cycle.py \u2014 os.path.dirname(os.path.abspath(__file__)) resolves to strategy/ not project root. Lines 333, 383-384, 398-401, 1339, 1418-1419, 1431-1432. All broken: strategy/logs/mtf_bot.log, strategy/logs/eod_*.json, strategy/weekly_review.py. Fix: added _PROJECT_ROOT = Path(__file__).resolve().parent.parent module constant, replaced all 6 path constructions. NOTE: prior note 'Resolved \u2014 all files use _ROOT anchors' was WRONG \u2014 run_cycle.py had been extracted to strategy/ subdir without updating paths. | S58c nightly 2026-06-12: kelly.py RC-2 confirmed stale (full read 444L \u2014 both paths use __file__.resolve anchor). run_cycle.py already confirmed stale (queued_for_review_2026-06-11). Files list now empty \u2014 RC-2 count correction deferred to Rafael (CLAUDE.md live count update requires session-level decision). | S59 2026-06-15: count corrected 7\u21920 (kelly.py fixed 2026-04-18, run_cycle.py fixed 2026-05-03, both confirmed via full read S58c). Files list already empty. RC-2 CLOSED."
+    "notes": "2026-04-18: kelly.py fixed. 2026-05-03: 6 violations found in strategy/run_cycle.py — os.path.dirname(os.path.abspath(__file__)) resolves to strategy/ not project root. Lines 333, 383-384, 398-401, 1339, 1418-1419, 1431-1432. All broken: strategy/logs/mtf_bot.log, strategy/logs/eod_*.json, strategy/weekly_review.py. Fix: added _PROJECT_ROOT = Path(__file__).resolve().parent.parent module constant, replaced all 6 path constructions. NOTE: prior note 'Resolved — all files use _ROOT anchors' was WRONG — run_cycle.py had been extracted to strategy/ subdir without updating paths. | S58c nightly 2026-06-12: kelly.py RC-2 confirmed stale (full read 444L — both paths use __file__.resolve anchor). run_cycle.py already confirmed stale (queued_for_review_2026-06-11). Files list now empty — RC-2 count correction deferred to Rafael (CLAUDE.md live count update requires session-level decision). | S59 2026-06-15: count corrected 7→0 (kelly.py fixed 2026-04-18, run_cycle.py fixed 2026-05-03, both confirmed via full read S58c). Files list already empty. RC-2 CLOSED."
   },
   "RC-3": {
     "label": "Silent exception (except: pass with no logging)",
@@ -159,9 +159,9 @@
     ],
     "first_seen": "2026-04-22",
     "last_patched": "2026-05-29 S44",
-    "notes": "exit_logic.py L1818 fixed S55 (commit 334e7aa) \u2014 1 remaining unlocalized",
+    "notes": "exit_logic.py L1818 fixed S55 (commit 334e7aa) — 1 remaining unlocalized",
     "history": null,
-    "last_fix": "S58 2026-06-11: unlocalized RC-3 localized+fixed \u2014 autonomous_patch_generator.py _log() except-pass \u2192 stderr (commit 2c4552d)"
+    "last_fix": "S58 2026-06-11: unlocalized RC-3 localized+fixed — autonomous_patch_generator.py _log() except-pass → stderr (commit 2c4552d)"
   },
   "RC-4": {
     "label": "Estimated exit price / fill unverified not cleared",
@@ -175,12 +175,13 @@
       "RC4-MARK-FILL-EXPIRED-P3-2026-05-15",
       "RC4-LOAD-LOG-DOUBLE-APPEND-P4A-2026-05-15",
       "EL-RC4-EXITS-S30",
-      "RC4-ENTRY-LOGIC-12C-L644-S39"
+      "RC4-ENTRY-LOGIC-12C-L644-S39",
+      "RC4-FILL-MATCHING-PHANTOM-2026-07-03"
     ],
     "files": [],
     "first_seen": "2026-04-20",
-    "last_patched": "2026-05-25 S39",
-    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa). S58c: count corrected 7\u21924 (exit_logic.py stale). S59: all remaining sites confirmed clean via full read. portfolio_tracker.py L1200 (VWAP from Alpaca FIFO fills, compliant). portfolio_tracker.py L1753 (Alpaca filled_avg_price via orphan_manager, compliant). run_cycle.py L583 (fetch_actual_fill_price with poll_secs=0 \u2014 position already closed by Alpaca, compliant). Also clean: trade_engine.py (0 record_exit calls), fill_helpers.py (0 calls), fill_reconciler.py (0 calls), reconcile_eod.py (0 calls), main.py (comment only), events/handlers.py (fetch_actual_fill_price+submitted_after best pattern), orphan_manager.py L652+L1138 (both fetch_actual_fill_price). RC-4 count=0 CLOSED S59 2026-06-15.",
+    "last_patched": "2026-07-03",
+    "notes": "exit_logic.py 3 sites fixed S55 (commit 334e7aa). S58c: count corrected 7→4 (exit_logic.py stale). S59: all remaining sites confirmed clean via full read. portfolio_tracker.py L1200 (VWAP from Alpaca FIFO fills, compliant). portfolio_tracker.py L1753 (Alpaca filled_avg_price via orphan_manager, compliant). run_cycle.py L583 (fetch_actual_fill_price with poll_secs=0 — position already closed by Alpaca, compliant). Also clean: trade_engine.py (0 record_exit calls), fill_helpers.py (0 calls), fill_reconciler.py (0 calls), reconcile_eod.py (0 calls), main.py (comment only), events/handlers.py (fetch_actual_fill_price+submitted_after best pattern), orphan_manager.py L652+L1138 (both fetch_actual_fill_price). RC-4 count=0 CLOSED S59 2026-06-15. | RC4-FILL-MATCHING-PHANTOM-2026-07-03: fetch_actual_fill_price(submitted_after=None) queried CLOSED orders oldest-first (direction='asc') with NO time bound -> returned months-old fill as today's close (TSLA ~$347=April entry; PANW -$182.79) -> phantom P&L into record_exit/Kelly/kill-switch. Fixed: external path now bounds by entry_time/overnight_since (_derive_close_lower_bound), filled_at DESC most-recent, side filter (sell=long/buy=short), +/-50% sanity band, fail-closed to _fill_unverified when no bound. Board 4/4 PASS-WITH-CHANGES (all adopted) + Gro APPROVE + GAI APPROVE + cold-agent PASS. Count stays 0 (found+fixed same session).",
     "status": "CLOSED"
   },
   "RC-5": {
@@ -204,16 +205,18 @@
       "PT-001",
       "PT-FIFO-2",
       "RC6-TE-ANALYST-2026-05-10",
-      "RC6-GEX-OI-FIELD-2026-07-03"
+      "RC6-GEX-OI-FIELD-2026-07-03",
+      "RC6-FILL-QUERY-SEMANTICS-2026-07-03"
     ],
     "files": [
       "execution/portfolio_tracker.py",
       "execution/trade_engine.py",
-      "data/gex.py"
+      "data/gex.py",
+      "execution/fill_helpers.py"
     ],
     "first_seen": "2026-04-23",
     "last_patched": "2026-07-03",
-    "notes": "PT-001 (2026-04-23): filled_at vs transaction_time. PT-FIFO-2 (2026-04-28): activity_type param silently ignored by Alpaca \u2014 must be in URL path /activities/FILL not query string. reconcile_eod.py used correct URL path, portfolio_tracker.py did not \u2014 this is why FIFO returned $0.00 P&L. Also added error body detection for Alpaca 4xx JSON responses. 2026-05-10 S16: RC6-TE-ANALYST \u2014 line 1094: _analyst_sentiment[symbol] direct subscript without isinstance guard. Fixed with _analyst_data local var + isinstance check. | RC6-GEX-OI-FIELD-2026-07-03: data/gex.py read gamma from snapshot['greeks'] and OI from snapshot['openInterest'] \u2014 Alpaca 'indicative' feed carries ONLY latestQuote (verified via live response 2026-07-03); OI lives on the CONTRACT object (open_interest, verified). 1,269 snapshots since 2026-04-27 had zero valid datapoints; empty results mislabeled POSITIVE. Fixed: OI from contract listing, gamma computed locally (BS bisection IV from quote mid), label UNKNOWN on zero valid contracts, shadow log promoted to INFO (gex.py + run_cycle.py Layer 8). Board 2/2 (Kyle/McKinney) + Gro APPROVE + GAI APPROVE (design fork AND diff). Cold second-agent PASS (0 threats). Runtime-verified on OCI same session: SPY NEAR-FLIP 706/1239 valid, QQQ NEGATIVE 754/1139. Count stays 0 \u2014 found and fixed in the same session."
+    "notes": "PT-001 (2026-04-23): filled_at vs transaction_time. PT-FIFO-2 (2026-04-28): activity_type param silently ignored by Alpaca — must be in URL path /activities/FILL not query string. reconcile_eod.py used correct URL path, portfolio_tracker.py did not — this is why FIFO returned $0.00 P&L. Also added error body detection for Alpaca 4xx JSON responses. 2026-05-10 S16: RC6-TE-ANALYST — line 1094: _analyst_sentiment[symbol] direct subscript without isinstance guard. Fixed with _analyst_data local var + isinstance check. | RC6-GEX-OI-FIELD-2026-07-03: data/gex.py read gamma from snapshot['greeks'] and OI from snapshot['openInterest'] — Alpaca 'indicative' feed carries ONLY latestQuote (verified via live response 2026-07-03); OI lives on the CONTRACT object (open_interest, verified). 1,269 snapshots since 2026-04-27 had zero valid datapoints; empty results mislabeled POSITIVE. Fixed: OI from contract listing, gamma computed locally (BS bisection IV from quote mid), label UNKNOWN on zero valid contracts, shadow log promoted to INFO (gex.py + run_cycle.py Layer 8). Board 2/2 (Kyle/McKinney) + Gro APPROVE + GAI APPROVE (design fork AND diff). Cold second-agent PASS (0 threats). Runtime-verified on OCI same session: SPY NEAR-FLIP 706/1239 valid, QQQ NEGATIVE 754/1139. Count stays 0 — found and fixed in the same session. | RC6-FILL-QUERY-SEMANTICS-2026-07-03: fill_helpers.py sorted CLOSED orders by created_at (submission time) not filled_at (actual fill time) and assumed ASC-oldest was the close -- wrong for external-close recovery. Fixed: external path sorts by filled_at DESC (mirrors _fetch_fill_timestamp), Sort enum from alpaca.common.enums. Count stays 0 (found+fixed same session)."
   },
   "RC-7": {
     "label": "Zero-share sizing (int truncation before min-share floor)",
@@ -225,7 +228,7 @@
     "files": [],
     "first_seen": "2026-04-22",
     "last_patched": "2026-04-28",
-    "notes": "PT-004 (2026-04-23): max(1,_sized) floor with _can_afford_one guard. MN-RC7-SIZING (2026-04-28 session 3): board vote (3 CONDITION / 1 REJECT of one-liner) \u2014 replaced with 3-branch form: size_multiplier=0.0 \u2192 shares=0 (explicit blockade), _can_afford_one + _sized>0 \u2192 max(1,_sized), _can_afford_one + _sized=0 \u2192 1 (RC-7 floor), else \u2192 0. SIZING-0-D open finding CLOSED by this fix. | S58c nightly 2026-06-12: CLOSED \u2014 both violations confirmed stale by full read (entry_logic.py has the guard; queued_for_review_2026-06-11.md confirmed). Count corrected 2\u21920. | S59 2026-06-15: RC-7 confirmed closed \u2014 guard at entry_logic.py L1127-1190 verified via full read (1618L). S58c nightly was correct.",
+    "notes": "PT-004 (2026-04-23): max(1,_sized) floor with _can_afford_one guard. MN-RC7-SIZING (2026-04-28 session 3): board vote (3 CONDITION / 1 REJECT of one-liner) — replaced with 3-branch form: size_multiplier=0.0 → shares=0 (explicit blockade), _can_afford_one + _sized>0 → max(1,_sized), _can_afford_one + _sized=0 → 1 (RC-7 floor), else → 0. SIZING-0-D open finding CLOSED by this fix. | S58c nightly 2026-06-12: CLOSED — both violations confirmed stale by full read (entry_logic.py has the guard; queued_for_review_2026-06-11.md confirmed). Count corrected 2→0. | S59 2026-06-15: RC-7 confirmed closed — guard at entry_logic.py L1127-1190 verified via full read (1618L). S58c nightly was correct.",
     "status": "CLOSED"
   },
   "RC-8": {
@@ -240,8 +243,8 @@
     ],
     "first_seen": "2026-04-22",
     "last_patched": "2026-04-30",
-    "notes": "CLOSED \u2705 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed \u2014 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 \u2014 prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1. | S59 2026-06-15: pending_approvals_2026-06-07.md #1 confirmed stale \u2014 all 9 sites verified present via full read of entry_logic.py (1618L). Additional site at L663 (12c-exit) also present. RC-8 CLOSED.",
-    "last_fix": "S58c 2026-06-11: 9 sites confirmed applied in b2e61f7 (2026-06-08); DS/GAI deadlock resolved via tie-breaker counter-prompt \u2014 both APPROVE. CLOSED."
+    "notes": "CLOSED ✅ 2026-04-30. v1 (prior session): _rc8_clear_buffers() helper + 12 gate clears. v2 (2026-04-30, same session): DS+GAI external audit completed — 7 required fixes applied: (1) _rc8_clear_buffers moved outside for loop (GAI anti-pattern); (2) immediate atomic persist inside helper (DS Condition 1 — prevents stale disk state on watchdog restart); (3) existing per-symbol persist moved to end-of-cycle outside loop (GAI I/O thrashing); (4) Bucket A zero-cap guard (DS Condition 2); (5) stale-bar clear (GAI); (6) price-sanity-fail clear (GAI); (7) c3-deviation clear (GAI). Total gates: 16. Board vote: 27-0. External audit: COMPLETE. | S51 2026-06-07: 9 missing _rc8_clear_buffers() sites found in entry_logic.py: Rule1, Rule2, SPY-direction-DOWN, SPY-direction-UP, ORB-feed-fail, ORB-not-computed, ORB-long-no-breakout, ORB-short-no-breakdown, BoD2-3x-regime. Board 2/2 APPROVE. DS/GAI REJECT (incorrect IO analysis). Pending approval #1. | S59 2026-06-15: pending_approvals_2026-06-07.md #1 confirmed stale — all 9 sites verified present via full read of entry_logic.py (1618L). Additional site at L663 (12c-exit) also present. RC-8 CLOSED.",
+    "last_fix": "S58c 2026-06-11: 9 sites confirmed applied in b2e61f7 (2026-06-08); DS/GAI deadlock resolved via tie-breaker counter-prompt — both APPROVE. CLOSED."
   },
   "file_hotspot": {
     "_meta": {
@@ -253,30 +256,30 @@
       "patch_count": 2,
       "last_patched": "2026-05-23 S34",
       "lines": 1667,
-      "notes": "S34: exec summary redesign \u2014 _exec_summary_stats() replaced 8 metrics with 4 AB-board metrics: (1) Edge Ratio (Thorp); (2) Score Monotonicity simplified (boundary WRs + \u2713/\u26a0); (3) Early Exit Rate Among Losers (Douglas); (4) MRI P&L split with multi-entry attribution fix (key on symbol+exit_date via _entry_mri()). Removed: Score WR table, Realized R:R, T1 hit rate, min-score losses%, Kelly sample, bugs this week, T4 fallback count. py_compile PASS, mypy 0, ruff 0. Cold second-agent PASS. OCI py_compile PASS. No restart needed. | S33: _exec_summary_stats() function added (~170L). Standalone script \u2014 not in RTH import chain, DS/GAI not triggered."
+      "notes": "S34: exec summary redesign — _exec_summary_stats() replaced 8 metrics with 4 AB-board metrics: (1) Edge Ratio (Thorp); (2) Score Monotonicity simplified (boundary WRs + ✓/⚠); (3) Early Exit Rate Among Losers (Douglas); (4) MRI P&L split with multi-entry attribution fix (key on symbol+exit_date via _entry_mri()). Removed: Score WR table, Realized R:R, T1 hit rate, min-score losses%, Kelly sample, bugs this week, T4 fallback count. py_compile PASS, mypy 0, ruff 0. Cold second-agent PASS. OCI py_compile PASS. No restart needed. | S33: _exec_summary_stats() function added (~170L). Standalone script — not in RTH import chain, DS/GAI not triggered."
     },
     "execution/entry_logic.py": {
       "patch_count": 6,
       "last_patched": "2026-06-08 S54",
-      "notes": "S54 PDT Tier 2: removed record_day_trade(symbol) call at L641-642 (#12c exit path) + pdt=get_rolling_day_trade_count() kwarg from alert_entry() at L1320. 1614\u21921611L. Board 3/3 APPROVE. DS APPROVE. GAI REJECT (P2 partial-cleanup philosophy, not safety). py_compile/mypy/ruff PASS. OCI deployed. | S47c P1: BUCKET_B power_hour expansion \u2014 7 fixes. Full read 1724L (general-purpose subagent). BUG-PH-1 kill-switch bypass (break before expansion). BUG-PH-2 hardcode 3:30PM\u2192TOD_EXPANSION_WINDOW_START config const. BUG-PH-3 len(tracker.open_trades)\u2192risk.open_positions (authoritative counter). BUG-PH-4 re-check risk.open_positions>=_ph_limit before fall-through. BUG-PH-5 PDT=3/3 expansion disabled (BoD 3-0: Simons/Taleb/Kyle). Fix#6 pre-loop time computation (_is_ph_cyc once per cycle \u2014 Data Integrity board). Fix#7 logger.warning before each break (Reliability board). DS/GAI both APPROVE all 7 questions. 3-Point AI Summary 3/3 unanimous. py_compile/mypy/ruff PASS. Cold second-agent PASS. OCI deployed, all 4 services active. 1724L\u21921747L. | S42 P0-CYCLE-SYNC-GUARD. | S39 RC-4 #12c + RC-3\u00d73. | S28 NEW FILE extraction. S24 ORB gate."
+      "notes": "S54 PDT Tier 2: removed record_day_trade(symbol) call at L641-642 (#12c exit path) + pdt=get_rolling_day_trade_count() kwarg from alert_entry() at L1320. 1614→1611L. Board 3/3 APPROVE. DS APPROVE. GAI REJECT (P2 partial-cleanup philosophy, not safety). py_compile/mypy/ruff PASS. OCI deployed. | S47c P1: BUCKET_B power_hour expansion — 7 fixes. Full read 1724L (general-purpose subagent). BUG-PH-1 kill-switch bypass (break before expansion). BUG-PH-2 hardcode 3:30PM→TOD_EXPANSION_WINDOW_START config const. BUG-PH-3 len(tracker.open_trades)→risk.open_positions (authoritative counter). BUG-PH-4 re-check risk.open_positions>=_ph_limit before fall-through. BUG-PH-5 PDT=3/3 expansion disabled (BoD 3-0: Simons/Taleb/Kyle). Fix#6 pre-loop time computation (_is_ph_cyc once per cycle — Data Integrity board). Fix#7 logger.warning before each break (Reliability board). DS/GAI both APPROVE all 7 questions. 3-Point AI Summary 3/3 unanimous. py_compile/mypy/ruff PASS. Cold second-agent PASS. OCI deployed, all 4 services active. 1724L→1747L. | S42 P0-CYCLE-SYNC-GUARD. | S39 RC-4 #12c + RC-3×3. | S28 NEW FILE extraction. S24 ORB gate."
     },
     "execution/trade_engine.py": {
       "patch_count": 4,
       "sessions": 1,
       "last_patched": "2026-05-16",
       "open_rc_violations": [],
-      "risk_rating": "HIGH \u2014 265 lines post-decomp (shim/re-export). S47d CRITICAL FINDING: direct risk.open_positions assignment at L252-254. S16: RC-4 (pm_exit fill price) + RC-6 (analyst sentiment isinstance). All 8 RC classes otherwise PASS.",
-      "notes": " S47d: CRITICAL desync bug found at L252-254 \u2014 direct assignment instead of risk.register_open(). Patch queued post-RTH (DS/GAI required, RTH-chain). | S22 BUG-#6: _reconcile_pending_overnight_orders() call site \u2014 added filled_qty extraction (getattr order.filled_qty), pdt_count=tracker.get_rolling_day_trade_count(), passed as kwargs to promote_pending_to_active(). py_compile PASS. Startup clean PID 1019546."
+      "risk_rating": "HIGH — 265 lines post-decomp (shim/re-export). S47d CRITICAL FINDING: direct risk.open_positions assignment at L252-254. S16: RC-4 (pm_exit fill price) + RC-6 (analyst sentiment isinstance). All 8 RC classes otherwise PASS.",
+      "notes": " S47d: CRITICAL desync bug found at L252-254 — direct assignment instead of risk.register_open(). Patch queued post-RTH (DS/GAI required, RTH-chain). | S22 BUG-#6: _reconcile_pending_overnight_orders() call site — added filled_qty extraction (getattr order.filled_qty), pdt_count=tracker.get_rolling_day_trade_count(), passed as kwargs to promote_pending_to_active(). py_compile PASS. Startup clean PID 1019546."
     },
     "execution/fill_reconciler.py": {
       "patch_count": 1,
       "last_patched": "2026-05-15",
-      "notes": "S21: P2 \u2014 tracker.mark_fill_expired(sym) call added in expired loop. Breaks RC-4 restart CRITICAL loop."
+      "notes": "S21: P2 — tracker.mark_fill_expired(sym) call added in expired loop. Breaks RC-4 restart CRITICAL loop."
     },
     "execution/orphan_manager.py": {
-      "patch_count": 4,
-      "last_patched": "2026-06-07 S54",
-      "notes": "S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard \u2014 batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS. | S54: QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). cancel_and_reconcile_gtc_stops() reads quarterly_holds.json at startup to protect AVGO/NVDA/ANET GTC stops \u2014 avoids empty-frozenset startup-order bug by reading state file directly instead of get_quarterly_hold_symbols(). PDT Tier 2: removed DAY_TRADE_MAX_ROLLING + CONVICTION_PDT_SOFT_MIN refs (4 mypy errors, RULE C-4). Orphan overnight=True always. GTC stop submission no longer gated on PDT. Board split 1 APPROVE (Execution Risk) / 1 REJECT (Reliability) + DS APPROVE / GAI REJECT \u2014 state file approach adopted to resolve startup-order objection. py_compile/mypy/ruff PASS. Pending Approval #3 CLOSED."
+      "patch_count": 5,
+      "last_patched": "2026-07-03 (fill-matching call sites + entry_price<=0 partial guard)",
+      "notes": "2026-07-03: 3 fetch_actual_fill_price call sites updated for the phantom-fill fix -- external-close (L1196) and startup phantom-close (L679) now consume trade['_recovered_close_reason'] to label gtc_stop_triggered vs external_close (fixes ~14 mislabeled closes); qty-mismatch partial (L1420) adds entry_price<=0 guard (falls back to fill_price to avoid inflated P&L) + clears reason key. Board 4/4 + Gro + GAI + cold-agent PASS. | S5: RC-3 x2 (alert_gtc_failed bare excepts). S28: OM-RACE-1 PENDING_CANCEL deferral guard — batch get_open_orders() before Patch 1 loop, _get_blocking_ids() helper, gtc_p1_defer_cycles counter with 3 reset paths (PDT exit, no-blocking, successful submit), escalation to CRITICAL+alert at cycle 5. RULE C-4: Optional types, 4x type: ignore[attr-defined], 1x type: ignore[unreachable], 1x type: ignore[union-attr]. Board 4/4, DS/GAI CONDITIONAL APPROVE, cold second-agent v4 PASS. py_compile/mypy/ruff PASS. All RC PASS. | S54: QHM GTC stop exclusion + PDT Tier 2 cleanup (commit 436e1ad). cancel_and_reconcile_gtc_stops() reads quarterly_holds.json at startup to protect AVGO/NVDA/ANET GTC stops — avoids empty-frozenset startup-order bug by reading state file directly instead of get_quarterly_hold_symbols(). PDT Tier 2: removed DAY_TRADE_MAX_ROLLING + CONVICTION_PDT_SOFT_MIN refs (4 mypy errors, RULE C-4). Orphan overnight=True always. GTC stop submission no longer gated on PDT. Board split 1 APPROVE (Execution Risk) / 1 REJECT (Reliability) + DS APPROVE / GAI REJECT — state file approach adopted to resolve startup-order objection. py_compile/mypy/ruff PASS. Pending Approval #3 CLOSED."
     },
     "execution/risk_manager.py": {
       "patch_count": 7,
@@ -290,38 +293,38 @@
       "audit_s35": "S35 RC-3 x4 PATCHED. All 8 RC PASS post-patch.",
       "audit_s44": "S44 5-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. OCI deployed.",
       "audit_s47": "S47 4-bug patch. All 8 RC PASS post-patch. py_compile PASS, mypy 0, ruff PASS. DS+GAI both APPROVE. OCI deployed. Commit 0f3aa58.",
-      "audit_s47b": "S47b pnl=0.0 storage rounding fix. 8 locations round(x,2)\u2192round(x,4). L792 float-zero guard. All 8 RC PASS. py_compile PASS, mypy 0, ruff PASS. DS/GAI CONDITIONAL APPROVE. Cold second-agent PASS. OCI deployed. Commit 5600c70.",
-      "notes": "2026-07-03: record_entry() stored score_16pt on the trade dict but never passed it to _log_event \u2014 every entry event since inception lacked it while run_cycle Layer 9 traded on the score. Fixed + extra_log filtered defensively (GAI R1). Board Thorp+Taleb, Gro APPROVE, GAI APPROVE R2, cold agent PASS. | S21: P3 (mark_fill_expired method), P4-A (_load_log double-append fix + len guard), P4-B (write_eod_summary _load_log reload), P5 (RC-1 date.today\u2192datetime.now(_PT).date). S22 PT-RC3-EFF: 5 RC-3 violations + L859 display bug. S22 BUG-#4: record_exit() pnl=0.0 when qty_remaining=0 with no partial exits \u2014 guard added (partial_exited flag discriminator, external_close branch, entry.get() defensive). S22 BUG-#11 L1306: stop-hit classification changed from exact set membership to substring match \u2014 any(s in str(reason or \"\") for s in _LOG_STOP_REASONS). Handles compound reason strings (e.g. 'overnight_atr_buffer_exit | detail'). Startup clean PID 1014968. S22 BUG-#6: promote_pending_to_active() \u2014 added _log_event(\"entry\",...) call when overnight limit order fills. Signature extended (filled_qty, mri_level, pdt_used). Idempotency guard (status != pending_ongoing). _qty<=0 guard prevents zero-size event. data_source=\"overnight_limit_fill\". trade_mode from trade dict. direction/stop/target included. Board (Reliability/ExecRisk/DataIntegrity) + DS+GAI + 3-Point AI Summary. Critical: GAI caught AttributeError \u2014 compute_rolling_pdt_count is module-level not method; changed to get_rolling_day_trade_count(). py_compile PASS, ruff 0 new violations. Cold second-agent FAIL\u2192PASS (T2/T3 qty guard added). Startup clean PID 1019546. S35: RC-3 x4 (L123/L134/L583/L419) all -> logger.warning. py_compile/ruff PASS. OCI restart clean. S44: BUG-1 patch_exit_pnl _qty_at_close or-chain \u2192 is not None sentinel (phantom P&L on fully-partial-exited positions); BUG-2 _fifo_reconstruct orphan close CRITICAL+Slack+synthetic short guard; BUG-3 _load_prior_day_lots staleness detection (age_days>1\u2192WARNING, never returns {}); BUG-4/RC-3 _fill_et_date bare except\u2192logger.warning; BUG-5 record_exit pre-pop entry_price=None guard (CRITICAL+Slack) + pnl=0.0 forced + pnl_pct guard. 1939L\u21922048L. 4 cold board agents. DS/GAI APPROVE (with GAI cross-bug guard for entry_px=0.0 interaction). Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. OCI deployed. S47: Bug1 get_stats() avg_r_multiple \u2014 _fill_unverified exclusion, \u00b150R clamp (max(-50,min(50,r))), WARNING log when r_multiples empty + all closed trades unverified, unverified_trades added to return dict; Bug2 record_exit() entry\u22640 sets _fill_unverified=True, pnls filter excludes _fill_unverified, return dict adds verified_trades + unverified_trades; Bug3 _load_log() (symbol,entry_time) tuple replaces symbol-only double-record detection (same-day re-entry has different entry_time \u2014 symbol-only was false-positive); Bug8 _load_day_trades() TOCTOU fix (removed exists()\u2192open() race, handle FileNotFoundError explicitly), 100ms retry loop for transient write-lock collision, CRITICAL+Slack on genuine corruption, self._day_trades=[] set before Slack call. 2049L\u21922124L. 4 cold board agents. DS+GAI APPROVE. Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. Commit 0f3aa58. OCI deployed, all 4 services active.",
+      "audit_s47b": "S47b pnl=0.0 storage rounding fix. 8 locations round(x,2)→round(x,4). L792 float-zero guard. All 8 RC PASS. py_compile PASS, mypy 0, ruff PASS. DS/GAI CONDITIONAL APPROVE. Cold second-agent PASS. OCI deployed. Commit 5600c70.",
+      "notes": "2026-07-03: record_entry() stored score_16pt on the trade dict but never passed it to _log_event — every entry event since inception lacked it while run_cycle Layer 9 traded on the score. Fixed + extra_log filtered defensively (GAI R1). Board Thorp+Taleb, Gro APPROVE, GAI APPROVE R2, cold agent PASS. | S21: P3 (mark_fill_expired method), P4-A (_load_log double-append fix + len guard), P4-B (write_eod_summary _load_log reload), P5 (RC-1 date.today→datetime.now(_PT).date). S22 PT-RC3-EFF: 5 RC-3 violations + L859 display bug. S22 BUG-#4: record_exit() pnl=0.0 when qty_remaining=0 with no partial exits — guard added (partial_exited flag discriminator, external_close branch, entry.get() defensive). S22 BUG-#11 L1306: stop-hit classification changed from exact set membership to substring match — any(s in str(reason or \"\") for s in _LOG_STOP_REASONS). Handles compound reason strings (e.g. 'overnight_atr_buffer_exit | detail'). Startup clean PID 1014968. S22 BUG-#6: promote_pending_to_active() — added _log_event(\"entry\",...) call when overnight limit order fills. Signature extended (filled_qty, mri_level, pdt_used). Idempotency guard (status != pending_ongoing). _qty<=0 guard prevents zero-size event. data_source=\"overnight_limit_fill\". trade_mode from trade dict. direction/stop/target included. Board (Reliability/ExecRisk/DataIntegrity) + DS+GAI + 3-Point AI Summary. Critical: GAI caught AttributeError — compute_rolling_pdt_count is module-level not method; changed to get_rolling_day_trade_count(). py_compile PASS, ruff 0 new violations. Cold second-agent FAIL→PASS (T2/T3 qty guard added). Startup clean PID 1019546. S35: RC-3 x4 (L123/L134/L583/L419) all -> logger.warning. py_compile/ruff PASS. OCI restart clean. S44: BUG-1 patch_exit_pnl _qty_at_close or-chain → is not None sentinel (phantom P&L on fully-partial-exited positions); BUG-2 _fifo_reconstruct orphan close CRITICAL+Slack+synthetic short guard; BUG-3 _load_prior_day_lots staleness detection (age_days>1→WARNING, never returns {}); BUG-4/RC-3 _fill_et_date bare except→logger.warning; BUG-5 record_exit pre-pop entry_price=None guard (CRITICAL+Slack) + pnl=0.0 forced + pnl_pct guard. 1939L→2048L. 4 cold board agents. DS/GAI APPROVE (with GAI cross-bug guard for entry_px=0.0 interaction). Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. OCI deployed. S47: Bug1 get_stats() avg_r_multiple — _fill_unverified exclusion, ±50R clamp (max(-50,min(50,r))), WARNING log when r_multiples empty + all closed trades unverified, unverified_trades added to return dict; Bug2 record_exit() entry≤0 sets _fill_unverified=True, pnls filter excludes _fill_unverified, return dict adds verified_trades + unverified_trades; Bug3 _load_log() (symbol,entry_time) tuple replaces symbol-only double-record detection (same-day re-entry has different entry_time — symbol-only was false-positive); Bug8 _load_day_trades() TOCTOU fix (removed exists()→open() race, handle FileNotFoundError explicitly), 100ms retry loop for transient write-lock collision, CRITICAL+Slack on genuine corruption, self._day_trades=[] set before Slack call. 2049L→2124L. 4 cold board agents. DS+GAI APPROVE. Cold second-agent PASS. py_compile PASS, mypy 0, ruff PASS. Commit 0f3aa58. OCI deployed, all 4 services active.",
       "lines": 2125,
-      "last_patch_desc": "Phase 2a.5 FIFO overnight reconciliation \u2014 commit fb4c662",
+      "last_patch_desc": "Phase 2a.5 FIFO overnight reconciliation — commit fb4c662",
       "risk_rating": "CRITICAL",
-      "audit_2026_06_28": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): 6 fixes \u2014 (1) cumulative P&L lookback loop break moved inside try (was giving up on first unreadable prior-day file); (2) record_entry() duplicate-open-position guard added; (3) record_partial_exit() entry_price validation added (BUG-5 mirror) + _fill_unverified flag (board/Thorp-discovered gap, fixed before commit); (4) update_trail_stop() now self-persists; (5) write_eod_summary() all 3 _fifo_reconciled_closed-without-record_exit() paths now set _fill_unverified=True (root cause for the get_stats() KeyError risk and kelly.py cascading corruption); (6) get_stats() t['pnl'] -> t.get('pnl', 0.0) defensive fallback. Board 4/4 APPROVE (Peterffy/Katsuyama, Harris/Brandt, McKinney, Thorp). GAI APPROVE x2. Gro APPROVE on the 9-fix batch (hit daily TPD limit before re-reviewing fix #10's addition). py_compile/mypy/ruff PASS. Cold second-agent PASS."
+      "audit_2026_06_28": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): 6 fixes — (1) cumulative P&L lookback loop break moved inside try (was giving up on first unreadable prior-day file); (2) record_entry() duplicate-open-position guard added; (3) record_partial_exit() entry_price validation added (BUG-5 mirror) + _fill_unverified flag (board/Thorp-discovered gap, fixed before commit); (4) update_trail_stop() now self-persists; (5) write_eod_summary() all 3 _fifo_reconciled_closed-without-record_exit() paths now set _fill_unverified=True (root cause for the get_stats() KeyError risk and kelly.py cascading corruption); (6) get_stats() t['pnl'] -> t.get('pnl', 0.0) defensive fallback. Board 4/4 APPROVE (Peterffy/Katsuyama, Harris/Brandt, McKinney, Thorp). GAI APPROVE x2. Gro APPROVE on the 9-fix batch (hit daily TPD limit before re-reviewing fix #10's addition). py_compile/mypy/ruff PASS. Cold second-agent PASS."
     },
     "execution/exit_logic.py": {
       "patch_count": 12,
       "last_patched": "2026-06-28 (MTF FULL BOT AUDIT consolidated fix batch)",
       "lines": 2123,
-      "notes": "S33B BVR-1 trail ratchet GTC/DAY fix (2265L\u21922435L): (1) trail_hit evaluated PRE-ratchet (40310000 prevention \u2014 cancel/resubmit no longer locks shares before close); (2) robust cancel block ported from CRITICAL-1 \u2014 checks cancel_order() return, get_order() verify, break on still-live; (3) 5-poll held_for_orders (max 2.0s, 4\u00d70.5s) with alert_gtc_failed try/except fallback; (4) Alpaca qty clamp downward only; (5) GTC/DAY mutual exclusion: overnight=True\u2192submit_gtc_stop_order+tracker.set_gtc_stop_order_id(), overnight=False\u2192submit_day_stop_order+tracker._save_log() immediately; (6) tracker._save_log() added to partial exit DAY path (~L737) \u2014 asymmetry with GTC auto-save wrapper fixed (Data Integrity Item 5). Board: 4/4 CONDITIONAL APPROVE. DS+GAI audit complete. Cold second-agent FAIL\u2192PASS (observability fixes: log when qty clamped to 0, comment 2.5s\u21922.0s). py_compile PASS, mypy 0, ruff PASS. OCI py_compile PASS, all 4 services active. BVR-1 CLOSED. S22 BUG-#5: thesis invalidation cancel-before-close race (40310000). RC-3 x3 (L971 stale fill warning+continue, L1023 entry_time parse warning, L1601 entry_ts parse debug). RC-7 (L1228 if _gtc_qty>=1 guard). Full Explore read 2108 lines. Board+DS+GAI. Startup clean. S30 #13 CLOSED: (1) L672 qty_remaining KeyError guard \u2014 try/except CRITICAL+computed fallback+key restore; (2) RC-3 x5 \u2014 L229 bar fetch ERROR+continue, L244 live price override WARNING (partials), L852 live price override WARNING (exits), L950 overnight ATR entry_time parse WARNING+_entry_dt=None, L1945 EH get_order() ERROR+continue (critical: was order=None which would have cleared pm_exit_order_id + orphaned live Alpaca limit order); (3) RC-4 x2 \u2014 L1038 overnight ATR else fallback current_price\u2192entry_price+CRITICAL log; L1635 defer GTC fallback current_price\u2192stop or entry_price+CRITICAL log; (4) RULE C-4 mypy 31\u21920. py_compile PASS, mypy 0, ruff 0. 2133L\u21922168L. Rsync PASS. All 4 services active. S32 GTC held_for_orders + DAY-GTC mutual exclusion + qty_remaining desync (2026-05-23): (1) Trail ratchet: removed random offset jitter (_tr_offset/_tr_adj_px), added time.sleep(0.1) cancel propagation buffer; (2) Partial exit stop re-sub (L587-656 replaced, +97 lines): 5-poll held_for_orders loop (2.5s), _submit_stop boolean (False on closed/unknown breaks; True on exhaustion \u2014 submit anyway), for/else exhaustion Slack alert, DAY/GTC mutual exclusion (overnight\u2192GTC only, intraday\u2192DAY only \u2014 root cause of GTC spam per GAI Q9), qty_remaining desync fix (remove qty_orig fallback, recover from Alpaca on None), directional Alpaca qty clamp (downward only, upward\u2192WARNING); (3) Breakeven push: removed offset jitter \u2014 exact entry_price. Board: Beck/Kim/Minsky+Harris/Brandt+Simons/Taleb CONDITIONAL APPROVE. DS Bug#1 (qty_remaining desync) + GAI Q9 (DAY-GTC exclusion) both incorporated. Cold second-agent FAIL x2 \u2192 PASS x1 (FAIL#1: _submit_stop logic inversion fixed; FAIL#2: 3 fixes \u2014 logger.error placement, getattr fallback 0, downward-only clamp; FAIL#2d false positive confirmed). py_compile PASS, mypy 0, ruff 0. 2168L\u21922265L. Rsync PASS. All 4 services active. RAM: 245MB used / 565MB avail post-restart.",
-      "audit_2026_06_28": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): 2 fixes \u2014 (1) _check_exits_extended_hours()'s PM partial-exit reconciliation now calls risk.register_close(pnl or 0.0) \u2014 closes HIGH-severity finding where EH partial-exit P&L was invisible to the daily kill-switch total; (2) the signal-exit close-failure path's previously-silent 'position confirmed still exists' case now has a logged + escalating-alert else branch (3-cycle escalation, mirrors the existing GTC-defer-counter pattern in this same file), closing a Medium-High asymmetric-alerting gap vs. the hard_stop path's existing CRITICAL handling. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
+      "notes": "S33B BVR-1 trail ratchet GTC/DAY fix (2265L→2435L): (1) trail_hit evaluated PRE-ratchet (40310000 prevention — cancel/resubmit no longer locks shares before close); (2) robust cancel block ported from CRITICAL-1 — checks cancel_order() return, get_order() verify, break on still-live; (3) 5-poll held_for_orders (max 2.0s, 4×0.5s) with alert_gtc_failed try/except fallback; (4) Alpaca qty clamp downward only; (5) GTC/DAY mutual exclusion: overnight=True→submit_gtc_stop_order+tracker.set_gtc_stop_order_id(), overnight=False→submit_day_stop_order+tracker._save_log() immediately; (6) tracker._save_log() added to partial exit DAY path (~L737) — asymmetry with GTC auto-save wrapper fixed (Data Integrity Item 5). Board: 4/4 CONDITIONAL APPROVE. DS+GAI audit complete. Cold second-agent FAIL→PASS (observability fixes: log when qty clamped to 0, comment 2.5s→2.0s). py_compile PASS, mypy 0, ruff PASS. OCI py_compile PASS, all 4 services active. BVR-1 CLOSED. S22 BUG-#5: thesis invalidation cancel-before-close race (40310000). RC-3 x3 (L971 stale fill warning+continue, L1023 entry_time parse warning, L1601 entry_ts parse debug). RC-7 (L1228 if _gtc_qty>=1 guard). Full Explore read 2108 lines. Board+DS+GAI. Startup clean. S30 #13 CLOSED: (1) L672 qty_remaining KeyError guard — try/except CRITICAL+computed fallback+key restore; (2) RC-3 x5 — L229 bar fetch ERROR+continue, L244 live price override WARNING (partials), L852 live price override WARNING (exits), L950 overnight ATR entry_time parse WARNING+_entry_dt=None, L1945 EH get_order() ERROR+continue (critical: was order=None which would have cleared pm_exit_order_id + orphaned live Alpaca limit order); (3) RC-4 x2 — L1038 overnight ATR else fallback current_price→entry_price+CRITICAL log; L1635 defer GTC fallback current_price→stop or entry_price+CRITICAL log; (4) RULE C-4 mypy 31→0. py_compile PASS, mypy 0, ruff 0. 2133L→2168L. Rsync PASS. All 4 services active. S32 GTC held_for_orders + DAY-GTC mutual exclusion + qty_remaining desync (2026-05-23): (1) Trail ratchet: removed random offset jitter (_tr_offset/_tr_adj_px), added time.sleep(0.1) cancel propagation buffer; (2) Partial exit stop re-sub (L587-656 replaced, +97 lines): 5-poll held_for_orders loop (2.5s), _submit_stop boolean (False on closed/unknown breaks; True on exhaustion — submit anyway), for/else exhaustion Slack alert, DAY/GTC mutual exclusion (overnight→GTC only, intraday→DAY only — root cause of GTC spam per GAI Q9), qty_remaining desync fix (remove qty_orig fallback, recover from Alpaca on None), directional Alpaca qty clamp (downward only, upward→WARNING); (3) Breakeven push: removed offset jitter — exact entry_price. Board: Beck/Kim/Minsky+Harris/Brandt+Simons/Taleb CONDITIONAL APPROVE. DS Bug#1 (qty_remaining desync) + GAI Q9 (DAY-GTC exclusion) both incorporated. Cold second-agent FAIL x2 → PASS x1 (FAIL#1: _submit_stop logic inversion fixed; FAIL#2: 3 fixes — logger.error placement, getattr fallback 0, downward-only clamp; FAIL#2d false positive confirmed). py_compile PASS, mypy 0, ruff 0. 2168L→2265L. Rsync PASS. All 4 services active. RAM: 245MB used / 565MB avail post-restart.",
+      "audit_2026_06_28": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): 2 fixes — (1) _check_exits_extended_hours()'s PM partial-exit reconciliation now calls risk.register_close(pnl or 0.0) — closes HIGH-severity finding where EH partial-exit P&L was invisible to the daily kill-switch total; (2) the signal-exit close-failure path's previously-silent 'position confirmed still exists' case now has a logged + escalating-alert else branch (3-cycle escalation, mirrors the existing GTC-defer-counter pattern in this same file), closing a Medium-High asymmetric-alerting gap vs. the hard_stop path's existing CRITICAL handling. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
     },
     "trade_logger.py": {
       "patch_count": 1,
       "last_patched": "2026-05-16",
-      "notes": "S22 BUG-#11: _STOP_REASONS frozenset updated \u2014 removed 'stop_hit' (redundant, false-positive risk per DS), added 'overnight_atr_buffer_exit' and 'breakeven_stop' (both missing since file creation). Comment added warning against naming exit reasons with these strings as substrings."
+      "notes": "S22 BUG-#11: _STOP_REASONS frozenset updated — removed 'stop_hit' (redundant, false-positive risk per DS), added 'overnight_atr_buffer_exit' and 'breakeven_stop' (both missing since file creation). Comment added warning against naming exit reasons with these strings as substrings."
     },
     "main.py": {
       "patch_count": 36,
       "sessions": 12,
       "last_patched": "2026-05-25 S37-autonomous",
       "open_rc_violations": [],
-      "risk_rating": "HIGH \u2014 36 bugs fixed across 12 sessions. S37: RC-3 x4 PATCHED. All 8 RC PASS. py_compile/mypy/ruff PASS.",
-      "notes": " | S26: SIGTERM handler spam fix. | S29: _spy_fetch_alert_sent bool flag for #16 P2 T1 fail-streak alert. | S37-autonomous: RC-3 x4 \u2014 L522 SIGTERM open_syms fallback; L555 SIGTERM lockfile close; L690 code version check; L838 heartbeat restart lockfile. All 4: added logger.debug() \u2014 no control flow change. py_compile/mypy/ruff PASS. OCI py_compile PASS. Bot restarted active."
+      "risk_rating": "HIGH — 36 bugs fixed across 12 sessions. S37: RC-3 x4 PATCHED. All 8 RC PASS. py_compile/mypy/ruff PASS.",
+      "notes": " | S26: SIGTERM handler spam fix. | S29: _spy_fetch_alert_sent bool flag for #16 P2 T1 fail-streak alert. | S37-autonomous: RC-3 x4 — L522 SIGTERM open_syms fallback; L555 SIGTERM lockfile close; L690 code version check; L838 heartbeat restart lockfile. All 4: added logger.debug() — no control flow change. py_compile/mypy/ruff PASS. OCI py_compile PASS. Bot restarted active."
     },
     "strategy/signal_generator.py": {
       "patch_count": 10,
-      "last_patched": "2026-07-03 (TSMOM field tagging restored \u2014 vol-scaled sizing live for the first time, staged)",
+      "last_patched": "2026-07-03 (TSMOM field tagging restored — vol-scaled sizing live for the first time, staged)",
       "lines": 937,
-      "notes": "2026-07-03: _analyze_symbol_full computed the momentum summary but tsmom_12m/6m/ewma_vol_60d/tsmom_vol_mult/tsmom_direction were never attached to signal dicts (lost in main.py extraction) \u2014 entry_logic's sig.get('tsmom_vol_mult') was always None, so the board-approved (17-0, 2026-04-22) TSMOM vol-scaling was a silent no-op and the Gate-3 90-day log held only nulls. Fixed: _mom_summary returned + 5 fields attached to both directions in Phase 3. | Phase 2 redo with full board (4 domain agents). Real fixes: residual momentum (16pt log-only) was including the stock in its own sector average, contradicting its docstring formula; fixed to exclude self. Plus an atomic-write fix for the score_comparison diagnostic log. Refuted 2 false claims (missing-global, quartile off-by-one) via direct grep and calculation. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit 7da5d28."
+      "notes": "2026-07-03: _analyze_symbol_full computed the momentum summary but tsmom_12m/6m/ewma_vol_60d/tsmom_vol_mult/tsmom_direction were never attached to signal dicts (lost in main.py extraction) — entry_logic's sig.get('tsmom_vol_mult') was always None, so the board-approved (17-0, 2026-04-22) TSMOM vol-scaling was a silent no-op and the Gate-3 90-day log held only nulls. Fixed: _mom_summary returned + 5 fields attached to both directions in Phase 3. | Phase 2 redo with full board (4 domain agents). Real fixes: residual momentum (16pt log-only) was including the stock in its own sector average, contradicting its docstring formula; fixed to exclude self. Plus an atomic-write fix for the score_comparison diagnostic log. Refuted 2 false claims (missing-global, quartile off-by-one) via direct grep and calculation. Cold second-agent PASS, GAI APPROVE (Gro exhausted). Commit 7da5d28."
     },
     "execution/broker.py": {
       "patch_count": 10,
@@ -338,7 +341,7 @@
     "reconcile_eod.py": {
       "patch_count": 2,
       "last_patched": "2026-05-22",
-      "notes": "S21: RC-4 PATH A/B _fill_unverified never cleared \u2014 P1 fix. S29 #12: _compute_trade_pnl() Harris/Kyle condition \u2014 _weighted_avg_exit_price() now returns tuple(price,actual_qty); _compute_trade_pnl() accepts actual_qty param; reconcile() loop: min cap + _qty_at_close audit field + ghost-share Slack alert + overshoot WARNING. RULE C-4: mypy 0, ruff 0. All RC PASS."
+      "notes": "S21: RC-4 PATH A/B _fill_unverified never cleared — P1 fix. S29 #12: _compute_trade_pnl() Harris/Kyle condition — _weighted_avg_exit_price() now returns tuple(price,actual_qty); _compute_trade_pnl() accepts actual_qty param; reconcile() loop: min cap + _qty_at_close audit field + ghost-share Slack alert + overshoot WARNING. RULE C-4: mypy 0, ruff 0. All RC PASS."
     },
     "events/news_monitor.py": {
       "patch_count": 5,
@@ -351,35 +354,35 @@
       "sessions": 3,
       "last_patched": "2026-05-05",
       "open_rc_violations": [
-        "dual-timezone filter (MEDIUM \u2014 audit script only)"
+        "dual-timezone filter (MEDIUM — audit script only)"
       ],
-      "risk_rating": "LOW \u2014 not in trading path. 2026-05-05: MA-PARTIAL-SIZE-1 \u2014 analyse_pnl used entry size instead of tranche size for partial_exit P&L calculation."
+      "risk_rating": "LOW — not in trading path. 2026-05-05: MA-PARTIAL-SIZE-1 — analyse_pnl used entry size instead of tranche size for partial_exit P&L calculation."
     },
     "strategy/run_cycle.py": {
       "patch_count": 12,
-      "last_patched": "2026-07-03 (GEX Layer8 shadow log debug\u2192INFO \u2014 one line)",
+      "last_patched": "2026-07-03 (GEX Layer8 shadow log debug→INFO — one line)",
       "lines": 1670,
-      "notes": "AWP commit 3a7677b: AH GTC overnight-stop block's 'mirrors risk_manager.py RTH logic' comment had been false since 2026-06-24 (risk_manager.py switched to a continuous VIX curve, this mirror didn't). Restored. Board split 2-2 on timing, BoD tie-break 4-0 apply now, Gro + GAI both confirmed it's a genuine bug. Cold second-agent flagged a separate pre-existing H2-awareness gap, logged to Future Roadmap, not fixed (out of scope). | 2026-07-03: GEX Layer8 regime log promoted logger.debug\u2192logger.info (+2 comment lines) so the 30-session shadow review accumulates visible evidence at production log level. Same gate package as data/gex.py repair (board 2/2 + Gro + GAI + cold second-agent PASS). Statics all PASS post-edit."
+      "notes": "AWP commit 3a7677b: AH GTC overnight-stop block's 'mirrors risk_manager.py RTH logic' comment had been false since 2026-06-24 (risk_manager.py switched to a continuous VIX curve, this mirror didn't). Restored. Board split 2-2 on timing, BoD tie-break 4-0 apply now, Gro + GAI both confirmed it's a genuine bug. Cold second-agent flagged a separate pre-existing H2-awareness gap, logged to Future Roadmap, not fixed (out of scope). | 2026-07-03: GEX Layer8 regime log promoted logger.debug→logger.info (+2 comment lines) so the 30-session shadow review accumulates visible evidence at production log level. Same gate package as data/gex.py repair (board 2/2 + Gro + GAI + cold second-agent PASS). Statics all PASS post-edit."
     },
     "data/fetcher.py": {
       "patch_count": 4,
       "sessions": 1,
       "last_patched": "2026-05-11",
       "open_rc_violations": [],
-      "risk_rating": "LOW \u2014 S16: 4 patches (get_bars missing, dedup logging, P1 retry bypass, P2 overbroad match). All RC classes PASS. Not in RTH execution critical path (data layer only)."
+      "risk_rating": "LOW — S16: 4 patches (get_bars missing, dedup logging, P1 retry bypass, P2 overbroad match). All RC classes PASS. Not in RTH execution critical path (data layer only)."
     },
     "execution/fill_helpers.py": {
-      "patch_count": 4,
-      "last_patched": "2026-06-02 S47",
+      "patch_count": 5,
+      "last_patched": "2026-07-03 (phantom-fill fix: entry_time-bounded + filled_at DESC + side filter + sanity band + fail-closed + exit-reason labeling)",
       "lines": 222,
-      "notes": "S5 (2026-05-04): RC-4 fill fallback chain fix (trail_stop\u2192stop\u2192entry_price eliminated; retry logic 2 attempts; entry_price-only fallback; CRITICAL+Slack; _fill_unverified=True). S37: RC-3 x2 \u2014 L55 + L67 bare except blocks upgraded to logger.warning. S47 P5-H2: _query_fills() 3 changes for fill crosstalk on sub-second rapid re-entry: (1) direction='asc' on GetOrdersRequest \u2014 oldest-first pagination prevents newest page missing close order; (2) submitted_after-0.05 \u2014 50ms NTP grace margin; (3) sort key (created_at ASC, id) reverse=False \u2014 close order always created before re-entry. DS APPROVE (50ms critical). GAI APPROVE (direction='asc' needed). py_compile PASS, mypy 0, ruff PASS. Commit 1adc1cb. OCI deployed.",
-      "risk_rating": "HIGH \u2014 RTH-chain (imported by portfolio_tracker.py \u2192 run_cycle.py \u2192 main.py). DS/GAI required for any non-read-only change."
+      "notes": "2026-07-03 PHANTOM-FILL FIX: fetch_actual_fill_price rewrite -- external-close path (submitted_after=None) now bounds the CLOSED-orders query by trade entry_time/overnight_since, takes MOST RECENT fill (filled_at DESC, limit 5->20) on the correct close side (sell=long/buy=short), applies +/-50% sanity band vs entry_price, and fails closed to _fill_unverified when no bound derivable. Added _derive_close_lower_bound (RC-1 naive/wrong-zone/future guards) + _fill_unverified_fallback helpers + _recovered_close_reason exit-reason labeling (gtc_stop_triggered vs external_close). Legacy submitted_after path unchanged (Sort.ASC enum + assert). Board 4/4 + Gro + GAI + cold-agent PASS. Statics PASS. OCI deployed, health OK. | S5 (2026-05-04): RC-4 fill fallback chain fix (trail_stop→stop→entry_price eliminated; retry logic 2 attempts; entry_price-only fallback; CRITICAL+Slack; _fill_unverified=True). S37: RC-3 x2 — L55 + L67 bare except blocks upgraded to logger.warning. S47 P5-H2: _query_fills() 3 changes for fill crosstalk on sub-second rapid re-entry: (1) direction='asc' on GetOrdersRequest — oldest-first pagination prevents newest page missing close order; (2) submitted_after-0.05 — 50ms NTP grace margin; (3) sort key (created_at ASC, id) reverse=False — close order always created before re-entry. DS APPROVE (50ms critical). GAI APPROVE (direction='asc' needed). py_compile PASS, mypy 0, ruff PASS. Commit 1adc1cb. OCI deployed.",
+      "risk_rating": "HIGH — RTH-chain (imported by portfolio_tracker.py → run_cycle.py → main.py). DS/GAI required for any non-read-only change."
     },
     "execution/kelly.py": {
       "patch_count": 2,
-      "last_patched": "2026-07-03 (GEX edge-mult log debug\u2192INFO + GAI R3: getattr fallbacks 1.30/1.15 \u2192 direct config access, fail-neutral 1.0)",
+      "last_patched": "2026-07-03 (GEX edge-mult log debug→INFO + GAI R3: getattr fallbacks 1.30/1.15 → direct config access, fail-neutral 1.0)",
       "lines": 458,
-      "notes": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): rebuild_from_trades() now skips trades with missing/zero exit_price instead of defaulting to 0.0 \u2014 closes HIGH-severity finding where a missing exit_price produced a phantom catastrophic loss (long trades) or phantom huge win (short trades), the latter risking Kelly over-sizing future short positions on a fictitious trade. Traces to the same root cause as portfolio_tracker.py's write_eod_summary() fix. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
+      "notes": "MTF FULL BOT AUDIT consolidated fix batch (commit a41e7ce): rebuild_from_trades() now skips trades with missing/zero exit_price instead of defaulting to 0.0 — closes HIGH-severity finding where a missing exit_price produced a phantom catastrophic loss (long trades) or phantom huge win (short trades), the latter risking Kelly over-sizing future short positions on a fictitious trade. Traces to the same root cause as portfolio_tracker.py's write_eod_summary() fix. Board 4/4 APPROVE, GAI APPROVE x2, Gro APPROVE. py_compile/mypy/ruff PASS. Cold second-agent PASS."
     },
     "run_movers.py": {
       "patch_count": 2,
@@ -431,30 +434,30 @@
     },
     "config.py": {
       "patch_count": 3,
-      "last_patched": "2026-07-03 (GEX_ENABLED=True \u2014 Rafael mandate supersedes S50b 30-session condition; staged mults 1.10/1.05; GEX_STALE_MINUTES 45\u219230)",
+      "last_patched": "2026-07-03 (GEX_ENABLED=True — Rafael mandate supersedes S50b 30-session condition; staged mults 1.10/1.05; GEX_STALE_MINUTES 45→30)",
       "lines": 522,
       "notes": "Added a hardened cross-check in validate_config() to reject startup if VOLUME_CONFIRMATION_ENABLED=True but SCORE_WEIGHTS wasn't correctly paired-edited. Board+Gro+GAI unanimous, Rafael approved. Verified with 3 live Python executions. Commit 8460a19, deployed to OCI."
     },
     "data/gex.py": {
       "patch_count": 2,
-      "last_patched": "2026-07-03 (GEX pipeline repair \u2014 local BS greeks, OI from contract object, UNKNOWN-on-empty)",
+      "last_patched": "2026-07-03 (GEX pipeline repair — local BS greeks, OI from contract object, UNKNOWN-on-empty)",
       "lines": 447,
-      "notes": "2026-07-03: full fetch/compute rewrite (commit pending). Root cause verified live: indicative options feed returns only latestQuote \u2014 no greeks/OI ever; contracts endpoint returned empty until options approval landed 2026-06-25. Fix: OI from /v2/options/contracts open_interest (~59% populated, T+1); gamma via stdlib Black-Scholes (IV bisection from quote mid, r=0.045 q=0.012 module constants, logged per snapshot); quote hygiene (zero/crossed bid, spread ratio>0.25, expired, mid outside IV bracket) with per-snapshot skip counters; label UNKNOWN when zero valid contracts (was mislabeled POSITIVE); per-symbol result log at INFO (shadow-review record). Consumer interface unchanged (get_gex_regime keys intact; 3 consumers: live_data_writer.py, run_cycle.py Layer 8, kelly.py \u2014 latter two gated behind GEX_ENABLED=False). Also cleared pre-existing mypy arg-type error at old L88. Board 2/2 + Gro + GAI APPROVE; cold second-agent PASS; statics all PASS; runtime-verified on OCI (SPY NEAR-FLIP $-59981M flip=610, QQQ NEGATIVE $-99489M flip=595). 30-session shadow clock starts 2026-07-06 (next RTH session). Prior: RC3-GEX-L172-S36C.",
-      "risk_rating": "LOW \u2014 display-only behind GEX_ENABLED=False; runs in mtf-writer process, not the trading loop"
+      "notes": "2026-07-03: full fetch/compute rewrite (commit pending). Root cause verified live: indicative options feed returns only latestQuote — no greeks/OI ever; contracts endpoint returned empty until options approval landed 2026-06-25. Fix: OI from /v2/options/contracts open_interest (~59% populated, T+1); gamma via stdlib Black-Scholes (IV bisection from quote mid, r=0.045 q=0.012 module constants, logged per snapshot); quote hygiene (zero/crossed bid, spread ratio>0.25, expired, mid outside IV bracket) with per-snapshot skip counters; label UNKNOWN when zero valid contracts (was mislabeled POSITIVE); per-symbol result log at INFO (shadow-review record). Consumer interface unchanged (get_gex_regime keys intact; 3 consumers: live_data_writer.py, run_cycle.py Layer 8, kelly.py — latter two gated behind GEX_ENABLED=False). Also cleared pre-existing mypy arg-type error at old L88. Board 2/2 + Gro + GAI APPROVE; cold second-agent PASS; statics all PASS; runtime-verified on OCI (SPY NEAR-FLIP $-59981M flip=610, QQQ NEGATIVE $-99489M flip=595). 30-session shadow clock starts 2026-07-06 (next RTH session). Prior: RC3-GEX-L172-S36C.",
+      "risk_rating": "LOW — display-only behind GEX_ENABLED=False; runs in mtf-writer process, not the trading loop"
     },
     "scripts/score16_aggregator.py": {
       "patch_count": 1,
-      "last_patched": "2026-07-03 (NEW \u2014 shadow-scoring evidence archiver, cron 20:20 UTC weekdays)",
+      "last_patched": "2026-07-03 (NEW — shadow-scoring evidence archiver, cron 20:20 UTC weekdays)",
       "lines": 180,
       "notes": "Archives per-day score_comparison rows into logs/score16_history.jsonl before the 14-day prune deletes them; rebuilds logs/score16_report.json (agreement rates + trade outcomes by 12pt/16pt bucket from eod files). Standalone, local-files only, no execution imports. First run backfilled 11 days / 310 rows. Statics PASS.",
-      "risk_rating": "LOW \u2014 standalone cron analytics, not in RTH chain"
+      "risk_rating": "LOW — standalone cron analytics, not in RTH chain"
     },
     "scripts/gex_daily_audit.py": {
       "patch_count": 1,
-      "last_patched": "2026-07-03 (NEW \u2014 mandatory daily GEX impact audit, cron 20:30 UTC weekdays)",
+      "last_patched": "2026-07-03 (NEW — mandatory daily GEX impact audit, cron 20:30 UTC weekdays)",
       "lines": 185,
       "notes": "Compensating control for early GEX activation. Reads gex_history.jsonl + mtf_bot.log (Layer8 reads, floor raises, Kelly mults) + trade_events entries; writes logs/gex_daily_audit_YYYY-MM-DD.json (atomic) + Slack summary. Standalone, local files only.",
-      "risk_rating": "LOW \u2014 standalone cron analytics"
+      "risk_rating": "LOW — standalone cron analytics"
     }
   },
   "sessions": [
@@ -484,7 +487,7 @@
           "RC-2": "PASS",
           "RC-3": "PASS (S36B patches intact)",
           "RC-4": "N/A",
-          "RC-5": "PASS (atomic tmp\u2192replace)",
+          "RC-5": "PASS (atomic tmp→replace)",
           "RC-6": "PASS",
           "RC-7": "N/A",
           "RC-8": "N/A"
@@ -538,7 +541,7 @@
           "RC-6": "PASS",
           "RC-7": "N/A",
           "RC-8": "N/A",
-          "OPEN": "CRITICAL \u2014 TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252"
+          "OPEN": "CRITICAL — TE-S47D-DESYNC-DIRECT-ASSIGNMENT-L252"
         },
         "execution/orphan_manager.py": {
           "RC-1": "PASS",
@@ -562,13 +565,13 @@
         }
       },
       "board": "4 cold parallel subagents (Kim/McKinney/Harris/Majors) voted on P/L mismatch fix. All 4 MODIFY with 6 mandatory requirements. See tb_audit_log.md header for full detail.",
-      "ds_gai": "Prompts prepared in-session (plain text) for generate_dashboard.py (RTH-chain) and trade_engine.py (RTH-chain). Feedback not yet received \u2014 RTH block active. Patches queued for post-RTH.",
-      "investigation_notes": "ROOT CAUSE 1 (P/L mismatch): generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py _load_lifetime_pnl() dead code; stale OCI cache with wrong key 'lifetime_pnl' (should be 'total_pnl'). ROOT CAUSE 2 (desync): trade_engine.py L252-254 direct assignment instead of risk.register_open(). reset_daily() confirmed safe \u2014 does NOT reset open_positions. run_cycle.py L824 confirmed as desync trigger during RTH.",
+      "ds_gai": "Prompts prepared in-session (plain text) for generate_dashboard.py (RTH-chain) and trade_engine.py (RTH-chain). Feedback not yet received — RTH block active. Patches queued for post-RTH.",
+      "investigation_notes": "ROOT CAUSE 1 (P/L mismatch): generate_dashboard.py never writes lifetime_pnl_cache.json; monthly_review.py _load_lifetime_pnl() dead code; stale OCI cache with wrong key 'lifetime_pnl' (should be 'total_pnl'). ROOT CAUSE 2 (desync): trade_engine.py L252-254 direct assignment instead of risk.register_open(). reset_daily() confirmed safe — does NOT reset open_positions. run_cycle.py L824 confirmed as desync trigger during RTH.",
       "open_items_carried": [
-        "P1: risk.open_positions desync ROOT CAUSE CONFIRMED \u2014 trade_engine.py L252-254 direct assignment; patch pending DS/GAI post-RTH",
-        "P1: P/L mismatch \u2014 generate_dashboard.py cache write gap + monthly_review.py dead code; board MODIFY; DS/GAI pending for generate_dashboard.py; monthly_review.py patch ready",
-        "P1: MSTR double-record \u2014 reconcile_eod.py + portfolio_tracker.py",
-        "P2: BoD-3 log message misleading \u2014 main.py L88-94",
+        "P1: risk.open_positions desync ROOT CAUSE CONFIRMED — trade_engine.py L252-254 direct assignment; patch pending DS/GAI post-RTH",
+        "P1: P/L mismatch — generate_dashboard.py cache write gap + monthly_review.py dead code; board MODIFY; DS/GAI pending for generate_dashboard.py; monthly_review.py patch ready",
+        "P1: MSTR double-record — reconcile_eod.py + portfolio_tracker.py",
+        "P2: BoD-3 log message misleading — main.py L88-94",
         "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases"
       ]
     },
@@ -593,7 +596,7 @@
           "RC-1": "PASS",
           "RC-2": "PASS",
           "RC-3": "PASS",
-          "RC-4": "PARTIAL (pre-existing L660 fallback \u2014 unchanged)",
+          "RC-4": "PARTIAL (pre-existing L660 fallback — unchanged)",
           "RC-5": "N/A",
           "RC-6": "PASS",
           "RC-7": "PASS",
@@ -612,14 +615,14 @@
       },
       "board": "4 cold parallel subagents (Reliability/Execution Risk/Data Integrity/Quant Logic). Reliability APPROVE with Fix#7 (WARNING logs before breaks). Execution Risk APPROVE. Data Integrity APPROVE with Fix#6 (pre-loop time computation). Quant Logic APPROVE with Fix#5 (PDT=3/3 disable). BoD tiebreaker 3-0 YES-DISABLE (Simons/Taleb/Kyle) on Fix#5.",
       "ds_gai": "DS: APPROVE all 7 questions. Q7 confirmed via follow-up: all entry conditions correctly gated. GAI: APPROVE all 7 questions. Forward-looking P3: extract to helper function. 3-Point AI Summary: 3/3 unanimous on all 7 fixes. POINT 2: nothing Claude missed. POINT 3: GAI P3 helper refactor only.",
-      "cold_second_agent": "PASS \u2014 logic inversion CLEAR, off-by-one CLEAR (_open_count < _ph_limit allows slots 4+5), missing conditions CLEAR, branch completeness CLEAR (all 4 branches: kill-switch/PDT-exhausted/expansion/standard-limit).",
+      "cold_second_agent": "PASS — logic inversion CLEAR, off-by-one CLEAR (_open_count < _ph_limit allows slots 4+5), missing conditions CLEAR, branch completeness CLEAR (all 4 branches: kill-switch/PDT-exhausted/expansion/standard-limit).",
       "static_analysis": "entry_logic.py: py_compile PASS, mypy PASS (0 errors in file), ruff PASS. config.py: py_compile PASS, mypy PASS, ruff PASS.",
       "deploy": "rsync config.py PASS, rsync entry_logic.py PASS. sudo systemctl restart mtf-bot mtf-writer mtf-http: RESTART OK. Health check: all 4 services active (mtf-bot/mtf-writer/mtf-http/nginx). OCI py_compile PASS both files.",
-      "patch": "config.py (+1L): TOD_EXPANSION_WINDOW_START = 15*60+30 constant added. entry_logic.py (1724L\u21921747L): pre-loop _is_ph_cyc/_mins_ph_cyc computation; restructured if-not-can_open_position block with 4 branches (kill-switch break, PDT-exhausted break, expansion with score gate + re-check, standard limit break); WARNING logs before all breaks.",
+      "patch": "config.py (+1L): TOD_EXPANSION_WINDOW_START = 15*60+30 constant added. entry_logic.py (1724L→1747L): pre-loop _is_ph_cyc/_mins_ph_cyc computation; restructured if-not-can_open_position block with 4 branches (kill-switch break, PDT-exhausted break, expansion with score gate + re-check, standard limit break); WARNING logs before all breaks.",
       "open_items_carried": [
-        "P1: risk.open_positions desync CRITICAL \u2014 main.py/orphan_manager.py",
-        "P1: MSTR double-record in EOD snapshot \u2014 reconcile_eod.py + portfolio_tracker.py",
-        "P2: BoD-3 log message misleading \u2014 main.py L88-94",
+        "P1: risk.open_positions desync CRITICAL — main.py/orphan_manager.py",
+        "P1: MSTR double-record in EOD snapshot — reconcile_eod.py + portfolio_tracker.py",
+        "P2: BoD-3 log message misleading — main.py L88-94",
         "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases"
       ]
     },
@@ -637,7 +640,7 @@
           "RC-1": "PASS",
           "RC-2": "PASS",
           "RC-3": "PASS",
-          "RC-4": "PASS \u2014 L1667 GTC confirmed compliant (Alpaca filled_avg_price)",
+          "RC-4": "PASS — L1667 GTC confirmed compliant (Alpaca filled_avg_price)",
           "RC-5": "PASS",
           "RC-6": "PASS",
           "RC-7": "N/A",
@@ -645,15 +648,15 @@
         }
       },
       "board": "4 cold parallel subagents (Reliability/Execution Risk/Data Integrity/Quant Logic): 4/4 APPROVE round(x,4). DataIntegrity + QuantLogic: CONDITIONAL APPROVE (decimal.Decimal long-term, test coverage).",
-      "ds_gai": "DS: CONDITIONAL APPROVE (round(x,4) sufficient for reported bug; suggest round(x,6) for robustness; pnl==0.0 search mandatory). GAI: CONDITIONAL APPROVE (same; accumulated drift acknowledged as design trade-off; decimal.Decimal P3 roadmap). 3-Point AI Summary: L792 _partial_pnl != 0.0 \u2192 abs()>1e-8 added per DS+GAI mandatory condition. round(x,4) adopted per board vote + authority rule (DS/GAI advisory only).",
-      "cold_second_agent": "PASS \u2014 logic inversion CLEAR, boundary CLEAR (1e-8 well below min $0.01 trade P&L), missing conditions CLEAR (display locations verified non-storage), branch completeness CLEAR (_day_slice both paths correct).",
-      "static_analysis": "py_compile PASS, mypy PASS (0 errors in portfolio_tracker.py; 10 unrelated errors in events/calendar.py pre-existing), ruff PASS (0 violations \u2014 E501 fixed by shortening comments).",
+      "ds_gai": "DS: CONDITIONAL APPROVE (round(x,4) sufficient for reported bug; suggest round(x,6) for robustness; pnl==0.0 search mandatory). GAI: CONDITIONAL APPROVE (same; accumulated drift acknowledged as design trade-off; decimal.Decimal P3 roadmap). 3-Point AI Summary: L792 _partial_pnl != 0.0 → abs()>1e-8 added per DS+GAI mandatory condition. round(x,4) adopted per board vote + authority rule (DS/GAI advisory only).",
+      "cold_second_agent": "PASS — logic inversion CLEAR, boundary CLEAR (1e-8 well below min $0.01 trade P&L), missing conditions CLEAR (display locations verified non-storage), branch completeness CLEAR (_day_slice both paths correct).",
+      "static_analysis": "py_compile PASS, mypy PASS (0 errors in portfolio_tracker.py; 10 unrelated errors in events/calendar.py pre-existing), ruff PASS (0 violations — E501 fixed by shortening comments).",
       "deploy": "rsync PASS, sudo systemctl restart PASS, all 4 services active, dashboard 401 (expected auth), health OK. Commit 5600c70.",
-      "patch": "portfolio_tracker.py (2124L\u21922125L): 8 storage round(x,2)\u2192round(x,4): _fifo_reconstruct L282/L308, patch_exit_pnl L585/L587/L588, record_partial_exit L1455, record_exit L1578/L1590. +1 float-zero guard: L792 _partial_pnl != 0.0 \u2192 abs(_partial_pnl) > 1e-8. 5 display locations unchanged at round(x,2): L337/L609-611/L823/L826/L2024.",
+      "patch": "portfolio_tracker.py (2124L→2125L): 8 storage round(x,2)→round(x,4): _fifo_reconstruct L282/L308, patch_exit_pnl L585/L587/L588, record_partial_exit L1455, record_exit L1578/L1590. +1 float-zero guard: L792 _partial_pnl != 0.0 → abs(_partial_pnl) > 1e-8. 5 display locations unchanged at round(x,2): L337/L609-611/L823/L826/L2024.",
       "open_items_carried": [
-        "P1: risk.open_positions desync CRITICAL \u2014 main.py/orphan_manager.py",
-        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored \u2014 execution/entry_logic.py",
-        "P1: MSTR double-record \u2014 reconcile_eod.py + portfolio_tracker.py",
+        "P1: risk.open_positions desync CRITICAL — main.py/orphan_manager.py",
+        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored — execution/entry_logic.py",
+        "P1: MSTR double-record — reconcile_eod.py + portfolio_tracker.py",
         "P2: unit/integration test coverage for portfolio_tracker.py P&L edge cases (DS+GAI)"
       ]
     },
@@ -677,7 +680,7 @@
           "RC-2": "PASS (all paths anchored to _LOTS_STATE_FILE/_LOG_FILE)",
           "RC-3": "PASS (no bare pass in except blocks)",
           "RC-4": "PASS (record_exit uses _fetch_actual_fill_price() upstream)",
-          "RC-5": "PASS (_atomic_write uses tmp\u2192replace)",
+          "RC-5": "PASS (_atomic_write uses tmp→replace)",
           "RC-6": "PASS (no new unverified API field assumptions)",
           "RC-7": "N/A (no sizing logic in portfolio_tracker.py)",
           "RC-8": "N/A (no scan buffer in portfolio_tracker.py)"
@@ -686,24 +689,24 @@
           "RC-1": "PASS",
           "RC-2": "PASS",
           "RC-3": "PASS",
-          "RC-4": "PASS \u2014 _query_fills() changes are in fill retrieval layer, not exit price path",
+          "RC-4": "PASS — _query_fills() changes are in fill retrieval layer, not exit price path",
           "RC-5": "N/A",
-          "RC-6": "PASS \u2014 direction/submitted_after/sort fields verified against Alpaca GetOrdersRequest schema",
+          "RC-6": "PASS — direction/submitted_after/sort fields verified against Alpaca GetOrdersRequest schema",
           "RC-7": "N/A",
           "RC-8": "N/A"
         }
       },
-      "board": "fill_helpers.py: 4 cold independent subagents APPROVE (RTH-chain \u2014 DS/GAI required and obtained). portfolio_tracker.py: 4 cold independent subagents APPROVE. DS vs GAI conflicts: Bug1 \u2014 DS suggested \u00b1100R cap (Claude used \u00b150R per DS rationale), GAI suggested \u00b110R (too narrow for high-volatility positions per board review). Board resolution: \u00b150R adopted. Bug2 \u2014 DS/GAI both flagged patch_exit_pnl() entry=0 guard as mandatory prerequisite; guard confirmed already present at L564-574 (added S44 as 'GAI cross-bug guard'). Bug3 \u2014 GAI REJECT on symbol-only matching (conceptual error), recommending entry_time-based detection; adopted. Bug8 \u2014 both DS+GAI APPROVE Option A (retry + TOCTOU fix).",
-      "ds_gai": "fill_helpers.py: DS APPROVE (50ms grace margin critical for NTP drift; direction='asc' needed for determinism). GAI APPROVE (direction='asc' resolves pagination non-determinism root cause). portfolio_tracker.py: DS APPROVE (\u00b1100R suggestion noted but \u00b150R adopted; CRITICAL+retry for Bug8; set [] before Slack). GAI APPROVE (Bug3 entry_time guard; Bug8 TOCTOU fix; unverified_trades flag). 3-Point AI Summary completed before Step 5.",
-      "cold_second_agent": "PASS \u2014 all changes verified. Logic inversions: none. Off-by-one/boundary: none. Missing conditions: none. Both TRUE and FALSE branches verified.",
-      "static_analysis": "fill_helpers.py: py_compile PASS, mypy 0, ruff PASS. portfolio_tracker.py: py_compile PASS, mypy 0, ruff PASS (4 E501 violations fixed in Bug3 edit due to deep indentation \u2014 comment and warning strings shortened).",
+      "board": "fill_helpers.py: 4 cold independent subagents APPROVE (RTH-chain — DS/GAI required and obtained). portfolio_tracker.py: 4 cold independent subagents APPROVE. DS vs GAI conflicts: Bug1 — DS suggested ±100R cap (Claude used ±50R per DS rationale), GAI suggested ±10R (too narrow for high-volatility positions per board review). Board resolution: ±50R adopted. Bug2 — DS/GAI both flagged patch_exit_pnl() entry=0 guard as mandatory prerequisite; guard confirmed already present at L564-574 (added S44 as 'GAI cross-bug guard'). Bug3 — GAI REJECT on symbol-only matching (conceptual error), recommending entry_time-based detection; adopted. Bug8 — both DS+GAI APPROVE Option A (retry + TOCTOU fix).",
+      "ds_gai": "fill_helpers.py: DS APPROVE (50ms grace margin critical for NTP drift; direction='asc' needed for determinism). GAI APPROVE (direction='asc' resolves pagination non-determinism root cause). portfolio_tracker.py: DS APPROVE (±100R suggestion noted but ±50R adopted; CRITICAL+retry for Bug8; set [] before Slack). GAI APPROVE (Bug3 entry_time guard; Bug8 TOCTOU fix; unverified_trades flag). 3-Point AI Summary completed before Step 5.",
+      "cold_second_agent": "PASS — all changes verified. Logic inversions: none. Off-by-one/boundary: none. Missing conditions: none. Both TRUE and FALSE branches verified.",
+      "static_analysis": "fill_helpers.py: py_compile PASS, mypy 0, ruff PASS. portfolio_tracker.py: py_compile PASS, mypy 0, ruff PASS (4 E501 violations fixed in Bug3 edit due to deep indentation — comment and warning strings shortened).",
       "deploy": "fill_helpers.py: rsync PASS, commit 1adc1cb. portfolio_tracker.py: rsync PASS, py_compile OCI PASS, all 4 services active. RAM 247MB/564MB. Commit 0f3aa58. PDT counter startup log: 'PDT counter in sync with Alpaca: 0/3'.",
-      "patch": "fill_helpers.py (222L): _query_fills() \u2014 (1) direction='asc' on GetOrdersRequest; (2) submitted_after-0.05 (50ms NTP grace); (3) sort (created_at, id) reverse=False. portfolio_tracker.py (2049L\u21922124L): (1) Bug1 get_stats() \u2014 _fill_unverified exclusion from r_multiples loop, \u00b150R clamp, _unverified_count computed before loop, WARNING if r_multiples empty, unverified_trades in return dict; (2) Bug2 record_exit() entry\u22640 branch sets _fill_unverified=True; get_stats() pnls filter excludes _fill_unverified; return dict adds verified_trades+unverified_trades, total_trades=len(self.closed_trades); (3) Bug3 _load_log() \u2014 _closed_entry_keys = {(symbol,entry_time)} tuples, warning message updated; (4) Bug8 _load_day_trades() \u2014 for _attempt in range(2) retry loop, FileNotFoundError\u2192[] return, 100ms sleep on attempt 0, CRITICAL+Slack on attempt 1 failure, self._day_trades=[] before Slack.",
+      "patch": "fill_helpers.py (222L): _query_fills() — (1) direction='asc' on GetOrdersRequest; (2) submitted_after-0.05 (50ms NTP grace); (3) sort (created_at, id) reverse=False. portfolio_tracker.py (2049L→2124L): (1) Bug1 get_stats() — _fill_unverified exclusion from r_multiples loop, ±50R clamp, _unverified_count computed before loop, WARNING if r_multiples empty, unverified_trades in return dict; (2) Bug2 record_exit() entry≤0 branch sets _fill_unverified=True; get_stats() pnls filter excludes _fill_unverified; return dict adds verified_trades+unverified_trades, total_trades=len(self.closed_trades); (3) Bug3 _load_log() — _closed_entry_keys = {(symbol,entry_time)} tuples, warning message updated; (4) Bug8 _load_day_trades() — for _attempt in range(2) retry loop, FileNotFoundError→[] return, 100ms sleep on attempt 0, CRITICAL+Slack on attempt 1 failure, self._day_trades=[] before Slack.",
       "open_items_carried": [
-        "P1: risk.open_positions desync STILL firing \u2014 main.py/orphan_manager.py (RTH-chain, DS/GAI required)",
-        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour \u2014 execution/entry_logic.py (RTH-chain)",
-        "P1: pnl=0.0 for stop_hit events with entry\u2260exit \u2014 portfolio_tracker.py (RTH-chain, Gemini May 27)",
-        "P1: MSTR tracked as both closed and overnight_hold in EOD snapshot \u2014 reconcile_eod.py + portfolio_tracker.py"
+        "P1: risk.open_positions desync STILL firing — main.py/orphan_manager.py (RTH-chain, DS/GAI required)",
+        "P1: BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour — execution/entry_logic.py (RTH-chain)",
+        "P1: pnl=0.0 for stop_hit events with entry≠exit — portfolio_tracker.py (RTH-chain, Gemini May 27)",
+        "P1: MSTR tracked as both closed and overnight_hold in EOD snapshot — reconcile_eod.py + portfolio_tracker.py"
       ]
     },
     {
@@ -723,26 +726,26 @@
         "execution/portfolio_tracker.py": {
           "RC-1": "PASS (all datetime.now calls use _PT/_ET timezone)",
           "RC-2": "PASS (all paths anchored to _LOTS_STATE_FILE/_LOG_FILE)",
-          "RC-3": "PATCHED \u2014 _fill_et_date() bare except replaced with logger.warning (PT-S44-FILL-ET-DATE-RC3)",
-          "RC-4": "PASS (no current_price passed to record_exit \u2014 fill price used)",
-          "RC-5": "PASS (_atomic_write uses tmp\u2192replace)",
+          "RC-3": "PATCHED — _fill_et_date() bare except replaced with logger.warning (PT-S44-FILL-ET-DATE-RC3)",
+          "RC-4": "PASS (no current_price passed to record_exit — fill price used)",
+          "RC-5": "PASS (_atomic_write uses tmp→replace)",
           "RC-6": "PASS (no unverified API field assumptions added)",
           "RC-7": "N/A (no sizing logic in portfolio_tracker.py)",
           "RC-8": "N/A (no scan buffer in portfolio_tracker.py)"
         }
       },
       "board": "4 independent cold subagents (Reliability, Execution Risk, Data Integrity, Quant Logic). All returned findings. DS/GAI conflicts on BUG-2 (raise vs append phantom short) and BUG-3 (staleness threshold vs no threshold) resolved by board. GAI wins on BUG-2 (Alpaca fills authoritative per project invariant); HYBRID wins on BUG-3 (DS detection method age_days>1 + GAI never-return-empty logic).",
-      "ds_gai": "DS APPROVE (with cross-bug guard requirement: _entry_px=0.0 in patch_exit_pnl \u2192 phantom profit). GAI APPROVE (with _entry_px<=0 guard in patch_exit_pnl confirmed). 3-Point AI Summary logged. DS prompt framing updated: head quant / lead engineer at $50M AUM firm \u2014 'audit as if a production P&L incident depended on your findings.'",
-      "cold_second_agent": "PASS \u2014 all 5 changes verified. Logic inversions: none. Off-by-one/boundary: none. Missing conditions: none. Both TRUE and FALSE branches of every new conditional confirmed correct.",
+      "ds_gai": "DS APPROVE (with cross-bug guard requirement: _entry_px=0.0 in patch_exit_pnl → phantom profit). GAI APPROVE (with _entry_px<=0 guard in patch_exit_pnl confirmed). 3-Point AI Summary logged. DS prompt framing updated: head quant / lead engineer at $50M AUM firm — 'audit as if a production P&L incident depended on your findings.'",
+      "cold_second_agent": "PASS — all 5 changes verified. Logic inversions: none. Off-by-one/boundary: none. Missing conditions: none. Both TRUE and FALSE branches of every new conditional confirmed correct.",
       "static_analysis": "py_compile PASS, mypy 0 errors in file, ruff PASS (2 E501 fixed during draft: FIFO Slack message + patch_exit_pnl error string split across continuation lines)",
-      "deploy": "rsync -av -e 'ssh -i ~/.ssh/mtf_bot_oracle' PASS. All 4 services active (mtf-bot, mtf-writer, mtf-http, nginx). Dashboard curl \u2192 401 Basic Auth = expected/correct. Health OK.",
-      "patch": "execution/portfolio_tracker.py (1939L\u21922048L): (1) BUG-4/RC-3 \u2014 _fill_et_date() L147-148 bare except\u2192logger.warning with ts_str repr+error, str(ts_str)[:10] safe slice or '' on empty; (2) BUG-2 \u2014 _fifo_reconstruct() orphan close guard before current.append(): CRITICAL log + Slack alert + side='short' synthetic short; (3) BUG-3 \u2014 _load_prior_day_lots() staleness detection: stored_dt vs today age_days>1\u2192WARNING; never returns {} (only on exception path); (4) BUG-1 \u2014 patch_exit_pnl() _qty_at_close or-chain fix: is not None/'' sentinel replaces falsy or-chain; exit_price<=0 guard returns False; _entry_px<=0 cross-bug guard (GAI BUG-5 interaction) \u2192 preserves partial_pnl only; (5) BUG-5 \u2014 record_exit() pre-pop entry_price validation: None/zero\u2192CRITICAL+Slack BEFORE pop(); entry=float(or 0.0) coerce; pnl=0.0 forced if entry<=0; pnl_pct guard if entry>0 and _orig_qty>0.",
+      "deploy": "rsync -av -e 'ssh -i ~/.ssh/mtf_bot_oracle' PASS. All 4 services active (mtf-bot, mtf-writer, mtf-http, nginx). Dashboard curl → 401 Basic Auth = expected/correct. Health OK.",
+      "patch": "execution/portfolio_tracker.py (1939L→2048L): (1) BUG-4/RC-3 — _fill_et_date() L147-148 bare except→logger.warning with ts_str repr+error, str(ts_str)[:10] safe slice or '' on empty; (2) BUG-2 — _fifo_reconstruct() orphan close guard before current.append(): CRITICAL log + Slack alert + side='short' synthetic short; (3) BUG-3 — _load_prior_day_lots() staleness detection: stored_dt vs today age_days>1→WARNING; never returns {} (only on exception path); (4) BUG-1 — patch_exit_pnl() _qty_at_close or-chain fix: is not None/'' sentinel replaces falsy or-chain; exit_price<=0 guard returns False; _entry_px<=0 cross-bug guard (GAI BUG-5 interaction) → preserves partial_pnl only; (5) BUG-5 — record_exit() pre-pop entry_price validation: None/zero→CRITICAL+Slack BEFORE pop(); entry=float(or 0.0) coerce; pnl=0.0 forced if entry<=0; pnl_pct guard if entry>0 and _orig_qty>0.",
       "open_items_carried": [
-        "P1: S44-BUG-6 \u2014 OVERNIGHT_ENTRIES_ENABLED=False hardcoded override in main.py L120 (RTH-chain, full 9-step required)",
-        "P1: S44-BUG-3 \u2014 risk.open_positions desync STILL firing after P0-STARTUP fix \u2014 root cause unknown (main.py + orphan_manager.py investigation needed)",
-        "P1: S44-BUG-8 \u2014 BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour (execution/entry_logic.py)",
-        "P2: S44-BUG-5 \u2014 avg_r_multiple wrong in reporting/metrics.py (non-RTH, direct deploy eligible)",
-        "P2: S44-BUG-7 \u2014 MSTR double-record in reconcile_eod.py (non-RTH, direct deploy eligible)"
+        "P1: S44-BUG-6 — OVERNIGHT_ENTRIES_ENABLED=False hardcoded override in main.py L120 (RTH-chain, full 9-step required)",
+        "P1: S44-BUG-3 — risk.open_positions desync STILL firing after P0-STARTUP fix — root cause unknown (main.py + orphan_manager.py investigation needed)",
+        "P1: S44-BUG-8 — BUCKET_B_MAX_POSITIONS_POWER=5 not honored during power_hour (execution/entry_logic.py)",
+        "P2: S44-BUG-5 — avg_r_multiple wrong in reporting/metrics.py (non-RTH, direct deploy eligible)",
+        "P2: S44-BUG-7 — MSTR double-record in reconcile_eod.py (non-RTH, direct deploy eligible)"
       ]
     },
     {
@@ -767,12 +770,12 @@
           "RC-8": "N/A"
         }
       },
-      "board": "AB: Thorp (Edge Ratio formula), Douglas (Early Exit Rate = higher is better), L\u00f3pez de Prado (Score Monotonicity simplified), Majors (MRI N inline, attribution fix)",
-      "ds_gai": "NOT REQUIRED \u2014 standalone script, not in RTH import chain (RULE C-5)",
-      "cold_second_agent": "PASS \u2014 all 4 branches verified, MRI attribution fix confirmed correct",
+      "board": "AB: Thorp (Edge Ratio formula), Douglas (Early Exit Rate = higher is better), López de Prado (Score Monotonicity simplified), Majors (MRI N inline, attribution fix)",
+      "ds_gai": "NOT REQUIRED — standalone script, not in RTH import chain (RULE C-5)",
+      "cold_second_agent": "PASS — all 4 branches verified, MRI attribution fix confirmed correct",
       "static_analysis": "py_compile PASS, mypy 0 errors in weekly_review.py, ruff 0 violations",
       "deploy": "rsync PASS, OCI py_compile PASS, no restart needed",
-      "patch": "weekly_review.py: replaced _exec_summary_stats() 8-metric function (L911-L1153) with 4-metric version (L911-L1090). New: Edge Ratio, Monotonicity verdict (boundary WRs only), Early Exit Rate Among Losers, MRI P&L split with (symbol,exit_date) attribution fix. Removed: Score WR table, Realized R:R, T1 hit rate, min-score losses%, Kelly sample, bugs this week, T4 fallback count. 1706L\u21921667L."
+      "patch": "weekly_review.py: replaced _exec_summary_stats() 8-metric function (L911-L1153) with 4-metric version (L911-L1090). New: Edge Ratio, Monotonicity verdict (boundary WRs only), Early Exit Rate Among Losers, MRI P&L split with (symbol,exit_date) attribution fix. Removed: Score WR table, Realized R:R, T1 hit rate, min-score losses%, Kelly sample, bugs this week, T4 fallback count. 1706L→1667L."
     },
     {
       "date": "2026-05-23",
@@ -797,14 +800,14 @@
         }
       },
       "board": "AB: McKinney (first-entry-wins, per-line try/except), Beck (division-by-zero, early-return, missing-field safety), Majors (T4 count, MRI N inline), Thorp (score monotonicity WR12>=WR11>=WR10)",
-      "ds_gai": "NOT REQUIRED \u2014 standalone script, not in RTH import chain (RULE C-5)",
+      "ds_gai": "NOT REQUIRED — standalone script, not in RTH import chain (RULE C-5)",
       "cold_second_agent": "FAIL->PASS: L1019 silent profit-divergence skip changed to explicit warn+continue",
       "static_analysis": "py_compile PASS, mypy 0 errors in weekly_review.py, ruff 0 violations",
       "deploy": "rsync PASS, OCI py_compile PASS, no restart needed",
       "open_items_carried": [
-        "BUG-C structural fix (background thread) \u2014 run_cycle.py \u2014 deadline 2026-06-30",
-        "Trail ratchet GTC loss \u2014 exit_logic.py \u2014 board vote required",
-        "RAM leak \u2014 alerts.py \u2014 DS/GAI required before patch"
+        "BUG-C structural fix (background thread) — run_cycle.py — deadline 2026-06-30",
+        "Trail ratchet GTC loss — exit_logic.py — board vote required",
+        "RAM leak — alerts.py — DS/GAI required before patch"
       ],
       "patch": "weekly_review.py: added _exec_summary_stats(trade_log, monday) function (~170L) + replaced exec_html block to always render deterministic stats card (independent of --analyze flag). 8 metrics: score WR per bucket (10/11/12) with monotonicity badge, realized R:R for wins using stop distance, T1 hit rate, MRI P&L split NORMAL vs CAUTION+ (N per bucket), min-score loss %, kelly sample N, bugs fixed this week from bug_counter.json sessions, T4 fallback count. Gemini narrative appended below with separator when --analyze present. 1462L->1706L."
     },
@@ -847,7 +850,7 @@
           "RC-8": "N/A"
         }
       },
-      "patch": "#14: _yf_last_close_safe() wraps VIX3M in ThreadPoolExecutor (8s, future.cancel+shutdown(wait=False,cancel_futures=True)). #15: _fmp_quote() replaces yf for ^VIX; _fmp_last_two_closes() replaces yf for JPY=X\u2192USDJPY FMP. RC-3 x6: logger.debug added to all 4 remaining nested helpers; _yf_last_two_closes + _yf_session_pct removed as dead code. mypy 0 errors, ruff 0 violations. fetcher.py: 12 fixes \u2014 throttle order, backoff cap, 500 retryable, TF_4H days_back. Both files py_compile/mypy/ruff PASS. Deployed \u2014 all 4 services active."
+      "patch": "#14: _yf_last_close_safe() wraps VIX3M in ThreadPoolExecutor (8s, future.cancel+shutdown(wait=False,cancel_futures=True)). #15: _fmp_quote() replaces yf for ^VIX; _fmp_last_two_closes() replaces yf for JPY=X→USDJPY FMP. RC-3 x6: logger.debug added to all 4 remaining nested helpers; _yf_last_two_closes + _yf_session_pct removed as dead code. mypy 0 errors, ruff 0 violations. fetcher.py: 12 fixes — throttle order, backoff cap, 500 retryable, TF_4H days_back. Both files py_compile/mypy/ruff PASS. Deployed — all 4 services active."
     },
     {
       "date": "2026-05-17",
@@ -863,7 +866,7 @@
         "strategy/confluence.py": {
           "RC-1": "PASS",
           "RC-2": "N/A",
-          "RC-3": "PASS (now WARNING \u2014 was debug)",
+          "RC-3": "PASS (now WARNING — was debug)",
           "RC-4": "N/A",
           "RC-5": "N/A",
           "RC-6": "N/A",
@@ -871,7 +874,7 @@
           "RC-8": "N/A"
         }
       },
-      "patch": "VOLSHADOW exception handlers L201 (long) + L400 (short): logger.debug\u2192logger.warning. Prevents silent 5-day shadow data blackout if volume compute fails during RTH (e.g. partial-bar DataFrame shape mismatch on Monday open). py_compile PASS. Deployed OCI all 4 services active."
+      "patch": "VOLSHADOW exception handlers L201 (long) + L400 (short): logger.debug→logger.warning. Prevents silent 5-day shadow data blackout if volume compute fails during RTH (e.g. partial-bar DataFrame shape mismatch on Monday open). py_compile PASS. Deployed OCI all 4 services active."
     },
     {
       "date": "2026-05-17",
@@ -908,7 +911,7 @@
           "RC-8": "N/A"
         }
       },
-      "patch": "Volume confirmation: rsi_in_range replaced by VOLUME_CONFIRMATION_ENABLED gate in confluence.py score_long_signal + score_short_signal. Shadow mode (False): RSI still scores, VOLSHADOW JSON logged. Live mode (True): Bucket A auto-pass, Bucket B iloc[-21:-1].dropna()>=15 bars>=1.5x threshold. config.py: 5 new constants + SCORE_WEIGHTS toggle comment. Board 19/19 CONDITIONAL APPROVE. DS+GAI audit: binary 1.5x 3/3 aligned, GAI graded recommendation deferred to S25. B1 Beck, B2 McKinney, R1 Majors, R2 Kim, C1 Taleb (deferred), C2 Levitt, C3 Kyle all addressed. Cold second-agent FAIL\u2192PASS. py_compile PASS, mypy pre-existing only, ruff new lines PASS. PID 6878 startup clean."
+      "patch": "Volume confirmation: rsi_in_range replaced by VOLUME_CONFIRMATION_ENABLED gate in confluence.py score_long_signal + score_short_signal. Shadow mode (False): RSI still scores, VOLSHADOW JSON logged. Live mode (True): Bucket A auto-pass, Bucket B iloc[-21:-1].dropna()>=15 bars>=1.5x threshold. config.py: 5 new constants + SCORE_WEIGHTS toggle comment. Board 19/19 CONDITIONAL APPROVE. DS+GAI audit: binary 1.5x 3/3 aligned, GAI graded recommendation deferred to S25. B1 Beck, B2 McKinney, R1 Majors, R2 Kim, C1 Taleb (deferred), C2 Levitt, C3 Kyle all addressed. Cold second-agent FAIL→PASS. py_compile PASS, mypy pre-existing only, ruff new lines PASS. PID 6878 startup clean."
     },
     {
       "date": "2026-05-17",
@@ -966,7 +969,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "ORB gate: 4-file additive feature \u2014 config constants, main.py globals+reset, run_cycle.py compute block, entry_logic.py gate check. Board 26/26 unanimous. DS/GAI audit: P0 TOCTOU (single datetime.now call), P1 ORB validation (_h>_l AND _l>0), P2 try/except. Cold second-agent FAIL\u2192PASS (F1: missing pre-9:55 branch merged). All py_compile PASS, ruff PASS. PID 5812 startup clean."
+      "patch": "ORB gate: 4-file additive feature — config constants, main.py globals+reset, run_cycle.py compute block, entry_logic.py gate check. Board 26/26 unanimous. DS/GAI audit: P0 TOCTOU (single datetime.now call), P1 ORB validation (_h>_l AND _l>0), P2 try/except. Cold second-agent FAIL→PASS (F1: missing pre-9:55 branch merged). All py_compile PASS, ruff PASS. PID 5812 startup clean."
     },
     {
       "date": "2026-05-16",
@@ -992,7 +995,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "BUG-#5: thesis invalidation cancel-before-close (was after). RC-3 x3: stale fill warning+continue, entry_time parse warning, entry_ts parse debug. RC-7: if _gtc_qty>=1 guard. Board (Harris+Peterffy) + DS+GAI + cold second-agent (FAIL\u2192resolved). py_compile+ruff PASS. Startup clean."
+      "patch": "BUG-#5: thesis invalidation cancel-before-close (was after). RC-3 x3: stale fill warning+continue, entry_time parse warning, entry_ts parse debug. RC-7: if _gtc_qty>=1 guard. Board (Harris+Peterffy) + DS+GAI + cold second-agent (FAIL→resolved). py_compile+ruff PASS. Startup clean."
     },
     {
       "date": "2026-05-16",
@@ -1025,7 +1028,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "BUG-#11: (1) trade_logger.py _STOP_REASONS: removed 'stop_hit' (redundant/false-positive risk), added 'overnight_atr_buffer_exit' + 'breakeven_stop'. (2) portfolio_tracker.py L1306: exact set membership `reason in _LOG_STOP_REASONS` \u2192 substring scan `any(s in str(reason or \"\") for s in _LOG_STOP_REASONS)`. Handles compound reasons e.g. 'overnight_atr_buffer_exit | details'. Root cause: stop-hit rate reported 0% even for confirmed stops (NVDA: exit $225.53 < stop $225.61). Domain board + DS+GAI audit + cold second-agent PASS. py_compile PASS both files. Startup clean PID 1014968."
+      "patch": "BUG-#11: (1) trade_logger.py _STOP_REASONS: removed 'stop_hit' (redundant/false-positive risk), added 'overnight_atr_buffer_exit' + 'breakeven_stop'. (2) portfolio_tracker.py L1306: exact set membership `reason in _LOG_STOP_REASONS` → substring scan `any(s in str(reason or \"\") for s in _LOG_STOP_REASONS)`. Handles compound reasons e.g. 'overnight_atr_buffer_exit | details'. Root cause: stop-hit rate reported 0% even for confirmed stops (NVDA: exit $225.53 < stop $225.61). Domain board + DS+GAI audit + cold second-agent PASS. py_compile PASS both files. Startup clean PID 1014968."
     },
     {
       "date": "2026-05-04",
@@ -1041,7 +1044,7 @@
         "RC-2": "PASS",
         "RC-3": "PASS"
       },
-      "patch": "record_exit() \u2014 qty_remaining zeroed, qty clamped, mri_level normalized"
+      "patch": "record_exit() — qty_remaining zeroed, qty clamped, mri_level normalized"
     },
     {
       "date": "2026-05-05",
@@ -1085,9 +1088,9 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "BV-3: overnight_breakeven \u2192 overnight_atr_buffer_exit \u2014 7 locations across 3 files. Legacy alias retained in weekly_review.py MECHANICAL_REASONS for backward compat with historical trade_log.json entries.",
+      "patch": "BV-3: overnight_breakeven → overnight_atr_buffer_exit — 7 locations across 3 files. Legacy alias retained in weekly_review.py MECHANICAL_REASONS for backward compat with historical trade_log.json entries.",
       "open_findings": [
-        "weekly_review.py RC-3 pre-existing: bare except at lines 191,367,526 \u2014 separate P2 item"
+        "weekly_review.py RC-3 pre-existing: bare except at lines 191,367,526 — separate P2 item"
       ]
     },
     {
@@ -1110,7 +1113,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "TB rider from BV-1: qty_remaining bounds check in _compute_trade_pnl() and reconcile(). Guards: total_qty<=0 \u2192 skip/return (0,0) with warning; qty_remaining<0 or >total_qty \u2192 fallback to 0 with warning. Cold second-agent v3 PASS.",
+      "patch": "TB rider from BV-1: qty_remaining bounds check in _compute_trade_pnl() and reconcile(). Guards: total_qty<=0 → skip/return (0,0) with warning; qty_remaining<0 or >total_qty → fallback to 0 with warning. Cold second-agent v3 PASS.",
       "open_findings": []
     },
     {
@@ -1167,7 +1170,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "BV-2 Phase 2: full FIFO P&L sync in update_daily_pnl_from_alpaca(). Steps: (1) paginated FILL activities fetch; (2) GET /v2/positions to seed overnight lot basis (avg_entry_price, BV-2 Option A board unanimous); (3) isinstance(positions,list) guard \u2014 cold second-agent FAIL fix; (4) FIFO match fills chronologically \u2014 long exit=(sell-entry)*qty, short cover=(entry-cover)*qty; (5) self.daily_pnl = round(realized_pnl,2). from collections import defaultdict,deque added. py_compile PASS, ruff 18 E501 pre-existing only (zero new). Bot restarted \u2014 all 4 services active.",
+      "patch": "BV-2 Phase 2: full FIFO P&L sync in update_daily_pnl_from_alpaca(). Steps: (1) paginated FILL activities fetch; (2) GET /v2/positions to seed overnight lot basis (avg_entry_price, BV-2 Option A board unanimous); (3) isinstance(positions,list) guard — cold second-agent FAIL fix; (4) FIFO match fills chronologically — long exit=(sell-entry)*qty, short cover=(entry-cover)*qty; (5) self.daily_pnl = round(realized_pnl,2). from collections import defaultdict,deque added. py_compile PASS, ruff 18 E501 pre-existing only (zero new). Bot restarted — all 4 services active.",
       "open_findings": []
     },
     {
@@ -1190,7 +1193,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "MA-PARTIAL-SIZE-1: analyse_pnl() line 240 \u2014 qty now uses ex.get('size') for partial_exit events (tranche qty) instead of en.get('size') (full entry qty). Prevents P&L overstatement on partial closes. Cold second-agent PASS.",
+      "patch": "MA-PARTIAL-SIZE-1: analyse_pnl() line 240 — qty now uses ex.get('size') for partial_exit events (tranche qty) instead of en.get('size') (full entry qty). Prevents P&L overstatement on partial closes. Cold second-agent PASS.",
       "open_findings": []
     },
     {
@@ -1213,7 +1216,7 @@
           "RC-8": "N/A"
         }
       },
-      "patch": "MRI-LKG-CACHE-P1 (11 changes): (1) _last_known_good_level/_last_known_good_at/_refresh_failed added to __init__; (2) ConnectionError guard in _compute() raises when all feeds return None \u2014 fixes Fatal Flaw A (silent network outage); (3) cache updated inside MRI-COMPUTE-LOCK; (4) refresh() sets _refresh_failed flag on exception; (5) level() returns _last_known_good_level when _refresh_failed=True; (6) is_fresh() new public method; (7) inject_news_state() zero-alert branch updates cache; (8) inject_news_state() main path updates cache; (9) _restore() no-file \u2192 CRITICAL; (10) _restore() >20h \u2192 CRITICAL (fixes dead-code from second-agent); (11) _restore() successful \u2192 saved_at timestamp not datetime.now(). DS+GAI external audit. Board 3-domain split resolved (McKinney reject \u2192 approved revised design). Cold second-agent FAIL \u2192 PASS after dead-code fix.",
+      "patch": "MRI-LKG-CACHE-P1 (11 changes): (1) _last_known_good_level/_last_known_good_at/_refresh_failed added to __init__; (2) ConnectionError guard in _compute() raises when all feeds return None — fixes Fatal Flaw A (silent network outage); (3) cache updated inside MRI-COMPUTE-LOCK; (4) refresh() sets _refresh_failed flag on exception; (5) level() returns _last_known_good_level when _refresh_failed=True; (6) is_fresh() new public method; (7) inject_news_state() zero-alert branch updates cache; (8) inject_news_state() main path updates cache; (9) _restore() no-file → CRITICAL; (10) _restore() >20h → CRITICAL (fixes dead-code from second-agent); (11) _restore() successful → saved_at timestamp not datetime.now(). DS+GAI external audit. Board 3-domain split resolved (McKinney reject → approved revised design). Cold second-agent FAIL → PASS after dead-code fix.",
       "open_findings": []
     },
     {
@@ -1236,7 +1239,7 @@
           "RC-8": "PASS"
         }
       },
-      "patch": "WR-RC3-1: 4 bare except blocks fixed \u2014 lines 191 (_load_patch_data), 367 (_load_latest_backtest), 376 (_load_trade_log), 526 (_strategy_validation_html hold_time loop). Each now prints WARN to stderr. Return values unchanged. Cold second-agent PASS.",
+      "patch": "WR-RC3-1: 4 bare except blocks fixed — lines 191 (_load_patch_data), 367 (_load_latest_backtest), 376 (_load_trade_log), 526 (_strategy_validation_html hold_time loop). Each now prints WARN to stderr. Return values unchanged. Cold second-agent PASS.",
       "open_findings": []
     },
     {
@@ -1281,7 +1284,7 @@
       "session": "S23-A2",
       "date": "2026-05-16",
       "patches": [
-        "A2 Kelly ATH drawdown adaptation \u2014 kelly.py + config.py"
+        "A2 Kelly ATH drawdown adaptation — kelly.py + config.py"
       ],
       "pid": 1022452
     },
@@ -1289,9 +1292,9 @@
       "session": "S23-aggressive-params",
       "date": "2026-05-16",
       "patches": [
-        "KELLY_FRACTION 0.15\u21920.25 (PROFILES[paper])",
-        "KELLY_MAX_RISK_PCT 0.04\u21920.06 (global constant)",
-        "MAX_PORTFOLIO_RISK_PCT 0.03\u21920.04 (PROFILES[paper])",
+        "KELLY_FRACTION 0.15→0.25 (PROFILES[paper])",
+        "KELLY_MAX_RISK_PCT 0.04→0.06 (global constant)",
+        "MAX_PORTFOLIO_RISK_PCT 0.03→0.04 (PROFILES[paper])",
         "Majors observability log added to KellySizer.__init__()"
       ],
       "pid": 1025416,
@@ -1302,11 +1305,11 @@
       "session": "S24",
       "date": "2026-05-17",
       "patches": [
-        "config.py L355: KELLY_A2_DD_START 0.02\u21920.05 \u2014 DS+GAI approved, no board vote needed (parameter calibration only)"
+        "config.py L355: KELLY_A2_DD_START 0.02→0.05 — DS+GAI approved, no board vote needed (parameter calibration only)"
       ],
       "pid": 1384,
       "operational_incidents": [
-        "SSH-KEY-OVERWRITE: rsync -i flag parsed as --itemize-changes (NOT identity file). Overwrote ~/.ssh/mtf_bot_oracle with config.py. Recovery: boot volume detach/reattach via OCI CLI. New key pair generated, injected via helper instance mount. Key renamed back to ~/.ssh/mtf_bot_oracle. Total recovery time: ~2 hours. Root cause: always use `rsync -e 'ssh -i keyfile'` syntax \u2014 never pass -i as a standalone rsync flag."
+        "SSH-KEY-OVERWRITE: rsync -i flag parsed as --itemize-changes (NOT identity file). Overwrote ~/.ssh/mtf_bot_oracle with config.py. Recovery: boot volume detach/reattach via OCI CLI. New key pair generated, injected via helper instance mount. Key renamed back to ~/.ssh/mtf_bot_oracle. Total recovery time: ~2 hours. Root cause: always use `rsync -e 'ssh -i keyfile'` syntax — never pass -i as a standalone rsync flag."
       ],
       "startup_verified": "Risk: 4%/trade | Kelly config: fraction=0.25 | max_risk=6.0% | min_risk=0.8% | Config validation passed 0 warnings 0 errors"
     },
@@ -1329,22 +1332,22 @@
       ],
       "patches": [
         "GTC held_for_orders race fix: 5-poll loop (2.5s, 0.5s intervals) with _submit_stop boolean. Exhaustion path submits anyway + Slack alert_gtc_failed. for/else Python construct.",
-        "DAY-GTC mutual exclusion: overnight\u2192GTC only; intraday\u2192DAY only. Root cause of GTC spam (GAI Q9): submitting both locks qty_available=0 \u2192 40310000 every retry.",
+        "DAY-GTC mutual exclusion: overnight→GTC only; intraday→DAY only. Root cause of GTC spam (GAI Q9): submitting both locks qty_available=0 → 40310000 every retry.",
         "qty_remaining desync fix: removed stale qty_orig fallback from trade.get(). If qty_remaining is None, recover from Alpaca position API. Root cause of PANW 40310000 spam (DS Bug#1): state loaded after restart had qty_orig=2, Alpaca had 1sh.",
-        "Directional Alpaca qty clamp: if _alpaca_qty < _new_rem \u2192 clamp down + ERROR log. If _alpaca_qty > _new_rem \u2192 WARNING only (bot tranche state authoritative for upward discrepancies).",
+        "Directional Alpaca qty clamp: if _alpaca_qty < _new_rem → clamp down + ERROR log. If _alpaca_qty > _new_rem → WARNING only (bot tranche state authoritative for upward discrepancies).",
         "Trail ratchet: removed _tr_offset/_tr_adj_px random jitter. Stop submitted at exact _cur_trail_px. Added time.sleep(0.1) after cancel loop for propagation buffer.",
         "Breakeven push: removed _be_offset random jitter. _be_stop_px = _be_entry (exact entry price). Simons/Taleb/DS/GAI all consensus on removing randomization."
       ],
-      "rc_changes": "No RC class counts changed (no new violations introduced). exit_logic.py file_hotspot patch_count 6\u21927, lines 2168\u21922265.",
+      "rc_changes": "No RC class counts changed (no new violations introduced). exit_logic.py file_hotspot patch_count 6→7, lines 2168→2265.",
       "board": "Beck/Kim/Minsky (TB) + Harris/Brandt (AB) + Simons/Taleb (BoD) CONDITIONAL APPROVE. All conditions satisfied.",
       "ds_gai": "DS CONDITIONAL APPROVE (Bug#1 qty_remaining desync incorporated). GAI CONDITIONAL APPROVE (Q9 DAY-GTC mutual exclusion incorporated). 3-Point AI Summary logged in tb_audit_log.md.",
-      "cold_second_agent": "FAIL#1 (submit_stop logic inversion) \u2192 FAIL#2 (3 issues: logger.error placement, getattr fallback, bidirectional clamp; 1 FALSE POSITIVE confirmed) \u2192 PASS#3.",
+      "cold_second_agent": "FAIL#1 (submit_stop logic inversion) → FAIL#2 (3 issues: logger.error placement, getattr fallback, bidirectional clamp; 1 FALSE POSITIVE confirmed) → PASS#3.",
       "static_analysis": "py_compile PASS, mypy 0 errors, ruff 0 violations",
       "deploy": "Rsync PASS. All 4 services active. RAM 245MB used / 565MB avail (was 47MB before restart).",
       "open_items_carried": [
-        "P1: RAM leak in alerts.py GTC retry accumulation \u2014 4 restarts in 18h. Separate full audit session required.",
-        "P1: Trail ratchet cancels both rth_day_stop_order_id and gtc_stop_order_id but only resubmits DAY stop \u2014 overnight positions lose GTC protection on every trail update. Pre-existing, not changed by S32 patch.",
-        "P2: weekly_review vs monthly_review P&L discrepancy \u2014 weekly uses realized (Alpaca fills), monthly uses equity change. Alignment required."
+        "P1: RAM leak in alerts.py GTC retry accumulation — 4 restarts in 18h. Separate full audit session required.",
+        "P1: Trail ratchet cancels both rth_day_stop_order_id and gtc_stop_order_id but only resubmits DAY stop — overnight positions lose GTC protection on every trail update. Pre-existing, not changed by S32 patch.",
+        "P2: weekly_review vs monthly_review P&L discrepancy — weekly uses realized (Alpaca fills), monthly uses equity change. Alignment required."
       ]
     },
     {
@@ -1354,9 +1357,9 @@
         "strategy/run_cycle.py"
       ],
       "patches": [
-        "BUG-C CLOSED (run_cycle.py L1552-1566): write_scan_html interim throttle. Root cause: write_scan_html() calls scan_to_html.run_scan(tickers) internally \u2014 sequential scan of 23+ symbols at 20s timeout each (~460s). Fires every RTH cycle \u2192 441-529s cycles vs designed 200-250s. Fix: 10-min elapsed guard + override on entries/exits/MRI level change/SPY event type change. State persisted on function object (_last_scan_html_ts/-9999.0 sentinel, _last_scan_html_mri/None, _last_scan_html_spy/None). Timestamp committed in finally clause (second-agent Threat #5 fix). DS/GAI: -9999.0 startup sentinel, None MRI default, SPY event override (DS BLOCKING) \u2014 all incorporated. Cold second-agent CONDITIONAL PASS (Threat #5 valid\u2192fixed via finally). py_compile/ruff PASS, mypy run_cycle.py PASS. Board TB/AB CONDITIONAL APPROVE, BoD Peterffy REJECT/Taleb CONDITIONAL/Shaw reject-as-interim. Consensus: deploy as 2-week interim, structural fix (background thread) by 2026-06-30. 1632L\u21921656L."
+        "BUG-C CLOSED (run_cycle.py L1552-1566): write_scan_html interim throttle. Root cause: write_scan_html() calls scan_to_html.run_scan(tickers) internally — sequential scan of 23+ symbols at 20s timeout each (~460s). Fires every RTH cycle → 441-529s cycles vs designed 200-250s. Fix: 10-min elapsed guard + override on entries/exits/MRI level change/SPY event type change. State persisted on function object (_last_scan_html_ts/-9999.0 sentinel, _last_scan_html_mri/None, _last_scan_html_spy/None). Timestamp committed in finally clause (second-agent Threat #5 fix). DS/GAI: -9999.0 startup sentinel, None MRI default, SPY event override (DS BLOCKING) — all incorporated. Cold second-agent CONDITIONAL PASS (Threat #5 valid→fixed via finally). py_compile/ruff PASS, mypy run_cycle.py PASS. Board TB/AB CONDITIONAL APPROVE, BoD Peterffy REJECT/Taleb CONDITIONAL/Shaw reject-as-interim. Consensus: deploy as 2-week interim, structural fix (background thread) by 2026-06-30. 1632L→1656L."
       ],
-      "rc_changes": "No RC class counts changed. run_cycle.py patch_count 8\u21929."
+      "rc_changes": "No RC class counts changed. run_cycle.py patch_count 8→9."
     },
     {
       "session": "S30",
@@ -1365,12 +1368,12 @@
         "execution/exit_logic.py"
       ],
       "patches": [
-        "#13 CLOSED (exit_logic.py L672): trade['qty_remaining'] KeyError guard \u2014 try/except with CRITICAL log + computed fallback (qty_rem - qty_to_cls, semantically correct per second-agent resolution) + key restoration to prevent infinite loop.",
-        "RC-3 x5 (exit_logic.py): L229 bar fetch ERROR+continue; L244 live price override WARNING (partials); L852 live price override WARNING (exits); L950 overnight ATR entry_time parse WARNING+_entry_dt=None; L1945 EH get_order() ERROR+continue \u2014 critical change: was `order=None` which would have cleared pm_exit_order_id and permanently orphaned the live Alpaca limit order.",
-        "RC-4 x2 (exit_logic.py): L1038 overnight ATR else branch current_price\u2192entry_price+CRITICAL log; L1635 defer GTC final fallback current_price\u2192stop or entry_price+CRITICAL log. Both locations already called _fetch_actual_fill_price() above \u2014 fix is final fallback target only, no redundant API call.",
-        "RULE C-4 mypy 31\u21920 (exit_logic.py): type:ignore[assignment] on None-default typed params (L188, L762); type:ignore[attr-defined]/[union-attr] on submit_* .id returns (L292/294/602/611/619/636/737/1164/1168/2025/2059/2095/2126/2131); tqi guards get('tqi_score',0) if closed_trades else 0 (L342/1001/1063/1121/1302/1414/1767); no-redef _ep annotation removed (L1667); type:ignore[unreachable] on both if-line AND body-line (L1038/1039)."
+        "#13 CLOSED (exit_logic.py L672): trade['qty_remaining'] KeyError guard — try/except with CRITICAL log + computed fallback (qty_rem - qty_to_cls, semantically correct per second-agent resolution) + key restoration to prevent infinite loop.",
+        "RC-3 x5 (exit_logic.py): L229 bar fetch ERROR+continue; L244 live price override WARNING (partials); L852 live price override WARNING (exits); L950 overnight ATR entry_time parse WARNING+_entry_dt=None; L1945 EH get_order() ERROR+continue — critical change: was `order=None` which would have cleared pm_exit_order_id and permanently orphaned the live Alpaca limit order.",
+        "RC-4 x2 (exit_logic.py): L1038 overnight ATR else branch current_price→entry_price+CRITICAL log; L1635 defer GTC final fallback current_price→stop or entry_price+CRITICAL log. Both locations already called _fetch_actual_fill_price() above — fix is final fallback target only, no redundant API call.",
+        "RULE C-4 mypy 31→0 (exit_logic.py): type:ignore[assignment] on None-default typed params (L188, L762); type:ignore[attr-defined]/[union-attr] on submit_* .id returns (L292/294/602/611/619/636/737/1164/1168/2025/2059/2095/2126/2131); tqi guards get('tqi_score',0) if closed_trades else 0 (L342/1001/1063/1121/1302/1414/1767); no-redef _ep annotation removed (L1667); type:ignore[unreachable] on both if-line AND body-line (L1038/1039)."
       ],
-      "rc_changes": "RC-3: 23\u219218 (exit_logic.py x5 fixed). RC-4: 13\u219211 (exit_logic.py x2 fixed). exit_logic.py file_hotspot patch_count 5\u21926, lines 2133\u21922168."
+      "rc_changes": "RC-3: 23→18 (exit_logic.py x5 fixed). RC-4: 13→11 (exit_logic.py x2 fixed). exit_logic.py file_hotspot patch_count 5→6, lines 2133→2168."
     },
     {
       "session": "S29",
@@ -1385,10 +1388,10 @@
       ],
       "patches": [
         "OM-RACE-1 (orphan_manager.py): PENDING_CANCEL deferral guard in Patch 1 loop + tracker._save_log() after PDT branch counter reset. Cold second-agent v4 PASS. Board 4/4. DS/GAI CONDITIONAL APPROVE. All RC PASS.",
-        "BUG-D (portfolio_tracker.py): write_eod_summary score_comparison reader fixed \u2014 isinstance(cmp_data,dict) branch extracts tickers list; avg_12pt/16pt=mean(max(long,short)) per ticker; scan_date+trade_mode metadata added; legacy list branch preserved. RULE C-4: mypy 10\u21920, ruff 69\u21920. Board 3/3 CONDITIONAL APPROVE. Cold second-agent PASS. py_compile/mypy/ruff all PASS.",
+        "BUG-D (portfolio_tracker.py): write_eod_summary score_comparison reader fixed — isinstance(cmp_data,dict) branch extracts tickers list; avg_12pt/16pt=mean(max(long,short)) per ticker; scan_date+trade_mode metadata added; legacy list branch preserved. RULE C-4: mypy 10→0, ruff 69→0. Board 3/3 CONDITIONAL APPROVE. Cold second-agent PASS. py_compile/mypy/ruff all PASS.",
         "P&L discrepancy (weekly_review.py): compute_lifetime_stats() now primary P&L source (Alpaca-authoritative). RULE C-4: mypy 0, ruff 0. Board McKinney+Beck/Kim CONDITIONAL APPROVE. Cold second-agent v2 PASS. Rsync PASS, no restart needed.",
         "#12 (reconcile_eod.py): _compute_trade_pnl() uses actual Alpaca fill qty. Board: Harris+Kyle CONDITIONAL APPROVE. Cold second-agent PASS. py_compile/mypy/ruff PASS. Rsync PASS. No restart needed.",
-        "#16 P2 (run_cycle.py): T1 fail-streak Slack alert \u2014 send_slack import, recovery re-arm, exception handler alert at \u22653 failures. RULE C-4: mypy 18\u21920. Board 3/3 CONDITIONAL APPROVE. DS/GAI: GAI APPROVE, DS REJECT resolved (systemd restart arch). Cold second-agent FAIL\u2192resolved (deploy ordering). py_compile/mypy/ruff PASS. Rsync PASS.",
+        "#16 P2 (run_cycle.py): T1 fail-streak Slack alert — send_slack import, recovery re-arm, exception handler alert at ≥3 failures. RULE C-4: mypy 18→0. Board 3/3 CONDITIONAL APPROVE. DS/GAI: GAI APPROVE, DS REJECT resolved (systemd restart arch). Cold second-agent FAIL→resolved (deploy ordering). py_compile/mypy/ruff PASS. Rsync PASS.",
         "#16 P2 (main.py): _spy_fetch_alert_sent: bool = False global added. py_compile/mypy/ruff PASS. Rsync first (before run_cycle.py). Restart: all 4 services active."
       ],
       "rc_changes": "RC-3: no change (23). run_cycle.py open_rc_violations cleared. #16 P2 CLOSED."
@@ -1401,10 +1404,10 @@
         "execution/orphan_manager.py"
       ],
       "patches": [
-        "PLTR-PHANTOM-EXIT (entry_logic.py): post-fill tracking block wrapped in try/except; sys.exit(1) on exception \u2192 systemd restart \u2192 _reconcile_positions() adopts orphan; entered.append() moved to last. RC-3 x3 fixed. RC-3 count 26\u219223.",
+        "PLTR-PHANTOM-EXIT (entry_logic.py): post-fill tracking block wrapped in try/except; sys.exit(1) on exception → systemd restart → _reconcile_positions() adopts orphan; entered.append() moved to last. RC-3 x3 fixed. RC-3 count 26→23.",
         "OM-RACE-1 (orphan_manager.py): PENDING_CANCEL deferral guard in Patch 1 loop. Batch get_open_orders() before loop. _get_blocking_ids() list helper. gtc_p1_defer_cycles counter (3 reset paths). Escalation to CRITICAL+alert_gtc_failed at cycle 5. RULE C-4 mypy fixes. Board 4/4. DS/GAI CONDITIONAL APPROVE. Cold second-agent v4 PASS."
       ],
-      "rc_changes": "RC-3: 26\u219223 (entry_logic.py x3 fixed). orphan_manager.py RC-3 PASS (no violations found in re-audit)."
+      "rc_changes": "RC-3: 26→23 (entry_logic.py x3 fixed). orphan_manager.py RC-3 PASS (no violations found in re-audit)."
     },
     {
       "session": "S27",
@@ -1414,10 +1417,10 @@
         "execution/risk_manager.py"
       ],
       "patches": [
-        "BUG-A (confluence.py): VOLSHADOW numpy.bool_ JSON serialization fix \u2014 bool() wrapper on _would_pass and rsi_would_score. RC-3 x4. F401 x7. E402 x6. E701 x4. E501 x10+.",
+        "BUG-A (confluence.py): VOLSHADOW numpy.bool_ JSON serialization fix — bool() wrapper on _would_pass and rsi_would_score. RC-3 x4. F401 x7. E402 x6. E701 x4. E501 x10+.",
         "BUG-B (risk_manager.py): FIFO 4-way explicit handling for sell_short/buy_to_cover Alpaca fill sides. Kill switch now sees short P&L. RC-3 x2 (_load_kill_state + _save_kill_state). RULE C-4: Optional types, type: ignore requests, E501 x16."
       ],
-      "rc_changes": "RC-3: 28 \u2192 26 (risk_manager.py x2 fixed S27). confluence.py RC-3 x4 also fixed S27 (logged separately in S27 BUG-A entry)."
+      "rc_changes": "RC-3: 28 → 26 (risk_manager.py x2 fixed S27). confluence.py RC-3 x4 also fixed S27 (logged separately in S27 BUG-A entry)."
     }
   ],
   "fixes": [
@@ -1425,7 +1428,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "strategy/signal_generator.py + strategy/movers/scanner.py",
-      "bug": "generate_signal() not implemented \u2014 ImportError on every movers bot confluence cycle",
+      "bug": "generate_signal() not implemented — ImportError on every movers bot confluence cycle",
       "class": "missing-function",
       "severity": "P0",
       "fix": "Implemented generate_signal() with direction-specific scoring, explicit tf_data guards, df.copy(), exception fallback. Added direction=direction kwarg at call site in scanner.py.",
@@ -1435,7 +1438,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "data/fmp_client.py",
-      "bug": "Change D: earnings coverage gap logging \u2014 preload_earnings_week() silent on coverage gaps",
+      "bug": "Change D: earnings coverage gap logging — preload_earnings_week() silent on coverage gaps",
       "class": "missing-logging",
       "severity": "P2",
       "fix": "INFO summary (scanned/with_earnings/no_events_in_window/lookahead_days) + DEBUG symbol list after for-loop. Severity downgraded from WARNING to INFO+DEBUG (board: McKinney/Majors).",
@@ -1445,7 +1448,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "data/fetcher.py",
-      "bug": "DataFetcher.get_bars() not implemented \u2014 AttributeError on every get_daily_movers()/get_intraday_movers() call in scanner.py",
+      "bug": "DataFetcher.get_bars() not implemented — AttributeError on every get_daily_movers()/get_intraday_movers() call in scanner.py",
       "class": "missing-method",
       "severity": "P0",
       "fix": "_BARS_PER_TRADING_DAY constant + DataFetcher.get_bars() thin wrapper. Converts days_back to num_bars with +1 buffer, unknown-TF and days_back<=0 guards, delegates to fetch_bars().",
@@ -1455,7 +1458,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "data/fetcher.py",
-      "bug": "fetch_bars() non-retryable exceptions logged at DEBUG \u2014 silent failures invisible in production logs",
+      "bug": "fetch_bars() non-retryable exceptions logged at DEBUG — silent failures invisible in production logs",
       "class": "missing-logging",
       "severity": "P1",
       "fix": "First occurrence per symbol escalated to WARNING; repeats demoted to DEBUG for 1h window. Module-level _fetch_bars_warned dict + _FETCH_WARN_COOLDOWN_SECS=3600.0.",
@@ -1465,7 +1468,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "data/fetcher.py",
-      "bug": "P1: transient errors (ConnectionError/Timeout/502/503/504) bypass retry loop, return empty immediately. P2: 'rate' substring too broad \u2014 matches unrelated error text.",
+      "bug": "P1: transient errors (ConnectionError/Timeout/502/503/504) bypass retry loop, return empty immediately. P2: 'rate' substring too broad — matches unrelated error text.",
       "class": "retry-bypass + overbroad-match",
       "severity": "P1+P2",
       "fix": "_RETRYABLE_ERR_SIGNALS + _RATE_LIMIT_SIGNALS tuples. Transients now retry 5x with 2s/4s/8s/8s/8s backoff. Rate-limit narrowed to 'rate limit' two-word phrase, separate 30s-cap backoff curve.",
@@ -1475,7 +1478,7 @@
       "session": "S16-continued",
       "date": "2026-05-10",
       "file": "run_movers.py",
-      "bug": "Change E: TF_WEEKLY fetched per symbol in TIMEFRAMES_FOR_CONFLUENCE but never used by confluence.py scorer \u2014 pure API waste",
+      "bug": "Change E: TF_WEEKLY fetched per symbol in TIMEFRAMES_FOR_CONFLUENCE but never used by confluence.py scorer — pure API waste",
       "class": "dead-code",
       "severity": "P2",
       "fix": "Removed TF_WEEKLY from TIMEFRAMES_FOR_CONFLUENCE list and from import. 25% API call reduction per scan cycle. confluence.py confirmed zero TF_WEEKLY refs.",
@@ -1487,7 +1490,7 @@
       "rc": "RC-3",
       "file": "autonomous_patch_generator.py",
       "line": 67,
-      "fix": "except-pass in _log \u2192 print to stderr",
+      "fix": "except-pass in _log → print to stderr",
       "commit": "2c4552d"
     },
     {
@@ -1495,7 +1498,7 @@
       "session": "S58c",
       "rc": "RC-8",
       "file": "execution/entry_logic.py",
-      "fix": "9 buffer-clear sites (b2e61f7) \u2014 deadlock resolved, item closed",
+      "fix": "9 buffer-clear sites (b2e61f7) — deadlock resolved, item closed",
       "commit": "b2e61f7"
     }
   ],
@@ -1504,7 +1507,7 @@
       "session": "S16",
       "date": "2026-05-11",
       "file": "strategy/movers/scanner.py",
-      "bug": "DataFetcher.get_bars() does not exist \u2014 AttributeError on every get_daily_movers()/get_intraday_movers() call",
+      "bug": "DataFetcher.get_bars() does not exist — AttributeError on every get_daily_movers()/get_intraday_movers() call",
       "class": "missing-method",
       "severity": "P0",
       "source": "GAI audit",
@@ -1517,7 +1520,7 @@
         "S17"
       ],
       "patch_count": 1,
-      "note": "new file \u2014 Stage A baseline capture + decomp regression checker"
+      "note": "new file — Stage A baseline capture + decomp regression checker"
     },
     "generate_wtp.py": {
       "session": "S17",
@@ -1529,7 +1532,7 @@
       "session": "S18",
       "date": "2026-05-11",
       "type": "new_file",
-      "description": "Dynamic Parameter Engine (DPE) Phase 1. rv_cache (20-day annualized realized vol, 1h TTL, stale-cache fallback on failure). get_be_buffer_mult(symbol, vix) \u2014 H1 overnight ATR buffer using rv_scalar=clip(rv/0.20,1.0,2.0), Taleb ceiling min(base*scalar,0.65). Board-approved. DS/GAI audited. 3 findings fixed: NaN filter, None sentinel, sys.path removal."
+      "description": "Dynamic Parameter Engine (DPE) Phase 1. rv_cache (20-day annualized realized vol, 1h TTL, stale-cache fallback on failure). get_be_buffer_mult(symbol, vix) — H1 overnight ATR buffer using rv_scalar=clip(rv/0.20,1.0,2.0), Taleb ceiling min(base*scalar,0.65). Board-approved. DS/GAI audited. 3 findings fixed: NaN filter, None sentinel, sys.path removal."
     }
   },
   "stats": {
