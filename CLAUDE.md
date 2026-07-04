@@ -51,7 +51,7 @@ YOUR DECISION: APPROVE / REJECT / DEFER
 1. Never bring a proposal until ALL voices (board, Gro, GAI) are aligned. If there is a split, Claude resolves it via counter-prompting — Rafael never sees unresolved technical disagreements.
 2. Never use technical jargon in the summary. If a concept requires explanation, use a real stock (NVDA, AAPL, SPY) and a dollar amount.
 3. Never bring more than 3 proposals in one session unless Rafael asks for more.
-4. "Let's do it" or "Approved" = proceed immediately to apply + rsync + restart. No follow-up confirmation needed.
+4. "Let's do it" or "Approved" = proceed immediately to the FINAL pre-ship Gro+GAI audit of the exact diff (see FINAL PRE-SHIP rule) → apply + commit + push + OCI `git pull --ff-only` + restart. No follow-up confirmation needed.
 5. Rafael's approval covers the exact proposal presented — not scope beyond it.
 
 ---
@@ -159,8 +159,28 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 | **5c** | **code-review-graph Impact Analysis** — run `detect_changes_tool` + `get_impact_radius_tool` on every changed file. Show user which dependent functions are affected. | No patch proposed until complete |
 | **6** | **Propose Patch with Exact Diff** — show exact before/after for every changed line. Show static analysis results. Show second-agent verdict. Nothing written to disk yet. | No edit until user approves |
 | **7** | **User Approval** — user says "approved." This is the sole required gate. "Approved" implies confirmed — Claude writes immediately without asking a second confirmation question. | No edit without approval |
-| **8** | **Apply, Rsync, Restart** | |
+| **8** | **FINAL Gro + GAI pre-ship audit of the EXACT diff (mandatory — see FINAL PRE-SHIP Gro/GAI AUDIT rule below) → then Apply, Commit + Push, OCI `git pull --ff-only`, Restart** — git single-channel deploy; NEVER rsync tracked files (rsync dirties OCI's git tree and aborts the next auto_deploy pull) | No ship until BOTH Gro + GAI APPROVE the final diff |
 | **9** | **Post-Patch Verification** — re-run audit points 1, 2, 4, 5. Run mypy + ruff again on patched file. Confirm no regressions. Update `logs/tb_audit_log.md`. | Item not closed until verified |
+
+---
+
+### FINAL PRE-SHIP Gro + GAI AUDIT — HARD RULE, ZERO EXCEPTIONS (Rafael mandate 2026-07-03)
+
+**No code, patch, diff, config change, or execution-governing doc may be applied, committed, pushed, or deployed until Gro AND GAI have audited the EXACT FINAL ARTIFACT — the literal diff being shipped, not the concept, plan, or decision behind it — in one last pass immediately before ship.**
+
+This rule exists because a concept-level Gro/GAI approval (Step 4 — on audit findings, before the patch is written) does NOT catch bugs introduced during implementation. On 2026-07-03 an approved deploy-mechanism change (Option A) passed its concept audit cleanly, but the actual codification contained three implementation bugs — the rollback reverted the wrong commit (`HEAD` instead of the captured patch SHA), an unhandled non-fast-forward push race, and a silently-swallowed pull failure. All three were caught ONLY because the exact final diff was sent to Gro + GAI one last time before applying. Without that final pass it would have shipped broken. This nearly happened; it must not happen again.
+
+**The gate:**
+- Runs AFTER Step 7 approval and BEFORE Step 8 apply/ship — it is the last thing before anything is written or deployed.
+- Same comprehensive prompt to BOTH (Gro/GAI Same Prompt Rule). The prompt carries the EXACT final diff + the original intent — never a summary, never a leading "the board converged on X" (see Gro/GAI No-Leading-Prompts rule).
+- BOTH must return APPROVE before ship. APPROVE-WITH-CHANGES is not a pass until every named change is applied AND the revised diff is re-sent for a clean confirmation. A REJECT from either blocks the ship until resolved and re-audited.
+- Applies to ALL artifacts that reach or govern execution: `.py` code, `config.py`, patch files, AND process/runbook docs that control how code is built, deployed, or rolled back (skill deploy handlers, CLAUDE.md deploy steps). If it changes what runs or how it ships, it needs the final pass.
+- No "it's just docs," "it's small," "obvious," or "the concept was already approved" exceptions.
+- **Self-application:** this rule and the runbook docs that contain it (this file; the `session-start` skill deploy handler) are themselves execution-governing. A change to any of them undergoes this SAME final Gro + GAI pass on its own diff before it is committed or pushed — exactly as this rule was itself audited before it first shipped (2026-07-03). There is no highest-level document that is exempt from its own gate.
+
+### DEPLOY MECHANISM — git single channel (Rafael mandate 2026-07-03, board 4/4 + Gro + GAI)
+
+Git is the SOLE deploy channel. The Mac commits + pushes to GitHub; OCI deploys by `git pull origin main --ff-only` + restart (the exact path `auto_deploy.sh` already runs). **Rsync of tracked files is PROHIBITED** — it writes bytes without a commit, dirtying OCI's git tree so the next `git pull --ff-only` aborts (this caused OCI HEAD to drift 5 commits behind GitHub, 6/29–7/3). Rollback reverts the CAPTURED patch SHA (`DEPLOY_SHA` from the commit step), never `HEAD`, because `autonomous_review.py` or a later commit may have advanced HEAD. Deploy success requires a literal `DEPLOY_OK` marker from the OCI ssh command; its absence means the pull failed and the restart was correctly skipped — do not report success.
 
 ---
 
@@ -934,6 +954,9 @@ scan this log first alongside the open items list.
 ---
 
 ### Logged Items
+
+**[2026-07-03 DEPLOY-FIX] autonomous_review.py pushes directly to `main` — conflicts with git-single-channel deploy (Gro + GAI Point-3, board vote required)**
+During the Option-A deploy-mechanism codification audit, both Gro and GAI independently flagged that `autonomous_review.py` (nightly cron on OCI) runs `git pull`/`git apply`/`git commit`/`git push` directly against `main` — the same branch that is now the sole deploy channel. This means `main` can advance out from under an operator deploy (non-fast-forward push rejection) or interleave an un-approved autonomous commit into a live deploy. The mitigations shipped 2026-07-03 (capture `DEPLOY_SHA` for rollback; push-rejection retry-with-rebase; `DEPLOY_OK` marker) handle the symptom. The structural fix GAI recommends: `autonomous_review.py` should push to a dedicated branch (e.g. `autonomous/suggestions`) and open a PR / require an explicit merge to `main`, rather than pushing to `main` directly. This is a redesign of the autonomous pipeline's git flow — separate design session, Feature Design Protocol gate first, full board + Gro/GAI. Files: `autonomous_review.py`, `auto_deploy.sh`. Not urgent (nightly crons rarely collide with ad-hoc deploys) but it is the last structural gap in the single-channel model.
 
 **[2026-07-03 S-GEX] UX total redesign — all 5 HTML pages (Rafael directive, QUEUED behind critical bugs)**
 Rafael wants a total UX redesign of dashboard.html, weekly_review.html, scan_results.html, options page, and monthly_review.html. Explicitly queued behind critical-bug work. When picked up: Feature Design Protocol gate first (data sources unchanged — this is presentation-layer only), Luke Wroblewski (TB, UI/UX mobile-first seat) leads the board input. Scope: 5 pages, shared design system, PT timestamps preserved, mobile-first.
