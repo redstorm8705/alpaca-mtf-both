@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Recurring bug class counters. Updated each time a patch is logged. RC classes defined in CLAUDE.md. Recurrence >= 3 triggers red badge in weekly_review.html.",
-    "last_updated": "2026-07-03 (PHANTOM-FILL FIX: fetch_actual_fill_price entry_time-bounded + filled_at DESC + side filter + sanity band + fail-closed; RC-4/RC-6 class, found+fixed same session)"
+    "last_updated": "2026-07-03 evening (CROSS-STRATEGY COLLISION diagnosis: Movers closed main-bot shared Alpaca lots — HOOD + 7/2 8-position mass-dump; 7 bidirectional vectors; true root = main-bot false record_exit dropping a live position from trade_log.json open (RC-4/phantom-fill class); DECISION: Movers RETIRED, no code shipped. See tb_audit_log.md)"
   },
   "RC-1": {
     "label": "Naive datetime (datetime.now() without timezone)",
