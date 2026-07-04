@@ -39,6 +39,12 @@ _LOGS = _PROJECT_ROOT / "logs"
 _HISTORY = _LOGS / "score16_history.jsonl"
 _REPORT = _LOGS / "score16_report.json"
 
+# 16pt strategy-review milestones (Rafael 2026-07-03): fire a one-time Slack
+# reminder each time the count of 16pt-EVALUABLE closed trades (those with a
+# real score_16pt — the 'None' bucket is excluded) first crosses a threshold.
+_MILESTONE_FILE = _LOGS / "score16_milestones.json"
+_MILESTONES = (50, 100, 150, 200)
+
 
 def _log(msg: str) -> None:
     print(f"[score16_aggregator] {msg}", file=sys.stderr, flush=True)
@@ -164,10 +170,62 @@ def build_report() -> dict:
     }
 
 
+def check_milestones(by16: dict) -> None:
+    """Fire a one-time Slack reminder when 16pt-evaluable trade count crosses
+    50 / 100 / 150 / 200 — cue to revisit the 16pt strategy evaluation.
+
+    Count excludes the 'None' bucket (trades without a real score_16pt).
+    Idempotent: fired milestones persisted to score16_milestones.json, so each
+    threshold alerts exactly once. Never raises into the caller.
+    """
+    try:
+        count = sum(v.get("n", 0) for k, v in by16.items() if k not in ("None", None))
+        fired: list = []
+        if _MILESTONE_FILE.exists():
+            try:
+                fired = json.load(open(_MILESTONE_FILE)).get("fired", [])
+            except (json.JSONDecodeError, OSError) as e:
+                _log(f"milestone file unreadable, treating as empty: {e}")
+                fired = []
+        newly = [m for m in _MILESTONES if count >= m and m not in fired]
+        if not newly:
+            return
+        for m in newly:
+            _log(f"16pt milestone reached: {count} evaluable trades >= {m}")
+            try:
+                from alerts import send_slack
+                send_slack(
+                    f":checkered_flag: *16pt STRATEGY REVIEW DUE* — {count} "
+                    f"evaluable 16pt-scored trades (milestone {m}). Revisit the "
+                    f"16pt strategy evaluation: per-factor ICs, score-monotonicity, "
+                    f"and 12pt-vs-16pt divergence."
+                )
+            except Exception as e:
+                _log(f"milestone Slack failed (non-fatal): {e}")
+        fired = sorted(set(fired) | set(newly))
+        tmp = _MILESTONE_FILE.with_suffix(".json.tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(
+                    {"fired": fired, "last_count": count,
+                     "updated": datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")},
+                    f, indent=2,
+                )
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, _MILESTONE_FILE)
+        except Exception:
+            tmp.unlink(missing_ok=True)   # no orphan .tmp on write failure
+            raise
+    except Exception as e:
+        _log(f"check_milestones failed (non-fatal): {e}")
+
+
 def main() -> int:
     try:
         added = archive_comparisons()
         report = build_report()
+        check_milestones(report.get("trades_by_score_16pt", {}))
         tmp = _REPORT.with_suffix(".json.tmp")
         with open(tmp, "w") as f:
             json.dump(report, f, indent=2)
