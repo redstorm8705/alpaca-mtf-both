@@ -24,6 +24,15 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from reporting.metrics import _day_pnl, compute_lifetime_stats, compute_period_stats
+from ui_tokens import (
+    BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
+    TEXT_PRIMARY, TEXT_BRIGHT, TEXT_MUTED, TEXT_DIM,
+    BORDER_PANEL, BORDER_LIGHT, BORDER_TODAY,
+    STATUS_POSITIVE, STATUS_NEGATIVE, STATUS_WARNING,
+    FONT_FAMILY,
+    FS_DISPLAY, FS_STAT, FS_H1, FS_PNL, FS_BODY, FS_NAV, FS_LABEL, FS_MICRO, FS_TINY,
+    RADIUS_SM, RADIUS_MD, RADIUS_LG,
+)
 
 import logging
 
@@ -154,15 +163,27 @@ def _fmt_pnl(pnl: float) -> str:
 
 
 def _wr_color(wr: float) -> str:
-    return "#30d158" if wr >= 60 else "#ffd60a" if wr >= 40 else "#ff3b30"
+    return (
+        STATUS_POSITIVE if wr >= 60
+        else STATUS_WARNING if wr >= 40
+        else STATUS_NEGATIVE
+    )
 
 
 def _tqi_color(v: float) -> str:
-    return "#30d158" if v >= 65 else "#ffd60a" if v >= 40 else "#ff3b30"
+    return (
+        STATUS_POSITIVE if v >= 65
+        else STATUS_WARNING if v >= 40
+        else STATUS_NEGATIVE
+    )
 
 
 def _pf_color(v: float) -> str:
-    return "#30d158" if v >= 1.5 else "#ffd60a" if v >= 1.0 else "#ff3b30"
+    return (
+        STATUS_POSITIVE if v >= 1.5
+        else STATUS_WARNING if v >= 1.0
+        else STATUS_NEGATIVE
+    )
 
 
 def _day_cell(d: date | None) -> str:
@@ -237,23 +258,23 @@ def _day_cell(d: date | None) -> str:
 
 def _stats_html(m: dict) -> str:
     if m["total_pnl"] > 0:
-        pnl_c = "#30d158"
+        pnl_c = STATUS_POSITIVE
     elif m["total_pnl"] < 0:
-        pnl_c = "#ff3b30"
+        pnl_c = STATUS_NEGATIVE
     else:
-        pnl_c = "#636680"
+        pnl_c = TEXT_MUTED
     wr_c  = _wr_color(m["wr"])
 
     score_str = f"{m['avg_score']:.1f}/12" if m["avg_score"] is not None else "—"
     tqi_str   = f"{m['avg_tqi']:.1f}"      if m["avg_tqi"] is not None   else "—"
-    tqi_c     = _tqi_color(m["avg_tqi"])   if m["avg_tqi"] is not None   else "#636680"
+    tqi_c     = _tqi_color(m["avg_tqi"])   if m["avg_tqi"] is not None   else TEXT_MUTED
     pf_str    = f"{m['profit_factor']:.2f}×" if m["profit_factor"] is not None else "—"
     pf_c = (
         _pf_color(m["profit_factor"]) if m["profit_factor"] is not None
-        else "#636680"
+        else TEXT_MUTED
     )
 
-    def box(label: str, val: str, color: str = "#e8ecff") -> str:
+    def box(label: str, val: str, color: str = TEXT_BRIGHT) -> str:
         return (
             f'<div class="stat-box">'
             f'<div class="stat-label">{label}</div>'
@@ -309,7 +330,11 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
     _lt_pnl    = float(_lt_data.get("total_pnl", 0.0))
     _lt_trades = int(_lt_data.get("total_trades", 0))
     _lt_wr     = float(_lt_data.get("win_rate", 0.0))
-    _lt_pnl_c  = "#30d158" if _lt_pnl > 0 else "#ff3b30" if _lt_pnl < 0 else "#636680"
+    _lt_pnl_c  = (
+        STATUS_POSITIVE if _lt_pnl > 0
+        else STATUS_NEGATIVE if _lt_pnl < 0
+        else TEXT_MUTED
+    )
     _lt_sign   = "+" if _lt_pnl >= 0 else ""
     _lt_banner = (
         f'<div class="lt-banner">'
@@ -350,64 +375,70 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         if is_archive else ""
     )
 
+    # CSS values sourced from ui_tokens.py (Step-1 token extraction, 2026-07-04).
+    # Byte-identical to the prior hardcoded literals — golden-diff gated.
+    # rgba() overlays remain literal here (page-specific low-alpha status tints);
+    # they are tokenized at the later visual-convergence step, not now.
     css = (
         "* {box-sizing:border-box;margin:0;padding:0}"
-        "body{background:#0d0f1a;color:#c8cce4;"
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;"
-        "font-size:14px;min-height:100vh}"
-        ".header{background:#13162a;border-bottom:1px solid #252847;"
+        f"body{{background:{BG_BASE};color:{TEXT_PRIMARY};"
+        f"font-family:{FONT_FAMILY};"
+        f"font-size:{FS_BODY}px;min-height:100vh}}"
+        f".header{{background:{BG_PANEL};border-bottom:1px solid {BORDER_PANEL};"
         "padding:16px 24px;display:flex;align-items:center;"
         "justify-content:space-between;flex-wrap:wrap;gap:12px}"
-        ".header h1{font-size:18px;font-weight:600;color:#e8ecff}"
-        ".header-sub{font-size:12px;color:#636680;margin-top:2px}"
+        f".header h1{{font-size:{FS_H1}px;font-weight:600;color:{TEXT_BRIGHT}}}"
+        f".header-sub{{font-size:{FS_LABEL}px;color:{TEXT_MUTED};margin-top:2px}}"
         ".nav-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}"
-        ".nav-btn{background:#1e2240;border:1px solid #363a5a;color:#c8cce4;"
-        "padding:6px 14px;border-radius:6px;cursor:pointer;"
-        "text-decoration:none;font-size:13px}"
-        ".nav-btn:hover{background:#252847}"
+        f".nav-btn{{background:{BG_ELEVATED};border:1px solid {BORDER_LIGHT};"
+        f"color:{TEXT_PRIMARY};"
+        f"padding:6px 14px;border-radius:{RADIUS_MD}px;cursor:pointer;"
+        f"text-decoration:none;font-size:{FS_NAV}px}}"
+        f".nav-btn:hover{{background:{BORDER_PANEL}}}"
         ".nav-btn.disabled{opacity:.3;pointer-events:none}"
-        ".nav-select{background:#1e2240;border:1px solid #363a5a;"
-        "color:#c8cce4;padding:6px 10px;border-radius:6px;font-size:13px}"
-        ".back-link{color:#636680;font-size:12px;text-decoration:none;"
+        f".nav-select{{background:{BG_ELEVATED};border:1px solid {BORDER_LIGHT};"
+        f"color:{TEXT_PRIMARY};padding:6px 10px;"
+        f"border-radius:{RADIUS_MD}px;font-size:{FS_NAV}px}}"
+        f".back-link{{color:{TEXT_MUTED};font-size:{FS_LABEL}px;text-decoration:none;"
         "display:block;margin-bottom:6px}"
-        ".back-link:hover{color:#c8cce4}"
+        f".back-link:hover{{color:{TEXT_PRIMARY}}}"
         ".main{padding:20px 24px;max-width:1400px;margin:0 auto}"
         ".stats-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}"
-        ".stat-box{background:#13162a;border:1px solid #252847;"
-        "border-radius:8px;padding:12px 16px;min-width:100px;flex:1}"
-        ".stat-label{font-size:11px;color:#636680;text-transform:uppercase;"
+        f".stat-box{{background:{BG_PANEL};border:1px solid {BORDER_PANEL};"
+        f"border-radius:{RADIUS_LG}px;padding:12px 16px;min-width:100px;flex:1}}"
+        f".stat-label{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};text-transform:uppercase;"
         "letter-spacing:.5px;margin-bottom:4px}"
-        ".stat-value{font-size:20px;font-weight:600}"
+        f".stat-value{{font-size:{FS_STAT}px;font-weight:600}}"
         ".cal-table{width:100%;border-collapse:separate;border-spacing:5px}"
-        ".cal-table th{text-align:center;font-size:11px;color:#636680;"
+        f".cal-table th{{text-align:center;font-size:{FS_MICRO}px;color:{TEXT_MUTED};"
         "text-transform:uppercase;letter-spacing:.5px;padding-bottom:4px}"
-        "td.day{background:#13162a;border:1px solid #252847;"
-        "border-radius:8px;vertical-align:top;padding:8px 10px;"
+        f"td.day{{background:{BG_PANEL};border:1px solid {BORDER_PANEL};"
+        f"border-radius:{RADIUS_LG}px;vertical-align:top;padding:8px 10px;"
         "min-height:80px;width:20%}"
-        "td.day.today{border-color:#5055a0;background:#161934}"
-        "td.day.weekend{background:#0f1121}"
+        f"td.day.today{{border-color:{BORDER_TODAY};background:{BG_TODAY}}}"
+        f"td.day.weekend{{background:{BG_WEEKEND}}}"
         "td.day.no-data{opacity:.45}"
         "td.day.empty{background:transparent;border:none}"
         ".cell-header{display:flex;align-items:center;"
         "justify-content:space-between;margin-bottom:3px}"
-        ".cell-date{font-size:12px;color:#636680;font-weight:500}"
-        ".cell-pnl{font-size:17px;font-weight:700;margin-bottom:2px}"
-        ".cell-meta{font-size:11px}"
-        ".cell-empty{font-size:11px;color:#363a5a;font-style:italic;margin-top:4px}"
-        ".pos{color:#30d158}.neg{color:#ff3b30}.zero{color:#636680}"
-        ".loss-badge{font-size:10px;font-weight:600;margin-top:4px;"
-        "padding:2px 5px;border-radius:4px;display:inline-block}"
-        ".loss-badge.mech{background:rgba(255,214,10,.13);color:#ffd60a}"
-        ".loss-badge.strat{background:rgba(255,59,48,.13);color:#ff3b30}"
-        ".footer{text-align:center;font-size:11px;color:#363a5a;"
+        f".cell-date{{font-size:{FS_LABEL}px;color:{TEXT_MUTED};font-weight:500}}"
+        f".cell-pnl{{font-size:{FS_PNL}px;font-weight:700;margin-bottom:2px}}"
+        f".cell-meta{{font-size:{FS_MICRO}px}}"
+        f".cell-empty{{font-size:{FS_MICRO}px;color:{TEXT_DIM};font-style:italic;margin-top:4px}}"
+        f".pos{{color:{STATUS_POSITIVE}}}.neg{{color:{STATUS_NEGATIVE}}}.zero{{color:{TEXT_MUTED}}}"
+        f".loss-badge{{font-size:{FS_TINY}px;font-weight:600;margin-top:4px;"
+        f"padding:2px 5px;border-radius:{RADIUS_SM}px;display:inline-block}}"
+        f".loss-badge.mech{{background:rgba(255,214,10,.13);color:{STATUS_WARNING}}}"
+        f".loss-badge.strat{{background:rgba(255,59,48,.13);color:{STATUS_NEGATIVE}}}"
+        f".footer{{text-align:center;font-size:{FS_MICRO}px;color:{TEXT_DIM};"
         "padding:16px;margin-top:8px}"
-        ".lt-banner{background:#0d1f12;border:1px solid rgba(48,209,88,.35);"
-        "border-radius:8px;padding:16px 24px;margin-bottom:16px;"
+        f".lt-banner{{background:{BG_LT_BANNER};border:1px solid rgba(48,209,88,.35);"
+        f"border-radius:{RADIUS_LG}px;padding:16px 24px;margin-bottom:16px;"
         "display:flex;align-items:center;gap:32px;flex-wrap:wrap}"
-        ".lt-label{font-size:11px;color:#636680;text-transform:uppercase;"
+        f".lt-label{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};text-transform:uppercase;"
         "letter-spacing:.5px;margin-bottom:4px}"
-        ".lt-val{font-size:28px;font-weight:700}"
-        ".lt-sub{font-size:11px;color:#636680;margin-top:4px}"
+        f".lt-val{{font-size:{FS_DISPLAY}px;font-weight:700}}"
+        f".lt-sub{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};margin-top:4px}}"
     )
 
     return f"""<!DOCTYPE html>
