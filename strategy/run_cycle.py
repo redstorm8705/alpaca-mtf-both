@@ -651,7 +651,10 @@ def run_cycle(
                     _gah_exit_px = _fetch_actual_fill_price(_gsym, _gtr, poll_secs=0)
                     _gah_pnl = tracker.record_exit(_gsym, _gah_exit_px,
                                                     reason="external_close_detected_ah",
-                                                    mri_level=mri.level() if mri else "NORMAL")
+                                                    mri_level=mri.level() if mri else "NORMAL",
+                                                    # Verified: reached only under
+                                                    # `if _galpaca_pos is None` above.
+                                                    alpaca_confirmed_absent=True)
                     if risk is not None:
                         risk.register_close(_gah_pnl or 0.0)
                     continue

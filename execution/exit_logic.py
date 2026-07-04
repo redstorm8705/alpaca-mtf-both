@@ -1953,7 +1953,10 @@ def check_exits(
                                 logger.error("[%s] RC-4 Slack alert failed: %s", symbol, _slack_e)
                         if symbol in tracker.open_trades:
                             pnl = tracker.record_exit(
-                                symbol, _ep, reason="external_close", mri_level=mri_level
+                                symbol, _ep, reason="external_close", mri_level=mri_level,
+                                # Verified: reached only under `if _ap_pos is None`
+                                # (get_open_position confirmed absent) above.
+                                alpaca_confirmed_absent=True,
                             )
                             risk.register_close(pnl or 0.0)
                             trade.pop("_gtc_sig_defer_count", None)

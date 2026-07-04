@@ -478,6 +478,8 @@ class PortfolioTracker:
         self._traded_today_date = datetime.now(_PT).strftime("%Y-%m-%d")
         # RC-4: symbol → list of live trade refs
         self._unverified_exits: dict[str, list[dict]] = {}
+        # Guard A consecutive empty-batch skip counter (orphan_manager, 2026-07-04)
+        self._reconcile_empty_skips: int = 0
         self._load_log()
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -1329,6 +1331,9 @@ class PortfolioTracker:
                                 exit_price=_fifo_exit_px,
                                 reason="external_close",
                                 mri_level=_tr_r.get("mri_level", "NORMAL"),
+                                # Verified: FIFO matched actual Alpaca close-fills
+                                # that fully consume the lot (Guard D contract).
+                                alpaca_confirmed_absent=True,
                             )
                             # Q1: correct exit_time to actual Alpaca fill timestamp
                             # so this reconciled trade does not appear in today_trades
@@ -1760,12 +1765,39 @@ class PortfolioTracker:
         self, symbol: str, exit_price: float, reason: str = "signal",
         # BUG-E2E-4: was always "NORMAL" (hardcoded default in _log_event)
         mri_level: str = "NORMAL",
+        # Guard D (2026-07-04, board+Gro+GAI): defense-in-depth against the
+        # false-drop root cause. An external_close exit must be Alpaca-VERIFIED
+        # by the caller (reconcile double-confirm / Patch 1 get_open_position
+        # None / EOD FIFO fill-match). record_exit stays a pure state mutation
+        # — it makes NO network call — it only enforces the contract so no
+        # future caller can silently drop a live position on an unverified
+        # external_close. Non-external reasons (signal/stop/target/EOD) ignore
+        # this flag.
+        alpaca_confirmed_absent: bool = False,
     ):
         # BV-1: normalize None/""/UNKNOWN to baseline
         # (MRI is background-only; absence = NORMAL)
         if mri_level in (None, "", "UNKNOWN"):
             mri_level = "NORMAL"
         if symbol not in self.open_trades:
+            return
+        # Guard D: refuse an UNVERIFIED external_close drop.
+        if str(reason).startswith("external_close") and not alpaca_confirmed_absent:
+            logger.critical(
+                "[%s] record_exit BLOCKED: external_close reason=%r without "
+                "alpaca_confirmed_absent — caller must verify the position is "
+                "gone at Alpaca first. Position RETAINED (fail-closed).",
+                symbol, reason,
+            )
+            try:
+                from alerts import send_slack as _gd_slack
+                _gd_slack(
+                    f"🚨 {symbol}: external_close record_exit BLOCKED "
+                    f"(unverified) — position retained. Caller must re-verify "
+                    f"against Alpaca."
+                )
+            except Exception as _gd_err:
+                logger.warning("[%s] Guard-D Slack alert failed: %s", symbol, _gd_err)
             return
         # DS guard: reject already-closed trade in open_trades (corrupt restart state)
         if self.open_trades.get(symbol, {}).get("status") == "closed":

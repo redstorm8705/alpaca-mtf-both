@@ -687,6 +687,8 @@ def cancel_and_reconcile_gtc_stops(
                     _sym, _p1_exit_px,
                     reason=_p1_reason,
                     mri_level="UNKNOWN",
+                    # Verified: get_open_position(_sym) returned None above.
+                    alpaca_confirmed_absent=True,
                 )
                 if risk is not None:
                     risk.register_close(_p1_pnl or 0.0)
@@ -1191,24 +1193,105 @@ def reconcile_positions(
             )
 
     # ── Externally closed positions (in tracker, not in Alpaca) ─────────────
-    # Skip symbols we just reconciled via GTC stop — already handled
-    for sym in tracker_symbols - alpaca_symbols:
+    # (GTC-stop reconciled symbols were already removed from tracker earlier.)
+    _ext_closed = tracker_symbols - alpaca_symbols
+    # Guard A (2026-07-04, board+Gro+GAI): FAIL-CLOSED against a stale/empty
+    # Alpaca snapshot. If get_open_positions() came back EMPTY while the tracker
+    # holds positions, the batch is untrustworthy — dropping every live position
+    # on one bad snapshot is the confirmed HOOD false-drop root cause. Skip the
+    # external-close sweep this cycle; retry next cycle. Loud CRITICAL + Slack.
+    if _ext_closed and not alpaca_symbols and tracker_symbols:
+        # Consecutive-skip counter (cold-agent review 2026-07-04): if the
+        # account TRULY empties, Guard A would otherwise retain the dead
+        # positions and re-alert identically forever. Track consecutive skips
+        # and escalate to a distinct PERSISTENT alert after N cycles so the
+        # operator acts (manual reconcile). N=3 is an operational alerting
+        # threshold (observability), not a trading parameter. Still NEVER
+        # auto-drops on an ambiguous empty batch — that is the whole point.
+        _skips = getattr(tracker, "_reconcile_empty_skips", 0) + 1
+        tracker._reconcile_empty_skips = _skips
+        _persistent = _skips >= 3
+        logger.critical(
+            "reconcile_positions: Alpaca returned ZERO positions while tracker "
+            "holds %d (%s) — batch treated as stale/erroneous; SKIPPING the "
+            "external-close sweep (consecutive empty-skip #%d)%s.",
+            len(tracker_symbols), sorted(tracker_symbols), _skips,
+            " — PERSISTENT: manual reconcile likely required (genuine empty "
+            "account or sustained API failure)" if _persistent else
+            " — retrying next cycle",
+        )
+        try:
+            from alerts import send_slack as _ga_slack
+            _ga_slack(
+                f"{'🚨🚨 PERSISTENT' if _persistent else '🚨 CRITICAL'}: Alpaca "
+                f"returned 0 positions but tracker holds {len(tracker_symbols)} "
+                f"({sorted(tracker_symbols)}) for {_skips} cycle(s). Skipped "
+                f"external-close sweep to prevent false-drop."
+                + (" MANUAL RECONCILE LIKELY REQUIRED." if _persistent else
+                   " Check Alpaca API.")
+            )
+        except Exception as _ga_err:
+            logger.warning("Guard-A Slack alert failed: %s", _ga_err)
+        _ext_closed = set()
+    else:
+        # Good batch (or empty tracker) — reset the consecutive-skip counter.
+        if getattr(tracker, "_reconcile_empty_skips", 0):
+            tracker._reconcile_empty_skips = 0
+
+    for sym in _ext_closed:
         trade = tracker.open_trades[sym]
+        # Guard B (2026-07-04, board+Gro+GAI): before dropping a symbol missing
+        # from the batch snapshot, RE-VERIFY it individually (mirrors Patch 1
+        # L666). Only drop if the single-symbol fetch ALSO confirms absent. On a
+        # contradiction (still open) or an error, FAIL-CLOSED: retain + alert.
+        # (Patch 1 fail-OPENs because its consequence is a benign stop resubmit;
+        # here the consequence is dropping a LIVE position, so we fail-CLOSED.)
+        try:
+            _reverify = get_open_position(sym)
+        except Exception as _rv_err:
+            logger.critical(
+                "[%s] Guard B: per-symbol re-verify FAILED (%s) — NOT dropping "
+                "(fail-closed). Position retained; retry next cycle.",
+                sym, _rv_err,
+            )
+            try:
+                from alerts import send_slack as _gb_slack
+                _gb_slack(
+                    f"🚨 {sym}: re-verify errored during external-close check "
+                    f"— retained (fail-closed). Check Alpaca API."
+                )
+            except Exception:
+                pass
+            continue
+        if _reverify is not None:
+            logger.critical(
+                "[%s] Guard B: batch snapshot said CLOSED but single-symbol "
+                "fetch shows it is STILL OPEN — inconsistent Alpaca response. "
+                "NOT dropping (fail-closed); position retained.", sym,
+            )
+            try:
+                from alerts import send_slack as _gb_slack2
+                _gb_slack2(
+                    f"🚨 {sym}: Alpaca batch/single-fetch disagree "
+                    f"(batch=closed, single=open) — retained. Investigate."
+                )
+            except Exception:
+                pass
+            continue
+        # Double-confirmed absent → genuine external close.
         # SF-03: fetch the real fill price from Alpaca's closed-order history
-        # instead of recording entry_price (which always produced PnL=$0 and
-        # left the kill switch blind to external liquidation losses).
-        # poll_secs=0 — position is already gone, no need to wait.
+        # instead of recording entry_price (poll_secs=0 — already gone).
         exit_price = fetch_actual_fill_price(sym, trade, poll_secs=0)
-        # Label gtc_stop_triggered vs external_close from the matched close
-        # order's type (fixes ~14 stop fills mislabeled external_close).
+        # Label gtc_stop_triggered vs external_close from the matched close order.
         _close_reason = trade.pop("_recovered_close_reason", "external_close")
         logger.warning(
-            f"[{sym}] Position in tracker but NOT in Alpaca — closed "
-            f"externally ({_close_reason}). Recording exit at ${exit_price:.2f} "
-            f"(entry was ${trade.get('entry_price', 0):.2f})."
+            f"[{sym}] Position in tracker but NOT in Alpaca (double-confirmed) "
+            f"— closed externally ({_close_reason}). Recording exit at "
+            f"${exit_price:.2f} (entry was ${trade.get('entry_price', 0):.2f})."
         )
         pnl = tracker.record_exit(sym, exit_price, reason=_close_reason,
-                                   mri_level="UNKNOWN")
+                                   mri_level="UNKNOWN",
+                                   alpaca_confirmed_absent=True)
         if risk is not None:                                      # C-2
             risk.register_close(pnl or 0.0)
 
