@@ -6921,3 +6921,22 @@ INCIDENT (same session, self-inflicted): the 2026-07-03 untracked cleanup delete
   - Gro + GAI FINAL pre-ship on exact diff: BOTH APPROVE. (GAI's L322 "bare 🚨" note = diff misread; file uses SEV_CRITICAL — confirmed, GAI classed non-blocking.)
 **Deploy:** git single-channel. DEPLOY_SHA=77458e8, ff-only pull DEPLOY_OK, restart, HEALTH OK. Gro back online — no waiver used (prior session's Gro-waiver was moot).
 **Next (UX Phase 1 remainder):** Increment 2 = raw-site severity tagging + throttling + Block Kit. Then web pages w/ Wroblewski lead + Gro/GAI (Rafael directive 2026-07-04).
+
+---
+## 2026-07-04 — UX REDESIGN Phase-1 (web) DESIGN DECISION (Rafael approved approach + tokens)
+**Fork:** how to give 5 Python-generated pages one design system. A) shared external stylesheet B) shared ui_tokens.py module C) page-by-page redesign.
+**Voices:** Gro→B · GAI→A · Wroblewski(board)→B · Beck(board)→B. **Consensus B, 3-1.** GAI's own A-risk ("broken css/nginx blinds operator") favors B; git log shows the mtf-http public/ served-asset incident already happened → B avoids that failure axis.
+**Rafael decisions (Feature Design gate):** Accent = **cyan #00e5ff** (board rec: best WCAG contrast on #080c10, incumbent on dashboard+scanner). Start = **fix options non-atomic write, then invisible token extraction**.
+**Agreed tokens:** accent cyan #00e5ff; font floor **14px** / body 16px; type scale **28/20/16/14** (KPI/header/body/label); dedicated **3-tier status colors** (normal/caution/critical) mirroring the Slack severity system shipped in 77458e8 — critical must be pre-attentively distinct (Wroblewski's catch).
+**Build sequence (Beck):** (1) fix options_scanner.py non-atomic write L~1904/1917 → tmp+os.replace (own patch sequence, IN PROGRESS). (2) extract ui_tokens.py with TODAY's exact values (behavior-preserving). (3) migrate generators monthly→weekly→scan→dashboard→options, each gated on a **golden byte-diff** (must be empty for token-injection steps). (4) only then change token values, one at a time, diff = review artifact.
+**Key risk (Beck):** silent visual regression — generator succeeds but emits subtly-wrong HTML (statics pass, cron green, alerts lose color). Guardrail = golden-master characterization diff on emitted HTML.
+
+---
+## 2026-07-04 — options_scanner.py atomic HTML write (SHIPPED, commit 4adc09a)
+**Type:** RC-5 safety fix (new instance found+fixed; RC-5 count stays 0). Beck-flagged during UX design session as the enabling tidy before ui_tokens.py extraction.
+**What:** 2 non-atomic `OPTIONS_HTML.write_text()` sites (L1904 watch-mode, L1917 single-run) → `_atomic_write_text()`: pid-scoped sibling .tmp, flush+fsync, os.replace; on failure unlinks tmp (missing_ok, debug-logged) and re-raises the original exception with the live file untouched. Mirrors run_scan()'s OPTIONS_SCAN_JSON pattern. Display-only generator, no execution imports.
+**Gate:** full read 1947L; py_compile+mypy+ruff clean-delta (0 new); cold second-agent PASS; GAI final pre-ship APPROVE (R2, after tmp-cleanup hardening — R1 REJECT's 3/4 points were misapplied [EXDEV moot on same-dir sibling; atomic swap beats torn read for nginx per-request; OSError preserved], 1 valid [tmp leak] adopted). Gro TPD-walled → Rafael waived (display-only, not execution-governing, 2 independent approvals on exact diff).
+**Deploy:** DEPLOY_SHA=4adc09a, ff-only pull DEPLOY_OK, restart, HEALTH OK.
+
+### DEFERRED ITEM (logged, not this patch): options_scanner.py pre-existing statics cleanup
+Per RULE C-4 fork resolved to Option A (board Beck + GAI; Gro→C): shipped the scoped safety fix, deferred the pre-existing lint. **190 pre-existing issues in options_scanner.py:** 183 E501 (line-too-long) + 2 E701 (multi-statement) + 5 mypy (Optional-not-handled L1672; incompatible dict-type L1017; missing attr scan_to_html._pdt_reset_display L1198; +2). NONE introduced by the atomic fix (delta 0). Cleanup candidate: add `# ruff: noqa: E501` header (matches alerts.py convention) clears 183 in one line; then fix 2 E701 + 5 mypy as own patch sequence. Own full sequence when picked up.
