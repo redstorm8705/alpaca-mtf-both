@@ -148,6 +148,26 @@ def run_movers_cycle(
 
 
 def main():
+    # RETIREMENT GUARD (Rafael decision 2026-07-03; board+Gro+GAI unanimous
+    # Option A). The Movers bot is RETIRED: it shares per-symbol Alpaca lots
+    # with the main bot with NO ownership tag, so its adopt-by-default reconcile
+    # + symbol-level close_position() flatten another strategy's live positions
+    # (the 2026-07-02 8-position mass-dump / HOOD collision). This guard makes
+    # retirement enforced in CODE, not just a commented-out cron — refuse to
+    # launch (manual OR cron) unless MOVERS_REVIVE=1 is explicitly set. Do NOT
+    # set that flag until the per-strategy client_order_id ownership fix ships
+    # (CLAUDE.md Future Roadmap [2026-07-03 MOVERS-RETIRED]).
+    if os.environ.get("MOVERS_REVIVE") != "1":
+        msg = ("Movers bot is RETIRED (2026-07-03) — refusing to launch to "
+               "prevent cross-strategy position dumps. Set MOVERS_REVIVE=1 to "
+               "override (forbidden until client_order_id ownership fix ships).")
+        try:
+            logger.critical(msg)
+        except Exception:
+            pass
+        print(msg)
+        return
+
     parser = argparse.ArgumentParser(description="Alpaca Top Movers Bot")
     parser.add_argument("--mode",           default="intraday", choices=["intraday", "swing"])
     parser.add_argument("--top",            type=int, default=10,  help="Top N movers to scan")
