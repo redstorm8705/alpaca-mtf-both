@@ -6907,3 +6907,17 @@ FIX (board+Gro+GAI design-approved A+B+D; cold second-agent added the escalation
 - Guard D (portfolio_tracker.record_exit): new alpaca_confirmed_absent flag; refuses external_close* reason without it (pure state mutation, no network call). All 5 external_close callers updated to pass it (reconcile L1273, Patch1 L686, EOD FIFO L1327, exit_logic L1955, run_cycle L652) — each already verifies absence.
 GATES: statics py_compile/ruff/mypy clean (4 files); cold second-agent PASS after counter added; final pre-ship Gro+GAI markers written for all 4 files; deployed via git-single-channel (DEPLOY_OK), OCI HEAD d8e08e1, startup reconcile ran clean, record_exit signature verified live. +134/-13.
 INCIDENT (same session, self-inflicted): the 2026-07-03 untracked cleanup deleted public/ (mtf-http systemd WorkingDirectory — a symlink dir). Latent until this deploy's restart → mtf-http CHDIR-failed (status=200/CHDIR). Restored from cleanup_backup_20260703.tar.gz; mtf-http active, dashboard OK. LESSON: cleanup safety-grep checked Python writers but NOT systemd unit WorkingDirectory/ExecStart references — add that to any future file-deletion vetting.
+
+---
+## 2026-07-04 — alerts.py Phase-1 Slack UX (SHIPPED, commit 77458e8)
+**Type:** Feature (UX redesign Phase 1 — highest-safety piece per Gro/GAI roadmap). Not a bug fix — no RC count change.
+**What:** Central `_sanitize()` de-jargons EVERY outbound Slack string (RC-4→Position-Mismatch check, held_for_orders→plain, fail-closed→plain, phantom entry→unverified entry, GTC-RACE→GTC order conflict). Added 🚨 CRITICAL / ⚠️ WARNING severity prefixes to 6 critical/warning wrappers (kill_switch, spy_event, stop_breach, crash, gtc_failed, systemic_stale_feed). spy_event now: EXTREME/BROAD_*→CRITICAL, narrower→WARNING. All behind SLACK_V2_ENABLED (default on).
+**Safety:** `_sanitize(text: object)` coerces non-str upfront + try/except backstop → NEVER raises into alerting path (a formatting bug cannot fail an alert). ntfy + _send fan-out untouched.
+**Gate (full sequence, this session per RULE C-7 — prior-session gates expired):**
+  - Full read: 402 lines. Statics: py_compile + mypy --warn-unreachable + ruff ALL clean.
+  - Cold second-agent: PASS (no threats; verified _sanitize exception-total, flag sense, branch completeness, ntfy untouched).
+  - Gro + GAI round 1: APPROVE-WITH-CHANGES (consensus: coerce non-str upfront vs except-backstop).
+  - Hardening applied (param str→object, upfront isinstance coerce — mypy-clean; neither external voice caught the --warn-unreachable conflict, board/Claude did).
+  - Gro + GAI FINAL pre-ship on exact diff: BOTH APPROVE. (GAI's L322 "bare 🚨" note = diff misread; file uses SEV_CRITICAL — confirmed, GAI classed non-blocking.)
+**Deploy:** git single-channel. DEPLOY_SHA=77458e8, ff-only pull DEPLOY_OK, restart, HEALTH OK. Gro back online — no waiver used (prior session's Gro-waiver was moot).
+**Next (UX Phase 1 remainder):** Increment 2 = raw-site severity tagging + throttling + Block Kit. Then web pages w/ Wroblewski lead + Gro/GAI (Rafael directive 2026-07-04).
