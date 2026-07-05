@@ -1,3 +1,4 @@
+# ruff: noqa: E501  — pre-existing long-line debt (RULE C-4 option A, task_d2d4c1f5); fix as own sequence
 """
 options_scanner.py
 Options chain scanner and recommendation engine for manual execution.
@@ -174,7 +175,7 @@ def _load_event_calendar() -> list:
         return []
 
 
-def get_next_friday_expiry(from_date: date = None) -> str:
+def get_next_friday_expiry(from_date: date | None = None) -> str:
     """
     Find the next tradeable Friday expiry.
     - Skips NYSE market holidays (BLACKOUT from calendar.py)
@@ -754,7 +755,7 @@ def _build_recs(
     in_win: bool,
     vix_tertile: str,
     events: list,
-    locked_directions: dict = None,
+    locked_directions: dict | None = None,
 ) -> tuple[list, list, list]:   # P2-OPTIONS-REJECT: now returns (recs, watchlist, rejections)
     """
     Build recommendation and watchlist lists from pre-scored symbols.
@@ -1127,181 +1128,6 @@ def _event_banner(events: list) -> str:
     return f'<div class="event-banner"><strong>⚠️ Volatility Events This Week</strong><ul>{items}</ul></div>'
 
 
-# ── Status bar builders (matches scan_results.html bars exactly) ──────────────
-
-def _build_bot_health_bar() -> str:
-    """Read state files and render bot health bar."""
-    import config as _cfg
-    _daily_pnl = None
-    _pnl_data  = {}
-    try:
-        _pnl_data  = json.loads((LOGS_DIR / "daily_pnl_cache.json").read_text())
-        _daily_pnl = _pnl_data.get("daily_pnl")
-    except Exception:
-        pass
-    _spy_event = ""
-    try:
-        _hs = json.loads((LOGS_DIR / "hybrid_state.json").read_text())
-        _today_et = datetime.now(ET).strftime("%Y-%m-%d")
-        if _hs.get("saved_at", "").startswith(_today_et) and int(_hs.get("scans_left", 0)) > 0:
-            _spy_event = _hs.get("event_type", "")
-    except Exception:
-        pass
-    _tqi_avg = None
-    _tqi_n   = 0
-    try:
-        _tqi_hist = json.loads((LOGS_DIR / "tqi_history.json").read_text())
-        if isinstance(_tqi_hist, list) and _tqi_hist:
-            _tail    = _tqi_hist[-10:]
-            _tqi_avg = round(sum(_tail) / len(_tail), 1)
-            _tqi_n   = len(_tail)
-    except Exception:
-        pass
-    _scan_ts = "—"
-    try:
-        _ts = _pnl_data.get("ts", "")
-        if _ts:
-            _scan_ts = datetime.fromisoformat(_ts).astimezone(PT).strftime("%-I:%M %p PT")
-    except Exception:
-        pass
-    _spy_col = ("#ff3b30" if _spy_event == "EXTREME"
-                else "#ff9f0a" if _spy_event.startswith("BROAD")
-                else "#ffd60a" if _spy_event == "SECTOR"
-                else "#30d158")
-    _spy_tag  = (f'<span style="font-size:12px;font-weight:700;color:{_spy_col}">'
-                 f'SPY: {_spy_event or "CLEAR"}</span>')
-    _pnl_str  = f'{_daily_pnl:+.2f}' if _daily_pnl is not None else "—"
-    _pnl_col  = "#30d158" if (_daily_pnl or 0) >= 0 else "#ff3b30"
-    _kill_pct = getattr(_cfg, "MAX_DAILY_LOSS_PCT", 0.05) * 100
-    _tqi_col  = ("#30d158" if (_tqi_avg or 0) >= 60
-                 else "#ffd60a" if (_tqi_avg or 0) >= 40
-                 else "#ff3b30")
-    _tqi_tag  = (f'TQI: <b style="color:{_tqi_col}">{_tqi_avg:.0f}/100</b> ({_tqi_n}-trade avg)'
-                 if _tqi_avg is not None else "TQI: <b style='color:#b8bdd4'>no history</b>")
-    return (f'<div style="padding:7px 20px;background:#0f1118;border-bottom:1px solid #161a28;'
-            f'display:flex;align-items:center;gap:18px;flex-wrap:wrap">'
-            f'<span style="font-size:10px;color:#6a7090;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Bot Health</span>'
-            f'{_spy_tag}'
-            f'<span style="color:#2a2f48">|</span>'
-            f'<span style="font-size:12px;color:#c8ccd8;white-space:nowrap">P&amp;L: <b style="color:{_pnl_col}">${_pnl_str}</b>'
-            f'<span style="color:#6a7090;font-size:10px"> (kill@{_kill_pct:.0f}%)</span></span>'
-            f'<span style="color:#2a2f48">|</span>'
-            f'<span style="font-size:12px;color:#c8ccd8;white-space:nowrap">{_tqi_tag}</span>'
-            f'<span style="color:#2a2f48">|</span>'
-            f'<span style="font-size:10px;color:#6a7090;white-space:nowrap">last scan: {_scan_ts}</span>'
-            f'</div>')
-
-
-def _build_pdt_bar() -> str:
-    """Read day_trades.json and render PDT status bar."""
-    try:
-        from scan_to_html import _pdt_reset_display
-        _dt_raw   = json.loads((LOGS_DIR / "day_trades.json").read_text())
-        _dt_list  = _dt_raw if isinstance(_dt_raw, list) else []
-        _today    = date.today().isoformat()
-        _count    = len([t for t in _dt_list
-                         if isinstance(t, dict) and t.get("symbol") != "SYNC"
-                         and t.get("date") == _today])
-        pdt_info  = _pdt_reset_display(_dt_list, _count)
-        pdt_col   = pdt_info["color"]
-        pdt_lbl   = pdt_info["label"]
-        ns        = pdt_info["next_slot"]
-        fr        = pdt_info["full_reset"]
-        swing_tag = ('<span style="font-size:11px;color:#ffd60a;font-weight:600;margin-left:12px">'
-                     '⚠ SWING MODE ONLY — 10/12+ REQUIRED</span>'
-                     if pdt_info["show_swing_warning"] else "")
-        parts = []
-        if ns: parts.append(f'NEXT SLOT: <b style="color:#e2e4ee">{ns}</b>')
-        if fr: parts.append(f'FULL RESET: <b style="color:#e2e4ee">{fr}</b>')
-        reset_html = (' <span style="color:#2a2f48">|</span> '
-                      + ' <span style="color:#2a2f48">|</span> '.join(
-                          f'<span style="font-size:12px;color:#c8ccd8;white-space:nowrap">{p}</span>'
-                          for p in parts)
-                      if parts else "")
-        return (f'<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;'
-                f'display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
-                f'<span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">PDT Status</span>'
-                f'<span style="font-size:13px;font-weight:800;color:{pdt_col};white-space:nowrap">PDT: {pdt_lbl}</span>'
-                f'{reset_html}{swing_tag}</div>')
-    except Exception:
-        return ('<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28">'
-                '<span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em">PDT Status</span>'
-                '<span style="font-size:12px;color:#b8bdd4;margin-left:12px">PDT: —</span></div>')
-
-
-def _build_composite_bar() -> str:
-    """Call _get_composite_regime_display() and render regime bar."""
-    try:
-        from scan_to_html import _get_composite_regime_display
-        cr = _get_composite_regime_display()
-        if not cr:
-            return ""
-        cr_regime  = cr.get("composite_regime", "NEUTRAL")
-        cr_display = "NEUTRAL" if cr_regime == "HIGH_VOL" else cr_regime
-        cr_col     = {"BULL": "#30d158", "BEAR": "#ff3b30", "NEUTRAL": "#ffd60a"}.get(cr_display, "#ffd60a")
-        term_lbl   = cr.get("term_label", "NORMAL")
-        term_col   = "#ff3b30" if term_lbl == "INVERTED" else "#30d158"
-        spy50      = cr.get("spy_vs_50sma_pct")
-        spy50_str  = f"{spy50:+.2f}%" if spy50 is not None else "—"
-        spy50_col  = "#30d158" if (spy50 or 0) > 0 else "#ff3b30"
-        rvol20     = cr.get("spy_rvol_20d")
-        rvol20_str = f"{rvol20:.1f}%" if rvol20 is not None else "—"
-        _vix_val = None
-        try:
-            import yfinance as _yf  # T4: ^VIX not available on Alpaca Data
-            logger.debug("T4: fetching ^VIX via yfinance for composite bar display")
-            _vix_val = float(_yf.Ticker("^VIX").fast_info.last_price or 0) or None
-        except Exception:
-            pass
-        _vix_col = ("#ff3b30" if (_vix_val or 0) > 30
-                    else "#ffd60a" if (_vix_val or 0) > 20
-                    else "#30d158")
-        _vix_lbl = f"{_vix_val:.1f}" if _vix_val else "—"
-        return (f'<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;'
-                f'display:flex;align-items:center;gap:20px;flex-wrap:wrap">'
-                f'<span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Composite Regime</span>'
-                f'<span style="font-size:13px;font-weight:800;color:{cr_col};white-space:nowrap">REGIME: {cr_display}</span>'
-                f'<span style="color:#2a2f48">|</span>'
-                f'<span style="font-size:12px;color:#e2e4ee;white-space:nowrap">VIX <b style="color:{_vix_col}">{_vix_lbl}</b></span>'
-                f'<span style="color:#2a2f48">|</span>'
-                f'<span style="font-size:12px;white-space:nowrap">TERM: <b style="color:{term_col}">{term_lbl}</b></span>'
-                f'<span style="color:#2a2f48">|</span>'
-                f'<span style="font-size:12px;white-space:nowrap">SPY vs 50-day SMA: <b style="color:{spy50_col}">{spy50_str}</b></span>'
-                f'<span style="color:#2a2f48">|</span>'
-                f'<span style="font-size:12px;white-space:nowrap">20d rvol: <b style="color:#e2e4ee">{rvol20_str}</b></span>'
-                f'</div>')
-    except Exception:
-        return ""
-
-
-def _build_implied_range_bar() -> str:
-    """Fetch SPY + QQQ implied ranges and render bar."""
-    def _ir_html(sym, ir):
-        if ir is None:
-            return f'<span style="font-size:12px;color:#b8bdd4;white-space:nowrap">{sym} implied: unavailable</span>'
-        p, lo, hi = ir["price"], ir["low"], ir["high"]
-        lbl, lbl_col = (("ABOVE", "#ff3b30") if p > hi
-                         else ("BELOW", "#30d158") if p < lo
-                         else ("INSIDE", "#ffd60a"))
-        return (f'<span style="font-size:12px;font-weight:700;color:#e2e4ee;white-space:nowrap">'
-                f'{sym} IMPLIED: <span style="color:{lbl_col}">${lo:,.2f} – ${hi:,.2f}</span>'
-                f' <span style="font-size:10px;color:{lbl_col}">({lbl})</span></span>')
-    try:
-        spy_ir = _fetch_implied_range("SPY")
-        qqq_ir = _fetch_implied_range("QQQ")
-        if not spy_ir and not qqq_ir:
-            return ""
-        return (f'<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;'
-                f'display:flex;align-items:center;gap:20px;flex-wrap:wrap">'
-                f'<span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Implied Range</span>'
-                f'{_ir_html("SPY", spy_ir)}'
-                f'<span style="color:#2a2f48">|</span>'
-                f'{_ir_html("QQQ", qqq_ir)}'
-                f'</div>')
-    except Exception:
-        return ""
-
-
 # ── Expandable rec table rows ─────────────────────────────────────────────────
 
 def _bias_info(rec: dict) -> tuple:
@@ -1493,67 +1319,6 @@ def expiry_display(expiry_str: str) -> str:
         return expiry_str
 
 
-def _watchlist_row(sig: dict) -> str:
-    sym    = sig.get("symbol", "—")
-    ls     = sig.get("long_score", 0)
-    ss     = sig.get("short_score", 0)
-    price  = sig.get("price")
-    reason = sig.get("watch_reason", "—")
-    p_str  = f"${price:.2f}" if price else "—"
-    return f"""
-      <tr>
-        <td>{sym}</td>
-        <td>{p_str}</td>
-        <td style="color:#30d158">{ls}/12</td>
-        <td style="color:#ff6b6b">{ss}/12</td>
-        <td class="muted">{reason}</td>
-      </tr>"""
-
-
-def _fills_table(fills: list) -> str:
-    if not fills:
-        return '<p class="muted">No fills logged yet. Use <code>python3.10 log_fill.py</code> after each execution.</p>'
-
-    rows = ""
-    total_pl = 0.0
-    for f in fills:
-        status  = f.get("status", "open")
-        entry   = float(f.get("entry_premium", 0))
-        exit_p  = float(f.get("exit_premium", 0)) if f.get("exit_premium") else None
-        conts   = int(f.get("contracts", 1))
-        pl      = round((exit_p - entry) * 100 * conts, 2) if exit_p else None
-        pl_str  = f"${pl:+.2f}" if pl is not None else "—"
-        pl_color = "#30d158" if (pl or 0) > 0 else "#ff3b5c" if pl else "#aaa"
-        total_pl += pl or 0
-        status_badge = (
-            '<span class="badge badge-long-call">CLOSED</span>' if status == "closed"
-            else '<span class="badge badge-mod">OPEN</span>'
-        )
-        rows += f"""
-        <tr>
-          <td>{f.get('symbol','—')}</td>
-          <td>{f.get('direction','—').upper()}</td>
-          <td>${f.get('strike','—')}</td>
-          <td>{f.get('expiry','—')}</td>
-          <td>${entry:.2f} × {conts}</td>
-          <td>{f"${exit_p:.2f}" if exit_p else '—'}</td>
-          <td style="color:{pl_color}">{pl_str}</td>
-          <td>{status_badge}</td>
-          <td class="muted">{f.get('notes','')}</td>
-        </tr>"""
-
-    total_color = "#30d158" if total_pl > 0 else "#ff3b5c" if total_pl < 0 else "#aaa"
-    rows += f'<tr class="total-row"><td colspan="6"><strong>Total P&L</strong></td><td style="color:{total_color}"><strong>${total_pl:+.2f}</strong></td><td colspan="2"></td></tr>'
-    return f"""
-    <table class="fills-table">
-      <thead><tr>
-        <th>Sym</th><th>Dir</th><th>Strike</th><th>Expiry</th>
-        <th>Entry × Qty</th><th>Exit</th><th>P&L</th><th>Status</th><th>Notes</th>
-      </tr></thead>
-      <tbody>{rows}</tbody>
-    </table>"""
-
-
 def _build_rec_table(recs: list, id_offset: int = 0) -> str:
     """Render an expandable recommendation table from a list of rec dicts."""
     if not recs:
@@ -1618,9 +1383,7 @@ def _rejections_section(rejections: list) -> str:
 def generate_html(data: dict) -> str:
     weekly_recs = data["recommendations"]
     dte_recs    = data.get("recs_0dte", [])
-    watchlist   = data["watchlist"]
     rejections  = data.get("rejections", [])   # P2-OPTIONS-REJECT
-    fills       = data["fills"]
     events      = data["week_events"]
     generated   = data["generated"]
     expiry      = data["expiry"]
@@ -1645,12 +1408,6 @@ def generate_html(data: dict) -> str:
                  else "#30d158" if vix_tertile == "Low"
                  else "#ffd60a")
 
-    # Build status bars
-    bot_health_bar    = _build_bot_health_bar()
-    pdt_bar           = _build_pdt_bar()
-    composite_bar     = _build_composite_bar()
-    implied_range_bar = _build_implied_range_bar()
-
     # Rec tables — 0DTE IDs offset by 1000 to avoid det-{idx} collisions
     weekly_table = _build_rec_table(weekly_recs, id_offset=0)
     dte_table    = _build_rec_table(dte_recs,    id_offset=1000)
@@ -1669,7 +1426,7 @@ def generate_html(data: dict) -> str:
             f'<div>'
             f'<span style="font-weight:700;color:{_dir_color};font-size:13px">TIMEFRAME ALIGNMENT — SPY {_dir_word}</span>'
             f'<span style="color:#b8bdd4;font-size:11px;margin-left:10px">'
-            f'Weekly ({_spy_weekly_dir.upper()}) and 0DTE ({_spy_0dte_dir.upper()}) point the same direction — '
+            f'Weekly ({str(_spy_weekly_dir).upper()}) and 0DTE ({str(_spy_0dte_dir).upper()}) point the same direction — '
             f'elevated confluence</span>'
             f'</div>'
             f'</div>'
@@ -1679,10 +1436,6 @@ def generate_html(data: dict) -> str:
 
     # Rejections section — P2-OPTIONS-REJECT
     rejections_html = _rejections_section(rejections)
-
-    # Watchlist
-    watch_rows = "".join(_watchlist_row(s) for s in watchlist) if watchlist else \
-        '<tr><td colspan="5" class="muted">Nothing on watch.</td></tr>'
 
     # 0DTE window pill
     dte_win_cls = "open" if in_win_0dte else "closed"
@@ -1827,10 +1580,6 @@ def generate_html(data: dict) -> str:
 </div>
 
 {_event_banner(events)}
-{bot_health_bar}
-{pdt_bar}
-{composite_bar}
-{implied_range_bar}
 {_align_banner}
 
 <!-- ── WEEKLY OPTIONS ─────────────────────────────────────────────────────── -->
@@ -1850,23 +1599,8 @@ def generate_html(data: dict) -> str:
 </div>
 {dte_table}
 
-<!-- ── WATCHLIST ──────────────────────────────────────────────────────────── -->
-<div class="section-hdr" style="margin-top:4px">Watchlist — Monitoring</div>
-<div class="content" style="padding-bottom:6px">
-  <table>
-    <thead><tr><th>Symbol</th><th>Price</th><th>Long Score</th><th>Short Score</th><th>Status</th></tr></thead>
-    <tbody>{watch_rows}</tbody>
-  </table>
-</div>
-
 <!-- ── REJECTIONS ─────────────────────────────────────────────────────────── -->
 {rejections_html}
-
-<!-- ── FILLS ─────────────────────────────────────────────────────────────── -->
-<div class="section-hdr">Open Positions &amp; Trade Log</div>
-<div class="content">
-  {_fills_table(fills)}
-</div>
 
 <div class="footer">
   <div>Options Scanner · MTF Confluence Bot · Auto-refresh every 15 min ·
@@ -1945,27 +1679,6 @@ def main():
             f"Done — {len(data['recommendations'])} weekly recs, "
             f"{len(data.get('recs_0dte', []))} 0DTE recs → {OPTIONS_HTML}"
         )
-
-
-# ── Implied range helper (used by _build_implied_range_bar) ──────────────────
-
-def _fetch_implied_range(symbol: str) -> dict | None:
-    """Fetch ATM straddle implied move for the nearest expiry."""
-    try:
-        expiry = get_next_friday_expiry()
-        both   = _fetch_both_chains(symbol, expiry, 0)
-        calls  = both["call"]
-        puts   = both["put"]
-        if not calls or not puts:
-            return None
-        # Use spot from ATM call
-        atm_call = min(calls, key=lambda r: abs(r["delta"] - 0.50))
-        spot     = atm_call["strike"]   # approximate — good enough for range display
-        atm_put  = min(puts,  key=lambda r: abs(r["strike"] - spot))
-        move     = round(atm_call["mid"] + atm_put["mid"], 2)
-        return {"price": spot, "low": round(spot - move, 2), "high": round(spot + move, 2)}
-    except Exception:
-        return None
 
 
 if __name__ == "__main__":
