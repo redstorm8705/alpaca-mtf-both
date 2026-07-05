@@ -1,81 +1,99 @@
 """
-ui_tokens.py — Shared design-token source of truth for all HTML generators.
+ui_tokens.py — Canonical design-token source of truth for all HTML generators.
 
 Approach B (board 3-1 + Rafael sign-off, 2026-07-04): ONE flat module of design
-tokens that every HTML-generating script imports and interpolates into its own
-CSS strings. No CSS-emitter functions at this stage — value constants only.
+tokens every HTML-generating script imports and interpolates into its own CSS.
+Value constants only — no CSS-emitter functions (council: Gro + GAI + Wroblewski).
 
-Council consensus (Gro + GAI + Wroblewski, 2026-07-04): constants-only, flat,
-semantic names, at repo root. This keeps the FIRST migration byte-for-byte
-identical (a golden-diff gate proves it) while establishing the single decision
-layer through which the later visual convergence flows.
-
-Migration order: monthly -> weekly -> scan -> dashboard -> options.
-  monthly / weekly ... ungated (standalone / subprocess-spawned).
-  scan / dashboard ... enter the live RTH import chain -> full Gro+GAI pre-ship.
+CANONICAL SYSTEM (Rafael-approved 2026-07-04, board GAI + Wroblewski):
+The 5 monitoring pages (dashboard, weekly, scanner, options, monthly) all converge
+to the CANONICAL tokens below. Decisions locked by Rafael:
+  - Base background #0d0f1a family (monthly seed; rejected #0a0e14 / #080c10).
+  - P&L stays GREEN gain / RED loss (trader convention), distinct in *use* from
+    the 3-tier system-health status even though the hues coincide.
+  - Weekly (first convergence page) gets full palette + type scale in one pass.
 
 GOVERNING INVARIANT (Rafael, hard): algo-hedge-fund monitoring density + Apple/
-Tesla clarity. Preserve every data field; cut only redundancy (duplicated literal
-values); clarity through hierarchy, never subtraction.
+Tesla clarity. Preserve every data field; cut only redundancy; clarity through
+hierarchy, never subtraction.
 
-Token values below are TODAY'S EXACT VALUES harvested from monthly_review.py.
-They are the current design system, not the target. The visible convergence to
-the north-star palette (cyan accent, 28/20/16/14 scale) is a separate, LATER,
-intentionally-visible step — see the RESERVED section at the bottom.
+Migration state: monthly extracted (Step 1) then aligned to canonical text tiers
+here (muted/dim shift to the lighter canonical grays; primary/secondary remapped
+byte-identically). Monthly keeps its granular FS_* sizes until the global type
+pass. Weekly next (full canonical: palette + TYPE_* scale). scan/dashboard enter
+the RTH import chain -> full Gro+GAI pre-ship at those steps.
 """
 
 from __future__ import annotations
 
-# ── Colors — backgrounds (hierarchical depth: base -> panel -> elevated) ───────
-BG_BASE      = "#0d0f1a"   # page background
-BG_PANEL     = "#13162a"   # card / panel / cell surface
-BG_ELEVATED  = "#1e2240"   # interactive controls (buttons, selects)
-BG_TODAY     = "#161934"   # semantic: today's calendar cell
-BG_WEEKEND   = "#0f1121"   # semantic: weekend calendar cell
-BG_LT_BANNER = "#0d1f12"   # semantic: lifetime-P&L banner (green-tinted panel)
+# ══════════════════════════════════════════════════════════════════════════════
+# CANONICAL TOKENS — the shared target every page converges to
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ── Colors — text (signal strength: primary -> bright -> muted -> dim) ─────────
-TEXT_PRIMARY = "#c8cce4"   # default body text
-TEXT_BRIGHT  = "#e8ecff"   # headers, emphasis, stat values
-TEXT_MUTED   = "#636680"   # secondary labels, captions
-TEXT_DIM     = "#363a5a"   # tertiary hints (empty cells, footer)
+# ── Backgrounds (3-step depth ladder) ──────────────────────────────────────────
+BG_BASE     = "#0d0f1a"   # page background
+BG_PANEL    = "#13162a"   # cards / panels / cells / tables
+BG_ELEVATED = "#1e2240"   # modals, dropdowns, hover, higher separation
 
-# ── Colors — borders (mirror the background hierarchy) ─────────────────────────
-BORDER_PANEL = "#252847"   # panel / cell borders (also nav hover surface)
-BORDER_LIGHT = "#363a5a"   # control borders / subtle dividers (== TEXT_DIM today)
-BORDER_TODAY = "#5055a0"   # highlight ring for today's cell
+# ── Text tiers (hard-coded, not opacity — legible at any density) ──────────────
+TEXT_PRIMARY   = "#e8ecff"   # body text, main figures
+TEXT_SECONDARY = "#c8cce4"   # supporting copy, reduced-emphasis values
+TEXT_MUTED     = "#8a94ae"   # labels, captions, metadata
+TEXT_DIM       = "#5a6580"   # footer, hints, tertiary
 
-# ── Colors — status (semantic; hue is meaning, not decoration) ─────────────────
-STATUS_POSITIVE = "#30d158"   # wins / gains / healthy
-STATUS_NEGATIVE = "#ff3b30"   # losses / errors
-STATUS_WARNING  = "#ffd60a"   # caution / mechanical / mid-tier
+# ── Borders ────────────────────────────────────────────────────────────────────
+BORDER_DEFAULT = "#252847"   # separators, table rows, card edges
+BORDER_STRONG  = "#5055a0"   # focus / hover / strong hierarchy
+
+# ── Status 3-tier: SYSTEM HEALTH (fg + low-alpha bg tint). NOT P&L. ────────────
+STATUS_POSITIVE    = "#30d158"                  # NORMAL / healthy / pass
+STATUS_POSITIVE_BG = "rgba(48,209,88,.12)"
+STATUS_WARNING     = "#ffd60a"                  # CAUTION / review / threshold
+STATUS_WARNING_BG  = "rgba(255,214,10,.10)"
+STATUS_NEGATIVE    = "#ff3b30"                  # CRITICAL / stop / risk breach
+STATUS_NEGATIVE_BG = "rgba(255,59,48,.15)"
+
+# ── P&L semantic colors (SEPARATE concept from status; hues coincide by design) ─
+PNL_GAIN = "#30d158"   # realized/unrealized gain
+PNL_LOSS = "#ff3b30"   # realized/unrealized loss
+
+# ── Accent — cyan. Interactive / focus / active / one key figure per view. ─────
+# NOT for: table headers, body copy, status badges, generic "positive".
+ACCENT_CYAN = "#00e5ff"
 
 # ── Typography ─────────────────────────────────────────────────────────────────
 FONT_FAMILY = "-apple-system,BlinkMacSystemFont,'Segoe UI',monospace"
 
-# Type scale (px, ints). Interpolate as f"{FS_BODY}px". Named by display role;
-# several roles share a size today. The later convergence collapses this 9-value
-# scale toward the 4-tier north-star (28/20/16/14) — encoding sizes here makes
-# that flip a one-line change per token, not a five-file hunt.
-FS_DISPLAY = 28   # lifetime-P&L headline number
-FS_STAT    = 20   # stat-box values
-FS_H1      = 18   # page title
-FS_PNL     = 17   # calendar-cell P&L
-FS_BODY    = 14   # base body text (FLOOR — never below 14)
-FS_NAV     = 13   # nav buttons / selects
-FS_LABEL   = 12   # sub-labels, dates, back-link
-FS_MICRO   = 11   # small labels, meta, footer
-FS_TINY    = 10   # badges
+# Canonical type scale (px ints; interpolate f"{TYPE_BODY}px"). 14px is the floor.
+TYPE_TITLE   = 28   # page title (1 per page)
+TYPE_SECTION = 20   # section / card header
+TYPE_BODY    = 16   # body text, hero numbers
+TYPE_LABEL   = 14   # labels, dense table cells — FLOOR (kills 9-13px)
 
-# ── Radii (px, ints). Interpolate as f"{RADIUS_MD}px". ─────────────────────────
+# ── Radii (px ints; interpolate f"{RADIUS_MD}px") ──────────────────────────────
 RADIUS_SM = 4   # badges
 RADIUS_MD = 6   # buttons, selects
 RADIUS_LG = 8   # panels, cells, banners
 
-# ── RESERVED — north-star convergence targets (UNUSED in Step 1) ───────────────
-# Defined now, deliberately not referenced by any generator yet, so the later
-# VISIBLE convergence step is a value flip here rather than a cross-file hunt.
-# Do NOT wire these into templates until that step is explicitly approved.
-ACCENT_CYAN = "#00e5ff"                 # north-star accent (replaces ad-hoc highlights)
-TYPE_FLOOR_TARGET = 14                  # body floor stays 14
-TYPE_SCALE_TARGET = (28, 20, 16, 14)    # 4-tier target scale (h1/h2/h3/body)
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE-SPECIFIC / TRANSITIONAL — not yet unified into the canonical set.
+# Monthly's granular sizes + its bespoke cell backgrounds/borders. These migrate
+# to the canonical TYPE_* scale + BORDER_DEFAULT during the global type pass;
+# kept here so monthly renders unchanged (except the intended muted/dim shift).
+# ══════════════════════════════════════════════════════════════════════════════
+BG_TODAY     = "#161934"   # monthly: today's calendar cell
+BG_WEEKEND   = "#0f1121"   # monthly: weekend calendar cell
+BG_LT_BANNER = "#0d1f12"   # monthly: lifetime-P&L banner (green-tinted panel)
+BORDER_LIGHT = "#363a5a"   # monthly: nav-control borders / subtle dividers
+BORDER_TODAY = "#5055a0"   # monthly: today-cell ring (== BORDER_STRONG value)
+
+# Monthly's granular type sizes (pre-canonical; migrate to TYPE_* in the type pass)
+FS_DISPLAY = 28   # lifetime-P&L headline
+FS_STAT    = 20   # stat-box values
+FS_H1      = 18   # page title
+FS_PNL     = 17   # calendar-cell P&L
+FS_BODY    = 14   # base body text
+FS_NAV     = 13   # nav buttons / selects
+FS_LABEL   = 12   # sub-labels, dates
+FS_MICRO   = 11   # small labels, meta, footer
+FS_TINY    = 10   # badges

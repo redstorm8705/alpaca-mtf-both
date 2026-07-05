@@ -26,8 +26,8 @@ from zoneinfo import ZoneInfo
 from reporting.metrics import _day_pnl, compute_lifetime_stats, compute_period_stats
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
-    TEXT_PRIMARY, TEXT_BRIGHT, TEXT_MUTED, TEXT_DIM,
-    BORDER_PANEL, BORDER_LIGHT, BORDER_TODAY,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
+    BORDER_DEFAULT, BORDER_LIGHT, BORDER_TODAY,
     STATUS_POSITIVE, STATUS_NEGATIVE, STATUS_WARNING,
     FONT_FAMILY,
     FS_DISPLAY, FS_STAT, FS_H1, FS_PNL, FS_BODY, FS_NAV, FS_LABEL, FS_MICRO, FS_TINY,
@@ -274,7 +274,7 @@ def _stats_html(m: dict) -> str:
         else TEXT_MUTED
     )
 
-    def box(label: str, val: str, color: str = TEXT_BRIGHT) -> str:
+    def box(label: str, val: str, color: str = TEXT_PRIMARY) -> str:
         return (
             f'<div class="stat-box">'
             f'<div class="stat-label">{label}</div>'
@@ -381,30 +381,30 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
     # they are tokenized at the later visual-convergence step, not now.
     css = (
         "* {box-sizing:border-box;margin:0;padding:0}"
-        f"body{{background:{BG_BASE};color:{TEXT_PRIMARY};"
+        f"body{{background:{BG_BASE};color:{TEXT_SECONDARY};"
         f"font-family:{FONT_FAMILY};"
         f"font-size:{FS_BODY}px;min-height:100vh}}"
-        f".header{{background:{BG_PANEL};border-bottom:1px solid {BORDER_PANEL};"
+        f".header{{background:{BG_PANEL};border-bottom:1px solid {BORDER_DEFAULT};"
         "padding:16px 24px;display:flex;align-items:center;"
         "justify-content:space-between;flex-wrap:wrap;gap:12px}"
-        f".header h1{{font-size:{FS_H1}px;font-weight:600;color:{TEXT_BRIGHT}}}"
+        f".header h1{{font-size:{FS_H1}px;font-weight:600;color:{TEXT_PRIMARY}}}"
         f".header-sub{{font-size:{FS_LABEL}px;color:{TEXT_MUTED};margin-top:2px}}"
         ".nav-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}"
         f".nav-btn{{background:{BG_ELEVATED};border:1px solid {BORDER_LIGHT};"
-        f"color:{TEXT_PRIMARY};"
+        f"color:{TEXT_SECONDARY};"
         f"padding:6px 14px;border-radius:{RADIUS_MD}px;cursor:pointer;"
         f"text-decoration:none;font-size:{FS_NAV}px}}"
-        f".nav-btn:hover{{background:{BORDER_PANEL}}}"
+        f".nav-btn:hover{{background:{BORDER_DEFAULT}}}"
         ".nav-btn.disabled{opacity:.3;pointer-events:none}"
         f".nav-select{{background:{BG_ELEVATED};border:1px solid {BORDER_LIGHT};"
-        f"color:{TEXT_PRIMARY};padding:6px 10px;"
+        f"color:{TEXT_SECONDARY};padding:6px 10px;"
         f"border-radius:{RADIUS_MD}px;font-size:{FS_NAV}px}}"
         f".back-link{{color:{TEXT_MUTED};font-size:{FS_LABEL}px;text-decoration:none;"
         "display:block;margin-bottom:6px}"
-        f".back-link:hover{{color:{TEXT_PRIMARY}}}"
+        f".back-link:hover{{color:{TEXT_SECONDARY}}}"
         ".main{padding:20px 24px;max-width:1400px;margin:0 auto}"
         ".stats-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}"
-        f".stat-box{{background:{BG_PANEL};border:1px solid {BORDER_PANEL};"
+        f".stat-box{{background:{BG_PANEL};border:1px solid {BORDER_DEFAULT};"
         f"border-radius:{RADIUS_LG}px;padding:12px 16px;min-width:100px;flex:1}}"
         f".stat-label{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};text-transform:uppercase;"
         "letter-spacing:.5px;margin-bottom:4px}"
@@ -412,7 +412,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         ".cal-table{width:100%;border-collapse:separate;border-spacing:5px}"
         f".cal-table th{{text-align:center;font-size:{FS_MICRO}px;color:{TEXT_MUTED};"
         "text-transform:uppercase;letter-spacing:.5px;padding-bottom:4px}"
-        f"td.day{{background:{BG_PANEL};border:1px solid {BORDER_PANEL};"
+        f"td.day{{background:{BG_PANEL};border:1px solid {BORDER_DEFAULT};"
         f"border-radius:{RADIUS_LG}px;vertical-align:top;padding:8px 10px;"
         "min-height:80px;width:20%}"
         f"td.day.today{{border-color:{BORDER_TODAY};background:{BG_TODAY}}}"

@@ -20,18 +20,22 @@ _HEX = re.compile(r"^#[0-9a-f]{6}$")
 # Every color token must be a valid 6-digit lowercase hex string.
 _COLOR_TOKENS = [
     "BG_BASE", "BG_PANEL", "BG_ELEVATED", "BG_TODAY", "BG_WEEKEND", "BG_LT_BANNER",
-    "TEXT_PRIMARY", "TEXT_BRIGHT", "TEXT_MUTED", "TEXT_DIM",
-    "BORDER_PANEL", "BORDER_LIGHT", "BORDER_TODAY",
+    "TEXT_PRIMARY", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DIM",
+    "BORDER_DEFAULT", "BORDER_STRONG", "BORDER_LIGHT", "BORDER_TODAY",
     "STATUS_POSITIVE", "STATUS_NEGATIVE", "STATUS_WARNING",
+    "PNL_GAIN", "PNL_LOSS",
     "ACCENT_CYAN",
 ]
 
+# Every low-alpha status tint must be a valid rgba() string.
+_RGBA_TOKENS = ["STATUS_POSITIVE_BG", "STATUS_WARNING_BG", "STATUS_NEGATIVE_BG"]
+
 # Every size/radius token must be a positive int (interpolated as f"{X}px").
 _INT_TOKENS = [
+    "TYPE_TITLE", "TYPE_SECTION", "TYPE_BODY", "TYPE_LABEL",
     "FS_DISPLAY", "FS_STAT", "FS_H1", "FS_PNL", "FS_BODY", "FS_NAV",
     "FS_LABEL", "FS_MICRO", "FS_TINY",
     "RADIUS_SM", "RADIUS_MD", "RADIUS_LG",
-    "TYPE_FLOOR_TARGET",
 ]
 
 
@@ -43,14 +47,19 @@ def main() -> int:
         if not isinstance(val, str) or not _HEX.match(val):
             failures.append(f"{name}={val!r} is not a valid #rrggbb lowercase hex")
 
+    for name in _RGBA_TOKENS:
+        val = getattr(T, name, None)
+        if not isinstance(val, str) or not re.match(r"^rgba\([\d,.\s]+\)$", val):
+            failures.append(f"{name}={val!r} is not a valid rgba() string")
+
     for name in _INT_TOKENS:
         val = getattr(T, name, None)
         if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
             failures.append(f"{name}={val!r} is not a positive int")
 
-    # Body floor invariant (Rafael-locked): base body text never below 14px.
-    if getattr(T, "FS_BODY", 0) < 14:
-        failures.append(f"FS_BODY={T.FS_BODY} violates the 14px body floor")
+    # Canonical type floor (Rafael-locked): TYPE_LABEL is the 14px floor.
+    if getattr(T, "TYPE_LABEL", 0) < 14:
+        failures.append(f"TYPE_LABEL={T.TYPE_LABEL} violates the 14px type floor")
 
     # Font family must be a non-empty string.
     if not isinstance(getattr(T, "FONT_FAMILY", None), str) or not T.FONT_FAMILY:
@@ -63,8 +72,8 @@ def main() -> int:
         return 1
 
     print(
-        f"PASS — {len(_COLOR_TOKENS)} color + {len(_INT_TOKENS)} numeric tokens "
-        f"valid; body floor {T.FS_BODY}px OK"
+        f"PASS — {len(_COLOR_TOKENS)} color + {len(_RGBA_TOKENS)} rgba + "
+        f"{len(_INT_TOKENS)} numeric tokens valid; type floor {T.TYPE_LABEL}px OK"
     )
     return 0
 
