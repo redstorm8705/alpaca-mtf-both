@@ -386,6 +386,106 @@ def diagnostic() -> dict:
     return report
 
 
+def heal_history(dry_run: bool = True) -> dict:
+    """
+    Phase 2b heal: recompute ALL realized P&L from the stateless FIFO ledger and
+    write the TRUE per-day values back into every eod_*.json, plus the lifetime
+    cache. FAIL-CLOSED: if the reconciliation invariant does not hold (recomputed
+    realized+unrealized != equity-deposits within $5), NOTHING is written — a bad
+    recompute can never corrupt the pages. Idempotent; safe to re-run.
+
+    dry_run=True (default): compute + return the plan, write nothing.
+    dry_run=False: rewrite eod_*.json pnl_today (+ intraday/qhm split, clear
+                   pnl_unreconciled, stamp _healed_by/_healed_at) and lifetime cache.
+    """
+    ledger = build_ledger()
+    inv = ledger["invariant"]
+    result: dict = {
+        "invariant": inv,
+        "lifetime_realized": ledger["lifetime"],
+        "lifetime_intraday": ledger["lifetime_intraday"],
+        "lifetime_qhm": ledger["lifetime_qhm"],
+        "dry_run": dry_run,
+        "eod_updated": [],
+        "eod_missing_for_days": [],
+        "lifetime_cache_updated": False,
+        "aborted": False,
+    }
+    if not inv["ok"]:
+        # FAIL-CLOSED: never write when the ledger does not reconcile to equity.
+        result["aborted"] = True
+        result["abort_reason"] = (
+            f"invariant drift ${inv['drift']:.2f} > ${inv['tolerance']:.2f} — "
+            f"recomputed ${inv['computed_total_pnl']:.2f} vs equity-deposits "
+            f"${inv['expected_total_pnl']:.2f}. Refusing to write."
+        )
+        logger.critical("heal_history ABORT (fail-closed): %s", result["abort_reason"])
+        try:
+            from alerts import send_slack
+            send_slack(f":rotating_light: P&L heal ABORTED — {result['abort_reason']}")
+        except Exception:
+            pass
+        return result
+
+    per_day = ledger["per_day"]
+    per_day_intraday = ledger["per_day_intraday"]
+    per_day_qhm = ledger["per_day_qhm"]
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    for day, true_pnl in per_day.items():
+        eod_path = _LOGS / f"eod_{day}.json"
+        if not eod_path.exists():
+            result["eod_missing_for_days"].append(day)
+            continue
+        try:
+            eod = json.loads(eod_path.read_text())
+        except Exception as e:
+            logger.warning("heal: cannot read %s: %s", eod_path.name, e)
+            continue
+        old = eod.get("pnl_today")
+        # INCLUDE-SEPARATE (data-integrity board): pnl_today stays INTRADAY (its
+        # historical meaning — weekly/monthly sum this field), QHM realized is a
+        # SEPARATE line, and the reconciles-to-equity TOTAL is kept for reference.
+        # This avoids any double-count and preserves downstream semantics.
+        new_intraday = round(per_day_intraday.get(day, 0.0), 2)
+        eod["pnl_today"] = new_intraday
+        eod["pnl_today_qhm"] = round(per_day_qhm.get(day, 0.0), 2)
+        eod["pnl_today_total"] = round(true_pnl, 2)  # intraday + qhm
+        eod["pnl_unreconciled"] = False
+        eod["pnl_unreconciled_reason"] = None
+        eod["_healed_by"] = "pnl_ledger.heal_history"
+        eod["_healed_at"] = now_iso
+        result["eod_updated"].append({"date": day, "old": old, "new": new_intraday})
+        if not dry_run:
+            tmp = eod_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(eod, indent=2))
+            tmp.replace(eod_path)
+
+    # Lifetime cache — realized lifetime from the ledger (authoritative).
+    if not dry_run:
+        try:
+            cache_path = _LOGS / "lifetime_pnl_cache.json"
+            cache = {}
+            if cache_path.exists():
+                try:
+                    cache = json.loads(cache_path.read_text())
+                except Exception:
+                    cache = {}
+            cache["total_pnl"] = ledger["lifetime"]
+            cache["total_pnl_intraday"] = ledger["lifetime_intraday"]
+            cache["total_pnl_qhm"] = ledger["lifetime_qhm"]
+            cache["ts"] = now_iso
+            cache["type"] = "ledger_fifo_authoritative"
+            tmp = cache_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cache, indent=2))
+            tmp.replace(cache_path)
+            result["lifetime_cache_updated"] = True
+        except Exception as e:
+            logger.warning("heal: lifetime cache write failed: %s", e)
+
+    return result
+
+
 def _acquire_singleton_lock():
     """
     Exclusive non-blocking lock so only ONE ledger run executes at a time.
@@ -418,6 +518,31 @@ if __name__ == "__main__":
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _, _v = _line.partition("=")
                 os.environ.setdefault(_k.strip(), _v.strip())
+
+    import sys as _sys
+    _mode = _sys.argv[1] if len(_sys.argv) > 1 else "--diagnostic"
+
+    if _mode in ("--heal", "--heal-apply"):
+        _apply = _mode == "--heal-apply"
+        hr = heal_history(dry_run=not _apply)
+        i = hr["invariant"]
+        print("=" * 68)
+        print(f"P&L HEAL — {'APPLY (writing)' if _apply else 'DRY-RUN (no writes)'}")
+        print("=" * 68)
+        print(f"INVARIANT ok={i['ok']} drift=${i['drift']:.2f} "
+              f"(computed ${i['computed_total_pnl']:+.2f} vs equity-deposits ${i['expected_total_pnl']:+.2f})")
+        if hr["aborted"]:
+            print(f"ABORTED (fail-closed): {hr.get('abort_reason')}")
+            raise SystemExit(1)
+        print(f"lifetime realized: ${hr['lifetime_realized']:+,.2f} "
+              f"(intraday ${hr['lifetime_intraday']:+,.2f} / qhm ${hr['lifetime_qhm']:+,.2f})")
+        print(f"eod days to heal: {len(hr['eod_updated'])}  "
+              f"(missing eod file for {len(hr['eod_missing_for_days'])} days)")
+        for u in hr["eod_updated"]:
+            if u["old"] != u["new"]:
+                print(f"  {u['date']}: {u['old']}  ->  {u['new']:+.2f}")
+        print(f"lifetime_cache_updated={hr['lifetime_cache_updated']}")
+        raise SystemExit(0)
 
     rep = diagnostic()
     inv = rep["invariant"]
