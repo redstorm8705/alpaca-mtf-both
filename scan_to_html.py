@@ -1691,42 +1691,13 @@ def write_html(data):
         + build_rows(sorted_rest, open_now, idx_offset=len(pinned), pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
     )
 
-    # ── Composite regime bar ─────────────────────────────────────────────────
+    # Composite regime BAR removed (redesign 2026-07-05) — it lives on the
+    # dashboard. cr is still fetched below: the 0DTE rec logic consumes it.
     cr = _get_composite_regime_display()
-    if cr:
-        cr_regime     = cr.get("composite_regime", "NEUTRAL")
-        cr_display    = "NEUTRAL" if cr_regime == "HIGH_VOL" else cr_regime
-        cr_col        = {"BULL": "#30d158", "BEAR": "#ff3b30", "NEUTRAL": "#ffd60a"}.get(cr_display, "#ffd60a")
-        term_lbl      = cr.get("term_label", "NORMAL")
-        term_col      = "#ff3b30" if term_lbl == "INVERTED" else "#30d158"
-        spy50         = cr.get("spy_vs_50sma_pct")
-        spy50_str     = (f"{spy50:+.2f}%" if spy50 is not None else "—")
-        spy50_col     = "#30d158" if (spy50 or 0) > 0 else "#ff3b30"
-        rvol20        = cr.get("spy_rvol_20d")
-        rvol20_str    = (f"{rvol20:.1f}%" if rvol20 is not None else "—")
-        composite_bar_html = f"""
-<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;
-  display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-  <span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Composite Regime (watchlist)</span>
-  <span style="font-size:13px;font-weight:800;color:{cr_col};white-space:nowrap">REGIME: {cr_display}</span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;color:#e2e4ee;white-space:nowrap">VIX <b style="color:{vix_col}">{vix_lbl}</b></span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;white-space:nowrap">TERM: <b style="color:{term_col}">{term_lbl}</b></span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;white-space:nowrap">SPY vs 50-day SMA: <b style="color:{spy50_col}">{spy50_str}</b></span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;white-space:nowrap">20d rvol: <b style="color:#e2e4ee">{rvol20_str}</b></span>
-</div>"""
-    else:
-        composite_bar_html = ""
+    composite_bar_html = ""
 
     # ── Implied range + 0DTE rec ─────────────────────────────────────────────
     spy_0dte  = _fetch_spy_0dte_data()
-    qqq_ir    = _fetch_implied_range("QQQ")
-    spy_ir    = ({"price": spy_0dte["price"], "low": spy_0dte["range_low"],
-                  "high": spy_0dte["range_high"], "expiry": spy_0dte["expiry"]}
-                 if spy_0dte else None)
     _dte_prev = _load_dte_prev()           # capture before _compute saves new rec
     dte_rec   = _compute_0dte_rec(results_by_sym.get("SPY"), spy_0dte, vix_val, cr)
 
@@ -1773,30 +1744,9 @@ def write_html(data):
                 "phantom":     _is_phantom,
                 "confirm":     _new_confirm,
             }
-    def _ir_html(sym, ir):
-        if ir is None:
-            return f'<span style="font-size:12px;color:#b8bdd4;white-space:nowrap">{sym} implied: unavailable</span>'
-        p, lo, hi = ir["price"], ir["low"], ir["high"]
-        if p > hi:
-            lbl, lbl_col = "ABOVE", "#ff3b30"
-        elif p < lo:
-            lbl, lbl_col = "BELOW", "#30d158"
-        else:
-            lbl, lbl_col = "INSIDE", "#ffd60a"
-        return (f'<span style="font-size:12px;font-weight:700;color:#e2e4ee;white-space:nowrap">'
-                f'{sym} IMPLIED: <span style="color:{lbl_col}">${lo:,.2f} – ${hi:,.2f}</span>'
-                f' <span style="font-size:10px;color:{lbl_col}">({lbl})</span></span>')
-    if spy_ir or qqq_ir:
-        implied_bar_html = f"""
-<div style="padding:9px 20px;background:#161920;border-bottom:1px solid #161a28;
-  display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-  <span style="font-size:10px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Implied Range</span>
-  {_ir_html("SPY", spy_ir)}
-  <span style="color:#2a2f48">|</span>
-  {_ir_html("QQQ", qqq_ir)}
-</div>"""
-    else:
-        implied_bar_html = ""
+    # Implied-range bar REMOVED (redesign 2026-07-05) — noise on scan; the 0DTE
+    # tile carries the actionable directional read.
+    implied_bar_html = ""
 
     # PDT status bar removed — SEC/FINRA rule amendment, board vote S50 28-0.
 
@@ -1822,43 +1772,9 @@ def write_html(data):
             "write_html: daily_pnl_cache read failed — stale cache, no output impact: %s",
             _cr_e,
         )
-    _bh_tqi_hist   = data.get("tqi_history") or []
-    _bh_scan_time  = scan_time
-
-    _bh_spy_col  = ("#ff3b30" if _bh_spy_event in ("EXTREME",)
-                    else "#ff9f0a" if _bh_spy_event.startswith("BROAD")
-                    else "#ffd60a" if _bh_spy_event == "SECTOR"
-                    else "#30d158")
-    _bh_spy_tag  = (f'<span style="font-size:12px;font-weight:700;color:{_bh_spy_col}">'
-                    f'SPY: {_bh_spy_event or "CLEAR"}</span>'
-                    if _bh_spy_event or True else "")
-    _bh_pnl_str  = (f'{_bh_daily_pnl:+.2f}' if _bh_daily_pnl is not None else "—")
-    _bh_pnl_col  = ("#30d158" if (_bh_daily_pnl or 0) >= 0 else "#ff3b30")
-    _kill_pct    = getattr(config, "MAX_DAILY_LOSS_PCT", 0.05) * 100
-    _bh_tqi_avg  = (round(sum(_bh_tqi_hist) / len(_bh_tqi_hist), 1)
-                    if _bh_tqi_hist else None)
-    _bh_tqi_col  = ("#30d158" if (_bh_tqi_avg or 0) >= 60
-                    else "#ffd60a" if (_bh_tqi_avg or 0) >= 40
-                    else "#ff3b30")
-    _bh_tqi_tag  = (f'TQI: <b style="color:{_bh_tqi_col}">{_bh_tqi_avg:.0f}/100</b> '
-                    f'({len(_bh_tqi_hist)}-trade avg)'
-                    if _bh_tqi_avg is not None else "TQI: <b style='color:#b8bdd4'>no history</b>")
-
-    bot_health_bar_html = f"""
-<div style="padding:7px 20px;background:#0f1118;border-bottom:1px solid #161a28;
-  display:flex;align-items:center;gap:18px;flex-wrap:wrap">
-  <span style="font-size:10px;color:#6a7090;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Bot Health</span>
-  {_bh_spy_tag}
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;color:#c8ccd8;white-space:nowrap">
-    P&L: <b style="color:{_bh_pnl_col}">${_bh_pnl_str}</b>
-    <span style="color:#6a7090;font-size:10px"> (kill@{_kill_pct:.0f}%)</span>
-  </span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:12px;color:#c8ccd8;white-space:nowrap">{_bh_tqi_tag}</span>
-  <span style="color:#2a2f48">|</span>
-  <span style="font-size:10px;color:#6a7090;white-space:nowrap">last scan: {_bh_scan_time[:19] if _bh_scan_time else "—"} ET</span>
-</div>"""
+    # Bot-health bar REMOVED (redesign 2026-07-05) — P&L / TQI / SPY-event belong
+    # on the dashboard, not as per-scan noise.
+    bot_health_bar_html = ""
 
     # ── 0DTE tile HTML + alert banner (pre-computed to keep f-string clean) ────
     # TB-5: Phantom flip guard — if direction just flipped and has < 2 confirming
