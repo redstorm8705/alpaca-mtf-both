@@ -267,45 +267,6 @@ def _scan_countdown(bot_status: dict, is_market_open: bool) -> str:
         return ""
 
 
-def _build_mri_components(components: dict, mri_col: str) -> str:
-    if not components:
-        return ""
-    _labels = {
-        "vix_level":      "VIX Level",
-        "vix_term":       "VIX/VIX3M",
-        "jpy_carry":      "JPY Carry",
-        "tlt_flight":     "TLT Flight",
-        "credit_spread":  "Credit Sprd",
-        "oil_shock":      "Oil Shock",
-        "gold_flight":    "Gold Flight",
-        "global_etf":     "Global ETF",
-    }
-    rows = ""
-    for key, val in components.items():
-        pts = val.get("score", 0) if isinstance(val, dict) else 0
-        if pts <= 0:
-            continue
-        label = _labels.get(key, key)
-        raw   = val.get("value", "") if isinstance(val, dict) else ""
-        raw_s = f" ({raw:+.2f}%)" if isinstance(raw, (int, float)) else ""
-        rows += (
-            f'<div style="display:flex;justify-content:space-between;padding:4px 16px;'
-            f'font-family:var(--mono);font-size:10px;border-bottom:1px solid #1e2240">'
-            f'<span style="color:var(--dim)">{label}{raw_s}</span>'
-            f'<span style="color:{mri_col};font-weight:700">+{pts}pts</span>'
-            f'</div>'
-        )
-    if not rows:
-        return ""
-    return (
-        f'<div style="background:#13162a;border-top:1px solid #1e2240">'
-        f'<div style="padding:6px 16px 4px;font-family:var(--mono);font-size:9px;'
-        f'letter-spacing:2px;color:var(--dim);text-transform:uppercase">MRI Drivers</div>'
-        f'{rows}'
-        f'</div>'
-    )
-
-
 def _build_gex_section(gex_data: dict, open_pos: list) -> str:
     """Render GEX panel rows for SPY/QQQ market anchors + current open positions."""
     if not gex_data or not gex_data.get("symbols"):
@@ -617,6 +578,16 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     if not news_rows:
         news_rows = '<div style="padding:20px 16px;font-family:var(--mono);font-size:11px;color:var(--muted)">No news items</div>'
 
+    # Alert count + risk-aware badge for the collapsible news panel (risk-first:
+    # routine news folds behind a badge; a HIGH_RISK alert auto-expands so it
+    # can't be missed). Data is preserved — every item still renders inside.
+    _news_n = _shown + len(_mkt_items[:max(0, 8 - _shown)])
+    _news_has_risk = any(
+        it.get("risk") == "HIGH_RISK"
+        for it in _bot_items[:5] + _mkt_items[:max(0, 8 - _shown)]
+    )
+    _news_badge_col = "#ff3b30" if _news_has_risk else "#8a94ae"
+
     news_ts = market_news.get("generated", "")
     if news_ts:
         try:
@@ -693,6 +664,9 @@ tr:hover td{{background:rgba(255,255,255,.03)}}
 .mri-badge{{font-size:9px;padding:2px 8px}}
 footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);display:flex;justify-content:space-between;background:var(--surface)}}
 .news-feed{{padding:4px 0}}
+.news-details summary{{outline:none}}
+.news-details summary::-webkit-details-marker{{display:none}}
+.news-details[open] summary .pm{{opacity:.7}}
 .news-item{{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px}}
 .news-item:last-child{{border-bottom:none}}
 .news-headline{{font-size:12px;color:var(--text);line-height:1.45}}
@@ -831,11 +805,13 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
       <a class="link-btn" href="logs/{_last_week_fname}">→ Last Week Report</a>
     </div>
 
-    <div class="ph" style="margin-top:1px">
-      <span class="pt">Breaking News</span>
-      <span class="pm">{news_ts}</span>
-    </div>
-    <div class="news-feed">{news_rows}</div>
+    <details class="news-details"{' open' if _news_has_risk else ''}>
+      <summary class="ph" style="margin-top:1px;cursor:pointer;list-style:none">
+        <span class="pt">Breaking News <span style="color:{_news_badge_col};font-weight:700">· {_news_n} alert{'s' if _news_n != 1 else ''}</span></span>
+        <span class="pm">{news_ts} ▾</span>
+      </summary>
+      <div class="news-feed">{news_rows}</div>
+    </details>
 
     <div class="ph" style="margin-top:1px">
       <span class="pt">Bot State</span>
@@ -846,7 +822,6 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
         <tr><td style="color:var(--dim)">Scans to Clear</td><td>{spy_scans}</td></tr>
         <tr><td style="color:var(--dim)">SPY Move</td><td style="color:{'#00ff88' if spy_mag >= 0 else '#ff3b5c'}">{spy_mag:+.2f}%</td></tr>
         <tr><td style="color:var(--dim)">Kill Switch</td><td style="color:{ks_col}">{ks_used_pct:.1f}% used</td></tr>
-        <tr><td style="color:var(--dim)">Last Refresh</td><td style="font-size:10px">{now_et.astimezone(PT).strftime('%-I:%M:%S %p PT')}</td></tr>
         <tr style="border-top:1px solid #1a2530">
           <td style="color:var(--dim)">MRI Score</td>
           <td><span style="color:{mri_col};font-weight:700">{mri_score}/100</span></td>
