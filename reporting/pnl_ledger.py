@@ -63,8 +63,14 @@ def _headers() -> dict:
     }
 
 
-def _get_json(url: str, tries: int = 6):
-    """GET with 429 exponential backoff. Raises on non-429 HTTP errors."""
+def _get_json(url: str, tries: int = 8):
+    """
+    GET with exponential backoff. Retries BOTH 429 rate-limits AND transient
+    network/SSL errors (URLError, SSLError, socket timeout, connection reset) —
+    a mid-fetch SSL EOF must not crash a full-history recompute. Non-429 HTTP
+    errors (4xx/5xx that aren't 429) still raise immediately.
+    """
+    import socket
     last_err: Exception | None = None
     for i in range(tries):
         try:
@@ -77,6 +83,13 @@ def _get_json(url: str, tries: int = 6):
                 time.sleep(1.5 * (i + 1))
                 continue
             raise
+        except (urllib.error.URLError, ssl.SSLError, socket.timeout,
+                ConnectionError, TimeoutError) as e:
+            # Transient network/SSL blip — back off and retry.
+            last_err = e
+            logger.warning("transient network error (retry %d/%d): %s", i + 1, tries, e)
+            time.sleep(1.5 * (i + 1))
+            continue
     raise RuntimeError(f"Alpaca GET failed after {tries} tries: {last_err}")
 
 
