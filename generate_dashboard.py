@@ -491,7 +491,6 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     mri_score         = _mri.get("score", 0)
     mri_level         = _mri.get("level", "NORMAL")
     mri_size_floor    = _mri.get("size_floor", 1.0)
-    mri_components    = _mri.get("components", {})
 
     _mri_colors = {
         "NORMAL":   "#636680",
@@ -653,7 +652,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 <meta http-equiv="refresh" content="30">
 <title>MTF Bot — Dashboard</title>
 <style>
-:root{{--bg:#111318;--surface:#161920;--border:#1e2240;--accent:#0a84ff;--green:#30d158;--red:#ff3b30;--yellow:#ffd60a;--muted:#636680;--text:#e2e4ee;--dim:#b8bdd4;--mono:'SF Mono','Share Tech Mono',monospace;--sans:-apple-system,'SF Pro Text','Segoe UI',sans-serif}}
+:root{{--bg:#0d0f1a;--surface:#13162a;--border:#252847;--accent:#00e5ff;--green:#30d158;--red:#ff3b30;--yellow:#ffd60a;--muted:#8a94ae;--text:#e8ecff;--dim:#c8cce4;--mono:'SF Mono','Share Tech Mono',monospace;--sans:-apple-system,'SF Pro Text','Segoe UI',sans-serif}}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}}
 header{{display:flex;align-items:center;justify-content:space-between;padding:13px 24px;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:100}}
@@ -863,7 +862,6 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
 
       </tbody>
     </table>
-    {_build_mri_components(mri_components, mri_col)}
     {_build_gex_section(gex or {}, open_pos)}
   </div>
 </div>
