@@ -1419,11 +1419,13 @@ def build_html(  # noqa: E501
             '</div>'
         )
 
-    # ── Live strategy validation (replaces stale daily-bar backtest card) ───────
-    # Backtest data is still loaded and passed to the AI analysis prompt for
-    # historical context, but is no longer the primary display. Live trade data
-    # from trade_log.json is the authoritative signal.
-    bt_html = _strategy_validation_html(trade_log, lifetime_pnl=_lt_pnl)
+    # ── Strategy validation MOVED to the monthly page (Rafael 2026-07-05) ───────
+    # Now the "Strategy Edge Report (All-Time)" on monthly_review — all-time edge
+    # diagnostics belong with the lifetime view, not this week's review. The
+    # _strategy_validation_html function stays here (monthly imports it); weekly
+    # just no longer displays it. trade_log + _lt_pnl are still used below.
+    bt_html = ""
+    _ = _lt_pnl  # retained for the exec-summary/AI-analysis context below
 
     # ── AI sections ──────────────────────────────────────────────────────────
     _det_stats = _exec_summary_stats(trade_log, monday)
