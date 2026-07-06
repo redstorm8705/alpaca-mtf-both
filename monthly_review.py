@@ -442,18 +442,55 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         "letter-spacing:.5px;margin-bottom:4px}"
         f".lt-val{{font-size:{FS_DISPLAY}px;font-weight:700}}"
         f".lt-sub{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};margin-top:4px}}"
+        f".edge-details{{margin-top:20px;border:1px solid {BORDER_DEFAULT};"
+        f"border-radius:{RADIUS_LG}px;background:{BG_PANEL};overflow:hidden}}"
+        ".edge-details summary{list-style:none;cursor:pointer;padding:14px 18px;"
+        "display:flex;align-items:center;gap:14px;flex-wrap:wrap}"
+        ".edge-details summary::-webkit-details-marker{display:none}"
+        f".edge-details summary:hover{{background:{BG_ELEVATED}}}"
+        f".edge-title{{font-size:{FS_MICRO}px;font-weight:600;color:{TEXT_MUTED};"
+        "text-transform:uppercase;letter-spacing:.1em}"
+        f".edge-sum{{display:flex;align-items:center;gap:8px;font-size:{FS_NAV}px;"
+        "font-weight:600;margin-left:auto}"
+        f".edge-dot{{color:{TEXT_DIM}}}"
+        f".edge-caret{{color:{TEXT_MUTED};font-size:{FS_LABEL}px;"
+        "transition:transform .15s}"
+        ".edge-details[open] .edge-caret{transform:rotate(180deg)}"
+        ".edge-body{padding:0 18px 18px}"
     )
 
-    # Strategy Edge Report (All-Time) — all-time edge diagnostics, moved here
-    # from weekly (score->outcome, exit breakdown, edge ratio, PF, drawdown).
+    # Strategy Edge Report (All-Time) — COLLAPSED dropdown (Rafael 2026-07-06,
+    # board + Gro + GAI). Summary line shows the four headline metrics
+    # (P&L / Win Rate / Profit Factor / Trades); full breakdown behind the expand.
     try:
         _tl = _load_trade_log()
-        _n_closed = len(_tl.get("closed", []))
+        _closed = _tl.get("closed", [])
+        _n_closed = len(_closed)
         _edge_body = _strategy_validation_html(_tl, lifetime_pnl=_lt_pnl)
     except Exception as _edge_err:
         logger.warning("monthly Strategy Edge Report failed: %s", _edge_err)
-        _edge_body, _n_closed = "", 0
+        _edge_body, _n_closed, _closed = "", 0, []
     if _edge_body:
+        # All-time profit factor from closed-trade P&L (matches edge-report math).
+        _epnls = [_day_pnl(t) for t in _closed]
+        _gw = sum(p for p in _epnls if p > 0)
+        _gl = abs(sum(p for p in _epnls if p < 0))
+        _pf_all = (_gw / _gl) if _gl > 0 else 0.0
+        _pf_all_str = f"{_pf_all:.2f}×" if _gl > 0 else "—"
+        _pnl_sum_c = STATUS_POSITIVE if _lt_pnl >= 0 else STATUS_NEGATIVE
+        _wr_sum_c = _wr_color(_lt_wr)
+        _pf_sum_c = _pf_color(_pf_all) if _gl > 0 else TEXT_MUTED
+        _summary = (
+            '<span class="edge-sum">'
+            f'<span style="color:{_pnl_sum_c}">{_lt_sign}${_lt_pnl:,.2f}</span>'
+            '<span class="edge-dot">·</span>'
+            f'<span style="color:{_wr_sum_c}">{_lt_wr:.0f}% WR</span>'
+            '<span class="edge-dot">·</span>'
+            f'<span style="color:{_pf_sum_c}">PF {_pf_all_str}</span>'
+            '<span class="edge-dot">·</span>'
+            f'<span style="color:{TEXT_SECONDARY}">{_n_closed} trades</span>'
+            '</span>'
+        )
         _caveat = (
             '<div style="font-size:11px;color:#ffd60a;'
             'background:rgba(255,214,10,.10);border:1px solid rgba(255,214,10,.3);'
@@ -462,11 +499,13 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
             f'(n={_n_closed} closed trades)</div>'
         ) if _n_closed < 100 else ""
         _edge_report = (
-            '<div style="margin-top:20px">'
-            '<div style="font-size:11px;font-weight:600;color:#8a94ae;'
-            'text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">'
-            'Strategy Edge Report — All-Time</div>'
-            f'{_caveat}{_edge_body}</div>'
+            '<details class="edge-details">'
+            '<summary class="edge-summary">'
+            '<span class="edge-title">Strategy Edge Report — All-Time</span>'
+            f'{_summary}<span class="edge-caret">▾</span>'
+            '</summary>'
+            f'<div class="edge-body">{_caveat}{_edge_body}</div>'
+            '</details>'
         )
     else:
         _edge_report = ""
