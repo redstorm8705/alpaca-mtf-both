@@ -1487,41 +1487,41 @@ def generate_html(data: dict) -> str:
   </script>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{background:#000000;color:#e2e4ee;font-family:-apple-system,'SF Pro Text',sans-serif;font-size:13px;line-height:1.4}}
+    body{{background:#0d0f1a;color:#e8ecff;font-family:-apple-system,'SF Pro Text',sans-serif;font-size:13px;line-height:1.4}}
     .top-nav{{display:flex;align-items:center;justify-content:space-between;padding:13px 20px;
-      background:#161920;border-bottom:1px solid #161a28;position:sticky;top:0;z-index:10}}
+      background:#13162a;border-bottom:1px solid #252847;position:sticky;top:0;z-index:10}}
     .nav-title{{font-size:15px;font-weight:700;letter-spacing:-.01em}}
-    .nav-sub{{font-size:11px;color:#b8bdd4;margin-left:10px}}
-    .nav-back{{font-size:11px;font-weight:600;color:#b8bdd4;text-decoration:none;
-      padding:5px 11px;border:1px solid #2a2f48;border-radius:6px;white-space:nowrap;
+    .nav-sub{{font-size:11px;color:#8a94ae;margin-left:10px}}
+    .nav-back{{font-size:11px;font-weight:600;color:#8a94ae;text-decoration:none;
+      padding:5px 11px;border:1px solid #252847;border-radius:6px;white-space:nowrap;
       transition:color .15s,border-color .15s}}
-    .nav-back:hover{{color:#e2e4ee;border-color:#4a5070}}
+    .nav-back:hover{{color:#00e5ff;border-color:#00e5ff}}
     .win-pill{{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;
       border:1px solid;font-size:11px;font-weight:600;letter-spacing:.08em}}
     .win-pill.open{{border-color:#30d158;color:#30d158}}
-    .win-pill.closed{{border-color:#636680;color:#636680}}
+    .win-pill.closed{{border-color:#8a94ae;color:#8a94ae}}
     .win-dot{{width:7px;height:7px;border-radius:50%;background:currentColor;animation:wp 1.5s infinite}}
     @keyframes wp{{0%,100%{{opacity:1}}50%{{opacity:.2}}}}
-    .stat-bar{{display:flex;gap:1px;background:#161a28;border-bottom:1px solid #161a28}}
-    .stat-tile{{flex:1;padding:12px 18px;background:#161920}}
-    .stat-tile.accent{{border-left:1px solid #1e2440}}
-    .s-lbl{{font-size:10px;color:#b8bdd4;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}}
+    .stat-bar{{display:flex;gap:1px;background:#252847;border-bottom:1px solid #252847}}
+    .stat-tile{{flex:1;padding:12px 18px;background:#13162a}}
+    .stat-tile.accent{{border-left:1px solid #1e2240}}
+    .s-lbl{{font-size:10px;color:#8a94ae;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}}
     .s-val{{font-size:22px;font-weight:700}}
-    .s-sub{{font-size:11px;color:#b8bdd4;margin-top:2px}}
-    .event-banner{{background:#2a1f00;border:1px solid #5a3e00;padding:10px 20px;font-size:12px}}
+    .s-sub{{font-size:11px;color:#8a94ae;margin-top:2px}}
+    .event-banner{{background:rgba(255,214,10,.10);border:1px solid rgba(255,214,10,.3);padding:10px 20px;font-size:12px}}
     .event-banner ul{{margin-top:5px;padding-left:18px;color:#ffd60a}}
-    .section-hdr{{padding:10px 20px 6px;font-size:10px;font-weight:600;color:#b8bdd4;
-      text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid #161a28;background:#000000}}
-    .section-hdr.dte-hdr{{background:#0a0d06;border-top:2px solid #30d158}}
+    .section-hdr{{padding:10px 20px 6px;font-size:10px;font-weight:600;color:#8a94ae;
+      text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid #252847;background:#0d0f1a}}
+    .section-hdr.dte-hdr{{background:#0d1f12;border-top:2px solid #30d158}}
     .content{{padding:16px 20px}}
     table{{width:100%;border-collapse:collapse}}
-    thead th{{padding:7px 14px;text-align:left;font-size:10px;font-weight:500;color:#b8bdd4;
-      letter-spacing:.08em;text-transform:uppercase;background:#000000;
-      border-bottom:1px solid #161a28;white-space:nowrap}}
-    td{{padding:10px 14px;border-bottom:1px solid #10131e}}
-    .rec-row:hover td{{background:#0f1220}}
-    .total-row td{{border-top:1px solid #161a28;border-bottom:none;font-weight:600}}
-    .fills-table{{background:#161920;border-radius:8px;overflow:hidden;border:1px solid #1e2440}}
+    thead th{{padding:7px 14px;text-align:left;font-size:10px;font-weight:500;color:#8a94ae;
+      letter-spacing:.08em;text-transform:uppercase;background:#0d0f1a;
+      border-bottom:1px solid #252847;white-space:nowrap}}
+    td{{padding:10px 14px;border-bottom:1px solid #1e2240}}
+    .rec-row:hover td{{background:#1e2240}}
+    .total-row td{{border-top:1px solid #252847;border-bottom:none;font-weight:600}}
+    .fills-table{{background:#13162a;border-radius:8px;overflow:hidden;border:1px solid #252847}}
     .muted{{color:#b8bdd4}}
     .center{{text-align:center;padding:28px;color:#b8bdd4}}
     code{{font-family:'SF Mono',monospace}}
