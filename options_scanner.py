@@ -1319,19 +1319,44 @@ def expiry_display(expiry_str: str) -> str:
         return expiry_str
 
 
+def _tier_header(label: str, color: str, n: int) -> str:
+    """A full-width tier divider row (HIGHEST / SECONDARY) with count or empty-state."""
+    tail = (f'<span style="color:#636680;font-weight:400"> · {n}</span>' if n
+            else '<span style="color:#4a5070;font-weight:400"> — none this scan</span>')
+    return (f'<tr><td colspan="11" style="padding:8px 14px;font-size:11px;font-weight:700;'
+            f'letter-spacing:.08em;text-transform:uppercase;color:{color};'
+            f'background:#0a0d14;border-top:1px solid #161a28">{label}{tail}</td></tr>')
+
+
 def _build_rec_table(recs: list, id_offset: int = 0) -> str:
-    """Render an expandable recommendation table from a list of rec dicts."""
+    """Render a TIERED (Highest-Conviction / Secondary) expandable rec table.
+
+    Splits by conviction so the highest-conviction contracts read first, per the
+    2026-07-05 UX redesign (board + Gro + GAI: tiered). id_offset keeps det-{idx}
+    unique across weekly(0)/0DTE(1000); +500 separates the MOD sub-block.
+    """
     if not recs:
         return '<p class="muted center">No recommendations at current signal levels.</p>'
-    rec_rows = "".join(_rec_row(r, i + id_offset) + _rec_detail(r, i + id_offset)
-                       for i, r in enumerate(recs))
+    high = [r for r in recs if r.get("conviction") == "HIGH"]
+    mod  = [r for r in recs if r.get("conviction") != "HIGH"]
+
+    def _rows(subset: list, base: int) -> str:
+        return "".join(_rec_row(r, i + base) + _rec_detail(r, i + base)
+                       for i, r in enumerate(subset))
+
+    body = (
+        _tier_header("▲ Highest Conviction · score ≥ 10", "#30d158", len(high))
+        + _rows(high, id_offset)
+        + _tier_header("◆ Secondary · score 8–9", "#ffd60a", len(mod))
+        + _rows(mod, id_offset + 500)
+    )
     return f"""<table style="width:100%;border-collapse:collapse">
   <thead><tr>
     <th>Ticker</th><th>Price</th><th>Bias</th><th>Score</th>
     <th>VRP</th><th>Signal</th><th>Strike</th><th>δ</th><th>IV</th><th>DTE</th>
     <th style="text-align:center;width:32px">▼</th>
   </tr></thead>
-  <tbody>{rec_rows}</tbody>
+  <tbody>{body}</tbody>
 </table>"""
 
 
