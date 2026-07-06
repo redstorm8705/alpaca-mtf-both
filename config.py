@@ -104,6 +104,22 @@ BARS_TO_FETCH = {
     TF_4H:    200, TF_12H:  150, TF_DAILY: 365, TF_WEEKLY: 104,
 }
 
+# ─── ALPACA BAR FETCH: GLOBAL RATE LIMITER + SHARED TTL CACHE ─────────────────
+# Board + Gro + GAI consensus 2026-07-06 (RC: scanner + main bot raced for the
+# shared Alpaca quota → 429 backoff cascades → ~21-min scanner gaps). A GLOBAL
+# rate limiter (data/fetcher.py) caps TOTAL bar throughput across scanner AND
+# main bot so they can no longer race past the quota; a shared TTL cache stops
+# them double-fetching identical bars (~halves requests).
+# Conservative default: 175/min stays under the 200/min free-tier ceiling even
+# if "unlimited paper" is stale. Raise only AFTER empirically verifying the real
+# 429 threshold (parallelization is deferred until then).
+ALPACA_MAX_REQ_PER_MIN   = 175   # global cap across all bar fetchers
+# Cache TTL (secs): dedupes scanner/main-bot fetches of the same (symbol,tf,bars)
+# within a cycle. 180s is well inside the Data-Quality Contract's 15-min bar-
+# staleness bound, and the real-time SPY entry gate uses alpaca_data.py (quotes),
+# NOT this bar path — so scoring bars up to 180s old are safe.
+ALPACA_BAR_CACHE_TTL_SECS = 180
+
 # ─── MOVING AVERAGES ─────────────────────────────────────────────────────────
 
 EMA_FAST = 13

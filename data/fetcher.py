@@ -1,9 +1,13 @@
 """
 data/fetcher.py
 Rate-limited Alpaca bar fetcher.
-- Singleton client (one auth for entire session)
-- Sequential fetching only (no threading)
-- 0.5s between requests = max 120 req/min (Alpaca free tier: 200/min)
+- Singleton client (one auth for entire session; requests.Session is concurrent-safe)
+- GLOBAL rate limiter (_rate_gate) shared by scanner + main bot: aggregate
+  throughput capped at config.ALPACA_MAX_REQ_PER_MIN (default 175) regardless of
+  caller/thread — replaces the old per-call 0.5s sleep so the two can no longer
+  race past the quota (board + Gro + GAI 2026-07-06).
+- Shared TTL cache (config.ALPACA_BAR_CACHE_TTL_SECS): dedupes identical
+  (symbol, timeframe, n_bars) fetches so scanner + main bot stop double-fetching.
 - Retry up to 5x with aggressive backoff on rate limit errors
 - Intraday mode: 3 TFs only (15M, 1H, Daily)
 """
@@ -11,6 +15,7 @@ Rate-limited Alpaca bar fetcher.
 import os
 import time
 import logging
+import threading
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -71,6 +76,57 @@ def get_client():
     return _client
 
 
+# ─── Global rate limiter + shared TTL bar cache (board + Gro + GAI 2026-07-06) ─
+# GLOBAL across scanner + main bot: both import this module, so every bar fetch
+# passes through ONE rate gate — they can no longer race past the shared Alpaca
+# quota (root-cause of the 429 backoff cascades / ~21-min scanner gaps). The TTL
+# cache stops double-fetching identical (symbol, timeframe, n_bars) bars.
+_rate_lock   = threading.Lock()
+_last_req_ts = 0.0                       # monotonic ts of the last request start
+_cache_lock  = threading.RLock()
+_bar_cache: dict = {}                    # (symbol, tf, n_bars) -> (df, mono_ts)
+
+
+def _rate_gate() -> None:
+    """Reserve the next evenly-spaced request slot and block until it arrives.
+
+    Shared by EVERY bar fetch (scanner + main bot). The slot is RESERVED inside
+    the lock (_last_req_ts advanced to the reserved time), then the wait happens
+    OUTSIDE the lock — so every request start is guaranteed >= min_interval apart
+    across all callers/threads (deterministic spacing, no double-booking), with
+    no lock held during the sleep. Aggregate Alpaca throughput therefore stays at
+    ALPACA_MAX_REQ_PER_MIN regardless of caller/thread or request duration."""
+    global _last_req_ts
+    rpm = max(int(getattr(config, "ALPACA_MAX_REQ_PER_MIN", 175)), 1)
+    min_interval = 60.0 / rpm
+    with _rate_lock:
+        slot = max(time.monotonic(), _last_req_ts + min_interval)
+        _last_req_ts = slot          # reserve BEFORE releasing the lock
+    wait = slot - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _cache_get(key):
+    """Return a fresh cached DataFrame for `key`, or None. TTL<=0 disables."""
+    ttl = float(getattr(config, "ALPACA_BAR_CACHE_TTL_SECS", 0) or 0)
+    if ttl <= 0:
+        return None
+    with _cache_lock:
+        entry = _bar_cache.get(key)
+        if entry is not None and (time.monotonic() - entry[1]) < ttl:
+            return entry[0]
+    return None
+
+
+def _cache_put(key, df) -> None:
+    ttl = float(getattr(config, "ALPACA_BAR_CACHE_TTL_SECS", 0) or 0)
+    if ttl <= 0:
+        return
+    with _cache_lock:
+        _bar_cache[key] = (df, time.monotonic())
+
+
 def get_universe():
     try:
         sp500  = pd.read_html(config.SP500_URL)[0]["Symbol"].tolist()
@@ -88,13 +144,25 @@ def fetch_bars(
     symbol: str, timeframe: str, num_bars: int | None = None
 ) -> pd.DataFrame:
     """
-    Fetch OHLCV bars with rate limit protection.
-    - 0.5s sleep after every response (including empty — throttles all API calls)
+    Fetch OHLCV bars with a GLOBAL rate limiter + shared TTL cache.
+    - Shared TTL cache (ALPACA_BAR_CACHE_TTL_SECS): a fresh cached (symbol, tf,
+      n_bars) is returned as a COPY without an API call or rate-budget cost —
+      dedupes scanner/main-bot double-fetches of identical bars.
+    - Global rate gate (ALPACA_MAX_REQ_PER_MIN) BEFORE each request replaces the
+      old per-call 0.5s sleep, so scanner + main bot share ONE throughput cap and
+      can no longer race past the Alpaca quota (root cause of 429 backoff cascades).
     - Up to 5 retries with exponential backoff capped at 20s (3s, 6s, 12s, 20s, 20s)
     - Cap prevents a single thread from sleeping 61s and blocking run_scan()'s
-      executor timeout (90s), which would cause the watchdog to fire.
+      timeout (90s), which would cause the watchdog to fire.
     """
     n_bars = num_bars or config.BARS_TO_FETCH.get(timeframe, 300)
+
+    # Shared TTL cache — a hit returns a COPY (callers must not mutate cached data)
+    # with no API call and no rate-budget cost.
+    _ckey = (symbol, timeframe, n_bars)
+    _cached = _cache_get(_ckey)
+    if _cached is not None:
+        return _cached.copy()
 
     if timeframe in [config.TF_15M, config.TF_30M]:
         days_back = max(30, n_bars // 26)
@@ -113,6 +181,7 @@ def fetch_bars(
 
     for attempt in range(5):
         try:
+            _rate_gate()  # global min-interval before call (replaces per-call sleep)
             client = get_client()
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
@@ -122,7 +191,6 @@ def fetch_bars(
             bars = client.get_stock_bars(request)
             df   = bars.df
 
-            time.sleep(0.5)  # 0.5s throttle = max 120 req/min; applies to all responses
             if df.empty:
                 return pd.DataFrame()
 
@@ -134,6 +202,7 @@ def fetch_bars(
                     "[%s/%s] Requested %d bars, got %d",
                     symbol, timeframe, n_bars, len(result),
                 )
+            _cache_put(_ckey, result)
             return result
 
         except Exception as e:
