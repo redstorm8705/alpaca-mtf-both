@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from reporting.metrics import compute_lifetime_stats
+from ui_tokens import LIVE_CLOCK_HTML
 
 # Load .env explicitly so API keys are available whether this module is
 # imported from within main.py's process or run standalone. Without this,
@@ -317,9 +318,8 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         market_news = {"items":[]}
 
     now_et   = datetime.now(ET)
-    now_pt   = now_et.astimezone(PT)
-    _hr_pt   = str(int(now_pt.strftime("%I")))
-    ts       = now_pt.strftime("%a %b %-d · ") + _hr_pt + now_pt.strftime(":%M:%S %p PT")
+    # Header time is now a LIVE in-browser clock (LIVE_CLOCK_HTML) — no static
+    # server-rendered timestamp string needed (Rafael rule 2026-07-06).
     _mkt     = _market_status_info(now_et)
     _scan_cd = _scan_countdown(bot_status, _mkt["is_open"])
 
@@ -704,7 +704,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   <div class="logo">MTF Bot <span>COMMAND CENTER</span></div>
   <div class="hdr-right">
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-      <span>{ts}</span>
+      <span style="font-size:12px;color:var(--text)">{LIVE_CLOCK_HTML}</span>
       <span style="font-size:9px;color:var(--dim)">{_scan_cd}</span>
     </div>
     <div class="pill {'open' if _mkt['is_open'] else 'closed'}">

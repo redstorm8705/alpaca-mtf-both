@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import glob
+from ui_tokens import LIVE_CLOCK_HTML  # live-clock rule (2026-07-06)
 import argparse
 import subprocess
 import logging
@@ -1538,7 +1539,7 @@ def build_html(  # noqa: E501
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
     {nav_html}
     {back_link}
-    <div style="font-size:10px;color:#b8bdd4">Last updated {gen_ts}</div>
+    <div style="font-size:10px;color:#b8bdd4">Last updated {gen_ts} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}</div>
   </div>
 </div>
 

@@ -35,6 +35,7 @@ from ui_tokens import (
     FONT_FAMILY,
     FS_DISPLAY, FS_STAT, FS_H1, FS_PNL, FS_BODY, FS_NAV, FS_LABEL, FS_MICRO, FS_TINY,
     RADIUS_SM, RADIUS_MD, RADIUS_LG,
+    LIVE_CLOCK_HTML,
 )
 
 import logging
@@ -523,7 +524,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
 <div class="header">
   <div>
     <h1>Monthly Review — {month_label}</h1>
-    <div class="header-sub">Updated {updated}</div>
+    <div class="header-sub">Updated {updated} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}</div>
   </div>
   <div>
     {back}

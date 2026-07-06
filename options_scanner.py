@@ -40,6 +40,7 @@ import os
 import sys
 import json
 import time
+from ui_tokens import LIVE_CLOCK_HTML  # live-clock rule (2026-07-06)
 import logging
 import argparse
 import numpy as np
@@ -1579,7 +1580,7 @@ def generate_html(data: dict) -> str:
       <span class="nav-sub">
         Weekly {exp_full} ({exp_display}) · {len(weekly_recs)} rec{'s' if len(weekly_recs)!=1 else ''}
         &nbsp;·&nbsp; 0DTE {dte_display} · {len(dte_recs)} rec{'s' if len(dte_recs)!=1 else ''}
-        &nbsp;·&nbsp; {generated}
+        &nbsp;·&nbsp; {generated} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}
       </span>
     </div>
   </div>

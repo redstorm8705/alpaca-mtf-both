@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import argparse
+from ui_tokens import LIVE_CLOCK_HTML  # live-clock rule (2026-07-06)
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -2050,7 +2051,7 @@ def write_html(data):
   <div style="display:flex;align-items:center;gap:16px">
     <div>
       <span style="font-size:15px;font-weight:700;letter-spacing:-.01em">Raf's Signal Scanner</span>
-      <span style="font-size:11px;color:#b8bdd4;margin-left:10px">{len(results)} tickers{pv_str} · ranked by score · {pt_time}</span>
+      <span style="font-size:11px;color:#b8bdd4;margin-left:10px">{len(results)} tickers{pv_str} · ranked by score · {pt_time} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}</span>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:16px">

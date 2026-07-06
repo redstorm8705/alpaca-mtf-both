@@ -75,6 +75,24 @@ RADIUS_SM = 4   # badges
 RADIUS_MD = 6   # buttons, selects
 RADIUS_LG = 8   # panels, cells, banners
 
+# ── Extended CATEGORICAL palette — DISTINCT from semantic status/P&L ────────────
+# Weekly encodes ~20 categorical distinctions (exit reasons, risk tiers, SPY event
+# types, board roles) that exceed the 3-tier status + P&L + cyan set. These hues
+# preserve those distinctions (board audit 2026-07-05 — "preserve every field").
+# They are categorical taxonomy colors, NOT semantic status. Kept as hex strings
+# so the alpha-suffix pattern (f"{CAT_TRAIL}18") for low-alpha tints still works.
+CAT_TRAIL  = "#ff6b35"   # exit: trail-stop · SPY: war/geo (warm orange)
+CAT_AMBER  = "#ff9f0a"   # exit: breakeven · risk: HIGH · SPY: technical (amber)
+CAT_PURPLE = "#bf5af2"   # board role: Quant Research (purple)
+CAT_INFO   = "#0a84ff"   # info-blue: SECTOR event, info badges, clickable signals
+CAT_INFO_BG = "rgba(10,132,255,.15)"   # info-badge background tint
+# Exit-target/signal/hard-stop/other reuse STATUS_POSITIVE/WARNING/NEGATIVE/TEXT_MUTED.
+
+# ── Narrow density carve-out (Rafael-approved 2026-07-05) ──────────────────────
+# 14px is the floor for ALL structural text. This sub-floor is permitted ONLY for
+# the densest count-badges and multi-column table cells where 14px wraps/overflows.
+TYPE_DENSE = 12   # documented carve-out — densest count badges / table cells only
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE-SPECIFIC / TRANSITIONAL — not yet unified into the canonical set.
 # Monthly's granular sizes + its bespoke cell backgrounds/borders. These migrate
@@ -97,3 +115,22 @@ FS_NAV     = 13   # nav buttons / selects
 FS_LABEL   = 12   # sub-labels, dates
 FS_MICRO   = 11   # small labels, meta, footer
 FS_TINY    = 10   # badges
+
+# ── Live clock — cross-page rule (Rafael 2026-07-06) ──────────────────────────
+# Every HTML page shows a DYNAMIC current-PT clock that ticks every second
+# in-browser — never a static server-rendered timestamp. Insert LIVE_CLOCK_HTML
+# into any page header. The "data as of / last scan" freshness labels stay put
+# (they convey data AGE, a different thing from the wall clock).
+# Plain string (NOT an f-string) so its literal { } braces are safe when a page
+# inserts it via f"...{LIVE_CLOCK_HTML}...". Timezone forced to PT regardless of
+# the viewer's locale (project TZ rule). tabular-nums stops digit jitter.
+LIVE_CLOCK_HTML = (
+    '<span id="live-clock" class="live-clock" '
+    'style="font-variant-numeric:tabular-nums;white-space:nowrap"></span>'
+    '<script>(function(){var el=document.getElementById("live-clock");'
+    'if(!el)return;function t(){var n=new Date();'
+    'el.textContent=n.toLocaleString("en-US",{timeZone:"America/Los_Angeles",'
+    'weekday:"short",month:"short",day:"numeric",hour:"numeric",'
+    'minute:"2-digit",second:"2-digit",hour12:true})+" PT";}'
+    't();setInterval(t,1000);})();</script>'
+)
