@@ -269,18 +269,35 @@ def _scan_countdown(bot_status: dict, is_market_open: bool) -> str:
 
 
 def _build_gex_section(gex_data: dict, open_pos: list) -> str:
-    """Render GEX panel rows for SPY/QQQ market anchors + current open positions."""
+    """Render the GEX title card — market anchors + open positions, WEEKLY expiry.
+    Shows the timeframe (weekly · exp Friday · DTE) and the flip strike relative to
+    spot so the flip is interpretable at a glance (Rafael 2026-07-06)."""
+    _hdr = ('<div class="ph"><span class="pt">Gamma Exposure (GEX)</span>'
+            '{sub}</div>')
     if not gex_data or not gex_data.get("symbols"):
         return (
-            '<div style="border-top:1px solid #1e2240">'
-            '<div class="ph"><span class="pt">GEX</span></div>'
-            '<div style="padding:20px 16px;font-family:var(--mono);font-size:11px;'
-            'color:#636680">GEX data unavailable — ensure live_data_writer.py is running</div>'
-            '</div>'
+            '<div class="panel gex-card">'
+            + _hdr.format(sub='')
+            + '<div style="padding:18px 16px;font-family:var(--mono);font-size:11px;'
+              'color:#636680">GEX data unavailable — ensure live_data_writer.py is running</div>'
+            + '</div>'
         )
     _gex_colors = {"POSITIVE": "#30d158", "NEAR-FLIP": "#ffd60a", "NEGATIVE": "#ff3b30"}
     sym_data = gex_data.get("symbols", {})
     ts_str   = gex_data.get("ts", "")
+
+    # Timeframe sub-label (all symbols share the weekly window)
+    _tf = ""
+    for _s in ["SPY", "QQQ"]:
+        _d = sym_data.get(_s, {})
+        if _d and not _d.get("error") and _d.get("window"):
+            _exp   = _d.get("expiry", "")
+            _dte   = _d.get("dte")
+            _dte_s = f" · {_dte}d (cal)" if _dte is not None else ""
+            _tf    = f"Weekly · exp {_exp}{_dte_s}"
+            break
+    _sub = (f'<span class="pm" style="font-size:9px">{_tf} · {ts_str}</span>'
+            if _tf else f'<span class="pm" style="font-size:9px">{ts_str}</span>')
 
     rows = ""
     shown = set()
@@ -291,23 +308,33 @@ def _build_gex_section(gex_data: dict, open_pos: list) -> str:
         d = sym_data.get(sym, {})
         if not d or d.get("error"):
             continue
-        label    = d.get("label", "N/A")
-        flip     = d.get("flip_strike")
-        col      = _gex_colors.get(label, "#4a6a80")
-        flip_str = f'  <span style="font-size:9px;color:var(--dim)">flip ${flip:,.0f}</span>' if flip else ""
+        label = d.get("label", "N/A")
+        flip  = d.get("flip_strike")
+        spot  = d.get("spot")
+        col   = _gex_colors.get(label, "#4a6a80")
+        if flip:
+            _flip_cell = (
+                f'${flip:,.0f}'
+                + (f' <span style="font-size:9px;color:var(--dim)">/ ${spot:,.0f} spot</span>'
+                   if spot else '')
+            )
+        else:
+            _flip_cell = '<span style="color:#636680">—</span>'
         rows += (
-            f'<tr><td style="color:var(--dim)">{sym} GEX</td>'
-            f'<td><span style="color:{col};font-weight:700">{label}</span>{flip_str}</td></tr>'
+            f'<tr><td style="color:var(--text);font-weight:700">{sym}</td>'
+            f'<td><span style="color:{col};font-weight:700">{label}</span></td>'
+            f'<td style="text-align:right">{_flip_cell}</td></tr>'
         )
 
     if not rows:
         return ""
     return (
-        f'<div style="border-top:1px solid #1e2240">'
-        f'<div class="ph"><span class="pt">GEX</span>'
-        f'<span class="pm" style="font-size:9px">{ts_str}</span></div>'
-        f'<table><tbody>{rows}</tbody></table>'
-        f'</div>'
+        '<div class="panel gex-card">'
+        + _hdr.format(sub=_sub)
+        + '<table><thead><tr><th>Symbol</th><th>Regime</th>'
+          '<th style="text-align:right">Flip / Spot</th></tr></thead>'
+        + f'<tbody>{rows}</tbody></table>'
+        + '</div>'
     )
 
 
@@ -837,8 +864,11 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
 
       </tbody>
     </table>
-    {_build_gex_section(gex or {}, open_pos)}
   </div>
+</div>
+
+<div style="padding:0 24px 16px;background:var(--bg)">
+{_build_gex_section(gex or {}, open_pos)}
 </div>
 
 <footer>

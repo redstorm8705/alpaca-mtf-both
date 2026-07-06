@@ -98,9 +98,16 @@ def _get_spot(symbol: str) -> float | None:
 # ── Contract list (with open interest) ────────────────────────────────────────
 
 def _expiry_range() -> tuple[str, str]:
-    """Nearest 3 weekly expiries — 21-day window from today ET."""
-    today = datetime.now(ET)
-    return today.strftime("%Y-%m-%d"), (today + timedelta(days=21)).strftime("%Y-%m-%d")
+    """This WEEK's expiries only — today ET through the coming Friday (the weekly
+    expiry). Narrowed from the prior 21-day / 3-expiry window (Rafael 2026-07-06):
+    the wide window pulled far-OTM open interest from later expiries and dragged
+    the zero-gamma flip implausibly far from spot (SPY flip $670 vs $752 spot).
+    This-week-only OI concentrates near spot, giving a sensible weekly GEX + flip.
+    NOTE: get_gex_regime() feeds kelly.py + run_cycle Layer 8, so this changes an
+    execution-consumed signal — gated as such."""
+    today  = datetime.now(ET)
+    friday = today + timedelta(days=(4 - today.weekday()) % 7)  # coming Fri (today if Fri)
+    return today.strftime("%Y-%m-%d"), friday.strftime("%Y-%m-%d")
 
 
 def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, float]:
@@ -357,6 +364,13 @@ def refresh_gex() -> None:
     ts_str = ts_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
     date_gte, date_lte = _expiry_range()
+    try:
+        # calendar days to the weekly expiry; 0 on the expiry Friday itself (0DTE
+        # is correct — same-day expiry means zero days remaining, not one).
+        _dte = (datetime.strptime(date_lte, "%Y-%m-%d").date() - datetime.now(ET).date()).days
+    except Exception as _dte_e:  # RC-3: log, don't silently swallow (display-only value)
+        logger.debug("GEX: dte calc failed (date_lte=%r): %s", date_lte, _dte_e)
+        _dte = None
 
     # Universe: market anchors + current bot positions (deduped, order preserved)
     symbols = list(dict.fromkeys(_MARKET_SYMBOLS + _position_symbols()))
@@ -384,6 +398,9 @@ def refresh_gex() -> None:
         gex = _compute_gex(snapshots, oi_map, spot)
         gex["spot"]              = round(spot, 2)
         gex["contracts_fetched"] = len(oi_map)
+        gex["expiry"]            = date_lte     # this week's Friday (weekly expiry)
+        gex["dte"]               = _dte         # calendar days to that Friday
+        gex["window"]            = "weekly"
         results[symbol]          = gex
         # INFO (was debug): this line IS the shadow-review record — must be visible
         # at production log level or the 30-session clock never accumulates evidence.
