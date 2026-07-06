@@ -148,13 +148,41 @@ def cancel_and_reconcile_gtc_stops(
                 sym for sym, pos in _raw.items()
                 if isinstance(pos, dict) and pos.get("state") in _active_states
             )
+        else:
+            # ABSENT file is NOT "no QHM holds" — a deploy/restore that omits
+            # data/state/, a wiped volume, or a non-atomic write killed mid-flush
+            # loses QHM state while the GTC stop is still LIVE in Alpaca. We cannot
+            # enumerate holds, so — identical to a corrupt file — FAIL-CLOSED:
+            # retain ALL stops this cycle and escalate (board + Gro + GAI 2026-07-05,
+            # Option 2). A genuinely-empty account has no overnight-GTC positions and
+            # returns early below, so no intraday stop is wrongly retained. Never
+            # cancel a stop on unknown QHM state — naked-QHM risk >> a stale stop
+            # retained one extra cycle (swept by reconcile once the file is restored).
+            _qhm_load_failed = True
+            logger.critical(
+                "QHM state file ABSENT (%s) — GTC reconciliation FAIL-CLOSED: "
+                "cannot enumerate QHM holds, retaining ALL overnight GTC stops this "
+                "cycle to avoid stripping a QHM position's protection. Restore "
+                "data/state/quarterly_holds.json. Manual review required.",
+                _qhm_state_path,
+            )
+            try:
+                send_slack(
+                    ":rotating_light: QHM state file ABSENT in GTC reconcile — "
+                    "FAIL-CLOSED, all GTC stops retained this cycle. Restore "
+                    "data/state/quarterly_holds.json."
+                )
+            except Exception as _ofa_e:
+                logger.warning(
+                    "absent-file fail-closed Slack alert failed: %s", _ofa_e
+                )
     except Exception as _qhm_e:
         # FAIL-CLOSED (2026-07-01, board + Gro + GAI): the file EXISTS but is
         # unreadable/corrupt — we KNOW there may be QHM holds but cannot enumerate
         # them. Cancelling GTC stops now would strip protection from a QHM position
         # (naked-QHM capital risk >> double-stop transactional risk). Retain ALL
-        # stops this cycle and escalate. A simply-ABSENT file does not raise, so this
-        # branch fires only on a present-but-corrupt file.
+        # stops this cycle and escalate. An ABSENT file is handled fail-closed in the
+        # `else` above; this branch fires only on a present-but-corrupt file.
         _qhm_load_failed = True
         logger.critical(
             "QHM state file UNREADABLE (%s) — GTC reconciliation FAIL-CLOSED: "
