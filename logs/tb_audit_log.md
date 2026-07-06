@@ -6940,3 +6940,188 @@ INCIDENT (same session, self-inflicted): the 2026-07-03 untracked cleanup delete
 
 ### DEFERRED ITEM (logged, not this patch): options_scanner.py pre-existing statics cleanup
 Per RULE C-4 fork resolved to Option A (board Beck + GAI; Gro→C): shipped the scoped safety fix, deferred the pre-existing lint. **190 pre-existing issues in options_scanner.py:** 183 E501 (line-too-long) + 2 E701 (multi-statement) + 5 mypy (Optional-not-handled L1672; incompatible dict-type L1017; missing attr scan_to_html._pdt_reset_display L1198; +2). NONE introduced by the atomic fix (delta 0). Cleanup candidate: add `# ruff: noqa: E501` header (matches alerts.py convention) clears 183 in one line; then fix 2 E701 + 5 mypy as own patch sequence. Own full sequence when picked up.
+
+---
+## 2026-07-04 — UX Step 1: ui_tokens.py extraction (SHIPPED 3b6a3b5)
+**Scope:** New shared design-token module + migrate monthly_review.py (byte-identical).
+**Files:** ui_tokens.py (new), test_ui_tokens.py (new), monthly_review.py (modified).
+**Full read:** monthly_review.py 505 lines (complete). RC scan: no RC classes triggered
+(display-only value-substitution; RC-1/2/3/5 N/A — no datetime/path/except/atomic-write changes).
+**Council (design fork, Open Question Protocol):** Gro + GAI + Wroblewski — 3/3 consensus:
+constants-only (no CSS emitter), flat semantic names, repo root, golden byte-diff gate.
+Rejected GAI's src/ directory-restructure (over-scoped) and Wroblewski's invented 3-tier bg shades.
+**Static:** py_compile + mypy(--warn-unreachable) + ruff(E,W,F,B) all clean on 3 files.
+6 self-introduced E501 fixed (HEAD monthly was 0-E501; RULE C-4 no carve-out).
+**Golden gate:** before/after diff = byte-identical except per-run timestamp line (root + archive).
+**Cold second-agent:** PASS — 64-row token→literal mapping table, all branches complete, no inversion.
+**Final pre-ship Gro+GAI (exact diff):** Gro APPROVE; GAI REJECT→APPROVE (R2 — withdrew FONT_FAMILY
+Finding 1, a Python string-literal misread disproven by golden gate; disagreement protocol, 1 round).
+**Gate N/A:** monthly standalone, not in RTH import chain (ui_tokens becomes RTH-reachable at scan step).
+**Deploy:** git single-channel. OCI git pull --ff-only → 3b6a3b5, monthly regenerated, test PASS,
+DEPLOY_OK, page serves 200. No service restart (services don't import these files).
+**Next:** weekly_review.py migration (ungated, subprocess-spawned), then scan+dashboard (RTH-gated).
+
+---
+## 2026-07-05 — UX Step 2: canonical design system (SHIPPED 7dfaea4)
+**Scope:** ui_tokens.py becomes the Rafael-approved CANONICAL system; monthly re-aligned.
+**Design council:** GAI + Wroblewski (Gro daily TPD-walled). Rafael's 3 locked calls:
+base #0d0f1a, green/red P&L (separate from 3-tier status), weekly=palette+type together.
+Canonical: text primary #e8ecff/secondary #c8cce4/muted #8a94ae/dim #5a6580; STATUS_*_BG
+rgba tints; PNL_GAIN/LOSS; ACCENT_CYAN live; TYPE_ scale 28/20/16/14 (14px floor).
+**Monthly change:** primary->secondary/bright->primary/panel->default = byte-identical;
+ONLY visible shift = muted #636680->#8a94ae, dim #363a5a->#5a6580. All fields + sizes preserved.
+**Gates:** golden diff = exactly muted/dim (verified byte-identical remap) - py_compile/mypy/ruff
+clean - token test PASS (20 color+3 rgba+16 int) - cold second-agent PASS - GAI pre-ship APPROVE.
+**Deploy:** OCI git pull --ff-only -> 7dfaea4, monthly regen, served 200, DEPLOY_OK.
+**Next:** weekly_review.py full canonical rewrite (1656L; palette + TYPE_ scale; categoricals
+preserved field-by-field; RTH-ungated but preship hook runs GAI+Gro-when-unwalled).
+
+---
+## 2026-07-05 — UX Step 3 (weekly) PHASE 1 diagnostic audit COMPLETE (not yet drafted)
+**Voices:** board (3 cold agents: field-preservation, reliability/RC, Wroblewski-UX) + Gro + GAI. All 5 in.
+**Rafael decisions locked:** (1) 14px floor + NARROW documented carve-out (TYPE_DENSE=12) for densest
+count-badges/table-cells only; (2) FIX SPY collision — remap BROAD_TECHNICAL #ffd60a->#ff9f0a (was
+visually identical to FED_POLICY).
+**Findings:** 95+ data fields (8 sections) + 20 categorical color encodings inventoried — the rewrite's
+"do-not-drop" checklist. Extended categorical palette REQUIRED (canonical 3-tier+P&L+cyan can't hold 20
+distinctions). RC-clean (RC-1/2/3/5 PASS), atomic writes safe. HAZARDS: 3 alpha-suffix sites L1355/58/60
+({_color}18/33/55 — keep tokens as HEX so suffix works); 5 silent-fail conditional-render zones
+(L191/388/944/1441/869 — `if not X: return ""`, DO NOT touch); overflow-hides-field (GAI: field present
+in HTML but clipped at 14px — needs visual check too). Cyan discipline already clean (weekly uses info-blue).
+**Built this session (uncommitted WIP, gated, compiles, token-test PASS):**
+- ui_tokens.py: extended CATEGORICAL palette (CAT_TRAIL #ff6b35, CAT_AMBER #ff9f0a, CAT_PURPLE #bf5af2,
+  CAT_INFO #0a84ff, CAT_INFO_BG) + TYPE_DENSE=12 carve-out.
+- test_ui_tokens.py: validates new tokens (24 color+4 rgba+17 int).
+- weekly_field_gate.py: characterization gate — strips tags, compares visible-text before/after (styling-only
+  => visible text invariant). Baseline captured (128 lines).
+**NEXT (Phase 2 draft + audit):** rewrite weekly_review.py styling (CSS block L732-794 + ~160 inline sites
+across _build_patch_health_section/_strategy_validation_html/_exec_summary_stats/build_html) to canonical
+tokens + categorical palette + 28/20/16/14 (TYPE_DENSE carve-out) + SPY fix; gate each region vs
+weekly_field_gate baseline (expect empty visible-text diff); then Phase 2 board+Gro+GAI on the drafted diff;
+then final pre-ship. weekly = subprocess-spawned (RTH-ungated) but preship hook runs.
+
+---
+## 2026-07-05 — P0 P&L-attribution ROOT-CAUSE DIAGNOSTIC (triggered by monthly "$0.00 · N trades")
+**Reported:** monthly page shows days with a trade count but $0.00 P&L (6/15, 6/22, 7/2, +~32 more).
+**Data ground-truth (OCI eod + Alpaca FILL activities):**
+- Every recent flagged day: pnl_today==alpaca_pnl==0.0, tracker_pnl==sum(trade.pnl) (6/15 -3.28, 7/2 -251.12).
+- 6/15 Alpaca = 3 BUYS only (INTC/TOST/UBER), ZERO sells => real realized $0 (alpaca_pnl correct); tracker
+  recorded UBER/TOST as CLOSED (hard_stop/overnight) = phantom.
+- 7/2 Alpaca = 18 fills incl 8 real sells (Movers dump) => real closes happened, yet alpaca_pnl=0.0.
+- pnl_today == alpaca_pnl on ~all recent days; monthly $ is authoritative, trade COUNT comes from
+  phantom-polluted trades[] => the "$0.00 · N trades" symptom. pnl_today vs trade-sum diverge 35/50 days.
+**LAYERED ROOT CAUSE (full reads: fill_helpers.py 369 complete; portfolio_tracker.py:write_eod_summary
+L812-1151 complete):**
+1. RC-4 phantom external_close per-trade pnl — **FIXED 2026-07-03 (b488a25, fill_helpers.py)**: entry-time
+   -bounded query + filled_at DESC + side filter + ±50% band + fail-closed. 7/2 eod = pre-fix historical corruption.
+2. **LIVE BUG — FIFO $0 on real-close days (portfolio_tracker.py:write_eod_summary):** orphan-seeding
+   (L937-1016) seeds a prior lot from tracker entry_price; if tracker record missing (false-drop) or
+   entry unconfirmed -> None sentinel -> skip -> closing fills net $0 ("FIFO treats closing sells as new
+   short openings -> P&L=$0", L927). The A-4 gap guard (L1079-1084) ONLY catches len(_day_fills)==0;
+   7/2 had 18 fills so it did NOT fire -> pnl_today wrongly = alpaca_pnl = 0.0. [STRONG hypothesis from
+   code+data; 7/2 logs rotated, NOT log-confirmed — confirm via _fifo_reconstruct read + a rebuild run.]
+3. False-drop of live positions (main bot false record_exit) — partially addressed 7/3 (d8e08e1); feeds #2.
+4. Corrupted historical eod data (35/50 days) — needs FIFO-over-Alpaca-fills REBUILD (+ kelly_stats rebuild).
+5. Monthly display sources $ from pnl_today but count from trades[] — should use ONE authoritative field +
+   flag unreconciled; follows the data fix.
+**FIX PATH (next focused session — hotspot, full sequence):** full reads portfolio_tracker.py(2159,Explore)
++ orphan_manager.py(1596,Explore) + reconcile_eod.py(622) + _fifo_reconstruct/_fetch_alpaca_fills_for_date/
+_load_prior_day_lots; broaden A-4 guard (FIFO closed fills but netted $0 for tracked symbols -> tracker
+fallback or "unreconciled" flag, never silent $0) and/or seed orphan lots from Alpaca opening-fill history
+not just tracker entry_price; rebuild historical eod+kelly; board + Gro + GAI; then monthly display fix.
+
+---
+## 2026-07-05 — P0 P&L: FULL-READ GATE COMPLETE + ROOT CAUSE CONFIRMED (was hypothesis)
+Full reads done (durable): fill_helpers.py 369, reconcile_eod.py 623, orphan_manager.py 1597,
+portfolio_tracker.py 2159. RC scan portfolio_tracker.py: RC-1..5 all PASS (no prereq fixes).
+**CONFIRMED mechanism (read _fifo_reconstruct L252-403 + A-4 guard L1079-1084 + write_eod L1093-1096):**
+- _fifo_reconstruct: a closing sell with no open long lots (net_qty<=0) logs CRITICAL and appends a
+  SYNTHETIC SHORT contributing **$0** to today_pnl (portfolio_tracker.py ~L"closing sell with no open
+  long lots"). So unmatched closes net $0.
+- Orphan-seeding (L937-1016) is the only thing that seeds those lots (from tracker entry_price); it hits a
+  None sentinel + SKIPS when (a) no tracker record for the symbol, or (b) entry_price<=0 -> lot never seeded
+  -> FIFO synthetic-short $0. QHM symbols (GOOGL/NVDA) are excluded from FIFO by design (also $0 to FIFO).
+- **A-4 gap guard only fires when len(_day_fills)==0** (L1082). 7/2 had 18 fills, so it did NOT fire ->
+  _pnl_today = _alpaca_pnl = 0.0 even though real closes happened. THIS is the confirmed live bug.
+**PROPOSED FIX (multi-part; board + Gro + GAI required — P&L core / RTH hotspot):**
+1. write_eod_summary: broaden the fallback — when _alpaca_pnl==0.0 AND len(_alpaca_per_trade)==0 (FIFO
+   attributed nothing) AND len(today_trades)>0, treat as unreconciled: fall back to tracker_pnl OR write a
+   pnl_today=None/"unreconciled" marker + Slack, NEVER a silent authoritative $0. (Also cover: FIFO logged
+   synthetic-short for a tracked symbol.) Exact site: L1079-1096.
+2. reconcile_eod.py: (a) find why it's not finalizing (no _reconcile_ts on 6/15,6/22,7/2 — cron/post-close
+   gate?); (b) its "no matching fills -> leave as-is" (L452-454) PRESERVES phantom closes -> should flag/zero
+   a tracker "closed" trade that Alpaca shows was never sold (6/15 UBER/TOST buys-only).
+3. Historical rebuild: re-run reconcile/FIFO backfill over corrupted eod files (~35/50 days) + kelly rebuild.
+4. monthly_review.py display: source $ AND count from one authoritative field; flag unreconciled days
+   instead of "$0.00 · N trades".
+**False-drop root:** largely FIXED (Guard A empty-batch fail-closed + Guard B per-symbol re-verify + Guard D
+record_exit external_close requires alpaca_confirmed_absent — all 2026-07-04). Not the live gap now.
+**NEXT:** board (execution-risk + reliability + quant-logic) + Gro + GAI on this fix design; draft from
+alignment; Phase-2 audit the draft; ship (hotspot pre-ship). Gate satisfied so next session goes straight to it.
+
+---
+## 2026-07-05 — Options page declutter SHIPPED (6e601c5) — UX structural Increment 1
+Full read gate (options_scanner.py 1973L) + board inventory + Gro APPROVE + GAI APPROVE (exact diff).
+DELETED 6 self-contained display sections (Rafael's 2 callouts + audit noise): PDT bar (stale), composite
+regime bar (dup dashboard), bot-health bar, implied-range bar (+_fetch_implied_range), watchlist table,
+fills table — + call-sites, HTML wiring, orphaned locals (watchlist/fills/watch_rows), 2 scan_to_html imports.
+CLEARED deferred statics debt task_d2d4c1f5: `# ruff: noqa: E501` + 3 behavior-preserving mypy fixes
+(date|None, dict|None, str() wrap in truthy guard). py_compile+mypy+ruff ALL CLEAN. -291 lines.
+OCI deploy verified: rendered public/options.html has 0 stale-section hits, 11 kept-section hits. DEPLOY_OK.
+Ungated (standalone, not RTH). Increment 2 (deferred): tiered HIGH/MOD + canonical colors + 0DTE SPY+QQQ.
+NEXT per Rafael queue: P0 fill-matching fix (full-read gate already satisfied, root cause confirmed).
+
+---
+## 2026-07-05/06 — UX REDESIGN: all 5 pages shipped (10 ships) + nginx no-store cache fix
+Ships: 3b6a3b5 (monthly token extract), 7dfaea4 (canonical system), 6e601c5 (options declutter),
+6d664bf (options tiers), fec4b91 (options canonical colors), b4d9aff (monthly Strategy Edge Report),
+cb5b117 (weekly drop strat-val), 7376540 (weekly full mockup redesign), 3d24f9d (dashboard canonical
++ MRI-drivers declutter), 15df6bd (scan canonical colors). Plus nginx add_header Cache-Control no-store
+on the :8080 proxy (browser was serving 304-cached; deploy chain was always correct — :8080 auth->proxy
+:18080->OCI files; the earlier "stale" was browser cache + the mockup-vs-shipped gap).
+Each ungated page: py_compile/mypy/ruff clean + Gro+GAI APPROVE on exact diff. Options+scan+dashboard use
+the RTH import chain (display-only changes; Gro+GAI pre-ship covered). options_scanner statics debt cleared
+(task_d2d4c1f5): # ruff: noqa E501 + 4 mypy fixes.
+STATE: Options=FULL mockup (declutter+tiers+canonical). Weekly=FULL mockup (headline+collapsible <details>
++canonical). Monthly=canonical+Strategy Edge Report (imported from weekly, n<100 caveat). Dashboard=
+canonical+risk-first (MRI-drivers dropped). Scan=canonical colors DONE; **REMAINING follow: scan tiered
+Highest/Watchlist restructure + declutter composite-regime/implied-range/bot-health bars + funnel line.**
+Also remaining: P0 fill-matching fix (board+Gro+GAI fix-design converged on broaden A-4 guard to
+len(_alpaca_per_trade)==0 -> write pnl_today=None+unreconciled flag NOT tracker; reconcile_eod flag-clear
+same patch; orphan-seed-from-Alpaca-history = follow). Weekly/scan regenerate on their crons (next RTH/AH).
+
+---
+## 2026-07-05 — P0 RC-4 phantom-$0 EOD P&L fix (commit acee4f8)
+
+**Files:** execution/portfolio_tracker.py (hotspot, 47th patch), reconcile_eod.py
+**Symptom:** monthly page showed "$0.00 · N trades" on days with real closed trades
+(5/1, 5/4, 6/15, 6/22, 7/2 — 7/2 was Alpaca $0.00 vs tracker -$251.12).
+
+**Root:** write_eod_summary's A-4 guard only caught len(_day_fills)==0. When fills
+existed but every closing sell hit _fifo_reconstruct's synthetic-short path (prior
+lots missing via orphan-seed failure), _alpaca_per_trade came back empty, _alpaca_pnl=0.0,
+and $0 was written as authoritative pnl_today.
+
+**Fix:**
+ - portfolio_tracker.py: broadened _a4_gap to also fire on len(_alpaca_per_trade)==0;
+   falls back to tracker P&L (existing) + NEW pnl_unreconciled flag + reason + Slack.
+   Chose tracker+flag over None (avoids None impact-radius on Kelly/kill-switch/get_stats).
+ - reconcile_eod.py: clears the flag ONLY if every closed trade is _pnl_source=="alpaca_fill";
+   else keeps flagged (reason=reconcile_partial_unmatched_fills). Regression-free for
+   days write_eod never flagged.
+
+**Gate:** full read (both files) · static (py_compile/mypy/ruff clean) · cold-agent FAIL
+REFUTED vs _fifo_reconstruct source (per_trade appends on every close regardless of P&L →
+legit flat $0 day has len>0, never trips guard) · Gro APPROVE · GAI REJECT→APPROVE after
+counter-prompt (scoped clear-logic correct for the P0; universal-arbiter logged as future).
+
+**Historical backfill:** ran reconcile_eod.py on all 5 days → corrected to real values
+(5/1 -9.24, 5/4 -43.53, 6/15 -3.28, 6/22 -0.15, 7/2 -251.12). Regenerated all monthly
+HTML (--all-months). Served pages verified corrected.
+
+**Still open (separate items):**
+ - RC-4 ROOT: fill_helpers.py/orphan_manager.py match months-old fills as today's close —
+   corrupts the trade records themselves (7/2 -251.12 is tracker-derived, not Alpaca-confirmed).
+   This write-side fix stops the phantom $0; the root fix restores fill-confirmed accuracy.
+ - FORWARD (GAI Point-3): make reconcile_eod the universal fill-confirmation arbiter (flag ANY
+   not-all-fill-sourced day). Deferred — would add operator noise on normal unmatched-GTC days.
