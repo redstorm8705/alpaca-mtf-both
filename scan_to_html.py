@@ -1685,10 +1685,31 @@ def write_html(data):
     _pinned_set = set(PINNED)
     open_trades_for_active = {k: v for k, v in open_trades.items() if k not in _pinned_set}
     active_rows_html = build_active_rows(open_trades_for_active, results_by_sym)
+    # ── Tier the watchlist by conviction (redesign 2026-07-05) ────────────────
+    def _score_of(r):
+        return max(r.get("long_score", 0), r.get("short_score", 0))
+    _high  = [r for r in sorted_rest if _score_of(r) >= _full]
+    _watch = [r for r in sorted_rest if _half <= _score_of(r) < _full]
+    _below = [r for r in sorted_rest if _score_of(r) < _half]
+
+    def _tier_div(label, color, n):
+        tail = (f'<span style="color:#5a6580;font-weight:400"> &middot; {n}</span>' if n
+                else '<span style="color:#5a6580;font-weight:400"> &mdash; none</span>')
+        return (f'<tr><td colspan="9" style="padding:8px 14px;font-size:11px;'
+                f'font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
+                f'color:{color};background:#0a0d14;border-top:1px solid #252847">'
+                f'{label}{tail}</td></tr>')
+
+    _b = len(pinned)
     rows_html = (
-        build_rows(pinned,       open_now, idx_offset=0,          pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
+        build_rows(pinned, open_now, idx_offset=0, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
         + active_rows_html
-        + build_rows(sorted_rest, open_now, idx_offset=len(pinned), pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        + _tier_div(f"&#9650; Highest Conviction &middot; score &ge; {_full}", "#30d158", len(_high))
+        + build_rows(_high, open_now, idx_offset=_b, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        + _tier_div(f"&#9670; Watchlist &middot; score {_half}&ndash;{_full - 1}", "#ffd60a", len(_watch))
+        + build_rows(_watch, open_now, idx_offset=_b + 300, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        + _tier_div(f"Below threshold &middot; score &lt; {_half}", "#8a94ae", len(_below))
+        + build_rows(_below, open_now, idx_offset=_b + 600, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
     )
 
     # Composite regime BAR removed (redesign 2026-07-05) — it lives on the
