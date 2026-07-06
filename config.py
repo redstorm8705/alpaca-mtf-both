@@ -174,6 +174,19 @@ MOMENTUM_LONG_LOOKBACK  = 252   # ~12 months of trading days
 MOMENTUM_SHORT_LOOKBACK = 21    # ~1 month skip (avoids short-term reversal)
 MOMENTUM_MIN_PCT        = 0.0   # price must be higher than N days ago to pass (long)
 
+# ─── DELTA-OF-SIGNAL SHADOW (Cedar "trade the delta, not the level") ──────────
+# Board + Gro + GAI consensus 2026-07-06. Mirrors the VOLUME_CONFIRMATION shadow
+# pattern (gated flag, log-only until proven). DELTA_SCORING_ENABLED=False =
+# SHADOW: strategy/delta_shadow.py logs the bar-over-bar change in the
+# feature-isolated (non-momentum_12_1) confluence score to trade_events.jsonl,
+# with ZERO impact on scoring / sizing / entries. Flip to True ONLY after >=50
+# shadow samples show independent edge (LdP feature-importance) — and that flip
+# requires a FRESH board vote (Architecture Invariant #1: SPY 5-min bar-over-bar
+# stays the sole entry gate; a proven delta only ever adjusts the quality bar).
+DELTA_SCORING_ENABLED     = False
+DELTA_OFF_FENCE_THRESHOLD = 3   # non-momentum score jump that flags "off the fence"
+DELTA_PERSISTENCE_BARS    = 2   # consecutive scans a jump must hold (5-min noise filter)
+
 # ─── TRADE MODES ─────────────────────────────────────────────────────────────
 
 class TradeMode:

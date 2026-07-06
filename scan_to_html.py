@@ -378,6 +378,15 @@ def run_scan(tickers):
         vr   = f"  vol {r['vol_ratio']}x" if r["vol_ratio"] else ""
         print(f"  [{pct:3d}%] {sym:<6} {best}/{r['max_score']}{sig}{px}{vr}", flush=True)
         results.append(r)
+        # Delta-of-signal SHADOW (Cedar concept) — observational ONLY, gated by
+        # config.DELTA_SCORING_ENABLED (False = log-only). record() never raises
+        # and returns 0 in shadow mode, so it cannot affect scoring/sizing/entries.
+        try:
+            from strategy.delta_shadow import record as _delta_record
+            _delta_record(sym, "long",  r.get("long_score", 0),  r.get("long_conditions", {}))
+            _delta_record(sym, "short", r.get("short_score", 0), r.get("short_conditions", {}))
+        except Exception:
+            pass
     try:
         open_now = bool(is_market_open())
     except Exception as _mktopen_e:
