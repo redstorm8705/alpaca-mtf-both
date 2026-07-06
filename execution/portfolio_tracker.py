@@ -1072,24 +1072,50 @@ class PortfolioTracker:
                 _eod_fifo_in_progress = False
 
         # Authoritative P&L — Alpaca wins; tracker is fallback.
-        # A-4 paper-API gap: Alpaca paper fills endpoint sometimes returns 0 fills for
-        # same-day trades (settlement delay). If Alpaca returned 0.0 with zero fills but
-        # we have confirmed closed trades in the tracker, fall back to tracker
-        # and log it.
+        # A-4/FIFO gap: Alpaca P&L is $0 but there ARE closed trades AND either
+        #   (a) zero same-day fills (paper settlement delay — original A-4), OR
+        #   (b) fills exist but FIFO attributed $0 to ALL of them
+        #       (len(_alpaca_per_trade) == 0 — orphan-seed failed, closing sells
+        #        reconstructed as synthetic-short $0). This is the phantom-$0 bug
+        #        (e.g. 2026-07-02: Alpaca $0.00 vs tracker -$251.12).
+        # In EITHER case $0 is NOT authoritative: fall back to tracker P&L AND
+        # flag the day unreconciled so reconcile_eod finalizes it and downstream
+        # renders "review" — never a silent authoritative $0.
+        # (P0 fix 2026-07-05, board + Gro + GAI: tracker+flag over None to avoid
+        #  a None impact-radius across Kelly / kill-switch / get_stats.)
         _a4_gap = (
             _alpaca_pnl is not None
             and _alpaca_pnl == 0.0
-            and len(_day_fills) == 0
             and len(today_trades) > 0
+            and (len(_day_fills) == 0 or len(_alpaca_per_trade) == 0)
         )
+        _pnl_unreconciled = False
+        _pnl_unreconciled_reason: Optional[str] = None
         if _a4_gap:
-            logger.warning(
-                f"A-4 paper fills gap: Alpaca returned 0 fills despite"
-                f" {len(today_trades)} "
-                f"closed trade(s) — using tracker P&L"
-                f" (${_tracker_pnl:.2f}) as fallback. "
-                f"Verify fills manually."
+            _pnl_unreconciled = True
+            _pnl_unreconciled_reason = (
+                "alpaca_zero_fills" if len(_day_fills) == 0
+                else "alpaca_fifo_unattributed"
             )
+            logger.warning(
+                "A-4/FIFO gap: Alpaca P&L=$0 despite %d closed trade(s) "
+                "(fills=%d, attributed=%d, reason=%s) — using tracker P&L "
+                "($%.2f) as FLAGGED-unreconciled fallback; reconcile_eod will "
+                "finalize. Verify fills manually.",
+                len(today_trades), len(_day_fills), len(_alpaca_per_trade),
+                _pnl_unreconciled_reason, _tracker_pnl,
+            )
+            try:
+                from alerts import send_slack as _sl_a4
+                _sl_a4(
+                    f":warning: *EOD P&L unreconciled* — Alpaca FIFO returned $0 "
+                    f"with {len(today_trades)} closed trade(s) "
+                    f"(fills={len(_day_fills)}, attributed={len(_alpaca_per_trade)}, "
+                    f"reason={_pnl_unreconciled_reason}). Using tracker "
+                    f"${_tracker_pnl:.2f} (flagged); reconcile_eod will correct."
+                )
+            except Exception as _sl_err:
+                logger.warning("A-4 unreconciled Slack alert failed: %s", _sl_err)
         _pnl_today = (
             _tracker_pnl if _a4_gap
             else (_alpaca_pnl if _alpaca_pnl is not None else _tracker_pnl)
@@ -1142,6 +1168,10 @@ class PortfolioTracker:
             "tracker_pnl":     _tracker_pnl,
             "pnl_drift":       _pnl_drift,
             "alpaca_per_trade": _alpaca_per_trade,
+            # P0 2026-07-05: flag days where Alpaca FIFO gave $0 but trades exist.
+            # pnl_today carries the tracker fallback; reconcile_eod clears the flag.
+            "pnl_unreconciled":        _pnl_unreconciled,
+            "pnl_unreconciled_reason": _pnl_unreconciled_reason,
         }
 
         # 16pt score bucket analysis

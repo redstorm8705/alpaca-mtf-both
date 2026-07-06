@@ -574,6 +574,26 @@ def reconcile(date_str: str, suppress_slack: bool = False) -> None:
     if new_16pt_bkts:
         eod["score_16pt_buckets"] = new_16pt_bkts
     eod["trades"]               = trades  # closed trades updated in-place
+    # P0 2026-07-05: clear the write_eod_summary unreconciled flag ONLY if every
+    # closed trade is now confirmed against a real Alpaca fill. If any trade
+    # couldn't be matched (the RC-4 root: closing fills absent/mismatched),
+    # leave the flag set so the day still renders "review" downstream rather
+    # than falsely asserting a completed reconciliation.
+    _all_fill_sourced = bool(closed) and all(
+        t.get("_pnl_source") == "alpaca_fill" for t in closed
+    )
+    if _all_fill_sourced:
+        eod["pnl_unreconciled"]        = False
+        eod["pnl_unreconciled_reason"] = None
+    elif eod.get("pnl_unreconciled"):
+        eod["pnl_unreconciled_reason"] = "reconcile_partial_unmatched_fills"
+        logger.warning(
+            "%s: %d/%d closed trade(s) NOT fill-confirmed — leaving day flagged "
+            "unreconciled (reason=reconcile_partial_unmatched_fills).",
+            date_str,
+            sum(1 for t in closed if t.get("_pnl_source") != "alpaca_fill"),
+            len(closed),
+        )
     # R-GUARD sentinel — bot will not overwrite after this timestamp is set.
     # AWP audit fix (2026-06-30): only set once the trading day's fills are
     # actually complete (post-close). Setting it mid-RTH would freeze the
