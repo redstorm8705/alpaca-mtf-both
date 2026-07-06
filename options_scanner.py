@@ -1437,6 +1437,23 @@ def generate_html(data: dict) -> str:
     weekly_table = _build_rec_table(weekly_recs, id_offset=0)
     dte_table    = _build_rec_table(dte_recs,    id_offset=1000)
 
+    # Cross-strategy clarity: tickers in BOTH weekly (directional) and 0DTE
+    # (premium-selling) are NOT a contradiction — they are different strategies.
+    # Flag it explicitly (Rafael + board + Gro + GAI, 2026-07-06).
+    _both_syms = sorted({r["symbol"] for r in weekly_recs} & {r["symbol"] for r in dte_recs})
+    if _both_syms:
+        _both_str = ", ".join(_both_syms)
+        _conflict_note = (
+            f'<div class="strat-conflict">&#9888; <b>{_both_str}</b> '
+            f'appear{"" if len(_both_syms) > 1 else "s"} in BOTH sections below — this is '
+            f'<b>not a contradiction</b>. The Weekly row is a <b>directional</b> trade '
+            f'(you BUY, betting the stock moves your way); the 0DTE row is a '
+            f'<b>premium-selling</b> trade (you SELL, betting it stays put today). '
+            f'Different strategies, different holding periods — either can stand alone.</div>'
+        )
+    else:
+        _conflict_note = ""
+
     # Alignment banner: both timeframes agree on SPY direction
     _spy_weekly_dir = next((r["direction"] for r in weekly_recs if r["symbol"] == "SPY"), None)
     _spy_0dte_dir   = next((r["direction"] for r in dte_recs   if r["symbol"] == "SPY"), None)
@@ -1512,7 +1529,11 @@ def generate_html(data: dict) -> str:
     .event-banner ul{{margin-top:5px;padding-left:18px;color:#ffd60a}}
     .section-hdr{{padding:10px 20px 6px;font-size:10px;font-weight:600;color:#8a94ae;
       text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid #252847;background:#0d0f1a}}
-    .section-hdr.dte-hdr{{background:#0d1f12;border-top:2px solid #30d158}}
+    .section-hdr.dte-hdr{{background:#1f1a0d;border-top:2px solid #ff9f0a}}
+    .strat-explainer{{padding:8px 20px 12px;font-size:11px;color:#b8bdd4;background:#0d0f1a;border-bottom:1px solid #252847;line-height:1.5}}
+    .strat-explainer b{{color:#e8ecff;font-weight:600}}
+    .strat-conflict{{margin:10px 20px 0;padding:10px 14px;background:rgba(255,159,10,.08);border:1px solid rgba(255,159,10,.3);border-radius:6px;font-size:11px;color:#ffd60a;line-height:1.5}}
+    .strat-conflict b{{color:#ffe08a;font-weight:700}}
     .content{{padding:16px 20px}}
     table{{width:100%;border-collapse:collapse}}
     thead th{{padding:7px 14px;text-align:left;font-size:10px;font-weight:500;color:#8a94ae;
@@ -1606,22 +1627,25 @@ def generate_html(data: dict) -> str:
 
 {_event_banner(events)}
 {_align_banner}
+{_conflict_note}
 
-<!-- ── WEEKLY OPTIONS ─────────────────────────────────────────────────────── -->
-<div class="section-hdr">Weekly Options — {exp_display} Expiry
+<!-- ── WEEKLY DIRECTIONAL (long premium) ──────────────────────────────────── -->
+<div class="section-hdr">📈 Weekly Directional — {exp_display} Expiry · Buy Calls / Puts
   <span style="margin-left:8px;font-size:10px;color:#636680;font-weight:400;
     text-transform:none;letter-spacing:0">· click row to expand · entry windows 10:00–11:30 / 14:00–15:00 ET</span>
 </div>
+<div class="strat-explainer"><b>Directional — you BUY the option.</b> Profit if the underlying moves your way before expiry; risk is capped at the premium paid. A bet on <b>movement</b>.</div>
 {weekly_table}
 
-<!-- ── 0DTE TRADES ────────────────────────────────────────────────────────── -->
+<!-- ── 0DTE PREMIUM SELLING (short premium) ───────────────────────────────── -->
 <div class="section-hdr dte-hdr" style="margin-top:4px">
-  <span style="color:#30d158">●</span> 0DTE — {dte_display} Same-Day Expiry
+  <span style="color:#ff9f0a">⚡</span> 0DTE Premium Selling — {dte_display} Same-Day · Sell Puts / Calls
   <span style="margin-left:8px;font-size:10px;color:#ff3b30;font-weight:700;
     text-transform:none;letter-spacing:0">⏰ HARD CLOSE 3:45 PM ET — entry window 10:05–10:20 ET only</span>
   {'<span style="margin-left:10px;font-size:10px;color:#30d158;font-weight:700;text-transform:none;letter-spacing:0">🔒 DIRECTION LOCKED ' + dte_lock_time + ' ET — hold to 3:45 ET</span>' if dte_lock_time else '<span style="margin-left:10px;font-size:10px;color:#ffd60a;font-weight:600;text-transform:none;letter-spacing:0">⏳ Direction sets at 10:05 ET open</span>'}
   {'<span style="margin-left:12px;font-size:10px;color:#ff3b30;font-weight:700">BLOCKED — High VIX regime</span>' if vix_tertile == "High" else ''}
 </div>
+<div class="strat-explainer"><b>Premium selling — you SELL the option.</b> Profit if the underlying stays put and time decay erodes it by the 3:45 ET close. Short premium. A bet on <b>no big move today</b> — <b>not</b> a bet against the weekly.</div>
 {dte_table}
 
 <!-- ── REJECTIONS ─────────────────────────────────────────────────────────── -->
