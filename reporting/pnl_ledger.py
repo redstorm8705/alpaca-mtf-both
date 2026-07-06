@@ -386,8 +386,30 @@ def diagnostic() -> dict:
     return report
 
 
+def _acquire_singleton_lock():
+    """
+    Exclusive non-blocking lock so only ONE ledger run executes at a time.
+    Any duplicate launch (cron overlap, manual re-run, retry storm) exits
+    immediately instead of competing for the Alpaca rate limit. Returns the
+    open file handle (kept alive to hold the lock) or None if already held.
+    """
+    import fcntl
+    lock_path = _LOGS / ".pnl_ledger.lock"
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except OSError:
+        fh.close()
+        return None
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    _lock = _acquire_singleton_lock()
+    if _lock is None:
+        print("another pnl_ledger instance is already running — exiting (singleton lock).")
+        raise SystemExit(0)
     # Load .env for standalone runs
     _envp = _ROOT / ".env"
     if _envp.exists():
