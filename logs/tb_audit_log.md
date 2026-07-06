@@ -7125,3 +7125,81 @@ HTML (--all-months). Served pages verified corrected.
    This write-side fix stops the phantom $0; the root fix restores fill-confirmed accuracy.
  - FORWARD (GAI Point-3): make reconcile_eod the universal fill-confirmation arbiter (flag ANY
    not-all-fill-sourced day). Deferred — would add operator noise on normal unmatched-GTC days.
+
+---
+
+## 2026-07-05 (S, market closed) — RC-4 ROOT verification: CODE-CLOSED (not open)
+
+**Trigger:** Session-start tasked "continue P0 RC-4 root fix (fill_helpers.py + orphan_manager.py)."
+Full read of BOTH files (369 + 1596 lines) + git-history verification found the root is
+already FIXED and DEPLOYED — the "still open" line in the prior (acee4f8) entry is imprecise.
+
+**Evidence (git + OCI):**
+ - `b488a25` (2026-07-03 19:47) "Phantom-fill fix — entry_time-bounded + filled_at-DESC
+   external-close recovery" — fill_helpers.py `_derive_close_lower_bound()` bounds the CLOSED-
+   orders query by the trade's own entry_time, takes filled_at DESC, side-filters (long→sell /
+   short→buy), and rejects any recovered fill >50% off entry (±50% sanity band), failing closed
+   to `_fill_unverified` when no bound is derivable. This IS the fix for "matches months-old
+   fills as today's close" (the TSLA ~$347 / PANW -$182.79 phantom).
+ - `d8e08e1` (2026-07-04 06:32) "Fix false-drop root cause" — orphan_manager.py Guard A
+   (empty-batch fail-closed, L1198-1240) + Guard B (per-symbol re-verify before drop, L1243-1280).
+   This IS the fix for the HOOD false-drop (live position dropped on a bad/empty Alpaca snapshot).
+ - BOTH present in OCI HEAD `acee4f8` (verified via `git grep` on the commit). bug_counter RC-4
+   already = count 0. kelly_stats rebuilt (logs/kelly_stats.json.pre_phantom_fix backup on OCI).
+
+**Nightly CATASTROPHIC HOOD alert (gemini_audit 2026-07-03, VERDICT FAIL): STALE.** All HOOD
+trade_events are 7-01/7-02 (entry sz=3 @104.88 → exit sz=3 @112.82 → later partial_exit/exit on
+same live position → exit_pnl_correction) — pre-fix data. Fix shipped 7-03/7-04. Weekend = no RTH
+firing of Guard A/B yet.
+
+**Genuinely remaining (NOT a code patch):**
+ 1. Monday 2026-07-06 = first live RTH exercise of the fixed matcher + Guard A/B. Efficacy-not-
+    presence: verify they fire correctly in the real process (post-market gemini_audit should
+    supersede the stale 7-03 FAIL).
+ 2. 7/2 EOD = -251.12 already (correct dollar figure); re-tag from tracker-derived to
+    alpaca_fill by re-running the now-fixed matcher over 7-02 closed orders = OPTIONAL cleanup.
+ 3. Autonomous pipeline STALLED (meta_audit gro_ok=False = Groq rate-limited; 50 directives
+    failed_permanent) — why stale findings aren't self-clearing. Infra, separate from RC-4.
+
+**No patch proposed — no code change required.** Gate steps 3-8 N/A (nothing to ship).
+
+---
+
+## 2026-07-05 (S, market closed) — SHIPPED: orphan_manager absent-file fail-closed (Option 2)
+
+**Commit:** 3b2b0eb (deployed OCI acee4f8→3b2b0eb, DEPLOY_OK, HEALTH OK). File: execution/orphan_manager.py.
+
+**Bug (fail-OPEN, capital-risk):** cancel_and_reconcile_gtc_stops() loads QHM-protected
+symbols from data/state/quarterly_holds.json. A CORRUPT file was fail-closed
+(_qhm_load_failed=True → retain ALL stops), but an ABSENT file (.exists()==False) raised no
+exception → _qhm_load_failed stayed False, _qhm_protected empty → a QHM (GOOGL/NVDA) position's
+GTC stop — its ONLY overnight protection — was CANCELLED, naked overnight. Triggers: fresh deploy
+/ new OCI host, wiped data/state/ volume, accidental delete, restore-gap, non-atomic write killed
+mid-flush. GAI rated CATASTROPHIC (nightly 2026-07-02). Dormant in prod (file present) until any
+state-loss event. NOT RC-1..8 — new fail-open/missing-condition class in the QHM guard.
+
+**Fix (Option 2):** added an `else` to the exists() check treating ABSENT identically to CORRUPT
+— _qhm_load_failed=True + CRITICAL log + Slack. No change to the retain condition. A genuinely-
+empty account has no overnight-GTC positions and hits `if not gtc_positions: return` before the
+loop, so no intraday stop is wrongly retained. 30 insertions, 2 deletions.
+
+**Design history:** initial design (v1/v2) disambiguated absent via Alpaca get_open_positions()
+ground truth + per-symbol re-verify (board 3-2 for disambiguate over blanket). Cold-agent FAILED
+v1 (degraded Alpaca read — empty [] or symbol-omission — reintroduced the naked bug); v2 added
+Guard-B per-symbol re-verify (cold-agent PASS, Gro APPROVE) but GAI held NEEDS-CHANGES on residual
+double-glitch risk. Rafael chose Option 2 (treat absent==corrupt, never cancel on unknown state):
+strictly safest on the catastrophic axis, simplest, GAI-clean.
+
+**Full gate:** full read 1596L · 3 cold board agents (Thorp/Taleb, Peterffy/Kim, McKinney/Derman —
+all APPROVE the defect) + Gro + GAI diagnostic APPROVE · static py_compile/mypy/ruff clean ·
+FINAL pre-ship on exact Option-2 diff: Gro APPROVE + GAI APPROVE + cold-agent PASS · impact radius
+LOW/contained (no signature change, no new imports, callers unaffected).
+
+**Follow-ups (logged, NOT in this diff):**
+ - T2/second site: reconcile_positions QHM stop-relink (~L1031, `if _qhm_state_path.exists():`)
+   has the same absent-file fail-open shape (absent → gtc_stop_order_id not linked → risks
+   duplicate-stop 40310000 on orphan adoption). Fails toward safety but deserves the same Option-2
+   treatment. Flagged by Peterffy/Kim + Thorp/Taleb + McKinney/Derman + final cold-agent.
+ - _get_qhm_syms() module-set vs file-read truth-source split (startup-ordering inconsistency).
+ - T3: absent-file alert has no hysteresis (re-fires CRITICAL Slack every cycle file is missing) —
+   acceptable (rare/short), noise-only.
