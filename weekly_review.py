@@ -731,56 +731,56 @@ def _week_stats(week_eods: dict) -> dict:
 # ── CSS (same dark theme as scan_results.html) ────────────────────────────────
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#111318;color:#e2e4ee;font-family:-apple-system,"SF Pro Text",sans-serif;font-size:13px;line-height:1.4}
-.header{background:#161920;border-bottom:1px solid #161a28;padding:13px 24px;
+body{background:#0d0f1a;color:#e8ecff;font-family:-apple-system,"SF Pro Text",sans-serif;font-size:13px;line-height:1.4}
+.header{background:#13162a;border-bottom:1px solid #252847;padding:13px 24px;
   display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
 .title{font-size:15px;font-weight:700}
-.sub{font-size:11px;color:#b8bdd4;margin-top:2px}
+.sub{font-size:11px;color:#8a94ae;margin-top:2px}
 .container{max-width:1200px;margin:0 auto;padding:24px}
-.card{background:#161920;border:1px solid #161a28;border-radius:8px;margin-bottom:20px;overflow:hidden}
-.card-hdr{background:#1a1e28;border-bottom:1px solid #161a28;padding:11px 20px;
-  font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#b8bdd4}
+.card{background:#13162a;border:1px solid #252847;border-radius:8px;margin-bottom:20px;overflow:hidden}
+.card-hdr{background:#1e2240;border-bottom:1px solid #252847;padding:11px 20px;
+  font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#8a94ae}
 .card-body{padding:20px}
 .stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px}
-.stat{background:#161920;border:1px solid #161a28;border-radius:6px;padding:14px;text-align:center}
-.stat-lbl{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#b8bdd4;margin-bottom:6px}
+.stat{background:#13162a;border:1px solid #252847;border-radius:6px;padding:14px;text-align:center}
+.stat-lbl{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#8a94ae;margin-bottom:6px}
 .stat-val{font-size:20px;font-weight:700}
 .days-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px}
-.day{background:#161920;border:1px solid #161a28;border-radius:6px;padding:14px}
-.day.active{border-color:#0a84ff}
+.day{background:#13162a;border:1px solid #252847;border-radius:6px;padding:14px}
+.day.active{border-color:#00e5ff}
 .day.no-data{opacity:.5}
-.day-name{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#b8bdd4;margin-bottom:2px}
-.day-date{font-size:11px;color:#b8bdd4;margin-bottom:8px}
+.day-name{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#8a94ae;margin-bottom:2px}
+.day-date{font-size:11px;color:#8a94ae;margin-bottom:8px}
 .day-pnl{font-size:22px;font-weight:700;margin-bottom:4px}
-.day-driver{font-size:10px;color:#b8bdd4;line-height:1.5}
-.day-meta{font-size:10px;color:#b8bdd4;margin-top:4px}
-.pos{color:#30d158}.neg{color:#ff3b30}.zero{color:#b8bdd4}
+.day-driver{font-size:10px;color:#8a94ae;line-height:1.5}
+.day-meta{font-size:10px;color:#8a94ae;margin-top:4px}
+.pos{color:#30d158}.neg{color:#ff3b30}.zero{color:#8a94ae}
 .bt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.bt-stat{background:#111318;border:1px solid #161a28;border-radius:5px;padding:12px;text-align:center}
-.bt-lbl{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#b8bdd4;margin-bottom:4px}
+.bt-stat{background:#0d0f1a;border:1px solid #252847;border-radius:5px;padding:12px;text-align:center}
+.bt-lbl{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#8a94ae;margin-bottom:4px}
 .bt-val{font-size:16px;font-weight:700}
 .badge{display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px;
   letter-spacing:.06em;text-transform:uppercase}
-.badge-info{background:rgba(10,132,255,.15);color:#0a84ff}
-.footer{padding:12px 24px;font-size:10px;color:#b8bdd4;border-top:1px solid #161a28;text-align:center}
-.exec-card{background:#1a1e28;border:1px solid #0a84ff;border-radius:8px;padding:18px 22px;margin-bottom:20px}
-.exec-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#0a84ff;margin-bottom:8px}
-.exec-text{font-size:14px;line-height:1.7;color:#e2e4ee}
+.badge-info{background:rgba(0,229,255,.15);color:#00e5ff}
+.footer{padding:12px 24px;font-size:10px;color:#8a94ae;border-top:1px solid #252847;text-align:center}
+.exec-card{background:#13162a;border:1px solid #252847;border-radius:8px;padding:18px 22px;margin-bottom:20px}
+.exec-label{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#00e5ff;margin-bottom:8px}
+.exec-text{font-size:14px;line-height:1.7;color:#e8ecff}
 .ai-section{margin-bottom:20px}
 .ai-hdr{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
-  color:#b8bdd4;padding:10px 0 8px;border-bottom:1px solid #161a28;margin-bottom:12px}
-.ai-body{font-size:13px;line-height:1.8;color:#e2e4ee}
-.rec-item{background:#111318;border:1px solid #161a28;border-radius:6px;
+  color:#8a94ae;padding:10px 0 8px;border-bottom:1px solid #252847;margin-bottom:12px}
+.ai-body{font-size:13px;line-height:1.8;color:#e8ecff}
+.rec-item{background:#0d0f1a;border:1px solid #252847;border-radius:6px;
   padding:14px 16px;margin-bottom:10px}
-.rec-title{font-size:13px;font-weight:600;color:#e2e4ee;margin-bottom:4px}
-.rec-detail{font-size:12px;color:#b8bdd4;line-height:1.6}
+.rec-title{font-size:13px;font-weight:600;color:#e8ecff;margin-bottom:4px}
+.rec-detail{font-size:12px;color:#8a94ae;line-height:1.6}
 .rec-change{font-size:11px;color:#ffd60a;margin-top:6px;font-family:monospace}
 .conf-high{color:#30d158}.conf-med{color:#ffd60a}.conf-low{color:#ff3b30}
 .board-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
-.board-item{background:#111318;border:1px solid #161a28;border-radius:6px;padding:12px 14px}
+.board-item{background:#0d0f1a;border:1px solid #252847;border-radius:6px;padding:12px 14px}
 .board-role{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#bf5af2;margin-bottom:4px}
-.board-pov{font-size:12px;color:#b8bdd4;line-height:1.5;margin-bottom:4px}
-.board-next{font-size:11px;color:#0a84ff}
+.board-pov{font-size:12px;color:#8a94ae;line-height:1.5;margin-bottom:4px}
+.board-next{font-size:11px;color:#00e5ff}
 @media(max-width:768px){
   .stats-row{grid-template-columns:repeat(2,1fr)!important}
   .days-grid{grid-template-columns:1fr!important}
@@ -1419,25 +1419,24 @@ def build_html(  # noqa: E501
             '</div>'
         )
 
-    # ── Strategy validation MOVED to the monthly page (Rafael 2026-07-05) ───────
-    # Now the "Strategy Edge Report (All-Time)" on monthly_review — all-time edge
-    # diagnostics belong with the lifetime view, not this week's review. The
+    # Strategy validation MOVED to the monthly page (Rafael 2026-07-05) — the
     # _strategy_validation_html function stays here (monthly imports it); weekly
-    # just no longer displays it. trade_log + _lt_pnl are still used below.
-    bt_html = ""
-    _ = _lt_pnl  # retained for the exec-summary/AI-analysis context below
+    # no longer displays it.
 
     # ── AI sections ──────────────────────────────────────────────────────────
     _det_stats = _exec_summary_stats(trade_log, monday)
     _gemini_txt = analysis.get("exec_summary", "") if analysis else ""
-    exec_html = (
-        '<div class="exec-card">'
-        '<div class="exec-label">Executive Summary</div>'
-        + _det_stats
-        + (f'<div class="exec-text" style="margin-top:10px;padding-top:10px'
-           f';border-top:1px solid #2a2e3d">{_gemini_txt}</div>'
-           if _gemini_txt else "")
-        + '</div>'
+    # ── Headline: week P&L + one-line verdict (mockup redesign 2026-07-05) ─────
+    _wp_col = "#30d158" if wp > 0 else ("#ff3b30" if wp < 0 else "#8a94ae")
+    _wp_str = ("+" if wp >= 0 else "") + f"${wp:.2f}"
+    _verdict = _gemini_txt or "No AI verdict generated for this week."
+    headline_html = (
+        '<div style="display:flex;gap:16px;align-items:center;margin:14px 0">'
+        '<div><div style="font-size:11px;color:#8a94ae">Week P&amp;L</div>'
+        f'<div style="font-size:28px;font-weight:700;color:{_wp_col}">{_wp_str}</div>'
+        '</div>'
+        '<div style="flex:1;font-size:14px;color:#c8cce4;'
+        f'border-left:1px solid #252847;padding-left:16px">{_verdict}</div></div>'
     )
     ai_html    = ""
     if analysis:
@@ -1501,6 +1500,25 @@ def build_html(  # noqa: E501
 
     patch_html = _build_patch_health_section(monday)
 
+    # ── Collapsible detail sections — preserve every field, collapsed default ──
+    def _collapsible(label: str, inner: str) -> str:
+        if not inner:
+            return ""
+        return ('<details style="margin-top:10px;background:#13162a;'
+                'border:1px solid #252847;border-radius:8px">'
+                '<summary style="padding:12px 16px;font-size:14px;font-weight:600;'
+                'color:#c8cce4;cursor:pointer">'
+                f'{label}</summary>'
+                f'<div style="padding:0 16px 12px">{inner}</div></details>')
+    collapsibles_html = (
+        '<div style="font-size:12px;color:#8a94ae;margin-top:18px">'
+        'Everything below is preserved — collapsed by default, one click to expand:'
+        '</div>'
+        + _collapsible("Detail stats &amp; exit breakdown", _det_stats + exits_html)
+        + _collapsible("AI review &amp; board POV", ai_html)
+        + _collapsible("Patch health", patch_html)
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1527,19 +1545,17 @@ def build_html(  # noqa: E501
 <div class="container">
 
 {no_data_html}
-{exec_html}
+{headline_html}
 
 {stats_html}
-{exits_html}
-{performers_html}
 
 <div class="days-grid" style="margin-top:20px">
 {day_tiles}
 </div>
 
-{bt_html}
-{ai_html}
-{patch_html}
+{performers_html}
+
+{collapsibles_html}
 
 </div>
 
