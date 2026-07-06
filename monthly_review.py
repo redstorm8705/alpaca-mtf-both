@@ -24,6 +24,9 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from reporting.metrics import _day_pnl, compute_lifetime_stats, compute_period_stats
+# Strategy Edge Report (All-Time) lives on monthly now (Rafael 2026-07-05) —
+# imported from weekly_review, not duplicated.
+from weekly_review import _load_trade_log, _strategy_validation_html
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
@@ -441,6 +444,33 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         f".lt-sub{{font-size:{FS_MICRO}px;color:{TEXT_MUTED};margin-top:4px}}"
     )
 
+    # Strategy Edge Report (All-Time) — all-time edge diagnostics, moved here
+    # from weekly (score->outcome, exit breakdown, edge ratio, PF, drawdown).
+    try:
+        _tl = _load_trade_log()
+        _n_closed = len(_tl.get("closed", []))
+        _edge_body = _strategy_validation_html(_tl, lifetime_pnl=_lt_pnl)
+    except Exception as _edge_err:
+        logger.warning("monthly Strategy Edge Report failed: %s", _edge_err)
+        _edge_body, _n_closed = "", 0
+    if _edge_body:
+        _caveat = (
+            '<div style="font-size:11px;color:#ffd60a;'
+            'background:rgba(255,214,10,.10);border:1px solid rgba(255,214,10,.3);'
+            'border-radius:6px;padding:8px 14px;margin-bottom:10px">'
+            f'&#9888; n&lt;100 — not yet statistically significant '
+            f'(n={_n_closed} closed trades)</div>'
+        ) if _n_closed < 100 else ""
+        _edge_report = (
+            '<div style="margin-top:20px">'
+            '<div style="font-size:11px;font-weight:600;color:#8a94ae;'
+            'text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">'
+            'Strategy Edge Report — All-Time</div>'
+            f'{_caveat}{_edge_body}</div>'
+        )
+    else:
+        _edge_report = ""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -469,6 +499,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
   {_lt_banner}
   {_stats_html(metrics)}
   {_cal_html(year, month)}
+  {_edge_report}
 </div>
 <div class="footer">alpaca-mtf-bot · paper account · auto-refresh 60s</div>
 </body>
