@@ -953,6 +953,18 @@ scan this log first alongside the open items list.
 
 ---
 
+### SHADOW STRATEGY TRACKER — revisit each every session (Rafael mandate 2026-07-06)
+
+**Every shadow signal is logged-but-not-live until it earns its weight. Check this table each session; when a revisit trigger is met, run the analysis and bring the flip to the board.** A shadow that is never revisited is wasted data.
+
+| Shadow | Flag (config.py) | What it logs | Revisit trigger | Flip requires |
+|--------|------------------|--------------|-----------------|---------------|
+| **Delta-of-signal** (Cedar "trade the delta") | `DELTA_SCORING_ENABLED=False` | `delta_shadow` events in `trade_events.jsonl` — bar-over-bar change in the feature-isolated (non-momentum_12_1) confluence score, off_the_fence, persistence, `momentum_flipped` | **≥50 delta_shadow samples** (excluding `momentum_flipped=True` rows), then an **LdP feature-importance check**: does the delta explain **>5% of win variance independent of EMA/MACD/momentum_12_1**? | Fresh **board vote** (Architecture Invariant #1) → flip flag + wire the +0.5→1 bonus into scoring. Est. added 2026-07-06. |
+| **Volume confirmation** | `VOLUME_CONFIRMATION_ENABLED=False` | `VOLSHADOW` log lines — vol_ratio, would_pass, closed-bar pctile | **≥30 post-close STOD-normalized samples** → derive `VOLUME_THRESHOLD` percentile-based (currently a static 1.5× = ~8.8% pass rate, miscalibrated) | Board vote + the two-step atomic toggle (swap `rsi_in_range`→`volume_confirmed` in SCORE_WEIGHTS simultaneously). |
+| **16-point scoring** | log-only (shadow 16pt beside live 12pt) | `score_16pt` in entry events | **50 / 100 / 150 / 200 evaluable trades** (`score16_milestones.json` Slack reminder) | Board review of the 16pt-vs-12pt edge before any weight migration. |
+
+*(GEX Layer-8 and TSMOM vol-scaling are staged-ACTIVE, not pure shadows — tracked under Standing Conditions in handoff.md, not here.)*
+
 ### Logged Items
 
 **[2026-07-03 MOVERS-RETIRED] Movers bot RETIRED — do NOT re-enable without per-strategy ownership fix (Rafael decision)**
