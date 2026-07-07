@@ -1,0 +1,19 @@
+--- /home/user/alpaca-mtf-both/generate_dashboard.py	2026-07-07 22:02:09.414699540 +0000
++++ /tmp/generate_dashboard_proposed.py	2026-07-07 22:23:17.660234911 +0000
+@@ -24,6 +24,7 @@
+ from zoneinfo import ZoneInfo
+ from reporting.metrics import compute_lifetime_stats
+ from ui_tokens import LIVE_CLOCK_HTML
++from config import SCAN_INTERVAL_SWING
+ 
+ # Load .env explicitly so API keys are available whether this module is
+ # imported from within main.py's process or run standalone. Without this,
+@@ -256,7 +257,7 @@
+         now  = datetime.now(ET)
+         elapsed_s = int((now - last).total_seconds())
+         elapsed_m = elapsed_s // 60
+-        interval  = 5 if is_market_open else 10
++        interval  = 5 if is_market_open else SCAN_INTERVAL_SWING
+         remaining = max(0, interval * 60 - elapsed_s)
+         rem_m     = remaining // 60
+         rem_s     = remaining % 60

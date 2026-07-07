@@ -1,0 +1,34 @@
+{
+  "created": "2026-07-07T22:25:00",
+  "file": "generate_dashboard.py",
+  "finding_id": "reporting_low_generatedashboard",
+  "priority": "low",
+  "rth_chain": true,
+  "status": "awaiting_gro_gai",
+  "base_commit": "29af07b36882b7d309384c86002d5fe7c82e67c3",
+  "base_sha256": "7549708ab347e355be8109fb030873921df49fc3a0146489841e0c2ea40ab8f4",
+  "patch_file": "logs/pending_patch_2026-07-07_reporting_low_generatedashboard.patch",
+  "finding": "_scan_countdown() uses hardcoded 10-minute interval for market-closed scan, contradicting config.SCAN_INTERVAL_SWING=60. Dashboard shows 'next scan in Xm' counting to 10 min instead of 60 min when market is closed.",
+  "board_vote": {
+    "A": "APPROVE",
+    "B": "APPROVE",
+    "C": "APPROVE",
+    "summary": "3/3 APPROVE. All agents confirmed: fix correct, no circular import risk (config.py is pure constants), nxt_str display logic works correctly with interval=60, no RC violations introduced."
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS",
+    "ruff": "PASS"
+  },
+  "cold_second_agent": {
+    "verdict": "PASS",
+    "checks": {
+      "logic_inversion": "PASS - 5 if open, 60 if closed, no inversion",
+      "off_by_one": "PASS - rem_m < interval boundary correct for both 10 and 60",
+      "missing_conditions": "PASS - market-closed path only, sufficient for stated scope",
+      "branch_completeness": "PASS - rem_m==60 edge case shows '60m', harmless"
+    }
+  },
+  "gro_gai_prompt": "You are auditing a proposed patch to generate_dashboard.py for the alpaca-mtf-bot paper trading system. This is the FINAL PRE-SHIP audit — the exact diff being shipped, not the concept. Audit for correctness and any RC-class violations.\n\nFINDING: _scan_countdown() at line 259 uses a hardcoded 10-minute interval when the market is closed, but config.py defines SCAN_INTERVAL_SWING=60 (the actual swing scan interval). The dashboard displays 'next scan in Xm' counting down to 10 minutes instead of the correct 60 minutes.\n\nEXACT DIFF:\n--- a/generate_dashboard.py\n+++ b/generate_dashboard.py\n@@ -24,6 +24,7 @@\n from zoneinfo import ZoneInfo\n from reporting.metrics import compute_lifetime_stats\n from ui_tokens import LIVE_CLOCK_HTML\n+from config import SCAN_INTERVAL_SWING\n \n@@ -256,7 +257,7 @@\n         elapsed_m = elapsed_s // 60\n-        interval  = 5 if is_market_open else 10\n+        interval  = 5 if is_market_open else SCAN_INTERVAL_SWING\n         remaining = max(0, interval * 60 - elapsed_s)\n\nSCAN_INTERVAL_SWING=60 at config.py:236. config.py is a pure constants file with no side effects on import.\n\nRC CHECKLIST (verify each):\nRC-1 (naive datetime): Does this patch introduce any datetime.now() without timezone?\nRC-2 (CWD-relative path): Does this patch introduce any relative paths not anchored to __file__?\nRC-3 (silent exception): Does this patch introduce any bare except: pass or bare except Exception: pass?\nRC-4 (estimated exit price): Does this patch pass any non-fill price to record_exit()?\nRC-5 (non-atomic write): Does this patch introduce any direct file writes without tmp->replace?\nRC-6 (wrong API field): Does this patch assume any Alpaca API field not confirmed in docs?\nRC-7 (zero-share sizing): Does this patch affect any share sizing calculation?\nRC-8 (unbounded scan buffer): Does this patch affect any confirm_gate or entry buffer?\n\nReturn APPROVE or REJECT with specific technical findings.",
+  "notes": "Gro/GAI APIs blocked in this session (proxy 403). autonomous_review.py will call them on next nightly run. The Groq UA fix (commit 496aaac) enables Groq to receive the call. Both agents must APPROVE before this patch is applied to the original file and shipped."
+}

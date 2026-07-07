@@ -46,6 +46,54 @@ Cold second-agent: PASS | pytest: 6/6 PASS
 Commit: `496aaac` — branch claude/youthful-wozniak-w249j9
 
 ---
+## 2026-07-07 S-AUTO — generate_dashboard.py scan interval fix (RTH draft, awaiting Gro/GAI)
+
+**Session:** Nightly autonomous work (10 PM ET)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| generate_dashboard.py | 952 | _scan_countdown() uses hardcoded 10-min interval for market-closed path; config.SCAN_INTERVAL_SWING=60 |
+
+### generate_dashboard.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | PASS — py_compile PASS, mypy PASS, ruff PASS (on proposed) |
+| 2 | End-to-end trade path | N/A — dashboard renderer; no entry/exit/sizing logic |
+| 3 | Adversarial scenarios | All loaders use .get() defaults; _scan_countdown try/except logs; generate() re-raises on write fail |
+| 4 | Full read | COMPLETE — 952 lines in 4 chunks |
+| 5 | Cross-references | reporting.metrics, ui_tokens, config — all confirmed present |
+| 6 | Conflicting execution directions | None — pure read/render module |
+| 7 | Redundancy scan | No dead code; HTML templates intentionally verbose (ruff noqa) |
+| 8 | State persistence | generate() uses tmp→replace at L940-944 — PASS |
+| 9 | Data source tier | Uses Alpaca REST via requests for account/positions/orders — acceptable (dashboard read-only) |
+| 10 | Timezone + logging | datetime.now(ET) at L80, datetime.now(PT) at L88, L394, L436, L636, L728 — PASS |
+
+### RC checks (generate_dashboard.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — datetime.now(ET/PT) throughout; no bare datetime.now() |
+| RC-2 | CWD-relative path | PASS — ROOT = Path(__file__).parent.resolve() at L49. Gro's RC-2 rejection was a hallucination. |
+| RC-3 | Silent exception | PASS — all except blocks log (debug or error). No bare pass. |
+| RC-4 | Estimated exit price | N/A — dashboard renderer |
+| RC-5 | Non-atomic write | PASS — generate() uses tmp_path.with_suffix(".tmp") → replace() at L940-944 |
+| RC-6 | Wrong API field | N/A — no change to API field access |
+| RC-7 | Zero-share sizing | N/A — dashboard renderer |
+| RC-8 | Unbounded scan buffer | N/A — dashboard renderer |
+
+### RTH-chain draft (STEP 4b — awaiting Gro/GAI)
+| What | Detail |
+|------|--------|
+| Finding | _scan_countdown() interval hardcoded as 10 for market-closed; should be SCAN_INTERVAL_SWING=60 |
+| Fix | Add `from config import SCAN_INTERVAL_SWING` at L27; change L259 `10` → `SCAN_INTERVAL_SWING` |
+| Board | A APPROVE, B APPROVE, C APPROVE (3/3) |
+| Static | py_compile PASS, mypy PASS, ruff PASS |
+| Cold second-agent | PASS — all 4 checks: no inversion, boundary correct, scope sufficient, edge harmless |
+| Patch file | logs/pending_patch_2026-07-07_reporting_low_generatedashboard.patch |
+| Pending JSON | logs/pending_gro_gai_2026-07-07_reporting_low_generatedashboard.json |
+| Status | RTH file — NEVER edit original. Gro+GAI must APPROVE before apply. autonomous_review.py will call Gro/GAI on next nightly run (UA fix committed 496aaac enables Groq). |
+
+---
 ## 2026-06-25 S67 — macro_risk_index.py yfinance T4 fallbacks (VIX + JPY)
 
 **Session:** S67 (MRI backup sources — yfinance fallbacks for FMP-silent scenarios)
