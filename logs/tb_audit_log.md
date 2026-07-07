@@ -7311,3 +7311,25 @@ POINT 3 — FIX FORK (split, unresolved pending Gro)
 **Confirmed non-issue:** diff does NOT create/worsen RBLX phantom-lot re-seed (pre-existing orphan-seed; queued item 2). P&L now correct on every same-day run.
 
 **Status:** Awaiting Rafael approval (Step 7). Then FINAL pre-ship Gro+GAI on the exact commit diff → git apply → commit/push → OCI git pull --ff-only + restart → verify. GROQ_API_KEY note: the 403 was a Cloudflare-1010 UA ban; Gro now reachable via urllib with a browser User-Agent header.
+
+### SHIPPED — bridge FIFO patch (2026-07-06 S-FIFO) ✅
+Commit 654d507 (amended from 174f46e to add GAI-requested numeric guard on alpaca_today_pnl).
+Final pre-ship: GAI APPROVE (both manual + gate); Gro APPROVE on the substantive diff at final pre-ship, then Groq TPD (100k/day) exhausted by the audit rounds → Rafael AUTHORIZED --waive-gro for the GAI-only numeric-guard delta. Marker: gro=WAIVED gai=APPROVE sha 0c40cc01.
+Deployed OCI HEAD 654d507, portfolio_tracker sha 0c40cc01 (== audited artifact), DEPLOY_OK, all 4 services active, HEALTH_OK.
+Verification checkpoint: nightly Gemini audit 7-07 should flip FAIL→PASS on repeat-run days (no more false alpaca_fifo_unattributed); open_lots_prior_day.json will carry alpaca_today_pnl/alpaca_per_trade keys after the next EOD run.
+
+REMAINING QUEUE (each needs full sequence; Gro TPD-exhausted until daily reset — blocks further gated ships tonight):
+  2. One-time phantom RBLX short-lot cleanup in open_lots_prior_day.json + confirm reconcile_eod corrects understated cumulative.
+  3. Groq UA-header fix in autonomous pipeline urllib callers (root-caused: Cloudflare-1010 UA ban; curl works, urllib w/ browser UA works).
+  4. M1 decomp — extract fifo_pnl.py with OPT-2 event-sourced replay (Rafael's #2 priority; folds the council's preferred structural fix into the module).
+
+### M1 DECOMP SEQUENCING — Open Question Protocol council (2026-07-06 S-FIFO)
+Fork: (A) mechanical byte-for-byte extract of stateless FIFO fns into fifo_pnl.py → verify via golden eod diff → ship; THEN OPT-2 as separate gated ship. vs (B) combined extract+OPT-2 in one ship.
+CONSENSUS 4-0 → A:
+  Board Beck/Kim: A — "Tidy First" separate movement from mutation; DORA small-batch/rollback.
+  Board Harris/Peterffy/McKinney: A — never migrate live financial-state logic + rewrite in one deploy; traceability prerequisite for P&L audit; state-shape change separate from logic. Surfaced OPT-2 hazard: mid-day force-restart replaying fills vs partially-processed start-of-day lots could reintroduce 2026-06-27 duplicate-lot bug unless fill-ID checkpoint is perfect → OPT-2 must be its own isolated audited ship.
+  Gro: A. GAI: A.
+Plan adopted: A. M1 = mechanical extract first (golden eod_*.json parity: pnl_today/alpaca_per_trade/total_pnl zero-diff), then OPT-2 separately.
+
+### WAY-OF-WORKING HARDENED (Rafael mandate 2026-07-06)
+Board + Gro + GAI POV required on EVERY fork/question BEFORE bringing to Rafael — not just RTH-impacting ones. Prior "Gro/GAI only when RTH-impacting or deadlock" carve-out REVOKED. Memory feedback_board_rec_with_questions updated. CLAUDE.md §OPEN QUESTION PROTOCOL trigger loophole ("cannot resolve from first principles") to be removed via gated edit (pending Gro TPD reset/waiver).
