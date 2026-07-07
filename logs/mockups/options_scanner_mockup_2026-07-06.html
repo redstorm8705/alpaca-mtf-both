@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options Scanner — mockup</title>
+<style>
+  :root{
+    --bg:#0a0e1a; --panel:#0d1220; --head:#111830; --line:#1e2240;
+    --text:#e6e8ec; --dim:#8a8fa3; --muted:#636680; --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --green:#30d158; --amber:#ff9f0a; --red:#ff3b30; --gcol:#0f1e14; --acol:#1e1608;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+  .scanner{max-width:1180px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:var(--head);border-bottom:1px solid var(--line)}
+  .title{font-size:19px;font-weight:700}
+  .ts{color:var(--dim);font-size:13px;font-family:var(--mono);margin-left:12px;font-weight:400}
+  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid #2b6b3a;border-radius:20px;padding:6px 14px;font-size:12px;color:var(--green);font-family:var(--mono)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+  .dots{color:var(--muted);margin-left:8px;letter-spacing:1px}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}
+  .tile{padding:14px 20px;border-right:1px solid var(--line)}
+  .tile:last-child{border-right:none}
+  .tile .k{font-size:11px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+  .tile .v{font-size:30px;font-weight:700;line-height:1.15;color:var(--green)}
+  .cols{display:grid;grid-template-columns:1fr 1fr}
+  .col{border-right:1px solid var(--line)}
+  .col:last-child{border-right:none}
+  .colhead{display:flex;align-items:baseline;gap:12px;padding:11px 18px;border-top:3px solid transparent}
+  .col.wk .colhead{background:var(--gcol);border-top-color:var(--green)}
+  .col.zd .colhead{background:var(--acol);border-top-color:var(--amber)}
+  .col.wk .ch-t{color:var(--green)} .col.zd .ch-t{color:var(--amber)}
+  .ch-t{font-size:15px;font-weight:700}
+  .ch-s{font-size:12px;color:var(--dim);font-family:var(--mono)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono)}
+  thead th{font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:600;text-align:right;padding:8px 10px;background:#0b1020}
+  thead th.l{text-align:left}
+  tbody td{font-size:13px;padding:7px 10px;text-align:right;border-top:1px solid #141a30}
+  tbody td.l{text-align:left}
+  .sec{font-size:11px;font-weight:700;padding:9px 12px 5px;letter-spacing:.03em}
+  .sec.hi{color:var(--green)} .sec.se{color:var(--amber)}
+  .tkr{color:var(--text);font-weight:700}
+  .sc{font-weight:700}
+  .sig-call{color:var(--green)} .sig-put{color:var(--red)} .sig-short{color:var(--amber)}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .vrp-hot{color:var(--amber);font-weight:700}
+  footer{padding:11px 18px;font-size:12px;color:var(--muted);font-family:var(--mono);border-top:1px solid var(--line)}
+  @media(max-width:768px){.cols{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid var(--line)}.tiles{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="scanner">
+
+  <div class="top">
+    <div><span class="title">Options Scanner</span><span class="ts" id="clk">Mon Jul 6 · 12:11:08 PM PT</span></div>
+    <div><span class="pill"><span class="dot"></span>Entry window open · 14:00–15:00 ET</span><span class="dots">•••</span></div>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Weekly</div><div class="v">5</div></div>
+    <div class="tile"><div class="k">0DTE</div><div class="v">5</div></div>
+    <div class="tile"><div class="k">High Conviction</div><div class="v">6</div></div>
+    <div class="tile"><div class="k">VIX</div><div class="v">Low</div></div>
+  </div>
+
+  <div class="cols">
+
+    <div class="col wk">
+      <div class="colhead"><span class="ch-t">Weekly directional</span><span class="ch-s">buy calls / puts · 7/10</span></div>
+      <table>
+        <thead><tr><th class="l">Tkr</th><th>Px</th><th>Sc</th><th>VRP</th><th class="l">Signal</th><th>Strk</th><th>Δ</th><th>IV</th></tr></thead>
+        <tbody>
+          <tr><td class="l sec hi" colspan="8">HIGHEST ≥10 · 3</td></tr>
+          <tr><td class="l tkr">SPY</td><td>751</td><td class="sc pos">12</td><td class="neg">-6.9</td><td class="l sig-call">Long call</td><td>753</td><td>.45</td><td>11%</td></tr>
+          <tr><td class="l tkr">QQQ</td><td>723</td><td class="sc pos">10</td><td class="neg">-11</td><td class="l sig-call">Long call</td><td>726</td><td>.45</td><td>23%</td></tr>
+          <tr><td class="l tkr">AMZN</td><td>245</td><td class="sc pos">10</td><td class="pos">+1.5</td><td class="l sig-call">Long call</td><td>248</td><td>.43</td><td>38%</td></tr>
+          <tr><td class="l sec se" colspan="8">SECONDARY 8–9 · 2</td></tr>
+          <tr><td class="l tkr">MSFT</td><td>386</td><td class="sc" style="color:var(--amber)">9</td><td class="pos">+0.5</td><td class="l sig-put">Long put</td><td>378</td><td>.27</td><td>38%</td></tr>
+          <tr><td class="l tkr">AAPL</td><td>313</td><td class="sc" style="color:var(--amber)">8</td><td class="neg">-10</td><td class="l sig-call">Long call</td><td>318</td><td>.33</td><td>27%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col zd">
+      <div class="colhead"><span class="ch-t">0DTE premium selling</span><span class="ch-s">sell puts / calls · today · 3:45 close</span></div>
+      <table>
+        <thead><tr><th class="l">Tkr</th><th>Px</th><th>Sc</th><th>VRP</th><th class="l">Signal</th><th>Strk</th><th>Δ</th><th>IV</th></tr></thead>
+        <tbody>
+          <tr><td class="l sec hi" colspan="8">HIGHEST ≥10 · 3</td></tr>
+          <tr><td class="l tkr">SPY</td><td>751</td><td class="sc pos">12</td><td class="vrp-hot">+110</td><td class="l sig-short">Short put</td><td>750</td><td>.19</td><td>146%</td></tr>
+          <tr><td class="l tkr">QQQ</td><td>723</td><td class="sc pos">10</td><td class="vrp-hot">+185</td><td class="l sig-short">Short put</td><td>721</td><td>.20</td><td>250%</td></tr>
+          <tr><td class="l tkr">AAPL</td><td>313</td><td class="sc pos">10</td><td class="vrp-hot">+221</td><td class="l sig-short">Short put</td><td>312</td><td>.25</td><td>270%</td></tr>
+          <tr><td class="l sec se" colspan="8">SECONDARY 8–9 · 2</td></tr>
+          <tr><td class="l tkr">MSFT</td><td>386</td><td class="sc" style="color:var(--amber)">9</td><td class="vrp-hot">+310</td><td class="l sig-short">Short call</td><td>390</td><td>.07</td><td>423%</td></tr>
+          <tr><td class="l tkr">NVDA</td><td>198</td><td class="sc" style="color:var(--amber)">8</td><td class="vrp-hot">+95</td><td class="l sig-short">Short put</td><td>196</td><td>.15</td><td>210%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <footer>Click a row to expand · full VRP, entry windows, targets, rejections</footer>
+</div>
+
+<script>
+  (function(){
+    var el=document.getElementById('clk');
+    function tick(){
+      var now=new Date();
+      var s=now.toLocaleString('en-US',{timeZone:'America/Los_Angeles',weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true});
+      s=s.replace(/,/g,'').replace(/(\d) (\d{1,2}:\d{2}:\d{2})/,'$1 · $2');
+      el.textContent=s+' PT';
+    }
+    tick(); setInterval(tick,1000);
+  })();
+</script>
+</body>
+</html>

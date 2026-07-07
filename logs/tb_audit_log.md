@@ -7333,3 +7333,62 @@ Plan adopted: A. M1 = mechanical extract first (golden eod_*.json parity: pnl_to
 
 ### WAY-OF-WORKING HARDENED (Rafael mandate 2026-07-06)
 Board + Gro + GAI POV required on EVERY fork/question BEFORE bringing to Rafael — not just RTH-impacting ones. Prior "Gro/GAI only when RTH-impacting or deadlock" carve-out REVOKED. Memory feedback_board_rec_with_questions updated. CLAUDE.md §OPEN QUESTION PROTOCOL trigger loophole ("cannot resolve from first principles") to be removed via gated edit (pending Gro TPD reset/waiver).
+
+---
+## 2026-07-06 (evening) — M1 mechanical extract: fifo_pnl.py + state_io.py from portfolio_tracker.py
+
+**Task:** M1 (per logs/M1_decomp_spec.md). Byte-for-byte extraction, ZERO logic change.
+Split execution/portfolio_tracker.py (2265L) → 1795L + 2 new leaf modules.
+DAG: portfolio_tracker → fifo_pnl → state_io (verified acyclic).
+
+**Moved (byte-identical, AST-proven):**
+- state_io.py (NEW leaf): _atomic_write, _BotEncoder, _ET, _PT, _SSL_CTX + _ROOT + _LOTS_STATE_FILE
+- fifo_pnl.py (NEW): _parse_alpaca_ts, _fill_et_date, _fetch_alpaca_fills_for_date,
+  _fifo_reconstruct, _load_prior_day_lots, _save_open_lots_state, _load_today_attribution;
+  defines _ALPACA_PAPER_BASE; imports _LOTS_STATE_FILE from state_io.
+- portfolio_tracker.py: imports moved names; call sites unchanged; dropped now-unused stdlib
+  imports (re/ssl/tempfile/shutil/urllib/time/zoneinfo.ZoneInfo) + _ET; kept _DRIFT_ALERT_FILE.
+
+**Full Read Gate:** portfolio_tracker.py — full read complete: 2265 lines in 8 chunks.
+
+**10-pt / RC scan (extraction context):**
+- RC-1 naive datetime: PASS (all datetime.now use _PT/_ET; unchanged, moved verbatim)
+- RC-2 CWD path: PASS (all paths _ROOT-anchored; _LOTS_STATE_FILE now single-sourced in state_io)
+- RC-3 silent except: PASS (no bare pass introduced; moved blocks log/re-raise unchanged)
+- RC-4/RC-6/RC-7/RC-8: N/A — no sizing/exit/API-field/scan-buffer logic altered (pure move)
+- RC-5 non-atomic write: PASS (_atomic_write tmp→fsync→os.replace moved verbatim; durability intact)
+- Static: py_compile PASS; ruff --select E,W,F,B "All checks passed" (all 3); mypy clean (state_io, fifo_pnl)
+- Byte-identity: AST source-compare — all 9 moved defs IDENTICAL to live
+- Import DAG: no circular import; fifo_pnl._LOTS_STATE_FILE IS state_io._LOTS_STATE_FILE (1 path object)
+- Functional: _fifo_reconstruct fixture pnl correct; repeat-run dedup invariant PASS
+- External importers of moved symbols: NONE (grep-verified; all 7 callers import only PortfolioTracker class)
+
+**Board (cold subagents, 4 domains):**
+- Reliability: PASS (no circular import, no NameError, sys.path order correct, atomicity intact)
+- Quant-logic: PASS (FIFO math + repeat-run attribution bridge byte-identical; SAFE TO DEPLOY)
+- Data-integrity: PASS (no path drift, no duplicate defs, DAG acyclic)
+- Execution-risk: FAIL → recommended single-sourcing _LOTS_STATE_FILE in state_io. ADOPTED in v2.
+
+**Gro/GAI:**
+- v1: GAI REJECT (path re-derivation + logger-name); Gro 429 (TPD).
+- v2 (path centralized): GAI REJECT→APPROVE after Round-2 counter (board argument: pattern already
+  in live, change reduces derivations to one, matches project convention). Gro APPROVE (diff-level).
+
+**3-Point AI Summary:**
+- P1 Alignment: no-logic-change 3/3 · DAG 3/3 · import-safety 3/3 · path-single-source 3/3 (post-fix)
+- P2 Claude-missed (Gro+GAI/board consensus): _ROOT/_LOTS_STATE_FILE centralization — adopted.
+- P3 Forward-looking: (a) logger-name change — verified no alerting keys on module name, disclosed;
+  (b) central config._ROOT — logged as future hardening (out of M1 scope); (c) OPT-2 replay = next ship.
+
+**Status:** All gates green. Presenting to Rafael for approval. Final pre-ship Gro+GAI on exact
+artifact + golden-eod-diff parity verification pending approval + apply. NOT YET APPLIED to project tree.
+
+**UPDATE — SHIPPED + VERIFIED (2026-07-06 evening):** Commit `1952bef` (main), OCI HEAD `1952bef`,
+DEPLOY_OK. Rafael APPROVE. Final pre-ship: GAI APPROVE (false-positive _fill_et_date "IndexError"
+retracted via counter — byte-identical to live + slice never raises IndexError); Gro=WAIVED (Groq
+TPD 97.5k/100k, Rafael-authorized; same-session Gro APPROVE on exact diff on record). Golden-diff
+parity PASS (old git-HEAD vs new _fifo_reconstruct — 6 fixtures + repeat-run dedup, all identical).
+Post-deploy: 4/4 services active, dashboard OK, OCI clean-import (PortfolioTracker + 5 moved fns
+resolve, _LOTS_STATE_FILE single-sourced), no ImportError/traceback. Board 4/4.
+Follow-ups: OPT-2 event-sourced replay (next ship, separate); central config._ROOT (GAI future item,
+out of M1 scope); nightly EOD cron 7-07 = live end-to-end eod confirmation.

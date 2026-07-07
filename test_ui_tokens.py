@@ -25,14 +25,17 @@ _COLOR_TOKENS = [
     "STATUS_POSITIVE", "STATUS_NEGATIVE", "STATUS_WARNING",
     "PNL_GAIN", "PNL_LOSS",
     "ACCENT_CYAN",
+    "CAT_TRAIL", "CAT_AMBER", "CAT_PURPLE", "CAT_INFO",
 ]
 
-# Every low-alpha status tint must be a valid rgba() string.
-_RGBA_TOKENS = ["STATUS_POSITIVE_BG", "STATUS_WARNING_BG", "STATUS_NEGATIVE_BG"]
+# Every low-alpha tint must be a valid rgba() string.
+_RGBA_TOKENS = [
+    "STATUS_POSITIVE_BG", "STATUS_WARNING_BG", "STATUS_NEGATIVE_BG", "CAT_INFO_BG",
+]
 
 # Every size/radius token must be a positive int (interpolated as f"{X}px").
 _INT_TOKENS = [
-    "TYPE_TITLE", "TYPE_SECTION", "TYPE_BODY", "TYPE_LABEL",
+    "TYPE_TITLE", "TYPE_SECTION", "TYPE_BODY", "TYPE_LABEL", "TYPE_DENSE",
     "FS_DISPLAY", "FS_STAT", "FS_H1", "FS_PNL", "FS_BODY", "FS_NAV",
     "FS_LABEL", "FS_MICRO", "FS_TINY",
     "RADIUS_SM", "RADIUS_MD", "RADIUS_LG",
