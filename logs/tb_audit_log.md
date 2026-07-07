@@ -94,6 +94,69 @@ Commit: `496aaac` — branch claude/youthful-wozniak-w249j9
 | Status | RTH file — NEVER edit original. Gro+GAI must APPROVE before apply. autonomous_review.py will call Gro/GAI on next nightly run (UA fix committed 496aaac enables Groq). |
 
 ---
+## 2026-07-07 S-AUTO — strategy/run_cycle.py duplicate exit fix (RTH draft, BOARD REJECT → STEP 6)
+
+**Session:** Nightly autonomous work (10 PM ET)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| strategy/run_cycle.py | 1,865 | Duplicate EXIT events logged per position across run_cycle() calls — position state not cleared on exit order submission |
+
+### strategy/run_cycle.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | Not run — draft blocked by board REJECT |
+| 2 | End-to-end trade path | RTH chain: run_cycle() → check_exits() → exit_logic.py. Duplicate exits occur because no persistent guard tracks in-flight exit orders across calls |
+| 3 | Adversarial scenarios | Restart-between-submit-and-fill is the critical gap: module-level set cold-boots empty on restart, zero protection for in-flight exits |
+| 4 | Full read | COMPLETE — 1,865 lines in 7 chunks (0-299, 300-599, 600-899, 900-1199, 1200-1499, 1500-1799, 1800-1865) |
+| 5 | Cross-references | _PROJECT_ROOT = Path(__file__).resolve().parent.parent (RC-2 PASS). All imports verified. |
+| 6 | Conflicting execution directions | check_exits() in main.py calls exit_logic.py — gating must live inside check_exits() signature, not in run_cycle.py wrapper |
+| 7 | Redundancy scan | No dead code found |
+| 8 | State persistence | _save_spy_52w_high uses os.replace atomic write (RC-5 PASS) |
+| 9 | Data source tier | fetch_bars() T1, yfinance fallback for VIX only (T4, correct) |
+| 10 | Timezone + logging | datetime.now(ET/PT) throughout — PASS |
+
+### RC checks (strategy/run_cycle.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — all datetime.now() calls include ET or PT |
+| RC-2 | CWD-relative path | PASS — _PROJECT_ROOT = Path(__file__).resolve().parent.parent |
+| RC-3 | Silent exception | PASS — all except blocks log or re-raise |
+| RC-4 | Estimated exit price | N/A — not touched by this finding |
+| RC-5 | Non-atomic write | PASS — _save_spy_52w_high uses tmp→replace |
+| RC-6 | Wrong API field | N/A |
+| RC-7 | Zero-share sizing | N/A — not touched by this finding |
+| RC-8 | Unbounded scan buffer | PASS — existing |
+
+### Proposed fix (3 changes — REJECTED, not applied to original file)
+| Change | Location | Description |
+|--------|----------|-------------|
+| 1 | After L75 (module level) | `_pending_exit_symbols: set = set()` |
+| 2 | After L137 (_clear_live_score_cache) | `_pending_exit_symbols.intersection_update(tracker.open_trades.keys())` |
+| 3 | Replace L1496-1497 | `_pending_exit_symbols.update(closed)` + logger.info with set contents |
+
+### Board vote
+| Agent | Vote | Key finding |
+|-------|------|-------------|
+| A | APPROVE | Data structure correct; pruning sound; flagged restart risk for gating patch |
+| B | REJECT | No actual guard — check_exits() called unconditionally; bookkeeping without enforcement |
+| C | REJECT | Same gap as prior local-variable draft; no "if symbol in _pending_exit_symbols: skip" before submit |
+
+**Result: 1/3 APPROVE → FAIL → STEP 6**
+
+### Required redesign (B + C consensus)
+Single patch spanning run_cycle.py + exit_logic.py:
+- Add `pending_exit_syms: set | None = None` to check_exits() signature in exit_logic.py
+- Skip symbols present in pending_exit_syms before submitting exit order
+- run_cycle.py owns module-level set and passes it explicitly (eliminates implicit global coupling)
+- Handle Alpaca order rejection: discard(symbol) from set
+- No module-level state read from foreign module (inverted coupling avoided)
+Requires full read + new audit of exit_logic.py + main.py before next draft.
+
+Queued: logs/queued_for_review_2026-07-07.md
+
+---
 ## 2026-06-25 S67 — macro_risk_index.py yfinance T4 fallbacks (VIX + JPY)
 
 **Session:** S67 (MRI backup sources — yfinance fallbacks for FMP-silent scenarios)
