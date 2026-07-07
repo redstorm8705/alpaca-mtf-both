@@ -1,6 +1,51 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-07 S-AUTO — autonomous_review.py Groq UA fix
+
+**Session:** Nightly autonomous work (10 PM ET)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| autonomous_review.py | 579 | _call_groq() lacks User-Agent header — Cloudflare-1010 blocking OCI→api.groq.com |
+
+### autonomous_review.py 10-Point Audit
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis | PASS — py_compile PASS, mypy 0 errors, ruff 0 violations |
+| 2 | End-to-end trade path | N/A — standalone nightly cron, not in RTH execution chain |
+| 3 | Adversarial scenarios | API failures caught, retried, Slack-alerted; no silent failures |
+| 4 | Full read | COMPLETE — 579 lines in 2 chunks |
+| 5 | Cross-references | All imports verified; no RTH entrypoint imports this file |
+| 6 | Conflicting execution directions | None — completely separate from live bot |
+| 7 | Redundancy scan | No dead code |
+| 8 | State persistence | _write_atomic() used at L231-233, L334, L414 — PASS |
+| 9 | Data source tier | N/A |
+| 10 | Timezone + logging | datetime.now(PT) at L46, L316, L338, L494, L547 — PASS |
+
+### RC checks (autonomous_review.py)
+| RC | Check | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — datetime.now(PT) throughout |
+| RC-2 | CWD-relative path | PASS — _REPO_DIR = Path("/home/ubuntu/mtf-bot") absolute |
+| RC-3 | Silent exception | PASS — all blocks log or return error dict. Advisory: L515 except swallows JSON error without logging (pre-existing, not touched by this diff) |
+| RC-4 | Estimated exit price | N/A |
+| RC-5 | Non-atomic write | PASS — _write_atomic() uses tmp→replace; appends to log files only |
+| RC-6 | Wrong API field | PASS — Groq choices[0].message.content and Gemini candidates[0].content.parts[0].text verified |
+| RC-7 | Zero-share sizing | N/A |
+| RC-8 | Unbounded scan buffer | N/A |
+
+### Patch applied
+| Change | Location | Fix |
+|--------|----------|-----|
+| Add `"User-Agent": "Mozilla/5.0 (compatible; autonomous-reviewer/1.0)"` | `_call_groq()` L99-102 | Resolves Cloudflare-1010 block on OCI→api.groq.com |
+
+Board: A PASS | B PASS | C PASS | Static: py_compile PASS, mypy PASS, ruff PASS
+Cold second-agent: PASS | pytest: 6/6 PASS
+Commit: `496aaac` — branch claude/youthful-wozniak-w249j9
+
+---
 ## 2026-06-25 S67 — macro_risk_index.py yfinance T4 fallbacks (VIX + JPY)
 
 **Session:** S67 (MRI backup sources — yfinance fallbacks for FMP-silent scenarios)
