@@ -99,6 +99,7 @@ def _call_groq(prompt: str) -> dict:
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (compatible; autonomous-reviewer/1.0)",
                 },
                 json={
                     "model": _GRO_MODEL,
