@@ -7203,3 +7203,111 @@ LOW/contained (no signature change, no new imports, callers unaffected).
  - _get_qhm_syms() module-set vs file-read truth-source split (startup-ordering inconsistency).
  - T3: absent-file alert has no hysteresis (re-fires CRITICAL Slack every cycle file is missing) —
    acceptable (rare/short), noise-only.
+
+---
+## 2026-07-06 — GEX weekly-expiry fix + dashboard card (shipped 504bd8f)
+- **data/gex.py**: `_expiry_range()` narrowed 21-day/3-expiry → this-week (today→coming Friday). Fixes implausible zero-gamma flip (SPY $670 vs $752 spot). Snapshot now stamps expiry/dte/window. RC-3: added logger.debug to `_dte` except (was silent). 0DTE=0 documented.
+- **generate_dashboard.py**: GEX rendered as standalone titled card (Weekly · exp Friday · Nd (cal) · flip/spot).
+- **Consumer contract verified fail-neutral**: kelly.py L348 (UNKNOWN/STALE/NEAR-FLIP→1.0x; GEX skipped Fridays) + run_cycle Layer8 L1386 (only NEGATIVE bumps min_score). More-frequent UNKNOWN → neutral baseline, never mis-size.
+- **Gate**: full read (gex 461 / dash 952); static py_compile+mypy+ruff clean; cold-agent PASS; Gro APPROVE + GAI APPROVE (3-round counter-prompt resolved GAI's self-contradictory weekend objection). Backward-compat verified (old snapshot→ts-only label).
+- **preship_audit.py (local hook, gitignored) fixed 2 real bugs**: (1) empty `--cached` diff on a committed file fell back to auditing the ENTIRE file → GAI hallucinated a defect on unchanged line 289 (`3600` misread as `36`); now diffs vs origin/main from the index (focused, -U30). (2) GAI maxOutputTokens=2000 truncated verbose approvals before the trailing VERDICT line → false REJECT; raised to 8192 + verdict-required-on-line-1 + first-VERDICT-line parse. gro=WAIVED (Rafael-authorized; Gro flakily false-rejected the correct display-only _dte calc); GAI APPROVE gated the marker.
+
+---
+## 2026-07-06 — portfolio_tracker.py P0 DIAGNOSTIC (Phase 1 — full read complete, NO patch applied)
+**Full read: 2189 lines (subagent, verbatim record_exit/record_partial_exit). Gro + GAI + subagent converged.**
+
+### FIFO gap (attributed=0 on RBLX close) — 3 candidate mechanisms, root NOT yet data-confirmed (OCI SSH down):
+- `_a4_gap` fires (L1086-1091) when `_alpaca_pnl==0 & today_trades>0 & (len(_day_fills)==0 OR len(_alpaca_per_trade)==0)`; reason `alpaca_fifo_unattributed` ⇒ fills existed, per_trade empty. per_trade only appended at L334 (cover match) / L371 (long close). Empty ⇒ no fill reached a matched branch.
+- **MECH-1 (MOST LIKELY):** RBLX is a RETIRED-Movers cross-day position (short entry 7-02, stop-cover 7-06). Its short lot was almost certainly NEVER in the main bot's `open_lots_prior_day.json` (Movers/main-bot share Alpaca lots w/o main-bot tracking — see roadmap MOVERS-RETIRED + cross-strategy audit item). So the 7-06 buy_to_cover hits `_fifo_reconstruct` L344 "buy_to_cover with no open short lots" CRITICAL → no lot, no per_trade → attributed=0. **UNCONFIRMED: need `RBLX in open_lots_prior_day.json?` — OCI SSH was timing out.**
+- MECH-2: processed_fill_ids dedup (L310-311) skipped the closing fill on a repeat same-day write_eod_summary call (Gro/GAI theory).
+- MECH-3: RBLX buy fill missing from `_day_fills` (pagination/date-boundary) → same L344 path.
+- **My original same-day-round-trip hypothesis REFUTED** by Gro + GAI + subagent (entry fill in same _day_fills would append a lot the exit matches). Owned.
+
+### HOOD phantom (7-02) — CONFIRMED inert-but-persistent:
+record_exit fully pops symbol (L1867); subsequent partial_exit (L1693) & record_exit (L1812) are guarded → NO self-healing path re-mutates the corrupt `closed[]` record. Nightly audit re-reads trade_log.json closed[] every night → re-flags FAIL forever. **Fix = one-time closed[] history repair** (remove/reconcile the 7-02 phantom HOOD partials). Low risk (historical data, not live path).
+
+### Decomposition roadmap (subagent + Gro + GAI converged) — 5 modules, extract in order:
+1. **M1 `fifo_pnl.py` — EXTRACT FIRST (lowest risk/highest value):** _parse_alpaca_ts, _fill_et_date, _fetch_alpaca_fills_for_date, (_fifo_reconstruct), _load_prior_day_lots, _save_open_lots_state (~330 lines, ZERO self coupling). [Gro/GAI: split _fifo_reconstruct to its own higher-scrutiny step.]
+2. M2 `persistence.py`: _BotEncoder, _atomic_write, _load_drift_alert_date.
+3. M3 `eod_summary.py`: write_eod_summary (640 lines, entangled → collaborator, not free fn).
+4. M4 `fill_reconciliation.py`: get_unverified_exits, patch_exit_pnl, mark_fill_expired.
+5. M5 `stats.py`: get_stats, print_stats.
+**KEEP on class (too entangled):** record_exit, record_partial_exit, record_entry, promote_pending_to_active, _load_log, _save_log.
+
+### RC scan: RC-8 PASS. RC-4 residual at entry_logic.py:680,1292 (entry-price fallback can reach record_exit if order lacks filled_avg_price). State-clearing gap: record_exit L1867 pop vs L1990 index-append ordering (transient, rebuilt on restart).
+
+---
+
+## 2026-07-06 S-FIFO — DATA-CONFIRMED ROOT CAUSE: A-4/FIFO `alpaca_fifo_unattributed` is a repeat-run attribution artifact (NOT RBLX lot-seed gap, NOT HOOD corruption)
+
+**Full read complete: 2189 lines in 4 chunks — execution/portfolio_tracker.py (session gate reset, RULE C-2).**
+
+**Symptom (nightly Gemini 7-06, VERDICT FAIL, CATASTROPHIC):** `A-4/FIFO gap: Alpaca P&L=$0 despite 1 closed trade(s) (fills=12, attributed=0, reason=alpaca_fifo_unattributed)`.
+
+**DATA (fetched live from Alpaca 7-06, OCI):** all 12 of today's FILL activities are `buy` openings (HOOD x2, RBLX x1 [cover of short@54.47 @57.45 = −2.98], MARA x3, RIVN x3, AVGO x1, MS x1, SNOW x1). `open_lots_prior_day.json` dated 2026-07-06 with `processed_fill_ids` = exactly those 12 IDs. RBLX short lot STILL present in file (phantom re-seed).
+
+**ROOT CAUSE (structural):** `_fifo_reconstruct` (L298-403) skips fills whose ID ∈ `processed_fill_ids` (L310) for LOT-mutation dedup (added 2026-06-27 to stop duplicate-lot accumulation). But `per_trade` (attribution list) is rebuilt fresh each call and ONLY gets entries from fills processed IN THAT CALL. `write_eod_summary()` runs from 6 sites + periodic flush → many runs/day. Run 1 attributes correctly (RBLX −2.98, all 12 IDs saved processed). Every 2nd+ run same day: all 12 fills skipped → `per_trade=[]`, `_alpaca_pnl=0` → with today_trades>0 hits A-4 gap branch (L1086-1090) → false `alpaca_fifo_unattributed` + CRITICAL/Slack → nightly escalates to CATASTROPHIC. Fires EVERY day with ≥1 close + >1 EOD run. RBLX short lot persistence = orphan-seed (L924-1016) re-seeding on a later run because the actual cover fill was skipped.
+
+**Severity:** FALSE-ALARM / observability-integrity, NOT live-capital P&L corruption. Real P&L booked run 1; tracker fallback correct. Harm: (1) daily false CATASTROPHIC buries real alarms; (2) every day flagged unreconciled; (3) final-run EOD file overwrites cumulative with prev+0 (understates until reconcile_eod); (4) phantom stale lots persist in open_lots_prior_day.json.
+
+**Prior hypotheses REFUTED by data:** (a) "RBLX short never in open_lots" (S-prev, subagent+Gro+GAI converged) — FALSE, RBLX short IS in file. (b) "HOOD closed[] repair flips FAIL→PASS" — FALSE, HOOD closed record already `_patch_applied_ts` clean (0 partials, pnl 10.67); FIFO gap symbol is RBLX-cover attribution, not HOOD.
+
+**Fix fork (Open Question Protocol — board + Gro + GAI convening 7-06):**
+- OPT-1: persist today's per_trade + _alpaca_pnl in lots-state, reload+merge so attribution is cumulative-for-day across runs.
+- OPT-2: decouple attribution from lot-dedup — replay ALL today's fills vs START-OF-DAY lots for per_trade, keep processed_fill_ids only for lot carry.
+- OPT-3: suppress A-4 gap when all today's fills already ∈ processed_fill_ids (expected, not anomalous); read prior-run persisted _alpaca_pnl instead.
+
+Status: Phase-1 diagnostic. NO patch drafted. Board(cold)+Gro+GAI evaluating fork.
+
+### 3-POINT AI SUMMARY — portfolio_tracker.py _fifo_reconstruct / write_eod_summary A-4 gap (2026-07-06 S-FIFO)
+
+POINT 1 — ALIGNMENT
+  Mechanism (repeat same-day run → all fills in processed_fill_ids → per_trade rebuilds empty → false A-4 alpaca_fifo_unattributed):
+    4/4 — Claude ✓ | Board-DataIntegrity ✓ | Board-ExecRisk ✓ | Board-Reliability ✓ | GAI ✓  (Gro 403 — pending)
+  Cumulative total_pnl understated on final same-day run (L1038 prev+0 overwrites eod file): Claude ✓ DataIntegrity ✓ GAI ✓ (real, transient until reconcile_eod).
+  Phase 2a.5 spurious-close NOT possible (guarded by `not _a4_gap`, L1276): ExecRisk ✓.
+
+POINT 2 — MISSED BY CLAUDE (board/GAI surfaced)
+  - ExecRisk: latent REAL double-count vector — if run-1 crashes between L1019 (lot consumed in-memory) and L1021 (save), or run-2 overwrites with stale lots, the phantom short persists to next day and matches a real future buy → double P&L. LOW prob, CRITICAL impact. The current RBLX short lot sitting in open_lots_prior_day.json IS this phantom (orphan-seed L1006-1010 re-seeded it because the cover fill was dedup-skipped).
+  - Pure OPT-3 (naive suppress) would set pnl_today=_alpaca_pnl=0 (L1119) — must be paired with reuse of run-1's persisted P&L, else it zeroes the day.
+
+POINT 3 — FIX FORK (split, unresolved pending Gro)
+  Discriminator (all converged): `len(day_fills)>0 and all(f.id in processed_fill_ids for f in day_fills)` = benign re-run vs genuine-unmatched.
+  OPT-2 event-sourced replay-from-start-of-day: DataIntegrity(McKinney) + GAI. Most correct; eliminates class + phantom-lot vector; highest blast radius; best folded into M1 fifo_pnl.py extraction.
+  OPT-1/3 hybrid (discriminator-guard + reuse persisted run-1 pnl/per_trade): Reliability + ExecRisk. Minimal blast; stops daily false CATASTROPHIC + keeps cumulative correct; ~1 session.
+  Board split 2-2. Gro REQUIRED before any patch (hotspot RTH file). NO patch drafted. TODO: (a) confirm reconcile_eod actually corrects the understated cumulative; (b) one-time phantom RBLX lot cleanup; (c) rotate GROQ_API_KEY (403).
+
+### UPDATE — Gro restored (Cloudflare-1010 / User-Agent block), council complete (2026-07-06 S-FIFO)
+
+**GRO 403 ROOT CAUSE (data-confirmed):** api.groq.com returns HTTP 403 body `error code: 1010` (Cloudflare edge ban on browser signature) to Python `urllib` default UA (`Python-urllib/3.x`). Adding `User-Agent: Mozilla/5.0 ...Chrome...` → 200 OK (17 models, llama-3.3-70b-versatile present). `curl` also 200 (different TLS fingerprint) — which is why CLAUDE.md's curl examples always worked but any urllib-based Groq caller 403s. LIKELY the real cause (or major contributor) of the handoff "autonomous pipeline stalled on Groq / gro_ok=False / 54 failed_permanent" — previously misattributed to the 12k-TPM ceiling. ACTION (separate patch, needs sequence): add UA header to every urllib Groq caller in the autonomous pipeline (autonomous_review.py / meta_audit / wherever Groq is called via urllib).
+
+**GRO FIFO VERDICT:** mechanism VERIFIED; REAL P&L corruption (last same-day run overwrites eod file with _alpaca_pnl=0 → cumulative understated); RBLX lot risks future double-count; recommends OPT-2 (decouple attribution from lot-dedup, replay vs start-of-day lots); discriminator = today's fills ⊆ processed_fill_ids + per_trade empty → benign re-run, reuse prior run's persisted _alpaca_pnl.
+
+**UPDATED COUNCIL TALLY:**
+  Mechanism: 5/5 (Claude, Board-DataIntegrity, Board-ExecRisk, Board-Reliability, Gro, GAI all VERIFIED).
+  Cumulative understatement = REAL corruption: Gro ✓ GAI ✓ DataIntegrity ✓ (not merely a false alarm — bridge fix MUST correct cumulative, not just suppress).
+  Fix approach: OPT-2 = Gro + GAI + DataIntegrity (3). OPT-3 = Reliability + ExecRisk (2). → OPT-2 is the destination.
+  **Rafael decision (2026-07-06): Option 1 — minimal bridge now (discriminator + reuse persisted run-1 pnl/per_trade, which corrects cumulative) + one-time phantom-lot cleanup; OPT-2 lands inside M1 fifo_pnl.py extraction. Every proposal/finding audited by board+Gro+GAI.**
+
+**WORK QUEUE (each = full patch sequence, board+Gro+GAI on the diff):**
+  1. Bridge FIFO patch — write_eod_summary discriminator + persist/reuse run-1 _alpaca_pnl+per_trade in open_lots_prior_day.json (dated). Corrects cumulative + kills daily false CATASTROPHIC.
+  2. One-time phantom RBLX short-lot cleanup in open_lots_prior_day.json + confirm reconcile_eod corrects understated cumulative.
+  3. Groq UA-header fix in autonomous pipeline urllib callers (unblocks Gro pipeline-wide).
+  4. M1 decomp — extract fifo_pnl.py with OPT-2 event-sourced replay as the module design.
+
+### BRIDGE PATCH — Phase-2 integrity COMPLETE (2026-07-06 S-FIFO), unanimous after counter-prompt
+
+**Diff:** portfolio_tracker.py — (1) _save_open_lots_state +today_pnl/per_trade params → persists alpaca_today_pnl/alpaca_per_trade in the existing single _atomic_write; (2) new _load_today_attribution() (same-day gate, swallow+baseline on error, matches _load_prior_day_lots); (3) write_eod_summary accumulates prior-run attribution onto this run's before the UNCHANGED A-4 check. _fifo_reconstruct + processed_fill_ids dedup untouched.
+
+**Static:** py_compile OK · mypy clean · ruff "All checks passed!"
+**Cold second-agent (fresh):** PASS — 6-pt trace, threat list NONE.
+**Impact radius:** contained to write_eod_summary internals + 2 new keys in a state file only this module reads (code-review-graph 500-node reading is false-broad name-collision noise).
+
+**Board + Gro + GAI (Phase-2 on the exact diff):**
+  Round 1: GAI PASS; Board 3×FAIL + Gro FAIL. FAILs traced to: atomic-write divergence misunderstanding (data-integrity, exec-risk, gro), _alpaca_pnl(day) vs _alpaca_cumulative(lifetime) confusion (data-integrity), and one review of a hallucinated diff (reliability).
+  Counter-prompt (disagreement protocol): FACT-1 single _atomic_write of all keys (no divergence); FACT-2 day-total drift is correct; re-served the ACTUAL diff to reliability; Gro round-3 (its "raise" fix would raise on every normal fresh-day first run).
+  Round 2/3 → ALL PASS: Reliability PASS (grade A), Exec-risk PASS ("blockers introduced BY this diff: NONE"), Data-integrity PASS ("remaining valid blockers: NONE"), Gro PASS.
+
+**Confirmed non-issue:** diff does NOT create/worsen RBLX phantom-lot re-seed (pre-existing orphan-seed; queued item 2). P&L now correct on every same-day run.
+
+**Status:** Awaiting Rafael approval (Step 7). Then FINAL pre-ship Gro+GAI on the exact commit diff → git apply → commit/push → OCI git pull --ff-only + restart → verify. GROQ_API_KEY note: the 403 was a Cloudflare-1010 UA ban; Gro now reachable via urllib with a browser User-Agent header.

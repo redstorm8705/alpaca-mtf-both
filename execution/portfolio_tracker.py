@@ -452,11 +452,21 @@ def _load_prior_day_lots() -> tuple:
 
 def _save_open_lots_state(
     lots: dict, date_str: str, processed_fill_ids: "set | None" = None,
+    today_pnl: float = 0.0, per_trade: "list | None" = None,
 ):
     """Persist end-of-day open lot structure for the next day's FIFO seeding.
 
     processed_fill_ids: fill IDs already folded into `lots` for `date_str` —
     persisted so a later same-day call can skip them (see _load_prior_day_lots).
+
+    today_pnl / per_trade: the day's ACCUMULATED Alpaca-FIFO realized P&L and
+    per-trade attribution for `date_str`. Persisted so a repeat same-day
+    write_eod_summary() call — which skips all already-processed fills and so
+    reconstructs an EMPTY per_trade / $0 pnl for its own pass — can reload and
+    reuse the earlier run's attribution instead of falsely reporting
+    attributed=0 (the alpaca_fifo_unattributed A-4 artifact, 2026-07-06
+    S-FIFO). Only reused when the reader's date matches (see
+    _load_today_attribution).
     """
     try:
         _LOTS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -464,10 +474,58 @@ def _save_open_lots_state(
             "date": date_str,
             "open_lots": lots,
             "processed_fill_ids": sorted(processed_fill_ids or set()),
+            "alpaca_today_pnl": round(float(today_pnl or 0.0), 2),
+            "alpaca_per_trade": per_trade or [],
         })
         logger.info(f"Open lots state saved for {date_str}: {len(lots)} symbol(s)")
     except Exception as exc:
         logger.warning(f"Could not save open lots state: {exc}")
+
+
+def _load_today_attribution() -> tuple:
+    """Return (today_pnl, per_trade) previously persisted by an earlier
+    write_eod_summary() run TODAY — else the empty baseline (0.0, []).
+
+    Mirrors _load_prior_day_lots' same-day gate: attribution is reused only
+    when the state file's stored date == today (PT). On a fresh day the prior
+    day's attribution must NOT carry, so the baseline is returned.
+
+    Bridge for the repeat-run FIFO attribution artifact (2026-07-06 S-FIFO):
+    a 2nd+ same-day run skips all already-processed fills, so its own
+    _fifo_reconstruct pass yields an empty per_trade and $0 pnl. The caller
+    accumulates this run's newly-attributed fills ON TOP of this baseline, so
+    the day's total attribution survives across every run.
+    """
+    try:
+        if _LOTS_STATE_FILE.exists():
+            with open(_LOTS_STATE_FILE) as f:
+                data = json.load(f)
+            stored_date = data.get("date", "")
+            today_str = datetime.now(_PT).strftime("%Y-%m-%d")
+            if stored_date == today_str:
+                _pt = data.get("alpaca_per_trade", []) or []
+                if not isinstance(_pt, list):
+                    logger.warning(
+                        "[lots] alpaca_per_trade not a list (%s) — ignoring "
+                        "persisted attribution baseline", type(_pt).__name__,
+                    )
+                    return 0.0, []
+                # Symmetric numeric guard for alpaca_today_pnl (GAI pre-ship
+                # 2026-07-06): a non-numeric stored value must degrade to the
+                # baseline, not raise — same contract as the per_trade check.
+                _raw_pnl = data.get("alpaca_today_pnl", 0.0)
+                try:
+                    _pnl = float(_raw_pnl if _raw_pnl is not None else 0.0)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "[lots] alpaca_today_pnl not numeric (%r) — ignoring "
+                        "persisted attribution baseline", _raw_pnl,
+                    )
+                    return 0.0, []
+                return round(_pnl, 2), _pt
+    except Exception as exc:
+        logger.warning(f"Could not load today attribution baseline: {exc}")
+    return 0.0, []
 
 
 class PortfolioTracker:
@@ -919,6 +977,11 @@ class PortfolioTracker:
             _eod_fifo_in_progress = True
             try:
                 _prior_lots, _processed_fill_ids = _load_prior_day_lots()
+                # Bridge (2026-07-06 S-FIFO): baseline of today's already-
+                # attributed FIFO P&L/per_trade from any earlier same-day run —
+                # accumulated onto below so repeat runs don't falsely report
+                # attributed=0 / understate the Alpaca cumulative.
+                _prior_today_pnl, _prior_today_per_trade = _load_today_attribution()
                 _day_fills        = _fetch_alpaca_fills_for_date(today)
 
                 # ── FIFO Orphan Lot Seeding ──────────────────────────────────────
@@ -1018,7 +1081,20 @@ class PortfolioTracker:
                 _alpaca_pnl, _alpaca_lots, _alpaca_per_trade, _seen_fill_ids = (
                     _fifo_reconstruct(_day_fills, _prior_lots, _processed_fill_ids)
                 )
-                _save_open_lots_state(_alpaca_lots, today, _seen_fill_ids)
+                # Accumulate this run's newly-attributed fills onto the day's
+                # persisted baseline (2026-07-06 S-FIFO): _fifo_reconstruct only
+                # attributes fills NOT already in processed_fill_ids, so on a
+                # repeat same-day run its per_trade is empty and today_pnl is $0.
+                # Adding the earlier run's attribution reconstitutes the full-day
+                # total — correcting the false A-4 unattributed flag AND the
+                # understated Alpaca cumulative. No double-count: a fill is in the
+                # baseline only if it is in processed_fill_ids, which this run skips.
+                _alpaca_pnl       = round(_prior_today_pnl + _alpaca_pnl, 2)
+                _alpaca_per_trade = _prior_today_per_trade + _alpaca_per_trade
+                _save_open_lots_state(
+                    _alpaca_lots, today, _seen_fill_ids,
+                    today_pnl=_alpaca_pnl, per_trade=_alpaca_per_trade,
+                )
 
                 # Cumulative total = prior EOD total + today's Alpaca P&L
                 for _back in range(1, 8):
