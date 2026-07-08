@@ -28,7 +28,6 @@ import data.bar_cache as _bar_cache  # noqa: F401 — used inline inside functio
 from alerts import alert_kill_switch, alert_spy_event, send_slack
 from data.fetcher import fetch_bars
 from data.sectors import SECTOR_MAP as _SECTOR_MAP  # noqa: F401
-from events.handlers import safe_close_all as _safe_close_all
 from execution.broker import (
     cancel_order,
     get_account,
@@ -1022,14 +1021,28 @@ def run_cycle(
     _news_summary["mri"] = mri.summary()
     tracker.attach_news_summary(_news_summary)
 
-    # ── HALT: true exchange emergency (circuit breaker / trading halt) ─────────
-    # The only remaining news gate. Everything else is market-reaction-driven.
+    # ── HALT: news-keyword gate — INTERIM (2026-07-08, board+Gro+GAI, "disarm now") ──
+    # A news-keyword HALT NO LONGER LIQUIDATES the book. Until 2026-07-08 a raw substring
+    # match (KEYWORDS_HALT, e.g. "national emergency") set news_size_mult=0.0 →
+    # _safe_close_all(circuit_breaker=True) → the ENTIRE non-QHM book was market-sold. It
+    # fired on a benign tariff QUESTION ("Can Trump cut off all trade with Spain?") that
+    # contained "national emergency" (~-$26, 6 positions, 11s). Interim: a keyword HALT now
+    # BLOCKS NEW ENTRIES ONLY (see the _news_halt_block_entries return below, placed AFTER
+    # exit management so existing positions are still managed by their GTC stops + the SPY
+    # 5-min EXTREME engine). A real "close everything" reflex returns in Build F, triggered
+    # by a real price circuit-breaker / exchange-halt signal — never a keyword.
+    # _safe_close_all is UNCHANGED and still used by that future path. DELIBERATE: this
+    # interim does NOT set the session _halt_entries_for_session flag — the block is
+    # per-cycle and self-clears when the (false) keyword ages out of the news window,
+    # instead of locking out entries until 4pm ET on a false positive.
+    _news_halt_block_entries = False
     if news_size_mult == 0.0:
-        logger.critical("⛔ NEWS HALT — closing ALL positions including Bucket A (circuit_breaker=True).")
-        _safe_close_all(tracker, risk, circuit_breaker=True,
-                        mri_level=mri.level() if mri else "NORMAL")
-        _touch_cycle_ts()
-        return
+        logger.critical(
+            "⛔ NEWS HALT (keyword) — BLOCKING NEW ENTRIES this cycle; positions "
+            "RETAINED (managed by stops + SPY price engine). No liquidation "
+            "(interim; Build F adds a price/exchange-triggered close reflex)."
+        )
+        _news_halt_block_entries = True
 
     # ── Hybrid Market Reaction Engine ─────────────────────────────────────────
     # Four-layer system combining Proposals A + B + C + D:
@@ -1562,6 +1575,22 @@ def run_cycle(
             )
     except Exception as _anomaly_err:
         logger.warning("Anomaly checks failed (non-critical): %s", _anomaly_err)
+
+    # ── NEWS HALT (interim, 2026-07-08): block ALL new entries this cycle ─────
+    # Exits/partials/breakeven/fill-recon already ran above → existing positions are
+    # managed normally. This return blocks QHM + intraday entries. DELIBERATE DIVERGENCE
+    # from EXTREME/BV-5 (which sit BELOW the QHM call and let QHM run): a news-keyword HALT
+    # is a max-uncertainty, known-false-positive-prone signal, so it over-blocks QHM by one
+    # cycle (costs ~nothing — QHM re-checks next cycle). INTERIM-ONLY — revisit in Build F
+    # when the keyword classifier is replaced by a real price/exchange signal; do NOT "fix"
+    # this back to QHM-orthogonal without that context. No liquidation.
+    if _news_halt_block_entries:
+        logger.critical(
+            "⛔ NEWS HALT — no new entries this cycle (existing positions managed "
+            "normally; no liquidation)."
+        )
+        _touch_cycle_ts()
+        return
 
     # ── QHM: quarterly hold entries — orthogonal to intraday gates ───────────
     # Pre-planned 3-13 week positions; not blocked by EXTREME/BV-5 (intraday only)
