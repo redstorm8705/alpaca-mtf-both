@@ -7392,3 +7392,96 @@ Post-deploy: 4/4 services active, dashboard OK, OCI clean-import (PortfolioTrack
 resolve, _LOTS_STATE_FILE single-sourced), no ImportError/traceback. Board 4/4.
 Follow-ups: OPT-2 event-sourced replay (next ship, separate); central config._ROOT (GAI future item,
 out of M1 scope); nightly EOD cron 7-07 = live end-to-end eod confirmation.
+
+---
+## 2026-07-08 — FALSE NEWS-HALT mass-liquidation (found + interim fix SHIPPED)
+**File:** strategy/run_cycle.py | **Commit:** 9d03be1 | **Status:** LIVE on OCI (health-verified)
+**Bug:** news_monitor `_classify()` HALT is a raw substring match against KEYWORDS_HALT ("national
+emergency"). A benign tariff QUESTION ("Can Trump cut off all trade with Spain?") matched → news_size_mult
+=0.0 → `_safe_close_all(circuit_breaker=True)` market-liquidated the entire non-QHM book (6 pos, ~-$26,
+11s @ 10:53 ET). No real halt, no price confirmation (price gate confirmed stripped: get_news_size_multiplier
+`price_change_pct` param is "Unused"; PRICE_CONFIRM_THRESHOLD is a dead constant). 2nd false mass-liq this week
+(7/7 was Alpaca desync — distinct root).
+**Interim fix (SHIPPED):** news-keyword HALT now blocks NEW ENTRIES only (flag + guarded return placed
+after check_exits/check_partial_exits, before all entry paths incl. QHM). No liquidation. Existing positions
+managed by GTC/DAY stops + SPY 5-min EXTREME engine. Removed now-unused `_safe_close_all` import.
+**Gate:** board 3/3 (Thorp+Taleb masked-loss / Harris cross-strategy / Kim reliability) APPROVE + Gro APPROVE
++ GAI APPROVE (both final-pre-ship REJECTs were factual misreads, withdrawn on counter-prompt). Static clean.
+**Follow-up:** Build F = full HALT/mass-liquidation ARCHITECTURE REDESIGN (real price/exchange-signal trigger,
+keyword-set overhaul for false-pos AND false-neg e.g. "Iran oil license"). Scoped in logs/api_build_packages_2026-07-08.md.
+
+---
+## 2026-07-08 (autonomous scheduled session) — Build F design: news_monitor.py 10-pt audit + RC checks
+
+**Session:** Scheduled task `resume-build-f-2026-07-08` (headless, design-only — no code shipped this session).
+**Trigger:** Build F (HALT & mass-liquidation architecture redesign), continuing from the 2026-07-08 interim
+fix (commit `9d03be1`). Full scope: `logs/api_build_packages_2026-07-08.md`.
+
+### Files fully read this session
+| File | Lines | Method | Finding |
+|------|-------|--------|---------|
+| events/news_monitor.py | 1828 | Explore subagent, verbatim | Confirms build-package doc's cited line numbers exactly (L74 PRICE_CONFIRM_THRESHOLD, L103-109 KEYWORDS_HALT, L446-452 _classify, L1679-1703 get_news_size_multiplier). |
+| events/handlers.py | 132 | Read tool, 1 chunk | safe_close_all() has its own H-6/H-12 session-halt persistence (_halt_entries_for_session + _save_kill_state) — separate from run_cycle.py's per-cycle interim flag. QHM ownership guard (L68-83) and Bucket-A same-day exemption (L70-74, circuit_breaker=False only) both confirmed present and correctly gated. |
+| strategy/run_cycle.py | L980-1619 (640 lines) | Read tool, re-confirm | Interim fix (L1024-1593) confirmed live and correctly placed: exit management (partials/breakeven/full-exits/fill-recon, L1493-1515) all run BEFORE the news-halt entry-block return (L1587-1593) — existing positions are never abandoned by the interim. QHM entry gate (L1595-1602), EXTREME block (L1604-1611), and BV-5 MRI block (L1613+) all sit AFTER the news-halt return, confirming the documented "QHM over-blocked by one cycle" divergence is real but bounded (self-clears next cycle). |
+
+### 10-Point Audit — events/news_monitor.py
+| # | Check | Result |
+|---|-------|--------|
+| 1 | Static analysis | Not run this session (design-only, no patch to this file yet — static analysis deferred to the API-side diff gate per Build F handoff mechanics) |
+| 2 | End-to-end trade path trace | news_monitor.scan_breaking_news() → _classify() → active_alerts → get_news_size_multiplier()/get_active_event_type() consumed by run_cycle.py (L989-1046, L1146). HALT path previously fed `_safe_close_all`; now (interim) feeds only the per-cycle entry-block. No other consumer found. |
+| 3 | Adversarial scenario testing | CONFIRMED false-positive: question headline "Can Trump cut off all trade with Spain?" matches KEYWORDS_HALT substring "national emergency". CONFIRMED false-negative: "Iran revokes oil export license" matches no keyword in GEO_ENERGY_KEYWORDS (has "oil embargo"/"oil supply"/"opec cut", not "oil license"/"revokes"). |
+| 4 | Full top-to-bottom read | Complete — see table above. |
+| 5 | Grep-verified cross-references (post full-read) | `get_news_size_multiplier()` called from run_cycle.py L992 with ZERO arguments — `price_change_pct` param is unwired end-to-end, not just a stale docstring. `PRICE_CONFIRM_THRESHOLD` (L74) has zero other references in the 1828-line file — confirmed dead constant. |
+| 6 | Conflicting execution directions | None found — single owner (news_monitor) of HALT/CAUTION/MONITOR classification; run_cycle.py is sole consumer of the size-multiplier signal. |
+| 7 | Redundancy scan | PRICE_CONFIRM_THRESHOLD = dead code. `is_war_state_active()` (backward-compat alias) still present and still called — not yet dead, marked for removal after main.py fully migrates to is_macro_risk_active(). |
+| 8 | State persistence correctness | PASS — `_save_seen_hashes()` and `_persist_macro_risk_window()` both use tmp-file + `.replace()` atomic pattern; both anchored via `Path(__file__).parent...` (RC-2 pass). |
+| 9 | Data source tier compliance | N/A for this file — 14 news sources are not OHLCV/quote data (Data Source Hierarchy tiers T1-T4 govern market data, not news feeds); no raw market-data `requests.get()` calls found. |
+| 10 | Timezone + logging compliance | PASS — all datetimes tz-aware via `ZoneInfo("America/New_York")`/`PT`; no naive `datetime.now()` calls (RC-1 pass). |
+
+### RC-1 through RC-8 — events/news_monitor.py
+| RC | Class | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS |
+| RC-2 | CWD-relative path | PASS |
+| RC-3 | Silent exception | PASS (all except blocks log) |
+| RC-4 | Estimated exit price | N/A (no exit-price recording in this file) |
+| RC-5 | Non-atomic write | PASS (tmp→replace on both state files) |
+| RC-6 | Wrong API field name | N/A (no Alpaca order/position fields touched) |
+| RC-7 | Zero-share sizing | N/A (no sizing math in this file) |
+| RC-8 | Unbounded scan buffer | PASS — `_seen_hashes` capped at 10k with eviction (L~404-410); `_active_alerts` capped at 100 (L~1666-1671) |
+
+**No patch proposed this session** — session is DESIGN ONLY per scheduled-task mandate. Findings feed the
+MODE 2 board + Gro/GAI review of the 4 Build F design forks (see below); output is a decision package for
+Rafael in `logs/pending_claude_session_2026-07-08.md`, not a diff.
+
+### MODE 2 Architecture Board + Gro + GAI — Build F design forks (2026-07-08, autonomous session)
+
+4 cold parallel board seats (Taleb/fragility-masked-loss, Harris/microstructure-cross-strategy,
+Simons/signal-consistency, Peterffy+Kim/reliability) + Gro (Groq llama-3.3-70b-versatile, direct API) +
+GAI (Gemini 2.5 flash, direct API) independently reviewed the same lean prompt (raw problem statement +
+4 design forks, no leading conclusions) — zero shared context between seats.
+
+**Result: 6/6 unanimous on all 4 forks.**
+1. News signal must NEVER trigger mass liquidation — entries-only, permanently.
+2. Any real "close everything" trigger must be built fresh on real SPY-price-threshold and/or Alpaca
+   exchange-halt signal — never news. Dead `PRICE_CONFIRM_THRESHOLD`/`price_change_pct` → REMOVE, don't
+   resurrect (4/4 board explicit; Gro ambiguous but still rejects news-alone).
+3. Retire keyword-driven HALT entirely — false-positive (Spain tariff question) and false-negative (Iran
+   oil-license) are the same structural defect, not two independent bugs; not fixable via better phrase
+   matching. Keywords retained for CAUTION/MONITOR only (unchanged, already zero size impact).
+4. No new cross-strategy collision found. Flag: QHM guard in safe_close_all() is QHM-specific, not a
+   general ownership system — retired Movers' dormant untagged lots will be swept by any future real
+   circuit-breaker call same as main-bot lots. Must be an explicit tested/documented decision before ship,
+   not silent inheritance. Re-verify QHM/Bucket-A guards fire correctly under a REAL circuit-breaker call
+   (cross-process), not just code-presence (per existing "Audit Efficacy Not Presence" project rule).
+
+**3-Point AI Summary:**
+- Point 1 (alignment): all 4 findings 3/3 (board/Gro/GAI).
+- Point 2 (Gro+GAI caught, board missed): none — board was more thorough this round, not less.
+- Point 3 (forward-looking, board-only): staggered/sequenced unwind execution-quality (Harris); pre-action
+  telemetry + amber-zone pre-warning alert (Kim); single named mandatory-args gate function (Kim/Peterffy);
+  optional bundle of the already-logged dormant-ThreadPoolExecutor reliability gap (Kim) — Rafael's call.
+
+**Output:** `logs/pending_claude_session_2026-07-08.md` (plain-English decision package, 5 confirmation
+questions for Rafael). No code proposed or changed this session — design/audit only, per scheduled-task
+mandate (autonomous sessions never ship).

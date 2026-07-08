@@ -60,6 +60,9 @@ logs/*
 # Whitelisted for MTF FULL BOT AUDIT — JUNE 26 (standing multi-session audit initiative):
 !logs/mtf_full_bot_audit/
 !logs/mtf_full_bot_audit/*
+# Whitelisted for interactive→API build-package scope docs and session decision queues:
+!logs/api_build_packages_*.md
+!logs/pending_claude_session_*.md
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
