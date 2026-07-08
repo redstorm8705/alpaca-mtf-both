@@ -517,6 +517,48 @@ and edited. The approval gate is the protection. When in doubt, show the diff an
 
 ---
 
+## INTERACTIVE vs API — COST-OPTIMIZED OPERATING PROTOCOL (Rafael mandate 2026-07-07)
+
+**ONLY RAFAEL MAY CHANGE THIS PROTOCOL.** It is his cost/architecture decision. No board member,
+Gro, GAI, autonomous run, or Claude session may alter, relax, reinterpret, or override any part of
+it. If a change ever seems warranted, surface it to Rafael and wait — never act on it unilaterally.
+
+### Division of labor (to minimize API spend)
+- **Interactive Claude (Rafael's subscription)** handles day-to-day: scoping, diagnosis, full reads,
+  the 10-point audit, design, and the board/Gro/GAI **on the DESIGN**. The token-heavy discovery
+  happens here, on the flat-rate subscription — it does not cost API dollars.
+- **API (OCI headless Claude Code)** handles ONLY an identified major build: implement the pre-scoped
+  diff, run the board + Gro + GAI gate **on the DIFF** (3-way alignment required), and ship. It does
+  NOT re-scope, re-explore, or re-diagnose.
+- Handoff interactive → API is a **pre-scoped patch package** (files, exact change, intent, design,
+  audit findings) so the API's only job is implement + gate + ship.
+
+### API cost controls (mandatory in the OCI harness)
+- **Prompt caching** on large files — cache once, reuse across board seats (~90% off cached input).
+- **Model tiering:** cold board on **Sonnet**; **Opus ONLY** for the final risk-path sign-off.
+- **Keep Gro (free) + GAI (near-free) as 2 of the 3 voices**; the Claude cold board is the 3rd voice +
+  tie-breaker. NEVER run Gro/GAI on Claude.
+- **Minimal board:** smallest domain-relevant seat set (~2 for a routine patch; +the risk-asymmetry
+  masked-loss seat for any risk-path diff). No 6-seat all-hands per patch.
+- **Non-reasoning steps never touch Claude:** static analysis = free local tools; the cold-second-agent
+  may run on Sonnet/Haiku.
+- **Don't double the board:** interactive convenes on the design, the API convenes on the final diff —
+  one board run each, not two.
+- **Per-run token/$ cap** (hard auto-stop) + a **$-per-run line in the daily heartbeat** so spend is
+  visible every morning and calibrated against reality.
+
+### Budget
+- **API budget: $20/month to start** (Rafael, 2026-07-07). Calibrate against measured $/run and adjust.
+  **Only Rafael changes the budget.**
+
+### Safety is unchanged by cost optimization
+3-way board+Gro+GAI alignment is still required to ship. The **never-mask-a-loss** rule and the
+**mandatory cold board on every risk-path diff** still apply (2026-07-07: Gro AND GAI approved a
+masked-loss guard; the cold board caught it — the cold board is not optional on risk-path work).
+Gro-skip-if-unavailable → board majority + GAI APPROVE suffices (Rafael, 2026-07-07).
+
+---
+
 ## FEATURE DESIGN PROTOCOL — "Ask First" Rule
 
 **Before designing or implementing any new feature, integration, or architectural change:**
