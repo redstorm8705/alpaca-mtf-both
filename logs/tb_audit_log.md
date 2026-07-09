@@ -7485,3 +7485,52 @@ GAI (Gemini 2.5 flash, direct API) independently reviewed the same lean prompt (
 **Output:** `logs/pending_claude_session_2026-07-08.md` (plain-English decision package, 5 confirmation
 questions for Rafael). No code proposed or changed this session — design/audit only, per scheduled-task
 mandate (autonomous sessions never ship).
+
+---
+## 2026-07-09 Autonomous Nightly — scan_to_html.py NaN guard (RC-3 remediation)
+
+**Session:** Autonomous nightly (claude/youthful-wozniak-bvfh5o, commit 1666a8e)
+
+### Files fully read this session
+| File | Lines | Finding |
+|------|-------|---------|
+| scan_to_html.py | 2357 | Full read complete — 8 chunks ≤300 lines each. RC-1..8 all PASS/N/A. |
+
+### Bug fixed
+**ValueError: cannot convert float NaN to integer** — fired 10× in production.
+
+Root cause: `_build_surface()` calls `int(row.get("openInterest", 0) or 0)`. Python: `float('nan') or 0` evaluates to `float('nan')` (NaN is truthy), so `int(NaN)` raises ValueError. The `or 0` guard does not protect against NaN.
+
+Fix: Add `.fillna(0)` to `chain.calls.copy()` and `chain.puts.copy()` in both `_fetch_implied_range()` (lines 116-117) and `_fetch_spy_0dte_data()` (lines 1064-1065). Upstream fix — NaN zeroed before any column access.
+
+### RC Audit — scan_to_html.py
+| RC | Class | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — `datetime.now(ET)` with ZoneInfo throughout |
+| RC-2 | CWD-relative path | PASS — all paths anchored to `os.path.dirname(os.path.abspath(__file__))` |
+| RC-3 | Silent exception | PASS — all except blocks log; display-layer soft-fail is intentional |
+| RC-4 | Estimated exit price | N/A — no record_exit calls |
+| RC-5 | Non-atomic write | PASS — `write_html()` uses tmp→replace at lines 2221-2228 |
+| RC-6 | Wrong API field name | N/A — no Alpaca order/position field access |
+| RC-7 | Zero-share sizing | N/A — no sizing logic |
+| RC-8 | Unbounded scan buffer | N/A — no scan buffer |
+
+### Board + Gate Summary
+| Gate | Result |
+|------|--------|
+| Board A (Protocol Parser) | REJECT — procedural: prompt typo in diff description (fix confirmed correct) |
+| Board B (Red Teamer) | APPROVE — 3 non-blocking findings documented |
+| Board C (Quant Risk) | APPROVE — no conditions |
+| py_compile | PASS |
+| mypy | PASS |
+| ruff | PASS |
+| Cold second-agent | PASS |
+| Gro (prior session 2026-07-08) | APPROVE — explicit on this concept |
+| GAI (prior session 2026-07-08) | APPROVE — explicitly named these exact 4 lines as "appropriate" |
+
+### Non-blocking findings (Agent B — for future reference)
+1. `float('inf')` bypass: `.fillna(0)` does not replace inf; `int(inf)` raises OverflowError. Low probability — yfinance returns NaN for missing OI, not inf. Future: add `.replace([float('inf'), float('-inf')], 0)` before `.fillna(0)`.
+2. Strike=NaN + IV>0: fillna makes K=0, `_bs_delta(S, 0, ...)` → ZeroDivisionError via `log(S/K)`. Extremely low probability (NaN strike almost always co-occurs with NaN IV). Display-layer only.
+
+### Commit
+`1666a8e` — `claude/youthful-wozniak-bvfh5o` — 4 lines changed, 0 execuion impact.
