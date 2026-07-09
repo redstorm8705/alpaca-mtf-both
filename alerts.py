@@ -286,6 +286,26 @@ def alert_spy_event(event_type: str, magnitude: float, scans_left: int) -> None:
           emoji=":rotating_light:" if is_extreme else ":warning:")
 
 
+def alert_venue_halt(venue_status: dict, spy_5m_pct: float, qqq_5m_pct: float) -> None:
+    """Fire when Build F's venue-state check confirms a REAL halt (exchange clock
+    reports closed mid-session, SPY itself is untradable, or session-cumulative
+    SPY decline crosses a real MWCB -7/-13/-20 band). Entries-only block — never
+    liquidates; see events/handlers.py:safe_close_all for the (user-shutdown-only)
+    mass-close path."""
+    title = f"{SEV_CRITICAL} — VENUE HALT CONFIRMED"
+    body  = (
+        f"is_open={venue_status.get('is_open')} "
+        f"SPY_tradable={venue_status.get('spy_tradable')} "
+        f"MWCB={venue_status.get('mwcb_band')}\n"
+        f"SPY session: {venue_status.get('spy_session_pct', 0):+.2f}% | "
+        f"SPY 5m: {spy_5m_pct:+.2f}% | QQQ 5m: {qqq_5m_pct:+.2f}%\n"
+        f"New entries BLOCKED this cycle. Existing positions managed by stops. "
+        f"No liquidation (mass-close is user-shutdown-only)."
+    )
+    _send(title, body, priority=5, tags=["rotating_light", "no_entry"],
+          emoji=":rotating_light:")
+
+
 def alert_stop_breach(symbol: str, direction: str, current_price: float,
                       stop: float, gtc_submitted: bool = True) -> None:
     """Fire when stop is breached and position cannot be closed immediately:

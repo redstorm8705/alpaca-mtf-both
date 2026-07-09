@@ -25,12 +25,14 @@ from zoneinfo import ZoneInfo
 
 import config
 import data.bar_cache as _bar_cache  # noqa: F401 — used inline inside function body
-from alerts import alert_kill_switch, alert_spy_event, send_slack
+from alerts import alert_kill_switch, alert_spy_event, alert_venue_halt, send_slack
 from data.fetcher import fetch_bars
 from data.sectors import SECTOR_MAP as _SECTOR_MAP  # noqa: F401
 from execution.broker import (
     cancel_order,
     get_account,
+    get_asset_tradable,
+    get_clock,
     get_open_position,
     get_order,
     get_portfolio_value,
@@ -109,6 +111,47 @@ def _load_spy_52w_high() -> dict | None:
         return {"value": float(_raw["value"]), "age_days": _age_days}
     except Exception as _load_err:
         logger.warning("SPY 52w high cache load failed: %s", _load_err)
+        return None
+
+
+# ── Build F — Halt observability (2026-07-09, board+Gro+GAI LOCKED) ──────────
+# Real market-wide circuit-breaker bands (session-cumulative SPY decline vs
+# prior close). Used only to corroborate a venue-state halt signal — never to
+# gate sizing directly and never to trigger liquidation (see
+# logs/build_f_decision_2026-07-08.md Fork 2/3).
+_MWCB_BANDS = ((-20.0, "-20"), (-13.0, "-13"), (-7.0, "-7"))
+
+
+def _mwcb_band(session_pct: float) -> "str | None":
+    """Return the deepest real MWCB band ('-7'/'-13'/'-20') that session_pct
+    (signed % change vs prior close) has crossed, or None."""
+    for _threshold, _label in _MWCB_BANDS:
+        if session_pct <= _threshold:
+            return _label
+    return None
+
+
+def _spy_prior_session_close() -> "float | None":
+    """
+    Most recent prior CLOSED session's SPY daily close (T1). Used by the Build F
+    halt-observability check to compute session-cumulative decline vs. the real
+    MWCB (-7/-13/-20) circuit-breaker bands. Filters out today's forming daily
+    bar by calendar date rather than assuming index position — Alpaca may or
+    may not include a partial current-day bar depending on time of day.
+    """
+    try:
+        _df = fetch_bars("SPY", config.TF_DAILY, num_bars=3)
+        if _df is None or _df.empty:
+            return None
+        _today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        _idx_et = _df.index.tz_convert(ET)
+        _prior = _df[_idx_et.strftime("%Y-%m-%d") != _today_str]
+        if _prior.empty:
+            return None
+        _pc = float(_prior["close"].iloc[-1])
+        return _pc if _pc > 0 else None
+    except Exception as _pce:
+        logger.warning(f"Build F halt-eval: SPY prior close fetch failed: {_pce}")
         return None
 
 
@@ -989,7 +1032,7 @@ def run_cycle(
         news.scan_breaking_news()
     except Exception as _news_err:
         logger.error(f"[run_cycle] news.scan_breaking_news() failed: {_news_err}", exc_info=True)
-    news_size_mult = news.get_news_size_multiplier()   # returns 1.0 always, 0.0 on HALT
+    news_size_mult = news.get_news_size_multiplier()   # Build F: always returns 1.0 — HALT is display-only
 
     # ── MRI refresh — cross-asset background stress score ─────────────────────
     # Fetches TLT/HYG/LQD/USO/GLD/EWJ/EWG via fetch_bars (Alpaca Data T1).
@@ -1021,28 +1064,32 @@ def run_cycle(
     _news_summary["mri"] = mri.summary()
     tracker.attach_news_summary(_news_summary)
 
-    # ── HALT: news-keyword gate — INTERIM (2026-07-08, board+Gro+GAI, "disarm now") ──
-    # A news-keyword HALT NO LONGER LIQUIDATES the book. Until 2026-07-08 a raw substring
+    # ── HALT: news-keyword gate — display-tier ONLY (Build F, 2026-07-09 LOCKED) ──
+    # A news-keyword HALT NEVER LIQUIDATES the book — this is now permanent, not interim
+    # (see logs/build_f_decision_2026-07-08.md Fork 1/3). Until 2026-07-08 a raw substring
     # match (KEYWORDS_HALT, e.g. "national emergency") set news_size_mult=0.0 →
     # _safe_close_all(circuit_breaker=True) → the ENTIRE non-QHM book was market-sold. It
     # fired on a benign tariff QUESTION ("Can Trump cut off all trade with Spain?") that
-    # contained "national emergency" (~-$26, 6 positions, 11s). Interim: a keyword HALT now
-    # BLOCKS NEW ENTRIES ONLY (see the _news_halt_block_entries return below, placed AFTER
-    # exit management so existing positions are still managed by their GTC stops + the SPY
-    # 5-min EXTREME engine). A real "close everything" reflex returns in Build F, triggered
-    # by a real price circuit-breaker / exchange-halt signal — never a keyword.
-    # _safe_close_all is UNCHANGED and still used by that future path. DELIBERATE: this
-    # interim does NOT set the session _halt_entries_for_session flag — the block is
-    # per-cycle and self-clears when the (false) keyword ages out of the news window,
-    # instead of locking out entries until 4pm ET on a false positive.
-    _news_halt_block_entries = False
-    if news_size_mult == 0.0:
+    # contained "national emergency" (~-$26, 6 positions, 11s). Build F retired that 0.0
+    # branch entirely — get_news_size_multiplier() now always returns 1.0, and a keyword
+    # HALT is classified for dashboard display only. The entries-only block below is driven
+    # off news.has_active_halt_keyword() (the display-tier flag) instead of the retired
+    # news_size_mult==0.0 signal — same behavior, new source. This return sits AFTER exit
+    # management so existing positions are still managed by their GTC stops + the SPY 5-min
+    # EXTREME engine. A real price/exchange-triggered halt signal is added below (venue
+    # observability) — see _venue_halt_block_entries. _safe_close_all is UNCHANGED and
+    # remains user-shutdown-only (Build F Fork 2: no automated mass-liquidation reflex
+    # anywhere). DELIBERATE: this per-cycle block does NOT set the session
+    # _halt_entries_for_session flag — it self-clears when the (often false-positive)
+    # keyword ages out of the 30-min news window, instead of locking out entries until
+    # 4pm ET on a false positive.
+    _news_halt_block_entries = news.has_active_halt_keyword()
+    if _news_halt_block_entries:
         logger.critical(
             "⛔ NEWS HALT (keyword) — BLOCKING NEW ENTRIES this cycle; positions "
             "RETAINED (managed by stops + SPY price engine). No liquidation "
-            "(interim; Build F adds a price/exchange-triggered close reflex)."
+            "(permanent architecture — Build F)."
         )
-        _news_halt_block_entries = True
 
     # ── Hybrid Market Reaction Engine ─────────────────────────────────────────
     # Four-layer system combining Proposals A + B + C + D:
@@ -1117,6 +1164,88 @@ def run_cycle(
             )
         else:
             logger.warning(f"SPY/QQQ 5-min fetch failed ({_main._spy_fetch_failures}x) — using prior risk state: {_mkt5_err}")
+
+    # ── Build F — Halt OBSERVABILITY (2026-07-09, board+Gro+GAI LOCKED) ──────────
+    # Independent, price/exchange-level corroboration of a real halt — NEVER
+    # liquidates. Alpaca venue-state (clock.is_open + SPY tradable status) plus
+    # session-cumulative SPY decline vs prior close at the real MWCB -7/-13/-20
+    # circuit-breaker bands. Emits a `halt_eval` discriminator event to
+    # trade_events.jsonl every RTH cycle for postmortem correlation against the
+    # keyword classifier, regardless of verdict. On verdict="real": blocks new
+    # entries this cycle (same per-cycle, self-clearing mechanism as the news
+    # keyword gate) and fires ONE CRITICAL Slack per occurrence (debounced via a
+    # run_cycle function-attribute flag; re-arms once the venue signal clears).
+    _venue_halt_block_entries = False
+    try:
+        _venue_is_open = bool(get_clock().get("is_open"))
+    except Exception as _clk_err:
+        logger.warning(f"Build F halt-eval: get_clock() failed: {_clk_err}")
+        # Fail toward "no new signal from this check" — is_market_open() already
+        # confirmed RTH-open earlier this cycle (see _rcy_market_open above).
+        _venue_is_open = True
+
+    # get_asset_tradable() already fail-safes internally (returns None on any
+    # error — see execution/broker.py) so no wrapping try/except is needed here.
+    _spy_tradable = get_asset_tradable("SPY")
+
+    _spy_prior_close = _spy_prior_session_close()
+    _spy_session_pct = 0.0
+    if _spy_prior_close and _main._spy_last_close:
+        _spy_session_pct = (_main._spy_last_close - _spy_prior_close) / _spy_prior_close * 100
+    _mwcb_hit = _mwcb_band(_spy_session_pct)
+
+    _venue_real_halt = (not _venue_is_open) or (_spy_tradable is False) or (_mwcb_hit is not None)
+    # Board round-2 (Thorp/Taleb masked-loss seat + Gro + GAI, 2026-07-09): a
+    # None here means the tradable check could not be confirmed this cycle —
+    # NOT the same as a confirmed real halt. Fails closed for ENTRIES ONLY
+    # (cheap, self-clearing, QHM re-checks next cycle — same asymmetric-cost
+    # reasoning as the rest of this block, and matches this file's own ORB-gate
+    # precedent above: "any feed error → BLOCK_ALL"). Does NOT fire the
+    # CRITICAL "VENUE HALT CONFIRMED" alert or set verdict="real" — that would
+    # manufacture a false-positive-driven alert from routine API noise, exactly
+    # what Build F exists to eliminate. is_open + MWCB are independent signals
+    # (separate trading-API and data-API calls) that still corroborate a real
+    # halt even when this one leg is degraded.
+    _venue_uncertain = _spy_tradable is None
+    _venue_verdict = "real" if _venue_real_halt else "unconfirmed"
+    _venue_status = {
+        "is_open":         _venue_is_open,
+        "spy_tradable":    _spy_tradable,
+        "spy_session_pct": round(_spy_session_pct, 2),
+        "mwcb_band":       _mwcb_hit,
+    }
+
+    _log_trade_event(
+        "halt_eval", symbol="SPY", price=_main._spy_last_close, size=0,
+        mri_level=mri.level() if mri else "NORMAL", data_source="alpaca_data",
+        keyword_hit=_news_halt_block_entries,
+        spy_5m_pct=round(_spy_5m_pct, 3), qqq_5m_pct=round(_qqq_5m_pct, 3),
+        venue_status=_venue_status, verdict=_venue_verdict,
+    )
+
+    if _venue_real_halt:
+        _venue_halt_block_entries = True
+        if not getattr(run_cycle, "_venue_halt_alerted", False):
+            run_cycle._venue_halt_alerted = True  # type: ignore[attr-defined]
+            logger.critical(
+                f"⛔ VENUE HALT CONFIRMED — is_open={_venue_is_open} "
+                f"SPY_tradable={_spy_tradable} MWCB={_mwcb_hit} "
+                f"SPY_session={_spy_session_pct:+.2f}% — BLOCKING NEW ENTRIES this "
+                f"cycle; positions RETAINED (no liquidation)."
+            )
+            try:
+                alert_venue_halt(_venue_status, _spy_5m_pct, _qqq_5m_pct)
+            except Exception as _vh_alert_err:
+                logger.error(f"Build F halt-eval: alert_venue_halt failed: {_vh_alert_err}")
+    else:
+        run_cycle._venue_halt_alerted = False  # type: ignore[attr-defined]  # re-arm for next occurrence
+        if _venue_uncertain:
+            _venue_halt_block_entries = True
+            logger.warning(
+                "Build F halt-eval: SPY tradable status could not be confirmed this "
+                "cycle — blocking new entries out of caution (fail-closed on data gap; "
+                "not a confirmed halt, no CRITICAL alert)."
+            )
 
     # Layer 1 + 2: Classify the bar
     _SPY_TRIGGER   = 1.0    # % in one 5-min bar → active
@@ -1576,17 +1705,18 @@ def run_cycle(
     except Exception as _anomaly_err:
         logger.warning("Anomaly checks failed (non-critical): %s", _anomaly_err)
 
-    # ── NEWS HALT (interim, 2026-07-08): block ALL new entries this cycle ─────
+    # ── HALT (Build F, 2026-07-09 LOCKED): block ALL new entries this cycle ──────
     # Exits/partials/breakeven/fill-recon already ran above → existing positions are
     # managed normally. This return blocks QHM + intraday entries. DELIBERATE DIVERGENCE
-    # from EXTREME/BV-5 (which sit BELOW the QHM call and let QHM run): a news-keyword HALT
-    # is a max-uncertainty, known-false-positive-prone signal, so it over-blocks QHM by one
-    # cycle (costs ~nothing — QHM re-checks next cycle). INTERIM-ONLY — revisit in Build F
-    # when the keyword classifier is replaced by a real price/exchange signal; do NOT "fix"
-    # this back to QHM-orthogonal without that context. No liquidation.
-    if _news_halt_block_entries:
+    # from EXTREME/BV-5 (which sit BELOW the QHM call and let QHM run): both the news
+    # keyword tier (max-uncertainty, known-false-positive-prone) and a real venue-confirmed
+    # halt over-block QHM by one cycle (costs ~nothing — QHM re-checks next cycle); a
+    # confirmed exchange-level halt is exactly the situation where QHM entries should also
+    # wait. No liquidation in either case — the actual close-all reflex stays
+    # user-shutdown-only (see events/handlers.py:safe_close_all).
+    if _news_halt_block_entries or _venue_halt_block_entries:
         logger.critical(
-            "⛔ NEWS HALT — no new entries this cycle (existing positions managed "
+            "⛔ HALT — no new entries this cycle (existing positions managed "
             "normally; no liquidation)."
         )
         _touch_cycle_ts()
