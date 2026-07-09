@@ -18,14 +18,15 @@ NOT /wrap-up.
 - **Quick fix queued (from 2026-07-08 audits):** `scan_to_html._fetch_options_data` — `cannot convert float NaN
   to integer` (fired 10×; display-layer, fails-closed → not urgent). One-line NaN guard. NOTE: `scan_to_html.py`
   also has a *rejected* Gro/GAI RC-3 item today — handle carefully.
-- **WEEKLY AUDIT ROLLUP (2026-07-02→08) → `logs/weekly_audit_rollup_2026-07-08.md`.** A week of Gemini
-  midday/post-market audits, deduped. **KEY TAKEAWAY: ~20 daily "CRITICAL" flags collapse to ONE root — P&L
-  ATTRIBUTION CORRUPTION** (`FILL UNVERIFIED → external_close → $0 P&L`; drove the 07-07 false −73.86% kill-switch
-  trip, the EOD P&L drifts, the RIVN $0 P&L + direction corruption, the stop-hit fidelity errors). **This is the
-  single highest-value outstanding fix — build it WITH Build A + B (same fill/reconciliation family).** Tier-2:
-  TOD/phase bug, scan_to_html NaN, cycle-perf/scan-timeout. Recurring FALSE POSITIVE: the VOLSHADOW "score
-  discrepancy" (Gemini misreads the log-only volume shadow — verify once + rename fields). ALPHA (not bugs):
-  exit R:R, high-score≠profit scoring validation, MRI data stability. Full prioritized list in the rollup.
+- **WEEKLY AUDIT ROLLUP (2026-07-02→09) → `logs/weekly_audit_rollup_2026-07-08.md`.** A week of Gemini
+  midday/post-market audits, deduped to **TWO dominant roots:** (#1) **P&L ATTRIBUTION CORRUPTION** (`FILL
+  UNVERIFIED → external_close → $0 P&L`; drove the 07-07 false −73.86% kill-switch trip, the EOD P&L drifts, RIVN
+  $0-P&L + direction corruption, stop-hit fidelity) — build it WITH Build A + B (same fill/reconciliation family);
+  (#2, new on 07-09) **ENTRY-PIPELINE THROTTLING** — sizing-cap stacking → 0 shares on high-priced names, silent
+  "no allocation" skips, ANOMALY-2 confirm_gate stalls; qualified signals not being entered (costing trades now).
+  Tier-2: TOD/phase, scan_to_html NaN, cycle-perf. Recurring FALSE POSITIVE: VOLSHADOW "score discrepancy" (Gemini
+  misreads the log-only volume shadow — verify + rename). ALPHA reviews: exit R:R, high-score≠profit, MRI data.
+  Full prioritized where-to-continue in the rollup.
 
 ## Bot Status
 - **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`

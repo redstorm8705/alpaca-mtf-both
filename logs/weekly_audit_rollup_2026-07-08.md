@@ -1,7 +1,7 @@
-# Weekly Audit Rollup — 2026-07-02 → 07-08 (midday + post-market Gemini + meta audits)
+# Weekly Audit Rollup — 2026-07-02 → 07-09 (midday + post-market Gemini + meta audits)
 **Aggregated for handoff.** Source: `logs/{midday_gemini,gemini_audit,meta_audit}_2026-07-0*.txt/json`.
-The week produced ~20 "CRITICAL" flags; **deduped, they collapse to one dominant root + a short tier-2 list.**
-Prioritized where-to-continue below. (No board/Gro/GAI run — this is aggregation of existing audits.)
+The week produced ~25 "CRITICAL"/"HIGH" flags; **deduped, they collapse to two dominant roots + a short tier-2
+list.** Prioritized where-to-continue below. (No board/Gro/GAI run — this is aggregation of existing audits.)
 
 ## #1 — P&L ATTRIBUTION CORRUPTION (THE root — flagged CRITICAL every day this week) ★ TOP OUTSTANDING
 Chain: `execution/fill_helpers.py` **FILL UNVERIFIED** (can't recover a close fill from the activity feed) →
@@ -18,6 +18,25 @@ explained-P&L validator is adjacent — coordinate). **Files:** `execution/fill_
 `execution/orphan_manager.py`, `execution/portfolio_tracker.py`, `execution/fifo_pnl.py`, `trade_logger.py`.
 **This is the single highest-value outstanding fix — a full week of CRITICALs, one root. It also overlaps Build B
 (orphan-stop) and Build A (glitch safe-mode) — sequence it with them.**
+
+## #2 — ENTRY-PIPELINE THROTTLING: qualified signals NOT being entered (NEW — dominant on 07-09) ★
+07-09 surfaced a distinct cluster: the bot produces strong signals but doesn't act on them. Three related paths:
+- **Sizing-cap STACKING → 0 shares (HIGH):** for high-score names (SOXL/MU/AMD/AVGO 10–12/12), the caps stack —
+  `AB-3 TQI demotion` × `TSMOM vol-scale` × `VOTE-3 vol cap` × `VOTE-5 vol-target cap` — until `dollar_cap <
+  price_per_share` → 0 shares → skip. e.g. `[SOXL] VOTE-5 vol-target cap produced 0 shares (σ=2.287 | equity=$2778
+  | price=$201.20) — skipping entry.` On a ~$2.8K account, high-priced names become **un-tradeable even on 12/12
+  signals.** (RC-7 zero-share-sizing family.) **Fix direction:** a small-account floor that lets ≥1 share through
+  on a qualifying score, or don't stack all vol-caps multiplicatively.
+- **"Score 9/12 — no allocation. Skipping" (MEDIUM):** PANW/SPY/QCOM met MIN_SCORE=9 but were skipped *before*
+  Kelly/dollar-cap even ran — a silent filter/logic gap that never logs its reason.
+- **ANOMALY-2 confirm_gate scans but no entry (CRITICAL on 07-09):** 9 symbols hit the confirm_gate but never
+  entered while `open_positions=2–3` << `MAX_OPEN_POSITIONS=7`. Qualified signals blocked with **no stated reason.**
+  Post-market audit: "severely impacting the bot's ability to enter trades." **Fix direction:** log the SPECIFIC
+  block reason inside the ANOMALY-2 message (sector/correlation/news/liquidity/ORB), then fix whichever drops it.
+**Net:** the bot's alpha is being throttled by the entry pipeline + small-account sizing. Distinct from #1 (which
+is P&L *accounting*); this is *entering trades at all*. Files: `execution/entry_logic.py`, `strategy/run_cycle.py`
+(confirm_gate), `execution/kelly.py` + the VOTE/TSMOM sizing caps. Good news: the bot IS trading again post-incident
+(07-09 opened NET/HOOD/RIVN), so this is optimization, not a full stop.
 
 ## Tier-2 — genuine contained bugs
 - **TOD/phase determination (07-03):** at 8:11 PM ET the bot logged "cycle @ 13:11 ET / phase=midday". Internal
@@ -53,8 +72,13 @@ explained-P&L validator is adjacent — coordinate). **Files:** `execution/fill_
 ## WHERE TO CONTINUE (handoff order)
 1. **Merge Build F branch** (`claude/build-f-2026-07-08`) → deploy. (Ready now.)
 2. **Forever-6 API build** (design locked). 
-3. **Build A + B + the P&L-ATTRIBUTION ROOT (#1) together** — they're the same reconciliation/fill family; the P&L
-   root is the week's dominant CRITICAL and should be built alongside A/B, not after.
-4. **Tier-2 bugs:** TOD/phase, scan_to_html NaN, cycle-perf pass.
-5. **VOLSHADOW verify-and-clarify** (kills the recurring false-flag).
-6. **ALPHA reviews** (exit R:R, scoring validation, MRI data) — strategy sessions, board-led, not patches.
+3. **Build A + B + the P&L-ATTRIBUTION ROOT (#1) together** — same reconciliation/fill family; the week's dominant
+   CRITICAL. Build alongside A/B, not after.
+4. **ENTRY-PIPELINE THROTTLING (#2)** — small-account sizing floor (≥1 share on a qualifying score / don't stack
+   all vol-caps multiplicatively) + make ANOMALY-2 log the specific block reason + fix the silent "no allocation"
+   skip. This is directly costing trades right now (07-09). High-value; board-led (touches sizing → risk-path).
+5. **Tier-2 bugs:** TOD/phase, scan_to_html NaN, cycle-perf pass.
+6. **VOLSHADOW verify-and-clarify** (kills the recurring false-flag).
+7. **ALPHA reviews** (exit R:R, "high-score≠profit" scoring validation, MRI data, signals-generated-past-close) —
+   strategy sessions, board-led, not patches. (07-09 meta-audit re-flagged "winners truncated by a blanket
+   override" — that was the already-fixed false news-HALT, mis-attributed to MRI; interim 9d03be1 + Build F address it.)
