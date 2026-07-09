@@ -7,6 +7,21 @@ NOT /wrap-up.
 > open items), (4) `logs/api_build_packages_2026-07-08.md` (the F/A/B/E build slate, scoped),
 > (5) `logs/tb_audit_log.md` (bug/patch log). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-07-09 wrap) — pick up here
+- **Build F API build: DONE → branch `claude/build-f-2026-07-08` (`ffc3a61`), STATUS: READY FOR REVIEW+MERGE.**
+  Implemented on OCI in an isolated worktree (live bot untouched, `main@02500cf`, active). Changed 5 code files
+  (news_monitor keyword→context, run_cycle venue-detection + `halt_eval`, broker clock helper, alerts CRITICAL,
+  trade_logger fields) + passed its gate. **NEXT ACTION: review that branch's diff, then merge to main → OCI
+  `git pull` + restart to deploy.** (Do NOT let OCI commit to main; merge from the Mac/GitHub.)
+- **Forever-6 = the NEXT API build** (design 100% locked in `logs/build_f_decision_2026-07-08.md`; launch it the
+  same isolated-worktree/branch way once Build F is merged).
+- **Quick fix queued (from 2026-07-08 audits):** `scan_to_html._fetch_options_data` — `cannot convert float NaN
+  to integer` (fired 10×; display-layer, fails-closed → not urgent). One-line NaN guard. NOTE: `scan_to_html.py`
+  also has a *rejected* Gro/GAI RC-3 item today — handle carefully.
+- **Audit note:** today's Gemini "signal/volume filtering CRITICAL" flag is a FALSE POSITIVE (it misread the
+  log-only VOLUME shadow — `score_without_vol` ≠ live score). The RIVN $0-P&L + EOD P&L drift flags = the known
+  fill-matching/P&L-attribution P0 (already listed below).
+
 ## Bot Status
 - **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`
   (local = GitHub = OCI, verify with `git rev-parse HEAD` + OCI ssh). paper=True. Account ~$2,782, kill switch clear.
