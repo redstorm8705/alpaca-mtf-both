@@ -140,12 +140,16 @@ All 4 = SHIP-WITH-GUARDRAILS (Thorp/Taleb: DO-NOT-SHIP if margin-funded). Load-b
      fat-finger bad print can't manufacture a fake −10% and trigger a real, permanent buy.
   7. **Exemption is from the kill-switch + halt-ENTRY-block ONLY — never from the cash floor or the CAP.**
      "Regardless" ≠ "regardless of available cash."
-- **SIZING FORK (unresolved — Rafael's call):** Sosnoff + Gro = SCALE UP (convex 0.5/1.0/2.0× at −7/−13/−20).
-  Thorp/Taleb + GAI = KEEP FLAT (1 share) — scaling up on a $2.8K account amplifies the falling-knife (min-1
-  already over-sizes). **Reconciliation both camps accept:** express "back up the truck harder" as **MORE
-  distinct trigger levels** (−7/−13/−20 each fire their own 1-share buy) under a FLAT per-trigger lot — you
-  deploy more in total on a deeper crash, but each buy is bounded, cash-funded, and daily-latched. This gives
-  Rafael's aggression WITHOUT the leverage-into-the-tail. **← recommend this synthesis.**
+- **SIZING FORK — RESOLVED (Rafael 2026-07-08): SCALE UP into deeper crashes (Gro/Sosnoff convex ladder).**
+  Bigger slice at −13 / −20 than at −7 (e.g. Sosnoff 0.5× / 1.0× / 2.0×·S, or Gro 3% / 4% / 5%). **CRITICAL
+  reconciliation that makes scale-up SAFE:** Thorp/Taleb's disaster model (scale-up → margin call) assumed
+  MARGIN funding. With **CASH-FUNDED-ONLY + the FIXED-RESERVE CAP** enforced, the ladder allocates *within*
+  a hard, pre-snapshotted ammunition budget — deeper crash = a larger share of the ALREADY-CAPPED reserve,
+  weighted toward the deepest level (preserves dry powder for −20, the max-edge point). You literally cannot
+  spend past the reserve → a −50% cascade cannot margin-call the account no matter how aggressive the ladder.
+  So: **scale-up is APPROVED, and its safety DEPENDS on cash-only + fixed-reserve cap being non-negotiable
+  co-requirements.** Implementer: the ladder multiplies the slice; the CAP + cash floor truncate any tranche
+  that would exceed remaining reserve/cash (truncate, then close the (name,day) latch).
 - **CAP NUMBER:** Gro/GAI 20% · Sosnoff 25–30% · Thorp/Taleb 40% of min-equity. Range 20–40% (Rafael said
   40–50%). With CASH-ONLY enforced, the CAP is a secondary belt (margin-call already impossible) — recommend
   ~30–40% of the fixed reserve.
