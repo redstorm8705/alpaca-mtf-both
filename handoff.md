@@ -1,72 +1,90 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-08 (autonomous scheduled session, evening) | NOT /wrap-up
+**Updated:** 2026-07-08 (evening, interactive) | **HANDOFF TO A NEW CLAUDE ACCOUNT** (Rafael ~87% weekly limit).
+NOT /wrap-up.
 
-> **READ FIRST:** Build F design is DONE, awaiting Rafael's confirmation —
-> `logs/pending_claude_session_2026-07-08.md` (5 plain-English yes/no questions). Build map:
-> `logs/api_build_packages_2026-07-08.md` (the F/A/B/E slate).
+> **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file, (2) `CLAUDE.md` (binding rules),
+> (3) `logs/build_f_decision_2026-07-08.md` (the ACTIVE work — Build F + Forever-Hold design, decisions +
+> open items), (4) `logs/api_build_packages_2026-07-08.md` (the F/A/B/E build slate, scoped),
+> (5) `logs/tb_audit_log.md` (bug/patch log). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
 ## Bot Status
-- **Running:** 4 services active on OCI (129.153.208.32). Git HEAD `9d03be1` (local = GitHub = OCI).
-- Account healed (~$2,782). Kill switch CLEAR. Holding QHM NVDA/GOOGL (both stopped) + intraday.
-- **Interactive-vs-API cost protocol is LIVE** (CLAUDE.md): interactive scopes/designs + runs board/Gro/GAI
-  on the DESIGN; API implements the pre-scoped diff + gates the DIFF + ships. Only Rafael changes it. Budget $20/mo.
+- **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`
+  (local = GitHub = OCI, verify with `git rev-parse HEAD` + OCI ssh). paper=True. Account ~$2,782, kill switch clear.
+- **SSH:** `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32`. Deploy = git single channel (Mac commit→push→
+  OCI `git pull --ff-only`+restart). NEVER rsync tracked files.
+- **Permissions:** project `.claude/settings.local.json` `defaultMode: bypassPermissions` (set 2026-07-08 so
+  scheduled/headless sessions don't stall on Bash approval). Backup: `settings.local.json.bak-20260708`.
+- **Cost protocol (CLAUDE.md, LIVE):** interactive scopes/designs + runs board/Gro/GAI on the DESIGN; API
+  (OCI headless) implements the pre-scoped diff + gates the DIFF + ships. Only Rafael changes it. Budget $20/mo.
 
-## Resolved this session (2026-07-08)
-- **INCIDENT #2 — false news-HALT mass-liquidation → INTERIM FIX SHIPPED (commit `9d03be1`, LIVE).**
-  A benign tariff QUESTION headline ("Can Trump cut off all trade with Spain?") matched the KEYWORDS_HALT
-  substring "national emergency" → `_safe_close_all(circuit_breaker=True)` sold the whole non-QHM book
-  (6 pos, ~-$26, 11s). Root: news HALT is a raw substring match + the price-confirmation gate was stripped
-  from the HALT path (`get_news_size_multiplier` price param is "Unused"). Interim: news HALT now blocks
-  NEW ENTRIES only, never liquidates. Full gate passed (board 3/3 + Gro + GAI; both final-pre-ship REJECTs
-  were misreads, withdrawn on counter-prompt). Logged: `logs/tb_audit_log.md`.
-- **INCIDENT #1 (2026-07-07 Alpaca desync)** — self-healed; account recovered. Its roadmap = Build A below.
-- **Cost:** morning health report retuned to **$0.044/run** (was $0.86) — OCI cron 6 AM PT →
-  `scripts/oci_report_runner.sh` (Haiku, clean context, pre-gathered facts) + `scripts/collect_health_facts.py`.
-  Zero local/Mac dependency.
+## SHIPPED this session (2026-07-08)
+- **F-INTERIM — commit `9d03be1`, LIVE + health-verified.** A false news-keyword HALT ("Can Trump cut off all
+  trade with Spain?" matched substring "national emergency") had `safe_close_all`-liquidated the whole non-QHM
+  book (6 pos, ~-$26, 11s). Interim: news-keyword HALT now BLOCKS NEW ENTRIES only, never liquidates. Full gate
+  passed (board 3/3 + Gro + GAI; both final-pre-ship REJECTs were misreads, withdrawn on counter-prompt).
+- **Cost fix:** morning health report retuned $0.86 → **$0.044/run** (`scripts/oci_report_runner.sh` Haiku +
+  `scripts/collect_health_facts.py`; OCI cron 6 AM PT). Zero Mac dependency.
+- **Scheduler root-cause fixed + validated:** crons failed on PERMISSIONS (no broad Bash allow → headless
+  session stalled → wedged the slot), not scheduling. Fixed via bypassPermissions; live-test-fired 2026-07-08
+  12:40 PT, wrote its marker cleanly. **In-thread pickup = CronCreate (not scheduled-tasks routines).**
 
-## NEXT SESSION ENTRY POINT — Build slate (Rafael 2026-07-08): F → A → B → E
-Full scope: `logs/api_build_packages_2026-07-08.md`.
-- **F (full HALT/mass-liquidation ARCHITECTURE REDESIGN) — DESIGN DONE, AWAITING RAFAEL.** Full read gate
-  satisfied this session: `events/news_monitor.py` (1828L, Explore subagent verbatim), `events/handlers.py`
-  (132L), `strategy/run_cycle.py` L980-1619 (re-confirmed). 10-pt audit + RC-1..8 in `tb_audit_log.md`. MODE 2
-  board (4 cold seats: Taleb, Harris, Simons, Peterffy+Kim) + Gro + GAI ALL independently reviewed the 4 design
-  forks — **6/6 UNANIMOUS, no disagreement**: (1) news signals must NEVER trigger mass liquidation, entries-only,
-  permanently; (2) any real "close everything" trigger must be built FRESH on real SPY-price-threshold and/or
-  Alpaca exchange-halt signal, never news — dead `PRICE_CONFIRM_THRESHOLD`/`price_change_pct` to be REMOVED not
-  resurrected; (3) retire keyword-driven HALT entirely (not fixable via better phrase-matching — this week's
-  false-positive AND false-negative are the same structural defect); keywords stay for CAUTION/MONITOR only;
-  (4) no NEW cross-strategy collision found, but flag: QHM guard in `safe_close_all()` is QHM-specific, not a
-  general ownership system — retired Movers' dormant untagged lots will be swept by any future real
-  circuit-breaker call same as main-bot lots; must be an explicit tested/documented decision before ship, not
-  silent inheritance. **Next action: Rafael answers the 5 questions in
-  `logs/pending_claude_session_2026-07-08.md`, then this becomes a pre-scoped API patch package.**
-- **A (Data-Integrity Safe Mode)** — scoped to the LINE this session (full reads done: run_cycle 1865,
-  orphan_manager 1624, risk_manager 802). Explained-P&L glitch validator → safe-mode → glitch-vs-real kill
-  tagging → orphan/trade gating. A4 = the explained-P&L guard the existing Guard A/B structurally miss.
-- **B (Orphan-stop root)** — scoped to the LINE (orphan_manager L714 + L1320; one confirming read left:
-  `portfolio_tracker.py:~965`). Cancel stops BEFORE record_exit in the external-close paths, fail-closed, + sweep.
-- **E (QHM accumulation)** — decisions LOCKED (never-sell; buy-more-on-dips; fixed-$ slice
-  `max(1, floor(0.03·equity ÷ price))`; 20% per-name ceiling). Full read of `quarterly_hold_manager.py`
-  (1954L) still owed — it's a rewrite of the entry/exit core.
+## ACTIVE WORK — Build F + Forever-Hold (design DONE, decisions in `logs/build_f_decision_2026-07-08.md`)
+**Build F (HALT/mass-liquidation redesign) — DECIDED (Rafael): "No reflex + halt observability."**
+News = context/display only (delete `get_news_size_multiplier` 0.0 branch); NO automated close-all re-added
+(liquidation authority stays with per-position stops + SPY-EXTREME entry-block + 7% kill-switch; `safe_close_all`
+= user-shutdown only); ADD Alpaca venue-state detection → block entries + CRITICAL alert + `halt_eval` event
+(never blind to a real halt). QHM exempt. Bucket-A-on-CB reversal → deferred to a board re-vote (moot w/o CB-liq).
+KEY FACT: the 7% kill-switch does NOT liquidate — only blocks entries; only live `safe_close_all` caller = user-shutdown.
 
-## Process (Rafael directive 2026-07-08 — binding)
-The board + Gro + GAI audit of the FULLY-MAPPED proposal is the ABSOLUTE LAST STEP before anything goes to
-the API — scope 100% mapped, accounting for cross-strategy implications, existing bugs, and hotspot files.
-The 2026-07-08 F-INTERIM ship validated this: the gate caught two misread-REJECTs and held the ship until
-resolved. Cold board is MANDATORY on every risk-path diff (Gro/GAI can miss what the board catches).
+**Forever-Hold Accumulation — Rafael mandate, SEPARATE TIER above QHM (design done, guardrails locked, some open).**
+- FOREVER-6: **TSLA, GOOGL, AMZN, CRWD, META, NVDA** — never sold (T1 = +1000%/10x → trim 25%; no other sell).
+  Own bucket/logic/rules; ring-fenced (other strategies never dip into forever-6 shares). Curated 3–10yr secular
+  names (NOT valuation-based), added manually over time; an extension of QHM. Crash/halt/CB/flash-crash = BUY.
+  EXEMPT from kill-switch + halt-entry-block.
+- **Board (Gro/GAI/Sosnoff/Thorp+Taleb) = SHIP-WITH-GUARDRAILS.** MANDATORY guards (see decision doc): (1)
+  CASH-FUNDED ONLY (settled cash ≥ cost, never margin — makes margin-call impossible; THE load-bearing guard),
+  (2) CAP on FIXED reserve / min(current,prior) equity not live equity, (3) per-name cap min(1sh, ~8% eq), (4)
+  one-shot latch per (symbol, date) + ≤3 buys/day, (5) marketable limit never market, (6) data-quality gate
+  before flash detector, (7) exemption from kill-switch/halt only — never from cash floor/CAP.
+- **OPEN (Rafael + board):** sizing fork (scale-up vs flat/"more-levels" synthesis — recommend more-levels);
+  CAP number (~30–40%); the EXPANDED crash-scenario board pass Rafael asked for (rules for flash/halt/CB/intraday
+  crash/weekly crash/bear market — the full sell-first/no-buyers set); full-read `quarterly_hold_manager.py`
+  (1954L); then final board+Gro+GAI on the combined proposal → **API build** (Rafael: ship to API to build).
 
-## Also still open (pre-incident, lower priority than the slate)
-- Options two-column page (board-designed 0DTE volatility/reversal column, NOT premium selling). Mockup:
-  `logs/mockups/options_scanner_mockup_2026-07-06.html`. SPX-source blocker unresolved (Alpaca has no SPX).
-- OPT-2 event-sourced replay (after M1, shipped `1952bef`). CLAUDE.md Open-Question loophole removal. RBLX phantom lot.
-- UX total redesign of the 5 HTML pages (Rafael directive, queued behind critical bugs).
+## BUILD SLATE (Rafael): F → (Forever-6) → A → B → E  — full scope in `logs/api_build_packages_2026-07-08.md`
+- **A — Data-Integrity Safe Mode** (2026-07-07 Alpaca-desync fix). Scoped to the LINE (full reads done:
+  run_cycle 1865, orphan_manager 1624, risk_manager 802). Explained-P&L glitch validator → safe-mode → glitch-vs-
+  real kill tagging → orphan/trade gating. Masked-loss seat MANDATORY (Scenario-7 test).
+- **B — Orphan-stop root.** Scoped to the LINE (orphan_manager L714 + L1320; one confirming read left:
+  portfolio_tracker.py:~965). Cancel stops BEFORE record_exit in external-close paths, fail-closed, + sweep.
+- **E — QHM accumulation** (never-sell + buy-on-dips + `max(1, floor(0.03·eq÷price))`, 20% cap). Full read of
+  quarterly_hold_manager.py (1954L) owed. **Note: Forever-6 supersedes/extends this — reconcile E with Forever-6.**
 
-## Hard Invariants (unchanged)
-- `paper=True` hardcoded in broker.py. SPY 5-min = sole entry gate. P&L from Alpaca fills only.
-- Board + Gro + GAI on EVERY fork BEFORE Rafael; final Gro+GAI pre-ship on the exact diff.
-- Risk-path safety: **a safety control must never mask a real loss** — keep the cold board on every risk-path diff.
+## OPEN ITEMS / BUGS / UNRESOLVED (as of 2026-07-08)
+- **P0 (from incidents, in the slate):** Build A (glitch safe-mode), Build B (orphan-stop naked-short root).
+- **Build F implementation** (decided, not built) + **Forever-6 implementation** (guardrailed; sizing/CAP + expanded
+  crash board owed) → then API build.
+- **Bucket-A-on-circuit-breaker reversal** — needs a fresh board vote (reverses Apr-8 ruling).
+- **RC-4 open sites:** portfolio_tracker.py L1200/L1753 (per tb_audit_log hotspot table) — verify.
+- **Main-bot false-drop root** (`record_exit` dropping a still-live position) — corrupts P&L; feeds the retired-Movers
+  adopt vector. Pre-existing P0 (see FUTURE ROADMAP LOG MOVERS-RETIRED).
+- **Cross-strategy audit** (strategies sharing Alpaca lots w/o ownership tags) — ongoing (roadmap 2026-06-30).
+- **autonomous_review.py pushes to main** — conflicts with git-single-channel; needs branch+PR redesign (roadmap 2026-07-03).
+- **Pre-incident:** Options two-column 0DTE page (SPX-source blocker — Alpaca has no SPX; mockup at
+  logs/mockups/options_scanner_mockup_2026-07-06.html); OPT-2 event-sourced replay; CLAUDE.md Open-Question
+  loophole removal; RBLX phantom lot; UX redesign of the 5 HTML pages; volume/16pt/delta/GEX/TSMOM shadow flips
+  (see CLAUDE.md SHADOW STRATEGY TRACKER + FUTURE ROADMAP LOG).
+- **Desktop scheduled-task `resume-build-f-2026-07-08`** — DISABLED (switched to in-thread CronCreate). Stray
+  in-thread cron jobs are session-only (die on session end).
 
-## References
-- Build map / slate: `logs/api_build_packages_2026-07-08.md`
-- Audit log: `logs/tb_audit_log.md`
-- Incident #1 forensics: `logs/incident_2026-07-07_alpaca_desync.json`; safe-mode spec: `logs/safe_mode_spec_2026-07-07.md`
+## Process / Invariants (binding — CLAUDE.md is authoritative)
+- Board + Gro + GAI on EVERY fork BEFORE Rafael; the board+Gro+GAI audit of the FULLY-MAPPED proposal is the
+  ABSOLUTE LAST STEP before API (account cross-strategy + existing bugs + hotspots). Final Gro+GAI pre-ship on the
+  exact diff (preship_gate enforces on commit). Cold board MANDATORY on every risk-path diff.
+- Safety: a control must NEVER mask a real loss. paper=True locked. SPY 5-min = sole entry gate. P&L from Alpaca fills only.
+
+## References (all committed to git for the handoff)
+- `logs/build_f_decision_2026-07-08.md` — Build F + Forever-Hold decisions + board results + open items (THE active doc)
+- `logs/api_build_packages_2026-07-08.md` — F/A/B/E build slate (scoped to the line)
+- `logs/tb_audit_log.md` — bug/patch log · `logs/incident_2026-07-07_alpaca_desync.json` — desync forensics
+- `logs/safe_mode_spec_2026-07-07.md` — Build A spec
