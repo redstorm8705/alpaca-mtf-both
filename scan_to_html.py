@@ -113,8 +113,8 @@ def _fetch_implied_range(symbol: str) -> "dict | None":
         nearest = future[0]
 
         chain = ticker.option_chain(nearest)
-        calls = chain.calls.copy()
-        puts  = chain.puts.copy()
+        calls = chain.calls.copy().fillna(0)
+        puts  = chain.puts.copy().fillna(0)
 
         # Guard: empty chain (zero-OI or freshly listed expiry) → .iloc[0] IndexError
         if calls.empty or puts.empty:
@@ -1061,8 +1061,8 @@ def _fetch_spy_0dte_data() -> "dict | None":
         nearest = future[0]
 
         chain = ticker.option_chain(nearest)
-        calls = chain.calls.copy()
-        puts  = chain.puts.copy()
+        calls = chain.calls.copy().fillna(0)
+        puts  = chain.puts.copy().fillna(0)
 
         if calls.empty or puts.empty:
             return None
