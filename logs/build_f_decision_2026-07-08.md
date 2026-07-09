@@ -159,7 +159,65 @@ All 4 = SHIP-WITH-GUARDRAILS (Thorp/Taleb: DO-NOT-SHIP if margin-funded). Load-b
 - **CROSS-STRATEGY (Thorp/Taleb):** register ALL 6 in the QHM never-sell registry — `get_quarterly_hold_symbols()`,
   the HOLE-2 stray-sell guard, and `_get_quarterly_notional_excl` (so intraday sizing reserves their notional).
   Verify the registry populates for all 6 at runtime (Audit-Efficacy-Not-Presence).
-- **STILL OWED before API:** (a) Rafael's sizing-fork decision (scale-up vs flat/more-levels) + CAP number;
+### FOREVER-HOLD — T2/T3 EXIT + MARGIN grounded in real drawdowns (2026-07-08)
+- **EXIT LADDER (Rafael decided):** trim **25% at +1000% (10x), another 25% at +2000% (20x)**, laddering up
+  — always keeping a shrinking "house-money" core. (Extends the single +1000% trim.)
+- **MARGIN — grounded in REAL worst drawdowns since 2000 (Rafael's ask):**
+  - **S&P 500 (drives the basket margin call) worst peak-to-trough since 2000:** GFC 2007-09 ≈ **−57%** (~17mo);
+    dot-com 2000-02 ≈ −49% (~2.5yr); COVID Feb-Mar 2020 ≈ −34% (~5wk, fastest); 2022 ≈ −25% (~10mo). **A −70%
+    S&P drawdown has NOT occurred since 2000** (GFC −57% is the worst).
+  - **BUT the forever-6 are individual high-beta tech names, which DO hit −66% to −95%:** 2022 alone — META
+    ≈ −76%, TSLA ≈ −73%, CRWD ≈ −70%, NVDA ≈ −66%, AMZN ≈ −56%; dot-com — AMZN ≈ −95%, Nasdaq ≈ −78%.
+    (Figures approximate.) So −70% is real at the SINGLE-NAME level, not the index level.
+  - **What drives forced liquidation = the BASKET decline** (single-name −77% on META = only ~−20% on a
+    6-name book). Worst realized 6-tech-name BASKET drawdown ≈ GFC −57% / 2022 tech ~−55-60%.
+  - **Margin math (risk seats): max safe loan = 0.75 × (1 − crashDepth) of forever-6 MV.**
+    → survive −57% (GFC, worst real basket): loan ≤ **~32% of MV** · survive −60% (buffer): ≤ **~30%** ·
+    survive −70% (worse than any real basket): ≤ 22.5% · survive −50% (COVID-ish deep): ≤ 37.5%.
+  - **Seats:** Thorp/Taleb — cash-only CAP 35% is cleanest, or bounded 33.3%-of-MV loan / CAP 30% survives −55.6%
+    (re-surface: 50%-of-MV is unsafe, breaches at −33%). GAI — 22.5%-of-MV survives −70%; 50%-of-MV = DO-NOT-SHIP.
+    Sosnoff — 25%-of-MV loan survives −67%; + the geometric-decay pacing model (below). All 4 = SHIP-WITH-GUARDRAILS
+    EXCEPT literal-50%-of-MV = DO-NOT-SHIP.
+  - **GROUNDED RECOMMENDATION:** **margin loan ≤ ~30% of forever-6 MV** (cash ≥ ~70% of each tranche) — survives
+    the WORST real basket drawdown since 2000 (GFC −57%) with a buffer, gives ~1.4× leverage (not cash-only), and
+    fails only a basket drop WORSE than 2008 (>−60%). That is the honest real-world answer to "when did −70% happen":
+    never at the index; so design to the worst real basket (−57%), not the hypothetical −70%. ← Rafael to lock the number.
+- **CADENCE (Sosnoff, for the bear-market pacing):** each buy = fixed % (0.20–0.25) of the **REMAINING** reserve
+  (geometric decay — mathematically never hits zero, always dry powder for the bottom) × a **convex depth ladder
+  1.0/1.6/2.5× at −7/−13/−20 (capped 2.5×)**, truncated by `min(remaining, CAP, funds)`. In a months-long bear:
+  buy once per name **per additional 5% SPY drawdown** (not per calendar day) once SPY >20% below its 90-day high —
+  paces the reserve across the whole bear by PRICE depth, not time. Per-scenario rules (flash/halt/CB/intraday/weekly/
+  bear/gap-open/sector/earnings-gap/VIX/no-bid) enumerated in the seat output. Two flagged forks: the −20 latch-upgrade
+  exception (conviction=take it, safety=strict per-day), and −30% single-name earnings-gap buy = permitted-but-escalated
+  for same-day human thesis check.
+
+### FOREVER-HOLD — FINAL LOCKED SPEC (Rafael 2026-07-08) — DESIGN COMPLETE
+- **Universe:** FOREVER-6 = TSLA, GOOGL, AMZN, CRWD, META, NVDA (curated, grows manually; 3–10yr secular; not
+  valuation-based). Ring-fenced never-sell tier ABOVE QHM; other strategies never touch forever-6 shares.
+- **MARGIN — LOCKED: loan ≤ 30% of forever-6 market value** (each tranche ≥ ~70% cash). Survives GFC −57%
+  (worst real basket drawdown since 2000) + buffer. Enforce via atomic pre-trade check on the BORROWED portion
+  (not buying_power). Protection depends on staying diversified across all 6 (a single-name −90% à la AMZN
+  dot-com strains it if concentrated).
+- **CAP (concentration belt) — 35% of the FIXED reserve** (snapshot at session open, frozen, decremented by
+  cost basis; never live equity). Board range was 30–40%; 35% leans to Rafael's aggressive preference within the
+  safe band. (Separate from the 30% leverage; implementer confirms the exact interaction at the gate.)
+- **BUY triggers:** crash / circuit-breaker (−7/−13/−20) / post-halt resumption / flash-crash / intraday /
+  weekly / bear. EXEMPT from the 7% kill-switch + halt entry-block (never from the CAP or funding floor).
+- **SIZING (LOCKED — scale up):** `tranche = min( deploy_frac(0.20–0.25) × REMAINING_reserve × depth_mult ,
+  remaining_reserve, CAP_headroom, funds )`. depth_mult convex ladder **1.0 / 1.6 / 2.5× at −7 / −13 / −20
+  (capped 2.5×)**. Geometric-decay base = never runs to zero, always dry powder for the bottom.
+- **BEAR-MARKET pacing:** once SPY >20% below its 90-day high, buy once per name **per additional 5% SPY
+  drawdown** (indexed to price depth, not calendar day) — paces the reserve across a months-long bear.
+- **EXIT (LOCKED):** trim 25% at +1000% (10x), another 25% at +2000% (20x); shrinking house-money core; else never sold.
+- **EXECUTION:** marketable limit `last × 1.01–1.02`, never market; one tranche per latch; no fill = no buy.
+- **DEBOUNCE:** one-shot latch per (symbol, calendar_date) + ≤3 forever-6 buys/day. Two flagged forks for the
+  implement/gate: (1) −20 latch-upgrade exception (conviction=allow one extra buy at −20 same day; safety=strict);
+  (2) −30% single-name earnings-gap buy = permitted-but-Slack-escalated for same-day human thesis check.
+- **CROSS-STRATEGY:** register ALL 6 in the QHM never-sell registry (get_quarterly_hold_symbols, HOLE-2 guard,
+  _get_quarterly_notional_excl); runtime-verify the registry populates for all 6 (Audit-Efficacy-Not-Presence).
+- **DATA-QUALITY gate runs BEFORE the flash detector** (reject `close < 0.5×prior` / zero-volume).
+
+- **STILL OWED before API:** (a) ~~margin/CAP~~ LOCKED above;
   (b) the EXPANDED crash-scenario board pass Rafael asked for (flash/halt/CB/intraday-crash/weekly-crash/bear-
   market rules for the full sell-first/no-buyers set); (c) full-read gate on quarterly_hold_manager.py (1954L)
   since forever-6 extends it; (d) final board+Gro+GAI on the fully-mapped combined proposal → API build.
