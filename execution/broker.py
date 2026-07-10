@@ -39,6 +39,25 @@ def get_short_blocked_symbols() -> set:
     return _short_blocked_symbols
 
 
+def _make_idem_id(tier: str, symbol: str, side: str) -> str:
+    """Tier-tagged idempotency client_order_id: {TIER2}-{symbol}-{s}-{epoch_ms}-{uuid8}.
+    Generated ONCE per order and reused across retries (Alpaca deduplicates double-fires).
+    The tier prefix lets fills be attributed to the owning strategy tier
+    (execution.ownership_guard.tier_of_coid parses it) for the Phase 0-a ownership layer.
+    Today every caller defaults to "intraday" except QHM (passes "qhm"). Fail-safe: an
+    unknown tier falls back to intraday rather than crashing order submission."""
+    import time as _t
+    from execution.ownership_guard import make_coid
+    _epoch = int(_t.time() * 1000)
+    _uniq = uuid.uuid4().hex[:8]
+    try:
+        return make_coid(tier, symbol, side, _epoch, _uniq)
+    except ValueError:
+        logger.warning("[%s] unknown tier %r for client_order_id — tagging intraday",
+                       symbol, tier)
+        return make_coid("intraday", symbol, side, _epoch, _uniq)
+
+
 def _get_trading_client() -> TradingClient:
     global _trading_client
     if _trading_client is None:
@@ -165,6 +184,7 @@ def submit_market_order(
     symbol: str,
     qty: int,
     side: str,          # "buy" or "sell"
+    tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
 ) -> object:
     """
     Submit a plain market order with retry (max 3 attempts, 1s / 2s / 4s backoff).
@@ -179,10 +199,9 @@ def submit_market_order(
     client     = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
     last_error = None
-    # Generate idempotency key once — reused on every retry so Alpaca deduplicates
-    # double-fires caused by network timeouts hitting the retry loop.
-    # UUID avoids same-second collisions for back-to-back orders of identical symbol/side/qty.
-    _idem_id   = f"mtf-{symbol}-{side}-{uuid.uuid4().hex[:12]}"
+    # Tier-tagged idempotency key, generated once — reused on every retry so Alpaca
+    # deduplicates double-fires caused by network timeouts hitting the retry loop.
+    _idem_id   = _make_idem_id(tier, symbol, side)
 
     for attempt in range(3):
         try:
@@ -242,6 +261,7 @@ def submit_limit_order(
     side: str,              # "buy" or "sell"
     limit_price: float,
     extended_hours: bool = False,
+    tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
 ) -> object:
     """
     Submit a DAY limit order. Used for overnight swing entries.
@@ -261,8 +281,8 @@ def submit_limit_order(
     # error where the original order may have actually been accepted.
     # _is_retryable() (used below) explicitly includes "timeout" and
     # "connection" as retryable, so this is a genuinely reachable
-    # ambiguous-success scenario, not theoretical.
-    _idem_id   = f"mtf-{symbol}-{side}-{uuid.uuid4().hex[:12]}"
+    # ambiguous-success scenario, not theoretical. Now tier-tagged.
+    _idem_id   = _make_idem_id(tier, symbol, side)
 
     order_data = LimitOrderRequest(
         symbol=symbol,
@@ -319,6 +339,7 @@ def submit_gtc_stop_order(
     qty: int,
     side: str,          # "sell" for long stops, "buy" for short stops
     stop_price: float,
+    tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
 ) -> object:
     """
     Submit a GTC stop-market order for overnight position protection.
@@ -343,6 +364,7 @@ def submit_gtc_stop_order(
         side=order_side,
         stop_price=round(stop_price, 2),
         time_in_force=TimeInForce.GTC,
+        client_order_id=_make_idem_id(tier, symbol, side),
     )
 
     try:
@@ -437,6 +459,7 @@ def submit_day_stop_order(
     qty: int,
     side: str,          # "sell" for long stops, "buy" for short stops
     stop_price: float,
+    tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
 ) -> object:
     """
     Submit a DAY stop-market order for RTH session protection.
@@ -459,6 +482,7 @@ def submit_day_stop_order(
         side=order_side,
         stop_price=round(stop_price, 2),
         time_in_force=TimeInForce.DAY,
+        client_order_id=_make_idem_id(tier, symbol, side),
     )
     try:
         order = client.submit_order(order_data)
@@ -529,7 +553,7 @@ def cancel_order(order_id: str) -> bool:
 
 # ── Position management ───────────────────────────────────────────────────────
 
-def partial_close_position(symbol: str, qty: int) -> bool:
+def partial_close_position(symbol: str, qty: int, tier: str = "intraday") -> bool:
     """
     Close a specific quantity of an open position (partial exit).
     Used for taking first-target profits while letting remainder run.
@@ -553,11 +577,13 @@ def partial_close_position(symbol: str, qty: int) -> bool:
             logger.warning(f"[{symbol}] No open position for partial close")  # type: ignore[unreachable]
             return False
         side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY  # type: ignore[union-attr]
+        _side_str = "sell" if pos.side == "long" else "buy"  # type: ignore[union-attr]
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,
+            client_order_id=_make_idem_id(tier, symbol, _side_str),
         )
         order = client.submit_order(order_data)
         logger.info(f"[{symbol}] Partial close: {qty} shares | Order ID: {order.id}")  # type: ignore[union-attr]

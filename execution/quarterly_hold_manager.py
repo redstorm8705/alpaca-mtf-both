@@ -273,7 +273,8 @@ class OrderDispatcher:
         limit_price: float,
         extended_hours: bool = False,
     ) -> object:
-        return broker.submit_limit_order(symbol, qty, side, limit_price, extended_hours)
+        return broker.submit_limit_order(
+            symbol, qty, side, limit_price, extended_hours, tier="qhm")
 
     def submit_gtc_stop(
         self,
@@ -283,7 +284,7 @@ class OrderDispatcher:
         side: str,
         stop_price: float,
     ) -> object:
-        return broker.submit_gtc_stop_order(symbol, qty, side, stop_price)
+        return broker.submit_gtc_stop_order(symbol, qty, side, stop_price, tier="qhm")
 
     def close(self, broker, symbol: str) -> bool:
         return broker.close_position(symbol)
