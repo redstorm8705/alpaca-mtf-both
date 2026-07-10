@@ -39,14 +39,57 @@ submit_* / partial_close / close_position callers live in: `strategy/run_cycle.p
 (via OrderDispatcher L256), `execution/orphan_manager.py`, `main.py`, `run_movers.py` (retired).
 Each passes its tier (intraday for run_cycle/entry/exit, qhm for QHM/OrderDispatcher).
 
+## entry_logic.py — EXACT CHANGES (FULL READ DONE via Explore: 1688 lines)
+- **REMOVE the registry entry-block: lines 437–440** verbatim:
+  `# QHM exclusion: skip intraday entries...` / `if symbol in get_quarterly_hold_symbols():` /
+  `_rc8_clear_buffers(symbol, "qhm-hold")` / `continue`. This is what blocks confluence from entering
+  ring-fenced names — deleting it un-blocks them (Rafael mandate).
+- **Import at L64 STAYS** (`from execution.quarterly_hold_manager import get_quarterly_hold_symbols`):
+  L406–410 CYCLE-SYNC-GUARD still calls it to exclude QHM from a tracker-open count. **BUT that
+  count-sync must become TIER-AWARE** under coexistence — intraday can now legitimately hold a QHM/F6
+  name, so excluding all QHM symbols from the intraday count is now wrong. Review L406–410.
+- **4 submit call sites (add tier param):** L676 `submit_market_order(...side=_exit_side)` — a #12c
+  opposite-signal EXIT = a REDUCING order → must route through the floor guard, not just be tagged
+  (tier=intraday); L1287 `submit_market_order` main intraday entry (tier=intraday); L1360
+  `submit_gtc_stop_order` overnight GTC stop (tier=intraday); L1675 `submit_limit_order` overnight DAY
+  limit (tier=intraday for Phase 0; swing tier deferred).
+- Two entry flows: `execute_entries()` L271 (intraday) + `_overnight_entry_check()` L1495 (swing —
+  deferred, tag intraday for Phase 0). Kelly sizing L1078–1136 intact. No `_get_quarterly_notional_excl`
+  call in this file (it lives in QHM/risk_manager — Phase 1 generalizes it there).
+
+## fill_helpers.py — (FULL READ DONE: 369 lines)
+Recovers fill PRICES (fetch_actual_fill_price, by symbol/side/time-bound) — does NOT read
+client_order_id, does NOT attribute to a tier. So **fill→tier attribution is NET-NEW** at the
+reconcile layer (portfolio_tracker), keyed on the client_order_id prefix. The `submitted_after=None`
+external-close path (L219–279) is exactly the "untagged external close" the P&L seat said must
+HALT+ALERT rather than silently attribute. (Also the FILL-UNVERIFIED→$0-P&L root — Build A adjacent.)
+
 ## STILL TO SCOPE (remaining Phase 0 reads before the exact diff + final gate)
-- FULL READ `execution/entry_logic.py` (1687L → Explore) — REMOVE the registry entry-block (Item 3);
-  tag intraday entries. (entry_logic reads get_quarterly_hold_symbols before the scan loop.)
-- FULL READ the fill→tier attribution loop (`execution/fill_helpers.py` 369L + the portfolio_tracker
-  fill-reconcile path) — attribute fills by client_order_id prefix; untagged→halt+alert.
+- FULL READ `execution/exit_logic.py` — **the critical one**: the main reducing-order paths (partial
+  exits, stops, full exits) that MUST route through `check_never_sell_floor()`. This is where the floor
+  guard actually protects. (entry_logic only had the one #12c exit at L676.)
+- FULL READ the fill-reconcile path in `execution/portfolio_tracker.py` — where fills land; add the
+  client_order_id→tier attribution + untagged-external-close halt+alert.
+- Other submit/close call sites: `strategy/run_cycle.py`, `execution/orphan_manager.py`,
+  `execution/quarterly_hold_manager.py` (OrderDispatcher L256, tier=qhm), `main.py` (launch-init hook +
+  close_all_positions/kill-switch floor-awareness).
 - Spec `ownership_guard.py` pseudocode → concrete (from the masked-loss + execution seat designs).
-- Launch-init: seed from get_all_positions(), existing GOOGL(1)/NVDA(1) → intraday, F6/QHM=0.
+- Launch-init: seed from get_all_positions(), existing GOOGL(1)/NVDA(1) → intraday, F6/QHM=0, run ONCE.
 - Then: static + cold-2nd-agent + impact + FINAL Gro+GAI on the exact Phase 0 diff → API build.
+
+## CALL-SITE CENSUS (broker submit/close/partial refs — each needs tier param; reducing orders also guard-routed)
+- `execution/exit_logic.py` — **2268 lines, 30 refs** (the critical file — main partial/stop/full exit
+  paths = the reducing orders the floor guard protects). Explore full-read next, with clean context.
+- `execution/orphan_manager.py` — 5 refs (external-close/stop-cancel paths; Build B adjacent).
+- `strategy/run_cycle.py` — 4 refs.
+- `main.py` — 6 refs (incl. kill-switch/close_all + shutdown safe_close_all — floor-awareness).
+- `execution/quarterly_hold_manager.py` — via OrderDispatcher (submit_limit/submit_gtc_stop/close), tier=qhm.
+Total Phase 0 order-path surface ≈ 45 call sites across 6+ files + 2 new modules (ownership_guard, ledger)
++ launch-init. This is a multi-step build — scope the rest with fresh context, then diff → gate → API.
+
+## SCOPING PROGRESS: broker.py ✅ · entry_logic.py ✅ · fill_helpers.py ✅
+## NEXT (fresh context): exit_logic.py (2268L Explore) → portfolio_tracker fill-reconcile →
+## orphan/run_cycle/main call sites → spec ownership_guard.py → launch-init → Phase-0 diff → FINAL gate → API build.
 
 ## ENFORCEMENT NOTE (Rafael-locked)
 Ring-fenced names are LONG-ONLY for share tiers (shorts→options program, separate). So the guard's

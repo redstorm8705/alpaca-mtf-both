@@ -37,10 +37,12 @@ NOT /wrap-up.
   tier-tagging + floor-guard chokepoint (`execution/ownership_guard.py`) + drift reconcile + launch init +
   `close_position` hard-disallow on multi-tier symbols. Validated with intraday+QHM; **also fixes the Movers/
   cross-strategy bug.** Then Phase 1 (per-tier FIFO P&L + synced stops), then Phase 2 (Forever-6 tier).
-  Line-scoping started: **broker.py FULLY READ + scoped** in `logs/phase0_ownership_scoping_2026-07-09.md`.
-  STILL TO SCOPE before the Phase-0 diff: full-read entry_logic.py (1687L, remove registry entry-block) +
-  the fill→tier attribution loop (fill_helpers.py + portfolio_tracker) + spec ownership_guard.py → then
-  static + cold-2nd + FINAL Gro+GAI on the exact Phase-0 diff → API build.
+  Line-scoping in progress → `logs/phase0_ownership_scoping_2026-07-09.md`. **SCOPED: broker.py (780L) +
+  entry_logic.py (1688L, remove registry block L437-440) + fill_helpers.py (369L).** Phase-0 order-path
+  surface ≈ **45 call sites across 6+ files** + 2 new modules (ownership_guard, ledger) + launch-init.
+  **NEXT (fresh context): exit_logic.py (2268L, 30 refs — the critical guard-routing file) → portfolio_tracker
+  fill-reconcile → orphan/run_cycle/main call sites → spec ownership_guard.py → launch-init → Phase-0 diff →
+  static + cold-2nd + FINAL Gro+GAI → API build.**
 - **TWO catastrophic modes the board designed against (do NOT regress):** (a) stale resting stop eats a
   protected share → synchronous cancel-replace on every tier-qty change; (b) floor recomputed from Alpaca's
   drifted net → floor is LEDGER-derived ONLY, drift→freeze-sells; (c) F6 trim reading Alpaca blended avg_entry
