@@ -77,6 +77,24 @@ HALT+ALERT rather than silently attribute. (Also the FILL-UNVERIFIED→$0-P&L ro
 - Launch-init: seed from get_all_positions(), existing GOOGL(1)/NVDA(1) → intraday, F6/QHM=0, run ONCE.
 - Then: static + cold-2nd-agent + impact + FINAL Gro+GAI on the exact Phase 0 diff → API build.
 
+## exit_logic.py — EXACT CHANGES (FULL READ DONE via Explore: 2269 lines) — THE CRITICAL GUARD FILE
+3 tier-agnostic top-level fns, all INTRADAY, inject `tier` + thread through every close/stop call:
+`check_partial_exits()` L185, `check_exits()` L1061, `_check_exits_extended_hours()` L2051.
+**~23 REDUCING-ORDER sites → must route through `check_never_sell_floor(symbol,"intraday",qty,side)`
+(qty-bound to intraday's OWN ledger qty AND the floor; reject if it would breach):**
+- Full closes (`close_position`): L343 (trail-stop), L1278 (overnight ATR), L1439 (thesis-inval),
+  L1547 (hard-stop), L1621 (target), L1878 (reversal).
+- Partial closes (`partial_close_position`): L297 (trail phase adv), L715 (tranche) → use new
+  `qty_bounded_partial_close(symbol,"intraday",qty)`.
+- EH limit closes (`submit_limit_order` reducing): L2190, L2226, L2257.
+- Stop re-protect (NOT reducing but need tier tag + correct qty): `submit_gtc_stop_order` L492, L876;
+  `submit_day_stop_order` L531, L913, L1487. + `cancel_order` L293/339/377/675/1481 (stop-replace flow).
+**QTY-VALUATION BUG ZONE (Phase 0 fixes this):** exits size off tracker `qty_orig` (L286, 637, 638);
+Alpaca qty only clamps DOWNWARD (L460, 846); NO per-tier validation → a shared-lot exit sized off
+tracker state could exceed intraday's own shares. Guard makes the tier's ledger qty the primary bound.
+**P&L path (Phase 1 per-tier attribution):** 23 `record_exit` + 1 `record_partial_exit`; 11
+`fetch_actual_fill_price`. Map captured in the Explore output (task a745b80a).
+
 ## CALL-SITE CENSUS (broker submit/close/partial refs — each needs tier param; reducing orders also guard-routed)
 - `execution/exit_logic.py` — **2268 lines, 30 refs** (the critical file — main partial/stop/full exit
   paths = the reducing orders the floor guard protects). Explore full-read next, with clean context.
