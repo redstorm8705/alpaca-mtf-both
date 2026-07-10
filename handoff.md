@@ -93,9 +93,17 @@ NOT /wrap-up.
   static + cold-2nd PASS (caught the TZ bug) + Gro + GAI APPROVE. eod files re-healed with PT-keys. So
   the LIVE pnl_today the bot writes each cycle is now Alpaca truth, not corrupt-then-heal. New eod fields:
   pnl_today_qhm / pnl_today_total / pnl_ledger_authoritative.
-- **STILL OWED (the last big build): per-strategy attribution + the ownership layer (P0-a, ~45 call
-  sites + never-sell-floor guard)** — `logs/phase0_combined_ownership_pnl_plan_2026-07-09.md`. This is
-  the one that makes per-tier P&L correct + ring-fences Forever-6; ships as its own gated build.
+- **P0-a ownership FOUNDATION — SHIPPED (commit `658933f`, unwired/zero-live-effect)**:
+  `execution/ownership_guard.py` — per-tier ledger + `check_never_sell_floor()` chokepoint (fails CLOSED;
+  floor ledger-derived only; ring-fenced=long-only; protected-tier self-exit nets vs effective_floor =
+  floor-own) + `make_coid`/`tier_of_coid` + `reconcile_drift` + `launch_init`. Full self-tests + cold-2nd
+  (caught QHM self-exit bug, fixed) + Gro + GAI + static clean.
+- **P0-a WIRING — remaining, STRICT ORDER (or it fails-closed & freezes sells):** (a) run `launch_init`
+  to seed the ledger from the current Alpaca book (all→intraday, F6/QHM=0); (b) add fill→tier attribution
+  (client_order_id prefix) so the ledger stays current each cycle; (c) per-cycle `reconcile_drift`; (d)
+  THEN route reducing-order paths (exit_logic 23 sites, broker close/partial → `qty_bounded_partial_close`)
+  through `check_never_sell_floor` + mandatory broker `tier` param; entry_logic tier-tag + remove L437-440
+  registry block. Each = own gated increment on live RTH. Scoping: `logs/phase0_*_2026-07-09.md`.
 
 ## Bot Status
 - **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`
