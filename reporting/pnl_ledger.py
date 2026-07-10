@@ -99,18 +99,26 @@ def fetch_all_fills() -> list[dict]:
     Rate-safe pagination via after_id with inter-page sleep + 429 backoff.
     """
     fills: list[dict] = []
-    after_id: str | None = None
-    while True:
+    # Alpaca activities pagination uses page_token (the last activity id of the
+    # current page), NOT after_id. after_id is IGNORED by /v2/account/activities,
+    # so it returned the same newest 100 fills every call -> len==100 forever ->
+    # INFINITE LOOP / hang on any account with >100 fills (confirmed live 2026-07-10:
+    # 367 fills hung the heal ~14min; page_token walks all 4 pages and terminates).
+    page_token: str | None = None
+    _max_pages = 200  # hard backstop against any future cursor regression
+    _pages = 0
+    while _pages < _max_pages:
         url = f"{_PAPER_BASE}/v2/account/activities/FILL?page_size=100"
-        if after_id:
-            url += f"&after_id={after_id}"
+        if page_token:
+            url += f"&page_token={page_token}"
         batch = _get_json(url)
         if not isinstance(batch, list) or not batch:
             break
         fills.extend(batch)
+        _pages += 1
         if len(batch) < 100:
             break
-        after_id = batch[-1].get("id")
+        page_token = batch[-1].get("id")
         time.sleep(0.5)
     fills.sort(key=lambda f: (f.get("transaction_time", ""), f.get("id", "")))
     return fills
@@ -132,11 +140,12 @@ def fetch_net_deposits() -> float:
     """
     total = 0.0
     for atype in ("CSD", "CSW"):  # cash deposit / withdrawal
-        after_id = None
-        while True:
+        page_token = None  # Alpaca activities cursor (NOT after_id — see fetch_all_fills)
+        _pages = 0
+        while _pages < 200:  # hard backstop against a cursor regression
             url = f"{_PAPER_BASE}/v2/account/activities/{atype}?page_size=100"
-            if after_id:
-                url += f"&after_id={after_id}"
+            if page_token:
+                url += f"&page_token={page_token}"
             try:
                 batch = _get_json(url)
             except Exception as e:  # non-fatal — funding activities may be absent
@@ -149,9 +158,10 @@ def fetch_net_deposits() -> float:
                     total += float(a.get("net_amount") or a.get("amount") or 0.0)
                 except (TypeError, ValueError):
                     pass
+            _pages += 1
             if len(batch) < 100:
                 break
-            after_id = batch[-1].get("id")
+            page_token = batch[-1].get("id")
             time.sleep(0.3)
     return round(total, 2)
 
