@@ -1,0 +1,33 @@
+{
+  "status": "pending_gro_gai",
+  "created": "2026-07-10",
+  "session_type": "nightly_autonomous",
+  "file": "scan_to_html.py",
+  "patch_file": "logs/pending_patch_2026-07-10_scan_to_html.patch",
+  "base_commit": "23efb24230b741e6102a058ecde361593c4df711",
+  "patched_sha256": "22c87525e15548dd94e1d91d1fbc240a7dbce33a6075dae1ed63566cd6315607",
+  "rth_chain": true,
+  "priority": "NON-URGENT",
+  "issue": "ValueError: cannot convert float NaN to integer — fires 10x per scan cycle in _fetch_spy_0dte_data._build_surface (display-only, fails-closed)",
+  "gate_results": {
+    "full_read": "COMPLETE — 2358 lines in 8 chunks",
+    "board_vote": "3/3 PASS — A (Strict Parser), B (Red Teamer), C (Quant Risk)",
+    "py_compile": "PASS",
+    "mypy": "PASS",
+    "ruff": "PASS",
+    "cold_second_agent": "PASS"
+  },
+  "prior_rejected_drafts": [
+    {
+      "file": "logs/pending_ds_gai_2026-07-08_rc3_scantohtml.json",
+      "status": "superseded",
+      "reason": "Malformed diff — wrong function name, introduced RC-2 violation (pd.read_csv CWD-relative path)"
+    },
+    {
+      "file": "logs/pending_ds_gai_2026-07-09_rc3_scantohtml.json",
+      "status": "superseded",
+      "reason": "Attempted yf.Ticker().options.fillna(0) on a list (AttributeError) — would introduce worse bug"
+    }
+  ],
+  "gro_gai_prompt": "You are auditing a one-line code fix for a Python trading bot's display-layer file (scan_to_html.py). This file generates HTML scan results and is called from run_cycle.py. The fix is display-only — it does NOT affect order submission, P&L recording, scoring, sizing, or any execution path.\n\n=== BUG ===\nFile: scan_to_html.py\nLine: 1098\nFunction: _fetch_spy_0dte_data()._build_surface() (nested function)\n\nCURRENT CODE (buggy):\n    oi = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0\n\nROOT CAUSE:\n_oi = row.get('openInterest', 0) returns numpy.float64(nan) from yfinance when OI data is missing. In numpy >= 2.0, numpy.float64 no longer subclasses Python's built-in float, so isinstance(numpy.float64(nan), float) returns False. This causes the condition to evaluate as:\n  1. if _oi → True (NaN is truthy)\n  2. isinstance(numpy_nan, float) → False\n  3. not (False and ...) → True\n  4. int(numpy.float64(nan)) → ValueError: cannot convert float NaN to integer\n\nThe ValueError is caught by try/except at line 1232 (fails-closed, returns None). Net effect: 0DTE tile shows 'No setup · neutral regime' instead of a real recommendation. Fires 10× per scan cycle.\n\n=== PROPOSED FIX (exact diff, one line changed) ===\n--- a/scan_to_html.py\n+++ b/scan_to_html.py\n@@ -1098 +1098 @@\n-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0\n+                oi   = int(_oi) if _oi and _oi == _oi else 0\n\n=== EXPLANATION ===\nThe fix uses the IEEE 754 NaN identity property: nan != nan is universally True for ALL NaN-bearing numeric types — Python float, numpy.float64, numpy.float32. So _oi == _oi returns False ONLY when _oi is NaN (of any numeric type). For all valid numbers (including 0 which short-circuits on 'if _oi'), the condition correctly calls int(_oi).\n\nLogic trace:\n- _oi = numpy.float64(nan): if _oi → True; _oi == _oi → False; else → 0 ✓\n- _oi = numpy.float64(500): if _oi → True; _oi == _oi → True; int(500.0) → 500 ✓\n- _oi = 0 or 0.0 or None: if _oi → False; else → 0 ✓\n- _oi = float('nan'): if _oi → True; _oi == _oi → False; else → 0 ✓\n\nNo new imports. One line changed. The math module is still imported at line 1026 and is used for other math operations in the same function — removing the math.isnan() call on line 1098 does not orphan the import.\n\n=== GATE RESULTS (pre-Gro/GAI) ===\n- Full Read: 2358 lines, all 8 chunks completed\n- Board 3/3 PASS: A (Strict Parser), B (Red Teamer), C (Quant Risk)\n- py_compile: PASS\n- mypy --warn-unreachable: PASS\n- ruff --select E,W,F,B: PASS\n- Cold second-agent: PASS (4/4: logic inversion, boundary, coverage, branches)\n\n=== YOUR TASK ===\nAudit this exact one-line diff. Evaluate:\n1. Is the IEEE 754 NaN identity trick (_oi == _oi) correct for all numeric NaN types that yfinance can return?\n2. Does removing isinstance/math.isnan introduce any regression for valid OI values?\n3. Is there any edge case where the fix fails (infinity, negative OI, string inputs, etc.)?\n4. Given this is display-only (no P&L or execution impact), is the fix safe to ship?\n\nReturn APPROVE or REJECT with specific technical findings."
+}

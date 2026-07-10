@@ -7659,3 +7659,70 @@ only), documented in the 10-point audit's "Grep-verified cross-references" point
 
 **GATE RESULT: 3-way alignment reached (board 3/3 + Gro APPROVE + GAI APPROVE, round 3). Proceeding to
 ship (commit + push branch only — no merge, no restart, per task scope).**
+
+
+---
+
+## scan_to_html.py — NaN Guard Fix — 2026-07-10 (Nightly Autonomous Agent)
+
+**File:** scan_to_html.py (2358 lines)
+**Issue:** ValueError: cannot convert float NaN to integer at line 1098 inside `_fetch_spy_0dte_data._build_surface()` — fires 10× per scan cycle, fails-closed (display-only impact)
+**RTH Chain:** YES — `run_cycle.py` imports `write_scan_html` from this file
+**Session type:** Nightly autonomous — DRAFT ONLY (Step 4b), original file NOT modified
+
+### 10-Point Audit Results
+
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis (py_compile, mypy, ruff) | PASS on patched version |
+| 2 | End-to-end trade path trace | write_scan_html → write_html → _fetch_spy_0dte_data → display only; no scoring/execution path |
+| 3 | Adversarial scenario testing | NaN (numpy.float64 and float), None, 0, valid int/float all traced correctly |
+| 4 | Full top-to-bottom read | COMPLETE — 2358 lines in 8 chunks |
+| 5 | Grep-verified cross-references | _fetch_spy_0dte_data called only from write_html; write_scan_html called from run_cycle.py |
+| 6 | Conflicting execution directions | None — display-only file, no execution state mutations |
+| 7 | Redundancy scan | math still used elsewhere in _fetch_spy_0dte_data; no dead import after fix |
+| 8 | State persistence | write_html uses tmp→replace (atomic); _save_dte_prev uses write_text (pre-existing, not in scope) |
+| 9 | Data source tier compliance | yfinance for SPY options (T4 — no T1/T2 equivalent for options chains) |
+| 10 | Timezone + logging compliance | PT timestamps throughout write_html; logger.warning on all non-trivial exceptions |
+
+### RC Class Results
+
+| RC | Class | Result |
+|----|-------|--------|
+| RC-1 | Naive datetime | PASS — datetime.now(ET) used; fromisoformat results replaced with tzinfo if naive |
+| RC-2 | CWD-relative path | PASS — Path(__file__).parent anchored; os.path.abspath(__file__) anchored |
+| RC-3 | Silent exception | PASS — all except blocks log debug or warning; no bare pass found |
+| RC-4 | Estimated exit price | N/A — display-only file, no record_exit calls |
+| RC-5 | Non-atomic write | PASS for HTML output (tmp→replace); _save_dte_prev uses write_text (pre-existing, not in scope) |
+| RC-6 | Wrong API field name | PASS — yfinance option_chain() column names are standard and stable |
+| RC-7 | Zero-share sizing | N/A — display-only file |
+| RC-8 | Unbounded scan buffer | N/A — display-only file |
+
+### Board Vote: 3/3 PASS
+- **A (Strict Parser):** PASS — IEEE 754 identity trick correct for all numeric NaN types
+- **B (Red Teamer):** PASS — all 8 attack vectors found no new failures
+- **C (Quant Risk):** PASS — display-only; oi=0 for NaN contracts is safer than no surface
+
+### Static Analysis (patched version)
+- py_compile: PASS
+- mypy --warn-unreachable --ignore-missing-imports: PASS (no issues found)
+- ruff check --select E,W,F,B: PASS (all checks passed)
+
+### Cold Second-Agent Logic Review: PASS (4/4)
+- Logic inversion: PASS
+- Boundary errors: PASS
+- Missing conditions: PASS
+- Branch completeness: PASS
+
+### Proposed Fix (line 1098 only)
+```diff
+-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0
++                oi   = int(_oi) if _oi and _oi == _oi else 0
+```
+
+### Draft files committed
+- `logs/pending_patch_2026-07-10_scan_to_html.patch` — exact diff
+- `logs/pending_gro_gai_2026-07-10_scan_to_html.json` — Gro/GAI prompt (status: pending_gro_gai)
+
+### Next action (interactive session)
+Apply `logs/pending_patch_2026-07-10_scan_to_html.patch` after running final Gro/GAI audit (FINAL PRE-SHIP rule). One-line edit to scan_to_html.py line 1098.

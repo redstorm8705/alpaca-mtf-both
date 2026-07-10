@@ -1,0 +1,59 @@
+--- a/scan_to_html.py
++++ b/scan_to_html.py
+@@ -1095,7 +1095,7 @@ def _fetch_spy_0dte_data() -> "dict | None":
+                 K    = float(row["strike"])
+                 iv   = float(row.get("impliedVolatility", 0) or 0)
+                 _oi  = row.get("openInterest", 0)
+-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0
++                oi   = int(_oi) if _oi and _oi == _oi else 0
+                 bid  = float(row.get("bid", 0) or 0)
+                 ask  = float(row.get("ask", 0) or 0)
+                 last = float(row.get("lastPrice", 0) or 0)
+
+# ═══════════════════════════════════════════════════════════
+# PATCH METADATA — generated 2026-07-10 by nightly autonomous agent
+# ═══════════════════════════════════════════════════════════
+# file:            scan_to_html.py
+# line:            1098
+# function:        _fetch_spy_0dte_data._build_surface (nested function)
+# base_commit:     23efb24230b741e6102a058ecde361593c4df711
+# patched_sha256:  22c87525e15548dd94e1d91d1fbc240a7dbce33a6075dae1ed63566cd6315607
+# priority:        NON-URGENT (display-only, fails-closed on crash)
+# rth_chain:       YES (run_cycle.py imports write_scan_html — Step 4b draft-only)
+#
+# BUG:
+#   _oi = row.get("openInterest", 0) returns numpy.float64(nan) from yfinance
+#   when OI data is missing.  The guard isinstance(_oi, float) returns False
+#   in numpy >= 2.0 (numpy.float64 no longer subclasses Python float), so
+#   int(numpy.float64(nan)) is called → ValueError: cannot convert float NaN
+#   to integer.  Fired 10× per scan.  Caught by outer except at line 1232
+#   (fails-closed, returns None → 0DTE tile shows "no rec").
+#
+# FIX:
+#   Replace type-sensitive isinstance guard with IEEE 754 NaN identity check:
+#   `_oi == _oi` is False ONLY for NaN of any numeric type (Python float,
+#   numpy.float64, numpy.float32, etc.).  No imports added.  One line changed.
+#
+# GATE RESULTS:
+#   Full Read Gate:     COMPLETE — 2358 lines in 8 chunks declared
+#   10-Point Audit:     COMPLETE — all 10 points checked, results in tb_audit_log.md
+#   RC-1 through RC-8:  ALL PASS — no violations
+#   Board vote (3/3):   A (Strict Parser) PASS, B (Red Teamer) PASS, C (Quant Risk) PASS
+#   py_compile:         PASS
+#   mypy:               PASS (no issues found)
+#   ruff E,W,F,B:       PASS (all checks passed)
+#   Cold 2nd agent:     PASS (4/4 checks: logic, boundary, coverage, branches)
+#   Gro/GAI:            PENDING (this file is the draft — awaiting Mac session audit)
+#
+# PRIOR REJECTED DRAFTS:
+#   2026-07-08 pending_ds_gai: SUPERSEDED — malformed diff, wrong function name,
+#     introduced RC-2 violation (pd.read_csv('options_data.csv'))
+#   2026-07-09 pending_ds_gai: SUPERSEDED — attempted yf.Ticker().options.fillna(0)
+#     on a list object (AttributeError), Board B / Gro / GAI all REJECT
+#
+# APPLY INSTRUCTIONS (when Rafael approves in interactive session):
+#   1. Interactive session reads this file
+#   2. Final Gro + GAI audit on this exact diff (FINAL PRE-SHIP rule)
+#   3. Edit scan_to_html.py line 1098: replace the -line with the +line above
+#   4. git add scan_to_html.py && git commit && git push
+#   5. OCI: git pull --ff-only && restart
