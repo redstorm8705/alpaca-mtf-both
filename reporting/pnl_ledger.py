@@ -145,6 +145,90 @@ def fetch_all_fills() -> list[dict]:
     return fills
 
 
+def _bump_iso_ms(ts: str) -> str | None:
+    """Return `ts` (UTC ISO-8601) advanced by 1ms, so it can be used as an INCLUSIVE
+    `until` bound against Alpaca's strictly-before (exclusive) `until` — 'before T+1ms'
+    includes every order at exactly T. Returns None if unparseable (caller stops)."""
+    try:
+        from datetime import timedelta
+        _t = datetime.fromisoformat(ts.replace("Z", "+00:00")) + timedelta(milliseconds=1)
+        # Emit RFC3339 'Z' form — NOT isoformat()'s '+00:00': a literal '+' in the URL
+        # query decodes to a space and Alpaca rejects it (HTTP 422). 'Z' has no '+'.
+        return _t.isoformat().replace("+00:00", "Z")
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def fetch_all_orders() -> list[dict]:
+    """
+    All orders from account inception (status=all), for the ownership tier-attribution
+    JOIN. Alpaca FILL activities do NOT carry client_order_id — only order_id — but the
+    ORDER object carries client_order_id and `fill.order_id == order.id` (verified live
+    2026-07-10). So per-tier attribution requires joining fills to orders by that id.
+
+    Pagination = OVERLAP-AND-DEDUP (cold-2nd 2026-07-10): Alpaca `until` is exclusive
+    (strictly-before created_at). A naive `until = oldest_created_at` would STRAND any
+    same-timestamp tie-group split across the 500-row page cutoff (the next request
+    excludes all orders at that exact timestamp, and a dedup set cannot recover an order
+    that was never returned). Instead we advance `until` to oldest+1ms (INCLUSIVE of the
+    boundary ts) so the tie-group is re-fetched and deduped via `_seen` — never dropped.
+    The pathological >500-orders-at-one-identical-timestamp case (no created_at cursor
+    can page past it) is SURFACED (CRITICAL), never silently truncated.
+    """
+    orders: list[dict] = []
+    until: str | None = None
+    _max_pages = 400  # hard backstop against a cursor regression
+    _pages = 0
+    _seen: set = set()  # order ids already collected (dedupe the intentional overlap)
+    while _pages < _max_pages:
+        url = (f"{_PAPER_BASE}/v2/orders?status=all&limit=500&direction=desc"
+               "&nested=false")
+        if until:
+            url += f"&until={until}"
+        batch = _get_json(url)
+        if not isinstance(batch, list):
+            # 200 with a non-list body is unexpected — do NOT treat as end-of-data
+            # (that would silently truncate the history). Surface and stop.
+            logger.critical("fetch_all_orders: non-list response at until=%s — order "
+                            "history may be INCOMPLETE: %r", until, str(batch)[:200])
+            break
+        if not batch:
+            break  # genuine end of data
+        _new = [o for o in batch if o.get("id") not in _seen]
+        for o in _new:
+            _seen.add(o.get("id"))
+        orders.extend(_new)
+        _pages += 1
+        if len(batch) < 500:
+            break  # last (partial) page — no more data
+        _oldest = batch[-1].get("created_at")
+        _next = _bump_iso_ms(_oldest) if _oldest else None
+        if not _next:
+            logger.critical("fetch_all_orders: unparseable boundary created_at %r — "
+                            "stopping; order history may be INCOMPLETE", _oldest)
+            break
+        if not _new:
+            # Full page but ZERO new after dedup → >500 orders share one identical
+            # created_at; a timestamp cursor cannot advance past it. Surface, don't drop.
+            logger.critical("fetch_all_orders: full page, 0 new at until=%s — >500 "
+                            "orders at one timestamp; history may be INCOMPLETE", until)
+            break
+        until = _next
+        time.sleep(0.3)
+    return orders
+
+
+def build_coid_map(orders: list[dict]) -> dict:
+    """{order_id: client_order_id} for the fill→order→tier attribution join. Skips
+    orders missing an id; a missing client_order_id maps to None (→ untagged→intraday)."""
+    out: dict = {}
+    for o in (orders or []):
+        oid = o.get("id")
+        if oid:
+            out[oid] = o.get("client_order_id")
+    return out
+
+
 def fetch_account() -> dict:
     return _get_json(f"{_PAPER_BASE}/v2/account")
 
