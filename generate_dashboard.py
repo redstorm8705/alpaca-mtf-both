@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from reporting.metrics import compute_lifetime_stats
+from reporting.metrics import compute_lifetime_stats, _net_deposits
 from ui_tokens import LIVE_CLOCK_HTML
 
 # Load .env explicitly so API keys are available whether this module is
@@ -373,40 +373,20 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             _lt_e,
         )
         _lt = {}
-    all_pnl    = _lt.get("total_pnl", round(float(equity) - 2500.0, 2))
+    # all_pnl = TOTAL account P&L (equity - net_deposits), computed live by
+    # compute_lifetime_stats (metrics._net_deposits). Always current from live equity.
+    # Last-resort fallback (only if compute_lifetime_stats raised → _lt={}) uses the
+    # SAME net_deposits basis — never the old equity-2500 hardcode.
+    all_pnl    = _lt.get("total_pnl", round(float(equity) - _net_deposits(), 2))
     all_wr     = _lt.get("win_rate", 0.0)
     all_trades = _lt.get("total_trades", 0)
 
-    # S47e: Write lifetime P&L cache so monthly_review.py reads current data.
-    # Only write when total_pnl is not None — prevents poison writes when
-    # compute_lifetime_stats raises and returns {}. Zero P&L (0.0) correctly
-    # persists (0.0 is not None → True). bool({}) == False guards empty dict.
-    _total_pnl_val = _lt.get("total_pnl") if _lt else None
-    if _lt and _total_pnl_val is not None:
-        try:
-            _lt_cache_path = LOG_DIR / "lifetime_pnl_cache.json"
-            _lt_tmp = _lt_cache_path.with_suffix(".tmp")
-            _lt_tmp.write_text(
-                json.dumps({
-                    "total_pnl":    round(float(_total_pnl_val), 4),
-                    "win_rate":     round(float(_lt.get("win_rate", 0.0)), 2),
-                    "total_trades": int(_lt.get("total_trades", 0)),
-                    "ts":           datetime.now(ET).isoformat(),
-                    "type":         "realized_eod",  # DS S52: consumers distinguish from prior equity-based cache
-                }, indent=2),
-                encoding="utf-8",
-            )
-            _lt_tmp.replace(_lt_cache_path)
-            logger.info(
-                "_build_html: lifetime_pnl_cache written — total_pnl=%.4f",
-                _total_pnl_val,
-            )
-        except Exception as _lt_cache_e:
-            logger.warning(
-                "_build_html: lifetime_pnl_cache write failed"
-                " — monthly_review.py will use stale/compute fallback: %s",
-                _lt_cache_e,
-            )
+    # NOTE: this module NO LONGER writes lifetime_pnl_cache.json (board 4-0 + Gro + GAI,
+    # 2026-07-10). reporting.pnl_ledger.heal_history is now the SOLE authoritative writer
+    # (TOTAL semantic + net_deposits + realized/unrealized components), eliminating the
+    # dual-writer 'which cron won' ~$13 swing. The dashboard READS the live authoritative
+    # total (equity - net_deposits) via compute_lifetime_stats; monthly_review reads the
+    # cache. One writer, one meaning.
 
     # Unrealized P&L: from Alpaca's live open position data.
     # Filtered to symbols the bot has open so re-entries aren't double-counted.

@@ -13,9 +13,26 @@ logger = logging.getLogger(__name__)
 _BASE = Path(__file__).resolve().parent.parent   # project root
 _LOGS = _BASE / "logs"
 
-# Paper account starting equity — used to compute authoritative lifetime P&L.
-# Change only if the account was reset or reseeded.
+# Paper account starting equity — the FALLBACK basis before the authoritative
+# ledger cache has written the real net_deposits. Change only if reset/reseeded.
 INITIAL_PAPER_EQUITY = 2500.0
+
+
+def _net_deposits() -> float:
+    """Basis for TOTAL account P&L (= equity - net_deposits). Reads net_deposits from
+    the authoritative ledger cache (sole writer: pnl_ledger.heal_history); falls back to
+    INITIAL_PAPER_EQUITY before the first heal has written it. Replaces the equity-2500
+    hardcode, which would show a phantom gain the moment any real deposit/withdrawal
+    lands (board 4-0 + Gro + GAI, 2026-07-10)."""
+    try:
+        cache = json.loads(
+            (_LOGS / "lifetime_pnl_cache.json").read_text(encoding="utf-8"))
+        nd = cache.get("net_deposits")
+        if nd is not None:
+            return float(nd)
+    except Exception as e:  # RC-3: logged, not swallowed (missing cache = normal)
+        logger.debug("_net_deposits: cache read failed, using INITIAL: %s", e)
+    return INITIAL_PAPER_EQUITY
 
 
 def _fetch_alpaca_equity() -> float | None:
@@ -141,8 +158,8 @@ def compute_lifetime_stats(
 ) -> dict[str, Any]:
     """
     Lifetime stats across ALL eod files.
-    total_pnl: Alpaca-authoritative (equity - INITIAL_PAPER_EQUITY) when API available.
-    Fallback: sum of alpaca_pnl/pnl_today across EOD files.
+    total_pnl: Alpaca-authoritative TOTAL account P&L (equity - net_deposits) when the
+    API is available. Fallback: sum of alpaca_pnl/pnl_today across EOD files.
     equity: if provided (e.g. from generate_dashboard.py which already fetched it),
             skips the Alpaca API call. Pass None to fetch from Alpaca directly.
     skip_fetch: if True and equity is None, skip the Alpaca API call entirely
@@ -157,7 +174,7 @@ def compute_lifetime_stats(
     else:
         _equity = _fetch_alpaca_equity()
     _alpaca_pnl = (
-        round(_equity - INITIAL_PAPER_EQUITY, 2) if _equity is not None else None
+        round(_equity - _net_deposits(), 2) if _equity is not None else None
     )
 
     eod_paths = sorted(_LOGS.glob("eod_????-??-??.json"))

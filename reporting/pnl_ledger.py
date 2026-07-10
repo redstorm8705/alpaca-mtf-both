@@ -586,7 +586,17 @@ def heal_history(dry_run: bool = True) -> dict:
                     cache = json.loads(cache_path.read_text())
                 except Exception:
                     cache = {}
-            cache["total_pnl"] = ledger["lifetime"]
+            # SOLE authoritative writer (board 4-0 + Gro + GAI, 2026-07-10). total_pnl
+            # is the TOTAL account P&L = equity - net_deposits (Alpaca ground truth,
+            # realized + unrealized) — NOT realized-only. Only reached when the
+            # invariant holds (fail-closed above), so equity-net_deposits reconciles to
+            # realized+unrealized. Components stored explicitly so consumers never
+            # re-derive a total. Fixes the dual-writer 'which cron won' ~$13 swing and
+            # the equity-2500 hardcode (net_deposits is the real basis).
+            cache["total_pnl"] = round(ledger["equity"] - ledger["net_deposits"], 2)
+            cache["realized_lifetime"] = ledger["lifetime"]
+            cache["unrealized"] = ledger["unrealized"]
+            cache["net_deposits"] = ledger["net_deposits"]
             cache["total_pnl_intraday"] = ledger["lifetime_intraday"]
             cache["total_pnl_qhm"] = ledger["lifetime_qhm"]
             cache["ts"] = now_iso
