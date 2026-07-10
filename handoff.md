@@ -86,10 +86,16 @@ NOT /wrap-up.
   (post-close, both DST; idempotent/fail-closed/singleton). Dashboard regenerates from healed files.
   **TRUE LIFETIME REALIZED = +$282.88** (account UP ~$288 since inception; the losses were mostly
   corrupt reporting + the 07-08 false-HALT day). NOTE: crontab is NOT in git — re-add on host rebuild.
-- **STILL OWED (the big builds, not one-nightable):** (a) LIVE intraday P&L number should READ from
-  pnl_ledger, not the bot's own computation (P0-b — bot still computes today's number until the post-
-  close heal); (b) per-strategy attribution + the ownership layer (P0-a, ~45 call sites) — see
-  `logs/phase0_combined_ownership_pnl_plan_2026-07-09.md`.
+- **P0-b LIVE P&L authoritative — SHIPPED (commit `280cdec`, live)**: `portfolio_tracker.write_eod_summary`
+  now sources `pnl_today` from `pnl_ledger.build_ledger()` (authoritative Alpaca-FIFO), invariant-gated
+  ($5 tol), PT-keyed, A-4-gap-guarded, dual-compute fallback on any fail. Also fixed `pnl_ledger` to key
+  per_day by PT date (was UTC → AH/overnight fills mis-bucketed; commit `1175596`). Gate: full read +
+  static + cold-2nd PASS (caught the TZ bug) + Gro + GAI APPROVE. eod files re-healed with PT-keys. So
+  the LIVE pnl_today the bot writes each cycle is now Alpaca truth, not corrupt-then-heal. New eod fields:
+  pnl_today_qhm / pnl_today_total / pnl_ledger_authoritative.
+- **STILL OWED (the last big build): per-strategy attribution + the ownership layer (P0-a, ~45 call
+  sites + never-sell-floor guard)** — `logs/phase0_combined_ownership_pnl_plan_2026-07-09.md`. This is
+  the one that makes per-tier P&L correct + ring-fences Forever-6; ships as its own gated build.
 
 ## Bot Status
 - **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`
