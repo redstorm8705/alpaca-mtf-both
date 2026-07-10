@@ -75,6 +75,22 @@ NOT /wrap-up.
   misreads the log-only volume shadow — verify + rename). ALPHA reviews: exit R:R, high-score≠profit, MRI data.
   Full prioritized where-to-continue in the rollup.
 
+## ⚡ 2026-07-10 SHIPPED (P&L fixes — LIVE)
+- **Kill-switch phantom-proof** (commit `24c542a`, live): drop corrupt daily_pnl; measure = Alpaca
+  equity delta − QHM unrealized (position objects, no fill-matching), fail-safe to account-level.
+  Fixes the 07-07 false −73.86% trip. Board(masked-loss+reliability)+Gro+GAI, marker 79a4c2c8.
+- **pnl_ledger pagination fix** (commit `e1e7416`, live): Alpaca activities use page_token NOT after_id
+  (after_id ignored → infinite loop → 14-min hang on 367 fills — the "stayed stuck" issue). Now 3.7s.
+- **P&L heal APPLIED + cron**: `python3 -m reporting.pnl_ledger --heal-apply` healed 51 eod days to true
+  Alpaca-FIFO (7/02: −251.12→+41.08); invariant ok drift $0.65. **OCI cron `30 20,21,22 * * 1-5`**
+  (post-close, both DST; idempotent/fail-closed/singleton). Dashboard regenerates from healed files.
+  **TRUE LIFETIME REALIZED = +$282.88** (account UP ~$288 since inception; the losses were mostly
+  corrupt reporting + the 07-08 false-HALT day). NOTE: crontab is NOT in git — re-add on host rebuild.
+- **STILL OWED (the big builds, not one-nightable):** (a) LIVE intraday P&L number should READ from
+  pnl_ledger, not the bot's own computation (P0-b — bot still computes today's number until the post-
+  close heal); (b) per-strategy attribution + the ownership layer (P0-a, ~45 call sites) — see
+  `logs/phase0_combined_ownership_pnl_plan_2026-07-09.md`.
+
 ## Bot Status
 - **Running:** 4 services active on OCI 129.153.208.32 (mtf-bot, mtf-writer, mtf-http, nginx). Git HEAD `9d03be1`
   (local = GitHub = OCI, verify with `git rev-parse HEAD` + OCI ssh). paper=True. Account ~$2,782, kill switch clear.
