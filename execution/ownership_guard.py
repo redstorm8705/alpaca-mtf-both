@@ -286,11 +286,12 @@ def _fill_time_key(f: dict) -> str:
     return str(t)
 
 
-def sync_ledger(fills: list, positions: list) -> dict:
+def sync_ledger(fills: list, positions: list,
+                coid_by_order_id: dict | None = None) -> dict:
     """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
     authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
-    replaying the FULL Alpaca fill history, attributing each fill to its
-    client_order_id tier, then reconciling per-symbol against live Alpaca positions.
+    replaying the FULL Alpaca fill history, attributing each fill to its tier, then
+    reconciling per-symbol against live Alpaca positions.
 
     NEVER-SHRINK-A-PROTECTED-FLOOR GUARD (why this is safe as a heal tool): if the
     rebuilt ledger would REDUCE any protected-tier (qhm/forever6) qty for any symbol
@@ -300,10 +301,16 @@ def sync_ledger(fills: list, positions: list) -> dict:
     thus never silently shrunk by a replay (the locked invariant). An INCREASE (0→real,
     or seeding a new protected lot) is allowed; only a decrease aborts.
 
-    Attribution: a fill's tier = its client_order_id prefix (tier_of_coid). UNTAGGED
-    fills attribute to INTRADAY — correct for the pre-Phase-0 legacy book; a
+    Attribution (RC-6 JOIN): Alpaca FILL activities do NOT carry client_order_id —
+    only order_id — so a fill's tier is resolved via the order_id→client_order_id join.
+    Pass `coid_by_order_id` = {order_id: client_order_id} (from
+    reporting.pnl_ledger.build_coid_map(fetch_all_orders())); tier =
+    tier_of_coid(coid_by_order_id[fill.order_id]). Falls back to fill['client_order_id']
+    when the map is absent or lacks the order_id (e.g. pre-joined fills / tests).
+    UNTAGGED fills attribute to INTRADAY — correct for the pre-Phase-0 legacy book; a
     post-launch untagged fill (external/manual trade) is quarantined by the incremental
-    engine, not here.
+    engine, not here. NOTE: without `coid_by_order_id`, raw Alpaca fills have no
+    client_order_id → everything no-ops to intraday (safe, but not real attribution).
 
     Per tier, net qty = sum(buy/cover) - sum(sell/short); avg_cost is the FIFO-weighted
     average of the tier's remaining open long lots. Fills are sorted chronologically
@@ -322,7 +329,18 @@ def sync_ledger(fills: list, positions: list) -> dict:
             continue
         if not sym or q <= 0:
             continue
-        tier = tier_of_coid(f.get("client_order_id")) or "intraday"
+        _oid = f.get("order_id")
+        if coid_by_order_id is not None and _oid in coid_by_order_id:
+            # AUTHORITATIVE join: the map's value for this order_id is final — even a
+            # mapped None (a real order with no client_order_id) means "confirmed
+            # untagged" → intraday. Must NOT fall through to the fill's own coid here,
+            # or an authoritative-untagged order would wrongly inherit a stale coid.
+            _coid = coid_by_order_id[_oid]
+        else:
+            # No map, or this order_id was not joined → fall back to the fill's own coid
+            # (pre-joined fills / tests). Raw Alpaca fills carry none → intraday.
+            _coid = f.get("client_order_id")
+        tier = tier_of_coid(_coid) or "intraday"
         tq = tiers_qty.setdefault(sym, {})
         tq[tier] = tq.get(tier, 0.0) + (q if side in ("buy", "buy_to_cover") else -q)
         # FIFO long-lot tracking for avg_cost (buys add lots; sells consume oldest).
