@@ -275,6 +275,139 @@ def reconcile_drift(alpaca_positions: list) -> dict:
     return drifted
 
 
+# ── Heal / audit tool — full replay, refuse to shrink a protected floor ────────
+def _fill_time_key(f: dict) -> str:
+    """Sort key for a fill — Alpaca activities carry `transaction_time` (ISO-8601,
+    lexicographically sortable). Missing/unknown sorts last so a malformed fill can
+    never jump ahead of a real, timestamped one. Never raises."""
+    t = f.get("transaction_time") or f.get("filled_at") or f.get("timestamp")
+    if not t:                    # None / "" / absent → sort LAST
+        return "~"               # "~" (0x7E) > any digit or 'T' lexicographically
+    return str(t)
+
+
+def sync_ledger(fills: list, positions: list) -> dict:
+    """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
+    authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
+    replaying the FULL Alpaca fill history, attributing each fill to its
+    client_order_id tier, then reconciling per-symbol against live Alpaca positions.
+
+    NEVER-SHRINK-A-PROTECTED-FLOOR GUARD (why this is safe as a heal tool): if the
+    rebuilt ledger would REDUCE any protected-tier (qhm/forever6) qty for any symbol
+    vs the CURRENT persisted ledger, fills establishing the floor have aged out of
+    Alpaca's retrievable window — a truncated replay. The rebuild is ABORTED: nothing
+    written, a CRITICAL alert fires, caller gets {"healed": False, ...}. The floor is
+    thus never silently shrunk by a replay (the locked invariant). An INCREASE (0→real,
+    or seeding a new protected lot) is allowed; only a decrease aborts.
+
+    Attribution: a fill's tier = its client_order_id prefix (tier_of_coid). UNTAGGED
+    fills attribute to INTRADAY — correct for the pre-Phase-0 legacy book; a
+    post-launch untagged fill (external/manual trade) is quarantined by the incremental
+    engine, not here.
+
+    Per tier, net qty = sum(buy/cover) - sum(sell/short); avg_cost is the FIFO-weighted
+    average of the tier's remaining open long lots. Fills are sorted chronologically
+    here (defensive — never assumes the caller sorted). Returns the ledger dict on
+    success, or {"healed": False, "reason":..., "shrink":{...}} on a refused replay.
+    """
+    tiers_qty: dict = {}   # symbol -> {tier: net_qty}
+    lots: dict = {}        # symbol -> {tier: list[[qty, price]]} open longs, FIFO
+    for f in sorted((fills or []), key=_fill_time_key):
+        sym = f.get("symbol")
+        side = str(f.get("side", "")).lower()
+        try:
+            q = float(f.get("qty", 0.0) or 0.0)
+            px = float(f.get("price", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not sym or q <= 0:
+            continue
+        tier = tier_of_coid(f.get("client_order_id")) or "intraday"
+        tq = tiers_qty.setdefault(sym, {})
+        tq[tier] = tq.get(tier, 0.0) + (q if side in ("buy", "buy_to_cover") else -q)
+        # FIFO long-lot tracking for avg_cost (buys add lots; sells consume oldest).
+        lt = lots.setdefault(sym, {}).setdefault(tier, [])
+        if side in ("buy", "buy_to_cover"):
+            lt.append([q, px])
+        else:
+            rem = q
+            while rem > _QTY_EPS and lt:
+                if lt[0][0] <= _QTY_EPS:      # defensive: drop a degenerate/empty
+                    lt.pop(0)                 # lot so the loop always makes progress
+                    continue
+                if lt[0][0] <= rem + _QTY_EPS:
+                    rem -= lt[0][0]
+                    lt.pop(0)
+                else:
+                    lt[0][0] -= rem
+                    rem = 0.0
+
+    alp = {}
+    for p in (positions or []):
+        try:
+            alp[p.get("symbol")] = float(p.get("qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+
+    ledger = _empty_ledger()
+    for sym in set(tiers_qty) | set(alp):
+        tq = tiers_qty.get(sym, {})
+        tier_entries: dict = {}
+        for t in _TIERS:
+            q = round(tq.get(t, 0.0), 6)
+            _lt = lots.get(sym, {}).get(t, [])
+            _open = sum(lot[0] for lot in _lt)
+            avg = (round(sum(lot[0] * lot[1] for lot in _lt) / _open, 4)
+                   if _open > _QTY_EPS else 0.0)
+            tier_entries[t] = {"qty": q, "avg_cost": avg, "last_fill_id": None}
+        ledger_sum = round(sum(tier_entries[t]["qty"] for t in _TIERS), 6)
+        net = alp.get(sym, 0.0)
+        ledger["positions"][sym] = {
+            "alpaca_net_qty": net,
+            "tiers": tier_entries,
+            "drift": round(net - ledger_sum, 6),
+        }
+
+    # NEVER-SHRINK-A-PROTECTED-FLOOR: compare the rebuild to the persisted baseline.
+    # A protected tier (qhm/forever6) going DOWN vs the current ledger = truncated
+    # replay → abort, never write, alert. (Absent/corrupt baseline → protected qty
+    # treated as 0, so any rebuild only ever increases; can't falsely trip.)
+    try:
+        _base = load_ledger()
+    except LedgerError:
+        _base = _empty_ledger()
+    _new_positions = ledger["positions"]
+    _base_positions = _base.get("positions", {})
+    # Iterate the UNION of new + baseline symbols: a symbol that had a protected floor
+    # in the baseline but VANISHES from the rebuild (all its fills aged out AND it is
+    # absent from current Alpaca positions) must still be caught as a shrink-to-0 —
+    # otherwise a disappeared floor evades the guard entirely.
+    _shrink: dict = {}
+    for sym in set(_new_positions) | set(_base_positions):
+        _new_tiers = _new_positions.get(sym, {}).get("tiers", {})
+        _base_tiers = _base_positions.get(sym, {}).get("tiers", {})
+        for pt in _PROTECTED_TIERS:
+            new_q = float(_new_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
+            old_q = float(_base_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
+            if new_q < old_q - _QTY_EPS:
+                _shrink[f"{sym}/{pt}"] = {"was": old_q, "would_be": new_q}
+    if _shrink:
+        logger.critical(
+            "sync_ledger REFUSED — replay would shrink protected floor(s) %s "
+            "(fills likely aged out of Alpaca window). Ledger NOT written.", _shrink)
+        return {"healed": False, "reason": "protected-floor shrink — replay truncated",
+                "shrink": _shrink}
+
+    save_ledger(ledger)
+    _drifted = {s: e["drift"] for s, e in ledger["positions"].items()
+               if abs(e["drift"]) > _QTY_EPS}
+    if _drifted:
+        logger.critical("sync_ledger: drift on %d symbol(s) %s — sells frozen there",
+                        len(_drifted), _drifted)
+    ledger["healed"] = True
+    return ledger
+
+
 # ── Launch init (run ONCE) ────────────────────────────────────────────────────
 def launch_init(alpaca_positions: list, force: bool = False) -> dict:
     """Seed the ledger from the current Alpaca book, attributing ALL existing shares to
