@@ -722,10 +722,57 @@ class PortfolioTracker:
                 )
             except Exception as _sl_err:
                 logger.warning("A-4 unreconciled Slack alert failed: %s", _sl_err)
+        # Authoritative pnl_today from pnl_ledger (2026-07-10, board + Gro + GAI).
+        # pnl_ledger recomputes realized P&L via PURE FIFO over the COMPLETE Alpaca
+        # fill log — the phantom-proof source that replaced the RC-4 phantom-fill
+        # class (the 2026-07-02 -$251.12-vs-+$41.08 corruption). GATED on its
+        # reconciliation invariant (realized+unrealized ~= equity-deposits, $5 tol):
+        # on invariant FAIL / error we fall back to the existing dual-compute exactly
+        # as before — never write a ledger number that does not reconcile to Alpaca
+        # equity. pnl_today keeps its INTRADAY meaning (per_day_intraday); QHM realized
+        # and the reconciles-to-equity TOTAL are separate fields (heal_history schema).
+        # `today` is the PT date (the eod file's own date); RTH fills' UTC txn-date
+        # key coincides with it.
+        #
+        # DEFAULT = the exact prior dual-compute behavior (so _pnl_today is ALWAYS
+        # bound and the ledger only ever OVERWRITES a known-good fallback on success).
         _pnl_today = (
             _tracker_pnl if _a4_gap
             else (_alpaca_pnl if _alpaca_pnl is not None else _tracker_pnl)
         )
+        _pnl_today_qhm: Optional[float] = None
+        _pnl_today_total: Optional[float] = None
+        _pnl_ledger_authoritative = False
+        try:
+            from reporting.pnl_ledger import build_ledger as _build_pnl_ledger
+            _led = _build_pnl_ledger()
+            _led_inv = _led.get("invariant", {})
+            if _led_inv.get("ok"):
+                _pi = _led.get("per_day_intraday", {}).get(today, 0.0)
+                _pq = _led.get("per_day_qhm", {}).get(today, 0.0)
+                _pt = _led.get("per_day", {}).get(today, 0.0)
+                _pnl_today = round(float(_pi), 2)
+                _pnl_today_qhm = round(float(_pq), 2)
+                _pnl_today_total = round(float(_pt), 2)
+                _pnl_unreconciled = False
+                _pnl_unreconciled_reason = None
+                _pnl_ledger_authoritative = True
+                logger.info(
+                    "pnl_today from pnl_ledger (authoritative): $%.2f intraday "
+                    "($%.2f qhm / $%.2f total) invariant ok drift=$%.2f",
+                    _pnl_today, _pnl_today_qhm, _pnl_today_total,
+                    _led_inv.get("drift", 0.0),
+                )
+            else:
+                raise RuntimeError(
+                    f"pnl_ledger invariant FAIL drift=${_led_inv.get('drift')}"
+                )
+        except Exception as _led_err:
+            # _pnl_today already holds the dual-compute default set above.
+            logger.warning(
+                "pnl_ledger unavailable/invariant-fail for %s — dual-compute "
+                "fallback kept: %s", today, _led_err,
+            )
         _pnl_drift = (
             round(_alpaca_pnl - _tracker_pnl, 2) if _alpaca_pnl is not None else None
         )
@@ -763,6 +810,10 @@ class PortfolioTracker:
             "date":           today,
             "trades_today":   len(today_trades),
             "pnl_today":      _pnl_today,
+            # pnl_ledger authoritative fields (2026-07-10) — match heal_history schema.
+            "pnl_today_qhm":            _pnl_today_qhm,
+            "pnl_today_total":          _pnl_today_total,
+            "pnl_ledger_authoritative": _pnl_ledger_authoritative,
             "win_rate_today": round(
                 len([p for p in today_pnls if p > 0]) / len(today_pnls) * 100, 1
             ) if today_pnls else 0,

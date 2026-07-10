@@ -36,9 +36,30 @@ import logging
 import urllib.request
 import urllib.error
 from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# Per-day P&L is keyed by the PT calendar date (America/Los_Angeles) to match the
+# eod_{PT-date}.json files written by portfolio_tracker.write_eod_summary. Alpaca's
+# transaction_time is UTC; a naive UTC t[:10] split buckets any after-hours/overnight
+# fill between ~5pm-midnight PT into the NEXT calendar day (UTC rolls at 00:00 =
+# 5pm PT), silently dropping it from that trading day's total. Convert to PT first.
+_PT_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _pt_date(transaction_time: str) -> str:
+    """UTC ISO transaction_time -> 'YYYY-MM-DD' PT calendar date. Falls back to the
+    raw UTC date prefix if the timestamp is missing/unparseable (never raises)."""
+    if not transaction_time:
+        return ""
+    try:
+        _t = transaction_time.replace("Z", "+00:00")
+        return datetime.fromisoformat(_t).astimezone(_PT_TZ).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return transaction_time[:10]
 
 # ── Path anchoring — always relative to this file, never CWD ──────────────────
 _ROOT = Path(__file__).resolve().parent.parent
@@ -245,7 +266,7 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
         except (TypeError, ValueError):
             continue
         t = f.get("transaction_time", "")
-        day = t[:10]
+        day = _pt_date(t)   # PT calendar date (matches eod_{PT-date}.json — see _pt_date)
         if not sym or qty <= 0 or not day:
             continue
         dq = lots[sym]
