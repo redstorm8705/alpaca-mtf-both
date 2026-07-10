@@ -731,8 +731,10 @@ class PortfolioTracker:
         # as before — never write a ledger number that does not reconcile to Alpaca
         # equity. pnl_today keeps its INTRADAY meaning (per_day_intraday); QHM realized
         # and the reconciles-to-equity TOTAL are separate fields (heal_history schema).
-        # `today` is the PT date (the eod file's own date); RTH fills' UTC txn-date
-        # key coincides with it.
+        # `today` is the PT date (the eod file's own date). pnl_ledger keys per_day by
+        # PT date too (see pnl_ledger._pt_date — converts Alpaca's UTC transaction_time
+        # to PT so after-hours/overnight fills bucket into the correct trading day), so
+        # per_day_intraday[today] is the correct PT-day realized P&L.
         #
         # DEFAULT = the exact prior dual-compute behavior (so _pnl_today is ALWAYS
         # bound and the ledger only ever OVERWRITES a known-good fallback on success).
@@ -747,10 +749,27 @@ class PortfolioTracker:
             from reporting.pnl_ledger import build_ledger as _build_pnl_ledger
             _led = _build_pnl_ledger()
             _led_inv = _led.get("invariant", {})
+            _led_pdi = _led.get("per_day_intraday", {}) or {}
+            _led_pd = _led.get("per_day", {}) or {}
+            # A-4-gap protection (preserved): a day absent from the ledger's per_day
+            # means $0 realized that day — correct to write authoritatively ONLY when
+            # there were no closed trades today. If the tracker DID book closes today
+            # but the (equity-reconciling) ledger shows nothing for today, that is a
+            # real discrepancy — fall back + flag rather than assert authoritative $0.
+            if (
+                _led_inv.get("ok")
+                and today not in _led_pd
+                and today not in _led_pdi
+                and len(today_trades) > 0
+            ):
+                raise RuntimeError(
+                    f"ledger invariant ok but 0 per-day realized for {today} "
+                    f"despite {len(today_trades)} closed trade(s) — keep fallback"
+                )
             if _led_inv.get("ok"):
-                _pi = _led.get("per_day_intraday", {}).get(today, 0.0)
+                _pi = _led_pdi.get(today, 0.0)
                 _pq = _led.get("per_day_qhm", {}).get(today, 0.0)
-                _pt = _led.get("per_day", {}).get(today, 0.0)
+                _pt = _led_pd.get(today, 0.0)
                 _pnl_today = round(float(_pi), 2)
                 _pnl_today_qhm = round(float(_pq), 2)
                 _pnl_today_total = round(float(_pt), 2)
