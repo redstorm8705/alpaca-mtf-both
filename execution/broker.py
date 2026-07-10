@@ -708,6 +708,23 @@ def get_clock() -> dict:
     }
 
 
+def get_asset_tradable(symbol: str) -> "bool | None":
+    """
+    Return the Alpaca-reported tradable status for a symbol, or None if the
+    lookup fails or the field is absent — callers must treat None as "unknown",
+    never as "not tradable". Used by Build F's halt-observability check (never
+    gates order submission directly here — see strategy/run_cycle.py).
+    """
+    client = _get_trading_client()
+    try:
+        asset = client.get_asset(symbol)
+        tradable = getattr(asset, "tradable", None)
+        return bool(tradable) if tradable is not None else None
+    except Exception as e:
+        logger.warning(f"[{symbol}] get_asset_tradable failed: {e}")
+        return None
+
+
 # ── Strategy adapter ──────────────────────────────────────────────────────────
 
 class AlpacaBroker:

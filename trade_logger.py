@@ -15,6 +15,8 @@ Event types:
   stop_hit      — stop-loss triggered (hard_stop, trail_stop, gtc_stop_triggered)
   signal        — confluence signal fired (logged before entry gate)
   mri_refresh   — MacroRiskIndex refreshed
+  halt_eval     — Build F halt-observability discriminator (every RTH cycle):
+                  {keyword_hit, spy_5m_pct, qqq_5m_pct, venue_status, verdict}
 
 Usage:
   from trade_logger import log_event

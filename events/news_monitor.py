@@ -30,12 +30,16 @@ SOURCE ROSTER:
 Dedup: every headline/post is content-hashed before storing. A hash that has
 already been seen is silently dropped — no re-fire on repeat poll of same story.
 
-Sizing: get_news_size_multiplier() returns 1.0 always except HALT=0.0.
-        All size reduction is performed by the hybrid SPY/QQQ engine in run_cycle().
+Sizing: get_news_size_multiplier() always returns 1.0 (Build F, 2026-07-09) — a
+        keyword HALT is display-only now. All size reduction is performed by the
+        hybrid SPY/QQQ engine in run_cycle().
 
 How it plugs into the bot:
    - NewsMonitor.scan_breaking_news()    → call once per scan cycle
-   - NewsMonitor.get_news_size_multiplier() → returns 1.0 or 0.0 (HALT only)
+   - NewsMonitor.get_news_size_multiplier() → always returns 1.0 (display-only HALT, Build F)
+   - NewsMonitor.has_active_halt_keyword() → True if a HALT-tier keyword is active (display
+                                             tier only; used by run_cycle to block NEW ENTRIES
+                                             for the cycle — never liquidates, Build F)
    - NewsMonitor.get_active_event_type() → GEO_CONFLICT | GEO_ENERGY | MACRO_MONETARY |
                                            MACRO_CREDIT | MACRO_FX | MACRO_SYSTEMIC |
                                            GLOBAL_ASIA | GLOBAL_EU | TECHNICAL
@@ -68,11 +72,6 @@ _SEEN_HASHES_PATH = Path(__file__).parent.parent / "logs" / "news_seen_hashes.js
 
 # Disk path for macro risk window persistence — survives bot restarts (T3b)
 _MACRO_RISK_STATE_PATH = Path(__file__).parent.parent / "data" / "state" / "hybrid_state.json"
-
-# ── Price-confirmation threshold ──────────────────────────────────────────────
-# SPY must have moved at least this % since the alert fired for full penalty
-# to apply. Below this → softer multiplier (see get_news_size_multiplier).
-PRICE_CONFIRM_THRESHOLD = 0.5   # 0.5% SPY move confirms the news risk
 
 # ── Market-moving keyword sets ────────────────────────────────────────────────
 # Tiered by expected market impact.
@@ -434,12 +433,15 @@ class NewsMonitor:
         """
         Returns (risk_level, matched_keywords, size_multiplier).
 
-        Post April-2 rebuild: sizing is REMOVED from keyword classification.
-        All multipliers are 1.0. The SPY 5-min market reaction engine in
-        main.py run_cycle() is the sole source of position sizing changes.
+        Build F (2026-07-09, LOCKED): HALT is now a display tier, same as CAUTION/
+        MONITOR — a keyword match alone can never gate sizing or trigger a close.
+        The SPY 5-min market reaction engine in run_cycle() is the sole source of
+        position sizing changes; a real exchange-level halt is detected
+        independently via Alpaca venue-state (see run_cycle's halt_eval event).
 
         risk_level: "HALT" | "CAUTION" | "MONITOR" | None
-          HALT    → 0.0  (true exchange emergency only — circuit breaker etc.)
+          HALT    → 1.0  (prominent dashboard display only — true exchange-emergency
+                          keywords; corroborated separately by venue-state detection)
           CAUTION → 1.0  (notable headline — displayed in dashboard, no size impact)
           MONITOR → 1.0  (logged only)
         """
@@ -449,7 +451,7 @@ class NewsMonitor:
         found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
 
         if found_halt:
-            return "HALT",    found_halt[:3],    0.0
+            return "HALT",    found_halt[:3],    1.0   # display only — no size penalty (Build F)
         if found_caution:
             return "CAUTION", found_caution[:3], 1.0   # display only — no size penalty
         if found_monitor:
@@ -1676,31 +1678,25 @@ class NewsMonitor:
 
     # ── SIZE MULTIPLIER (plugs into run_cycle) ────────────────────────────────
 
-    def get_news_size_multiplier(self, price_change_pct: float = 0.0) -> float:
+    def get_news_size_multiplier(self) -> float:
         """
-        Returns 0.0 if any active alert is HALT (exchange-level emergency only).
-        Returns 1.0 for all other news — sizing is owned by the SPY 5-min bar
-        engine in run_cycle(), not by news keywords (April 2026 architecture).
-
-        Args:
-            price_change_pct: Unused — kept for call-site compatibility.
-
-        Returns:
-            0.0 (HALT active) or 1.0 (all other cases)
+        Build F (2026-07-09, LOCKED): always returns 1.0. A keyword HALT is
+        display-only and no longer zeroes size or triggers a close — sizing is
+        owned entirely by the SPY 5-min bar engine in run_cycle(). A real
+        exchange-level halt is detected independently via Alpaca venue-state
+        (see run_cycle's halt_eval event), not via this function.
         """
-        if not self._active_alerts:
-            return 1.0
+        return 1.0
 
-        # NM-3: docstring updated to match actual behavior. Prior docstring described
-        # price-confirmation penalties (HIGH_RISK → 0.75, CAUTION → 1.0) that were
-        # removed in the April 2026 market-reaction-first architecture switch.
-        # All keyword-based sizing is gone. Only HALT (circuit breaker / exchange
-        # emergency) is enforced here. Everything else is 1.0.
-        for alert in self._active_alerts:
-            if alert.risk_level == "HALT":
-                return 0.0   # circuit breaker / trading halt — always enforce
-
-        return 1.0   # all other news: zero size impact
+    def has_active_halt_keyword(self) -> bool:
+        """
+        True if a HALT-tier keyword alert (display-only, Build F) is currently
+        active. Used by run_cycle to block NEW ENTRIES for the cycle only —
+        self-clears when the alert ages out of the 30-min active window. Never
+        liquidates. Replaces the retired news_size_mult==0.0 entry-block trigger.
+        """
+        with self._alerts_lock:
+            return any(a.risk_level == "HALT" for a in self._active_alerts)
 
     def is_macro_risk_active(self) -> bool:
         """Returns True when sustained macro risk CAUTION state is active (display only).

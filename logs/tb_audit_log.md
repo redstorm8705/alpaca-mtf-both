@@ -7485,3 +7485,177 @@ GAI (Gemini 2.5 flash, direct API) independently reviewed the same lean prompt (
 **Output:** `logs/pending_claude_session_2026-07-08.md` (plain-English decision package, 5 confirmation
 questions for Rafael). No code proposed or changed this session — design/audit only, per scheduled-task
 mandate (autonomous sessions never ship).
+
+---
+
+## 2026-07-09 — API BUILD (headless, worktree claude/build-f-2026-07-08) — Build F IMPLEMENTATION
+
+Full-read gate satisfied via direct Read tool (≤300-line chunks, no grep-as-explore) — NOT Explore
+subagent, since the harness's Explore tool is documented to read excerpts/windows rather than full
+verbatim file content, which would violate CLAUDE.md's anti-summary rule more than a direct chunked Read.
+
+**Files fully read this session (declared complete before any analysis):**
+- `events/news_monitor.py` — 1828 lines, 7 chunks (1-300...1500-1829)
+- `strategy/run_cycle.py` — 1893 lines, 7 chunks (1-300...1700-1893)
+- `events/handlers.py` — 131 lines, 1 chunk (full file)
+- `execution/broker.py` — 763 lines, 3 chunks (1-60, 60-360, 360-610, 610-763) — patched this session, so
+  full-read gate applies (≤1000 lines → direct Read, no Explore subagent required)
+- `alerts.py` — 407 lines, 2 chunks (1-260, 330-407, plus earlier 260-330 spot-read) — patched this session
+
+### 10-Point Audit (scope: the Build F change set)
+
+1. **Static analysis** — see Static Analysis Gate section below (py_compile/mypy/ruff all run post-patch).
+2. **End-to-end trade path trace** — `news.scan_breaking_news()` → `_classify()` → `get_news_size_multiplier()`
+   / `has_active_halt_keyword()` (new) → `run_cycle()`'s entry-block flag → `execute_entries()` gate. Traced
+   full chain; confirmed `run_scan()`'s `news_size_mult` parameter is fed by `_spy_risk_mult` (the SPY/MRI/
+   breadth-derived multiplier), NOT by `news.get_news_size_multiplier()` — these are two different variables
+   sharing a confusing parameter name across the module boundary. Build F's change to
+   `get_news_size_multiplier()` does NOT touch `run_scan()`'s HALT branch (`signal_generator.py:574`) or
+   `risk_manager.get_news_adjusted_stop()`'s `news_size_mult<=0.0` branch — verified by reading both call
+   sites; neither receives the news module's multiplier.
+3. **Adversarial scenarios enumerated:** (a) no active alerts → `has_active_halt_keyword()` returns False,
+   no regression; (b) HALT keyword ages out mid-cycle (30-min window) → self-clears next cycle, unchanged
+   from interim; (c) `get_clock()` raises (network) → fail toward `_venue_is_open=True` (no new block from
+   this signal alone — RTH-open was already confirmed earlier in the same cycle at line ~393); (d)
+   `get_asset_tradable()` raises or schema lacks `.tradable` → returns `None`, treated as "unknown", does NOT
+   independently trigger `_venue_real_halt`; (e) SPY prior-close fetch returns empty/None → `_spy_session_pct`
+   stays 0.0, `_mwcb_band()` returns None, no false trigger; (f) all three venue signals absent/benign but a
+   keyword HALT still fires → entries still blocked via `_news_halt_block_entries` (unchanged path), `halt_eval`
+   logs `verdict="unconfirmed"` with `keyword_hit=True` for postmortem visibility.
+4. **Full top-to-bottom read** — done (see file list above).
+5. **Grep-verified cross-references** — `get_news_size_multiplier` (3 call sites: run_cycle.py:992,
+   get_summary() self-call, generate_dashboard.py display-only), `price_change_pct` (zero callers pass it —
+   confirmed safe to drop), `PRICE_CONFIRM_THRESHOLD` (zero other references in repo), `get_asset_tradable`/
+   `alert_venue_halt`/`_spy_prior_session_close`/`_mwcb_band`/`has_active_halt_keyword` (new symbols, single
+   definition + call site each, verified no name collisions via grep).
+6. **Conflicting execution directions** — none found; `run_scan()`'s and `risk_manager.py`'s `news_size_mult<=0.0`
+   / `==0.0` branches are now permanently unreachable VIA THE NEWS MODULE specifically (they remain reachable
+   via `_spy_risk_mult`/MRI floors, which are untouched) — see Point 3 Roadmap finding below.
+7. **Redundancy scan** — `PRICE_CONFIRM_THRESHOLD` (dead, never referenced outside its own definition) removed.
+   `_classify()`'s HALT branch retained (relabels size_mult 0.0→1.0, keeps keyword detection for CAUTION-style
+   display) rather than deleted — Fork 3 explicitly keeps `get_active_event_type()`'s labeling use of keyword
+   sets, and HALT-tier keywords still populate `_active_alerts`/dashboard display + the new
+   `has_active_halt_keyword()` entry-block signal, so the branch is live, not dead.
+8. **State persistence correctness** — `halt_eval` written via existing `trade_logger.log_event()` (already
+   atomic-append, already anchored to `Path(__file__).resolve().parent`); no new state files introduced.
+9. **Data source tier compliance** — `get_clock()`/`get_asset_tradable()` both go through
+   `execution/broker.py`'s singleton `TradingClient` (T1, execution-isolation rule respected — no new client
+   instantiated outside broker.py). SPY prior-close via existing `fetch_bars()` (T1, `data/fetcher.py`).
+10. **Timezone + logging compliance** — `_spy_prior_session_close()` converts the daily-bar index to ET
+    before date-filtering (matches existing ORB-gate pattern at run_cycle.py:849); `halt_eval` event goes
+    through `trade_logger.log_event()`, which already stamps `ts` in PT per Guardrail 8 — no new naive
+    datetimes introduced (RC-1 clean).
+
+### RC-1 through RC-8 — this change set
+
+| RC | Class | Verdict | Note |
+|----|-------|---------|------|
+| RC-1 | Naive datetime | PASS | No new `datetime.now()` without tz; `_spy_prior_session_close()` reuses the file's existing `ET` constant and `.tz_convert()` pattern. |
+| RC-2 | CWD-relative path | PASS | No new file I/O paths introduced. |
+| RC-3 | Silent exception | PASS | Every new `try/except` (clock fetch, asset-tradable fetch, prior-close fetch, Slack alert) logs at WARNING/ERROR — no bare `except: pass`. |
+| RC-4 | Estimated exit price | N/A | No exit/fill-price path touched. |
+| RC-5 | Non-atomic write | N/A | No new file writes (halt_eval reuses trade_logger's existing append). |
+| RC-6 | Wrong API field name | PASS | `Asset.tradable` confirmed against the installed `alpaca-py` model (`Asset.model_fields`) in this session's venv, not assumed from docs. `clock.is_open` already used identically in the pre-existing `is_market_open()`. |
+| RC-7 | Zero-share sizing | N/A | No sizing/order-qty path touched. |
+| RC-8 | Unbounded scan buffer | N/A | No confirm-gate/conviction-streak dict touched. |
+
+### Forward-looking findings NOT fixed this session (out of scope, logged for the board)
+
+- **ANOMALY-4** (`strategy/run_cycle.py` ~line 1561, pre-existing) checks
+  `if _mri_lvl in ("HALT", "STRESSED+") and news_size_mult >= 1.0` — `mri.level()` only ever returns
+  NORMAL/ELEVATED/STRESSED/HIGH/CRITICAL (confirmed via `events/macro_risk_index.py`), so `"HALT"` and
+  `"STRESSED+"` never match. This check has been dead code since before this session's changes and is
+  unaffected by them (it was already unreachable). Not fixed — unrelated to Build F's scope; flagging for
+  a future debug session.
+- **`execution/risk_manager.py:get_news_adjusted_stop()`** and **`strategy/signal_generator.py:run_scan()`**
+  both branch on a parameter also named `news_size_mult`, but — confirmed via full trace — neither receives
+  the news module's multiplier (they receive `_spy_risk_mult`). Their own `<=0.0`/`==0.0` branches are
+  unrelated to this patch and remain reachable via the SPY/MRI path. No change needed; noted only so a
+  future reader doesn't assume Build F touched these branches.
+
+### Cold Board (3 seats, independent Explore subagents, no shared context) — Round 1
+
+| Seat | Vote | Core finding |
+|------|------|--------------|
+| Thorp/Taleb (masked-loss) | APPROVE-WITH-CHANGES | Confirmed `if _spy_prior_close and _main._spy_last_close:` correctly skips on `0.0` (Python falsy) — no false -100%. Flagged `get_asset_tradable()` None→"unknown" as fragile; recommended failing toward real-halt on API failure (Kelly/risk-of-ruin asymmetry). |
+| Harris (microstructure/cross-strategy) | APPROVE | QHM entry-block during a confirmed venue halt is correct (liquidation-exemption ≠ entry-block exemption). 3-signal OR is empirically sound (cites Harris 1989 MWCB work); all 3 failure modes (missing prior close, clock failure, tradable-lookup failure) fail toward "no false trigger." |
+| Kim/Peterffy (reliability) | APPROVE | All new try/except blocks log (RC-3 clean). Safe defaults confirmed. `halt_eval` event fields confirmed JSON-safe (no None reaching `round()`). Debounce function-attribute pattern matches existing precedent in this file. No per-cycle log spam. |
+
+**Cold second-agent (Step 5b, exact CLAUDE.md 4-point mandate):** PASS on all 4 — no logic inversion
+(traced each OR'd sub-condition in `_venue_real_halt` individually), no off-by-one (`_mwcb_band()`
+boundary-tested at exactly -7.0/-6.99/-7.01/-13.0/-20.0), no missing conditions (independently verified
+the `_spy_risk_mult`-not-`get_news_size_multiplier()` claim against the actual diff text, not taken on
+faith), branch completeness confirmed (`_venue_halt_alerted` set/reset exactly once each, no early
+return between).
+
+### Gro + GAI — 3 rounds (direct API, same prompt each round, exact diff)
+
+**Round 1** (initial diff): Gro raised 4 concerns (asset-tradable None handling, `_mwcb_band` None
+propagation, exception fail-safe direction, debounce robustness) — none held up as bugs on inspection
+(guards already correct). GAI raised 5 findings, most severe: a claimed -100% false session-decline
+from `_main._spy_last_close` defaulting to `0.0`.
+
+**Round 2** (counter-prompt with board's Python-semantics rebuttal): **Both Gro and GAI explicitly
+conceded the -100% claim was wrong** — confirmed `0.0` is falsy in Python, the existing guard already
+prevents it. Both held their position that `get_asset_tradable()` returning `None` on failure should
+not be silently treated as "no new signal" — GAI's specific refined ask: block entries on an
+unconfirmed tradable status, but don't fire the CRITICAL "confirmed halt" alert for it.
+
+**Synthesis applied to the diff:** Added `_venue_uncertain` (`_spy_tradable is None`) — fails closed
+for **entries only** (cheap, self-clearing, matches this file's own existing ORB-gate precedent:
+"any feed error → BLOCK_ALL") when the tradable status can't be confirmed, but does **not** set
+`verdict="real"` or fire `alert_venue_halt()` for this case (WARNING log only) — preserves the
+distinction between "confirmed real halt" (CRITICAL, entries blocked) and "data gap, blocking out of
+caution" (WARNING, entries blocked, no false alarm). This directly implements GAI's own Round-2
+proposal.
+
+**Round 3** (final pre-ship pass, exact updated diff): **Gro: APPROVE. GAI: APPROVE.** Both confirmed
+the synthesis fully resolves the Round 2 concern and introduces no new issue (GAI specifically traced
+the `_venue_halt_alerted` re-arm placement relative to the new `if _venue_uncertain:` nested block and
+confirmed re-arm still fires correctly on every non-real-halt cycle).
+
+### 3-Point AI Summary
+
+**Point 1 — Alignment:**
+- News-HALT display-tier retirement (0.0→1.0): 3/3 — Claude ✓ Gro ✓ GAI ✓
+- Venue-state observability (is_open + tradable + MWCB, entries-only, never liquidate): 3/3 — Claude ✓ Gro ✓ GAI ✓
+- `_spy_last_close`/`0.0` guard correctness: 3/3 (after Round 2) — Claude ✓ Gro ✓ (conceded) GAI ✓ (conceded)
+- `get_asset_tradable()` None fail-safe direction: 3/3 (after synthesis in Round 2→3) — Claude ✓ Gro ✓ GAI ✓
+
+**Point 2 — What Gro/GAI both agreed on that Claude/board missed:** The `get_asset_tradable()` None
+handling gap (Round 1) — both Gro and GAI independently flagged that a bare "None = no signal" was
+under-conservative for a P0 risk-path check, before any board seat raised it. Treated as a confirmed
+gap and fixed (see synthesis above), even though 2 of 3 board seats (Harris, Kim/Peterffy) had
+independently judged the original behavior as correct given signal redundancy — Gro+GAI consensus
+outweighed the board majority per the masked-loss risk-asymmetry argument (Thorp/Taleb's seat agreed
+with Gro/GAI on this specific point, making it 4 of 6 total voices, not a board-vs-external split).
+
+**Point 3 — New forward-looking issues (neither blocking, not fixed this session):**
+- ANOMALY-4 in run_cycle.py (~line 1561 pre-patch numbering) checks `mri.level() in ("HALT",
+  "STRESSED+")` — neither string is ever returned by `MacroRiskIndex.level()` (confirmed real levels:
+  NORMAL/ELEVATED/STRESSED/HIGH/CRITICAL). Pre-existing dead code, unrelated to and unaffected by this
+  diff. Source: Claude (board scope). Priority: P3. Board vote: N — trivial fix, future debug session.
+- `execution/risk_manager.py:get_news_adjusted_stop()`'s `news_size_mult>=0.75`/`<=0.0` branches and
+  `strategy/signal_generator.py:run_scan()`'s `news_size_mult==0.0` branch are fed by `_spy_risk_mult`,
+  not the news module — confirmed unrelated to this diff, flagged only so a future reader doesn't
+  assume Build F touched them. Source: Claude. Priority: informational only.
+- Gro (Round 1) suggested a future enhancement: alternate/fallback data source verification for
+  `get_asset_tradable()` failures rather than relying solely on redundancy from `is_open`/MWCB. Not
+  adopted this session (the `_venue_uncertain` fail-closed-on-entries fix addresses the practical risk
+  without new infrastructure) — logged as a possible future hardening if `get_asset_tradable()`
+  failures prove frequent in production telemetry. Source: Gro only. Priority: P3.
+
+### Static Analysis Gate — FINAL (all 5 files, post-synthesis)
+`python3 -m py_compile` — PASS (5/5) · `python3 -m mypy --warn-unreachable` — PASS, 0 errors (5/5) ·
+`ruff check --select E,W,F,B` — PASS, 0 violations (5/5). mypy/ruff run via `/home/ubuntu/mtf-bot/venv`
+(mypy 2.2.0 installed into that venv this session for the static-analysis gate; ruff 0.15.12 pre-existing).
+
+### code-review-graph MCP impact analysis
+Not available in this headless session (tool not connected/found via ToolSearch). Substituted with
+exhaustive manual call-site tracing (repo-wide grep for every touched symbol — `get_news_size_multiplier`,
+`price_change_pct`, `PRICE_CONFIRM_THRESHOLD`, `has_active_halt_keyword`, `get_asset_tradable`,
+`alert_venue_halt`, `_spy_prior_session_close`, `_mwcb_band` — all single-definition, verified callers
+only), documented in the 10-point audit's "Grep-verified cross-references" point above.
+
+**GATE RESULT: 3-way alignment reached (board 3/3 + Gro APPROVE + GAI APPROVE, round 3). Proceeding to
+ship (commit + push branch only — no merge, no restart, per task scope).**
