@@ -33,10 +33,22 @@ NOT /wrap-up.
     `logs/per_tier_ownership_design_2026-07-09.md`. **Rafael locked 3 decisions:** (1) shorts on ring-fenced
     names → via OPTIONS not shares (share tiers LONG-ONLY there); (2) real Alpaca GTC stops, auto-re-issued on
     every tier-qty change; (3) **BUILD ORDER = FOUNDATION FIRST, 3 PHASES.**
-- **⏭ NEXT BUILD = PHASE 0 (ownership foundation), NOT Forever-6.** Phase 0 = ownership ledger + client_order_id
-  tier-tagging + floor-guard chokepoint (`execution/ownership_guard.py`) + drift reconcile + launch init +
-  `close_position` hard-disallow on multi-tier symbols. Validated with intraday+QHM; **also fixes the Movers/
-  cross-strategy bug.** Then Phase 1 (per-tier FIFO P&L + synced stops), then Phase 2 (Forever-6 tier).
+- **⏭ NEXT BUILD = PHASE 0 (COMBINED: ownership foundation + BROKER-AUTHORITATIVE P&L), NOT Forever-6.**
+  Rafael merged the fail-proof P&L fix INTO Phase 0 (2026-07-09) — same problem: per-strategy P&L needs
+  execution-time ownership. Plan: `logs/phase0_combined_ownership_pnl_plan_2026-07-09.md`. Sub-phases:
+  **P0-a** ownership (ledger + client_order_id tier-tag + `ownership_guard.py` floor chokepoint +
+  `qty_bounded_partial_close` + `close_position` multi-tier hard-disallow + drift reconcile + launch init;
+  also fixes Movers bug). **P0-b** broker-authoritative P&L: WIRE IN `reporting/pnl_ledger.py` (570L,
+  ALREADY BUILT, confirmed UNWIRED — the abandoned stateless-FIFO-from-Alpaca-fills engine) as the SOLE
+  realized source + fill ingestion; DELETE the 3 parallel engines — `fetch_actual_fill_price` (~10 call
+  sites), `_fifo_reconstruct`/`fifo_pnl.py`, and STRIP P&L from `record_exit` (~14 callers) while KEEPING
+  its state machine. Total P&L→portfolio-history (advisory), unrealized→position objects. **P0-c** the
+  STATE-RECONSTRUCTION INVARIANT: replay fills ledger → reconstruct per-(symbol,tier) qty/avg_cost →
+  compare to Alpaca live positions every cycle; confirmed break (≥2 cycles)→FREEZE+manual, never auto-
+  correct; portfolio-history is NEVER the freeze trigger (board seat fix). Validation = property-based
+  FIFO tests + golden-master replay of the real bugged-months fills + 2am manual-reconcile runbook.
+  **Build A (safe-mode) + OPT-2 (event-sourced replay) are SUBSUMED by P0-b/P0-c — retire as separate items.**
+  Then Phase 1 (per-tier P&L history + synced stops), then Phase 2 (Forever-6 tier).
   Line-scoping → `logs/phase0_ownership_scoping_2026-07-09.md` (order-path sites) + canonical guard spec
   `logs/phase0_ownership_guard_spec_2026-07-09.md`. **SCOPED (4 core order files): broker.py (780L) +
   entry_logic.py (1688L, del registry block L437-440) + exit_logic.py (2269L, 23 reducing-order sites +
