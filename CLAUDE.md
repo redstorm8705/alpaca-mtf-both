@@ -87,6 +87,8 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 **Admit uncertainty:** If uncertain about any fact, statistic, date, or piece of technical information: say so explicitly before including it. Never fill gaps with plausible-sounding information. When in doubt, say so.
 
+**Never suggest stopping (Rafael mandate 2026-07-09):** Do NOT tell Rafael to stop, pause, checkpoint, or "pick this up with fresh context," and do NOT recommend ending the session or ask "keep going or pause?". When he says continue/proceed, execute the next step and keep driving. A session that produced a lot of design/scoping is NOT a reason to wrap — find the highest-value thing that can be SHIPPED correctly through the gate this session and ship it. Manage context by offloading reads to subagents and writing durable docs, never by asking to stop. Only stop when Rafael says so.
+
 ---
 
 ## 5-HOUR AUTONOMOUS WORK CHAIN — SESSION START DUTY (Rafael mandate 2026-06-11)

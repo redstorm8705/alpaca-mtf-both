@@ -1094,7 +1094,8 @@ def _fetch_spy_0dte_data() -> "dict | None":
             for _, row in df.iterrows():
                 K    = float(row["strike"])
                 iv   = float(row.get("impliedVolatility", 0) or 0)
-                oi   = int(row.get("openInterest", 0) or 0)
+                _oi  = row.get("openInterest", 0)
+                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0
                 bid  = float(row.get("bid", 0) or 0)
                 ask  = float(row.get("ask", 0) or 0)
                 last = float(row.get("lastPrice", 0) or 0)
