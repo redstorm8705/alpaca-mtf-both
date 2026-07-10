@@ -218,9 +218,12 @@ All 4 = SHIP-WITH-GUARDRAILS (Thorp/Taleb: DO-NOT-SHIP if margin-funded). Load-b
 - **DATA-QUALITY gate runs BEFORE the flash detector** (reject `close < 0.5×prior` / zero-volume).
 
 - **STILL OWED before API:** (a) ~~margin/CAP~~ LOCKED above;
-  (b) the EXPANDED crash-scenario board pass Rafael asked for (flash/halt/CB/intraday-crash/weekly-crash/bear-
-  market rules for the full sell-first/no-buyers set); (c) full-read gate on quarterly_hold_manager.py (1954L)
-  since forever-6 extends it; (d) final board+Gro+GAI on the fully-mapped combined proposal → API build.
+  (b) ~~EXPANDED crash-scenario board pass~~ ✅ DONE 2026-07-09 — full board (Thorp/Taleb + Sosnoff + Harris)
+  + Gro + GAI; 13-scenario map + 10 new guards in `logs/forever6_scenario_board_2026-07-09.md`. BOTH FORKS
+  LOCKED by Rafael: FORK A = per-rung monotonic latch (one buy per depth level, monotonic, ≤3/day); FORK B =
+  small first rung fires immediately + Slack ping + human-gate the deeper rungs (earnings-origin classified).
+  (c) full-read gate on quarterly_hold_manager.py (1954L) since forever-6 extends it — NEXT;
+  (d) final board+Gro+GAI on the fully-mapped combined proposal → API build.
 
 ## Note on duplicate work
 An autonomous scheduled session also produced Build-F design output (handoff.md refs

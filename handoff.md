@@ -23,8 +23,28 @@ NOT /wrap-up.
   ("no decline") for one cycle because `_main._spy_last_close` defaults to 0.0; the independent is_open /
   spy_tradable legs still catch a real halt, and it's auditable via `halt_eval`. Minor; consider a
   "warming/unknown" sentinel instead of 0.0. Both are `strategy/run_cycle.py`.
-- **Forever-6 = the NEXT API build** (design 100% locked in `logs/build_f_decision_2026-07-08.md`; launch it the
-  same isolated-worktree/branch way now that Build F is merged).
+- **Forever-6 design = 100% COMPLETE + LOCKED (2026-07-09)** — but a big architecture decision reordered the build:
+  - Scenario map (all 13 sell-first/no-buyers cases) + both forks locked → `logs/forever6_scenario_board_2026-07-09.md`.
+    FORK A = per-rung monotonic latch; FORK B = small first rung fires + ping + human-gate deeper rungs.
+  - Full read of `quarterly_hold_manager.py` (1955L) done → integration map `logs/forever6_integration_map_2026-07-09.md`.
+  - **RAFAEL NEW MANDATE (2026-07-09): intraday/swing tiers must STILL trade QHM/Forever-6 names on confluence.**
+    Ring-fence protects a SHARE COUNT, not the symbol. This requires the per-tier shared-lot ownership layer
+    (the "real fix" the roadmap flagged; its absence retired Movers). Full board (5 voices) designed it →
+    `logs/per_tier_ownership_design_2026-07-09.md`. **Rafael locked 3 decisions:** (1) shorts on ring-fenced
+    names → via OPTIONS not shares (share tiers LONG-ONLY there); (2) real Alpaca GTC stops, auto-re-issued on
+    every tier-qty change; (3) **BUILD ORDER = FOUNDATION FIRST, 3 PHASES.**
+- **⏭ NEXT BUILD = PHASE 0 (ownership foundation), NOT Forever-6.** Phase 0 = ownership ledger + client_order_id
+  tier-tagging + floor-guard chokepoint (`execution/ownership_guard.py`) + drift reconcile + launch init +
+  `close_position` hard-disallow on multi-tier symbols. Validated with intraday+QHM; **also fixes the Movers/
+  cross-strategy bug.** Then Phase 1 (per-tier FIFO P&L + synced stops), then Phase 2 (Forever-6 tier).
+  Line-scoping started: **broker.py FULLY READ + scoped** in `logs/phase0_ownership_scoping_2026-07-09.md`.
+  STILL TO SCOPE before the Phase-0 diff: full-read entry_logic.py (1687L, remove registry entry-block) +
+  the fill→tier attribution loop (fill_helpers.py + portfolio_tracker) + spec ownership_guard.py → then
+  static + cold-2nd + FINAL Gro+GAI on the exact Phase-0 diff → API build.
+- **TWO catastrophic modes the board designed against (do NOT regress):** (a) stale resting stop eats a
+  protected share → synchronous cancel-replace on every tier-qty change; (b) floor recomputed from Alpaca's
+  drifted net → floor is LEDGER-derived ONLY, drift→freeze-sells; (c) F6 trim reading Alpaca blended avg_entry
+  → trim reads F6's OWN basis only.
 - **Quick fix queued (from 2026-07-08 audits):** `scan_to_html._fetch_options_data` — `cannot convert float NaN
   to integer` (fired 10×; display-layer, fails-closed → not urgent). One-line NaN guard. NOTE: `scan_to_html.py`
   also has a *rejected* Gro/GAI RC-3 item today — handle carefully.
