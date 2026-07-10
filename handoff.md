@@ -7,14 +7,24 @@ NOT /wrap-up.
 > open items), (4) `logs/api_build_packages_2026-07-08.md` (the F/A/B/E build slate, scoped),
 > (5) `logs/tb_audit_log.md` (bug/patch log). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-09 wrap) — pick up here
-- **Build F API build: DONE → branch `claude/build-f-2026-07-08` (`ffc3a61`), STATUS: READY FOR REVIEW+MERGE.**
-  Implemented on OCI in an isolated worktree (live bot untouched, `main@02500cf`, active). Changed 5 code files
-  (news_monitor keyword→context, run_cycle venue-detection + `halt_eval`, broker clock helper, alerts CRITICAL,
-  trade_logger fields) + passed its gate. **NEXT ACTION: review that branch's diff, then merge to main → OCI
-  `git pull` + restart to deploy.** (Do NOT let OCI commit to main; merge from the Mac/GitHub.)
+## ⏩ LATEST (2026-07-10 interactive) — pick up here
+- **Build F: ✅ MERGED + DEPLOYED — LIVE on `main@90f8bdf` (2026-07-10 00:27 UTC).** Reviewed the branch diff
+  full + verified all 6 integration points; re-ran the gate this session (RULE C-2, prior OCI gate expired):
+  Gro APPROVE + GAI APPROVE (both withdrew all findings on counter-prompt), cold board 2-0 (masked-loss +
+  execution seats), py_compile/ruff/mypy clean, preship markers written for news_monitor/broker/run_cycle.
+  Rafael APPROVED. Merged `claude/build-f-2026-07-08`→main (no-ff `90f8bdf`), pushed, OCI ff-only pull +
+  restart → DEPLOY_OK, health OK, zero tracebacks. Branch `claude/build-f-2026-07-08` can be deleted.
+- **TWO FOLLOW-UP ENHANCEMENTS from the Build F gate (logged, non-blocking):**
+  (1) GAI: add a LOW-severity Slack heads-up if `get_asset_tradable("SPY")` returns None for several
+  consecutive cycles while the SPY *bar* feed still works (a get_asset-only outage never trips the existing
+  3-fail T1-FEED-DOWN alert). Path already logs a WARNING + `halt_eval` event each cycle — this just adds a
+  human page for a persistent streak. (2) Masked-loss seat: cold-start edge — on the very first cycle after a
+  restart, if SPY gapped down hard before the first successful 5-min fetch, `_spy_session_pct` reads 0.0
+  ("no decline") for one cycle because `_main._spy_last_close` defaults to 0.0; the independent is_open /
+  spy_tradable legs still catch a real halt, and it's auditable via `halt_eval`. Minor; consider a
+  "warming/unknown" sentinel instead of 0.0. Both are `strategy/run_cycle.py`.
 - **Forever-6 = the NEXT API build** (design 100% locked in `logs/build_f_decision_2026-07-08.md`; launch it the
-  same isolated-worktree/branch way once Build F is merged).
+  same isolated-worktree/branch way now that Build F is merged).
 - **Quick fix queued (from 2026-07-08 audits):** `scan_to_html._fetch_options_data` — `cannot convert float NaN
   to integer` (fired 10×; display-layer, fails-closed → not urgent). One-line NaN guard. NOTE: `scan_to_html.py`
   also has a *rejected* Gro/GAI RC-3 item today — handle carefully.
