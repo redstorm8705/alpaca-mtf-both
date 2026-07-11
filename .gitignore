@@ -53,8 +53,9 @@ logs/*
 !logs/pending_ds_gai_*.json
 !logs/pending_patch_*.patch
 !logs/pending_approvals_*.md
-# Whitelisted for research memos (quarterly holds, session analysis):
+# Whitelisted for research memos (quarterly holds, session analysis, QHM status updates):
 !logs/quarterly_holds_research_*.md
+!logs/qhm_status_update_*.md
 # Whitelisted for failure log (approach history across sessions):
 !logs/ERRORS.md
 # Whitelisted for MTF FULL BOT AUDIT — JUNE 26 (standing multi-session audit initiative):
