@@ -7659,3 +7659,59 @@ only), documented in the 10-point audit's "Grep-verified cross-references" point
 
 **GATE RESULT: 3-way alignment reached (board 3/3 + Gro APPROVE + GAI APPROVE, round 3). Proceeding to
 ship (commit + push branch only — no merge, no restart, per task scope).**
+
+---
+
+## 2026-07-10 (interactive) — P0-a ownership layer: sync_ledger Option-C heal tool (`execution/ownership_guard.py`, commit `decbf77`)
+
+**Increment:** add `sync_ledger()` (full-replay heal/audit tool) + `_fill_time_key()`. INERT — no caller; ownership_guard.py imported by broker.py but sync_ledger uncalled → zero runtime effect until wired. No restart.
+
+**Design fork resolved:** ledger-maintenance = OPTION C (incremental-delta per-cycle authority + full-replay heal tool that refuses to shrink a protected floor). UNANIMOUS: Gro + GAI + cold board Reliability(Majors/Kim) + Execution-risk(Thorp/Taleb). Option A ruled out — violates locked never-shrink-floor invariant (recompute from truncatable fills). Full design + 12-item hardening list: `logs/ownership_ledger_design_2026-07-10.md`.
+
+**Gate:** board 4-0 (design) · final Gro+GAI APPROVE on exact diff (Gro initial REJECT fully counter-verified — 4 false findings conceded) · cold-2nd VERDICT PASS · py_compile/ruff/mypy clean · self-tests (attribution, chronological sort, FIFO avg_cost, drift, refuse-to-shrink truncation-abort + increase-allowed + dropout, degenerate-lot no-stall) all PASS · preship marker sha256 553e23d5 (gro+gai APPROVE).
+
+**Bug caught + fixed PRE-SHIP by cold-2nd (not shipped):** the never-shrink guard originally iterated only the NEW ledger's symbols → a symbol whose protected floor VANISHES entirely from the rebuild (all fills aged out AND absent from current Alpaca positions) evaded the guard. FIX: iterate `union(new, baseline)` symbols so a disappeared floor is caught as shrink-to-0. Re-tested (LLY/qhm 2→0 now caught + not written) + re-gated (Gro+GAI APPROVE on revised diff). No RC-class instance shipped.
+
+**RC scan (shipped code):** RC-1 naive-dt PASS (uses `datetime.now(timezone.utc)`) · RC-2 path PASS (`_LEDGER_PATH` anchored to `__file__`) · RC-3 silent-except PASS (LedgerError→empty baseline is logged-intent, not swallowed) · RC-5 atomic-write PASS (save_ledger tmp→replace+fsync) · RC-7/RC-8 N/A. No counts changed.
+
+**Process note:** preship_audit flash-GAI stochastic false-reject loop (~13 rolls hallucinating already-present guards: `or 0.0`, `if not t`, union-iteration). Rafael chose re-roll; a roll landed clean gro+gai APPROVE. Candidate gate hardening (logged, not acted): upgrade preship_audit GAI model or majority-of-3-rolls. Every authoritative voice had already approved the exact diff.
+
+### 2026-07-10 — RC-6 near-miss CAUGHT pre-wiring (ownership attribution data layer)
+Verified live (read-only) that Alpaca's `/v2/account/activities/FILL` object does NOT carry
+`client_order_id` (only `order_id`); the ORDER object carries `client_order_id` and `fill.order_id
+== order.id`. The per-tier attribution scheme (tier_of_coid on the fill's client_order_id) would have
+silently attributed 100% of fills to intraday. Caught by the full-read + field-verification gate
+BEFORE wiring any attribution. FIX (folded into step B): join `fill.order_id → order.client_order_id
+→ tier` via a fetched `{order.id: client_order_id}` map. Shipped `sync_ledger` (decbf77) is SAFE
+(untagged→intraday fallback, forever6/qhm=0) but its attribution is a NO-OP until the join is added.
+RC-6 count unchanged (no defective field-read shipped). Design doc updated: ownership_ledger_design_2026-07-10.md.
+
+### 2026-07-10 — JOIN foundation SHIPPED (fetch_all_orders/build_coid_map, `reporting/pnl_ledger.py`, commit `4c0902e`)
+RC-6 fix: attribution requires fill.order_id → order.client_order_id join (fills lack client_order_id). Added fetch_all_orders() + build_coid_map(). INERT (uncalled).
+**Cold-2nd caught a real bug BOTH Gro+GAI missed (Prime Directive):** naive `until=oldest_created_at` is EXCLUSIVE → silently strands same-timestamp order tie-groups split across the 500-row page cutoff → incomplete order set → fills misclassify as intraday (floor under-count = catastrophic direction). FIX: overlap-and-dedup (`until`=oldest+1ms inclusive + `_seen` dedup; `_bump_iso_ms` emits 'Z' form — isoformat '+00:00' breaks the URL, HTTP 422). >500-at-one-ts + non-list responses SURFACED (CRITICAL), never silently truncated.
+Gate: cold-2nd FAIL→fix→PASS · final Gro+GAI APPROVE on revised diff · static clean · live-verified (1928 orders, 0 dupes, 369/369 join). reporting/ not in preship hook dirs (no marker needed); ran authoritative Gro+GAI+cold-2nd per RULE C-5 (RTH import chain via portfolio_tracker).
+
+### 2026-07-10 — sync_ledger tier-attribution JOIN param SHIPPED (`execution/ownership_guard.py`, commit `d33c10c`)
+Makes the heal tool attribute by tier: added optional `coid_by_order_id` param; tier resolved via AUTHORITATIVE membership check `if order_id in map: _coid = map[order_id]` (honor mapped-None → intraday) else fallback to fill's own coid. Backward compatible. INERT (uncalled).
+**Cold-2nd caught a real correctness-by-construction bug Gro+GAI missed (Prime Directive, 3rd this session):** first version used `map.get(order_id)` which can't distinguish key-absent from key-present-None; build_coid_map stores None for untagged orders, so an authoritative-untagged order wrongly fell through to the fill's own (future-stale) coid. FIX: membership check. Not exploitable today (raw fills carry no coid) but wrong by construction. cold-2nd FAIL→fix→PASS (threats: none).
+Gate: final Gro+GAI APPROVE on revised diff · cold-2nd PASS · ruff/mypy clean · 5 self-tests · preship marker gro+gai APPROVE (sha f7a88ac).
+**LIVE END-TO-END PROOF (temp ledger, no real-state write):** fetch_all_fills(370)+fetch_all_orders(1932)+build_coid_map → sync_ledger reconstructed per-tier ownership for all 5 open positions (GOOGL/META/NET/NVDA=1 intraday, RIVN=21 intraday) with **total |drift|=0.0** — ledger tiers reconcile exactly to live Alpaca net. All intraday (no IN/QH/F6 tags until OCI restart). The full attribution-heal read path is proven correct on live data.
+
+### 2026-07-10 — ownership-ledger MAINTAINER SHIPPED (`run_ledger_sync.py`, commit `23efb24`)
+Maintainer fork UNANIMOUS → OPTION 1 (full-replay via sync_ledger); incremental-delta engine ELIMINATED (Gro+GAI+2 cold seats). Standalone cron script; NOT in run_cycle → no RTH edit, no restart; only writes the ledger (nothing gates on it yet). Instrumented: wall-time, healed=False streak (Slack≥3), drift, per-tier sanity. sync_once never raises (whole body in one try/except + stage tag).
+**Cold-2nd caught Threat-1 (crash-into-cron) — Gro+GAI both missed it (Prime Directive, 4th this session):** only the fetch was guarded; build_coid_map/sync_ledger(save_ledger)/instrumentation ran unguarded → a raise there crashes cron, violating the file's own invariant. FIX: wrap entire body. cold-2nd FAIL→fix→PASS. Also caught (during live run): my own first sync_ledger self-test had contaminated the REAL data/state/ownership_ledger.json with synthetic qhm floors — the refuse-to-shrink guard fired correctly + refused; cleaned local file, reseeded clean. (OCI unaffected — no local test artifacts there.)
+Gate: final Gro+GAI APPROVE + cold-2nd PASS + ruff/mypy clean + fault-injection (never-raise@every stage) + live on Mac AND OCI (370 fills, 1932 orders, 35 positions, ~6-7s, |drift|=0.0, seeds clean). preship marker gro+gai APPROVE.
+**PENDING (Rafael confirm — scheduling):** OCI cron on the throttled cadence (~15-30min RTH + at open). Until then the maintainer only runs when invoked manually.
+
+### 2026-07-10 — P&L single authoritative writer SHIPPED + LIVE (commit `1397194`)
+Fixed the last dual-writer P&L hole (the "multiple sources of truth" root). logs/lifetime_pnl_cache.json had TWO writers with different `total_pnl` semantics: pnl_ledger.heal_history=REALIZED ($273.25), generate_dashboard=equity-2500=TOTAL ($259.42) → all-time headline swung ~$13 by cron timing; hardcoded 2500 would show a phantom gain on any real deposit.
+FIX (Rafael-approved TOTAL; board 4-0 McKinney/Derman + Peterffy/Taleb + Gro + GAI, Option A): pnl_ledger.heal_history = SOLE writer (total_pnl = equity-net_deposits TOTAL + realized_lifetime/unrealized/net_deposits, fail-closed). metrics.compute_lifetime_stats uses equity - _net_deposits() (from cache, fallback INITIAL). generate_dashboard STOPS writing the cache. Both use equity-net_deposits now.
+Gate: board 4-0 + final Gro+GAI APPROVE (2 passes) + cold-2nd PASS (6 checks) + ruff/mypy/py_compile clean + live-verified on OCI (cache new schema total_pnl=259.6; dashboard renders +$259.59 TOTAL; no import cycle). 3 files, restart done (market closed). Files: reporting/pnl_ledger.py, reporting/metrics.py, generate_dashboard.py.
+FOLLOW-UPS (logged, non-blocking): (1) pnl_ledger `net_deposits = fetch() or 2500` can mis-sum a real future deposit — fix before any deposit; (2) compute_lifetime_stats trade-count/win-rate (105/30%) diverges from ledger round-trips (232/50%) — separate eod-vs-FIFO counting difference; (3) monthly_review docstring "written by generate_dashboard" stale.
+
+### 2026-07-11 — Authoritative entry-level win-rate + trade count SHIPPED + LIVE (commit `96c89c1`)
+Dashboard all-time Win Rate + trade count were eod-file-based (machine-dependent: 69 local / 105 OCI trades; ~30-40% win). Now ledger-authoritative ENTRY-LEVEL (partials merged per (symbol,entry_time)): 158 trades / 39.9%. pnl_ledger.compute_realized computes them; heal_history writes to the authoritative cache; metrics.compute_lifetime_stats overrides eod-based with cache (main + _empty paths). Live-verified OCI: dashboard shows 158 trades / 40%.
+Gate: board win-rate fork 2-0 (Gro+GAI, Option A) + cold-2nd PASS (7 checks) + Gro APPROVE + static clean + live. **GAI SKIPPED on the final diff pass — Gemini API prepaid credits DEPLETED (429 RESOURCE_EXHAUSTED); Rafael-authorized one-time skip for this reporting-only diff.** Follow-up: eod-based 'wins' field now inconsistent w/ win_rate (harmless, no consumer). Files: reporting/pnl_ledger.py, reporting/metrics.py.
+
+### ⚠️ 2026-07-11 — GEMINI (GAI) API CREDITS DEPLETED — operational blocker
+`gemini-2.5-flash` returns 429 "prepayment credits depleted". Blocks: (1) the mandatory final Gro+GAI pre-ship gate (only Gro available → every future gated ship needs a Rafael GAI-skip or a top-up); (2) the OCI autonomous nightly pipeline (nightly_audit/meta-audit use Gemini → will fail until topped up). ACTION NEEDED (Rafael): top up Gemini API billing at ai.studio, or rotate to a funded key. GROQ_API_KEY (Gro) still works.

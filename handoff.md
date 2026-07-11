@@ -8,6 +8,84 @@ NOT /wrap-up.
 > (5) `logs/tb_audit_log.md` (bug/patch log). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
 ## ⏩ LATEST (2026-07-10 interactive) — pick up here
+- **P&L DIAGNOSIS + SINGLE-WRITER FIX SHIPPED + LIVE (`main@1397194`).** Answer to "is the bot
+  losing money": **NO — up +$259 (+10.4%), positive expectancy (50% win, avg win +$8.38 vs avg loss
+  -$5.90).** The scary numbers were phantoms (RC-4 fill-matching: PANW -$182/TSLA -$81 on 07-02 that
+  never happened; real 07-02 = +$45.31), the Movers mass-dump (retired), and the 07-08 false-HALT
+  (Build F fixed). Reporting now truthful (lifetime cache = authoritative). **FIX (Rafael-approved,
+  board 4-0 + Gro + GAI Option A):** killed the last dual-writer P&L hole — `lifetime_pnl_cache.json`
+  had 2 writers with different `total_pnl` semantics (realized $273 vs total $259) swinging the
+  headline ~$13 by cron timing + a hardcoded-2500 that would show a phantom gain on any deposit. Now
+  pnl_ledger.heal_history is SOLE writer (total_pnl = equity-net_deposits TOTAL + components);
+  generate_dashboard reads-only; metrics uses net_deposits not 2500. Live-verified: dashboard renders
+  +$259.59 TOTAL. See logs/tb_audit_log.md 2026-07-10 entry. Follow-ups logged (net_deposits `or 2500`;
+  monthly_review stale docstring).
+- **WIN-RATE + TRADE-COUNT NOW AUTHORITATIVE (`main@96c89c1`, 2026-07-11).** Dashboard win-rate/count were
+  eod-file-based (machine-dependent: 69 local/105 OCI, ~30-40%). Now ledger ENTRY-LEVEL (partials merged):
+  **158 trades / 39.9%** (lot-level 232/49.6% over-counts partials). heal writes win_rate+total_trades to
+  the authoritative cache; metrics overrides eod-based with it. Live: dashboard shows 158/40%. NOTE: my
+  earlier "50% win" to Rafael was the lot-level count; accurate trade-level is ~40% (still net-positive,
+  +$1.73/trade). Board 2-0 + Gro + cold-2nd PASS.
+- **⚠️ GEMINI (GAI) API CREDITS DEPLETED (2026-07-11)** — 429 RESOURCE_EXHAUSTED. Blocks the final Gro+GAI
+  gate (Gro-only now → each ship needs a Rafael GAI-skip or top-up) AND the OCI nightly pipeline
+  (nightly_audit/meta-audit). ACTION: Rafael tops up Gemini billing / rotates key. Gro (Groq) still works.
+- **P0-a OWNERSHIP LAYER — 3 increments SHIPPED (all INERT until wiring). LIVE `main@decbf77`.**
+  Per-tier shared-lot ownership (intraday/qhm/forever6) so per-strategy P&L attribution + a
+  never-sell floor become real. Alpaca = 1 untagged net position/symbol; ledger = per-tier CLAIM.
+  - **(1) `execution/ownership_guard.py`** foundation (`658933f`): ledger I/O (RC-5 atomic),
+    `make_coid`/`tier_of_coid`, `check_never_sell_floor` chokepoint, `reconcile_drift`, `launch_init`.
+  - **(2) tier-tagging** (`7b1c5c0`): `tier=` param on the 5 broker submit/close wrappers +
+    QHM dispatcher + `_QHMBroker` → client_order_id carries IN/QH/F6. New orders tag on next restart.
+  - **(3) `sync_ledger` Option-C heal tool** (`decbf77`, THIS SESSION): full-replay rebuild from the
+    Alpaca fill history, attributed by tier, with a **NEVER-SHRINK-A-PROTECTED-FLOOR** guard
+    (aborts+alerts, never writes, if a replay would reduce any qhm/forever6 qty vs the persisted
+    ledger — i.e. old fills aged out). Iterates union(new,baseline) so a vanished floor is caught.
+  - **MAINTENANCE FORK RESOLVED → OPTION C, UNANIMOUS** (Gro+GAI+2 cold seats). Design + the 12-item
+    hardening list + build sequence A→D: `logs/ownership_ledger_design_2026-07-10.md`.
+  - **⚠️ RC-6 CONSTRAINT (verified live 2026-07-10):** Alpaca FILL activities do NOT carry
+    `client_order_id` (only `order_id`); ORDER objects carry it and `fill.order_id==order.id`. So
+    attribution REQUIRES a join `fill.order_id → order.client_order_id → tier` (fetch orders, build
+    `{order.id: coid}` map). Shipped `sync_ledger` reads the fill's (absent) client_order_id → today it
+    no-ops everything to intraday (SAFE: fallback, f6/qhm=0) but does NOT actually attribute until the
+    join is added. Fold the join + an optional `coid_by_order_id` param into step B.
+  - **(4) JOIN foundation SHIPPED** (`4c0902e`, THIS SESSION): `fetch_all_orders()` + `build_coid_map()`
+    in `reporting/pnl_ledger.py` — the RC-6 fix. `fetch_all_orders` paginates `/v2/orders?status=all`
+    via OVERLAP-AND-DEDUP (cold-2nd caught that a naive exclusive-`until` cursor silently strands
+    same-timestamp tie-groups at the 500-row page cutoff; fix = `until`=oldest+1ms inclusive + `_seen`
+    dedup; `_bump_iso_ms` emits 'Z' form or the URL 422s). Live: 1928 orders, 0 dupes, 369/369 fills
+    joined. INERT (uncalled). `build_coid_map` → `{order_id: client_order_id}`.
+  - **(5) sync_ledger ATTRIBUTION JOIN SHIPPED** (`d33c10c`, THIS SESSION): optional
+    `coid_by_order_id` param; tier resolved via AUTHORITATIVE membership check (cold-2nd caught +
+    fixed a map-hit-None-vs-miss ambiguity). Heal tool now attributes by tier when given the map.
+    **LIVE END-TO-END PROVEN (temp ledger):** fetch_all_fills(370)+fetch_all_orders(1932)+
+    build_coid_map → sync_ledger reconstructed all 5 open positions' per-tier ownership with
+    **|drift|=0.0** (reconciles exactly to Alpaca net). All intraday until OCI restart tags new orders.
+  - **ATTRIBUTION READ-PATH IS COMPLETE + GATED + LIVE-PROVEN.** The heal/reconstruct side of the
+    ownership layer works end-to-end: given live fills+orders+positions it produces a per-tier ledger
+    that reconciles to zero drift and refuses to shrink a protected floor.
+  - **(6) MAINTAINER SHIPPED** (`23efb24`, THIS SESSION): `run_ledger_sync.py` — maintainer fork
+    UNANIMOUS → OPTION 1 full-replay (Gro+GAI+2 cold seats); **incremental-delta engine ELIMINATED**
+    (sync_ledger's refuse-to-shrink guard makes full-replay safe → incremental = cost-only, and its
+    cursor failure modes are a fail-closed violation). Standalone cron script (NOT in run_cycle → no RTH
+    edit, no restart); only writes the ledger. Instrumented (wall-time, healed-streak Slack, drift,
+    per-tier sanity); sync_once never raises (cold-2nd caught + fixed a crash-into-cron). **Live-proven
+    on Mac AND OCI:** 370 fills, 1932 orders, 35 positions, ~6-7s, seeds clean |drift|=0.0. OCI ledger
+    is seeded. Design/decision: logs/ownership_ledger_design_2026-07-10.md.
+  - **✅ MAINTAINER CRON INSTALLED (Rafael-approved 2026-07-10):** OCI crontab
+    `*/20 13-21 * * 1-5 ... run_ledger_sync.py >> logs/ledger_sync_cron.log` — throttled ~every 20min
+    across the RTH UTC window, weekdays. Raw UTC (no cron_tz_wrapper — exact ET alignment not needed for
+    a reconciler; 13-21 UTC covers RTH year-round). $0 incremental cost (Alpaca paper API free; no LLM
+    calls at runtime). OCI ledger seeded + now self-maintaining. Event-triggered-on-guard-reject is a
+    step-D concern (guard unwired). Backup of prior crontab at OCI /tmp/crontab.bak.
+  - **NEXT (build seq C2 → D):** C2 hardening before the guard gates live sells — #2 per-tier Level-2
+    reconciliation (catches mistagged-fill floor drift the total-drift check misses), #7 untagged-after-
+    launch quarantine, #9 Alpaca-net staleness window (fold into ownership_guard + maintainer). THEN
+    D — wire the guard into reducing-order paths (exit_logic, broker close/partial), close_position
+    multi-tier disallow, entry_logic tier-tag. **Guard does NOT gate live sells until C2 lands.** D is
+    the only increment needing a restart + full RTH gate.
+  - Gate note: preship_audit flash-GAI was in a stochastic false-reject loop (~13 rolls; hallucinated
+    already-present guards); Rafael chose re-roll; roll landed a clean gro+gai APPROVE marker (sha 553e23d5).
+    Every authoritative voice (board 4-0, my final Gro+GAI, cold-2nd) had already approved the exact diff.
 - **Build F: ✅ MERGED + DEPLOYED — LIVE on `main@90f8bdf` (2026-07-10 00:27 UTC).** Reviewed the branch diff
   full + verified all 6 integration points; re-ran the gate this session (RULE C-2, prior OCI gate expired):
   Gro APPROVE + GAI APPROVE (both withdrew all findings on counter-prompt), cold board 2-0 (masked-loss +
