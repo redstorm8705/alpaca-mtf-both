@@ -35,6 +35,22 @@ def _net_deposits() -> float:
     return INITIAL_PAPER_EQUITY
 
 
+def _auth_trade_stats() -> dict | None:
+    """Authoritative ENTRY-LEVEL win_rate + total_trades from the ledger cache (sole
+    writer: pnl_ledger.heal_history; board 4-0 + Gro + GAI, Rafael-approved 2026-07-10).
+    Replaces the machine-dependent eod-file trade counting. Returns None if the cache
+    lacks the fields → caller keeps the eod-based fallback until the first heal."""
+    try:
+        cache = json.loads(
+            (_LOGS / "lifetime_pnl_cache.json").read_text(encoding="utf-8"))
+        if cache.get("win_rate") is not None and cache.get("total_trades") is not None:
+            return {"win_rate": float(cache["win_rate"]),
+                    "total_trades": int(cache["total_trades"])}
+    except Exception as e:  # RC-3: logged, not swallowed (missing cache = normal)
+        logger.debug("_auth_trade_stats: cache read failed: %s", e)
+    return None
+
+
 def _fetch_alpaca_equity() -> float | None:
     """
     Fetch current equity from Alpaca paper account API.
@@ -185,6 +201,10 @@ def compute_lifetime_stats(
         "pdt_count": 0, "overnight_count": 0,
     }
     if not eod_paths:
+        _ats_e = _auth_trade_stats()   # authoritative even when no eod files present
+        if _ats_e:
+            _empty["win_rate"] = _ats_e["win_rate"]
+            _empty["total_trades"] = _ats_e["total_trades"]
         return _empty
 
     first_date: date | None = None
@@ -205,4 +225,10 @@ def compute_lifetime_stats(
     stats = compute_period_stats(first_date, last_date)
     if _alpaca_pnl is not None:
         stats["total_pnl"] = _alpaca_pnl
+    # win_rate + total_trades: authoritative entry-level from the ledger cache, NOT the
+    # machine-dependent eod-file count. Falls back to eod-based until the first heal.
+    _ats = _auth_trade_stats()
+    if _ats:
+        stats["win_rate"] = _ats["win_rate"]
+        stats["total_trades"] = _ats["total_trades"]
     return stats

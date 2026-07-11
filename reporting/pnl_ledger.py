@@ -372,6 +372,19 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
                 dq.append((qty, price, "short", t))
 
     open_lots = {s: [list(x) for x in dq] for s, dq in lots.items() if dq}
+
+    # ENTRY-LEVEL trade stats (partials merged per position entry) — the AUTHORITATIVE
+    # win rate + trade count for the dashboard (board 4-0 + Gro + GAI, Rafael-approved A,
+    # 2026-07-10). One position entry->full exit = ONE trade; its partial closes are
+    # summed into one win/loss. Lot-level (len(round_trips)) over-counts partials as
+    # separate trades and inflates the win rate. Keyed by (symbol, entry_time) — the same
+    # entry lot; a re-entry at a different time is a distinct trade.
+    _entry_pnl: dict = defaultdict(float)
+    for _r in round_trips:
+        _entry_pnl[(_r["symbol"], _r["entry_time"])] += _r["pnl"]
+    _n_entry = len(_entry_pnl)
+    _entry_wins = sum(1 for _v in _entry_pnl.values() if _v > 0)
+
     return {
         "round_trips": round_trips,
         "per_day": {k: round(v, 2) for k, v in sorted(per_day.items())},
@@ -380,6 +393,8 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
         "lifetime": round(sum(per_day.values()), 2),
         "lifetime_intraday": round(sum(per_day_intraday.values()), 2),
         "lifetime_qhm": round(sum(per_day_qhm.values()), 2),
+        "total_trades": _n_entry,
+        "win_rate": round(_entry_wins / _n_entry * 100, 1) if _n_entry else 0.0,
         "unmatched_closes": unmatched,
         "open_lots": open_lots,
     }
@@ -599,6 +614,10 @@ def heal_history(dry_run: bool = True) -> dict:
             cache["net_deposits"] = ledger["net_deposits"]
             cache["total_pnl_intraday"] = ledger["lifetime_intraday"]
             cache["total_pnl_qhm"] = ledger["lifetime_qhm"]
+            # Authoritative ENTRY-LEVEL win rate + trade count (partials merged) —
+            # replaces the machine-dependent eod-file counting on the dashboard.
+            cache["win_rate"] = ledger["win_rate"]
+            cache["total_trades"] = ledger["total_trades"]
             cache["ts"] = now_iso
             cache["type"] = "ledger_fifo_authoritative"
             tmp = cache_path.with_suffix(".tmp")
