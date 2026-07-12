@@ -1,6 +1,17 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-12 — CLAUDE.md §DURABLE SYNC RULE codified (Rafael mandate)
+
+New hard rule: on every ship AND every Board+Gro+GAI alignment (even zero-code), sync all 5
+channels same-turn (git push + handoff/design docs w/ exact next step, OCI git pull --ff-only,
+.md, logs/, Master Brain); handoff.md always carries a live "⏩ pick up here" pointer pushed the
+moment alignment is reached. Enables seamless cross-account (two Gmail / rolling 5h limits)
+pickup. Self-application: CLAUDE.md diff passed the FINAL PRE-SHIP Gro+GAI gate (marker
+`a97ea0d7686f`, both APPROVE). Retroactively applied same turn: handoff.md "pick up here"
+rewritten to inc3-shipped + inc4-next.
+
+---
 ## 2026-07-12 — Ownership ledger increment 3: QHM-tier attribution (UNWIRED)
 
 **Session:** per-tier ownership floor build. Increment 3 of 4. Attributes legacy untagged

@@ -146,6 +146,55 @@ Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 
 ---
 
+## DURABLE SYNC RULE — PERSIST ALIGNED STATE ON EVERY SHIP *AND* EVERY BGG-ALIGNMENT (Rafael mandate 2026-07-12)
+
+**Purpose:** Rafael works across two Claude Gmail accounts (rolling 5-hour usage limits).
+When one account hits its limit, the other must pick up the work SEAMLESSLY — `git pull` →
+read `handoff.md` → query Master Brain — and land exactly where the prior account left off.
+That only works if aligned state is pushed to durable, cross-account-readable storage the
+MOMENT it is decided, not at session end.
+
+**The failure this prevents:** aligned scope (the next increment's plan, a BGG-approved
+rule, a design decision) living ONLY in one session's context. If it is never written to
+git/handoff/Master Brain, the other account starts blind. Shipped CODE was already being
+persisted; DECISIONS and SCOPE were not — this rule closes that gap.
+
+### Two triggers (either one fires the sync — same turn, no exceptions)
+1. **Any ship** — code, config, or execution-governing doc that deploys.
+2. **Any BGG alignment** — any time Board + Gro + GAI reach alignment on a protocol, rule,
+   decision, scope, or design fork, **even if zero code ships.**
+
+### The sync sweep (ALL five channels, same turn as the trigger)
+| Channel | What must land |
+|---------|----------------|
+| **Git** | commit + push the change AND the updated `handoff.md`/design docs capturing the aligned scope + the EXACT next actionable step |
+| **OCI** | ships → `git pull --ff-only` + restart (existing deploy SOP); alignment-only (no code) → nothing to deploy, but the handoff push to git still happens (OCI `git pull --ff-only`, no restart) |
+| **.md files** | `handoff.md` "⏩ pick up here" block rewritten to current state + exact next step; design docs updated for scope; `tb_audit_log.md` for audits |
+| **logs/** | one-line audit/log entry |
+| **Master Brain** | push updated project-state so a NotebookLM query returns current state (`notebooklm` CLI) |
+
+### Hard invariant
+`handoff.md` ALWAYS carries a live **"⏩ pick up here"** pointer — current state + the single
+exact next action — pushed the MOMENT alignment is reached, never deferred to session end or
+`/wrap-up`. A cross-account handoff must always be exactly: `git pull` → read `handoff.md` →
+query Master Brain.
+
+### Token efficiency (also mandated)
+The sync is SURGICAL, not a heavyweight wrap-up: update only the "pick up here" block +
+append one log line (do not rewrite whole files); batch the `git add`/`commit`/`push`; one
+Master Brain push. It runs on every trigger, so it must stay cheap.
+
+### Relationship to other rules
+- Does NOT replace `/wrap-up` (session-end, Rafael-triggered only) or the FINAL PRE-SHIP
+  gate. It is an additional, lighter, more frequent persistence step.
+- An alignment-only sync (no code shipped) does not touch OCI services and needs no preship
+  marker — it commits/pushes docs (`handoff.md`, design `.md`, logs). A CODE ship still runs
+  its full mandatory patch sequence + preship gate as usual.
+- Self-application: this rule is itself execution-governing; a change to it undergoes the
+  FINAL PRE-SHIP Gro+GAI pass on its own diff (as this one did before it first shipped).
+
+---
+
 ## MANDATORY PATCH SEQUENCE — ZERO EXCEPTIONS, EVER
 
 **Every file. Every session. Every patch. In this exact order. No step may be skipped for any reason — urgency, simplicity, or prior familiarity with the file are not exceptions. This applies to ALL files in the project, not just hotspot files.**

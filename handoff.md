@@ -1,13 +1,56 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-08 (evening, interactive) | **HANDOFF TO A NEW CLAUDE ACCOUNT** (Rafael ~87% weekly limit).
-NOT /wrap-up.
+**Updated:** 2026-07-12 (interactive) | **CROSS-ACCOUNT HANDOFF** — always current per the new
+DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
-> **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file, (2) `CLAUDE.md` (binding rules),
-> (3) `logs/build_f_decision_2026-07-08.md` (the ACTIVE work — Build F + Forever-Hold design, decisions +
-> open items), (4) `logs/api_build_packages_2026-07-08.md` (the F/A/B/E build slate, scoped),
-> (5) `logs/tb_audit_log.md` (bug/patch log). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+> **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
+> point), (2) `CLAUDE.md` (binding rules — note new §DURABLE SYNC RULE), (3) `logs/tb_audit_log.md`
+> (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
+> (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-10 interactive) — pick up here
+## ⏩ LATEST (2026-07-12 interactive) — pick up here
+
+**NEW HARD RULE — DURABLE SYNC RULE (CLAUDE.md §, Rafael mandate 2026-07-12, Gro+GAI APPROVE
+marker `a97ea0d7686f`).** On EVERY ship AND EVERY time Board+Gro+GAI align on a
+protocol/rule/decision/scope — *even with zero code shipped* — sync all 5 channels the SAME turn:
+git push (+ handoff/design docs carrying the EXACT next step), OCI `git pull --ff-only` (+restart
+only if code), `.md` files, `logs/`, Master Brain. `handoff.md` always carries a live "⏩ pick up
+here" pointer, pushed the moment alignment is reached. Surgical + cheap. Full text: CLAUDE.md
+§DURABLE SYNC RULE. **Why:** Rafael switches between two Claude Gmail accounts on rolling 5h limits
+— the other account must resume with `git pull` → read handoff.md → query Master Brain and land
+exactly here.
+
+**OWNERSHIP INCREMENT 3 — QHM-TIER ATTRIBUTION SHIPPED + LIVE (`main@cbb3925`).** Legacy untagged
+QHM buys (NVDA/GOOGL, predate client_order_id tagging) now get a real never-sell floor (were
+counting as intraday → floor=0 → sellable). New `get_quarterly_hold_quantities()` (fail-closed on
+corrupt state) → `sync_ledger` qhm overlay `qhm=min(max(claim,replay_qhm),net-f6)` (MERGE not
+overwrite) + SKIP drifted symbols. **Cold board caught 2 real bugs Gro+GAI BOTH missed**
+(overwrite-clawback of tagged-qhm protection; drift-masking) — both fixed, 6/6 self-test PASS,
+static clean, Gro+GAI APPROVE final combined diff. Still **UNWIRED** (standalone cron maintainer
+`run_ledger_sync.py`; nothing reads the ledger to gate a live sell yet). See tb_audit_log 2026-07-12.
+
+**➡️ EXACT NEXT STEP = OWNERSHIP INCREMENT 4 (needs Rafael's explicit "approved" + a restart).**
+Two moves, floor-first sequence now unblocked (inc3 floor is live): (a) wire the live exit-reducing
+paths through `broker.close_position_for_tier()` + the ownership guard so an intraday exit is bounded
+to intraday shares (can't sell a QHM/F6 share); (b) remove the intraday-blocks-QHM gate at
+`execution/entry_logic.py:406,438` (the `_quarterly_hold` check) so ALL symbols become tradable
+across tiers (Rafael: "all stock symbols tradable, period... tagged properly so the bot doesn't
+accidentally sell a forever-6 or QHM day-trading"). Full mandatory patch sequence on entry_logic.py
++ the exit path (map close_position callers via graph `callers_of` — likely exit_logic.py /
+run_cycle.py / main.py); board + Gro + GAI; then a one-page approval package to Rafael BEFORE
+apply/restart. In-progress at time of this handoff: mapping the exit-path surface via code-review-graph.
+
+**GAI conservation:** Rafael topped up Gemini credits but mandated **free-tier gemini-2.5-flash ONLY**
+(never pro/preview) + minimize call volume. `auto_ai_audit.py` already on flash (`a7923ae`).
+
+**Queued (post-inc4):** QHM dip-add rule (2 rungs −2%/−5% + NVDA one-time catch-up; board vote on the
+−5% over-weight multiple ~1.25–1.5× target), per-tier exit logic + Rafael wants a summary, Forever-6
+build, S/R + buy-the-bounce feature (SPY/SPX/QQQ GEX levels on an HTML page), QHM v2 framework
+(report→config pipeline, persistent conviction book, post-earnings state machine, take-profit).
+See `logs/qhm_v2_design_2026-07-11.md`, `logs/improvement_queue.md`.
+
+---
+
+## (2026-07-10 interactive) — prior context
 - **P&L DIAGNOSIS + SINGLE-WRITER FIX SHIPPED + LIVE (`main@1397194`).** Answer to "is the bot
   losing money": **NO — up +$259 (+10.4%), positive expectancy (50% win, avg win +$8.38 vs avg loss
   -$5.90).** The scary numbers were phantoms (RC-4 fill-matching: PANW -$182/TSLA -$81 on 07-02 that
