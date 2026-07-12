@@ -28,16 +28,57 @@ overwrite) + SKIP drifted symbols. **Cold board caught 2 real bugs Gro+GAI BOTH 
 static clean, Gro+GAI APPROVE final combined diff. Still **UNWIRED** (standalone cron maintainer
 `run_ledger_sync.py`; nothing reads the ledger to gate a live sell yet). See tb_audit_log 2026-07-12.
 
-**➡️ EXACT NEXT STEP = OWNERSHIP INCREMENT 4 (needs Rafael's explicit "approved" + a restart).**
-Two moves, floor-first sequence now unblocked (inc3 floor is live): (a) wire the live exit-reducing
-paths through `broker.close_position_for_tier()` + the ownership guard so an intraday exit is bounded
-to intraday shares (can't sell a QHM/F6 share); (b) remove the intraday-blocks-QHM gate at
-`execution/entry_logic.py:406,438` (the `_quarterly_hold` check) so ALL symbols become tradable
-across tiers (Rafael: "all stock symbols tradable, period... tagged properly so the bot doesn't
-accidentally sell a forever-6 or QHM day-trading"). Full mandatory patch sequence on entry_logic.py
-+ the exit path (map close_position callers via graph `callers_of` — likely exit_logic.py /
-run_cycle.py / main.py); board + Gro + GAI; then a one-page approval package to Rafael BEFORE
-apply/restart. In-progress at time of this handoff: mapping the exit-path surface via code-review-graph.
+**➡️ EXACT NEXT STEP = OWNERSHIP INCREMENT 4 — DESIGN BGG-ALIGNED (Option B), AWAITING RAFAEL APPROVAL.**
+Architecture fork resolved **UNANIMOUS Option B (broker chokepoint)**: Board 6-0 (Harris/Peterffy/
+Katsuyama exec-chokepoint seat + Kim/Majors/Taleb reliability/tail-risk seat) + Gro + GAI. One-page
+approval package presented to Rafael 2026-07-12; awaiting his APPROVE + confirmation of kill-switch
+semantics.
+
+**Option B = make the broker's own sell primitives floor-aware (enforce at the chokepoint, not at
+~9 call sites).** `broker.close_position(symbol, tier="intraday")` + `partial_close_position(symbol,
+qty, tier="intraday")` route through the ownership guard internally → every caller auto-protected,
+zero call-site edits. Rejected Option A (per-call-site) = a single missed site sells a protected share
+(the July-2 mass-dump class).
+
+**BUILD PLAN (floor-first, Rafael mandate) — each its own full patch sequence + Gro+GAI on the DIFF:**
+- **4a (protection first, behind a flag):** make `broker.close_position`/`partial_close_position`
+  floor-aware (default `tier="intraday"`, keyword-only per GAI). Behind `OWNERSHIP_GUARD_ENFORCE`
+  flag (one-line kill switch for the guard itself). Observability (board): log every guard decision
+  (APPROVE/QTY_BOUND/REJECT); ALERT on any QTY_BOUND outside expected QHM/F6 self-close (canary that
+  B works); wire `reconcile_drift()` to run + alert on nonzero drift.
+- **4b (open the door, only after 4a live+verified):** remove intraday-blocks-QHM gate at
+  `execution/entry_logic.py:438` (`if symbol in get_quarterly_hold_symbols(): continue`) + fix the
+  QHM exclusion in the cycle-sync risk count at `entry_logic.py:406-410` (an intraday position in a
+  QHM symbol SHOULD count toward intraday risk once co-holding is allowed).
+
+**REQUIRED EXPLICIT-TIER CALLERS under B (board-identified — must NOT default to intraday):**
+- `execution/quarterly_hold_manager.py:322` `QHMBrokerAdapter.close()` → `broker.close_position(sym,
+  tier="qhm")` (else a QHM exit is bounded to the ~0-share intraday tier and silently no-ops).
+- forever6 self-trim → `tier="forever6"` + `is_authorized_f6_trim=True` (ownership_guard L256-264).
+- All ~9 sites in exit_logic.py (L1278/1439/1547/1621/1878 full + L297/715 partial), gtc_manager.py
+  L189, and safe_close_all are legit intraday → default, no edit.
+
+**SEAM BUG TO UNIT-TEST FIRST (board seat 1):** `close_position_for_tier` calls plain
+`close_position(symbol)` at broker.py L721/L724. Once `close_position` gains a `tier` param, those
+internal calls MUST pass `tier` through, else `close_position_for_tier(sym, tier="qhm")` on a
+single-tier symbol collapses to the new `"intraday"` default and mistags the client_order_id.
+
+**safe_close_all REWRITE (events/handlers.py L64-83):** drop the whole-symbol QHM skip → call
+`close_position(sym, tier="intraday")` per symbol. Preserves QHM/F6 FLOOR even on circuit-breaker
+(matches today's intent) BUT now correctly flattens the intraday shares of a co-held symbol.
+
+**DO NOT build a full-flatten-regardless-of-tier path this increment** (board emphatic). A true
+regulatory/forced liquidation must be a SEPARATE named primitive (e.g. `broker.force_liquidate`) —
+never a `tier=` variant. `broker.close_all_positions()` (L740) is defined but has ZERO callers today;
+leave it dead until a deliberate separate decision.
+
+**KILL-SWITCH SEMANTICS = Rafael's open decision:** under B the 7% kill switch / circuit-breaker
+preserves QHM/F6 shares but flattens the intraday shares of a co-held symbol (vs today's whole-symbol
+skip). Recommended; awaiting Rafael confirm.
+
+Note (housekeeping): code-review-graph is STALE (showed main.py at 3340 lines; it's 1092 post-
+decomposition — exit logic now in execution/exit_logic.py). Rebuild the graph before relying on its
+line numbers next session.
 
 **GAI conservation:** Rafael topped up Gemini credits but mandated **free-tier gemini-2.5-flash ONLY**
 (never pro/preview) + minimize call volume. `auto_ai_audit.py` already on flash (`a7923ae`).
