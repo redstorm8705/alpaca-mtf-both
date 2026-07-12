@@ -15,12 +15,12 @@ can NEVER drop below the protected floor (forever6_qty + qhm_qty) — the never-
 Two catastrophic-mode defenses baked in:
   1. The floor is LEDGER-derived ONLY, never recomputed from Alpaca's (possibly drifted)
      net position — a drift must FREEZE sells, not silently shrink the floor.
-  2. Directional fail-safety (board 4-0, 2026-07-11): fail-CLOSED (block the sell) on any
-     ambiguity ONLY for a symbol that HAS a protected floor (qhm/forever6 > 0). For a
-     symbol with NO protected floor there is nothing to protect, so an ordinary reducing
-     order (an intraday stop-loss/target) is APPROVED unconditionally and FAILS OPEN even
-     on a ledger/Alpaca read error — because blocking a legitimate exit (unbounded loss)
-     is the worse error. A cached protected-symbols set decides this without a live read.
+  2. Directional fail-safety (board 4-0, 2026-07-11): fail-CLOSED (block the sell) on
+     ambiguity ONLY for a symbol that HAS a protected floor (qhm/forever6 > 0). A symbol
+     with NO protected floor has nothing to protect, so an ordinary reducing order (an
+     intraday stop-loss/target) is APPROVED unconditionally and FAILS OPEN even on a
+     ledger/Alpaca read error — blocking a legitimate exit (unbounded loss) is the worse
+     error. A cached protected-symbols set decides this without a live read.
 
 Rafael-locked (2026-07-09): ring-fenced names are LONG-ONLY for the share tiers
 (bearish exposure → options program). So a short on a floor>0 symbol is REJECTED here.
@@ -330,7 +330,8 @@ def _fill_time_key(f: dict) -> str:
 
 
 def sync_ledger(fills: list, positions: list,
-                coid_by_order_id: dict | None = None) -> dict:
+                coid_by_order_id: dict | None = None,
+                qhm_holdings: dict | None = None) -> dict:
     """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
     authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
     replaying the FULL Alpaca fill history, attributing each fill to its tier, then
@@ -428,6 +429,48 @@ def sync_ledger(fills: list, positions: list,
             "tiers": tier_entries,
             "drift": round(net - ledger_sum, 6),
         }
+
+    # QHM-TIER ATTRIBUTION (increment 3, 2026-07-12): the fill-based replay counts
+    # legacy QHM buys (bought before tier-tagging → untagged) as intraday, so they'd
+    # have NO protected floor. The QuarterlyHoldManager is the authoritative source of
+    # the quarterly-hold share COUNT, so overlay its holdings onto the replay. Two
+    # cold-2nd (2026-07-12) hardenings baked in:
+    #   • MERGE, never overwrite: qhm = min(max(claim, replay_qhm), net - forever6). The
+    #     overlay may only RAISE qhm above what the tagged-fill replay proved — a
+    #     stale/lower quarterly_holds.json must NEVER claw back a correctly-tagged QH-
+    #     fill's protection (that loss would be invisible to the never-shrink guard,
+    #     which compares only the FINAL result to the persisted baseline).
+    #   • SKIP drifted symbols: a symbol whose Alpaca net != summed fills must stay
+    #     FROZEN. Overlaying it would force sum==net and silently absorb the drift into
+    #     intraday, masking a real discrepancy. Its floor is set on a later clean run
+    #     once drift resolves; until then drift freezes all sells there.
+    # For a clean (non-drift) symbol the tiers already sum to net, so moving shares
+    # intraday→qhm preserves both net and the sum==net invariant (no fabrication).
+    for _sym, _qhm_qty in (qhm_holdings or {}).items():
+        _ent = ledger["positions"].get(_sym)
+        if not _ent:
+            continue
+        if abs(float(_ent.get("drift", 0.0) or 0.0)) > _QTY_EPS:
+            continue  # drifted → frozen; do not mask by forcing sum==net
+        _net = float(_ent.get("alpaca_net_qty", 0.0) or 0.0)
+        _f6 = float(_ent["tiers"]["forever6"]["qty"] or 0.0)
+        _replay_qhm = float(_ent["tiers"]["qhm"].get("qty", 0.0) or 0.0)
+        try:
+            _qhm = min(max(round(float(_qhm_qty), 6), round(_replay_qhm, 6)),
+                       round(_net - _f6, 6))
+        except (TypeError, ValueError):
+            continue
+        # Only act when the overlay RAISES qhm above the replay; if the replay already
+        # proved >= the claim (or there's no room), leave the replay's tiers untouched.
+        if _qhm <= _QTY_EPS or _qhm <= _replay_qhm + _QTY_EPS:
+            continue
+        _intra_avg = _ent["tiers"]["intraday"].get("avg_cost", 0.0)
+        _ent["tiers"]["qhm"]["qty"] = round(_qhm, 6)
+        _ent["tiers"]["intraday"]["qty"] = round(_net - _qhm - _f6, 6)
+        # Best-effort cost basis for the reclassified shares (floor only needs qty; the
+        # future dip-add rule refines qhm avg_cost from the QHM manager's entry price).
+        if not _ent["tiers"]["qhm"].get("avg_cost"):
+            _ent["tiers"]["qhm"]["avg_cost"] = _intra_avg
 
     # NEVER-SHRINK-A-PROTECTED-FLOOR: compare the rebuild to the persisted baseline.
     # A protected tier (qhm/forever6) going DOWN vs the current ledger = truncated

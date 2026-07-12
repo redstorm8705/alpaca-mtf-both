@@ -169,6 +169,38 @@ def get_quarterly_hold_symbols() -> frozenset[str]:
         return _fallback
 
 
+def get_quarterly_hold_quantities() -> dict[str, int]:
+    """{symbol: qty_filled} for ACTIVE quarterly holds — the AUTHORITATIVE source of
+    which shares are QHM-tier. Read by the ownership ledger (execution.ownership_guard)
+    to attribute the qhm tier's protected floor: legacy QHM buys predate the
+    client_order_id tier-tagging, so a fill-based ledger counts them as intraday
+    (floor=0, unprotected). This gives the maintainer the true qhm share count so
+    NVDA/GOOGL etc. get a real never-sell floor.
+
+    Fail-CLOSED: an existing-but-unreadable/corrupt state file RAISES so the caller (the
+    ledger maintainer) leaves the ledger at its last-good state rather than silently
+    dropping a quarterly-hold's protected floor to 0. A genuinely-absent file, or a book
+    with no active holds, returns {} (there is nothing to attribute)."""
+    if not _QHM_STATE_FILE.exists():
+        return {}
+    try:
+        _raw = json.loads(_QHM_STATE_FILE.read_text())
+        return {
+            sym: int(pos.get("qty_filled", 0) or 0)
+            for sym, pos in _raw.items()
+            if isinstance(pos, dict)
+            and pos.get("state") in _QHM_ACTIVE_STATES
+            and int(pos.get("qty_filled", 0) or 0) > 0
+        }
+    except Exception as _qhm_qty_err:
+        logger.critical(
+            "get_quarterly_hold_quantities: state file present but unreadable/corrupt "
+            "(%s) — raising so the ledger maintainer fails CLOSED (keeps last-good)",
+            _qhm_qty_err,
+        )
+        raise
+
+
 def _register_symbol(symbol: str) -> None:
     _quarterly_hold_symbols.add(symbol)
 
@@ -661,7 +693,7 @@ class QuarterlyHoldManager:
 
                 self._maybe_enter_earnings_hold(pos)
                 if pos.state == HoldState.PENDING_EARNINGS:
-                    continue  # type: ignore[unreachable]  # mypy: side-effect changes state
+                    continue  # type: ignore[unreachable]  # state set by side-effect
 
                 if pos.entry_day:
                     try:

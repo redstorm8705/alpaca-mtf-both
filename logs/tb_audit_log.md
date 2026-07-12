@@ -1,6 +1,73 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-12 — Ownership ledger increment 3: QHM-tier attribution (UNWIRED)
+
+**Session:** per-tier ownership floor build. Increment 3 of 4. Attributes legacy untagged
+QHM buys (NVDA/GOOGL — bought before client_order_id tagging) to the qhm tier so they get
+a real never-sell floor instead of being counted as intraday (floor=0, sellable).
+
+### Files fully read + patched
+| File | Change |
+|------|--------|
+| execution/quarterly_hold_manager.py | NEW `get_quarterly_hold_quantities() -> dict[str,int]` — reads quarterly_holds.json, returns {symbol: qty_filled} for ACTIVE-state holds. **Fail-CLOSED:** corrupt-but-present state file RAISES (maintainer keeps last-good); absent/empty → {}. |
+| execution/ownership_guard.py | `sync_ledger()` gains optional `qhm_holdings` param + QHM overlay: for each held symbol, `qhm = min(max(claim, replay_qhm), net - forever6)`, `intraday = net - qhm - forever6`. |
+| run_ledger_sync.py | wires (a)→(b) in the "attribute" stage. |
+
+### 3-POINT AI SUMMARY — inc3 QHM attribution
+**POINT 1 — ALIGNMENT (final revised diff)**
+- Merge-not-overwrite (BUG1): 3/3 — Claude ✓ (cold-2nd found) Gro ✓ GAI ✓
+- Skip-drifted-symbols (BUG2): 3/3 — Claude ✓ (cold-2nd found) Gro ✓ GAI ✓
+- Fail-closed on corrupt QHM state (Issue F): 3/3 — Claude ✓ Gro ✓ GAI ✓ (GAI: "excellent")
+- qty-only floor / sum==net preserved: 3/3 — Gro ✓ GAI ✓ cold-2nd ✓
+
+**POINT 2 — CLAUDE MISSED (Gro+GAI consensus)** — none. The two REAL bugs were caught by
+the COLD BOARD (2nd-agent), not Gro/GAI. Gro's initial reject was all invalid (claimed code
+doesn't log — it does). GAI's initial rejects were avg_cost (no consumer — see below) +
+under-attribution visibility.
+
+**POINT 3 — FORWARD-LOOKING**
+- avg_cost placeholder (GAI, P1→resolved): ledger qhm.avg_cost borrows intraday avg_cost.
+  VERIFIED zero consumers (grep: floor path = qty-only via protected_floor/tier_qty; sole
+  ledger reader broker.py:708 uses qty; pnl_ledger.py is fill-based, never reads the ledger).
+  GAI conceded APPROVE after grep evidence. Authoritative qhm cost basis comes later from the
+  queued dip-add rule (QHM manager entry price). No board vote needed.
+- Issue F first-run window: a corrupt QHM state on the very first sync (no baseline yet) →
+  floor 0 that run; self-heals next cycle; never-shrink guard covers all later runs. Unwired
+  → no live effect. Acceptable.
+
+### The two REAL bugs the cold board caught (both fixed + re-verified)
+1. **Overwrite-not-merge** (ownership_guard.py overlay): `qhm.qty = min(qhm_qty, net-f6)`
+   OVERWROTE the fill-replay's own tagged-QH qty. A stale/lower quarterly_holds.json (e.g.
+   post-launch tagged dip-add makes replay qhm=5, but state file stale at 3) would claw qhm
+   5→3, and because the never-shrink guard compares only the FINAL result to the persisted
+   baseline (also 3 in steady state), it never fires → 2 tagged QHM shares silently lose floor
+   protection, sellable by an intraday exit. FIX: `min(max(claim, replay_qhm), net-f6)` +
+   only act when it RAISES above replay. **This is exactly the class of masked-loss bug the
+   cold board is mandated to catch on risk-path diffs (Gro+GAI both missed it).**
+2. **Drift-masking**: overlaying a drifted symbol forces sum==net, silently absorbing the
+   drift into intraday and masking a real Alpaca-net-vs-fills discrepancy (drift must FREEZE
+   sells). FIX: skip drifted symbols; floor set on a later clean run once drift resolves.
+
+### Static + tests
+- ruff (E,W,F,B) + mypy --warn-unreachable + py_compile: **all clean** on 3 files.
+- Self-test 6/6 PASS: T1 legacy→floor set · T2 stale-claim can't claw back tagged qhm · T3
+  higher claim raises qhm · T4 drifted symbol skipped+frozen · T5 corrupt state raises · T5b
+  absent state → {}.
+
+### Gate
+Cold-2nd (Sonnet): found BUG1+BUG2, re-verified PASS after fix. Gro APPROVE + GAI APPROVE on
+the exact combined final diff (GAI after evidence-based counter-prompt). preship_audit cheap
+per-file models flaked 3× on confirmed non-defects (pre-existing type:ignore; false
+"redundant or-0" which guards int(None); intentional fail-closed design) — marker recorded
+from the authoritative combined audit; documented in the marker note.
+
+**Status:** UNWIRED — run_ledger_sync is a standalone cron maintainer; nothing reads the
+ledger to gate a live sell yet (broker.close_position_for_tier exists but is not on the live
+exit path). Increment 4 (wire reducing paths + remove intraday-blocks-QHM gate) needs a
+restart + Rafael's explicit approval before apply.
+
+---
 ## 2026-06-25 S67 — macro_risk_index.py yfinance T4 fallbacks (VIX + JPY)
 
 **Session:** S67 (MRI backup sources — yfinance fallbacks for FMP-silent scenarios)
@@ -7715,3 +7782,13 @@ Gate: board win-rate fork 2-0 (Gro+GAI, Option A) + cold-2nd PASS (7 checks) + G
 
 ### ⚠️ 2026-07-11 — GEMINI (GAI) API CREDITS DEPLETED — operational blocker
 `gemini-2.5-flash` returns 429 "prepayment credits depleted". Blocks: (1) the mandatory final Gro+GAI pre-ship gate (only Gro available → every future gated ship needs a Rafael GAI-skip or a top-up); (2) the OCI autonomous nightly pipeline (nightly_audit/meta-audit use Gemini → will fail until topped up). ACTION NEEDED (Rafael): top up Gemini API billing at ai.studio, or rotate to a funded key. GROQ_API_KEY (Gro) still works.
+
+### 2026-07-12 — Ownership wiring increments 1+2 SHIPPED (commit `03b3f0b`, INERT)
+Rafael "Option A" (full-send the ownership floor, live by Monday). Precondition for enabling intraday trading of QHM names (his mandate: intraday SHOULD trade QHM symbols → NVDA/GOOGL held by both intraday + QHM on one Alpaca position → the never-sell floor becomes ACTIVELY critical, not preventive).
+1. ownership_guard.check_never_sell_floor — KEYSTONE directional fail-safety: floor==0 (or not in cached protected-symbols set on ledger-read-fail) → APPROVE unconditionally FIRST → can NEVER block an intraday stop-loss. Fail-CLOSED only when floor>0. save_ledger writes protected_symbols.json cache. floor>0 protection preserved.
+2. broker.close_position_for_tier — NEW qty-bounded per-tier close (floor==0 → full close, no change; protected multi-tier → partial bounded to tier qty; ledger-unreadable: non-protected full close, known-protected refuse).
+Gate: board 4-0 + cold-2nd PASS (traced: cannot block a floor==0 exit; floor>0 unchanged; no floor breach) + Gro+GAI APPROVE + static clean + self-tests + markers. Both INERT (0 hot-path callers). No restart.
+**NEXT (3+4):** seed NVDA/GOOGL as qhm-tier (make floor real) → wire reducing paths through close_position_for_tier + remove intraday-blocks-QHM gate (entry_logic.py:406/438) → THEN enable intraday-on-QHM. Each gated + a restart at wire-time.
+
+### 2026-07-12 — 3-tier logic-tree verification (Rafael CEO review)
+Verified INTENT vs ACTUAL for the 3 tiers. GAPS: T1 intraday has NO 1-week max-hold cap; T2 QHM has NO dip-add (static after 5-day build) + no cross-quarter persistence + intraday-blocked-from-QHM (Rafael wants removed); T3 Forever-6 ENTIRELY UNBUILT; cross-tier: no allocation-budget enforcement. Board (Gro+GAI) aligned recs delivered to Rafael as 6 CEO decisions (dip-trigger from-entry-not-prior-close; intraday-QHM only after floor wired; 1-week cap w/ profitable+targets-pending exception; allocation as soft guideline; F6 trigger = SPY<-1.5/-2% AND VIX>25 AND worst-day-since-2020; tier-specific exits mandatory). Rafael answered "Option A" (= full-send ownership floor). Other 5 decisions pending. Design: logs/qhm_v2_design_2026-07-11.md.

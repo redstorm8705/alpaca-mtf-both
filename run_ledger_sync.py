@@ -109,6 +109,7 @@ def sync_once() -> dict:
             fetch_all_fills, fetch_all_orders, fetch_positions, build_coid_map,
         )
         from execution.ownership_guard import sync_ledger, tier_of_coid
+        from execution.quarterly_hold_manager import get_quarterly_hold_quantities
 
         stage = "fetch"
         fills = fetch_all_fills()
@@ -117,9 +118,17 @@ def sync_once() -> dict:
 
         stage = "attribute"
         coid_map = build_coid_map(orders)
+        # Authoritative qhm-tier share counts. Legacy QHM buys are untagged → they land
+        # in the intraday tier of the fill-based ledger; the QHM manager knows the real
+        # quarterly holdings, giving NVDA/GOOGL etc. a true never-sell floor. Absent
+        # file / no active holds → {} (nothing to attribute). A corrupt-but-present
+        # state file RAISES (fail-closed) — caught by sync_once's try/except, leaving
+        # the ledger at last-good rather than dropping a hold's floor to 0.
+        qhm_holdings = get_quarterly_hold_quantities()
 
         stage = "sync"
-        led = sync_ledger(fills, positions, coid_by_order_id=coid_map)
+        led = sync_ledger(fills, positions, coid_by_order_id=coid_map,
+                          qhm_holdings=qhm_holdings)
 
         stage = "instrument"
         elapsed = round(time.monotonic() - t0, 2)
