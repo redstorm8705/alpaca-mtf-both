@@ -15,8 +15,12 @@ can NEVER drop below the protected floor (forever6_qty + qhm_qty) — the never-
 Two catastrophic-mode defenses baked in:
   1. The floor is LEDGER-derived ONLY, never recomputed from Alpaca's (possibly drifted)
      net position — a drift must FREEZE sells, not silently shrink the floor.
-  2. Fail-CLOSED on any ambiguity (stale/unreadable ledger, Alpaca read failure, drift,
-     unknown tier) — never sell when unsure.
+  2. Directional fail-safety (board 4-0, 2026-07-11): fail-CLOSED (block the sell) on any
+     ambiguity ONLY for a symbol that HAS a protected floor (qhm/forever6 > 0). For a
+     symbol with NO protected floor there is nothing to protect, so an ordinary reducing
+     order (an intraday stop-loss/target) is APPROVED unconditionally and FAILS OPEN even
+     on a ledger/Alpaca read error — because blocking a legitimate exit (unbounded loss)
+     is the worse error. A cached protected-symbols set decides this without a live read.
 
 Rafael-locked (2026-07-09): ring-fenced names are LONG-ONLY for the share tiers
 (bearish exposure → options program). So a short on a floor>0 symbol is REJECTED here.
@@ -37,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _LEDGER_PATH = _ROOT / "data" / "state" / "ownership_ledger.json"
+# Lightweight cache of symbols that currently have a nonzero protected (qhm/forever6)
+# floor. Written by save_ledger; read by the guard ONLY when the main ledger is
+# unreadable, so a symbol that was never protected still fails OPEN (never blocks an
+# ordinary intraday exit). Today this is empty (all positions intraday).
+_PROTECTED_SET_PATH = _ROOT / "data" / "state" / "protected_symbols.json"
 
 Tier = Literal["intraday", "qhm", "forever6"]
 _TIERS: tuple[str, ...] = ("intraday", "qhm", "forever6")
@@ -105,7 +114,8 @@ def load_ledger() -> dict:
 
 
 def save_ledger(ledger: dict) -> None:
-    """Atomic tmp→replace write (RC-5)."""
+    """Atomic tmp→replace write (RC-5). Also refreshes the lightweight
+    protected-symbols cache the guard uses when the main ledger is unreadable."""
     _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = _LEDGER_PATH.with_suffix(".tmp")
     with open(tmp, "w") as f:
@@ -113,6 +123,32 @@ def save_ledger(ledger: dict) -> None:
         f.flush()
         os.fsync(f.fileno())
     tmp.replace(_LEDGER_PATH)
+    # Refresh the protected-symbols cache (qhm/forever6 names). RC-5 atomic.
+    try:
+        _prot = sorted(s for s in ledger.get("positions", {})
+                       if protected_floor(ledger, s) > _QTY_EPS)
+        _pt = _PROTECTED_SET_PATH.with_suffix(".tmp")
+        with open(_pt, "w") as f:
+            json.dump(_prot, f)
+            f.flush()
+            os.fsync(f.fileno())
+        _pt.replace(_PROTECTED_SET_PATH)
+    except Exception as e:  # RC-3: logged; cache is a non-critical fallback.
+        logger.warning("protected_symbols cache write failed: %s", e)
+
+
+def _cached_protected_symbols() -> set:
+    """Symbols with a nonzero protected floor, from the lightweight cache. Read by the
+    guard ONLY when the main ledger is unreadable, so a never-protected symbol still
+    fails OPEN. Absent/unreadable → empty set (fail OPEN — a genuinely protected symbol
+    would be in the cache)."""
+    try:
+        data = json.loads(_PROTECTED_SET_PATH.read_text())
+        if isinstance(data, list):
+            return {str(s) for s in data}
+    except Exception as e:  # RC-3: logged; missing cache is normal (nothing protected).
+        logger.debug("_cached_protected_symbols: read failed, empty: %s", e)
+    return set()
 
 
 class LedgerError(Exception):
@@ -166,50 +202,57 @@ def check_never_sell_floor(
     if tier not in _TIERS:
         return GuardResult("REJECT", 0.0, f"unknown tier {tier!r}")
 
-    # STEP 0 — fail-closed preconditions
+    # ── KEYSTONE — fail OPEN for a non-protected symbol (board 4-0, 2026-07-11).
+    # A symbol with NO protected floor (qhm+forever6 == 0) has nothing to protect, so an
+    # ordinary reducing order (an intraday stop-loss/target) MUST be approved — blocking
+    # or shrinking a legitimate exit is the catastrophic error, worse than floor risk.
+    # Protected status needs no live Alpaca read; on a ledger-read failure we
+    # consult the lightweight cache so a never-protected symbol still fails OPEN.
     try:
         ledger = load_ledger()
     except LedgerError as e:
-        return GuardResult("REJECT", 0.0, f"ledger unreadable — fail closed: {e}")
-    if alpaca_net_qty is None:
-        return GuardResult("REJECT", 0.0, "Alpaca net qty unavailable — fail closed")
+        if symbol not in _cached_protected_symbols():
+            return GuardResult("APPROVE", qty,
+                               "ledger unreadable, symbol not protected — exit ok")
+        return GuardResult("REJECT", 0.0,
+                           f"ledger unreadable for PROTECTED {symbol} — closed: {e}")
 
+    floor = protected_floor(ledger, symbol)      # ledger-derived ONLY (forever6 + qhm)
+    if floor <= _QTY_EPS:
+        # No protected floor → nothing to protect. Approve the full order regardless of
+        # ledger drift or Alpaca-net availability (those only bind when a floor exists).
+        return GuardResult("APPROVE", qty, "no protected floor — exit allowed")
+
+    # ── The symbol IS protected (floor > 0) → engage the fail-CLOSED protection logic.
+    if alpaca_net_qty is None:
+        return GuardResult("REJECT", 0.0,
+                           "Alpaca net unavailable for PROTECTED symbol — fail closed")
     _ent = _entry(ledger, symbol)
     if _ent is not None:
         _drift = float(_ent.get("drift", 0.0) or 0.0)
         if abs(_drift) > _QTY_EPS:
             return GuardResult(
                 "REJECT", 0.0, f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen")
-
-    # STEP 1 — reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
+    # reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
     ledger_sum = get_combined_symbol_exposure(ledger, symbol)
     if abs(ledger_sum - float(alpaca_net_qty)) > _QTY_EPS:
         return GuardResult(
             "REJECT", 0.0,
             f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed")
 
-    floor = protected_floor(ledger, symbol)      # ledger-derived ONLY (forever6 + qhm)
     own = tier_qty(ledger, symbol, tier)
     net = float(alpaca_net_qty)
-    # A protected tier (qhm / forever6) selling its OWN shares reduces its own
-    # contribution to the floor, so its sell must only stay above the OTHER protected
-    # tiers' qty — NOT the full floor (which would wrongly block QHM from exiting its
-    # own shares). For a non-protected tier (intraday) the effective floor is the full
-    # forever6+qhm. Example: net=4 intraday=1 qhm=2 f6=1 → a QHM sell of its own 2 must
-    # only respect forever6(1), so effective_floor=1 and QHM can sell both.
+    # A protected tier (qhm/forever6) selling its OWN shares reduces its own share
+    # to the floor, so it need only stay above the OTHER protected tiers' qty. Example:
+    # net=4 intraday=1 qhm=2 f6=1 → a QHM sell of its own 2 respects only forever6(1).
     _own_protected = own if tier in _PROTECTED_TIERS else 0.0
     effective_floor = floor - _own_protected
 
-    # STEP 2 — short on a ring-fenced (floor>0) name: REJECTED (long-only,
-    # Rafael 2026-07-09; bearish exposure → options program).
+    # short on a ring-fenced (floor>0) name → REJECT (long-only; shorts → options).
     if str(side).lower() == "short":
-        if floor > _QTY_EPS:
-            return GuardResult(
-                "REJECT", 0.0, "ring-fenced name is long-only (shorts→options)")
-        # floor==0 → no protected exposure → ordinary short (net may go negative).
-        return GuardResult("APPROVE", qty, "no protected floor — short permitted")
+        return GuardResult("REJECT", 0.0, "ring-fenced name is long-only (shorts→opts)")
 
-    # STEP 3 — sells, per tier
+    # sells, per tier
     if tier == "forever6":
         if not is_authorized_f6_trim:
             return GuardResult(

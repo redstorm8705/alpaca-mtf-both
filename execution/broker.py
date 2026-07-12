@@ -690,6 +690,53 @@ def close_position(symbol: str) -> bool:
         return False
 
 
+def close_position_for_tier(symbol: str, tier: str = "intraday") -> bool:
+    """Close ONLY the shares `tier` owns for `symbol` — NEVER the whole Alpaca position
+    (which would flatten other tiers' shares in the same symbol: the 2026-07-02 Movers
+    mass-dump root). Board 4-0 SAFE, 2026-07-11.
+
+    - Symbol with NO protected floor (single-tier — the common intraday case): this is
+      exactly a full close (nothing else to protect), so it delegates to close_position()
+      — zero behavior change vs today.
+    - Protected multi-tier symbol (qhm/forever6 hold shares): closes ONLY the tier's owned
+      qty via a bounded partial, leaving the qhm/forever6 floor untouched.
+    Fails SAFE: on a ledger-read failure a non-protected symbol still gets a full close
+    (nothing to protect); a KNOWN-protected symbol is refused rather than risk the floor.
+    """
+    from execution import ownership_guard as _og
+    try:
+        _ledger: "dict | None" = _og.load_ledger()
+    except Exception:
+        _ledger = None
+
+    if _ledger is None:
+        # Ledger unreadable → cannot bound to one tier. Non-protected → safe full close;
+        # known-protected → refuse (never risk the floor on a blind full close).
+        if symbol in _og._cached_protected_symbols():
+            logger.error(
+                f"[{symbol}] close_position_for_tier({tier}): ledger unreadable for a "
+                f"PROTECTED symbol — refusing full close to preserve the never-sell floor."
+            )
+            return False
+        return close_position(symbol)
+
+    if _og.protected_floor(_ledger, symbol) <= _og._QTY_EPS:
+        return close_position(symbol)          # single-tier / nothing to protect → full
+
+    # Protected multi-tier: close only this tier's own shares (never the whole position).
+    _tq = int(_og.tier_qty(_ledger, symbol, tier))
+    if _tq < 1:
+        logger.warning(
+            f"[{symbol}] close_position_for_tier({tier}): tier owns 0 — nothing to close."
+        )
+        return True
+    logger.info(
+        f"[{symbol}] close_position_for_tier({tier}): protected symbol — bounding close to "
+        f"the tier's {_tq} share(s), preserving the qhm/forever6 floor."
+    )
+    return partial_close_position(symbol, _tq, tier)
+
+
 def close_all_positions() -> bool:
     """Close all open positions. Used for kill switch."""
     client = _get_trading_client()
