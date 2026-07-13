@@ -43,7 +43,6 @@ import os
 import sys
 import json
 import time
-from ui_tokens import LIVE_CLOCK_HTML  # live-clock rule (2026-07-06)
 import logging
 import argparse
 import numpy as np
@@ -1149,8 +1148,10 @@ def run_scan() -> dict:
         {**r, "mode": "0DTE"} for r in dte_rejections
     ]
 
+    _scan_now = datetime.now(PT)
     result = {
-        "scan_time":          datetime.now(PT).isoformat(),
+        "scan_time":          _scan_now.isoformat(),
+        "next_scan_ts":       (_scan_now + timedelta(minutes=15)).isoformat(),  # 15-min cron cadence
         "expiry":             weekly_expiry,
         "today":              today_str,
         "in_window":          in_win_weekly,
@@ -1530,7 +1531,8 @@ def generate_html(data: dict) -> str:
     dte_recs    = data.get("recs_0dte", [])
     rejections  = data.get("rejections", [])   # P2-OPTIONS-REJECT
     events      = data["week_events"]
-    generated   = data["generated"]
+    scan_time   = data.get("scan_time", "")       # freshness pill (Luke step A)
+    next_scan_ts = data.get("next_scan_ts", "")
     expiry      = data["expiry"]
     today_str   = data.get("today", date.today().isoformat())
     win_label   = data["window_label"]
@@ -1540,7 +1542,6 @@ def generate_html(data: dict) -> str:
     vix_tertile  = data.get("vix_tertile", "—")
 
     exp_display = expiry_display(expiry)
-    exp_full    = datetime.strptime(expiry, "%Y-%m-%d").strftime("%A, %B %-d")
     dte_display = expiry_display(today_str)
 
     high_count_weekly = sum(1 for r in weekly_recs if r.get("conviction") == "HIGH")
@@ -1609,6 +1610,12 @@ def generate_html(data: dict) -> str:
       padding:5px 11px;border:1px solid #252847;border-radius:6px;white-space:nowrap;
       transition:color .15s,border-color .15s}}
     .nav-back:hover{{color:#00e5ff;border-color:#00e5ff}}
+    /* ── freshness pill (Luke step A: kill screensaver clock, show data liveness) ── */
+    .fresh-pill{{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;
+      border:1px solid #252847;font-size:11px;font-weight:600;color:#b8bdd4;font-variant-numeric:tabular-nums}}
+    .fresh-dot{{width:8px;height:8px;border-radius:50%;background:#30d158;box-shadow:0 0 6px currentColor;
+      animation:fp 2s infinite}}
+    @keyframes fp{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}
     .win-pill{{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;
       border:1px solid;font-size:11px;font-weight:600;letter-spacing:.08em}}
     .win-pill.open{{border-color:#30d158;color:#30d158}}
@@ -1695,15 +1702,9 @@ def generate_html(data: dict) -> str:
 <body>
 
 <div class="top-nav">
-  <div style="display:flex;align-items:center;gap:16px">
-    <div>
-      <span class="nav-title">Options Scanner</span>
-      <span class="nav-sub">
-        Weekly {exp_full} ({exp_display}) · {len(weekly_recs)} rec{'s' if len(weekly_recs)!=1 else ''}
-        &nbsp;·&nbsp; 0DTE {dte_display} · {len(dte_recs)} rec{'s' if len(dte_recs)!=1 else ''}
-        &nbsp;·&nbsp; {generated} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}
-      </span>
-    </div>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span class="nav-title">Options Scanner</span>
+    <span class="fresh-pill"><span class="fresh-dot" id="freshDot"></span><span id="freshTxt">updated · next —</span></span>
   </div>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <a href="scan_results.html" class="nav-back">← Scanner</a>
@@ -1772,6 +1773,26 @@ def generate_html(data: dict) -> str:
     <div style="color:#b8bdd4">0DTE blocked in High VIX — hard close 3:45 ET regardless of P&L</div>
   </div>
 </div>
+<script>
+  // Freshness pill (Luke step A): "updated Xm ago · next in Ym Zs", dot color by age.
+  var SCAN_TS = "{scan_time}", NEXT_TS = "{next_scan_ts}";
+  function fmtFresh() {{
+    var txt = document.getElementById("freshTxt"), dot = document.getElementById("freshDot");
+    if (!txt) return;
+    var now = new Date(), scan = new Date(SCAN_TS), next = new Date(NEXT_TS);
+    if (isNaN(scan)) {{ txt.textContent = "scan time —"; return; }}
+    var ageMin = Math.max(0, Math.floor((now - scan) / 60000));
+    var nxt = isNaN(next) ? -1 : Math.max(0, Math.floor((next - now) / 1000));
+    if (nxt > 0) {{
+      var m = Math.floor(nxt / 60), s = nxt % 60;
+      txt.textContent = "updated " + ageMin + "m ago · next in " + m + "m " + (s < 10 ? "0" : "") + s + "s";
+    }} else {{
+      txt.textContent = "updated " + ageMin + "m ago · refreshing…";
+    }}
+    if (dot) dot.style.background = ageMin < 5 ? "#30d158" : (ageMin < 16 ? "#ff9f0a" : "#ff3b30");
+  }}
+  fmtFresh(); setInterval(fmtFresh, 1000);
+</script>
 </body>
 </html>"""
 
