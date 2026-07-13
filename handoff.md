@@ -9,6 +9,27 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
+**▶ TWO ACTIVE THREADS:** (A) **QHM dip-add rule — magnitudes BGG-ALIGNED + Rafael APPROVED, ready to
+BUILD (gated)** — see block just below; full spec `logs/qhm_v2_design_2026-07-11.md` PART 1 FINALIZED.
+(B) **Ownership 4a activation — Monday-gated:** blocker #1 (QHM tier=qhm) CLEARED `main@a8584ac`; blocker
+#2 REMAINS = verify OCI ledger populated + `protected_symbols.json` present (Monday RTH cron runs inc3
+code) BEFORE flipping `OWNERSHIP_GUARD_ENFORCE=True`. Chokepoint is shipped DARK (`main@488a893`).
+
+**QHM DIP-ADD RULE — FINALIZED (board 2 seats + Gro + GAI, Rafael APPROVED 2026-07-12). NEXT = BUILD
+(gated: full patch sequence on execution/quarterly_hold_manager.py 1988L + new config.py constants).**
+- Rung A: price ≤ cost_avg×(1−0.02) → small add, capped AT target weight.
+- Rung B: price ≤ cost_avg×(1−0.05) → aggressive add (size ≥ existing position), MAY exceed target up to
+  a **1.375× target ceiling (27.5% equity)** enforced as a **HARD PRE-FILL cap** + a **max-shares-per-name
+  cap** recomputed quarterly (`floor(ceiling_wt×equity/price_at_review)`). Board OVERRODE Gro/GAI "no cap":
+  cost-avg triggers re-arm on a falling avg → ladder can hit ~34% equity before the price floor fires.
+- Hard STOP-ADDING floor: **−15% below FIRST-ENTRY (tranche1)** → escalate to board (NVDA: below $169.17).
+- Trigger off COST-AVERAGE; stop-floor off FIRST-ENTRY. Anti-osc: max 3 adds/qtr, ≥2 days apart, none in
+  final ~7d pre-earnings, keep day-3 re-confirm.
+- **NVDA one-time CATCH-UP: +1 share → 15.2%** (unanimous; NOT +2/22.7%). ⚠️ LIVE paper order tagged
+  tier="qhm" — needs Rafael's explicit go before it fires. GOOGL = no action (≈target).
+- config constants to add: QHM_DIP_ADD_RUNG_A_PCT=0.02, _RUNG_B_PCT=0.05, _CEILING_MULT=1.375,
+  _STOP_FLOOR_PCT=0.15, _MAX_PER_QUARTER=3, _MIN_DAYS_BETWEEN=2, _NO_ADD_DAYS_PRE_EARNINGS=7.
+
 **NEW HARD RULE — DURABLE SYNC RULE (CLAUDE.md §, Rafael mandate 2026-07-12, Gro+GAI APPROVE
 marker `a97ea0d7686f`).** On EVERY ship AND EVERY time Board+Gro+GAI align on a
 protocol/rule/decision/scope — *even with zero code shipped* — sync all 5 channels the SAME turn:
