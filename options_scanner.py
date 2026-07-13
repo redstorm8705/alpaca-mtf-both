@@ -1617,6 +1617,15 @@ def generate_html(data: dict) -> str:
     .col.wk .ch-t{{color:#30d158}}
     .col.zd .ch-t{{color:#ff9f0a}}
     .ch-s{{font-size:10px;color:#8a94ae;display:block;margin-top:2px;line-height:1.4}}
+    /* ── ⓘ progressive-disclosure popover (Luke UX 2026-07-13: kill paragraph text) ── */
+    .xpl{{display:inline;position:relative}}
+    .xpl summary{{display:inline;cursor:pointer;color:#8a94ae;font-size:11px;font-weight:600;
+      list-style:none;margin-left:6px;vertical-align:middle}}
+    .xpl summary::-webkit-details-marker{{display:none}}
+    .xpl-pop{{position:absolute;left:0;top:20px;z-index:30;width:280px;max-width:78vw;background:#0d1220;
+      border:1px solid #2b3157;border-radius:8px;padding:10px 12px;font-size:11px;font-weight:400;
+      color:#b8bdd4;line-height:1.55;box-shadow:0 8px 24px rgba(0,0,0,.55)}}
+    .xpl-pop b{{color:#e8ecff;font-weight:600}}
     .col table{{width:100%}}
     .col thead th{{padding:6px 10px;font-size:9px}}
     .col td{{padding:7px 10px}}
@@ -1723,19 +1732,17 @@ def generate_html(data: dict) -> str:
 
   <div class="col zd">
     <div class="colhead">
-      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional</span>
-      <span class="ch-s">buy calls &amp; puts · {dte_display} same-day · capture the intraday swing either way · <b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET{'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
+      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional · {len(dte_recs)}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium. SPY/QQQ + Mag 7.</span></details></span>
+      <span class="ch-s"><b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET{'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
     </div>
-    <div class="strat-explainer"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium, <b>hard close 3:45 ET</b>. SPY/QQQ + Mag 7.</div>
     {dte_table}
   </div>
 
   <div class="col wk">
     <div class="colhead">
-      <span class="ch-t">📈 Weekly directional</span>
-      <span class="ch-s">buy calls / puts · {exp_display} expiry · entry 10:00–11:30 / 14:00–15:00 ET · click a row to expand</span>
+      <span class="ch-t">📈 Weekly directional · {len(weekly_recs)} · {exp_display}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option.</b> Profit if the underlying moves your way before expiry; risk capped at premium paid. A bet on <b>movement</b>.</span></details></span>
+      <span class="ch-s">entry 10:00–11:30 / 14:00–15:00 ET · click a row to expand</span>
     </div>
-    <div class="strat-explainer"><b>You BUY the option.</b> Profit if the underlying moves your way before expiry; risk capped at premium paid. A bet on <b>movement</b>.</div>
     {weekly_table}
   </div>
 
