@@ -103,3 +103,21 @@ Evolution Mandate specifically called out as the bot's biggest structural gap.
   the deflated-Sharpe/multiple-testing guard (#5) is not optional here, it is co-required with (1).
 - **NEXT:** Rafael to decide whether to graduate item (1) into a Feature-Design + full-board build,
   ranked against the S59 roadmap whitespace. No build started — scope only, as requested.
+
+---
+
+## 2026-07-13 — Rafael directives (updates)
+- **NVDA QHM catch-up DONE + LIVE:** +1 share, NVDA now 2 sh @ $203.13 = 15.1% equity, GTC stop for
+  2 @ $169.21. Executed stop-safe (bot briefly stopped to avoid state race; cancel→buy→resubmit→state
+  update→restart). Dip-add completes the rest on a dip below $203.13.
+- **NEWS ARCHITECTURE REFINED (Rafael):** keep MACRO/headline news DISPLAY-ONLY (tariffs/Fed/geo → MRI,
+  no per-name gating — no invariant reversal). ADD a per-name ACTIONABLE layer ONLY for stock-specific
+  catalysts on held/candidate names: classify (split/buyback=positive→can add if QHM; offering/dilution/
+  guidance-cut=negative→block/exit) and act DYNAMICALLY (not static thresholds). Engine must SORT
+  stock-specific (act) from macro-noise (display) even when both hit at once ("NVDA split" vs "Trump
+  tariffs"). This narrows the board-vote to stock-specific-on-held-names only. Folds into catalyst engine.
+- **IC/ICIR ENGINE — Rafael: begin building.** Plain-English + diff + timeline given. NO Claude/GAI API
+  for the engine (pure stats: numpy/scipy/pandas, free, runs on OCI); API only for the existing BGG gate
+  on proposed weight changes. Phase 1 = research/ic_engine.py (read-only): per-factor IC/ICIR/half-life +
+  bootstrap-CI + PBO from trade_events.jsonl + shadow logs. Phase 2 = OOS/walk-forward gate + weekly
+  proposal generator. Phase 3 = wire an approved weight change. ~3-4 sessions; Phase 1 ships first.
