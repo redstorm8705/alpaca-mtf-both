@@ -219,7 +219,13 @@ def _day_cell(d: date | None) -> str:
         )
 
     trades  = [t for t in (eod.get("trades") or []) if t.get("status") == "closed"]
-    pnl     = float(eod.get("pnl_today", 0) or 0)
+    # P&L display must use the SAME field the monthly total sums
+    # (compute_period_stats: alpaca_pnl if present else pnl_today) — else the
+    # "Monthly P&L" header (Σ alpaca_pnl) diverges from the visible daily cells
+    # (previously Σ pnl_today). Prefer the Alpaca-reconciled value (Rafael's
+    # Alpaca-sourced-P&L mandate); fall back to pnl_today. (Fix 2026-07-12.)
+    _ap     = eod.get("alpaca_pnl")
+    pnl     = float(_ap if _ap is not None else (eod.get("pnl_today", 0) or 0))
     n       = len(trades)
 
     if n == 0:
