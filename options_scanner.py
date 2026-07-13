@@ -1697,28 +1697,13 @@ def generate_html(data: dict) -> str:
 <!-- 5-tile stat bar -->
 <div class="stat-bar">
   <div class="stat-tile">
-    <div class="s-lbl">0DTE Recs</div>
-    <div class="s-val" style="color:{'#ff9f0a' if dte_recs else '#4a5070'}">{len(dte_recs)}</div>
-    <div class="s-sub">{high_count_dte} high · both sides · 3:45 ET close</div>
-  </div>
-  <div class="stat-tile accent">
-    <div class="s-lbl">Weekly Recs</div>
-    <div class="s-val" style="color:{'#30d158' if weekly_recs else '#4a5070'}">{len(weekly_recs)}</div>
-    <div class="s-sub">{high_count_weekly} high conviction</div>
-  </div>
-  <div class="stat-tile accent">
     <div class="s-lbl">High Conviction</div>
     <div class="s-val" style="color:{'#30d158' if high_count_total else '#4a5070'}">{high_count_total}</div>
-    <div class="s-sub">score ≥ 10/12 (both sets)</div>
-  </div>
-  <div class="stat-tile accent">
-    <div class="s-lbl">Weekly Expiry</div>
-    <div class="s-val" style="font-size:18px;margin-top:3px">{exp_display}</div>
-    <div class="s-sub">{exp_full}</div>
+    <div class="s-sub">score ≥ 10/12 · both sets</div>
   </div>
   <div class="stat-tile accent">
     <div class="s-lbl">VIX Tertile</div>
-    <div class="s-val" style="font-size:18px;margin-top:3px;color:{vix_t_col}">{vix_tertile}</div>
+    <div class="s-val" style="font-size:20px;margin-top:3px;color:{vix_t_col}">{vix_tertile}</div>
     <div class="s-sub">POST-2022-ERA regime · Vilkov 2026</div>
   </div>
 </div>
