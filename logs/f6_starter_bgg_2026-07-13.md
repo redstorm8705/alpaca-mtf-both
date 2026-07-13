@@ -49,3 +49,41 @@ diff before any live wiring.
 
 **NEXT:** Rafael adopt/amend/reject → if adopt, this becomes a Feature-Design build alongside the catalyst
 engine (which supplies the Q2 screen).
+
+---
+
+## RAFAEL DECISION (2026-07-13): ADOPTED cascade + concept ("fine with what everyone approves").
+Build proceeds in the board-amended safe form (−3% dynamic close · catalyst screen · breadth/correlation-
+ranked · segregated starter budget). ONE open parameter → the MARGIN fork below.
+
+## MARGIN FORK — BGG (Rafael: "$681 cash barely funds starters — use some margin?")
+Gro + GAI both in; cold board seat (Thorp/Taleb/Dalio) finalizing. STRONG early alignment:
+- **Q1 shallow-starter margin: Gro REJECT · GAI REJECT.** Levering into day-1 of a −3% decline is the
+  death-spiral cash-only was built to prevent. Starter stays 100% CASH.
+- **Q2 where: both = deep rungs ONLY (−13/−20).** Gro tighter ≤20%-of-MV; GAI the locked ≤30%-of-MV/tranche.
+- **Q3: margin re-opens BOTH ruin findings** (ammo cannibalization; margin-call forced-liquidation of the
+  never-sell book) — mitigated (deep-only + cap + pre-call alerts), NOT eliminated.
+- **Q4 funding architecture: both pick (B) cash-only STARTER + bounded margin ONLY at deep rungs.**
+- **Q5 too small? both YES.** $681 cash + high-priced names = razor-thin margin buffer; a levered 6-name
+  never-sell tier on this equity has outsized margin-call risk that VIOLATES the never-sell premise. Honest
+  answer: stay cash-only / fund FEWER names (1–3) / accept slow accumulation until equity grows.
+- Board seat (leverage-ruin lens) verdict + "what Gro/GAI missed" PENDING → consolidate then to Rafael.
+
+## MARGIN FORK — FINAL BGG VERDICT (unanimous): NO MARGIN — Forever-6 stays CASH-ONLY.
+Cold board seat (Thorp/Taleb/Dalio) delivered the decisive finding Gro+GAI both MISSED:
+- **RegT margin is computed on TOTAL account equity, not per-tier.** Forever-6 shares the Alpaca
+  account with the intraday bot. Worked case: F6 on 20% margin (~$550 borrowed) + an UNRELATED intraday
+  loss of $400 (a normal bad day on $2,745) → equity $2,345 → maintenance breach → broker force-sells
+  the highest-MV liquid names (TSLA/NVDA) to cure it. **The never-sell book is liquidated by a loss that
+  had nothing to do with it.** => margin and the never-sell invariant are MUTUALLY EXCLUSIVE.
+- **Kelly:** at ~$2,745 bankroll, 6 names ~0.6-corr, basket σ~40%: ruin term ∝ L²σ² dominates growth
+  ∝ Lμ for ANY L>1 → no leverage is growth-optimal on this book until equity is large enough that a
+  maintenance call can't reach it.
+- Q-summary all 3 voices: Q1 REJECT starter-margin · Q2 (if ever) deep rungs only ≤20% MV · Q3 margin
+  re-opens both ruin findings, (ii) forced-liquidation is FATAL · Q4 Architecture B (cash starters) ·
+  Q5 YES too small for a levered 6-name never-sell.
+
+**UNANIMOUS RECOMMENDATION → Rafael:** Forever-6 = **CASH-ONLY**, fund **1-3 highest-priority names**
+(breadth/correlation-ranked) all-cash now, widen to 6 as equity compounds. RegT BP above settled cash is
+a TRAP number — locked/unused for F6. Awaiting Rafael's adopt on the cash-only/fewer-names framing → then
+Feature-Design build (F6 starter tier, cash-only) alongside the catalyst engine (Q2 screen).
