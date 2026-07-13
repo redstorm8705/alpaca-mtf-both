@@ -102,6 +102,56 @@ def _load_gex_snapshot():
     return _load_json(LOG_DIR / "gex_snapshot.json", {})
 
 
+def _compute_spy_levels() -> dict:
+    """SPY GEX regime/flip (from gex_snapshot.json) + floor-trader pivot S/R from
+    the last completed SPY daily bar (Alpaca Data API, T1). Standalone + fail-soft:
+    every field defaults to None so the dashboard card always renders. GEX may be
+    degraded (weekly expired) — pivots are always computable from the prior day."""
+    out = {"spot": None, "regime": None, "flip": None,
+           "P": None, "R1": None, "R2": None, "S1": None, "S2": None}
+    try:
+        gx = _load_gex_snapshot().get("symbols", {}).get("SPY", {})
+        out["regime"] = gx.get("label")
+        out["flip"]   = gx.get("flip_strike")
+        out["spot"]   = gx.get("spot")
+    except Exception as e:
+        logger.warning(f"SPY levels: GEX snapshot read failed: {e}")
+    try:
+        import urllib.request as _ur
+        import ssl as _ssl
+        try:
+            import certifi as _cert
+            _ctx = _ssl.create_default_context(cafile=_cert.where())
+        except ImportError:
+            _ctx = _ssl.create_default_context()
+        _k = os.getenv("ALPACA_API_KEY")
+        _s = os.getenv("ALPACA_SECRET_KEY")
+        if _k and _s:
+            # start ~12 days back so the last COMPLETED daily bar is always present
+            # (Alpaca returns bars=null when no explicit start window is given).
+            _start = (datetime.now(ZoneInfo("UTC")) - timedelta(days=12)).strftime("%Y-%m-%d")
+            url = ("https://data.alpaca.markets/v2/stocks/SPY/bars"
+                   f"?timeframe=1Day&start={_start}&limit=10&feed=iex&adjustment=raw")
+            req = _ur.Request(url, headers={"APCA-API-KEY-ID": _k,
+                                            "APCA-API-SECRET-KEY": _s})
+            with _ur.urlopen(req, context=_ctx, timeout=20) as r:
+                bars = json.load(r).get("bars") or []
+            if bars:
+                b = bars[-1]  # most recent completed daily bar
+                h, low, c = float(b["h"]), float(b["l"]), float(b["c"])
+                p = (h + low + c) / 3.0
+                out["P"]  = round(p, 2)
+                out["R1"] = round(2 * p - low, 2)
+                out["S1"] = round(2 * p - h, 2)
+                out["R2"] = round(p + (h - low), 2)
+                out["S2"] = round(p - (h - low), 2)
+                if not out["spot"]:
+                    out["spot"] = round(c, 2)
+    except Exception as e:
+        logger.warning(f"SPY levels: pivot fetch failed: {e}")
+    return out
+
+
 def _load_alpaca():
     """
     Fetch live account, positions, and open orders via direct Alpaca REST.
@@ -496,6 +546,39 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     if mri_score > 0:
         spy_sub += f" · MRI {mri_score}/100"
 
+    # SPY GEX & Levels card (Rafael 2026-07-12) — top row, directly right of the
+    # SPY Regime/MRI tile. GEX regime/flip from the snapshot (shows "computing"
+    # when the weekly is expired/degraded) + floor-trader pivot S/R (always live).
+    _lv = _compute_spy_levels()
+    _lv_regime = _lv.get("regime") or "—"
+    _lv_rcol = {"POSITIVE": "#30d158", "NEAR-FLIP": "#ffd60a",
+                "NEGATIVE": "#ff3b30"}.get(_lv_regime, "#636680")
+
+    def _fx(v):
+        return f"${v:,.2f}" if isinstance(v, (int, float)) else "—"
+
+    _lv_spot = _fx(_lv.get("spot"))
+    _lv_flip = _fx(_lv.get("flip")) if _lv.get("flip") else "computing"
+    spy_levels_card = (
+        '  <div class="kpi" style="grid-column:span 2">\n'
+        '    <div class="kpi-lbl">SPY GEX &amp; Levels</div>\n'
+        '    <div class="kpi-val" style="display:flex;align-items:baseline;'
+        'gap:10px;flex-wrap:wrap;font-size:18px">\n'
+        f'      <span>{_lv_spot}</span>\n'
+        f'      <span class="spy-badge" style="color:{_lv_rcol};'
+        f'border-color:{_lv_rcol}">GEX {_lv_regime}</span>\n'
+        f'      <span style="font-size:11px;color:var(--dim)">flip {_lv_flip}</span>\n'
+        '    </div>\n'
+        '    <div class="kpi-sub" style="line-height:1.7">\n'
+        f'      <b style="color:#ff453a">R2</b> {_fx(_lv.get("R2"))} · '
+        f'<b style="color:#ff9f0a">R1</b> {_fx(_lv.get("R1"))} · '
+        f'<b style="color:#8e8e93">P</b> {_fx(_lv.get("P"))} · '
+        f'<b style="color:#30d158">S1</b> {_fx(_lv.get("S1"))} · '
+        f'<b style="color:#0a84ff">S2</b> {_fx(_lv.get("S2"))}\n'
+        '    </div>\n'
+        '  </div>'
+    )
+
     # Kill switch gauge — read from config so paper profile (15%) matches BoD-3 runtime override
     try:
         import config as _cfg
@@ -761,6 +844,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     </div>
     <div class="kpi-sub">{spy_sub}</div>
   </div>
+{spy_levels_card}
 </div>
 
 <!-- Kill switch bar -->

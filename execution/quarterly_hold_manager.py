@@ -84,6 +84,23 @@ _MAX_HOLD_CALENDAR_DAYS = 13 * 7  # 91 calendar days
 # DAY order expiry detection — Katsuyama
 _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
 
+# ── QHM DIP-ADD RULE (board 2 seats + Gro + GAI, Rafael approved 2026-07-12) ──
+# Buy MORE of a conviction hold on weakness below cost average. Spec:
+# logs/qhm_v2_design_2026-07-11.md PART 1 FINALIZED. DORMANT until
+# _DIP_ADD_ENABLED=True (ships dark; enable after a verification cycle + the
+# one-time NVDA catch-up). Two rungs; a hard pre-fill %-equity ceiling + a
+# quarterly max-shares cap (board OVERRODE Gro/GAI "no cap": the -5% trigger
+# is off a FALLING cost avg, so a grind could stack adds to ~34% of equity
+# before the price floor fires); a -15% first-entry stop-adding floor.
+_DIP_ADD_ENABLED           = False
+_DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
+_DIP_ADD_RUNG_B_PCT        = 0.05   # <= cost_avg*(1-0.05): aggressive add to ceiling
+_DIP_ADD_CEILING_MULT      = 1.375  # Rung B ceiling = 1.375x target (27.5% @ 20%)
+_DIP_ADD_STOP_FLOOR_PCT    = 0.15   # STOP adding below first-entry*(1-0.15); escalate
+_DIP_ADD_MAX_PER_QUARTER   = 3      # anti-osc: max dip-adds per position per quarter
+_DIP_ADD_MIN_DAYS_BETWEEN  = 2      # anti-osc: >= this many days between adds
+_DIP_ADD_NO_ADD_DAYS_PRE_EARNINGS = 7  # no adds within this many days of earnings
+
 
 # ---------------------------------------------------------------------------
 # Module-level shared registry (imported by entry_logic.py)
@@ -247,6 +264,11 @@ class HoldPosition:
     thesis_check_result: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(ET).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(ET).isoformat())
+    # Dip-add anti-oscillation state (2026-07-12). Defaulted so from_dict(cls(**d))
+    # on pre-existing persisted holds (which lack these keys) applies the defaults.
+    dip_adds_quarter: int = 0                  # dip-adds done in dip_add_quarter_tag
+    last_dip_add_date: Optional[str] = None    # YYYY-MM-DD of last dip-add (spacing)
+    dip_add_quarter_tag: Optional[str] = None  # "YYYY-Qn" the counter resets on
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -698,6 +720,10 @@ class QuarterlyHoldManager:
                 self._maybe_enter_earnings_hold(pos)
                 if pos.state == HoldState.PENDING_EARNINGS:
                     continue  # type: ignore[unreachable]  # state set by side-effect
+
+                # DIP-ADD: buy more on weakness below cost avg (DORMANT unless
+                # _DIP_ADD_ENABLED). Runs on ACTIVE holds only; never raises.
+                self._maybe_dip_add(pos, self._now_et().strftime("%Y-%m-%d"))
 
                 if pos.entry_day:
                     try:
@@ -1510,6 +1536,118 @@ class QuarterlyHoldManager:
                 "QuarterlyHoldManager: %s Day-3 re-confirm error: %s", symbol, e
             )
             return True  # Fail-open
+
+    @staticmethod
+    def _quarter_tag(today_str: str) -> str:
+        """Calendar-quarter tag 'YYYY-Qn' for the dip-add per-quarter counter."""
+        _d = datetime.strptime(today_str, "%Y-%m-%d").date()
+        return "%d-Q%d" % (_d.year, (_d.month - 1) // 3 + 1)
+
+    def _maybe_dip_add(self, pos: HoldPosition, today_str: str) -> None:
+        """DIP-ADD: buy more of a conviction hold on weakness below cost average.
+        Two rungs (A -2% small-to-target, B -5% aggressive-to-ceiling), a HARD pre-fill
+        %-equity ceiling + a quarterly max-shares cap, a -15% first-entry stop-adding
+        floor, and anti-oscillation (max N/quarter, >= K days apart, none within ~7 days
+        of the earnings exit). DORMANT unless _DIP_ADD_ENABLED. Never raises into the
+        weekly-check caller. Spec: logs/qhm_v2_design_2026-07-11.md PART 1 FINALIZED.
+        """
+        if not _DIP_ADD_ENABLED or self.dry_run:
+            return
+        try:
+            if (pos.state != HoldState.ACTIVE or pos.qty_filled <= 0
+                    or pos.avg_entry_price <= 0 or pos.tranche1_price <= 0):
+                return
+            live_price = self._get_live_price(pos.symbol)
+            if not live_price or live_price <= 0:
+                return
+
+            # STOP-ADDING FLOOR (first-entry anchor) — thesis may be re-rating: halt.
+            floor_price = pos.tranche1_price * (1 - _DIP_ADD_STOP_FLOOR_PCT)
+            if live_price < floor_price:
+                logger.warning(
+                    "QHM dip-add: %s $%.2f below -%.0f%% first-entry floor ($%.2f) — "
+                    "STOP adding, escalate to board for a conviction re-vote.",
+                    pos.symbol, live_price, _DIP_ADD_STOP_FLOOR_PCT * 100, floor_price)
+                return
+
+            # Trigger off COST AVERAGE. Rung B (deeper) implies Rung A.
+            rung_b = live_price <= pos.avg_entry_price * (1 - _DIP_ADD_RUNG_B_PCT)
+            rung_a = live_price <= pos.avg_entry_price * (1 - _DIP_ADD_RUNG_A_PCT)
+            if not rung_a:
+                return
+
+            # Pre-earnings blackout (final ~N days before the earnings exit).
+            if pos.earnings_gate_date:
+                try:
+                    _ed = datetime.strptime(pos.earnings_gate_date, "%Y-%m-%d").date()
+                    _days_to_er = (_ed - self._now_et().date()).days
+                    if 0 <= _days_to_er <= _DIP_ADD_NO_ADD_DAYS_PRE_EARNINGS:
+                        return
+                except ValueError:
+                    pass
+
+            # Anti-oscillation: reset the per-quarter counter on a new quarter.
+            _qtag = self._quarter_tag(today_str)
+            if pos.dip_add_quarter_tag != _qtag:
+                pos.dip_add_quarter_tag = _qtag
+                pos.dip_adds_quarter = 0
+            if pos.dip_adds_quarter >= _DIP_ADD_MAX_PER_QUARTER:
+                return
+            if pos.last_dip_add_date:
+                try:
+                    _last = datetime.strptime(pos.last_dip_add_date, "%Y-%m-%d").date()
+                    if (self._now_et().date() - _last).days < _DIP_ADD_MIN_DAYS_BETWEEN:
+                        return
+                except ValueError:
+                    pass
+
+            equity = self._get_account_equity()
+            if equity <= 0:
+                return
+            cur_notional = pos.qty_filled * live_price
+            cur_weight = cur_notional / equity
+            target_weight = pos.target_equity_pct
+            ceiling_weight = target_weight * _DIP_ADD_CEILING_MULT
+            # Rung A caps AT target; Rung B may run up to the ceiling.
+            cap_weight = ceiling_weight if rung_b else target_weight
+            if cur_weight >= cap_weight - 1e-9:
+                return  # already at/above the applicable cap for this rung
+
+            if rung_b:
+                # Aggressive: "equal or greater" than existing position (to ceiling).
+                add_qty = max(pos.qty_filled, 1)
+            else:
+                # Rung A: small add toward target only.
+                add_qty = int((target_weight * equity - cur_notional) / live_price)
+            if add_qty < 1:
+                return
+
+            # HARD PRE-FILL %-equity cap: never let (cur + add) exceed cap_weight.
+            max_by_weight = int((cap_weight * equity - cur_notional) / live_price)
+            add_qty = min(add_qty, max_by_weight)
+            # HARD max-shares-per-name cap derived from the ceiling (belt-and-suspenders
+            # on this lumpy account where the capital cap binds before the price floor).
+            max_shares = int((ceiling_weight * equity) / live_price)
+            add_qty = min(add_qty, max(max_shares - pos.qty_filled, 0))
+            if add_qty < 1:
+                return
+
+            limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
+            order = self._dispatcher.submit_limit(
+                self.broker, pos.symbol, add_qty,
+                "buy" if pos.direction == "long" else "sell_short", limit_price)
+            if order and hasattr(order, "id"):
+                pos.dip_adds_quarter += 1
+                pos.last_dip_add_date = today_str
+                pos.updated_at = self._now_et().isoformat()  # RC-1
+                logger.warning(
+                    "QHM DIP-ADD: %s rung %s — +%d sh @ $%.2f limit (avg $%.2f, "
+                    "%.1f%% -> cap %.1f%%, add #%d/%d this quarter)",
+                    pos.symbol, "B" if rung_b else "A", add_qty, limit_price,
+                    pos.avg_entry_price, cur_weight * 100, cap_weight * 100,
+                    pos.dip_adds_quarter, _DIP_ADD_MAX_PER_QUARTER)
+        except Exception as e:  # RC-3
+            logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
 
     def _submit_tranche(self, pos: HoldPosition, today_str: str) -> bool:
         """Submit DAY limit order for current tranche. RC-7: max(int(), 1) guard."""
