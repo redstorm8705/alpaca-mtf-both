@@ -54,7 +54,10 @@ data. The entire UPPER portion feels like static info that doesn't refresh — m
 age-color dot; killed running clock + nav-sub dup; next_scan_ts emitted) · ✅ D (`03a8886`) pinned
 ▌INDEX-0DTE SPY/QQQ anchor (call/put/strike large glyphs, de-duped from tier). ALL live+served, verified
 in a full-page screenshot. **REMAINING: F only** (optional polish — pulse on 15m refresh + 200ms strike-
-change highlight; the freshness dot already pulses). Options UX redesign is functionally COMPLETE.
+change highlight; the freshness dot already pulses). Options UX redesign COMPLETE + REFINED: header now matches the dashboard format (logo+clock+countdown+pulse
+pill) and top/bottom duplication removed (verbose window pills + 5-line footer legend cut) — `9c2ac5b`. Rafael
+screenshot was a cached pre-A view; live page is clean. Trivial follow-up: purge dead CSS (.top-nav/.nav-sub/
+.legend-row/.fresh-pill now unused). Optional step F polish (strike-change flash) still open.
 Next = gated builds: #2 Forever-6 cash-only, #3 spam/leak, #4 IC Phase 1b.
 
 **LUKE WROBLEWSKI SPEC (mobile-first / progressive disclosure) — build in this order (highest readability
