@@ -487,6 +487,21 @@ RUNNER_MODE_MOMENTUM_CHECK  = False  # Derman gate: EMA13>EMA30 required at +20%
 MIN_POSITION_VALUE_ADVISORY  = 200   # Advisory floor for non-fractionable symbols (whole-share only)
                                       # Warning logged when 1 share risk < this; does not block entry
 
+# ─── OWNERSHIP NEVER-SELL FLOOR — broker chokepoint enforcement (increment 4a) ─
+# Board 6-0 (Harris/Peterffy/Katsuyama + Kim/Majors/Taleb) + Gro + GAI, 2026-07-12.
+# When True, broker.close_position / partial_close_position route every position-
+# REDUCING order through execution.ownership_guard.check_never_sell_floor, so an
+# intraday exit can NEVER sell a qhm/forever6 share: a non-protected symbol still gets
+# a full close; a protected multi-tier symbol is bounded to the caller's tier via a
+# partial; a floor-binding case is REJECTED rather than breach the floor.
+# When False (DEFAULT), the chokepoint is DORMANT — close paths behave EXACTLY as
+# before (raw full close, zero behavior change). Flip True ONLY after: (1) the OCI
+# ledger is confirmed populated by run_ledger_sync with the inc3 code (protected_
+# symbols.json present + NVDA/GOOGL show a qhm floor), AND (2) the QHM manager's own
+# close passes tier="qhm" — else a genuinely-protected symbol reads floor=0 and the
+# guard is a silent no-op. This is the one-line kill switch for the guard itself.
+OWNERSHIP_GUARD_ENFORCE = False
+
 
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 

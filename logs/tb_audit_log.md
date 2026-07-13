@@ -1,6 +1,39 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-12 — Ownership increment 4a: broker chokepoint floor-enforcement (DARK, flag=False)
+
+**Rafael-approved Option B** (board 6-0 + Gro + GAI). Enforce the never-sell floor at the broker
+CHOKEPOINT so an intraday exit can never sell a qhm/forever6 share, WITHOUT editing ~9 call sites.
+
+### Files (full reads: broker.py 853L, config.py 607L — both `# ruff: noqa: E501`)
+| File | Change |
+|------|--------|
+| config.py | NEW `OWNERSHIP_GUARD_ENFORCE = False` (S52 flags). Dark default = the guard is DORMANT; one-line kill switch. |
+| execution/broker.py | Renamed old `close_position` body → `_raw_close_position` (unguarded). New `close_position(symbol, *, tier="intraday")` = gated chokepoint (flag off → `_raw_close_position`, byte-equivalent; flag on → ledger check → non-protected full close / protected → `check_never_sell_floor` → REJECT=False / QTY_BOUND=partial(_bypass) / APPROVE=full). `close_position_for_tier` → thin alias (eliminates the seam bug). `partial_close_position` gained keyword-only `_bypass_floor` + gated floor-bounding. |
+
+### Gate
+- Static: py_compile + mypy + ruff(E,W,F,B) all clean.
+- Self-test 5/5 PASS: flag-off dormant · non-protected full close (no pos fetch) · protected NVDA
+  intraday bounded 3→2 · QHM self-close tier=qhm closes its 1 · fully-protected intraday-owns-0 REJECT.
+- Cold-2nd: flag-off dormancy BYTE-EQUIVALENT + all 7 logic checks clean. Gro APPROVE + GAI APPROVE
+  (authoritative same-prompt; GAI after counter-prompt on the board-ratified fail-open direction).
+
+### ⚠️ ACTIVATION BLOCKERS (must clear BEFORE flipping OWNERSHIP_GUARD_ENFORCE=True)
+Both are flag-ON only (dormant now); cold-2nd + GAI found them:
+1. **QHM self-close must pass `tier="qhm"`** at `execution/quarterly_hold_manager.py:322`
+   (`OrderDispatcher.close` → `broker.close_position(symbol)`) AND `main.py:459` (`_QHMBroker.close_position`
+   → `_qhm_close_pos(sym)`). Else QHM's 13-week backstop exit on a QHM-only symbol is tagged intraday →
+   guard REJECTs (intraday owns 0) → QHM can NEVER force-exit. Fix: add `tier="qhm"` to both. Needs full
+   reads of both files (RULE C-6).
+2. **Ledger must be populated + `protected_symbols.json` present** on OCI (run_ledger_sync with inc3
+   code — cronned */20 RTH Mon-Fri; last ran Jul-10 pre-inc3, so NVDA/GOOGL currently floor=0). GAI:
+   if flag on while ledger corrupt AND cache absent, a protected symbol fails OPEN — the cache-present
+   precondition closes this. Verify protected_symbols.json present + NVDA/GOOGL show qhm floor first.
+
+### Non-blocking (cold-2nd): double load_ledger() per close (benign, single-threaded).
+
+---
 ## 2026-07-12 — CLAUDE.md §DURABLE SYNC RULE codified (Rafael mandate)
 
 New hard rule: on every ship AND every Board+Gro+GAI alignment (even zero-code), sync all 5
