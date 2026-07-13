@@ -1,6 +1,24 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-13 — QHM dip-add ACTIVATED LIVE (_DIP_ADD_ENABLED=True, Rafael go)
+
+Revised the dormant dip-add + turned it on. Gate: static clean, self-test PASS (incl. affordability
++ BP<=0 fail-closed), cold-2nd PASS, Gro+GAI APPROVE (marker c39d28fbc189).
+- **Threat-B fix:** moved `_maybe_dip_add` AFTER the max-hold exit check (a force-exiting position
+  self-guards on state!=ACTIVE).
+- **Margin affordability guard:** before submit, read RegT (overnight) buying power; shrink add to
+  what BP affords; **fail-CLOSED** if BP unreadable OR `<=0` (cold-2nd threat #7 — the `_regt_bp>0`
+  gate originally skipped the shrink when BP was exhausted/negative → would submit unconstrained;
+  fixed to `if _regt_bp<=0: return`). Ceiling stays %-of-EQUITY (BGG unanimous); BP is affordability
+  only. RegT (not intraday effective BP) binds for overnight QHM.
+- **Threat A:** max_shares -> max_shares_ceiling + comment (cosmetic).
+Live behavior on activation: NVDA above cost (no trigger), GOOGL lumpy at target (no add) → no
+immediate order; fires on a real dip below cost avg.
+
+---
+
+---
 ## 2026-07-12 — Ownership 4a ACTIVATION BLOCKER #1 CLEARED: QHM self-close tier="qhm"
 
 Fixes the cold-2nd/GAI-found blocker so `OWNERSHIP_GUARD_ENFORCE` can be flipped True without

@@ -92,7 +92,7 @@ _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
 # quarterly max-shares cap (board OVERRODE Gro/GAI "no cap": the -5% trigger
 # is off a FALLING cost avg, so a grind could stack adds to ~34% of equity
 # before the price floor fires); a -15% first-entry stop-adding floor.
-_DIP_ADD_ENABLED           = False
+_DIP_ADD_ENABLED           = True   # LIVE (Rafael 2026-07-13): adds on dips below avg
 _DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
 _DIP_ADD_RUNG_B_PCT        = 0.05   # <= cost_avg*(1-0.05): aggressive add to ceiling
 _DIP_ADD_CEILING_MULT      = 1.375  # Rung B ceiling = 1.375x target (27.5% @ 20%)
@@ -721,10 +721,6 @@ class QuarterlyHoldManager:
                 if pos.state == HoldState.PENDING_EARNINGS:
                     continue  # type: ignore[unreachable]  # state set by side-effect
 
-                # DIP-ADD: buy more on weakness below cost avg (DORMANT unless
-                # _DIP_ADD_ENABLED). Runs on ACTIVE holds only; never raises.
-                self._maybe_dip_add(pos, self._now_et().strftime("%Y-%m-%d"))
-
                 if pos.entry_day:
                     try:
                         entry_dt = datetime.strptime(pos.entry_day, "%Y-%m-%d").date()
@@ -742,6 +738,12 @@ class QuarterlyHoldManager:
                             "— skipping max-hold check",
                             symbol, pos.entry_day,
                         )
+
+                # DIP-ADD: buy more on weakness below cost avg (cold-2nd threat-B fix:
+                # placed AFTER the max-hold check so a position that just initiated its
+                # force-exit self-guards on state != ACTIVE and gets no dip-add). ACTIVE
+                # ACTIVE holds only; DORMANT unless _DIP_ADD_ENABLED; never raises.
+                self._maybe_dip_add(pos, self._now_et().strftime("%Y-%m-%d"))
 
             except Exception as e:  # RC-3
                 logger.warning(
@@ -1627,10 +1629,44 @@ class QuarterlyHoldManager:
             add_qty = min(add_qty, max_by_weight)
             # HARD max-shares-per-name cap derived from the ceiling (belt-and-suspenders
             # on this lumpy account where the capital cap binds before the price floor).
-            max_shares = int((ceiling_weight * equity) / live_price)
-            add_qty = min(add_qty, max(max_shares - pos.qty_filled, 0))
+            # max_shares_ceiling: total-shares cap from the CEILING (Rung-B bound).
+            # For Rung A, max_by_weight (target-based, above) is the tighter binding
+            # cap — do not drop it in a refactor and leave only this looser ceiling cap.
+            max_shares_ceiling = int((ceiling_weight * equity) / live_price)
+            add_qty = min(add_qty, max(max_shares_ceiling - pos.qty_filled, 0))
             if add_qty < 1:
                 return
+
+            # MARGIN AFFORDABILITY (BGG unanimous 2026-07-13): the ceiling is
+            # sized off EQUITY (real capital at risk), but confirm the add is affordable
+            # against RegT (overnight/settled) buying power — a QHM position is held
+            # overnight, so RegT is the binding constraint, NOT intraday effective BP.
+            # Shrink to what BP allows; fail-CLOSED if BP unreadable or < 1 share.
+            try:
+                _acct = self.broker.get_account()
+                _regt_bp = float(getattr(_acct, "regt_buying_power", None)
+                                 or getattr(_acct, "buying_power", 0) or 0)
+            except Exception as _bp_e:
+                logger.warning("QHM dip-add: %s BP read failed (%s) — skip add",
+                               pos.symbol, _bp_e)
+                return
+            if _regt_bp <= 0:
+                # BP exhausted by resting orders / negative on a Reg-T call — cannot
+                # afford anything. Fail-CLOSED (cold-2nd threat #7, 2026-07-13).
+                logger.warning("QHM dip-add: %s RegT BP <= 0 ($%.0f) — skip add",
+                               pos.symbol, _regt_bp)
+                return
+            if add_qty * live_price > _regt_bp:
+                _afford = int(_regt_bp / live_price)
+                if _afford < 1:
+                    logger.warning(
+                        "QHM dip-add: %s unaffordable ($%.0f > RegT BP $%.0f) skip",
+                        pos.symbol, add_qty * live_price, _regt_bp)
+                    return
+                logger.info(
+                    "QHM dip-add: %s affordability bounded %d→%d sh (RegT BP $%.0f)",
+                    pos.symbol, add_qty, _afford, _regt_bp)
+                add_qty = _afford
 
             limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
             order = self._dispatcher.submit_limit(
