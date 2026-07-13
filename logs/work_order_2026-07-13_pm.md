@@ -6,8 +6,22 @@ resume THIS session) — the method that worked last night. This is the standard
 ## PRIORITY QUEUE (resumed session executes in order; full patch sequence + BGG gate on every gated file;
 ## ship on 3-way alignment per Rafael's auto-apply mandate; queue anything unaligned)
 
-### 0) ⛔ P0 — "overnight_atr_buffer_exit" REVIEW (Rafael flagged 2026-07-13: "why did we sell RIVN at
-### market when it didn't hit our ~$15 stop?") [GATED — RTH exit path]
+### 0) "overnight_atr_buffer_exit" — DIAGNOSED, WORKING AS DESIGNED. Remaining = transparency/naming/tag
+### cleanup (P2, GATED). (Rafael flagged 2026-07-13: "why did RIVN sell at market, not the ~$15 stop?")
+**RESOLUTION (read exit_logic.py:1187-1349): NOT A BUG.** The guard `_is_prior_session = entry_date < today`
++ `not opened_today` means this exit ONLY applies to OVERNIGHT-HELD positions (RIVN held since 7/9); QHM
+exempt; suppressed before 10:00 AM ET (grace) then ACTIVE during RTH. So it is DESIGNED to run intraday on
+stale overnight names — "overnight" = the POSITION is overnight-held, not the exit time. RIVN sat below
+entry−0.5·ATR ($17.35) for 9 scans → exited @ $17.22 (−$17.64) to stop a bleed toward the $15.34 catastrophe
+stop. Concern (a) RTH-firing = RESOLVED (by design, not systemic). REMAINING (all lower priority):
+  (b) **TRANSPARENCY (P2):** surface the ATR-buffer soft-exit level (entry−be_mult·ATR, be_mult∈[0.25,0.65]
+     dynamic per param_engine.get_be_buffer_mult) on the dashboard next to the GTC stop, for overnight-held
+     positions — so the real exit is never a surprise.
+  (c) **ORDER TAGGING (P3):** the exit's close_position() submits an untagged (bare-UUID) market order;
+     tag it with the tier client_order_id per the ownership-ledger design.
+  (d) **RENAME (P3):** "overnight_atr_buffer_exit" is misleading (caused this confusion) → e.g.
+     "overnight_held_breakeven_buffer_exit". Cosmetic; bundle with (b).
+Original (a) systemic-misfire worry retired. No emergency; handle in normal queue order after the builds.
 **ROOT CAUSE ESTABLISHED (Alpaca + bot log, authoritative):** RIVN was NOT stopped out. Its $15.34 GTC stop
 was canceled/unfilled (correct). A SEPARATE soft-exit fired: `trade_events.jsonl` 2026-07-13T09:24:08
 `event=stop_hit reason="overnight_atr_buffer_exit | 9-scan breach | entry=$18.06 thresh=$17.35
