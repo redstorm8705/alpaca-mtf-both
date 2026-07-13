@@ -9,6 +9,15 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
+**⏩⏩ 2026-07-13 PM RESUME (cron 0365e14f @ ~1:45 PM PT, session-only) — READ `logs/work_order_2026-07-13_pm.md`
+FIRST.** Priority queue for the resumed session (all Rafael-greenlit this session): (1) **Options page UX
+REDESIGN** (display-only) per Luke's spec — anchor SPY/QQQ pinned atop 0DTE, SECONDARY→dropdown, freshness
+pill (last/next scan), kill text density + dup data, keep vol-events banner; (2) **Forever-6 CASH-ONLY starter
+build** [gated, approved]; (3) **Option A Slack-spam + main.py leak** [gated, 'proceed']; (4) **IC Phase 1b**
+[gated] if usage remains. Full spec + Luke's ordered build steps in the work-order. Cron method = CronCreate
+one-shot session-resume (Rafael's standard going forward). SHIPPED today: options 2-col + 0DTE reframe, IC
+Phase 1, GOOGL 2sh add — all live+synced.
+
 **🌙 OVERNIGHT/EARLY-AM 2026-07-13 — pick-up state.** Full detail: `logs/overnight_work_order_2026-07-12.md`
 + `logs/july_trade_audit_2026-07.md`. **SHIPPED + LIVE:** dashboard SPY GEX+S/R card; monthly P/L fix
 (`4b43042`); loop-engineering scope (`bot_improvements.md`); **QHM dip-add FULLY LIVE** (`aeed5cd`):
