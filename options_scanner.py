@@ -1434,6 +1434,36 @@ def _tier_header(label: str, color: str, n: int) -> str:
             f'background:#0a0d14;border-top:1px solid #161a28">{label}{tail}</td></tr>')
 
 
+def _build_index_anchor(recs: list) -> str:
+    """Luke step D — pinned INDEX-0DTE block for SPY/QQQ. Call/put/strike are the largest
+    glyphs on the page so a glance any hour lands here first. Never collapses/reorders.
+    Each name shows its long OTM call (upside) + put (downside) with strike + IV."""
+    if not recs:
+        return ""
+    by_sym: dict = {}
+    for r in recs:
+        by_sym.setdefault(r["symbol"], {})[r["direction"]] = r
+    rows = ""
+    for sym in ("SPY", "QQQ"):
+        if sym not in by_sym:
+            continue
+        c = by_sym[sym].get("call")
+        p = by_sym[sym].get("put")
+        ref = c or p
+        px = ref["price"]
+        iv = ref.get("iv")
+        call_html = (f'<span class="idx-leg" style="color:#30d158">▲ CALL ${c["strike"]:.0f}</span>'
+                     if c else '<span class="idx-leg" style="color:#4a5070">▲ —</span>')
+        put_html  = (f'<span class="idx-leg" style="color:#ff3b5c">▼ PUT ${p["strike"]:.0f}</span>'
+                     if p else '<span class="idx-leg" style="color:#4a5070">▼ —</span>')
+        iv_html   = f'<span class="idx-iv">IV {iv:.0f}%</span>' if iv is not None else ''
+        rows += (f'<div class="idx-row"><span class="idx-sym">{sym}</span>'
+                 f'<span class="idx-px">${px:.0f}</span>{call_html}{put_html}{iv_html}</div>')
+    if not rows:
+        return ""
+    return f'<div class="idx-anchor"><div class="idx-hdr">▌ INDEX 0DTE</div>{rows}</div>'
+
+
 def _build_rec_table(recs: list, id_offset: int = 0) -> str:
     """Render a TIERED (Highest-Conviction / Secondary) expandable rec table.
 
@@ -1555,7 +1585,12 @@ def generate_html(data: dict) -> str:
 
     # Rec tables — 0DTE IDs offset by 1000 to avoid det-{idx} collisions
     weekly_table = _build_rec_table(weekly_recs, id_offset=0)
-    dte_table    = _build_rec_table(dte_recs,    id_offset=1000)
+    # Luke step D: pull SPY/QQQ into a pinned INDEX anchor block; the rest tier normally.
+    _anchor_syms = ("SPY", "QQQ")
+    _anchor_recs = [r for r in dte_recs if r["symbol"] in _anchor_syms]
+    _rest_recs   = [r for r in dte_recs if r["symbol"] not in _anchor_syms]
+    index_anchor = _build_index_anchor(_anchor_recs)
+    dte_table    = _build_rec_table(_rest_recs, id_offset=1000)
 
     # (Retired 2026-07-13) The cross-strategy conflict note + SPY-alignment banner were
     # premium-selling-specific (weekly BUY vs 0DTE SELL). 0DTE is now directional LONG
@@ -1657,6 +1692,16 @@ def generate_html(data: dict) -> str:
       border:1px solid #2b3157;border-radius:8px;padding:10px 12px;font-size:11px;font-weight:400;
       color:#b8bdd4;line-height:1.55;box-shadow:0 8px 24px rgba(0,0,0,.55)}}
     .xpl-pop b{{color:#e8ecff;font-weight:600}}
+    /* ── pinned INDEX-0DTE anchor (Luke step D: SPY/QQQ glanceable) ── */
+    .idx-anchor{{border-left:3px solid #ff9f0a;background:#140f05;padding:8px 14px 10px}}
+    .idx-hdr{{font-size:10px;font-weight:700;letter-spacing:.08em;color:#ff9f0a;
+      text-transform:uppercase;margin-bottom:4px}}
+    .idx-row{{display:flex;align-items:baseline;gap:12px;padding:5px 0;border-top:1px solid #241a08;flex-wrap:wrap}}
+    .idx-row:first-of-type{{border-top:none}}
+    .idx-sym{{font-size:17px;font-weight:800;color:#e8ecff;min-width:46px}}
+    .idx-px{{font-size:12px;color:#8a94ae;min-width:50px}}
+    .idx-leg{{font-size:15px;font-weight:700}}
+    .idx-iv{{font-size:11px;color:#8a94ae;margin-left:auto}}
     .col table{{width:100%}}
     .col thead th{{padding:6px 10px;font-size:9px}}
     .col td{{padding:7px 10px}}
@@ -1745,6 +1790,7 @@ def generate_html(data: dict) -> str:
       <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional · {len(dte_recs)}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium. SPY/QQQ + Mag 7.</span></details></span>
       <span class="ch-s"><b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET{'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
     </div>
+    {index_anchor}
     {dte_table}
   </div>
 
