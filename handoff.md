@@ -9,6 +9,9 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
+**🌙 OVERNIGHT WORK ORDER active (2026-07-12 night):** see `logs/overnight_work_order_2026-07-12.md` for the live queue + AM summary. Resume cron 03:50. DONE: dashboard SPY GEX+S/R card (LIVE), loop-engineering scope→bot_improvements.md. HELD: QHM dip-add (dormant on OCI, needs margin reconciliation). QUEUED: monthly P/L bug, margin-aware sizing. Margin reality: BP $7,720.63 / cash $888.32 (not $2,751 equity).
+
+
 **▶ TWO ACTIVE THREADS:** (A) **QHM dip-add rule — magnitudes BGG-ALIGNED + Rafael APPROVED, ready to
 BUILD (gated)** — see block just below; full spec `logs/qhm_v2_design_2026-07-11.md` PART 1 FINALIZED.
 (B) **Ownership 4a activation — Monday-gated:** blocker #1 (QHM tier=qhm) CLEARED `main@a8584ac`; blocker

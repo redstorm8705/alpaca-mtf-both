@@ -37,7 +37,42 @@ Durable Sync Rule (CLAUDE.md) · inc3 QHM attribution (main@cbb3925) · inc4 Opt
 (main@488a893) · 4a activation blocker#1 QHM tier=qhm (main@a8584ac) · QHM dip-add magnitudes BGG-aligned
 (design doc PART 1 FINALIZED). 4a activation blocker#2 (OCI ledger populate) still Monday-gated.
 
-## DIP-ADD BUILD — uncommitted working tree (execution/quarterly_hold_manager.py)
+## DIP-ADD BUILD — ACCIDENTALLY COMMITTED (dormant) in cf117d2 + on OCI
 _maybe_dip_add + _quarter_tag + _DIP_ADD_* consts + 3 HoldPosition fields + run_weekly_check hook.
-Static clean, 10/10 self-test PASS. NOT committed pending margin reconciliation + GAI counter-prompt +
-threat-B guard. Decide at activation whether to ship the dormant code now or fold the margin/threat fixes in first.
+Static clean, 10/10 self-test PASS. Review: cold-2nd PASS (no FAIL-grade defect), Gro APPROVE, GAI
+REJECT (confirmed FALSE POSITIVE — "ceiling breach" is really redundant belt-and-suspenders caps;
+cold-2nd verified bounded). **PROCESS NOTE:** it was `git add`ed for a diff capture, never unstaged,
+so the dashboard `git commit` swept it in → pushed → OCI pull. The preship_gate hook did NOT block
+(worth investigating — a stale tier=qhm marker was present; sha should have mismatched). **It is
+DORMANT: `_DIP_ADD_ENABLED = False` (verified OCI L95); OCI services NOT restarted so it isn't even
+loaded → ZERO live effect.** DO NOT flip the flag until: (a) MARGIN reconciliation — dip-add sizes
+against EQUITY ($2,751) but Rafael mandates buying-power-aware sizing (BP $7,720.63, cash $888.32) —
+board question: does the concentration ceiling stay %-of-equity (yes, it's a risk limit) while
+affordability checks buying power? (b) cold-2nd threat B — move the max-hold exit check BEFORE the
+dip-add hook (don't buy into a position about to be force-exited); (c) GAI counter-prompt to resolve
+the false reject; (d) threat A naming cleanup (non-exploitable). Then re-gate the revised diff + flip.
+
+---
+
+## ⏸️ AM SUMMARY (for Rafael) — overnight of 2026-07-12
+**Done + LIVE:**
+1. ✅ **Dashboard "SPY GEX & Levels" card** — top row, right of SPY Regime/MRI. LIVE + served on OCI
+   (:18080). Shows SPY spot + GEX regime (UNKNOWN now — weekly expired, real regime Monday RTH) +
+   pivot support/resistance (R2/R1/P/S1/S2, e.g. R1 $757.53 / S1 $750.25). Read-only, Gro+GAI APPROVE.
+2. ✅ **Loop-engineering article scoped → `logs/bot_improvements.md`** — what the bot is MISSING
+   (IC/ICIR, factor half-life, out-of-sample gate, loop orchestrator, PBO), PARTIAL (shadow tracker is
+   a proto-loop), ACTIVE. BGG read: build the **IC/ICIR engine first** (+ PBO co-required on our tiny
+   ~158-trade sample). Maps to your Evolution Mandate + the S59 walk-forward roadmap. Scope only, as
+   asked — your call whether to graduate it to a build.
+
+**Built but HELD (dormant, needs your input):**
+3. ⏸️ **QHM dip-add rule** — fully built + reviewed (cold-2nd PASS, Gro APPROVE), DORMANT on OCI.
+   Held for your **margin** directive: it currently sizes against equity; needs buying-power-aware
+   reconciliation + a board vote before activation (see the dip-add block above).
+
+**Queued for the 03:50 resume (not started):**
+4. ⏳ **Monthly review P/L bug** (shows -$279.06 but the dated rows don't sum to it) — diagnosis +
+   BGG + fix. This is item #2 on the queue; the resume picks it up.
+5. ⏳ **Margin-aware sizing** across the board (dip-add + any equity-based sizing) — board question.
+
+**Note:** 4a ownership floor is still Monday-gated (blocker #2 = OCI ledger populate on the RTH cron).
