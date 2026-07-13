@@ -36,23 +36,23 @@ now route reducing orders through `ownership_guard.check_never_sell_floor` when
 cold-2nd verified)**. `close_position_for_tier` → thin alias (seam bug eliminated). Gate: static
 clean, 5/5 self-test, cold-2nd PASS on dark ship, Gro+GAI APPROVE. Live: flag=False confirmed on OCI.
 
-**➡️ EXACT NEXT STEP = 4a-part-2 ACTIVATION (flip `OWNERSHIP_GUARD_ENFORCE=True`). Two blockers
-MUST clear first (both flag-ON only; found by cold-2nd + GAI):**
-1. **QHM self-close must pass `tier="qhm"`** — `execution/quarterly_hold_manager.py:322`
-   (`OrderDispatcher.close` → `broker.close_position(symbol)` → add `tier="qhm"`) AND `main.py:459`
-   (`_QHMBroker.close_position` → `_qhm_close_pos(sym)` → add `tier="qhm"`). Else QHM's 13-week
-   backstop exit on a QHM-only symbol is tagged intraday → guard REJECTs (intraday owns 0) → QHM can
-   NEVER force-exit. 2-line fix but needs full reads of both files (RULE C-6) + gate.
-2. **Ledger populated + `protected_symbols.json` present on OCI.** run_ledger_sync (cron */20 RTH
-   Mon-Fri) last ran Jul-10 (pre-inc3) → NVDA/GOOGL currently floor=0 in the live ledger; cache
-   absent. Monday's RTH cron runs inc3 code → will populate real floors + write the cache. VERIFY
-   (`protected_symbols.json` present + NVDA/GOOGL show a qhm floor) BEFORE flipping the flag — GAI:
-   flag-on while ledger corrupt AND cache absent fails OPEN on a protected symbol; the cache-present
-   precondition closes this.
-Activation sequence: clear blocker 1 (gated ship) → verify blocker 2 on OCI → flip flag True (gated
-config change) → restart → live-verify an intraday exit on a protected symbol bounds correctly +
-QHM self-close still works. Observability the board asked for (log every guard decision; ALERT on
-unexpected QTY_BOUND; reconcile_drift alert) can fold into blocker-1's ship or the flag flip.
+**➡️ EXACT NEXT STEP = 4a-part-2 ACTIVATION (flip `OWNERSHIP_GUARD_ENFORCE=True`). ONE blocker
+remains:**
+1. ✅ **CLEARED (`main@a8584ac`, 2026-07-12): QHM self-close tags `tier="qhm"`** — fixed at
+   `main.py:459` (`_QHMBroker.close_position(self, sym, tier="qhm")`) + `quarterly_hold_manager.py:322`
+   (`OrderDispatcher.close` → `broker.close_position(symbol, tier="qhm")`). Gate: static clean,
+   self-test threads tier=qhm end-to-end, cold-2nd PASS 5/5, Gro+GAI APPROVE. Still dormant (flag off).
+2. ⏳ **REMAINS — Ledger populated + `protected_symbols.json` present on OCI.** run_ledger_sync (cron
+   */20 RTH Mon-Fri) last ran Jul-10 (pre-inc3) → NVDA/GOOGL currently floor=0 in the live ledger;
+   cache absent. Monday's RTH cron runs inc3 code → will populate real floors + write the cache.
+   VERIFY (`ssh OCI: cat data/state/protected_symbols.json` present + NVDA/GOOGL show a qhm floor in
+   ownership_ledger.json) BEFORE flipping the flag — GAI: flag-on while ledger corrupt AND cache
+   absent fails OPEN on a protected symbol; the cache-present precondition closes this.
+Activation sequence (once blocker 2 verified): flip `OWNERSHIP_GUARD_ENFORCE=True` (gated config
+change — 1-line, needs full read of config.py + gate + Rafael approval) → restart → live-verify an
+intraday exit on a protected symbol bounds correctly + QHM self-close still works. Observability the
+board asked for (log every guard decision; ALERT on unexpected QTY_BOUND; reconcile_drift alert) can
+fold into the flag-flip ship.
 
 **THEN 4b (open the door, only after 4a fully active + verified):** remove intraday-blocks-QHM gate at
 `execution/entry_logic.py:438` (`if symbol in get_quarterly_hold_symbols(): continue`) + fix the QHM
