@@ -14,9 +14,10 @@ exempt; suppressed before 10:00 AM ET (grace) then ACTIVE during RTH. So it is D
 stale overnight names — "overnight" = the POSITION is overnight-held, not the exit time. RIVN sat below
 entry−0.5·ATR ($17.35) for 9 scans → exited @ $17.22 (−$17.64) to stop a bleed toward the $15.34 catastrophe
 stop. Concern (a) RTH-firing = RESOLVED (by design, not systemic). REMAINING (all lower priority):
-  (b) **TRANSPARENCY (P2):** surface the ATR-buffer soft-exit level (entry−be_mult·ATR, be_mult∈[0.25,0.65]
-     dynamic per param_engine.get_be_buffer_mult) on the dashboard next to the GTC stop, for overnight-held
-     positions — so the real exit is never a surprise.
+  (b) ✅ **TRANSPARENCY — SHIPPED (`8a195f9`).** Dashboard now shows 'soft ~$X · N/9' beside the GTC stop for
+     overnight-held non-QHM positions (live breach count, color-escalating, tooltip). Verified served: NET
+     ~$267.93·2/9, META ~$655.54·1/9; NVDA/GOOGL (QHM) excluded. FOLLOW-UP (P3): persist the EXACT per-scan
+     be_thresh from exit_logic (gated) so it's penny-exact vs the current 0.5·ATR '~' approximation.
   (c) **ORDER TAGGING (P3):** the exit's close_position() submits an untagged (bare-UUID) market order;
      tag it with the tier client_order_id per the ownership-ledger design.
   (d) **RENAME (P3):** "overnight_atr_buffer_exit" is misleading (caused this confusion) → e.g.
