@@ -1,0 +1,14 @@
+--- scan_to_html.py	(original)
++++ scan_to_html.py	(proposed)
+@@ -208,7 +208,11 @@ def avg_volume(daily_df, period=20):
+ def avg_volume(daily_df, period=20):
+     try:
+-        return float(daily_df["volume"].tail(period).mean())
++        result = daily_df["volume"].tail(period).mean()
++        if result != result:  # NaN != NaN is always True; guards all-NaN volume series
++            logger.debug("avg_volume: all-NaN volume series — returning None")
++            return None
++        return float(result)
+     except Exception as _vol_e:
+         logger.debug("avg_volume: computation failed — %s", _vol_e)
+         return None

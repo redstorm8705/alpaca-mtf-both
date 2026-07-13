@@ -7,7 +7,15 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-12 interactive) — pick up here
+## ⏩ LATEST (2026-07-13 overnight cron) — pick up here
+
+**🌙 2026-07-13 OVERNIGHT AUTONOMOUS — scan_to_html.py NaN patch DRAFT COMPLETE. Awaiting Gro+GAI.**
+Steps 1–5b complete for `scan_to_html.py` avg_volume NaN bug (RTH-chain, DRAFT-ONLY):
+- Full Read Gate: 2358 lines in 8 chunks ✅ | 10-Point Audit + RC-1→RC-8: all PASS/N/A ✅
+- Board Vote: 3/3 PASS (Beck+Kim, Schneier+Derman, Thorp+Taleb) ✅
+- Static analysis: py_compile PASS, mypy PASS, ruff PASS ✅ | Cold second-agent: PASS (2 LOW advisories, not blockers) ✅
+- Pending files written: `logs/pending_patch_2026-07-13_scan_to_html.patch` + `logs/pending_gro_gai_2026-07-13_scan_to_html.json`
+- **EXACT NEXT STEP:** Send the Gro/GAI prompt from `logs/pending_gro_gai_2026-07-13_scan_to_html.json` to Gro + GAI via direct API. Both must APPROVE. Then bring to Rafael with one-page package. If both APPROVE → Edit tool on `scan_to_html.py` line 210: replace `return float(daily_df["volume"].tail(period).mean())` with the 4-line patched block (see patch file). The fix: `result = ...; if result != result: return None; return float(result)` — stops NaN escaping avg_volume when all volume bars are NaN (caused `int(NaN) ValueError` in write_scan_html 10×/10 cycles).
 
 **⏩⏩ 2026-07-13 PM RESUME (cron 0365e14f @ ~1:45 PM PT, session-only) — READ `logs/work_order_2026-07-13_pm.md`
 FIRST.** Priority queue for the resumed session (all Rafael-greenlit this session): (1) **Options page UX
