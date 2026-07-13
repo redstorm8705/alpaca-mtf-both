@@ -1,6 +1,26 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-13 — QHM dip-add: OPTION-C stop-safe add (wash-trade fix) — SHIPPED
+
+The activated dip-add couldn't place a buy: each QHM position holds a GTC sell-stop and Alpaca blocks
+a same-symbol buy (wash-trade 40310000). Option C (board seat Peterffy/Majors/Taleb + Gro + GAI
+unanimous): RTH-only cancel-stop -> marketable-limit add -> 15s fill poll -> resubmit stop for ACTUAL
+held qty (Alpaca truth via _resync). 4-branch fail-safe, invariant "never return stopless without
+PENDING_STOP_REPLACE + alert". Gate: static clean, 8-scenario self-test PASS (4 branches + happy +
+RTH + Finding-1 flat/partial), cold-2nd PASS on the invariant, Gro+GAI APPROVE.
+- **Finding #1 FIXED (cold-2nd):** if the stop FIRES during the cancel (cancel_order maps
+  'already filled'->ok), re-check get_position; if reduced/flat, ABORT the add (never re-buy into a
+  stopped-out position) + restore the stop for the actual held qty.
+- **Finding #2 QUEUED (non-blocking):** the 40310000 double-race + 60s stop-poll can block
+  run_weekly_check up to ~78s/symbol (no timeout wrapper). Add a concurrent.futures timeout around
+  run_weekly_check (matches the 90s scan_premarket_movers pattern).
+- **Finding #3 QUEUED (cosmetic):** _resync no-ops on a flat position -> transient false PENDING
+  alert, cleaned next cycle by _detect_external_close.
+
+---
+
+---
 ## 2026-07-13 — QHM dip-add ACTIVATED LIVE (_DIP_ADD_ENABLED=True, Rafael go)
 
 Revised the dormant dip-add + turned it on. Gate: static clean, self-test PASS (incl. affordability

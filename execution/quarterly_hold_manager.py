@@ -1668,20 +1668,144 @@ class QuarterlyHoldManager:
                     pos.symbol, add_qty, _afford, _regt_bp)
                 add_qty = _afford
 
+            # ── OPTION C: stop-safe add (board + Gro + GAI unanimous 2026-07-13) ──
+            # A QHM position holds a resting GTC sell-stop; Alpaca blocks a same-symbol
+            # BUY (wash-trade). So, RTH-only: cancel the stop -> marketable-limit add ->
+            # poll for fill (<=15s) -> resubmit the stop for the ACTUAL held qty (Alpaca
+            # truth via _resync). INVARIANT across every branch: never return without a
+            # resting stop OR PENDING_STOP_REPLACE + a Slack alert (resubmit_if_needed
+            # + startup reconcile are the outer backstops).
+            from execution.broker import (
+                cancel_order as _cancel_order,
+                get_order as _get_order,
+                is_market_open as _is_market_open,
+            )
+            import time as _time
+            try:
+                if not _is_market_open():
+                    logger.info("QHM dip-add: %s market closed — defer", pos.symbol)
+                    return
+            except Exception as _clk_e:
+                logger.warning("QHM dip-add: %s clock check failed (%s) — defer",
+                               pos.symbol, _clk_e)
+                return
+
+            _stop_side = "sell" if pos.direction == "long" else "buy"
+            _orig_qty = pos.qty_filled
+            _stop_id = pos.stop_order_id
             limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
-            order = self._dispatcher.submit_limit(
-                self.broker, pos.symbol, add_qty,
-                "buy" if pos.direction == "long" else "sell_short", limit_price)
-            if order and hasattr(order, "id"):
+
+            def _restore_or_pending(_qty: int, _reason: str) -> None:
+                # Resting stop for _qty, else PENDING_STOP_REPLACE + alert. Never naked.
+                _r = None
+                try:
+                    if _qty >= 1 and pos.stop_price > 0:
+                        _r = self._dispatcher.submit_gtc_stop(
+                            self.broker, pos.symbol, _qty, _stop_side, pos.stop_price)
+                except Exception as _rse:
+                    logger.critical("QHM dip-add: %s stop resubmit threw: %s",
+                                    pos.symbol, _rse)
+                if _r is not None and hasattr(_r, "id"):
+                    pos.stop_order_id = _r.id
+                    pos.state = HoldState.ACTIVE
+                    pos.updated_at = self._now_et().isoformat()
+                    self._save_state()
+                    return
+                try:
+                    self._resync_from_alpaca(pos)
+                except Exception:
+                    pass
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                logger.critical("QHM dip-add: %s %s — PENDING_STOP_REPLACE",
+                                pos.symbol, _reason)
+                try:
+                    self._alert(":rotating_light: QHM %s dip-add %s — stop pending "
+                                "resubmit" % (pos.symbol, _reason))
+                except Exception:
+                    pass
+
+            # Branch 0 — cancel the resting stop. Cancel failure => abort, stop intact.
+            if _stop_id:
+                if not _cancel_order(str(_stop_id)):
+                    logger.warning("QHM dip-add: %s stop cancel failed — abort "
+                                   "(stop intact)", pos.symbol)
+                    return
+                pos.stop_order_id = None
+                # Finding #1 (cold-2nd): cancel_order maps "already filled" -> ok, so
+                # the stop may have FIRED during the cancel. Never re-buy into a
+                # position the stop just exited. Re-check Alpaca truth; if reduced/flat,
+                # abort the add and protect only what is actually held.
+                try:
+                    _pn = self.broker.get_position(pos.symbol)
+                    _held = int(float(getattr(_pn, "qty", 0) or 0)) if _pn else 0
+                except Exception:
+                    _held = _orig_qty  # unknown -> assume unchanged (do not over-react)
+                if _held < _orig_qty:
+                    logger.warning("QHM dip-add: %s reduced %d->%d during stop cancel "
+                                   "(stop likely fired) — abort add", pos.symbol,
+                                   _orig_qty, _held)
+                    if _held >= 1:
+                        try:
+                            self._resync_from_alpaca(pos)
+                        except Exception:
+                            pass
+                        _restore_or_pending(pos.qty_filled, "stop-fired-during-cancel")
+                    # _held == 0: flat — no stop needed; external-close cleans up.
+                    return
+
+            # Submit the marketable-limit add (0.1% over live => crosses, fills fast).
+            try:
+                _add = self._dispatcher.submit_limit(
+                    self.broker, pos.symbol, add_qty,
+                    "buy" if pos.direction == "long" else "sell_short", limit_price)
+            except Exception as _ae:
+                logger.warning("QHM dip-add: %s add threw (%s)", pos.symbol, _ae)
+                _add = None
+            if not (_add is not None and hasattr(_add, "id")):
+                # Branch 1 — add failed after the cancel: restore the ORIGINAL stop now.
+                _restore_or_pending(_orig_qty, "add-failed")
+                return
+
+            # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
+            _deadline = _time.monotonic() + 15.0
+            _time.sleep(2)
+            _filled = 0
+            while _time.monotonic() < _deadline:
+                try:
+                    _o = _get_order(str(_add.id))
+                    _st = str(getattr(_o, "status", "")).lower()
+                    _filled = int(float(getattr(_o, "filled_qty", 0) or 0))
+                    if _st in ("filled", "canceled", "cancelled", "rejected",
+                               "expired"):
+                        break
+                except Exception:
+                    pass
+                _time.sleep(1)
+
+            # Branch 2 — not fully filled: cancel the add (partials keep filled shares).
+            if _filled < add_qty:
+                try:
+                    _cancel_order(str(_add.id))
+                except Exception:
+                    pass
+            # Resync to Alpaca truth (full/partial/no fill), resubmit the stop for the
+            # ACTUAL held qty. Branch 3 (resubmit fails) => PENDING inside the helper.
+            try:
+                self._resync_from_alpaca(pos)
+            except Exception:
+                pass
+            _restore_or_pending(pos.qty_filled, "post-add stop resubmit")
+            if _filled >= 1:
                 pos.dip_adds_quarter += 1
                 pos.last_dip_add_date = today_str
-                pos.updated_at = self._now_et().isoformat()  # RC-1
+                self._save_state()
                 logger.warning(
-                    "QHM DIP-ADD: %s rung %s — +%d sh @ $%.2f limit (avg $%.2f, "
-                    "%.1f%% -> cap %.1f%%, add #%d/%d this quarter)",
-                    pos.symbol, "B" if rung_b else "A", add_qty, limit_price,
-                    pos.avg_entry_price, cur_weight * 100, cap_weight * 100,
-                    pos.dip_adds_quarter, _DIP_ADD_MAX_PER_QUARTER)
+                    "QHM DIP-ADD OK: %s rung %s +%d filled — stop for %d @ $%.2f "
+                    "(#%d/%d qtr)", pos.symbol, "B" if rung_b else "A", _filled,
+                    pos.qty_filled, pos.stop_price, pos.dip_adds_quarter,
+                    _DIP_ADD_MAX_PER_QUARTER)
         except Exception as e:  # RC-3
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
 
