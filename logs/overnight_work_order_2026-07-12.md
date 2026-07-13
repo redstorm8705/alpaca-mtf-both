@@ -81,10 +81,22 @@ the false reject; (d) threat A naming cleanup (non-exploitable). Then re-gate th
    sum of the daily cells; both use the Alpaca-reconciled `alpaca_pnl` field. Was: header summed
    alpaca_pnl, cells showed pnl_today → mismatch. Verified numerically.
 
-**Queued for the 03:50 resume (not started — needs your input / margin):**
-4. ⏳ **Margin-aware sizing** across the board (QHM dip-add + any equity-based sizing). Board question:
-   concentration ceiling stays %-of-equity (risk limit) while affordability checks buying power?
-   Then revise the dormant dip-add (threats A/B + margin) + resolve GAI false-reject + flip the flag.
-5. ⏳ **QHM dip-add activation** (after #4) + **4a ownership activation** (Monday ledger-populate).
+**Margin question — BGG-RESOLVED (Gro + GAI UNANIMOUS, 2026-07-12):** concentration ceiling **STAYS
+% of EQUITY** (a limit on true capital at risk) — the dip-add's equity-based 27.5% ceiling is ALREADY
+correct, do NOT scale it to buying power. ADD a separate **buying-power affordability check** before
+submitting any add (confirm the order can execute). #1 risk of buying-power-based sizing on a $2,751
+account = over-leverage → margin call / forced liquidation on a modest downturn. So margin work =
+a small affordability GUARD, not a sizing rewrite. (Board-canon: Thorp/Taleb — size risk on capital,
+not on available leverage.) Rafael to confirm in AM; recommended = adopt as stated.
+
+**Queued for the 03:50 resume (needs Rafael's go on live orders):**
+4. ⏳ **QHM dip-add activation** — revise the dormant build: (a) ADD the buying-power affordability
+   guard before each add (per the margin BGG above); (b) cold-2nd threat B — move the max-hold exit
+   check BEFORE the dip-add hook (don't buy into a position about to be force-exited); (c) threat A
+   naming cleanup (non-exploitable). Then re-gate the revised diff (cold-2nd + Gro + GAI) + flip
+   `_DIP_ADD_ENABLED=True` + the one-time NVDA catch-up (+1 share, tier=qhm) — BOTH the flag flip and
+   the catch-up are LIVE actions needing Rafael's explicit go.
+5. ⏳ **4a ownership activation** — Monday: verify OCI ledger populated + protected_symbols.json
+   present → flip `OWNERSHIP_GUARD_ENFORCE=True` (gated + Rafael go).
 
 **Note:** 4a ownership floor is still Monday-gated (blocker #2 = OCI ledger populate on the RTH cron).
