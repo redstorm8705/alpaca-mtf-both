@@ -46,6 +46,7 @@ logs/*
 !logs/tb_audit_log.md
 !logs/qhm_v2_design_2026-07-11.md
 !logs/overnight_work_order_2026-07-12.md
+!logs/bot_improvements.md
 !logs/weekly_perf_audit_design_v1.md
 !logs/bug_counter.json
 !logs/project-state.md

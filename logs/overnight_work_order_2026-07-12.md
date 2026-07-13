@@ -8,10 +8,15 @@
 - Resume cron set: CronCreate 06e02d0e one-shot 03:50 PDT (after usage reset) → continues this session.
 
 ## QUEUE + STATUS
-1. **Dashboard SPY GEX + S/R card** — top row, directly RIGHT of the "SPY Regime/MRI" tile. Must be LIVE
-   on git + OCI so Rafael sees it in the AM. GEX data exists (data/gex.py, GEX_ENABLED=True); S/R via GEX
-   flip/call-wall/put-wall levels (+ swing H/L if cheap). Feature-Design + BGG on the card → build → ship.
-   STATUS: IN PROGRESS.
+1. **Dashboard SPY GEX + S/R card** — ✅ DONE + LIVE + SERVED (`main@cf117d2`). New span-2 KPI tile
+   "SPY GEX & Levels" directly right of the SPY Regime/MRI tile: SPY spot + GEX regime/flip (from
+   gex_snapshot.json; shows UNKNOWN/"computing" now — weekly expired, repopulates Monday RTH) + floor-
+   trader pivot S/R (P/R1/R2/S1/S2) from the last completed SPY daily bar (Alpaca Data API, read-only).
+   Gro+GAI APPROVE (read-only, not risk-path → no cold board). Live-verified served: R1 $757.53, S1
+   $750.25, etc. LESSON: mtf-writer (live_data_writer.py) regenerates dashboard.html every 30s by
+   importing generate_dashboard — the in-loop `import` does NOT hot-reload, so a DASHBOARD code change
+   requires `sudo systemctl restart mtf-writer` (git pull alone is not enough). public/dashboard.html is
+   a symlink to ../dashboard.html; mtf-http serves public/ on :18080.
 2. **Monthly review P/L bug** — monthly page shows "-$279.06" but the dated rows don't sum to that. Another
    P/L calc error. Diagnose (reporting/ + monthly_review generator) → BGG → fix → ship. STATUS: QUEUED.
 3. **Loop-engineering article → scope analysis → bot_improvements log** — digest the Horizon "loop
