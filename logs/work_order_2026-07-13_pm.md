@@ -49,12 +49,13 @@ the two-stop model is intended and documented.
 (collapse SECONDARY conviction). Vol-events banner stays. Add last-scan + next-scan data; remove duplicative
 data. The entire UPPER portion feels like static info that doesn't refresh — make it read LIVE.
 
-**PROGRESS:** ✅ C SHIPPED (`ae679e6`) explainers→ⓘ popover + counts in headers · ✅ B SHIPPED (`1d73215`)
-stat bar 5→2 (kept High Conviction + VIX) · ✅ E SHIPPED (`1a41c14`) SECONDARY→collapsed tap-to-expand
-dropdown (multi-tbody + togSec, both cols). ALL live+served. REMAINING: **A** (header freshness pill: emit
-last_scan_ts/next_scan_ts from run_scan, JS countdown, kill the running seconds-clock + nav-sub dup, window-
-state→chip), **D** (SPY/QQQ pinned INDEX-0DTE anchor block above the tiers — the marquee glance ask), **F**
-(live cues: pulse/tick/stale-color). Then gated builds #2 F6, #3 spam/leak, #4 IC 1b.
+**PROGRESS — 5/6 SHIPPED:** ✅ C (`ae679e6`) explainers→ⓘ popover+counts · ✅ B (`1d73215`) stat 5→2 ·
+✅ E (`1a41c14`) SECONDARY→collapsed dropdown · ✅ A (`cafbdf2`) freshness pill (updated Xm/next in Ym,
+age-color dot; killed running clock + nav-sub dup; next_scan_ts emitted) · ✅ D (`03a8886`) pinned
+▌INDEX-0DTE SPY/QQQ anchor (call/put/strike large glyphs, de-duped from tier). ALL live+served, verified
+in a full-page screenshot. **REMAINING: F only** (optional polish — pulse on 15m refresh + 200ms strike-
+change highlight; the freshness dot already pulses). Options UX redesign is functionally COMPLETE.
+Next = gated builds: #2 Forever-6 cash-only, #3 spam/leak, #4 IC Phase 1b.
 
 **LUKE WROBLEWSKI SPEC (mobile-first / progressive disclosure) — build in this order (highest readability
 win first):**
