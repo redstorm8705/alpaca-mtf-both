@@ -6,6 +6,28 @@ resume THIS session) — the method that worked last night. This is the standard
 ## PRIORITY QUEUE (resumed session executes in order; full patch sequence + BGG gate on every gated file;
 ## ship on 3-way alignment per Rafael's auto-apply mandate; queue anything unaligned)
 
+### 0) ⛔ P0 — "overnight_atr_buffer_exit" REVIEW (Rafael flagged 2026-07-13: "why did we sell RIVN at
+### market when it didn't hit our ~$15 stop?") [GATED — RTH exit path]
+**ROOT CAUSE ESTABLISHED (Alpaca + bot log, authoritative):** RIVN was NOT stopped out. Its $15.34 GTC stop
+was canceled/unfilled (correct). A SEPARATE soft-exit fired: `trade_events.jsonl` 2026-07-13T09:24:08
+`event=stop_hit reason="overnight_atr_buffer_exit | 9-scan breach | entry=$18.06 thresh=$17.35
+(ATR=1.419 Tier_adj=0.500)"` → market-sold 21sh @ $17.22, pnl −$17.64. The sell order carried a BARE-UUID
+client_order_id (99964b72…), i.e. UNTAGGED (not IN-/mtf-/QH-). Mechanism: exit when price < entry−0.5·ATR
+sustained 9 scans. **THREE things to review (each a real concern):**
+  (a) **"OVERNIGHT" exit FIRED MID-SESSION (12:24 ET / 9:24 PT).** Is an overnight-ATR-buffer exit supposed
+     to be RTH-active? If mis-scoped, it may be tightening exits intraday on ALL positions (systemic — check
+     every open name for the same 9-scan ATR-buffer arming during RTH). This is the load-bearing question.
+  (b) **TRANSPARENCY:** operator sees only the ~$15 GTC stop; the REAL exit is ~$17.35. Dashboard + options/
+     scanner should surface BOTH the hard GTC stop AND the ATR-buffer soft-exit level so exits never surprise.
+  (c) **ORDER TAGGING:** this exit submits an UNTAGGED market order (bare UUID) — violates the per-tier
+     ownership-tag design (IN-/QH-/F6-). Tag it so ownership-guard/ledger can attribute it.
+**DO:** full read of the overnight_atr_buffer_exit path (strategy/run_cycle.py + execution/exit_logic.py +
+risk_manager.py — locate the `overnight_atr_buffer_exit` / `Tier_adj` / 9-scan-breach logic), 10-pt + RC audit,
+board (incl. masked-loss seat — this is an EXIT that realizes losses) + Gro + GAI. Determine intended vs actual
+RTH behavior BEFORE any change; if it's working-as-designed, the fix may be (b) transparency + (c) tagging only.
+NOTE: entry event logged stop=$15.39/$18.41 at entry but the ATR-buffer thresh is computed separately — confirm
+the two-stop model is intended and documented.
+
 ### 1) OPTIONS PAGE UX REDESIGN — options_scanner.py (display-only, NON-gated). Rafael feedback + Luke spec.
 **Rafael's feedback (verbatim intent):** page has WAY too much text, not readable. Anchor SPY/QQQ on the
 0DTE side so a random daytime glance shows call/put/strike immediately. Redesign with secondary dropdowns
