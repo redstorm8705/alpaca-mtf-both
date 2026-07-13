@@ -9,7 +9,19 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
-**🌙 OVERNIGHT WORK ORDER active (2026-07-12 night):** see `logs/overnight_work_order_2026-07-12.md` for the live queue + AM summary. Resume cron 03:50. DONE: dashboard SPY GEX+S/R card (LIVE), loop-engineering scope→bot_improvements.md. HELD: QHM dip-add (dormant on OCI, needs margin reconciliation). QUEUED: monthly P/L bug, margin-aware sizing. Margin reality: BP $7,720.63 / cash $888.32 (not $2,751 equity).
+**🌙 OVERNIGHT/EARLY-AM 2026-07-13 — pick-up state.** Full detail: `logs/overnight_work_order_2026-07-12.md`
++ `logs/july_trade_audit_2026-07.md`. **SHIPPED + LIVE:** dashboard SPY GEX+S/R card; monthly P/L fix
+(`4b43042`); loop-engineering scope (`bot_improvements.md`); **QHM dip-add FULLY LIVE** (`aeed5cd`):
+flag ON + RegT-BP affordability guard + **Option-C stop-safe add** (cancel GTC stop→marketable
+add→15s poll→resubmit stop for actual qty; 4-branch fail-safe; RTH-gated; cold-2nd PASS + Gro+GAI).
+**KEY FINDING:** July "downturn" is 87% PHANTOM — real July P&L = **−$34.70** FIFO (not −$279), and
+~all of it is **RIVN** (bought into its 7/6 public offering; catalyst the bot doesn't screen).
+**REMAINING QUEUE (all need Rafael/BGG):** (a) NVDA catch-up +1sh — do at 9:30 open w/ stop-safe
+pattern (Rafael go given); (b) eod/P&L 100%-reliable (purge 07-02 phantom + reconcile to FIFO —
+Rafael mandate); (c) catalyst/news engine (per-name screen; reverses news-display-only invariant →
+board vote); (d) IC/ICIR learning-loop (Rafael: begin); (e) S/R-calc BGG (VWAP/history/dynamic); (f)
+dip-add Findings #2 (78s-latency timeout) + #3 (cosmetic). Margin: RegT BP $3,266 (overnight) /
+effective $7,724 (intraday) / cash $888.
 
 
 **▶ TWO ACTIVE THREADS:** (A) **QHM dip-add rule — magnitudes BGG-ALIGNED + Rafael APPROVED, ready to
