@@ -1565,9 +1565,7 @@ def generate_html(data: dict) -> str:
     next_scan_ts = data.get("next_scan_ts", "")
     expiry      = data["expiry"]
     today_str   = data.get("today", date.today().isoformat())
-    win_label   = data["window_label"]
     in_win      = data["in_window"]
-    win_0dte    = data.get("window_label_0dte", "")
     in_win_0dte = data.get("in_window_0dte", False)
     vix_tertile  = data.get("vix_tertile", "—")
 
@@ -1602,10 +1600,6 @@ def generate_html(data: dict) -> str:
 
     # Rejections section — P2-OPTIONS-REJECT
     rejections_html = _rejections_section(rejections)
-
-    # 0DTE window pill
-    dte_win_cls = "open" if in_win_0dte else "closed"
-    dte_win_dot = '<div class="win-dot"></div>' if in_win_0dte else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1651,6 +1645,19 @@ def generate_html(data: dict) -> str:
     .fresh-dot{{width:8px;height:8px;border-radius:50%;background:#30d158;box-shadow:0 0 6px currentColor;
       animation:fp 2s infinite}}
     @keyframes fp{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}
+    /* ── dashboard-matched header (Rafael 2026-07-13: follow the dashboard top format) ── */
+    .opt-hdr{{display:flex;align-items:center;justify-content:space-between;padding:13px 24px;
+      border-bottom:1px solid #252847;background:#13162a;position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px}}
+    .logo{{font-size:16px;font-weight:700;color:#e8ecff;letter-spacing:-.01em}}
+    .logo span{{color:#636680;font-size:10px;font-weight:500;display:block;letter-spacing:.08em;
+      text-transform:uppercase;margin-top:2px}}
+    .hdr-right{{display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+    .opt-pill{{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;border:1px solid;
+      font-size:11px;font-weight:600;letter-spacing:.03em}}
+    .opt-pill.open{{border-color:#30d158;color:#30d158;background:rgba(48,209,88,.08)}}
+    .opt-pill.closed{{border-color:#636680;color:#8a94ae;background:rgba(99,102,128,.08)}}
+    .pulse{{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite}}
+    @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
     .win-pill{{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;
       border:1px solid;font-size:11px;font-weight:600;letter-spacing:.08em}}
     .win-pill.open{{border-color:#30d158;color:#30d158}}
@@ -1746,23 +1753,17 @@ def generate_html(data: dict) -> str:
 </head>
 <body>
 
-<div class="top-nav">
-  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-    <span class="nav-title">Options Scanner</span>
-    <span class="fresh-pill"><span class="fresh-dot" id="freshDot"></span><span id="freshTxt">updated · next —</span></span>
-  </div>
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+<header class="opt-hdr">
+  <div class="logo">Options Scanner <span>MTF CONFLUENCE</span></div>
+  <div class="hdr-right">
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+      <span style="font-size:12px;color:#e8ecff;font-variant-numeric:tabular-nums" id="freshClock">—</span>
+      <span style="font-size:9px;color:#8a94ae" id="freshTxt">next scan —</span>
+    </div>
+    <div class="opt-pill {'open' if (in_win or in_win_0dte) else 'closed'}"><span class="pulse"></span>{'ENTRY OPEN' if (in_win or in_win_0dte) else 'ENTRY CLOSED'}</div>
     <a href="scan_results.html" class="nav-back">← Scanner</a>
-    <div class="win-pill {'open' if in_win else 'closed'}">
-      {'<div class="win-dot"></div>' if in_win else ''}
-      <span>{win_label}</span>
-    </div>
-    <div class="win-pill {dte_win_cls}" style="font-size:10px">
-      {dte_win_dot}
-      <span>{win_0dte or "0DTE"}</span>
-    </div>
   </div>
-</div>
+</header>
 
 <!-- 5-tile stat bar -->
 <div class="stat-bar">
@@ -1808,34 +1809,28 @@ def generate_html(data: dict) -> str:
 {rejections_html}
 
 <div class="footer">
-  <div>Options Scanner · MTF Confluence Bot · Auto-refresh every 15 min ·
-    Log fills: <code>python3.10 log_fill.py SYMBOL long_call|short_put|… STRIKE EXPIRY PREMIUM CONTRACTS</code>
-  </div>
-  <div class="legend-row">
-    <div><span style="color:#30d158;font-weight:700">●</span> Weekly LONG CALL/PUT — directional (buy the move), low VRP</div>
-    <div><span style="color:#ff9f0a;font-weight:700">●</span> 0DTE — directional intraday capture: long OTM call (up) &amp; put (down) per name, SPY/QQQ+Mag7</div>
-    <div><span style="color:#30d158;font-weight:700">HIGH</span> score ≥ 10/12 &nbsp; <span style="color:#ffd60a;font-weight:700">MOD</span> score 8–9/12</div>
-    <div style="color:#b8bdd4">VIX tertile: Low/Mid/High from post-2022 data (Vilkov 2026)</div>
-    <div style="color:#b8bdd4">0DTE blocked in High VIX — hard close 3:45 ET regardless of P&L</div>
-  </div>
+  <div>MTF Confluence Bot · auto-refresh 15 min · log fills: <code>python3.10 log_fill.py SYMBOL long_call|long_put STRIKE EXPIRY PREMIUM CONTRACTS</code></div>
 </div>
 <script>
-  // Freshness pill (Luke step A): "updated Xm ago · next in Ym Zs", dot color by age.
+  // Dashboard-matched header clock + scan countdown (Rafael 2026-07-13).
   var SCAN_TS = "{scan_time}", NEXT_TS = "{next_scan_ts}";
   function fmtFresh() {{
-    var txt = document.getElementById("freshTxt"), dot = document.getElementById("freshDot");
+    var now = new Date();
+    var clk = document.getElementById("freshClock");
+    if (clk) clk.textContent = now.toLocaleString('en-US', {{timeZone:'America/Los_Angeles',
+      weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true}}) + ' PT';
+    var txt = document.getElementById("freshTxt");
     if (!txt) return;
-    var now = new Date(), scan = new Date(SCAN_TS), next = new Date(NEXT_TS);
-    if (isNaN(scan)) {{ txt.textContent = "scan time —"; return; }}
+    var scan = new Date(SCAN_TS), next = new Date(NEXT_TS);
+    if (isNaN(scan)) {{ txt.textContent = "scan —"; return; }}
     var ageMin = Math.max(0, Math.floor((now - scan) / 60000));
     var nxt = isNaN(next) ? -1 : Math.max(0, Math.floor((next - now) / 1000));
     if (nxt > 0) {{
       var m = Math.floor(nxt / 60), s = nxt % 60;
-      txt.textContent = "updated " + ageMin + "m ago · next in " + m + "m " + (s < 10 ? "0" : "") + s + "s";
+      txt.textContent = "scanned " + ageMin + "m ago · next in " + m + "m " + (s < 10 ? "0" : "") + s + "s";
     }} else {{
-      txt.textContent = "updated " + ageMin + "m ago · refreshing…";
+      txt.textContent = "scanned " + ageMin + "m ago · refreshing…";
     }}
-    if (dot) dot.style.background = ageMin < 5 ? "#30d158" : (ageMin < 16 ? "#ff9f0a" : "#ff3b30");
   }}
   fmtFresh(); setInterval(fmtFresh, 1000);
 </script>
