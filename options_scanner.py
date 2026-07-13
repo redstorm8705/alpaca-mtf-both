@@ -1144,7 +1144,13 @@ def _bias_info(rec: dict) -> tuple:
 
 
 def _rec_row(rec: dict, idx: int) -> str:
-    """Compact summary row — click expands detail."""
+    """Compact 8-field summary row — click expands full detail.
+
+    2026-07-13 two-column redesign: slimmed to the mockup's field set
+    (Tkr/Px/Sc/VRP/Signal/Strk/δ/IV) so two tables sit side-by-side. Bias,
+    DTE, Greeks, targets and the log command all remain in the expand row —
+    no data is dropped, only de-duplicated from the at-a-glance line.
+    """
     sym        = rec["symbol"]
     direction  = rec["direction"]
     side       = rec.get("side", "long")
@@ -1152,43 +1158,39 @@ def _rec_row(rec: dict, idx: int) -> str:
     score      = rec["score"]
     price      = rec["price"]
     pct        = rec.get("pct_change")
-    pct_str    = f"{pct:+.2f}%" if pct is not None else "—"
+    pct_str    = f"{pct:+.1f}%" if pct is not None else "—"
     pct_col    = "#30d158" if (pct or 0) > 0 else "#ff3b5c"
-    bias_lbl, bias_col = _bias_info(rec)
     score_col  = "#30d158" if score >= 10 else "#ffd60a" if score >= 8 else "#ff9f0a"
     conv_col   = "#7fff4f" if conviction == "HIGH" else "#ffd60a"
     high_bg    = "background:#0a1308;" if conviction == "HIGH" else ""
 
     # Signal label and color (4 variants)
     if side == "long":
-        sig_lbl = "LONG CALL ↑" if direction == "call" else "LONG PUT ↓"
+        sig_lbl = "Long call ↑" if direction == "call" else "Long put ↓"
         sig_col = "#30d158" if direction == "call" else "#ff3b5c"
     else:
-        sig_lbl = "SHORT CALL ↓" if direction == "call" else "SHORT PUT ↑"
+        sig_lbl = "Short call ↓" if direction == "call" else "Short put ↑"
         sig_col = "#ff9f0a"   # orange for short premium
 
     vrp       = rec.get("vrp")
-    vrp_str   = f"VRP {vrp:+.1f}" if vrp is not None else ""
+    vrp_str   = f"{vrp:+.1f}" if vrp is not None else "—"
     vrp_col   = ("#ff9f0a" if vrp and vrp > VRP_HIGH_THRESHOLD
                  else "#30d158" if vrp and vrp < 0
                  else "#636680")
 
     return (f'<tr class="rec-row" onclick="tog({idx})" style="cursor:pointer;{high_bg}">'
-            f'<td style="font-size:14px;font-weight:700;color:#e2e4ee;white-space:nowrap">{sym}'
-            f'  <span style="font-size:9px;font-weight:600;color:{conv_col};margin-left:5px;'
-            f'    padding:2px 5px;border-radius:10px;background:rgba(127,255,79,.08)">{conviction}</span></td>'
-            f'<td style="white-space:nowrap"><span style="font-weight:600">${price:.2f}</span>'
-            f'  <span style="font-size:11px;color:{pct_col};margin-left:5px">{pct_str}</span></td>'
-            f'<td style="font-size:11px;font-weight:700;color:{bias_col};white-space:nowrap">{bias_lbl}</td>'
-            f'<td style="font-weight:700;color:{score_col};white-space:nowrap">{score}/12</td>'
-            f'<td style="color:{vrp_col};font-size:11px;white-space:nowrap">{vrp_str}</td>'
-            f'<td style="font-weight:700;color:{sig_col};white-space:nowrap">{sig_lbl}'
-            f'  <span style="font-size:10px;color:{conv_col};margin-left:3px">({conviction})</span></td>'
-            f'<td style="font-weight:700;color:#e2e4ee;font-size:13px;white-space:nowrap">${rec["strike"]:.0f}</td>'
-            f'<td style="color:#30d158;font-size:12px">{rec["delta"]:.2f}</td>'
-            f'<td style="color:#b8bdd4;font-size:12px">{rec["iv"]:.1f}%</td>'
-            f'<td style="color:#b8bdd4;font-size:12px">{rec["DTE"]}d</td>'
-            f'<td id="arr-{idx}" style="color:#636680;font-size:11px;text-align:center">▼</td>'
+            f'<td style="font-size:13px;font-weight:700;color:#e2e4ee;white-space:nowrap">'
+            f'<span id="arr-{idx}" style="color:#4a5070;font-size:9px;margin-right:3px">▸</span>{sym}'
+            f'<span style="font-size:8px;font-weight:700;color:{conv_col};margin-left:4px;'
+            f'padding:1px 4px;border-radius:8px;background:rgba(127,255,79,.08)">{conviction[0]}</span></td>'
+            f'<td style="white-space:nowrap;font-weight:600">${price:.0f}'
+            f'<span style="font-size:10px;color:{pct_col};margin-left:3px">{pct_str}</span></td>'
+            f'<td style="font-weight:700;color:{score_col}">{score}</td>'
+            f'<td style="color:{vrp_col};font-size:11px">{vrp_str}</td>'
+            f'<td style="font-weight:700;color:{sig_col};font-size:11px;white-space:nowrap">{sig_lbl}</td>'
+            f'<td style="font-weight:700;color:#e2e4ee;font-size:13px">${rec["strike"]:.0f}</td>'
+            f'<td style="color:#30d158;font-size:11px">{rec["delta"]:.2f}</td>'
+            f'<td style="color:#b8bdd4;font-size:11px">{rec["iv"]:.0f}%</td>'
             f'</tr>')
 
 
@@ -1252,10 +1254,10 @@ def _rec_detail(rec: dict, idx: int) -> str:
                       '⏰ 0DTE — HARD CLOSE AT 3:45 PM ET — DO NOT HOLD TO EXPIRY</div>')
 
     return f"""<tr id="det-{idx}" style="display:none">
-  <td colspan="9" style="padding:0;border-bottom:1px solid #1e2440">
-    <div style="padding:16px 20px;background:#0b0e16;border-top:1px solid #1e2440">
+  <td colspan="8" style="padding:0;border-bottom:1px solid #1e2440">
+    <div style="padding:14px 16px;background:#0b0e16;border-top:1px solid #1e2440">
       {mode_badge}
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+      <div style="display:grid;grid-template-columns:1fr;gap:14px">
 
         <div>
           <div style="font-size:10px;color:#636680;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px">
@@ -1324,8 +1326,8 @@ def _tier_header(label: str, color: str, n: int) -> str:
     """A full-width tier divider row (HIGHEST / SECONDARY) with count or empty-state."""
     tail = (f'<span style="color:#636680;font-weight:400"> · {n}</span>' if n
             else '<span style="color:#4a5070;font-weight:400"> — none this scan</span>')
-    return (f'<tr><td colspan="11" style="padding:8px 14px;font-size:11px;font-weight:700;'
-            f'letter-spacing:.08em;text-transform:uppercase;color:{color};'
+    return (f'<tr><td colspan="8" style="padding:8px 12px;font-size:10px;font-weight:700;'
+            f'letter-spacing:.06em;text-transform:uppercase;color:{color};'
             f'background:#0a0d14;border-top:1px solid #161a28">{label}{tail}</td></tr>')
 
 
@@ -1353,9 +1355,8 @@ def _build_rec_table(recs: list, id_offset: int = 0) -> str:
     )
     return f"""<table style="width:100%;border-collapse:collapse">
   <thead><tr>
-    <th>Ticker</th><th>Price</th><th>Bias</th><th>Score</th>
-    <th>VRP</th><th>Signal</th><th>Strike</th><th>δ</th><th>IV</th><th>DTE</th>
-    <th style="text-align:center;width:32px">▼</th>
+    <th>Tkr</th><th>Px</th><th>Sc</th><th>VRP</th>
+    <th>Signal</th><th>Strk</th><th>δ</th><th>IV</th>
   </tr></thead>
   <tbody>{body}</tbody>
 </table>"""
@@ -1497,9 +1498,9 @@ def generate_html(data: dict) -> str:
       var a = document.getElementById("arr-"+i);
       if (!d) return;
       if (d.style.display === "none" || d.style.display === "") {{
-        d.style.display = "table-row"; a.innerHTML = "▲";
+        d.style.display = "table-row"; if (a) a.innerHTML = "▾";
       }} else {{
-        d.style.display = "none"; a.innerHTML = "▼";
+        d.style.display = "none"; if (a) a.innerHTML = "▸";
       }}
     }}
   </script>
@@ -1535,6 +1536,21 @@ def generate_html(data: dict) -> str:
     .strat-explainer b{{color:#e8ecff;font-weight:600}}
     .strat-conflict{{margin:10px 20px 0;padding:10px 14px;background:rgba(255,159,10,.08);border:1px solid rgba(255,159,10,.3);border-radius:6px;font-size:11px;color:#ffd60a;line-height:1.5}}
     .strat-conflict b{{color:#ffe08a;font-weight:700}}
+    /* ── Two-column side-by-side layout (2026-07-13 redesign) ── */
+    .cols{{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid #252847}}
+    .col{{border-right:1px solid #252847;min-width:0;overflow-x:auto}}
+    .col:last-child{{border-right:none}}
+    .colhead{{padding:11px 16px;border-top:3px solid transparent}}
+    .col.wk .colhead{{background:#0f1e14;border-top-color:#30d158}}
+    .col.zd .colhead{{background:#1f1a0d;border-top-color:#ff9f0a}}
+    .ch-t{{font-size:14px;font-weight:700;display:block}}
+    .col.wk .ch-t{{color:#30d158}}
+    .col.zd .ch-t{{color:#ff9f0a}}
+    .ch-s{{font-size:10px;color:#8a94ae;display:block;margin-top:2px;line-height:1.4}}
+    .col table{{width:100%}}
+    .col thead th{{padding:6px 10px;font-size:9px}}
+    .col td{{padding:7px 10px}}
+    .col .strat-explainer{{border-bottom:1px solid #1e2240}}
     .content{{padding:16px 20px}}
     table{{width:100%;border-collapse:collapse}}
     thead th{{padding:7px 14px;text-align:left;font-size:10px;font-weight:500;color:#8a94ae;
@@ -1568,6 +1584,8 @@ def generate_html(data: dict) -> str:
       td{{padding:6px 8px;font-size:11px}}
       .content{{padding:10px 12px}}
       .legend-row{{gap:10px}}
+      .cols{{grid-template-columns:1fr}}
+      .col{{border-right:none;border-bottom:1px solid #252847}}
     }}
   </style>
 </head>
@@ -1630,24 +1648,30 @@ def generate_html(data: dict) -> str:
 {_align_banner}
 {_conflict_note}
 
-<!-- ── WEEKLY DIRECTIONAL (long premium) ──────────────────────────────────── -->
-<div class="section-hdr">📈 Weekly Directional — {exp_display} Expiry · Buy Calls / Puts
-  <span style="margin-left:8px;font-size:10px;color:#636680;font-weight:400;
-    text-transform:none;letter-spacing:0">· click row to expand · entry windows 10:00–11:30 / 14:00–15:00 ET</span>
-</div>
-<div class="strat-explainer"><b>Directional — you BUY the option.</b> Profit if the underlying moves your way before expiry; risk is capped at the premium paid. A bet on <b>movement</b>.</div>
-{weekly_table}
+<!-- ── TWO-COLUMN: Weekly directional | 0DTE premium selling (2026-07-13) ──── -->
+<div class="cols">
 
-<!-- ── 0DTE PREMIUM SELLING (short premium) ───────────────────────────────── -->
-<div class="section-hdr dte-hdr" style="margin-top:4px">
-  <span style="color:#ff9f0a">⚡</span> 0DTE Premium Selling — {dte_display} Same-Day · Sell Puts / Calls
-  <span style="margin-left:8px;font-size:10px;color:#ff3b30;font-weight:700;
-    text-transform:none;letter-spacing:0">⏰ HARD CLOSE 3:45 PM ET — entry window 10:05–10:20 ET only</span>
-  {'<span style="margin-left:10px;font-size:10px;color:#30d158;font-weight:700;text-transform:none;letter-spacing:0">🔒 DIRECTION LOCKED ' + dte_lock_time + ' ET — hold to 3:45 ET</span>' if dte_lock_time else '<span style="margin-left:10px;font-size:10px;color:#ffd60a;font-weight:600;text-transform:none;letter-spacing:0">⏳ Direction sets at 10:05 ET open</span>'}
-  {'<span style="margin-left:12px;font-size:10px;color:#ff3b30;font-weight:700">BLOCKED — High VIX regime</span>' if vix_tertile == "High" else ''}
+  <div class="col wk">
+    <div class="colhead">
+      <span class="ch-t">📈 Weekly directional</span>
+      <span class="ch-s">buy calls / puts · {exp_display} expiry · entry 10:00–11:30 / 14:00–15:00 ET · click a row to expand</span>
+    </div>
+    <div class="strat-explainer"><b>You BUY the option.</b> Profit if the underlying moves your way before expiry; risk capped at premium paid. A bet on <b>movement</b>.</div>
+    {weekly_table}
+  </div>
+
+  <div class="col zd">
+    <div class="colhead">
+      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE premium selling</span>
+      <span class="ch-s">sell puts / calls · {dte_display} same-day · <b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET only
+      {'· <b style="color:#30d158">🔒 locked ' + dte_lock_time + ' ET</b>' if dte_lock_time else '· <span style="color:#ffd60a">⏳ direction sets 10:05 ET</span>'}
+      {'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
+    </div>
+    <div class="strat-explainer"><b>You SELL the option.</b> Profit if the underlying stays put and time decay erodes it by the 3:45 ET close. A bet on <b>no big move today</b> — <b>not</b> against the weekly.</div>
+    {dte_table}
+  </div>
+
 </div>
-<div class="strat-explainer"><b>Premium selling — you SELL the option.</b> Profit if the underlying stays put and time decay erodes it by the 3:45 ET close. Short premium. A bet on <b>no big move today</b> — <b>not</b> a bet against the weekly.</div>
-{dte_table}
 
 <!-- ── REJECTIONS ─────────────────────────────────────────────────────────── -->
 {rejections_html}
