@@ -89,3 +89,17 @@ names exactly the missing machinery.
 Recommended first build = (1) IC/ICIR engine (unlocks 2–5). Ranks against the existing roadmap
 whitespace items (TCA, correlation aggregator, adaptive MIN_SCORE) — this is the "learning loop" the
 Evolution Mandate specifically called out as the bot's biggest structural gap.
+
+**BGG READ (2026-07-12):**
+- **GAI:** build **IC/ICIR measurement FIRST** — "without it you cannot validate if your confluence
+  scoring or shadow strategy are generating any signal, making all other components potentially
+  useless." #1 risk = **overfitting / noise-masking**: ~158 trades are insufficient to statistically
+  separate genuine alpha from chance, especially across a 12-factor score.
+- **Gro:** call errored (shell-escaping bug in the harness prompt, not a real reject) — deferred per
+  Gro-skip; a prioritization read, not a ship gate.
+- **Board framework grounding (already in scope):** Grinold-Kahn (IC/breadth), LdP (CPCV/PBO — the
+  small-sample discipline GAI flags), Jegadeesh-Titman (momentum factor). Consensus with GAI: **(1)
+  IC/ICIR first, and it MUST ship with bootstrap-CI + PBO from day one** because our sample is tiny —
+  the deflated-Sharpe/multiple-testing guard (#5) is not optional here, it is co-required with (1).
+- **NEXT:** Rafael to decide whether to graduate item (1) into a Feature-Design + full-board build,
+  ranked against the S59 roadmap whitespace. No build started — scope only, as requested.
