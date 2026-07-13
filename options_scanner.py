@@ -1449,18 +1449,34 @@ def _build_rec_table(recs: list, id_offset: int = 0) -> str:
         return "".join(_rec_row(r, i + base) + _rec_detail(r, i + base)
                        for i, r in enumerate(subset))
 
-    body = (
+    high_body = (
         _tier_header("▲ Highest Conviction · score ≥ 10", "#30d158", len(high))
         + _rows(high, id_offset)
-        + _tier_header("◆ Secondary · score 8–9", "#ffd60a", len(mod))
-        + _rows(mod, id_offset + 500)
     )
+    # SECONDARY collapsed by default (Luke step E): a clickable summary row toggles a hidden
+    # second <tbody> (valid HTML — a table may have multiple tbodies). Keeps the fast-scan view
+    # to the highest-conviction rows; tap to reveal the 8–9 tier.
+    if mod:
+        sec_summary = (
+            f'<tr class="sec-toggle" onclick="togSec({id_offset})" style="cursor:pointer">'
+            f'<td colspan="8" style="padding:8px 12px;font-size:10px;font-weight:700;'
+            f'letter-spacing:.06em;text-transform:uppercase;color:#ffd60a;background:#0a0d14;'
+            f'border-top:1px solid #161a28">'
+            f'<span id="secarr-{id_offset}">▸</span> Secondary · score 8–9 · {len(mod)}'
+            f'<span style="color:#4a5070;font-weight:400;text-transform:none;letter-spacing:0">'
+            f' — tap to show</span></td></tr>'
+        )
+        sec_body = _rows(mod, id_offset + 500)
+    else:
+        sec_summary = _tier_header("◆ Secondary · score 8–9", "#ffd60a", 0)
+        sec_body = ""
     return f"""<table style="width:100%;border-collapse:collapse">
   <thead><tr>
     <th>Tkr</th><th>Px</th><th>Sc</th><th>VRP</th>
     <th>Signal</th><th>Strk</th><th>δ</th><th>IV</th>
   </tr></thead>
-  <tbody>{body}</tbody>
+  <tbody>{high_body}{sec_summary}</tbody>
+  <tbody id="secbody-{id_offset}" style="display:none">{sec_body}</tbody>
 </table>"""
 
 
@@ -1572,6 +1588,14 @@ def generate_html(data: dict) -> str:
       }} else {{
         d.style.display = "none"; if (a) a.innerHTML = "▸";
       }}
+    }}
+    function togSec(o) {{
+      var b = document.getElementById("secbody-"+o);
+      var a = document.getElementById("secarr-"+o);
+      if (!b) return;
+      var hidden = (b.style.display === "none" || b.style.display === "");
+      b.style.display = hidden ? "table-row-group" : "none";
+      if (a) a.innerHTML = hidden ? "▾" : "▸";
     }}
   </script>
   <style>
