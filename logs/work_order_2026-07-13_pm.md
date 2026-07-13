@@ -12,9 +12,13 @@ resume THIS session) — the method that worked last night. This is the standard
 (collapse SECONDARY conviction). Vol-events banner stays. Add last-scan + next-scan data; remove duplicative
 data. The entire UPPER portion feels like static info that doesn't refresh — make it read LIVE.
 
+**PROGRESS:** ✅ Step C SHIPPED (`ae679e6`) — paragraph explainers → ⓘ popover + rec counts folded into
+each column header. Live+served on OCI. REMAINING for the resume: A (header freshness pill), D (SPY/QQQ
+anchor block), E (SECONDARY dropdown), B (tiles 5→2), F (live cues).
+
 **LUKE WROBLEWSKI SPEC (mobile-first / progressive disclosure) — build in this order (highest readability
 win first):**
-1. **C — kill the two 3-sentence explainer paragraphs → an ⓘ info-icon popover** next to each column title
+1. ✅ **C — kill the two 3-sentence explainer paragraphs → an ⓘ info-icon popover** [DONE `ae679e6`] next to each column title
    (`0DTE Directional ⓘ`). Biggest density drop, lowest risk. Explainer text moves into the popover.
 2. **A — header collapse + FRESHNESS PILL.** Header = one row: `Options Scanner` (title only, kill the
    sub-caption sentence) + right-side **freshness pill** `● Updated 2m ago · next in 13m` (dot pulses on
