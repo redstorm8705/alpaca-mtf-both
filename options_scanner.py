@@ -22,10 +22,13 @@ VRP REGIME (Vilkov 2026, POST-2022-ERA):
 TWO RECOMMENDATION SETS:
   Weekly: next-Friday expiry. Entry windows 10:00–11:30 / 14:00–15:00 ET.
           Max $150/trade, 2 contracts. Target +100% (long) / 75% profit (short).
-  0DTE:   same-day expiry. Entry window 10:05–10:20 ET ONLY. 3:45 ET hard close.
-          Max $75/trade, 1 contract. Blocked entirely in High VIX tertile.
+  0DTE:   DIRECTIONAL intraday-swing capture (reframed 2026-07-13 — NOT premium selling).
+          Long OTM ~0.35Δ CALL (upside) + PUT (downside) per name so the operator plays the
+          day either way. Same-day expiry, 10:05–10:20 ET entry, 3:45 ET hard close.
+          Max $75/trade, 1 contract, +100% target. Blocked entirely in High VIX tertile.
+          Universe: SPY, QQQ + Mag 7 (AAPL/MSFT/GOOGL/AMZN/NVDA/META/TSLA).
 
-Universe: SPY, QQQ, AAPL, MSFT, AMZN (core) + META, GOOGL, AMD (conditional, premium ≤ $3)
+Weekly universe: SPY, QQQ, AAPL, MSFT, AMZN (core) + META, GOOGL, AMD (conditional, ≤ $3)
 Account: $500
 
 Usage:
@@ -75,6 +78,15 @@ PT = ZoneInfo("America/Los_Angeles")
 CORE_UNIVERSE        = ["SPY", "QQQ", "AAPL", "MSFT", "AMZN"]
 CONDITIONAL_UNIVERSE = ["META", "GOOGL", "AMD"]   # only when ATM premium ≤ $3.00
 PREMIUM_LIMIT_CONDITIONAL = 3.00
+
+# ── 0DTE universe — DIRECTIONAL intraday-swing capture (Rafael 2026-07-13) ─────
+# 0DTE is NO LONGER premium-selling. It is directional capture of the same-day move
+# EITHER WAY — a long OTM call (upside) AND a long OTM put (downside) per name, so the
+# operator plays whichever direction the day develops. Universe: SPY, QQQ + the Mag 7.
+ZDTE_UNIVERSE      = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+ZDTE_DELTA_TARGET  = 0.35   # OTM strike delta target (capture the swing, not lottery/ATM)
+ZDTE_DELTA_MIN     = 0.20   # too deep OTM → illiquid lottery
+ZDTE_DELTA_MAX     = 0.48   # too close to ATM → overpaying theta on a 0DTE
 
 # ── Signal thresholds ────────────────────────────────────────────────────────
 MIN_SCORE_ANY  = 8    # below this → watchlist only
@@ -974,6 +986,106 @@ def _build_recs(
     return recommendations, watchlist, rejections  # P2-OPTIONS-REJECT: 3-tuple
 
 
+# ── 0DTE directional intraday-swing builder (Rafael 2026-07-13) ────────────────
+
+def _select_directional_otm(rows: list, spot: float, opt_type: str,
+                            target: float = ZDTE_DELTA_TARGET) -> dict | None:
+    """Pick the OTM strike (delta ~0.35) for directional 0DTE capture. OTM = strike>spot
+    for a call, strike<spot for a put. Returns the row dict or None if none liquid."""
+    if not rows or spot <= 0:
+        return None
+    if opt_type == "call":
+        band = [r for r in rows if r["strike"] > spot
+                and ZDTE_DELTA_MIN <= r["delta"] <= ZDTE_DELTA_MAX and r["mid"] > 0]
+        otm = [r for r in rows if r["strike"] > spot and r["mid"] > 0]
+    else:
+        band = [r for r in rows if r["strike"] < spot
+                and ZDTE_DELTA_MIN <= r["delta"] <= ZDTE_DELTA_MAX and r["mid"] > 0]
+        otm = [r for r in rows if r["strike"] < spot and r["mid"] > 0]
+    pool = band or otm
+    if not pool:
+        return None
+    return min(pool, key=lambda r: abs(r["delta"] - target))
+
+
+def _build_0dte_directional(
+    scored: list, expiry_today: str, in_win: bool, vix_tertile: str, events: list,
+) -> tuple[list, list, list]:
+    """Directional intraday-swing 0DTE recommendations — LONG premium, capture the same-day
+    move EITHER WAY. For each SPY/QQQ/Mag-7 name: a long OTM ~0.35Δ CALL (upside) AND a long
+    OTM ~0.35Δ PUT (downside), so the operator plays whichever direction the day develops.
+    Replaces the prior VRP premium-selling 0DTE path (Rafael 2026-07-13). 1 contract, ≤$75,
+    hard-close 3:45 ET, blocked entirely in High-VIX (undefined 0DTE tail risk)."""
+    recs: list = []
+    watch: list = []
+    rej: list = []
+    event_flags = [e["note"] for e in events]
+
+    for sig in scored:
+        sym = sig["symbol"]
+        err = sig.get("error")
+        price = sig.get("price")
+        score = max(int(sig.get("long_score", 0) or 0), int(sig.get("short_score", 0) or 0))
+
+        if err or not price:
+            rej.append({"symbol": sym, "reason": err or "no price data", "score": 0, "mode": "0DTE"})
+            continue
+        if vix_tertile == "High":
+            rej.append({"symbol": sym, "reason": "0DTE blocked: High VIX regime — undefined tail risk (Vilkov 2026)",
+                        "score": score, "mode": "0DTE"})
+            continue
+
+        both = _fetch_both_chains(sym, expiry_today, price)
+
+        for opt_type in ("call", "put"):
+            chain = both["call"] if opt_type == "call" else both["put"]
+            best = _select_directional_otm(chain, price, opt_type)
+            if best is None:
+                rej.append({"symbol": sym, "reason": f"no liquid OTM {opt_type} for 0DTE {expiry_today}",
+                            "score": score, "mode": "0DTE"})
+                continue
+
+            mid_px = best["mid"]
+            cost_pct = round((best["ask"] - best["bid"]) / mid_px, 3) if mid_px > 0 else 1.0
+            if cost_pct > BAS_MAX_0DTE:
+                rej.append({"symbol": sym, "reason": f"BAS {cost_pct:.0%} too wide (>{BAS_MAX_0DTE:.0%}) on {opt_type.upper()} 0DTE",
+                            "score": score, "mode": "0DTE"})
+                continue
+
+            contracts = 1
+            cost_per_cont = round(best["mid"] * 100, 2)
+            total_cost = round(contracts * cost_per_cont, 2)
+            if total_cost > MAX_TRADE_DOLLARS_0DTE:
+                rej.append({"symbol": sym, "reason": f"{opt_type.upper()} 0DTE ${total_cost:.0f} > ${MAX_TRADE_DOLLARS_0DTE} cap",
+                            "score": score, "mode": "0DTE"})
+                continue
+
+            limit_sell = round(best["mid"] * LIMIT_SELL_MULT, 2)   # +100% target on long premium
+            log_cmd = (f"python3.10 log_fill.py {sym} long_{opt_type} "
+                       f"{int(best['strike'])} {expiry_today} {best['mid']} {contracts}")
+
+            recs.append({
+                "symbol": sym, "direction": opt_type, "side": "long", "score": score,
+                "long_score": int(sig.get("long_score", 0) or 0),
+                "short_score": int(sig.get("short_score", 0) or 0),
+                "price": price, "pct_change": sig.get("pct_change"),
+                "strike": best["strike"], "expiry": expiry_today, "premium_mid": best["mid"],
+                "bid": best["bid"], "ask": best["ask"], "iv": best["iv"], "delta": best["delta"],
+                "theta": best["theta"], "gamma": best.get("gamma", "—"), "vega": best.get("vega", "—"),
+                "source": best.get("source", "yfinance"), "exp_move": best["exp_move"],
+                "breakeven": best["breakeven"], "DTE": best["DTE"], "oi": best["oi"], "volume": best["volume"],
+                "limit_sell": limit_sell, "contracts": contracts, "cost_per_cont": cost_per_cont,
+                "total_cost": total_cost, "credit_received": None, "est_margin": None,
+                "log_cmd": log_cmd, "event_flags": event_flags, "in_window": in_win,
+                "conviction": "HIGH" if score >= MIN_SCORE_HIGH else "MOD",
+                "vrp": None, "isk": None, "vix_tertile": vix_tertile, "cost_pct": cost_pct, "mode": "0dte",
+            })
+
+    # Rank: HIGH-conviction first, then by score, then call (upside) before put per name
+    recs.sort(key=lambda r: (-int(r["conviction"] == "HIGH"), -r["score"], r["symbol"], r["direction"]))
+    return recs, watch, rej
+
+
 # ── Main scan ────────────────────────────────────────────────────────────────
 
 def run_scan() -> dict:
@@ -987,49 +1099,39 @@ def run_scan() -> dict:
     logger.info(f"Scanning options — weekly expiry {weekly_expiry}, 0DTE expiry {today_str}")
     logger.info(f"Week events: {[e['note'] for e in events]}")
 
-    # Score universe once — reused for both weekly and 0DTE
-    all_symbols = CORE_UNIVERSE + CONDITIONAL_UNIVERSE
+    # Score universe once — union of weekly (core+conditional) and 0DTE (SPY/QQQ/Mag7)
+    _weekly_syms = set(CORE_UNIVERSE + CONDITIONAL_UNIVERSE)
+    _zdte_syms   = set(ZDTE_UNIVERSE)
+    all_symbols  = sorted(_weekly_syms | _zdte_syms)
     scored = score_universe(all_symbols)
+    scored_by_sym = {s["symbol"]: s for s in scored}
 
     # VIX tertile — cached 30 min; one yfinance T4 call per session
     vix_tertile = _get_vix_tertile()
     logger.info(f"VIX tertile: {vix_tertile}")
 
-    # ── Weekly recommendations ─────────────────────────────────────────────────
+    # ── Weekly recommendations (core + conditional universe only) ──────────────
+    weekly_scored = [scored_by_sym[s] for s in (CORE_UNIVERSE + CONDITIONAL_UNIVERSE) if s in scored_by_sym]
     weekly_recs, weekly_watch, weekly_rejections = _build_recs(  # P2-OPTIONS-REJECT
-        scored, weekly_expiry, "weekly", in_win_weekly, vix_tertile, events
+        weekly_scored, weekly_expiry, "weekly", in_win_weekly, vix_tertile, events
     )
 
-    # ── 0DTE recommendations (RTH only — 0DTE worthless after close) ───────────
-    # Direction is locked at the first scan at/after 10:05 ET and never re-derived.
-    # This prevents whipsawing between SHORT PUT and SHORT CALL every 15 minutes.
+    # ── 0DTE recommendations — DIRECTIONAL intraday-swing capture (RTH only) ────
+    # Reframed 2026-07-13: long OTM call (upside) + long OTM put (downside) per SPY/QQQ/Mag7
+    # name, so the operator plays the day either way. No direction-lock needed — both sides
+    # are always shown. Premium-selling / VRP 0DTE path retired.
     now_et  = datetime.now(ET)
     is_rth  = (
         (9 * 60 + 30) <= (now_et.hour * 60 + now_et.minute) < (16 * 60)
         and now_et.weekday() < 5
     )
-    # Load existing day-lock (None if no lock for today)
-    dte_lock = _load_dte_lock()
-    locked_directions = dte_lock.get("directions") if dte_lock else None
-    dte_lock_time = dte_lock.get("set_at_et") if dte_lock else None
+    dte_lock_time = None   # retained for the HTML signature (directional 0DTE has no lock)
 
     if is_rth:
-        dte_recs, dte_watch, dte_rejections = _build_recs(  # P2-OPTIONS-REJECT
-            scored, today_str, "0dte", in_win_0dte, vix_tertile, events,
-            locked_directions=locked_directions,
+        zdte_scored = [scored_by_sym[s] for s in ZDTE_UNIVERSE if s in scored_by_sym]
+        dte_recs, dte_watch, dte_rejections = _build_0dte_directional(
+            zdte_scored, today_str, in_win_0dte, vix_tertile, events,
         )
-        # Save direction lock after the first 0DTE scan at or after 10:05 ET.
-        # Once saved, all subsequent scans today use the locked directions.
-        now_mins = now_et.hour * 60 + now_et.minute
-        past_window_open = now_mins >= (10 * 60 + 5)
-        if not dte_lock and past_window_open and dte_recs:
-            new_lock = {
-                r["symbol"]: {"side": r["side"], "opt_type": r["direction"]}
-                for r in dte_recs
-            }
-            _save_dte_lock(new_lock)
-            dte_lock_time = datetime.now(ET).strftime("%H:%M")
-            logger.info(f"0DTE direction locked for the day at {dte_lock_time} ET")
     else:
         dte_recs, dte_watch, dte_rejections = [], [], []  # P2-OPTIONS-REJECT
         logger.info("0DTE scan skipped — outside RTH")
@@ -1420,7 +1522,6 @@ def generate_html(data: dict) -> str:
     win_0dte    = data.get("window_label_0dte", "")
     in_win_0dte = data.get("in_window_0dte", False)
     vix_tertile  = data.get("vix_tertile", "—")
-    dte_lock_time = data.get("dte_lock_time")   # HH:MM ET when 0DTE direction was locked, or None
 
     exp_display = expiry_display(expiry)
     exp_full    = datetime.strptime(expiry, "%Y-%m-%d").strftime("%A, %B %-d")
@@ -1439,44 +1540,13 @@ def generate_html(data: dict) -> str:
     weekly_table = _build_rec_table(weekly_recs, id_offset=0)
     dte_table    = _build_rec_table(dte_recs,    id_offset=1000)
 
-    # Cross-strategy clarity: tickers in BOTH weekly (directional) and 0DTE
-    # (premium-selling) are NOT a contradiction — they are different strategies.
-    # Flag it explicitly (Rafael + board + Gro + GAI, 2026-07-06).
-    _both_syms = sorted({r["symbol"] for r in weekly_recs} & {r["symbol"] for r in dte_recs})
-    if _both_syms:
-        _both_str = ", ".join(_both_syms)
-        _conflict_note = (
-            f'<div class="strat-conflict">&#9888; <b>{_both_str}</b> '
-            f'appear{"" if len(_both_syms) > 1 else "s"} in BOTH sections below — this is '
-            f'<b>not a contradiction</b>. The Weekly row is a <b>directional</b> trade '
-            f'(you BUY, betting the stock moves your way); the 0DTE row is a '
-            f'<b>premium-selling</b> trade (you SELL, betting it stays put today). '
-            f'Different strategies, different holding periods — either can stand alone.</div>'
-        )
-    else:
-        _conflict_note = ""
-
-    # Alignment banner: both timeframes agree on SPY direction
-    _spy_weekly_dir = next((r["direction"] for r in weekly_recs if r["symbol"] == "SPY"), None)
-    _spy_0dte_dir   = next((r["direction"] for r in dte_recs   if r["symbol"] == "SPY"), None)
-    _aligned        = _spy_weekly_dir and _spy_0dte_dir and _spy_weekly_dir == _spy_0dte_dir
-    if _aligned:
-        _dir_word = "BULLISH" if _spy_weekly_dir == "call" else "BEARISH"
-        _dir_color = "#30d158" if _spy_weekly_dir == "call" else "#ff3b5c"
-        _align_banner = (
-            f'<div style="background:#0d1a0d;border:1px solid {_dir_color};border-left:4px solid {_dir_color};'
-            f'padding:10px 20px;display:flex;align-items:center;gap:10px">'
-            f'<span style="font-size:16px">{"📈" if _spy_weekly_dir == "call" else "📉"}</span>'
-            f'<div>'
-            f'<span style="font-weight:700;color:{_dir_color};font-size:13px">TIMEFRAME ALIGNMENT — SPY {_dir_word}</span>'
-            f'<span style="color:#b8bdd4;font-size:11px;margin-left:10px">'
-            f'Weekly ({str(_spy_weekly_dir).upper()}) and 0DTE ({str(_spy_0dte_dir).upper()}) point the same direction — '
-            f'elevated confluence</span>'
-            f'</div>'
-            f'</div>'
-        )
-    else:
-        _align_banner = ""
+    # (Retired 2026-07-13) The cross-strategy conflict note + SPY-alignment banner were
+    # premium-selling-specific (weekly BUY vs 0DTE SELL). 0DTE is now directional LONG
+    # premium with BOTH sides shown per name, so a name in both sections is simply a
+    # directional setup on two timeframes — no contradiction to flag, no single 0DTE
+    # direction to align on. Both banners retired.
+    _conflict_note = ""
+    _align_banner = ""
 
     # Rejections section — P2-OPTIONS-REJECT
     rejections_html = _rejections_section(rejections)
@@ -1618,14 +1688,14 @@ def generate_html(data: dict) -> str:
 <!-- 5-tile stat bar -->
 <div class="stat-bar">
   <div class="stat-tile">
+    <div class="s-lbl">0DTE Recs</div>
+    <div class="s-val" style="color:{'#ff9f0a' if dte_recs else '#4a5070'}">{len(dte_recs)}</div>
+    <div class="s-sub">{high_count_dte} high · both sides · 3:45 ET close</div>
+  </div>
+  <div class="stat-tile accent">
     <div class="s-lbl">Weekly Recs</div>
     <div class="s-val" style="color:{'#30d158' if weekly_recs else '#4a5070'}">{len(weekly_recs)}</div>
     <div class="s-sub">{high_count_weekly} high conviction</div>
-  </div>
-  <div class="stat-tile accent">
-    <div class="s-lbl">0DTE Recs</div>
-    <div class="s-val" style="color:{'#30d158' if dte_recs else '#4a5070'}">{len(dte_recs)}</div>
-    <div class="s-sub">{high_count_dte} high · 3:45 ET close</div>
   </div>
   <div class="stat-tile accent">
     <div class="s-lbl">High Conviction</div>
@@ -1648,8 +1718,17 @@ def generate_html(data: dict) -> str:
 {_align_banner}
 {_conflict_note}
 
-<!-- ── TWO-COLUMN: Weekly directional | 0DTE premium selling (2026-07-13) ──── -->
+<!-- ── TWO-COLUMN: 0DTE directional (LEFT) | Weekly directional (RIGHT) ─────── -->
 <div class="cols">
+
+  <div class="col zd">
+    <div class="colhead">
+      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional</span>
+      <span class="ch-s">buy calls &amp; puts · {dte_display} same-day · capture the intraday swing either way · <b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET{'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
+    </div>
+    <div class="strat-explainer"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium, <b>hard close 3:45 ET</b>. SPY/QQQ + Mag 7.</div>
+    {dte_table}
+  </div>
 
   <div class="col wk">
     <div class="colhead">
@@ -1658,17 +1737,6 @@ def generate_html(data: dict) -> str:
     </div>
     <div class="strat-explainer"><b>You BUY the option.</b> Profit if the underlying moves your way before expiry; risk capped at premium paid. A bet on <b>movement</b>.</div>
     {weekly_table}
-  </div>
-
-  <div class="col zd">
-    <div class="colhead">
-      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE premium selling</span>
-      <span class="ch-s">sell puts / calls · {dte_display} same-day · <b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET only
-      {'· <b style="color:#30d158">🔒 locked ' + dte_lock_time + ' ET</b>' if dte_lock_time else '· <span style="color:#ffd60a">⏳ direction sets 10:05 ET</span>'}
-      {'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
-    </div>
-    <div class="strat-explainer"><b>You SELL the option.</b> Profit if the underlying stays put and time decay erodes it by the 3:45 ET close. A bet on <b>no big move today</b> — <b>not</b> against the weekly.</div>
-    {dte_table}
   </div>
 
 </div>
@@ -1681,8 +1749,8 @@ def generate_html(data: dict) -> str:
     Log fills: <code>python3.10 log_fill.py SYMBOL long_call|short_put|… STRIKE EXPIRY PREMIUM CONTRACTS</code>
   </div>
   <div class="legend-row">
-    <div><span style="color:#30d158;font-weight:700">●</span> LONG CALL/PUT — buy direction, low VRP</div>
-    <div><span style="color:#ff9f0a;font-weight:700">●</span> SHORT CALL/PUT — sell premium, high VRP (IV > RV + 5 pts)</div>
+    <div><span style="color:#30d158;font-weight:700">●</span> Weekly LONG CALL/PUT — directional (buy the move), low VRP</div>
+    <div><span style="color:#ff9f0a;font-weight:700">●</span> 0DTE — directional intraday capture: long OTM call (up) &amp; put (down) per name, SPY/QQQ+Mag7</div>
     <div><span style="color:#30d158;font-weight:700">HIGH</span> score ≥ 10/12 &nbsp; <span style="color:#ffd60a;font-weight:700">MOD</span> score 8–9/12</div>
     <div style="color:#b8bdd4">VIX tertile: Low/Mid/High from post-2022 data (Vilkov 2026)</div>
     <div style="color:#b8bdd4">0DTE blocked in High VIX — hard close 3:45 ET regardless of P&L</div>
