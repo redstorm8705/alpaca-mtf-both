@@ -592,6 +592,17 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 
     # Build open positions rows
     pos_rows = ""
+    # Overnight-held breakeven soft-exit transparency (Rafael 2026-07-13): the visible GTC
+    # stop is the catastrophe backstop, but an OVERNIGHT-HELD non-QHM position actually exits
+    # at ~entry−0.5×ATR (the "overnight breakeven buffer" in exit_logic) once it breaches for
+    # 9 scans. Surface that real level + live breach count so the stop is never a surprise.
+    _qhm_syms: set = set()
+    try:
+        _qh = _load_json(ROOT / "data" / "state" / "quarterly_holds.json", {})
+        _qhm_syms = set(_qh.keys()) if isinstance(_qh, dict) else set()
+    except Exception:
+        _qhm_syms = set()
+
     if open_pos:
         for p in open_pos:
             sym   = p["symbol"]
@@ -606,6 +617,19 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             tl_open = {t["symbol"]: t for t in trade_log.get("open",[])} if isinstance(trade_log.get("open"), list) else {}
             td = tl_open.get(sym, {})
             stop_str   = f"${td['stop']:.2f}" if td.get("stop") else "—"
+            # Overnight-held soft-exit (~entry−0.5×ATR) + live breach count, non-QHM only.
+            # be_mult is dynamic [0.25,0.65] in exit_logic; 0.5 is the representative midpoint
+            # (RIVN's actual), labelled "~". Exact per-scan threshold persist = queued follow-up.
+            _soft_html = ""
+            _atr_v = td.get("atr_value")
+            if td.get("overnight") and sym not in _qhm_syms and _atr_v and td.get("entry_price"):
+                _dir_td = str(td.get("direction", "long")).lower()
+                _soft = (entry_price - 0.5 * _atr_v) if _dir_td != "short" else (entry_price + 0.5 * _atr_v)
+                _brc = int(td.get("breakeven_breach_count", 0) or 0)
+                _brc_col = "#ff3b30" if _brc >= 6 else "#ff9f0a" if _brc >= 1 else "#8a94ae"
+                _soft_html = (f'<br><span style="font-size:10px;color:{_brc_col}" '
+                              f'title="Overnight breakeven buffer: exits ~entry−0.5×ATR after a 9-scan breach. '
+                              f'The $ stop above is only the catastrophe backstop.">soft ~${_soft:.2f} · {_brc}/9</span>')
             target_str = f"${td['target']:.2f}" if td.get("target") else "—"
             score_str  = f"{td['score']}/12" if td.get("score") else "—"
             overnight  = "🌙" if td.get("overnight") else ""
@@ -617,7 +641,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
               <td>${price:.2f}</td>
               <td style="color:#b8bdd4">${entry_price:.2f}</td>
               <td style="color:{ucol};font-weight:700">{sign}${abs(upnl):.2f}</td>
-              <td style="color:#ffd60a">{stop_str}</td>
+              <td style="color:#ffd60a">{stop_str}{_soft_html}</td>
               <td style="color:#30d158">{target_str}</td>
               <td style="color:#b8bdd4">{score_str}</td>
             </tr>"""
