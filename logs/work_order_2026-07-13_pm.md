@@ -49,9 +49,12 @@ the two-stop model is intended and documented.
 (collapse SECONDARY conviction). Vol-events banner stays. Add last-scan + next-scan data; remove duplicative
 data. The entire UPPER portion feels like static info that doesn't refresh — make it read LIVE.
 
-**PROGRESS:** ✅ Step C SHIPPED (`ae679e6`) — paragraph explainers → ⓘ popover + rec counts folded into
-each column header. Live+served on OCI. REMAINING for the resume: A (header freshness pill), D (SPY/QQQ
-anchor block), E (SECONDARY dropdown), B (tiles 5→2), F (live cues).
+**PROGRESS:** ✅ C SHIPPED (`ae679e6`) explainers→ⓘ popover + counts in headers · ✅ B SHIPPED (`1d73215`)
+stat bar 5→2 (kept High Conviction + VIX) · ✅ E SHIPPED (`1a41c14`) SECONDARY→collapsed tap-to-expand
+dropdown (multi-tbody + togSec, both cols). ALL live+served. REMAINING: **A** (header freshness pill: emit
+last_scan_ts/next_scan_ts from run_scan, JS countdown, kill the running seconds-clock + nav-sub dup, window-
+state→chip), **D** (SPY/QQQ pinned INDEX-0DTE anchor block above the tiers — the marquee glance ask), **F**
+(live cues: pulse/tick/stale-color). Then gated builds #2 F6, #3 spam/leak, #4 IC 1b.
 
 **LUKE WROBLEWSKI SPEC (mobile-first / progressive disclosure) — build in this order (highest readability
 win first):**
