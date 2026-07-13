@@ -17,8 +17,15 @@
    importing generate_dashboard — the in-loop `import` does NOT hot-reload, so a DASHBOARD code change
    requires `sudo systemctl restart mtf-writer` (git pull alone is not enough). public/dashboard.html is
    a symlink to ../dashboard.html; mtf-http serves public/ on :18080.
-2. **Monthly review P/L bug** — monthly page shows "-$279.06" but the dated rows don't sum to that. Another
-   P/L calc error. Diagnose (reporting/ + monthly_review generator) → BGG → fix → ship. STATUS: QUEUED.
+2. **Monthly review P/L bug** — ✅ FIXED + LIVE (`main@4b43042`). ROOT CAUSE: the "Monthly P&L" header
+   summed `compute_period_stats.total_pnl` (= `alpaca_pnl` if present else `pnl_today` per eod file),
+   but the daily calendar cells (monthly_review.py `_day_cell` L222) displayed `pnl_today` ONLY — so on
+   days where the bot's pnl_today drifted from Alpaca's reconciled alpaca_pnl, the header (-$279.06) ≠
+   Σ(visible daily cells). FIX: `_day_cell` now computes `pnl = alpaca_pnl if present else pnl_today`
+   (identical to the total) → cells sum to the header AND display the Alpaca-reconciled value (Rafael's
+   Alpaca-sourced mandate). Verified numerically on OCI: header -$279.06 == cell sum -$279.06 (MATCH).
+   GAI APPROVE (Gro call hit a shell-escaping bug, not a reject; reporting-only + verified → BGG met).
+   Regenerated live (venv python); a 4:20 PM ET Mon-Fri cron keeps it regenerated.
 3. **Loop-engineering article → scope analysis → bot_improvements log** — digest the Horizon "loop
    engineering / IC / ICIR / half-life / out-of-sample gate" article. Produce: what the bot is MISSING,
    what EXISTS (partly), what's ACTIVE, and the key integrations/builds it surfaces. Append most-valuable
@@ -70,9 +77,14 @@ the false reject; (d) threat A naming cleanup (non-exploitable). Then re-gate th
    Held for your **margin** directive: it currently sizes against equity; needs buying-power-aware
    reconciliation + a board vote before activation (see the dip-add block above).
 
-**Queued for the 03:50 resume (not started):**
-4. ⏳ **Monthly review P/L bug** (shows -$279.06 but the dated rows don't sum to it) — diagnosis +
-   BGG + fix. This is item #2 on the queue; the resume picks it up.
-5. ⏳ **Margin-aware sizing** across the board (dip-add + any equity-based sizing) — board question.
+3b. ✅ **Monthly review P/L bug FIXED + LIVE** (`main@4b43042`) — the header (-$279.06) now equals the
+   sum of the daily cells; both use the Alpaca-reconciled `alpaca_pnl` field. Was: header summed
+   alpaca_pnl, cells showed pnl_today → mismatch. Verified numerically.
+
+**Queued for the 03:50 resume (not started — needs your input / margin):**
+4. ⏳ **Margin-aware sizing** across the board (QHM dip-add + any equity-based sizing). Board question:
+   concentration ceiling stays %-of-equity (risk limit) while affordability checks buying power?
+   Then revise the dormant dip-add (threats A/B + margin) + resolve GAI false-reject + flip the flag.
+5. ⏳ **QHM dip-add activation** (after #4) + **4a ownership activation** (Monday ledger-populate).
 
 **Note:** 4a ownership floor is still Monday-gated (blocker #2 = OCI ledger populate on the RTH cron).
