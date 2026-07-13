@@ -28,28 +28,36 @@ overwrite) + SKIP drifted symbols. **Cold board caught 2 real bugs Gro+GAI BOTH 
 static clean, Gro+GAI APPROVE final combined diff. Still **UNWIRED** (standalone cron maintainer
 `run_ledger_sync.py`; nothing reads the ledger to gate a live sell yet). See tb_audit_log 2026-07-12.
 
-**➡️ EXACT NEXT STEP = OWNERSHIP INCREMENT 4 — DESIGN BGG-ALIGNED (Option B), AWAITING RAFAEL APPROVAL.**
-Architecture fork resolved **UNANIMOUS Option B (broker chokepoint)**: Board 6-0 (Harris/Peterffy/
-Katsuyama exec-chokepoint seat + Kim/Majors/Taleb reliability/tail-risk seat) + Gro + GAI. One-page
-approval package presented to Rafael 2026-07-12; awaiting his APPROVE + confirmation of kill-switch
-semantics.
+**OWNERSHIP INCREMENT 4a-part-1 — CHOKEPOINT SHIPPED + LIVE (DARK, `main@488a893`).** Rafael
+APPROVED Option B (broker chokepoint) + kill-switch semantics + build structure (2026-07-12).
+`broker.close_position(symbol, *, tier="intraday")` + `partial_close_position(..., _bypass_floor)`
+now route reducing orders through `ownership_guard.check_never_sell_floor` when
+`config.OWNERSHIP_GUARD_ENFORCE` is True. Shipped **flag=False (DORMANT — byte-equivalent to today,
+cold-2nd verified)**. `close_position_for_tier` → thin alias (seam bug eliminated). Gate: static
+clean, 5/5 self-test, cold-2nd PASS on dark ship, Gro+GAI APPROVE. Live: flag=False confirmed on OCI.
 
-**Option B = make the broker's own sell primitives floor-aware (enforce at the chokepoint, not at
-~9 call sites).** `broker.close_position(symbol, tier="intraday")` + `partial_close_position(symbol,
-qty, tier="intraday")` route through the ownership guard internally → every caller auto-protected,
-zero call-site edits. Rejected Option A (per-call-site) = a single missed site sells a protected share
-(the July-2 mass-dump class).
+**➡️ EXACT NEXT STEP = 4a-part-2 ACTIVATION (flip `OWNERSHIP_GUARD_ENFORCE=True`). Two blockers
+MUST clear first (both flag-ON only; found by cold-2nd + GAI):**
+1. **QHM self-close must pass `tier="qhm"`** — `execution/quarterly_hold_manager.py:322`
+   (`OrderDispatcher.close` → `broker.close_position(symbol)` → add `tier="qhm"`) AND `main.py:459`
+   (`_QHMBroker.close_position` → `_qhm_close_pos(sym)` → add `tier="qhm"`). Else QHM's 13-week
+   backstop exit on a QHM-only symbol is tagged intraday → guard REJECTs (intraday owns 0) → QHM can
+   NEVER force-exit. 2-line fix but needs full reads of both files (RULE C-6) + gate.
+2. **Ledger populated + `protected_symbols.json` present on OCI.** run_ledger_sync (cron */20 RTH
+   Mon-Fri) last ran Jul-10 (pre-inc3) → NVDA/GOOGL currently floor=0 in the live ledger; cache
+   absent. Monday's RTH cron runs inc3 code → will populate real floors + write the cache. VERIFY
+   (`protected_symbols.json` present + NVDA/GOOGL show a qhm floor) BEFORE flipping the flag — GAI:
+   flag-on while ledger corrupt AND cache absent fails OPEN on a protected symbol; the cache-present
+   precondition closes this.
+Activation sequence: clear blocker 1 (gated ship) → verify blocker 2 on OCI → flip flag True (gated
+config change) → restart → live-verify an intraday exit on a protected symbol bounds correctly +
+QHM self-close still works. Observability the board asked for (log every guard decision; ALERT on
+unexpected QTY_BOUND; reconcile_drift alert) can fold into blocker-1's ship or the flag flip.
 
-**BUILD PLAN (floor-first, Rafael mandate) — each its own full patch sequence + Gro+GAI on the DIFF:**
-- **4a (protection first, behind a flag):** make `broker.close_position`/`partial_close_position`
-  floor-aware (default `tier="intraday"`, keyword-only per GAI). Behind `OWNERSHIP_GUARD_ENFORCE`
-  flag (one-line kill switch for the guard itself). Observability (board): log every guard decision
-  (APPROVE/QTY_BOUND/REJECT); ALERT on any QTY_BOUND outside expected QHM/F6 self-close (canary that
-  B works); wire `reconcile_drift()` to run + alert on nonzero drift.
-- **4b (open the door, only after 4a live+verified):** remove intraday-blocks-QHM gate at
-  `execution/entry_logic.py:438` (`if symbol in get_quarterly_hold_symbols(): continue`) + fix the
-  QHM exclusion in the cycle-sync risk count at `entry_logic.py:406-410` (an intraday position in a
-  QHM symbol SHOULD count toward intraday risk once co-holding is allowed).
+**THEN 4b (open the door, only after 4a fully active + verified):** remove intraday-blocks-QHM gate at
+`execution/entry_logic.py:438` (`if symbol in get_quarterly_hold_symbols(): continue`) + fix the QHM
+exclusion in the cycle-sync risk count at `entry_logic.py:406-410` (an intraday position in a QHM
+symbol SHOULD count toward intraday risk once co-holding is allowed).
 
 **REQUIRED EXPLICIT-TIER CALLERS under B (board-identified — must NOT default to intraday):**
 - `execution/quarterly_hold_manager.py:322` `QHMBrokerAdapter.close()` → `broker.close_position(sym,
