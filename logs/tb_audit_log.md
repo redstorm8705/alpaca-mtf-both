@@ -1,6 +1,29 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-12 — Ownership 4a ACTIVATION BLOCKER #1 CLEARED: QHM self-close tier="qhm"
+
+Fixes the cold-2nd/GAI-found blocker so `OWNERSHIP_GUARD_ENFORCE` can be flipped True without
+breaking QHM's own exit. Full reads: main.py 1092L (chunked), quarterly_hold_manager.py 1988L
+(Explore verbatim — pre-existing RC-1..8 scan clean).
+
+| Site | Change |
+|------|--------|
+| main.py:459 `_QHMBroker.close_position` | `def close_position(self, sym)` → `(self, sym, tier="qhm"): return _qhm_close_pos(sym, tier=tier)` — matches the adapter's submit siblings (accept+default+forward). |
+| execution/quarterly_hold_manager.py:322 `OrderDispatcher.close` | `broker.close_position(symbol)` → `broker.close_position(symbol, tier="qhm")` — matches submit_limit/submit_gtc_stop. |
+
+**Why:** `_initiate_exit` (the 13-week max-hold backstop, sole close caller) → `_dispatcher.close`
+→ (was) `broker.close_position(sym)` defaulting tier="intraday" → once the flag is on, the guard
+REJECTs a QHM self-exit on a QHM-only symbol (intraday owns 0) → QHM could never force-exit.
+
+**Gate:** static clean, self-test (tier=qhm threads end-to-end both sites), cold-2nd PASS (5/5;
+confirmed dormant when flag off; Movers close_position hits a different adapter, unaffected; no
+positional-2-arg callers), Gro APPROVE + GAI APPROVE (clean first roll). Still DORMANT (flag=False).
+
+**Activation blocker #2 REMAINS:** OCI ledger populated + protected_symbols.json present (Monday
+RTH cron). Verify before flipping OWNERSHIP_GUARD_ENFORCE=True.
+
+---
 ## 2026-07-12 — Ownership increment 4a: broker chokepoint floor-enforcement (DARK, flag=False)
 
 **Rafael-approved Option B** (board 6-0 + Gro + GAI). Enforce the never-sell floor at the broker

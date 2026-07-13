@@ -456,7 +456,12 @@ def main():
             return _qhm_submit_limit(s, q, side, price, ext, tier=tier)
         def submit_gtc_stop_order(self, s, q, side, price, tier="qhm"):
             return _qhm_submit_gtc_stop(s, q, side, price, tier=tier)
-        def close_position(self, sym): return _qhm_close_pos(sym)
+        # tier="qhm" (matches the submit siblings): the QHM manager's own close must
+        # tag the qhm tier so the never-sell-floor chokepoint (broker.close_position,
+        # increment 4a) routes it to the qhm tier's shares — else it defaults to
+        # "intraday" and, once OWNERSHIP_GUARD_ENFORCE=True, the guard REJECTs a QHM
+        # self-exit on a QHM-only symbol (intraday owns 0). Activation blocker #1.
+        def close_position(self, sym, tier="qhm"): return _qhm_close_pos(sym, tier=tier)
 
     class _QHMSlackAlerter:
         """Thin adapter: routes QHM alerts to send_slack."""

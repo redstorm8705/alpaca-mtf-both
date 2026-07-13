@@ -319,7 +319,11 @@ class OrderDispatcher:
         return broker.submit_gtc_stop_order(symbol, qty, side, stop_price, tier="qhm")
 
     def close(self, broker, symbol: str) -> bool:
-        return broker.close_position(symbol)
+        # tier="qhm" (matches submit_limit / submit_gtc_stop above): tags the qhm
+        # tier so the never-sell-floor chokepoint (broker.close_position, inc 4a)
+        # routes this QHM self-exit to the qhm tier's shares, not the "intraday"
+        # default (which the guard REJECTs on a QHM-only symbol once the flag is on).
+        return broker.close_position(symbol, tier="qhm")
 
 
 # ---------------------------------------------------------------------------
