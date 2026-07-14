@@ -91,7 +91,13 @@ Vol-events banner STAYS. After build: render-verify (preview desktop+mobile), Gr
 ### catalyst screen is a hard dependency; un-screened F6 = RIVN mistake at tier scale).
 - ✅ **CATALYST ENGINE 1a SHIPPED (`8d46797`, DARK)** — events/catalyst_engine.py per-name detector
   (Alpaca News + rule classifier + primary-symbol attribution). No entry gating (flag off). Gro+GAI APPROVE.
-- **NEXT — CATALYST 1b [GATED, board vote req]:** wire has_blocking_catalyst() into the entry gate to BLOCK
+- ✅ **CATALYST 1b gate-logic + cron SHIPPED** (`ae9db77`, still DARK): cached read + never-mask fault
+  handling + blocking filters (4 types, per-type age) + ~10-min RTH refresh cron seeding catalyst_state.json.
+  BGG APPROVE (Gro+GAI+cold seat; cold seat caught never-mask-on-infra-fault). REMAINING for LIVE: wire
+  has_blocking_catalyst() into execution/entry_logic.py entry loop (full-read gate; _rc8_clear_buffers on
+  block; once/cycle cache-fault CRITICAL alert; entry-branch ONLY + test held+catalyst position NOT closed);
+  validate detector from cron data; flip CATALYST_GATE_ENABLED=True.
+- (superseded) **NEXT — CATALYST 1b [GATED, board vote req]:** wire has_blocking_catalyst() into the entry gate to BLOCK
   new entries into a name with an active negative catalyst. This REVERSES the news-display-only invariant for
   stock-specific-on-held names → full board + Gro + GAI. Also add: a ~30-min RTH cron to run the detector +
   populate catalyst_state.json; SEC EDGAR per-CIK (S-1/S-3/424B) for offerings the newswire lags; dashboard surface.
