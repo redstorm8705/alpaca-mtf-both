@@ -340,6 +340,25 @@ VIX_STOP_WIDEN_MULT_2      = 2.0
 VIX_BE_WIDEN_THRESHOLD_1 = 20.0   # VIX ≥ 20 → 0.40×ATR buffer
 VIX_BE_WIDEN_THRESHOLD_2 = 30.0   # VIX ≥ 30 → 0.50×ATR buffer
 
+# ── FOREVER-6 STARTER TIER (Rafael 2026-07-13, BGG-locked: logs/f6_starter_bgg_2026-07-13.md) ──
+# A never-sell conviction tier ABOVE QHM. The STARTER rule ESTABLISHES 1-3 anchor names on a
+# market-wide dip. CASH-ONLY (no margin — the cold board proved margin makes the never-sell book a
+# hostage to any other strategy's worst day: a maintenance call would force-liquidate the anchors).
+# Ships DARK until the module is wired + live-validated.
+FOREVER6_ENABLED = False                       # master flag — DARK until validated live
+FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA"]  # curated, grows manually
+# Dynamic starter trigger: SPY down ≥ max(2.0, 0.15×VIX)% on the CLOSE — keeps it a ~2σ event across
+# regimes (VIX 13→2% floor, 20→3%, 27→4%). Board Shaw/Dalio formula; NOT a static −2% (no-static rule).
+FOREVER6_STARTER_TRIGGER_FLOOR_PCT = 2.0
+FOREVER6_STARTER_TRIGGER_VIX_SLOPE = 0.15
+FOREVER6_STARTER_MAX_NAMES = 3                 # fund at most 3 names per starter event (breadth-first)
+FOREVER6_STARTER_MAX_EVENTS_PER_MONTH = 4      # per-month event cap (anti-overtrade)
+# Segregated starter budget: the starter may spend at most this fraction of SETTLED CASH per event
+# (Thorp/Taleb catch — the shallow starter must never cannibalize the deep crash-ladder's dry powder),
+# and never draw settled cash below the floor reserve.
+FOREVER6_STARTER_CASH_FRAC_PER_EVENT = 0.20
+FOREVER6_STARTER_CASH_FLOOR = 200.0
+
 # Overnight hold — reversal confirmation scan count
 # Bot requires this many consecutive reversal scans before closing overnight position
 # At 5-min intervals: 10 scans = 50 min, 15 scans = 75 min
