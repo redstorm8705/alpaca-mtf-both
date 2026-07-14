@@ -575,6 +575,23 @@ def _strategy_validation_html(  # noqa: E501
 
     th = 'style="font-family:monospace;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#636680;padding:6px 12px;text-align:left;border-bottom:1px solid #1a1e30"'  # noqa: E501
 
+    # Reconciliation bridge — realized (edge total) → account total (equity−2500). Prevents the
+    # "why don't these match" confusion: they differ by fees + open unrealized, all shown.
+    if _fifo is not None:
+        _recon_note = (
+            '<div style="font-size:10px;color:#8a94ae;margin:0 0 14px;padding:8px 12px;'
+            'background:rgba(48,209,88,.05);border-left:2px solid #30d158;border-radius:4px">'
+            f'✓ <b style="color:#30d158">Alpaca-FIFO reconciled</b> — closed-trade realized '
+            f'<b>{"+" if total_pnl>=0 else ""}${total_pnl:,.2f}</b> (rows below sum to this) '
+            f'&minus; fees ${_fifo["fees"]:.2f} {"+" if _fifo["unrealized"]>=0 else "&minus; $"}'
+            f'{abs(_fifo["unrealized"]):,.2f} open unrealized = account '
+            f'<b>{"+" if _fifo["equity_minus_2500"]>=0 else ""}${_fifo["equity_minus_2500"]:,.2f}</b> '
+            f'(equity &minus; $2,500). Residual ${_fifo["residual"]:+.2f}.</div>'
+        )
+    else:
+        _recon_note = ('<div style="font-size:10px;color:#ffd60a;margin:0 0 14px">&#9888; Source: bot '
+                       'tracker (unreconciled — FIFO cache unavailable).</div>')
+
     return f"""
 <div class="card">
   <div class="card-hdr">
@@ -607,6 +624,7 @@ def _strategy_validation_html(  # noqa: E501
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
 
       <div>
+        {_recon_note}
         <div style="font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#636680;margin-bottom:8px">Score → Outcome</div>
         <table style="width:100%;border-collapse:collapse">
           <thead><tr>
