@@ -29,8 +29,9 @@ import config
 import data.bar_cache as _bar_cache
 from alerts import (
     alert_entry, alert_gtc_failed, alert_stale_bar,
-    alert_systemic_stale_feed,
+    alert_systemic_stale_feed, send_slack,
 )
+import events.catalyst_engine as _catalyst
 from data.alpaca_data import get_latest_trade, get_latest_quote  # noqa: F401
 from data.fetcher import fetch_bars
 from data.premarket import calculate_atr
@@ -428,6 +429,21 @@ def execute_entries(
     _mins_ph_cyc  = _now_ph_cyc.hour * 60 + _now_ph_cyc.minute
     _is_ph_cyc    = _mins_ph_cyc >= config.TOD_EXPANSION_WINDOW_START
 
+    # ── Catalyst entry-gate cache (1b) — loaded ONCE per cycle (BGG: Gro+GAI+cold seat). ──
+    # DARK until _catalyst.CATALYST_GATE_ENABLED. On a cache fault (missing/malformed/stale) we
+    # block NOTHING (never-mask: a data fault is not a trade decision) and fire ONE CRITICAL alert
+    # this cycle. Per-symbol blocking (below) reads this pre-loaded map — no hot-path network.
+    _cat_on     = _catalyst.CATALYST_GATE_ENABLED
+    _cat_state: dict = _catalyst.read_cached_state() if _cat_on else {"ok": True, "active": {}}
+    _cat_active: dict[str, dict] = _cat_state.get("active", {})
+    if _cat_on and not _cat_state.get("ok"):
+        try:
+            send_slack(f":rotating_light: CATALYST CACHE FAULT — {_cat_state.get('reason')} — "
+                       f"catalyst entry-gate INACTIVE this cycle (blocking nothing).")
+        except Exception as _cat_alert_e:
+            logger.critical("CATALYST CACHE FAULT (alert failed): %s | %s",
+                            _cat_state.get("reason"), _cat_alert_e)
+
     for sig in signals:
         symbol    = sig["symbol"]
         direction = sig["direction"]
@@ -438,6 +454,23 @@ def execute_entries(
         if symbol in get_quarterly_hold_symbols():
             _rc8_clear_buffers(symbol, "qhm-hold")
             continue
+
+        # ── Catalyst gate (1b, DARK until CATALYST_GATE_ENABLED) ──────────
+        # Block a NEW entry into a name with an active high-severity NEGATIVE stock-specific
+        # catalyst (offering/dilution/guidance-cut/solvency/probe). Reads the once-per-cycle
+        # cache loaded above; a cache fault already alerted + blocks nothing (never-mask). This
+        # is ENTRY-ONLY — it never runs in check_exits/safe_close_all/QHM, so it cannot force a
+        # held position (incl. a never-sell tier) to close. Blocking = bounded missed entry;
+        # the alternative is the RIVN case (bought into a dilutive offering). (Rafael 2026-07-14)
+        if _cat_on and _cat_state.get("ok"):
+            _cat_hit = _catalyst.blocking_catalyst_for(symbol, _cat_active)
+            if _cat_hit is not None:
+                logger.warning(
+                    "[%s] CATALYST BLOCK [%s]: %s — refusing new entry.",
+                    symbol, _cat_hit.get("type"), (_cat_hit.get("headline") or "")[:80],
+                )
+                _rc8_clear_buffers(symbol, "catalyst-negative")
+                continue
 
         # ── Rule 1 enforcement ───────────────────────────────────────────
         if _longs_blocked_rule1 and direction == "long":
