@@ -9,7 +9,7 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
-**⏩⏩ 2026-07-14 RESUME (cron 3d094884 @ ~6:45 AM PT, session-only, after Rafael's usage reset) — READ
+**⏩⏩ 2026-07-13 RESUME (cron 741aaaf8 @ ~11:56 PM PT, session-only, after Rafael's usage reset) — READ
 `logs/work_order_2026-07-13_pm.md` FIRST.** CATALYST ENGINE fully built + wired, all DARK: 1a detector
 (`8d46797`) + 1b gate-logic+cron (`ae9db77`, ~10min RTH refresh populating catalyst_state.json) + 1b
 entry-wiring (`7732c5a`, in execute_entries, never-mask fault handling, entry-branch-only, deployed).
