@@ -1,4 +1,6 @@
-# Forever-6 STARTER — increment 1b/1c BUILD PACKAGE (ready to execute)
+# Forever-6 STARTER — 1b SHIPPED (3711f03), 1c BUILD PACKAGE (ready to execute)
+
+> **STATUS 2026-07-14:** increment **1b `execute_starter()` SHIPPED DARK** (commit 3711f03, Rafael "ship"; gate: ruin seat + Gro + GAI APPROVE, preship marker 49f8ebd1). The §1b spec below is DONE. Remaining = **§1c** (run_cycle wiring) + the FOREVER6_ENABLED flip (Rafael go).
 
 **Design authority:** `logs/f6_starter_bgg_2026-07-13.md` — BGG-aligned + Rafael-ADOPTED
 (cash-only, no margin, 1-3 names, −3% dynamic close trigger, catalyst-screened, segregated budget).

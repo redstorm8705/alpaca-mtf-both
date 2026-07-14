@@ -27,11 +27,21 @@ GAI marker I won't self-write).
 > GAI's dissent is against risk-first (a real cut blocks a new entry even alongside an EPS beat), which
 > you already approved when the gate shipped.
 
-**NEXT (queued, needs interactive session with Rafael):**
-- **F6 1b/1c cash-only build** — full spec in `logs/f6_1b_build_package_2026-07-14.md`. Real-order path:
-  `execute_starter()` (cash-only, fail-closed) in forever_hold_manager → run_cycle after-close hook
-  (needs 2023-line Explore read) → mandatory cold masked-loss seat + Gro/GAI → ship DARK → Rafael go
-  flips `FOREVER6_ENABLED=True`. Do NOT flip live-order execution autonomously.
+**✅ F6 1b SHIPPED DARK (`3711f03`, Rafael "ship" 2026-07-14):** `execute_starter()` in
+`execution/forever_hold_manager.py` — cash-only, fail-closed, tier-tagged `forever6` (never-sell
+floor via ownership_guard), slippage-buffered `reserved` guard so a market fill can't breach the
+cash floor / cannibalize the deep ladder. Double-dark (unwired + `FOREVER6_ENABLED=False`). Gate:
+cold ruin/masked-loss seat APPROVE + Gro APPROVE + GAI APPROVE (preship marker `49f8ebd1`). OCI
+pulled, NO restart (dead code; nightly cron loads it). Note: GAI flash oscillated ~6 rolls on the
+non-safety fill-price reporting logic → simplified it out (record planned px; Alpaca holds
+authoritative cost-basis; floor safety is via `reserved`, unchanged) → clean Gro+GAI APPROVE.
+
+**NEXT — F6 increment 1c (run_cycle wiring), needs interactive session:**
+- Full spec in `logs/f6_1b_build_package_2026-07-14.md` (§1c). Explore full-read `run_cycle.py`
+  (2023 lines, mandatory) → wire an after-close once-per-day hook behind `if config.FOREVER6_ENABLED:`
+  that calls `maybe_start_accumulation()` then `execute_starter()` → full board + Gro/GAI on the
+  run_cycle diff → ship DARK. Then a SEPARATE 1-line `FOREVER6_ENABLED=True` flip needs Rafael's
+  explicit go (execution-behavior change). Do NOT flip live-order execution autonomously.
 - **GEX expected-close BUILD** (top build from the prior handoff) — 0-DTE chain in data/gex.py + band.
 - Lower-pri: catalyst downgrade/leadership/recall types after more validation; overnight_atr_buffer_exit
   (c)tag/(d)rename; IC Phase 1b per-factor logging.
