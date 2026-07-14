@@ -52,8 +52,13 @@ PT = ZoneInfo("America/Los_Angeles")
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE = _ROOT / "data" / "state" / "catalyst_state.json"   # atomic snapshot for the dashboard/gate
 
-# ── GATE FLAG — flip to True only after 1b wiring is validated live (cron populates cache). ──
-CATALYST_GATE_ENABLED = False
+# ── GATE FLAG — LIVE (Rafael go 2026-07-14). Detector validated on real market-day news
+# (classifier accurate, co-tag attribution bug caught+fixed); wiring is entry-branch-only with
+# never-mask fault handling (stale/missing cache → block nothing + alert). The ~10-min RTH cron
+# refreshes catalyst_state.json before each session's open. Reverses Architecture Invariant #2
+# (news display-only) NARROWLY: only stock-specific high-severity NEGATIVE catalysts on watched
+# names block NEW entries; macro news stays display-only; exits/never-sell tiers untouched. ──
+CATALYST_GATE_ENABLED = True
 
 # Only consider catalysts within this recency window (dynamic: newest wins, not a static score).
 _LOOKBACK_HOURS = 72
