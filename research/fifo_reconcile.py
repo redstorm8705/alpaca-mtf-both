@@ -24,6 +24,9 @@ import urllib.error
 from collections import deque, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_PT = ZoneInfo("America/Los_Angeles")
 
 _ROOT = Path(__file__).resolve().parent.parent
 try:
@@ -163,38 +166,79 @@ def _match_score(pt: dict, closed: list) -> "int | None":
     return int(best["score"]) if best and best.get("score") is not None else None
 
 
-def main() -> int:
+_CACHE = _ROOT / "logs" / "fifo_edge.json"
+
+
+def compute_edge_cache() -> dict:
+    """Reconciled Alpaca-FIFO edge data for the Strategy Edge Report. Returns the full dict."""
     fills, fees = fetch_activities()
     realized, per_trade = fifo_realized(fills)
     eq = float(_get("/v2/account")["equity"])
-    pos = _get("/v2/positions")
-    unreal = round(sum(float(p["unrealized_pl"]) for p in pos), 2)
-    lhs = round(eq - 2500, 2)
-    rhs = round(realized - fees + unreal, 2)
-    print("=" * 66)
-    print("FIFO RECONCILE — all-time")
-    print(f"  fills={len(fills)}  closed-trade legs={len(per_trade)}")
-    print(f"  Σ FIFO realized     = ${realized:+,.2f}")
-    print(f"  Σ fees              = ${fees:,.2f}")
-    print(f"  open unrealized     = ${unreal:+,.2f}")
-    print("  ------------------------------------")
-    print(f"  realized - fees + unreal = ${rhs:+,.2f}")
-    print(f"  equity - 2500            = ${lhs:+,.2f}")
-    print(f"  RESIDUAL (dividends/other/rounding) = ${lhs - rhs:+,.2f}   {'✅ RECONCILES' if abs(lhs-rhs) < 1.0 else '❌ gap >$1'}")
-    # per-score edge from FIFO (matched to bot scores)
+    unreal = round(sum(float(p["unrealized_pl"]) for p in _get("/v2/positions")), 2)
     try:
-        tl = json.loads((_ROOT / "trade_log.json").read_text()); closed = tl.get("closed", [])
+        closed = json.loads((_ROOT / "trade_log.json").read_text()).get("closed", [])
     except Exception:
         closed = []
-    bands: dict = defaultdict(list)
+    by_score: dict = {}
     for pt in per_trade:
-        bands[_match_score(pt, closed) if _match_score(pt, closed) is not None else "?"].append(pt["pnl"])
+        sc = _match_score(pt, closed)
+        key = str(sc) if sc is not None else "?"
+        b = by_score.setdefault(key, {"n": 0, "pnl": 0.0, "wins": 0, "win_pnl": 0.0, "loss_pnl": 0.0, "loss_n": 0})
+        b["n"] += 1
+        b["pnl"] += pt["pnl"]
+        if pt["pnl"] > 0:
+            b["wins"] += 1; b["win_pnl"] += pt["pnl"]
+        else:
+            b["loss_n"] += 1; b["loss_pnl"] += pt["pnl"]
+    for b in by_score.values():
+        b["pnl"] = round(b["pnl"], 2)
+        b["win_pct"] = round(100 * b["wins"] / b["n"], 0) if b["n"] else 0
+        b["avg_win"] = round(b["win_pnl"] / b["wins"], 2) if b["wins"] else 0.0
+        b["avg_loss"] = round(b["loss_pnl"] / b["loss_n"], 2) if b["loss_n"] else 0.0
+    lhs = round(eq - 2500, 2)
+    rhs = round(realized - fees + unreal, 2)
+    total_wins = sum(1 for pt in per_trade if pt["pnl"] > 0)
+    return {
+        "updated": datetime.now(_PT).isoformat(),
+        "realized": realized, "fees": fees, "unrealized": unreal,
+        "equity_minus_2500": lhs, "residual": round(lhs - rhs, 2),
+        "reconciles": abs(lhs - rhs) < 1.0, "n_legs": len(per_trade),
+        "total_wins": total_wins,
+        "win_pct": round(100 * total_wins / len(per_trade), 0) if per_trade else 0,
+        "by_score": by_score,
+    }
+
+
+def write_cache() -> dict:
+    """Atomically persist the reconciled edge cache to logs/fifo_edge.json (RC-5)."""
+    d = compute_edge_cache()
+    _CACHE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CACHE.with_suffix(f".json.{os.getpid()}.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(d, fh, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(str(tmp), str(_CACHE))
+    return d
+
+
+def main() -> int:
+    d = write_cache()   # single fetch → compute → persist logs/fifo_edge.json
+    print("=" * 66)
+    print("FIFO RECONCILE — all-time  (wrote logs/fifo_edge.json)")
+    print(f"  closed-trade legs   = {d['n_legs']}")
+    print(f"  Σ FIFO realized     = ${d['realized']:+,.2f}")
+    print(f"  Σ fees              = ${d['fees']:,.2f}")
+    print(f"  open unrealized     = ${d['unrealized']:+,.2f}")
+    print("  ------------------------------------")
+    print(f"  equity - 2500       = ${d['equity_minus_2500']:+,.2f}")
+    print(f"  RESIDUAL            = ${d['residual']:+,.2f}   {'✅ RECONCILES' if d['reconciles'] else '❌ gap >$1'}")
     print("-" * 66)
     print("PER-SCORE edge (Alpaca-FIFO):")
     print(f"  {'score':<10}{'n':>4}{'Σpnl':>12}{'win%':>8}")
-    for k in sorted(bands.keys(), key=lambda x: (0, x) if isinstance(x, int) else (1, 0)):
-        v = bands[k]; s = sum(v); wr = 100 * sum(1 for x in v if x > 0) / len(v) if v else 0
-        print(f"  {str(k) + '/12':<10}{len(v):>4}{s:>+12.2f}{wr:>7.0f}%")
+    for k in sorted(d["by_score"].keys(), key=lambda x: (0, int(x)) if x.isdigit() else (1, 0)):
+        b = d["by_score"][k]
+        print(f"  {k + '/12':<10}{b['n']:>4}{b['pnl']:>+12.2f}{b['win_pct']:>7.0f}%")
     print("=" * 66)
     return 0
 

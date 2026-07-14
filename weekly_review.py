@@ -8,6 +8,7 @@ Usage:
     python3 weekly_review.py --week 2026-03-24    # specific Monday
     python3 weekly_review.py --analyze            # include Claude AI summary
 """
+# ruff: noqa: E501
 import os
 import sys
 import json
@@ -391,18 +392,6 @@ def _strategy_validation_html(  # noqa: E501
     if not closed:
         return ""
 
-    total_trades = len(closed)
-    all_wins  = [t for t in closed if (t.get("pnl") or 0) > 0]
-    all_losses = [t for t in closed if (t.get("pnl") or 0) <= 0]
-    all_wr    = len(all_wins) / total_trades * 100 if total_trades else 0
-    avg_w     = sum((t.get("pnl") or 0) for t in all_wins)  / len(all_wins)  if all_wins  else 0   # noqa: E501
-    avg_l     = sum((t.get("pnl") or 0) for t in all_losses) / len(all_losses) if all_losses else 0  # noqa: E501
-    total_pnl = (
-        lifetime_pnl if lifetime_pnl is not None
-        else compute_lifetime_stats().get("total_pnl", 0.0)
-    )
-    pf        = abs(avg_w / avg_l) if avg_l != 0 else float("inf")
-
     def _col(v, pos="#30d158", neg="#ff3b30", zero="#b8bdd4"):
         if v is None:
             return zero
@@ -410,42 +399,78 @@ def _strategy_validation_html(  # noqa: E501
     def _pct_col(wr):
         return "#30d158" if wr >= 60 else ("#ffd60a" if wr >= 40 else "#ff3b30")
 
-    # ── Score → Outcome matrix ────────────────────────────────────────────────
-    _n_min       = 5   # P1-SCORE-TABLE: min trades for full confidence display
-    _n_min_show  = 1   # C-2: always show WR%; add (n=X) to Trades column for small samples  # noqa: E501
-    bands: dict[int | str, list] = {}
-    for t in closed:
-        score = t.get("score")
-        key = int(score) if score is not None else "?"
-        bands.setdefault(key, []).append(t)
+    # ── SOURCE: Alpaca-FIFO reconciled cache (logs/fifo_edge.json) when fresh+reconciled, else
+    # the bot tracker's pnl. The tracker's pnl is corrupted (phantom exits/estimated fills) so its
+    # rows never summed to the account P&L; the FIFO cache is reconciled to Alpaca to the cent, so
+    # the score rows sum EXACTLY to realized. (Rafael 2026-07-14 — "the score should match the P/L".)
+    _fifo = None
+    try:
+        _fp = os.path.join(LOGS_DIR, "fifo_edge.json")
+        if os.path.exists(_fp):
+            with open(_fp) as _fh:
+                _fc = json.load(_fh)
+            if isinstance(_fc, dict) and _fc.get("by_score") and _fc.get("reconciles"):
+                _fifo = _fc
+    except Exception:
+        _fifo = None
 
-    score_rows = ""
-    for score in sorted(bands.keys(), key=lambda x: (0, x) if isinstance(x, int) else (1, 0)):  # noqa: E501
-        trades = bands[score]
-        n      = len(trades)
-        wins   = [t for t in trades if (t.get("pnl") or 0) > 0]
-        losses = [t for t in trades if (t.get("pnl") or 0) <= 0]
-        wr     = len(wins) / n * 100 if n else 0
-        aw     = sum((t.get("pnl") or 0) for t in wins)   / len(wins)   if wins   else 0
-        al     = sum((t.get("pnl") or 0) for t in losses) / len(losses) if losses else 0
-        tpnl   = sum(t.get("pnl") or 0 for t in trades)
-        lbl    = f"{score}/12" if isinstance(score, int) else "pre-score"
-        _row_bg = ("rgba(48,209,88,.07)" if wr >= 60
-                   else "rgba(255,214,10,.07)" if wr >= 40
-                   else "rgba(255,59,48,.07)")
-        # C-2: always show WR%; mark small-sample rows with (n=X) in Trades column
-        _wr_str   = f'{wr:.0f}%'
-        _n_lbl    = f'{n} <span style="font-size:9px;color:#636680">(n={n})</span>' if n < _n_min else str(n)  # noqa: E501
-        score_rows += (
+    _n_min = 5   # P1-SCORE-TABLE: min trades for full confidence display
+
+    def _score_row(lbl: str, n: int, wr: float, aw: float, al: float, tpnl: float, has_w: bool, has_l: bool) -> str:
+        _row_bg = ("rgba(48,209,88,.07)" if wr >= 60 else "rgba(255,214,10,.07)" if wr >= 40 else "rgba(255,59,48,.07)")
+        _n_lbl = f'{n} <span style="font-size:9px;color:#636680">(n={n})</span>' if n < _n_min else str(n)
+        return (
             f'<tr style="background:{_row_bg}">'
             f'<td style="color:#e2e4ee;font-weight:700">{lbl}</td>'
             f'<td style="color:#b8bdd4">{_n_lbl}</td>'
-            f'<td style="color:{_pct_col(wr)};font-weight:700">{_wr_str}</td>'
-            f'<td style="color:#30d158">{f"+${aw:.2f}" if wins else "—"}</td>'
-            f'<td style="color:#ff3b30">{f"${al:.2f}" if losses else "—"}</td>'
-            f'<td style="color:{_col(tpnl)};font-weight:700">{("+" if tpnl>=0 else "")}${tpnl:.2f}</td>'  # noqa: E501
+            f'<td style="color:{_pct_col(wr)};font-weight:700">{wr:.0f}%</td>'
+            f'<td style="color:#30d158">{f"+${aw:.2f}" if has_w else "—"}</td>'
+            f'<td style="color:#ff3b30">{f"${al:.2f}" if has_l else "—"}</td>'
+            f'<td style="color:{_col(tpnl)};font-weight:700">{("+" if tpnl>=0 else "")}${tpnl:.2f}</td>'
             f'</tr>'
         )
+
+    if _fifo is not None:
+        bs = _fifo["by_score"]
+        total_trades = int(_fifo.get("n_legs", 0))
+        all_wr    = float(_fifo.get("win_pct", 0))
+        total_pnl = float(_fifo.get("realized", 0.0))   # rows sum to this (reconciled to Alpaca)
+        _wn = sum(b["wins"] for b in bs.values())
+        _ln = sum(b["loss_n"] for b in bs.values())
+        avg_w = sum(b["avg_win"] * b["wins"] for b in bs.values()) / _wn if _wn else 0
+        avg_l = sum(b["avg_loss"] * b["loss_n"] for b in bs.values()) / _ln if _ln else 0
+        pf    = abs(avg_w / avg_l) if avg_l != 0 else float("inf")
+        score_rows = ""
+        for key in sorted(bs.keys(), key=lambda x: (0, int(x)) if x.isdigit() else (1, 0)):
+            b = bs[key]
+            lbl = f"{key}/12" if key.isdigit() else "pre-score"
+            score_rows += _score_row(lbl, b["n"], b["win_pct"], b["avg_win"], b["avg_loss"], b["pnl"], b["wins"] > 0, b["loss_n"] > 0)
+    else:
+        # Fallback: bot tracker (corrupted pnl — rows will NOT reconcile; used only if cache absent).
+        total_trades = len(closed)
+        all_wins  = [t for t in closed if (t.get("pnl") or 0) > 0]
+        all_losses = [t for t in closed if (t.get("pnl") or 0) <= 0]
+        all_wr    = len(all_wins) / total_trades * 100 if total_trades else 0
+        avg_w     = sum((t.get("pnl") or 0) for t in all_wins)  / len(all_wins)  if all_wins  else 0
+        avg_l     = sum((t.get("pnl") or 0) for t in all_losses) / len(all_losses) if all_losses else 0
+        total_pnl = (lifetime_pnl if lifetime_pnl is not None else compute_lifetime_stats().get("total_pnl", 0.0))
+        pf        = abs(avg_w / avg_l) if avg_l != 0 else float("inf")
+        bands: dict[int | str, list] = {}
+        for t in closed:
+            score = t.get("score")
+            bands.setdefault(int(score) if score is not None else "?", []).append(t)
+        score_rows = ""
+        for score in sorted(bands.keys(), key=lambda x: (0, x) if isinstance(x, int) else (1, 0)):
+            trades = bands[score]
+            n = len(trades)
+            wins   = [t for t in trades if (t.get("pnl") or 0) > 0]
+            losses = [t for t in trades if (t.get("pnl") or 0) <= 0]
+            wr     = len(wins) / n * 100 if n else 0
+            aw     = sum((t.get("pnl") or 0) for t in wins)   / len(wins)   if wins   else 0
+            al     = sum((t.get("pnl") or 0) for t in losses) / len(losses) if losses else 0
+            tpnl   = sum(t.get("pnl") or 0 for t in trades)
+            lbl    = f"{score}/12" if isinstance(score, int) else "pre-score"
+            score_rows += _score_row(lbl, n, wr, aw, al, tpnl, bool(wins), bool(losses))
 
     # ── Exit reason breakdown — bucket into clean categories ─────────────────
     _REASON_CATS = [
