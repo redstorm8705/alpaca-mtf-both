@@ -173,13 +173,19 @@ def get_active_catalysts(symbols: list[str]) -> dict[str, dict]:
         if pol == "neutral":
             continue
         syms = [str(s).upper() for s in it.get("symbols", [])]
-        # ATTRIBUTION: a stock-specific catalyst belongs to ONE company. Benzinga lists the
-        # primary symbol first, and the subject is usually named in the headline. Attribute to
-        # a watch-symbol NAMED IN THE HEADLINE if any, else the PRIMARY (first) watch-symbol —
-        # so a "Rivian offering" article co-tagged [RIVN, TSLA] does not falsely flag TSLA.
+        # ATTRIBUTION: a stock-specific catalyst belongs to ONE company — its SUBJECT. Benzinga
+        # lists the subject as the PRIMARY (first) symbol. Rule: attribute to the primary IF it
+        # is a watched name; else attribute ONLY to a watched symbol whose TICKER appears in the
+        # HEADLINE. NEVER attribute to an incidental co-tag (an index or unrelated ticker that
+        # merely appears in the symbols list). This is what stops a RIVN-offering article
+        # co-tagged [RIVN,TSLA] from flagging TSLA, or a WBD/PSKY-merger co-tagged SPY from
+        # flagging SPY. (Validation catch, 2026-07-14 — co-tag false positives found live.)
         hl = it["headline"].upper()
-        named = [s for s in syms if s in watch and s in hl]
-        target = named[0] if named else next((s for s in syms if s in watch), None)
+        primary = syms[0] if syms else None
+        if primary in watch:
+            target = primary
+        else:
+            target = next((s for s in syms if s in watch and s in hl), None)
         if target and target not in result:
             result[target] = {
                 "polarity":   pol,
