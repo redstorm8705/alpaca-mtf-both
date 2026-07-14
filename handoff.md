@@ -1,5 +1,6 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-12 (interactive) | **CROSS-ACCOUNT HANDOFF** — always current per the new
+**Updated:** 2026-07-14 (interactive — session wrapped at Rafael's 89% weekly limit; NEXT ACCOUNT
+IS A DIFFERENT CLAUDE GMAIL) | **CROSS-ACCOUNT HANDOFF** — always current per the new
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,7 +8,59 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-12 interactive) — pick up here
+## ⏩ LATEST (2026-07-14 interactive) — pick up here
+
+**⏩⏩ 2026-07-14 CROSS-ACCOUNT PICK-UP (a DIFFERENT Claude Gmail resumes — Rafael at 89% weekly).**
+Standard resume: `git pull` → read this block → query Master Brain. Everything below is SHIPPED+PUSHED
+or a scoped/aligned next step; nothing lives only in the prior session's context.
+
+**✅ SHIPPED + LIVE + SYNCED this session (all on `main`, OCI at `9ee9299`):**
+- **CATALYST ENGINE — LIVE.** `events/catalyst_engine.py` per-name blocking-catalyst detector +
+  `CATALYST_GATE_ENABLED=True` (`2e2561d`); entry-gate wired into `execution/entry_logic.py:execute_entries`
+  after QHM exclusion (`7732c5a`,`0c2db0d`) with never-mask fault handling (block only on positively-confirmed
+  catalyst; on cache-absence/ambiguity return raw). ~10-min RTH cron writes `logs/catalyst_state.json`.
+  Validated 48/50 correctly-neutral; caught+fixed a co-tag attribution bug (RIVN offering was false-flagging TSLA).
+  Blocking types: dilution_offering/guidance_cut/solvency/legal_probe.
+- **FIFO EDGE REPORT — LIVE (this was the corrupt-tracker fix Rafael asked for: "score should match the P/L").**
+  `research/fifo_reconcile.py` (`e57b380`) signed-FIFO over all Alpaca fills → reconciles account to **$-0.02
+  residual**. Truth: all-time realized **+$255.61**, fees $0.65, open unrealized ~−$36, equity−2500 ≈ +$228.
+  Tracker was **~$436 off** (showed −$181). Cache `logs/fifo_edge.json` (cron `8 5,20 * * 1-5` on OCI).
+  `weekly_review._strategy_validation_html` now sources this cache (`ae3a5d9`) + a reconciliation bridge note
+  (`9ee9299`) so per-score rows always sum to the account total. **Per-score edge revealed: 11/12 is a REAL
+  LOSING band (−$38, 39% win, n=31); 10/12 +$105.56 (55%, n=95); 12/12 +$111.59 (47%, n=55).**
+- **F6 (Forever-6) starter — BUILT, DARK.** `execution/forever_hold_manager.py` (`417f0865`, gated, log-only)
+  + config constants (`5f712c7`, `FOREVER6_ENABLED=False`). Cash-only, catalyst-screened, breadth-first,
+  VIX-scaled starter trigger. NOT wired into run_cycle yet.
+- Options UX 2-col + 0DTE directional reframe; dashboard overnight soft-exit transparency; GOOGL 2sh add;
+  weekly/monthly 404 fix (public/logs symlinks + daily cron `35 5 * * *`).
+
+**🤝 BGG ALIGNMENTS (persisted, no code yet — safe to build next):**
+- **GEX expected-close (dynamic, not static) — SCOPED, cold-seat-vetted.** Rafael: add an "on-the-close"
+  EOD SPY estimate that is dynamic. Cold seat found the fatal flaw: **the weekly chain is the wrong instrument
+  — the closing pin is driven by 0-DTE gamma (∝1/√T), not the weekly GEX.** Build spec: fetch 0-DTE SPY chain
+  in `data/gex.py` → persist per-strike gamma profile → regime-conditional gravity band (negative GEX = amplify/
+  trend, positive = dampen/pin) → dashboard render. A pure single-number "gravity price" was rejected; it's a
+  regime-conditional band. **THIS IS THE TOP NEXT BUILD.**
+- **Catalyst Phase 2 (exit-on-catalyst)** pending; reverses Architecture Invariant #2 (news display-only) →
+  needs the Invariant #2 text updated + board vote before exit-side goes live.
+- **F6 cascade concept** adopted by Rafael ("fine with the cascade"); live-wiring needs run_cycle hook +
+  cash-only order path + `FOREVER6_ENABLED` flip + a masked-loss cold seat on the risk-path diff.
+
+**📌 QUEUE (Rafael-greenlit, gated, for the next account in priority order):**
+1. **GEX expected-close BUILD** (spec above) — `data/gex.py` + dashboard. Feature Design Protocol gate first.
+2. **Slack-spam / `main.py` memory-leak** (Option A, Rafael already said 'proceed'; RSS 120→600MB over hours).
+3. **`overnight_atr_buffer_exit`** follow-ups: (c) order-tagging so exits are attributable, (d) rename for
+   clarity; **dashboard must show the real ~$15 ATR-buffer stop** (this exit sold RIVN — NOT the hard stop;
+   PRESERVE the logic, it's correct; `execution/exit_logic.py:1187-1349`).
+4. **F6 live-wiring** (above). 5. **IC Phase 1b** per-factor logging (`research/ic_engine.py`).
+
+**⚠️ OCI HAZARD CLEARED THIS TURN:** OCI had a *direct-edited* `weekly_review.py` + 2 untracked `research/*.py`
+that were blocking `git pull --ff-only` (silent — HEAD was stuck at `cc1724b` for multiple prior "deploys").
+Backed the OCI-local copies to `/tmp/*.bak`, `git checkout --` the file, landed `9ee9299`. **Lesson: after any
+deploy, verify `git rev-parse HEAD` on OCI actually advanced — a blocked ff-pull fails silently and the `&&`
+chain still prints later steps.** Never edit tracked files directly on OCI (off-git channel = prohibited).
+
+---
 
 **⏩⏩ 2026-07-13 RESUME (cron 741aaaf8 @ ~11:56 PM PT, session-only, after Rafael's usage reset) — READ
 `logs/work_order_2026-07-13_pm.md` FIRST.** CATALYST ENGINE fully built + wired, all DARK: 1a detector
