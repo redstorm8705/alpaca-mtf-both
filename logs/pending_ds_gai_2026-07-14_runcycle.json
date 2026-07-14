@@ -1,0 +1,26 @@
+{
+  "session": "autonomous-2026-07-14-nightly",
+  "item": "ANOMALY-4 dead-code removal",
+  "file": "strategy/run_cycle.py",
+  "base_commit": "e5ff91c",
+  "sha256_original": "4a5fd5df6e631ac219c971d115cf82523ce7013f814d41f5207d7c92231f3d08",
+  "sha256_proposed": "4b48885ff085b75b70ad55a5bdef5a56dea24ffc90e5db2509e23d738e15ef36",
+  "lines_removed": 11,
+  "board_vote": {
+    "agent_1_beck_minsky": "PASS — condition tests values outside the type's value set; doubly dead since get_news_size_multiplier() also always returns 1.0",
+    "agent_2_taleb_schneier": "PASS — _score_to_level() is exhaustively enumerated with 5 labels and 3 hardcoded fallbacks; no code path can produce 'HALT' or 'STRESSED+'",
+    "agent_3_simons_ldp": "PASS — no legitimate monitoring coverage removed; a future replacement using mri.level() in ('HIGH','CRITICAL') vs news.has_active_halt_keyword() would be meaningful",
+    "result": "3/3 APPROVE"
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "ruff_select_EWFB": "PASS — zero violations",
+    "mypy_warn_unreachable": "PASS — no issues found"
+  },
+  "cold_second_agent": "PASS — no threats found; logic inversion: none; off-by-one: none (_mri_lvl scoped to removed block only); missing conditions: none; branch completeness: if-with-no-else, zero control-flow impact",
+  "gro_gai_prompt": "You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging.\n\nAudit this diff to strategy/run_cycle.py before it is applied to a live paper trading bot. The file runs every 5 minutes during RTH.\n\nORIGINAL INTENT:\nRemove dead code. The block `if _mri_lvl in ('HALT', 'STRESSED+')` can never fire: mri.level() (from events/macro_risk_index.py) returns exactly 5 values — NORMAL, ELEVATED, STRESSED, HIGH, CRITICAL. 'HALT' and 'STRESSED+' are not in that set. The cascading unused variable `news_size_mult` is also removed (ruff F841).\n\nVERIFIED FACTS:\n- events/macro_risk_index.py _score_to_level() returns exactly: NORMAL, ELEVATED, STRESSED, HIGH, CRITICAL\n- Hardcoded fallbacks: 'NORMAL' (default), 'CRITICAL' (line 961), 'ELEVATED' (line 197)\n- No subclasses or config overrides that produce 'HALT' or 'STRESSED+'\n- news_size_mult has zero code consumers after this removal (3 comment references + one keyword-arg name for run_scan() which passes _spy_risk_mult as the VALUE)\n- py_compile / ruff / mypy all PASS on proposed file\n- Cold second-agent: PASS — no threats found\n- Board 3/3 APPROVE\n\nDIFF:\n--- a/strategy/run_cycle.py\n+++ b/strategy/run_cycle.py\n@@ -1032,7 +1032,6 @@\n         news.scan_breaking_news()\n     except Exception as _news_err:\n         logger.error(f\"[run_cycle] news.scan_breaking_news() failed: {_news_err}\", exc_info=True)\n-    news_size_mult = news.get_news_size_multiplier()   # Build F: always returns 1.0 — HALT is display-only\n \n     # ── MRI refresh — cross-asset background stress score ─────────────────────\n     # Fetches TLT/HYG/LQD/USO/GLD/EWJ/EWG via fetch_bars (Alpaca Data T1).\n@@ -1683,16 +1682,6 @@\n                     f\"< 30 — review exit discipline and stop placement.\"\n                 )\n \n-        # Check 4: MRI vs news_monitor divergence\n-        # HALT/STRESSED+ MRI while news_size_mult == 1.0 (CLEAR) suggests the\n-        # news_monitor and MRI are reading different data sources.\n-        _mri_lvl = mri.level() if mri else \"NORMAL\"\n-        if _mri_lvl in (\"HALT\", \"STRESSED+\") and news_size_mult >= 1.0:\n-            logger.warning(\n-                f\"[ANOMALY-4] MRI={_mri_lvl} but news_size_mult={news_size_mult:.2f} (CLEAR) \"\n-                f\"— MRI and news_monitor diverge. Verify cross-asset feed and news feed.\"\n-            )\n-\n         # Check 5: Fill price polling consistently returning fallback\n         # If _fetch_actual_fill_price returned entry_price (fallback) 3+ times today,\n         # the fill polling window may be too short for current Alpaca latency.\n\nRETURN: APPROVE or REJECT with specific technical rationale. If REJECT, name the exact line and failure scenario.",
+  "gro_response": "PENDING — requires Rafael to run curl in live environment (GROQ_API_KEY from .env on Mac)",
+  "gai_response": "PENDING — requires Rafael to run curl in live environment (GEMINI_API_KEY from .env on Mac)",
+  "status": "AWAITING_GRO_GAI — all gates except Gro/GAI complete; board 3/3 APPROVE; patch ready to apply after Gro+GAI APPROVE",
+  "apply_instruction": "After Gro + GAI both return APPROVE: cp logs/pending_patch_2026-07-14_runcycle_anomaly4.patch /tmp/ && cd /path/to/repo && patch -p1 < /tmp/pending_patch_2026-07-14_runcycle_anomaly4.patch && git add strategy/run_cycle.py && git commit -m 'remove ANOMALY-4 dead-code (MRI level strings HALT/STRESSED+ never returned)' && git push origin main && ssh oci 'cd /path && git pull --ff-only && sudo systemctl restart mtf_bot'"
+}

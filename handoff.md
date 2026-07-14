@@ -8,7 +8,16 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-14 autonomous resume) — pick up here
+## ⏩ LATEST (2026-07-14 nightly autonomous #2) — pick up here
+
+**⏩⏩ 2026-07-14 NIGHTLY AUTONOMOUS #2 (second run; Rafael asleep) — ANOMALY-4 draft fully prepped.**
+Sole RTH-chain item tonight: dead-code removal in `strategy/run_cycle.py` (ANOMALY-4). The `if _mri_lvl in ("HALT", "STRESSED+")` block can never fire — `mri.level()` returns exactly {NORMAL, ELEVATED, STRESSED, HIGH, CRITICAL}; those two strings are not in the set. Board 3/3 APPROVE (Beck/Minsky, Taleb/Schneier, Simons/LdP), statics clean (py_compile + ruff + mypy all PASS), cold second-agent PASS. Cascading removal: `news_size_mult` at line 1035 also removed (ruff F841 — no code consumers after ANOMALY-4 gone; it was only used in the now-dead block). 11 lines removed total. **Pending: Gro + GAI APPROVE required before apply.** Patch at `logs/pending_patch_2026-07-14_runcycle_anomaly4.patch`; prompt at `logs/pending_gro_gai_2026-07-14_runcycle.json`. Apply is 1 command: `patch -p1 < pending_patch...patch` → commit → OCI pull+restart.
+
+> **🟡 FOR RAFAEL (ANOMALY-4):** Run the Gro/GAI prompt from `logs/pending_gro_gai_2026-07-14_runcycle.json` via curl (keys in .env on Mac). If both return APPROVE → apply the patch. Board already 3/3; statics clean; cold-agent PASS.
+
+IC Phase 1b (per-factor confluence conditions at entry) was the other handoff queue item — **confirmed already shipped** (`0c2db0d`, `e59ccef`, `26a987f`). No new work needed.
+
+---
 
 **⏩⏩ 2026-07-14 AUTONOMOUS SESSION RESULT (scheduled resume; Rafael asleep) — ONE approval waiting.**
 Verified true state at 100% (git, not the stale prompt): catalyst gate is **already LIVE** (`2e2561d`,

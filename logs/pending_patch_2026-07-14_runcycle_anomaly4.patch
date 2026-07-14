@@ -1,0 +1,27 @@
+--- a/strategy/run_cycle.py
++++ b/strategy/run_cycle.py
+@@ -1032,7 +1032,6 @@
+         news.scan_breaking_news()
+     except Exception as _news_err:
+         logger.error(f"[run_cycle] news.scan_breaking_news() failed: {_news_err}", exc_info=True)
+-    news_size_mult = news.get_news_size_multiplier()   # Build F: always returns 1.0 — HALT is display-only
+ 
+     # ── MRI refresh — cross-asset background stress score ─────────────────────
+     # Fetches TLT/HYG/LQD/USO/GLD/EWJ/EWG via fetch_bars (Alpaca Data T1).
+@@ -1683,16 +1682,6 @@
+                     f"< 30 — review exit discipline and stop placement."
+                 )
+ 
+-        # Check 4: MRI vs news_monitor divergence
+-        # HALT/STRESSED+ MRI while news_size_mult == 1.0 (CLEAR) suggests the
+-        # news_monitor and MRI are reading different data sources.
+-        _mri_lvl = mri.level() if mri else "NORMAL"
+-        if _mri_lvl in ("HALT", "STRESSED+") and news_size_mult >= 1.0:
+-            logger.warning(
+-                f"[ANOMALY-4] MRI={_mri_lvl} but news_size_mult={news_size_mult:.2f} (CLEAR) "
+-                f"— MRI and news_monitor diverge. Verify cross-asset feed and news feed."
+-            )
+-
+         # Check 5: Fill price polling consistently returning fallback
+         # If _fetch_actual_fill_price returned entry_price (fallback) 3+ times today,
+         # the fill polling window may be too short for current Alpaca latency.
