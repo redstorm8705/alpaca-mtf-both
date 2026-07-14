@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,6 +34,12 @@ logger = logging.getLogger("forever6")
 PT = ZoneInfo("America/Los_Angeles")
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE = _ROOT / "data" / "state" / "forever6_holds.json"
+
+# Reserve slightly MORE than the planned price per leg so a market-order fill above the planned
+# price can never push cumulative spend past `spendable` and breach the cash floor (GAI pre-ship
+# catch: a HARD cash limit must reserve against slippage, not the planned price). 1% is very
+# conservative for a 1-share order in the most-liquid mega-caps; it only ever SKIPS a marginal name.
+_STARTER_SLIPPAGE_BUFFER = 1.01
 
 
 def starter_trigger_pct(vix: float) -> float:
@@ -136,6 +143,109 @@ class ForeverHoldManager:
         else:
             logger.info("[F6] STARTER triggered but no fundable name (budget $%.0f) — screen/affordability filtered all.", budget)
         return {"triggered": True, "reason": "ok", "plan": plan, "budget": round(budget, 2)}
+
+    # ── the starter EXECUTION (1b: CASH-ONLY orders, fail-closed) ────────────────
+    def execute_starter(self, plan: list[dict], budget: float, settled_cash: float | None = None) -> dict:
+        """Increment 1b: place CASH-ONLY market BUY orders for a starter PLAN (1 share per planned
+        name), tier-tagged "forever6" so the ownership ledger protects them as never-sell shares.
+        NEVER sells. FAIL-CLOSED: stops on the FIRST broker failure and never counts an unconfirmed
+        order as placed (never-mask — a data/broker fault must not manufacture or hide a fill).
+
+        PRECONDITION: the CALLER (run_cycle, increment 1c) has already checked config.FOREVER6_ENABLED
+        AND the after-close timing. This method does the money-moving part only.
+        Returns {"placed": [...], "skipped": [...], "spent": float, "reason": str}."""
+        if not plan:
+            return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
+
+        # Re-verify SETTLED CASH at execution time. F6 is CASH-ONLY — margin is FORBIDDEN (the cold
+        # board's decisive ruin finding: a maintenance call from ANY other strategy's bad day would
+        # force-liquidate the never-sell book). settled_cash comes from account.cash, never buying_power.
+        cash = float(settled_cash) if settled_cash is not None else self._fetch_cash()
+        # Hard SEGREGATION guard: never spend into the dry powder the deep crash ladder reserves
+        # (ammo-cannibalization ruin finding). spendable is bounded by BOTH the per-event budget and
+        # the cash floor — whichever is tighter.
+        spendable = min(float(budget), cash - config.FOREVER6_STARTER_CASH_FLOOR)
+        if spendable <= 0:
+            logger.warning("[F6] execute_starter: no spendable cash (cash $%.0f, floor $%.0f, budget $%.0f) — nothing placed",
+                           cash, config.FOREVER6_STARTER_CASH_FLOOR, float(budget))
+            return {"placed": [], "skipped": list(plan), "spent": 0.0, "reason": "cash-floor/budget guard"}
+
+        from execution import broker as _bk
+        placed: list[dict] = []
+        skipped: list[dict] = []
+        reserved = 0.0      # slippage-buffered UPPER BOUND on spend — the cash-floor guard variable
+        for i, p in enumerate(plan):
+            sym = str(p.get("symbol", "")).upper()
+            try:
+                px = float(p.get("price", 0) or 0)
+            except (TypeError, ValueError):
+                px = 0.0
+            if not sym or px <= 0:
+                skipped.append({**p, "skip": "bad symbol/price"})
+                continue
+            # Reserve a slippage-buffered amount; a market fill above the planned price can then NEVER
+            # push cumulative spend past `spendable` and breach the cash floor (ruin finding #1).
+            px_reserve = px * _STARTER_SLIPPAGE_BUFFER
+            if px_reserve > (spendable - reserved):
+                skipped.append({**p, "skip": "budget/floor exhausted"})
+                continue
+            # CASH-ONLY 1-share market buy, tier-tagged "forever6" (never-sell attribution).
+            try:
+                order = _bk.submit_market_order(sym, 1, "buy", tier="forever6")
+            except Exception as e:
+                logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed)", sym, e)
+                skipped.extend({**q, "skip": "stopped after broker exception"} for q in plan[i + 1:])
+                break
+            if order is None:
+                # broker returned None → NOT a confirmed order. Never-mask: do not count it placed,
+                # and do NOT keep placing (a systemic fault would repeat down the plan).
+                logger.error("[F6] BUY UNCONFIRMED %s (broker returned None) — STOPPING starter (fail-closed)", sym)
+                skipped.extend({**q, "skip": "stopped after unconfirmed order"} for q in plan[i + 1:])
+                break
+            oid = getattr(order, "id", None)
+            # The cash-floor guard is enforced ENTIRELY by `reserved` (the slippage-buffered upper
+            # bound) above — it does not depend on the fill price. Record the PLANNED price as display
+            # metadata; Alpaca holds the authoritative fill / cost-basis (a market order's fill price is
+            # not reliably available synchronously at submit, and duplicating it here adds no safety).
+            placed.append({"symbol": sym, "qty": 1, "price": round(px, 2),
+                           "reserved": round(px_reserve, 2), "order_id": str(oid) if oid else None})
+            reserved += px_reserve
+            logger.warning("[F6] STARTER BUY placed: %s 1sh planned~$%.2f (reserved $%.2f, order %s)", sym, px, px_reserve, oid)
+
+        planned_spent = round(sum(float(p["price"]) for p in placed), 2)
+        if placed:
+            self._record_event(placed, planned_spent)
+        return {"placed": placed, "skipped": skipped, "spent": planned_spent, "reason": "ok"}
+
+    def _record_event(self, placed: list[dict], spent: float) -> None:
+        """Durably append a starter event — the SOURCE OF TRUTH for the per-month event cap.
+        Atomic (RC-5 tmp→fsync→replace). Recorded AFTER confirmed placement so a failed/partial
+        placement never phantom-counts against the cap; a persist failure is logged LOUDLY (the cap
+        may then under-count, allowing a later extra event — the safe-side error for an anti-overtrade
+        cap, vs. blocking legitimate events by over-counting)."""
+        try:
+            state = self._load_state()
+            events = state.get("events", [])
+            if not isinstance(events, list):
+                events = []
+            now_pt = datetime.now(PT)   # capture once — no date/ts skew across a midnight boundary
+            events.append({
+                "date": now_pt.strftime("%Y-%m-%d"),
+                "ts":   now_pt.isoformat(),
+                "placed": placed,
+                "spent": round(float(spent), 2),
+            })
+            state["events"] = events
+            _STATE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATE.with_suffix(f".json.{os.getpid()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp), str(_STATE))
+        except Exception as e:
+            logger.error("[F6] _record_event FAILED to persist starter event — per-month cap may "
+                         "under-count next trigger: %s", e)
 
     # ── read helpers (1a) ──────────────────────────────────────────────────────
     def _fetch_cash(self) -> float:
