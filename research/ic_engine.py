@@ -92,8 +92,42 @@ def _match_trades(events: list[dict]) -> list[dict]:
                 "entry_price": ep,
                 "exit_price": xp,
                 "ret": ret,
+                # IC Phase 1b: per-factor pass/fail breakdown (present on entries logged after
+                # 2026-07-14). {} for older entries → those trades are skipped in factor analysis.
+                "conditions": en.get("conditions") if isinstance(en.get("conditions"), dict) else {},
             })
     return trades
+
+
+def analyze_factors(trades: list[dict]) -> list[dict]:
+    """Per-factor IC/ICIR: for each confluence component, correlate its pass/fail (1/0) at entry
+    with the trade's realized return. Ranks which of the 12 ingredients actually predict (IC
+    Phase 1b payoff). Only trades whose entry logged `conditions` count. Returns a list of
+    {factor, n, ic, icir, lo, hi, ci_excludes_zero} sorted by |ICIR| desc."""
+    factored = [t for t in trades if t.get("conditions") and t.get("ret") is not None]
+    factor_names: set = set()
+    for t in factored:
+        factor_names.update(t["conditions"].keys())
+    out: list[dict] = []
+    for fac in sorted(factor_names):
+        xs: list[float] = []
+        ys: list[float] = []
+        for t in factored:
+            v = t["conditions"].get(fac)
+            if isinstance(v, bool):        # only score genuine pass/fail booleans
+                xs.append(1.0 if v else 0.0)
+                ys.append(t["ret"])
+        if len(xs) < 5 or len(set(xs)) < 2:   # need spread (both pass and fail seen)
+            out.append({"factor": fac, "n": len(xs), "ic": None, "icir": None,
+                        "lo": None, "hi": None, "note": "too few / no spread"})
+            continue
+        r = _bootstrap_icir(xs, ys)
+        r["factor"] = fac
+        r["ci_excludes_zero"] = (r["lo"] is not None and r["hi"] is not None
+                                 and (r["lo"] > 0 or r["hi"] < 0))
+        out.append(r)
+    out.sort(key=lambda d: (-(abs(d["icir"]) if d.get("icir") is not None else -1)))
+    return out
 
 
 def _num(v):
@@ -212,10 +246,26 @@ def main() -> int:
         print(f"{sig:<14}{r['n']:>4}{_fmt(r['ic']):>9}{_fmt(r['icir']):>9}"
               f"{ci:>20}  {' '.join(flags)}")
     print("-" * 70)
-    print("READ: IC>0 = the signal precedes better returns; ICIR = consistency; a 95% CI\n"
-          "that excludes 0 is statistically real. n<50 on our tiny sample => treat as noise\n"
-          "(PBO caveat). NEXT (Phase 1b): log per-factor SCORE_WEIGHTS at entry to get IC of\n"
-          "each of the 12 components individually. This engine PROPOSES; the board decides.")
+    # ── Phase 1b: per-factor ranking (present once entries logged after 2026-07-14 accrue) ──
+    _all_trades = _match_trades(_load_events())
+    _facts = analyze_factors(_all_trades)
+    _scored_facts = [f for f in _facts if f.get("icir") is not None]
+    print("PER-FACTOR IC (Phase 1b — which of the confluence components predict):")
+    if not _scored_facts:
+        _n_have = len([1 for t in _all_trades if t.get("conditions")])
+        print(f"  no factor-scored trades yet ({_n_have} entries carry per-factor conditions; need ≥5\n"
+              f"  with spread). Accrues as new entries log after the 2026-07-14 logging change.")
+    else:
+        print(f"  {'factor':<26}{'n':>4}{'IC':>9}{'ICIR':>9}{'95% CI':>20}  flag")
+        for f in _scored_facts:
+            ci = f"[{_fmt(f['lo'])},{_fmt(f['hi'])}]"
+            flag = "SIGNIFICANT" if f.get("ci_excludes_zero") else ""
+            print(f"  {f['factor']:<26}{f['n']:>4}{_fmt(f['ic']):>9}{_fmt(f['icir']):>9}{ci:>20}  {flag}")
+    print("-" * 70)
+    print("READ: IC>0 = the signal precedes better returns; ICIR = consistency; a 95% CI that\n"
+          "excludes 0 is statistically real. n<50 on our tiny sample => treat as noise (PBO\n"
+          "caveat). Per-factor IC shows which of the 12 confluence components actually earn their\n"
+          "weight vs which are dead weight. This engine PROPOSES; the board decides weight changes.")
     print("=" * 70)
     return 0
 
