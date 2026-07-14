@@ -1378,6 +1378,12 @@ def execute_entries(
                     tsmom_ewma_vol=sig.get("ewma_vol_60d"),
                     tsmom_vol_mult=sig.get("tsmom_vol_mult"),
                     tsmom_direction=sig.get("tsmom_direction"),
+                    # IC Phase 1b: per-factor pass/fail breakdown (the 12 confluence components)
+                    # for the traded direction — forwarded via record_entry(**extra_log) → the
+                    # trade_events.jsonl entry event so research/ic_engine.py can rank each factor's
+                    # IC/ICIR individually (not just the total score). sig IS long_r/short_r, which
+                    # carries "conditions"; this was the only missing link (per-factor never logged).
+                    conditions=sig.get("conditions"),
                 )
                 # Tag overnight: AH entries (after 3:30 PM ET) are overnight holds
                 entry_time = datetime.now(ET)
