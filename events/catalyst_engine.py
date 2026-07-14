@@ -52,11 +52,24 @@ PT = ZoneInfo("America/Los_Angeles")
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE = _ROOT / "data" / "state" / "catalyst_state.json"   # atomic snapshot for the dashboard/gate
 
-# ── DARK FLAG — 1a never gates. Flip to True only after 1b board vote + validation. ──
+# ── GATE FLAG — flip to True only after 1b wiring is validated live (cron populates cache). ──
 CATALYST_GATE_ENABLED = False
 
 # Only consider catalysts within this recency window (dynamic: newest wins, not a static score).
 _LOOKBACK_HOURS = 72
+
+# ── 1b entry-gate policy (BGG: Gro + GAI + cold seat, 2026-07-13) ──
+# Block ONLY these high-severity, unambiguous negative types (add downgrade/leadership/recall
+# later after validation). A catalyst older than _BLOCK_MAX_AGE_HOURS is treated as priced-in
+# (Simons: act only on signal whose decay you understand). Cache older than _CACHE_STALE_HOURS
+# is a FAULT → block NOTHING + alert (never-mask: absence of data is not a trade decision).
+_BLOCKING_TYPES: tuple[str, ...] = ("dilution_offering", "guidance_cut", "solvency", "legal_probe")
+# Per-type freshness for BLOCKING. Event-like catalysts (an offering, a guidance cut) price in
+# within days → 48h. Structural catalysts (bankruptcy/delisting, SEC probe/fraud) persist and
+# are NOT priced-in in 48h → 30-day window (GAI 1b review).
+_BLOCK_MAX_AGE_HOURS = 48.0
+_BLOCK_MAX_AGE_BY_TYPE: dict[str, float] = {"solvency": 720.0, "legal_probe": 720.0}
+_CACHE_STALE_HOURS = 1.0
 
 # ── Rule-based classification catalogs (lowercase substring match on headline+summary) ──
 # NEGATIVE → a future entry-gate would BLOCK new entries into the name (the RIVN class).
@@ -179,14 +192,67 @@ def get_active_catalysts(symbols: list[str]) -> dict[str, dict]:
     return result
 
 
-def has_blocking_catalyst(symbol: str, active: dict[str, dict] | None = None) -> bool:
-    """True if `symbol` has an active NEGATIVE stock-specific catalyst. When the gate is DARK
-    (CATALYST_GATE_ENABLED=False) this ALWAYS returns False so no entry is ever blocked in 1a."""
+def read_cached_state() -> dict:
+    """Read the cron-refreshed catalyst_state.json for the entry gate (fast, no network).
+    Validates schema + freshness. Returns {"ok": bool, "active": {sym: catalyst}, "reason": str}.
+    On missing / unparseable / STALE (> _CACHE_STALE_HOURS) → ok=False, active={}: the caller must
+    NOT block on ok=False (never-mask — absence of data is an infra fault, not a signal) and should
+    fire a CRITICAL alert. Only a positively-classified negative catalyst in a FRESH cache blocks."""
+    try:
+        if not _STATE.exists():
+            return {"ok": False, "active": {}, "reason": "catalyst_state.json missing (cron not run?)"}
+        payload = json.loads(_STATE.read_text())
+        if (not isinstance(payload, dict) or "updated" not in payload
+                or not isinstance(payload.get("active"), dict)):
+            return {"ok": False, "active": {}, "reason": "catalyst_state.json malformed schema"}
+        updated = datetime.fromisoformat(payload["updated"])
+        age_h = (datetime.now(PT) - updated).total_seconds() / 3600.0
+        if age_h > _CACHE_STALE_HOURS:
+            return {"ok": False, "active": {},
+                    "reason": f"catalyst cache stale ({age_h:.1f}h > {_CACHE_STALE_HOURS}h)"}
+        return {"ok": True, "active": payload["active"], "reason": "fresh"}
+    except Exception as e:
+        return {"ok": False, "active": {}, "reason": f"catalyst cache read error: {e}"}
+
+
+def blocking_catalyst_for(symbol: str, active: dict[str, dict]) -> dict | None:
+    """Return the catalyst dict if `symbol` has an active NEGATIVE catalyst of a BLOCKING type
+    within the age window; else None. Pure filter — no I/O."""
+    c = active.get(symbol.upper())
+    if not c or c.get("polarity") != "negative":
+        return None
+    ctype = c.get("type")
+    if ctype not in _BLOCKING_TYPES:       # only the 4 high-severity 1b types block
+        return None
+    max_age = _BLOCK_MAX_AGE_BY_TYPE.get(ctype, _BLOCK_MAX_AGE_HOURS)
+    ca = c.get("created_at")
+    if not isinstance(ca, str) or not ca.strip():
+        # No usable timestamp → cannot CONFIRM the catalyst is within the fresh window → do NOT
+        # block. A data issue must never manufacture a trade decision (never-mask); the refresh
+        # job + its cache-staleness monitor are what surface a data fault, not the entry gate.
+        logger.debug("catalyst for %s has no usable created_at — cannot confirm freshness, not blocking", symbol)
+        return None
+    try:
+        ts = datetime.fromisoformat(ca.replace("Z", "+00:00")).astimezone(timezone.utc)
+        age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+        if age_h > max_age:
+            return None   # priced-in — no longer blocks (per-type window)
+    except (ValueError, TypeError) as _age_e:
+        logger.debug("catalyst age unparseable for %s (%s) — cannot confirm freshness, not blocking", symbol, _age_e)
+        return None
+    return c
+
+
+def has_blocking_catalyst(symbol: str) -> bool:
+    """True iff `symbol` has an active, in-window, high-severity NEGATIVE catalyst in a FRESH cache
+    AND the gate is enabled. Fail-safe: gate off OR cache fault → False (never block on absence of
+    data — the CALLER must alert on a cache fault). Read-only, fast (cache) — safe in the hot path."""
     if not CATALYST_GATE_ENABLED:
         return False
-    a = active if active is not None else get_active_catalysts([symbol])
-    c = a.get(symbol.upper())
-    return bool(c and c.get("polarity") == "negative")
+    st = read_cached_state()
+    if not st["ok"]:
+        return False   # never-mask: no data ≠ block; caller alerts on st["reason"]
+    return blocking_catalyst_for(symbol, st["active"]) is not None
 
 
 def _write_state(active: dict[str, dict]) -> None:
