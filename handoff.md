@@ -9,6 +9,16 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-12 interactive) — pick up here
 
+**⏩⏩ 2026-07-14 RESUME (cron 3d094884 @ ~6:45 AM PT, session-only, after Rafael's usage reset) — READ
+`logs/work_order_2026-07-13_pm.md` FIRST.** CATALYST ENGINE fully built + wired, all DARK: 1a detector
+(`8d46797`) + 1b gate-logic+cron (`ae9db77`, ~10min RTH refresh populating catalyst_state.json) + 1b
+entry-wiring (`7732c5a`, in execute_entries, never-mask fault handling, entry-branch-only, deployed).
+NEXT: (1) validate the detector from overnight cron data (logs/catalyst_engine.log); (2) flip
+CATALYST_GATE_ENABLED=True (Rafael go + Gro/GAI on 1-line diff) → catalyst entry-block goes LIVE; (3)
+FOREVER-6 cash-only build with the screen live (logs/f6_starter_bgg_2026-07-13.md). Lower-pri: options UX
+step F + dead-CSS purge; overnight_atr_buffer_exit (c)tag/(d)rename; IC Phase 1b. Options UX 5/6 + dashboard
+soft-exit transparency + GOOGL 2sh all shipped earlier. Cron method = CronCreate one-shot session-resume.
+
 **⏩⏩ 2026-07-13 PM RESUME (cron 0365e14f @ ~1:45 PM PT, session-only) — READ `logs/work_order_2026-07-13_pm.md`
 FIRST.** Priority queue for the resumed session (all Rafael-greenlit this session): (1) **Options page UX
 REDESIGN** (display-only) per Luke's spec — anchor SPY/QQQ pinned atop 0DTE, SECONDARY→dropdown, freshness
