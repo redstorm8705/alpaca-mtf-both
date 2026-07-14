@@ -86,6 +86,17 @@ client-side JS off next_scan_ts; all timestamps PT. Presentation only — no dat
 Vol-events banner STAYS. After build: render-verify (preview desktop+mobile), Gro+GAI sanity (as done for the
 2-col + 0DTE reframe), ship (commit/push) + OCI git pull + regenerate options.html + verify served + sync.
 
+
+### ★ SEQUENCING UPDATE (Rafael 2026-07-13): CATALYST ENGINE FIRST, then F6 (BGG unanimous — F6's
+### catalyst screen is a hard dependency; un-screened F6 = RIVN mistake at tier scale).
+- ✅ **CATALYST ENGINE 1a SHIPPED (`8d46797`, DARK)** — events/catalyst_engine.py per-name detector
+  (Alpaca News + rule classifier + primary-symbol attribution). No entry gating (flag off). Gro+GAI APPROVE.
+- **NEXT — CATALYST 1b [GATED, board vote req]:** wire has_blocking_catalyst() into the entry gate to BLOCK
+  new entries into a name with an active negative catalyst. This REVERSES the news-display-only invariant for
+  stock-specific-on-held names → full board + Gro + GAI. Also add: a ~30-min RTH cron to run the detector +
+  populate catalyst_state.json; SEC EDGAR per-CIK (S-1/S-3/424B) for offerings the newswire lags; dashboard surface.
+- **THEN — FOREVER-6 cash-only build** (was #2) with the catalyst screen live. Spec: logs/f6_starter_bgg_2026-07-13.md.
+
 ### 2) FOREVER-6 CASH-ONLY STARTER BUILD [GATED — Rafael APPROVED cascade+concept+cash-only]
 Full spec: `logs/f6_starter_bgg_2026-07-13.md`. UNANIMOUS BGG: **CASH-ONLY (no margin** — margin lets an
 unrelated intraday loss force-sell the never-sell book), **fund 1–3 highest-priority names** (breadth then
