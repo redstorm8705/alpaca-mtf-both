@@ -1,0 +1,41 @@
+diff --git a/events/catalyst_engine.py b/events/catalyst_engine.py
+index fe9dcd3..5ec83e0 100644
+--- a/events/catalyst_engine.py
++++ b/events/catalyst_engine.py
+@@ -86,7 +86,27 @@ _NEGATIVE: dict[str, tuple[str, ...]] = {
+                           "convertible senior notes", "shelf registration"),
+     "guidance_cut":      ("cuts guidance", "lowers guidance", "slashes guidance", "profit warning",
+                           "warns on", "cuts forecast", "lowers forecast", "guides below",
+-                          "withdraws guidance", "cuts outlook"),
++                          "withdraws guidance", "cuts outlook",
++                          # recall expansion (validation 2026-07-14): substring match missed common
++                          # split phrasings ("cuts full-year REVENUE guidance", "lowers outlook").
++                          # Improves recall of an already-approved blocking type (not a new type).
++                          # By design this is RISK-FIRST: a headline containing a real active cut
++                          # blocks a NEW entry even if it also carries a positive element (an EPS beat
++                          # alongside a guidance cut is still a guidance cut) — blocking a new entry,
++                          # never an exit. High-precision, not zero-risk; the tail is bounded below.
++                          # DISCIPLINE: PRESENT-TENSE ACTIVE verbs ONLY (matches the original set's
++                          # "cuts/lowers X" form) — these denote a CURRENT company action. Noun form
++                          # ("guidance cut") and PAST/PASSIVE forms ("lowered outlook", "cut its X")
++                          # were DROPPED (GAI pre-ship catches 2026-07-14): they match headlines that
++                          # merely REFERENCE a past cut ("despite a lowered outlook earlier this year,
++                          # Company beats Q3") → false entry-block.
++                          "lowers outlook", "reduces outlook", "trims outlook", "slashes outlook",
++                          "reduces guidance", "trims guidance", "cuts its guidance", "lowers its guidance",
++                          "reduces forecast", "trims forecast", "slashes forecast",
++                          "cuts revenue guidance", "lowers revenue guidance",
++                          "cuts full-year guidance", "lowers full-year guidance",
++                          "cuts full year guidance", "lowers full year guidance",
++                          "cuts fy guidance", "lowers fy guidance"),
+     "downgrade":         ("downgrade", "downgraded", "cut to sell", "cut to underperform",
+                           "double downgrade"),
+     "legal_probe":       ("sec investigation", "sec probe", "subpoena", "securities fraud",
+@@ -187,6 +207,7 @@ def get_active_catalysts(symbols: list[str]) -> dict[str, dict]:
+         # flagging SPY. (Validation catch, 2026-07-14 — co-tag false positives found live.)
+         hl = it["headline"].upper()
+         primary = syms[0] if syms else None
++        target: str | None
+         if primary in watch:
+             target = primary
+         else:

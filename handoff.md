@@ -8,7 +8,35 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-14 interactive) — pick up here
+## ⏩ LATEST (2026-07-14 autonomous resume) — pick up here
+
+**⏩⏩ 2026-07-14 AUTONOMOUS SESSION RESULT (scheduled resume; Rafael asleep) — ONE approval waiting.**
+Verified true state at 100% (git, not the stale prompt): catalyst gate is **already LIVE** (`2e2561d`,
+Rafael go) and F6 1a is dark. Did the priority-1 catalyst **validation**: classifier 8/9 on real
+headlines, blocks dilution/solvency/legal correctly, no over-block — found ONE recall gap (`guidance_cut`
+missed "cuts full-year **REVENUE** guidance"-style split phrasings). Built + fully gated the fix
+(present-tense active verb expansion + a pre-existing mypy fix; statics clean; **11/11** validated).
+Gate result: **Gro APPROVE ×3, cold board 2-0 APPROVE, GAI REJECT ×3** (its R1 noun + R2 past/passive
+catches were VALID and incorporated; R3 attacks the already-approved risk-first premise → board ruled
+out-of-scope). **Not clean 3-way → QUEUED** (per auto-apply mandate + preship_gate needs an honest
+GAI marker I won't self-write).
+
+> **🟢 ONE-CLICK FOR RAFAEL:** read `logs/pending_approval_catalyst_guidance_2026-07-14.md`. If you say
+> **approved**, apply `logs/pending_patch_2026-07-14_catalyst_guidance.patch` (clean on `ea5a58c`) →
+> commit → OCI `git pull --ff-only` + `sudo systemctl restart mtf-bot` → done. Board + Gro back it;
+> GAI's dissent is against risk-first (a real cut blocks a new entry even alongside an EPS beat), which
+> you already approved when the gate shipped.
+
+**NEXT (queued, needs interactive session with Rafael):**
+- **F6 1b/1c cash-only build** — full spec in `logs/f6_1b_build_package_2026-07-14.md`. Real-order path:
+  `execute_starter()` (cash-only, fail-closed) in forever_hold_manager → run_cycle after-close hook
+  (needs 2023-line Explore read) → mandatory cold masked-loss seat + Gro/GAI → ship DARK → Rafael go
+  flips `FOREVER6_ENABLED=True`. Do NOT flip live-order execution autonomously.
+- **GEX expected-close BUILD** (top build from the prior handoff) — 0-DTE chain in data/gex.py + band.
+- Lower-pri: catalyst downgrade/leadership/recall types after more validation; overnight_atr_buffer_exit
+  (c)tag/(d)rename; IC Phase 1b per-factor logging.
+
+---
 
 **⏩⏩ 2026-07-14 CROSS-ACCOUNT PICK-UP (a DIFFERENT Claude Gmail resumes — Rafael at 89% weekly).**
 Standard resume: `git pull` → read this block → query Master Brain. Everything below is SHIPPED+PUSHED
