@@ -8,7 +8,29 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-14 interactive, Rafael stepped away mid-session) — pick up here
+## ⏩ LATEST (2026-07-15 interactive) — pick up here
+
+**⏰ RESUME CRON: `28ad6c89` fires 14:55 PT (2026-07-15, +3h10m). Session-only (CronCreate).**
+
+**▶ MID-FLIGHT = OPTION A (memory/OOM). DIAGNOSIS COMPLETE → next is the FIX.**
+Full diagnosis: `logs/option_a_memory_diagnosis_2026-07-15.md`. REFRAME: small TRUE leak + large transient
+peak (RSS oscillates 195↔574MB — NOT monotonic). **True leak = `data/fetcher.py:87` `_bar_cache`** (module
+dict, written every fetch; the 180s TTL is READ-ONLY — NO eviction ever; stale DataFrames resident all
+session + premarket-mover key churn). Transient peak = per-cycle 36-sym×3-TF DataFrame set
+(`signal_generator.py:200-226`, collected each cycle). **NEXT: convene BGG on the fix (`_bar_cache`
+TTL-eviction-on-write + daily prune; peak reduction via freeing _entry_df/_daily_df + the num_bars=400
+question) → full patch sequence → ship. Optionally ship a tracemalloc snapshot-diff instrumentation first.**
+Then Slack-relief secondary (*/5 DOWN watchdog grace + consolidate the 3 RAM watchdogs). gc.freeze active;
+gc now ~200ms (was 2.5-4.6s); score_comparison bounded (old P5-M3 note STALE).
+
+**✅ TODAY'S SHIPS (all LIVE on OCI, restarted 2026-07-15):** Slack-relief `b2f79db` · Stage 1 risk-gov
+`0569360` (cap→circuit-breaker 20 + BP pre-flight + gross 2.5x + overnight 0.40) · Stage 2 Bucket A/B
+collapse `6d79d32` (unified tier + leveraged ring-fence 5%) · GEX fix+sharpen `aad518a`+`ee88482` (flip now
+**0.0% off spot**, was ~9%). Details in the blocks below.
+
+---
+
+## ⏩ PRIOR (2026-07-14) — tier refactor + Stage 1/2
 
 **FULL DESIGN + BGG CONSENSUS: `logs/tier_refactor_design_2026-07-14.md` (read it first).**
 
