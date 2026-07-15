@@ -101,7 +101,7 @@ def _fetch_fills(date_str: str) -> list[dict]:
     """
     Pull all FILL activities for a calendar date (ET timezone window).
     Returns list of fill dicts from Alpaca /v2/account/activities/FILL.
-    Paginates via after_id to get all fills.
+    Paginates via page_token to get all fills (after_id is IGNORED by Alpaca).
     """
     # Build ET midnight-to-23:59 window in ISO-8601
     day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(
@@ -109,23 +109,22 @@ def _fetch_fills(date_str: str) -> list[dict]:
     )
     day_end = day_start + timedelta(hours=23, minutes=59, seconds=59)
 
-    after_id: str | None = None
+    page_token: str | None = None
     all_fills: list[dict] = []
 
     while True:
-        params: dict = {
-            "after":  day_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "until":  day_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "page_size": 100,
-        }
-        if after_id:
-            params["after_id"] = after_id
-
+        url = (
+            f"{_PAPER_BASE}/v2/account/activities/FILL"
+            f"?after={day_start.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            f"&until={day_end.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            f"&page_size=100"
+        )
+        if page_token:
+            url += f"&page_token={page_token}"
         try:
             resp = requests.get(
-                f"{_PAPER_BASE}/v2/account/activities/FILL",
+                url,
                 headers=_headers(),
-                params=params,
                 timeout=_TIMEOUT,
             )
         except requests.RequestException as exc:
@@ -141,7 +140,7 @@ def _fetch_fills(date_str: str) -> list[dict]:
             break
 
         all_fills.extend(batch)
-        after_id = batch[-1].get("id")
+        page_token = batch[-1].get("id")
 
         if len(batch) < 100:
             break  # last page
