@@ -85,6 +85,14 @@ _rate_lock   = threading.Lock()
 _last_req_ts = 0.0                       # monotonic ts of the last request start
 _cache_lock  = threading.RLock()
 _bar_cache: dict = {}                    # (symbol, tf, n_bars) -> (df, mono_ts)
+# RAM-DRAIN fix (2026-07-15, board + Gro + GAI): the cache had NO eviction — the 180s
+# TTL was a read-only freshness check, so stale DataFrames stayed resident all session
+# and key churn (n_bars variants + daily premarket-mover symbols) climbed the RSS floor
+# toward OOM. _cache_put now sweeps (throttled to once per TTL): drop entries older than
+# TTL, then hard-cap as a backstop against key-churn explosion within one TTL window.
+_last_sweep_ts = 0.0                # monotonic ts of the last eviction sweep
+_BAR_CACHE_HARD_CAP = 5000          # backstop cap (~80MB worst case @ ~16KB/DataFrame)
+_BAR_CACHE_SOFT_CAP = 4000          # prune target when the hard cap is exceeded
 
 
 def _rate_gate() -> None:
@@ -123,8 +131,28 @@ def _cache_put(key, df) -> None:
     ttl = float(getattr(config, "ALPACA_BAR_CACHE_TTL_SECS", 0) or 0)
     if ttl <= 0:
         return
+    global _last_sweep_ts
+    now = time.monotonic()
     with _cache_lock:
-        _bar_cache[key] = (df, time.monotonic())
+        _bar_cache[key] = (df, now)
+        # Throttled eviction: sweep at most once per TTL (O(n), cost negligible).
+        if now - _last_sweep_ts >= ttl:
+            _last_sweep_ts = now
+            # (1) drop TTL-expired entries (just-added key has ts=now, so it survives).
+            _stale = [k for k, (_d, _ts) in _bar_cache.items() if now - _ts >= ttl]
+            for k in _stale:
+                del _bar_cache[k]
+            # (2) hard-cap backstop: if key churn within one TTL overran the cap, evict
+            #     the oldest (by ts) down to the soft cap. Just-added key has the newest
+            #     ts, so it is never in the evicted slice.
+            _over = len(_bar_cache) - _BAR_CACHE_SOFT_CAP
+            if len(_bar_cache) > _BAR_CACHE_HARD_CAP and _over > 0:
+                for k, _ in sorted(_bar_cache.items(), key=lambda kv: kv[1][1])[:_over]:
+                    del _bar_cache[k]
+            logger.debug(
+                "bar_cache eviction: %d entries resident (dropped %d stale)",
+                len(_bar_cache), len(_stale),
+            )
 
 
 def get_universe():
