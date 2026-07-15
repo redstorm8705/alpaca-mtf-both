@@ -1314,6 +1314,20 @@ def execute_entries(
         #   60% base  |  80% if zone_tier=0 (Green, no distribution)
         #   40% if macro_regime_tier=2 (Contraction / High-risk)
 
+        # ── Buying-power pre-flight (fail-closed) — 2026-07-14 board+Gro+GAI ──────────
+        # Closes the latent over-commit/desync bug: the bot used to fire the order and let
+        # Alpaca reject it when short of funds, drifting tracker vs risk. Verify live BP
+        # covers the notional (+10% cushion) BEFORE submitting; skip cleanly if not.
+        if not risk.check_buying_power_for_order(shares, entry_price):
+            _rc8_clear_buffers(symbol, "bp-insufficient")
+            continue
+        # ── Aggregate gross-exposure gate (MAX_GROSS_EXPOSURE_RATIO × equity) ─────────
+        # The PRIMARY governor of position count now that MAX_OPEN_POSITIONS is a
+        # circuit-breaker. Blocks the entry if it would push total open notional past cap.
+        if not risk.check_gross_exposure_for_order(tracker, entry_price, shares):
+            _rc8_clear_buffers(symbol, "gross-exposure-cap")
+            continue
+
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
         side = "buy" if direction == "long" else "sell"

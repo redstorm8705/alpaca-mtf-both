@@ -201,13 +201,23 @@ INTRADAY_CLOSE_MINUTES_BEFORE_EOD   = 15
 # Per-trade risk: 2% of portfolio per trade — professional standard, do not raise
 MAX_PORTFOLIO_RISK_PCT = 0.02
 
-# Max concurrent positions: lowered 10 → 4
-# On a $1,000 account, >4 positions means most size to 1 share anyway
-MAX_OPEN_POSITIONS     = 4
+# Max concurrent positions: now a RUNAWAY-LOOP CIRCUIT-BREAKER only (2026-07-14, board+Gro+GAI).
+# It is NO LONGER the active limit on how many positions the account carries — the real governor
+# is MAX_GROSS_EXPOSURE_RATIO (aggregate notional) + the buying-power pre-flight check. Count is a
+# poor proxy for risk (4 correlated names can be riskier than 20 uncorrelated ones). Raised 4→20
+# so it never binds in normal operation but still stops a bug that tries to open hundreds.
+MAX_OPEN_POSITIONS     = 20
 
 # Daily kill switch: tightened 5% → 3% for first 30 days of live running
 # Once bot behavior is confirmed, raise back to 5%
 MAX_DAILY_LOSS_PCT     = 0.03
+
+# ─── AGGREGATE EXPOSURE GOVERNANCE (2026-07-14, board + Gro + GAI) ────────────────
+# PRIMARY governor of position count now that MAX_OPEN_POSITIONS is a circuit-breaker.
+# Module-level (applies across profiles). Enforced in execution/entry_logic.py before each
+# order via RiskManager.check_gross_exposure_for_order / check_buying_power_for_order.
+MAX_GROSS_EXPOSURE_RATIO   = 2.5   # sum(|open position notional|) / equity — block new entry if breach
+MAX_OVERNIGHT_EXPOSURE_PCT = 0.40  # overnight notional / equity (Architecture Invariant #11 gap; was unset)
 
 # ─── STOP / TARGET (ATR-based multipliers) ───────────────────────────────────────────
 
@@ -262,7 +272,7 @@ PROFILES = {
     "paper": {
         # Bucket-aware paper profile
         "MAX_PORTFOLIO_RISK_PCT":  0.04,   # fallback only — bucket sizing overrides this
-        "MAX_OPEN_POSITIONS":      7,      # raised 4→7 — board 5-0 + Gro + GAI 2026-06-30 (max capital deployment)
+        "MAX_OPEN_POSITIONS":      20,     # 7→20 (2026-07-14): now a circuit-breaker only; real limit is MAX_GROSS_EXPOSURE_RATIO + BP pre-flight (board+Gro+GAI)
         "MAX_DAILY_LOSS_PCT":      0.07,   # 7% kill switch — board vote 2026-04-22 (25-1, Thorp dissent 0.10)
         "INTRADAY_STOP_ATR_MULT":  1.20,  # tightened 1.25→1.20 S52 — DS/GAI floor for 2x ETF universe; board floor was 1.10
         "INTRADAY_TARGET_ATR_MULT":2.5,   # 2:1 R:R minimum

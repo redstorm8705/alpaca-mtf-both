@@ -22,6 +22,13 @@ _PT = ZoneInfo("America/Los_Angeles")
 
 logger = logging.getLogger(__name__)
 
+# Alpaca REST base URL — PAPER endpoint. The bot is paper=True (Architecture Invariant #8,
+# LOCKED until a full board vote at live launch). Going live flips broker.py's paper flag AND
+# this constant together in that one board-gated change — this is the single documented migration
+# point for REST calls added here. (Older helpers in this module still inline the paper URL; they
+# fold onto this constant over time.)
+_ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+
 # ── BUG-ADV-1: Kill switch state persistence ─────────────────────────────────
 # Survives os.execv() watchdog restarts — new RiskManager instances restore
 # killed=True from disk if the date matches the current session.
@@ -286,6 +293,96 @@ class RiskManager:
             )
             return False
         return True
+
+    def check_buying_power_for_order(self, shares: int, entry_price: float) -> bool:
+        """Live Alpaca buying-power pre-flight before submitting an order (2026-07-14,
+        board + Gro + GAI). The bot previously never checked BP — it sized a position and
+        fired the order, relying on Alpaca to reject when short, which then drifted the
+        tracker vs risk count. This closes that latent over-commit / desync bug.
+
+        Requires remaining buying_power to cover the order notional + a 10% cushion
+        (slippage / rounding). FAIL-CLOSED: returns False on ANY error or absence — the
+        bot must NEVER over-commit; a missed entry is cheap, an unfunded fill is not.
+        """
+        try:
+            notional = float(shares) * float(entry_price)
+            if notional <= 0:
+                return False
+            api_key = os.getenv("ALPACA_API_KEY", "")
+            secret  = os.getenv("ALPACA_SECRET_KEY", "")
+            if not api_key or not secret:
+                logger.warning("BP pre-flight: API keys not set — failing closed (no entry).")
+                return False
+            resp = requests.get(
+                f"{_ALPACA_BASE_URL}/v2/account",
+                headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "BP pre-flight: account HTTP %d — failing closed (no entry).",
+                    resp.status_code,
+                )
+                return False
+            bp = float(resp.json().get("buying_power", 0) or 0)
+            required = notional * 1.10
+            if bp < required:
+                logger.warning(
+                    "BP pre-flight FAIL: buying_power $%.2f < required $%.2f "
+                    "(notional $%.2f + 10%% cushion) — blocking entry.",
+                    bp, required, notional,
+                )
+                return False
+            return True
+        except Exception as e:  # RC-3
+            logger.warning("BP pre-flight error (%s) — failing closed (no entry).", e)
+            return False
+
+    def check_gross_exposure_for_order(self, tracker, entry_price: float, shares: int) -> bool:
+        """Aggregate gross-exposure gate (2026-07-14, board + Gro + GAI): the PRIMARY
+        governor of how many positions the account carries now that MAX_OPEN_POSITIONS is a
+        runaway-loop circuit-breaker. Blocks a new entry if it would push
+        sum(|open position notional|) above config.MAX_GROSS_EXPOSURE_RATIO × equity.
+
+        Notional is summed from the tracker's non-closed open_trades. A malformed single
+        row is skipped. On a total read error this FAILS OPEN (returns True) — the
+        buying-power pre-flight above is the hard, fail-closed account-level guard, so this
+        governor never needs to halt the whole book on a tracker glitch.
+        """
+        try:
+            new_notional = float(shares) * float(entry_price)
+            if new_notional <= 0:
+                return False   # malformed sizing (shares/price <= 0) — fail-closed (cold-2nd defense-in-depth)
+            open_notional = 0.0
+            for _t in (getattr(tracker, "open_trades", {}) or {}).values():
+                if not isinstance(_t, dict) or _t.get("status") == "closed":
+                    continue
+                try:
+                    _qty = float(_t.get("qty_remaining") or _t.get("qty", 0) or 0)
+                    _px  = float(_t.get("entry_price", 0) or 0)
+                    open_notional += abs(_qty * _px)
+                except (TypeError, ValueError):
+                    continue
+            # getattr-with-default: MAX_GROSS_EXPOSURE_RATIO is added alongside this in config.py;
+            # the 2.5 fallback equals the intended value so the guard still holds even if a partial
+            # config import were ever seen — degrade to the correct ratio, never to an unbounded one.
+            ratio = float(getattr(config, "MAX_GROSS_EXPOSURE_RATIO", 2.5))
+            cap   = self.portfolio_value * ratio
+            total = open_notional + new_notional
+            if total > cap:
+                logger.warning(
+                    "GROSS-EXPOSURE cap: open $%.0f + new $%.0f = $%.0f > cap $%.0f "
+                    "(%.1fx equity) — blocking entry.",
+                    open_notional, new_notional, total, cap, ratio,
+                )
+                return False
+            return True
+        except Exception as e:  # RC-3
+            logger.warning(
+                "gross-exposure check error (%s) — allowing entry (BP pre-flight is the hard guard).",
+                e,
+            )
+            return True
 
     def calculate_position_size(
         self,
