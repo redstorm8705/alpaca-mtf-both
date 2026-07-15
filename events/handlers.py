@@ -70,7 +70,7 @@ def safe_close_all(tracker, risk=None,
     # Bucket A exemption only applies to routine halts, never circuit-breakers
     protected = [] if circuit_breaker else [
         s for s in tracker.open_trades
-        if s in config.BUCKET_A_TICKERS and tracker.opened_today(s)
+        if s in config.LEVERAGED_TICKERS and tracker.opened_today(s)
     ]
     symbols_to_close = [
         s for s in list(tracker.open_trades)

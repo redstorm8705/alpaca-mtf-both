@@ -1,3 +1,4 @@
+# ruff: noqa: E501, E702  (pre-existing style debt; not part of the 2026-07-15 bucket-collapse rename)
 """
 data/premarket.py
 Pre-market mover detection + ATR-based volatility filter.
@@ -12,18 +13,15 @@ Two jobs:
 
 import os
 import logging
-import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
 from data.fetcher import fetch_bars, get_client
 
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest, StockBarsRequest
-from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.data.requests import StockLatestQuoteRequest
 
 logger = logging.getLogger("premarket")
 ET = ZoneInfo("America/New_York")
@@ -420,7 +418,7 @@ def build_dynamic_universe() -> list:
     MAX_UNIVERSE = 22
 
     # Anchors: always included regardless of screener results
-    anchors    = list(config.BUCKET_A_TICKERS) + ["SPY", "QQQ"]
+    anchors    = list(config.LEVERAGED_TICKERS) + ["SPY", "QQQ"]
     anchor_set = set(anchors)
 
     from data.fmp_client import get_screener_movers

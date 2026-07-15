@@ -142,7 +142,7 @@ def score_long_signal(
     # Live  (VOLUME_CONFIRMATION_ENABLED=True):   volume_confirmed scores, RSI retired.
     if config.VOLUME_CONFIRMATION_ENABLED:
         # ── LIVE: score volume_confirmed ─────────────────────────────────────
-        if symbol in config.BUCKET_A_TICKERS:
+        if symbol in config.LEVERAGED_TICKERS:
             # Bucket A auto-pass: high-velocity leveraged ETFs (daily volume unreliable)
             # C1 TODO: suspend under MRI >= STRESSED+ (requires MRI level threading)
             conditions["volume_confirmed"] = True
@@ -199,7 +199,7 @@ def score_long_signal(
         else:
             conditions["rsi_in_range"] = False
         # Shadow observability (R1 Majors): compute volume, log JSON, zero score impact
-        if daily_df is not None and symbol not in config.BUCKET_A_TICKERS:
+        if daily_df is not None and symbol not in config.LEVERAGED_TICKERS:
             try:
                 _vol_series = daily_df["volume"].iloc[-21:-1].dropna()
                 if len(_vol_series) >= config.VOLUME_MIN_VALID_BARS:
@@ -377,7 +377,7 @@ def score_short_signal(
 
     # ── 4. RSI / VOLUME_CONFIRMED (short mirror) ──────────────────────────────
     if config.VOLUME_CONFIRMATION_ENABLED:
-        if symbol in config.BUCKET_A_TICKERS:
+        if symbol in config.LEVERAGED_TICKERS:
             conditions["volume_confirmed"] = True
             score += weights.get("volume_confirmed", 1)
         elif daily_df is not None:
@@ -429,7 +429,7 @@ def score_short_signal(
                 score += weights["rsi_in_range"]
         else:
             conditions["rsi_in_range"] = False
-        if daily_df is not None and symbol not in config.BUCKET_A_TICKERS:
+        if daily_df is not None and symbol not in config.LEVERAGED_TICKERS:
             try:
                 _vol_series = daily_df["volume"].iloc[-21:-1].dropna()
                 if len(_vol_series) >= config.VOLUME_MIN_VALID_BARS:

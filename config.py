@@ -42,16 +42,19 @@ LEVERAGED_3X_TICKERS           = {"TQQQ", "SQQQ"}
 LEVERAGED_3X_STOP_MULTIPLIER   = 3.0   # 3x underlying — extra cushion
 LEVERAGED_3X_TARGET_MULTIPLIER = 3.0   # maintain 1:1 R:R
 
-# ─── BUCKET ALLOCATION ───────────────────────────────────────────────────────
-# Bucket A: leveraged ETF swing holds — 5% of portfolio, min 1-day hold
-# Bucket B: swing trades — 95% of portfolio, conviction-sized
-
-BUCKET_A_TICKERS         = {"TSLL", "NVDL", "TQQQ", "SQQQ"}
-BUCKET_A_ALLOCATION_PCT  = 0.15   # 15% of portfolio (raised from 5% — board 5-0 + Gro + GAI 2026-06-30)
-BUCKET_A_MIN_HOLD_DAYS   = 1      # minimum 1 full trading day before exit
-
-BUCKET_B_ALLOCATION_PCT        = 0.85   # 85% of portfolio (adjusted from 95% to keep A+B=100%)
-BUCKET_B_MAX_POSITIONS         = 999    # placeholder; actual cap is MAX_OPEN_POSITIONS=4
+# ─── UNIFIED TIER ALLOCATION (Bucket A/B collapsed 2026-07-15, board + Gro + GAI) ─────
+# Active tiers are: intraday/intraweek (this), QHM, and Forever-6. The old Bucket A (leveraged
+# ETF, 15%) / Bucket B (85%) ALLOCATION split is DELETED — all symbols size via the unified
+# conviction + Kelly path; leveraged names are ring-fenced by LEVERAGED_NOTIONAL_MAX_PCT and
+# aggregate exposure is governed by MAX_GROSS_EXPOSURE_RATIO. The leveraged-ETF SET now lives in
+# LEVERAGED_TICKERS (defined above) — BUCKET_A_TICKERS is removed.
+INTRA_ALLOCATION_PCT           = 0.85   # full-conviction per-position dollar-cap (was BUCKET_B_ALLOCATION_PCT)
+LEVERAGED_NOTIONAL_MAX_PCT     = 0.05   # 3x/2x ETF hard notional ceiling as % of equity (ring-fence — board FORK-5)
+LEVERAGED_MIN_HOLD_DAYS        = 1      # leveraged ETFs: min 1 trading day before exit (was BUCKET_A_MIN_HOLD_DAYS)
+# Position-COUNT mechanism (NOT an allocation tier) — power-hour slot expansion. Count is now
+# governed primarily by MAX_OPEN_POSITIONS(=20 circuit-breaker) + MAX_GROSS_EXPOSURE_RATIO.
+# (Cosmetic follow-up: rename these off the "BUCKET_B" prefix.)
+BUCKET_B_MAX_POSITIONS         = 999    # std position-count placeholder
 BUCKET_B_MAX_POSITIONS_POWER   = 5      # power-hour / AH slot expansion (≥3:30 PM ET)
 TOD_EXPANSION_WINDOW_START     = 15 * 60 + 30  # 3:30 PM ET — power-hour expansion window (minutes-since-midnight)
 
@@ -547,14 +550,9 @@ def validate_config():
     errors   = []
     warnings = []
 
-    # Capital allocation — buckets cannot exceed 100%
-    total_alloc = BUCKET_A_ALLOCATION_PCT + BUCKET_B_ALLOCATION_PCT
-    if total_alloc > 1.0:
-        errors.append(
-            f"BUCKET_A_ALLOCATION_PCT ({BUCKET_A_ALLOCATION_PCT:.0%}) + "
-            f"BUCKET_B_ALLOCATION_PCT ({BUCKET_B_ALLOCATION_PCT:.0%}) = "
-            f"{total_alloc:.0%} > 100%"
-        )
+    # (Bucket A/B allocation-sum check removed 2026-07-15 — the buckets were collapsed into a
+    #  unified intraday/intraweek tier; aggregate exposure is governed by MAX_GROSS_EXPOSURE_RATIO,
+    #  not a per-bucket % that must sum to ≤100%.)
 
     # R:R — stop must always be narrower than target
     if INTRADAY_STOP_ATR_MULT >= INTRADAY_TARGET_ATR_MULT:

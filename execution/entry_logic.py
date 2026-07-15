@@ -474,8 +474,7 @@ def execute_entries(
 
         # ── Rule 1 enforcement ───────────────────────────────────────────
         if _longs_blocked_rule1 and direction == "long":
-            _is_inverse_etf = symbol in getattr(config, "LEVERAGED_TICKERS", set()) or \
-                              symbol in getattr(config, "BUCKET_A_TICKERS", set())
+            _is_inverse_etf = symbol in getattr(config, "LEVERAGED_TICKERS", set())
             if not _is_inverse_etf:
                 logger.info(
                     f"[{symbol}] Rule 1 BLOCKED: no longs in premarket red session "
@@ -518,8 +517,7 @@ def execute_entries(
         #   spy_risk_direction == "up": SPY surged >1% last 5-min bar
         #     → block all new shorts (tape just moved against short bias)
         #     → long signals and leveraged ETFs pass through
-        _is_lev_etf = (symbol in getattr(config, "LEVERAGED_TICKERS", set()) or
-                       symbol in getattr(config, "BUCKET_A_TICKERS", set()))
+        _is_lev_etf = symbol in getattr(config, "LEVERAGED_TICKERS", set())
 
         if spy_risk_direction == "down" and direction == "long" and not _is_lev_etf:
             logger.info(
@@ -589,8 +587,8 @@ def execute_entries(
             _rc8_clear_buffers(symbol, "bod2-3x-etf-extreme-regime")
             continue
 
-        # ── Bucket routing ───────────────────────────────────────────────
-        is_bucket_a = symbol in config.BUCKET_A_TICKERS
+        # ── Leveraged-ETF flag (Bucket A/B collapsed 2026-07-15) ─────────
+        is_leveraged = symbol in config.LEVERAGED_TICKERS
 
         # ── BoD-1: Entry confirmation buffer ─────────────────────────────
         # Simons: single qualifying scans can be noise; require 2 consecutive
@@ -604,10 +602,10 @@ def execute_entries(
             f"[{symbol}] entry_confirm={gate_state.entry_confirm_buffer[symbol]}/2 "
             f"(score={score}/{config.CONVICTION_SKIP_BELOW})"
         )
-        # Bucket A is LONG ONLY — leveraged ETFs not shortable on Alpaca
-        if is_bucket_a and direction == "short":
-            logger.info(f"[{symbol}] Bucket A long-only — skipping short signal")
-            _rc8_clear_buffers(symbol, "bucket-A-short-skip")
+        # Leveraged ETFs are LONG ONLY — not shortable on Alpaca (inverse ETF = the "short")
+        if is_leveraged and direction == "short":
+            logger.info(f"[{symbol}] Leveraged ETF long-only — skipping short signal")
+            _rc8_clear_buffers(symbol, "leveraged-short-skip")
             continue
 
         # ── Live shorting pre-flight (first short per cycle only) ────────
@@ -627,7 +625,7 @@ def execute_entries(
             continue
         # BoD-1: 2-scan confirmation gate — ALL buckets (unchanged)
         _confirm = gate_state.entry_confirm_buffer.get(symbol, 0)
-        _min_confirm = _param_engine.h4_entry_confirm_scans(vix, is_bucket_a)
+        _min_confirm = _param_engine.h4_entry_confirm_scans(vix, is_leveraged)
         if _confirm < _min_confirm:
             logger.info(
                 f"[{symbol}] BoD-1 CONFIRM GATE: scan {_confirm}/{_min_confirm} qualifying "
@@ -1012,8 +1010,7 @@ def execute_entries(
         # Leveraged ETFs exempt: their target/stop multipliers already account
         # for the asymmetry and the gate would over-filter them.
         _is_leveraged_any = symbol in getattr(config, "LEVERAGED_TICKERS", set()) or \
-                            symbol in getattr(config, "LEVERAGED_3X_TICKERS", set()) or \
-                            symbol in getattr(config, "BUCKET_A_TICKERS", set())
+                            symbol in getattr(config, "LEVERAGED_3X_TICKERS", set())
         if not _is_leveraged_any and stop and target:
             _risk_dist   = abs(entry_price - stop)
             _reward_dist = abs(target - entry_price)
@@ -1085,35 +1082,19 @@ def execute_entries(
             _rc8_clear_buffers(symbol, "portfolio-correlation")
             continue
 
-        # ── Bucket-aware position sizing ────────────────────────────────
-        if is_bucket_a:
-            # Rank 1: leverage-adjusted notional cap for Bucket A.
-            # Base = flat 5% from risk manager. Override to min(flat, notional_cap)
-            # so that 3x ETFs never exceed 15% notional as account scales.
-            dollar_cap    = risk.calculate_bucket_a_size()
-            _lev          = _main._BUCKET_A_LEVERAGE.get(symbol, 1.0)
-            _notional_cap = risk.portfolio_value * _main._BUCKET_A_MAX_NOTIONAL_PCT / _lev
-            if _notional_cap < dollar_cap:
-                logger.info(
-                    f"[{symbol}] Bucket A notional cap applied: {_lev}x leverage → "
-                    f"${_notional_cap:.2f} dollar cap (flat was ${dollar_cap:.2f})"
-                )
-                dollar_cap = _notional_cap
-            # DS Condition 2 (REQUIRED): guard Bucket A zero-cap same as Bucket B zero-cap.
-            # calculate_bucket_a_size() can return 0 when kill switch is close to trigger
-            # or portfolio_value is 0 — entering with dollar_cap=0 would submit 0 shares.
-            if dollar_cap <= 0:
-                logger.info(
-                    f"[{symbol}] Bucket A zero-cap (calculate_bucket_a_size()={dollar_cap:.2f}) — skipping entry."
-                )
-                _rc8_clear_buffers(symbol, "bucket-a-zero-cap")
-                continue
-        else:
+        # ── Unified position sizing (Bucket A/B collapsed 2026-07-15, board+Gro+GAI) ──
+        # ALL symbols — including leveraged ETFs — size via conviction-linear + Kelly + TQI,
+        # then the shared TSMOM/earnings/VOTE-3/FVG multiplier chain below. Leveraged names
+        # then get a hard notional clamp AFTER the multipliers (LEVERAGED_NOTIONAL_MAX_PCT) —
+        # the ring-fence replacing the deleted Bucket-A 15%/leverage cap (board FORK-5). The
+        # `if True:` keeps the body in place (no risky mass de-indent) while running it for
+        # every symbol; the old `if is_bucket_a: … else:` routing is removed.
+        if True:
             # Rank 2: conviction sizing — linear
-            #   score 10  → ½ size  (47.5%)
-            #   score 11+ → full    (95%)
-            _pct_min  = config.BUCKET_B_ALLOCATION_PCT * 0.5   # 47.5%
-            _pct_max  = config.BUCKET_B_ALLOCATION_PCT          # 95%
+            #   score 10  → ½ size  (42.5%)
+            #   score 11+ → full    (85%)
+            _pct_min  = config.INTRA_ALLOCATION_PCT * 0.5   # 42.5%
+            _pct_max  = config.INTRA_ALLOCATION_PCT          # 85%
             if score < _main._LINEAR_SCORE_MIN:
                 dollar_cap = 0.0
             elif score >= _main._LINEAR_SCORE_MAX:
@@ -1213,6 +1194,20 @@ def execute_entries(
                 f"[{symbol}] FVG {_fvg_arrow} {_fvg_mult:.2f}x ({_fvg_reason}) | "
                 f"dollar_cap → ${dollar_cap:,.2f}"
             )
+
+        # ── Leveraged-ETF notional ring-fence (Bucket A/B collapse 2026-07-15) ──────
+        # Replaces the deleted Bucket-A 15%/leverage cap. Now that leveraged names size via
+        # the unified conviction+Kelly path, a 3x ETF could otherwise take a huge notional on
+        # a small account (board FORK-5: ~$70k on $2.8k = ruin). Hard-cap leveraged names to
+        # LEVERAGED_NOTIONAL_MAX_PCT of equity AFTER all multipliers, BEFORE the share sizing.
+        if is_leveraged:
+            _lev_cap = risk.portfolio_value * config.LEVERAGED_NOTIONAL_MAX_PCT
+            if dollar_cap > _lev_cap:
+                logger.info(
+                    f"[{symbol}] LEVERAGED notional ring-fence: ${dollar_cap:,.2f} → ${_lev_cap:,.2f} "
+                    f"({config.LEVERAGED_NOTIONAL_MAX_PCT:.0%} of equity)"
+                )
+                dollar_cap = _lev_cap
 
         # ── BoD-5R: Minimum-lot guard ────────────────────────────────────────
         # After all multipliers are applied, sub-$50 notional orders have
@@ -1703,7 +1698,7 @@ def _overnight_entry_check(
 
     # Size: 50% of full Bucket B allocation (Marcus Thorne: overnight gap discount)
     portfolio_value      = get_portfolio_value()
-    overnight_dollar_cap = portfolio_value * config.BUCKET_B_ALLOCATION_PCT * 0.95 * 0.50
+    overnight_dollar_cap = portfolio_value * config.INTRA_ALLOCATION_PCT * 0.95 * 0.50
     stop_distance        = abs(limit_price - stop)
     if stop_distance == 0:
         logger.warning(f"{_log} {symbol}: zero stop distance — skip")

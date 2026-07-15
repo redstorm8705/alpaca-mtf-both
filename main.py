@@ -139,11 +139,8 @@ _OVERNIGHT_MAX_AH_DRIFT   = 0.03       # reject if AH price > 3% from close
 _OVERNIGHT_MIN_AH_VOLUME  = 50_000     # Marcus Thorne: reject thin AH tape
 
 # ── Rank 1: Bucket A leverage factors + notional cap ────────────────────────
-# Prevents notional Nasdaq/sector exposure from growing unbounded as account scales.
-# Cap: max 15% notional exposure per Bucket A position.
-# Dollar cap = portfolio * 0.15 / leverage_factor (supersedes flat 5% when tighter).
-_BUCKET_A_LEVERAGE = {"TSLL": 1.5, "NVDL": 2.0, "TQQQ": 3.0, "SQQQ": 3.0}
-_BUCKET_A_MAX_NOTIONAL_PCT = 0.15  # 15% max notional per position
+# (_BUCKET_A_LEVERAGE / _BUCKET_A_MAX_NOTIONAL_PCT REMOVED 2026-07-15 — Bucket A/B collapse.
+#  Leveraged-ETF notional is now ring-fenced by config.LEVERAGED_NOTIONAL_MAX_PCT in entry_logic.)
 
 # ── Bug 8 / Bug 3 fix: Sector correlation map ────────────────────────────────
 # Maps each tradeable symbol to a sector label. Used to block a second entry

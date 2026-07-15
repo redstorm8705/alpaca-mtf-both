@@ -89,7 +89,7 @@ def _get_weekly_bias(symbol: str):
         return "BULLISH" if qqq_bias == "BEARISH" else "BEARISH"
 
     # All other Bucket A tickers (TSLL, NVDL, TQQQ): bypass filter
-    if symbol in config.BUCKET_A_TICKERS:
+    if symbol in config.LEVERAGED_TICKERS:
         return None
 
     now    = datetime.now(ET)

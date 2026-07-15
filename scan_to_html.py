@@ -487,7 +487,7 @@ def decision_tag(r):
     ls, ss = r["long_signal"], r["short_signal"]
     score  = max(r["long_score"], r["short_score"])
     sym    = r.get("symbol", "")
-    is_bucket_a = sym in getattr(config, "BUCKET_A_TICKERS", set())
+    is_bucket_a = sym in getattr(config, "LEVERAGED_TICKERS", set())
     if score < config.CONVICTION_SKIP_BELOW:              return "SKIP",         "#4a5070"
     if is_bucket_a:                                        return "HOLD",         "#0a84ff"
     if score >= config.CONVICTION_FULL_MIN:
@@ -768,7 +768,7 @@ def build_active_rows(open_trades: dict, results_by_sym: dict, idx_offset: int =
         active_stop  = trade.get("trail_stop") or trade.get("stop")
         target_price = trade.get("target")
         is_overnight = trade.get("overnight", False)
-        is_bucket_a   = sym in getattr(config, "BUCKET_A_TICKERS", set())
+        is_bucket_a   = sym in getattr(config, "LEVERAGED_TICKERS", set())
         is_orphan     = trade.get("_adopted_orphan", False)
         entry_score   = trade.get("score", 0)
         rev_count     = trade.get("reversal_scan_count", 0)

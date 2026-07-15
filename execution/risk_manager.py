@@ -916,40 +916,9 @@ class RiskManager:
         )
         return new_stop
 
-    def calculate_bucket_allocation(self, score: int) -> float:
-        """
-        Returns dollar risk cap for Bucket B based on conviction score.
-        Scales as % of current portfolio value — grows with wins, shrinks after losses.
-
-        11-12/12: full allocation = 95% of portfolio
-        9-10/12:  half allocation = 47.5% of portfolio
-        below 9:  skip = 0
-        When day-trade counter is at 3, caller must enforce 10/12 minimum externally.
-        """
-        if score >= config.CONVICTION_FULL_MIN:
-            pct = config.BUCKET_B_ALLOCATION_PCT          # 95%
-        elif score >= config.CONVICTION_HALF_MIN:
-            pct = config.BUCKET_B_ALLOCATION_PCT * 0.5    # 47.5%
-        else:
-            return 0.0
-        dollar_cap = self.portfolio_value * pct
-        logger.info(
-            f"Bucket B allocation: score {score}/12 → "
-            f"{pct:.1%} of ${self.portfolio_value:,.2f} = ${dollar_cap:,.2f}"
-        )
-        return dollar_cap
-
-    def calculate_bucket_a_size(self) -> float:
-        """
-        Returns dollar cap for Bucket A (leveraged ETF swing holds).
-        Hard capped at 5% of current portfolio value.
-        """
-        dollar_cap = self.portfolio_value * config.BUCKET_A_ALLOCATION_PCT
-        logger.info(
-            f"Bucket A allocation: {config.BUCKET_A_ALLOCATION_PCT:.1%} of "
-            f"${self.portfolio_value:,.2f} = ${dollar_cap:,.2f}"
-        )
-        return dollar_cap
+    # calculate_bucket_allocation() and calculate_bucket_a_size() were REMOVED 2026-07-15
+    # (Bucket A/B collapse). They were dead (no callers — entry_logic sizes inline via the
+    # unified conviction path) and referenced the deleted BUCKET_*_ALLOCATION_PCT constants.
 
     def summary(self) -> dict:
         worst_pnl = min(self.daily_pnl, self.equity_pnl)

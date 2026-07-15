@@ -1133,7 +1133,7 @@ def check_exits(
         direction     = trade["direction"]
         trade_mode    = trade["trade_mode"]
         is_overnight  = trade.get("overnight", False)
-        is_bucket_a   = symbol in config.BUCKET_A_TICKERS
+        is_bucket_a   = symbol in config.LEVERAGED_TICKERS
         entry_price   = trade.get("entry_price", 0)
         current_price = None
         _cur_bar_ts   = None
