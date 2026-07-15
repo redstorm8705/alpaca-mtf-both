@@ -12,16 +12,17 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏰ RESUME CRON: `ce7c799d` fires 20:02 PT (2026-07-15). Session-only (CronCreate).**
 
-**▶ MID-FLIGHT = OPTION A (memory/OOM). DIAGNOSIS COMPLETE → next is the FIX.**
-Full diagnosis: `logs/option_a_memory_diagnosis_2026-07-15.md`. REFRAME: small TRUE leak + large transient
-peak (RSS oscillates 195↔574MB — NOT monotonic). **True leak = `data/fetcher.py:87` `_bar_cache`** (module
-dict, written every fetch; the 180s TTL is READ-ONLY — NO eviction ever; stale DataFrames resident all
-session + premarket-mover key churn). Transient peak = per-cycle 36-sym×3-TF DataFrame set
-(`signal_generator.py:200-226`, collected each cycle). **NEXT: convene BGG on the fix (`_bar_cache`
-TTL-eviction-on-write + daily prune; peak reduction via freeing _entry_df/_daily_df + the num_bars=400
-question) → full patch sequence → ship. Optionally ship a tracemalloc snapshot-diff instrumentation first.**
-Then Slack-relief secondary (*/5 DOWN watchdog grace + consolidate the 3 RAM watchdogs). gc.freeze active;
-gc now ~200ms (was 2.5-4.6s); score_comparison bounded (old P5-M3 note STALE).
+**✅ OPTION A part 1 SHIPPED + LIVE (`daadf19`, restarted 2026-07-15):** `data/fetcher.py` `_bar_cache`
+eviction — `_cache_put` now sweeps (throttled once per TTL): drop entries older than TTL + hard-cap
+5000→4000. Fixes the TRUE leak (cache had NO eviction; the 180s TTL was read-only → stale DataFrames +
+premarket-mover key churn climbed the RSS floor → OOM). Gate: static+self-test PASS, cold-2nd PASS,
+Gro+GAI APPROVE, BGG design consensus. Diagnosis: `logs/option_a_memory_diagnosis_2026-07-15.md`.
+**▶ NEXT (resume here): OPTION A part 2 = the TRANSIENT PEAK** (RSS still spikes 195↔574MB from the
+per-cycle 36-sym×3-TF DataFrame set in `signal_generator.py:200-226` — `_analyze_symbol_full` retains
+`_entry_df`/`_daily_df`). Convene BGG → free those refs after scoring (do NOT trim num_bars — SMA200/325
+lookback). Then Slack-relief secondary (*/5 DOWN watchdog grace + consolidate the 3 RAM watchdogs).
+Then priority queue: catalyst guidance_cut one-click approval; Stage-2 cosmetic renames; GEX threshold
+recalibration once clean data accumulates. (gc.freeze active; gc ~200ms; score_comparison bounded.)
 
 **✅ TODAY'S SHIPS (all LIVE on OCI, restarted 2026-07-15):** Slack-relief `b2f79db` · Stage 1 risk-gov
 `0569360` (cap→circuit-breaker 20 + BP pre-flight + gross 2.5x + overnight 0.40) · Stage 2 Bucket A/B
