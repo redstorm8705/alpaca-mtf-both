@@ -78,8 +78,13 @@ _MAX_CONTRACT_PAGES = 2     # up to 2000 contracts per underlying (API-budget ca
 # (roadmap: GEX threshold + _NEAR_FLIP_RATIO recalibration once enough clean sessions log).
 _ATM_MONEYNESS      = 0.01   # a strike within ±1% of spot counts as ATM
 _MIN_ATM_STRIKES    = 3      # need >= this many surviving ATM strikes, else UNKNOWN
-_MIN_CAPTURE_RATIO  = 0.40   # valid-gamma contracts / OI-bearing contracts must be >= this, else UNKNOWN
-_MIN_VALID_COUNT    = 20     # absolute floor on valid-gamma contracts, else UNKNOWN
+# WINDOWED capture (2026-07-15): capture ratio + count are measured over ONLY the ±_CAPTURE_WINDOW
+# near-spot strikes — NOT all contracts — so far-OTM sparseness on the indicative feed can't drag the
+# gate to a false UNKNOWN when near-spot data is fine (first live SPY: atm_count=80 but ALL-contract
+# capture was 34% → false UNKNOWN). This is the region that actually drives the ±5% flip.
+_CAPTURE_WINDOW_PCTILE = 0.10  # capture ratio + windowed count measured over ±10% of spot
+_MIN_CAPTURE_RATIO  = 0.40   # WINDOWED valid-gamma / OI-bearing (within ±_CAPTURE_WINDOW) must be >= this
+_MIN_WINDOWED_COUNT = 10     # >= this many valid-gamma contracts within ±_CAPTURE_WINDOW, else UNKNOWN
 _FLIP_WINDOW_PCTILE = 0.05   # flip computed only over strikes within ±5% of spot (nearest-spot crossing)
 
 
@@ -276,7 +281,8 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     total_abs   = 0.0
     strike_gex: dict[float, float] = {}
     count       = 0
-    atm_count   = 0   # surviving strikes within ±_ATM_MONEYNESS of spot (data-quality gate)
+    atm_count     = 0   # surviving strikes within ±_ATM_MONEYNESS of spot (data-quality gate)
+    windowed_valid = 0  # surviving valid-gamma strikes within ±_CAPTURE_WINDOW_PCTILE of spot
     skips = {"no_quote": 0, "zero_bid": 0, "wide_spread": 0, "parse": 0, "expired": 0, "no_iv": 0}
     now_et = datetime.now(ET)
 
@@ -321,17 +327,28 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
         if abs(strike - spot) <= spot * _ATM_MONEYNESS:
             atm_count += 1
+        if abs(strike - spot) <= spot * _CAPTURE_WINDOW_PCTILE:
+            windowed_valid += 1
 
     # ── Data-quality gate (2026-07-14, board + Gro + GAI) — fail-safe to UNKNOWN ──
     # If the surviving strike set is too biased/sparse (ATM dropped by the indicative
     # feed's wide spreads), the flip AND the label are untrustworthy — both derive from
     # the same censored set. Emit UNKNOWN so the signal has ZERO execution effect rather
     # than a confident-but-wrong level. capture_ratio = valid-gamma / OI-bearing contracts.
-    capture_ratio = (count / len(oi_map)) if oi_map else 0.0
+    # Windowed denominator: OI-bearing contracts whose STRIKE is within ±_CAPTURE_WINDOW of spot.
+    _cap_lo = spot * (1.0 - _CAPTURE_WINDOW_PCTILE)
+    _cap_hi = spot * (1.0 + _CAPTURE_WINDOW_PCTILE)
+    windowed_oi_denom = 0
+    for _osym in oi_map:
+        _p = _parse_occ(_osym)
+        if _p is not None and _cap_lo <= _p[2] <= _cap_hi:
+            windowed_oi_denom += 1
+    # capture_ratio is now WINDOWED (near-spot valid-gamma / near-spot OI-bearing), not over all strikes.
+    capture_ratio = (windowed_valid / windowed_oi_denom) if windowed_oi_denom else 0.0
     quality_ok = (
         atm_count >= _MIN_ATM_STRIKES
         and capture_ratio >= _MIN_CAPTURE_RATIO
-        and count >= _MIN_VALID_COUNT
+        and windowed_valid >= _MIN_WINDOWED_COUNT
     )
 
     # Label — UNKNOWN on zero valid contracts OR insufficient data quality
@@ -342,9 +359,9 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
             if atm_count < _MIN_ATM_STRIKES:
                 skips["insufficient_atm"] = atm_count
             if capture_ratio < _MIN_CAPTURE_RATIO:
-                skips["low_capture_ratio_pct"] = int(round(capture_ratio * 100))
-            if count < _MIN_VALID_COUNT:
-                skips["too_few_valid"] = count
+                skips["low_windowed_capture_pct"] = int(round(capture_ratio * 100))
+            if windowed_valid < _MIN_WINDOWED_COUNT:
+                skips["too_few_windowed"] = windowed_valid
     elif total_abs > 0 and abs(net_gex) / total_abs < _NEAR_FLIP_RATIO:
         label = "NEAR-FLIP"
     elif net_gex >= 0:
