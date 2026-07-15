@@ -8,7 +8,42 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-14 autonomous resume) — pick up here
+## ⏩ LATEST (2026-07-14 interactive, Rafael stepped away mid-session) — pick up here
+
+**FULL DESIGN + BGG CONSENSUS: `logs/tier_refactor_design_2026-07-14.md` (read it first).**
+
+**SHIPPED + LIVE this session:** Slack false-alarm relief (`b2f79db`) — `scripts/memory_watchdog.sh`
+throttled (was the primary un-throttled */30 <200MB Slack spammer; 2026-07-02 fix had only covered
+the secondary `ram_watch.sh`) + stale `/tmp/mtf_planned_restart` sentinel cleared. Gro+GAI APPROVE,
+deployed OCI.
+
+**APPROVED + BUILDING (Stage 1 — the risk-governance redesign, UNDER existing buckets = safe):**
+Rafael approved `MAX_OPEN_POSITIONS` 4→20 (circuit-breaker only) + **NEW buying-power pre-flight
+check** (fixes a latent ruin/desync bug: bot never checks BP before submitting) + **`MAX_GROSS_EXPOSURE_RATIO=2.5`**
+(the real governor) + **`MAX_OVERNIGHT_EXPOSURE_PCT=0.40`** + replace P0-STARTUP HALT-at-MAX with a
+gross-exposure health check. Files: config.py, risk_manager.py, entry_logic.py, main.py. **NEXT EXACT
+STEP: full-read config.py → build the Stage 1 diff → statics + cold-2nd + board-on-diff + final Gro+GAI
+→ ship.**
+
+**QUEUED (Stage 2 — DELETE Bucket A/B → tiers = intraday/intraweek + QHM + F6). Owner mandate.
+BGG-aligned (Gro+GAI+2 seats). Blocked on TWO owner decisions:**
+1. FORK 2 "intraweek" = A (hold winners ~1wk via existing trailing-stop, contained refactor — REC) or
+   B (separate HTF-confluence swing framework, multi-session, defer per the 2026-06-28 mandate)?
+2. FORK 5 `LEVERAGED_NOTIONAL_MAX_PCT` value = 5% per-symbol (REC) / 15% / 20% aggregate.
+Reply e.g. **"A, 5%"** → build+gate+ship Stage 2.
+> 🔴 **LETHAL INVARIANT:** deleting Bucket A without a replacement leveraged notional cap lets a 3x ETF
+> size to ~$70k notional on a $2.8k account (25× gross) = bankruptcy before the equity kill switch. The
+> `LEVERAGED_NOTIONAL_MAX_PCT` guard MUST ship in the SAME patch that deletes Bucket A.
+
+**Also diagnosed (not yet built):** (a) position-count-drift nightly CATASTROPHIC = **FALSE ALARM**
+(board 4/4 — over-entry doubly guarded); (b) **GEX/S&R levels are buggy** — flip_strike ~10% below
+spot (strike-truncation, ~50% contracts skipped); FIX the computation before any GEX backtest;
+`logs/gex_history.jsonl` is the backtest raw material. (c) catalyst guidance_cut approval still pending
+(`logs/pending_approval_catalyst_guidance_2026-07-14.md`).
+
+---
+
+## ⏩ PRIOR (2026-07-14 autonomous resume)
 
 **⏩⏩ 2026-07-14 AUTONOMOUS SESSION RESULT (scheduled resume; Rafael asleep) — ONE approval waiting.**
 Verified true state at 100% (git, not the stale prompt): catalyst gate is **already LIVE** (`2e2561d`,
