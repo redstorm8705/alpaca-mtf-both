@@ -82,3 +82,68 @@ Primary governing variable = **gross-notional / margin headroom**, NOT position 
 1. **FORK 2:** "intraweek" = A (hold-longer, contained refactor) or B (separate HTF swing framework, deferred)?
 2. **FORK 5:** `LEVERAGED_NOTIONAL_MAX_PCT` value — 5% per-symbol (rec) / 15% / 20% aggregate?
 Reply e.g. **"A, 5%"** → build + gate + ship Stage 2.
+
+---
+
+## STAGE 1 — EXACT PATCH SPEC (pre-scoped, ready to build+gate+ship)
+
+**CRITICAL: the bot runs `--profile paper`, so the paper-profile override is what's LIVE.
+Patch the profile dict, not just the base constant.**
+
+### config.py
+- **L206** base: `MAX_OPEN_POSITIONS = 4` → `20` (circuit-breaker; base/live-default).
+- **L265** paper profile: `"MAX_OPEN_POSITIONS": 7,` → `"MAX_OPEN_POSITIONS": 20,`  ← **THE ACTIVE VALUE**.
+- Leave `live` profile (L248) at 4 (conservative, not active; revisit at live launch).
+- **After L210** (`MAX_DAILY_LOSS_PCT`), add module-level (not profile-overridden):
+  ```python
+  # AGGREGATE EXPOSURE GOVERNANCE (2026-07-14, board+Gro+GAI) — the PRIMARY governor.
+  # Gross notional is the real limit on position count; the count cap is only a
+  # runaway-loop circuit-breaker. Applies across profiles.
+  MAX_GROSS_EXPOSURE_RATIO   = 2.5   # sum |position notional| / equity — block entry if breach
+  MAX_OVERNIGHT_EXPOSURE_PCT = 0.40  # overnight notional / equity (Invariant #11 gap; was unset)
+  ```
+- validate_config() bucket-sum check (L540-547) UNCHANGED in Stage 1 (buckets still exist).
+
+### execution/risk_manager.py — add 2 methods (after can_open_position, ~L288)
+```python
+def check_buying_power_for_order(self, shares: int, entry_price: float) -> bool:
+    """Live Alpaca buying-power pre-flight. Reject if remaining BP can't cover
+    notional + 10% cushion. FAIL-CLOSED (return False) on any error — never over-commit.
+    Uses the same requests + os.getenv pattern as _qhm_unrealized_pl()."""
+    # notional = shares*entry_price; require buying_power >= notional*1.10; else False.
+```
+```python
+def check_gross_exposure_for_order(self, tracker, entry_price: float, shares: int) -> bool:
+    """Sum |open-position notional| (from tracker.open_trades non-closed) + new notional;
+    reject if > portfolio_value * config.MAX_GROSS_EXPOSURE_RATIO. Log the breach."""
+```
+
+### execution/entry_logic.py — in execute_entries, immediately BEFORE `order = submit_market_order(...)` (~L1317, after the `if shares < 1: continue` + short-block-cache checks)
+```python
+# ── Buying-power pre-flight (fail-closed) — closes the latent over-commit/desync bug ──
+if not risk.check_buying_power_for_order(shares, entry_price):
+    logger.warning(f"[{symbol}] BP pre-flight failed — skipping entry.")
+    _rc8_clear_buffers(symbol, "bp-insufficient")
+    continue
+# ── Aggregate gross-exposure gate (2.5x equity) — the primary count governor ──
+if not risk.check_gross_exposure_for_order(tracker, entry_price, shares):
+    logger.warning(f"[{symbol}] gross-exposure cap reached — skipping entry.")
+    _rc8_clear_buffers(symbol, "gross-exposure-cap")
+    continue
+```
+
+### main.py — P0-STARTUP block (~L799-865)
+- With MAX_OPEN_POSITIONS=20, the existing HALT-at-MAX rarely fires (keep as backstop).
+- ADD a startup gross-exposure health check: compute live gross notional / equity; if
+  `>= config.MAX_GROSS_EXPOSURE_RATIO`, log CRITICAL + `_set_halt_entries(True)` (fail-closed,
+  matches the block's existing exception handling).
+
+### Gate to run before ship (mandatory)
+py_compile + mypy --warn-unreachable + ruff (E,W,F,B) on all 3 .py files; cold-2nd agent on the
+combined diff; code-review-graph impact; board-on-diff (ruin + execution seats); FINAL Gro+GAI on
+the exact diff. Then apply → commit → push → OCI `git pull --ff-only` + `systemctl restart mtf-bot`
+(this DOES restart — RTH-execution code) → health check. On paper=True; zero live-money risk.
+
+### Behavior after Stage 1 (validated by board): ~3-5 concurrent positions in practice (sizing +
+BP self-limit), count cap no longer the binding constraint, over-commit bug closed, gross exposure
+capped at 2.5x. No lethal leveraged exposure (Bucket A's 15% ring-fence still intact until Stage 2).
