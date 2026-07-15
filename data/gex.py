@@ -66,6 +66,22 @@ _IV_LO, _IV_HI    = 0.01, 3.0   # bisection bracket; mid outside bracket → con
 _MIN_T_YEARS      = 1.0 / (365.0 * 24.0)  # 1-hour floor on time-to-expiry
 _MAX_CONTRACT_PAGES = 2     # up to 2000 contracts per underlying (API-budget cap for mtf-writer)
 
+# ── GEX data-quality gate + flip window (2026-07-14, board + Gro + GAI unanimous) ──────
+# The Alpaca INDICATIVE feed drops ATM options (they carry the widest relative spreads),
+# leaving a deep-ITM-biased strike set that dragged flip_strike ~10% below spot and biased
+# the NEGATIVE/POSITIVE label (2026-07-14: labeled NEGATIVE while SPY pinned dead-flat).
+# FAIL-SAFE: if the surviving strikes are too biased/sparse to trust, emit label=UNKNOWN +
+# flip_strike=None. UNKNOWN already = neutral Kelly (GEX_EDGE_MULT_NEUTRAL) + no MIN_SCORE
+# bump downstream, so a weak-data day has ZERO execution effect — strictly safer than
+# emitting a confident-but-wrong level that actively costs trades. Thresholds are
+# microstructure-derived STARTING points; recalibrate from logs/gex_history.jsonl
+# (roadmap: GEX threshold + _NEAR_FLIP_RATIO recalibration once enough clean sessions log).
+_ATM_MONEYNESS      = 0.01   # a strike within ±1% of spot counts as ATM
+_MIN_ATM_STRIKES    = 3      # need >= this many surviving ATM strikes, else UNKNOWN
+_MIN_CAPTURE_RATIO  = 0.40   # valid-gamma contracts / OI-bearing contracts must be >= this, else UNKNOWN
+_MIN_VALID_COUNT    = 20     # absolute floor on valid-gamma contracts, else UNKNOWN
+_FLIP_WINDOW_PCTILE = 0.05   # flip computed only over strikes within ±5% of spot (nearest-spot crossing)
+
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -260,6 +276,7 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     total_abs   = 0.0
     strike_gex: dict[float, float] = {}
     count       = 0
+    atm_count   = 0   # surviving strikes within ±_ATM_MONEYNESS of spot (data-quality gate)
     skips = {"no_quote": 0, "zero_bid": 0, "wide_spread": 0, "parse": 0, "expired": 0, "no_iv": 0}
     now_et = datetime.now(ET)
 
@@ -302,10 +319,32 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         total_abs += abs(contrib)
         count     += 1
         strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
+        if abs(strike - spot) <= spot * _ATM_MONEYNESS:
+            atm_count += 1
 
-    # Label — UNKNOWN on zero valid contracts (fix: was POSITIVE via net_gex >= 0)
-    if count == 0:
+    # ── Data-quality gate (2026-07-14, board + Gro + GAI) — fail-safe to UNKNOWN ──
+    # If the surviving strike set is too biased/sparse (ATM dropped by the indicative
+    # feed's wide spreads), the flip AND the label are untrustworthy — both derive from
+    # the same censored set. Emit UNKNOWN so the signal has ZERO execution effect rather
+    # than a confident-but-wrong level. capture_ratio = valid-gamma / OI-bearing contracts.
+    capture_ratio = (count / len(oi_map)) if oi_map else 0.0
+    quality_ok = (
+        atm_count >= _MIN_ATM_STRIKES
+        and capture_ratio >= _MIN_CAPTURE_RATIO
+        and count >= _MIN_VALID_COUNT
+    )
+
+    # Label — UNKNOWN on zero valid contracts OR insufficient data quality
+    if count == 0 or not quality_ok:
         label = "UNKNOWN"
+        if count > 0 and not quality_ok:
+            # record WHY the otherwise-nonempty snapshot was quarantined (shadow-review audit)
+            if atm_count < _MIN_ATM_STRIKES:
+                skips["insufficient_atm"] = atm_count
+            if capture_ratio < _MIN_CAPTURE_RATIO:
+                skips["low_capture_ratio_pct"] = int(round(capture_ratio * 100))
+            if count < _MIN_VALID_COUNT:
+                skips["too_few_valid"] = count
     elif total_abs > 0 and abs(net_gex) / total_abs < _NEAR_FLIP_RATIO:
         label = "NEAR-FLIP"
     elif net_gex >= 0:
@@ -313,17 +352,31 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     else:
         label = "NEGATIVE"
 
-    # Gamma flip strike — lowest strike where cumulative GEX crosses zero
+    # Gamma flip strike — zero-crossing NEAREST spot within a ±_FLIP_WINDOW_PCTILE band.
+    # (Was: lowest crossing over ALL strikes — deep-ITM put survivors dragged it ~10% below
+    # spot.) Only computed when data quality is OK; else None (untrustworthy → not emitted).
     flip_strike = None
-    if strike_gex:
-        cumulative  = 0.0
-        prev_sign   = None
+    if strike_gex and spot > 0 and quality_ok:
+        _w_lo = spot * (1.0 - _FLIP_WINDOW_PCTILE)
+        _w_hi = spot * (1.0 + _FLIP_WINDOW_PCTILE)
+        # Accumulate the running net-GEX over ONLY the in-window (near-spot) strikes, so the
+        # flip reflects the LOCAL gamma balance around spot and is immune to far deep-ITM
+        # survivors (which were dragging it ~10% below spot). Pick the zero-crossing of that
+        # local cumulative that is nearest spot. (GAI preship catch 2026-07-14: accumulating
+        # over ALL strikes let out-of-window contributions distort where the local flip appears.)
+        cumulative = 0.0
+        prev_sign  = None
+        _best_dist = float("inf")
         for strike in sorted(strike_gex):
+            if not (_w_lo <= strike <= _w_hi):
+                continue
             cumulative += strike_gex[strike]
             curr_sign   = 1 if cumulative >= 0 else -1
             if prev_sign is not None and curr_sign != prev_sign:
-                flip_strike = round(strike, 2)
-                break
+                _dist = abs(strike - spot)
+                if _dist < _best_dist:
+                    _best_dist  = _dist
+                    flip_strike = round(strike, 2)
             prev_sign = curr_sign
 
     return {
@@ -331,6 +384,9 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         "label":           label,
         "flip_strike":     flip_strike,
         "contract_count":  count,
+        "atm_count":       atm_count,
+        "capture_ratio":   round(capture_ratio, 3),
+        "quality_ok":      quality_ok,
         "skips":           skips,
         "model":           {"r": _RISK_FREE_RATE, "q": _DIV_YIELD, "max_spread": _MAX_SPREAD_RATIO},
     }
