@@ -39,11 +39,12 @@ Reply e.g. **"A, 5%"** → build+gate+ship Stage 2.
 > `LEVERAGED_NOTIONAL_MAX_PCT` guard MUST ship in the SAME patch that deletes Bucket A.
 
 **Also diagnosed (not yet built):** (a) position-count-drift nightly CATASTROPHIC = **FALSE ALARM**
-(board 4/4 — over-entry doubly guarded); (b) **GEX/S&R levels are buggy — ROOT-CAUSED**
-(`logs/gex_flip_diagnosis_2026-07-14.md`): `data/gex.py` strike-survivor-bias (ATM dropped by the 25%
-spread filter L280 + zero-bid skip → deep-ITM puts survive) + the "lowest cumulative-crossing" flip
-definition (L316-327) → flip lands ~10% below spot. Execution-consumed (kelly+Layer-8) → fix needs a
-board design round (options A/B/C in the doc) + full gate. FIX before backtesting (`gex_history.jsonl`).
+(board 4/4 — over-entry doubly guarded); (b) **✅ GEX/S&R FIX SHIPPED** (`aad518a`, code on OCI — activates next AH/nightly restart; market was
+open so no RTH restart). `data/gex.py`: data-quality gate → `UNKNOWN`+flip=None when
+atm_count<3/capture<0.40/count<20 (fail-safe, zero exec effect on weak data) + flip = local in-window
+±5% cumulative zero-crossing NEAREST spot. 4-voice design unanimous; static+cold-2nd+Gro+GAI. Diagnosis:
+`logs/gex_flip_diagnosis_2026-07-14.md`. FOLLOW-UPS: (A) moneyness-aware ATM recovery (sharper flips more
+often); (B) recalibrate thresholds from `gex_history.jsonl`; THEN the backtest.
 (c) catalyst guidance_cut approval still pending
 (`logs/pending_approval_catalyst_guidance_2026-07-14.md`).
 
