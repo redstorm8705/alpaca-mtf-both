@@ -17,12 +17,17 @@ eviction — `_cache_put` now sweeps (throttled once per TTL): drop entries olde
 5000→4000. Fixes the TRUE leak (cache had NO eviction; the 180s TTL was read-only → stale DataFrames +
 premarket-mover key churn climbed the RSS floor → OOM). Gate: static+self-test PASS, cold-2nd PASS,
 Gro+GAI APPROVE, BGG design consensus. Diagnosis: `logs/option_a_memory_diagnosis_2026-07-15.md`.
-**▶ NEXT (resume here): OPTION A part 2 = the TRANSIENT PEAK** (RSS still spikes 195↔574MB from the
-per-cycle 36-sym×3-TF DataFrame set in `signal_generator.py:200-226` — `_analyze_symbol_full` retains
-`_entry_df`/`_daily_df`). Convene BGG → free those refs after scoring (do NOT trim num_bars — SMA200/325
-lookback). Then Slack-relief secondary (*/5 DOWN watchdog grace + consolidate the 3 RAM watchdogs).
-Then priority queue: catalyst guidance_cut one-click approval; Stage-2 cosmetic renames; GEX threshold
-recalibration once clean data accumulates. (gc.freeze active; gc ~200ms; score_comparison bounded.)
+**OPTION A part 2 (transient peak) — NO CODE FIX NEEDED (verified 2026-07-15):** the DataFrame-freeing
+was ALREADY done (`signal_generator.py:771-774` pops+dels `_entry_df`/`_daily_df` after 16pt scoring; the
+liquidity-skip at 716-717 also pops) — S43B "Priority 4 RAM leak fix". The hunt agent saw the retain at
+L224 but missed the pop. So the remaining RSS spikes (195↔574MB) are INHERENT pandas working-set (per-symbol
+fetch + prepare_df copies + 16pt scoring × 36 symbols) — a WATCHLIST-SIZE / BOX-SIZE matter, not a code leak.
+Option A is substantively COMPLETE with part 1 (bar_cache eviction). If spikes still trip the watchdog:
+trim the 36-symbol watchlist or size up the box (not a code change).
+**▶ NEXT (resume here): priority queue** — (1) Slack-relief secondary: */5 "bot DOWN" watchdog CONSECUTIVE-FAIL
+grace (only alert after ~2 straight fails — kills the mid-restart false DOWN) + consolidate the 3 RAM watchdogs;
+(2) catalyst guidance_cut one-click approval (`logs/pending_approval_catalyst_guidance_2026-07-14.md`, Rafael go);
+(3) Stage-2 cosmetic renames (BUCKET_B_MAX_POSITIONS*); (4) GEX threshold recalibration once clean data accumulates.
 
 **✅ TODAY'S SHIPS (all LIVE on OCI, restarted 2026-07-15):** Slack-relief `b2f79db` · Stage 1 risk-gov
 `0569360` (cap→circuit-breaker 20 + BP pre-flight + gross 2.5x + overnight 0.40) · Stage 2 Bucket A/B
