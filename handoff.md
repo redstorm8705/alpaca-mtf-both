@@ -28,15 +28,21 @@ seat APPROVE, Gro+GAI APPROVE (diff + preship markers). **Follow-ups (logged, no
 gross-exposure fail-open (tracker-corruption blind spot); the P0-STARTUP gross-exposure health check was
 deferred (with MAX=20 the count-HALT is a harmless high backstop); ruin models re-baseline at Stage 2.
 
-**QUEUED (Stage 2 — DELETE Bucket A/B → tiers = intraday/intraweek + QHM + F6). Owner mandate.
-BGG-aligned (Gro+GAI+2 seats). Blocked on TWO owner decisions:**
-1. FORK 2 "intraweek" = A (hold winners ~1wk via existing trailing-stop, contained refactor — REC) or
-   B (separate HTF-confluence swing framework, multi-session, defer per the 2026-06-28 mandate)?
-2. FORK 5 `LEVERAGED_NOTIONAL_MAX_PCT` value = 5% per-symbol (REC) / 15% / 20% aggregate.
-Reply e.g. **"A, 5%"** → build+gate+ship Stage 2.
-> 🔴 **LETHAL INVARIANT:** deleting Bucket A without a replacement leveraged notional cap lets a 3x ETF
-> size to ~$70k notional on a $2.8k account (25× gross) = bankruptcy before the equity kill switch. The
-> `LEVERAGED_NOTIONAL_MAX_PCT` guard MUST ship in the SAME patch that deletes Bucket A.
+**✅ STAGE 2 SHIPPED + LIVE-VERIFIED (`6d79d32`, Rafael "approve" 2026-07-15) — Bucket A/B DELETED.**
+Tiers are now: **intraday/intraweek + QHM + F6.** Deleted BUCKET_A/B allocation tiers +
+BUCKET_A_TICKERS (→ LEVERAGED_TICKERS, identical set, 8 files) + dead calculate_bucket_a_size/
+calculate_bucket_allocation. Unified sizing: ALL symbols via conviction+Kelly+multipliers. NEW
+`LEVERAGED_NOTIONAL_MAX_PCT=0.05` ring-fence (board FORK-5 — caps a 3x ETF at ~$139, replacing the
+old 15%/leverage cap; verified TQQQ $2362→$139). intraweek=Option A (hold winners under existing exit
+logic). `INTRA_ALLOCATION_PCT=0.85` replaces BUCKET_B_ALLOCATION_PCT. Gate: static+import clean on OCI,
+cold-2nd PASS, ruin/masked-loss seat APPROVE, Gro+GAI APPROVE (diff-level); preship markers (4
+mechanical-rename files gro=WAIVED+GAI-APPROVE — Rafael authorized "A" past a per-file-context hook
+limitation that couldn't verify the same-set rename). Code on OCI; **deferred restart (market open) →
+activates next AH/nightly restart.** FOLLOW-UPS: rename BUCKET_B_MAX_POSITIONS* count constants off the
+"BUCKET" prefix; cosmetic `is_bucket_a` local-var names in exit_logic/scan_to_html; a future FORK-5
+option to differentiate 3x(5%) vs 2x/1.5x leveraged caps (current flat 5% is tighter-and-safe).
+> **STILL UNCOMMITTED (separate, DO NOT bundle):** the F6 1c edits (`execution/forever_hold_manager.py`
+> +8, `strategy/run_cycle.py` +28) from session start — dark/gated, need their own gate/decision.
 
 **Also diagnosed (not yet built):** (a) position-count-drift nightly CATASTROPHIC = **FALSE ALARM**
 (board 4/4 — over-entry doubly guarded); (b) **✅ GEX/S&R FIX SHIPPED** (`aad518a`, code on OCI — activates next AH/nightly restart; market was
