@@ -17,13 +17,16 @@ throttled (was the primary un-throttled */30 <200MB Slack spammer; 2026-07-02 fi
 the secondary `ram_watch.sh`) + stale `/tmp/mtf_planned_restart` sentinel cleared. Gro+GAI APPROVE,
 deployed OCI.
 
-**APPROVED + BUILDING (Stage 1 — the risk-governance redesign, UNDER existing buckets = safe):**
-Rafael approved `MAX_OPEN_POSITIONS` 4→20 (circuit-breaker only) + **NEW buying-power pre-flight
-check** (fixes a latent ruin/desync bug: bot never checks BP before submitting) + **`MAX_GROSS_EXPOSURE_RATIO=2.5`**
-(the real governor) + **`MAX_OVERNIGHT_EXPOSURE_PCT=0.40`** + replace P0-STARTUP HALT-at-MAX with a
-gross-exposure health check. Files: config.py, risk_manager.py, entry_logic.py, main.py. **NEXT EXACT
-STEP: full-read config.py → build the Stage 1 diff → statics + cold-2nd + board-on-diff + final Gro+GAI
-→ ship.**
+**✅ SHIPPED + LIVE (Stage 1 — risk-governance redesign, `0569360`, DEPLOY_OK+HEALTH_OK):**
+`MAX_OPEN_POSITIONS` 4→20 base + **7→20 paper profile (the live value)** = circuit-breaker only.
+NEW `risk_manager.check_buying_power_for_order()` (live Alpaca BP pre-flight, fail-closed — **fixes a
+latent over-commit/desync bug: the bot never checked BP before ordering**) + `check_gross_exposure_for_order()`
+(2.5× equity governor); both called before `submit_market_order`. NEW `MAX_GROSS_EXPOSURE_RATIO=2.5` +
+`MAX_OVERNIGHT_EXPOSURE_PCT=0.40`. `_ALPACA_BASE_URL` constant = single live-migration point. Buckets
+INTACT this stage (no lethal leveraged exposure). Gate: static clean, cold-2nd PASS, ruin/masked-loss
+seat APPROVE, Gro+GAI APPROVE (diff + preship markers). **Follow-ups (logged, non-blocking):** alert on
+gross-exposure fail-open (tracker-corruption blind spot); the P0-STARTUP gross-exposure health check was
+deferred (with MAX=20 the count-HALT is a harmless high backstop); ruin models re-baseline at Stage 2.
 
 **QUEUED (Stage 2 — DELETE Bucket A/B → tiers = intraday/intraweek + QHM + F6). Owner mandate.
 BGG-aligned (Gro+GAI+2 seats). Blocked on TWO owner decisions:**
