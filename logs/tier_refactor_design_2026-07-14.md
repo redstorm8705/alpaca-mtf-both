@@ -147,3 +147,60 @@ the exact diff. Then apply → commit → push → OCI `git pull --ff-only` + `s
 ### Behavior after Stage 1 (validated by board): ~3-5 concurrent positions in practice (sizing +
 BP self-limit), count cap no longer the binding constraint, over-commit bug closed, gross exposure
 capped at 2.5x. No lethal leveraged exposure (Bucket A's 15% ring-fence still intact until Stage 2).
+
+---
+
+## STAGE 2 — CRITICAL STRUCTURAL FINDING (from the live-code read, 2026-07-15)
+
+**Owner-delegated decisions locked (board defaults, "then stage 2" + trust-the-board):**
+- FORK 2 intraweek = **Option A** (hold winners longer under existing exit logic; contained refactor).
+- FORK 5 leveraged cap = **`LEVERAGED_NOTIONAL_MAX_PCT = 0.05` per-symbol** (ruin-seat value; safest,
+  ≈ the old ~$139/name ring-fence on a $2.8K account). Adjustable later.
+
+**THE STRUCTURE (entry_logic.py, current line numbers post-Stage-1):**
+- L592-593: `is_bucket_a = symbol in config.BUCKET_A_TICKERS`.
+- L607-611: `if is_bucket_a and direction == "short":` long-only skip.
+- **L1088-1132: the sizing split.** `if is_bucket_a:` (L1089-1110) sizes leveraged names by
+  `calculate_bucket_a_size()` + the 15%/leverage notional cap ONLY. `else:` (L1111+) is the FULL
+  unified-sizing path — conviction-linear (L1112-1132) **AND the entire multiplier chain**
+  (Kelly L1134, AB-3 TQI L1147, then TSMOM, earnings, VOTE-3, FVG, min-lot … through ~L1265) is
+  ALL inside this `else:` block. **Bucket A SKIPS every multiplier.**
+
+**⇒ The unification is a ~150-line restructure, not a branch delete.** All symbols must flow
+through the `else:`-block sizing; then the leveraged clamp applies AFTER the multiplier chain.
+
+**EXACT EDIT PLAN (safest, avoids a 150-line manual de-indent):**
+1. **entry_logic L592-593:** replace `is_bucket_a = symbol in config.BUCKET_A_TICKERS` with
+   `is_leveraged = symbol in config.LEVERAGED_TICKERS` (LEVERAGED_TICKERS already exists, == the old
+   Bucket-A set {TSLL,NVDL,TQQQ,SQQQ}).
+2. **entry_logic L607-611:** long-only gate → `if is_leveraged and direction == "short":`.
+3. **entry_logic L1088-1111:** DELETE the whole `if is_bucket_a:` A-branch (1089-1110) AND the
+   `else:` line (1111) — promote the else-body to run unconditionally. Cleanest mechanical form:
+   replace `        if is_bucket_a:\n …A… \n        else:` with just the sizing comment header, and
+   the former else-body (L1112+) must lose ONE indent level. Do this as a single Read-the-block →
+   Write-the-dedented-block edit (NOT many small edits), then `py_compile` catches any indent slip.
+4. **entry_logic — AFTER the last size multiplier (FVG, ~L1215, before `raw_shares`):** add the
+   leveraged clamp:
+   `if is_leveraged: dollar_cap = min(dollar_cap, risk.portfolio_value * config.LEVERAGED_NOTIONAL_MAX_PCT)`
+   with a log line. THIS IS THE RING-FENCE REPLACEMENT — must be present or the deletion is LETHAL.
+5. **entry_logic L1094-1095:** remove the `_main._BUCKET_A_LEVERAGE` / `_main._BUCKET_A_MAX_NOTIONAL_PCT`
+   refs (they die with the A-branch).
+6. **config.py L49-56:** delete BUCKET_A_TICKERS, BUCKET_A_ALLOCATION_PCT, BUCKET_A_MIN_HOLD_DAYS,
+   BUCKET_B_ALLOCATION_PCT, BUCKET_B_MAX_POSITIONS, BUCKET_B_MAX_POSITIONS_POWER. Add
+   `LEVERAGED_NOTIONAL_MAX_PCT = 0.05`. NOTE: BUCKET_B_ALLOCATION_PCT (0.85) is USED at L1115-1116
+   for `_pct_min/_pct_max` — replace those with literals (0.425 / 0.85) or a new
+   `INTRA_ALLOCATION_PCT = 0.85`. VOLUME_CONFIRMATION comment at config L430 references BUCKET_A —
+   cosmetic. `validate_config()` L540-547 bucket-sum check → delete.
+7. **risk_manager.py:** delete `calculate_bucket_a_size` (~L930 post-Stage-1); rename
+   `calculate_bucket_allocation`→`calculate_unified_allocation` (or leave — it's only called by
+   is_bucket_a path? verify callers). Also `calculate_bucket_a_size` caller was entry_logic L1093 (deleted).
+8. **DEAD-REF SWEEP (mandatory):** `grep -rn "BUCKET_A\|BUCKET_B\|calculate_bucket_a\|_BUCKET_A_LEVERAGE\|is_bucket_a"`
+   across the repo — catch main.py `_main._BUCKET_A_LEVERAGE`/`_BUCKET_A_MAX_NOTIONAL_PCT` defs,
+   quarterly_hold, scan_to_html, volume-confirmation Bucket-A auto-pass (config comment L430-431).
+9. **Gate:** py_compile (catches de-indent), ruff, mypy; cold-2nd MUST verify the leveraged clamp is
+   present + correct (ring-fence); ruin/masked-loss seat (LETHAL path); Gro+GAI; preship markers.
+   Ship after close (or dark) — this changes live sizing for leveraged names.
+
+**RISK NOTE:** this is a delicate ring-fence refactor with a bankruptcy-class downside if the clamp
+is dropped. Build with care + lean on py_compile (indent) + cold-2nd (clamp presence). Per the
+INTERACTIVE-vs-API cost protocol this is the "identified major build" for a focused implement pass.
