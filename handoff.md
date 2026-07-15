@@ -10,7 +10,7 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-15 interactive) — pick up here
 
-**⏰ RESUME CRON: `28ad6c89` fires 14:55 PT (2026-07-15, +3h10m). Session-only (CronCreate).**
+**⏰ RESUME CRON: `ce7c799d` fires 20:02 PT (2026-07-15). Session-only (CronCreate).**
 
 **▶ MID-FLIGHT = OPTION A (memory/OOM). DIAGNOSIS COMPLETE → next is the FIX.**
 Full diagnosis: `logs/option_a_memory_diagnosis_2026-07-15.md`. REFRAME: small TRUE leak + large transient
