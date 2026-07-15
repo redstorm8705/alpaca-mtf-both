@@ -45,12 +45,15 @@ option to differentiate 3x(5%) vs 2x/1.5x leveraged caps (current flat 5% is tig
 > +8, `strategy/run_cycle.py` +28) from session start — dark/gated, need their own gate/decision.
 
 **Also diagnosed (not yet built):** (a) position-count-drift nightly CATASTROPHIC = **FALSE ALARM**
-(board 4/4 — over-entry doubly guarded); (b) **✅ GEX/S&R FIX SHIPPED** (`aad518a`, code on OCI — activates next AH/nightly restart; market was
-open so no RTH restart). `data/gex.py`: data-quality gate → `UNKNOWN`+flip=None when
-atm_count<3/capture<0.40/count<20 (fail-safe, zero exec effect on weak data) + flip = local in-window
-±5% cumulative zero-crossing NEAREST spot. 4-voice design unanimous; static+cold-2nd+Gro+GAI. Diagnosis:
-`logs/gex_flip_diagnosis_2026-07-14.md`. FOLLOW-UPS: (A) moneyness-aware ATM recovery (sharper flips more
-often); (B) recalibrate thresholds from `gex_history.jsonl`; THEN the backtest.
+(board 4/4 — over-entry doubly guarded); (b) **✅ GEX/S&R FIXED + SHARPENED + LIVE** (`aad518a` fix + `ee88482` sharpening; RESTARTED 2026-07-15,
+DEPLOY_OK). `data/gex.py`: (1) fail-safe data-quality gate → UNKNOWN+flip=None when data untrustworthy
+(zero exec effect); (2) flip = local ±5% nearest-spot crossing; (3) **windowed capture** — capture_ratio
+measured over ±10% near-spot window (was ALL contracts → far-OTM sparseness caused false UNKNOWN despite
+atm_count=80). LIVE-VERIFIED: SPY flip=755.0 @ spot 754.64 (**0.0% off** — was ~9% off; median historical
+9%). Full arc: 9%-off bug → safe UNKNOWN → sharp-at-spot. quality_ok=atm>=3 AND windowed_capture>=0.40 AND
+windowed_valid>=10. Diagnosis: `logs/gex_flip_diagnosis_2026-07-14.md`. FOLLOW-UP: recalibrate thresholds
+from accumulated CLEAN (post-fix) data + the level-respect / regime-predictive backtest (historical data is
+corrupted by the old bug — median 9% off — so a backtest needs post-fix data to accumulate first).
 (c) catalyst guidance_cut approval still pending
 (`logs/pending_approval_catalyst_guidance_2026-07-14.md`).
 
