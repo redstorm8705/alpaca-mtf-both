@@ -20,12 +20,21 @@ suppresses unmatched; fail-open; report FILE keeps original verdict. RIVN NOT su
 statics, 9-scenario self-test, cold-2nd r2 PASS, preship gro+gai APPROVE (eedcafb39fff). Runtime-verified OCI.
 Expected 5/7→~2/7 FAIL. Seeded: POSITION_COUNT_DRIFT + PAPER_FILLS_A4 (false_alarm), PNL_LEDGER + TQI (resolved).
 
-**▶ NEXT REAL BUG (BGG unanimous top item): RIVN P&L corruption** — flagged 4 days this week (7/7,7/8,7/9,7/13):
-direction mismatch, pnl=0.0 despite price change, Alpaca-vs-tracker discrepancy; caused the −73.86% FALSE kill-switch
-7/7. Root = fill-matching / main-bot false-drop (known P0, see roadmap MOVERS-RETIRED entry). This is the highest-value
-real bug still open. **avg_r_multiple 0.012 = RESOLVED as NOT-a-bug** (McKinney code-trace: correct R-multiple; real
-exit-discipline finding — tranches/breakeven/trails scratch trades at ~1% initial risk; the 0.5R premature-truncation
-threshold is the lever). avg_r is a STRATEGY-level exit-discipline review (board), NOT a metric patch — do not "fix the metric."
+**▶ RIVN P&L corruption — PHASE-1 DIAGNOSIS COMPLETE (full doc: `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`).**
+Ground truth: RIVN bought 17@$19.73 (7/6), sold 17@$17.32 (7/7 13:38 UTC, GTC stop fired) = clean −$41 long loss.
+Bot corrupted it 3 ways off ONE clean trade. TWO confirmed root bugs (cold-agent full reads):
+  • **Bug A (pnl=0.0):** `fill_reconciler.py:90` derives submitted_after from entry_time → forces LEGACY P5-H2 path
+    (`fill_helpers.py:280-304`: Sort.ASC + limit=5) → never matches a close fill ~16h later → falls back to entry_price.
+    FIX (isolated, low-risk, HIGHEST VALUE — feeds the false kill-switch): reconciler calls the external-close path
+    (`fetch_actual_fill_price(submitted_after=None, no_retry=True)`, filled_at DESC + entry lower bound) instead.
+  • **Bug B (direction flip):** `orphan_manager.py:928` infers dir from bare qty sign; no guard vs adopting a
+    just-closed/flat symbol; correction handler (L1335-1525) only runs for already-tracked syms. FIX: guard
+    just-closed/flat adoption + validate direction from last-fill SIDE.
+  • **Upstream:** main-bot false-drop of a still-live position from trade_log (record_exit path) = Bug B's trigger.
+**▶ NEXT: Phase 2 = ship Bug A first (isolated fill_reconciler fix, own full-read gate + BGG + preship), then Bug B +
+false-drop root.** Rafael to confirm Phase-2 go / sequencing.
+**avg_r_multiple 0.012 = RESOLVED as NOT-a-bug** (McKinney code-trace: correct R-multiple; real exit-discipline —
+tranches/breakeven/trails scratch ~1% initial risk; 0.5R premature-truncation is the lever). STRATEGY review, NOT a metric patch.
 
 
 **✅ TQI STALE-BASELINE FIX SHIPPED + LIVE + VERIFIED (`df03656`, restarted 2026-07-15):** today's nightly
