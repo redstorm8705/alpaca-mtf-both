@@ -7929,3 +7929,26 @@ Verified INTENT vs ACTUAL for the 3 tiers. GAPS: T1 intraday has NO 1-week max-h
 [2026-07-15 11:29 PT] GEX SHARPENING (windowed capture) SHIPPED. data/gex.py: data-quality capture_ratio now measured over ±10% near-spot window (was ALL contracts → far-OTM sparseness caused false UNKNOWN despite atm_count=80). quality_ok = atm>=3 AND windowed_capture>=0.40 AND windowed_valid>=10. Flip logic (±5% nearest-spot) unchanged. LIVE-VALIDATED: SPY flip=755.0 vs spot 754.68 (0.0% off — credible!), quality_ok=True (was UNKNOWN). Full arc: 9%-off bug → safe-UNKNOWN → sharp-at-spot. Gate: static clean, live-proven, Gro+GAI APPROVE (line-level, cold-2nd-equiv). BGG-aligned design. Follow-up: recalibrate thresholds from accumulated clean data.
 
 [2026-07-15 15:47 PT] OPTION A memory fix (bar_cache eviction) SHIPPED. data/fetcher.py: _cache_put now does THROTTLED eviction (once per TTL, under _cache_lock): drop entries older than TTL + hard-cap backstop (5000→4000). Fixes the RAM-floor climb → OOM (cache had NO eviction — 180s TTL was read-only; key churn from n_bars variants + daily premarket-mover symbols left stale DataFrames resident). Gate: static clean, eviction self-test PASS, cold-2nd PASS (6/6), Gro+GAI APPROVE, BGG design consensus (evict-on-write+hard-cap; peak-reduction=separate follow-up; num_bars trim OFF-limits for SMA200/325). FOLLOW-UP: free _entry_df/_daily_df post-score in signal_generator (transient peak); Slack */5 DOWN watchdog grace.
+
+## 2026-07-15 (autonomous-chain resume) — reporting/pnl_ledger.py — P&L ledger unparseable-boundary CRITICAL
+FINDING (new, P0): OCI py3.10.12 `datetime.fromisoformat` rejects 5-digit fractional seconds.
+Alpaca emitted order `created_at '2026-05-13T06:00:16.06547Z'`; `_bump_iso_ms` raised ValueError→None
+→ `fetch_all_orders` halted pagination ("order history may be INCOMPLETE", logged CRITICAL 2x on 7/15).
+Root cause reproduced live on OCI. Impact: order→tier attribution (client_order_id join) truncated;
+realized-P&L-from-fills NOT corrupted (build_ledger uses fetch_all_fills, not orders) — reliability board
+clarified. Secondary latent bug also cured: _pt_date fallback mis-bucketed after-hours 5-digit-fraction
+fills onto wrong PT day (McKinney seat).
+FIX: shared `_iso_to_dt(ts)` helper normalizes variable-length fraction to exactly 6 digits before
+fromisoformat (regex `\.(\d+)` → `(digits+"000000")[:6]`), returns None on genuine failure; `_pt_date`
+and `_bump_iso_ms` both route through it. +37/-14, reporting/pnl_ledger.py.
+STATICS: py_compile PASS, mypy clean, ruff PASS. Self-test PASS (0/1/3/5/6/9-digit + degrade).
+GATE: Board 3/3 APPROVE (McKinney data-integrity, Kim reliability) + Gro APPROVE + GAI APPROVE (rd2,
+truncation concern resolved: +1ms inclusive overlap (1000us) dominates <1us truncation → until always
+strictly > oldest T → no stranding/skip). Cold-2nd PASS. Impact radius contained (portfolio_tracker
+build_ledger + run_ledger_sync consumers use public surface only).
+FOLLOW-UPS (non-blocking, logged): (1) EOD pnl_ledger_authoritative flag doesn't reflect an order-fetch
+halt — observability gap, P2, no board vote (P&L is fills-derived). (2) naive (no-tz) timestamp accepted
+silently — add WARNING log, P3.
+STATUS: SHIPPED + LIVE + VERIFIED (commit e6d471e, restarted 2026-07-15). Rafael APPROVE → FINAL preship
+Gro+GAI APPROVE (marker cd9975b5337c; one GAI flash false-reject on the regex re-rolled clean) → git
+single-channel + OCI restart + DEPLOY_OK. Runtime proof: fetch_all_orders() walked 1989 orders, zero CRITICAL.

@@ -8,9 +8,26 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-15 interactive) — pick up here
+## ⏩ LATEST (2026-07-15 interactive — autonomous-chain resume) — pick up here
 
-**⏰ RESUME CRON: `ce7c799d` fires 20:02 PT (2026-07-15). Session-only (CronCreate).**
+**✅ P&L LEDGER unparseable-boundary FIX SHIPPED + LIVE + VERIFIED (`e6d471e`, restarted 2026-07-15):**
+Today's nightly Gemini VERDICT=FAIL was driven by CRITICAL (2x) `reporting.pnl_ledger fetch_all_orders:
+unparseable boundary created_at '2026-05-13T06:00:16.06547Z' — stopping; order history may be INCOMPLETE`.
+Root cause (reproduced live on OCI py3.10.12): `datetime.fromisoformat` rejects 5-digit fractional seconds →
+`_bump_iso_ms`→None → pager HALTED. FIX: shared `_iso_to_dt()` normalizes fraction to 6 digits before parse;
+`_pt_date`+`_bump_iso_ms` route through it (also cured a latent `_pt_date` after-hours PT-date mis-bucket).
+Reliability board clarified: realized-P&L-from-fills was NOT corrupted (build_ledger uses fetch_all_fills,
+not orders) — the halt truncated order→tier attribution only. **RUNTIME-VERIFIED: `fetch_all_orders()` now
+walks 1989 orders to completion, zero CRITICAL.** Gate: board 2/0 (McKinney+Kim) + Gro + GAI APPROVE, cold-2nd
+PASS, statics clean, preship marker cd9975b5337c (GAI flash false-reject on regex re-rolled clean). Audit:
+`logs/tb_audit_log.md` 2026-07-15 entry. FOLLOW-UPS logged (non-blocking): EOD authoritative-flag doesn't
+reflect an order-fetch halt (P2 observability); naive-timestamp WARNING log (P3).
+**Also open from today's nightly (NOT yet addressed — separate items):** TQI `_compute_tqi` gives 0 score_pts
+to valid score-8/9 entries (MIN_LONG_SCORE=8/CONVICTION_FULL_MIN=9 mismatch — ALPHA/HIGH); avg_r_multiple
+0.012 vs 2.08 target R:R (edge-capture failure — ALPHA/HIGH); VOLSHADOW `"bucket":"B"` stale tag post-collapse
+(ALPHA/LOW); confluence chart-context fields None for all entries (data-integrity — ds_meta).
+
+**⏰ RESUME CRON: `ce7c799d` fired 20:02 PT (2026-07-15) → this resume. Session-only (CronCreate).**
 
 **✅ OPTION A part 1 SHIPPED + LIVE (`daadf19`, restarted 2026-07-15):** `data/fetcher.py` `_bar_cache`
 eviction — `_cache_put` now sweeps (throttled once per TTL): drop entries older than TTL + hard-cap
