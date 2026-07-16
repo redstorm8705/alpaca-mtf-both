@@ -8,7 +8,38 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-15 interactive — autonomous-chain resume) — pick up here
+## ⏩ LATEST (2026-07-16 interactive) — pick up here
+
+**⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
+Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**CURRENT TASK: RIVN P&L corruption Phase 2 — shipping the fixes (Rafael approved all 3; full diag +
+BGG-locked design in `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`).**
+- **✅ Bug A SHIPPED + LIVE (`5fb5c4e`):** fill_reconciler.py external-close path — pnl=0.0 root fixed.
+- **▶▶ NEXT — Bug B+C via OPTION B (Rafael chose 2026-07-16, guard-first):** ONE low-risk fix in
+  `execution/orphan_manager.py` `reconcile_positions()` — after the orphan set is computed (L922:
+  `orphans = (alpaca_symbols - tracker_symbols) - _get_qhm_syms()`), ALSO exclude any symbol present in
+  `tracker.closed_trades` (or `tracker._unverified_exits`) with a recent exit (config window, derive don't
+  hardcode; RIVN was 36 min) AND fire a CRITICAL Slack alert on the "Alpaca shows a position the bot just
+  closed" mismatch (surfaces a real double-sell / stale read; never silently leave a live position — the
+  alert is the fail-safe; persist-then-auto-adopt is a follow-up). This prevents the RIVN wrong-direction
+  short adoption WITHOUT the risky lifecycle change.
+  **DO NOT do Option A** (portfolio_tracker status="closing" lifecycle rewrite) — the pop at
+  portfolio_tracker.py:1543 is CORRECT; Option B (reconciler checks closed_trades) is sufficient + far
+  lower risk (Option A touches the #1 hotspot's close lifecycle + exit managers). Confirmed by Bug C diag.
+  **EXACT NEXT STEP:** full-read gate on `orphan_manager.py` (1624L, >1000 → Explore full read + personal
+  read of the change region L895-1054 already done) → implement guard+alert at reconcile_positions →
+  statics → cold-2nd → BGG on diff (Gro may be TPD-limited → GAI+board+preship suffices per Rafael rule) →
+  FINAL preship → ship (RTH-path → OCI restart) → verify.
+- **Follow-ups logged (not blocking):** Harris masked-loss doc-comment in fill_helpers._sanity_ok (>50% gap
+  loss); Bug E (was −17 a real double-sell? check GTC-stop-vs-cover lifecycle); persist-then-auto-adopt fail-safe.
+
+**Earlier this session (all SHIPPED + LIVE + VERIFIED):** P&L ledger `e6d471e` · TQI `df03656` ·
+Slack signal-to-noise `c069132` · RIVN Bug A `5fb5c4e`. avg_r_multiple = RESOLVED not-a-bug (exit-discipline).
+
+---
+
+## ⏩ PRIOR (2026-07-15 interactive — autonomous-chain resume)
 
 **✅ SLACK SIGNAL-TO-NOISE FIX SHIPPED + LIVE + VERIFIED (`c069132`, OCI pull, cron — no restart):** Rafael
 asked for a BGG audit of the week's Slack reports (5/7 nightly FAIL = crying wolf). Root cause (Majors code-trace):
