@@ -29,10 +29,20 @@ NEVER alert) + UNTHROTTLED disk-full/state-write guard. Cron: `*/5 * * * * /bin/
 `logs/crontab.bak.1784217095`). Gate: GAI APPROVE + board Majors/Kim APPROVE (both blockers fixed) + preship
 `baf2117d0d60`, Gro WAIVED. **⚠️ Self-caught pre-ship:** the anchored grep `^SLACK_WEBHOOK=` matched NOTHING
 (var is **SLACK_WEBHOOK_URL**) → would have made the watchdog unable to EVER alert; fixed + live-verified.
-**Board follow-ups (logged, NOT done):** (1) HEARTBEAT — nobody watches the watchdog; touch a heartbeat each
-run + have nightly_audit assert <15min freshness; (2) BACKPORT confirmed-send into `memory_watchdog.sh`
-`alert_once()` — it stamps BEFORE curl (:36-39) so a failed delivery silently eats a real <150MB alert for
-30 min (SAME bug class, live in prod now); (3) rolling-window flap detector (perfect 50/50 alternation).
+**✅ BOARD FOLLOW-UPS #1 + #2 ALSO SHIPPED + LIVE (2026-07-16):**
+- **`75c75ad` — memory_watchdog confirmed-send backport:** `alert_once()` stamped BEFORE curl, so a failed
+  delivery silently ate a REAL alert for 30 min (was live in prod). Now stamps only after a confirmed POST →
+  failed delivery retries next tick; missing webhook/curl failure logged loudly. Scope: `alert_once` ONLY —
+  the auto-restart action stays unthrottled (outside it). Preship `fb766de537a6`.
+- **`32d0f97` — HEARTBEAT + nightly freshness ("nobody watches the watchdog" CLOSED):**
+  `service_watchdog.sh` touches `logs/svc_watchdog.heartbeat` every */5 run; `nightly_audit.py`
+  `_check_watchdog_heartbeat()` asserts <15min freshness → CRITICAL Slack if STALE/MISSING (deterministic
+  mtime math, called first + independently in main(), never raises). Live-verified end-to-end on OCI.
+  Preship `fd105cec1cc5` + `0e588eb65434`.
+**ALERTING-INTEGRITY ARC COMPLETE:** nightly crying-wolf suppression (`c069132`) + memory_watchdog throttle
+(`b2f79db`) + service_watchdog grace/throttle (`2cf6526`/`600c5d0`) + confirmed-send (`75c75ad`) + heartbeat
+(`32d0f97`). **Remaining follow-up (LOW value, not done):** rolling-window flap detector — a perfect 50/50
+down/up alternation still never reaches GRACE (decay already covers the downs>ups case).
 
 **✅ RIVN P&L CORRUPTION — FULLY RESOLVED (all 3 bugs, 2026-07-16). Chain broken.**
 - **Bug A SHIPPED (`5fb5c4e`):** fill_reconciler.py external-close path → pnl=0.0 fixed.
