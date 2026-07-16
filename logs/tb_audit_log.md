@@ -8021,3 +8021,20 @@ since startup-only, window 120 documented, fail-safe=auto-adopt-past-window). Pr
 (TPD, Rafael standing rule) marker 2bcc8142743d. SHIPPED 71cae8c, OCI DEPLOY_OK+restart, HEALTH_OK, verified.
 RIVN corruption chain (Bug A pnl=0.0 + Bug B direction-flip + Bug C false-drop) FULLY BROKEN. Bug E
 (real double-sell?) + Harris masked-loss comment + persist-then-auto-adopt-tightening = logged follow-ups.
+
+## 2026-07-16 — RIVN Bug E RESOLVED (follow-up diagnostic, no code change)
+QUESTION: was the -17 short a real double-sell (live execution bug) or a stale/phantom read?
+ANSWER: **PHANTOM — no double-sell.** Complete paginated fills 7/6-7/8 = 7 fills: bought 17, sold 17,
+NET 0. ONE sell order only (74f96fcb). Alpaca paper reported -17 @ $17.32 (the SELL price) = its engine
+booked the long-closing sell as OPENING A SHORT. RIVN flat now (404).
+SMOKING GUN: order f1d4e826 — **BUY 17 stop @ $18.81 submitted 7/7 14:14:11**, 5s after the 14:14:06
+phantom adoption ("Stop=$18.81"). The bot placed a REAL live order against a NON-EXISTENT short; had RIVN
+traded through $18.81 it would have bought 17 real shares = unwanted real long from a phantom. Canceled
+before fill. => Bug B guard (71cae8c) prevents real orders against phantom positions = REAL capital-risk
+prevention, and is VALIDATED (skipping a phantom is unambiguously correct; the board's "real double-sell
+left unmanaged" fail-safe worry does not apply to this class).
+NEW FINDING (root of the real −$41 loss): protective stop CANCELED (e72ae17d) + resubmit REJECTED
+(1a30ab52) at 7/6 21:21 UTC = 5:21 PM ET (after RTH close) = the known extended-hours GTC rejection
+(42210000 / OM-BUG-1, listed as "KNOWN BENIGN" in nightly_audit prompt). RIVN sat UNPROTECTED overnight →
+gap-down → cover @17.32 → real −$41. **OM-BUG-1 is NOT benign — it cost a real loss. Candidate for its
+own diagnostic/fix (extended-hours stop rejection leaves overnight positions unprotected).**

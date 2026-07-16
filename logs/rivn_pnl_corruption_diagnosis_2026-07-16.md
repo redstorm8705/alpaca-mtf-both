@@ -47,6 +47,37 @@
   Bug B re-adoption. Fixing the false-drop root removes Bug B's trigger. Files: portfolio_tracker.py record_exit
   path + orphan_manager reconcile.
 
+## ✅ BUG E RESOLVED (2026-07-16) — NO double-sell; it was a PHANTOM, and the bot traded against it
+**Complete paginated fill history 7/6-7/8 = 7 fills: bought 17, sold 17, NET 0 (FLAT). Only ONE sell
+order (74f96fcb). There was NO double-sell.** The -17 short was a pure PHANTOM from Alpaca's paper
+engine — note it reported avg_entry_price $17.32 (the SELL price), i.e. paper booked the single
+long-closing sell as OPENING A NEW SHORT. RIVN is flat now (positions/RIVN → 404).
+
+**SMOKING GUN — full RIVN order history 7/6-7/8:**
+| UTC | order | status |
+|---|---|---|
+| 7/6 17:35:57 | BUY 17 market (110251a7) | filled → long @19.73 |
+| 7/6 20:07:23 | SELL 17 stop @18.38 (e72ae17d) — protective | **canceled**, filled 0 |
+| 7/6 21:21:55 | SELL 17 stop @18.41 (1a30ab52) — resubmit | **REJECTED**, filled 0 |
+| 7/7 13:38:20 | SELL 17 market (74f96fcb) — the cover | filled → FLAT |
+| 7/7 **14:14:11** | **BUY 17 stop @18.81 (f1d4e826)** | **canceled**, filled 0 |
+
+The last row fired 5s AFTER the 14:14:06 "ORPHANED POSITION ADOPTED — -17 short, Stop=$18.81" log: the
+phantom adoption made the bot **submit a REAL live BUY-stop for 17 shares against a NON-EXISTENT short**.
+Had RIVN traded up through $18.81 it would have BOUGHT 17 real shares — creating an unwanted REAL long
+out of a phantom. It was canceled before triggering. => **Bug B's guard (71cae8c) prevents the bot from
+placing real orders against phantom positions — real capital risk, not just bookkeeping.** Guard VALIDATED:
+skipping a phantom is unambiguously correct (no real position exists to manage), and the board's fail-safe
+worry (a real double-sell left unmanaged) does NOT apply to this incident class.
+
+**NEW FINDING (root of the actual −$41 loss, separate from the corruption):** rows 2-3 — the protective
+stop was CANCELED and its resubmit REJECTED at 7/6 21:21 UTC (5:21 PM ET = AFTER RTH close) → the known
+extended-hours GTC rejection (42210000 / OM-BUG-1, already in nightly KNOWN BENIGN PATTERNS). RIVN sat
+UNPROTECTED overnight → gapped down → "STOP BREACHED at RTH open, no valid stop placeable" → manual cover
+@17.32 = real −$41. The loss was REAL and caused by an unprotected position; the corruption only mis-reported
+it. **FOLLOW-UP: OM-BUG-1 (extended-hours stop rejection leaving overnight positions unprotected) is NOT
+benign — it cost a real loss here. Candidate for its own diagnostic/fix.**
+
 ## ✅ RESOLVED (2026-07-16) — RIVN corruption chain fully broken
 - **Bug A SHIPPED (`5fb5c4e`):** fill_reconciler external-close path → pnl=0.0 fixed.
 - **Bug B SHIPPED (`71cae8c`):** orphan_manager recent-close guard (window 120min config) + CRITICAL
