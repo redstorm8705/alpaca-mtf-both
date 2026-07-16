@@ -7969,3 +7969,30 @@ DESIGN GATE (Open Question Protocol): DECISION 1 config-derived 4/4 unanimous (G
 positive floor 4/4, magnitude 5 (3-1 vs LdP's 2) → board majority = 5. Rafael APPROVE.
 DIFF GATE: statics clean (py_compile/mypy/ruff), self-test PASS, cold-2nd PASS, FINAL preship gro+gai APPROVE
 (marker 26c5482be261). SHIPPED df03656, OCI DEPLOY_OK + restart, HEALTH_OK. Runtime proof on OCI: 8->5..12->25.
+
+## 2026-07-15 (autonomous-chain resume) — nightly_audit.py — Slack signal-to-noise (issue-lifecycle suppression) SHIPPED
+CONTEXT: Rafael asked for a BGG audit of the week's Slack reports. Nightly verdicts FAIL,WARN,FAIL,WARN,FAIL,FAIL,FAIL
+(5/7 FAIL) = alert fatigue / crying wolf. Majors (code-traced): 100% alerting-policy defect — `_extract_verdict`
+just greps the LLM's stateless daily output; hardcoded P5_BUG_QUEUE stale since 2026-04-21; no dedup/lifecycle.
+~80% policy defect, ~20% real incomplete fixes. Board Majors + Gro + GAI aligned on the fix.
+FIX: logs/audit_suppressions.jsonl (false_alarm|acknowledged|resolved + match_keywords) + deterministic
+`_apply_suppressions` post-filter in nightly_audit.py. false_alarm removed; acknowledged kept-visible-not-FAIL;
+resolved-reappears [REGRESSION]+FAIL. FAIL->WARN only when zero real catastrophics AND zero unsuppressed CRITICAL
+new-bugs remain AND no unaccounted catastrophic (declared-count guard). Never suppresses unmatched. Fail-open.
+Report FILE keeps original verdict (audit trail); only card uses filtered view. RIVN NOT suppressed (top real item).
+GATE: full read 648 lines (personal, 4 chunks). statics clean. 9-scenario safety self-test PASS. cold-2nd round-1
+FAIL was self-contradictory (its "fix" == existing code) — disproven vs its own scenarios + one edge hardened;
+round-2 PASS. FINAL preship gro+gai APPROVE (marker eedcafb39fff; 3 GAI flash false-rejects disproven+rolled clean).
+Defensive hardening: match_keywords filtered to non-empty strings at load. SHIPPED c069132, OCI PULL_OK (cron
+script — no restart). Runtime-verified on OCI: benign->WARN, real naked-position->FAIL held. Expected 5/7 -> ~2/7.
+
+## 2026-07-15 — BGG AUDIT FINDINGS (avg_r_multiple RESOLVED + top open item)
+avg_r_multiple 0.012: NOT a calc bug. McKinney code-traced record_exit (portfolio_tracker.py:1598): pnl correctly
+includes accumulated partial_pnl; qty is original; R = total_pnl/(risk_per_share*original_qty) is the STANDARD
+correct R-multiple. The Gro/GAI armchair "dilution" hypothesis REFUTED by the code trace. Near-zero avg_r is a REAL
+exit-discipline/edge-capture finding — tranches+breakeven-pushes+trails+MRI-breakeven scratch trades at ~1% of
+initial risk so the designed 2.08 R:R is never captured. Corroborated by an existing audit_directives finding
+naming a hardcoded 0.5R premature-truncation threshold. => STRATEGY-level review (board), NOT a metric patch.
+TOP UNADDRESSED REAL ITEM (unanimous BGG): RIVN P&L corruption (flagged 7/7,7/8,7/9,7/13 — direction mismatch,
+pnl=0.0 despite price, Alpaca-vs-tracker discrepancy); caused the -73.86% false kill-switch 7/7. = fill-matching/
+false-drop root (known P0). NEXT REAL BUG TO ATTACK.

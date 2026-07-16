@@ -10,6 +10,24 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-15 interactive — autonomous-chain resume) — pick up here
 
+**✅ SLACK SIGNAL-TO-NOISE FIX SHIPPED + LIVE + VERIFIED (`c069132`, OCI pull, cron — no restart):** Rafael
+asked for a BGG audit of the week's Slack reports (5/7 nightly FAIL = crying wolf). Root cause (Majors code-trace):
+nightly_audit.py verdict is a stateless daily LLM grep, no dedup/lifecycle, stale hardcoded P5_BUG_QUEUE. FIX:
+`logs/audit_suppressions.jsonl` (false_alarm|acknowledged|resolved) + deterministic `_apply_suppressions` post-filter.
+false_alarm removed; acknowledged kept-visible-not-FAIL; resolved-reappears=[REGRESSION]+FAIL. Downgrade FAIL→WARN
+only when zero real catastrophics + zero unsuppressed CRITICAL + no unaccounted cat (declared-count guard). Never
+suppresses unmatched; fail-open; report FILE keeps original verdict. RIVN NOT suppressed. Gate: full read 648L,
+statics, 9-scenario self-test, cold-2nd r2 PASS, preship gro+gai APPROVE (eedcafb39fff). Runtime-verified OCI.
+Expected 5/7→~2/7 FAIL. Seeded: POSITION_COUNT_DRIFT + PAPER_FILLS_A4 (false_alarm), PNL_LEDGER + TQI (resolved).
+
+**▶ NEXT REAL BUG (BGG unanimous top item): RIVN P&L corruption** — flagged 4 days this week (7/7,7/8,7/9,7/13):
+direction mismatch, pnl=0.0 despite price change, Alpaca-vs-tracker discrepancy; caused the −73.86% FALSE kill-switch
+7/7. Root = fill-matching / main-bot false-drop (known P0, see roadmap MOVERS-RETIRED entry). This is the highest-value
+real bug still open. **avg_r_multiple 0.012 = RESOLVED as NOT-a-bug** (McKinney code-trace: correct R-multiple; real
+exit-discipline finding — tranches/breakeven/trails scratch trades at ~1% initial risk; the 0.5R premature-truncation
+threshold is the lever). avg_r is a STRATEGY-level exit-discipline review (board), NOT a metric patch — do not "fix the metric."
+
+
 **✅ TQI STALE-BASELINE FIX SHIPPED + LIVE + VERIFIED (`df03656`, restarted 2026-07-15):** today's nightly
 ALPHA/HIGH — `execution/exit_logic.py` `_compute_tqi` Component-1 hardcoded floor=9 went stale when the board
 lowered the entry floor 2026-06-30 (CONVICTION_SKIP_BELOW 10→8); valid score-8 (half) AND score-9 (FULL-conviction)
