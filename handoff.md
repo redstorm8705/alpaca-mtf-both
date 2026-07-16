@@ -13,6 +13,27 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**STANDING AUTHORIZATION (Rafael 2026-07-16, while he is away ~5-6h):** continue the ongoing work, then
+the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
+logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream. Gro is TPD-exhausted
+→ board + GAI + `--waive-gro` suffices (Rafael standing rule).
+
+**✅ SLACK-RELIEF SECONDARY SHIPPED + LIVE + VERIFIED (`2cf6526`+`600c5d0`, 2026-07-16) — last known spammer
+closed.** New `scripts/service_watchdog.sh` replaces the `*/5` one-liner (which alerted on the FIRST failed
+check → FALSE "bot DOWN" on any mid-restart blip, 18 restarts/24h; and re-alerted every 5 min forever on a
+real outage). Now: consecutive-fail GRACE (2≈10min, tunable `SVC_GRACE_CHECKS`) + 30-min THROTTLE + one-shot
+RECOVERY notice + honest delivery (never logs "ALERT SENT" unless the POST succeeded; stamps only on a
+confirmed send so a failed delivery retries) + counter DECAY (a flapper still accumulates; hard reset would
+NEVER alert) + UNTHROTTLED disk-full/state-write guard. Cron: `*/5 * * * * /bin/bash .../service_watchdog.sh`
+(bash-prefixed so a lost exec bit can't disarm it; file committed 100755; crontab backup
+`logs/crontab.bak.1784217095`). Gate: GAI APPROVE + board Majors/Kim APPROVE (both blockers fixed) + preship
+`baf2117d0d60`, Gro WAIVED. **⚠️ Self-caught pre-ship:** the anchored grep `^SLACK_WEBHOOK=` matched NOTHING
+(var is **SLACK_WEBHOOK_URL**) → would have made the watchdog unable to EVER alert; fixed + live-verified.
+**Board follow-ups (logged, NOT done):** (1) HEARTBEAT — nobody watches the watchdog; touch a heartbeat each
+run + have nightly_audit assert <15min freshness; (2) BACKPORT confirmed-send into `memory_watchdog.sh`
+`alert_once()` — it stamps BEFORE curl (:36-39) so a failed delivery silently eats a real <150MB alert for
+30 min (SAME bug class, live in prod now); (3) rolling-window flap detector (perfect 50/50 alternation).
+
 **✅ RIVN P&L CORRUPTION — FULLY RESOLVED (all 3 bugs, 2026-07-16). Chain broken.**
 - **Bug A SHIPPED (`5fb5c4e`):** fill_reconciler.py external-close path → pnl=0.0 fixed.
 - **Bug B SHIPPED (`71cae8c`):** orphan_manager recent-close guard (config window 120min) + CRITICAL
