@@ -8038,3 +8038,24 @@ NEW FINDING (root of the real −$41 loss): protective stop CANCELED (e72ae17d) 
 (42210000 / OM-BUG-1, listed as "KNOWN BENIGN" in nightly_audit prompt). RIVN sat UNPROTECTED overnight →
 gap-down → cover @17.32 → real −$41. **OM-BUG-1 is NOT benign — it cost a real loss. Candidate for its
 own diagnostic/fix (extended-hours stop rejection leaves overnight positions unprotected).**
+
+## 2026-07-16 — ⚠️ CORRECTION/RETRACTION: "OM-BUG-1 is NOT benign" was WRONG
+The 2026-07-16 Bug E entry above claimed OM-BUG-1 (extended-hours GTC stop rejection) "cost a real loss"
+on RIVN. **That claim is RETRACTED — it is incorrect.** Evidence (Alpaca 1H bars + order objects):
+- RIVN 7/6 19:00Z (3pm ET) C=20.11 — above the 18.38 stop (hence legitimately ACCEPTED at 20:07Z).
+- RIVN 7/7 13:00Z (9am ET RTH open) O=17.745 → a ~12% OVERNIGHT GAP straight THROUGH the 18.41 stop.
+- Both stops `extended_hours: False` → a stop does NOT execute outside RTH. A live stop would have
+  triggered at the 9:30 open into the gap, filling ~17.7 ≈ the bot's actual 17.32 cover. Rejection cost
+  ≈$0-7 slippage, NOT the −$41.
+- The rejection was ASYNC: submitted+ACCEPTED 7/6 21:21:55Z, Alpaca failed_at 7/7 08:00:01Z (4am ET
+  session-open validation, once the gap made sell-stop@18.41 sit above market). The submit-time
+  cover-on-breach pre-flight (run_cycle:711) could not have known — the gap came after submission.
+**CONCLUSION: OM-BUG-1's "KNOWN BENIGN" classification is DEFENSIBLE. My escalation was overstated.**
+Recovery path worked as designed (premarket reconcile cleared the dead ID; RTH cover-on-breach closed it).
+RESIDUAL (real, LOW impact, no fix warranted now): "phantom protection" — GTC stop status is polled only
+~1s post-submit (run_cycle:793-824), so an async rejection is undetected until the next premarket reconcile;
+harmless in practice (stops don't fire pre-market; RTH cover-on-breach backstops). Latent nit:
+gtc_manager.py:302 and :381 `_TERMINAL` omit "rejected" (falls into "else: still live") — cheap hardening
+candidate, did NOT cause this loss.
+REAL LESSON (not a code bug): a 12% overnight gap is unhedgeable by a stop → overnight-gap/sizing exposure
+question (Architecture Invariant #11), not stop mechanics.

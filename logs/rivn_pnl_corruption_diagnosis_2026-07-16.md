@@ -70,13 +70,32 @@ placing real orders against phantom positions — real capital risk, not just bo
 skipping a phantom is unambiguously correct (no real position exists to manage), and the board's fail-safe
 worry (a real double-sell left unmanaged) does NOT apply to this incident class.
 
-**NEW FINDING (root of the actual −$41 loss, separate from the corruption):** rows 2-3 — the protective
-stop was CANCELED and its resubmit REJECTED at 7/6 21:21 UTC (5:21 PM ET = AFTER RTH close) → the known
-extended-hours GTC rejection (42210000 / OM-BUG-1, already in nightly KNOWN BENIGN PATTERNS). RIVN sat
-UNPROTECTED overnight → gapped down → "STOP BREACHED at RTH open, no valid stop placeable" → manual cover
-@17.32 = real −$41. The loss was REAL and caused by an unprotected position; the corruption only mis-reported
-it. **FOLLOW-UP: OM-BUG-1 (extended-hours stop rejection leaving overnight positions unprotected) is NOT
-benign — it cost a real loss here. Candidate for its own diagnostic/fix.**
+**⚠️ RETRACTED CLAIM (corrected 2026-07-16 — I was WRONG; the earlier version of this entry said
+"OM-BUG-1 is NOT benign — it cost a real loss." That is INCORRECT. Retained here for audit honesty.)**
+
+**CORRECTED FINDING (root of the actual −$41 loss):** it was an UNHEDGEABLE OVERNIGHT GAP, NOT the stop
+rejection. Evidence (Alpaca 1H bars + order objects):
+- RIVN 7/6 19:00Z (3 PM ET): **C=20.11** (H 20.195) — well ABOVE the 18.38 stop, which is why the stop was
+  legitimately ACCEPTED at 20:07Z (4:07 PM ET).
+- RIVN 7/7 13:00Z (9:00 AM ET, RTH open hour): **O=17.745**, L=17.22. → a **~12% OVERNIGHT GAP** straight
+  THROUGH the 18.41 stop. No bars in between (after-hours).
+- Both stops are `extended_hours: False` → **a stop order does NOT execute outside RTH.** Even a perfectly
+  live stop would have sat until the 9:30 open and triggered into the gap, filling ≈17.7 — essentially the
+  same as the bot's actual 17.32 cover 8 min later. **The rejection cost ≈$0–7 of slippage, NOT the −$41.**
+- Timeline of the rejection: resubmit @18.41 submitted 7/6 21:21:55Z was **ACCEPTED**; Alpaca `failed_at`
+  **2026-07-07T08:00:01Z (4:00 AM ET)** — an ASYNC rejection at pre-market session open, once the gap made a
+  sell-stop@18.41 sit above market. The bot's submit-time cover-on-breach pre-flight (run_cycle.py:711,
+  ratified 2026-07-01) could not have known — the gap happened overnight, after submission.
+**=> OM-BUG-1's "KNOWN BENIGN" classification is DEFENSIBLE for this case.** The recovery path worked as
+designed: premarket reconcile cleared the dead ID; RTH cover-on-breach (gtc_manager:173) closed at the open.
+**RESIDUAL (real but LOW impact, NOT worth a risky fix):** "phantom protection" — the bot polls the GTC stop
+status only ~1s after submit (run_cycle.py:793-824), so an ASYNC rejection hours later is undetected until
+the next premarket reconcile. Practically harmless because stops don't execute pre-market anyway, and the
+RTH cover-on-breach backstops it. Note `gtc_manager.py:302` / `:381 _TERMINAL` omit `"rejected"` from their
+terminal-status sets (a rejected order falls into "else: still live") — a latent inconsistency worth a
+cheap hardening someday, but it did NOT cause this loss.
+**REAL LESSON (not a code bug):** a 12% overnight gap is unhedgeable by a stop. This is an OVERNIGHT-GAP /
+position-sizing exposure question (Architecture Invariant #11 overnight budget), not a stop-mechanics bug.
 
 ## ✅ RESOLVED (2026-07-16) — RIVN corruption chain fully broken
 - **Bug A SHIPPED (`5fb5c4e`):** fill_reconciler external-close path → pnl=0.0 fixed.
