@@ -74,34 +74,54 @@ def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: AR
     )
 
     for sym, trade_copy in pending:
-        _original_exit_px = float(trade_copy.get("exit_price") or 0.0)
         _original_exit_time = trade_copy.get("exit_time")
 
-        # submitted_after: use exit_time ISO string converted to float if available
-        _submitted_after: float | None = None
+        # Bug A fix (RIVN P&L corruption, 2026-07-16): call fetch_actual_fill_price with
+        # submitted_after=None so it uses the EXTERNAL-CLOSE path (fill_helpers.py:240-279)
+        # — entry-time-bounded CLOSED-orders query, filled_at DESC, protective-side filter,
+        # ±50% sanity band. The prior code derived submitted_after from entry_time, which
+        # forced the legacy P5-H2 ASC/limit=5 path (fill_helpers.py:280-304): it returns the
+        # 5 OLDEST orders after entry and MISSES a close that settled hours later → fell back
+        # to entry_price → pnl=0.0 (the RIVN −$41 real loss recorded as 0.0 that tripped the
+        # kill switch). The external path derives the entry-time bound INTERNALLY from the
+        # same trade dict, so the 2026-07-03 phantom-fill protection is preserved.
+        #
+        # Guards before querying (Gro + GAI design audit 2026-07-16):
+        #  - direction must be long/short — the external side filter (sell=long / buy=short)
+        #    would otherwise silently drop the real close and leave the trade unverified.
+        #  - entry_time must be present + parseable — it bounds the query; skip this cycle
+        #    (no _fill_unverified fallback spam) if not; RC-4 expiry surfaces a trade that
+        #    never resolves.
+        if trade_copy.get("direction") not in ("long", "short"):
+            logger.warning(
+                "[%s] fill_reconciler: missing/invalid direction (%r) — skipping "
+                "reconciliation this cycle.", sym, trade_copy.get("direction"),
+            )
+            continue
         _et_str = trade_copy.get("entry_time") or ""
-        if _et_str:
-            try:
-                from datetime import datetime
-                from zoneinfo import ZoneInfo
-                _dt = datetime.fromisoformat(_et_str)
-                if _dt.tzinfo is None:
-                    _dt = _dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-                _submitted_after = _dt.timestamp()
-            except Exception as _date_e:
-                logger.warning(
-                    "[fill_reconciler] entry_time parse failed for %s (%r) — "
-                    "skipping reconciliation this cycle to avoid stale fill match: %s",
-                    sym, _et_str[:80], _date_e
-                )
-                continue
+        if not _et_str:
+            logger.warning(
+                "[%s] fill_reconciler: no entry_time to bound the close query — "
+                "skipping this cycle.", sym,
+            )
+            continue
+        try:
+            from datetime import datetime
+            datetime.fromisoformat(_et_str)
+        except (ValueError, TypeError) as _date_e:
+            logger.warning(
+                "[fill_reconciler] entry_time parse failed for %s (%r) — skipping "
+                "this cycle to avoid an unbounded/stale fill match: %s",
+                sym, _et_str[:80], _date_e,
+            )
+            continue
 
         try:
             _fill = fetch_actual_fill_price(
                 symbol=sym,
                 trade=trade_copy,
                 poll_secs=0.1,
-                submitted_after=_submitted_after,
+                submitted_after=None,   # external-close path: entry-bounded, filled_at DESC
                 no_retry=True,
             )
         except Exception as _fe:
