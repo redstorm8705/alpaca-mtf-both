@@ -8089,3 +8089,19 @@ and have nightly_audit assert it is <15min old (converts "watchdog died" from in
 (2) BACKPORT confirmed-send discipline into memory_watchdog.sh alert_once() — it stamps BEFORE curl (:36-39),
 so a failed delivery silently suppresses a real <150MB alert for 30 min (same bug class just fixed here);
 (3) rolling-window flap detector (a perfect 50/50 alternation still never reaches GRACE).
+
+## 2026-07-16 — scripts/memory_watchdog.sh — confirmed-send backport (board follow-up #2) SHIPPED
+ROOT (board Majors/Kim catch during the service_watchdog review): alert_once() wrote the throttle stamp
+BEFORE curl (old L36-39), so a FAILED delivery (network blip / bad-missing webhook) silently suppressed a
+REAL alert for the next 30 min — the throttle ate an alert that was never sent. Same bug class as the one
+fixed in service_watchdog.sh; this one was LIVE IN PROD.
+FIX: stamp written ONLY after a confirmed POST (curl rc=0) → a failed delivery retries next tick; missing
+webhook / curl failure logged loudly instead of passing silently; malformed stamp value sanitized.
+SCOPE: alert_once ONLY (25/5). The auto-restart ACTION (touch + sudo systemctl restart, L90-91) is OUTSIDE
+alert_once and untouched — remains unthrottled (verified by diff scope + grep on OCI).
+GATE: bash -n; mocked self-test PASS — failed send → NO stamp + honest "POST failed" log; curl recovers →
+alert DELIVERS (old code ate it 30m); after confirmed send → throttled (proves stamp written on success).
+GAI APPROVE; Gro WAIVED (TPD); preship marker fb766de537a6. SHIPPED 75c75ad; OCI git pull (cron script, no
+restart); live-verified on OCI (syntax OK, discipline present, restart path intact, run exit=0).
+NOTE: 2 GAI preship rolls false-rejected (claimed the `case "$last"` sanitizer was misplaced — it is
+correctly AFTER the file read); roll 1 had already APPROVED + written the marker.
