@@ -8105,3 +8105,19 @@ GAI APPROVE; Gro WAIVED (TPD); preship marker fb766de537a6. SHIPPED 75c75ad; OCI
 restart); live-verified on OCI (syntax OK, discipline present, restart path intact, run exit=0).
 NOTE: 2 GAI preship rolls false-rejected (claimed the `case "$last"` sanitizer was misplaced — it is
 correctly AFTER the file read); roll 1 had already APPROVED + written the marker.
+
+## 2026-07-16 — watchdog HEARTBEAT + nightly freshness assert (board follow-up #1) SHIPPED
+ROOT (board Majors/Kim): every watchdog's failure mode is SILENCE — if cron stops, a unit is disabled, or
+the script breaks, the alerting is simply GONE and nothing says so. Silence is indistinguishable from health.
+FIX (their spec): scripts/service_watchdog.sh touches logs/svc_watchdog.heartbeat on EVERY */5 run (before
+any branching/flock — a fresh mtime proves only that the watchdog ran). nightly_audit.py
+_check_watchdog_heartbeat() asserts <15min freshness (runs */5 → >15min = 3 missed runs = dead) and fires a
+CRITICAL Slack if STALE or MISSING. Deterministic mtime math, never an LLM judgment. Called FIRST in main()
+and independently so a dead watchdog is reported even if the audit itself later fails (Gemini down). Never
+raises (fail-safe wrapped). Turns "the watchdog died" from invisible into one Slack/day.
+GATE: bash -n + py_compile/ruff/mypy clean; self-test PASS (fresh→silent, 20min stale→alert, missing→alert,
+14min boundary→silent, bad path→no raise). Board specified the design; GAI APPROVE (preship fd105cec1cc5 +
+0e588eb65434); Gro WAIVED (TPD). SHIPPED 32d0f97. OCI live-verified END-TO-END: watchdog run → heartbeat
+created; nightly check → fresh → 0 alerts, "Watchdog heartbeat OK (0.0 min old)".
+REMAINING board follow-up: rolling-window flap detector (a perfect 50/50 down/up alternation still never
+reaches GRACE — low value edge case; decay already covers downs>ups).
