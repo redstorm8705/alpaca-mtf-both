@@ -73,15 +73,26 @@ def _compute_tqi(trade: dict) -> int:
     Trade Quality Index — 0-100 per-trade execution quality score.
 
     Components:
-      Confluence at entry (0-25): 9→0, 10→8, 11→17, 12→25
+      Confluence at entry (0-25): config-anchored to CONVICTION_SKIP_BELOW (min enterable
+                                   score) → 5pt floor, scaling linearly to 25 at the 12-pt
+                                   max. Today (skip_below=8): 8→5, 9→10, 10→15, 11→20, 12→25.
       Exit reason quality (0-35): target→35, trail_stop→28, signal/opposite_signal→18,
                                    thesis_invalidation→15, pm_exit→12,
                                    overnight_atr_buffer_exit→10, hard_stop→0, other→8
       R-multiple achieved (0-40): R≥2→40, R≥1→30, R≥0.5→20, R≥0→10, R<0→0
     """
-    # Component 1: confluence at entry
+    # Component 1: confluence at entry (0-25). CONFIG-DERIVED baseline — the prior hardcoded
+    # `9` went stale when the board lowered the entry floor (2026-06-30), scoring valid
+    # score-8 (half) AND score-9 (FULL-conviction) entries as 0 and biasing the Kelly TQI
+    # feedback downward. Anchor = CONVICTION_SKIP_BELOW (the min enterable score); min-entry
+    # earns a 5pt floor (it cleared the gate), scaling to the 12-pt max = 25. Board 2-0
+    # (Thorp/Kelly, LdP/feature-quality) + Gro + GAI; floor=5 (3-1 vs LdP's 2). TQI is
+    # informational + Kelly rolling-quality feedback only — zero direct capital gate.
     entry_score = trade.get("score", 9)
-    score_pts   = round(max(0.0, (entry_score - 9) / 3 * 25))
+    _min_entry  = config.CONVICTION_SKIP_BELOW          # effective min enterable score (8/12 today)
+    _max_score  = sum(config.SCORE_WEIGHTS.values())    # 12-pt confluence max (canonical — matches validate_config)
+    _span       = max(1, _max_score - _min_entry)       # guard div-by-zero if floor ever == max
+    score_pts   = round(min(25.0, 5.0 + max(0.0, entry_score - _min_entry) / _span * 20.0))
 
     # Component 2: exit reason quality
     reason     = trade.get("exit_reason", "other")
