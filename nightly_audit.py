@@ -499,6 +499,150 @@ def _extract_verdict(report: str) -> str:
     return "UNKNOWN"
 
 
+# ── Issue-lifecycle suppression (signal-to-noise) ────────────────────────────
+# The nightly LLM auditor is STATELESS — it re-flags the same known-benign and
+# already-acknowledged items as fresh CATASTROPHIC/FAIL every day, training the
+# operator to ignore a verdict that fires 5/7 days (alert fatigue). This adds a
+# DETERMINISTIC post-filter driven by a curated lifecycle file so a FAIL means
+# "new + real + act-now". Design (board Majors + Gro + GAI, 2026-07-15):
+#   false_alarm  → removed from the card (benign, no operational impact)
+#   acknowledged → kept VISIBLE but no longer forces FAIL (known, fix pending)
+#   resolved     → if it REAPPEARS it is a REGRESSION: not suppressed, keeps FAIL,
+#                  tagged so the operator sees a fixed item came back
+# Safety invariants: (1) a finding matching NO directive is NEVER touched;
+# (2) FAIL→WARN downgrade happens ONLY when zero real (unsuppressed) catastrophics
+# AND zero unsuppressed CRITICAL new-bugs remain; (3) fail-open — any load/parse
+# error posts the audit UNFILTERED; (4) the full report FILE keeps the LLM's
+# original verdict (audit trail) — only the Slack card consumes the filtered view.
+SUPPRESSIONS_FILE = LOGS_DIR / "audit_suppressions.jsonl"
+
+
+def _load_suppressions() -> list[dict]:
+    """Load curated lifecycle directives. Fail-open: any error → [] (audit unfiltered).
+    A directive needs status in {false_alarm, acknowledged, resolved} and match_keywords."""
+    if not SUPPRESSIONS_FILE.exists():
+        return []
+    out: list[dict] = []
+    try:
+        for ln in SUPPRESSIONS_FILE.read_text(errors="replace").splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            try:
+                d = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if (isinstance(d, dict)
+                    and d.get("status") in ("false_alarm", "acknowledged", "resolved")
+                    and isinstance(d.get("match_keywords"), list)):
+                # Keep only non-empty STRING keywords — a malformed directive with a
+                # numeric/None keyword is skipped, never stringified into a match target.
+                d["match_keywords"] = [k for k in d["match_keywords"]
+                                       if isinstance(k, str) and k.strip()]
+                if d["match_keywords"]:
+                    out.append(d)
+    except Exception as e:
+        logger.warning("suppressions load failed (%s) — auditing UNFILTERED (fail-open)", e)
+        return []
+    return out
+
+
+def _match_directive(line: str, sup: list[dict]) -> dict | None:
+    """Return the first directive with a match_keyword that is a case-insensitive
+    substring of `line`, else None. Conservative: only curated keywords match."""
+    low = line.lower()
+    for d in sup:
+        # match_keywords are guaranteed non-empty strings by _load_suppressions.
+        for kw in d.get("match_keywords", []):
+            if kw.lower() in low:
+                return d
+    return None
+
+
+def _apply_suppressions(report: str, verdict: str) -> tuple[str, str, int, int]:
+    """Deterministic post-filter. Returns
+    (filtered_report_for_card, adjusted_verdict, n_suppressed, n_acknowledged).
+    The full report FILE is written separately with the ORIGINAL report+verdict."""
+    sup = _load_suppressions()
+    if not sup:
+        return report, verdict, 0, 0
+
+    section = None            # 'cat' | 'bugs' | None
+    n_suppressed = 0
+    n_ack = 0
+    real_cat_remaining = 0    # catastrophics NOT false_alarm/acknowledged (incl. regressions)
+    real_crit_remaining = 0   # NEW-BUGS lines tagged CRITICAL that are NOT suppressed/acked
+    declared_cat = None       # count the header declares (### CATASTROPHIC ALERT: N)
+    cat_findings_seen = 0     # catastrophic finding LINES we actually processed
+    out_lines: list[str] = []
+
+    for raw in report.splitlines():
+        s = raw.strip().lstrip("#").strip()
+        up = s.upper()
+        if up.startswith("CATASTROPHIC ALERT"):
+            section = "cat"
+            # Parse the declared count so the downgrade can be blocked if a catastrophic
+            # is unaccounted (e.g. LLM put a finding on the header line, or malformed output).
+            _tail = up.split(":", 1)[1].strip() if ":" in up else ""
+            _tok = _tail.split()[0] if _tail else ""
+            if _tok.isdigit():
+                declared_cat = (declared_cat or 0) + int(_tok)
+            out_lines.append(raw)
+            continue
+        if up.startswith("NEW BUGS FOUND"):
+            section = "bugs"
+            out_lines.append(raw)
+            continue
+        if raw.lstrip().startswith("###"):
+            section = None
+            out_lines.append(raw)
+            continue
+
+        is_finding = (section in ("cat", "bugs")
+                      and raw.strip()
+                      and not raw.strip().lower().startswith("none"))
+        if is_finding and section == "cat":
+            cat_findings_seen += 1
+        if is_finding:
+            d = _match_directive(raw, sup)
+            if d is not None:
+                st = d.get("status")
+                if st == "resolved":
+                    out_lines.append(raw.rstrip() + "  [REGRESSION — previously resolved]")
+                    if section == "cat":
+                        real_cat_remaining += 1
+                    elif "CRITICAL" in up:
+                        real_crit_remaining += 1
+                    continue
+                if st == "false_alarm":
+                    n_suppressed += 1
+                    continue  # drop entirely
+                if st == "acknowledged":
+                    n_ack += 1
+                    out_lines.append(raw.rstrip() + "  [ACKNOWLEDGED — tracked, fix pending]")
+                    continue  # kept visible, does NOT count as real
+            else:
+                if section == "cat":
+                    real_cat_remaining += 1
+                elif "CRITICAL" in up:
+                    real_crit_remaining += 1
+        out_lines.append(raw)
+
+    filtered = "\n".join(out_lines)
+
+    # Downgrade guard: block FAIL→WARN if the header declared more catastrophics than we
+    # accounted for (unaccounted catastrophic → treat as real, keep FAIL). Fails safe.
+    cat_unaccounted = declared_cat is not None and declared_cat > cat_findings_seen
+
+    adjusted = verdict
+    if (verdict == "FAIL" and (n_suppressed or n_ack)
+            and real_cat_remaining == 0 and real_crit_remaining == 0
+            and not cat_unaccounted):
+        adjusted = "WARN"
+
+    return filtered, adjusted, n_suppressed, n_ack
+
+
 def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
     """Extract key sections for Slack — keep it scannable."""
     verdict_emoji = {"PASS": ":white_check_mark:", "WARN": ":warning:",
@@ -579,17 +723,28 @@ def main():
     report = _call_gemini(prompt)
 
     verdict = _extract_verdict(report)
-    logger.info(f"Verdict: {verdict}")
+    # Deterministic signal-to-noise post-filter (curated lifecycle) — the report
+    # FILE keeps the ORIGINAL verdict (audit trail); the CARD consumes the adjusted view.
+    filtered_report, card_verdict_adj, n_sup, n_ack = _apply_suppressions(report, verdict)
+    if n_sup or n_ack or card_verdict_adj != verdict:
+        logger.info("suppressions: %d false-alarm removed, %d acknowledged; verdict %s → %s",
+                    n_sup, n_ack, verdict, card_verdict_adj)
+    logger.info(f"Verdict: {verdict} (card: {card_verdict_adj})")
 
     # ── Write full report ────────────────────────────────────────────────────
+    # Original report + verdict preserved verbatim (Schneier: durable audit trail);
+    # the suppression outcome is appended as a note, never overwriting the LLM output.
     report_path = LOGS_DIR / f"gemini_audit_{AUDIT_DATE}.txt"
     _tmp_report = report_path.with_suffix(".txt.tmp")
+    _sup_note = (f"\n\n{'='*80}\nSUPPRESSION POST-FILTER: {n_sup} false-alarm removed, "
+                 f"{n_ack} acknowledged | card verdict {verdict} → {card_verdict_adj} "
+                 f"(see logs/audit_suppressions.jsonl)\n") if (n_sup or n_ack) else ""
     _tmp_report.write_text(
         f"Nightly Gemini Audit — {AUDIT_DATE}\n"
         f"Model: {GEMINI_MODEL} | Verdict: {verdict}\n"
         f"Modified files: {list(modified_files.keys())}\n"
         f"{'='*80}\n\n"
-        + report,
+        + report + _sup_note,
         encoding="utf-8",
     )
     _tmp_report.replace(report_path)
@@ -610,10 +765,13 @@ def main():
         except (json.JSONDecodeError, TypeError):
             eod_dict = {}  # "(No EOD snapshot found)" etc. → mismatch-free empty card
         pnl = build_pnl_fields("nightly", eod_dict)
-        findings = findings_from_report(report)
+        findings = findings_from_report(filtered_report)
         dist = [f"✅ full report — logs/gemini_audit_{AUDIT_DATE}.txt",
                 f"✅ modified files audited — {len(modified_files)}"]
-        card_verdict = verdict if verdict != "UNKNOWN" else "WARN"
+        if n_sup or n_ack:
+            dist.append(f"⏭️ {n_sup} false-alarm suppressed · {n_ack} acknowledged "
+                        f"(logs/audit_suppressions.jsonl)")
+        card_verdict = card_verdict_adj if card_verdict_adj != "UNKNOWN" else "WARN"
         payload = render_card("nightly", AUDIT_DATE, card_verdict, pnl,
                               findings, dist_footer=dist)
         ok, reason = validate_no_pnl_rewrite(payload, pnl["injected_numbers"])
@@ -625,14 +783,15 @@ def main():
     except Exception as _card_err:
         logger.warning(f"Card render/post failed ({_card_err}) — falling back to text summary.")
     if not sent:
-        slack_body = _build_slack_summary(report, verdict, len(modified_files))
+        # Text fallback also consumes the filtered/adjusted view for consistency.
+        slack_body = _build_slack_summary(filtered_report, card_verdict_adj, len(modified_files))
         slack_emoji = {
             "PASS": ":white_check_mark:",
             "WARN": ":warning:",
             "FAIL": ":rotating_light:",
             "UNKNOWN": ":grey_question:",
-        }[verdict]
-        title = f"Nightly Audit {AUDIT_DATE} — {verdict}"
+        }[card_verdict_adj]
+        title = f"Nightly Audit {AUDIT_DATE} — {card_verdict_adj}"
         sent = _slack(title, slack_body, emoji=slack_emoji)
         if sent:
             logger.info("Slack summary posted (legacy text fallback).")
