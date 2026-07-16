@@ -27,13 +27,22 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
   after the phantom adoption → the bot placed a REAL live order against a NON-EXISTENT short (would have bought 17
   real shares if triggered; canceled before fill). **Bug B guard = real capital-risk prevention, VALIDATED**; the
   "real double-sell left unmanaged" fail-safe worry does NOT apply to this class.
-- **▶▶ NEW FINDING / TOP NEXT CANDIDATE — OM-BUG-1 is NOT benign:** RIVN's protective stop was CANCELED
-  (e72ae17d) + resubmit REJECTED (1a30ab52) at 7/6 21:21 UTC (5:21 PM ET, after RTH close) = the known
-  extended-hours GTC rejection (42210000 / OM-BUG-1). RIVN sat UNPROTECTED overnight → gap-down → cover @17.32 =
-  the REAL −$41 loss. **This bug is currently listed in nightly_audit.py KNOWN BENIGN PATTERNS (~L332) telling the
-  auditor "Do NOT flag pre-RTH occurrences" — so a LOSS-CAUSING bug is being actively suppressed from the audit.**
-  Candidate: (a) re-classify OM-BUG-1 out of KNOWN BENIGN, (b) diagnose/fix the extended-hours stop rejection so
-  overnight positions are never left unprotected. Full evidence: `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`.
+- **⚠️ RETRACTED (2026-07-16): an earlier version of this block claimed "OM-BUG-1 is NOT benign — it cost a real
+  loss." THAT WAS WRONG — do not act on it.** OM-BUG-1 diagnosed to completion; **its KNOWN BENIGN classification
+  is DEFENSIBLE**; NO fix warranted. Evidence: RIVN 7/6 3pm ET C=**20.11** (stop 18.38 legitimately accepted at
+  4:07pm); 7/7 9:30 open O=**17.745** → a **~12% OVERNIGHT GAP straight through the stop**. Stops are
+  `extended_hours: False` → a stop does NOT execute outside RTH, so even a LIVE stop would have triggered at the
+  open into the gap (~17.7) ≈ the bot's actual 17.32 cover. **The rejection cost ≈$0-7 slippage, NOT the −$41.**
+  The rejection was ASYNC (accepted 7/6 21:21:55Z; Alpaca `failed_at` 7/7 08:00:01Z = 4am ET session-open
+  validation once the gap made sell-stop@18.41 sit above market) — the submit-time cover-on-breach pre-flight
+  (run_cycle:711) could not have known. Recovery worked as designed (premarket reconcile cleared the dead ID;
+  RTH cover-on-breach closed at the open). **REAL LESSON: a 12% overnight gap is unhedgeable by a stop —
+  that's an overnight-gap/sizing question (Arch Invariant #11), not a stop-mechanics bug.**
+  **Low-impact residual (logged, NOT worth a risky fix):** "phantom protection" — GTC stop status polled only
+  ~1s post-submit (run_cycle:793-824), so an async rejection goes undetected until the next premarket reconcile
+  (harmless: stops don't fire pre-market; RTH cover-on-breach backstops). Latent nit: `gtc_manager.py:302` and
+  `:381 _TERMINAL` omit `"rejected"` (falls into "else: still live") — cheap hardening candidate only.
+  Full evidence: `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`.
 - **Other follow-ups (logged, non-blocking):** Harris masked-loss doc-comment in `fill_helpers._sanity_ok`;
   persist-then-auto-adopt tightening. Plus the pre-RIVN priority queue: catalyst guidance_cut one-click approval
   (`logs/pending_approval_catalyst_guidance_2026-07-14.md`); Stage-2 cosmetic renames; GEX threshold recalibration
