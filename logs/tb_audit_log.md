@@ -8007,3 +8007,17 @@ Full reads: fill_reconciler.py 133, fill_helpers.py 370. Statics clean. cold-2nd
 (a7223e38a434). SHIPPED 5fb5c4e, OCI DEPLOY_OK + restart, HEALTH_OK, runtime-verified.
 FOLLOW-UP (Harris, out of scope): fill_helpers _sanity_ok >50% gap-loss masked-as-breakeven — doc comment +
 equity-backstop note; consider asymmetric >50% loss handling. Non-urgent (equity kill backstops).
+
+## 2026-07-16 — execution/orphan_manager.py — RIVN Bug B (wrong-direction orphan re-adoption) SHIPPED
+Root: reconcile_positions (startup-only) adopted RIVN's just-closed LONG as SHORT -17 (stale/settling
+Alpaca read of a symbol closed 36 min earlier), inverted stop/target; corrupted P&L tripped kill switch.
+FIX (Option B): exclude from orphan set any symbol in tracker.closed_trades with exit_time within config
+window (RECONCILE_RECENT_CLOSE_WINDOW_MINUTES default 120) + CRITICAL Slack alert on mismatch. Startup-only
+→ alert re-fires each restart; real position auto-adopts on next restart past window (self-heals). Option A
+(portfolio_tracker status=closing lifecycle) REJECTED as too risky — pop@1543 is correct; guard subsumes it.
+Full read orphan_manager 1625L + dependency read record_exit exit_time field (portfolio_tracker:1606).
+Statics clean, guard self-test PASS, cold-2nd PASS, board Majors/Kim APPROVE-w-changes (throttle removed
+since startup-only, window 120 documented, fail-safe=auto-adopt-past-window). Preship gai=APPROVE gro=WAIVED
+(TPD, Rafael standing rule) marker 2bcc8142743d. SHIPPED 71cae8c, OCI DEPLOY_OK+restart, HEALTH_OK, verified.
+RIVN corruption chain (Bug A pnl=0.0 + Bug B direction-flip + Bug C false-drop) FULLY BROKEN. Bug E
+(real double-sell?) + Harris masked-loss comment + persist-then-auto-adopt-tightening = logged follow-ups.

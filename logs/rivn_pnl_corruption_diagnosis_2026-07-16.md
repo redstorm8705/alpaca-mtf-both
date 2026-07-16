@@ -47,6 +47,22 @@
   Bug B re-adoption. Fixing the false-drop root removes Bug B's trigger. Files: portfolio_tracker.py record_exit
   path + orphan_manager reconcile.
 
+## ✅ RESOLVED (2026-07-16) — RIVN corruption chain fully broken
+- **Bug A SHIPPED (`5fb5c4e`):** fill_reconciler external-close path → pnl=0.0 fixed.
+- **Bug B SHIPPED (`71cae8c`):** orphan_manager recent-close guard (window 120min config) + CRITICAL
+  mismatch alert → wrong-direction re-adoption prevented. reconcile is startup-only → alert re-fires
+  every restart; a real position auto-adopts on the next restart past the window (self-heals). Gate:
+  full read 1625L, statics, cold-2nd PASS, board Majors/Kim APPROVE-w-changes (incorporated: throttle
+  removed, window 120 documented), preship gai=APPROVE gro=WAIVED (TPD) marker 2bcc8142743d. Live+verified.
+- **Bug C RESOLVED via Option B (board decision):** the pop@portfolio_tracker:1543 is CORRECT; the Bug B
+  guard makes the false-drop harmless (reconciler no longer treats a just-closed lot as an orphan). The
+  risky Option A lifecycle rewrite (status="closing" in open_trades + exit-manager guards) is deliberately
+  NOT done — unnecessary + high-risk in the #1 hotspot. All 3 bugs addressed.
+- **Follow-ups (logged, non-blocking):** Bug E (was −17 a real double-sell? GTC-stop-vs-cover lifecycle);
+  Harris masked-loss doc-comment in fill_helpers._sanity_ok; persist-then-auto-adopt is partially built-in
+  (window-expiry auto-adopt) — a within-window intra-restart unmanaged window remains for a real double-sell
+  (bounded $, alerted every restart); optional tightening later.
+
 ## PHASE-2 SHIP STATUS
 - **✅ Bug A SHIPPED + LIVE (`5fb5c4e`, 2026-07-16):** fill_reconciler.py now calls
   fetch_actual_fill_price(submitted_after=None) → external-close path (entry-bounded, filled_at DESC,
