@@ -47,6 +47,23 @@
   Bug B re-adoption. Fixing the false-drop root removes Bug B's trigger. Files: portfolio_tracker.py record_exit
   path + orphan_manager reconcile.
 
+## PHASE-2 SHIP STATUS
+- **✅ Bug A SHIPPED + LIVE (`5fb5c4e`, 2026-07-16):** fill_reconciler.py now calls
+  fetch_actual_fill_price(submitted_after=None) → external-close path (entry-bounded, filled_at DESC,
+  side filter, ±50% band) + direction/entry_time guards. Gate: full reads (fill_reconciler 133 +
+  fill_helpers 370); statics; cold-2nd PASS; board Harris APPROVE (masked-loss check: kill switch uses
+  Alpaca EQUITY not daily_pnl → phantom-proof, real gap loss captured regardless); Gro+GAI design + FINAL
+  preship APPROVE (a7223e38a434). Runtime-verified on OCI.
+- **⏳ Bug B NEXT:** orphan_manager.py:928 direction inference (full read + gate).
+- **⏳ Bug C NEXT:** portfolio_tracker false-drop root (full read + gate).
+
+## FOLLOW-UP (Harris board seat, out of scope for Bug A — logged not shipped)
+`fill_helpers.py:_sanity_ok` (±50% band): a >50% gap fill is rejected → recorded as breakeven (masked loss),
+BUT fires CRITICAL + marks _fill_unverified (not silent) AND the equity-based kill switch catches the real
+loss regardless. Harris asked for (a) a doc comment flagging this + equity-backstop, and possibly (b) consider
+whether a >50% gap LOSS should be handled differently than a >50% phantom (asymmetric). Non-urgent (equity kill
+is the backstop); own increment (fill_helpers.py). Not a defect in Bug A's diff.
+
 ## NEXT (Phase 1 completion → Phase 2)
 1. Cold agents return exact root-cause lines for Bug A + Bug B.
 2. BGG (board + Gro + GAI) diagnostic on the aligned root cause.

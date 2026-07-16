@@ -7996,3 +7996,14 @@ naming a hardcoded 0.5R premature-truncation threshold. => STRATEGY-level review
 TOP UNADDRESSED REAL ITEM (unanimous BGG): RIVN P&L corruption (flagged 7/7,7/8,7/9,7/13 — direction mismatch,
 pnl=0.0 despite price, Alpaca-vs-tracker discrepancy); caused the -73.86% false kill-switch 7/7. = fill-matching/
 false-drop root (known P0). NEXT REAL BUG TO ATTACK.
+
+## 2026-07-16 — execution/fill_reconciler.py — RIVN Bug A (fill-recovery wrong query path) SHIPPED
+Root: run_fill_reconciliation derived submitted_after from entry_time → forced legacy P5-H2 path
+(fill_helpers Sort.ASC/limit=5/after=entry_time) → missed a close settled hours later → entry_price
+fallback → pnl=0.0 (RIVN real −$41 recorded $0 → tripped kill switch). FIX: submitted_after=None →
+external-close path (entry-bounded, filled_at DESC, side filter, ±50% band); + direction/entry_time guards.
+Full reads: fill_reconciler.py 133, fill_helpers.py 370. Statics clean. cold-2nd PASS. Board Harris APPROVE
+(masked-loss: kill switch uses equity not daily_pnl → phantom-proof). Gro+GAI design + FINAL preship APPROVE
+(a7223e38a434). SHIPPED 5fb5c4e, OCI DEPLOY_OK + restart, HEALTH_OK, runtime-verified.
+FOLLOW-UP (Harris, out of scope): fill_helpers _sanity_ok >50% gap-loss masked-as-breakeven — doc comment +
+equity-backstop note; consider asymmetric >50% loss handling. Non-urgent (equity kill backstops).
