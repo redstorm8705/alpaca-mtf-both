@@ -36,9 +36,14 @@
 # planned restart, and a STALE sentinel was itself a past false-alarm source.
 
 SERVICES="mtf-bot mtf-writer mtf-http"
-# Anchored + first-match + f2- : a commented '#SLACK_WEBHOOK=' line must not match
+# The var is SLACK_WEBHOOK_URL (NOT SLACK_WEBHOOK) — verified against the live .env.
+# Anchored + first-match + f2-: a commented '#SLACK_WEBHOOK_URL=' line must not match
 # (two matches -> multi-line value -> curl garbage), and a URL containing '=' survives.
-WEBHOOK=$(grep -m1 '^SLACK_WEBHOOK=' /home/ubuntu/mtf-bot/.env 2>/dev/null | cut -d= -f2-)
+# NOTE: memory_watchdog.sh:17 greps the UNANCHORED substring 'SLACK_WEBHOOK', which
+# happens to match SLACK_WEBHOOK_URL. Anchoring to '^SLACK_WEBHOOK=' (as first drafted
+# here) silently matched NOTHING -> empty webhook -> a watchdog that can never alert.
+# Caught by live verification before ship; keep the _URL suffix.
+WEBHOOK=$(grep -m1 '^SLACK_WEBHOOK_URL=' /home/ubuntu/mtf-bot/.env 2>/dev/null | cut -d= -f2-)
 LOG=/home/ubuntu/mtf-bot/logs/watchdog.log
 FAILS=/tmp/mtf_svc_fail_count
 STAMP=/tmp/mtf_svc_last_alert
