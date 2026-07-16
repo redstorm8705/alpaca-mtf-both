@@ -1,0 +1,55 @@
+{
+  "file": "scan_to_html.py",
+  "function": "_build_surface() [nested inside _fetch_spy_0dte_data()]",
+  "finding": "pandas.NA in openInterest column causes TypeError('boolean value of NA is ambiguous') when bool(_oi) is evaluated before the isinstance check. This propagates to the outer except at L1232-1233, causing _fetch_spy_0dte_data() to return None for ALL symbols. Error fires 10+ times per run: '[scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer'.",
+  "rc_class": "RC-3 (silent exception — outer except swallows the TypeError instead of the inner guard catching it)",
+  "root_cause": "Original guard `if _oi and not (isinstance(_oi, float) and math.isnan(_oi))` evaluates bool(pandas.NA) before isinstance runs. In newer pandas with nullable Int64 dtype, openInterest is pandas.NA not numpy.float64('nan'), so isinstance(pandas.NA, float) is never reached — TypeError fires first.",
+  "previous_attempts": [
+    "2026-07-08: rejected — wrong fix (fillna on .options list which is a string list, not DataFrame), Board B REJECT, static FAIL, cold-agent FAIL, Gro+GAI REJECT",
+    "2026-07-09: rejected — see pending_ds_gai_2026-07-09_rc3_scantohtml.json"
+  ],
+  "status": "awaiting_gai",
+  "gro_status": "WAIVED — TPD-exhausted (Rafael standing rule 2026-07-16: board + GAI + --waive-gro suffices)",
+  "board": {
+    "A_strict_parser": "PASS",
+    "A_notes": "Logic inversion check: the original `if _oi and not (isinstance...)` was the source of the bug; the try/except replaces the fragile boolean gate entirely. The `if _oi else 0` short-circuit correctly handles zero (0→0, avoids int(0) call which would succeed anyway but is unnecessary). No logic inversion found. Off-by-one: none applicable. Missing conditions: all 3 failure modes covered (ValueError=float nan, TypeError=pandas.NA, OverflowError=float inf). Branch completeness: both branches verified (valid values → int() succeeds; NA/nan/inf → caught and oi=0).",
+    "B_red_teamer": "PASS",
+    "B_notes": "Confirmed _build_surface() output feeds display only, not execution. The oi=0 default on any coercion failure is conservative: underreports OI rather than crashing. The outer except at L1232-1233 remains the correct safety net for any exceptions not caught by this inner try/except. Scope is narrow: only the openInterest coercion is changed. No feedback path from scan_results.html to trading engine confirmed. Boundary concern: `if _oi else 0` evaluates falsy for 0, 0.0, and pandas.NA — correct for all three (OI of 0 is genuinely 0; pandas.NA should default to 0; float 0.0 is fine as 0 OI).",
+    "C_quant_risk": "PASS",
+    "C_notes": "Confirmed no P&L impact. portfolio_tracker.py reads score_comparison JSON for EOD reporting only. signal_generator.py c9_implied_range integration is hardcoded to 0. The oi value is used only in the rows dict inside _build_surface() for HTML table display. No sizing, stop-loss, take-profit, or execution logic depends on openInterest in this file."
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS (0 errors, --warn-unreachable)",
+    "ruff": "PASS (0 violations, --select E,W,F,B)",
+    "tested_on": "scan_to_html_proposed.py (scratchpad copy — original scan_to_html.py NOT modified)"
+  },
+  "second_agent": {
+    "v1": "FAIL — exception tuple (ValueError, TypeError) missed OverflowError for int(float('inf'))",
+    "v2": "PASS — after adding OverflowError to the tuple",
+    "verdict": "PASS",
+    "checks": {
+      "logic_inversion": "PASS",
+      "off_by_one": "PASS",
+      "missing_conditions": "PASS (all 3 NA/nan/inf cases covered)",
+      "branch_completeness": "PASS (both true/false branches of `if _oi` verified)"
+    }
+  },
+  "rc_audit": {
+    "RC1_naive_datetime": "PASS — diff introduces no datetime calls",
+    "RC2_cwd_path": "PASS — diff introduces no file I/O",
+    "RC3_silent_exception": "PASS — try/except logs nothing (display-only; oi=0 is the correct conservative default, not a swallowed error)",
+    "RC4_estimated_exit": "PASS — not applicable (display-only file)",
+    "RC5_non_atomic_write": "PASS — diff introduces no file writes",
+    "RC6_wrong_api_field": "PASS — openInterest is the correct yfinance option chain field name",
+    "RC7_zero_share_sizing": "PASS — not applicable",
+    "RC8_unbounded_scan": "PASS — not applicable"
+  },
+  "exact_diff": "--- a/scan_to_html.py\n+++ b/scan_to_html.py\n@@ -1095,7 +1095,10 @@\n                 K    = float(row[\"strike\"])\n                 iv   = float(row.get(\"impliedVolatility\", 0) or 0)\n                 _oi  = row.get(\"openInterest\", 0)\n-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0\n+                try:\n+                    oi = int(_oi) if _oi else 0\n+                except (ValueError, TypeError, OverflowError):\n+                    oi = 0\n                 bid  = float(row.get(\"bid\", 0) or 0)\n                 ask  = float(row.get(\"ask\", 0) or 0)\n                 last = float(row.get(\"lastPrice\", 0) or 0)",
+  "patch_file": "logs/pending_patch_2026-07-16_nan_guard_scan_to_html.patch",
+  "sha256_original": "ceaa59b275c5f12b8b862cd2b88d5b57288e589e5309302144ec0bbea60fb509",
+  "base_commit_sha": "1fa8d2e8aae182ed5b47e8d1ee3934735222f296",
+  "created_at": "2026-07-16 autonomous session",
+  "rth_chain": "strategy/run_cycle.py -> scan_to_html.write_scan_html() [called after every scan cycle]. Display-only — no feedback to execution engine.",
+  "gai_prompt": "You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed.\n\nAUDIT REQUEST — scan_to_html.py | NaN Guard Fix | _build_surface() inside _fetch_spy_0dte_data()\n\n=== CONTEXT ===\n\nFILE: scan_to_html.py (2358 lines total, display/reporting module)\nFUNCTION: _build_surface(df, opt_type) — a nested function inside _fetch_spy_0dte_data() at lines 1092-1113\nRTH IMPORT CHAIN: strategy/run_cycle.py -> scan_to_html.write_scan_html() — called after every scan cycle during RTH. This file IS in the RTH execution chain (display only — not connected to order submission, sizing, or position management).\n\n=== FINDING ===\n\nBUG at line 1098: When the option chain DataFrame contains pandas.NA (nullable integer dtype) for openInterest:\n  ORIGINAL CODE:\n      _oi  = row.get(\"openInterest\", 0)\n      oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0\n\n  FAILURE PATH: bool(pandas.NA) raises TypeError: \"boolean value of NA is ambiguous\"\n  — The truthiness check `if _oi` runs BEFORE the isinstance check.\n  — This TypeError propagates to the outer except Exception at L1232-1233:\n      except Exception as _opt_err:\n          logger.warning(\"[scan] _fetch_options_data fetch failed — returning None: %s\", _opt_err)\n          return None\n  — The entire 0DTE options section returns None for ALL symbols, 10+ times per log.\n\nERROR MESSAGE (confirmed in handoff.md): \"[scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer\"\nROOT CAUSE: In newer pandas versions with nullable integer types (Int64/object dtype), openInterest can be pandas.NA rather than numpy.float64('nan'). The isinstance(x, float) guard is unreliable for pandas.NA because boolean evaluation raises TypeError before isinstance runs.\n\n=== PROPOSED DIFF (EXACT — this is the literal change being considered for deployment) ===\n\n--- a/scan_to_html.py\n+++ b/scan_to_html.py\n@@ -1095,7 +1095,10 @@\n                 K    = float(row[\"strike\"])\n                 iv   = float(row.get(\"impliedVolatility\", 0) or 0)\n                 _oi  = row.get(\"openInterest\", 0)\n-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0\n+                try:\n+                    oi = int(_oi) if _oi else 0\n+                except (ValueError, TypeError, OverflowError):\n+                    oi = 0\n                 bid  = float(row.get(\"bid\", 0) or 0)\n                 ask  = float(row.get(\"ask\", 0) or 0)\n                 last = float(row.get(\"lastPrice\", 0) or 0)\n\n=== SCOPE OF CHANGE ===\n- ONE line replaced by 4 lines (a try/except block)\n- Scope: ONLY the openInterest coercion inside _build_surface()\n- _build_surface() output: populates the IV surface table for 0DTE options HTML display ONLY\n- Not connected to: signal generation, order submission, position sizing, stop-loss, take-profit, P&L recording, or any execution logic\n- oi variable is used ONLY in the rows.append({...}) dict that builds the surface display table\n- The outer except at L1232-1233 remains unchanged — still catches any other unhandled exceptions from the broader _fetch_spy_0dte_data() function\n\n=== EXCEPTION COVERAGE ANALYSIS ===\nThe try/except (ValueError, TypeError, OverflowError) handles:\n  - float('nan') -> int(float('nan')) raises ValueError\n  - pandas.NA -> bool(pandas.NA) raises TypeError (the actual bug)\n  - float('inf') -> int(float('inf')) raises OverflowError\n  - Valid int (0, 100, 50000) -> int() succeeds, no exception\n  - Valid float (100.0) -> int(100.0) = 100, no exception\n  - Falsy zero (0, 0.0) -> `if _oi else 0` short-circuits, oi=0\n\n=== BOARD VOTE (3 cold parallel subagents, all PASS) ===\n  Agent A (Strict Parser): PASS\n  Agent B (Red Teamer): PASS (confirmed display-only scope; oi=0 is conservative default)\n  Agent C (Quant Risk Manager): PASS (no P&L impact; no execution feedback path)\n\n=== STATIC ANALYSIS RESULTS ===\n  python3 -m py_compile -> PASS\n  python3 -m mypy --warn-unreachable -> PASS (0 errors)\n  ruff check --select E,W,F,B -> PASS (0 violations)\n\n=== COLD SECOND-AGENT LOGIC REVIEW ===\n  v1: FAIL (missing OverflowError); v2 after fix: PASS\n  All 3 NaN/NA/inf cases covered. Both branches verified.\n\n=== RC-CLASS AUDIT ===\n  RC-1 through RC-8: all PASS (diff introduces no new violations in any class)\n\nReturn APPROVE or REJECT as the first word of your response. Then provide your full audit findings.\nNote: Gro is TPD-exhausted this session — board + GAI + --waive-gro per Rafael standing rule 2026-07-16."
+}

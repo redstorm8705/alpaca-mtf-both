@@ -1,0 +1,14 @@
+--- a/scan_to_html.py
++++ b/scan_to_html.py
+@@ -1095,7 +1095,10 @@
+                 K    = float(row["strike"])
+                 iv   = float(row.get("impliedVolatility", 0) or 0)
+                 _oi  = row.get("openInterest", 0)
+-                oi   = int(_oi) if _oi and not (isinstance(_oi, float) and math.isnan(_oi)) else 0
++                try:
++                    oi = int(_oi) if _oi else 0
++                except (ValueError, TypeError, OverflowError):
++                    oi = 0
+                 bid  = float(row.get("bid", 0) or 0)
+                 ask  = float(row.get("ask", 0) or 0)
+                 last = float(row.get("lastPrice", 0) or 0)

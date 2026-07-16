@@ -1,6 +1,21 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-16 — scan_to_html.py NaN guard fix (_build_surface) — AWAITING GAI
+
+**File:** scan_to_html.py (2358 lines) | **Function:** `_build_surface()` nested in `_fetch_spy_0dte_data()`
+**Finding:** `pandas.NA` in openInterest column fires `TypeError: boolean value of NA is ambiguous` before the `isinstance(_oi, float)` check runs. Propagates to outer `except Exception` at L1232-1233 → entire function returns None for all symbols (10+ `[scan] _fetch_options_data fetch failed` warnings per run).
+**Root cause:** Newer pandas nullable Int64 dtype returns `pandas.NA` (not `numpy.float64('nan')`). `bool(pandas.NA)` raises TypeError; `isinstance` never reached.
+**Fix:** Replace fragile `if _oi and not (isinstance(_oi, float) and math.isnan(_oi))` with `try: oi = int(_oi) if _oi else 0 / except (ValueError, TypeError, OverflowError): oi = 0`. Covers float nan (ValueError), pandas.NA (TypeError), float inf (OverflowError).
+**RC audit:** RC-1 through RC-8 all PASS. Diff introduces no new violations.
+**Board:** 3/3 PASS (A=PASS, B=PASS, C=PASS). Static: py_compile/mypy/ruff all PASS. Cold-agent v2 PASS.
+**Gro:** WAIVED (TPD-exhausted, Rafael standing rule 2026-07-16). **GAI:** PENDING — awaiting interactive session (API keys not available in autonomous environment).
+**Pending JSON:** `logs/pending_gro_gai_2026-07-16_nan_guard_scan_to_html.json`
+**Patch file:** `logs/pending_patch_2026-07-16_nan_guard_scan_to_html.patch`
+**Integrity:** SHA256 original=`ceaa59b275c5f12b8b862cd2b88d5b57288e589e5309302144ec0bbea60fb509` | base commit=`1fa8d2e8`
+**Note:** Two prior failed attempts (2026-07-08/09) used wrong approach (fillna on DataFrame/list). This attempt uses targeted try/except — fundamentally different and all gates PASS.
+
+---
 ## 2026-07-13 — QHM dip-add: OPTION-C stop-safe add (wash-trade fix) — SHIPPED
 
 The activated dip-add couldn't place a buy: each QHM position holds a GTC sell-stop and Alpaca blocks

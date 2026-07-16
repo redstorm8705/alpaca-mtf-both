@@ -8,7 +8,7 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-16 interactive) — pick up here
+## ⏩ LATEST (2026-07-16 autonomous nightly) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
@@ -17,6 +17,24 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
 the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
 logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream. Gro is TPD-exhausted
 → board + GAI + `--waive-gro` suffices (Rafael standing rule).
+
+**⏩ AUTONOMOUS NIGHTLY — EXACT NEXT STEP:**
+Run GAI audit on the scan_to_html NaN guard patch (board 3/3 PASS, static PASS, cold-agent PASS — awaiting GAI only).
+GAI prompt is embedded in `logs/pending_gro_gai_2026-07-16_nan_guard_scan_to_html.json` (`gai_prompt` field).
+Run: `curl ... -d '{"contents":[{"parts":[{"text":"<gai_prompt from JSON>"}]}],...}'` with `GEMINI_API_KEY` from `.env`.
+If GAI → APPROVE: apply the 4-line diff at line 1098 of `scan_to_html.py`, run final static analysis, commit + push + OCI pull + restart.
+If GAI → REJECT: move JSON to `rejected_gro_gai` status + log in tb_audit_log.md.
+**Patch diff:** `logs/pending_patch_2026-07-16_nan_guard_scan_to_html.patch`
+**After scan_to_html:** Priority queue → (1) catalyst guidance_cut one-click approval (`logs/pending_approval_catalyst_guidance_2026-07-14.md`, Rafael go); (2) Harris masked-loss doc-comment; (3) Stage-2 cosmetic renames; (4) GEX threshold recalibration.
+
+**✅ AUTONOMOUS NIGHTLY COMPLETED (2026-07-16): scan_to_html.py NaN guard — full audit sequence through Step 4b.7 PASS:**
+- Full read gate: 2358 lines, 8 chunks — COMPLETE
+- 10-pt audit + RC-1 through RC-8: all PASS — COMPLETE
+- Board vote 3/3 PASS (A/B/C all PASS) — COMPLETE
+- Static analysis (py_compile/mypy/ruff all PASS on scratchpad copy) — COMPLETE
+- Cold second-agent v2 PASS — COMPLETE
+- GAI: BLOCKED — GEMINI_API_KEY not available in autonomous environment (lives in Mac .env)
+- Status: AWAITING GAI (interactive session required to run GAI and ship)
 
 **✅ SLACK-RELIEF SECONDARY SHIPPED + LIVE + VERIFIED (`2cf6526`+`600c5d0`, 2026-07-16) — last known spammer
 closed.** New `scripts/service_watchdog.sh` replaces the `*/5` one-liner (which alerted on the FIRST failed
