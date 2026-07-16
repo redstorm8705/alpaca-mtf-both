@@ -21,10 +21,20 @@ THROTTLE=1800   # 30 min per alert category
 # alert_once <category_key> <message>
 # Sends the Slack alert only if >THROTTLE seconds have passed since the last send
 # for that category. Always returns 0 so callers never break on suppression.
+#
+# CONFIRMED-SEND DISCIPLINE (board catch 2026-07-16, backported from
+# scripts/service_watchdog.sh): this used to write the stamp BEFORE curl, so a
+# FAILED delivery (network blip, bad/missing webhook) silently suppressed a REAL
+# alert for the next 30 minutes — the throttle ate an alert that was never sent.
+# Now the stamp is written ONLY after a confirmed POST (curl rc=0), so a failed
+# delivery retries on the next tick instead of being swallowed; a missing webhook
+# or a curl failure is logged loudly rather than passing silently. A watchdog's
+# only product is the operator's trust that silence means healthy.
+# NOTE: the auto-restart ACTION remains unthrottled and unaffected by this.
 alert_once() {
     local key="$1" msg="$2"
     local stamp="/tmp/mtf_memwatch_${key}"
-    local now last
+    local now last rc
     # flock serializes the read-modify-write on the stamp so two overlapping
     # runs can't both slip past the throttle (GAI preship hardening 2026-07-14).
     (
@@ -32,11 +42,21 @@ alert_once() {
         now=$(date +%s)
         last=0
         [ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
+        case "$last" in (*[!0-9]*|"") last=0 ;; esac
         if [ $((now - last)) -ge "$THROTTLE" ]; then
-            echo "$now" > "$stamp"
-            curl -s -X POST "$WEBHOOK" \
-              -H 'Content-type: application/json' \
-              -d "{\"text\":\"$msg\"}" >/dev/null 2>&1
+            if [ -z "$WEBHOOK" ]; then
+                echo "$(TZ=America/Los_Angeles date): ERROR — SLACK webhook missing/empty; alert NOT delivered: $msg" >> "$LOG"
+            else
+                curl -s -X POST "$WEBHOOK" \
+                  -H 'Content-type: application/json' \
+                  -d "{\"text\":\"$msg\"}" >/dev/null 2>&1
+                rc=$?
+                if [ "$rc" -eq 0 ]; then
+                    echo "$now" > "$stamp"
+                else
+                    echo "$(TZ=America/Los_Angeles date): ERROR — Slack POST failed (curl rc=$rc); alert NOT delivered, retrying next tick: $msg" >> "$LOG"
+                fi
+            fi
         fi
     ) 200> "$stamp.lock"
     return 0
