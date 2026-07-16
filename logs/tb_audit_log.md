@@ -8059,3 +8059,33 @@ gtc_manager.py:302 and :381 `_TERMINAL` omit "rejected" (falls into "else: still
 candidate, did NOT cause this loss.
 REAL LESSON (not a code bug): a 12% overnight gap is unhedgeable by a stop → overnight-gap/sizing exposure
 question (Architecture Invariant #11), not stop mechanics.
+
+## 2026-07-16 — scripts/service_watchdog.sh — Slack-relief SECONDARY (last known spammer) SHIPPED
+ROOT: the */5 crontab one-liner `systemctl is-active --quiet mtf-bot mtf-writer mtf-http || curl <slack>`
+had (1) NO GRACE → alerted on the FIRST failed check, so a check landing mid-restart fired a FALSE
+"bot DOWN" (18 restarts observed in 24h); (2) NO THROTTLE → a real outage re-alerted every 5 min forever.
+Same class as the memory_watchdog.sh <200MB spammer (fixed 2026-07-14).
+FIX (new script, same */5 cron): consecutive-fail GRACE (default 2 ≈10min, tunable SVC_GRACE_CHECKS);
+30-min THROTTLE (flock+stamp); one-shot RECOVERY notice; HONEST DELIVERY (log never claims ALERT SENT
+unless the POST succeeded; stamp written ONLY on confirmed send so a failed delivery retries next tick);
+counter DECAY not hard-reset (a flapper still accumulates — hard reset would NEVER alert = the only path
+worse than the one-liner); UNTHROTTLED disk-full/state-write guard (state failure is CORRELATED with the
+outage it must catch — mtf-writer writes logs).
+GATE: bash -n; mocked self-test PASS (grace/alert/throttle/recovery, blip, flapper d-u-d-d, empty-webhook,
+curl-fail, disk-full, no-false-positive). GAI APPROVE-with-changes (silent-delivery defect → fixed).
+Board Majors/Kim APPROVE-with-changes — BOTH BLOCKERS fixed: (1) exec bit (file was 0644; committed 100755,
+verified via git ls-files — a non-exec file = cron Permission denied = watchdog silently stops watching);
+(2) cron invokes via /bin/bash so a lost exec bit/mangled shebang can't disarm it. Gro WAIVED (TPD).
+Preship markers d6eed967d5e9 → baf2117d0d60.
+⚠️ SELF-CAUGHT BUG (live verification, pre-ship): the board-suggested hardening `grep -m1 '^SLACK_WEBHOOK='`
+matched NOTHING — the .env var is **SLACK_WEBHOOK_URL**. WEBHOOK would have been empty → the watchdog could
+NEVER deliver an alert (the exact "silently stops watching" failure, introduced BY the hardening).
+memory_watchdog.sh:17 greps the UNANCHORED substring, which matches _URL by accident. Fixed to
+`grep -m1 '^SLACK_WEBHOOK_URL=' | cut -d= -f2-`; live-verified (len=81, https).
+SHIPPED 2cf6526 + 600c5d0. OCI: git pull, mode 100755 confirmed, flock at /usr/bin/flock, crontab swapped
+(backup logs/crontab.bak.1784217095, 1:1 replace, 91 lines unchanged), runs silent when healthy (exit 0).
+FOLLOW-UPS (board, logged): (1) HEARTBEAT — nobody watches the watchdog; have it touch a heartbeat every run
+and have nightly_audit assert it is <15min old (converts "watchdog died" from invisible to a nightly Slack);
+(2) BACKPORT confirmed-send discipline into memory_watchdog.sh alert_once() — it stamps BEFORE curl (:36-39),
+so a failed delivery silently suppresses a real <150MB alert for 30 min (same bug class just fixed here);
+(3) rolling-window flap detector (a perfect 50/50 alternation still never reaches GRACE).
