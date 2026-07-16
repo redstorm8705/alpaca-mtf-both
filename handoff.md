@@ -21,10 +21,21 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
 - **Bug C RESOLVED via Option B:** pop@portfolio_tracker:1543 is CORRECT; the guard makes the false-drop
   harmless. Risky Option A lifecycle rewrite deliberately NOT done. Full diag+gate:
   `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`.
-- **Follow-ups (logged, non-blocking, NEXT candidates):** Bug E (was −17 a real double-sell? GTC-stop-vs-cover
-  lifecycle check); Harris masked-loss doc-comment in `fill_helpers._sanity_ok` (>50% gap loss + equity-backstop
-  note); persist-then-auto-adopt tightening (a bounded intra-restart unmanaged window remains for a real
-  double-sell, alerted each restart). Plus the pre-RIVN priority queue: catalyst guidance_cut one-click approval
+- **✅ Bug E RESOLVED (2026-07-16, no code change):** NO double-sell — complete fills 7/6-7/8 = bought 17, sold 17,
+  NET 0; ONE sell order. The -17 was a PHANTOM (Alpaca paper booked the long-closing sell as opening a short,
+  avg_entry=$17.32=sell price). **SMOKING GUN:** order f1d4e826 = BUY 17 stop @$18.81 submitted 7/7 14:14:11, 5s
+  after the phantom adoption → the bot placed a REAL live order against a NON-EXISTENT short (would have bought 17
+  real shares if triggered; canceled before fill). **Bug B guard = real capital-risk prevention, VALIDATED**; the
+  "real double-sell left unmanaged" fail-safe worry does NOT apply to this class.
+- **▶▶ NEW FINDING / TOP NEXT CANDIDATE — OM-BUG-1 is NOT benign:** RIVN's protective stop was CANCELED
+  (e72ae17d) + resubmit REJECTED (1a30ab52) at 7/6 21:21 UTC (5:21 PM ET, after RTH close) = the known
+  extended-hours GTC rejection (42210000 / OM-BUG-1). RIVN sat UNPROTECTED overnight → gap-down → cover @17.32 =
+  the REAL −$41 loss. **This bug is currently listed in nightly_audit.py KNOWN BENIGN PATTERNS (~L332) telling the
+  auditor "Do NOT flag pre-RTH occurrences" — so a LOSS-CAUSING bug is being actively suppressed from the audit.**
+  Candidate: (a) re-classify OM-BUG-1 out of KNOWN BENIGN, (b) diagnose/fix the extended-hours stop rejection so
+  overnight positions are never left unprotected. Full evidence: `logs/rivn_pnl_corruption_diagnosis_2026-07-16.md`.
+- **Other follow-ups (logged, non-blocking):** Harris masked-loss doc-comment in `fill_helpers._sanity_ok`;
+  persist-then-auto-adopt tightening. Plus the pre-RIVN priority queue: catalyst guidance_cut one-click approval
   (`logs/pending_approval_catalyst_guidance_2026-07-14.md`); Stage-2 cosmetic renames; GEX threshold recalibration
   once clean data; avg_r_multiple exit-discipline STRATEGY review (0.5R premature-truncation lever — board).
 
