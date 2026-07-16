@@ -29,6 +29,7 @@ logs/; it does NOT yet become the authoritative source (that is Phase 2b, gated)
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import json
 import time
@@ -49,17 +50,39 @@ logger = logging.getLogger(__name__)
 # 5pm PT), silently dropping it from that trading day's total. Convert to PT first.
 _PT_TZ = ZoneInfo("America/Los_Angeles")
 
+# Matches the fractional-seconds group of an ISO timestamp (the '.NNN' before any
+# tz offset). Alpaca emits VARIABLE-length fractions; Python 3.10's
+# datetime.fromisoformat accepts ONLY 3- or 6-digit fractions, so a 5-digit fraction
+# like '2026-05-13T06:00:16.06547Z' raised ValueError and HALTED the order-history
+# paginator (marking P&L INCOMPLETE, 2026-07-15). Normalize to exactly 6 digits first.
+_FRAC_RE = re.compile(r"\.(\d+)")
+
+
+def _iso_to_dt(ts: str):
+    """Parse a UTC ISO-8601 timestamp to an aware datetime, tolerant of Alpaca's
+    variable-length fractional seconds (1-9 digits) and the 'Z' suffix. Pads/truncates
+    the fraction to exactly 6 digits so Python 3.10's fromisoformat accepts it. Returns
+    None on genuine failure (never raises) — callers decide how to degrade."""
+    if not ts:
+        return None
+    try:
+        _t = ts.strip().replace("Z", "+00:00")
+        m = _FRAC_RE.search(_t)
+        if m:
+            _frac6 = (m.group(1) + "000000")[:6]
+            _t = _t[:m.start() + 1] + _frac6 + _t[m.end():]
+        return datetime.fromisoformat(_t)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
 
 def _pt_date(transaction_time: str) -> str:
     """UTC ISO transaction_time -> 'YYYY-MM-DD' PT calendar date. Falls back to the
     raw UTC date prefix if the timestamp is missing/unparseable (never raises)."""
-    if not transaction_time:
-        return ""
-    try:
-        _t = transaction_time.replace("Z", "+00:00")
-        return datetime.fromisoformat(_t).astimezone(_PT_TZ).strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        return transaction_time[:10]
+    _dt = _iso_to_dt(transaction_time)
+    if _dt is None:
+        return transaction_time[:10] if transaction_time else ""
+    return _dt.astimezone(_PT_TZ).strftime("%Y-%m-%d")
 
 # ── Path anchoring — always relative to this file, never CWD ──────────────────
 _ROOT = Path(__file__).resolve().parent.parent
@@ -149,14 +172,14 @@ def _bump_iso_ms(ts: str) -> str | None:
     """Return `ts` (UTC ISO-8601) advanced by 1ms, so it can be used as an INCLUSIVE
     `until` bound against Alpaca's strictly-before (exclusive) `until` — 'before T+1ms'
     includes every order at exactly T. Returns None if unparseable (caller stops)."""
-    try:
-        from datetime import timedelta
-        _t = datetime.fromisoformat(ts.replace("Z", "+00:00")) + timedelta(milliseconds=1)
-        # Emit RFC3339 'Z' form — NOT isoformat()'s '+00:00': a literal '+' in the URL
-        # query decodes to a space and Alpaca rejects it (HTTP 422). 'Z' has no '+'.
-        return _t.isoformat().replace("+00:00", "Z")
-    except (ValueError, TypeError, AttributeError):
+    from datetime import timedelta
+    _dt = _iso_to_dt(ts)   # tolerant of Alpaca's variable-length fractional seconds
+    if _dt is None:
         return None
+    _t = _dt + timedelta(milliseconds=1)
+    # Emit RFC3339 'Z' form — NOT isoformat()'s '+00:00': a literal '+' in the URL
+    # query decodes to a space and Alpaca rejects it (HTTP 422). 'Z' has no '+'.
+    return _t.isoformat().replace("+00:00", "Z")
 
 
 def fetch_all_orders() -> list[dict]:
