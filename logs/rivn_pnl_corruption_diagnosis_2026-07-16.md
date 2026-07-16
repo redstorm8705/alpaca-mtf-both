@@ -54,8 +54,20 @@
   fill_helpers 370); statics; cold-2nd PASS; board Harris APPROVE (masked-loss check: kill switch uses
   Alpaca EQUITY not daily_pnl → phantom-proof, real gap loss captured regardless); Gro+GAI design + FINAL
   preship APPROVE (a7223e38a434). Runtime-verified on OCI.
-- **⏳ Bug B NEXT:** orphan_manager.py:928 direction inference (full read + gate).
-- **⏳ Bug C NEXT:** portfolio_tracker false-drop root (full read + gate).
+- **⏳ Bug B + C = ONE JOINT FIX (BGG design LOCKED 2026-07-16, GAI + cold board; Gro TPD-skipped per Rafael rule):**
+  - **PRIMARY (Bug C, portfolio_tracker):** stop the FALSE-DROP — a just-closed/fill-unverified position stays in
+    tracker.open_trades in a "closing/pending-verification" state until CONFIRMED flat (get_open_positions returns
+    none for it). Then it never appears as an orphan. This is the root fix; RIVN incident disappears.
+  - **GUARD (Bug B, orphan_manager reconcile_positions, defense-in-depth):** skip adopting a symbol present in
+    tracker.closed_trades with exit within a recent window (config `RECONCILE_RECENT_CLOSE_WINDOW_MINUTES`, default ~5m);
+    ALWAYS Slack-alert on a bot-flat-vs-Alpaca-position mismatch (signals a double-sell OR stale read); FAIL-SAFE: if a
+    skipped orphan PERSISTS beyond a longer threshold (~15m), adopt it with a CRITICAL alert (never leave a real
+    crash-orphan stopless). Line 928 direction inference is CORRECT and stays; the fix is the adoption GUARD, not the formula.
+  - **Bug E (open question):** was the −17 short a REAL double-sell (stale GTC stop firing after the cover) or a stale
+    Alpaca read? The "always-alert on mismatch" guard surfaces it going forward; a dedicated check of the GTC-stop
+    lifecycle vs the manual cover is a follow-up.
+  - **Sequencing:** fix Bug C (false-drop) FIRST (root), then Bug B guard (defense-in-depth). Each its own full-read gate
+    (portfolio_tracker.py 2268L + orphan_manager.py 1624L) + BGG + preship. Diagnose the record_exit false-drop next.
 
 ## FOLLOW-UP (Harris board seat, out of scope for Bug A — logged not shipped)
 `fill_helpers.py:_sanity_ok` (±50% band): a >50% gap fill is rejected → recorded as breakeven (masked loss),
