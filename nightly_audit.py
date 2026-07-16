@@ -693,6 +693,43 @@ def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
     return "\n".join(lines)
 
 
+# ── Watchdog heartbeat freshness (who watches the watchdog) ──────────────────
+# Board follow-up 2026-07-16: every watchdog's failure mode is SILENCE — if cron
+# stops, a unit is disabled, or the script breaks, the alerting is simply GONE and
+# nothing says so. scripts/service_watchdog.sh touches this file on EVERY */5 run
+# (before any branching), so a fresh mtime proves exactly one thing: the watchdog
+# ran. This nightly assert turns "the watchdog died" from invisible into one Slack
+# a day. Deterministic (mtime math) — never an LLM judgment.
+HEARTBEAT_FILE = LOGS_DIR / "svc_watchdog.heartbeat"
+HEARTBEAT_MAX_AGE_MIN = 15   # watchdog runs */5 → >15min = 3 missed runs = dead
+
+
+def _check_watchdog_heartbeat() -> None:
+    """Alert if the service watchdog's heartbeat is missing or stale. Never raises."""
+    try:
+        if not HEARTBEAT_FILE.exists():
+            msg = (f"WATCHDOG HEARTBEAT MISSING ({HEARTBEAT_FILE.name}) — "
+                   f"scripts/service_watchdog.sh has not run. The service-DOWN "
+                   f"watchdog may not be running at all (cron disabled? script "
+                   f"missing/not executable?). Nothing is watching the services.")
+            logger.critical(msg)
+            _slack("Watchdog heartbeat MISSING", msg, emoji=":rotating_light:")
+            return
+        age_min = (datetime.now(UTC).timestamp() - HEARTBEAT_FILE.stat().st_mtime) / 60.0
+        if age_min > HEARTBEAT_MAX_AGE_MIN:
+            msg = (f"WATCHDOG HEARTBEAT STALE — last run {age_min:.0f} min ago "
+                   f"(expected <= {HEARTBEAT_MAX_AGE_MIN}; it runs every 5 min). "
+                   f"The service-DOWN watchdog has stopped. Nothing is watching "
+                   f"the services. Check: crontab -l | grep service_watchdog")
+            logger.critical(msg)
+            _slack("Watchdog heartbeat STALE", msg, emoji=":rotating_light:")
+        else:
+            logger.info("Watchdog heartbeat OK (%.1f min old)", age_min)
+    except Exception as _hb_e:
+        # Never let the heartbeat check break the audit.
+        logger.warning("watchdog heartbeat check failed: %s", _hb_e)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -701,6 +738,11 @@ def main():
         sys.exit(1)
 
     logger.info(f"=== Nightly Gemini Audit — {AUDIT_DATE} ===")
+
+    # Who watches the watchdog: assert the service watchdog actually ran recently.
+    # Runs first + independently so a dead watchdog is reported even if the audit
+    # itself later fails (Gemini down, etc.).
+    _check_watchdog_heartbeat()
 
     logger.info("Collecting bot.log...")
     log_lines = _collect_log_lines()

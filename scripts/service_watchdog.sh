@@ -70,6 +70,15 @@ slack() {
     return 0
 }
 
+# HEARTBEAT (board follow-up 2026-07-16: "nobody watches the watchdog"). Every
+# watchdog's failure mode is SILENCE, and silence is indistinguishable from health:
+# if cron stops, the unit is disabled, or this script breaks, the alerting is simply
+# GONE and nothing says so. Touch on EVERY run (healthy or not, before any branching
+# or flock) so freshness proves only one thing — this script ran. nightly_audit.py
+# asserts it is < HEARTBEAT_MAX_AGE_MIN old and Slacks a CRITICAL if not, which turns
+# "the watchdog died" from invisible into a once-a-day alert. Cheap and unconditional.
+touch /home/ubuntu/mtf-bot/logs/svc_watchdog.heartbeat 2>/dev/null
+
 # Which services are down? (empty => all healthy)
 DOWN=""
 for s in $SERVICES; do
