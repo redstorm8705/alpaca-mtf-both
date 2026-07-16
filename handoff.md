@@ -10,6 +10,21 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 ## ⏩ LATEST (2026-07-15 interactive — autonomous-chain resume) — pick up here
 
+**✅ TQI STALE-BASELINE FIX SHIPPED + LIVE + VERIFIED (`df03656`, restarted 2026-07-15):** today's nightly
+ALPHA/HIGH — `execution/exit_logic.py` `_compute_tqi` Component-1 hardcoded floor=9 went stale when the board
+lowered the entry floor 2026-06-30 (CONVICTION_SKIP_BELOW 10→8); valid score-8 (half) AND score-9 (FULL-conviction)
+entries both graded 0 confluence pts → biased Kelly TQI feedback down. FIX: config-derive anchor =
+`config.CONVICTION_SKIP_BELOW` (min enterable score), 5pt floor → 25 at the 12-pt max. Mapping now 8→5, 9→10,
+10→15, 11→20, 12→25 (RUNTIME-VERIFIED on OCI). **Anchor note:** approval said min(MIN_LONG_SCORE) but those =4
+at runtime; CONVICTION_SKIP_BELOW (=8) is the constant that reproduces the approved mapping. Gate: Open Question
+Protocol design 4/4 (config-derived unanimous; floor=5 3-1 vs LdP's 2) + Rafael APPROVE → statics/self-test/cold-2nd
+PASS → FINAL preship gro+gai APPROVE (26c5482be261). Full read: exit_logic.py 2268 lines (Explore verbatim + personal
+1-600). RC pre-existing flagged for separate pass: RC-7 qty_rem==1 tranche skip (~L638); RC-4 fill sites (likely false).
+**STILL-OPEN from today's nightly (next candidates):** avg_r_multiple 0.012 vs 2.08 target R:R (edge-capture failure
+— ALPHA/HIGH, diagnostic-first); confluence chart-context fields None for all entries (silent fetch fail); VOLSHADOW
+"bucket":"B" stale tag (ALPHA/LOW cosmetic).
+
+
 **✅ P&L LEDGER unparseable-boundary FIX SHIPPED + LIVE + VERIFIED (`e6d471e`, restarted 2026-07-15):**
 Today's nightly Gemini VERDICT=FAIL was driven by CRITICAL (2x) `reporting.pnl_ledger fetch_all_orders:
 unparseable boundary created_at '2026-05-13T06:00:16.06547Z' — stopping; order history may be INCOMPLETE`.

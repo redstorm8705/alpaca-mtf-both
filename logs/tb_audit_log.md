@@ -7952,3 +7952,20 @@ silently — add WARNING log, P3.
 STATUS: SHIPPED + LIVE + VERIFIED (commit e6d471e, restarted 2026-07-15). Rafael APPROVE → FINAL preship
 Gro+GAI APPROVE (marker cd9975b5337c; one GAI flash false-reject on the regex re-rolled clean) → git
 single-channel + OCI restart + DEPLOY_OK. Runtime proof: fetch_all_orders() walked 1989 orders, zero CRITICAL.
+
+## 2026-07-15 (autonomous-chain resume) — execution/exit_logic.py — TQI confluence sub-score stale-baseline (ALPHA/HIGH)
+FINDING (from today's nightly): `_compute_tqi` Component-1 (`score_pts = round(max(0.0, (entry_score-9)/3*25))`)
+hardcoded floor=9. Board lowered entry floor 2026-06-30 (CONVICTION_SKIP_BELOW 10->8); valid score-8 (half)
+AND score-9 (FULL-conviction) entries both computed 0 confluence pts → biased Kelly TQI rolling feedback down.
+Root cause = stale hardcoded literal (no-static-threshold violation).
+FULL READ: 2268 lines (Explore agent, verbatim) + personal read 1-600. RC-1..RC-8 audited. Pre-existing items
+flagged for separate pass: RC-7 qty_rem==1 tranche skip (L638-area), RC-4 fill-price sites (likely false flag —
+they DO use _fetch_actual_fill_price). Not bundled (rule C-6).
+FIX: config-derive baseline — anchor = config.CONVICTION_SKIP_BELOW (effective min enterable score=8), 5pt floor
+scaling to 12-pt max (sum(SCORE_WEIGHTS)=12) = 25. Mapping 8->5,9->10,10->15,11->20,12->25. +14/-3.
+ANCHOR CORRECTION: approval said min(MIN_LONG_SCORE,MIN_SHORT_SCORE) but those are 4 at runtime (not 8) —
+CONVICTION_SKIP_BELOW (=8) is the constant that reproduces the approved mapping; surfaced to Rafael.
+DESIGN GATE (Open Question Protocol): DECISION 1 config-derived 4/4 unanimous (Gro,GAI,Thorp,LdP); DECISION 2
+positive floor 4/4, magnitude 5 (3-1 vs LdP's 2) → board majority = 5. Rafael APPROVE.
+DIFF GATE: statics clean (py_compile/mypy/ruff), self-test PASS, cold-2nd PASS, FINAL preship gro+gai APPROVE
+(marker 26c5482be261). SHIPPED df03656, OCI DEPLOY_OK + restart, HEALTH_OK. Runtime proof on OCI: 8->5..12->25.
