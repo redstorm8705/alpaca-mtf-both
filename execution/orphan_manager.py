@@ -920,6 +920,77 @@ def reconcile_positions(
     # function (L960/L979 original numbering) at this identical call time,
     # proven populated by production logs before this fix.
     orphans = (alpaca_symbols - tracker_symbols) - _get_qhm_syms()
+
+    # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
+    # A symbol the bot JUST CLOSED can momentarily reappear in Alpaca's OPEN positions:
+    # a settling/stale read, or a real double-sell (e.g. a stale GTC stop firing after
+    # the cover). Adopting it as a fresh orphan infers direction from the residual qty
+    # sign — RIVN's closed LONG reappeared as -17 and was adopted as a SHORT 36 min
+    # later with inverted stop/target, and its corrupted $0.00 / -73.86% P&L tripped the
+    # kill switch. So: exclude any recently-closed symbol from the orphan set and
+    # CRITICAL-alert the mismatch, so a GENUINELY live position (real double-sell) is
+    # surfaced for manual action instead of adopted with a bogus inferred direction.
+    # The pop in portfolio_tracker.record_exit is CORRECT (Bug C diag); this reconciler
+    # simply must not treat a just-closed lot as an orphan.
+    #
+    # FAIL-SAFE for a genuinely-live position: reconcile_positions runs ONCE PER STARTUP
+    # (main.py). A CRITICAL Slack alert fires on every restart while the mismatch lasts
+    # (no throttle needed — one call per process). Once the close ages past the window,
+    # the NEXT restart no longer excludes the symbol and adopts+stops it normally — so a
+    # real position self-heals within one restart-past-window, never permanently naked.
+    # WINDOW default 120 min: comfortably covers the RIVN 36-min gap (3.3x margin) for a
+    # stale/settling read while keeping the max manual-attention window bounded; a real
+    # position auto-adopts on the next restart past it. Config-tunable (no code change);
+    # shorter = faster auto-adopt of a real position, but may miss a longer stale read.
+    _recent_close_min = getattr(config, "RECONCILE_RECENT_CLOSE_WINDOW_MINUTES", 120)
+    _now_pt = datetime.now(PT)
+    _recently_closed: set = set()
+    for _ct in reversed(getattr(tracker, "closed_trades", None) or []):
+        _csym = _ct.get("symbol") if isinstance(_ct, dict) else None
+        if not isinstance(_csym, str):
+            continue
+        # Only symbols CURRENTLY in the orphan set are candidates (positive membership
+        # guard); already-matched symbols are skipped.
+        if _csym in orphans and _csym not in _recently_closed:
+            _xt = _ct.get("exit_time")
+            if not _xt or not isinstance(_xt, str):
+                continue
+            try:
+                _xdt = datetime.fromisoformat(_xt)
+            except (ValueError, TypeError):
+                continue
+            if _xdt.tzinfo is None:
+                _xdt = _xdt.replace(tzinfo=PT)
+            if 0 <= (_now_pt - _xdt).total_seconds() <= _recent_close_min * 60:
+                _recently_closed.add(_csym)
+    if _recently_closed:
+        orphans = orphans - _recently_closed
+        for _rsym in sorted(_recently_closed):
+            _rpos = alpaca_positions[_rsym]
+            try:
+                _rqty = _rpos.qty
+                _rpx = float(_rpos.avg_entry_price)
+            except Exception:
+                _rqty, _rpx = "?", 0.0
+            logger.critical(
+                "[%s] ORPHAN ADOPTION SKIPPED — bot closed this symbol within "
+                "%dmin but Alpaca still shows %s @ $%.2f. NOT auto-adopting "
+                "(prevents wrong-direction re-adoption). Verify: real double-sell "
+                "vs stale/settling read; manually flatten/adopt if genuinely live.",
+                _rsym, _recent_close_min, _rqty, _rpx,
+            )
+            try:
+                send_slack(
+                    f":rotating_light: ORPHAN ADOPTION SKIPPED [{_rsym}] — bot "
+                    f"closed it within {_recent_close_min}min but Alpaca shows "
+                    f"{_rqty} @ ${_rpx:.2f}. Verify double-sell vs stale read; "
+                    f"manually flatten/adopt if it is a genuine live position."
+                )
+            except Exception as _rse:
+                logger.warning(
+                    "[%s] orphan-skip Slack alert failed: %s", _rsym, _rse
+                )
+
     for sym in orphans:
         pos = alpaca_positions[sym]
         _entry_px  = float(pos.avg_entry_price)
