@@ -8145,3 +8145,39 @@ capital-risk path. FIX DIRECTIONS (BGG next): (1) call _run_fill_recon before th
 (2) widen RC-4 window >> cycle cadence (and move mark_fill_expired's 5-min cutoff with it); (3) stop
 reconcile_eod clobbering _qty_at_close (or have patch_exit_pnl prefer original qty when _qty_at_close==0 and
 not partial_exited); (4) gtc_manager falsely logs "Cover-on-breach filled @ $X" when nothing filled.
+
+## 2026-07-16 — RC-4 reconciler reachability + retry window — pnl=0.0 EPIDEMIC ROOT FIX — SHIPPED fb93d11
+Root (full evidence: logs/pnl_zero_root_cause_2026-07-16.md): every stop-breach cover at the RTH open
+recorded pnl=$0.00 PERMANENTLY. Today RIVN real +$0.51 → $0.00; same mechanism recorded RIVN's real -$41 as
+$0.00 on 7/7 + 6 siblings. Bug A (5fb5c4e) fixed WHICH query the reconciler runs; THIS fixes it never running.
+TWO structural defects fixed:
+1. run_cycle.py — the 9:30-10:00 ET "opening noise window" block runs check_exits then RETURNS while
+   _run_fill_recon sat ~700 lines below → reconciler NEVER ran in the opening window = exactly when
+   stop-breach covers fire AND when fills are slowest (open auction, 4 fills over 2-4 min). Now called after
+   check_exits, before the early return (runtime-verified on OCI: rel-line 30 recon < 32 return).
+2. fill_reconciler.py — max_age_minutes hardcoded 5 vs observed ~5.5-6 min cadence → AT MOST ONE retry,
+   usually ZERO. RIVN's fill was recoverable from 13:34:15 but first touched 14:06 → "expired". Now
+   config.RC4_RECONCILE_WINDOW_MINUTES = 90 (~15 attempts). RETRY BUDGET ONLY — does NOT widen the Alpaca
+   query (bounded independently by entry_time + side filter + ±50% band) → wrong-fill risk ZERO-DELTA (board).
+BOARD (McKinney/Thorp) APPROVE-WITH-CHANGES — 4 required ALL APPLIED: (1) floor clamp (window<5 would make
+mark_fill_expired silently skip expired trades → infinite re-queue loop; chose the board's assert option over
+importing config into the #1 hotspot); (2) expiry CRITICAL+Slack strings f-string the real window (were
+hardcoded "5-min" = false operator signal); (3) stale daily_pnl docstring corrected (rationale false in the
+opening block; conclusion holds — Alpaca-sourced); (4) config constant defined explicitly.
+Gro APPROVE. GAI APPROVE (changes applied; Kelly-rebuild-vs-same-cycle-sizing verified a non-issue — the
+opening window takes NO entries; elsewhere it replaces a fabricated 0.0 with a verified fill = better).
+⚠️ BOARD CAUGHT A FALSE CLAIM OF MINE: **TQI is NOT repaired** — exit_logic.py:180 append_tqi is APPEND-ONLY
+at exit time with the fabricated 0.00; patch_exit_pnl rebuilds Kelly but never replaces the TQI entry → the
+rolling TQI average keeps the corrupted score permanently. Not a regression/blocker; LOGGED FOLLOW-UP.
+Kelly ✓ / win-rate ✓ / daily_pnl ✓ (Alpaca-sourced — kill switch NEVER affected) / TQI ✗.
+WHY IT MATTERS: a SUPPRESSED LOSS inflates Kelly's win rate + under-reports drawdown → biases sizing UPWARD.
+Strictly risk-reducing. GATE: statics x3 clean; self-test PASS (90 from config, floor clamp fires at cfg=3→5,
+real RIVN timeline recovers at the 13:36 pass where OLD(5) was already EXPIRED). Preship gro+gai APPROVE:
+57b8c343732f + c1a22b1e679c + 59520d693858. SHIPPED fb93d11, OCI DEPLOY_OK + restart, HEALTH_OK, RUNTIME-VERIFIED.
+NOTE: one GAI preship roll false-rejected by judging UNCHANGED CONTEXT (claimed Bug A's submitted_after=None
+was "absent" — it is at L168, shipped 5fb5c4e; the diff has zero +/- lines touching it) — its own prompt
+forbids rejecting on space-prefixed context lines. Disproven + re-rolled clean.
+FOLLOW-UPS (board, logged not done): TQI recompute-on-patch; upper-bound accepted filled_at at ~exit+window;
+fill_helpers:369 returns entry_price as its FAILURE value (indistinguishable from a real scratch fill — forces
+the fragile abs(_fill-_entry_px)<_MIN_PRICE_DIFF heuristic) → return None + explicit flag; reconcile_eod:475
+_qty_at_close clobber (poisons only a POST-EOD patch); gtc_manager's false "Cover-on-breach filled @ $X" log.
