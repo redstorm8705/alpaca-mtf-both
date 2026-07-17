@@ -8121,3 +8121,27 @@ GATE: bash -n + py_compile/ruff/mypy clean; self-test PASS (fresh→silent, 20mi
 created; nightly check → fresh → 0 alerts, "Watchdog heartbeat OK (0.0 min old)".
 REMAINING board follow-up: rolling-window flap detector (a perfect 50/50 down/up alternation still never
 reaches GRACE — low value edge case; decay already covers downs>ups).
+
+## 2026-07-16 — ROOT CAUSE of the pnl=0.0 epidemic (from today's nightly VERDICT=FAIL) — DIAGNOSIS
+Today's nightly FAIL: RIVN `pnl: 0.0` + `_fill_unverified` + `_fill_reconcile_expired`. Ground truth: bought
+14@17.42 (7/14), sold 14 across FOUR fills 7/16 13:32:51-13:34:15 UTC (17.45/17.43/17.52/17.55) = REAL P&L
+**+$0.51**; bot recorded **$0.00**. Bug A (5fb5c4e) was live — NECESSARY BUT NOT SUFFICIENT.
+ROOT (3 compounding defects, evidence in logs/pnl_zero_root_cause_2026-07-16.md):
+1. fetch_actual_fill_price has a HARD 2.5s budget and ran 2s after close_position; the OPEN-AUCTION cover took
+   2-4 MINUTES to fill in 4 pieces → no fill existed → entry_price fallback → pnl=(17.42-17.42)*14=0.
+2. **RECONCILER NEVER RUNS IN TIME (binding defect):** (a) run_cycle.py:951-966 `if tod_phase=="opening"` runs
+   check_exits then **returns (~L966)**; `_run_fill_recon` is at **L1672** → the reconciler NEVER RUNS 9:30-10:00
+   ET — exactly when stop-breach covers fire. (b) fill_reconciler.py:39 `max_age_minutes=5` but observed cycle
+   cadence is ~5.5-6 min (13:30:24 / 13:36:22 / 13:41:53) → at most ONE attempt, often ZERO. First touch
+   14:06:30 (36 min later) → EXPIRED → zero recovery attempts. The fill was recoverable from 13:34:15.
+3. `_qty_at_close: 0` is a POST-HOC overwrite by reconcile_eod.py:475 (`= actual_qty`, 0 because flat by EOD),
+   NOT the close-time value (qty was correctly 14 — proof: the qty==0 fallback guard at portfolio_tracker.py:
+   1557-1573 never logged). CONSEQUENCE: patch_exit_pnl (L248-251) recomputes from _qty_at_close → any FUTURE
+   patch computes (fill-entry)*0 = 0 → the EOD overwrite POISONS the repair path.
+SYSTEMATIC: open-covers are the most common cover, and that is exactly when fills are slowest AND the
+reconciler is disabled → every open-cover gets a permanently wrong P&L (7/7 RIVN −$41 + 6 siblings; today).
+IMPACT: reporting/Kelly/TQI/win-rate corruption. Kill switch is phantom-proof (equity-based), so not a live
+capital-risk path. FIX DIRECTIONS (BGG next): (1) call _run_fill_recon before the opening early-return;
+(2) widen RC-4 window >> cycle cadence (and move mark_fill_expired's 5-min cutoff with it); (3) stop
+reconcile_eod clobbering _qty_at_close (or have patch_exit_pnl prefer original qty when _qty_at_close==0 and
+not partial_exited); (4) gtc_manager falsely logs "Cover-on-breach filled @ $X" when nothing filled.
