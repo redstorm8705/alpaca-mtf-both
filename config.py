@@ -243,6 +243,27 @@ SWING_TARGET_PCT    = 0.075   # 1:3 R:R maintained
 ORDER_TYPE         = "market"
 LIMIT_SLIPPAGE_PCT = 0.001
 
+# RC-4 fill-reconciliation retry window, in minutes (2026-07-16 root-cause fix;
+# board + Gro + GAI). How long a fill_unverified exit stays eligible for the
+# reconciler to keep retrying its Alpaca fill lookup before it is declared EXPIRED
+# (CRITICAL + Slack). This is a RETRY BUDGET only — it does NOT widen the Alpaca
+# query itself, which is independently bounded by the trade's own entry_time inside
+# fill_helpers._derive_close_lower_bound (plus a protective-side filter and a ±50%
+# sanity band). So a wider window cannot match a fill a narrower one wouldn't; it
+# only buys more attempts.
+# WHY 90: the window MUST comfortably exceed the real cycle cadence or the reconciler
+# is structurally unable to fire. SCAN_INTERVAL_INTRADAY is 5 min but OBSERVED cycles
+# run ~5.5-6 min (13:30:24 / 13:36:22 / 13:41:53 on 2026-07-16), so the old hardcoded
+# 5-min window gave AT MOST ONE attempt and usually ZERO — RIVN's open-auction cover
+# (fills at 13:32:51-13:34:15, recoverable) was first touched at 14:06 and found
+# already "expired" → real +$0.51 stayed recorded as $0.00; the same mechanism recorded
+# RIVN's real -$41 as $0.00 on 7/7 plus 6 other trades. 90 min ≈ 15 attempts and
+# survives a stalled cycle or a restart. Anything below ~15 is structurally broken.
+# FLOOR: values < 5 are clamped by fill_reconciler — portfolio_tracker.mark_fill_expired
+# hardcodes a 5-min floor guard, and a smaller window there would silently skip expired
+# trades and re-queue them forever.
+RC4_RECONCILE_WINDOW_MINUTES = 90
+
 # ─── SCAN SCHEDULE ───────────────────────────────────────────────────────────
 
 SCAN_INTERVAL_INTRADAY = 5    # minutes

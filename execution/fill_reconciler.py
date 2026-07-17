@@ -19,24 +19,68 @@ Design:
 
 import logging
 
+import config
 from execution.fill_helpers import fetch_actual_fill_price
 
 logger = logging.getLogger(__name__)
 
 _MIN_PRICE_DIFF = 0.001   # ignore trivial float drift in fill comparison
 
+# RC-4 reconciliation retry window (2026-07-16 root-cause fix — board + Gro + GAI).
+# WAS a hardcoded 5 minutes, which made the reconciler STRUCTURALLY UNABLE TO FIRE: the
+# observed run_cycle cadence is ~5.5-6 min (cycles at 13:30:24 / 13:36:22 / 13:41:53), so
+# a 5-min window gave AT MOST ONE attempt and usually ZERO. Real case 2026-07-16: RIVN's
+# open-auction cover filled in 4 pieces over 13:32:51-13:34:15 — recoverable — but the
+# first reconciler touch came at 14:06:30 (36 min later) and found the trade already
+# "expired" → zero recovery attempts ever made → a real +$0.51 stayed recorded as $0.00
+# (the same mechanism recorded RIVN's real -$41 as $0.00 on 7/7, plus 6 other trades).
+# This is a RETRY BUDGET ONLY — it does NOT widen the Alpaca query, which is independently
+# bounded by the trade's own entry_time in fill_helpers._derive_close_lower_bound (plus a
+# protective-side filter and a ±50% sanity band). So a wider window CANNOT match a fill a
+# narrower one wouldn't; it only buys attempts (board: "zero-delta" wrong-fill risk).
+# Expiry semantics shift accordingly: an RC-4 CRITICAL now means "90 min of failed
+# recovery" (a genuinely stuck fill) rather than "5 min" (a normal slow fill) — making the
+# alert meaningful instead of routine noise. The operator is never left silent either way:
+# the FIRST CRITICAL + Slack already fires at exit time from _fill_unverified_fallback.
+_RC4_WINDOW_MIN = getattr(config, "RC4_RECONCILE_WINDOW_MINUTES", 90)
+
+# FLOOR CLAMP (board catch 2026-07-16): portfolio_tracker.mark_fill_expired hardcodes a
+# 5-minute floor guard (`if _exit_dt >= cutoff: continue`) to avoid marking FRESH trades.
+# That is safe while this window is larger, but if anyone ever set this below 5, expired
+# trades would be silently skipped there — never marked, re-queued by _load_log() on every
+# restart → the exact infinite RC-4 CRITICAL loop the T1 fix exists to prevent. Config
+# drives one constant; its partner is hardcoded. Clamp so the two can never drift into it.
+if _RC4_WINDOW_MIN < 5:
+    logger.warning(
+        "[fill_reconciler] RC4_RECONCILE_WINDOW_MINUTES=%s is below the 5-min floor "
+        "hardcoded in mark_fill_expired — clamping to 5 to avoid silently skipping "
+        "expired trades (infinite re-queue loop).", _RC4_WINDOW_MIN,
+    )
+    _RC4_WINDOW_MIN = 5
+
 
 def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: ARG001
     """RC-4: Non-blocking reconciliation pass — called from run_cycle after check_exits().
 
+    Called from BOTH run_cycle paths that can close a position: the main pass, and the
+    9:30-10:00 ET "opening noise window" block (which returns early — before this fix the
+    reconciler was unreachable there, which is exactly where open stop-breach covers fire).
+
     Args:
         tracker: PortfolioTracker instance (owns _unverified_exits + patch_exit_pnl)
         kelly:   KellySizer instance (optional) — passed to patch_exit_pnl for rebuild
-        risk:    RiskManager instance (optional) — reserved; adjust_daily_pnl dropped
-                 (update_daily_pnl_from_alpaca already overwrites daily_pnl each cycle)
+        risk:    RiskManager instance (optional) — reserved; adjust_daily_pnl dropped.
+                 daily_pnl needs no adjustment here because risk.update_daily_pnl_from_alpaca()
+                 sources it from ALPACA, not from the tracker — so a fabricated tracker pnl
+                 never corrupted it. (The old note claimed that call "overwrites daily_pnl
+                 each cycle"; that is FALSE in the opening-window path, where run_cycle
+                 returns above it — but the conclusion still holds, because the value is
+                 Alpaca-sourced rather than refreshed-per-cycle. Board catch 2026-07-16.)
+                 Blast radius of an unpatched fill is therefore Kelly / win-rate / EOD —
+                 NOT the kill switch, which reads Alpaca equity.
     """
     try:
-        pending, expired = tracker.get_unverified_exits(max_age_minutes=5)
+        pending, expired = tracker.get_unverified_exits(max_age_minutes=_RC4_WINDOW_MIN)
     except Exception as _e:
         logger.warning(f"[fill_reconciler] get_unverified_exits failed: {_e}")
         return
@@ -45,15 +89,15 @@ def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: AR
     for sym in expired:
         logger.critical(
             f"[{sym}] RC-4 FILL RECONCILIATION EXPIRED: "
-            f"fill_unverified trade outside 5-min window — P&L remains unreliable. "
-            f"Manual verification required."
+            f"fill_unverified trade outside {_RC4_WINDOW_MIN}-min window — P&L remains "
+            f"unreliable. Manual verification required."
         )
         try:
             from alerts import send_slack
             send_slack(
                 f":rotating_light: RC-4 FILL RECONCILIATION EXPIRED [{sym}] "
-                f"fill_unverified trade outside 5-min reconciliation window. "
-                f"P&L for this trade is unreliable — MANUAL VERIFICATION REQUIRED."
+                f"fill_unverified trade outside the {_RC4_WINDOW_MIN}-min reconciliation "
+                f"window. P&L for this trade is unreliable — MANUAL VERIFICATION REQUIRED."
             )
         except Exception as _se:
             logger.warning(f"[{sym}] Slack RC-4 expiry alert failed: {_se}")

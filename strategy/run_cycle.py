@@ -855,6 +855,34 @@ def run_cycle(
             _main._overnight_entry_check(tracker, risk, kelly, calendar)
         except Exception as _oe:
             logger.warning(f"Overnight entry check failed: {_oe}")
+        # ── F6 Forever-6 STARTER — after-close accumulation on a market-wide dip (DARK) ──
+        # Increment 1c: evaluate once we're past the close (_is_ah window). The manager enforces
+        # per-day + per-month idempotency (durable state), the live catalyst screen, and cash-only
+        # segregation with a hard cash floor (never touches margin / the deep-ladder reserve).
+        # Gated by config.FOREVER6_ENABLED (currently False = DARK). Best-effort: any failure here
+        # must never break the after-hours cycle (overnight stops etc. already ran above).
+        if config.FOREVER6_ENABLED and _is_ah:
+            try:
+                from execution.forever_hold_manager import ForeverHoldManager
+                import execution.broker as _f6_bk
+                _f6_prior = _spy_prior_session_close()
+                _f6_df    = fetch_bars("SPY", config.TF_DAILY, num_bars=2)
+                _f6_close = (float(_f6_df["close"].iloc[-1])
+                             if _f6_df is not None and not _f6_df.empty else None)
+                if _f6_prior and _f6_close and _f6_prior > 0:
+                    _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
+                    _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
+                    _f6_mgr     = ForeverHoldManager(_f6_bk)
+                    _f6_plan    = _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix)
+                    if _f6_plan.get("plan"):
+                        _f6_res = _f6_mgr.execute_starter(_f6_plan["plan"], _f6_plan["budget"])
+                        logger.warning(
+                            "[F6] starter executed: placed %s (spent $%.2f)",
+                            [p.get("symbol") for p in _f6_res.get("placed", [])],
+                            _f6_res.get("spent", 0.0),
+                        )
+            except Exception as _f6e:
+                logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")
         _touch_cycle_ts()
         return
 
@@ -941,6 +969,19 @@ def run_cycle(
         _main.check_partial_exits(tracker, kelly, risk, mri, last_vix=_main._last_vix)
         _main.check_exits(tracker, risk, mri_level=mri.level() if mri else "NORMAL",
                     kelly=kelly, last_vix=_main._last_vix, gate_state=gate_state)
+        # RC-4 (2026-07-16 root-cause fix — board + Gro + GAI): reconcile fills HERE too.
+        # This block returns below, and the normal _run_fill_recon() call sits ~700 lines
+        # further down — so before this, the reconciler NEVER ran during 9:30-10:00 ET.
+        # That is exactly when stop-breach covers fire (a gapped position breaches its stop
+        # at the open), and exactly when fills are slowest (open auction, multi-fill). Result:
+        # every open-cover's P&L was fabricated from the entry_price fallback and never
+        # repaired — RIVN 2026-07-16 real +$0.51 recorded as $0.00; same mechanism recorded
+        # RIVN's real -$41 as $0.00 on 7/7 plus 6 other trades. Reconciliation is BOOKKEEPING
+        # (Alpaca-authoritative fill lookup + patch of an ALREADY-CLOSED trade), not a trading
+        # decision, so it belongs in every path where check_exits ran. Safe here: this window
+        # takes NO new entries, so the Kelly rebuild it may trigger cannot affect sizing this
+        # cycle; cost is ~0.1s/symbol and only for trades flagged _fill_unverified.
+        _run_fill_recon(tracker, kelly=kelly, risk=risk)
         _touch_cycle_ts()
         return
 

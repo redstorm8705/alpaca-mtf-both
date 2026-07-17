@@ -88,3 +88,43 @@ sizing off corrected data is strictly better than sizing off a wrong zero. Non-i
 the live path patches minutes after the exit while _qty_at_close is still true); gtc_manager's false
 "Cover-on-breach filled @ $X" log; the 2.5s fill-fetch budget (the reconciler is the correct repair layer —
 do not block the trading cycle waiting on fills).
+
+## BOARD SEAT (McKinney/Thorp) — APPROVE-WITH-CHANGES; all 4 required changes APPLIED
+**⚠️ IT CAUGHT A FALSE CLAIM OF MINE — recorded for honesty:** I framed this fix as repairing
+Kelly/TQI/win-rate. **TQI is NOT repaired.** `exit_logic.py:180` `kelly.append_tqi(tqi)` is APPEND-ONLY
+and runs at exit time with the fabricated `pnl=0.00`; `patch_exit_pnl` rebuilds Kelly but never recomputes
+or replaces the TQI entry, so the rolling TQI average keeps the corrupted score PERMANENTLY. Not a
+regression and not a blocker — but this ships with TQI still poisoned. Logged follow-up (board rec #6):
+recompute/replace TQI on patch, or skip `append_tqi` for `_fill_unverified` exits and append on patch.
+**Propagation verdict (3 of 4 correct):** Kelly ✓ (rebuild_from_trades; `_fill_unverified` cleared first so
+the trade re-enters stats same pass) · win-rate ✓ (get_stats computes live from closed_trades) · daily_pnl ✓
+(Alpaca-sourced — never corrupted; blast radius is Kelly/TQI/win-rate/EOD, NOT the kill switch) · TQI ✗.
+**Board sharpened the risk case:** today's +$0.51 is a rounding error, but 7/7's **-$41 recorded as $0.00 is
+the real damage — a SUPPRESSED LOSS inflates Kelly's win rate and under-reports drawdown, biasing sizing
+UPWARD.** This fix is strictly risk-reducing.
+**Key board insight:** `max_age_minutes` does NOT widen the Alpaca query at all (the search bound is derived
+independently from entry_time inside fill_helpers) → wrong-fill risk of a wider window is **ZERO-DELTA**; it
+only buys attempts. Board preferred **90** over 60 (costs nothing, survives a stalled cycle/restart);
+anything below ~15 is structurally broken vs a 5.5-6 min cadence.
+**Fail-loud CONFIRMED preserved:** mark_fill_expired's 5-min cutoff is a FLOOR guard, not a ceiling — a trade
+reaching the 90-min expired list is >90min so it always marks. The operator is never silent: the FIRST
+CRITICAL+Slack fires at exit time from `_fill_unverified_fallback`; RC-4 EXPIRED is the second notice.
+**Double-record IMPOSSIBLE:** patch_exit_pnl mutates an existing closed_trades entry in place; never appends,
+never touches open_trades, never calls register_close/_record_tqi. Confirms placement must be AFTER check_exits.
+**2.5s budget: board says DO NOT touch** — the reconciler is the correct repair layer; blocking check_exits for
+minutes at 9:30 while other positions breach is categorically worse. Confirms the deferral.
+### 4 REQUIRED CHANGES — ALL APPLIED + VERIFIED
+1. Floor clamp (chose the board's "assert window>=5" option over parameterizing mark_fill_expired — avoids
+   adding an import to the #1 hotspot). Verified: config=3 → clamped to 5 + WARNING. Closes the trap where a
+   window <5 would make mark_fill_expired silently skip expired trades → infinite re-queue loop.
+2. Expiry CRITICAL + Slack strings now f-string the real window (were hardcoded "5-min" → false operator signal).
+3. Stale docstring fixed: "update_daily_pnl_from_alpaca overwrites daily_pnl each cycle" is FALSE in the
+   opening block (it sits below the early return). Conclusion still holds — daily_pnl is Alpaca-sourced.
+4. `config.RC4_RECONCILE_WINDOW_MINUTES = 90` defined explicitly (getattr fallback kept as belt-and-braces).
+### Recommended, NOT applied (logged)
+5. Upper-bound accepted `filled_at` at ~exit_time+window (guards a close→re-entry→close inside the window;
+   theoretical — `is_in_trade`/`traded_today` blocks same-day re-entry).
+6. TQI gap (above). Also: fill_helpers:369 returns entry_price as its FAILURE value — indistinguishable from a
+   legitimate scratch fill, which is what forces the fragile `abs(_fill-_entry_px) < _MIN_PRICE_DIFF` heuristic.
+   Return None + an explicit flag. Non-blocking.
+**BGG ALIGNED: Gro APPROVE · GAI APPROVE (changes applied) · Board APPROVE (4 required changes applied).**
