@@ -62,3 +62,29 @@ open-cover gets a permanently wrong P&L. Matches 7/7 (RIVN covered 09:38 ET + 6 
 **Impact:** P&L integrity. Today only $0.51, but the SAME mechanism mis-reported RIVN's real −$41 on 7/7 and
 7 trades that day. Kill switch is phantom-proof (uses Alpaca equity, not daily_pnl), so this is a REPORTING/
 Kelly-feedback corruption, not a live capital-risk path — but it poisons Kelly + TQI + win-rate stats.
+
+## FIX IMPLEMENTED (2026-07-16) — awaiting board seat, then preship + ship
+**BGG so far: Gro APPROVE (clean) · GAI APPROVE-WITH-CHANGES (changes = docs + a verification, both
+addressed below; 3rd item deferred) · board seat IN FLIGHT.**
+1. `strategy/run_cycle.py` — `_run_fill_recon(tracker, kelly=kelly, risk=risk)` now called inside the
+   `if tod_phase == "opening":` block, AFTER check_exits and BEFORE `_touch_cycle_ts(); return`
+   (verified line-anchored: recon L984 → touch L985 → return L986).
+2. `execution/fill_reconciler.py` — `_RC4_WINDOW_MIN = getattr(config, "RC4_RECONCILE_WINDOW_MINUTES", 60)`
+   replaces the hard-coded `max_age_minutes=5`; the CRITICAL + Slack expiry messages now report the real
+   window instead of a hard-coded "5-min".
+**PROOF (self-test against the REAL RIVN timeline — exit 13:30:30, cycles 13:36/13:41/13:47/14:06):**
+```
+ +  5.9min  OLD(5)=EXPIRED(never tried)  NEW(60)=PENDING(retry)
+ + 11.4min  OLD(5)=EXPIRED(never tried)  NEW(60)=PENDING(retry)
+ + 36.0min  OLD(5)=EXPIRED(never tried)  NEW(60)=PENDING(retry)
+```
+Under the OLD window EVERY pass was already expired → recovery was IMPOSSIBLE. Under NEW, the 13:36 pass
+recovers (fills existed from 13:34:15). statics: py_compile + ruff + mypy clean.
+**GAI change #2 RESOLVED (verified in code):** the opening block takes NO new entries ("exits monitored, no
+new entries"), so a Kelly rebuild there cannot affect sizing that cycle. Outside it, `_run_fill_recon` (L1672)
+does precede `execute_entries` (L1890) — but it replaces a FABRICATED 0.0 with an Alpaca-verified fill, so
+sizing off corrected data is strictly better than sizing off a wrong zero. Non-issue / net benefit.
+**DEFERRED (unchanged, logged):** reconcile_eod.py:475 `_qty_at_close` clobber (only poisons a POST-EOD patch;
+the live path patches minutes after the exit while _qty_at_close is still true); gtc_manager's false
+"Cover-on-breach filled @ $X" log; the 2.5s fill-fetch budget (the reconciler is the correct repair layer —
+do not block the trading cycle waiting on fills).
