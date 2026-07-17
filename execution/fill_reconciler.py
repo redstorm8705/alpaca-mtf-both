@@ -20,11 +20,13 @@ Design:
 import logging
 
 import config
-from execution.fill_helpers import fetch_actual_fill_price
+from execution.fill_helpers import fetch_actual_fill_price_or_none
 
 logger = logging.getLogger(__name__)
 
-_MIN_PRICE_DIFF = 0.001   # ignore trivial float drift in fill comparison
+# (removed _MIN_PRICE_DIFF 2026-07-16: the fragile `abs(fill-entry) < _MIN_PRICE_DIFF`
+# failure-guess is gone — fetch_actual_fill_price_or_none returns None on a true miss,
+# so a real fill (incl. a genuine scratch at ~entry) is no longer mistaken for a failure.)
 
 # RC-4 reconciliation retry window (2026-07-16 root-cause fix — board + Gro + GAI).
 # WAS a hardcoded 5 minutes, which made the reconciler STRUCTURALLY UNABLE TO FIRE: the
@@ -161,7 +163,15 @@ def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: AR
             continue
 
         try:
-            _fill = fetch_actual_fill_price(
+            # None-on-failure sibling (2026-07-16, board + Gro + GAI): distinguishes
+            # "no fill found yet" (None → leave pending, retry next cycle) from a real
+            # fill — INCLUDING a genuine scratch that filled at ~entry. The old code
+            # used `abs(fill - entry) < _MIN_PRICE_DIFF` to GUESS failure, which skipped
+            # a real scratch trade FOREVER (never patched → rode to RC-4 EXPIRED as a
+            # false CRITICAL, re-queued every restart). fetch_actual_fill_price_or_none
+            # does NOT set _fill_unverified / fire CRITICAL+Slack — this is a retry, not
+            # a final give-up (that is what RC-4 expiry is for).
+            _fill = fetch_actual_fill_price_or_none(
                 symbol=sym,
                 trade=trade_copy,
                 poll_secs=0.1,
@@ -169,19 +179,19 @@ def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: AR
                 no_retry=True,
             )
         except Exception as _fe:
-            logger.warning(f"[{sym}] fill_reconciler: fetch_actual_fill_price error: {_fe}")
+            logger.warning(f"[{sym}] fill_reconciler: fetch_actual_fill_price_or_none error: {_fe}")
             continue
 
-        # fill_helpers returns entry_price on failure — skip if no real fill found
-        _entry_px = float(trade_copy.get("entry_price") or 0.0)
-        if abs(_fill - _entry_px) < _MIN_PRICE_DIFF and trade_copy.get("_fill_unverified"):
+        if _fill is None:
             logger.debug(
-                f"[{sym}] fill_reconciler: fill == entry_price ({_fill:.2f}) "
-                f"— Alpaca still unsettled or genuine scratch trade; skipping patch"
+                f"[{sym}] fill_reconciler: no verified close fill yet — Alpaca still "
+                f"unsettled; leaving pending for the next cycle (RC-4 expiry will "
+                f"surface it if it never resolves)."
             )
             continue
 
-        # Real fill found — patch the closed trade record
+        # Real fill found (a genuine scratch at ~entry is a REAL fill and IS patched —
+        # pnl 0.00 but VERIFIED, which clears _fill_unverified). Patch the closed record.
         _ok = tracker.patch_exit_pnl(
             symbol=sym,
             exit_price=_fill,

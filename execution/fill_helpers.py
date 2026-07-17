@@ -174,14 +174,24 @@ def _fill_unverified_fallback(symbol: str, trade: dict) -> float:
 # Fill-price poller
 # ---------------------------------------------------------------------------
 
-def fetch_actual_fill_price(
+def _recover_fill(
     symbol: str,
     trade: dict,
     poll_secs: float = 0.3,
     submitted_after: float | None = None,
     no_retry: bool = False,
-) -> float:
+) -> "float | None":
     """SF-02 / SF-03: Fetch the real market-order fill price from Alpaca after a close.
+
+    CORE query logic — returns the verified fill price, or None on ANY failure
+    (no derivable query bound / no matching fill after the poll budget / a >50%
+    sanity-band rejection). Returns None WITHOUT the entry_price fallback or its
+    _fill_unverified / CRITICAL / Slack side effects — those belong to the wrappers.
+    Single source of truth (2026-07-16, board + Gro + GAI): the two public entry
+    points below both call this, so the Alpaca query exists in exactly one place —
+    the drift between two copies is precisely what caused Bug A.
+    Diagnostic CRITICAL logs (no-bound, >50% deviation) stay here: they are pure
+    logging (no state mutation) and are worth surfacing on both wrapper paths.
 
     Two query modes:
       submitted_after PROVIDED (same-session close-before-reentry, P5-H2):
@@ -209,8 +219,9 @@ def fetch_actual_fill_price(
       sleeps min(1.0s, remaining budget) unless no_retry=True. Total blocking
       hard-capped at _MAX_TOTAL_WAIT = 2.5s. Latency -> logs/fill_latency.log.
 
-    Fallback (no fill / sanity reject / no bound): returns entry_price only,
-      via _fill_unverified_fallback (sets _fill_unverified + CRITICAL + Slack).
+    Failure (no fill / sanity reject / no bound): returns None. The public
+      wrappers below decide — fetch_actual_fill_price applies the entry_price
+      fallback; fetch_actual_fill_price_or_none propagates None.
     """
     _MAX_TOTAL_WAIT = 2.5  # hard cap: total blocking per symbol per call
     _RETRY_WAIT = 1.0
@@ -229,7 +240,7 @@ def fetch_actual_fill_price(
                 "to bound external-close query — failing closed to _fill_unverified "
                 "rather than risk an ancient-fill match.", symbol,
             )
-            return _fill_unverified_fallback(symbol, trade)
+            return None
 
     def _query_fills() -> "float | None":
         try:
@@ -325,7 +336,7 @@ def fetch_actual_fill_price(
     _price = _query_fills()
     if _price is not None:
         if not _sanity_ok(_price):
-            return _fill_unverified_fallback(symbol, trade)
+            return None
         _elapsed = time.monotonic() - _start
         logger.info(
             f"[{symbol}] Actual close fill: ${_price:.2f} "
@@ -347,7 +358,7 @@ def fetch_actual_fill_price(
         _price = _query_fills()
         if _price is not None:
             if not _sanity_ok(_price):
-                return _fill_unverified_fallback(symbol, trade)
+                return None
             _elapsed = time.monotonic() - _start
             logger.info(
                 f"[{symbol}] Actual close fill: ${_price:.2f} "
@@ -365,5 +376,54 @@ def fetch_actual_fill_price(
             f"({_elapsed1 * 1000:.0f}ms >= {_MAX_TOTAL_WAIT * 1000:.0f}ms)"
         )
 
-    # Both attempts exhausted — unverified fallback (entry_price only).
-    return _fill_unverified_fallback(symbol, trade)
+    # Both attempts exhausted — no fill recovered.
+    return None
+
+
+def fetch_actual_fill_price(
+    symbol: str,
+    trade: dict,
+    poll_secs: float = 0.3,
+    submitted_after: float | None = None,
+    no_retry: bool = False,
+) -> float:
+    """Fetch the real close fill price from Alpaca, or the entry_price fallback.
+
+    Unchanged public contract for the ~17 exit-path callers: on a recovered fill,
+    returns it; on ANY failure, returns _fill_unverified_fallback(...) — the
+    entry_price fallback, which ALSO sets trade['_fill_unverified'] and fires the
+    CRITICAL + Slack. Callers pass the result straight to record_exit, so they need
+    a usable price even when the fill is unknown. Behaviour is byte-for-byte what it
+    was before the 2026-07-16 refactor — it now just delegates the query to
+    _recover_fill and applies the fallback when that returns None.
+    """
+    _r = _recover_fill(
+        symbol, trade, poll_secs=poll_secs,
+        submitted_after=submitted_after, no_retry=no_retry,
+    )
+    return _r if _r is not None else _fill_unverified_fallback(symbol, trade)
+
+
+def fetch_actual_fill_price_or_none(
+    symbol: str,
+    trade: dict,
+    poll_secs: float = 0.1,
+    submitted_after: float | None = None,
+    no_retry: bool = True,
+) -> "float | None":
+    """Like fetch_actual_fill_price but returns None on failure instead of the
+    entry_price fallback — and does NOT set trade['_fill_unverified'] or fire the
+    CRITICAL + Slack.
+
+    For the RC-4 reconciler (execution/fill_reconciler.py), which must tell "no fill
+    found yet" (→ leave the trade pending, retry next cycle) apart from "a real fill
+    that happened to be at ~entry" (a genuine scratch → patch it, pnl 0.00 but
+    VERIFIED). The old code guessed via `abs(fill - entry) < _MIN_PRICE_DIFF`, which
+    skipped a genuine scratch trade FOREVER (never patched → rode to RC-4 EXPIRED as a
+    false CRITICAL, re-queued every restart). Board follow-up 2026-07-16 (board + Gro
+    + GAI). Defaults mirror the reconciler's call site (poll_secs=0.1, no_retry=True).
+    """
+    return _recover_fill(
+        symbol, trade, poll_secs=poll_secs,
+        submitted_after=submitted_after, no_retry=no_retry,
+    )
