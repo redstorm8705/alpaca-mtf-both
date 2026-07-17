@@ -90,6 +90,14 @@ class ForeverHoldManager:
             return {"triggered": False, "reason": f"SPY {spy_day_close_pct:+.2f}% > trigger {thresh:+.2f}% (VIX {vix:.1f})", "plan": [], "budget": 0.0}
 
         state = self._load_state()
+        # Durable per-DAY idempotency: if a starter event was already recorded today, do NOT
+        # place again. This is the definitive anti-double-place guard for the run_cycle after-close
+        # hook, which re-evaluates every closed-market cycle (and could otherwise re-fire after a
+        # mid-evening restart). State-based → survives restarts, unlike an in-process flag.
+        _today_str = datetime.now(PT).strftime("%Y-%m-%d")
+        if any(isinstance(e, dict) and str(e.get("date", "")) == _today_str
+               for e in state.get("events", [])):
+            return {"triggered": True, "reason": f"already ran today ({_today_str})", "plan": [], "budget": 0.0}
         n_month = self._events_this_month(state)
         if n_month >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
             return {"triggered": True, "reason": f"per-month cap hit ({n_month}/{config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH})", "plan": [], "budget": 0.0}

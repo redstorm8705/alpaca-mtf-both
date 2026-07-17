@@ -43,6 +43,9 @@ from execution.broker import (
     submit_gtc_stop_order,
 )
 from execution.fill_helpers import fetch_actual_fill_price
+from execution.ownership_guard import _cached_protected_symbols as _og_protected_cache
+from execution.ownership_guard import load_ledger as _og_load_ledger
+from execution.ownership_guard import tier_qty as _og_tier_qty
 from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _get_qhm_syms
 from strategy.scoring import get_live_score
 
@@ -864,6 +867,37 @@ def _fetch_fill_timestamp(symbol: str) -> str | None:
 # Startup position reconciliation
 # ---------------------------------------------------------------------------
 
+def _get_forever6_syms() -> set:
+    """Symbols the Forever-6 never-sell tier currently HOLDS (ledger forever6 qty > 0).
+    Excluded from the startup orphan set so an F6 anchor — which lives in
+    forever_hold_manager state + the ownership ledger, NEVER in tracker.open_trades — is
+    not adopted as an intraday orphan on restart (which would mislabel its tier, count
+    it against intraday risk, and hand it to check_exits, whose sell attempts the broker
+    never-sell floor then rejects as failed-sell noise). Keyed by HELD symbol, never by
+    FOREVER6_UNIVERSE name: TSLA is both an F6 name and a live intraday candidate, so a
+    by-name exclusion would wrongly skip a genuine intraday orphan. Fails CLOSED on a
+    ledger read error — degrades to the last-known-good protected-symbol cache
+    (_cached_protected_symbols) rather than an empty set, mirroring QHM's own
+    fail-closed exclusion and ownership_guard's protected-symbol REJECT posture.
+    Empty-on-error would un-protect an anchor from adoption while the broker floor's
+    fallback (the SAME cache) is the only remaining guard — a correlated double-fault
+    could then SELL the never-sell book. The cache never raises (empty set on its own
+    read failure), so the only residual is that total state loss (ledger AND cache both
+    unreadable) still adopts the anchor as intraday — the broker floor's tail to catch;
+    this helper no longer widens it. Non-protected orphans (a pure-intraday TSLA, absent
+    from the cache) are still adopted normally."""
+    try:
+        _l = _og_load_ledger()
+        return {s for s in _l.get("positions", {})
+                if _og_tier_qty(_l, s, "forever6") > 0}
+    except Exception as _fe:
+        logger.warning(
+            "orphan_manager: forever6-symbols lookup failed, fail-CLOSED to "
+            "protected cache: %s", _fe
+        )
+        return _og_protected_cache()
+
+
 def reconcile_positions(
     tracker: "PortfolioTracker",
     risk: "Optional[RiskManager]" = None,
@@ -919,7 +953,11 @@ def reconcile_positions(
     # set is safe here: _get_qhm_syms() is already called later in this same
     # function (L960/L979 original numbering) at this identical call time,
     # proven populated by production logs before this fix.
-    orphans = (alpaca_symbols - tracker_symbols) - _get_qhm_syms()
+    # forever6 excluded for the same reason as QHM (see _get_forever6_syms): an F6
+    # anchor is never an intraday orphan — forever_hold_manager + the floor own it.
+    orphans = (
+        (alpaca_symbols - tracker_symbols) - _get_qhm_syms() - _get_forever6_syms()
+    )
 
     # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
     # A symbol the bot JUST CLOSED can momentarily reappear in Alpaca's OPEN positions:
