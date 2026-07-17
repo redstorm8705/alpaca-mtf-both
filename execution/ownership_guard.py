@@ -29,9 +29,12 @@ Data tier: reads Alpaca positions via execution.broker (T1). State file RC-5 ato
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
-import os
 import logging
+import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +49,11 @@ _LEDGER_PATH = _ROOT / "data" / "state" / "ownership_ledger.json"
 # unreadable, so a symbol that was never protected still fails OPEN (never blocks an
 # ordinary intraday exit). Today this is empty (all positions intraday).
 _PROTECTED_SET_PATH = _ROOT / "data" / "state" / "protected_symbols.json"
+# Cross-process advisory lock serializing sync_ledger's read-modify-write of the ledger
+# (the RTH cron and any in-process caller both go through sync_ledger). See
+# _ledger_write_lock — without it, two concurrent full-replays can lost-update
+# each other (each compares its rebuild to a baseline read BEFORE the other's write).
+_LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
 
 Tier = Literal["intraday", "qhm", "forever6"]
 _TIERS: tuple[str, ...] = ("intraday", "qhm", "forever6")
@@ -149,6 +157,51 @@ def _cached_protected_symbols() -> set:
     except Exception as e:  # RC-3: logged; missing cache is normal (nothing protected).
         logger.debug("_cached_protected_symbols: read failed, empty: %s", e)
     return set()
+
+
+@contextlib.contextmanager
+def _ledger_write_lock(timeout_s: float = 5.0):
+    """Cross-process advisory lock serializing sync_ledger's read-modify-write of the
+    ledger. fcntl.flock is kernel-auto-released on process death (no stale-lock
+    deadlock, unlike a hand-rolled pidfile). On acquire timeout, proceed WITHOUT the
+    lock + a WARNING — save_ledger is atomic (tmp->replace), so the worst case degrades
+    to the pre-lock last-writer-wins behavior, NEVER a hang (a lock must never be able
+    to freeze the RTH maintainer cron). Always releases via finally."""
+    _fd = None
+    _held = False
+    try:
+        # Setup (mkdir/open) is INSIDE the guard so a lockfile-setup failure (permission
+        # or ENOSPC on the state dir) ALSO degrades to proceed-without-lock — never
+        # crashes the RTH cron (cold-2nd 2026-07-17: best-effort must include setup).
+        try:
+            _LEDGER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _fd = os.open(str(_LEDGER_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
+            _deadline = time.monotonic() + timeout_s
+            while True:
+                try:
+                    fcntl.flock(_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _held = True
+                    break
+                except OSError:
+                    if time.monotonic() >= _deadline:
+                        logger.warning(
+                            "ledger write-lock not acquired in %.1fs — proceeding "
+                            "without it (save is atomic; last-writer-wins).", timeout_s)
+                        break
+                    time.sleep(0.1)
+        except OSError as _se:
+            logger.warning(
+                "ledger write-lock setup failed (%s) — proceeding without it.", _se)
+        yield
+    finally:
+        if _fd is not None:
+            try:
+                if _held:
+                    fcntl.flock(_fd, fcntl.LOCK_UN)
+            except OSError as _ue:  # RC-3: logged; fd close below still frees the lock.
+                logger.warning("ledger write-lock release failed: %s", _ue)
+            finally:
+                os.close(_fd)
 
 
 class LedgerError(Exception):
@@ -476,40 +529,52 @@ def sync_ledger(fills: list, positions: list,
     # A protected tier (qhm/forever6) going DOWN vs the current ledger = truncated
     # replay → abort, never write, alert. (Absent/corrupt baseline → protected qty
     # treated as 0, so any rebuild only ever increases; can't falsely trip.)
-    try:
-        _base = load_ledger()
-    except LedgerError:
-        _base = _empty_ledger()
-    _new_positions = ledger["positions"]
-    _base_positions = _base.get("positions", {})
-    # Iterate the UNION of new + baseline symbols: a symbol that had a protected floor
-    # in the baseline but VANISHES from the rebuild (all its fills aged out AND it is
-    # absent from current Alpaca positions) must still be caught as a shrink-to-0 —
-    # otherwise a disappeared floor evades the guard entirely.
-    _shrink: dict = {}
-    for sym in set(_new_positions) | set(_base_positions):
-        _new_tiers = _new_positions.get(sym, {}).get("tiers", {})
-        _base_tiers = _base_positions.get(sym, {}).get("tiers", {})
-        for pt in _PROTECTED_TIERS:
-            new_q = float(_new_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
-            old_q = float(_base_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
-            if new_q < old_q - _QTY_EPS:
-                _shrink[f"{sym}/{pt}"] = {"was": old_q, "would_be": new_q}
-    if _shrink:
-        logger.critical(
-            "sync_ledger REFUSED — replay would shrink protected floor(s) %s "
-            "(fills likely aged out of Alpaca window). Ledger NOT written.", _shrink)
-        return {"healed": False, "reason": "protected-floor shrink — replay truncated",
-                "shrink": _shrink}
+    #
+    # The baseline-read → shrink-check → save is ONE cross-process read-modify-write
+    # critical section (board Reliability seat 2026-07-17). Two concurrent full-replays
+    # (RTH cron + an in-process post-seed sync) that each read the baseline BEFORE the
+    # other's save could lost-update: the staler rebuild's shrink-check passes against
+    # its OWN stale baseline and clobbers the fresher write. The lock serializes them so
+    # the second committer reads the first's write as its baseline and never-shrink then
+    # correctly aborts a stale-lower rebuild (a benign spurious healed=False, not a lost
+    # F6 floor). Lock is best-effort (atomic save is the real durability guarantee).
+    with _ledger_write_lock():
+        try:
+            _base = load_ledger()
+        except LedgerError:
+            _base = _empty_ledger()
+        _new_positions = ledger["positions"]
+        _base_positions = _base.get("positions", {})
+        # Iterate the UNION of new + baseline symbols: a symbol that had a protected
+        # floor in the baseline but VANISHES from the rebuild (all its fills aged out
+        # AND it is absent from current Alpaca positions) must still be caught as a
+        # shrink-to-0 — otherwise a disappeared floor evades the guard entirely.
+        _shrink: dict = {}
+        for sym in set(_new_positions) | set(_base_positions):
+            _new_tiers = _new_positions.get(sym, {}).get("tiers", {})
+            _base_tiers = _base_positions.get(sym, {}).get("tiers", {})
+            for pt in _PROTECTED_TIERS:
+                new_q = float(_new_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
+                old_q = float(_base_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
+                if new_q < old_q - _QTY_EPS:
+                    _shrink[f"{sym}/{pt}"] = {"was": old_q, "would_be": new_q}
+        if _shrink:
+            logger.critical(
+                "sync_ledger REFUSED — replay would shrink protected floor(s) %s "
+                "(fills likely aged out of Alpaca window). NOT written.", _shrink)
+            return {"healed": False,
+                    "reason": "protected-floor shrink — truncated replay",
+                    "shrink": _shrink}
 
-    save_ledger(ledger)
-    _drifted = {s: e["drift"] for s, e in ledger["positions"].items()
-               if abs(e["drift"]) > _QTY_EPS}
-    if _drifted:
-        logger.critical("sync_ledger: drift on %d symbol(s) %s — sells frozen there",
-                        len(_drifted), _drifted)
-    ledger["healed"] = True
-    return ledger
+        save_ledger(ledger)
+        _drifted = {s: e["drift"] for s, e in ledger["positions"].items()
+                   if abs(e["drift"]) > _QTY_EPS}
+        if _drifted:
+            logger.critical(
+                "sync_ledger: drift on %d symbol(s) %s — sells frozen there",
+                len(_drifted), _drifted)
+        ledger["healed"] = True
+        return ledger
 
 
 # ── Launch init (run ONCE) ────────────────────────────────────────────────────
