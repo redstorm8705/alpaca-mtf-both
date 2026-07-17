@@ -67,6 +67,8 @@ logs/*
 # Whitelisted for interactive→API build-package scope docs and session decision queues:
 !logs/api_build_packages_*.md
 !logs/pending_claude_session_*.md
+!logs/f6_activation_BLOCKED_*.md
+!logs/f6_prereq*_design_*.md
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
