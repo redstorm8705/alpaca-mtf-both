@@ -317,6 +317,36 @@ class PortfolioTracker:
             if not self._unverified_exits[symbol]:
                 del self._unverified_exits[symbol]
 
+        # TQI REPAIR (2026-07-16, board + Gro + GAI). The score recorded at exit came
+        # from the FABRICATED pnl (entry_price fallback -> 0.00), so _record_tqi did NOT
+        # add it to kelly._tqi_history. The P&L is VERIFIED now — recompute and append.
+        # Why: _tqi_history feeds AB-3 (entry_logic.py:1128-1150) which does
+        # `dollar_cap *= _tqi_kelly_adj`. _compute_tqi gives r_mult>=0 -> 10 pts but a
+        # REAL LOSS -> 0, so a fabricated score inflates the average and sizes LARGER
+        # (measured: RIVN's true -$41 scored 33/100 vs a true 23/100 = +10).
+        # No double-count: _record_tqi appends only when NOT _fill_unverified; this runs
+        # only for a trade that WAS (idempotent via _patch_applied_ts) — mutually
+        # exclusive (GAI). Lazy import: exit_logic imports this module (circular at
+        # top level). Fail-safe: TQI is SECONDARY — the P&L patch above is already
+        # committed and must never be undone by a TQI failure (Gro + GAI required).
+        try:
+            from execution.exit_logic import _compute_tqi as _compute_tqi_patched
+            _new_tqi = _compute_tqi_patched(_trade)
+            _trade["tqi_score"] = _new_tqi
+            if kelly is not None:
+                kelly.append_tqi(_new_tqi)
+                logger.info(
+                    "[%s] TQI repaired after fill verification: %d/100 (from the true "
+                    "P&L $%.2f) — appended to the rolling AB-3 history.",
+                    symbol, _new_tqi, _new_total_pnl,
+                )
+        except Exception as _tqi_e:
+            logger.warning(
+                "[%s] patch_exit_pnl: TQI repair failed (%s) — P&L patch stands; this "
+                "trade simply contributes no TQI to the rolling history.",
+                symbol, _tqi_e,
+            )
+
         self._save_log()
 
         if kelly is not None:

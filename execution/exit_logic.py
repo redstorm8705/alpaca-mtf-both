@@ -174,16 +174,40 @@ def _record_tqi(trade: dict, kelly: "KellySizer") -> None:
 
     Phase 0.5: _tqi_history moved to kelly._tqi_history.
     Disk persistence handled by kelly.append_tqi() — atomic write in KellySizer.
+
+    UNVERIFIED-FILL GUARD (2026-07-16, board + Gro + GAI): when the close fill could not
+    be recovered, record_exit stores a FABRICATED pnl (exit_price = entry_price fallback →
+    pnl = 0.00). A TQI computed from that is not just wrong, it is wrong in a DANGEROUS
+    direction: _compute_tqi's R-multiple tier gives `r_mult >= 0 → 10 pts` but a REAL LOSS
+    → 0 pts, so a suppressed loss scores 10 points TOO HIGH. That inflates the rolling
+    average consumed by AB-3 (entry_logic.py:1128-1150), which does `dollar_cap *=
+    _tqi_kelly_adj` — so an inflated TQI DEMOTES LESS and sizes positions LARGER. (Real
+    case: RIVN's true -$41 on 7/7 was recorded as $0.00 and scored 10 instead of 0.)
+    So: never feed a fabricated score into a rolling average that gates sizing. The score
+    is still computed + stored on the trade for the audit trail; it enters _tqi_history
+    only once the fill is VERIFIED — appended by patch_exit_pnl when it repairs the P&L.
+    Mirrors the established exclusion pattern (kelly.rebuild_from_trades:409,
+    portfolio_tracker.get_stats). If the fill is never recovered the trade contributes NO
+    TQI — a missing entry (honest) rather than a fabricated one (poison).
     """
     tqi = _compute_tqi(trade)
     trade["tqi_score"] = tqi   # H-1: persist to trade record → EOD file → weekly_review.py
+    symbol  = trade.get("symbol", "?")
+    reason  = trade.get("exit_reason", "?")
+    if trade.get("_fill_unverified"):
+        logger.warning(
+            "[%s] TQI %d/100 (%s) computed from an UNVERIFIED fill (pnl is the "
+            "entry_price fallback, not real) — stored on the trade for audit but NOT "
+            "added to the rolling TQI history that gates AB-3 sizing. It will be "
+            "appended with a TRUE score if fill reconciliation repairs the P&L.",
+            symbol, tqi, reason,
+        )
+        return
     kelly.append_tqi(tqi)
     rolling_avg = (
         round(sum(kelly._tqi_history) / len(kelly._tqi_history), 1)
         if kelly._tqi_history else 0
     )
-    symbol  = trade.get("symbol", "?")
-    reason  = trade.get("exit_reason", "?")
     r_count = len(kelly._tqi_history)
     logger.info(
         f"[{symbol}] TQI: {tqi}/100 ({reason}) | "
