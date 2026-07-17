@@ -34,9 +34,19 @@ reconciler **never running in time at all**. TWO structural defects:
    expired trades → infinite re-queue loop).
 **WHY IT MATTERS:** a SUPPRESSED LOSS inflates Kelly's win rate + under-reports drawdown → **biases sizing
 UPWARD**. Strictly risk-reducing. Kill switch was NEVER affected (Alpaca-equity sourced).
-**⚠️ KNOWN GAP (board caught my false claim): TQI is NOT repaired** — `exit_logic.py:180` `append_tqi` is
-APPEND-ONLY at exit time with the fabricated 0.00; `patch_exit_pnl` rebuilds Kelly but never replaces the TQI
-entry → the rolling TQI average keeps the corrupted score permanently. Kelly ✓ / win-rate ✓ / daily_pnl ✓ / TQI ✗.
+**✅ TQI GAP NOW CLOSED TOO (`10f710b`, 2026-07-16)** — the board caught that I'd wrongly claimed fb93d11
+repaired TQI. It didn't; this does. **⚠️ It also corrects a claim I repeated twice: "TQI has zero capital-gating
+role" is WRONG** — that came from an agent scoped to `exit_logic.py`, but **AB-3 lives in `entry_logic.py`
+:1128-1150 and does `dollar_cap *= _tqi_kelly_adj`** (floor 0.5x) when the rolling 10-trade avg < 50. TQI IS
+capital-affecting. THE HARM (measured): `_compute_tqi` gives `r_mult>=0 → 10 pts` but a REAL LOSS → 0, so a
+suppressed loss scores +10 too high — 7/7 RIVN's true −$41 scored **33/100 vs a true 23/100**. An inflated TQI
+**demotes LESS → sizes LARGER** (same upward-sizing bias as the Kelly win-rate path). FIX (board's rec):
+`_record_tqi` skips `append_tqi` when `_fill_unverified` (still stores tqi_score for audit); `patch_exit_pnl`
+recomputes from the TRUE pnl and appends once VERIFIED (lazy import — exit_logic imports portfolio_tracker;
+try/except so a TQI failure can never undo the committed P&L patch). Enters the average exactly ONCE, only when
+verified; never recovered → NO TQI (honest) over a fabricated one (poison). Gate: statics + self-test (unverified→[],
+verified→[23], +10 inflation reproduced, P&L-before-TQI ordering), Gro+GAI APPROVE, preship `0b59ef04dc3a` +
+`66132e189704`. Runtime-verified on OCI. Kelly ✓ / win-rate ✓ / daily_pnl ✓ / **TQI ✓**.
 Gate: board APPROVE (4 required changes applied) + Gro APPROVE + GAI APPROVE; preship `57b8c343732f` +
 `c1a22b1e679c` + `59520d693858`. Runtime-verified on OCI. Full evidence: `logs/pnl_zero_root_cause_2026-07-16.md`.
 **▶ NEXT CANDIDATES (board follow-ups, logged not done):** TQI recompute-on-patch (closes the gap above);
