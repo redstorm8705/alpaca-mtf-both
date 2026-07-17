@@ -1,6 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-14 (interactive — session wrapped at Rafael's 89% weekly limit; NEXT ACCOUNT
-IS A DIFFERENT CLAUDE GMAIL) | **CROSS-ACCOUNT HANDOFF** — always current per the new
+**Updated:** 2026-07-17 (interactive — Rafael away) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,14 +7,38 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-16 interactive) — pick up here
+## ⏩ LATEST (2026-07-17 interactive) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**STANDING AUTHORIZATION (Rafael 2026-07-16, while he is away ~5-6h):** continue the ongoing work, then
+**STANDING AUTHORIZATION (Rafael 2026-07-16, while he is away):** continue the ongoing work, then
 the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
 logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream.
+
+**🟢 SHIPPED TODAY (2026-07-17, git-only — OCI restart deferred to next non-RTH window):**
+1. **`d883f59` — fill-signal None-on-failure refactor.** `fetch_actual_fill_price` split into
+   `_recover_fill (→float|None)` + thin wrapper (byte-identical for 17 callers) + `fetch_actual_fill_price_or_none`.
+   `fill_reconciler` now branches on `fill is None` (leave pending / retry) instead of the fragile
+   `abs(fill-entry)<_MIN_PRICE_DIFF` miss-guess that skipped a genuine scratch-at-entry forever. Preship
+   `7781d06d`/`f15a6dfd`, cold-2nd PASS. (Closes the fill_helpers:369 board follow-up.)
+2. **`3270a76` — F6 fail-closed orphan exclusion + per-day starter guard (DARK/inert).** BGG-aligned
+   safety pre-positioning; F6 stays DARK. Preship `3e5a7a4a`/`7b5a72c0`.
+
+**🔴 QUEUED FOR RAFAEL — FOREVER-6 ARMING IS BLOCKED (do NOT flip FOREVER6_ENABLED=True).**
+Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed
+≥1 share (Option B)." The cold **execution-risk board seat REJECTED arming** (Gro/GAI/Reliability all
+APPROVED — they trusted the "floor is live" premise; it is NOT). **Verified at 100%:** (a)
+`OWNERSHIP_GUARD_ENFORCE=False` (config.py:556) → `close_position` does a RAW close, zero floor;
+(b) the F6 buy never syncs `ownership_ledger.json` (only the RTH-only `run_ledger_sync` cron does) →
+a fresh anchor is invisible to the exclusion overnight → a watchdog restart adopts it as an intraday
+orphan → `check_exits` raw-closes it → **the never-sell anchor gets sold.** This is the mandatory-cold-
+board-on-risk-path rule working. **3 board-required prereqs before ANY arming (all P0):** (1) arm
+`OWNERSHIP_GUARD_ENFORCE=True` w/ ledger F6 floors populated + `protected_symbols.json` present +
+live-verify a rejected sell; (2) F6 buy must persist forever6 qty to the ledger SYNCHRONOUSLY (or run
+ledger-sync immediately post-seed); (3) floor check on the GTC/DAY stop-submission path. Seed plan is
+READY in the doc (CRWD+AMZN+TSLA ≈ $841, ~$487 dry powder) but runs only AFTER all 3 clear + a clean restart.
+
 **Gro's TPD has RESET — full Gro+GAI preship is working again (no --waive-gro needed).**
 
 **🔴 BIGGEST FIND OF THE SESSION — pnl=0.0 EPIDEMIC ROOT FIXED + LIVE (`fb93d11`, 2026-07-16).**

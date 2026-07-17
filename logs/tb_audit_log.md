@@ -8213,3 +8213,16 @@ TQI repair present in patch_exit_pnl).
 NOTE (cosmetic, not fixed): backticks in the commit message triggered shell substitution, so `10f710b`'s body
 is missing the phrase "dollar_cap *= _tqi_kelly_adj" on one line. Code + gate unaffected; not force-pushing
 over main for a message typo — THIS audit entry is the authoritative record.
+
+## 2026-07-17 (interactive) — F6 activation: 2 dark-safe ships + arming BLOCKED
+- `d883f59` fill-signal None-on-failure refactor (fill_helpers split + fill_reconciler branch on None).
+  Board+Gro+GAI+cold-2nd PASS; preship 7781d06d/f15a6dfd. Git-only; OCI restart deferred.
+- `3270a76` F6 fail-closed orphan exclusion (orphan_manager `_get_forever6_syms`, fail-CLOSED to
+  protected cache per Reliability seat) + per-day starter guard (forever_hold_manager). DARK/inert.
+  Board 2 cold seats (Reliability APPROVE-after-fix, Execution-risk REJECT on ARMING only) + Gro
+  APPROVE + GAI APPROVE; preship 3e5a7a4a/7b5a72c0. Git-only; OCI restart deferred.
+- **ARMING BLOCKED (queued):** cold execution-risk seat caught that the never-sell floor is DORMANT
+  (`OWNERSHIP_GUARD_ENFORCE=False`, config.py:556 → `close_position` raw-closes) AND the F6 buy never
+  syncs `ownership_ledger.json` → arming would expose anchors to overnight force-liquidation. Gro/GAI/
+  Reliability all missed it (trusted the "floor live" premise). 3 P0 prereqs before arming — see
+  `logs/f6_activation_BLOCKED_2026-07-17.md`. Validates mandatory-cold-board-on-risk-path rule.
