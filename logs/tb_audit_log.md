@@ -8181,3 +8181,35 @@ FOLLOW-UPS (board, logged not done): TQI recompute-on-patch; upper-bound accepte
 fill_helpers:369 returns entry_price as its FAILURE value (indistinguishable from a real scratch fill — forces
 the fragile abs(_fill-_entry_px)<_MIN_PRICE_DIFF heuristic) → return None + explicit flag; reconcile_eod:475
 _qty_at_close clobber (poisons only a POST-EOD patch); gtc_manager's false "Cover-on-breach filled @ $X" log.
+
+## 2026-07-16 — TQI fabricated-score gap CLOSED (board follow-up to fb93d11) — SHIPPED 10f710b
+CONTEXT: fb93d11 fixed the RC-4 reconciler so fabricated pnl=0.00 gets repaired. The board caught that I had
+WRONGLY claimed TQI was repaired too — it was not. This closes that gap.
+THE HARM (measured, not theoretical): when the close fill can't be recovered, record_exit stores a FABRICATED
+pnl (exit_price = entry_price fallback -> 0.00). `_compute_tqi`'s R-tier gives `r_mult >= 0 -> 10 pts` but a
+REAL LOSS -> 0 pts. Self-test on the real 7/7 RIVN (true -$41 recorded as $0.00): fabricated TQI **33/100** vs
+true **23/100** = **+10 inflation**. NOT cosmetic: `entry_logic.py:1128-1150` "AB-3 TQI demotion" does
+`dollar_cap *= _tqi_kelly_adj` (floor 0.5x) when the rolling 10-trade avg < 50 — so an INFLATED TQI DEMOTES
+LESS and sizes positions **LARGER**. Same upward-sizing bias the board flagged for Kelly's win rate, second path.
+⚠️ CORRECTS MY EARLIER CLAIM: I stated (df03656 + this session) "TQI has zero direct capital-gating role —
+logging + Kelly feedback only". WRONG. That came from a full-read agent that scoped its read to exit_logic.py;
+**AB-3 lives in entry_logic.py** and does gate `dollar_cap`. TQI IS capital-affecting.
+FIX (board's own rec — exclude at exit, append on patch), 2 files:
+1. `exit_logic._record_tqi` — still computes + stores `trade["tqi_score"]` (audit trail) but SKIPS
+   `kelly.append_tqi()` when `_fill_unverified`, with a WARNING. Mirrors the established exclusion
+   (kelly.rebuild_from_trades:409, get_stats).
+2. `portfolio_tracker.patch_exit_pnl` — once P&L is VERIFIED: recompute TQI from the true pnl, overwrite
+   tqi_score, append it. Lazy import of `_compute_tqi` (exit_logic imports this module → top-level would be
+   circular). Wrapped in try/except so a TQI failure can NEVER undo the already-committed P&L patch (Gro+GAI
+   required change; verified by ordering test: pnl write @4587 < TQI block @5548).
+NET: a trade's TQI enters the rolling average exactly ONCE and only when VERIFIED. Never recovered → NO TQI
+(missing = honest) rather than fabricated (poison). No double-count: exit appends only if NOT unverified;
+patch only if it WAS (idempotent via _patch_applied_ts) — provably mutually exclusive (GAI).
+GATE: statics clean; self-test PASS (unverified→[] not poisoned; verified→[23] no regression; +10 inflation
+reproduced; P&L-before-TQI ordering; no circular import). Board recommended the design; Gro APPROVE-w-changes +
+GAI APPROVE-w-changes (try/except → applied). Preship gro+gai APPROVE: 0b59ef04dc3a + 66132e189704.
+SHIPPED 10f710b, OCI DEPLOY_OK + restart, HEALTH_OK, RUNTIME-VERIFIED on OCI (unverified→[], verified→[23],
+TQI repair present in patch_exit_pnl).
+NOTE (cosmetic, not fixed): backticks in the commit message triggered shell substitution, so `10f710b`'s body
+is missing the phrase "dollar_cap *= _tqi_kelly_adj" on one line. Code + gate unaffected; not force-pushing
+over main for a message typo — THIS audit entry is the authoritative record.
