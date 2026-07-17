@@ -8226,3 +8226,18 @@ over main for a message typo — THIS audit entry is the authoritative record.
   syncs `ownership_ledger.json` → arming would expose anchors to overnight force-liquidation. Gro/GAI/
   Reliability all missed it (trusted the "floor live" premise). 3 P0 prereqs before arming — see
   `logs/f6_activation_BLOCKED_2026-07-17.md`. Validates mandatory-cold-board-on-risk-path rule.
+
+## 2026-07-17 (interactive, cont.) — F6 prereq #1 C-1 shipped
+- `800815e` cross-process fcntl.flock around sync_ledger's baseline-read→shrink-check→save
+  critical section (ownership_guard.py). Closes the Reliability-seat lost-update (concurrent
+  cron + in-process full-replay clobbering the fresher forever6 write via stale-baseline
+  never-shrink). Best-effort: fail-open on acquire-timeout OR lockfile-setup failure → never
+  hangs the cron; save_ledger atomic tmp→replace is the real durability guarantee.
+  Gate: design board (Reliability seat specified this exact lock) + statics clean + self-test
+  (serialize/no-deadlock/fail-open-on-setup) + cold-2nd PASS (setup-guard note applied) + Gro
+  APPROVE + GAI APPROVE preship 55b0c5b0. 1 caller (run_ledger_sync.sync_once). Git-only; OCI
+  restart deferred (live cron path). Design: logs/f6_prereq1_syncgap_design_2026-07-17.md.
+- REMAINING prereq #1: C-2 (post-buy sync_once verify-retry loop in forever_hold_manager,
+  checks forever6_qty>=bought AND drift≈0 AND no newly-planted drift) + C-3 (persisted
+  block-further-seeding flag, auto-clear on clean sync). Both inert/dark. Then #3 (GTC floor
+  check) → #2 (arm floor) LAST. NO SEED until all 3.

@@ -24,8 +24,22 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
    `7781d06d`/`f15a6dfd`, cold-2nd PASS. (Closes the fill_helpers:369 board follow-up.)
 2. **`3270a76` — F6 fail-closed orphan exclusion + per-day starter guard (DARK/inert).** BGG-aligned
    safety pre-positioning; F6 stays DARK. Preship `3e5a7a4a`/`7b5a72c0`.
+3. **`3453148` — F6 prereq-1 design + blocker docs now git-tracked** (.gitignore negations).
+4. **`800815e` — F6 prereq #1 part C-1: cross-process lock on `sync_ledger`.** Closes the
+   Reliability-seat-proven lost-update (concurrent cron + in-process replay clobbering the F6 write).
+   Best-effort flock; fail-open on timeout/setup-failure so it can NEVER hang the cron. Gate: design
+   board + statics + self-test + cold-2nd PASS + Gro/GAI preship `55b0c5b0`. **Live cron-path change →
+   takes effect at the next non-RTH OCI restart (deferred).**
 
-**🔴 QUEUED FOR RAFAEL — FOREVER-6 ARMING IS BLOCKED (do NOT flip FOREVER6_ENABLED=True).**
+**▶ RAFAEL APPROVED (this session): BUILD THE 3 F6-ARMING PREREQS.** Design is board-blessed:
+`logs/f6_prereq1_syncgap_design_2026-07-17.md` (4-voice gate). Prereq #1 = C-1 (lock, ✅ shipped
+800815e) + **C-2/C-3 REMAIN** (the inert post-buy `sync_once` verify-retry loop in
+`forever_hold_manager` + the persisted block-further-seeding flag — full spec in the design doc,
+CONDITIONS section). Then **prereq #3** (GTC/DAY stop floor check) → **prereq #2** (arm
+OWNERSHIP_GUARD_ENFORCE=True) LAST. **NO SEED until all 3 land.** ⏩ NEXT EXACT STEP: implement C-2/C-3
+per the design doc's CONDITIONS (inert/dark; gate = statics + cold-2nd + Gro/GAI preship).
+
+**🔴 STILL BLOCKED — FOREVER-6 ARMING (do NOT flip FOREVER6_ENABLED=True until all 3 prereqs land).**
 Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed
 ≥1 share (Option B)." The cold **execution-risk board seat REJECTED arming** (Gro/GAI/Reliability all
 APPROVED — they trusted the "floor is live" premise; it is NOT). **Verified at 100%:** (a)
