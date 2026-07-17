@@ -34,6 +34,54 @@ logger = logging.getLogger("forever6")
 PT = ZoneInfo("America/Los_Angeles")
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE = _ROOT / "data" / "state" / "forever6_holds.json"
+# C-3 (design logs/f6_prereq1_syncgap_design_2026-07-17.md): persisted "block further F6
+# seeding" flag. Set when a post-buy ledger sync fails to reflect a fresh F6 lot (C-2);
+# blocks the NEXT seed until a clean sync clears it. Scoped to SEEDING only — never a
+# sell/exit path. Fail-CLOSED on read error (treat as degraded → block), the safe
+# direction for a never-sell book.
+_SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
+_EPS = 1e-6
+
+
+def _slack_safe(msg: str) -> None:
+    """Best-effort Slack; never raises into the F6 path."""
+    try:
+        from alerts import send_slack
+        send_slack(msg)
+    except Exception as e:  # RC-3: logged, not swallowed silently
+        logger.warning("forever6: slack alert failed: %s", e)
+
+
+def _read_sync_degraded() -> bool:
+    """True → F6 seeding is blocked. Fail-CLOSED: an unreadable flag returns True (block),
+    the safe direction for a never-sell book (never seed on uncertainty)."""
+    try:
+        if _SYNC_DEGRADED.exists():
+            d = json.loads(_SYNC_DEGRADED.read_text())
+            return bool(d.get("degraded", False))
+    except Exception as e:
+        logger.warning("forever6: sync-degraded read failed — fail-closed (block): %s", e)
+        return True
+    return False
+
+
+def _write_sync_degraded(degraded: bool, detail: str = "") -> None:
+    """Atomic tmp→fsync→replace (RC-5). A write failure is logged LOUDLY: if we meant to
+    SET degraded and the write fails, the next seed may proceed unblocked — so escalate."""
+    try:
+        _SYNC_DEGRADED.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SYNC_DEGRADED.with_suffix(f".json.{os.getpid()}.tmp")
+        with open(tmp, "w") as f:
+            json.dump({"degraded": bool(degraded), "detail": detail,
+                       "ts": datetime.now(PT).isoformat()}, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp), str(_SYNC_DEGRADED))
+    except Exception as e:
+        logger.error("forever6: sync-degraded write failed (degraded=%s): %s", degraded, e)
+        if degraded:
+            _slack_safe(f":rotating_light: F6 could not persist sync-degraded flag ({e}) "
+                        f"— next seed may NOT be auto-blocked; verify manually.")
 
 # Reserve slightly MORE than the planned price per leg so a market-order fill above the planned
 # price can never push cumulative spend past `spendable` and breach the cash floor (GAI pre-ship
@@ -165,6 +213,17 @@ class ForeverHoldManager:
         if not plan:
             return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
 
+        # C-3 (design 2026-07-17): refuse to place if a prior post-buy sync left the ledger
+        # degraded (a fresh F6 lot unreflected). Blocks a BUY only — never a sell — the safe
+        # direction for a never-sell book. Auto-cleared when a later sync verifies clean (C-2).
+        if _read_sync_degraded():
+            logger.critical("[F6] execute_starter BLOCKED — prior F6 sync degraded (a fresh "
+                            "lot was left unreflected in the ledger). Not placing; resolve first.")
+            _slack_safe(":rotating_light: F6 seed BLOCKED — prior sync degraded; further F6 "
+                        "buys held until a clean ledger sync clears it.")
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "sync-degraded block"}
+
         # Re-verify SETTLED CASH at execution time. F6 is CASH-ONLY — margin is FORBIDDEN (the cold
         # board's decisive ruin finding: a maintenance call from ANY other strategy's bad day would
         # force-liquidate the never-sell book). settled_cash comes from account.cash, never buying_power.
@@ -223,7 +282,128 @@ class ForeverHoldManager:
         planned_spent = round(sum(float(p["price"]) for p in placed), 2)
         if placed:
             self._record_event(placed, planned_spent)
+            self._verify_ledger_reflects(placed)   # C-2: sync + verify the F6 floor landed
         return {"placed": placed, "skipped": skipped, "spent": planned_spent, "reason": "ok"}
+
+    def _verify_ledger_reflects(self, placed: list[dict]) -> None:
+        """C-2 wrapper — STRUCTURALLY enforces 'never raises into execute_starter': on ANY
+        unexpected error it fail-CLOSES (sets the persisted degraded flag + alerts), so a
+        crash mid-verify can never leave the buy placed-but-unverified with the next-seed
+        block silently disarmed (cold-2nd 2026-07-17). The block-at-entry guarantees the
+        flag was clear before we placed, so a fail-closed SET here is always correct."""
+        try:
+            self._verify_ledger_reflects_inner(placed)
+        except Exception as _e:
+            logger.critical("[F6] post-buy verify: UNEXPECTED error (%s) — fail-closed: "
+                            "setting degraded flag + blocking further F6 seeding.", _e)
+            _slack_safe(f":rotating_light: F6 post-buy verify crashed ({_e}) — further F6 "
+                        f"seeding BLOCKED (fail-closed). Verify anchor(s) before next restart.")
+            _write_sync_degraded(True, f"verify exception: {_e}")
+
+    def _verify_ledger_reflects_inner(self, placed: list[dict]) -> None:
+        """C-2 (design logs/f6_prereq1_syncgap_design_2026-07-17.md): after an F6 buy, run
+        the authoritative full-replay sync (run_ledger_sync.sync_once) and verify EACH
+        placed symbol now has forever6 qty >= bought AND abs(drift) <= eps, retrying with
+        backoff (a just-placed market fill can lag the fills feed → healed=True with the lot
+        still absent is a real, expected outcome, so the ledger must be positively checked).
+        Also alerts if the sync planted NEW drift on a previously-clean protected symbol
+        (the multi-tier landmine). A placed order that is TERMINALLY rejected/canceled is
+        dropped from the wait-set (no anchor to protect → no false 'unprotected' alert). On
+        retry-budget exhaustion with a still-pending fill: CRITICAL + Slack + set the
+        persisted degraded flag (blocks the next seed, C-3). Never sells; never raises into
+        execute_starter. The block-at-entry guarantees the flag was clear before we placed,
+        so writing degraded=False on success only ever CONFIRMS clean (no spurious unblock)."""
+        import time as _time
+        try:
+            import run_ledger_sync as _rls
+            from execution import broker as _bk
+            from execution import ownership_guard as _og
+        except Exception as e:
+            logger.critical("[F6] post-buy verify: import failed (%s) — setting degraded flag", e)
+            _write_sync_degraded(True, f"import failure: {e}")
+            return
+
+        want: dict[str, int] = {}
+        oid_by_sym: dict[str, str] = {}
+        for p in placed:
+            s = str(p.get("symbol", "")).upper()
+            if not s:
+                continue
+            want[s] = want.get(s, 0) + int(p.get("qty", 1) or 1)
+            if p.get("order_id"):
+                oid_by_sym[s] = str(p["order_id"])
+
+        # Snapshot previously-clean protected symbols (floor>0, drift≈0) BEFORE syncing, so a
+        # drift this sync PLANTS on one of them (the multi-tier §2 landmine) is surfaced.
+        try:
+            _before = _og.load_ledger()
+            _clean_before = {
+                s for s in _before.get("positions", {})
+                if _og.protected_floor(_before, s) > _EPS
+                and abs(float(_before["positions"][s].get("drift", 0.0) or 0.0)) <= _EPS
+            }
+        except Exception:
+            _clean_before = set()
+
+        _delays = (2.0, 4.0, 8.0)
+        for _attempt in range(len(_delays) + 1):
+            # Drop terminally-rejected orders — no anchor exists, so do not wait/alert on them.
+            for s in list(want):
+                _oid = oid_by_sym.get(s)
+                if not _oid:
+                    continue
+                try:
+                    _st = str(getattr(_bk.get_order(_oid), "status", "") or "").lower()
+                except Exception:
+                    _st = ""
+                if _st in ("rejected", "canceled", "cancelled", "expired"):
+                    logger.warning("[F6] post-buy verify: %s order %s is %s — no anchor; "
+                                   "dropping from wait-set.", s, _oid, _st)
+                    want.pop(s, None)
+            if not want:
+                logger.info("[F6] post-buy verify: no pending anchors to verify.")
+                _write_sync_degraded(False, "no pending anchors")
+                return
+
+            _rls.sync_once()
+            try:
+                led = _og.load_ledger()
+            except Exception as e:
+                logger.warning("[F6] post-buy verify: ledger unreadable after sync: %s", e)
+                led = None
+
+            if led is not None:
+                _pos = led.get("positions", {})
+                _all_ok = True
+                for s, q in want.items():
+                    _f6 = _og.tier_qty(led, s, "forever6")
+                    _drift = abs(float(_pos.get(s, {}).get("drift", 0.0) or 0.0))
+                    if _f6 + _EPS < q or _drift > _EPS:
+                        _all_ok = False
+                        break
+                _new_drift = [s for s in _clean_before
+                              if abs(float(_pos.get(s, {}).get("drift", 0.0) or 0.0)) > _EPS]
+                if _new_drift:
+                    logger.critical("[F6] post-buy sync planted drift on previously-clean "
+                                    "protected %s — verify before enabling exits.", _new_drift)
+                    _slack_safe(f":rotating_light: F6 post-seed sync planted drift on "
+                                f"{_new_drift} — verify before enabling exits.")
+                if _all_ok:
+                    logger.warning("[F6] post-buy verify OK: %s ledger-reflected "
+                                   "(forever6 floor set, drift≈0).", dict(want))
+                    _write_sync_degraded(False, "verified")
+                    return
+
+            if _attempt < len(_delays):
+                _time.sleep(_delays[_attempt])
+
+        logger.critical("[F6] post-buy verify FAILED after retries — anchor(s) %s not "
+                        "ledger-reflected (floor dormant anyway; verify before next "
+                        "restart). Blocking further F6 seeding.", dict(want))
+        _slack_safe(f":rotating_light: F6 anchor(s) {list(want)} NOT ledger-reflected after "
+                    f"retries — further F6 seeding BLOCKED until a clean sync. Verify before "
+                    f"next restart.")
+        _write_sync_degraded(True, f"verify failed for {list(want)}")
 
     def _record_event(self, placed: list[dict], spent: float) -> None:
         """Durably append a starter event — the SOURCE OF TRUTH for the per-month event cap.
