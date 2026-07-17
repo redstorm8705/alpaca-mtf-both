@@ -8241,3 +8241,17 @@ over main for a message typo — THIS audit entry is the authoritative record.
   checks forever6_qty>=bought AND drift≈0 AND no newly-planted drift) + C-3 (persisted
   block-further-seeding flag, auto-clear on clean sync). Both inert/dark. Then #3 (GTC floor
   check) → #2 (arm floor) LAST. NO SEED until all 3.
+
+## 2026-07-17 (interactive, cont.) — F6 prereq #1 COMPLETE (C-2/C-3 shipped 9ad926d)
+- `9ad926d` forever_hold_manager: post-buy ledger-sync verify loop (C-2) + persisted
+  seed-block flag (C-3). DARK/inert (FOREVER6_ENABLED=False). After an F6 buy:
+  run_ledger_sync.sync_once() → verify each placed sym has forever6>=bought AND drift≈0,
+  4x retry (2/4/8s backoff); alert on newly-planted drift on a clean protected sym; drop
+  terminally-rejected orders; wrapper makes it NEVER raise (fail-closed → degraded flag).
+  execute_starter refuses the next seed while degraded (fail-closed read; auto-clear on
+  clean sync; block-at-entry ⇒ SET is never a spurious unblock).
+  Gate: design board (2 seats specified conditions) + statics + functional self-test
+  (round-trip/fail-closed/block-at-entry/fail-closed-on-crash) + cold-2nd FAIL→fixed
+  (outer try/except wrapper)→PASS re-verify + Gro APPROVE + GAI APPROVE preship b7c8d1ee.
+- PREREQ #1 COMPLETE (C-1 800815e + C-2/C-3 9ad926d). NEXT: prereq #3 (GTC/DAY stop floor
+  check in broker.py) → prereq #2 (arm OWNERSHIP_GUARD_ENFORCE=True) LAST. NO SEED until all 3.

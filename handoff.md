@@ -32,12 +32,18 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
    takes effect at the next non-RTH OCI restart (deferred).**
 
 **▶ RAFAEL APPROVED (this session): BUILD THE 3 F6-ARMING PREREQS.** Design is board-blessed:
-`logs/f6_prereq1_syncgap_design_2026-07-17.md` (4-voice gate). Prereq #1 = C-1 (lock, ✅ shipped
-800815e) + **C-2/C-3 REMAIN** (the inert post-buy `sync_once` verify-retry loop in
-`forever_hold_manager` + the persisted block-further-seeding flag — full spec in the design doc,
-CONDITIONS section). Then **prereq #3** (GTC/DAY stop floor check) → **prereq #2** (arm
-OWNERSHIP_GUARD_ENFORCE=True) LAST. **NO SEED until all 3 land.** ⏩ NEXT EXACT STEP: implement C-2/C-3
-per the design doc's CONDITIONS (inert/dark; gate = statics + cold-2nd + Gro/GAI preship).
+`logs/f6_prereq1_syncgap_design_2026-07-17.md` (4-voice gate).
+- **✅ PREREQ #1 COMPLETE:** C-1 lock (`800815e`) + C-2/C-3 post-buy verify loop + persisted
+  seed-block flag (`9ad926d`, DARK/inert). Both fully gated (design board + statics + cold-2nd +
+  Gro/GAI preship). OCI restart deferred (C-1 is a live cron-path change; C-2/C-3 inert).
+- **⏳ PREREQ #3 (NEXT):** GTC/DAY stop-submission floor check (or F6-symbol skip) in
+  `execution/broker.py:submit_gtc_stop_order`/day-stop path — close the resting-stop hole so an
+  orphan-adopted anchor can't get a live sell-stop. Its own full gate. Inert until floor armed.
+- **⏳ PREREQ #2 (LAST):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556) — ONLY after #1 (ledger
+  populated + protected_symbols.json present) AND #3 land, AND a live-verified rejected sell on a
+  protected symbol. This is the one dangerous flip; it changes the close path for ALL tiers.
+**NO SEED (execute_starter) until all 3 land.** ⏩ NEXT EXACT STEP: implement prereq #3 (GTC floor
+check) per the design doc ordering. Seed plan ready in `logs/f6_activation_BLOCKED_2026-07-17.md`.
 
 **🔴 STILL BLOCKED — FOREVER-6 ARMING (do NOT flip FOREVER6_ENABLED=True until all 3 prereqs land).**
 Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed
