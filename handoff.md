@@ -15,8 +15,35 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
 
 **STANDING AUTHORIZATION (Rafael 2026-07-16, while he is away ~5-6h):** continue the ongoing work, then
 the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
-logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream. Gro is TPD-exhausted
-→ board + GAI + `--waive-gro` suffices (Rafael standing rule).
+logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream.
+**Gro's TPD has RESET — full Gro+GAI preship is working again (no --waive-gro needed).**
+
+**🔴 BIGGEST FIND OF THE SESSION — pnl=0.0 EPIDEMIC ROOT FIXED + LIVE (`fb93d11`, 2026-07-16).**
+From today's post-market VERDICT=FAIL. **Every stop-breach cover at the RTH open recorded pnl=$0.00
+PERMANENTLY.** Today RIVN's real **+$0.51** → `$0.00`; the SAME mechanism recorded RIVN's real **−$41 as
+$0.00 on 7/7 plus 6 other trades**. Bug A (`5fb5c4e`) fixed WHICH query the reconciler runs — this fixed the
+reconciler **never running in time at all**. TWO structural defects:
+1. `run_cycle.py` — the 9:30-10:00 ET "opening noise window" block runs check_exits then **RETURNS**, while
+   `_run_fill_recon` sat ~700 lines below → the reconciler **NEVER ran in the opening window** = exactly when
+   open-covers fire AND when fills are slowest (RIVN's cover filled in 4 pieces over 13:32:51-13:34:15).
+   Now called after check_exits, before the early return.
+2. `fill_reconciler.py` — `max_age_minutes` hardcoded **5** vs observed **~5.5-6 min cadence** → at most ONE
+   retry, usually ZERO. Now `config.RC4_RECONCILE_WINDOW_MINUTES = 90`. It is a RETRY BUDGET only — it does
+   NOT widen the Alpaca query (bounded independently by entry_time + side filter + ±50% band) → wrong-fill
+   risk is **ZERO-DELTA** (board). Floor-clamped at 5 (below that, `mark_fill_expired` would silently skip
+   expired trades → infinite re-queue loop).
+**WHY IT MATTERS:** a SUPPRESSED LOSS inflates Kelly's win rate + under-reports drawdown → **biases sizing
+UPWARD**. Strictly risk-reducing. Kill switch was NEVER affected (Alpaca-equity sourced).
+**⚠️ KNOWN GAP (board caught my false claim): TQI is NOT repaired** — `exit_logic.py:180` `append_tqi` is
+APPEND-ONLY at exit time with the fabricated 0.00; `patch_exit_pnl` rebuilds Kelly but never replaces the TQI
+entry → the rolling TQI average keeps the corrupted score permanently. Kelly ✓ / win-rate ✓ / daily_pnl ✓ / TQI ✗.
+Gate: board APPROVE (4 required changes applied) + Gro APPROVE + GAI APPROVE; preship `57b8c343732f` +
+`c1a22b1e679c` + `59520d693858`. Runtime-verified on OCI. Full evidence: `logs/pnl_zero_root_cause_2026-07-16.md`.
+**▶ NEXT CANDIDATES (board follow-ups, logged not done):** TQI recompute-on-patch (closes the gap above);
+`fill_helpers:369` returns entry_price as its FAILURE value — indistinguishable from a real scratch fill, which
+forces the fragile `abs(_fill-_entry_px)<_MIN_PRICE_DIFF` heuristic → return None + explicit flag; upper-bound
+accepted `filled_at` at ~exit+window; `reconcile_eod:475` `_qty_at_close` clobber (poisons only a POST-EOD
+patch); `gtc_manager`'s false "Cover-on-breach filled @ $X" log (nothing had filled).
 
 **✅ SLACK-RELIEF SECONDARY SHIPPED + LIVE + VERIFIED (`2cf6526`+`600c5d0`, 2026-07-16) — last known spammer
 closed.** New `scripts/service_watchdog.sh` replaces the `*/5` one-liner (which alerted on the FIRST failed
