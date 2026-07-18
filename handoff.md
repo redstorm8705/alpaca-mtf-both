@@ -30,20 +30,40 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
    Best-effort flock; fail-open on timeout/setup-failure so it can NEVER hang the cron. Gate: design
    board + statics + self-test + cold-2nd PASS + Gro/GAI preship `55b0c5b0`. **Live cron-path change →
    takes effect at the next non-RTH OCI restart (deferred).**
+5. **`b5d519c` — F6 prereq #3: floor-bound resting sell-stops (GTC/DAY), DARK/inert.** See prereq
+   tracker below. Full gate 5/5 Variant A; supersedes stranded other-account `715c0b0` (never reached
+   this remote — its forever6-only fix refuted 5/5 as a QHM-floor breach). OCI git-synced, restart
+   deferred. **Cross-account note:** the other account also generated Q3 QHM research (MU top pick 4/4,
+   AVGO #2, VRT post-7/29, AMAT/LMT disqualified on earnings proximity) — findings live only in that
+   session's transcript; the memo was deemed already-committed (`quarterly_holds_research_Q3_2026-06-20.md`),
+   no new file. New follow-ups logged: D-cache + D-obs (prereq-2 arming conditions), and a separate
+   governance q — `check_never_sell_floor` lets a `qhm`-tier resting stop self-liquidate the QHM slice
+   (effective_floor=floor−own_qhm=0 when f6=0); pre-existing in the chokepoint, shared by the close path.
 
 **▶ RAFAEL APPROVED (this session): BUILD THE 3 F6-ARMING PREREQS.** Design is board-blessed:
 `logs/f6_prereq1_syncgap_design_2026-07-17.md` (4-voice gate).
 - **✅ PREREQ #1 COMPLETE:** C-1 lock (`800815e`) + C-2/C-3 post-buy verify loop + persisted
   seed-block flag (`9ad926d`, DARK/inert). Both fully gated (design board + statics + cold-2nd +
   Gro/GAI preship). OCI restart deferred (C-1 is a live cron-path change; C-2/C-3 inert).
-- **⏳ PREREQ #3 (NEXT):** GTC/DAY stop-submission floor check (or F6-symbol skip) in
-  `execution/broker.py:submit_gtc_stop_order`/day-stop path — close the resting-stop hole so an
-  orphan-adopted anchor can't get a live sell-stop. Its own full gate. Inert until floor armed.
-- **⏳ PREREQ #2 (LAST):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556) — ONLY after #1 (ledger
-  populated + protected_symbols.json present) AND #3 land, AND a live-verified rejected sell on a
-  protected symbol. This is the one dangerous flip; it changes the close path for ALL tiers.
-**NO SEED (execute_starter) until all 3 land.** ⏩ NEXT EXACT STEP: implement prereq #3 (GTC floor
-check) per the design doc ordering. Seed plan ready in `logs/f6_activation_BLOCKED_2026-07-17.md`.
+- **✅ PREREQ #3 COMPLETE (`b5d519c`, 2026-07-17 interactive, DARK/inert):** `_floor_bound_stop_qty`
+  wired into `submit_gtc_stop_order` + `submit_day_stop_order` — a resting sell-stop on a protected
+  (forever6/qhm) symbol can never fire INTO the never-sell floor. Gate = `protected_floor` (F6+QHM),
+  matching close-path chokepoint (**Variant A**, board 3/3 + Gro + GAI = **5/5**; the stranded
+  other-account fix `715c0b0` proposed forever6-ONLY which was refuted 5/5 as opening a QHM-floor
+  breach). Helper hardened with a never-raises wrapper (fail-closed on type-corrupt ledger — cold
+  board Reliability seat). Full-read 995L + statics + cold-2nd PASS + FINAL preship gro+gai APPROVE
+  (sha 34059f81). OCI git-synced (b5d519c), restart deferred with #1.
+- **⏳ PREREQ #2 (LAST — the one dangerous flip):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556)
+  — ONLY after #1 (ledger populated + protected_symbols.json present) AND #3 (done) land, AND a
+  live-verified rejected sell on a protected symbol. Changes the close path for ALL tiers.
+  **BINDING ARMING CONDITIONS from the prereq-#3 cold board (must resolve BEFORE the flip, not before
+  #3):** (a) **D-cache** — `save_ledger`'s protected-symbols cache is best-effort; a 0→qhm transition
+  that persists to the ledger while the cache write fails leaves a fail-OPEN window on the LedgerError
+  fallback (affects ALL guard fallbacks, not just stops); make the cache write coherent/monitored or
+  stop trusting it as authoritative. (b) **D-obs** — a fail-closed stop-skip on a protected symbol
+  only `logger.critical`s; add an operator page (as the GTC held_for_orders path already does).
+**NO SEED (execute_starter) until all 3 land.** ⏩ NEXT EXACT STEP: resolve arming conditions D-cache +
+D-obs, then prereq #2 (arm the flag) per `logs/f6_activation_BLOCKED_2026-07-17.md` ordering + seed plan.
 
 **🔴 STILL BLOCKED — FOREVER-6 ARMING (do NOT flip FOREVER6_ENABLED=True until all 3 prereqs land).**
 Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed

@@ -8255,3 +8255,30 @@ over main for a message typo — THIS audit entry is the authoritative record.
   (outer try/except wrapper)→PASS re-verify + Gro APPROVE + GAI APPROVE preship b7c8d1ee.
 - PREREQ #1 COMPLETE (C-1 800815e + C-2/C-3 9ad926d). NEXT: prereq #3 (GTC/DAY stop floor
   check in broker.py) → prereq #2 (arm OWNERSHIP_GUARD_ENFORCE=True) LAST. NO SEED until all 3.
+
+## 2026-07-17 (interactive, cont.) — F6 prereq #3 COMPLETE (broker.py, shipped b5d519c)
+- `b5d519c` broker.py: wired `_floor_bound_stop_qty` into submit_gtc_stop_order +
+  submit_day_stop_order (after each qty<=0 guard). A resting sell-stop on a protected
+  (forever6/qhm) symbol is bounded/skipped so it can never fire INTO the never-sell floor.
+  DARK/inert (OWNERSHIP_GUARD_ENFORCE=False). Full-read gate: broker.py 995L + ownership_guard.py 625L.
+- DESIGN FORK RESOLVED 5/5 → **Variant A** (pre-gate on `protected_floor` = F6+QHM, matching the
+  close-path chokepoint + both sibling funcs). Board 3 cold seats (Exec-risk/Reliability/Quant-logic)
+  + Gro + GAI all VERDICT A. The stranded other-account commit `715c0b0` (never reached this remote)
+  proposed forever6-ONLY (Variant B) — refuted 5/5: a qhm-only symbol (f6=0) would skip the check and
+  an intraday sell-stop could fire past the QHM never-sell floor. RULE C-1 vindicated (did not trust
+  the other session's cold-2nd conclusion; re-derived independently).
+- HARDENING (Reliability seat D-raise): helper split into thin wrapper + `_floor_bound_stop_qty_impl`;
+  wrapper's `except Exception` enforces the never-raises/fail-closed contract (type-corrupt ledger →
+  `float()` ValueError past the inner `except LedgerError` → now fail-closed 0 for protected / qty for
+  non-protected, never propagates). No re-indent risk (thin-wrapper form, C-2/C-3 precedent).
+- Gate: statics (py_compile/mypy/ruff clean) + cold-2nd PASS (empty threat list; bounded-qty flow into
+  StopOrderRequest verified in both funcs) + FINAL preship gro=APPROVE gai=APPROVE (sha 34059f81; GAI
+  flash false-rejected 2x on hallucinated-absent guards, cleared on re-roll #3). OCI git-synced b5d519c,
+  restart deferred with #1.
+- OPEN FOLLOW-UPS (NOT prereq-3 scope): **D-cache** (save_ledger protected-symbols cache best-effort →
+  fail-OPEN window on ledger-read fallback; affects all guard fallbacks) + **D-obs** (fail-closed
+  stop-skip only logs, no operator page) — both are BINDING prereq-#2 arming conditions. Plus a
+  governance q: `check_never_sell_floor` permits a `qhm`-tier resting stop to self-liquidate the QHM
+  slice when f6=0 (effective_floor=floor−own_qhm=0) — pre-existing in the chokepoint, shared by the
+  close path, separate patch if the board wants qhm truly never-sell against its own resting stops.
+- PREREQ #3 COMPLETE. NEXT: resolve D-cache + D-obs → prereq #2 (arm floor) LAST. NO SEED until #2 lands.
