@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-17 (interactive — Rafael away) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-07-18 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -26,14 +26,31 @@ cross-account-switch need):**
   reports** into `5b228aa`, pushed clean, tree clean, exit 0. Design `logs/reports_durability_design_2026-07-18.md`;
   board 3-1 + Gro (GAI dissent resolved). weekly/monthly `*.html` dashboards intentionally NOT synced
   (global `*.html` ignore; human-facing, web-served) — Rafael to decide if he wants them versioned.
-- **⏳ F6 PREREQ #3 (GTC/DAY stop floor check) — WIP, UNCOMMITTED.** `_floor_bound_stop_qty()` helper is
-  applied to `execution/broker.py` (working tree only; **defined but call-sites NOT yet wired → inert/unused**).
-  Full-read gate on broker.py DONE (931 lines, Explore verbatim). Design: bound a resting sell-stop by the
-  never-sell floor at submission (mirrors `close_position` L759-793), gate `side=="sell"` ONLY (short buy-stops
-  live in prod), inert unless `OWNERSHIP_GUARD_ENFORCE`. **⏩ NEXT EXACT STEP for F6:** wire the 2 call sites
-  (`submit_gtc_stop_order` after its qty guard + `submit_day_stop_order` after its qty guard: `_fq =
-  _floor_bound_stop_qty(symbol,qty,side,tier); if _fq<1: return None; qty=_fq`) → statics → cold-2nd →
-  Gro/GAI preship → ship. Then prereq #2 (arm `OWNERSHIP_GUARD_ENFORCE`) LAST. Design doc: `logs/f6_prereq1_syncgap_design_2026-07-17.md` (+ prereq #1 C-1/C-2/C-3 already shipped this thread).
+- **✅ F6 PREREQ #3 (GTC/DAY stop floor check) — DONE + LIVE** (`b5d519c`, deployed in `4c3ced6`).
+  The prior checkpoint's "WIP/uncommitted" was STALE — verified at 100% this session: `_floor_bound_stop_qty`
+  defined broker.py:337 (+wrapper:362, impl:382), WIRED at :458 (`submit_gtc_stop_order`) + :582
+  (`submit_day_stop_order`); working tree clean.
+- **🚢 F6 D-obs + OBS-A (prereq-2 arming cond b) — SHIPPING THIS SESSION (2026-07-18 interactive, Rafael
+  APPROVED).** DARK/inert (behind `OWNERSHIP_GUARD_ENFORCE=False`; **live behavior change = ZERO**).
+  Files: `alerts.py` (+`alert_floor_blind` bool transport), `execution/ownership_guard.py` (+`page_floor_blind`
+  never-raises throttled pager + function-boundary hardening of `check_never_sell_floor`), `execution/broker.py`
+  (`close_position`→wrapper+`_close_position_impl`; +`_floor_bound_partial_qty`/`_impl`; page wiring in
+  `_floor_bound_stop_qty`). **OBS-A:** a type-corrupt ledger qty → fail CLOSED for a cached-protected symbol
+  (page it), fail OPEN (keystone) otherwise — never crashes the exit path (Exec-risk's PLTR −$16k scenario
+  averted, runtime-proven). **D-obs:** throttled (kind,symbol / 30-min) phone+Slack page on fail-closed
+  AMBIGUITY (ledger/Alpaca unreadable, drift-freeze, type-corrupt); deterministic floor-binding rejects stay
+  log-only. Gate: 5-voice board (Reliability+Exec-risk+Observability+Gro+GAI) all APPROVE-WITH-CHANGES (every
+  change applied) → statics ✓ → runtime self-test 13/13 ✓ → cold-2nd PASS → FINAL preship markers
+  (broker/alerts = real Gro+GAI APPROVE; ownership_guard = gai=APPROVE, gro=WAIVED on active Groq TPM).
+  Design: `logs/f6_dobs_obsa_design_2026-07-18.md`. **v2 QUEUED (build BEFORE arming, NOT this ship):**
+  cycle-rollup + recovery/all-clear + heartbeat; `load_ledger` qty-type validation at source.
+- **⏩ NEXT EXACT STEP:** F6 v2 alert-polish (above) → live-verify a rejected sell on a protected symbol
+  (paper canary) → then prereq #2 = arm `OWNERSHIP_GUARD_ENFORCE=True` (LAST; per
+  `logs/f6_activation_BLOCKED_2026-07-17.md`). NO SEED until #2 lands. Non-F6 queue (Rafael this session):
+  RAM alert-spam recalibration (deferred, cheap win — collapse the 2 redundant watchdogs, swap free-MB
+  thresholds for swap-pressure; box size-up REFUSED, no spend); Slack Gemini-report format fix (broken/dup
+  fragments in the audit→Slack renderer). Reports confirmed cross-account in git+OCI (269 files); Gemini
+  routine reports NOT in Master Brain (only project-state is) — optional add.
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").

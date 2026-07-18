@@ -367,6 +367,11 @@ def _floor_bound_stop_qty(symbol: str, qty: int, side: str, tier: str) -> int:
         except Exception:
             _protected = False
         if _protected:
+            try:
+                _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                                     f"stop-submit floor helper raised: {e}")
+            except Exception:
+                pass
             logger.critical(
                 f"[{symbol}] stop-submit({tier}): floor helper raised for a PROTECTED "
                 f"symbol — SKIPPING the sell-stop (fail closed): {e}"
@@ -388,6 +393,7 @@ def _floor_bound_stop_qty_impl(symbol: str, qty: int, side: str, tier: str) -> i
         _ledger = _og.load_ledger()
     except _og.LedgerError as e:
         if symbol in _og._cached_protected_symbols():
+            _og.page_floor_blind(symbol, tier, "ledger_unreadable", f"stop-submit: {e}")
             logger.critical(
                 f"[{symbol}] stop-submit({tier}): ledger unreadable for a PROTECTED symbol "
                 f"— SKIPPING the sell-stop to preserve the never-sell floor: {e}"
@@ -403,6 +409,7 @@ def _floor_bound_stop_qty_impl(symbol: str, qty: int, side: str, tier: str) -> i
     try:
         _pos = get_open_position(symbol)
     except Exception as e:
+        _og.page_floor_blind(symbol, tier, "alpaca_unreadable", f"stop-submit: {e}")
         logger.critical(
             f"[{symbol}] stop-submit({tier}): Alpaca net unreadable for a PROTECTED symbol "
             f"— SKIPPING the sell-stop (fail closed): {e}"
@@ -663,6 +670,88 @@ def cancel_order(order_id: str) -> bool:
 
 # ── Position management ───────────────────────────────────────────────────────
 
+def _floor_bound_partial_qty(symbol: str, qty: int, tier: str) -> int:
+    """Floor-bound a PARTIAL-close qty (increment 4a; DORMANT unless OWNERSHIP_GUARD_ENFORCE —
+    the caller gates on that + _bypass_floor). Returns: the qty to submit (>=1); 0 to
+    REJECT/skip (caller returns False); or -1 = 'position already gone' (caller returns True,
+    preserving the pre-existing not-found→True contract). NEVER-RAISES (Reliability seat
+    2026-07-18): a type-corrupt ledger fails CLOSED (0) for a cached-protected symbol (page it)
+    and OPEN (requested qty) otherwise — never propagates and crashes the exit path. Same
+    proven structure as _floor_bound_stop_qty."""
+    try:
+        return _floor_bound_partial_qty_impl(symbol, qty, tier)
+    except Exception as e:
+        try:
+            from execution import ownership_guard as _og
+            _protected = symbol in _og._cached_protected_symbols()
+        except Exception:
+            _protected = False
+        if _protected:
+            try:
+                _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                                     f"partial-close floor helper raised: {e}")
+            except Exception:
+                pass
+            logger.critical(
+                f"[{symbol}] partial_close({tier}): floor helper raised for a PROTECTED "
+                f"symbol — refusing partial (fail closed): {e}"
+            )
+            return 0
+        logger.warning(
+            f"[{symbol}] partial_close({tier}): floor helper raised, symbol not protected "
+            f"— proceeding with requested qty: {e}"
+        )
+        return qty
+
+
+def _floor_bound_partial_qty_impl(symbol: str, qty: int, tier: str) -> int:
+    """Body of _floor_bound_partial_qty — call ONLY through that never-raises wrapper."""
+    from execution import ownership_guard as _og
+    try:
+        _ledger = _og.load_ledger()
+    except _og.LedgerError as e:
+        if symbol in _og._cached_protected_symbols():
+            _og.page_floor_blind(symbol, tier, "ledger_unreadable", f"partial-close: {e}")
+            logger.critical(
+                f"[{symbol}] partial_close({tier}): ledger unreadable for a PROTECTED "
+                f"symbol — refusing partial to preserve the floor: {e}"
+            )
+            return 0
+        logger.debug(
+            f"[{symbol}] partial_close: ledger unreadable, symbol not protected — "
+            f"proceeding with requested qty: {e}"
+        )
+        return qty
+    if _og.protected_floor(_ledger, symbol) <= _og._QTY_EPS:
+        return qty
+    try:
+        _pos = get_open_position(symbol)
+    except Exception as e:
+        _og.page_floor_blind(symbol, tier, "alpaca_unreadable", f"partial-close: {e}")
+        logger.critical(
+            f"[{symbol}] partial_close({tier}): Alpaca net unreadable for a PROTECTED "
+            f"symbol — refusing (fail closed): {e}"
+        )
+        return 0
+    if _pos is None:
+        return -1   # already gone → caller returns True (preserve not-found→True contract)
+    _net = abs(float(_pos.qty))
+    _side = "sell" if _pos.side == "long" else "buy"
+    _res = _og.check_never_sell_floor(symbol, tier, qty, _side, alpaca_net_qty=_net)
+    if _res.action == "REJECT":
+        logger.error(
+            f"[{symbol}] partial_close({tier}) BLOCKED by never-sell floor: {_res.reason}"
+        )
+        return 0
+    _bq = int(_res.qty)
+    if _bq < int(qty):
+        logger.warning(
+            f"[{symbol}] partial_close({tier}): never-sell floor bounded {int(qty)}→{_bq} "
+            f"share(s) ({_res.reason})."
+        )
+    return _bq if _bq >= 1 else 0
+
+
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                            *, _bypass_floor: bool = False) -> bool:
     """
@@ -684,49 +773,16 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
 
     # NEVER-SELL-FLOOR bounding (increment 4a). DORMANT unless OWNERSHIP_GUARD_ENFORCE.
     # _bypass_floor=True skips this (the chokepoint close_position already bounded qty).
+    # Delegated to the never-raises _floor_bound_partial_qty helper (Reliability seat
+    # 2026-07-18) so a type-corrupt ledger fails closed/open, never crashes this exit path.
     import config
     if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False) and not _bypass_floor:
-        from execution import ownership_guard as _og
-        try:
-            _ledger = _og.load_ledger()
-        except _og.LedgerError as e:
-            if symbol in _og._cached_protected_symbols():
-                logger.critical(
-                    f"[{symbol}] partial_close_position({tier}): ledger unreadable for a "
-                    f"PROTECTED symbol — refusing partial to preserve the floor: {e}"
-                )
-                return False
-            logger.debug(f"[{symbol}] partial_close_position: ledger unreadable, symbol not protected — proceeding with requested qty: {e}")
-        else:
-            if _og.protected_floor(_ledger, symbol) > _og._QTY_EPS:
-                try:
-                    _pos = get_open_position(symbol)
-                except Exception as e:
-                    logger.critical(
-                        f"[{symbol}] partial_close_position({tier}): Alpaca net unreadable "
-                        f"for a PROTECTED symbol — refusing (fail closed): {e}"
-                    )
-                    return False
-                if _pos is None:
-                    return True
-                _net = abs(float(_pos.qty))
-                _side = "sell" if _pos.side == "long" else "buy"
-                _res = _og.check_never_sell_floor(symbol, tier, qty, _side, alpaca_net_qty=_net)
-                if _res.action == "REJECT":
-                    logger.error(
-                        f"[{symbol}] partial_close_position({tier}) BLOCKED by never-sell "
-                        f"floor: {_res.reason}"
-                    )
-                    return False
-                _bq = int(_res.qty)
-                if _bq < int(qty):
-                    logger.warning(
-                        f"[{symbol}] partial_close_position({tier}): never-sell floor "
-                        f"bounded {int(qty)}→{_bq} share(s) ({_res.reason})."
-                    )
-                    qty = _bq
-                if qty < 1:
-                    return False
+        _fq = _floor_bound_partial_qty(symbol, qty, tier)
+        if _fq == -1:
+            return True   # position already gone — matches the not-found→True contract below
+        if _fq < 1:
+            return False
+        qty = _fq
 
     client = _get_trading_client()
     try:
@@ -868,7 +924,40 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
     import config
     if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
         return _raw_close_position(symbol)   # DORMANT — exact pre-4a behavior
+    # Function-boundary never-raises wrapper (Reliability seat 2026-07-18): any unexpected
+    # raise in the floor-aware body (e.g. a type-corrupt ledger qty making protected_floor
+    # raise) fails CLOSED for a cached-protected symbol (page it) and OPEN (raw close) for a
+    # non-protected one (keystone) — never propagates and crashes the exit path.
+    try:
+        return _close_position_impl(symbol, tier)
+    except Exception as e:
+        try:
+            from execution import ownership_guard as _og
+            _protected = symbol in _og._cached_protected_symbols()
+        except Exception:
+            _protected = False
+        if _protected:
+            try:
+                _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                                     f"close_position body raised: {e}")
+            except Exception:
+                pass
+            logger.critical(
+                f"[{symbol}] close_position({tier}): body raised for a PROTECTED symbol — "
+                f"refusing close (fail closed): {e}"
+            )
+            return False
+        logger.warning(
+            f"[{symbol}] close_position({tier}): body raised, symbol not protected — raw "
+            f"close (fail open): {e}"
+        )
+        return _raw_close_position(symbol)
 
+
+def _close_position_impl(symbol: str, tier: str) -> bool:
+    """Body of close_position (increment 4a chokepoint) — call ONLY through close_position's
+    never-raises wrapper, which short-circuits the enforce-off case and guarantees no raise
+    escapes to the caller."""
     from execution import ownership_guard as _og
     # Protection decision from the ledger (authoritative). Only a genuinely-protected
     # symbol needs the live Alpaca net, so the common non-protected path stays cheap
@@ -877,6 +966,7 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
         _ledger = _og.load_ledger()
     except _og.LedgerError as e:
         if symbol in _og._cached_protected_symbols():
+            _og.page_floor_blind(symbol, tier, "ledger_unreadable", f"close_position: {e}")
             logger.critical(
                 f"[{symbol}] close_position({tier}): ledger unreadable for a PROTECTED "
                 f"symbol — refusing close to preserve the never-sell floor: {e}"
@@ -891,6 +981,7 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
     try:
         _pos = get_open_position(symbol)
     except Exception as e:
+        _og.page_floor_blind(symbol, tier, "alpaca_unreadable", f"close_position: {e}")
         logger.critical(
             f"[{symbol}] close_position({tier}): Alpaca net unreadable for a PROTECTED "
             f"symbol — refusing close (fail closed): {e}"

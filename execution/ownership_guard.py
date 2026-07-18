@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """
 execution/ownership_guard.py — per-tier shared-lot ownership ledger + never-sell floor.
 
@@ -70,6 +71,13 @@ _CODE_TIER = {v: k for k, v in _TIER_CODE.items()}
 _PROTECTED_TIERS: tuple[str, ...] = ("forever6", "qhm")
 
 _QTY_EPS = 1e-6
+
+# ── D-obs: fail-closed-on-AMBIGUITY operator paging (board + Gro + GAI 2026-07-18) ──────
+# The guard pages the operator ONLY when it fails closed because it is BLIND (ledger/Alpaca
+# unreadable, ledger↔Alpaca drift, or type-corrupt ledger) — NOT on the deterministic
+# floor-binding rejects (those are the guard doing its designed job; log-only, no page).
+_PAGE_THROTTLE_S = 1800  # 30-min per-(kind, symbol) dedup window (v1; cycle-rollup is v2)
+_CRITICAL_PAGE_KINDS = frozenset({"ledger_unreadable", "drift_freeze", "ledger_type_corrupt"})
 
 
 # ── client_order_id tagging ───────────────────────────────────────────────────
@@ -233,6 +241,54 @@ class LedgerError(Exception):
     """Raised on a present-but-corrupt ledger — callers must fail closed."""
 
 
+# ── D-obs: never-raises operator pager ─────────────────────────────────────────
+def _floor_blind_stamp(kind: str, symbol: str) -> Path:
+    """Per-(kind, symbol) throttle stamp path under data/state/ (RC-5 atomic write)."""
+    safe = f"{kind}__{symbol}".replace(os.sep, "_").replace("/", "_").replace("\\", "_")
+    return _LEDGER_PATH.parent / f".floor_blind_{safe}.json"
+
+
+def page_floor_blind(symbol: str, tier: str, kind: str, detail: str = "") -> None:
+    """NEVER-RAISES operator page for a never-sell-guard fail-closed AMBIGUITY (ledger/Alpaca
+    unreadable, ledger↔Alpaca drift, or type-corrupt ledger). Per-(kind, symbol) 30-min
+    throttle; the dedup stamp is written ONLY on a CONFIRMED send (so a failed delivery
+    retries next time instead of being silently swallowed — mirrors alerts.alert_crash's
+    stamp-after-confirmed-send discipline). The import, the throttle-stamp read/parse, and the
+    send are ALL inside one try/except so a paging failure can NEVER raise into the RTH order
+    path — this contract is load-bearing: OBS-A's fail-closed handlers call this. Deterministic
+    floor-binding rejects must NOT call this (they stay log-only, to avoid alert fatigue)."""
+    try:
+        now = time.time()
+        stamp = _floor_blind_stamp(kind, symbol)
+        last = 0.0
+        try:
+            if stamp.exists():
+                last = float(json.loads(stamp.read_text()).get("ts", 0.0) or 0.0)
+        except Exception:  # RC-3: corrupt/unreadable stamp → treat as "send" (fail toward alerting)
+            last = 0.0
+        if (now - last) < _PAGE_THROTTLE_S:
+            return
+        from alerts import alert_floor_blind
+        if alert_floor_blind(symbol, tier, kind, detail, kind in _CRITICAL_PAGE_KINDS):
+            # Confirmed send → write the dedup stamp. Unique .{pid}.tmp suffix so two
+            # overlapping writers can't garble a shared tmp; atomic replace (RC-5).
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            _tmp = stamp.with_suffix(f".{os.getpid()}.tmp")
+            with open(_tmp, "w") as f:
+                json.dump({"ts": now, "kind": kind, "symbol": symbol,
+                           "utc": datetime.now(timezone.utc).isoformat()}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            _tmp.replace(stamp)
+    except Exception as e:  # RC-3: a pager MUST NEVER break the guard / order path.
+        try:
+            logger.warning("page_floor_blind swallowed error (%s/%s/%s): %s",
+                           symbol, kind, tier, e)
+        except Exception:
+            pass
+    return None
+
+
 # ── Accessors ─────────────────────────────────────────────────────────────────
 def _entry(ledger: dict, symbol: str) -> Optional[dict]:
     return ledger.get("positions", {}).get(symbol)
@@ -295,75 +351,128 @@ def check_never_sell_floor(
         # keystone). Protected → continue below, where the live-Alpaca reconciliation
         # (ledger_sum vs alpaca_net + the drift field) fails CLOSED on any stale drift.
         _bak = _load_bak_ledger()
-        if protected_floor(_bak, symbol) <= _QTY_EPS:
+        try:
+            _bak_floor = protected_floor(_bak, symbol)
+        except Exception as _pe:
+            # OBS-A (Exec-risk seat 2026-07-18): current ledger unreadable AND the .bak's
+            # protected field is type-corrupt = BOTH records compromised. Only a protected
+            # symbol carries a protected-tier value here, so this narrow double-blind is the
+            # one place fail-CLOSED is correct. Page it — the guard is blind on a would-be
+            # protected exit.
+            page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                             f"current ledger unreadable + .bak protected_floor raised: {_pe}")
+            logger.critical(
+                "[%s] check_never_sell_floor: current ledger unreadable AND .bak "
+                "protected_floor raised (%s) — fail closed.", symbol, _pe)
+            return GuardResult("REJECT", 0.0,
+                               "current ledger unreadable and .bak corrupt — fail closed")
+        if _bak_floor <= _QTY_EPS:
             return GuardResult(
                 "APPROVE", qty,
                 "current ledger unreadable, symbol not protected in .bak — exit ok")
+        page_floor_blind(symbol, tier, "ledger_unreadable",
+                         f"current ledger unreadable, using .bak for protected symbol: {e}")
         logger.critical(
             "[%s] check_never_sell_floor: current ledger unreadable (%s) — using "
             "last-known-good .bak for a PROTECTED symbol; live-Alpaca drift fails "
             "closed on any mismatch.", symbol, e)
         ledger = _bak
 
-    floor = protected_floor(ledger, symbol)      # ledger-derived ONLY (forever6 + qhm)
+    # ── Protection determination (main ledger). A raise here (type-corrupt qty) means we
+    # CANNOT determine protection → OBS-A .bak resolution (Reliability + Exec-risk seats):
+    # fail CLOSED only if the symbol is cached-protected (page it); else fail OPEN — blocking a
+    # legitimate intraday exit is the keystone catastrophe, worse than floor risk.
+    try:
+        floor = protected_floor(ledger, symbol)  # ledger-derived ONLY (forever6 + qhm)
+    except Exception as _pe:
+        if symbol in _cached_protected_symbols():
+            page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                             f"protected_floor raised for cached-protected symbol: {_pe}")
+            logger.critical(
+                "[%s] check_never_sell_floor: protected_floor raised for a cached-protected "
+                "symbol (%s) — fail closed.", symbol, _pe)
+            return GuardResult("REJECT", 0.0,
+                               "ledger entry corrupt for protected symbol — fail closed")
+        logger.warning(
+            "[%s] check_never_sell_floor: protected_floor raised, symbol not protected in "
+            ".bak — fail open (keystone): %s", symbol, _pe)
+        return GuardResult("APPROVE", qty,
+                           "ledger entry corrupt, symbol not protected in .bak — exit ok")
     if floor <= _QTY_EPS:
         # No protected floor → nothing to protect. Approve the full order regardless of
         # ledger drift or Alpaca-net availability (those only bind when a floor exists).
         return GuardResult("APPROVE", qty, "no protected floor — exit allowed")
 
-    # ── The symbol IS protected (floor > 0) → engage the fail-CLOSED protection logic.
-    if alpaca_net_qty is None:
-        return GuardResult("REJECT", 0.0,
-                           "Alpaca net unavailable for PROTECTED symbol — fail closed")
-    _ent = _entry(ledger, symbol)
-    if _ent is not None:
-        _drift = float(_ent.get("drift", 0.0) or 0.0)
-        if abs(_drift) > _QTY_EPS:
-            return GuardResult(
-                "REJECT", 0.0, f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen")
-    # reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
-    ledger_sum = get_combined_symbol_exposure(ledger, symbol)
-    if abs(ledger_sum - float(alpaca_net_qty)) > _QTY_EPS:
-        return GuardResult(
-            "REJECT", 0.0,
-            f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed")
-
-    own = tier_qty(ledger, symbol, tier)
-    net = float(alpaca_net_qty)
-    # A protected tier (qhm/forever6) selling its OWN shares reduces its own share
-    # to the floor, so it need only stay above the OTHER protected tiers' qty. Example:
-    # net=4 intraday=1 qhm=2 f6=1 → a QHM sell of its own 2 respects only forever6(1).
-    _own_protected = own if tier in _PROTECTED_TIERS else 0.0
-    effective_floor = floor - _own_protected
-
-    # short on a ring-fenced (floor>0) name → REJECT (long-only; shorts → options).
-    if str(side).lower() == "short":
-        return GuardResult("REJECT", 0.0, "ring-fenced name is long-only (shorts→opts)")
-
-    # sells, per tier
-    if tier == "forever6":
-        if not is_authorized_f6_trim:
-            return GuardResult(
-                "REJECT", 0.0, "forever6 reduces only via authorized +1000/+2000 trim")
-        bounded = min(qty, own)
-        if bounded <= _QTY_EPS:
-            return GuardResult("REJECT", 0.0, "forever6 trim exceeds own qty")
-        return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
-                           "f6 authorized trim")
-
-    # intraday / qhm sell: bound to the tier's OWN qty AND keep net >= effective_floor.
-    bounded = min(qty, own)                       # never sell more than the tier owns
-    if net - bounded < effective_floor - _QTY_EPS:
-        allowed = net - effective_floor           # max sellable before breaching floor
-        if allowed <= _QTY_EPS:
+    # ── The symbol IS protected (floor > 0) → fail-CLOSED protection logic. A coercion raise
+    # anywhere in this body (float() on a type-corrupt drift/exposure/tier qty — Reliability
+    # seat) now fails CLOSED (protected status is already established) instead of crashing the
+    # exit path.
+    try:
+        if alpaca_net_qty is None:
+            page_floor_blind(symbol, tier, "alpaca_unreadable",
+                             "live Alpaca net unavailable for protected symbol")
+            return GuardResult("REJECT", 0.0,
+                               "Alpaca net unavailable for PROTECTED symbol — fail closed")
+        _ent = _entry(ledger, symbol)
+        if _ent is not None:
+            _drift = float(_ent.get("drift", 0.0) or 0.0)
+            if abs(_drift) > _QTY_EPS:
+                page_floor_blind(symbol, tier, "drift_freeze",
+                                 f"ledger drift field={_drift}")
+                return GuardResult(
+                    "REJECT", 0.0, f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen")
+        # reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
+        ledger_sum = get_combined_symbol_exposure(ledger, symbol)
+        if abs(ledger_sum - float(alpaca_net_qty)) > _QTY_EPS:
+            page_floor_blind(symbol, tier, "drift_freeze",
+                             f"ledger_sum={ledger_sum} vs alpaca_net={alpaca_net_qty}")
             return GuardResult(
                 "REJECT", 0.0,
-                f"floor binding (net={net} floor={effective_floor}) — 0 sellable")
-        bounded = min(bounded, allowed)
-    if bounded <= _QTY_EPS:
-        return GuardResult("REJECT", 0.0, f"{tier} has no sellable qty (own={own})")
-    return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
-                       f"{tier} sell bounded to {bounded}")
+                f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed")
+
+        own = tier_qty(ledger, symbol, tier)
+        net = float(alpaca_net_qty)
+        # A protected tier (qhm/forever6) selling its OWN shares reduces its own share
+        # to the floor, so it need only stay above the OTHER protected tiers' qty. Example:
+        # net=4 intraday=1 qhm=2 f6=1 → a QHM sell of its own 2 respects only forever6(1).
+        _own_protected = own if tier in _PROTECTED_TIERS else 0.0
+        effective_floor = floor - _own_protected
+
+        # short on a ring-fenced (floor>0) name → REJECT (long-only; shorts → options).
+        if str(side).lower() == "short":
+            return GuardResult("REJECT", 0.0, "ring-fenced name is long-only (shorts→opts)")
+
+        # sells, per tier
+        if tier == "forever6":
+            if not is_authorized_f6_trim:
+                return GuardResult(
+                    "REJECT", 0.0, "forever6 reduces only via authorized +1000/+2000 trim")
+            bounded = min(qty, own)
+            if bounded <= _QTY_EPS:
+                return GuardResult("REJECT", 0.0, "forever6 trim exceeds own qty")
+            return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
+                               "f6 authorized trim")
+
+        # intraday / qhm sell: bound to the tier's OWN qty AND keep net >= effective_floor.
+        bounded = min(qty, own)                   # never sell more than the tier owns
+        if net - bounded < effective_floor - _QTY_EPS:
+            allowed = net - effective_floor       # max sellable before breaching floor
+            if allowed <= _QTY_EPS:
+                return GuardResult(
+                    "REJECT", 0.0,
+                    f"floor binding (net={net} floor={effective_floor}) — 0 sellable")
+            bounded = min(bounded, allowed)
+        if bounded <= _QTY_EPS:
+            return GuardResult("REJECT", 0.0, f"{tier} has no sellable qty (own={own})")
+        return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
+                           f"{tier} sell bounded to {bounded}")
+    except Exception as _ce:
+        page_floor_blind(symbol, tier, "ledger_type_corrupt",
+                         f"guard body raised for protected symbol: {_ce}")
+        logger.critical(
+            "[%s] check_never_sell_floor: protected-body raised (%s) — fail closed.",
+            symbol, _ce)
+        return GuardResult("REJECT", 0.0, "guard computation error — fail closed")
 
 
 # ── Drift reconcile ───────────────────────────────────────────────────────────

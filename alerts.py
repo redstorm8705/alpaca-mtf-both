@@ -402,6 +402,32 @@ def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> Non
           emoji=":rotating_light:")
 
 
+def alert_floor_blind(symbol: str, tier: str, kind: str, detail: str, critical: bool) -> bool:
+    """Operator page when the never-sell floor GUARD fails CLOSED on AMBIGUITY — it cannot
+    read the ownership ledger, cannot read the live Alpaca net qty, detects ledger↔Alpaca
+    drift, or hits a type-corrupt ledger value. A refused protected exit is a capital-risk
+    fault, so this fires the PHONE (ntfy) too, not Slack-only (mirrors alert_crash).
+
+    TRANSPORT ONLY — returns True on a CONFIRMED send (ntfy OR Slack ACK). Throttling and
+    the never-raises contract are the CALLER's responsibility
+    (execution.ownership_guard.page_floor_blind), which stamps its dedup only when this
+    returns True — so a failed delivery retries next time instead of being swallowed.
+    """
+    sev = SEV_CRITICAL if critical else SEV_WARNING
+    title = f"{sev} — NEVER-SELL GUARD BLIND — {symbol}"
+    body = (
+        f"Guard failed CLOSED on {symbol} [{tier}] — {kind}.\n"
+        f"{detail}\n"
+        f"A protected exit may be refused. Check Alpaca/ledger connectivity; "
+        f"run sync_ledger to heal if drift/corruption."
+    )
+    prio = 5 if critical else 4
+    ntfy_ok = _ntfy(title, body, priority=prio,
+                    tags=["rotating_light" if critical else "warning", "lock"])
+    slack_ok = _slack(title, body, emoji=":rotating_light:" if critical else ":warning:")
+    return bool(ntfy_ok or slack_ok)
+
+
 def alert_startup_test() -> bool:
     """
     Fire a low-priority ping to all configured transports at bot startup.

@@ -8304,3 +8304,29 @@ over main for a message typo — THIS audit entry is the authoritative record.
   check_never_sell_floor vs a type-corrupt qty → fail CLOSED not raise. OBS-C: stale on-disk
   protected_symbols.json is inert (nothing reads it) — optional cleanup.
 - NEXT: D-obs + OBS-A patch → live-verified rejected sell → prereq #2 (arm). NO SEED until #2 lands.
+
+## 2026-07-18 (interactive, Sat) — D-obs + OBS-A (F6 prereq-2 arming cond b) — GATED, pending ship
+- Files: `alerts.py` (+`alert_floor_blind`, bool-returning transport); `execution/ownership_guard.py`
+  (+`page_floor_blind` never-raises pager, +throttle consts, function-boundary hardening of
+  `check_never_sell_floor`); `execution/broker.py` (`close_position`→wrapper+`_close_position_impl`;
+  +`_floor_bound_partial_qty`/`_impl`; page wiring in `_floor_bound_stop_qty`/`_impl`). All DORMANT
+  behind `OWNERSHIP_GUARD_ENFORCE=False` (+ additive alert fn). Live behavior change = ZERO.
+- INTENT: (D-obs) throttled never-raises operator PAGE on guard fail-closed AMBIGUITY (ledger/Alpaca
+  unreadable, drift-freeze, type-corrupt); deterministic floor-binding rejects stay log-only. (OBS-A)
+  type-corrupt ledger qty → fail CLOSED for a cached-protected symbol, fail OPEN (keystone) otherwise —
+  never crash the exit path.
+- Full-read gate: ownership_guard.py 660L (3 chunks) + alerts.py 427L (2) + broker.py 1041L (4). Declared.
+- Board: 5 cold voices (Reliability + Exec-risk + Observability seats + Gro + GAI) all APPROVE-WITH-CHANGES
+  → every change incorporated. Exec-risk: PLTR −$16k keystone scenario forced the `.bak` resolution (not
+  blanket fail-closed) + L298 special fail-closed. Reliability: function-boundary wrapper (not surgical) —
+  also covers the drift/exposure/tier `float()` coercions. Observability: `send_slack` returns None → use
+  `_slack`/`_ntfy` + ntfy(phone) + confirmed-send stamp + (kind,symbol) 30-min throttle + per-kind severity.
+- RC: RC-1 (`datetime.now(timezone.utc)`) PASS; RC-2 (paths via `_LEDGER_PATH.parent`) PASS; RC-3 (every
+  except logs; pager swallows→logs) PASS; RC-5 (stamp tmp→fsync→replace, unique `.{pid}.tmp`) PASS.
+- Statics: py_compile OK, ruff clean (added `# ruff: noqa: E501` to ownership_guard, matching
+  broker/alerts convention — 35 E501 from the wrapping-indent, zero real F/B), mypy clean ×3. Runtime
+  self-test 13/13 PASS (corrupt-protected→closed; corrupt-nonprotected→OPEN [PLTR keystone]; unreadable→.bak;
+  BUY passthrough; DORMANT→raw close byte-identical).
+- v2 LOGGED (build before arming, NOT this ship): cycle-rollup + recovery/all-clear + heartbeat;
+  `load_ledger` qty-type validation at source. Design: `logs/f6_dobs_obsa_design_2026-07-18.md`.
+- STATUS: statics ✓ + self-test ✓; cold-2nd + FINAL preship pending → then ship. [SHA on ship]
