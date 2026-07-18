@@ -44,11 +44,15 @@ logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _LEDGER_PATH = _ROOT / "data" / "state" / "ownership_ledger.json"
-# Lightweight cache of symbols that currently have a nonzero protected (qhm/forever6)
-# floor. Written by save_ledger; read by the guard ONLY when the main ledger is
-# unreadable, so a symbol that was never protected still fails OPEN (never blocks an
-# ordinary intraday exit). Today this is empty (all positions intraday).
-_PROTECTED_SET_PATH = _ROOT / "data" / "state" / "protected_symbols.json"
+# Last-known-good full-ledger snapshot (Opt-2, board 2026-07-17: Data-integrity +
+# Gro + GAI, Rafael-approved). The derived protected-set is NO LONGER a separate file
+# — two files can't be atomically consistent, and a 0->qhm ledger write landing while
+# the sidecar write failed left a silent fail-OPEN window on the ledger-unreadable
+# fallback. The ledger IS the single source of truth; on an unreadable CURRENT ledger
+# the guard falls back to this one-generation .bak of the WHOLE ledger and runs the
+# full floor check against it (fails CLOSED on any live-Alpaca drift). save_ledger
+# rotates it best-effort (never hangs the cron) and only from a VALID current ledger.
+_LEDGER_BAK_PATH = _ROOT / "data" / "state" / "ownership_ledger.bak.json"
 # Cross-process advisory lock serializing sync_ledger's read-modify-write of the ledger
 # (the RTH cron and any in-process caller both go through sync_ledger). See
 # _ledger_write_lock — without it, two concurrent full-replays can lost-update
@@ -122,41 +126,62 @@ def load_ledger() -> dict:
 
 
 def save_ledger(ledger: dict) -> None:
-    """Atomic tmp→replace write (RC-5). Also refreshes the lightweight
-    protected-symbols cache the guard uses when the main ledger is unreadable."""
+    """Atomic tmp→replace write (RC-5). Before overwriting the current ledger, rotate
+    the existing (VALID) ledger to a one-generation .bak — the last-known-good snapshot
+    the guard falls back to when the CURRENT ledger is unreadable (Opt-2, board
+    2026-07-17; retires the separate protected_symbols.json sidecar). Rotation is
+    best-effort and copies ONLY a VALID current ledger, so it can neither hang the cron
+    nor overwrite a good .bak with corruption."""
     _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Rotate the CURRENT good ledger to .bak BEFORE overwriting it. Best-effort: skipped
+    # if current ledger is absent or already corrupt, so .bak keeps the last VALID one.
+    try:
+        if _LEDGER_PATH.exists():
+            _cur = load_ledger()   # raises LedgerError if current ledger corrupt → skip
+            _bt = _LEDGER_BAK_PATH.with_suffix(".tmp")
+            with open(_bt, "w") as f:
+                json.dump(_cur, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            _bt.replace(_LEDGER_BAK_PATH)
+    except Exception as e:  # RC-3: .bak best-effort — never blocks/hangs the save.
+        logger.warning("ownership ledger .bak rotation skipped: %s", e)
     tmp = _LEDGER_PATH.with_suffix(".tmp")
     with open(tmp, "w") as f:
         json.dump(ledger, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
     tmp.replace(_LEDGER_PATH)
-    # Refresh the protected-symbols cache (qhm/forever6 names). RC-5 atomic.
+
+
+def _load_bak_ledger() -> dict:
+    """Load the one-generation last-known-good ledger snapshot (Opt-2). Returns an
+    EMPTY ledger on absent/corrupt/unreadable .bak (fail OPEN — a genuinely-protected
+    symbol would be in a valid .bak). Never raises."""
     try:
-        _prot = sorted(s for s in ledger.get("positions", {})
-                       if protected_floor(ledger, s) > _QTY_EPS)
-        _pt = _PROTECTED_SET_PATH.with_suffix(".tmp")
-        with open(_pt, "w") as f:
-            json.dump(_prot, f)
-            f.flush()
-            os.fsync(f.fileno())
-        _pt.replace(_PROTECTED_SET_PATH)
-    except Exception as e:  # RC-3: logged; cache is a non-critical fallback.
-        logger.warning("protected_symbols cache write failed: %s", e)
+        if not _LEDGER_BAK_PATH.exists():
+            return _empty_ledger()
+        data = json.loads(_LEDGER_BAK_PATH.read_text())
+        if isinstance(data, dict) and "positions" in data:
+            return data
+    except Exception as e:  # RC-3: missing/corrupt .bak degrades to empty (fail open).
+        logger.debug("_load_bak_ledger: read failed, empty: %s", e)
+    return _empty_ledger()
 
 
 def _cached_protected_symbols() -> set:
-    """Symbols with a nonzero protected floor, from the lightweight cache. Read by the
-    guard ONLY when the main ledger is unreadable, so a never-protected symbol still
-    fails OPEN. Absent/unreadable → empty set (fail OPEN — a genuinely protected symbol
-    would be in the cache)."""
+    """Symbols with a nonzero protected floor per the last-known-good .bak ledger
+    (Opt-2 — replaces the retired protected_symbols.json sidecar). Read by the guard
+    ONLY when the CURRENT ledger is unreadable, so a never-protected symbol still fails
+    OPEN. Absent/corrupt .bak → empty set (a genuinely protected symbol would be in a
+    valid .bak)."""
+    bak = _load_bak_ledger()
     try:
-        data = json.loads(_PROTECTED_SET_PATH.read_text())
-        if isinstance(data, list):
-            return {str(s) for s in data}
-    except Exception as e:  # RC-3: logged; missing cache is normal (nothing protected).
-        logger.debug("_cached_protected_symbols: read failed, empty: %s", e)
-    return set()
+        return {s for s in bak.get("positions", {})
+                if protected_floor(bak, s) > _QTY_EPS}
+    except Exception as e:  # RC-3: type-corrupt .bak entry must not raise to a caller.
+        logger.debug("_cached_protected_symbols: derive failed, empty: %s", e)
+        return set()
 
 
 @contextlib.contextmanager
@@ -264,11 +289,21 @@ def check_never_sell_floor(
     try:
         ledger = load_ledger()
     except LedgerError as e:
-        if symbol not in _cached_protected_symbols():
-            return GuardResult("APPROVE", qty,
-                               "ledger unreadable, symbol not protected — exit ok")
-        return GuardResult("REJECT", 0.0,
-                           f"ledger unreadable for PROTECTED {symbol} — closed: {e}")
+        # Opt-2 fallback (board 2026-07-17): CURRENT ledger unreadable → fall back to
+        # the last-known-good .bak and run the FULL check against it. Not protected per
+        # the .bak → fail OPEN (blocking a legitimate intraday exit is the worse error —
+        # keystone). Protected → continue below, where the live-Alpaca reconciliation
+        # (ledger_sum vs alpaca_net + the drift field) fails CLOSED on any stale drift.
+        _bak = _load_bak_ledger()
+        if protected_floor(_bak, symbol) <= _QTY_EPS:
+            return GuardResult(
+                "APPROVE", qty,
+                "current ledger unreadable, symbol not protected in .bak — exit ok")
+        logger.critical(
+            "[%s] check_never_sell_floor: current ledger unreadable (%s) — using "
+            "last-known-good .bak for a PROTECTED symbol; live-Alpaca drift fails "
+            "closed on any mismatch.", symbol, e)
+        ledger = _bak
 
     floor = protected_floor(ledger, symbol)      # ledger-derived ONLY (forever6 + qhm)
     if floor <= _QTY_EPS:
