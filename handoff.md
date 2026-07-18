@@ -7,7 +7,7 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-17 interactive) — pick up here
+## ⏩ LATEST (2026-07-18 interactive) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
@@ -15,6 +15,25 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
 **STANDING AUTHORIZATION (Rafael 2026-07-16, while he is away):** continue the ongoing work, then
 the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
 logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream.
+
+**🟢 THIS SESSION (2026-07-18) — CHECKPOINT (updated at checkpoints, not just ships, per Rafael's
+cross-account-switch need):**
+- **✅ REPORTS DURABILITY (Option B) — DONE + LIVE.** All routine audit reports now cross-account via
+  `git pull`. `.gitignore` un-ignores the report globs; `scripts/sync_reports.py` (`994baaa`) is the
+  single OCI cron (wired **23:45 ET daily**, `cron_tz_wrapper.py`) that batch-commits new reports →
+  pushes to main (pull-rebase retry, rebase --abort on conflict, never force-push) → reconciliation
+  gated on `eod_{date}.json` → Slack-on-gap. **Validated live:** OCI test-run swept **256 historical
+  reports** into `5b228aa`, pushed clean, tree clean, exit 0. Design `logs/reports_durability_design_2026-07-18.md`;
+  board 3-1 + Gro (GAI dissent resolved). weekly/monthly `*.html` dashboards intentionally NOT synced
+  (global `*.html` ignore; human-facing, web-served) — Rafael to decide if he wants them versioned.
+- **⏳ F6 PREREQ #3 (GTC/DAY stop floor check) — WIP, UNCOMMITTED.** `_floor_bound_stop_qty()` helper is
+  applied to `execution/broker.py` (working tree only; **defined but call-sites NOT yet wired → inert/unused**).
+  Full-read gate on broker.py DONE (931 lines, Explore verbatim). Design: bound a resting sell-stop by the
+  never-sell floor at submission (mirrors `close_position` L759-793), gate `side=="sell"` ONLY (short buy-stops
+  live in prod), inert unless `OWNERSHIP_GUARD_ENFORCE`. **⏩ NEXT EXACT STEP for F6:** wire the 2 call sites
+  (`submit_gtc_stop_order` after its qty guard + `submit_day_stop_order` after its qty guard: `_fq =
+  _floor_bound_stop_qty(symbol,qty,side,tier); if _fq<1: return None; qty=_fq`) → statics → cold-2nd →
+  Gro/GAI preship → ship. Then prereq #2 (arm `OWNERSHIP_GUARD_ENFORCE`) LAST. Design doc: `logs/f6_prereq1_syncgap_design_2026-07-17.md` (+ prereq #1 C-1/C-2/C-3 already shipped this thread).
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").
