@@ -8282,3 +8282,25 @@ over main for a message typo — THIS audit entry is the authoritative record.
   slice when f6=0 (effective_floor=floor−own_qhm=0) — pre-existing in the chokepoint, shared by the
   close path, separate patch if the board wants qhm truly never-sell against its own resting stops.
 - PREREQ #3 COMPLETE. NEXT: resolve D-cache + D-obs → prereq #2 (arm floor) LAST. NO SEED until #2 lands.
+
+## 2026-07-18 (interactive, Sat) — D-cache Opt-2 SHIPPED+LIVE (4c3ced6) + deploy backlog cleared
+- `4c3ced6` ownership_guard.py: retired protected_symbols.json sidecar → single-source ledger +
+  one-generation last-known-good `.bak`. save_ledger rotates current VALID ledger→.bak (best-effort,
+  never hangs cron, never overwrites good .bak w/ corrupt); _load_bak_ledger (never-raises);
+  _cached_protected_symbols derives from .bak (same set return → 6 callers unaffected);
+  check_never_sell_floor LedgerError branch runs FULL check vs .bak (live-Alpaca drift → fail-closed).
+  Converts surviving failure mode: silent fail-OPEN → fail-closed-on-drift. = F6 prereq-2 D-cache condition DONE.
+- Gate: design board (Data-integrity+Reliability) + Gro + GAI = 3/4 Opt-2 (Reliability dissent Opt-1-bounded
+  on sequencing; Rafael chose Opt-2). Full-read 625L; statics clean; functional self-test 6/6 PASS
+  (rotation/derive/corrupt-current-skip/missing-bak-open/sidecar-retired); cold-2nd PASS; FINAL preship
+  gro+gai APPROVE sha 1a13b53.
+- **Rafael directive 2026-07-18 "ship everything BGG-built, nothing dark w/o explicit reason":** deployed
+  the ENTIRE deferred-restart backlog LIVE on OCI (git pull 4c3ced6 + restart mtf-bot/writer/http,
+  Sat market-CLOSED window verified via Alpaca clock, DEPLOY_OK + health PASS). Now RUNNING live:
+  C-1 lock (800815e), C-2/C-3 (9ad926d), prereq #3 (b5d519c), Opt-2 (4c3ced6), + prior d883f59/3270a76.
+  ONLY dark item remaining = OWNERSHIP_GUARD_ENFORCE flag (prereq #2), explicit reason = board arming
+  sequence (D-obs + OBS-A + live-verify pending).
+- OPEN (folded into D-obs, next): cold-2nd OBS-A — guard protected_floor(_bak,...) + main-path call in
+  check_never_sell_floor vs a type-corrupt qty → fail CLOSED not raise. OBS-C: stale on-disk
+  protected_symbols.json is inert (nothing reads it) — optional cleanup.
+- NEXT: D-obs + OBS-A patch → live-verified rejected sell → prereq #2 (arm). NO SEED until #2 lands.

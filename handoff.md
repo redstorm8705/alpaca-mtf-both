@@ -16,7 +16,11 @@ Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/mas
 the queue. **Once BGG is aligned → approved to ship** (unaligned → queue it). Push agreements to git +
 logs + .md + Master Brain at EVERY step so any account/session can pick up mid-stream.
 
-**🟢 SHIPPED TODAY (2026-07-17, git-only — OCI restart deferred to next non-RTH window):**
+**🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
+while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").
+The deferred-restart backlog (items 1–6) is RUNNING, not dark. ONLY remaining dark item = the
+`OWNERSHIP_GUARD_ENFORCE` flag (prereq #2 arming) — explicit board reason: needs D-obs + a live-verified
+rejected sell first (see prereq tracker).**
 1. **`d883f59` — fill-signal None-on-failure refactor.** `fetch_actual_fill_price` split into
    `_recover_fill (→float|None)` + thin wrapper (byte-identical for 17 callers) + `fetch_actual_fill_price_or_none`.
    `fill_reconciler` now branches on `fill is None` (leave pending / retry) instead of the fragile
@@ -39,6 +43,16 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
    no new file. New follow-ups logged: D-cache + D-obs (prereq-2 arming conditions), and a separate
    governance q — `check_never_sell_floor` lets a `qhm`-tier resting stop self-liquidate the QHM slice
    (effective_floor=floor−own_qhm=0 when f6=0); pre-existing in the chokepoint, shared by the close path.
+6. **`4c3ced6` — D-cache (Opt-2): retire protected_symbols.json sidecar → single-source ledger +
+   last-known-good `.bak`.** Closes the cache-coherence fail-OPEN window (2 files can't be atomically
+   consistent). `save_ledger` rotates the current VALID ledger to `.bak` before overwriting (best-effort,
+   never hangs the cron, never overwrites a good .bak with corruption); `_cached_protected_symbols`
+   derives from `.bak`; `check_never_sell_floor`'s LedgerError branch runs the FULL check against `.bak`
+   (live-Alpaca drift → fail-closed-on-drift, not silent fail-open). **`.bak` rotation is LIVE on the
+   ledger-sync cron; guard path dormant behind the flag.** = F6 prereq-2 arming condition #1 (D-cache) DONE.
+   Gate: design board (Data-integrity+Reliability) + Gro + GAI 3/4 → Opt-2 (Rafael-approved); full-read
+   625L; statics; self-test PASS; cold-2nd PASS; preship gro+gai APPROVE (sha 1a13b53). Cold-2nd OBS-A
+   (guard `protected_floor` vs a type-corrupt `.bak`) folded into the D-obs patch.
 
 **▶ RAFAEL APPROVED (this session): BUILD THE 3 F6-ARMING PREREQS.** Design is board-blessed:
 `logs/f6_prereq1_syncgap_design_2026-07-17.md` (4-voice gate).
@@ -56,14 +70,19 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
 - **⏳ PREREQ #2 (LAST — the one dangerous flip):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556)
   — ONLY after #1 (ledger populated + protected_symbols.json present) AND #3 (done) land, AND a
   live-verified rejected sell on a protected symbol. Changes the close path for ALL tiers.
-  **BINDING ARMING CONDITIONS from the prereq-#3 cold board (must resolve BEFORE the flip, not before
-  #3):** (a) **D-cache** — `save_ledger`'s protected-symbols cache is best-effort; a 0→qhm transition
-  that persists to the ledger while the cache write fails leaves a fail-OPEN window on the LedgerError
-  fallback (affects ALL guard fallbacks, not just stops); make the cache write coherent/monitored or
-  stop trusting it as authoritative. (b) **D-obs** — a fail-closed stop-skip on a protected symbol
-  only `logger.critical`s; add an operator page (as the GTC held_for_orders path already does).
-**NO SEED (execute_starter) until all 3 land.** ⏩ NEXT EXACT STEP: resolve arming conditions D-cache +
-D-obs, then prereq #2 (arm the flag) per `logs/f6_activation_BLOCKED_2026-07-17.md` ordering + seed plan.
+  **BINDING ARMING CONDITIONS from the prereq-#3 cold board (must resolve BEFORE the flip):**
+  (a) ✅ **D-cache DONE** (`4c3ced6`, Opt-2 — single-source ledger + `.bak`, deployed live).
+  (b) ⏳ **D-obs (NEXT)** — unify an operator PAGE across all guard fail-closed *ambiguity* returns
+  (stop-skip + close + partial: ledger/Alpaca unreadable, drift-freeze), suppressing the deterministic
+  floor-binding rejects to avoid alert fatigue; route via `alerts.py` webhook (NOT the unauthorized
+  finance:slack MCP). Board+Gro+GAI aligned (Data-integrity+Reliability+Gro+GAI). **FOLD IN cold-2nd
+  OBS-A:** guard the `protected_floor(_bak, symbol)` call (and the main-path call) in
+  `check_never_sell_floor` so a type-corrupt `.bak`/ledger qty fails CLOSED (returns protected) instead
+  of raising — restores the fail-closed-on-ambiguity posture the retired sidecar branch had.
+  (c) live-verified rejected sell on a protected symbol (paper canary) before the flip.
+**NO SEED (execute_starter) until all land.** ⏩ NEXT EXACT STEP: build **D-obs + OBS-A** (full patch
+sequence, `execution/ownership_guard.py` + `execution/broker.py` + `alerts.py`), then the live-verify,
+then prereq #2 (arm `OWNERSHIP_GUARD_ENFORCE=True`) per `logs/f6_activation_BLOCKED_2026-07-17.md`.
 
 **🔴 STILL BLOCKED — FOREVER-6 ARMING (do NOT flip FOREVER6_ENABLED=True until all 3 prereqs land).**
 Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed
