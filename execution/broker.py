@@ -334,6 +334,102 @@ def submit_limit_order(
     return None  # exhausted retries without exception path firing
 
 
+def _floor_bound_stop_qty(symbol: str, qty: int, side: str, tier: str) -> int:
+    """Prereq #3 (F6 arming; design logs/f6_prereq1_syncgap_design_2026-07-17.md): bound a
+    protective STOP's qty by the never-sell floor so a RESTING sell-stop on a protected
+    symbol (forever6/qhm) can never fill INTO the floor. This is the hole the close-path
+    chokepoint (close_position) does NOT cover: a stop is submitted once and fires later,
+    so it must be floor-bounded AT SUBMISSION. DORMANT unless config.OWNERSHIP_GUARD_ENFORCE
+    (mirrors close_position / partial_close_position). Returns the qty to submit (>=1), or
+    0 to SKIP the stop entirely (fully floor-blocked, or fail-CLOSED on a protected-symbol
+    read error). ONLY sell-stops (side=='sell', long-reducing) are gated — a buy-stop (short
+    cover) passes through untouched (short stops are live in production; ring-fenced names
+    are long-only, so a protected symbol never carries a short).
+
+    NEVER-RAISES CONTRACT (cold board Reliability seat 2026-07-18): the body only reaches
+    the ledger/Alpaca reads when enforcement is armed, and a schema-valid but TYPE-corrupt
+    ledger (e.g. a tier qty of "abc") slips load_ledger's schema check and makes
+    float()/tier_qty raise ValueError PAST the inner `except LedgerError`. This wrapper
+    guarantees the "0 = fail closed" contract holds even then: any unexpected raise fails
+    CLOSED (skip the sell-stop) for a protected symbol and OPEN (submit requested qty) for
+    a non-protected one — it never propagates out and crashes the stop-submission path."""
+    import config
+    if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+        return qty
+    if str(side).lower() != "sell":
+        return qty
+    try:
+        return _floor_bound_stop_qty_impl(symbol, qty, side, tier)
+    except Exception as e:
+        try:
+            from execution import ownership_guard as _og
+            _protected = symbol in _og._cached_protected_symbols()
+        except Exception:
+            _protected = False
+        if _protected:
+            logger.critical(
+                f"[{symbol}] stop-submit({tier}): floor helper raised for a PROTECTED "
+                f"symbol — SKIPPING the sell-stop (fail closed): {e}"
+            )
+            return 0
+        logger.warning(
+            f"[{symbol}] stop-submit({tier}): floor helper raised, symbol not protected "
+            f"— proceeding with requested qty: {e}"
+        )
+        return qty
+
+
+def _floor_bound_stop_qty_impl(symbol: str, qty: int, side: str, tier: str) -> int:
+    """Body of _floor_bound_stop_qty — MUST be called ONLY through that wrapper, which
+    enforces the never-raises fail-closed contract and has already short-circuited the
+    enforcement-off and non-sell cases."""
+    from execution import ownership_guard as _og
+    try:
+        _ledger = _og.load_ledger()
+    except _og.LedgerError as e:
+        if symbol in _og._cached_protected_symbols():
+            logger.critical(
+                f"[{symbol}] stop-submit({tier}): ledger unreadable for a PROTECTED symbol "
+                f"— SKIPPING the sell-stop to preserve the never-sell floor: {e}"
+            )
+            return 0
+        logger.debug(
+            f"[{symbol}] stop-submit: ledger unreadable, symbol not protected — "
+            f"proceeding with requested qty: {e}"
+        )
+        return qty
+    if _og.protected_floor(_ledger, symbol) <= _og._QTY_EPS:
+        return qty
+    try:
+        _pos = get_open_position(symbol)
+    except Exception as e:
+        logger.critical(
+            f"[{symbol}] stop-submit({tier}): Alpaca net unreadable for a PROTECTED symbol "
+            f"— SKIPPING the sell-stop (fail closed): {e}"
+        )
+        return 0
+    if _pos is None:
+        logger.warning(
+            f"[{symbol}] stop-submit({tier}): protected symbol has no live position — "
+            f"no sell-stop to place."
+        )
+        return 0
+    _net = abs(float(_pos.qty))
+    _res = _og.check_never_sell_floor(symbol, tier, int(qty), "sell", alpaca_net_qty=_net)
+    if _res.action == "REJECT":
+        logger.warning(
+            f"[{symbol}] stop-submit({tier}) SKIPPED by never-sell floor: {_res.reason}"
+        )
+        return 0
+    _bq = int(_res.qty)
+    if _bq < int(qty):
+        logger.warning(
+            f"[{symbol}] stop-submit({tier}): never-sell floor bounded the sell-stop "
+            f"{int(qty)}→{_bq} share(s) ({_res.reason})."
+        )
+    return _bq if _bq >= 1 else 0
+
+
 def submit_gtc_stop_order(
     symbol: str,
     qty: int,
@@ -354,6 +450,13 @@ def submit_gtc_stop_order(
     import re as _re
     if qty <= 0 or stop_price <= 0:
         logger.warning(f"[{symbol}] GTC stop skipped: qty={qty}, stop=${stop_price}")
+        return None
+
+    # Prereq #3 (F6 arming): floor-bound a RESTING sell-stop so it can never fire INTO the
+    # never-sell floor (forever6+qhm). Self-gating (DORMANT unless OWNERSHIP_GUARD_ENFORCE):
+    # returns qty unchanged for buy-stops / non-protected symbols, or 0 to skip entirely.
+    qty = _floor_bound_stop_qty(symbol, qty, side, tier)
+    if qty <= 0:
         return None
 
     client     = _get_trading_client()
@@ -471,6 +574,13 @@ def submit_day_stop_order(
     """
     if qty <= 0 or stop_price <= 0:
         logger.warning(f"[{symbol}] DAY stop skipped: qty={qty}, stop=${stop_price}")
+        return None
+
+    # Prereq #3 (F6 arming): floor-bound a RESTING sell-stop so it can never fire INTO the
+    # never-sell floor (forever6+qhm). Self-gating (DORMANT unless OWNERSHIP_GUARD_ENFORCE):
+    # returns qty unchanged for buy-stops / non-protected symbols, or 0 to skip entirely.
+    qty = _floor_bound_stop_qty(symbol, qty, side, tier)
+    if qty <= 0:
         return None
 
     client     = _get_trading_client()
