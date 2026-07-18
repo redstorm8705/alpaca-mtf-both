@@ -8329,4 +8329,8 @@ over main for a message typo — THIS audit entry is the authoritative record.
   BUY passthrough; DORMANT→raw close byte-identical).
 - v2 LOGGED (build before arming, NOT this ship): cycle-rollup + recovery/all-clear + heartbeat;
   `load_ledger` qty-type validation at source. Design: `logs/f6_dobs_obsa_design_2026-07-18.md`.
-- STATUS: statics ✓ + self-test ✓; cold-2nd + FINAL preship pending → then ship. [SHA on ship]
+- SHIPPED + LIVE: `d93be65` (2026-07-18 Sat, OCI `git pull --ff-only` + restart, DEPLOY_OK + health OK,
+  ENFORCE=False confirmed live). FINAL preship markers: broker.py + alerts.py = real Gro+GAI APPROVE;
+  ownership_guard.py = gai=APPROVE, gro=WAIVED (active Groq TPM rate-limit, Rafael 2026-07-07 pre-auth).
+  Cold-2nd PASS (all 6 checks). v2 (cycle-rollup/all-clear/heartbeat + load_ledger qty-type validation)
+  QUEUED before arming.

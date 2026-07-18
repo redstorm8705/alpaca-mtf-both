@@ -30,8 +30,9 @@ cross-account-switch need):**
   The prior checkpoint's "WIP/uncommitted" was STALE — verified at 100% this session: `_floor_bound_stop_qty`
   defined broker.py:337 (+wrapper:362, impl:382), WIRED at :458 (`submit_gtc_stop_order`) + :582
   (`submit_day_stop_order`); working tree clean.
-- **🚢 F6 D-obs + OBS-A (prereq-2 arming cond b) — SHIPPING THIS SESSION (2026-07-18 interactive, Rafael
-  APPROVED).** DARK/inert (behind `OWNERSHIP_GUARD_ENFORCE=False`; **live behavior change = ZERO**).
+- **✅ F6 D-obs + OBS-A (prereq-2 arming cond b) — SHIPPED + LIVE (`d93be65`, deployed 2026-07-18 Sat
+  market-CLOSED, `git pull --ff-only` + restart, DEPLOY_OK + health OK, ENFORCE=False confirmed live;
+  Rafael APPROVED).** DARK/inert (behind `OWNERSHIP_GUARD_ENFORCE=False`; **live behavior change = ZERO**).
   Files: `alerts.py` (+`alert_floor_blind` bool transport), `execution/ownership_guard.py` (+`page_floor_blind`
   never-raises throttled pager + function-boundary hardening of `check_never_sell_floor`), `execution/broker.py`
   (`close_position`→wrapper+`_close_position_impl`; +`_floor_bound_partial_qty`/`_impl`; page wiring in
