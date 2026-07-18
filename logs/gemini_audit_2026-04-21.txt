@@ -1,0 +1,74 @@
+Nightly Gemini Audit — 2026-04-21
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['run_macro_regime.py', 'config.py', 'weekly_review.py', 'options_scanner.py', 'main.py', 'midday_audit.py', 'nightly_audit.py', 'execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: FAIL
+(Active data corruption in P&L reporting, critical risk management bypass, and recurring state inconsistencies confirmed active.)
+
+### LOG ANOMALIES
+*   **Recurring `EOD P&L DRIFT` (e.g., `Alpaca=$0.00 tracker=$-5.38 drift=$+5.38`)**: This is a persistent anomaly across the entire log. The Alpaca reported P&L is consistently `0.00`, while the internal tracker reports actual losses. This indicates a critical discrepancy in P&L recording, likely due to Alpaca's paper API behavior (A-4).
+*   **Recurring `[ANOMALY-2] [TQQQ] confirm_gate=X scans but no entry` (up to 12 scans)**: This warning for TQQQ (and NFLX earlier) indicates high-score signals are consistently generated but never convert to entries. This suggests a permanent blocking condition or an excessively high `MIN_SCORE` threshold relative to signal quality, leading to missed opportunities or inefficient signal generation.
+*   **`PDT counter mismatch` (`Alpaca reports 3, tracker has 2`)**: Observed at `2026-04-21 13:00:53,629`. This indicates a temporary but critical inconsistency between the bot's internal PDT count and Alpaca's. While corrected by `Added 1 EXTERNAL entry/entries`, this implies the bot operated with an incorrect PDT state for some period, potentially leading to incorrect PDT decisions or blocks.
+*   **`[SPY] close_position blocked (40310000 held_for_orders)`**: Observed at `2026-04-21 11:28:39,069`. This indicates a race condition or timing issue in order management where an open order prevented a close. Though retried and successful, it highlights fragility in the order execution system.
+*   **Recurring `[RSS] Feed parse error (bozo=True)`**: This warning indicates news feeds are frequently malformed or returning HTML error pages, leading to incomplete news monitoring and potentially impacting `MacroRiskIndex` accuracy or individual news-based penalties.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: Appears correct for all closed trades shown in `TRADE EVENTS` and `EOD SNAPSHOT` `score_buckets` (`-$5.38` for AAPL, `-$3.40` for SPY).
+*   **`pnl_pct` computation**: `EOD SNAPSHOT` lists `pnl_pct` correctly for the two closed trades as `-1.96%` and `-0.48%` respectively based on initial entry.
+*   **Partial P&L Accumulation**: `TRADE EVENTS` shows one `partial_exit` for QQQ and one for NVDL. The `EOD SNAPSHOT` does not detail accumulated partial P&L, making verification difficult.
+*   **Trades with `pnl=0.0` where entry ≠ exit price**: None detected in `TRADE EVENTS`.
+*   **Entry/Exit prices plausibility**: Prices appear plausible for the respective symbols and times.
+*   **Score→outcome correlation**: With only two closed trades today (score 11 for -5.38, score 12 for -3.40), it's impossible to draw conclusions on score-to-outcome correlation.
+*   **Stop-hit rate vs. win rate**: Of the two closed trades today, both were losses due to "overnight_breakeven" breach. If `overnight_breakeven` exits that result in losses are considered "stop-hits", then the stop-hit rate is 100% for today's closed trades, indicating a significant regime mismatch or issue with stop placement/logic.
+*   **Exit reason consistency**: The `overnight_breakeven` exit reason is misleading (A-1). For QQQ (exit $647.7 vs entry $630.97) it resulted in a profit, but for AAPL (exit $268.60 vs entry $273.98, threshold $272.42) and SPY (exit $705.04 vs entry $708.44, threshold $706.19) it resulted in losses. The name "breakeven" is inaccurate when losses occur.
+*   **Profit factor and R:R vs. stated 2.5× target**: `EOD SNAPSHOT` `all_time_stats` shows `profit_factor: 5.49` and `avg_r_multiple: 0.314`. An average R-multiple of 0.314 is significantly below the stated `1:2` intraday and `1:3` swing targets, indicating the bot is not capturing its theoretical edge effectively or is cutting winners short/letting losers run too far.
+
+### TRADE INTEGRITY
+*   **`pnl_today: 0.0` in `EOD SNAPSHOT`**: This is a critical recording bug. Despite two trades closing for losses of `$-5.38` and `$-3.40` (total `$-8.78`), the `EOD SNAPSHOT` reports `pnl_today: 0.0`. This misrepresentation is a severe data integrity issue, likely stemming from Alpaca's delayed P&L reporting for same-day closures (A-4) being incorrectly used as the authoritative source without fallback.
+*   **`PDT counter mismatch`**: As noted in log anomalies, the temporary mismatch implies a period of incorrect PDT state, which could have led to incorrect trading decisions (e.g., unnecessarily blocking trades or taking trades that later resulted in a violation).
+
+### MODIFIED FILE FINDINGS
+*   **`config.py`**:
+    *   **CRITICAL (Risk Management Bypass)**: The `paper` trading profile sets `MAX_DAILY_LOSS_PCT` to `0.30` (30%). This is an astronomically high daily kill switch threshold, effectively disabling daily loss protection. While it's a paper account, it prevents the bot from giving meaningful feedback on cumulative losses.
+    *   **HIGH (Logic Inconsistency)**: `TOD_MARKET_OPEN_BUFFER_MINS` is set to `30`, intended for a 30-min no-entry window (9:30–10:00 ET). However, `main.py`'s `_tod_size_multiplier` actively negates this by returning a `1.0` multiplier for the "opening" phase, allowing entries during this high-volatility window. This makes the `TOD_MARKET_OPEN_BUFFER_MINS` variable misleading and functionally dead code for blocking entries.
+*   **`main.py`**:
+    *   **CRITICAL (Logic Inconsistency)**: Confirms the `TOD_MARKET_OPEN_BUFFER_MINS` bypass. `_tod_size_multiplier` has `"opening": 1.0`, allowing entries during the intended 30-minute no-entry window. This is a direct contradiction of stated risk management.
+    *   **HIGH (Potential Race Condition/Stale State)**: The use of `_rth_day_stops_submitted_dates` as a set to gate stop submissions, in conjunction with `held_for_orders` errors (`P5-H3`), suggests a potential race condition. If a stop submission fails silently or the `rth_day_stop_order_id` isn't robustly cleared/updated on cancellation/fill, subsequent attempts to submit a day stop might be blocked.
+    *   **MEDIUM (Partial Fix)**: `_find_recent_fvgs` in `main.py` (line 649) attempts to handle lowercase column names from `df_ohlc` to avoid `KeyError` with `col_lower.get("high", "High")`. While this mitigates the symptom for Alpaca data, it does not address the underlying `MultiIndex` issue if `prepare_df` from `strategy.confluence` or other upstream data sources were to return a `MultiIndex` DataFrame, which is the root cause of `P5-C1`.
+*   **`execution/portfolio_tracker.py`**:
+    *   **CRITICAL (Data Integrity)**: `write_eod_summary` (line 442) directly uses `_alpaca_pnl` for `_pnl_today` without robust handling for A-4 (Alpaca paper fills API returns empty for same-day closures). Since `0.0` is a valid `float`, `_alpaca_pnl = 0.0` due to API delay causes `pnl_today` in the EOD snapshot to be `0.0`, despite `_tracker_pnl` showing actual daily losses. This constitutes active data corruption for daily P&L reporting.
+    *   **HIGH (Ambiguous P&L Attribution)**: The `_day_slice(t)` logic (line 391) for attributing P&L across days for positions with partial exits is ambiguous. If a trade has multiple partial exits on different days, `t.get("pnl", 0)` (which might be the full entry-to-final-exit P&L) is added for the day of final exit. This could lead to double-counting or misattribution of P&L if not precisely handled, especially with `partial_realized_today` being added separately. This needs rigorous review to prevent P&L errors.
+*   **`midday_audit.py`**:
+    *   **HIGH (Inaccurate P&L Reporting)**: `analyse_pnl` (line 197) creates `entries` and `exits` dictionaries keyed by `symbol`. This overwrites any previous entries or exits for the same symbol within the same day. If the bot executes multiple trades (e.g., stop out, re-entry) or multiple partial exits + final close for a single symbol in a day, the `analyse_pnl` will only report the last such event, leading to inaccurate P&L and trade count in the `midday_audit` report.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **UNTOUCHED** (symptom partially mitigated, root cause not addressed in modified files).
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED**
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **TRIGGERED** (log shows `PDT counter mismatch`)
+*   P5-H2 | Fill price crosstalk: **UNCONFIRMED** (no direct log evidence)
+*   P5-H3 | Orphan GTC 404 path: **TRIGGERED** (indirectly, via `held_for_orders` blocking)
+*   P5-H4 | Rule 2 dead code: **TRIGGERED** (logic actively bypassed in `main.py` `_tod_size_multiplier`)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED**
+*   P5-M1 | Cycle watchdog restart loop: **UNTOUCHED**
+*   P5-M2 | MRI score cached stale across sessions: **UNCONFIRMED**
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **FIXED** (logic ensures non-empty return or `None`)
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **TRIGGERED** (P&L is understated as `0.0` due to A-4 interaction, rather than reflecting actual closed P&L)
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED**
+*   A-1 | overnight_breakeven exit fires at entry-0.25×ATR, not at entry price — name is misleading: **TRIGGERED** (confirmed by `TRADE EVENTS` entries resulting in profit/loss)
+*   A-2 | trail_stop not floor-bounded by promoted stop after partial exit — can exit below entry: **UNCONFIRMED** (no evidence in logs or trades)
+*   A-3 | nightly_audit trade_log.json reference was stale (file never existed) — fixed 2026-04-21: **FIXED**
+*   A-4 | Alpaca paper fills API returns empty for same-day closures until overnight settlement: **TRIGGERED** (confirmed by `EOD P&L DRIFT` and `alpaca_pnl: 0.0`)
+
+### NEW BUGS FOUND
+*   **CRITICAL** | `main.py` | `main.py`'s `_tod_size_multiplier` (line 590) explicitly returns `1.0` for the `"opening"` time-of-day phase. This bypasses the intended 30-minute no-entry window configured by `config.TOD_MARKET_OPEN_BUFFER_MINS` (line 217 in `config.py`), subjecting the bot to high-volatility early-market noise. | **Exact failure condition**: `config.py` defines `TOD_MARKET_OPEN_BUFFER_MINS = 30`, indicating a no-entry buffer. `main.py` `_get_tod_phase()` correctly identifies `9:30-10:00 ET` as `"opening"`. However, `_tod_size_multiplier()` explicitly sets a `1.0` multiplier for `"opening"`, allowing full-size entries in this period.
+*   **HIGH** | `midday_audit.py` | `analyse_pnl` (line 197) incorrectly calculates daily P&L and trade statistics for symbols with multiple trades in a single session. By using dictionary comprehension with symbol as the key for `entries` and `exits`, it retains only the *last* entry and exit for any given symbol, ignoring all preceding trades for that symbol on the same day. This leads to understated trade counts and inaccurate P&L. | **Exact failure condition**: `midday_audit.py` `analyse_pnl` uses `entries = {e["symbol"]: e for e in events if e.get("event") == "entry"}` and `exits = {e["symbol"]: e for e in events if e.get("event") in ("exit", "stop_hit", "partial_exit")}`. If `trade_events.jsonl` contains multiple `entry` events for the same `symbol` on the `AUDIT_DATE`, only the last `entry` for that `symbol` will be included in the `entries` dictionary, and similarly for `exits`.
+*   **MEDIUM** | `config.py` | The `paper` trading profile's `MAX_DAILY_LOSS_PCT` is set to `0.30` (30%). This is an unrealistically high daily loss threshold for any trading bot, even in a paper environment. It significantly diminishes the utility of the daily kill switch as a risk management and feedback mechanism by allowing massive drawdowns before halting operations. | **Exact failure condition**: `config.py` `PROFILES["paper"]["MAX_DAILY_LOSS_PCT"]` is `0.30`.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Fix P&L Reporting in EOD Snapshot.** Modify `execution/portfolio_tracker.py` `write_eod_summary` to use `_tracker_pnl` for `pnl_today` in `eod_YYYY-MM-DD.json` if `_alpaca_pnl` is `0.0` due to Alpaca's delayed settlement (A-4). Log an explicit warning if this fallback occurs.
+2.  **CRITICAL: Re-establish Market Open Entry Buffer.** In `main.py`, modify `_tod_size_multiplier` to return `0.0` for the `"opening"` phase, or implement a hard entry block during this period, in line with `config.TOD_MARKET_OPEN_BUFFER_MINS`.
+3.  **HIGH: Rectify `midday_audit.py`'s P&L Calculation.** Update `midday_audit.py` `analyse_pnl` to correctly aggregate all trade events for each symbol, ensuring accurate daily P&L and statistics reporting, especially for multiple trades per symbol per session.
+4.  **HIGH: Investigate `ANOMALY-2` for persistent signal blocks.** Debug the `confirm_gate` blocking condition for TQQQ (and NFLX). Identify whether `MIN_SCORE` is too high, a filter is silently blocking, or if these are indeed invalid signals.
+5.  **MEDIUM: Adjust Paper Profile's Daily Loss Limit.** Lower `config.py` `PROFILES["paper"]["MAX_DAILY_LOSS_PCT"` to a more realistic percentage (e.g., 0.05-0.10) to ensure the kill switch provides meaningful feedback during paper testing.

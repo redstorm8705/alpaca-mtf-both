@@ -1,0 +1,99 @@
+Nightly Gemini Audit — 2026-05-07
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring Data Insufficiency Warnings:**
+    *   `strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped`
+    *   This warning occurs repeatedly (e.g., ~20 times from 12:59 to 13:24, and then consistently throughout the log), indicating a persistent issue with data availability for weekly bias calculation across many symbols. While not immediately critical, it suggests a core signal component is frequently bypassed.
+*   **Persistent MRI STRESSED Regime and Entry Block:**
+    *   `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`
+    *   This critical block is active for the majority of the audited log period (from 14:02 ET onwards). While BV-5 itself is a valid risk management control, its prolonged activation suggests the bot is unable to find entry opportunities under the current macro regime, which might indicate a regime filter that is too strict or an inability to adapt to sustained market stress.
+*   **Recurring TQI Degradation Anomaly:**
+    *   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.2/100 < 30 — review exit discipline and stop placement.`
+    *   This warning is logged repeatedly from 14:03 ET onwards. It indicates a persistent problem with recent trade quality and suggests that the bot's exit discipline or stop placement needs review, even when under a "no new entries" regime.
+*   **Day Stop Blocked by Insufficient Buying Power:**
+    *   `WARNING | execution.broker | [AAPL] DAY stop blocked (40310000 / insufficient buying_power) — cancelling blocking orders and retrying once.` (14:02:38 ET)
+    *   `WARNING | execution.broker | [NVDL] DAY stop blocked (40310000 / insufficient buying_power) — cancelling blocking orders and retrying once.` (14:08:44 ET)
+    *   It is critical for stop orders to be processed without issue for risk management. A stop order for an existing position should generally not be blocked by "insufficient buying_power" as it's a liquidation order. The bot has a retry mechanism, but the initial blocking indicates a potential deeper issue with Alpaca's API interaction or the bot's internal order management (e.g., too many pending orders consuming buying power for a market order that should be allowed).
+*   **FILL UNVERIFIED Critical Logs:**
+    *   `CRITICAL | execution.fill_helpers | [CRM] FILL UNVERIFIED: Alpaca returned 0 fills after 2 attempts (1.43s). Using entry_price $184.00 as fallback. P&L for this trade is unreliable — manual verification required. [fallback #1 today]` (14:02:47 ET)
+    *   `CRITICAL | execution.fill_helpers | [QCOM] FILL UNVERIFIED: Alpaca returned 0 fills after 2 attempts (1.45s). Using entry_price $190.43 as fallback. P&L for this trade is unreliable — manual verification required. [fallback #2 today]` (15:42:54 ET)
+    *   While `A-4` describes this Alpaca API behavior as benign for fills *gap*, the bot's own log classifies this as CRITICAL, explicitly stating P&L is unreliable and requires manual verification. This indicates a significant operational burden and data integrity issue within the bot's P&L tracking.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Recording Inaccuracies (CRM & QCOM):**
+    *   **CRM (short):**
+        *   Entry: `2026-05-05T07:23:18.516486-07:00 entry symbol=CRM price=184.0 size=1 direction=short`
+        *   Log exit: `2026-05-07 14:02:46,396 | WARNING | execution.trade_engine | [CRM] HARD STOP CONFIRMED (3 scans): $186.72 (>= $184.00) — closing.`
+        *   Trade Event exit: `2026-05-07T07:02:48.144311-07:00 stop_hit symbol=CRM price=184.0 size=1 pnl=0.0 reason=hard_stop direction=short`
+        *   Expected P&L: (184.00 - 186.72) * 1 = -2.72. The recorded `pnl=0.0` is incorrect, misrepresenting a loss as a breakeven.
+    *   **QCOM (long):**
+        *   Entry: `2026-05-06T07:14:00.398019-07:00 entry symbol=QCOM price=190.43 size=2 direction=long target=216.95`
+        *   Trade Event exit: `2026-05-07T08:42:54.949575-07:00 exit symbol=QCOM price=190.43 size=1 pnl=0.0 reason=target direction=long`
+        *   The exit price `190.43` is the entry price, resulting in `pnl=0.0`. However, the `reason=target` is inconsistent, as the target was `216.95`. Exiting at entry price means it was a breakeven, not a target hit. This also highlights an unrecorded partial exit (1 of 2 shares).
+*   **Poor Risk/Reward Capture (avg_r_multiple):**
+    *   `all_time_stats.avg_r_multiple = -0.028`
+    *   Given `TARGET_ATR_MULT = 2.5`, the bot aims for a 2.5x profit target relative to its stop. An average R-multiple of -0.028 indicates the bot is consistently losing more than it wins (or more precisely, average P&L per unit of risk is negative), which is far from its intended profit capture and signals a fundamental problem with its strategy's edge or execution.
+*   **Stop-Hit Rate vs. Win Rate:**
+    *   The `all_time_stats.win_rate = 45.8%` is below 50%. Combined with the recurring `TQI degradation` (average last 5 trades < 30/100), this indicates a negative expectancy and suggests the stop placement or exit strategy needs significant tuning.
+
+### TRADE INTEGRITY
+
+*   **P&L = 0.0 with entry ≠ exit price (CRM, QCOM):**
+    *   **CRM**: The trade event (`symbol=CRM`, `price=184.0`, `pnl=0.0`) contradicts the log (`HARD STOP CONFIRMED... $186.72`). This is a direct P&L recording error where an actual loss is recorded as zero.
+    *   **QCOM**: The trade event (`symbol=QCOM`, `price=190.43`, `pnl=0.0`, `reason=target`) is internally inconsistent. An exit at entry price for a long position implies a breakeven, not a target hit. This is a logging anomaly and potential P&L corruption if the actual fill was different.
+*   **Partial Exit Not Fully Tracked (QCOM):**
+    *   `QCOM` was entered with `size=2` but exited `size=1`. The `EOD SNAPSHOT` lists `QCOM` in `overnight_holds`, suggesting a remaining position. However, the subsequent log for QCOM exit (15:42:53 ET) shows a `close_position` error, followed by `FILL UNVERIFIED` and then an `exit` trade event for `size=1`. This indicates that the partial exit event (if intended) or the full closure of the initial `size=2` position was not correctly or completely recorded, leading to discrepancies in active positions and P&L.
+
+### MODIFIED FILE FINDINGS
+
+No source files modified in last 24h.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** UNTOUCHED
+*   **P5-H2 | Fill price crosstalk:** TRIGGERED (by `CRM` and `QCOM` exits, which experienced `FILL UNVERIFIED` and resulted in P&L inconsistencies and fallback to entry price, masking the actual fill price discrepancy).
+*   **P5-H3 | Orphan GTC 404 path:** TRIGGERED (by `CRM` and `QCOM` exits, which logged `close_position: position not found on Alpaca`). While the log states "Returning True so record_exit() cleans up tracker," the immediate `FILL UNVERIFIED` critical log indicates that the P&L part of the problem persists.
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today:** UNTOUCHED
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** TRIGGERED (The `2026-05-07` EOD snapshot lists `CRM`, `QCOM`, `TOST` in `overnight_holds`, even though these positions were definitively closed on `2026-05-07` according to the trade events and logs. This indicates the snapshot data for overnight holds is stale or generated prematurely.)
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | execution.broker (DAY stop blocked)**
+    *   **Description**: Stop orders for existing positions are being blocked by Alpaca with a `40310000 / insufficient buying_power` error code.
+    *   **Exact failure condition**: When `execution.broker` attempts to submit a `DAY STOP` order (e.g., for `AAPL` or `NVDL`), Alpaca rejects it with error code `40310000`. This happens even though the order is a liquidation for an existing position and should not require additional buying power. While the bot retries, the initial failure is a critical risk management vulnerability, potentially leaving positions exposed.
+*   **EXECUTION BUG | HIGH | execution.trade_engine (CRM Stop Price Discrepancy)**
+    *   **Description**: The recorded `stop` price for `CRM` in the trade entry event (`193.28`) contradicts the `stop` price referenced in the `trade_engine` warning logs (`$184.00`).
+    *   **Exact failure condition**: For `CRM` (short), the initial entry event specified a `stop` at `193.28`. However, the `execution.trade_engine` logs (`13:34:48,689` and `13:45:52,797`) consistently refer to the `stop` as `$184.00`. This discrepancy between the intended stop (from entry) and the actively monitored stop could lead to incorrect loss calculations or premature/delayed stop triggers, and directly contributes to the P&L corruption issue.
+*   **ALPHA ISSUE | MEDIUM | strategy.signal_generator (Weekly Bias Data Insufficiency)**
+    *   **Description**: The `Weekly bias` signal consistently reports "insufficient data (4 bars)" and is skipped across multiple symbols.
+    *   **Exact failure condition**: The `strategy.signal_generator` module frequently logs a warning `[SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped`. This implies that the weekly bias component of the MTF confluence scoring system is not receiving adequate historical data (expected > 4 bars) to compute its signal, leading to a degraded or incomplete confluence score for affected symbols.
+*   **ALPHA ISSUE | HIGH | `all_time_stats.avg_r_multiple` (Negative R-Multiple)**
+    *   **Description**: The bot's overall `avg_r_multiple` is consistently negative, indicating that the average loss per trade significantly outweighs the average gain, despite a `TARGET_ATR_MULT` of 2.5.
+    *   **Exact failure condition**: The `all_time_stats.avg_r_multiple` is `-0.028`. This is far from the targeted 2.5 and suggests the strategy is not capturing its theoretical edge, leading to systematic underperformance relative to its design goals.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate and Rectify P&L Corruption and `FILL UNVERIFIED` Fallout (CRITICAL):** Prioritize fixing the P&L discrepancies for `CRM` and `QCOM`. The bot must accurately record actual fill prices and P&L, even when Alpaca's API doesn't provide same-day fills. This may involve implementing robust internal fill tracking or using a different P&L fallback mechanism than `entry_price` when `FILL UNVERIFIED` occurs, perhaps based on average price during the `HARD STOP CONFIRMED` period, or marking P&L as definitively `UNKNOWN` rather than `0.0`. Address P5-H2 and P5-H3.
+2.  **Resolve `DAY Stop Blocked` Issue (CRITICAL):** Immediately investigate why stop orders are blocked by `insufficient buying_power`. Verify if this is an Alpaca API misinterpretation or if the bot is creating conflicting orders that lock up margin. Ensure stop orders have absolute priority and liquidity for existing positions.
+3.  **Correct CRM Stop Price Discrepancy (HIGH):** Determine whether the actual stop for CRM was `193.28` (from trade event) or `184.00` (from logs). Implement a consistent and verifiable mechanism for setting and tracking stop prices, especially when dynamic adjustments (like MRI BE push) occur.
+4.  **Address TQI Degradation and Negative R-Multiple (HIGH):** A consistently low TQI average and negative R-multiple indicate fundamental performance issues. Review the strategy's exit discipline, stop placement logic (especially in relation to dynamic adjustments like MRI BE push), and overall signal quality to bring performance closer to `TARGET_ATR_MULT = 2.5`.
+5.  **Investigate `Weekly bias: insufficient data` (MEDIUM):** Understand why the weekly bias filter frequently lacks sufficient data. This could be a data ingestion issue, incorrect bar count calculation, or a need to adjust the lookback period to ensure this important signal is consistently available.

@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-07-16
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['nightly_audit.py', 'execution/orphan_manager.py', 'execution/fill_reconciler.py', 'execution/exit_logic.py', 'data/fetcher.py', 'reporting/pnl_ledger.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1.  `execution.portfolio_tracker` / `execution.fill_reconciler` | P&L corruption in tracker P&L affecting live risk decisions due to reconciliation failure for RIVN (recorded P&L $0.00 when Alpaca fills show a loss) and HOOD (entry price mismatch, resulting in different P&L). | RIVN, HOOD
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**: Recurring `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-14.06 tracker=$-5.14 drift=$-8.92`. This indicates a persistent and significant discrepancy between Alpaca's calculated P&L and the bot's internal tracker, which is used for live risk decisions and thus critical.
+*   **ANOMALY-3 TQI degradation**: Recurring `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=24.2/100 < 30 — review exit discipline and stop placement.` This warning indicates a sustained period of suboptimal trade execution quality, impacting overall bot performance.
+*   **ANOMALY-2 Confirm Gate, No Entry**: Recurring `WARNING | strategy.run_cycle | [ANOMALY-2] [COIN/CRWD] confirm_gate=N scans but no entry`. This suggests that signals are initially qualifying for entry but are subsequently blocked or degrade before a trade can be opened, warranting further investigation into the full entry pipeline.
+
+### PERFORMANCE AUDIT
+*   **P&L Recording Discrepancies**:
+    *   For the `RIVN` trade with `ts: 2026-07-16T06:30:30.966775-07:00` (from `trade_events`), the `EOD SNAPSHOT` `trades` section shows `entry_price: 17.42`, `exit_price: 17.42`, and `pnl: 0.0`. However, the `EOD SNAPSHOT` `alpaca_per_trade` section for RIVN indicates multiple partial exits that sum to a total P&L of `$-5.25`. This discrepancy, compounded by the `_fill_unverified: true` and `_fill_reconcile_expired: true` flags, confirms P&L corruption and a failure in reconciliation for this trade.
+    *   For the `HOOD` trade with `ts: 2026-07-16T11:00:27.827157-07:00` (from `trade_events`), `entry_price: 112.01`, `exit_price: 106.87`, and `pnl: -5.14`. However, the `EOD SNAPSHOT` `alpaca_per_trade` for HOOD shows an `entry: 115.68` and `pnl: -8.81` for the same `exit: 106.87`. The `115.68` entry price does not correspond to any `HOOD` entry in the provided `trade_events` or `EOD SNAPSHOT` `trades` for today, indicating a P&L attribution or entry tracking desync.
+*   **Poor R-multiple and High Stop-Hit Rate**: The `all_time_stats` report an `avg_r_multiple` of `0.007`, which is drastically below the stated `INTRADAY_TARGET_ATR_MULT` based target of 2.5x. The recent `trade_events` show a high proportion of stop-hit exits (3 out of 4 recent closed trades). This, combined with the recurring `TQI degradation` warning, indicates a significant lack of edge capture and systemic underperformance.
+
+### TRADE INTEGRITY
+*   **P&L=0.0 Anomaly with Reconciliation Failure**: The `RIVN` trade in `EOD SNAPSHOT` `trades` shows `pnl: 0.0` despite being flagged with `_fill_unverified: true` and `_fill_reconcile_expired: true`. This confirms that a legitimate loss (as per Alpaca's fills) was recorded as zero due to a reconciliation failure that expired before resolution, leading to P&L corruption in the tracker.
+
+### MODIFIED FILE FINDINGS
+*   **execution/exit_logic.py | Inconsistent `TRANCHE_SHARE` Documentation**:
+    *   Line 175: `TRANCHE_SHARE = 0.33`
+    *   Line 170 comment: `Each tranche closes 25% of the original position qty.`
+    *   Failure condition: The comment on line 170 (`25%`) directly contradicts the code's actual `TRANCHE_SHARE` value (`0.33`). This is either a logic error if 25% is the intended behavior, or a documentation error if 33% is. This inconsistency can lead to partial exits closing a different quantity than expected, affecting risk exposure and profit capture.
+*   **reporting/pnl_ledger.py | Diagnostic-Only Mode for Authoritative P&L**:
+    *   The `reporting/pnl_ledger.py` module, which implements a structurally sound, full-history FIFO P&L computation, is explicitly stated to be in `DIAGNOSTIC-ONLY` mode.
+    *   Failure condition: While this new ledger correctly computes P&L in isolation, the bot's live `portfolio_tracker` (which informs real-time risk decisions) is not yet utilizing this authoritative source. This means the `EOD P&L DRIFT` and related P&L corruption issues (as seen with RIVN and HOOD) persist in the live trading system, directly impacting the accuracy of live risk assessment and leading to the CATASTROPHIC ALERT.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **UNTOUCHED**
+*   P5-C2 | run_movers.py ImportError: **FIXED**
+*   P5-H1 | OBSOLETE — PDT enforcement: **OBSOLETE**
+*   P5-H2 | Fill price crosstalk: **IMPROVED**
+*   P5-H3 | Orphan GTC 404 path: **FIXED**
+*   P5-H4 | Rule 2 dead code: **FIXED**
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED**
+*   P5-M1 | Cycle watchdog restart loop: **UNTOUCHED**
+*   P5-M2 | MRI score cached stale across sessions: **UNTOUCHED**
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **UNTOUCHED**
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED**
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/fill_reconciler.py** | RIVN P&L corruption triggered and reconciliation expired.
+    *   Exact failure condition: The RIVN trade closing on `2026-07-16` shows `pnl: 0.0` in the `EOD SNAPSHOT` `trades` record, despite being marked `_fill_unverified: true` and `_fill_reconcile_expired: true`. This indicates that a real P&L (Alpaca's fills show a loss) was recorded as zero due to the reconciliation window expiring before the correct fill could be retrieved, directly corrupting the tracker's P&L for this trade.
+*   **ALPHA ISSUE | HIGH | `all_time_stats` & `TQI degradation`** | Bot not capturing sufficient edge for profitability.
+    *   Exact failure condition: `all_time_stats` reports `avg_r_multiple: 0.007`, which is drastically below the target of 2.5x. This, combined with a high recent stop-hit rate and recurring `[ANOMALY-3] TQI degradation` warnings in the log, indicates a systemic failure to generate profitable trades, suggesting a fundamental issue with the alpha model or its parameters.
+
+### FIX VALIDATION
+*   **P5-H2 (Fill price crosstalk)**: The `execution/fill_reconciler.py` module includes a new fix ("Bug A fix") specifically for RIVN P&L corruption, which is related to fill price handling. Additionally, `reporting/pnl_ledger.py` implements a structural solution for authoritative P&L.
+    *   FIX VALIDATION: PARTIAL
+    *   Exact reason: While `execution/fill_reconciler.py` has a new fix that should improve fill reconciliation, and `reporting/pnl_ledger.py` implements a structural solution for authoritative P&L, the live `portfolio_tracker` still exhibits `EOD P&L DRIFT` and specific instances of P&L corruption (RIVN, HOOD). The full integration of the authoritative ledger is pending, so the problem is not yet fully resolved in the live trading context.
+
+### RECOMMENDED ACTIONS
+1.  **Prioritize full integration of `reporting/pnl_ledger.py`**: Immediately integrate the `reporting.pnl_ledger` as the authoritative source for `portfolio_tracker` to eliminate P&L drift and corruption in live risk decisions. This is the most urgent action and directly addresses the CATASTROPHIC ALERT.
+2.  **Investigate ANOMALY-2 (Confirm Gate, No Entry)**: Analyze the full entry logic chain to determine why signals that initially qualify via the `confirm_gate` are not proceeding to actual trade entries for symbols like `COIN` and `CRWD`.
+3.  **Correct Partial Exit Logic in `execution/exit_logic.py`**: Clarify and correct the discrepancy between the `TRANCHE_SHARE = 0.33` value and the accompanying comment stating `25%` (lines 170/175). Ensure the code accurately reflects the intended partial exit strategy.
+4.  **Performance Tuning Based on R-multiple and TQI**: Address the `ANOMALY-3 TQI degradation` and the critically low `avg_r_multiple: 0.007` by conducting a thorough review of the bot's exit discipline, stop placement, and overall alpha model parameters.
+5.  **Investigate HOOD P&L Mismatch**: Specifically investigate the `HOOD` P&L discrepancy in the `alpaca_per_trade` data, where an entry price of `115.68` for a closed trade does not align with any logged entry. This suggests a deeper tracking issue or unlogged entries that contribute to P&L drift.

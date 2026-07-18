@@ -1,0 +1,43 @@
+Midday Gemini Audit — 2026-05-14
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades or flagged entries were recorded in this session. All P&L metrics are $0.00, which is consistent with no trading activity. Therefore, no performance audit findings can be made regarding entry/exit integrity, P&L signs, win rate, profit factor, score-to-outcome correlation, or stop rate analysis for actual trades. The bot's risk management successfully prevented entries during adverse market conditions.
+
+### ENTRY QUALITY
+No entries were attempted or taken during this session. The bot successfully abstained from trading due to its internal risk management mechanisms.
+
+### EXIT QUALITY
+No exits occurred during this session as no positions were opened.
+
+### MRI ALIGNMENT
+The bot demonstrated correct alignment with MRI levels:
+*   **MRI STRESSED (score=41):** The bot consistently applied a `size floor 0.70x` and critically logged `⛔ BV-5: MRI=STRESSED — no new entries until regime improves. Exits and partials managed normally.` This is the correct behavior to prevent entries during a STRESSED regime.
+*   **MRI ELEVATED (score=40):** When MRI improved to ELEVATED, the bot applied a `size floor 0.85x`. This also aligns with expected risk management (a higher floor than STRESSED, allowing for larger positions if other conditions permit).
+*   **Dynamic MIN_SCORE:** The bot dynamically raised its effective `MIN_SCORE` to `11/12` based on several factors (SPY, VIX, MRI, P&L, ATH), which then filtered out all available signals. This proactive filtering mechanism is consistent with a risk-off stance during less favorable conditions and is functioning as designed.
+
+### LOG ANOMALIES
+*   **`gc.collect()` Duration:** A `WARNING` log indicates a garbage collection cycle took a considerable amount of time.
+    *   `2026-05-14 17:06:08,443 | WARNING | main | gc.collect() took 200.1ms, collected 35 objects — heap may be growing`
+    *   This is a potential performance degradation indicator.
+
+### NEW BUGS / CONCERNS
+
+*   **INFRASTRUCTURE | HIGH | Potential Memory Leak / Performance Degradation**
+    *   **Variable/Metric Involved:** Python's garbage collection process duration (`gc.collect()` execution time) and heap growth.
+    *   **Value vs. Should Be:** The log shows `gc.collect() took 200.1ms, collected 35 objects — heap may be growing`. For an intraday trading bot, 200.1ms is a significant latency spike during a cycle, especially if the cycle needs to be reactive. While the number of objects collected (35) is small, the accompanying note "heap may be growing" strongly suggests a memory leak or inefficient memory management. Ideally, `gc.collect()` should either not be called explicitly (allowing Python to manage it automatically, which is often more efficient for common use cases) or, if explicit calls are necessary, they should be very fast and infrequent, with no indication of uncontrolled heap growth.
+    *   **Failure Constitutes:** This constitutes a systematic degradation in decision quality by introducing unpredictable latency spikes. If the heap is indeed growing unchecked, it can lead to increased memory consumption, slower performance over time, and eventually OutOfMemory (OOM) errors, causing the bot to crash during longer trading sessions.
+    *   **Exact Condition:** Occurs during the `main` loop cycle at `2026-05-14 17:06:08,443`. The specific condition causing the heap growth leading to the collection and its duration is not provided in the log but is indicated by the "heap may be growing" message. Source code not provided for `main` or specific memory allocation patterns.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE:** Investigate the `gc.collect()` warning. Analyze memory usage patterns over longer periods to confirm if a heap growth/memory leak is occurring. (HIGH URGENCY)
+    *   **Action:** Profile memory usage of the bot's components to identify any objects accumulating unnecessarily. Review areas of the codebase that create many temporary objects or hold onto references longer than needed. Consider adjusting Python's garbage collection thresholds or exploring alternative memory management strategies if a leak is confirmed.
+2.  **ALPHA:** Review the overall risk management thresholds given the lack of trading activity. While it's positive the bot avoided bad trades, 0 entries over several hours in a "NORMAL" volatility regime (VIX 17.X) might indicate overly conservative `MIN_SCORE` dynamics or other filtering conditions, potentially leading to missed profitable opportunities. (MEDIUM URGENCY)
+    *   **Action:** Analyze historical performance with similar MRI and VIX levels to determine if the dynamic `MIN_SCORE` and combined sizing penalties (Risk day, Mid-day doldrums, MRI floor) are too restrictive. Backtest scenarios where `MIN_SCORE` or size floors are slightly less aggressive to find a balance between risk aversion and opportunity capture.

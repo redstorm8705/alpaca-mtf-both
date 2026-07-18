@@ -1,0 +1,90 @@
+Midday Gemini Audit — 2026-05-28
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L and Exit Price Discrepancy (Critical)**:
+    *   **Variable/Metric**: `Total P&L`, `Avg win`, `exit price` in `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` vs. `P&L`, `exit price` reported in bot logs (`execution.portfolio_tracker`, `execution.fill_helpers`, `execution.exit_logic`).
+    *   **Value vs. What it should be**: For the MSTR short trade:
+        *   The `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` report `exit $144.84` and `P&L: $18.11`. This calculation is correct for a short: $162.95 (entry) - $144.84 (exit) = $18.11.
+        *   The log at `17:19:50,877` indicates a `Trail stop hit @ $151.63 (stop $150.77)`. If $151.63 was the exit, P&L would be $162.95 - $151.63 = $11.32.
+        *   The initial `execution.portfolio_tracker` log at `17:19:52,734` reports `P&L: $24.46 (trail_stop)` and mentions `Using entry_price $162.95 as fallback` due to `FILL UNVERIFIED`. If the entry price $162.95 was truly used as the exit price for a short, the P&L would be $0.00, not $24.46. This shows an incorrect fallback P&L calculation.
+        *   A subsequent `fill_correction` at `17:20:11,168` reports `exit 162.95→150.36 | pnl 24.46→62.23`. For entry $162.95 and corrected exit $150.36, the P&L should be $162.95 - $150.36 = $12.59, not $62.23.
+        *   **Failure**: There are four distinct and inconsistent P&L/exit price values reported for the same trade across the bot's logging and summary outputs. The final summary P&L and exit price do not reconcile with any of the intermediate log events or accurate calculations based on those logs. This indicates a severe data integrity issue where the true P&L of the trade cannot be reliably determined from the bot's own records.
+    *   **Condition**: Occurs for the MSTR short trade due to `FILL UNVERIFIED` from Alpaca, triggering faulty fallback P&L calculations and subsequent incorrect `fill_correction` logic, leading to corrupted data in the final summary.
+
+*   **Stop-hit rate vs. Partial Exit Reporting (Minor)**:
+    *   **Variable/Metric**: `Stop-hit rate` in `SESSION P&L SUMMARY` vs. `exit reason` (`partial_exit`) in `CLOSED TRADE DETAILS` and log `closing remainder`.
+    *   **Value vs. What it should be**: The summary states "Stop-hit rate: 100% (1 stops)" and "Partial: 1", while the trade details also list `partial_exit`. The log confirms a `Trail stop hit` and `closing remainder`. This indicates that the single closed trade was a partial exit triggered by a trailing stop. While a stop can trigger a partial, reporting "100% stop-hit rate" (which often implies a full position closure due to stop) when the trade is also explicitly called a "partial_exit" can be ambiguous. Given that "Closed trades: 1" and "Exits: 1" implies the trade is fully accounted for, this is likely a semantic nuance in reporting, not a logic error.
+    *   **Condition**: Occurs for the MSTR trade, where a trailing stop caused a partial closure, which was also the final closure event.
+
+*   **Win rate and profit factor**: The win rate of 100% and avg win of $18.11 are mechanically correct based on the reported summary data (1 win, 0 losses). However, the integrity of the underlying P&L data is compromised (see above), making these metrics unreliable. Insufficient data (only one trade) to comment on consistency with edge claims or profit factor.
+
+*   **Score→outcome correlation**: The MSTR entry had a score of 12/12 (above `MIN_SCORE=9`) and resulted in a profitable trade, aligning with positive correlation.
+
+*   **Stop-hit rate indication**: The 100% stop-hit rate for MSTR was a profitable outcome (P&L: +$18.11). This suggests the trailing stop mechanism successfully locked in gains, rather than the strategy being misaligned and hitting stops for losses.
+
+### ENTRY QUALITY
+
+*   No new entries were permitted during the log window after `17:09:38,655` due to `execute_entries: HALTED for session — no new entries permitted.`. This appears to be a control mechanism.
+*   The single MSTR trade entry details are not fully provided in the log snippets (only post-entry `VOLSHADOW` logs and exit processing).
+*   Based on `CLOSED TRADE DETAILS`, MSTR entry had `score 12/12` (above `MIN_SCORE=9`) and `MRI=ELEVATED`. The configuration permits entries at `ELEVATED` MRI levels. No issues can be flagged on entry quality without more specific entry logs.
+
+### EXIT QUALITY
+
+*   The MSTR exit was triggered by a `Trail stop hit @ $151.63 (stop $150.77)` for a short position entered at $162.95.
+*   The final reported exit price of $144.84 is significantly better (lower, for a short) than the trailing stop trigger price of $151.63.
+*   Strategically, this indicates successful stop management where the bot was able to capture additional profit beyond the initial stop trigger. The issue lies in the inconsistent *reporting* of this outcome, not the quality of the exit itself.
+
+### MRI ALIGNMENT
+
+*   The MSTR trade entry occurred at `MRI=ELEVATED`. `MRI session distribution` shows `ELEVATED` is a common state. The configuration does not prohibit entries at `ELEVATED` MRI, and the trade was profitable.
+*   Later in the log, `MRI refreshed: score=10 level=NORMAL`. The bot actively monitors and logs MRI changes.
+*   Position sizing adjustments are mentioned (`sizing stepped up to 75%`, `Mid-day doldrums — sizing at 75%`, `Breadth WEAKENING (...) — size floor 0.85x applied`, `Overnight exposure (...) → intraday size mult 0.90x`). This indicates the bot is actively adjusting to market conditions, including MRI.
+*   No entries were flagged at STRESSED/CRISIS MRI levels within the provided context.
+
+### LOG ANOMALIES
+
+*   `2026-05-28 17:14:20,973 | WARNING | main | gc.collect() took 3311.3ms, collected 99 objects — heap may be growing`
+*   `2026-05-28 17:19:51,041 | WARNING | execution.broker | [MSTR] close_position: position not found on Alpaca — already closed externally or by concurrent process. Returning True so record_exit() cleans up tracker.`
+*   `2026-05-28 17:19:52,477 | CRITICAL | execution.fill_helpers | [MSTR] FILL UNVERIFIED: Alpaca returned 0 fills after 2 attempts (1.44s). Using entry_price $162.95 as fallback. P&L for this trade is unreliable — manual verification required. [fallback #1 today]`
+*   `2026-05-28 17:14:17,563 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$30.60 tracker=$24.46 drift=$+6.14`
+*   `2026-05-28 17:09:38,655 | WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` (While a control, the lack of a clear reason in the log implies a need for better audit trail for this critical state change.)
+
+### NEW BUGS / CONCERNS
+
+1.  CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL
+    DESCRIPTION: **Pervasive P&L and Exit Price Data Corruption**
+    EXACT CONDITION: As detailed in the Performance Audit, the single MSTR trade exhibits four conflicting records for its P&L and exit price: (1) $18.11 P&L / $144.84 exit in summary; (2) $11.32 P&L / $151.63 trail stop trigger; (3) $24.46 P&L / $162.95 (fallback to entry) in initial log; (4) $62.23 P&L / $150.36 in fill_correction log. Furthermore, the `fill_correction` calculation of P&L itself is mathematically incorrect ($162.95 - $150.36 = $12.59$, not $62.23). This systematic failure to consistently calculate, track, and report trade financials compromises the entire performance audit.
+
+2.  CATEGORY: INFRASTRUCTURE | SEVERITY: HIGH
+    DESCRIPTION: **Critical Failure to Obtain Fill Data from Alpaca**
+    EXACT CONDITION: `2026-05-28 17:19:52,477 | CRITICAL | execution.fill_helpers | [MSTR] FILL UNVERIFIED: Alpaca returned 0 fills after 2 attempts (1.44s). Using entry_price $162.95 as fallback. P&L for this trade is unreliable — manual verification required. [fallback #1 today]`
+    The bot explicitly states it could not verify the fill for a closed position, rendering the P&L unreliable. While `A-4 paper fills gap` is benign for historical data, this is a real-time fill failure that directly affects current trade accounting. This critical error is the root cause of the P&L data corruption (New Bug 1).
+
+3.  CATEGORY: INFRASTRUCTURE | SEVERITY: HIGH
+    DESCRIPTION: **Broker-Tracker State Desynchronization on Position Closure**
+    EXACT CONDITION: `2026-05-28 17:19:51,041 | WARNING | execution.broker | [MSTR] close_position: position not found on Alpaca — already closed externally or by concurrent process. Returning True so record_exit() cleans up tracker.`
+    The bot attempted to close a position that Alpaca had already closed or was unaware of. This indicates a state mismatch between the bot's internal portfolio tracker and the broker, potentially leading to orphaned positions, incorrect sizing, or erroneous P&L calculations if the cleanup isn't robust.
+
+4.  CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM
+    DESCRIPTION: **Excessive Garbage Collection Pause Indicating Potential Memory Issues**
+    EXACT CONDITION: `2026-05-28 17:14:20,973 | WARNING | main | gc.collect() took 3311.3ms, collected 99 objects — heap may be growing`
+    A garbage collection pause exceeding 3 seconds is a significant event for a live trading bot. This can cause the bot to become unresponsive, miss critical market data, or delay order execution, thereby degrading execution quality and increasing slippage risk. The "heap may be growing" suggests a potential memory leak or inefficient resource management.
+
+5.  CATEGORY: EXECUTION BUG | SEVERITY: MEDIUM
+    DESCRIPTION: **End-of-Day P&L Drift between Alpaca and Internal Tracker**
+    EXACT CONDITION: `2026-05-28 17:14:17,563 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$30.60 tracker=$24.46 drift=$+6.14`
+    This explicit warning at the end of day confirms that the bot's internal P&L accounting ($24.46) differs from Alpaca's ($30.60). This reinforces the pervasive P&L consistency issues (New Bug 1) and indicates that the reconciliation process is not fully resolving discrepancies.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION**: **(URGENT)** Prioritize debugging and fixing the core P&L and exit price calculation and reporting logic (New Bug 1 and 5). This includes resolving the `FILL UNVERIFIED` fallback errors and the mathematical inaccuracies in `fill_correction`. A single, consistent, and accurate source of truth for trade P&L is paramount for reliable operation.
+2.  **INFRA**: Investigate and mitigate the `position not found on Alpaca` warning (New Bug 3). Determine the root cause of the state desynchronization and implement robust error handling, retry mechanisms, or proactive state reconciliation to prevent orphaned positions or unexpected closures.
+3.  **INFRA**: Profile the bot's memory usage and optimize resource management to eliminate the prolonged garbage collection pauses (New Bug 4). A 3-second pause can severely impact real-time trading performance and lead to missed opportunities or sub-optimal execution.

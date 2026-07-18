@@ -1,0 +1,94 @@
+{
+  "audit_date": "2026-06-24",
+  "run_ts": "2026-06-24T10:30:03.251665-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "MSTR"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 20,
+    "levels": {
+      "ELEVATED": 16,
+      "STRESSED": 4
+    },
+    "last_score": 45,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 94,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-24 13:33:57,247 | WARNING  | main | gc.collect() took 3436.7ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-24 13:38:58,322 | WARNING  | execution.gtc_manager | RTH DAY stops: 1 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market",
+      "2026-06-24 14:05:05,059 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-24 14:12:15,735 | WARNING  | main | gc.collect() took 3029.2ms, collected 99 objects \u2014 heap may be growing",
+      "2026-06-24 14:17:45,142 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "MSTR",
+      "status": "rc=2",
+      "entry": 120.63,
+      "exit": 98.16
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 22.47,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 22.47,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "MSTR",
+      "pnl": 22.47,
+      "entry_price": 120.63,
+      "exit_price": 98.16,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 140.92,
+      "target": 78.46
+    },
+    "worst": {
+      "symbol": "MSTR",
+      "pnl": 22.47,
+      "entry_price": 120.63,
+      "exit_price": 98.16,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 140.92,
+      "target": 78.46
+    },
+    "trades": [
+      {
+        "symbol": "MSTR",
+        "pnl": 22.47,
+        "entry_price": 120.63,
+        "exit_price": 98.16,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 140.92,
+        "target": 78.46
+      }
+    ]
+  }
+}

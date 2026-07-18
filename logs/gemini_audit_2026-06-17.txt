@@ -1,0 +1,98 @@
+Nightly Gemini Audit — 2026-06-17
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring CRITICAL FIFO Lot Mismatch (NFLX)**: Multiple `CRITICAL | execution.portfolio_tracker | [FIFO] NFLX: closing sell with no open long lots... Recording as synthetic short — review FIFO state immediately.` entries (e.g., 18:53:57, 19:00:54, 19:13:09, 19:25:51, 20:00:21). The `net_qty` consistently increases in negative magnitude (from -12 to -21), indicating a compounding error in position tracking for NFLX.
+*   **Persistent EOD P&L DRIFT**: Repeated `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-X tracker=$0.00 drift=$-X` entries (e.g., -12.90, -42.63, -37.11). The internal tracker consistently reports $0.00 P&L despite Alpaca showing losses, indicating a fundamental P&L reconciliation failure. This is directly related to P5-L2.
+*   **Recurring `gc.collect()` Performance Warning**: Multiple `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing` entries (e.g., 2969.0ms, 4279.0ms, 2935.0ms, 3430.2ms). These long garbage collection times suggest potential memory leaks or inefficient memory usage that could impact real-time performance.
+*   **Persistent `ANOMALY-3` TQI Degradation**: `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 — review exit discipline and stop placement.` is logged in almost every `run_cycle`. This indicates a sustained period of poor trade quality without automated corrective action.
+*   **Recurring `ANOMALY-2` Confirm Gate without Entry**: `WARNING | strategy.run_cycle | [ANOMALY-2] [CRM] confirm_gate=3 scans but no entry — risk.open_positions=X vs tracker=X | MAX_OPEN_POSITIONS=4.` appears repeatedly for CRM, suggesting a signal met initial criteria but was blocked multiple times without a clear reason logged. Given `risk.open_positions` matches `tracker`, it's not a `MAX_OPEN_POSITIONS` issue, implying an unlogged internal block.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness & Discrepancy**:
+    *   `TRADE EVENTS` on 2026-06-17 show entries for `TOST` (short), `SMCI` (short), `NFLX` (short), `MSTR` (short).
+    *   `EOD SNAPSHOT`'s `alpaca_per_trade` section, however, lists *long* positions closed for `TOST`, `SMCI`, `MSTR` on the same date. This is a severe discrepancy.
+    *   For the `alpaca_per_trade` entries:
+        *   `TOST` (long): entry=23.63, exit=24.92, pnl=5.16 (long profit, `exit > entry` -> Correct sign).
+        *   `TOST` (long): entry=23.63, exit=24.92, pnl=1.29 (long profit, `exit > entry` -> Correct sign).
+        *   `SMCI` (long): entry=35.36, exit=28.91, pnl=-19.35 (long loss, `exit < entry` -> Correct sign).
+        *   `MSTR` (long): entry=144.84, exit=120.63, pnl=-24.21 (long loss, `exit < entry` -> Correct sign).
+    *   While the individual `alpaca_per_trade` P&L signs are correct *assuming they are long positions*, the core problem is that the bot's `trade_events` indicate these were short entries. This means the actual trades executed by Alpaca either contradict the bot's intent, or the P&L reporting mechanism is mislabeling position sides.
+*   **Stop-hit rate vs. win rate**: For the four distinct `TRADE EVENTS` provided (UBER, TOST, INTC, NFLX, MSTR, SMCI), 3 are `stop_hit` (UBER, TOST, INTC). If we count only unique entries with outcomes, 3 out of 4 (75%) were stop-outs. This is significantly higher than the overall win rate (39.0%), indicating a potential regime mismatch or issues with stop placement/management.
+*   **Exit reason consistency**:
+    *   `TOST` (short) entry at $24.40 with `thresh=$24.98`. Stop hit at $25.36. Exit price is higher (worse for short) than the calculated threshold.
+    *   `INTC` (long) entry at $127.65 with `thresh=$122.75`. Stop hit at $119.75. Exit price is lower (worse for long) than the calculated threshold.
+    *   This suggests that the "overnight_atr_buffer_exit" is either firing late, or the "threshold" is not the actual order price sent to Alpaca, leading to worse-than-expected stop fills.
+*   **Profit factor and R:R**: `all_time_stats` show `avg_r_multiple = -0.076`, which is far below the `TARGET_ATR_MULT = 2.5` stated. The `profit_factor = 1.12` is barely positive. This suggests the bot is not capturing its intended edge, possibly due to poor entries, unfavorable exits, or issues in the R:R calculation itself.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording Discrepancy (Drift)**: The `EOD P&L DRIFT` consistently showing `tracker=$0.00` while `Alpaca` reports actual P&L indicates a critical failure in the bot's internal P&L accounting for daily summaries. This directly impacts the bot's ability to enforce `MAX_DAILY_LOSS_PCT`.
+*   **Trade Direction Mismatch in EOD Snapshot**: As detailed in "Performance Audit", there is a clear contradiction in trade direction (long/short) between the `TRADE EVENTS` and the `EOD SNAPSHOT`'s `alpaca_per_trade` section for trades on 2026-06-17. This is a severe data integrity issue.
+
+### MODIFIED FILE FINDINGS
+No issues found (as "No source files modified in last 24h")
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | UNTOUCHED
+*   P5-H2 | Fill price crosstalk | UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path | UNTOUCHED
+*   P5-H4 | Rule 2 dead code | UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today | UNTOUCHED (already fixed)
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **TRIGGERED** (consistent `tracker_pnl=$0.00` indicates P&L is understated or not recorded at EOD)
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL**
+    *   **Description**: **FIFO Lot Mismatch and State Corruption for NFLX (and likely others)**
+    *   **Function/Variable**: `execution.portfolio_tracker`, `net_qty`, `qty`, `price`
+    *   **Code Path**: The bot repeatedly logs `[FIFO] NFLX: closing sell with no open long lots (net_qty=-X, qty=1, price=77.54). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` This indicates an attempt to close a short position for NFLX, but the internal FIFO ledger is in a corrupted state, believing it has no long positions to close against, while simultaneously tracking a negative `net_qty` that continues to grow (e.g., -12 to -21).
+    *   **Exact failure condition**: The `execution.portfolio_tracker` fails to accurately reflect the actual open positions, specifically for NFLX, leading to a compounding error where the `net_qty` becomes increasingly negative without a corresponding record of initial entries or an ability to reconcile "closing sells" against "open long lots" (which should be "open short lots" in this context given the negative `net_qty`). This results in incorrect position sizing, P&L calculations, and potential overexposure to risk.
+
+*   **CATEGORY: P&L RECORDING | SEVERITY: CRITICAL**
+    *   **Description**: **Inaccurate P&L Tracking and EOD Drift**
+    *   **Function/Variable**: `execution.portfolio_tracker`, `alpaca_pnl`, `tracker_pnl`, `pnl_drift`
+    *   **Code Path**: The `EOD P&L DRIFT` messages consistently show `tracker_pnl` as `$0.00` while `alpaca_pnl` reflects actual losses (e.g., `$-12.90`, `$-42.63`, `$-37.11`). This indicates that the bot's internal `portfolio_tracker` is failing to correctly record or sum the P&L from closed positions for daily reporting.
+    *   **Exact failure condition**: The bot's internal P&L accounting system is not correctly aggregating or retrieving P&L from closed trades, resulting in a reported `tracker_pnl` of zero while actual losses or gains have occurred on the Alpaca account. This prevents accurate daily performance assessment and could lead to risk management failures (e.g., the `MAX_DAILY_LOSS_PCT` kill switch would never correctly trigger based on `tracker_pnl`).
+
+*   **CATEGORY: DATA INTEGRITY | SEVERITY: HIGH**
+    *   **Description**: **Trade Direction Mismatch between Entry Logs and EOD Snapshot**
+    *   **Function/Variable**: `TRADE EVENTS` `event="entry"`, `EOD SNAPSHOT` `alpaca_per_trade` `side`
+    *   **Code Path**: The `TRADE EVENTS` log entries from 2026-06-17 clearly state `direction: "short"` for `TOST`, `SMCI`, `NFLX`, and `MSTR`. However, the `EOD SNAPSHOT`'s `alpaca_per_trade` section lists positions closed for `TOST`, `SMCI`, and `MSTR` as `side: "long"`.
+    *   **Exact failure condition**: There is a critical inconsistency where the bot internally records entering short positions, but the P&L summary from Alpaca (or the bot's interpretation of it) reports these as closed long positions. This indicates either that orders are being placed with the wrong side, Alpaca's fill data is misinterpreted, or the P&L reporting mechanism is misattributing the position side, rendering P&L calculations and position state unreliable.
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM**
+    *   **Description**: **Excessive Garbage Collection Time**
+    *   **Function/Variable**: `main` module, `gc.collect()`
+    *   **Code Path**: The bot frequently logs `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing`, with `X` often being several seconds (e.g., 2969ms, 4279ms).
+    *   **Exact failure condition**: While not a direct crash, these prolonged garbage collection cycles indicate potential memory inefficiencies or leaks within the application. In a trading bot, these delays can lead to increased latency, missed market opportunities, and degraded responsiveness, especially during critical market events.
+
+*   **CATEGORY: ALPHA ISSUE | SEVERITY: LOW**
+    *   **Description**: **Unaddressed TQI Degradation**
+    *   **Function/Variable**: `strategy.run_cycle`, `[ANOMALY-3] TQI degradation`
+    *   **Code Path**: The log consistently reports `[ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 — review exit discipline and stop placement.` in almost every strategy cycle.
+    *   **Exact failure condition**: The bot identifies a significant degradation in its `Trade Quality Index` (TQI) but only logs a warning for manual review. There is no automated, programmed response (e.g., reducing trade size, pausing entries, adjusting risk parameters) to this identified underperformance, allowing the bot to continue trading with a suboptimal strategy without self-correction.
+
+### FIX VALIDATION
+No prior fixes to validate for the newly identified bugs.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE**: Investigate and fix the **FIFO lot mismatch and trade direction inconsistency** (`CRITICAL | EXECUTION BUG` and `HIGH | DATA INTEGRITY`). This is fundamental data corruption impacting position management and P&L accuracy. Verify that entry and exit order directions are correctly recorded and reconciled against Alpaca fills.
+2.  **URGENT**: Address the **inaccurate P&L tracking and EOD drift** (`CRITICAL | P&L RECORDING`). Ensure the `execution.portfolio_tracker` correctly accumulates and reports P&L from all closed trades to reflect the Alpaca account accurately. This also addresses P5-L2.
+3.  **HIGH PRIORITY**: Perform a memory profile of the bot to identify and resolve the root cause of the **excessive garbage collection times** (`MEDIUM | INFRASTRUCTURE`). Optimize memory usage or object lifecycles to reduce latency.
+4.  **MEDIUM PRIORITY**: Implement automated risk management responses to the **TQI degradation** (`LOW | ALPHA ISSUE`). For instance, if TQI falls below the threshold, automatically reduce `KELLY_FRACTION` or `MAX_POSITIONS`, or temporarily pause entries.
+5.  **REVIEW**: Investigate the `ANOMALY-2` `confirm_gate=3 scans but no entry` for CRM to understand the unlogged blocking condition. Ensure all entry blocks are explicitly logged for auditability.

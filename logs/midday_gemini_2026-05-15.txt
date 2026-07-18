@@ -1,0 +1,101 @@
+Midday Gemini Audit — 2026-05-15
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+**Reasoning for FAIL**: Significant P&L tracking discrepancy, critical fill reconciliation failures for untracked positions, and a direct contradiction in stop-hit reporting indicate fundamental issues with the bot's ability to accurately manage and record trades. These problems compromise the bot's reliability, accuracy of performance metrics, and trust in its internal P&L.
+
+---
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign & Position Type Consistency**:
+    *   **NFLX**: Entry $86.75, Exit $87.48, P&L $-4.38. For this to be a loss, it implies a SHORT position (`Entry - Exit = 86.75 - 87.48 = -0.73/share`). The negative P&L is consistent with a short position losing $0.73 per share.
+    *   **NVDA**: Entry $235.70, Exit $225.53, P&L $-20.34. For this to be a loss, it implies a LONG position (`Exit - Entry = 225.53 - 235.70 = -10.17/share`). The negative P&L is consistent with a long position losing $10.17 per share.
+    *   **Finding**: P&L signs are consistent with the inferred position types (short for NFLX, long for NVDA). No P&L sign errors detected.
+
+*   **Stop-Hit Recording Discrepancy (NVDA)**:
+    *   **Variable**: `stop-hit rate` (SESSION P&L SUMMARY), `exit price` (CLOSED TRADE DETAILS), `stop price` (CLOSED TRADE DETAILS).
+    *   **Value vs. Expected**: For the NVDA trade, the `exit $225.53` is below the `stop=$225.61`. For a long position, an exit price below the stop price indicates that the stop loss was hit (or violated by slippage). Therefore, this trade *should* be counted as a stop-hit. However, the "SESSION P&L SUMMARY" reports `Stop-hit rate: 0% (0 stops)`.
+    *   **Failure**: The bot's internal accounting and reporting of stop-loss events are inconsistent. This leads to inaccurate performance metrics and prevents proper analysis of the risk management system's effectiveness and slippage.
+    *   **Condition**: Occurs when an exit price for a trade (NVDA) is beyond its defined stop-loss price (indicating a stop-hit), but the trade is not recorded as a "stop-hit" in the session summary and the exit reason is not `stop`.
+
+*   **Score→Outcome Correlation**: Both closed trades had a `score 12/12` (above `MIN_SCORE = 9`), yet both resulted in losses. With only two closed trades in this session, it is not possible to establish a statistically significant correlation between confluence score and outcome.
+
+*   **Exit Price Consistency**:
+    *   **NFLX**: Exit $87.48 is between the stated stop ($89.59) and the first profit target ($85.62, for a short trade). This exit (reason `exit`) is plausible for a discretionary or time-based exit.
+    *   **NVDA**: Exit $225.53 is below the stated stop ($225.61) and far below any profit targets. This is consistent with a stop-out (as detailed in the stop-hit discrepancy finding).
+
+---
+
+### ENTRY QUALITY
+
+*   **MRI Level at Entry vs. Session Distribution (Clarification needed)**:
+    *   Both entries were made at `MRI=ELEVATED`. The `MIN_SCORE = 9` was met with a score of 12/12.
+    *   The bot config does not specify a no-entry rule for `ELEVATED` MRI levels, only for `STRESSED` (`⛔ BV-5`). The log shows `MRI news injection` escalating the MRI to `STRESSED` (`52`) shortly after the bot's restart (2026-05-15 16:17:33), and subsequent log entries consistently show `⛔ BV-5: MRI=STRESSED — no new entries`. This implies the entries occurred before this critical shift.
+    *   The "MRI SESSION DISTRIBUTION" reports `{'STRESSED': 39}` samples for the entire session. This either means the session distribution refers only to the period *after* the MRI escalated (i.e., not including the trade entry times), or there's an inconsistency in how MRI is recorded over time. Assuming the `MRI=ELEVATED` at entry time for the trades is accurate, no rule was violated at entry regarding MRI. However, the reporting creates ambiguity.
+
+---
+
+### EXIT QUALITY
+
+*   **NVDA Stop-Hit Not Recorded (reiterated for exit quality)**:
+    *   **Variable**: `exit price`, `stop price`, `exit reason`, `Stop-hit rate`.
+    *   **Value vs. Expected**: For NVDA (long position), the `exit price` ($225.53) is below its `stop price` ($225.61). This clearly indicates a stop-loss trigger. The `exit reason` is simply `exit` and the `Stop-hit rate` in the summary is 0%. The expected behavior is for the trade to be explicitly classified as a stop-hit exit.
+    *   **Failure**: The bot failed to correctly classify a stop-loss exit, which leads to inaccurate exit reason analysis and misrepresents the actual performance of the stop-loss mechanism, hindering strategy refinement.
+    *   **Condition**: Occurs for NVDA when the `exit price` is below its `stop price`, but the internal `exit reason` and `Stop-hit rate` do not reflect a stop-loss.
+
+---
+
+### MRI ALIGNMENT
+
+*   **Ambiguous MRI Reporting for Audit Trail**:
+    *   **Variable**: `MRI` level in "CLOSED TRADE DETAILS" vs. `MRI Session Distribution`.
+    *   **Value vs. Expected**: The `CLOSED TRADE DETAILS` explicitly list `MRI=ELEVATED` for both NFLX and NVDA at entry. In contrast, the "MRI SESSION DISTRIBUTION" summarizes all 39 samples as `STRESSED`. This presents a confusing picture for auditing. If the trades occurred earlier in the day when the MRI was indeed `ELEVATED`, the session distribution, by only showing `STRESSED` samples, fails to provide a complete and accurate historical context for the entire trading session.
+    *   **Failure**: While no rule appears violated at the time of entry, the discrepancy in reporting creates an auditability challenge. It becomes difficult to definitively confirm the market conditions under which *all* decisions were made throughout the day if the aggregated MRI data does not encompass the full spectrum of market regimes encountered.
+    *   **Condition**: The `MRI Session Distribution` provides a summary that is inconsistent with the specific `MRI` values recorded at the entry time of individual trades, implying either a temporal mismatch in the aggregated data or a misleading representation of the full session's MRI profile.
+
+---
+
+### LOG ANOMALIES
+
+*   **Significant P&L Drift between Alpaca and Tracker**:
+    *   `2026-05-15 16:17:11,229 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$15.16 | cumulative=$457.75 | tracker=$-24.72 | fills=3 lots_closed=5`
+    *   A drift of `$+39.88` between Alpaca's P&L and the bot's tracker for a paper account is substantial, especially when the total P&L for the session is `$-24.72`. While Alpaca's paper fills can be quirky, such a large, consistent discrepancy raises concerns about the bot's internal P&L calculation accuracy and reconciliation process, even with the known benign pattern of delayed Alpaca fills.
+*   **Critical Fill Reconciliation Failures for Untracked Symbols**:
+    *   `2026-05-15 16:17:43,104 | CRITICAL | execution.fill_reconciler | [QQQ] RC-4 FILL RECONCILIATION EXPIRED: fill_unverified trade outside 5-min window — P&L remains unreliable. Manual verification required.` (and similar for CRM, QCOM)
+    *   These critical alerts indicate that the bot failed to reconcile fills for QQQ, CRM, and QCOM within the expected 5-minute window. This means the bot either placed orders that Alpaca filled but were not correctly tracked internally, or its state management for pending orders is failing. This renders P&L for these symbols unreliable and requires manual intervention, representing a major failure in automated trading.
+
+---
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Unreconciled Fills Leading to Untracked Positions/P&L**:
+    *   **Exact variable or metric involved**: `fill_unverified trade`, `P&L remains unreliable` (log messages for QQQ, CRM, QCOM).
+    *   **Explain what the value is vs. what it should be and why that constitutes a failure**: The bot logged `CRITICAL` warnings indicating `fill_unverified trade outside 5-min window — P&L remains unreliable` for QQQ, CRM, and QCOM. This means that despite Alpaca potentially filling orders (implied by `fills=3` in the EOD summary and the `RC-4` message), the bot's `fill_reconciler` failed to confirm and track these trades within its operational window. The expected behavior is for all filled orders to be accurately recorded, their positions opened, and their P&L tracked. Failure to do so leads to untracked positions, unknown exposure, and corrupted P&L data, which is a critical failure for a trading bot.
+    *   **Exact condition under which this occurs**: Observed for symbols QQQ, CRM, and QCOM on `2026-05-15 16:17:43 ET` where the `execution.fill_reconciler` module failed to verify fills within the `5-min window`, despite Alpaca reporting `fills=3` in the EOD summary.
+
+2.  **EXECUTION BUG | HIGH | Inaccurate Stop-Loss Event Classification**:
+    *   **Exact variable or metric involved**: `Stop-hit rate` (SESSION P&L SUMMARY), `exit price` vs. `stop price` (CLOSED TRADE DETAILS for NVDA).
+    *   **Explain what the value is vs. what it should be and why that constitutes a failure**: For the NVDA trade, the `exit price ($225.53)` is below its `stop price ($225.61)`. This indicates a stop-loss order was triggered or price moved past it. Therefore, this trade should contribute to the `Stop-hit rate`. However, the `Stop-hit rate` is reported as `0% (0 stops)`. This is a failure because the bot is misrepresenting its risk management performance metrics. It implies a flaw in the logic that detects and counts stop-loss triggers or in how exit reasons are assigned, which prevents accurate post-trade analysis and potential strategy adjustments.
+    *   **Exact condition under which this occurs**: Occurs when a trade's final `exit price` for a long position is numerically less than its configured `stop price`, but the `Stop-hit rate` in the session summary is not incremented, and the `exit reason` is not explicitly recorded as a stop-hit. This was observed for the NVDA trade.
+
+3.  **INFRASTRUCTURE | MEDIUM | Persistent Alpaca vs. Internal P&L Drift**:
+    *   **Exact variable or metric involved**: `EOD P&L DRIFT`, `pnl_today` (Alpaca reported), `tracker` (Bot's internal).
+    *   **Explain what the value is vs. what it should be and why that constitutes a failure**: The `EOD P&L DRIFT` of `$+39.88` between Alpaca's reported P&L (`$15.16`) and the bot's internal tracker P&L (`$-24.72`) is a large and recurring discrepancy. While Alpaca paper account fills can have delays, a significant positive drift at EOD suggests a systematic misalignment in how the bot's internal P&L calculations or reconciliation process handles all trading-related costs (e.g., commissions, fees, market data adjustments) or how it synchronizes with Alpaca's final P&L reporting. This degrades confidence in the bot's financial accountability and could obscure the true profitability/loss of the strategy.
+    *   **Exact condition under which this occurs**: Observed at `2026-05-15 16:17:11,229` during EOD processing, where `Alpaca=$15.16` and `tracker=$-24.72`, resulting in a drift of `$+39.88`. This occurs daily upon EOD processing.
+
+---
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION**: **IMMEDIATE ACTION REQUIRED**: Investigate and rectify the **Fill Reconciliation Failures (RC-4)** for QQQ, CRM, QCOM, and any other symbols experiencing this. Ensure that all Alpaca-reported fills are robustly confirmed, positions are correctly opened/closed, and P&L is accurately tracked internally. This is paramount for reliable operation. (CRITICAL)
+2.  **EXECUTION**: Address the **Inaccurate Stop-Loss Event Classification**. Review the logic for detecting and categorizing stop-loss exits to ensure consistency between trade details, performance summaries, and historical records. (HIGH)
+3.  **INFRASTRUCTURE**: Conduct a thorough audit of the **EOD P&L Drift** by comparing detailed Alpaca trade reports (including commissions, fees) against the bot's internal P&L calculations. Identify the root cause of the `$39.88` drift and implement corrections to ensure accurate financial reporting. (MEDIUM)

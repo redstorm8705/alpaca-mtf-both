@@ -1,0 +1,92 @@
+Nightly Gemini Audit — 2026-06-09
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['config.py', 'execution/broker.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring WARNING: `gc.collect() took ...ms, collected 64 objects — heap may be growing`**
+    *   This warning appears repeatedly (e.g., 18:29:16, 18:40:29, 18:51:35, 19:03:12, 19:13:40, 19:24:36, 19:36:17, 19:47:55, 19:58:55). While `64 objects` is small, the collection time (3-5 seconds) is significant for a live trading bot. This indicates a potential memory management inefficiency or slow garbage collection process that could introduce latency, though not necessarily a leak causing OOM.
+*   **Recurring WARNING: `[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.`**
+    *   This critical performance warning indicates that the Trade Quality Index (TQI) for recent trades is consistently low (22.4/100, below the threshold of 30). It directly advises a review of exit discipline and stop placement, aligning with findings in the performance audit (below).
+*   **Recurring CRITICAL: `⛔ BV-5: MRI=STRESSED — no new entries until regime improves. Exits and partials managed normally.`**
+    *   This is not a bug but a critical risk management action. The bot correctly identified a "STRESSED" macro-risk regime (MRI score 54-55) and halted new entries. This is an intended behavior.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness:** Verified for `MSTR` and `NFLX` stop hits.
+    *   `MSTR`: short position, entry $118.94, stop $124.01. Exit $128.39. P&L: $-9.45. Correct (exit > entry for short = loss).
+    *   `NFLX`: short position, entry $81.84, stop $82.48. Exit $82.83. P&L: $-0.99. Correct (exit > entry for short = loss).
+    *   Other exits (`NFLX` long, `SPY` long, `PLTR` long, `NVDA` long) from 2026-06-02 cannot be fully verified without their respective entry prices.
+*   **`avg_r_multiple` vs. Stated Target:**
+    *   The `all_time_stats` report `avg_r_multiple: -0.06`. This is a significant concern. The `config.py` for the paper profile states `INTRADAY_TARGET_ATR_MULT = 2.5` and `SWING_TARGET_ATR_MULT = 5.0`, implying a positive R:R target. A persistently negative average R-multiple suggests the bot is failing to capture its profit targets, or its losses are consistently outpacing its wins in risk-adjusted terms. This aligns with the `TQI degradation` warning.
+*   **Stop-Hit Rate vs. Win Rate:**
+    *   `all_time_stats` show a `win_rate` of 40.5%. This means a loss rate of 59.5%. This high loss rate, coupled with the negative `avg_r_multiple`, indicates significant underperformance in the current trading strategy or market conditions.
+*   **Exit Reason Consistency (Stop Slippage):**
+    *   `MSTR` (short): stop threshold $124.01, actual exit $128.39. This is a slippage of $4.38 *beyond* the intended stop level for a short.
+    *   `NFLX` (short): stop threshold $82.48, actual exit $82.83. This is a slippage of $0.35 *beyond* the intended stop level for a short.
+    *   The `reason` for both is `overnight_atr_buffer_exit | 9-scan breach`. This implies the stop was not a hard Alpaca stop order (which would ideally fill closer to the stop price), but an internal logic-based exit (e.g., "safe_close_all") that triggered after the price had already moved significantly past the intended internal stop threshold. This indicates a gap in risk management where internal logical stops are not effectively translating into timely market exits, leading to increased realized losses.
+
+### TRADE INTEGRITY
+*   **P&L = 0.0 for closed positions:**
+    *   `SPY` exit on 2026-06-02 at $757.06 (size 1) and `NVDA` exit on 2026-06-02 at $216.41 (size 1) both report `pnl: 0.0`. If the entry price for these positions was different from the exit price, the P&L should be non-zero. While `KNOWN BENIGN PATTERNS` states "A-4 paper fills gap: Alpaca returned 0 fills", which correctly handles missing Alpaca data, defaulting P&L to 0.0 can silently mask actual (positive or negative) P&L, leading to inaccurate performance reporting. This is a recording issue, not necessarily a trading logic bug, but it impacts the accuracy of `total_pnl`, `avg_win`, `avg_loss`, and `profit_factor`.
+
+### MODIFIED FILE FINDINGS
+**File: `config.py`**
+*   **CONFIGURATION MISMATCH (Documentation vs. Runtime Override)**
+    *   **Description**: The `CONFIG CONSTANTS` section at the top of the audit document lists default configuration values which are superseded by the `PROFILES["paper"]` section within `config.py` due to the bot running with `--profile paper`. While `config.py`'s internal overrides are intentional, the `CONFIG CONSTANTS` section (which auditor is asked to "verify against") provides conflicting information, potentially leading to confusion during audits.
+    *   **Exact function name and variable involved**: N/A, general audit document discrepancy.
+    *   **Code path and failure condition**:
+        *   `CONFIG CONSTANTS` lists `MIN_SCORE = 9`, while `config.py`'s `PROFILES["paper"]` sets `MIN_LONG_SCORE = 10` and `MIN_SHORT_SCORE = 10`. The bot is operating with score 10 minimums.
+        *   `CONFIG CONSTANTS` lists `INTRADAY_STOP_ATR_MULT = 1.25`, while `config.py`'s `PROFILES["paper"]` sets `INTRADAY_STOP_ATR_MULT = 1.20`. The bot is operating with 1.20x intraday stops.
+        *   `CONFIG CONSTANTS` lists `TARGET_ATR_MULT = 2.5`, while `config.py`'s `PROFILES["paper"]` sets `INTRADAY_TARGET_ATR_MULT = 2.5` and `SWING_TARGET_ATR_MULT = 5.0`. The swing target is higher than listed in `CONFIG CONSTANTS`.
+    *   **Failure condition**: Misleading documentation for audit purposes. The bot's logic follows `config.py`, so the bot isn't failing. The audit process is hindered by inconsistent specification.
+*   **ALPHA ISSUE (Momentum Threshold)**
+    *   **Description**: The `MOMENTUM_MIN_PCT` is set to `0.0`. This means that any positive price change, no matter how small, is considered sufficient for the "momentum_12_1" score component. While technically correct according to its definition ("price must be higher than N days ago to pass (long)"), a zero threshold is extremely permissive and could lead to noisy signals where true momentum is absent.
+    *   **Exact function name and variable involved**: `config.py`, `MOMENTUM_MIN_PCT`.
+    *   **Code path and failure condition**: `SCORE_WEIGHTS` includes `"momentum_12_1": 2`. If a stock's price is higher by a minuscule amount (e.g., $0.01 on a $100 stock) over the 12-month period compared to 1 month ago, it would still score 2 points. This might inflate confluence scores for tickers lacking significant directional conviction, contributing to `TQI degradation`.
+    *   **Failure condition**: Potentially weak momentum signals contributing to overall poor performance (`avg_r_multiple: -0.06`). Not a code bug, but a strategic parameter weakness.
+
+**File: `execution/broker.py`**
+*   **HIGH | EXECUTION BUG (Unconfirmed Market Order Fills)**
+    *   **Description**: When `submit_market_order` encounters a `40910000` or "duplicate client order" error (indicating the order might have filled but the response timed out), it logs a warning and returns `None`. It explicitly states "Manual verification required." This means the bot's state management (e.g., `open_positions` tracker) will not be updated correctly if such an order indeed filled, leading to a desynchronized state and potential for "naked" positions or mismanaged entries/exits.
+    *   **Exact function name and variable involved**: `submit_market_order` in `execution/broker.py`, line ~175.
+    *   **Code path**: `submit_market_order` -> `client.submit_order(order_data)` raises exception -> `err` contains "40910000" or "duplicate client order" -> `logger.warning(...)` -> `return None`.
+    *   **Failure condition**: If an order fills but Alpaca sends a `409` or `duplicate client order` error back to the bot (e.g., due to network latency causing multiple requests), the bot will incorrectly assume the order *failed* and its internal state will not reflect the new open position. This would leave the position without managed stops/targets by the bot until manual intervention, increasing risk of large losses. This is a critical risk management failure for automated trading.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED (no new trades to trigger this)
+*   P5-H2 | Fill price crosstalk: UNTOUCHED (no new trades to trigger this)
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED (The provided `broker.py` `get_order` handles 404 gracefully but does not clear the tracker for stranded stops as per the original P5. Thus the core bug persists.)
+*   P5-H4 | Rule 2 dead code: FIXED (Comment in `config.py` confirms fix: `# P5-H4 fix, aligns with AB-4`)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: ALREADY FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED (cannot verify from logs/modified code)
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED (cannot confirm fix or trigger from provided data, EOD snapshot shows daily summary not continuous growth)
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: TRIGGERED (EOD snapshot shows 2 `open_trades` for `UBER` and `TOST`, confirming the snapshot is taken before all positions are closed, thus understating final day P&L).
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **ALPHA ISSUE | HIGH | `strategy.run_cycle` log `TQI degradation` / `EOD SNAPSHOT` `avg_r_multiple`**
+    *   **Description**: The persistent `[ANOMALY-3] TQI degradation` warning and the `all_time_stats` showing `avg_r_multiple: -0.06` highlight a critical performance gap. Despite target multiples of 2.5x to 5.0x ATR, the strategy is consistently losing more on average than it's gaining, or failing to hit targets.
+    *   **Exact function name and variable involved**: N/A (this is a systemic alpha issue, not a single function/variable bug).
+    *   **Code path**: The TQI warning (logged from `strategy.run_cycle`) and `avg_r_multiple` (calculated and reported in the EOD snapshot) are indicators of the strategy's overall performance.
+    *   **Failure condition**: The trading strategy is not profitable on a risk-adjusted basis (`avg_r_multiple` is negative). The bot's `win_rate` (40.5%) and `avg_loss` ($-14.34) versus `avg_win` ($23.95) are not sufficient to overcome the high stop-hit frequency or the effective stop slippage observed.
+
+### FIX VALIDATION
+*   **P5-H4 | Rule 2 dead code**:
+    *   FIX VALIDATION: PASS
+    *   The comment `# P5-H4 fix, aligns with AB-4` in `config.py` explicitly states the fix. This confirms the previously identified dead code is now active and functional.
+*   **GTC-RACE fix in `execution/broker.py` `submit_gtc_stop_order`**:
+    *   FIX VALIDATION: PASS
+    *   The extensive retry logic, `PENDING-CANCEL GUARD`, cancellation of blocking/related orders, 60-second poll, and critical alert fallback implemented in `submit_gtc_stop_order` directly addresses the GTC-RACE issue (e.g., MSTR incident 2026-04-21) and the `held_for_orders` death spiral. This fix appears robust given the known Alpaca paper API quirks.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate Alpha/Strategy Performance (HIGH URGENCY):** Conduct a deep dive into the `TQI degradation` and `avg_r_multiple: -0.06`. Analyze historical trades (beyond the last 10) to determine which confluence score components, timeframes, or volatility tiers correlate with underperformance. Review the effectiveness of `INTRADAY_STOP_ATR_MULT = 1.20` and `INTRADAY_TARGET_ATR_MULT = 2.5` in practice given the observed stop slippage.
+2.  **Address Stop Slippage / Exit Logic (HIGH URGENCY):** Rework the internal "scan breach" exit logic to either (a) use Alpaca-native stop orders as primary protection with tighter thresholds or (b) implement a more aggressive internal exit that triggers immediately upon threshold breach, rather than waiting for multiple scans or relying on a generic "safe_close_all" which might execute as a market order with significant slippage.
+3.  **Correct P&L Recording for 0.0 P&L Trades (MEDIUM URGENCY):** Implement a robust mechanism to determine actual P&L for positions where Alpaca returns no same-day fill data. Instead of defaulting to 0.0, attempt to calculate P&L using the last known price or a conservative estimate, or flag these trades for manual review in the tracker. This ensures accurate performance metrics.
+4.  **Resolve `config.py` vs. `CONFIG CONSTANTS` Documentation Mismatch (LOW URGENCY):** Update the `CONFIG CONSTANTS` section in the audit document to accurately reflect the runtime values from the `PROFILES["paper"]` section of `config.py`. This improves audit clarity and reduces potential confusion.
+5.  **Optimize `gc.collect()` Performance (LOW URGENCY):** Investigate why `gc.collect()` is taking 3-5 seconds. While `64 objects` is small, the duration suggests contention or inefficient object handling elsewhere. This could be a Python version issue, underlying system load, or specific objects becoming expensive to collect.

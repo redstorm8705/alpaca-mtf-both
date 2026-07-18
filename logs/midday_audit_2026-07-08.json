@@ -1,0 +1,151 @@
+{
+  "audit_date": "2026-07-08",
+  "run_ts": "2026-07-08T10:30:02.327245-07:00",
+  "entry_analysis": {
+    "entry_count": 6,
+    "exit_count": 6,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "MSTR",
+      "SNOW",
+      "HOOD",
+      "MARA",
+      "AVGO",
+      "MS"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "STRESSED": 30
+    },
+    "last_score": 49,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 65,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-08 15:47:46,517 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-10.90 tracker=$-26.46 drift=$+15.56",
+      "2026-07-08 15:52:47,002 | WARNING  | strategy.run_cycle | Risk day (FOMC Minutes Jun meeting \u2014 50% size) \u2014 sizing at 50%",
+      "2026-07-08 15:53:10,610 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-08 15:54:21,955 | WARNING  | execution.entry_logic | execute_entries: HALTED for session \u2014 no new entries permitted.",
+      "2026-07-08 15:55:04,446 | WARNING  | scan_to_html | [scan] _fetch_options_data fetch failed \u2014 returning None: cannot convert float NaN to integer"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 6,
+    "wins": 2,
+    "losses": 4,
+    "total_pnl": -26.45999999999998,
+    "win_rate": 0.3333333333333333,
+    "profit_factor": 0.8102517985611517,
+    "avg_win": 9.010000000000005,
+    "avg_loss": -11.119999999999997,
+    "best": {
+      "symbol": "AVGO",
+      "pnl": 10.800000000000011,
+      "entry_price": 376.78,
+      "exit_price": 387.58,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "ELEVATED",
+      "stop": 345.49,
+      "target": 441.61
+    },
+    "worst": {
+      "symbol": "MARA",
+      "pnl": -24.0,
+      "entry_price": 13.31,
+      "exit_price": 11.81,
+      "size": 16.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 10.75,
+      "target": 18.65
+    },
+    "trades": [
+      {
+        "symbol": "MSTR",
+        "pnl": 7.219999999999999,
+        "entry_price": 100.26,
+        "exit_price": 93.04,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 112.99,
+        "target": 73.74
+      },
+      {
+        "symbol": "HOOD",
+        "pnl": -11.160000000000025,
+        "entry_price": 115.68,
+        "exit_price": 110.1,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 106.61,
+        "target": 134.58
+      },
+      {
+        "symbol": "MARA",
+        "pnl": -24.0,
+        "entry_price": 13.31,
+        "exit_price": 11.81,
+        "size": 16.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 10.75,
+        "target": 18.65
+      },
+      {
+        "symbol": "AVGO",
+        "pnl": 10.800000000000011,
+        "entry_price": 376.78,
+        "exit_price": 387.58,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 11,
+        "mri_level": "ELEVATED",
+        "stop": 345.49,
+        "target": 441.61
+      },
+      {
+        "symbol": "MS",
+        "pnl": -4.650000000000006,
+        "entry_price": 221.41,
+        "exit_price": 216.76,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 209.48,
+        "target": 246.04
+      },
+      {
+        "symbol": "SNOW",
+        "pnl": -4.669999999999959,
+        "entry_price": 262.28,
+        "exit_price": 257.61,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 245.98,
+        "target": 296.23
+      }
+    ]
+  }
+}

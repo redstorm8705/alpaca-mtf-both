@@ -1,0 +1,101 @@
+Nightly Gemini Audit — 2026-06-05
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['execution/quarterly_hold_manager.py', 'execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **P&L Drift**: `[WARNING] EOD P&L DRIFT: Alpaca=$-34.84 tracker=$0.00 drift=$-34.84` recorded multiple times (e.g., `2026-06-05 18:56:57,823`). Despite Alpaca reporting closed trades for the day (see EOD Snapshot `alpaca_per_trade`), the bot's internal `tracker_pnl` for the day remained $0.00. This contradicts `KNOWN BENIGN PATTERNS` A-4, as Alpaca *did* return same-day fills. This indicates a critical failure in daily P&L reconciliation.
+*   **Orphaned Positions / Position Count Drift**:
+    *   `[CRITICAL] [TOST] ORPHANED POSITION ADOPTED — Alpaca: -2 shares @ $24.40 (short)...` (`2026-06-05 19:31:23,285`)
+    *   `[CRITICAL] POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.` (`2026-06-05 20:01:46,727`)
+    These critical logs indicate significant and recurring discrepancies between the bot's internal tracker and the live Alpaca account's open positions, leading to `P0-STARTUP: Already at MAX positions` blocks. This is a severe state management failure.
+*   **Garbage Collection Warnings**: `[WARNING] gc.collect() took ...ms, collected ... objects — heap may be growing` logged frequently (e.g., `2026-06-05 18:57:01,246`, `2026-06-05 19:08:11,651`). While not immediately critical, persistent high garbage collection times (3-5 seconds) and the "heap may be growing" message suggest potential memory leaks or inefficient object lifecycle management, which can degrade performance and stability over time.
+*   **TQI Degradation**: `[WARNING] [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` repeated several times (e.g., `2026-06-05 19:02:48,846`). This is an internal anomaly detection indicating poor recent trade performance/discipline.
+*   **Scan Results HTML Write Failure**: `[WARNING] strategy.run_cycle | scan_results.html write failed (BV-5): 0` logged twice (`2026-06-05 19:29:53,179`, `2026-06-05 20:00:22,829`). This occurs when BV-5 (MRI=STRESSED) is active, suggesting an issue with generating or writing the scan results HTML under this condition. The `0` implies an invalid or missing error code/count from the underlying write operation.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: For the closed trades in `alpaca_per_trade` of the EOD Snapshot:
+    *   MSTR (long): entry 150.36, exit 118.94. P&L -31.42 (correctly negative).
+    *   UBER (long): entry 75.42, exit 70.46. P&L -4.96 (correctly negative).
+    *   TOST (long): entry 23.63, exit 24.40. P&L 1.54 (correctly positive).
+    P&L signs appear correct for these Alpaca-reported closed trades.
+*   **Score-Outcome Correlation**: The provided logs do not allow for a direct correlation analysis between `confluence` scores and trade outcomes for closed positions. The `score_comparison` in the EOD snapshot reports *average scanned scores*, not the scores of *traded* instruments.
+*   **Stop-Hit Rate vs. Win Rate**: `all_time_stats` show `total_trades=79` and `win_rate=41.7%`. This implies a stop-hit/loss rate of 58.3%, which is greater than 50%. This indicates a potential regime mismatch, as noted by the `[ANOMALY-3] TQI degradation` warnings.
+*   **R:R vs. Target**: `all_time_stats` show `avg_r_multiple=-0.046`. This is significantly below the `TARGET_ATR_MULT = 2.5` specified in `CONFIG CONSTANTS`, indicating the bot is failing to capture its intended edge or its risk management is not effective in achieving positive risk-reward.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording Bug**: As detailed in `LOG ANOMALIES`, the `EOD P&L DRIFT` shows `tracker_pnl=0` despite `alpaca_pnl=$-34.84` from trades closed *today*. This is a direct failure of the bot's internal P&L tracking to accurately reflect daily activity, especially when Alpaca itself reports these fills on the same day.
+*   **Orphaned Positions**: The `ORPHANED POSITION ADOPTED` and `POSITION COUNT DRIFT` errors indicate that the bot's internal representation of open positions is frequently out of sync with Alpaca. This can lead to incorrect risk management decisions (e.g., hitting `MAX_POSITIONS` incorrectly) and inaccurate portfolio P&L calculation.
+
+### MODIFIED FILE FINDINGS
+
+#### execution/quarterly_hold_manager.py
+
+*   **Bug**: Inconsistent ATR bar count
+    *   **Exact function name and variable**: `_ATR_BARS` constant.
+    *   **Code path**: The constant `_ATR_PERIOD_WEEKS = 14` implies a 14-week lookback. A standard trading week has 5 days, so 14 weeks would ideally require 70 bars. However, `_ATR_BARS` is set to `65`, with the comment "McKinney fix: 14wk × 5d = 70 bars; use 65 for buffer". The "buffer" justification for a fixed `65` bars (instead of 70) is unexplained and appears arbitrary.
+    *   **Failure condition**: The Average True Range (ATR) calculation for `QuarterlyHoldManager` positions will consistently use a slightly shorter historical period (65 bars/days) than implied by the 14-week lookback, potentially leading to a slightly inaccurate (likely smaller, thus less conservative) ATR value and associated stop prices. This could expose positions to higher risk than intended.
+    *   **Severity**: LOW (Architectural consistency / potential minor risk underestimation)
+
+#### execution/portfolio_tracker.py
+
+*   **Bug**: Inconsistent handling of ISO timestamp fractional seconds.
+    *   **Exact function name and variable**: `_fill_et_date` function, specifically `ts_str`.
+    *   **Code path**: The log message `Could not parse timestamp '2026-06-05T18:32:24.83666Z': Invalid isoformat string: '2026-06-05T18:32:24.83666+00:00'` indicates `datetime.fromisoformat()` is failing *after* `ts_str.replace("Z", "+00:00")` has been applied to the input string. While `datetime.fromisoformat` in modern Python versions should handle 5-digit fractional seconds (`.83666`) by padding to microseconds, this error suggests a runtime environment or Alpaca output issue. The `try-except` block correctly falls back to `str(ts_str)[:10]`, which extracts the date, but the underlying parsing failure is a problem.
+    *   **Failure condition**: `datetime.fromisoformat()` raises a `ValueError` for specific timestamp formats provided by Alpaca, leading to a warning log and a fallback to string slicing. While the fallback correctly extracts the date, the parsing failure itself consumes unnecessary CPU cycles and generates noise, potentially masking more significant issues.
+    *   **Severity**: LOW (Performance / Logging Noise)
+
+*   **Bug**: Asymmetric Critical Logging for FIFO Reconstruction
+    *   **Exact function name and variable**: `_fifo_reconstruct`, specifically the `if side in ("buy", "buy_to_cover"):` block versus the `elif side in ("sell", "sell_short"):` block.
+    *   **Code path**: The `_fifo_reconstruct` function includes a `logger.critical` alert and Slack notification if a "closing sell" order is processed without corresponding open "long" lots (`net_qty > 0` condition for long closing is not met). However, the symmetric case (a "closing buy" order to cover a short position, `side in ("buy", "buy_to_cover")`, when no corresponding "short" lots are tracked for covering, i.e., `net_qty >= 0`) does *not* trigger a similar critical alert or explicit error handling. Instead, it proceeds to append the incoming buy as a new long position (`current.append({"qty": qty, "price": price, "side": "long"})`).
+    *   **Failure condition**: If a short position is externally closed or untracked by the bot's `lots` structure, and a `buy` or `buy_to_cover` fill arrives, the bot will incorrectly interpret this as opening a new long position instead of covering a short. This silent miscategorization can lead to inflated open position counts (phantom longs), inaccurate P&L calculations, and further state drift for short trades. Given the `ORPHANED POSITION ADOPTED` logs, this is a significant blind spot.
+    *   **Severity**: HIGH (P&L Corruption / State Drift for Short Positions)
+
+*   **Bug**: `_traded_today_date` not updated daily.
+    *   **Exact function name and variable**: `PortfolioTracker.__init__`, `self._traded_today_date`.
+    *   **Code path**: `self._traded_today_date` is initialized once when the `PortfolioTracker` object is created (`datetime.now(_PT).strftime("%Y-%m-%d")`). The `PortfolioTracker` class does not appear to have any mechanism to refresh this date after a midnight rollover if the bot runs continuously across multiple trading days without a full restart.
+    *   **Failure condition**: If the bot runs for longer than 24 hours, `self._traded_today_date` will become stale and incorrectly represent the previous day's date. This will cause `self.traded_today` (and any other daily metrics relying on `_traded_today_date`) to track trades for the wrong day, leading to incorrect daily statistics, inaccurate PDT counting, and potential confusion in trade logging.
+    *   **Severity**: HIGH (Daily Stats Corruption / PDT Tracking Risk)
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED
+*   P5-H2 | Fill price crosstalk: TRIGGERED (Indirectly, contributing to P&L drift and tracker discrepancies)
+*   P5-H3 | Orphan GTC 404 path: TRIGGERED (Evidenced by ORPHANED POSITION ADOPTED and POSITION COUNT DRIFT)
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: UNTOUCHED
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **P&L RECORDING** | CRITICAL | `execution/portfolio_tracker.py` (implied function `reconcile_eod_alpaca_fills`): The bot's internal `tracker_pnl` for the day does not reconcile with Alpaca's reported actual P&L for same-day closed trades, despite Alpaca providing these fills (contradicting KNOWN BENIGN PATTERN A-4).
+    *   **Exact failure condition**: The `EOD P&L DRIFT` warning shows `tracker_pnl=$0.00` while `alpaca_pnl=$-34.84` and `alpaca_per_trade` clearly lists today's closed trades from Alpaca. This means `PortfolioTracker.pnl_today` is not being updated from actual Alpaca fills that occurred on the same day, leading to inaccurate daily P&L reporting.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **CRITICAL: Address P&L Reconciliation Failure Immediately.**
+    *   Investigate why `portfolio_tracker.pnl_today` (`tracker_pnl` in logs) remains $0.00 when Alpaca is clearly returning same-day fill data. This involves verifying that `_fetch_alpaca_fills_for_date` and `_fifo_reconstruct`'s output is correctly integrated into the `PortfolioTracker`'s `pnl_today` calculation for all closed trades.
+2.  **CRITICAL: Investigate and Fix Position Count Drift and Orphaned Positions.**
+    *   The recurring `POSITION COUNT DRIFT` and `ORPHANED POSITION ADOPTED` logs indicate a severe state synchronization issue. Review the `execution/orphan_manager.py` and `execution/risk_manager.py` modules to ensure they robustly detect and correct discrepancies with Alpaca's live position state, especially during startup and after external closes.
+3.  **HIGH: Implement Symmetric Critical Logging in `_fifo_reconstruct`.**
+    *   Add equivalent critical logging and alerting within `execution/portfolio_tracker.py`'s `_fifo_reconstruct` for cases where a `buy` or `buy_to_cover` order is processed without sufficient open short lots. This will expose hidden state inconsistencies for short positions.
+4.  **HIGH: Ensure Daily Refresh of `_traded_today_date` in `PortfolioTracker`.**
+    *   Modify `execution/portfolio_tracker.py` to ensure `self._traded_today_date` (and any related daily counters/sets) is refreshed at the start of each new trading day, for bots that run continuously across midnight.
+5.  **MEDIUM: Address `scan_results.html` Write Failure.**
+    *   Investigate `strategy.run_cycle`'s `scan_results.html` write logic, particularly when `BV-5` (MRI=STRESSED) is active, to resolve the reported write failures.

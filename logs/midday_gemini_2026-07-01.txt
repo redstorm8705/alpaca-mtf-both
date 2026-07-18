@@ -1,0 +1,56 @@
+Midday Gemini Audit — 2026-07-01
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  [GOOGL] _load_log: same entry_time in open AND closed — double-record (failed pop)? Keeping open. Verify reconcile_eod.py. | GOOGL
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+No closed trades or flagged entries were provided for this session, so a direct performance audit regarding entry/exit prices, P&L, win rates, and stop-hit rates cannot be conducted for the current session. The `Alpaca FIFO EOD` reports `pnl_today=$0.00` and `tracker=$0.00`. The `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30` indicates a systematic degradation in strategy performance over the last 5 trades, which would typically result in reduced win rates or poor profit factor, an `ALPHA ISSUE`.
+
+### ENTRY QUALITY
+*   **[CRWD] Sizing to Zero for High-Scoring Signal:** A potential entry for `CRWD` with a `score=10/12` was skipped because its `dollar_cap` ($278.85) was less than the price of one share ($776.80) after several multipliers were applied. Specifically, a `VOTE-3 vol cap 0.25x` was applied due to `vol_ratio=0.37x avg`. While a `vol_ratio` of 0.37 (37% of average 20-day volume) indicates low volume, and the `VOLSHADOW` log for CRWD at 17:25:22 already marked `would_pass: false` for volume, filtering a high-scoring signal (10/12 is above MIN_LONG_SCORE=8) entirely due to a stacked volume multiplier might indicate over-aggressive sizing, potentially missing out on valid opportunities under low-volume conditions that still meet other high-quality criteria.
+
+### EXIT QUALITY
+No closed trades or exits were reported in the `CLOSED TRADE DETAILS` section for this session, so exit quality cannot be assessed. `[RIVN]` and `[MARA]` showed reversal signal decay, but no actual exits were triggered or reported.
+
+### MRI ALIGNMENT
+*   The MRI was `ELEVATED` (score=23) during the scan cycle (`17:24:09,215`), leading to an appropriate `size floor 0.85x` application. This suggests the bot is adhering to MRI-based sizing adjustments.
+*   However, the `macro_risk_index` encountered data source issues:
+    *   `MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=16.4. _vix_confirmed=False`. The bot fell back to yfinance, but `_vix_confirmed=False` resulted in news alerts being `PARTIAL-GATED` (capped at +20pts instead of a potentially higher impact).
+    *   `MRI JPY: FMP USDJPY failed — yfinance JPY=X=162.4910. No prior close available — JPY scoring 0pts (safe default)`. This prevented the JPY component from contributing to the MRI score.
+    *   While the bot applied safe defaults and partial gating, the reliance on fallback data and capping suggests a potential for misrepresentation of the true macro risk environment due to data ingestion issues.
+
+### LOG ANOMALIES
+*   `2026-07-01 17:18:59,233 | WARNING | main | gc.collect() took 3435.2ms, collected 241 objects — heap may be growing`
+*   `2026-07-01 17:18:59,234 | INFO | main | [CYCLE] duration=502s | phase=midday | watchdog_headroom=218s ⚠ SLOW CYCLE`
+*   `2026-07-01 17:26:22,172 | WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['MU', 'INTC']`
+*   `2026-07-01 17:24:03,445 | WARNING | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=16.4. _vix_confirmed=False, news capped at 20pts.`
+*   `2026-07-01 17:24:04,090 | WARNING | macro_risk_index | MRI JPY: FMP USDJPY failed — yfinance JPY=X=162.4910. No prior close available — JPY scoring 0pts (safe default).`
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Portfolio Tracker Inconsistency for GOOGL**
+    *   **Description**: The `execution.portfolio_tracker` logs show `GOOGL` with a critical internal inconsistency where the same `entry_time` is found in both open and closed trade records. The bot logs "Keeping open" but also states `_fifo_reconciled_closed=True`, implying an external close. This suggests a position might be internally registered as open when it is, in fact, closed (or vice-versa), leading to a misrepresentation of the true portfolio state and P&L. This occurred twice in the log, suggesting a recurring problem.
+    *   **Exact condition**: `[GOOGL] _load_log: same entry_time in open AND closed — double-record (failed pop)? Keeping open. Verify reconcile_eod.py.` occurring at `2026-07-01 17:18:55,156` and again at `2026-07-01 17:26:39,061`. The `_fifo_reconciled_closed=True` log entry also appears alongside these warnings, indicating a conflict in the recorded state of the position.
+*   **EXECUTION BUG | HIGH | Discrepancy in Open Position Counts (ANOMALY-2)**
+    *   **Description**: The bot reports a mismatch between `risk.open_positions` (5) and `tracker` (7) during a scan cycle, alongside `[ANOMALY-2]` for `CRWD` and `PANW` not entering despite multiple scans. This indicates a potential inconsistency in how the bot tracks its open positions versus a higher-level "tracker" component, which could lead to incorrect risk calculations, exceeding `MAX_OPEN_POSITIONS` (set at 7), or erroneously blocking new entries when capacity is actually available (or vice-versa, thinking it has capacity when it's at max).
+    *   **Exact condition**: `[ANOMALY-2] [CRWD] confirm_gate=16 scans but no entry — risk.open_positions=5 vs tracker=7 | MAX_OPEN_POSITIONS=7. If risk>7, CYCLE-SYNC should resolve next cycle.` (and identical log for `PANW`). Occurring at `2026-07-01 17:24:52,148`.
+*   **ALPHA ISSUE | HIGH | TQI Degradation (ANOMALY-3)**
+    *   **Description**: The TQI (Trade Quality Index) has degraded, with the `last-5-trade avg=28.0/100` being below the threshold of 30. This is a direct indication of systematic degradation in the quality of recent trades, implying issues with entry timing, exit discipline, or stop placement for the strategy.
+    *   **Exact condition**: `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` occurring at `2026-07-01 17:24:52,148`.
+*   **INFRASTRUCTURE | MEDIUM | Cycle Slowdown and Scan Timeouts**
+    *   **Description**: The `gc.collect()` operation is taking an excessive amount of time (`3435.2ms`), leading to a `SLOW CYCLE` (`duration=502s`). This performance degradation is causing `phase-1 global timeout`, resulting in some symbols (`MU`, `INTC`) being abandoned from the scan. This means the bot is missing potential trade signals due to internal processing delays, impacting its ability to scan the full universe in a timely manner.
+    *   **Exact condition**: `gc.collect() took 3435.2ms, collected 241 objects — heap may be growing` and `[CYCLE] duration=502s | phase=midday | watchdog_headroom=218s ⚠ SLOW CYCLE` at `2026-07-01 17:18:59,233`. Followed by `run_scan: phase-1 global timeout — abandoned symbols: ['MU', 'INTC']` at `2026-07-01 17:26:22,172`.
+*   **INFRASTRUCTURE | MEDIUM | External Data Source Reliability Issues**
+    *   **Description**: The bot is experiencing consistent failures to fetch data from its primary FMP (Financial Modeling Prep) source for VIX and JPY, falling back to `yfinance`. While fallbacks are implemented, the `_vix_confirmed=False` flag impacts how news alerts are processed, leading to `PARTIAL-GATED` news contributions to the MRI. The JPY component is also completely scored at 0pts due to missing prior close data from `yfinance`. This degrades the accuracy and completeness of the Macro Risk Index.
+    *   **Exact condition**: `MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=16.4. _vix_confirmed=False, news capped at 20pts.` at `2026-07-01 17:24:03,445` and `MRI JPY: FMP USDJPY failed — yfinance JPY=X=162.4910. No prior close available — JPY scoring 0pts (safe default).` at `2026-07-01 17:24:04,090`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: Immediately investigate and resolve the `[GOOGL] _load_log: same entry_time in open AND closed` issue. This is a critical data integrity problem that can corrupt P&L accounting and risk management. Prioritize reviewing `reconcile_eod.py` and the `portfolio_tracker`'s handling of position states during EOD/load.
+2.  **EXECUTION**: Address the `[ANOMALY-2]` discrepancy between `risk.open_positions` and `tracker` counts. Ensure all components of the bot agree on the current number of open positions to prevent miscalculations of available capacity or exceeding `MAX_OPEN_POSITIONS`.
+3.  **INFRA**: Profile and optimize memory usage to mitigate `gc.collect()` slowdowns and `phase-1 global timeout` issues. This will improve cycle efficiency and prevent missed scan opportunities. Consider reviewing symbol universe size if hardware resources are constrained.

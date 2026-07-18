@@ -1,0 +1,94 @@
+Nightly Gemini Audit — 2026-06-04
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['monthly_review.py', 'reconcile_eod.py', 'auto_ai_audit.py', 'generate_dashboard.py', 'execution/trade_engine.py', 'execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Recurring WARNING: `gc.collect() took Xms, collected Y objects — heap may be growing`**: These warnings appear frequently (e.g., 2026-06-04 19:23:26, 19:35:37, 19:49:17). This indicates a potential memory leak or inefficient garbage collection, which could impact bot stability and performance over longer runs.
+*   **Recurring WARNING: `[ANOMALY-2] [TQQQ/NVDL] confirm_gate=X scans but no entry`**: These warnings (e.g., 2026-06-04 19:09:41, 19:16:24, 19:28:58, 19:41:11, 19:54:51) indicate that a valid signal (passing `confirm_gate` scans) is being generated for TQQQ and NVDL, but entry is blocked. The message states `risk.open_positions=1 vs tracker=1 | MAX_OPEN_POSITIONS=4`, implying position limits are not the cause. The log does not provide the specific reason for blocking, which makes debugging difficult.
+*   **CRITICAL: `🔴 RULE 1 — PREMARKET RED LOCKOUT` firing at 3:17 PM ET**: The log entry `2026-06-04 19:17:34,152 | CRITICAL | execution.entry_logic | 🔴 RULE 1 — PREMARKET RED LOCKOUT: 10/11 tracked movers red ≥2% (91%) — ALL LONGS BLOCKED this session.` indicates a "Premarket" rule is triggering at 15:17 ET (3:17 PM ET). This is either a misnamed rule (if it's intended to apply all day) or a logic error causing a pre-market specific rule to fire outside of pre-market hours, potentially leading to incorrect trade blocking.
+
+### PERFORMANCE AUDIT
+
+*   **Average R-multiple is negative**: The EOD snapshot shows `all_time_stats.avg_r_multiple: -0.046`. This is a critical performance indicator, suggesting that, on average, the bot's losing trades outweigh its winning trades or that the average loss size is larger than the average win size. This is far from the `TARGET_ATR_MULT = 2.5` specified in `CONFIG CONSTANTS`, indicating a significant gap in capturing targeted edge.
+*   **Low Profit Factor**: The EOD snapshot reports `all_time_stats.profit_factor: 1.16`. A profit factor of 1.16 is low and suggests that the bot's gross profits are only marginally higher than its gross losses, consistent with the negative average R-multiple.
+*   **Frequent `pnl=0.0` exits on `safe_close_all`**: Several trade events show P&L of 0.0 upon exiting with the `safe_close_all` reason (e.g., NVDA on 2026-06-02, SPY on 2026-06-02). While technically correct if the exit price perfectly matches the entry price and there are no commissions, frequent occurrences suggest the strategy may not be effectively capturing small profits or managing risk to move stops to breakeven+ slippage.
+
+### TRADE INTEGRITY
+
+*   **Recording Bug: `reconcile_eod.py` incorrect P&L assignment**:
+    *   **Function name and variable involved**: `reconcile` function, `trade["pnl_remaining"]` variable.
+    *   **Code path**: In `reconcile_eod.py`, within the `reconcile` function, after calling `new_pnl, new_pnl_remaining = _compute_trade_pnl(...)`, the subsequent assignment is `trade["pnl_remaining"]     = new`. The variable `new` is not defined in this scope.
+    *   **Failure condition**: This will result in a `NameError` at runtime, causing the reconciliation process to fail for trades where `pnl_remaining` needs to be updated. If `new` were accidentally defined elsewhere with a stale value, it could lead to incorrect P&L values being recorded in the EOD file, corrupting daily and lifetime statistics.
+
+### MODIFIED FILE FINDINGS
+
+1.  **`reconcile_eod.py`**:
+    *   **Bug**: Typo in P&L calculation (as detailed above under Trade Integrity).
+    *   **Observation**: The `_weighted_avg_exit_price` function correctly handles "ghost shares" (Alpaca fill quantity less than tracker's `qty_remaining`), logging a warning and sending a Slack alert if `actual_qty < qty_remaining`. This is robust.
+    *   **Observation**: The `_recover_closed_trades_from_log` function provides a good recovery mechanism for situations where the EOD file might be incomplete due to a bot restart (SIGKILL).
+
+2.  **`generate_dashboard.py`**:
+    *   **Observation**: The `_load_alpaca` function uses `urllib.request` directly and includes robust error handling, SSL context management, and fallback for missing API keys.
+    *   **Observation**: The `_pdt_reset_display` (imported from `scan_to_html`) is used for PDT slot display, which is a good addition for visibility.
+    *   **Observation**: The lifetime P&L cache is explicitly written to `logs/lifetime_pnl_cache.json`, ensuring `monthly_review.py` has current data.
+
+3.  **`execution/trade_engine.py`**:
+    *   **Observation**: The `_load_hybrid_state` and `_save_hybrid_state` functions implement robust state persistence for the hybrid engine, correctly checking for same-day data and `scans_left` validity.
+    *   **Observation**: The `_reconcile_pending_overnight_orders` function correctly reconciles pending overnight orders, including handling fills, cancellations, and removing non-existent orders from the tracker, ensuring `risk.open_positions` is incremented only once per genuine transition.
+
+4.  **`execution/portfolio_tracker.py`**:
+    *   **Observation**: The `_atomic_write` function is robust and includes a `.bak` backup, which is critical for data integrity.
+    *   **Observation**: The `_fetch_alpaca_fills_for_date` and `_fifo_reconstruct` functions are well-engineered for accurately processing Alpaca fill data and reconstructing FIFO P&L, including handling shorts and mixed positions.
+    *   **Observation**: The `_load_log` function includes a `_fifo_reconciled_closed` guard to route externally closed positions to `closed_trades`, preventing Day 2 entry rejections. It also includes an `(symbol, entry_time)` match for open/closed trades to prevent false warnings on same-day re-entries.
+
+5.  **`monthly_review.py`**:
+    *   **Observation**: The RTH block correctly prevents the script from running during trading hours.
+    *   **Observation**: The P&L display, win rate, and PDT badge logic appears correct and robust.
+
+6.  **`auto_ai_audit.py`**:
+    *   **Observation**: The script defines distinct adversarial roles for DeepSeek and Gemini to prevent groupthink, which is a good meta-audit practice.
+    *   **Observation**: The data loading helpers (`_load_week_trade_events`, `_fetch_week_fills`, `_fetch_chart_proxies`, `_fetch_macro_events_week`) are well-designed with error handling and timeouts.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: UNTOUCHED
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: PARTIAL FIX (The `_reconcile_pending_overnight_orders` in `execution/trade_engine.py` now explicitly handles `order is None` for pending overnight orders by removing them from the tracker. This addresses a subset of the P5-H3 issue.)
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | `reconcile_eod.py`**: Typo in P&L calculation.
+    *   **Description**: In the `reconcile` function, `trade["pnl_remaining"] = new` should be `trade["pnl_remaining"] = new_pnl_remaining`. The variable `new` is not defined in this scope.
+    *   **Exact failure condition**: A `NameError` will occur when attempting to assign to `trade["pnl_remaining"]`, causing the reconciliation process to fail for trades that need this specific P&L field updated.
+*   **EXECUTION BUG | HIGH | Log analysis (`strategy.run_cycle` module)**: Unexplained `ANOMALY-2` entry blocking.
+    *   **Description**: The bot logs `[ANOMALY-2] ... confirm_gate=X scans but no entry` for TQQQ and NVDL (e.g., 19:09:41, 19:16:24) without clearly stating the blocking reason, even though position limits (`MAX_OPEN_POSITIONS=4`) are not met (`risk.open_positions=1`).
+    *   **Exact failure condition**: A valid signal for a symbol passes its `confirm_gate` checks, but an unspecified blocking condition prevents the order from being placed. This leads to missed entries and inconsistent behavior without proper logging.
+*   **EXECUTION BUG | MEDIUM | Log analysis (`execution.entry_logic` module)**: `PREMARKET RED LOCKOUT` rule firing in the afternoon.
+    *   **Description**: The `🔴 RULE 1 — PREMARKET RED LOCKOUT` is logged as `CRITICAL` at 19:17:34 ET (3:17 PM ET). A rule explicitly named "PREMARKET" should ideally only apply during pre-market hours.
+    *   **Exact failure condition**: If this rule is hardcoded to fire only during specific pre-market conditions, its activation in the afternoon indicates a logic error. If it's a general "longs blocked" rule that is misnamed, it introduces confusion. Either way, it suggests a potential for unintended or misunderstood entry blocking.
+*   **INFRASTRUCTURE | MEDIUM | Log analysis (`main` module)**: Recurring `gc.collect()` warnings.
+    *   **Description**: The bot frequently logs `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing`.
+    *   **Exact failure condition**: While not an immediate crash, these warnings indicate that the bot's memory usage may be growing unsustainably over time, potentially leading to performance degradation or out-of-memory errors during long periods of operation.
+*   **ALPHA ISSUE | HIGH | EOD snapshot (`all_time_stats`)**: Negative `avg_r_multiple`.
+    *   **Description**: The `avg_r_multiple` of `-0.046` indicates that, on average, the bot is not generating positive risk-adjusted returns per trade.
+    *   **Exact failure condition**: This is a direct measure of the trading strategy's effectiveness and shows that the bot is currently unprofitable on a per-trade basis, failing to achieve the stated `TARGET_ATR_MULT = 2.5`.
+
+### FIX VALIDATION
+
+No prior fixes for the newly flagged bugs were provided.
+
+### RECOMMENDED ACTIONS
+
+1.  **CRITICAL FIX: Address `reconcile_eod.py` P&L assignment typo immediately.** This bug directly impacts the accuracy of recorded P&L and could corrupt all historical performance metrics.
+2.  **Investigate and clarify `[ANOMALY-2]` entry blocking.** Modify the `strategy.run_cycle` or `execution.entry_logic` to explicitly log the *reason* for blocking an entry when `confirm_gate` is passed but an order is not placed.
+3.  **Review and rename/re-implement the `PREMARKET RED LOCKOUT` rule.** Ensure its activation logic and naming accurately reflect its intended operational window (pre-market only or full-day market condition).
+4.  **Prioritize strategy review due to negative average R-multiple and low profit factor.** Analyze stop-loss placement, profit-taking mechanics, and position sizing. Consider if `TARGET_ATR_MULT = 2.5` is realistic given the bot's current win rate, or if `VOLATILITY_TIER_HIGH_THRESHOLD` and `VOL_TIER_HIGH_STOP_INTRADAY` are appropriately tuned.
+5.  **Address `gc.collect()` warnings.** Conduct memory profiling to identify and resolve potential memory leaks or optimize data structures to prevent heap growth.

@@ -1,0 +1,101 @@
+Nightly Gemini Audit — 2026-06-30
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['audit_signals.py', 'run_macro_regime.py', 'compare_logs.py', 'autonomous_patch_generator.py', 'monthly_review.py', 'reconcile_eod.py', 'weekly_perf_audit.py', 'preflight_simulation.py', 'run_market_top.py', 'run_ftd.py', 'audit_final.py', 'earnings_preflight.py', 'backtest_12pt.py', 'scripts/preflight_sim.py', 'execution/gtc_manager.py', 'events/calendar.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   **execution.entry_logic** | `[CYCLE-SYNC] STATE DESYNC: Tracker (0) < RiskManager (2). Ignoring tracker` indicates a fundamental desync where the live Portfolio Tracker reports 0 open positions, but the RiskManager believes there are 2. This directly impacts live risk calculations, prevents new entries under position limits, and requires manual intervention. | Impacted: System-wide risk management, entry logic, AMD, QQQ.
+*   **execution.portfolio_tracker** | `FIFO orphan: closing fill for NVDA has no prior lot and no tracker record — fill unmatched.` (and GOOGL) indicates that closing fills from Alpaca are being received for positions the bot does not have a corresponding open record for. This leads to P&L miscalculation and further exacerbates the desync, representing a severe failure in position lifecycle tracking. | Impacted: NVDA, GOOGL, system-wide P&L accuracy.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **FIFO Orphan Warnings**: Repeated `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for NVDA/GOOGL has no prior lot and no tracker record — fill unmatched.` (e.g., `2026-06-30 18:53:41,820`, `19:00:09,500`, `19:11:52,290`, `19:49:54,321`). This is a persistent and critical issue indicating that the bot is failing to track certain open positions correctly, or fills are being received for non-existent positions, leading to P&L errors and state desync.
+*   **CYCLE-SYNC STATE DESYNC**: Multiple `CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (0) < RiskManager (2). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.` (e.g., `2026-06-30 19:00:07,479`, `19:06:30,994`, `19:44:06,072`). This is a recurring critical condition where the RiskManager and Portfolio Tracker disagree on the number of open positions, directly impacting risk management and trade entry decisions.
+*   **ANOMALY-2 (Position Desync)**: Repeated `WARNING | strategy.run_cycle | [ANOMALY-2] [AMD/QQQ] confirm_gate=X scans but no entry — risk.open_positions=2 vs tracker=0 | MAX_OPEN_POSITIONS=4.` (e.g., `2026-06-30 18:59:09,007`, `19:05:33,591`, `19:17:27,568`, `19:23:46,283`, `19:30:23,172`, `19:36:51,091`, `19:43:09,894`, `19:55:27,687`). This is a direct consequence of the `CYCLE-SYNC` desync, leading to false blocks on new entries.
+*   **ANOMALY-3 (TQI Degradation)**: Repeated `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` (e.g., `2026-06-30 18:59:09,007`, `19:05:33,591`, `19:17:27,568`, `19:23:46,284`, `19:30:23,173`, `19:36:51,091`, `19:43:09,894`, `19:55:27,688`). This indicates a persistent performance issue with recent trades, suggesting problems with exit logic or stop placement.
+*   **Memory Growth Warning**: Repeated `WARNING | main | gc.collect() took 3244.3ms, collected 369 objects — heap may be growing` (e.g., `2026-06-30 18:53:45,197`, `19:11:55,767`, `19:49:57,552`). This indicates a potential memory leak or inefficient memory usage that could degrade performance and eventually lead to crashes.
+
+### PERFORMANCE AUDIT
+*   **P&L Recording Discrepancy**: The `EOD SNAPSHOT` for `2026-06-30` shows `pnl_today: 0.0` and `trades_today: 0`. However, the `TRADE EVENTS` section clearly shows two profitable exit events for NVDA (`2026-06-30T02:35:16.691077-07:00`, `pnl: 10.79`) and GOOGL (`2026-06-30T06:31:04.319807-07:00`, `pnl: 4.49`) for the same date. This indicates a significant issue with the EOD P&L aggregation and reporting.
+*   **P&L Sign Correctness**: For the available trade events (`NVDA`, `GOOGL`, `NFLX`, `MSTR`, `TOST`, `NVDA`, `GOOGL` in `trade_events`), the P&L signs (positive for profitable exits, negative for losses) are consistent with the recorded entry/exit prices or the stated reason (e.g., `TAKE PROFIT +5%`).
+*   **Avg R-multiple**: `all_time_stats` shows `avg_r_multiple: -0.056`. This indicates that on average, trades are losing money relative to the initial risk unit, suggesting that the bot's edge is either not being captured or is being negated by poor exits or large losses.
+*   **Profit Factor**: `all_time_stats` shows `profit_factor: 1.19`, which is above 1.0 but relatively low, indicating marginal profitability overall.
+*   **TQI Degradation**: The repeated `ANOMALY-3 TQI degradation` warnings confirm issues with recent trade performance, corroborating the low `avg_r_multiple`.
+*   **Exit Reason Consistency**: The `stop_hit` for NVDA on `2026-06-26` (`price: 193.23`, `thresh=$194.38`) is consistent with a stop being hit below the threshold for a long position.
+*   **`price_pending: true` exits**: The `external_close_detected` events for NVDA and GOOGL at `2026-06-30T07:01:21` have `price: null` and `price_pending: true`. These unconfirmed exits, combined with the `FIFO orphan` warnings, suggest a breakdown in real-time fill tracking.
+
+### TRADE INTEGRITY
+*   **EOD Snapshot Inaccuracy**: As noted in the Performance Audit, the `EOD SNAPSHOT` `pnl_today` and `trades_today` fields are incorrect (0.0 and 0 respectively) for `2026-06-30`, despite actual recorded trades for that day in `trade_events`. This is a critical data integrity issue for daily reporting.
+*   **Untracked Closing Fills**: The repeated `FIFO orphan` warnings directly point to closing fills not matching any known prior lots or tracker records. This is a severe gap in trade integrity, as trades are occurring that the bot is not fully aware of.
+*   **Partial Exit Order Tracking Gap**: The comment in `execution/gtc_manager.py` (line 198) confirms that `gtc_partial_order_ids` is not populated, meaning partial profit-taking using GTC orders is not actively tracked, which is a significant gap if such a strategy is intended.
+
+### MODIFIED FILE FINDINGS
+*   **`reconcile_eod.py`**
+    *   **AWP Audit Fix (2026-06-30)**: The fix to prevent premature `_reconcile_ts` setting based on `_is_post_close()` is correctly implemented, preventing the EOD file from being prematurely finalized during RTH. However, this does not resolve the observed issue where `pnl_today` in the EOD snapshot remains 0 despite confirmed trades.
+    *   **AWP Audit Fix (2026-06-30) / Silent Fallback**: The `_recover_closed_trades_from_log` function is a good addition for `SIGKILL` recovery, but it is a fallback path that masks a failure in the primary EOD writer.
+*   **`execution/gtc_manager.py`**
+    *   **AWP Audit Fix (2026-06-28)**: The per-symbol error handling within `submit_rth_day_stops` to catch exceptions for individual symbols is a good robustness improvement, preventing one bad symbol from stopping the entire function.
+    *   **AWP Audit Fix (2026-06-29)**: The checks for collateral cancellation of `gtc_partial_order_ids` after `submit_day_stop_order` are well-implemented hardening, even if `gtc_partial_order_ids` is currently unused.
+    *   **Logic Error / State Mutation (Fixed)**: The logic for `_qty = abs(int(t.get("qty", 0) if _qty_rem_raw is None else _qty_rem_raw))` correctly handles `qty_remaining=0` to prevent submitting stop orders for more shares than remain, addressing a prior bug class.
+    *   **Silent Fallback / Dead Code**: The `gtc_partial_order_ids` is explicitly noted as "currently never populated" (line 198), meaning any strategy intending to use GTC partial exits is silently failing in this module.
+*   **`events/calendar.py`**
+    *   **AWP Audit Fix (2026-06-28)**: `CAUTION` sizing correctly adjusted to 65% (from 50%) after board review.
+    *   **AWP Audit Fix (2026-06-28)**: NFP date for 2026-07-03 corrected (was 2026-07-02).
+    *   **AWP Audit Fix (2026-06-28)**: `is_macro_event_day` now uses timezone-aware `datetime.now(_ET).date()`, improving accuracy.
+    *   **Logic Inconsistency (Low Severity)**: `STATIC_EVENTS` lists Columbus Day and Veterans Day as `EventType.MARKET_HOLIDAY` but with `EventRisk.CAUTION`. While `CAUTION` for "thin liquidity" is appropriate, `MARKET_HOLIDAY` conventionally suggests `BLACKOUT`. This is a semantic inconsistency.
+*   **`earnings_preflight.py`**
+    *   **CRITICAL FIX (2026-06-30)**: The `preload_earnings_week(sorted(symbols))` call was missing the `symbols` argument, which would cause a `TypeError` and prevent the earnings cache from ever being refreshed, leading to stale data and missed alerts. This was a critical fix.
+    *   **CRITICAL FIX (2026-06-30)**: The comparison `ed in trading_days` was comparing `date` objects to `str` objects, preventing earnings imminent alerts from ever firing correctly. This was a critical fix.
+*   **`autonomous_patch_generator.py`**
+    *   **CRITICAL FIX (2026-06-30)**: Migration from DeepSeek to Gro (Groq) API resolves silent `402 Payment Required` failures, restoring functionality to the autonomous patch pipeline.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE (PERMANENTLY DELETED)
+*   **P5-H2 | Fill price crosstalk**: TRIGGERED (Logs show `FIFO orphan` warnings, indicating active fill matching issues which could be related or exacerbated by this.)
+*   **P5-H3 | Orphan GTC 404 path**: FIXED (Addressed in `execution/gtc_manager.py` by clearing tracker IDs and issuing critical alerts when orders are not found on Alpaca.)
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: PARTIALLY FIXED / TRIGGERED (Bot's internal PDT guard is present, but `preflight_simulation.py` indicates Alpaca's API rejects AH GTC stop submissions for PDT, causing loss of stop protection. The bot is not proactively preventing this external rejection.)
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED (The patch check in `preflight_sim.py` addresses timing, not the `os.execv()` lockfile issue.)
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED (No logic found in provided source to validate/refresh `mri_state.json` on load in `main.py`.)
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNRESOLVED / DATA FAILURE (Score buckets are empty in EOD snapshot, so not growing, but this points to a failure in populating them.)
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: UNRESOLVED / TRIGGERED (The `reconcile_eod.py` fix for premature finalization is present, but `pnl_today` and `trades_today` are still `0` in the EOD snapshot despite confirmed trades, indicating reconciliation is not fully reflected or generated incorrectly.)
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution.portfolio_tracker | Portfolio Tracker and RiskManager desync leads to incorrect position count.**
+    *   Description: The `execution.entry_logic` logs repeated `[CYCLE-SYNC] STATE DESYNC: Tracker (0) < RiskManager (2). Ignoring tracker`. This indicates a fundamental desync between the tracker (source of truth for Alpaca positions) and the RiskManager, leading to incorrect open position counts and preventing correct risk management and new trade entries.
+    *   Exact failure condition: `tracker.open_positions` is `0` while `risk.open_positions` is `2` (or any non-zero `risk` count when `tracker` is `0`), causing `execution.entry_logic` to log `STATE DESYNC` and `strategy.run_cycle` to log `[ANOMALY-2]`.
+*   **EXECUTION BUG | CRITICAL | reconcile_eod.py / portfolio_tracker | `FIFO orphan` warnings indicate untracked closing fills, leading to P&L miscalculation and position desync.**
+    *   Description: The bot repeatedly logs `FIFO orphan: closing fill for NVDA has no prior lot and no tracker record — fill unmatched.` This means Alpaca is sending fills for positions the bot has no record of, leading to unrecorded P&L and a desynchronized internal state. This is directly related to the `CYCLE-SYNC` desync and suggests a failure in live position tracking (e.g., `register_open` or `register_close` logic).
+    *   Exact failure condition: Alpaca fill activities exist for a symbol, but `portfolio_tracker` cannot find a corresponding open position or prior lot, resulting in `FIFO orphan` warning and unrecorded/mismatched P&L.
+*   **ALPHA ISSUE | HIGH | EOD Snapshot / reconcile_eod.py | EOD snapshot `pnl_today` and `trades_today` fields are `0` despite profitable closed trades in `trade_events` for the same day.**
+    *   Description: The EOD snapshot (`date: 2026-06-30`) reports `pnl_today: 0.0` and `trades_today: 0`. However, `trade_events` records two profitable exits for NVDA and GOOGL on this date. This indicates a failure in updating the daily EOD summary, resulting in inaccurate performance reporting and contradicting actual trade data.
+    *   Exact failure condition: `EOD SNAPSHOT` `pnl_today` is `0.0` and `trades_today` is `0` when `trade_events.jsonl` contains `event: "exit"` records with positive `pnl` and `ts` matching the `date`.
+*   **INFRASTRUCTURE | MEDIUM | main | Repeated `gc.collect()` warnings indicate potential memory leak.**
+    *   Description: The log shows `gc.collect() took 3244.3ms, collected 369 objects — heap may be growing` repeatedly. This suggests inefficient memory management or a memory leak, which can degrade performance, increase cycle times, and lead to eventual out-of-memory errors or crashes.
+    *   Exact failure condition: `main` logger consistently reports `gc.collect()` taking excessive time (`> 3000ms`) and indicates "heap may be growing" across multiple log cycles within a 24-hour period.
+*   **EXECUTION BUG | MEDIUM | execution/gtc_manager.py | Partial GTC order tracking (gtc_partial_order_ids) is dead code, preventing proper partial profit-taking.**
+    *   Description: The comment in `execution/gtc_manager.py` (line 198) confirms that `gtc_partial_order_ids` is "currently never populated anywhere in this codebase." This means any strategy relying on GTC orders for partial profit-taking will not function as intended, leading to missed opportunities or sub-optimal exits.
+    *   Exact failure condition: The `trade` dictionary's `gtc_partial_order_ids` field is consistently `None` or an empty dictionary, even when partial exits via GTC orders are intended by the trading strategy.
+*   **ALPHA ISSUE | LOW | events/calendar.py | `EventType.MARKET_HOLIDAY` for Columbus Day / Veterans Day is semantically misleading.**
+    *   Description: The `STATIC_EVENTS` list uses `EventType.MARKET_HOLIDAY` with `EventRisk.CAUTION` for Columbus Day and Veterans Day. While the `CAUTION` risk level (65% sizing) is appropriate for days with "thin liquidity" where NYSE is open, `MARKET_HOLIDAY` typically implies a full `BLACKOUT` (no trading). This semantic inconsistency could cause confusion.
+    *   Exact failure condition: `STATIC_EVENTS` contains entries where `type` is `EventType.MARKET_HOLIDAY` but `risk` is `EventRisk.CAUTION`, contradicting the general definition of `BLACKOUT` for `MARKET_HOLIDAY` in the same file.
+
+### FIX VALIDATION
+*   **P5-H5 (GTC stop suppressed at PDT=3/3 + opened_today)**: **PARTIAL**
+    *   Exact reason: The bot now correctly includes an internal guard (`preflight_simulation.py` A5 passes) to prevent *itself* from generating PDT violations for AH GTC stops. However, `preflight_simulation.py` B5 indicates Alpaca's API still *rejects* these orders when `PDT=3/3`, leading to a loss of stop protection. The fix addresses the bot's internal state but doesn't prevent the external API rejection.
+    *   Alternative fix: **file: `execution/gtc_manager.py` (within `submit_day_stop_order` or `submit_gtc_stop_order` entry logic, or `submit_rth_day_stops` for overnight positions)**. Add a check: if `tracker.current_pdt_count >= config.DAY_TRADE_MAX_ROLLING` AND `trade.get("opened_today")` is True AND `_is_afterhours()` is True, then log a WARNING and `return None` without attempting API submission. This avoids the API rejection and relies on the next-morning RTH restart to place the day stop, as intended by the previous fix description.
+*   **AWP Audit Fix (2026-06-30) for `earnings_preflight.py` (`preload_earnings_week()` call missing `symbols` argument)**: **PASS**
+*   **AWP Audit Fix (2026-06-30) for `earnings_preflight.py` (`ed in trading_days` type mismatch)**: **PASS**
+*   **AWP Audit Fix (2026-06-30) for `autonomous_patch_generator.py` (DeepSeek -> Groq API migration)**: **PASS**
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE: Resolve `CYCLE-SYNC` and `FIFO orphan` desyncs (CRITICAL)**: Prioritize debugging `execution.portfolio_tracker` and `execution.risk_manager` to ensure consistent position tracking. Manually reconcile the current desync. Investigate why closing fills are unmatched and why `RiskManager`'s count diverges from `Tracker`. This impacts all subsequent trading decisions.
+2.  **FIX: Correct EOD Snapshot P&L Reporting (HIGH)**: Debug why `pnl_today` and `trades_today` remain `0` in the EOD snapshot despite successful trades. Ensure `reconcile_eod.py` or the daily summary generation logic correctly aggregates and persists reconciled P&L data into `eod_YYYY-MM-DD.json`.
+3.  **IMPLEMENT: Proactive PDT Rejection Avoidance (P5-H5, HIGH)**: Implement the proposed alternative fix for `P5-H5` in `execution/gtc_manager.py` to proactively prevent submitting AH GTC stop orders when Alpaca's PDT rules will reject them.
+4.  **INVESTIGATE: Memory Leak (MEDIUM)**: Address the recurring `gc.collect()` warnings. Profile `main.py`'s memory usage to identify and resolve any growing memory footprint that could lead to performance issues or crashes.
+5.  **REVIEW: Dead Code for Partial Exits (MEDIUM)**: Determine the intended strategy for partial exits. If GTC partials are desired, reactivate and populate `gtc_partial_order_ids` in `execution/gtc_manager.py` and other relevant modules; otherwise, explicitly document this as a deprecated feature.

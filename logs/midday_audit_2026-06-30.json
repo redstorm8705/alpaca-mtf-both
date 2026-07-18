@@ -1,0 +1,93 @@
+{
+  "audit_date": "2026-06-30",
+  "run_ts": "2026-06-30T10:30:02.826867-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 4,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NVDA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 28
+    },
+    "last_score": 38,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 126,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-30 14:07:02,000 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$5.87 tracker=$0.00 drift=$+5.87",
+      "2026-06-30 14:07:05,633 | WARNING  | main | gc.collect() took 3223.0ms, collected 251 objects \u2014 heap may be growing",
+      "2026-06-30 14:12:06,327 | WARNING  | strategy.run_cycle | Risk day (Q2 Quarter-End / Window Dressing \u2014 65% size, caution near close) \u2014 sizing at 65%",
+      "2026-06-30 14:12:28,396 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-30 14:13:24,145 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for NVDA has no prior lot and no tracker record \u2014 fill un"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "NVDA",
+      "status": "rc=2",
+      "entry": 215.76,
+      "exit": 203.225
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -37.60499999999999,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -37.60499999999999,
+    "best": {
+      "symbol": "NVDA",
+      "pnl": -37.60499999999999,
+      "entry_price": 215.76,
+      "exit_price": 203.225,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 206.54,
+      "target": 234.16
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": -37.60499999999999,
+      "entry_price": 215.76,
+      "exit_price": 203.225,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 206.54,
+      "target": 234.16
+    },
+    "trades": [
+      {
+        "symbol": "NVDA",
+        "pnl": -37.60499999999999,
+        "entry_price": 215.76,
+        "exit_price": 203.225,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 206.54,
+        "target": 234.16
+      }
+    ]
+  }
+}

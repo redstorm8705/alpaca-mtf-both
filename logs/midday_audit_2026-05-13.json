@@ -1,0 +1,47 @@
+{
+  "audit_date": "2026-05-13",
+  "run_ts": "2026-05-13T10:30:01.952810-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 39,
+    "levels": {
+      "STRESSED": 39
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 3,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-13 13:36:33,332 | WARNING  | execution.gtc_manager | RTH DAY stops: 1 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market",
+      "2026-05-13 13:36:36,418 | WARNING  | execution.broker | [NVDL] close_position blocked (40310000 held_for_orders) \u2014 cancelling all open orders and retr",
+      "2026-05-13 16:32:22,742 | WARNING  | main | gc.collect() took 213.6ms, collected 0 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

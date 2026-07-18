@@ -1,0 +1,84 @@
+Nightly Gemini Audit — 2026-05-18
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'weekly_review.py', 'monthly_review.py', 'generate_dashboard.py', 'data/fetcher.py', 'strategy/run_cycle.py', 'events/macro_risk_index.py', 'reporting/metrics.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Frequent `VOLSHADOW compute error: Object of type bool is not JSON serializable`**: This warning appears for almost every tracked symbol (CRWD, CRM, PANW, UBER, AMZN, META, NFLX, SPY, QQQ, INTC, QCOM, MU, NVDA, AAPL, TSLA, AMD, PLTR, COIN, SMCI, TOST, SOFI, MSTR) multiple times per minute throughout the log. It indicates a recurring issue in the `confluence` module's ability to process or serialize `VOLSHADOW` data, potentially impacting the core 12-point confluence score calculations.
+*   **Consistent `EOD P&L DRIFT: Alpaca=$-75.89 tracker=$0.00 drift=$-75.89`**: The `PortfolioTracker` module consistently reports $0.00 P&L while Alpaca reports a significant loss of $-75.89. This indicates a complete failure in the bot's internal P&L tracking mechanism, making internal risk management (like `MAX_DAILY_LOSS_PCT`) potentially unreliable and rendering daily P&L reporting useless.
+*   **`write_eod_summary: score_comparison expected list, got dict — skipped`**: This warning appears in conjunction with the P&L drift. It signifies a type mismatch when attempting to write the EOD summary, suggesting data corruption or an API change affecting the `score_comparison` data structure. This can lead to incomplete or incorrect historical performance records.
+*   **Recurring `gc.collect() took Xms, collected 99 objects — heap may be growing`**: The garbage collector is taking an unusually long time (4-7 seconds) and consistently collecting 99 objects. This pattern, appearing every few cycles, is a strong indicator of a potential memory leak or inefficient memory management, which can lead to performance degradation and eventually crashes, especially in a long-running trading bot.
+*   **Repeated `[ANOMALY-2] [SMCI] confirm_gate=X scans but no entry`**: For SMCI, SOFI, and COIN, the bot logs multiple `confirm_gate` scans, indicating strong signals, but no entry is made despite `MAX_OPEN_POSITIONS=4` and `risk.open_positions=3`. This suggests an entry gate or a position sizing constraint is silently preventing trades from firing even when conditions are met and capacity exists.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness & `pnl=0.0` Anomalies**:
+    *   The `alpaca_per_trade` entries in the EOD snapshot show correct P&L signs for closed trades (e.g., `SMCI` long entry 35.36, exit 29.99 → pnl -5.37; `TSLA` long entry 428.36, exit 406.17 → pnl -22.19).
+    *   **However, older trades show `pnl=0.0` for non-breakeven exits:** `TSLA` (long, 2026-05-11) and `AMZN` (long, 2026-05-11) exits are recorded with `pnl=0.0` despite the `overnight_atr_buffer_exit` reason, which usually implies some price movement from entry. This suggests a P&L calculation or recording bug for these specific exits. For TSLA, the exit price 428.36 is the same as an *entry price* from the EOD snapshot of 2026-05-18, implying potential confusion or re-use of P&L.
+*   **Score→Outcome Correlation**: With only 3 open trades and the aforementioned `pnl=0.0` issues for past exits, a robust correlation analysis for today's trades isn't possible from the provided data. The `all_time_stats` show a `win_rate` of `43.1%` and an `avg_r_multiple` of `-0.012`. This `avg_r_multiple` is very close to zero, or even slightly negative, which is far from the `TARGET_ATR_MULT = 2.5` defined in `CONFIG CONSTANTS`. This suggests the bot is not capturing its intended edge, possibly due to poor target realization or stops being hit too frequently relative to profit targets.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats` `win_rate` of `43.1%` suggests more losses than wins overall. Coupled with a near-zero or slightly negative `avg_r_multiple`, it implies that when losses occur, they are typically larger than average wins (or wins are very small), leading to a low profit factor (`1.31`). This performance profile suggests a mismatch in risk-reward capture, indicating stops might be hit more often, or at larger distances, than profits are realized.
+
+### TRADE INTEGRITY
+*   **P&L Recording Failure**: The `alpaca_pnl` is $-75.89 while `tracker_pnl` is $0.00, resulting in a drift of $-75.89. This confirms `PortfolioTracker` is completely failing to record the actual realized P&L from Alpaca for the current day.
+*   **`pnl=0.0` for trades with price deviation**: As noted in the Performance Audit, the `TSLA` and `AMZN` `overnight_atr_buffer_exit` trades from 2026-05-11 logged `pnl=0.0` despite the exit price being different from the implied entry/breakeven threshold, which is a recording bug or logic error in P&L calculation for specific exit types.
+
+### MODIFIED FILE FINDINGS
+*   **main.py**:
+    *   **CONFIGURATION DISCREPANCY: `OVERNIGHT_ENTRIES_ENABLED`**: Line 159 `OVERNIGHT_ENTRIES_ENABLED = False` is hardcoded with a comment `Rachel Okonkwo: flip after Phase 1 validates`. However, `config.py` (applied later from `config.ACTIVE_PROFILE` via `setattr`) sets `OVERNIGHT_ENTRIES_ENABLED = True`. This means overnight entries *are* enabled, directly contradicting the stated development phase in the comment. This is a policy/configuration mismatch.
+    *   **P5-M1 `Cycle watchdog restart loop` FIXED**: The `fcntl.fcntl(_lockfile.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)` line with the comment `P5-M1 root-cause fix` correctly addresses the lockfile persistence issue during `os.execv()` restarts.
+    *   **P5-H4 `Rule 2 dead code` FIXED**: The comment `P5-H4 fix: TOD_MARKET_OPEN_BUFFER_MINS aligned to 30 in config.py directly. Runtime override removed — single source of truth in config.py.` confirms the fix for this issue.
+*   **strategy/run_cycle.py**:
+    *   **REPORTING BUG: Breadth refresh logged as trade event**: The line around pre-market phase `_log_trade_event("breadth_refresh", symbol="BREADTH", price=0.0, size=0, ...)` logs a market breadth refresh as a `trade_event`. This misuses the trade logging mechanism, polluting trade statistics with non-trade entries and potentially skewing performance metrics.
+
+*   **data/fetcher.py**:
+    *   **P5-C2 `run_movers.py ImportError` FIXED**: The addition of the `class DataFetcher` with the necessary methods, explicitly noted with the comment `Required by run_movers.py — P5-C2 fix (class didn't exist, ImportError on startup)`, resolves this specific import error.
+    *   **POTENTIAL CAUSE OF VOLSHADOW ERROR**: While the `VOLSHADOW` error itself originates in the `confluence` module (not shown), `fetch_bars` is the upstream data provider. It correctly returns an empty DataFrame on error (`return pd.DataFrame()`). However, if `confluence` doesn't robustly handle empty DataFrames or `NaN` values that might result from partial data, and instead returns a boolean (e.g., `False` if calculation failed) which is then used where a JSON-serializable *value* is expected, it would lead to the observed `Object of type bool is not JSON serializable` error. This is a downstream handling gap.
+
+*   **events/macro_risk_index.py**:
+    *   **P5-M2 `MRI score cached stale across sessions` UNTOUCHED**: The `_restore()` method is not fully shown, and there's no visible explicit validation (e.g., checking `_last_refresh` against the current date) on load to prevent using stale MRI data from previous sessions after a bot restart. While `refresh()` will eventually update it, the initial period could operate on stale macro risk.
+
+*   **reporting/metrics.py**:
+    *   No new issues found in the visible portion. `compute_lifetime_stats()` correctly prioritizes live Alpaca equity.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: FIXED (in `data/fetcher.py`)
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: FIXED (implicitly by `_main._load_hybrid_state()` timestamp validation)
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED
+*   **P5-H4 | Rule 2 dead code**: FIXED (in `main.py` comments)
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED (as per description)
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED (in `main.py`)
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: TRIGGERED (log `score_comparison expected list, got dict — skipped`)
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: TRIGGERED (log `EOD P&L DRIFT` and `write_eod_summary` messages occur multiple times during the day and at close, implying premature or faulty EOD summary writes)
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **ALPHA ISSUE / EXECUTION BUG | HIGH | confluence module (source not provided) + data/fetcher.py (upstream)**:
+    *   DESCRIPTION: The repeated `VOLSHADOW long/short compute error: Object of type type bool is not JSON serializable` suggests a fundamental issue in the `confluence` module's handling of data from upstream, likely when `fetch_bars` returns an empty DataFrame or `NaN` values. The `confluence` module appears to attempt to JSON-serialize a boolean result (e.g., `False` for a failed computation or `df.empty`) where a numerical or string value is expected in the `VOLSHADOW` field. This directly impacts the integrity of the 12-point confluence score.
+    *   EXACT FAILURE CONDITION: The `confluence` module performs a calculation for `VOLSHADOW` (long/short). In cases of insufficient or malformed input data (potentially from `fetch_bars` returning an empty DataFrame), the calculation logic within `confluence` evaluates to a boolean (e.g., `True` or `False`), which is then stored in a data structure intended for JSON serialization, where the schema expects a different type (e.g., a float or int). When this structure is serialized, `json.dumps()` raises the `TypeError: Object of type bool is not JSON serializable`.
+*   **EXECUTION BUG / P&L RECORDING ISSUE | CRITICAL | execution.portfolio_tracker (source not provided, implied by logs)**:
+    *   DESCRIPTION: The bot's internal P&L tracker (`tracker_pnl`) consistently reports $0.00 while Alpaca shows a P&L of $-75.89, leading to a drift. This is a critical failure in internal accounting, rendering all P&L-dependent risk management and reporting inaccurate. The system is effectively running blind to its actual P&L.
+    *   EXACT FAILURE CONDITION: The `PortfolioTracker` module's internal `daily_pnl` variable (or equivalent) is not being updated from the actual `alpaca_pnl` or from individual trade fills as they occur during the trading day. It either remains at its initialized $0.00 value or is prematurely reset, failing to reflect the real-time financial state of the paper account. This happens despite `alpaca_per_trade` entries existing in the EOD snapshot, showing fills *are* received from Alpaca.
+*   **P&L RECORDING ISSUE | HIGH | trade_logger.py or execution.portfolio_tracker (source not provided, implied by trade events)**:
+    *   DESCRIPTION: `TSLA` and `AMZN` exits on 2026-05-11 are recorded with `pnl=0.0` despite being `overnight_atr_buffer_exit` types, which should have a non-zero P&L given price movement. This indicates a defect in how P&L is calculated or recorded for certain exit conditions.
+    *   EXACT FAILURE CONDITION: The logic within `_log_trade_event` (or upstream in `check_exits`'s P&L calculation) for specific exit reasons (like `overnight_atr_buffer_exit`) incorrectly calculates the `pnl` as `0.0`, or explicitly overrides it to `0.0`, even when the exit price differs from the entry/breakeven price, leading to false P&L reporting.
+*   **REPORTING BUG | LOW | strategy/run_cycle.py**:
+    *   DESCRIPTION: In `strategy/run_cycle.py`, the pre-market breadth refresh event is logged using `_log_trade_event("breadth_refresh", symbol="BREADTH", price=0.0, size=0, ...)` (line 217). This pollutes the `trade_log.json` with non-trade entries, which can distort trade analysis and metrics.
+    *   EXACT FAILURE CONDITION: A call to `_log_trade_event` is made for an informational, non-trading event, rather than using a standard logger (`logger.info`) or a dedicated event logging mechanism for non-trade-related system events.
+*   **CONFIGURATION ERROR | MEDIUM | main.py**:
+    *   DESCRIPTION: The `main.py` file contains a commented-out line `OVERNIGHT_ENTRIES_ENABLED = False` with an explicit note that it should be `False` until Phase 1 validation. However, the subsequent loading of `config.py` overrides this to `True`, enabling the feature prematurely. This indicates a disconnect between development policy and active configuration.
+    *   EXACT FAILURE CONDITION: Despite explicit instructions in `main.py` code comments to keep `OVERNIGHT_ENTRIES_ENABLED` as `False` pending "Phase 1 validation", the configuration loading process (specifically, `setattr(config, key, val)` from `config.PROFILES`) sets `config.OVERNIGHT_ENTRIES_ENABLED` to `True`, activating the feature against documented policy.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate and fix `PortfolioTracker` P&L drift**: The discrepancy between Alpaca P&L and internal tracker P&L is critical. Review `execution.portfolio_tracker` to ensure P&L is correctly fetched and stored from Alpaca's `equity - last_equity` and/or individual fills. This must be the highest priority to ensure reliable risk management.
+2.  **URGENT: Debug `VOLSHADOW compute error`**: Address the `Object of type bool is not JSON serializable` error in the `confluence` module. Trace data flow from `data/fetcher.py`'s `fetch_bars` to `confluence` to identify how boolean values are being generated and mistakenly passed for JSON serialization. This impacts the core scoring system.
+3.  **Address `gc.collect()` performance warning**: Investigate potential memory leaks or inefficient object lifetime management in the bot. Prolonged GC pauses can impact real-time trading performance and lead to instability.
+4.  **Resolve `[ANOMALY-2]` entry gate failures**: Determine why the bot is not entering trades for `SMCI`, `SOFI`, and `COIN` despite meeting `confirm_gate` requirements and having available position slots. This represents missed trading opportunities and a potential logic error in the entry execution path.
+5.  **Review and synchronize `OVERNIGHT_ENTRIES_ENABLED` configuration**: Either update the code comment in `main.py` to reflect that Phase 1 validation is complete and overnight entries are intentionally enabled, or adjust `config.py` to set `OVERNIGHT_ENTRIES_ENABLED = False` to align with the stated development policy.

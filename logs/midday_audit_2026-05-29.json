@@ -1,0 +1,95 @@
+{
+  "audit_date": "2026-05-29",
+  "run_ts": "2026-05-29T18:52:18.535054-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NVDA",
+      "TQQQ"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 38,
+    "levels": {
+      "ELEVATED": 32,
+      "NORMAL": 6
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 10,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-30 00:08:38,631 | WARNING  | execution.portfolio_tracker | PDT count mismatch \u2014 Alpaca reports 0, tracker has 3 in rolling window. Trades may ",
+      "2026-05-30 00:13:56,591 | WARNING  | main | gc.collect() took 2391.8ms, collected 0 objects \u2014 heap may be growing",
+      "2026-05-30 00:49:51,886 | WARNING  | main | gc.collect() took 2918.1ms, collected 64 objects \u2014 heap may be growing",
+      "2026-05-30 01:19:52,534 | WARNING  | execution.portfolio_tracker | PDT count mismatch \u2014 Alpaca reports 0, tracker has 1 in rolling window. Trades may ",
+      "2026-05-30 01:25:28,954 | WARNING  | main | gc.collect() took 2958.8ms, collected 64 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "TQQQ",
+      "status": "rc=2",
+      "entry": 76.22,
+      "exit": 85.04
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 8.820000000000007,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 8.820000000000007,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "TQQQ",
+      "pnl": 8.820000000000007,
+      "entry_price": 76.22,
+      "exit_price": 85.04,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 56.49,
+      "target": 115.71
+    },
+    "worst": {
+      "symbol": "TQQQ",
+      "pnl": 8.820000000000007,
+      "entry_price": 76.22,
+      "exit_price": 85.04,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 56.49,
+      "target": 115.71
+    },
+    "trades": [
+      {
+        "symbol": "TQQQ",
+        "pnl": 8.820000000000007,
+        "entry_price": 76.22,
+        "exit_price": 85.04,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 56.49,
+        "target": 115.71
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-05-25 11:00 PM PT",
+  "ts_iso": "2026-05-25T23:00:54.762666-07:00",
+  "prompt_chars": 35607,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "ds_prompt_chars": 35607,
+  "gai_prompt_chars": 35683,
+  "deepseek": {
+    "text": null,
+    "model": "deepseek-chat",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "DEEPSEEK_API_KEY not set in environment"
+  },
+  "gemini": {
+    "text": null,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "GEMINI_API_KEY not set in environment"
+  },
+  "summary": {
+    "ds_ok": false,
+    "gai_ok": false,
+    "both_ok": false,
+    "partial": false,
+    "both_failed": true
+  }
+}

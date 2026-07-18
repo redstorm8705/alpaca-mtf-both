@@ -1,0 +1,78 @@
+Midday Gemini Audit — 2026-06-22
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L Inconsistency for SMCI Trade (Critical Data Integrity Issue):**
+    *   The `CLOSED TRADE DETAILS` show: `SMCI: entry $28.91 → exit $28.91 (+$0.00) | score 12/12 | MRI=ELEVATED | stop_hit | stop=$34.09 | T1=$26.75 T2=$24.60 T3=$18.13`.
+    *   **Failure:** The recorded P&L (`+$0.00`) and `exit price` (`$28.91`) are inconsistent with the `stop_hit` reason and the `stop=$34.09`.
+        *   Assuming this was a short trade (stop-loss for a short position is typically above the entry price), a `stop_hit` at $34.09 would imply the price rose to $34.09, resulting in a loss of approximately ($34.09 - $28.91) per share, not $0.00.
+        *   If the actual exit price was $28.91, then the stop-loss at $34.09 was not hit.
+    *   This discrepancy indicates a critical flaw in either trade execution reporting, P&L calculation, or the internal state synchronization, making performance auditing unreliable. The "KNOWN BENIGN PATTERNS" specifically state "$0.00 on overnight_breakeven exit reason: valid if stop_price was pushed to entry_price," but this trade is explicitly listed as `stop_hit`, not `overnight_breakeven`, and the stop price $34.09 was not pushed to the entry price $28.91.
+    *   **Outcome correlation:** With this data inconsistency, the observation that a max-score 12/12 trade resulted in $0.00 P&L (or a potential undetected loss) cannot be properly assessed.
+    *   **Stop-hit rate:** The 100% stop-hit rate for the single trade is misleading given the P&L discrepancy.
+
+### ENTRY QUALITY
+
+*   **No issues** observed in the provided logs for entry quality. The bot correctly applied dynamic `MIN_SCORE` adjustments and used an `ORB gate BLOCK` to filter out potential entries for `MU` and `INTC`, indicating cautious entry logic. The `MRI=ELEVATED` for the SMCI trade (which occurred prior to the log window) is noted but not flagged as a violation without specific configurable limits for individual stock MRI.
+
+### EXIT QUALITY
+
+*   **Recurring Partial Close Failure for TOST (Critical Risk Management Issue):**
+    *   The logs show `ERROR | execution.broker | [TOST] Partial close failed: {"code":40410000,"message":"position does not exist"}` with `consecutive=4` and `consecutive=5` messages.
+    *   **Failure:** The bot is repeatedly failing to perform a partial close for an active, overnight position (`TOST`). This indicates a severe breakdown in the bot's ability to manage open positions, likely due to a desynchronization between the bot's internal state and Alpaca's API, or a persistent API issue that the bot is not recovering from. This exposes the account to unmanaged risk on positions that the bot intends to adjust.
+    *   **Condition:** Observed at `2026-06-22 17:14:29,884` and `2026-06-22 17:21:14,661`, with an increasing count of consecutive failures.
+
+*   **Self-Diagnosed TQI Degradation:**
+    *   The logs show `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 — review exit discipline and stop placement.`
+    *   **Failure:** This is a bot's internal warning indicating a decline in trade quality related to exit discipline and stop placement. This is an `ALPHA ISSUE` that requires strategy review, suggesting that current exit parameters might be misaligned with market conditions or asset characteristics.
+    *   **Condition:** Observed at `2026-06-22 17:14:40,040` and `2026-06-22 17:21:25,476`.
+
+### MRI ALIGNMENT
+
+*   **No issues** observed. The system accurately reported `Volatility regime: NORMAL (VIX: 17.2)` and `MRI refreshed: score=8 level=NORMAL`. The bot also appropriately adjusted `sizing at 75%` for `Mid-day doldrums` and dynamically raised `MIN_SCORE`, indicating that it is adapting to the perceived market conditions and risk.
+
+### LOG ANOMALIES
+
+*   **Excessive Garbage Collection Pauses and Slow Cycles:**
+    *   **Failure:** `gc.collect()` took 4060.8ms (over 4 seconds) and 2662.2ms (over 2.6 seconds). These long pauses directly contribute to very slow cycle durations (469s and 447s), which is unacceptable for an intraday bot. This significantly reduces `watchdog_headroom` and limits the bot's responsiveness to market changes, potentially leading to delayed or missed trades/exits. This points to a potential memory leak or inefficient resource management.
+    *   **Condition:** Observed at `2026-06-22 17:09:08,838` and `2026-06-22 17:28:26,363`.
+
+*   **Inconsistent Timestamp Parsing:**
+    *   **Failure:** The warning `[fill_date] Could not parse timestamp '2026-06-22T13:44:11.75157Z': Invalid isoformat string: '2026-06-22T13:44:11.75157+00:00' — using raw slice` indicates a recurring issue with parsing timestamps that include both 'Z' and a UTC offset. While the "raw slice" fallback might work, this implies a fragile data parsing mechanism that could lead to subtle time-related errors or inconsistencies if not handled perfectly.
+    *   **Condition:** Observed at `2026-06-22 17:15:56,168` and `2026-06-22 17:28:23,580`.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | SMCI P&L and Stop-Hit Discrepancy**
+    *   **(1) Exact variable or metric involved:** `SMCI` trade's `exit price`, `P&L`, `stop_hit` reason, and `stop` price within `CLOSED TRADE DETAILS`.
+    *   **(2) Explain what the value is vs. what it should be and why that constitutes a failure:** The `exit price` is $28.91 and `P&L` is $0.00. However, the `exit reason` is `stop_hit` with a `stop=$34.09`. For a short position (implied by stop above entry), if the stop was hit, the exit price should be near $34.09, resulting in a loss. If the exit price was $28.91, the stop was not hit. This is a severe logical contradiction that fundamentally compromises the accuracy of recorded trade outcomes and P&L, making it impossible to correctly assess strategy performance.
+    *   **(3) Exact condition under which this occurs:** A trade (`SMCI`) is recorded as `stop_hit`, but its `exit price` matches its `entry price` (resulting in $0.00 P&L), while the stated `stop` price is significantly different from the entry/exit price.
+
+2.  **EXECUTION BUG | CRITICAL | Persistent Failure to Partially Close TOST Position**
+    *   **(1) Exact variable or metric involved:** `ERROR` log messages from `execution.broker` and `execution.exit_logic` concerning `TOST` partial closes.
+    *   **(2) Value vs. should be and why that constitutes a failure:** The log shows `Partial close failed: {"code":40410000,"message":"position does not exist"}` with `consecutive` counts of 4 and 5. The bot should be able to successfully reduce an existing position. This failure means the bot cannot execute its intended risk management (partial exits), potentially leaving an oversized or unwanted position open. This indicates a critical breakdown in communication with the broker API or an internal state management error regarding open positions.
+    *   **(3) Exact condition under which this occurs:** The bot attempts to execute a partial close for an identified open position (`TOST`), but the Alpaca API consistently returns a `40410000` error ("position does not exist"), leading to repeated, consecutive failures in the bot's logs.
+
+3.  **INFRASTRUCTURE | HIGH | Systemic Performance Degradation due to GC and Slow Cycles**
+    *   **(1) Exact variable or metric involved:** `gc.collect() took Xms` and `[CYCLE] duration=Y` and `watchdog_headroom`.
+    *   **(2) Value vs. should be and why that constitutes a failure:** `gc.collect()` durations of over 4 seconds and 2.5 seconds are unacceptable, and `[CYCLE] duration` of 469 seconds (7.8 minutes) and 447 seconds (7.4 minutes) are far too long for an intraday trading system. These values indicate severe performance bottlenecks. Cycle durations should be much shorter (e.g., seconds or tens of seconds) to ensure timely market data processing, signal evaluation, and order execution. The low `watchdog_headroom` also suggests the bot is operating close to its stability limits, risking watchdog timeouts and restarts.
+    *   **(3) Exact condition under which this occurs:** `WARNING | main | gc.collect()` messages consistently report execution times exceeding 2.5 seconds, directly preceding `INFO | main | [CYCLE]` logs showing durations over 400 seconds, along with `⚠ SLOW CYCLE` warnings.
+
+4.  **INFRASTRUCTURE | MEDIUM | Timestamp Parsing Inconsistency**
+    *   **(1) Exact variable or metric involved:** Timestamp string format in `fill_date` within `execution.portfolio_tracker` logs.
+    *   **(2) Value vs. should be and why that constitutes a failure:** The bot encounters `Invalid isoformat string` errors for timestamps like `'2026-06-22T13:44:11.75157Z': '2026-06-22T13:44:11.75157+00:00'`. Standard ISO 8601 typically uses 'Z' for UTC or a `+HH:MM` offset, but not both in this manner. While the bot indicates it's using a "raw slice," this fallback mechanism is a point of fragility. Inconsistent or incorrect parsing of timestamps can lead to miscalculations of time-sensitive metrics, incorrect sequencing of fills, or errors in historical data analysis.
+    *   **(3) Exact condition under which this occurs:** `WARNING | execution.portfolio_tracker | [fill_date] Could not parse timestamp` when the provided timestamp string includes both `Z` (Zulu time) and a `+00:00` offset.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION | CRITICAL:** Prioritize fixing the `SMCI` P&L and stop-hit discrepancy. Trace the full lifecycle of the SMCI trade to identify where the data inconsistency originates (order submission, fill reporting, internal tracking, P&L calculation, or display logic). Ensure accurate recording of exit prices and P&L for all stop-hit scenarios.
+2.  **EXECUTION | HIGH:** Immediately investigate and resolve the `[TOST] Partial close failed` errors. Implement robust error handling for Alpaca API calls, including detailed logging of requests and responses, and state reconciliation mechanisms (e.g., verifying Alpaca positions against internal records) to prevent prolonged unmanaged exposure.
+3.  **INFRASTRUCTURE | HIGH:** Conduct a thorough performance and memory profiling of the bot. Identify the root cause of the excessive garbage collection pauses and long cycle durations. Optimize memory usage, consider refactoring parts of the code for efficiency, or explore alternative concurrency models to improve responsiveness and ensure timely decision-making.

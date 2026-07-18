@@ -1,0 +1,90 @@
+Nightly Gemini Audit — 2026-04-29
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'data/fetcher.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+1.  **Critical Information Gap: `bot.log not found`**: The audit explicitly states `(bot.log not found)`. This is a critical failure in providing required audit data. The `main.py` source code clearly configures logging to `mtf_bot.log`. The absence of any log entries for the last 24h severely hampers the ability to detect silent failures, unexpected behaviors, or error patterns within the bot's operational context.
+2.  **MRI `UNKNOWN` Level**: Multiple trade events (MSTR 2026-04-22, QQQ 2026-04-25, PANW 2026-04-27, TOST 2026-04-27) show `mri_level: "UNKNOWN"`. The `events/macro_risk_index.py` code defines discrete `_LEVELS` (NORMAL, ELEVATED, STRESSED, HIGH, CRITICAL) and `_score_to_level` is designed to always return one of these. An "UNKNOWN" level implies a failure in MRI computation or retrieval, potentially leading to incorrect risk sizing or entry decisions.
+
+### PERFORMANCE AUDIT
+
+1.  **P&L Calculation Errors and Inconsistencies**:
+    *   **NVDA (Long)**: `partial_exit` on 2026-04-23 shows `pnl: 3.19` for 1 share, implying an entry price of 200.57. `stop_hit` on 2026-04-23 shows `pnl: 5.35` for 4 shares, implying an entry price of 199.77. These implied entry prices are inconsistent for parts of the same overall position, indicating P&L calculation errors across partial exits.
+    *   **SMCI (Short)**: `partial_exit` on 2026-04-28 shows `pnl: 4.85` for 5 shares, consistent with entry at 28.07. However, the subsequent `stop_hit` on 2026-04-28 for the remaining 14 shares shows `pnl: 13.39`. With an entry of 28.07 and exit of 27.46, the correct P&L should be `(28.07 - 27.46) * 14 = 0.61 * 14 = 8.54`. The logged P&L of 13.39 is incorrect, indicating a **P&L miscalculation for stop-hit exits**.
+    *   **NFLX (Short)**: `partial_exit` on 2026-04-27 for 2 shares (`pnl: 3.62`) implies an entry of 93.19. `stop_hit` on 2026-04-28 for 8 shares (`pnl: 13.78`) implies an entry of 93.6425. Similar to NVDA, these implied entry prices are inconsistent, indicating **P&L calculation errors across partial exits**.
+2.  **Duplicate/Confused Exit Events for MSTR**: Two events for MSTR on 2026-04-22 are logged: a `stop_hit` at 07:00:16 and a general `exit` at 08:26:07. Both refer to a `size: 3` short position and, when back-calculated from P&L, imply the *exact same entry price* of approximately 164.55. A `stop_hit` *is* an exit. This redundancy suggests a fundamental confusion in position state tracking or event logging.
+3.  **Misleading "overnight_breakeven" Logic (A-1 Confirmed)**: The architectural issue A-1 states "overnight_breakeven exit fires at entry-0.25×ATR, not at entry price — name is misleading". This is confirmed by the CRWD exit on 2026-04-23 (`entry=$463.94 thresh=$458.71`) and QQQ exit on 2026-04-28 (`entry=$663.73 thresh=$661.19`). The "breakeven" logic clearly allows for a loss, which is deceptive and contradicts the common understanding of breakeven.
+4.  **Poor R-Multiple Performance**: The `all_time_stats.avg_r_multiple` is reported as `0.042`. Given the bot's stated target (implied by typical trading strategies) of 2.5x, an average R-multiple of 0.042 suggests a severe failure in achieving its edge, or a miscalculation of the R-multiple metric. This requires immediate investigation.
+5.  **Score-to-Outcome Correlation Weak**: High-score trades (Score 12) exhibit a mixed P&L performance, including significant losses (TOST -31.71, PANW -23.70, COIN -36.99). This indicates that the 12-point confluence score is not consistently leading to higher profitability, or the risk management for high-score trades is inadequate.
+
+### TRADE INTEGRITY
+
+1.  **CRITICAL: Position Direction and P&L Tracking Mismatch for Today's Trades**: The `alpaca_per_trade` section in the EOD snapshot for `2026-04-29` reports the following:
+    *   **TOST**: Bot `entry` event shows a `short` at `28.59` (size 6). `alpaca_per_trade` shows two `long` positions for TOST (total size 6) *closed* at `28.59` and `28.58`, with `entry: 29.21`.
+    *   **SMCI**: Bot `entry` event shows a `short` at `25.63` (size 18). `alpaca_per_trade` shows multiple `long` positions for SMCI (total size 18) *closed* at `25.63`, with various `entry` prices (e.g., `27.44`, `27.01`).
+    *   **PANW**: Bot `entry` event shows a `short` at `179.28` (size 1). `alpaca_per_trade` shows a `long` position for PANW (size 1) *closed* at `179.28`, with `entry: 182.24`.
+    This is a **catastrophic failure**. At the exact timestamps when the bot internally believes it is *entering short* positions, Alpaca is reporting the *closure of prior long positions* at those same price points. This fundamental direction mismatch indicates severe errors in:
+    *   Order submission (e.g., submitting a "sell to close" when intending a "sell to open short", or vice-versa).
+    *   Order execution response parsing.
+    *   Local position tracking and P&L attribution.
+    This leads directly to the `pnl_drift` and incorrect `trades_today`/`win_rate_today` statistics. The bot's internal state is completely out of sync with its broker positions.
+
+### MODIFIED FILE FINDINGS
+
+#### main.py
+
+1.  **False `_SHORTING_ENABLED` and `OVERNIGHT_ENTRIES_ENABLED` Flags**:
+    *   `_SHORTING_ENABLED = False` is set at the top, but the bot is clearly executing `short` trades. The comment states it's "Set at startup by shorting check", but the initial `False` is misleading and could indicate a race condition or incorrect state initialization if the check fails silently.
+    *   `OVERNIGHT_ENTRIES_ENABLED = False` is also set, yet the `overnight_holds` section of the EOD snapshot shows a `COIN` position being held overnight. This indicates a contradiction between the code's declared intent and the bot's observed behavior.
+2.  **Potential P5-C1 (FVG MultiIndex) Vulnerability Remains**: The comment in `_find_recent_fvgs` states "MultiIndex guard removed — Alpaca Data never returns MultiIndex, and yfinance is no longer used for bars". While `data/fetcher.py` has a guard for `df.index` MultiIndex, `_find_recent_fvgs` in `main.py` directly accesses `df_ohlc[high_col]`. If `df_ohlc` were to somehow receive `MultiIndex` *columns* (e.g., from an unexpected `yfinance` fallback, or a future Alpaca Data API change), this assumption could be violated, leading to a `KeyError`. The code relies on an assumption ("Alpaca Data never returns MultiIndex") rather than robustly handling the possibility.
+3.  **`_rth_day_stops_submitted_dates` Restrictiveness**: The global `_rth_day_stops_submitted_dates` is intended to gate RTH DAY stop submission once per calendar date. This could be overly restrictive. If stops fail to submit, are cancelled by the user, or new positions are opened later in the day, the bot might fail to submit necessary DAY stops, leaving positions vulnerable.
+4.  **`_last_cycle_lock` Race Condition**: The `_last_cycle_lock = threading.Lock()` is commented `BUG-W2: guards _last_cycle_complete across main/watchdog threads`. However, `_last_cycle_complete` is a `float`. Floating-point assignments are usually atomic on modern CPUs (writing a float value to memory is a single operation). The lock is not strictly necessary for the `float` assignment itself but is vital if `_last_cycle_complete` were a complex object. Assuming the intent is to guard *reads* by the watchdog during a write, the lock is placed correctly around `_last_cycle_complete = time.time()`. This is likely fine as a defensive measure.
+
+#### data/fetcher.py
+
+1.  **`days_back` for `TF_DAILY`**: `days_back = max(30, n_bars * 2)` for `TF_DAILY`. If `n_bars` is small (e.g., 2 for `_alpaca_session_pct` in MRI), this could result in fetching only 4 days of data. While this may be sufficient for a specific indicator, if other parts of the system expect a longer history, it could lead to data gaps. This seems intentionally optimized, but it's a potential area for silent data truncation if not all downstream consumers are aware of the minimum `days_back`.
+
+#### events/macro_risk_index.py
+
+1.  **`jpy_intraday_pct` Fallback Logic**: The `_yf_session_pct("JPY=X")` is attempted if `_yf_last_two_closes("JPY=X")` fails. This is a good defensive fallback.
+2.  **`_mri_sock.setdefaulttimeout(5.0)` Not Universal**: The `_mri_sock.setdefaulttimeout(5.0)` is used to cap yfinance calls, but the `main.py` globally sets `socket.setdefaulttimeout(15)`. The `_mri_old_to` is stored and restored, which is correct for temporary override. This ensures yfinance calls are faster than other Alpaca calls when possible.
+3.  **MRI-THREAD-4/5 Locks**: The `_lock` for `price_score()` and `components()` is good for thread safety, protecting against partial reads or writes when `_components` is being updated by `_compute()` or `inject_news_state()`.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **WORSENED**. The `main.py` code *removed* the explicit MultiIndex guard based on an assumption that Alpaca data will *never* return MultiIndex. This creates a silent point of failure if that assumption ever breaks, reverting to the original bug condition. `data/fetcher.py` still *retains* its own MultiIndex handling for its *index*, showing the problem exists.
+*   **P5-C2 | run_movers.py ImportError**: **FIXED**. The `DataFetcher` class was added to `data/fetcher.py`.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **UNTOUCHED**. While `_last_daily_reset_date` was added, its specific use for clearing the PDT confirm buffer is not visible, and the EOD snapshot `pdt_slots_used` is empty.
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED**. The `_fill_fallback_count` variable hints at awareness, but no specific fix is shown in the provided code.
+*   **P5-H3 | Orphan GTC 404 path**: **UNTOUCHED**. No visible changes related to this.
+*   **P5-H4 | Rule 2 dead code**: **FIXED**. The `_tod_size_multiplier` now explicitly returns `0.0` for the "opening" phase, clarifying and enforcing the intended no-entry rule during that period.
+*   **P5-H5 | FIXED 2026-04-21**: **FIXED**. (Stated as fixed).
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED**. The introduction of `_last_cycle_lock` and `_touch_cycle_ts` directly addresses safeguarding `_last_cycle_complete`.
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED**. The `_restore` method in `events/macro_risk_index.py` now includes date and `scans_left` validation.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. No visible changes related to this.
+*   **P5-L1 | _classify_loss_driver() returns empty label**: **UNTOUCHED**. No visible changes related to this.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED**. The EOD snapshot reports `open_trades: 4`, indicating positions are still open, but the EOD summary (from which `alpaca_pnl` and `tracker_pnl` are derived) has already been processed. This confirms the P&L is understated for the day.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. No code for this file was provided.
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | All Files (P&L/Position Tracking) | Position Direction and P&L Tracking Mismatch**: As detailed under "Trade Integrity", the bot's `entry` events for today's TOST, SMCI, and PANW positions report them as `short`, while the `alpaca_per_trade` section for the same timestamps and prices reports the *closure of `long` positions*. This is a fundamental inconsistency between the bot's internal state and what Alpaca reports, leading to incorrect positions, P&L calculations (`pnl_drift`), and potential unintended market exposure.
+    *   **Exact Failure Condition**: `trade_event.event == "entry"` with `trade_event.direction == "short"` for TOST, SMCI, PANW on 2026-04-29, concurrent with `eod_snapshot.alpaca_per_trade` entries for the same symbols showing `side == "long"` and `exit_price == trade_event.price`.
+*   **HIGH | EOD Snapshot Aggregation | Inconsistent Daily Trade Statistics**: The `EOD SNAPSHOT` shows `trades_today: 0` and `win_rate_today: 0`, yet there are multiple `entry` and `partial_exit` events (COIN, TOST, SMCI, PANW) for the audit date (2026-04-29). This indicates a failure in daily trade count and win rate aggregation or daily reset.
+    *   **Exact Failure Condition**: `eod_snapshot.trades_today == 0` when `trade_events` for `date == eod_snapshot.date` contains `event == "entry"` or `event == "partial_exit"`.
+*   **HIGH | EOD Snapshot P&L Reporting | Significant P&L Drift**: `alpaca_pnl` is -35.42, while `tracker_pnl` is 16.76, resulting in a `pnl_drift` of -52.18. This large discrepancy indicates a major problem with the bot's internal P&L tracking vs. Alpaca's reported P&L, likely stemming from the "Position Direction and P&L Tracking Mismatch" bug.
+    *   **Exact Failure Condition**: `eod_snapshot.alpaca_pnl != eod_snapshot.tracker_pnl` and `abs(eod_snapshot.pnl_drift) > 0.0`.
+*   **MEDIUM | main.py | `tsmom` Data Null for Entries**: Multiple `entry` events (TOST, PANW, COIN on April 23; TOST, SMCI, PANW on April 29) contain `tsmom_12m: null`, `tsmom_6m: null`, `tsmom_ewma_vol: null`, etc. If these are intended momentum indicators used by the MTF confluence scoring system (as suggested by their inclusion), their `null` values indicate either a silent failure in data retrieval/calculation or that they were not considered for these trades. This could impact the quality/consistency of the 12-point score.
+    *   **Exact Failure Condition**: `trade_event.event == "entry"` contains `tsmom_12m: null` or other `tsmom_` fields with `null` values when these are expected to contribute to the scoring logic.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE: Halt Trading Operations and Investigate Position Tracking**: The critical "Position Direction and P&L Tracking Mismatch" is catastrophic. The bot's internal understanding of its positions is fundamentally divergent from the broker. Halt all automated trading immediately, manually reconcile open positions on Alpaca, and conduct a full root cause analysis into order submission, execution response parsing, and local state management for entries and exits.
+2.  **Restore Missing Log Data**: Resolve why `bot.log` (or `mtf_bot.log`) was not provided or is empty. Without comprehensive logs, diagnosing runtime issues and silent failures is extremely difficult.
+3.  **Address P&L Calculation Inconsistencies**: Investigate and fix the P&L calculation errors identified in NVDA, SMCI, and NFLX trades across partial exits. Ensure the internal portfolio tracker accurately reflects partial closes and remaining position cost basis.
+4.  **Re-evaluate Risk Metrics**: Re-evaluate the `avg_r_multiple` calculation and its current value. A target of 2.5x with an observed 0.042 indicates a severe disconnect in the strategy or its measurement. Also, address the misleading "overnight_breakeven" exit logic.
+5.  **Review MRI System and Scoring Consistency**: Investigate the root cause of `mri_level: "UNKNOWN"` events. Ensure the MRI system is robustly initialized and refreshed, providing a valid risk level at all times. Also, reassess the `tsmom` indicator data capture for all entries.

@@ -1,0 +1,67 @@
+Nightly Gemini Audit — 2026-06-10
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['autonomous_patch_generator.py', 'autonomous_review.py', 'config.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring `gc.collect()` warnings:** The log shows `gc.collect()` warnings occurring every 10-12 minutes, consistently taking 3.7 to 7.5 seconds to complete. The accompanying message `— heap may be growing` indicates a potential memory leak or inefficient memory management, which can degrade performance over time or lead to Out-Of-Memory errors in long-running processes.
+*   **Recurring `[ANOMALY-3] TQI degradation` warning:** The bot consistently logs `[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.` This warning indicates that the Trade Quality Index is below the threshold, signaling poor recent trade performance. This is a critical performance indicator requiring attention.
+*   **Persistent MRI STRESSED regime:** The Macro Risk Index (MRI) consistently reports `level=STRESSED` (score 50 or 55). While the bot correctly applies a `size floor 0.70x` and a `⛔ BV-5: MRI=STRESSED — no new entries until regime improves` block, the prolonged `STRESSED` regime itself could indicate a broader market issue or a miscalibration of the MRI thresholds.
+
+### PERFORMANCE AUDIT
+*   **Poor R-multiple performance:** The `all_time_stats` show an `avg_r_multiple` of `-0.06` despite a `win_rate` of `40.5%`. This is a significant deviation from the intended positive R:R, especially given the `paper` profile's `INTRADAY_TARGET_ATR_MULT = 2.5` (implying a 1:2.5 target R:R). This suggests that winning trades are not capturing enough profit, or losing trades are being allowed to run too far, leading to an overall negative expected value per trade. This correlates with the `[ANOMALY-3] TQI degradation` warning.
+*   **Stop-hit rate vs. win rate:** With a 40.5% win rate, the stop-hit rate is 59.5%. This high stop-hit rate, combined with the negative average R-multiple, suggests that stops may be too tight for the target profit, or trades are being stopped out before having a chance to reach target.
+
+### TRADE INTEGRITY
+*   **Correct P&L sign on stop hits:** The two `stop_hit` events for `MSTR` and `NFLX` correctly show negative P&L for short positions where the exit price was higher than the entry price.
+*   **No P&L=0.0 anomalies for non-matching entry/exit:** Not observed in the provided `TRADE EVENTS`.
+*   **Partial exit tracking:** Cannot verify partial exit accumulation as no partial exit events are present in the provided logs.
+
+### MODIFIED FILE FINDINGS
+*   **`autonomous_patch_generator.py`**:
+    *   **Function:** `_log` (line context not provided, but pattern observed)
+    *   **Code path:** When attempting to append a log message to the log file (`_LOGS_DIR / "autonomous_patch_generator.log"`), the `try...except Exception: pass` block is used to catch any errors during file write operations.
+    *   **Runtime vs. Intended:** At runtime, if `f.write(line + "\n")` fails (e.g., due to disk full, permissions issue, or other I/O errors), the exception is silently caught and ignored. The intended behavior is that all log messages, especially those from an autonomous pipeline, should be reliably recorded, and any failure to do so should be actively escalated or at least reported.
+    *   **Failure Condition:** Critical information about the patch generation process, errors, or internal state can be lost without any notification, masking potential infrastructure or operational problems within the autonomous pipeline.
+*   **`autonomous_review.py`**:
+    *   **Function:** `main` (specifically the `_git("commit", ...)` call towards the end)
+    *   **Code path:** The `commit_msg` variable is constructed in the `main` function and includes the line `Co-Authored-By: autonomous_review.py <noreply@anthropic.com>`. This message is then passed to `_git("commit", "-m", commit_msg)`.
+    *   **Runtime vs. Intended:** At runtime, the Git commit history will show "Anthropic" as a co-author for changes made by `autonomous_review.py`. The script's header, however, states "Author: autonomous pipeline (S44)". The "Anthropic" attribution is incorrect.
+    *   **Failure Condition:** This leads to misattribution of automated work in the version control history, potentially confusing human reviewers or violating internal attribution standards.
+*   **`config.py`**:
+    *   **Variable:** `BUCKET_B_MAX_POSITIONS` (line context not provided, but visible in content)
+    *   **Code path:** The `config.py` file explicitly defines `BUCKET_B_MAX_POSITIONS = 999`. A comment states, "placeholder (PDT removed S50); actual cap is MAX_OPEN_POSITIONS=4". Simultaneously, `MAX_OPEN_POSITIONS = 4` is defined in the same file (and `MAX_POSITIONS = 4` is specified in the global CONFIG CONSTANTS).
+    *   **Runtime vs. Intended:** If any part of the position sizing or entry logic *accidentally* references `BUCKET_B_MAX_POSITIONS` instead of `MAX_OPEN_POSITIONS` (or `MAX_POSITIONS`) for limiting Bucket B trades outside of power hour, the bot would attempt to open up to 999 positions. The clear intention from other configuration constants and comments is that the maximum concurrent positions should be 4 (or 5 during power hour).
+    *   **Failure Condition:** This dual definition creates ambiguity and a high risk of a logic error where the bot might bypass the intended position limits, leading to severe over-leveraging and excessive risk exposure, especially in a paper account where such an error might not immediately halt operations.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED (The modified files do not address this, and no logs confirm its triggering, but the code still contains the bug).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** UNTOUCHED
+*   **P5-H2 | Fill price crosstalk:** UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path:** UNTOUCHED
+*   **P5-H4 | Rule 2 dead code:** AMBIGUOUS (Unconfirmed fix; `config.py` contains a comment about a fix, but without seeing the consuming code, I cannot confirm the resolution of the "dead code" or "no-op" aspect.)
+*   **P5-H5 | FIXED 2026-04-21:** FIXED (as per audit prompt documentation)
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** TRIGGERED (EOD snapshot was created while 2 positions, UBER and TOST, were still open and explicitly listed under `overnight_holds`, confirming the bug's condition)
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED
+
+### NEW BUGS FOUND
+*   INFRASTRUCTURE | MEDIUM | autonomous_patch_generator.py | Silent exception handling in `_log` function | An `except Exception: pass` block in the `_log` function silently suppresses any errors encountered when writing logs to disk, leading to potential loss of critical diagnostic information.
+*   INFRASTRUCTURE | LOW | autonomous_review.py | Incorrect co-authorship attribution in Git commit message | The `Co-Authored-By` line in the commit message generated by `autonomous_review.py` incorrectly attributes co-authorship to "Anthropic" instead of "autonomous pipeline (S44)".
+*   ALPHA ISSUE / RISK MANAGEMENT | MEDIUM | config.py | Inconsistent definition of maximum positions for Bucket B | `BUCKET_B_MAX_POSITIONS = 999` is defined as a placeholder, contradicting `MAX_OPEN_POSITIONS = 4` (and `MAX_POSITIONS = 4` in the global CONFIG CONSTANTS). This creates a risk of accidentally using the inflated `BUCKET_B_MAX_POSITIONS` value, bypassing intended risk limits.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Address TQI Degradation and Negative R-multiple:** Prioritize investigation into exit discipline and stop placement. The `[ANOMALY-3]` warning, coupled with a consistently negative `avg_r_multiple`, indicates fundamental issues in profit realization or loss control.
+2.  **Investigate Memory Growth:** Analyze the root cause of the frequent and time-consuming `gc.collect()` warnings. This could indicate a memory leak or inefficient data structures/processing, potentially impacting long-term bot stability and performance.
+3.  **Resolve P5-C2 `run_movers.py` ImportError:** This is a CRITICAL, unaddressed bug that will cause `run_movers.py` to crash if ever invoked, preventing the bot from scanning pre-market movers.
+4.  **Enforce Logging Robustness in Autonomous Pipeline:** Modify the `_log` function in `autonomous_patch_generator.py` to prevent silent suppression of logging errors. Implement robust error handling (e.g., re-raise a more specific exception, log to stderr, or send an emergency alert).
+5.  **Clarify Position Limits in `config.py`:** Standardize the `MAX_POSITIONS` parameters, removing ambiguous placeholders like `BUCKET_B_MAX_POSITIONS = 999` and ensuring a single, clear constant governs all position limits unless explicitly varied by well-defined, robust logic.

@@ -1,0 +1,69 @@
+Midday Gemini Audit — 2026-07-15
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+1.  **Exit Reason Mislabeling and Incorrect Stop-Hit Rate Calculation:**
+    *   **Variable/Metric Involved:** `exit reason` (as implied by "exit | stop=$258.29") and `Stop-hit rate` in SESSION P&L SUMMARY.
+    *   **Value vs. Should Be:**
+        *   For the NET trade (`entry $274.36 → exit $274.00 ($-0.36)`), the `exit reason` is recorded as `stop`. The associated `stop` price is `$258.29`.
+        *   Assuming this was a LONG trade (consistent with negative P&L of $-0.36, and stop/target levels below/above entry respectively), an exit at $274.00 means the price did not hit the stop loss at $258.29.
+        *   Therefore, the `exit reason` should not be `stop`, and this trade should not contribute to the `Stop-hit rate`.
+        *   The `Stop-hit rate` is reported as `100% (1 stops)`, implying the single closed trade was a stop hit. Based on the analysis above, this is incorrect. The `Stop-hit rate` should be `0%`.
+    *   **Failure Condition:** A trade's `exit reason` is recorded as `stop` when the `exit price` is on the "safe" side of the `stop price` (i.e., `exit_price > stop_price` for a long position), meaning the stop loss was not actually triggered.
+    *   **Impact:** Leads to inaccurate performance metrics, particularly the `Stop-hit rate`, which can mislead strategy evaluation and calibration efforts.
+
+2.  **Strategy Performance (Short-side):**
+    *   **Variable/Metric Involved:** `short_intraday` Kelly Stats Profit Factor (PF) and Win Rate (WR).
+    *   **Value vs. Should Be:** The Kelly Stats show `short_intraday | 35 trades | WR 25.7% | avg 0.49R/0.58R | PF 0.29`. A Profit Factor of 0.29 is significantly below 1.0, indicating the short strategy is consistently losing money. The Win Rate of 25.7% is also very low. While not a direct "should be" numerical comparison, this performance is poor and indicates systematic degradation in decision quality for short trades.
+    *   **Failure:** The bot's short-side strategy demonstrates very low profitability (PF 0.29) and a poor win rate (25.7%), indicating a lack of edge or severe misalignment with current market conditions.
+    *   **Condition:** Observed over a historical sample of 35 `short_intraday` trades.
+    *   **Impact:** The bot is actively losing money on its short positions, which is detrimental to the overall account P&L.
+
+### ENTRY QUALITY
+*   **TQI Degradation:** The warning `[ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 — review exit discipline and stop placement.` indicates a systematic decline in overall trade quality (TQI, Trade Quality Index), which directly impacts entry quality even if the specific `NET` entry had a high score.
+*   **Dynamic MIN_SCORE:** `Dynamic MIN_SCORE: raised to 9/12` suggests the bot is attempting to filter lower-quality entries due to perceived degradation in market conditions or strategy performance, implicitly admitting to a broader issue with entry quality.
+*   No specific issues with the `NET` entry conditions themselves (score 12/12, MRI=ELEVATED with sizing adjustment applied).
+
+### EXIT QUALITY
+*   The primary issue regarding exit quality stems from the `exit reason` mislabeling for the NET trade, as detailed in the Performance Audit. This suggests a potential logic error in how exit conditions are evaluated and logged.
+*   The `[ANOMALY-3] TQI degradation` warning also directly calls for a review of "exit discipline and stop placement," indicating a general concern about how the bot is managing its exits across trades.
+
+### MRI ALIGNMENT
+*   The bot correctly identified `MRI ELEVATED (score=37)` and applied a `size floor 0.85x`. This demonstrates appropriate risk management response to MRI conditions.
+*   No entries were taken at STRESSED/CRISIS MRI levels in the provided logs.
+
+### LOG ANOMALIES
+*   `CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (3) < RiskManager (4). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.` (Occurs at 2026-07-15 17:21:25,535 and 17:28:14,435)
+    *   **Description:** The internal position `Tracker` holds an inconsistent count of open positions compared to the `RiskManager`. While the log states it ignores the tracker for decreases, it explicitly notes "Manual reconciliation required," indicating this is not a self-resolving benign state.
+    *   **Consequence:** Directly led to a missed entry for `SMCI` as evidenced by `[ANOMALY-2] [SMCI] confirm_gate=4 scans but no entry — risk.open_positions=4 vs tracker=3`.
+*   `WARNING | strategy.run_cycle | [ANOMALY-2] [SMCI] confirm_gate=4 scans but no entry — risk.open_positions=4 vs tracker=3 | MAX_OPEN_POSITIONS=20. If risk>3, CYCLE-SYNC should resolve next cycle.` (Occurs at 2026-07-15 17:26:58,279)
+    *   **Description:** This warning directly highlights that a potential entry for `SMCI` was blocked because of the `Tracker` vs. `RiskManager` desync.
+*   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 — review exit discipline and stop placement.` (Occurs at 2026-07-15 17:26:58,279)
+    *   **Description:** This warning indicates a significant degradation in the overall Trade Quality Index, suggesting broader performance issues with the strategy's entry and exit logic.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Inaccurate Stop-Hit Detection and Reporting:**
+    *   **Description:** As detailed in the Performance Audit, the bot incorrectly logged the `NET` trade as a "stop hit" when the exit price ($274.00) was higher than the stated stop loss ($258.29) for what appears to be a long position. This fundamental error corrupts reported performance metrics.
+    *   **Exact Condition:** `exit_price` (e.g., $274.00 for NET) > `stop_price` (e.g., $258.29 for NET) for a long position, yet the `exit reason` is recorded as `stop`. This also impacts the `Stop-hit rate` metric.
+*   **EXECUTION BUG | HIGH | Persistent State Desync Preventing Entries:**
+    *   **Description:** The `[CYCLE-SYNC] STATE DESYNC` between `Tracker` and `RiskManager` is a critical error message indicating inconsistent internal state. Despite a note about ignoring the tracker for decreases, the "Manual reconciliation required" suggests it's not self-correcting. Furthermore, it directly led to a `[ANOMALY-2]` where an entry was skipped for `SMCI` due to this desync.
+    *   **Exact Condition:** `RiskManager.open_positions` (e.g., 4) != `Tracker.open_positions` (e.g., 3), leading to the `[CYCLE-SYNC] STATE DESYNC` critical log and subsequent `[ANOMALY-2]` warnings that block otherwise valid entries.
+*   **ALPHA ISSUE | HIGH | Systemic Short Strategy Underperformance:**
+    *   **Description:** The historical `short_intraday` performance metrics (PF 0.29, WR 25.7%) from Kelly Stats and the `[ANOMALY-3] TQI degradation` warning indicate a significant and possibly systemic underperformance of the short strategy. The bot continues to attempt short entries (CRWD, CRM, NFLX identified as short signals, though skipped) despite this clear underperformance trend.
+    *   **Exact Condition:** Kelly Stats for `short_intraday` show `PF < 1.0` (current 0.29) and `WR < 30%` (current 25.7%) over a substantial number of trades (35), compounded by `TQI degradation` warning.
+*   **ALPHA ISSUE | MEDIUM | Inconsistent Stop/Target Definitions:**
+    *   **Description:** For the `NET` trade (assuming long based on P&L sign), the target prices `T1=$281.06 T2=$287.75 T3=$307.84` are consistently above the entry $274.36, and the stop $258.29 is below. This is consistent for a long. However, if any other signal or internal logic suggests `NET` should have been a short (e.g., other signals showing strong_bear bias), then these stop/target levels would be incorrectly configured for a short position. Without definitive confirmation of NET's direction *from its entry signal*, there's a potential ambiguity or misconfiguration if the bot attempted a long against a strong bear bias.
+    *   **Exact Condition:** Not fully verifiable without the exact entry signal for NET, but a concern if the trade was intended to be short given other log contexts. (Less certain than the P&L issues identified above.)
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL: Investigate and fix the `exit reason` mislabeling and `Stop-hit rate` calculation immediately.** This is corrupting core performance data and misleading the bot's self-assessment. Review the logic that determines if a stop was truly hit and how that event is recorded for both long and short positions.
+2.  **INFRASTRUCTURE / EXECUTION | HIGH: Resolve the `[CYCLE-SYNC] STATE DESYNC` between the `Tracker` and `RiskManager` to ensure internal state consistency.** The "Manual reconciliation required" and blocked entries (`[ANOMALY-2]`) indicate a persistent, non-self-correcting issue that impacts trading decisions and reliability.
+3.  **ALPHA | HIGH: Conduct a deep dive into the short-side strategy's parameters and market alignment.** The consistently poor Profit Factor (0.29), low Win Rate (25.7%), and `TQI degradation` warning for short trades strongly suggest this strategy is not viable in current market conditions or has fundamental flaws. Consider deactivating or significantly reducing allocation to short trades until performance can be proven.

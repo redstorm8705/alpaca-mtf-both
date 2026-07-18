@@ -1,0 +1,102 @@
+Nightly Gemini Audit — 2026-05-08
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring `WARNING | strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped`**: This warning appears frequently for numerous symbols throughout the logs. While a warning, its persistence suggests a systemic data availability issue for a critical filtering mechanism, potentially leading to suboptimal signal generation as signals are evaluated without this bias.
+*   **Recurring `WARNING | execution.portfolio_tracker | write_eod_summary: score_comparison load failed ('str' object has no attribute 'get') — skipped`**: This recurring warning indicates a `TypeError` during the End-of-Day (EOD) summary generation, where an object expected to be a dictionary (with a `.get()` method) is incorrectly a string. This prevents proper EOD reporting.
+*   **Recurring `WARNING | strategy.run_cycle | [ANOMALY-2] [TQQQ] confirm_gate=10 scans but no entry — risk.open_positions=4 vs tracker=4 | MAX_OPEN_POSITIONS=4. If risk>4, CYCLE-SYNC should resolve next cycle.`**: This anomaly indicates the strategy is processing and confirming signals for TQQQ even when it correctly identifies that it's at its maximum allowed positions (4/4). This suggests inefficient processing. Furthermore, this anomaly also occurs during `power_hour` (e.g., `19:53:56`) when `BUCKET_B_MAX_POSITIONS_POWER` should allow for 5 positions, implying a potential misapplication or static check of `MAX_OPEN_POSITIONS`.
+*   **Recurring `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-12.84 tracker=$0.00 drift=$-12.84`**: This critical warning appears multiple times and indicates a significant discrepancy between Alpaca's reported P&L for the day and the bot's internal P&L tracker. This renders the bot's internal P&L metrics unreliable and is a severe P&L recording issue.
+*   **`WARNING | execution.portfolio_tracker | PDT count mismatch — Alpaca reports 3, tracker has 1 in rolling window.`**: This warning at `20:02:03` indicates a critical divergence in PDT tracking. While the bot attempts to correct it (`Added 2 EXTERNAL entry/entries`), it highlights a failure in the bot's internal state to accurately reflect trading activity, either from unrecorded internal trades or untracked external trades.
+
+### PERFORMANCE AUDIT
+
+A review of the last 10 trades from `TRADE EVENTS` reveals significant P&L recording issues that undermine the reliability of performance metrics:
+
+*   **P&L Sign & Value Correctness Anomalies (Recording Bug)**:
+    *   `META` (short, entry 610.25): `stop_hit` at 610.25 recorded `pnl=0.0`. This is fundamentally incorrect; a stop hit implies a loss.
+    *   `CRM` (short, entry 184.0): `stop_hit` at 184.0 recorded `pnl=0.0`. Same issue as META.
+    *   `QCOM` (long, entry 190.43): `target` at 190.43 recorded `pnl=0.0`. A target exit should imply a profit, not zero P&L at the entry price.
+    *   This consistent pattern of `pnl=0.0` when `exit.price == entry.price` for `stop_hit` and `target` reasons strongly indicates a bug where the actual fill price (or calculated P&L) is not being correctly recorded for these specific exit types.
+
+*   **Duplicate / Inconsistent Exit Recording**:
+    *   `META` (short) has two exit events: a `stop_hit` at `610.25` with `pnl=0.0` (which is itself a bug) and then an `external_close` at `610.4` with `pnl=-0.15`. This suggests a position was not properly closed or tracked after its initial "stop hit", leading to a phantom position or duplicate/inconsistent exit logging.
+
+*   **Plausibility of Entry/Exit Prices**:
+    *   Entry and exit prices generally seem plausible for the given symbols and timestamps, *except* for the cases where `exit.price == entry.price` for `stop_hit` or `target` events, which is a recording bug, not necessarily an implausible execution price.
+
+*   **Score-Outcome Correlation**:
+    *   Difficult to assess reliably due to the widespread `pnl=0.0` recording bugs. Many potentially losing trades (stop hits) and winning trades (targets) are showing zero P&L, distorting any correlation analysis.
+
+*   **Stop-hit rate vs. win rate & R:R**:
+    *   `all_time_stats` show `win_rate: 42.3%` and `avg_r_multiple: -0.036`. The `avg_r_multiple` being negative directly contradicts the `profit_factor: 1.39` and `avg_win: 25.15` vs `avg_loss: -13.27`. This discrepancy is almost certainly due to the `pnl=0.0` recording bugs, as these trades are counted but contribute zero to R. The actual average R-multiple is likely higher (or lower, depending on the true P&L of those 0.0 entries), but currently, it's misleading.
+
+### TRADE INTEGRITY
+
+*   **P&L recording bugs**: As detailed above, `pnl=0.0` for `stop_hit` and `target` exits, and the duplicate exit for META, are critical trade recording failures.
+*   **Alpaca vs. Tracker P&L Drift**: The persistent `EOD P&L DRIFT` indicates a fundamental breakdown in reconciling the bot's internal financial state with the broker's actual account.
+
+### MODIFIED FILE FINDINGS
+No source files modified in last 24h.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED (log shows successful movers scan, suggesting this bug may be latent or resolved in practice)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: TRIGGERED (Evidenced by "PDT count mismatch" log entry)
+*   P5-H2 | Fill price crosstalk: UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED (as per ticket description)
+
+### NEW BUGS FOUND
+
+1.  CATEGORY: ALPHA ISSUE | SEVERITY: MEDIUM | file: `strategy/run_cycle` (implied by log source)
+    *   description: The `ANOMALY-2` warning indicates that the `strategy.run_cycle` module continues to evaluate and confirm signals (`confirm_gate=10 scans`) for `TQQQ` even when `risk.open_positions` matches `MAX_OPEN_POSITIONS` (4). This is inefficient. Furthermore, this anomaly persists during `power_hour` when `BUCKET_B_MAX_POSITIONS_POWER` should expand the limit to 5, suggesting the position limit check within this anomaly detection is not correctly dynamic.
+    *   exact failure condition: `strategy.run_cycle` spends resources confirming signals for TQQQ when the standard `MAX_POSITIONS` is already met, and fails to correctly account for `BUCKET_B_MAX_POSITIONS_POWER` during power hour, leading to false `ANOMALY-2` warnings during potentially valid entry windows.
+
+2.  CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | file: `execution.portfolio_tracker` (implied by trade events P&L and prices)
+    *   description: The bot's `trade events` log frequently records `pnl=0.0` and `exit.price == entry.price` for `stop_hit` and `target` exit reasons (e.g., `META`, `CRM`, `QCOM`). This incorrectly represents the actual trade outcome, as a stop hit should imply a loss and a target hit a profit. This fundamentally corrupts P&L tracking and performance metrics.
+    *   exact failure condition: The `portfolio_tracker` records the `pnl` for `stop_hit` and `target` exits as `0.0` and the `exit.price` as identical to the `entry.price`, suggesting a failure to capture the actual filled exit price or calculate the correct P&L for these specific exit conditions.
+
+3.  CATEGORY: EXECUTION BUG | SEVERITY: HIGH | file: `execution.portfolio_tracker` (implied by trade events)
+    *   description: The `META` short position (entry `610.25`) records two distinct exit events: first a `stop_hit` (`pnl=0.0`) and then an `external_close` (`pnl=-0.15`). This suggests a failure to correctly manage the position state after the initial exit attempt, leading to a phantom open position or erroneous re-processing of an already closed trade.
+    *   exact failure condition: A single open position for `META` results in multiple `exit` records in the `trade events` log, indicating a corrupted position tracking state or failure to fully remove a closed position from active management.
+
+4.  CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | file: `execution.portfolio_tracker`
+    *   description: The `EOD P&L DRIFT` warning consistently shows `alpaca_pnl=$-12.84` while `tracker_pnl=$0.00`. This is a direct contradiction of daily performance and indicates a severe failure in the bot's internal P&L aggregation for the day, rendering all internally calculated daily P&L metrics unreliable.
+    *   exact failure condition: The `tracker_pnl` variable in `execution.portfolio_tracker` fails to accumulate daily profit and loss from executed trades, remaining at `0.0` despite the Alpaca broker API reporting actual trading activity with a non-zero `alpaca_pnl`.
+
+5.  CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: `execution.portfolio_tracker` (implied by log source)
+    *   description: The recurring `write_eod_summary: score_comparison load failed ('str' object has no attribute 'get') — skipped` error indicates a `TypeError` due to `score_comparison` being a string instead of a dictionary. This suggests an issue with data loading or serialization for a key component of the EOD summary.
+    *   exact failure condition: The `write_eod_summary` function attempts to call the `.get()` method on `score_comparison`, which is of type `str` instead of a dictionary, leading to a `TypeError` and an incomplete EOD summary.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Address Critical P&L Recording and Drift (CRITICAL)**:
+    *   **Action**: Immediately debug and fix the root cause of `pnl=0.0` for `stop_hit` and `target` exits, ensuring actual filled prices and calculated P&L values are correctly recorded.
+    *   **Action**: Investigate and resolve the `EOD P&L DRIFT` to ensure the bot's internal `tracker_pnl` accurately reflects Alpaca's reported P&L.
+    *   **Action**: Rectify the duplicate `META` exit issue to ensure position states are accurately managed.
+    *   **Files**: `execution.portfolio_tracker`
+
+2.  **URGENT: Resolve PDT Tracking Inconsistencies (HIGH)**:
+    *   **Action**: Thoroughly investigate the `PDT count mismatch` (P5-H1) to understand why the bot's internal tracker diverges from Alpaca's, and ensure all internal trades (and potentially acknowledged external ones) are correctly recorded in the rolling PDT window.
+    *   **Files**: `execution.portfolio_tracker`
+
+3.  **Address EOD Summary Data Loading Error (MEDIUM)**:
+    *   **Action**: Debug the `TypeError` (`'str' object has no attribute 'get'`) in `write_eod_summary` by examining how `score_comparison` data is loaded and processed, ensuring it is always the expected dictionary type.
+    *   **Files**: `execution.portfolio_tracker`
+
+4.  **Optimize Signal Generation Logic (MEDIUM)**:
+    *   **Action**: Modify the `strategy.run_cycle` logic to prevent unnecessary `confirm_gate` scans for symbols (like TQQQ) when `MAX_OPEN_POSITIONS` is already reached. Also, ensure the logic correctly recognizes and applies `BUCKET_B_MAX_POSITIONS_POWER` during power-hour for position limit checks.
+    *   **Files**: `strategy/run_cycle` (implied)
+
+5.  **Investigate Recurring Weekly Bias Warnings (MEDIUM)**:
+    *   **Action**: Determine why `Weekly bias: insufficient data (4 bars), filter skipped` is so frequent. This may indicate a data ingestion problem or a need to adjust the lookback period if 4 bars of weekly data are rarely available, impacting signal quality.
+    *   **Files**: `strategy.signal_generator` (implied)

@@ -1,0 +1,66 @@
+Nightly Gemini Audit — 2026-05-05
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['midday_audit.py', 'config.py', 'generate_dashboard.py', 'nightly_audit.py', 'execution/orphan_manager.py', 'execution/trade_engine.py', 'strategy/run_cycle.py', 'venv/lib/python3.10/site-packages/ruff/_find_ruff.py', 'venv/lib/python3.10/site-packages/ruff/__init__.py', 'venv/lib/python3.10/site-packages/ruff/__main__.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Potential Memory Pressure / Performance Degradation**: Multiple `WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing` entries (e.g., `11341.4ms`). This indicates the garbage collector is taking an excessive amount of time (over 11 seconds in one instance) to reclaim memory, suggesting a possible memory leak or highly inefficient memory usage. This can impact bot responsiveness and lead to missed opportunities or delayed execution.
+*   **Weekly Bias Filter Data Insufficiency**: Frequent `WARNING | strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (5 bars), filter skipped`. This recurring warning for many symbols indicates that the weekly bias filter is often skipped due to insufficient data. While gracefully handled, it suggests a limitation in data availability for this specific filter, potentially impacting the quality or quantity of signals.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Inversion on TOST Short Exit**: The `TOST` short trade (`2026-04-30T08:19:06.176145-07:00`) with an entry price of `$28.59` and an exit price of `$28.64` recorded a positive P&L of `$0.88`. For a short position, an exit price higher than the entry price should result in a loss, not a profit. The correct P&L for this trade (size 4) should be `(28.59 - 28.64) * 4 = -0.20`. This is a P&L calculation error.
+*   **Alarmingly Low Average R-Multiple**: The `EOD SNAPSHOT` reports `all_time_stats.avg_r_multiple: 0.01`. Given the `paper` profile configuration of `INTRADAY_STOP_ATR_MULT = 1.25` and `INTRADAY_TARGET_ATR_MULT = 2.5`, the intended R:R is `2.5 / 1.25 = 2:1`. An average R-multiple of 0.01 is drastically below the target and indicates the bot is fundamentally failing to capture its theoretical edge, or there's a severe P&L recording discrepancy that impacts this metric.
+*   **Stop-hit rate vs. win rate**: The `EOD SNAPSHOT` `all_time_stats.win_rate: 50.0%` is acceptable, but the `avg_r_multiple` being so low despite this win rate points to an issue where wins are too small relative to losses, or the risk calculation is flawed.
+*   **Score→outcome correlation**: The `EOD SNAPSHOT` does not provide enough granular data to audit score-to-outcome correlation beyond total P&L for "12-13" score bucket.
+
+### TRADE INTEGRITY
+*   **P&L Sign Inversion on TOST Short Exit**: As detailed in "Performance Audit", the P&L calculation for the `TOST` short exit at `2026-04-30T08:19:06.176145-07:00` is incorrect, showing a profit instead of a loss. This indicates a logic error in `execution/trade_engine.py` (or a related P&L recording function) when processing short exits.
+*   **EOD P&L DRIFT**: Recurring `EOD P&L DRIFT: Alpaca=$0.00 tracker=$44.97 drift=$-44.97` is noted in logs. This is explicitly a `KNOWN BENIGN PATTERNS` (A-4) and is not flagged as a bug.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/trade_engine.py`**:
+    *   **Function**: `execute_entries` (likely in a helper function or internal logic flow)
+    *   **Code Path**: `strategy.run_cycle` logs `PDT: 0/3`, indicating no pattern day trades have been used. The `config.py` `paper` profile sets `CONVICTION_HALF_MIN = 10` for `PDT 0-2/3 day trades used`. However, the log `2026-05-05 19:36:01,526 | INFO | execution.trade_engine | [AMD] Power-hour expansion denied: score 10 < 11 (need 11). Position limit reached.` shows that an AMD signal with `score=10/12` was denied because it "need 11". This implies the bot incorrectly applied the `CONVICTION_PDT_HALF_MIN = 11` rule (intended for PDT=3 accounts) even when `PDT: 0/3`.
+    *   **Failure Condition**: The bot fails to enter a trade with a valid score (10) when it should be eligible for a half-sized position under the non-PDT conviction rules defined in `config.py`. This leads to missed trading opportunities.
+*   **`execution/orphan_manager.py`**: No new issues found, but several prior P5 bugs are addressed.
+*   **`midday_audit.py`**: No issues found. The P&L calculation logic within `analyse_pnl()` for short trades appears correct in the code itself, implying the incorrect P&L for `TOST` originated upstream (e.g., in how the trade event was logged to `trade_events.jsonl`).
+*   **`config.py`**: No issues found. The distinction between `MIN_SCORE = 9` (global) and `MIN_LONG_SCORE = 10` (paper profile override) is noted, and the override is intentional.
+*   **`generate_dashboard.py`**: No issues found.
+*   **`nightly_audit.py`**: No issues found.
+*   **`strategy/run_cycle.py`**: No issues found.
+*   **`venv/lib/python3.10/site-packages/ruff/*`**: No issues found in the context of the bot's trading behavior. These are external tooling dependencies.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **FIXED** (by change in `execution/trade_engine.py` removing yfinance dependency and MultiIndex guard).
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED** (timeout added in `strategy/run_cycle.py` mitigates hangs, but not ImportErrors).
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **UNTOUCHED** (no specific code changes in modified files directly address a stale entry confirmation buffer).
+*   P5-H2 | Fill price crosstalk: **UNTOUCHED** (imports are present, but no code logic in modified sections addresses fill price crosstalk).
+*   P5-H3 | Orphan GTC 404 path: **FIXED** (explicitly handled in `execution/orphan_manager.py` by clearing `gtc_stop_order_id` if order not found).
+*   P5-H4 | Rule 2 dead code: **FIXED** (`get_tod_phase` and `tod_size_multiplier` in `execution/orphan_manager.py` correctly implement the 30-min no-entry buffer).
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED** (Patch 1 in `execution/orphan_manager.py` adds the explicit PDT/opened_today guard for GTC stop submission).
+*   P5-M1 | Cycle watchdog restart loop: **UNTOUCHED** (no code related to `os.execv()` re-entry or lockfile in modified files).
+*   P5-M2 | MRI score cached stale across sessions: **UNTOUCHED** (no explicit state validation/reload for MRI from `mri_state.json` in modified files).
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED** (no relevant modified files).
+*   P5-L1 | _classify_loss_driver() returns empty label: **UNTOUCHED** (no relevant modified files).
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **PARTIAL** (The `Startup R-GUARD` in `strategy/run_cycle.py` adds a mechanism to trigger `reconcile_eod.py` if a crash occurred, but doesn't change the initial timing of the EOD file write).
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED** (no relevant modified files, logs show symptoms of data issues but not a fix for this bug).
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/trade_engine.py | P&L Sign Inversion for Short Exits**: The P&L calculation for short trades upon exit (`(entry_price - exit_price) * qty`) is incorrectly recording a positive value when `entry_price < exit_price`. This leads to misreported profits for losses.
+    *   **Exact failure condition**: When a `short` position with `entry_price` X is exited at `exit_price` Y, if `Y > X`, the calculated P&L is `(Y - X) * qty` (as if it were a long trade) instead of `(X - Y) * qty`, resulting in a positive value where a negative one is expected. This bug is observed in the `TOST` exit event (`2026-04-30T08:19:06.176145-07:00`).
+*   **ALPHA ISSUE | HIGH | execution/trade_engine.py | Incorrect Conviction Tier Application for PDT Status**: The bot incorrectly applies PDT-exhausted conviction rules (`CONVICTION_PDT_HALF_MIN = 11`) to signals when the rolling PDT count is `0/3`, thereby rejecting valid entries that should qualify under non-PDT conviction rules (`CONVICTION_HALF_MIN = 10`).
+    *   **Exact failure condition**: For `AMD` with `score=10/12` while `PDT: 0/3`, `execute_entries` (or its sizing helper) logs `Power-hour expansion denied: score 10 < 11 (need 11)`. The intended `MIN_LONG_SCORE` for `paper` profile at `PDT: 0/3` is 10, meaning a score of 10 should be allowed at half size. The failure condition is the rejection of a valid signal due to an incorrect comparison against a higher score threshold.
+*   **INFRASTRUCTURE | MEDIUM | main (implied) | Excessive Garbage Collection Time**: The `gc.collect()` calls are taking an unusually long time (e.g., 11+ seconds), suggesting that the bot's heap size is growing and memory management is inefficient.
+    *   **Exact failure condition**: `gc.collect()` execution time exceeds acceptable limits for a real-time trading system, leading to significant pauses in bot operation. This indicates a potential memory leak or inefficient object lifecycle management, which could impact real-time data processing and order execution.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Prioritize Fixing P&L Sign Inversion (CRITICAL)**: Immediately correct the P&L calculation logic for short trades upon exit to ensure accurate performance tracking. This is critical for reliable Kelly sizing and performance analysis.
+2.  **Investigate and Correct PDT Conviction Tier Logic (HIGH)**: Address the bug in `execute_entries` (or its helpers) that misapplies PDT-exhausted conviction rules to non-PDT restricted accounts, causing missed trading opportunities.
+3.  **Conduct Root Cause Analysis for Low Average R-Multiple (HIGH)**: Deep-dive into the stop, target, and trailing stop logic (`INTRADAY_STOP_ATR_MULT`, `INTRADAY_TARGET_ATR_MULT`, `PARTIAL_EXIT_ATR_MULT`, `TRAIL_STOP_ATR_MULT`) to understand why the bot is consistently failing to achieve its target 2:1 R:R, and address any underlying issues.
+4.  **Optimize Memory Management / Reduce GC Pause Times (MEDIUM)**: Profile the bot's memory usage and identify areas of excessive object creation or retention that lead to long garbage collection pauses. Optimizing this will improve overall system responsiveness and reliability.
+5.  **Address P5-C2 (run_movers.py ImportError) (CRITICAL)**: Ensure `run_movers.py`'s import dependencies are correct to prevent crashes during pre-market mover scans. This prevents a critical silent failure in market breadth analysis.

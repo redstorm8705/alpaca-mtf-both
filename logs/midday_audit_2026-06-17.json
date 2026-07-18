@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-06-17",
+  "run_ts": "2026-06-17T10:30:03.270971-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 22,
+    "levels": {
+      "ELEVATED": 18,
+      "STRESSED": 4
+    },
+    "last_score": 44,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 58,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-17 13:06:25,257 | WARNING  | main | gc.collect() took 3465.7ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-17 13:16:30,247 | WARNING  | premarket |   [MU] Pre-market move -46.6% exceeds \u00b135% sanity cap \u2014 treating as bad data, skipping",
+      "2026-06-17 13:22:01,143 | WARNING  | main | gc.collect() took 3512.7ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-17 14:02:10,534 | WARNING  | strategy.run_cycle | Risk day (FOMC Rate Decision \u2014 50% size) \u2014 sizing at 50%",
+      "2026-06-17 14:02:35,359 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

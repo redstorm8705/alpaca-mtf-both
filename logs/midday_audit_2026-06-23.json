@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-06-23",
+  "run_ts": "2026-06-23T10:30:03.927496-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 18,
+    "levels": {
+      "STRESSED": 18
+    },
+    "last_score": 51,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 52,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-23 06:39:33,279 | WARNING  | main | gc.collect() took 2475.8ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-23 07:14:45,731 | WARNING  | main | gc.collect() took 2635.5ms, collected 99 objects \u2014 heap may be growing",
+      "2026-06-23 07:49:44,494 | WARNING  | main | gc.collect() took 3785.1ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-23 08:24:36,273 | WARNING  | main | gc.collect() took 2412.8ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-23 08:59:20,640 | WARNING  | main | gc.collect() took 2728.1ms, collected 31 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

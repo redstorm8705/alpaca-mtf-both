@@ -1,0 +1,105 @@
+Nightly Gemini Audit — 2026-06-02
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'execution/entry_logic.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Repeated CRITICAL FIFO Errors**: Multiple `CRITICAL | execution.portfolio_tracker | [FIFO] SPY: closing sell with no open long lots` and `CRITICAL | execution.portfolio_tracker | [FIFO] PLTR: closing sell with no open long lots` messages occur throughout the log (e.g., 19:25:15, 19:32:06, 19:43:17, 19:49:54, 20:00:10, 20:01:03). This indicates a systemic failure in the bot's internal position tracking or P&L reconciliation, leading to state corruption and incorrect P&L calculations.
+*   **Persistent EOD P&L DRIFT**: The `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$18.42 tracker=$-23.66 drift=$+42.08` appears repeatedly, coinciding with the FIFO errors. This confirms that the bot's internal P&L accounting is significantly misaligned with Alpaca's records.
+*   **GC Collect Warnings**: Repeated `WARNING | main | gc.collect() took ...ms, collected ... objects — heap may be growing` (e.g., 19:25:19, 19:43:21, 20:01:08). While not directly critical to trading, this indicates potential memory management issues, leading to performance degradation and possible instability.
+*   **TQI Degradation**: Multiple `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30` (e.g., 19:30:58, 19:37:21, 19:48:40, 19:55:09). This warning indicates a significant deterioration in trade quality, suggesting issues with exit discipline and stop placement.
+
+### PERFORMANCE AUDIT
+
+*   **Severe P&L Discrepancy (NVDA)**: The `EOD SNAPSHOT` lists Alpaca's P&L for NVDA as +14.39 (entry 215.76, exit 230.15) but the tracker records NVDA with 0.0 P&L (entry 216.41, exit 216.41). This is a direct, confirmed P&L corruption for a winning trade.
+*   **Inconsistent Trade Records**: The `TRADE EVENTS` and `EOD SNAPSHOT`'s `trades` list differ from `alpaca_per_trade` in `EOD SNAPSHOT`. Specifically, SPY and PLTR are in `tracker_pnl` calculation but not `alpaca_pnl`, while NVDA's correct PNL from Alpaca is *not* reflected in the tracker.
+*   **Averaging R-Multiple Indicates Deep Performance Issue**: The `all_time_stats` report `avg_r_multiple: -0.046`. This is highly concerning. Despite a `profit_factor: 1.16`, a negative average R-multiple implies that, on average, the bot is losing money relative to its risk per trade. This suggests either frequent small losses/break-evens with a few large wins, or that risk management (stops/targets) is severely underperforming expectations (expected 2.5x target for paper profile).
+*   **Low Win Rate**: Today's win rate is 25.0% (1/4 trades). The `all_time_stats` show a win rate of 41.7%, which is below average. Combined with the negative R-multiple, this suggests poor strategy efficacy.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording Failure (pnl=0.0 where exit ≠ entry)**: The EOD Snapshot shows NVDA `pnl: 0.0` with `exit_price: 216.41` and `entry_price: 216.41`. However, Alpaca's `alpaca_per_trade` section clearly indicates an entry of 215.76 and exit of 230.15 for NVDA, yielding a PNL of 14.39. This is a critical failure in recording the actual trade outcome. The `_fill_unverified: true` flag for NVDA (and SPY) suggests the bot fell back to a default price, failing to reconcile with Alpaca's actual fill.
+
+### MODIFIED FILE FINDINGS
+
+**`config.py`**
+*   **No issues found.** The changes reflect parameter tuning (e.g., `INTRADAY_STOP_ATR_MULT`, `MIN_LONG_SCORE`, `KELLY_FRACTION`) and new risk management features (`ATH_PDT_BLOCK_PCT`, VIX stop widening). `VOLUME_CONFIRMATION_ENABLED = False` correctly indicates shadow mode for volume scoring.
+
+**`execution/entry_logic.py`**
+*   **No new bugs found.** `Rule 2` (gap-down settling window) code is present and appears functional, disproving P5-H4. `_find_recent_fvgs`'s handling of `df_ohlc.columns` appears robust to MultiIndex based on comments, addressing P5-C1. The halting message `execute_entries: HALTED for session` appears to be correctly triggered by `_get_halt_entries()` or `is_pdt_lockedout()`, not a bug in `entry_logic` itself.
+
+**`execution/portfolio_tracker.py`**
+*   **EXECUTION BUG | CRITICAL | `_fifo_reconstruct` (lines 276-291)**
+    *   **Description**: When a "sell" order (Alpaca `side="sell"`) comes in for a symbol that has no open long lots (i.e., `net_qty <= 0`), the `_fifo_reconstruct` function incorrectly appends a "synthetic short" lot, assuming it's an opening short. However, Alpaca can send `side="sell"` for closing long positions, and `side="sell_short"` for opening short positions. The function's logic does not correctly distinguish a market sell (intended to close a long) that might result in going short, from an intentional opening short (`sell_short`).
+    *   **Code Path**: `_fifo_reconstruct` processes a fill with `side="sell"`. It checks `if net_qty > 0`. If this is false (meaning `net_qty` is 0 or negative), it falls into the `else` block (line 276). Inside this `else` block, it logs a critical error `[FIFO] ... closing sell with no open long lots` and then unconditionally appends a new short lot `current.append({"qty": qty, "price": price, "side": "short"})` (line 289). This is the "synthetic short" behavior.
+    *   **Intended vs. Actual**: Intended: correctly match sell orders to existing long lots (or open new short if no long lots exist AND it was an intentional open short). Actual: Any `sell` fill for a symbol with zero or negative net quantity is recorded as a *new* short, even if it was intended to close a long position where the initial long lots were missing from the bot's state. This causes the tracker to lose track of its true net position relative to Alpaca.
+    *   **Exact Failure Condition**: A `fill` activity is received from Alpaca for `side="sell"` (or implicitly `side="sell_short"` which could be sent as `sell` by Alpaca's API depending on context), and the `PortfolioTracker`'s internal `lots` for that `symbol` indicate `net_qty <= 0`. This will incorrectly create a new short lot or incorrectly close a phantom long.
+*   **EXECUTION BUG | HIGH | `patch_exit_pnl` (implicitly called after `fetch_actual_fill_price`)**
+    *   **Description**: The mechanism to `patch_exit_pnl` using `get_unverified_exits` is failing for some trades. The `EOD SNAPSHOT` shows NVDA with Alpaca P&L of +14.39, but the tracker recorded it as 0.0 with `_fill_unverified: true` and `_patch_applied_ts: null`. This implies that `fetch_actual_fill_price` set the `_fill_unverified` flag, but the subsequent patching process (which relies on `patch_exit_pnl` or a similar mechanism) did not correctly update the trade in `closed_trades`.
+    *   **Code Path**: `fetch_actual_fill_price` (in `fill_helpers.py`) fails to retrieve a fill, sets `trade["_fill_unverified"] = True`, and returns the entry price as a fallback. This `trade` dict is then eventually added to `closed_trades` in `PortfolioTracker`. The `get_unverified_exits` method correctly identifies such trades, but the `patch_exit_pnl` (or the caller of it, likely a reconciliation script not shown) fails to apply the correct Alpaca PNL.
+    *   **Exact Failure Condition**: `fetch_actual_fill_price` returns a fallback value, marking `_fill_unverified = True` on a trade. Alpaca's API *does* contain the actual fill for that trade (as evidenced by `alpaca_per_trade` having correct PNL), but the `patch_exit_pnl` or equivalent reconciliation logic fails to retrieve and apply this correct PNL to the `PortfolioTracker`'s `closed_trades` entry.
+
+**`execution/fill_helpers.py`**
+*   **INFRASTRUCTURE | HIGH | `fetch_actual_fill_price` (lines 110-129, specifically `_req_kwargs["after"]` and `_query_fills` sorting logic)**
+    *   **Description**: `fetch_actual_fill_price` is frequently failing to retrieve actual fill prices from Alpaca (`FILL UNVERIFIED` logs), resorting to entry price as a fallback. For NVDA, Alpaca clearly reports a fill and P&L, but `fetch_actual_fill_price` failed to find it. This indicates a problem with how it queries or filters Alpaca's closed orders.
+    *   **Code Path**: `_query_fills` constructs `GetOrdersRequest`. The `_req_kwargs["after"] = datetime.fromtimestamp(submitted_after - 0.05, tz=timezone.utc)` filter, intended to avoid fill crosstalk, might be too aggressive or susceptible to clock drift. Additionally, the sorting `key=lambda x: (str(getattr(x, "created_at", None) or "9999-12-31"), str(getattr(x, "id", "") or "")), reverse=False` aims to find the *earliest* closed order that matches the criteria. If Alpaca's order ID or creation timestamp isn't perfectly monotonic or if the `after` filter is misaligned, a valid fill might be missed.
+    *   **Intended vs. Actual**: Intended: reliably retrieve the actual fill price for a specific order. Actual: Fails to find fills that Alpaca *has* recorded, leading to `_fill_unverified` and P&L discrepancies.
+    *   **Exact Failure Condition**: An order is filled and closed by Alpaca, but the `GetOrdersRequest` in `_query_fills` (due to filtering, sorting, or timing) fails to return that specific filled order or returns it in a way that prevents its `filled_avg_price` from being correctly extracted, leading to fallback.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTOUCHED** (code comments claim this is fixed by Alpaca data source behavior, but the code itself is not defensive against it if `df_ohlc` were ever to contain MultiIndex columns from an alternative source).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED**
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **UNTOUCHED**
+*   **P5-H2 | Fill price crosstalk**: **TRIGGERED** (The attempt to fix this via `submitted_after` and specific sorting in `fetch_actual_fill_price` appears to have failed, leading to `FILL UNVERIFIED` and P&L drift for NVDA. The root cause is likely related to `fetch_actual_fill_price` failing to find the correct fill, rather than simply crosstalk.)
+*   **P5-H3 | Orphan GTC 404 path**: **UNTOUCHED**
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (The code exists and appears active in `execution/entry_logic.py`).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED**
+
+### NEW BUGS FOUND
+
+1.  **EXECUTION BUG | CRITICAL | `execution/portfolio_tracker.py` | `_fifo_reconstruct` (lines 276-291)**
+    *   **Description**: `_fifo_reconstruct` incorrectly creates "synthetic short" lots when a "sell" order is received and no open long lots exist. This logic fails to correctly handle Alpaca's fill types or the bot's internal state.
+    *   **Exact Failure Condition**: A `fill` activity from Alpaca has `side="sell"`, and the current net position for that symbol in the tracker is zero or short. The function incorrectly assumes this is an *opening* short and records a new short lot, leading to a desynchronized state and P&L errors.
+
+2.  **EXECUTION BUG | CRITICAL | `execution/portfolio_tracker.py` & `execution/fill_helpers.py` | P&L Reconciliation Failure (across `fetch_actual_fill_price`, `get_unverified_exits`, `patch_exit_pnl`)**
+    *   **Description**: The end-to-end process for retrieving actual fill prices and patching `_fill_unverified` trades is failing, leading to significant P&L drift and incorrect recording of trade outcomes in the `PortfolioTracker`.
+    *   **Exact Failure Condition**: `fetch_actual_fill_price` fails to retrieve an actual fill (sets `_fill_unverified=True`), and the subsequent reconciliation (via `get_unverified_exits` and `patch_exit_pnl` or external script) does not correctly update the trade's `exit_price` and `pnl` in `self.closed_trades` using Alpaca's confirmed fills.
+
+3.  **ALPHA ISSUE | CRITICAL | `all_time_stats` | `avg_r_multiple` (line 144 of `EOD SNAPSHOT` input)**
+    *   **Description**: The `avg_r_multiple` of -0.046 is a critical indicator of strategy underperformance, suggesting that trades are not achieving expected risk-reward ratios despite a positive profit factor. This implies the strategy is, on average, losing money relative to its per-trade risk.
+    *   **Exact Failure Condition**: The combination of `win_rate`, `avg_win`, and `avg_loss` leads to an `avg_r_multiple` significantly below target (e.g., negative or far from 1:1, especially with a 2.5x target). This indicates fundamental issues with trade selection, entry, or exit logic.
+
+4.  **INFRASTRUCTURE | MEDIUM | `main` | `gc.collect()` warnings (e.g., 19:25:19)**
+    *   **Description**: Repeated warnings about `gc.collect()` taking a long time and heap potentially growing indicate a memory leak or inefficient memory usage, which can lead to performance degradation and instability over time.
+    *   **Exact Failure Condition**: `gc.collect()` consistently takes over 100ms *and* the message "heap may be growing" appears repeatedly, suggesting a memory leak that could eventually lead to out-of-memory errors or significant latency spikes.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Immediate Priority: Fix FIFO P&L Reconstruction and Fill Reconciliation**:
+    *   **Action**: Thoroughly re-audit `execution/portfolio_tracker.py`'s `_fifo_reconstruct` to correctly handle all Alpaca fill types (especially differentiating `sell` for closing longs from `sell_short` for opening shorts, or robustly inferring intent from net position).
+    *   **Action**: Debug `execution/fill_helpers.py`'s `fetch_actual_fill_price` and the P&L patching process to ensure that actual Alpaca fill prices are consistently retrieved and correctly applied to `closed_trades`, eliminating the `_fill_unverified` and P&L drift issues.
+    *   **Justification**: This is causing critical data corruption and rendering the bot's internal P&L accounting unreliable.
+
+2.  **Investigate and Address Negative Average R-Multiple**:
+    *   **Action**: Conduct a detailed post-mortem analysis of past trades, focusing on actual R-multiples achieved versus target R-multiples for each trade. Analyze stop-out prices relative to entry and targets.
+    *   **Action**: Review `config.py` parameters related to stop and target ATR multiples, especially `PARTIAL_EXIT_ATR_MULT = 0.8` (paper profile), as early partial exits may be undermining overall trade profitability if remaining positions are frequently stopped out for small gains or losses.
+    *   **Justification**: A negative average R-multiple indicates a fundamental flaw in the strategy's ability to capture its edge, despite a positive profit factor.
+
+3.  **Address TQI Degradation**:
+    *   **Action**: Review exit discipline, stop placement logic, and trailing stop mechanisms (especially after partial exits) in light of the `[ANOMALY-3] TQI degradation` warnings.
+    *   **Justification**: Poor trade quality directly impacts performance and capital preservation.
+
+4.  **Investigate Memory Leak/Performance Degradation**:
+    *   **Action**: Profile the bot's memory usage and garbage collection activity to identify the source of the "heap may be growing" warnings and long `gc.collect()` times.
+    *   **Justification**: Long-running memory issues can lead to instability and unexpected latency, impacting timely order execution.
+
+5.  **Review PDT Entry Logic and Halt Conditions**:
+    *   **Action**: While PDT is 0/3, review the `execute_entries: HALTED for session` logs and the `events.handlers` module (not provided) to understand all conditions that can halt new entries. Ensure that these halts are intentional and not masking other issues.
+    *   **Justification**: Confirming the robustness of entry gatekeeping is crucial for PDT compliance and consistent strategy execution.

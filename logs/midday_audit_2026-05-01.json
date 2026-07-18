@@ -1,0 +1,123 @@
+{
+  "audit_date": "2026-05-01",
+  "run_ts": "2026-05-01T10:30:04.230391-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "AAPL",
+        "ts": "2026-05-01 09:05:22",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 284.91,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "UBER",
+        "ts": "2026-04-30 08:53:21",
+        "score": 11,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 74.1,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "AAPL",
+      "UBER"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 14,
+    "levels": {
+      "STRESSED": 14
+    },
+    "last_score": 53,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 950,
+    "watchdog_count": 3,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-01 06:37:58,137 | WARNING  | strategy.signal_generator | [NVDA] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-01 06:38:02,244 | WARNING  | strategy.signal_generator | [AAPL] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-01 06:38:08,335 | WARNING  | strategy.signal_generator | [TSLA] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-01 06:38:14,533 | WARNING  | strategy.signal_generator | [AMD] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-01 06:38:18,843 | WARNING  | strategy.signal_generator | [PLTR] Weekly bias: insufficient data (4 bars), filter skipped"
+    ],
+    "watchdog_lines": [
+      "2026-05-01 14:44:26,860 | CRITICAL | main | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting.",
+      "2026-05-01 15:46:45,436 | CRITICAL | main | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting.",
+      "2026-05-01 17:20:41,314 | CRITICAL | main | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [
+    {
+      "symbol": "UBER",
+      "status": "rc=2",
+      "entry": 74.1,
+      "exit": 76.48
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -16.660000000000068,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -16.660000000000068,
+    "best": {
+      "symbol": "UBER",
+      "pnl": -16.660000000000068,
+      "entry_price": 74.1,
+      "exit_price": 76.48,
+      "size": 7.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 76.48,
+      "target": 68.15
+    },
+    "worst": {
+      "symbol": "UBER",
+      "pnl": -16.660000000000068,
+      "entry_price": 74.1,
+      "exit_price": 76.48,
+      "size": 7.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 76.48,
+      "target": 68.15
+    },
+    "trades": [
+      {
+        "symbol": "UBER",
+        "pnl": -16.660000000000068,
+        "entry_price": 74.1,
+        "exit_price": 76.48,
+        "size": 7.0,
+        "exit_event": "exit",
+        "score": 11,
+        "mri_level": "STRESSED",
+        "stop": 76.48,
+        "target": 68.15
+      }
+    ]
+  }
+}

@@ -1,0 +1,75 @@
+Nightly Gemini Audit — 2026-07-08
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['scripts/collect_health_facts.py', 'strategy/run_cycle.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+TRADE INTEGRITY | RIVN exit pnl is 0.0 despite price difference | ts: 2026-07-07T23:00:40.366062-07:00 for RIVN, pnl: 0.0, price: 17.3218 (entry was 19.73)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Options Data Fetch Failure**: Recurring `WARNING` from `scan_to_html._fetch_options_data`: `fetch failed — returning None: cannot convert float NaN to integer` (e.g., `2026-07-08 19:32:36,961`, `2026-07-08 19:46:56,536`, `2026-07-08 20:01:12,414`). This indicates a persistent problem with fetching options data, which could impact any components reliant on it.
+*   **P&L Drift**: Persistent `WARNING` from `execution.portfolio_tracker`: `EOD P&L DRIFT: Alpaca=$-10.90 tracker=$-26.46 drift=$+15.56` (e.g., `2026-07-08 19:32:38,047`, `2026-07-08 19:39:09,909`, `2026-07-08 20:01:13,361`). While `A-4` states Alpaca paper fills gap, the consistent drift of $15.56 on a $2.5K account is a substantial divergence in reported P&L, warranting verification of the tracker's accuracy and reconciliation logic.
+*   **TQI Degradation**: Recurring `WARNING` from `strategy.run_cycle`: `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` (e.g., `2026-07-08 19:37:49,473`, `2026-07-08 20:00:03,229`). This self-reported anomaly indicates that recent trade performance is consistently below a healthy threshold, suggesting issues with exit discipline or stop placement.
+*   **Repetitive Entry Halt Logging**: Recurring `WARNING` from `execution.entry_logic`: `execute_entries: HALTED for session — no new entries permitted.` (e.g., `2026-07-08 19:39:07,562`, `2026-07-08 20:00:03,229`). This warning appears frequently (every ~7 minutes) during `MRI STRESSED` periods. While entries are correctly halted, the repetitive logging adds significant noise to the logs, potentially obscuring more critical issues.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: Verified for the 6 `safe_close_all` trades on 2026-07-08. All P&L signs (positive for wins, negative for losses) align with the entry and exit prices.
+*   **pnl_pct Computation**: Verified as correct for MARA based on entry price, exit price, and quantity. Assumed consistent for other trades.
+*   **Partial P&L Accumulation**: `partial_exit` events (e.g., HOOD, RIVN on 2026-07-02) record `pnl: 0.0`. While this aligns with Known Benign Pattern `A-4` (Alpaca paper fill reporting delay), the internal mechanism for accumulating P&L across tranches for these specific events is not visible or verifiable in the provided logs. The final P&L at full exit seems to capture the net result, suggesting the `partial_pnl` field might be intentionally zeroed for delayed reporting.
+*   **Trades with pnl=0.0 where entry ≠ exit price**:
+    *   **RIVN anomaly**: The trade event at `2026-07-07T23:00:40.366062-07:00` for `RIVN` shows an `exit_price` of `17.3218` for `size: 17`, with `pnl: 0.0`. However, the corresponding entry (from `2026-07-06T10:35:58.509315-07:00`) had an `entry_price` of `19.73`. This difference should result in a substantial loss (`(19.73 - 17.3218) * 17 = $40.94`), not `0.0`. This is a clear P&L recording bug.
+*   **Entry/Exit Prices Plausibility**: Prices are plausible for the symbols and times.
+*   **Score→Outcome Correlation**: For the 6 trades on 2026-07-08, 2 trades won (scores 9, 7) and 4 lost (scores 2, 5, 5, 10). A score of 10 resulted in a loss, and lower scores resulted in wins, indicating no strong correlation for this small sample, consistent with the `TQI degradation` warning.
+*   **Stop-Hit Rate vs. Win Rate**: Today's 6 trades exited via `safe_close_all`, not stop hits. The most recent `stop_hit` was RBLX on 2026-07-06. The `TQI degradation` warning highlights an underlying issue with exit performance.
+*   **Profit Factor and R:R vs. Stated Target**: The `all_time_stats` report an `avg_r_multiple` of `0.028`. This is severely misaligned with the `INTRADAY_TARGET_ATR_MULT` of `2.5`. This indicates the bot is failing to capture its intended risk-reward profile, suggesting fundamental issues in strategy, stop/target setting, or exit execution.
+
+### TRADE INTEGRITY
+*   **P&L Recording Error (RIVN)**: As detailed in the "Performance Audit" section, the `pnl` for the RIVN exit at `2026-07-07T23:00:40.366062-07:00` is incorrectly recorded as `0.0` when a significant loss should have been calculated. This is a critical error affecting the accuracy of trade P&L records.
+
+### MODIFIED FILE FINDINGS
+*   **scripts/collect_health_facts.py**
+    *   **`_env`, `_get` functions | LOW | Broad Exception Handling**:
+        *   Exact function names: `_env`, `_get`
+        *   Code path: Both functions employ bare `except Exception` blocks (e.g., `_env` line 25, `_get` line 39).
+        *   Failure condition: This broad exception handling can silently mask various underlying issues (e.g., file permission errors, malformed API responses, specific network errors) making it harder to diagnose the true cause of failures within this health-checking script.
+    *   **`main` function | LOW | Unconditional QHM Stop Exemption**:
+        *   Exact variable: `QHM = {"GOOGL", "NVDA"}` (line 53)
+        *   Code path: `if not has_stop and sym not in QHM:` (line 62)
+        *   Failure condition: While `QHM` symbols are labeled "never-sell holds," if the bot *itself* were to initiate new trades in `GOOGL` or `NVDA` (which it scans in `VOLSHADOW`), the `collect_health_facts.py` script would *not* flag these positions if they lacked protective stops, due to this hardcoded exemption. This bypasses a crucial safety check for potentially actively traded assets.
+
+*   **strategy/run_cycle.py**
+    *   **`run_cycle` function | MEDIUM | Repetitive "Halted Entries" Logging**:
+        *   Exact function name: `run_cycle`, specifically the logging of `execute_entries: HALTED for session` (calls `logger.critical` in `risk.check_kill_switch` or `logger.warning` in `execution.entry_logic`).
+        *   Code path: The warning `execute_entries: HALTED for session` is emitted in `execution.entry_logic` (called by `run_cycle`) multiple times within a single halted session.
+        *   Failure condition: This behavior clutters the log, making it difficult to discern new, distinct issues from repeated status updates. It should ideally be logged once when the halt state is initiated.
+    *   **`run_cycle` function | LOW | Inconsistent `trade_event` Logging for Breadth**:
+        *   Exact function name: `_log_trade_event` (line 120)
+        *   Code path: `_log_trade_event("breadth_refresh", symbol="BREADTH", price=0.0, size=0, ...)`
+        *   Failure condition: Using `price=0.0` and `size=0` for a non-trade event like "breadth_refresh" in a function explicitly named `_log_trade_event` is semantically inaccurate and could lead to incorrect parsing or aggregation by downstream tools expecting trade-specific values. A dedicated event type or logger for market health metrics would be more appropriate.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: TRIGGERED (implied by `Pre-market mover scan failed or timed out` in the log, likely due to this underlying issue or similar scan infrastructure failure which results in `movers = []` fallback)
+*   **P5-H1 | OBSOLETE - PDT enforcement**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | GTC stop suppressed**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **NONE** (Catastrophic items moved to the top section as per format)
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Fix P&L Recording Error for RIVN (TRADE INTEGRITY)**: Investigate `trade_logger.py` and `execution` modules to identify why the `pnl` field is recorded as `0.0` for the RIVN exit on `2026-07-07T23:00:40.366062-07:00` despite a clear price difference from entry. Ensure `tracker_pnl` is correctly reflecting all realized P&L.
+2.  **CRITICAL: Audit & Improve R:R Performance (ALPHA ISSUE)**: Conduct a comprehensive audit of the strategy's stop placement, target setting, and exit logic (including `safe_close_all` reasons) to determine why `avg_r_multiple` is `0.028` against a `2.5` target. The `TQI degradation` indicates an immediate need to re-evaluate how trades are managed post-entry.
+3.  **HIGH: Resolve Options Data Fetch Failure (INFRASTRUCTURE)**: Address the recurring `_fetch_options_data fetch failed` warning. Determine the root cause (API, network, data parsing) and implement more robust error handling, retries, or fallback mechanisms to prevent `NaN` conversion issues and ensure data integrity for any components that rely on options data.
+4.  **MEDIUM: Optimize Entry Halt Logging (LOG ANOMALIES)**: Modify the `execution.entry_logic` (or the component that issues the warning) to log the "HALTED for session" warning only when the entry halt state is initiated or changes, rather than on every subsequent cycle during which entries remain halted.
+5.  **LOW: Enhance Health Script Robustness (MODIFIED FILE FINDINGS)**: Refine exception handling in `scripts/collect_health_facts.py` to use more specific exception types. Re-evaluate the `QHM` symbol exemption in the stop coverage check, considering if actively traded `GOOGL` or `NVDA` positions should still be subject to stop order verification.

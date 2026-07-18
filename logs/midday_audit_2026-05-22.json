@@ -1,0 +1,86 @@
+{
+  "audit_date": "2026-05-22",
+  "run_ts": "2026-05-22T10:30:05.952504-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 0,
+    "partial_count": 2,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "PANW"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 18,
+    "levels": {
+      "ELEVATED": 18
+    },
+    "last_score": 38,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 44,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-22 14:44:48,557 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-05-22 14:51:55,363 | WARNING  | main | gc.collect() took 3562.5ms, collected 99 objects \u2014 heap may be growing",
+      "2026-05-22 14:56:55,948 | WARNING  | strategy.run_cycle | Risk day (Michigan Consumer Sentiment Final) \u2014 sizing at 50%",
+      "2026-05-22 14:57:52,861 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-05-22 15:05:20,854 | WARNING  | main | gc.collect() took 3916.7ms, collected 99 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -81.60999999999999,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -81.60999999999999,
+    "best": {
+      "symbol": "PANW",
+      "pnl": -81.60999999999999,
+      "entry_price": 172.31,
+      "exit_price": 253.92,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 180.21,
+      "target": 152.56
+    },
+    "worst": {
+      "symbol": "PANW",
+      "pnl": -81.60999999999999,
+      "entry_price": 172.31,
+      "exit_price": 253.92,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 180.21,
+      "target": 152.56
+    },
+    "trades": [
+      {
+        "symbol": "PANW",
+        "pnl": -81.60999999999999,
+        "entry_price": 172.31,
+        "exit_price": 253.92,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 12,
+        "mri_level": "HIGH",
+        "stop": 180.21,
+        "target": 152.56
+      }
+    ]
+  }
+}

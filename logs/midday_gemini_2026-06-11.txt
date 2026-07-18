@@ -1,0 +1,47 @@
+Midday Gemini Audit — 2026-06-11
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No entries or exits were recorded in this session, therefore direct assessment of entry/exit integrity, P&L signs, win rate, profit factor, or score-outcome correlation for the current session is not possible. The stop-hit rate is 0%, consistent with no trades.
+
+### ENTRY QUALITY
+No issues were detected. The bot correctly abstained from opening new positions due to the MRI being at a STRESSED level (score=45). This adheres to the `⛔ BV-5: MRI=STRESSED — no new entries until regime improves` rule. Additionally, most `VOLSHADOW` logs indicate `would_pass: false` or `score_without_vol` below the `MIN_SCORE = 9` threshold, further preventing potential low-quality entries.
+
+### EXIT QUALITY
+No exits were recorded in this session.
+
+### MRI ALIGNMENT
+The bot accurately identified and reacted to the `MRI STRESSED (score=45)` regime. It correctly applied a `size floor 0.70x` and, more critically, enacted a `⛔ BV-5: MRI=STRESSED — no new entries until regime improves` rule. This demonstrates proper alignment with the defined risk management rules for stressed market conditions. The VIX levels (21.3-21.6) also correctly triggered a sizing adjustment for a wider breakeven buffer (as VIX > `VIX_BE_WIDEN_THRESHOLD_1 = 20.0`), although stops were not widened as VIX remained below `VIX_STOP_WIDEN_THRESHOLD_1 = 25.0`.
+
+### LOG ANOMALIES
+*   **WARNING: Recurring `gc.collect()` overhead**: The garbage collector (`gc.collect()`) is consistently taking approximately 4 seconds to execute while collecting a minimal number of objects (64 objects). This suggests potential memory management issues and can lead to significant latency in a live trading environment.
+*   **WARNING: Recurring TQI degradation**: The `[ANOMALY-3] TQI degradation` warning is issued repeatedly, indicating that the `last-5-trade avg` TQI is `22.4/100`, which is below the target threshold of `30`. This points to systemic issues with recent trade performance.
+
+### NEW BUGS / CONCERNS
+
+**INFRASTRUCTURE | CRITICAL | Excessive Garbage Collection Overhead**
+*   **Variable involved:** `gc.collect()` execution time (`took 4050.8ms`, `3991.5ms`, `4087.9ms`) and number of objects collected (`collected 64 objects`).
+*   **Value vs. Should be:** The garbage collector is taking an excessively long time (~4 seconds) to complete, while only collecting a very small number of objects (64). In a high-frequency trading context, a 4-second pause is unacceptable as it can cause missed market opportunities, delayed order submissions, or even stop-loss failures. Ideally, `gc.collect()` should either execute much faster (milliseconds) for such a low object count, or it should collect a significantly higher number of objects if memory pressure truly necessitates it. This discrepancy suggests inefficient memory usage, a memory leak, or an overly aggressive/poorly timed explicit `gc.collect()` call.
+*   **Condition:** Occurs periodically (approximately every 10-11 minutes) in the `main` logger:
+    `2026-06-11 16:58:23,835 | WARNING | main | gc.collect() took 4050.8ms, collected 64 objects — heap may be growing`
+    `2026-06-11 17:09:21,857 | WARNING | main | gc.collect() took 3991.5ms, collected 64 objects — heap may be growing`
+    `2026-06-11 17:20:00,762 | WARNING | main | gc.collect() took 4087.9ms, collected 64 objects — heap may be growing`
+
+**ALPHA ISSUE | HIGH | Persistent Trade Quality Index (TQI) Degradation**
+*   **Variable involved:** `last-5-trade avg` TQI.
+*   **Value vs. Should be:** The `last-5-trade avg` TQI is consistently `22.4/100`, which is significantly below the internal threshold of `30`. This metric is designed to signal a degradation in the strategy's effectiveness, specifically prompting a "review exit discipline and stop placement." A TQI persistently below 30 indicates that recent closed trades have performed poorly, suggesting a systematic issue with the strategy's alpha generation or risk management, even if no trades were opened in *this specific* session.
+*   **Condition:** This warning is logged at the start of multiple strategy cycles:
+    `2026-06-11 17:04:04,059 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.`
+    `2026-06-11 17:14:55,278 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.`
+    `2026-06-11 17:25:40,155 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.`
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE**: Investigate the root cause of the prolonged `gc.collect()` execution taking ~4 seconds to collect only 64 objects. This could be due to a memory leak, excessive temporary object creation, or an ill-timed explicit call to `gc.collect()`. Employ memory profiling tools to identify and optimize memory usage, ensuring that critical trading operations are not impacted by GC pauses. This is a **CRITICAL** issue for a live trading system's responsiveness.
+2.  **ALPHA**: Conduct an immediate and thorough review of the strategy's recent trade performance, focusing on "exit discipline and stop placement," as indicated by the persistent `[ANOMALY-3] TQI degradation` warning. Analyze the last 5-10 closed trades (even if not shown in this specific log) to identify common patterns in losses or underperformance, especially concerning stop-loss and profit target execution.
+3.  **ALPHA**: Evaluate the `MIN_SCORE = 9` threshold in conjunction with the current `STRESSED` MRI regime and the observed low `score_without_vol` in `VOLSHADOW` logs. While the bot correctly avoided entries, the large number of symbols being scanned that consistently fail to meet the score or volume criteria might indicate that the strategy's filters are either too strict for current market conditions or its confluence logic needs refinement to generate higher quality signals. This can reduce unnecessary processing if many symbols are routinely rejected.

@@ -1,0 +1,103 @@
+Nightly Gemini Audit — 2026-06-18
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'tca_logger.py', 'execution/kelly.py', 'execution/orphan_manager.py', 'execution/broker.py', 'execution/entry_logic.py', 'execution/portfolio_tracker.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **P&L Drift**: Repeated `WARNING | execution.portfolio_tracker | EOD P&L DRIFT`. The EOD snapshot confirms a significant drift (`Alpaca=$1.10 tracker=$-14.49 drift=$+15.59`). This indicates a persistent discrepancy between the bot's internal P&L accounting and Alpaca's records. This is a critical issue for performance tracking and risk management.
+*   **TQI Degradation**: Recurring `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 — review exit discipline and stop placement.`. This is a self-reported performance warning, indicating an issue with trade execution quality or stop placement. While not a code bug, it's a critical operational alert.
+*   **Garbage Collection Blocking**: Recurring `WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing`. The `gc.collect()` calls are taking several seconds (e.g., 6639.9ms, 3394.2ms). This indicates significant blocking of the main thread, potentially impacting real-time decision-making, and suggests a potential memory leak or inefficient object management within the bot.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: The `NFLX` trade shows:
+    *   Partial exit: `direction="short"`, `entry_price=77.54`, `partial_exit_price=76.38`, `partial_pnl=1.16`. Correct (entry > exit = profit for short).
+    *   Full trade total P&L: `pnl=-14.49`. This is the combined P&L for both tranches from the bot's perspective.
+    *   Alpaca fills: First tranche P&L 1.16, second tranche P&L -0.06. Total Alpaca P&L: 1.10.
+    *   **Finding**: The `pnl_drift` (Alpaca vs. Tracker) for `NFLX` indicates the bot's internal P&L calculation for the second tranche (`pnl_remaining=-15.65`) is based on an `exit_price=93.19`, which does not match Alpaca's recorded exit price of `77.6` for that tranche. This directly causes the P&L drift.
+*   **pnl_pct computation**: For `NFLX`, `pnl_pct=-9.34` and `_qty_at_close=1`. This `pnl_pct` appears to be computed for the *remaining* (second) tranche (`-15.65 / 77.54 / 1 = -0.20`, or `-15.65 / 77.54` as dollar loss per entry price). The displayed `pnl_pct` needs clarification on its base (total initial investment or current tranche value).
+*   **partial_pnl accumulated**: `partial_pnl: 1.16` for `NFLX` is correctly recorded.
+*   **Trades with pnl=0.0 where entry ≠ exit price**: No such trades are visible in the provided logs or EOD snapshot. The `SF-01 GUARD` in `execution/orphan_manager.py` (line 159) explicitly patches `entry_price` to `fill_price` when a GTC stop fires on a pending entry, resulting in $0.00 P&L to prevent tracker desync. This is an intended fallback, not a bug, but it does mean such cases *can* occur.
+*   **Entry/exit prices plausible**: Prices for `UBER`, `TOST`, `INTC`, `NFLX`, `SMCI`, `MSTR` in the trade events appear plausible for typical stock trading.
+*   **Score→outcome correlation**: The single closed trade (`NFLX` score 12) resulted in a loss. No strong correlation can be drawn from limited data, but the `avg_r_multiple=-0.108` suggests negative expectancy across all trades.
+*   **Stop-hit rate vs. win rate**: `win_rate_today=0.0` (1 loss), `all_time_stats.win_rate=38.5`. This implies a stop-hit rate > 50% historically. The `[ANOMALY-3] TQI degradation` warning corroborates poor trade outcomes and indicates a regime mismatch where stop placement/exit discipline needs review.
+*   **Exit reason consistency**: For `NFLX`, the exit reason is `external_close`. The final `exit_price` recorded by the bot (93.19) is far above the `stop` (77.54) and `original_stop` (80.29), which is unusual for a typical stop-loss or target. This reinforces the P&L drift issue and suggests the `external_close` might not correctly capture the actual market exit price.
+*   **Profit factor and R:R vs. stated 2.5× target**: `all_time_stats.avg_r_multiple=-0.108`. This is significantly below the `TARGET_ATR_MULT=2.5`. The bot is not capturing its theoretical edge, and is losing money on average in R-multiple terms.
+
+### TRADE INTEGRITY
+
+*   **P&L Drift / Exit Price Mismatch**: As noted above, the `NFLX` trade's final exit price `93.19` in `PortfolioTracker` (leading to `pnl_remaining=-15.65`) is inconsistent with Alpaca's `77.6` fill for the same tranche (`pnl=-0.06`). This is a critical recording error.
+
+### MODIFIED FILE FINDINGS
+
+**1. `main.py`**
+*   **No issues found.** The changes related to `fcntl.FD_CLOEXEC` explicitly address `P5-M1`. Logging for `WatchedFileHandler` (H-1) looks correct. Startup validations and profile overrides appear robust.
+
+**2. `tca_logger.py`**
+*   **No issues found.** The logic for logging entry and exit slippage, including the `fill_confirmed` and `intended_price is None` guards, appears sound and intentional.
+
+**3. `execution/kelly.py`**
+*   **No issues found.** The `HARD VETO` logic for `kelly_full < 0.0` (returning `0.0` risk) is a deliberate and well-documented policy change (Board 2026-06-17), not a bug. The implementation of `_a2_mult` (ATH drawdown), `_restore_tqi_from_disk`, `append_tqi`, `_save` (atomic writes), `Derman guard`, and `GEX edge multiplier` all appear correctly implemented as per the audit instructions.
+
+**4. `execution/orphan_manager.py`**
+*   **No issues found.** The `cancel_and_reconcile_gtc_stops` function appears to handle various GTC order statuses (filled, pending_cancel, canceled/expired) and special cases like QHM protected symbols and the `SF-01` guard for pending entries. The GTC-PENDING-CANCEL-FIX (2026-04-30) and GAI-FIX-2026-05-11 logic for `pending_cancel` states are correctly applied. The logic for idempotently adopting live GTC stops in "closed" phase also looks correct.
+
+**5. `execution/broker.py`**
+*   **No issues found.** The retry logic for submitting orders, idempotency keys, and specific error handling for shorting blocks (`40310000`) and the `GTC-RACE` condition (60s poll) all seem robust. The new `GTC buy-stop rejected 42210000 (NBBO price)` nudge retry (2026-06-17) is a targeted fix for a specific broker error and is implemented with a single retry cap as intended.
+
+**6. `execution/entry_logic.py`**
+*   **Bug: Inconsistent Volume Scoring for `VOLSHADOW` and `strategy.run_cycle`**
+    *   **Function Name and Variable Involved**: `confluence` module (implicitly) determines `would_pass` and `score_without_vol` in `VOLSHADOW` logs, which clashes with the `score` reported by `strategy.run_cycle`. Specifically, the logic that integrates the volume condition into the final `score`.
+    *   **Code Path Trace**:
+        1.  At `2026-06-18 19:42:48,656`, the `confluence` module logs `[SPY] VOLSHADOW {"direction": "long", ..., "would_pass": false, ..., "score_without_vol": 8, ...}`. This indicates that for SPY Long, the score based on criteria *excluding volume* is 8, and the volume condition *did not pass*.
+        2.  However, at `2026-06-18 19:43:13,383`, `strategy.run_cycle` logs `SPY LONG score=12/12 bias=strong_bull`.
+        3.  A score of 12 (out of 12) from an `8` "score_without_vol" implies that 4 points were awarded, presumably for the volume condition, making the final score 12.
+    *   **Failure Condition**: There is a logical inconsistency. The `VOLSHADOW` log explicitly states `would_pass=false` for the volume condition, but the `strategy.run_cycle` reports a perfect 12/12 score for the same signal, which would require the volume condition to have passed. This suggests either the `would_pass` flag in `VOLSHADOW` is incorrectly calculated/logged, or the `strategy.run_cycle` is incorrectly awarding points for a volume condition that failed, leading to an inflated score and potentially an unwarranted trade entry.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash: **FIXED** (explicitly removed MultiIndex guard in `_find_recent_fvgs` as Alpaca Data returns flat columns).
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED** (file not provided).
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **UNTOUCHED** (No explicit fix for stale `entry_confirm_buffer` detected beyond generic `GateState` refactor; `_rc8_clear_buffers` clears on external blocks, but not for stale PDT buffer specific to this issue).
+*   P5-H2 | Fill price crosstalk: **UNTOUCHED** (No explicit fixes for `fill price crosstalk` found in the modified files. `client_order_id` in `broker.py` helps with idempotency but not necessarily crosstalk for multiple distinct orders.)
+*   P5-H3 | Orphan GTC 404 path: **FIXED** (The `get_order` function in `orphan_manager.py` handles `None` return, and `tracker.clear_gtc_stop_order_id` is called).
+*   P5-H4 | Rule 2 dead code: **FIXED** (Comment in `main.py` explicitly states `TOD_MARKET_OPEN_BUFFER_MINS` is now aligned directly in `config.py`).
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED** (As per P5 queue description itself).
+*   P5-M1 | Cycle watchdog restart loop: **FIXED** (`main.py` explicitly adds `fcntl.FD_CLOEXEC` to the lockfile).
+*   P5-M2 | MRI score cached stale across sessions: **FIXED** (`MacroRiskIndex._restore()` and `startup_stale` logic in `events/macro_risk_index.py` handles this).
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED** (No explicit pruning or size management for `score_comparison` JSON file found in provided code snippets).
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED** (Not in provided code).
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **UNTOUCHED** (EOD snapshot still shows open positions, implying the daily summary is written before all positions are fully closed for the day).
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED** (File not provided).
+
+### NEW BUGS FOUND
+
+1.  **CATEGORY**: EXECUTION BUG | **SEVERITY**: CRITICAL
+    *   **File**: `execution/portfolio_tracker.py`
+    *   **Description**: The bot's internal P&L accounting for closed trades, particularly those with an `external_close` reason, is not accurately reflecting Alpaca's confirmed fills. This leads to a significant and recurring `P&L DRIFT` between the bot's `tracker_pnl` and `alpaca_pnl`. For the `NFLX` trade, the bot recorded an `exit_price` of `93.19` for the second tranche, while Alpaca's actual fill was `77.6`.
+    *   **Exact failure condition**: `portfolio_tracker.py`'s internal `trade["exit_price"]` (and derived P&L) for trades with `exit_reason="external_close"` does not match the actual `fill.get("price")` received from Alpaca's activity stream, indicating a failure to correctly fetch or apply the confirmed exit price at the time of an `external_close`.
+
+2.  **CATEGORY**: ALPHA ISSUE | **SEVERITY**: HIGH
+    *   **File**: `execution/entry_logic.py` and `confluence` module (implicitly)
+    *   **Description**: There is a logical inconsistency in how the volume component of the confluence score is reported and used. The `VOLSHADOW` log for a symbol (e.g., SPY long at `19:42:48.656`) explicitly states `"would_pass": false` for the volume criteria and `"score_without_vol": 8`. However, shortly after (`19:43:13.383`), `strategy.run_cycle` logs a `score=12/12` for the same signal, implying that the volume condition *did* pass and contributed points to reach 12.
+    *   **Exact failure condition**: The boolean field `would_pass` in the `confluence` module's `VOLSHADOW` log does not correctly reflect the outcome of the volume condition used to compute the final `score` in `strategy.run_cycle`. Specifically, `would_pass=false` is logged when the condition must have actually passed for `score_without_vol` (8) to become the final `score=12`. This could lead to incorrect signal interpretation and trade entries based on flawed scoring.
+
+3.  **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: MEDIUM
+    *   **File**: `main.py`
+    *   **Description**: The garbage collection calls (`gc.collect()`) are causing multi-second blocking pauses (e.g., `6639.9ms`, `3394.2ms`) for collecting a relatively small number of objects (99 objects). This is accompanied by the warning "heap may be growing".
+    *   **Exact failure condition**: `gc.collect()` operations are blocking the main bot thread for an unacceptably long duration, impacting the bot's responsiveness and real-time trading capabilities. The "heap may be growing" warning suggests an underlying memory management problem, potentially a memory leak or inefficient object lifecycle, which could lead to increased latency and resource exhaustion over longer runtimes.
+
+### FIX VALIDATION
+
+No prior fixes to validate for the newly identified bugs.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate P&L Drift (CRITICAL)**: Trace the `NFLX` trade's `external_close` path to pinpoint where `trade["exit_price"]` is being incorrectly set to `93.19` instead of Alpaca's `77.6`. Ensure `_fetch_alpaca_fills_for_date` is the authoritative source for all exit prices for closed trades, especially `external_close` events.
+2.  **Resolve Volume Scoring Inconsistency (HIGH)**: Audit the `confluence` module's scoring logic for the volume component (`would_pass` and its contribution to the final score) to ensure consistency between logging and actual score calculation. Correct either the `VOLSHADOW` log output or the scoring mechanism in `strategy.run_cycle`.
+3.  **Address High GC Latency / Memory Growth (MEDIUM)**: Profile memory usage and object lifetimes during bot operation. Identify and optimize areas with excessive object creation or long-lived/unreachable objects. Consider alternative garbage collection strategies or less frequent/asynchronous `gc.collect()` calls if no leaks are found.
+4.  **Review TQI Degradation (OPERATIONAL ALERT)**: Act on the bot's self-reported `[ANOMALY-3] TQI degradation` warning. Review the historical trade data, stop placement strategies, and exit discipline as suggested by the bot's warning. This is a performance issue flagged by the bot itself that requires human review.
+5.  **Audit `score_comparison` Persistence (P5-M3)**: Verify the storage mechanism for the `score_comparison` data. If it's indeed appending to a JSON file without pruning, implement a rotation or size-capping strategy to prevent unbounded growth.

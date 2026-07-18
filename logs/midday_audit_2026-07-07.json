@@ -1,0 +1,166 @@
+{
+  "audit_date": "2026-07-07",
+  "run_ts": "2026-07-07T10:30:02.749988-07:00",
+  "entry_analysis": {
+    "entry_count": 7,
+    "exit_count": 7,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "MSTR",
+      "SNOW",
+      "RIVN",
+      "HOOD",
+      "MARA",
+      "AVGO",
+      "MS"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 1,
+    "levels": {
+      "ELEVATED": 1
+    },
+    "last_score": 27,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 21,
+    "watchdog_count": 1,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-07 09:30:11,084 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions: MSTR, HOOD, MARA, RIVN, AVGO, MS,",
+      "2026-07-07 09:30:13,436 | WARNING  | alerts | alert_crash: sentinel stat/remove failed \u2014 [Errno 1] Operation not permitted: '/tmp/mtf_planned_restart'",
+      "2026-07-07 09:30:15,703 | WARNING  | strategy.run_cycle | Overnight scan HTML write failed: 0",
+      "2026-07-07 13:04:08,992 | WARNING  | main | gc.collect() took 240.0ms, collected 64 objects \u2014 heap may be growing",
+      "2026-07-07 13:19:28,684 | WARNING  | main | gc.collect() took 273.0ms, collected 64 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": [
+      "2026-07-07 14:13:41,445 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 7,
+    "wins": 0,
+    "losses": 7,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "MSTR",
+      "pnl": 0.0,
+      "entry_price": 100.26,
+      "exit_price": 100.26,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 112.99,
+      "target": 73.74
+    },
+    "worst": {
+      "symbol": "MSTR",
+      "pnl": 0.0,
+      "entry_price": 100.26,
+      "exit_price": 100.26,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 112.99,
+      "target": 73.74
+    },
+    "trades": [
+      {
+        "symbol": "MSTR",
+        "pnl": 0.0,
+        "entry_price": 100.26,
+        "exit_price": 100.26,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 112.99,
+        "target": 73.74
+      },
+      {
+        "symbol": "HOOD",
+        "pnl": 0.0,
+        "entry_price": 115.68,
+        "exit_price": 115.68,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 106.61,
+        "target": 134.58
+      },
+      {
+        "symbol": "MARA",
+        "pnl": 0.0,
+        "entry_price": 13.31,
+        "exit_price": 13.31,
+        "size": 16.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 10.75,
+        "target": 18.65
+      },
+      {
+        "symbol": "RIVN",
+        "pnl": 0.0,
+        "entry_price": 19.73,
+        "exit_price": 19.73,
+        "size": 17.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 18.41,
+        "target": 22.48
+      },
+      {
+        "symbol": "AVGO",
+        "pnl": 0.0,
+        "entry_price": 376.78,
+        "exit_price": 376.78,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 11,
+        "mri_level": "ELEVATED",
+        "stop": 345.49,
+        "target": 441.61
+      },
+      {
+        "symbol": "MS",
+        "pnl": 0.0,
+        "entry_price": 221.41,
+        "exit_price": 221.41,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 209.48,
+        "target": 246.04
+      },
+      {
+        "symbol": "SNOW",
+        "pnl": 0.0,
+        "entry_price": 262.28,
+        "exit_price": 262.28,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 245.98,
+        "target": 296.23
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-05-21",
+  "run_ts": "2026-05-21T10:30:04.737624-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 17,
+    "levels": {
+      "STRESSED": 10,
+      "ELEVATED": 7
+    },
+    "last_score": 39,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 63,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-21 11:18:27,464 | WARNING  | main | gc.collect() took 6359.8ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-21 11:53:56,030 | WARNING  | main | gc.collect() took 3857.1ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-21 12:29:25,531 | WARNING  | main | gc.collect() took 4057.0ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-21 12:59:30,703 | WARNING  | premarket |   [MU] Pre-market move -91.1% exceeds \u00b135% sanity cap \u2014 treating as bad data, skipping",
+      "2026-05-21 13:05:28,746 | WARNING  | main | gc.collect() took 6050.8ms, collected 64 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

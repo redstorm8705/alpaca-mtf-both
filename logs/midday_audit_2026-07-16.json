@@ -1,0 +1,87 @@
+{
+  "audit_date": "2026-07-16",
+  "run_ts": "2026-07-16T10:30:03.937416-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "RIVN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 19,
+    "levels": {
+      "STRESSED": 4,
+      "ELEVATED": 15
+    },
+    "last_score": 27,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 59,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-16 15:48:20,377 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-5.25 tracker=$0.00 drift=$-5.25",
+      "2026-07-16 15:53:49,177 | WARNING  | strategy.run_cycle | [ANOMALY-2] [NET] confirm_gate=3 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | M",
+      "2026-07-16 15:53:49,177 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-16 15:55:08,091 | WARNING  | execution.entry_logic | [AAPL] Sector correlation BLOCKED: already holding META in sector 'bigtech' \u2014 skipping to",
+      "2026-07-16 15:55:13,457 | WARNING  | execution.entry_logic | [AMZN] Sector correlation BLOCKED: already holding META in sector 'bigtech' \u2014 skipping to"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -13.439999999999937,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -13.439999999999937,
+    "best": {
+      "symbol": "RIVN",
+      "pnl": -13.439999999999937,
+      "entry_price": 18.06,
+      "exit_price": 17.42,
+      "size": 21.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 15.39,
+      "target": 23.6
+    },
+    "worst": {
+      "symbol": "RIVN",
+      "pnl": -13.439999999999937,
+      "entry_price": 18.06,
+      "exit_price": 17.42,
+      "size": 21.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 15.39,
+      "target": 23.6
+    },
+    "trades": [
+      {
+        "symbol": "RIVN",
+        "pnl": -13.439999999999937,
+        "entry_price": 18.06,
+        "exit_price": 17.42,
+        "size": 21.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 15.39,
+        "target": 23.6
+      }
+    ]
+  }
+}

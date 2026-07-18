@@ -1,0 +1,49 @@
+Midday Gemini Audit — 2026-06-23
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades or flagged entries were recorded in this session. Therefore, direct performance audit metrics such as win rate, profit factor, entry/exit price plausibility, or P&L sign checks cannot be performed for the current session.
+However, the recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30` indicates a systematic issue with past trade performance, suggesting problems with exit discipline or stop placement that would directly impact future P&L and win rate.
+
+### ENTRY QUALITY
+The bot successfully adhered to the critical `BV-5: MRI=STRESSED` rule, preventing new entries. All `VOLSHADOW` logs show `would_pass: false` (e.g., `[GOOGL] VOLSHADOW` at 16:48:42,342 with `score_without_vol: 8` and `would_pass: false`), which correctly prevents entry as `MIN_SCORE = 9`. This indicates good risk management and adherence to entry constraints during a stressed market regime. News alerts also triggered `base penalty: 100%`, further reinforcing conservative entry behavior.
+
+### EXIT QUALITY
+No closed trades in the provided log, so exit quality cannot be assessed for this session.
+
+### MRI ALIGNMENT
+The bot accurately identified the `MRI` as `STRESSED` with a score of 51/100 (e.g., `2026-06-23 16:58:40,699`). It correctly applied the `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves` rule, explicitly preventing new positions. Sizing adjustments (`size floor 0.70x applied` and `intraday size mult 0.96x`) were also logged, indicating appropriate responses to the stressed market conditions, even though entries were ultimately blocked. This shows proper MRI alignment and risk mitigation.
+
+### LOG ANOMALIES
+*   Repeated `gc.collect() took Xms, collected 64 objects — heap may be growing` warnings (e.g., 16:53:27,155, 17:05:17,834, 17:17:27,749).
+*   One `⚠ SLOW CYCLE` warning detected: `[CYCLE] duration=426s | phase=midday | watchdog_headroom=294s ⚠ SLOW CYCLE` (17:17:27,757).
+*   Recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30` warnings (e.g., 16:58:54,253, 17:10:45,233, 17:22:53,368).
+
+### NEW BUGS / CONCERNS
+
+1.  **INFRASTRUCTURE | HIGH | Persistent Garbage Collection Warnings & Potential Memory Leak**
+    *   **Variable/Metric involved**: `gc.collect()` execution time and heap growth indicator.
+    *   **Value is vs. should be**: The log shows `gc.collect() took 3781.1ms, collected 64 objects — heap may be growing` (e.g., `2026-06-23 16:53:27,155`). This warning indicates that garbage collection is taking a significant amount of time (several seconds) to process a relatively small number of objects (64 objects). The repeated "heap may be growing" suggests a potential memory leak or inefficient memory management, where objects are being allocated but not properly released, causing the memory footprint to increase over time. This can lead to increased latency during trading cycles, reduced system responsiveness, and ultimately, a higher risk of crashes or missed market opportunities. Ideally, `gc.collect()` should either execute much faster, or the "heap may be growing" message should not persist if memory is being properly managed.
+    *   **Condition under which this occurs**: This pattern occurs regularly, approximately every 5 minutes, coinciding with the main strategy cycle.
+
+2.  **INFRASTRUCTURE | HIGH | Unacceptable Cycle Duration / SLOW CYCLE Warning**
+    *   **Variable/Metric involved**: `CYCLE duration` and `watchdog_headroom`.
+    *   **Value is vs. should be**: The log states `[CYCLE] duration=426s | phase=midday | watchdog_headroom=294s ⚠ SLOW CYCLE` (`2026-06-23 17:17:27,757`). A "SLOW CYCLE" warning indicates that a single execution cycle of the bot took 426 seconds (over 7 minutes). While the watchdog headroom (294s) suggests it didn't trigger a reset this time, such prolonged cycle durations can cause critical issues. It means the bot is operating on significantly stale market data for an extended period, potentially missing price movements, entry/exit signals, or failing to update orders/stops in a timely fashion. This severely degrades the bot's ability to react to real-time market conditions. Cycle durations should be consistently fast enough to ensure operations are performed on fresh data and well within any watchdog limits.
+    *   **Condition under which this occurs**: This specific instance occurred at `2026-06-23 17:17:27,757` during the "midday" phase.
+
+3.  **ALPHA ISSUE | HIGH | Persistent Trade Quality Index (TQI) Degradation**
+    *   **Variable/Metric involved**: `TQI degradation: last-5-trade avg`.
+    *   **Value is vs. should be**: The bot consistently logs `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 — review exit discipline and stop placement.` (e.g., `2026-06-23 16:58:54,253`). The Trade Quality Index average for the last five trades is 25.4, which is below the internal threshold of 30. This is a critical self-assessment by the bot indicating that its recent performance regarding exit discipline and stop placement is systematically poor. Although no new entries are being made in the current `STRESSED` regime, this TQI degradation suggests a fundamental flaw in the strategy's ability to manage trades profitably when it *does* enter. This could lead to a systematic erosion of the paper account when trading resumes. The average TQI should be consistently above the threshold of 30.
+    *   **Condition under which this occurs**: This warning appears in every `strategy.run_cycle` log in the provided window, suggesting a persistent underlying issue.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: Immediately investigate and profile the bot's memory usage and garbage collection behavior. Identify and resolve any memory leaks or excessive object allocations. Consider implementing a more targeted memory cleanup strategy or adjusting garbage collection parameters if possible. (HIGH urgency)
+2.  **INFRASTRUCTURE**: Conduct a detailed performance analysis of the bot's `MTF cycle` to identify bottlenecks causing the `SLOW CYCLE` warnings. Prioritize optimizing time-consuming operations (e.g., data processing, API calls, complex calculations) to ensure consistent, fast cycle execution and sufficient watchdog headroom. (HIGH urgency)
+3.  **ALPHA**: Perform a root cause analysis for the `[ANOMALY-3] TQI degradation`. This requires examining the specifics of the last five closed trades, including entry/exit points, stop/target levels, and market conditions, to understand why exit discipline and stop placement are consistently underperforming. This is crucial for strategy refinement before resuming active trading. (HIGH urgency)

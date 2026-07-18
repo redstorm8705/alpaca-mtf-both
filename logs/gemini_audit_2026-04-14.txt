@@ -1,0 +1,75 @@
+Nightly Gemini Audit — 2026-04-14
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['scan_to_html.py', 'generate_dashboard.py', 'weekly_review.py', 'options_scanner.py', 'main.py', 'execution/broker.py', 'events/macro_risk_index.py', 'data/premarket.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **`MACRO RISK STATE ACTIVATED` followed by `MRI refreshed: score=10 level=NORMAL`**: At `2026-04-14 09:14:07,083`, a CRITICAL alert states "MACRO RISK STATE ACTIVATED" due to 3 macro-risk alerts. However, the very next log entry (`2026-04-14 09:14:08,833`) reports the `MacroRiskIndex` refreshed to `score=10 level=NORMAL`. This is a direct contradiction, indicating a severe disconnect between the `news_monitor`'s assessment of macro risk and the `macro_risk_index`'s actual score, providing a false sense of security. This pattern recurs throughout the log, with MRI consistently reporting `score=10 level=NORMAL` despite numerous warning headlines about inflation, Iran war, oil shock, and interest rates.
+*   **Recurring `PDT=3/3 gate BLOCKED: score=X/12 streak=Y/3 consecutive ≥12/12 scans required`**: The bot is consistently unable to enter trades due to the PDT gate, even when signals reach `score=12/12` (e.g., `2026-04-14 10:04:53,516` for AMD with `streak=1/3`). This indicates an extremely restrictive entry condition that effectively paralyzes the bot for new entries when the PDT count is maxed out, limiting trading opportunities for a $2.5K account.
+*   **`[AMZN] Failed to close position: {"available":"0","code":40310000,... "held_for_orders":"1",...`**: At `2026-04-14 12:04:53,431`, the bot logged a CRITICAL ERROR attempting to close an AMZN position, citing "insufficient qty available for order" because it was "held for orders". While the `trade_log.json` indicates the AMZN position was closed at `2026-04-14T12:04:53.432307` (almost immediately after), the ERROR itself means the primary closing mechanism failed. This points to a race condition or a flaw in the `held_for_orders` error handling logic, which could result in unintended overnight positions if not resolved as quickly.
+*   **`ENTRY BLOCKED: PDT=3/3 — GTC stop cannot be placed (Alpaca 40310100)`**: Several entries (AMD at `2026-04-14 10:25:38,722`, TOST at `2026-04-14 12:49:09,648` and `12:56:22,638`) were blocked because Alpaca explicitly returned a 40310100 PDT violation when attempting to place a GTC stop. This occurs *after* the bot's internal PDT gate logic `PDT gate ACTIVE` has evaluated the signal. This suggests a subtle mismatch between the bot's PDT-blocking and what Alpaca allows, or an attempt to place a GTC stop for an intraday trade which would violate PDT, despite the bot's own internal PDT `streak` gate.
+
+### TRADE INTEGRITY
+
+*   **P&L Inconsistencies for Partially Exited Trades**:
+    *   **COIN (short)**: `partial_pnl` (38.43) does not match calculation `(179.97 - 167.675) * 4 = 49.18`.
+    *   **TOST (short)**: `partial_pnl` (47.96) does not match calculation `(26.82 - 24.98) * 41 = 75.44`.
+    *   **AMD (long)**: `partial_pnl` (49.21) does not match calculation `(248.28 - 231.25) * 3 = 51.09`.
+*   **TSLA (short) - Inconsistent `partial_exited` and P&L**: The trade shows `partial_exited: false` but `qty=3` and `qty_remaining=2`, which is contradictory. Furthermore, the `pnl` (7.36) does not match calculation based on initial `qty` or `qty_remaining` if a partial exit occurred without the flag, e.g. `(347.0 - 343.32) * 3 = 11.04` or `(347.0 - 343.32) * 2 = 7.36`. This indicates a core data integrity issue in how trade attributes and P&L are recorded for non-full exits.
+*   **AMZN (long) - Misleading Error Log for Successful Close**: An `ERROR` was logged for AMZN failing to close, but the `exit_time` in `trade_log.json` shows it closed at the same timestamp. This indicates the error log is misleading if the closure was successful, or a critical race condition was narrowly avoided.
+
+### MODIFIED FILE FINDINGS
+
+*   **`main.py`**:
+    *   **New Bug (HIGH): Sector Correlation Map Loophole**: The `_SECTOR_MAP` is incomplete, with only "energy" visible. The accompanying comment states, "Symbols not in the map are treated as 'uncorrelated' and always allowed." This creates a critical risk management bypass. Highly correlated tech stocks (e.g., AAPL, MSFT, NVDA, AMZN, GOOGL, META, CRM, SMCI, AMD) will be treated as uncorrelated if not explicitly mapped, allowing the bot to open multiple positions in the same highly correlated sector, leading to concentrated risk.
+    *   **New Bug (LOW): Overly Strict PDT Streak Requirement**: The PDT entry gate's requirement of `3 consecutive ≥12/12 scans` (visible in log messages and confirmed in `main.py` comments for `_conviction_streak`) is excessively strict for a PDT-constrained $2.5K account. This design choice severely limits valid trading opportunities, effectively paralyzing the bot for new entries.
+*   **`events/macro_risk_index.py`**:
+    *   **New Bug (HIGH): MRI Ineffectiveness**: The MRI consistently reports `score=10 level=NORMAL` despite numerous external risk signals (news, CRITICAL MACRO RISK STATE ACTIVATED). This strongly suggests a logic error in its `_compute()` method (not fully visible) or its thresholds, rendering it ineffective at assessing and reflecting genuine macro risk. It primarily seems to be a JPY strength detector (`jpy` component consistently `10 pts`).
+*   **`execution/broker.py`**:
+    *   **New Bug (MEDIUM): Ineffective `held_for_orders` Error Handling**: The `close_position_market()` function contains specific logic to cancel open orders and retry if an Alpaca 40310000 error (held for orders) occurs. The `AMZN` error log (`2026-04-14 12:04:53,431`) demonstrates that this designed safeguard failed at least once, requiring implicit manual or subsequent intervention to close the position. This indicates the retry/cancel logic is not fully robust, potentially leading to stranded positions.
+
+*   **`scan_to_html.py`, `generate_dashboard.py`, `weekly_review.py`, `options_scanner.py`, `data/premarket.py`**: No critical issues found in the visible code. Minor issues include broad `except Exception` blocks, but these are acceptable for optional display/pre-processing components.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: NOT TRIGGERED (bot's PDT counter confirms sync with Alpaca, the "lockout" is due to strict streak requirements).
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED (no visible simultaneous orders)
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (for 404; however, issues related to GTC stop placement (`40310100` error) were triggered, which is a related problem surface).
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED (or no trigger; `_last_cycle_lock` in `main.py` addresses the core concern)
+*   **P5-M2 | MRI score cached stale across sessions**: PARTIALLY FIXED (decay mechanism exists, but the core MRI scoring logic remains fundamentally flawed - see New Bugs Found).
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+*   **P5-L1 | Weekly review PDT label**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: NOT TRIGGERED (AMZN's close was recorded, but the `held_for_orders` error was a near-miss for this bug).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED (though new detection mechanisms in `main.py` address aspects of this problem).
+
+### NEW BUGS FOUND
+
+*   **HIGH** | `trade_log.json` (P&L Recording) | **Incorrect Partial P&L Calculation & Inconsistent `partial_exited` Flag**
+    *   **Description**: `partial_pnl` values are frequently incorrect. For `TSLA`, `partial_exited: false` contradicts `qty_remaining` being less than `qty`. This corrupts performance metrics.
+    *   **Exact failure condition**: As detailed in "Trade Integrity" (e.g., `COIN` (short): calculated `partial_pnl` is 49.18, recorded is 38.43).
+*   **HIGH** | `events/macro_risk_index.py` | **MRI Ineffectiveness / False Sense of Security**
+    *   **Description**: MRI consistently logs `score=10 level=NORMAL` despite `news_monitor`'s critical alerts and multiple news items indicating macro-risk events. The system fails to reflect true market stress.
+    *   **Exact failure condition**: Log shows `CRITICAL | news_monitor | 🚨 MACRO RISK STATE ACTIVATED` directly followed by `INFO | macro_risk_index | MRI refreshed: score=10 level=NORMAL`.
+*   **HIGH** | `main.py` | **Sector Correlation Map Loophole**
+    *   **Description**: The `_SECTOR_MAP` is incomplete, and its default handling allows unmapped symbols (e.g., highly correlated tech stocks) to be treated as uncorrelated, leading to concentrated sector exposure and undermining risk management.
+    *   **Exact failure condition**: `main.py:_SECTOR_MAP`'s incomplete definition combined with its "always allowed" default for unmapped symbols.
+*   **MEDIUM** | `main.py`, `execution/broker.py` | **Ineffective `held_for_orders` Error Handling**
+    *   **Description**: The retry-and-cancel logic for Alpaca's `40310000` (`held_for_orders`) error failed for AMZN, leading to an `ERROR` log. While the position was closed, this shows the mechanism is not fully robust and could leave positions stranded.
+    *   **Exact failure condition**: `ERROR | execution.broker | [AMZN] Failed to close position: ... {"code":40310000,... "held_for_orders":"1"}`.
+*   **LOW** | `main.py` | **Overly Strict PDT Streak Requirement**
+    *   **Description**: The `3 consecutive ≥12/12 scans` condition for PDT-constrained entries is overly strict, effectively paralyzing the bot for new entries even when high-conviction signals occur, limiting trading frequency.
+    *   **Exact failure condition**: Recurring log entries like `[AMD] PDT=3/3 gate BLOCKED: score=12/12 streak=1/3 consecutive ≥12/12 scans required (ALL buckets) — not entering.`
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Fix P&L Recording and Trade Data Integrity**: Immediately audit and correct the logic responsible for recording `partial_pnl` and managing the `partial_exited` flag in `trade_log.json`. This is critical for accurate performance evaluation and risk assessment.
+2.  **URGENT: Overhaul Macro Risk Index (MRI) Scoring**: Revamp the `_compute()` method in `events/macro_risk_index.py` to ensure it accurately integrates and scores all relevant macro inputs (e.g., VIX, credit, oil, news sentiment). The current failure to reflect genuine market risk when `news_monitor` triggers `CRITICAL` alerts is a severe vulnerability.
+3.  **HIGH: Complete and Enforce Sector Correlation Map**: Fully populate the `_SECTOR_MAP` in `main.py` for all tradeable symbols and revise the logic to strictly enforce sector exposure limits, eliminating the "uncorrelated and always allowed" loophole.
+4.  **HIGH: Enhance `held_for_orders` Error Recovery**: Improve the resilience of the `close_position_market()` function in `execution/broker.py` to prevent and gracefully recover from `40310000` (held for orders) errors, ensuring positions are always closed as intended without manual intervention or data inconsistencies.
+5.  **MEDIUM: Re-evaluate PDT Entry Gate Strictness**: Adjust the `3 consecutive ≥12/12 scans` requirement in `main.py` for PDT-constrained entries. Consider relaxing it to allow for more frequent, high-conviction trades within the spirit of PDT rules, especially for a small paper account.

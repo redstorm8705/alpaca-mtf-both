@@ -1,0 +1,76 @@
+Midday Gemini Audit — 2026-05-07
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+The bot has identified and is currently enforcing a no-new-entries rule due to STRESSED MRI conditions, which is positive risk management. However, past entries were made under these conditions, contributing to a 0% win rate for the reported closed trades. Several alpha-related issues, primarily concerning trade performance and unclear sizing logic, are present. A minor infrastructure/logging issue was also noted.
+
+---
+
+### PERFORMANCE AUDIT
+*   **Entry Price Plausibility**: Entry prices for CRM ($184.00), TOST ($28.73), and QCOM ($190.43) appear plausible for the respective symbols and general market conditions. No anomalies detected.
+*   **Exit Price Consistency**:
+    *   CRM: Entry $184.00, Exit $184.00, P&L $0.00, Reason `stop_hit`. Consistent with a breakeven stop being hit, which aligns with "Exit P&L = $0.00 on overnight_breakeven exit reason: valid if stop_price was pushed to entry_price" (extrapolated to any breakeven stop hit).
+    *   TOST: Entry $28.73, Exit $29.42, P&L $-3.45. This was a short trade (as $28.73 - $29.42 is negative). The exit reason `exit` with the price being between the entry ($28.73) and stop loss ($29.77) indicates an early exit for a loss, not a stop hit or target achievement.
+    *   QCOM: Entry $190.43, Exit $190.43, P&L $0.00, Reason `exit`. Consistent with a breakeven exit.
+*   **P&L Sign Checks**: All P&L signs are consistent with the inferred trade direction (TOST as short, CRM/QCOM as effectively breakeven).
+*   **Win Rate and Profit Factor**: The session recorded 0 wins and 3 losses (including 2 breakeven and 1 actual loss), resulting in a 0% win rate and a total P&L of $-3.45. This indicates a significant systematic degradation in decision quality for this session and is inconsistent with the expectation of a profitable bot edge.
+*   **Score→Outcome Correlation**: The highest confluence scores (11/12 for CRM, 12/12 for TOST and QCOM) resulted in two breakeven trades and one loss. This session shows a complete lack of positive correlation between high scores and winning trades.
+*   **Stop-Hit Rate**: A 33% stop-hit rate (1 of 3 trades, CRM) combined with a 0% win rate suggests the strategy thesis is misaligned with the current market regime or that initial stop placement/trade management requires review.
+
+---
+
+### ENTRY QUALITY
+**ALPHA ISSUE | CRITICAL | Entries Made During STRESSED MRI (Historical)**
+*   **Variable or Metric Involved**: `MRI` (Macro Risk Index) level at the time of trade entry.
+*   **Value vs. Should be**: The `MRI` value was `STRESSED` (`score=12/12`) at the time of entry for `TOST` and `QCOM` on 2026-05-06. The bot's current runtime log for 2026-05-07 explicitly states `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`. This indicates that making entries during a `STRESSED` MRI regime is now considered a critical risk violation. The historical entries for TOST and QCOM thus represent a failure to adhere to the current risk-averse policy for macro conditions, likely contributing to their non-profitable outcomes.
+*   **Condition Under Which This Occurs**: Entries for `TOST` @ 2026-05-06 07:13:53 PT and `QCOM` @ 2026-05-06 07:14:00 PT, both flagged with `MRI=STRESSED at entry`, contradicting the `BV-5` rule actively enforced in the 2026-05-07 logs.
+
+---
+
+### EXIT QUALITY
+**ALPHA ISSUE | HIGH | Failure to Reach Profit Targets / Premature Loss Exit**
+*   **Variable or Metric Involved**: `Closed trades` P&L and `T1`, `T2`, `T3` (profit target levels).
+*   **Value vs. Should be**: All three closed trades resulted in either $0.00 P&L or a loss ($-3.45 for TOST). None of the trades appear to have reached their first profit target (T1), indicating a systematic issue with capturing profits. For TOST, the trade was exited for a loss (`exit` reason) before hitting its stated stop loss ($29.77) or profit target ($28.21), suggesting either a discretionary exit that failed to stem losses effectively or a timing issue.
+*   **Condition Under Which This Occurs**: `Session P&L Summary` showing `Wins: 0` and `Losses: 3`, with no trades hitting profit targets (T1/T2/T3 are always further from exit than entry price). For `TOST`, the exit price ($29.42) is between the entry ($28.73) and stop loss ($29.77), yet it resulted in a loss, and the reason was generic `exit`.
+
+---
+
+### MRI ALIGNMENT
+*   The `MRI SESSION DISTRIBUTION` for the current audit date (2026-05-07) shows 100% of samples (36/36) at `STRESSED` level.
+*   The bot logs confirm `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` is being repeatedly enforced, correctly preventing new entries in the current `STRESSED` regime.
+*   Position sizing was appropriately adjusted: `MRI STRESSED (score=50) — size floor 0.70x applied.` and `Overnight exposure: $286 notional → intraday size mult 0.90x`.
+*   This indicates the bot's *current* operational risk management is aligned with the `STRESSED` MRI. However, as noted in "Entry Quality," entries were made under similar `STRESSED` conditions in the prior session, highlighting a past misalignment.
+
+---
+
+### LOG ANOMALIES
+*   **Conflicting Sizing Adjustments**: Multiple `WARNING` and `INFO` logs indicating different percentage sizing adjustments (`Risk day (...) sizing at 50%` and `Mid-day doldrums (...) sizing at 75%`) appear concurrently in most `strategy.run_cycle` iterations. This creates ambiguity regarding the actual sizing multiplier being applied, potentially leading to incorrect risk allocation or unexpected position sizing.
+*   **Noisy Logging for NVDL Same-Day Close Block**: The log `INFO | execution.trade_engine | [NVDL] Bucket A same-day close blocked — hard rule` is printed repeatedly (in almost every cycle). While `OVERNIGHT_ENTRIES_ENABLED = True` confirms this is a benign rule for Bucket A, the constant logging adds unnecessary noise and verbosity to the logs, potentially obscuring more critical events.
+
+---
+
+### NEW BUGS / CONCERNS
+
+*   **ALPHA ISSUE | HIGH | Ambiguous Position Sizing Factor Combination**
+    *   **Variable**: `strategy.run_cycle`'s internal calculation and application of sizing multipliers.
+    *   **Value vs. Should be**: The logs `WARNING | strategy.run_cycle | Risk day (Initial Jobless Claims) — sizing at 50%` and `INFO | strategy.run_cycle | Mid-day doldrums — sizing at 75%` appear consecutively in almost every cycle. It is unclear how these distinct sizing factors (50% and 75%) are combined or prioritized to produce a single, effective position sizing multiplier. This ambiguity could lead to unintended risk exposure (too large or too small positions) or inconsistent application of risk management rules. A clear, singular sizing factor should be derived and applied.
+    *   **Condition**: Concurrent logging of multiple, distinct position sizing adjustment messages within the same `strategy.run_cycle` loop, such as `sizing at 50%` and `sizing at 75%`.
+
+*   **INFRASTRUCTURE | LOW | Excessive Logging of Benign Condition for NVDL**
+    *   **Variable**: `execution.trade_engine` log stream.
+    *   **Value vs. Should be**: The message `[NVDL] Bucket A same-day close blocked — hard rule` is logged in nearly every execution cycle. Given that `OVERNIGHT_ENTRIES_ENABLED = True`, this "hard rule" is expected and benign behavior for Bucket A assets. Continuously logging this message without a change in status or an actual attempt to close the position leads to log spam and reduces the signal-to-noise ratio in the logs. This message should ideally be logged only once per session, or upon a relevant state change, not cyclically.
+    *   **Condition**: Repeated logging of `[NVDL] Bucket A same-day close blocked — hard rule` in successive `strategy.run_cycle` iterations when no new attempts to close or relevant state changes for NVDL are observed.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA**: **Review and Refine Strategy Alpha for Profit Capture.** Investigate the underlying reasons for the consistent 0% win rate and failure to reach profit targets, especially given high confluence scores (11/12, 12/12). Analyze the market conditions and indicator performance for TOST, QCOM, and CRM around their entry and exit points to understand why the strategy's edge is not materializing. (Urgency: HIGH)
+2.  **ALPHA**: **Clarify and Consolidate Position Sizing Logic.** Explicitly define how multiple, potentially overlapping, sizing adjustment factors (e.g., "Risk day," "Mid-day doldrums," MRI size floor) are combined into a single, unambiguous position sizing multiplier. Implement logging that clearly states the final, effective sizing factor applied in each cycle. (Urgency: MEDIUM)
+3.  **EXECUTION**: **Formalize MRI-Based Entry Blocking Enforcement.** While the `⛔ BV-5` rule appears active today, ensure its implementation is robust and was retroactively applied or formally adopted to prevent entries during `STRESSED` MRI conditions, as identified in historical flagged entries. This includes clear thresholds and enforcement mechanisms. (Urgency: MEDIUM)

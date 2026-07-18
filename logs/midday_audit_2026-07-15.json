@@ -1,0 +1,86 @@
+{
+  "audit_date": "2026-07-15",
+  "run_ts": "2026-07-15T10:30:10.141452-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NET"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 22,
+    "levels": {
+      "ELEVATED": 22
+    },
+    "last_score": 37,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 22,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-15 15:45:27,235 | WARNING  | main | gc.collect() took 214.8ms, collected 66 objects \u2014 heap may be growing",
+      "2026-07-15 15:50:57,838 | WARNING  | execution.exit_logic | [SOXL] OVERNIGHT BREAKEVEN EXIT: 9-scan breach | entry=$182.83 thresh=$165.18 (ATR=35.293 ",
+      "2026-07-15 15:50:57,923 | WARNING  | execution.broker | [SOXL] close_position blocked (40310000 held_for_orders) \u2014 cancelling all open orders and retr",
+      "2026-07-15 15:51:03,172 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-15 15:57:20,363 | WARNING  | main | gc.collect() took 218.6ms, collected 66 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -0.36000000000001364,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -0.36000000000001364,
+    "best": {
+      "symbol": "NET",
+      "pnl": -0.36000000000001364,
+      "entry_price": 274.36,
+      "exit_price": 274.0,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 258.29,
+      "target": 307.84
+    },
+    "worst": {
+      "symbol": "NET",
+      "pnl": -0.36000000000001364,
+      "entry_price": 274.36,
+      "exit_price": 274.0,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 258.29,
+      "target": 307.84
+    },
+    "trades": [
+      {
+        "symbol": "NET",
+        "pnl": -0.36000000000001364,
+        "entry_price": 274.36,
+        "exit_price": 274.0,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 258.29,
+        "target": 307.84
+      }
+    ]
+  }
+}

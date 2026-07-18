@@ -1,0 +1,52 @@
+{
+  "audit_date": "2026-06-09",
+  "run_ts": "2026-06-09T10:30:02.654427-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 19,
+    "levels": {
+      "ELEVATED": 1,
+      "STRESSED": 18
+    },
+    "last_score": 55,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 75,
+    "watchdog_count": 1,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-09 06:41:30,565 | WARNING  | main | gc.collect() took 3279.9ms, collected 171 objects \u2014 heap may be growing",
+      "2026-06-09 07:16:25,961 | WARNING  | main | gc.collect() took 2997.5ms, collected 99 objects \u2014 heap may be growing",
+      "2026-06-09 07:51:29,837 | WARNING  | main | gc.collect() took 3770.6ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-09 08:26:07,231 | WARNING  | main | gc.collect() took 3756.0ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-09 09:00:06,333 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions: UBER, TOST."
+    ],
+    "watchdog_lines": [
+      "2026-06-09 16:09:09,731 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

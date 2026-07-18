@@ -1,0 +1,92 @@
+Nightly Gemini Audit — 2026-04-07
+Model: gemini-2.0-flash | Verdict: FAIL
+Modified files: ['alerts.py', 'config.py', 'generate_dashboard.py', 'weekly_review.py', 'main.py', 'nightly_audit.py', 'execution/portfolio_tracker.py', 'execution/risk_manager.py', 'strategy/signal_generator.py']
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is experiencing a critical, recurring failure to maintain a single running instance, as evidenced by hundreds of `ERROR: Another bot instance is already running. Exiting.` messages. This compromises operational stability and suggests a fundamental problem with process management. Additionally, several P5 bugs remain active or were triggered, and new logic errors/risk management gaps have been identified.
+
+### LOG ANOMALIES
+
+*   **Critical Operational Instability (Recurring ERROR)**: The log is saturated with `ERROR: Another bot instance is already running. Exiting.` messages, occurring hundreds of times throughout the last 24 hours (e.g., between 20:46:53 and 21:11:23 and before/after). This indicates a severe and persistent failure in the bot's single-instance enforcement or its watchdog/restart mechanism. This directly confirms the activation of **P5-M1 Cycle watchdog restart loop**.
+*   **Stale Macro Risk Index (MRI)**: The log repeatedly shows `INFO | macro_risk_index | MRI state 8.0h stale — starting fresh.` and `MRI state 8.4h stale — starting fresh.`. While the system attempts to recover by "starting fresh," this means the bot is frequently operating without the intended macro-risk context for extended periods (over 8 hours), which is a significant risk management gap. This confirms the activation of **P5-M2 MRI score cached stale across sessions**.
+*   **Redundant Daily Reset Logging**: The `execution.risk_manager` logs "Daily reset. Portfolio: $X" twice in quick succession before `main` logs the `Daily reset fired` event (e.g., `2026-04-07 20:46:53,762` and `20:46:53,836`). While likely idempotent, this indicates inefficient logging or potential for double-triggering if the reset logic isn't strictly idempotent.
+*   **Daily Reset Date Discrepancy**: The log shows `Daily reset fired for 2026-04-07` at `20:46:53 ET` and `Daily reset fired for 2026-04-08` at `21:11:25 ET` (Pacific Time likely, but the internal time is ET as stated in the `main` log line). This is expected behaviour if the reset occurs around midnight ET (e.g. 23:46 ET vs 00:11 ET for the respective days), but could be confusing if not explicitly understood.
+
+### TRADE INTEGRITY
+
+All 4 closed trades appear consistent:
+*   P&L signs (`COIN` short profit, `AMD` long loss, `SQQQ` long profit, `META` short profit) are correct relative to price movement and direction.
+*   `pnl_pct` calculations are accurate based on entry price and quantity.
+*   `partial_exited` is false for all, so no partial P&L accumulation to audit.
+*   No trades show `pnl=0.0` incorrectly.
+*   Entry and exit prices are plausible.
+*   The `_adopted_orphan: true` flag and missing `score`/`score_16pt` for the closed trades (all entered on 2026-04-06) suggest they were carried over from a previous bot instance or version. This is not a defect in the current bot's calculations but limits historical signal quality analysis.
+*   The open `SQQQ` position (long, entry $76.96, stop $49.89) has a high score (12/12) and a `gtc_stop_order_id` which aligns with a log warning. It is marked `overnight: true`, consistent with the Bucket A strategy.
+
+### MODIFIED FILE FINDINGS
+
+#### alerts.py
+*   **No issues found.** The SSL context fallback and logging strategies appear robust.
+
+#### config.py
+*   **Bug (Documentation Inconsistency)**: The comment `Trimmed to 10 tickers — avoids Alpaca free tier rate limits` is inconsistent with the actual `WATCHLIST` array containing 23 tickers. This creates misleading documentation.
+
+#### generate_dashboard.py
+*   **Bug (Logic Error in PDT Counting)**: In `_pdt_rolling_count`, the set `_phantom = {"EXTERNAL", "SYNC"}` is used to exclude certain trade types from the rolling PDT count. If "EXTERNAL" or "SYNC" are legitimate day trades recognized by Alpaca, their exclusion will cause the dashboard's displayed PDT count to be lower than the actual count, leading to potential PDT violations for the user.
+
+#### weekly_review.py
+*   **Bug (Logic Error in PDT Counting - Inconsistent)**: In `_pdt_for_date` and `_rolling_pdt_count`, the functions explicitly exclude `t.get("symbol") != "SYNC"`. However, unlike `generate_dashboard.py`, it does *not* exclude "EXTERNAL" trades. This inconsistency across different modules tracking PDTs is a bug, and the exclusion of "SYNC" itself may be incorrect if Alpaca counts these as day trades.
+
+#### main.py
+*   **Bug (Risk Management Gap / Feature Inconsistency)**: `OVERNIGHT_ENTRIES_ENABLED` is explicitly set to `False`. However, the `trade_log.json` clearly shows multiple trades entered on `2026-04-06T19:10:xx-04:00` (7:10 PM ET), which is after RTH close, and are marked `overnight: true`. This indicates either `OVERNIGHT_ENTRIES_ENABLED` is not correctly gating all overnight entries, or there's an alternative code path allowing them despite the flag. This is a critical risk management flaw as the bot is performing actions explicitly disabled.
+*   **P5-M1 TRIGGERED**: The pervasive "Another bot instance is already running" error directly confirms this bug is actively causing operational instability.
+*   **P5-M2 TRIGGERED**: The logs explicitly showing `MRI state Xh stale — starting fresh.` indicates that the MRI state is not being correctly validated or persisted across sessions, triggering this bug.
+
+#### execution/portfolio_tracker.py
+*   **No issues found.** The atomic write logic and EOD summary generation appear robust. Pruning of day trades is a good practice.
+
+#### execution/risk_manager.py
+*   **Bug (Typo / Missing Configuration)**: In `get_stop_and_target`, the line `target_mult *= config.LEVERAGED_TARGET` is likely a typo. Based on `config.py` definitions, it should almost certainly be `config.LEVERAGED_TARGET_MULTIPLIER`. If `config.LEVERAGED_TARGET` is undefined, this will cause a runtime `AttributeError`. If it's defined elsewhere for another purpose, it's a silent logic error.
+
+#### strategy/signal_generator.py
+*   **Bug (Documentation/Logic Mismatch)**: In `_intraday_override`, the comment states the override triggers if `(current - prev_close) / prev_close` is `>= +1.5%` or `<= -1.5%`. However, the code uses `_INTRADAY_OVERRIDE_THRESHOLD = 1.0`. This discrepancy means the comment is either outdated or the threshold value is set differently than intended.
+*   **Minor Race Condition**: In `_get_weekly_bias`, if the cache expires, multiple concurrent calls for the same symbol could all initiate `yfinance.download` calls before the cache is updated. While using `ThreadPoolExecutor` and a timeout, it results in redundant API calls to `yfinance` in a busy period when the cache is being refreshed.
+*   **P5-C1 UNTOUCHED**: The `_find_recent_fvgs()` function, which is the subject of this bug, is not visible in the provided code snippet for `strategy/signal_generator.py` or `main.py`. Therefore, its status cannot be determined from this audit.
+
+#### nightly_audit.py
+*   **No issues found.** The audit script's own logic for collecting logs and files seems sound.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED (relevant code not visible, no log evidence)
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED (file not modified, no direct log evidence)
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: FIXED (logs show `conviction/confirm buffers cleared` during daily reset)
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED (no relevant files modified, no log evidence)
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (no relevant files modified, no log evidence)
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED (relevant code not visible, no log evidence)
+*   **P5-M1 | Cycle watchdog restart loop**: **TRIGGERED** (log is filled with `ERROR: Another bot instance is already running. Exiting.`)
+*   **P5-M2 | MRI score cached stale across sessions**: **TRIGGERED** (log shows `MRI state Xh stale — starting fresh.`)
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (no relevant files modified, no log evidence)
+*   **P5-L1 | Weekly review PDT label**: UNTOUCHED (relevant code not visible, no log evidence)
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: UNTOUCHED (current EOD output is consistent with open/closed trades, no evidence of trigger)
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED (file not modified, no specific log evidence)
+
+### NEW BUGS FOUND
+
+*   **HIGH** | `main.py` | **Inconsistent Overnight Entry State** | `main.py` explicitly sets `OVERNIGHT_ENTRIES_ENABLED = False`, yet `trade_log.json` shows multiple trades with `overnight: true` and `entry_time` significantly after RTH close (e.g., `2026-04-06T19:10:53.694030-04:00`). This indicates a bypass of the intended risk control for overnight entries.
+*   **MEDIUM** | `generate_dashboard.py` | **Inaccurate PDT Counting Exclusion** | In `_pdt_rolling_count`, the exclusion of "EXTERNAL" and "SYNC" trades from the rolling PDT count (line context `_phantom = {"EXTERNAL", "SYNC"}`) can lead to a displayed PDT count that is lower than Alpaca's actual count, risking PDT violations.
+*   **MEDIUM** | `weekly_review.py` | **Inconsistent PDT Counting Exclusion** | `_pdt_for_date` and `_rolling_pdt_count` exclude "SYNC" trades but *not* "EXTERNAL" trades from PDT calculation. This inconsistency with `generate_dashboard.py` and potential inaccuracy against Alpaca's rules is problematic.
+*   **LOW** | `execution/risk_manager.py` | **Truncated Variable Name** | In `get_stop_and_target`, the line `target_mult *= config.LEVERAGED_TARGET` is a likely typo; it should be `config.LEVERAGED_TARGET_MULTIPLIER`. This will cause an `AttributeError` if `LEVERAGED_TARGET` is not defined or a silent error if it's unintentionally defined.
+*   **LOW** | `strategy/signal_generator.py` | **Intraday Override Threshold Mismatch** | The comment in `_intraday_override` describes a `1.5%` threshold, but the `_INTRADAY_OVERRIDE_THRESHOLD` variable is set to `1.0`. This inconsistency is a documentation and potential logic mismatch.
+*   **LOW** | `config.py` | **Outdated Watchlist Comment** | The `WATCHLIST` comment states "Trimmed to 10 tickers" but the list contains more than 20.
+*   **LOW** | `strategy/signal_generator.py` | **Minor Race Condition in Weekly Bias Cache** | In `_get_weekly_bias`, if the cache expires, multiple concurrent calls for the same symbol may redundantly fetch `yfinance` data before the cache is updated.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Investigate and Fix P5-M1 Cycle Watchdog Restart Loop.** The constant "Another bot instance is already running" errors indicate a critical flaw in the bot's lifecycle management. This must be fixed immediately to ensure stable operation and prevent resource exhaustion. (File: `main.py`, associated lock/watchdog mechanisms).
+2.  **HIGH: Rectify `OVERNIGHT_ENTRIES_ENABLED` Discrepancy.** Determine why overnight entries are occurring when `OVERNIGHT_ENTRIES_ENABLED` is `False` in `main.py`. This is a critical risk control bypass. Either enable the feature explicitly if it's desired, or implement a hard stop to prevent any entries outside RTH when it's disabled.
+3.  **MEDIUM: Standardize and Verify PDT Counting Logic.** Audit and harmonize the PDT counting logic across `generate_dashboard.py`, `weekly_review.py`, and `execution/portfolio_tracker.py`. Specifically, clarify whether "EXTERNAL" and "SYNC" trades should be excluded, and ensure the displayed counts accurately reflect Alpaca's official PDT rules.
+4.  **MEDIUM: Address Stale MRI State (P5-M2).** Investigate why the `MRI state` is consistently becoming stale after a few hours and "starting fresh." Implement robust persistence, validation, or refresh mechanisms to ensure the Macro Risk Index is always informed by recent data.
+5.  **LOW: Resolve `config.LEVERAGED_TARGET` Typo.** Correct `target_mult *= config.LEVERAGED_TARGET` to `config.LEVERAGED_TARGET_MULTIPLIER` in `execution/risk_manager.py` to prevent potential runtime errors or silent misconfigurations.

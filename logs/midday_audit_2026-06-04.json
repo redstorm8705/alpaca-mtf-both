@@ -1,0 +1,51 @@
+{
+  "audit_date": "2026-06-04",
+  "run_ts": "2026-06-04T10:30:05.083477-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 21,
+    "levels": {
+      "STRESSED": 5,
+      "ELEVATED": 1,
+      "NORMAL": 15
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 57,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-04 14:13:10,333 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-04 14:19:12,497 | WARNING  | main | gc.collect() took 4736.2ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-04 14:24:13,789 | WARNING  | strategy.run_cycle | Risk day (Fed Barkin Speech) \u2014 sizing at 50%",
+      "2026-06-04 14:24:46,229 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-04 14:29:54,281 | WARNING  | main | gc.collect() took 4361.3ms, collected 64 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

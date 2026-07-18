@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "ts_pt": "2026-05-25 07:50 PM PT",
+  "ts_iso": "2026-05-25T19:50:54.682482-07:00",
+  "prompt_chars": 128842,
+  "prompt_preview": "META-AUDIT CROSS-REVIEW — alpaca-mtf-bot trading system\n\nYou are an independent auditor reviewing Gemini's automated audit reports for an Alpaca paper trading bot.\nThe nightly and midday reports below were produced by Gemini (gemini-2.5-flash). Your job:\n\n1. CONFIRM findings you agree are critical —…",
+  "deepseek": {
+    "text": null,
+    "model": "deepseek-chat",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "DEEPSEEK_API_KEY not set in environment"
+  },
+  "gemini": {
+    "text": null,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "GEMINI_API_KEY not set in environment"
+  },
+  "summary": {
+    "ds_ok": false,
+    "gai_ok": false,
+    "both_ok": false,
+    "partial": false,
+    "both_failed": true
+  }
+}

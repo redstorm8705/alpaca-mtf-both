@@ -1,0 +1,66 @@
+Midday Gemini Audit — 2026-07-06
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  RBLX exit price inconsistency: `RBLX` trade, `exit $57.45` with `stop_hit` reason, but `stop=$61.51` for a short position (entry $54.47, P&L $-2.98).
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry prices plausible**: Plausible on their own. No specific time-of-day information for RBLX entry, but price point is reasonable.
+*   **Exit prices consistent with stated exit reason**: **FAILURE**. For the RBLX trade, which was an inferred short position (`entry $54.47`, `exit $57.45`, `P&L $-2.98`), the exit reason was `stop_hit` with `stop=$61.51`. For a short trade, a stop hit implies the price rose to or above the stop price. The actual exit price of $57.45 is significantly *below* the stated stop price of $61.51. This is a direct contradiction.
+*   **P&L signs correct**: Assuming RBLX was a short trade (deduced from `entry $54.47`, `exit $57.45`, and `P&L $-2.98` which implies `entry - exit = -2.98`), the P&L sign is correct.
+*   **Win rate and profit factor consistent with bot's edge claims**: Only one closed trade (a loss), so insufficient data to assess consistency with overall Kelly stats.
+*   **Score→outcome correlation**: One trade (RBLX, score 10/12, a loss) is insufficient to determine correlation.
+*   **Stop-hit rate indicates misalignment**: One stop-hit out of one closed trade (100% stop-hit rate) is insufficient to indicate systematic misalignment.
+*   **P&L = 0.0 but entry ≠ exit price**: No such trades found.
+*   **Partial exit that doesn't reduce position size correctly**: No partial exits in this session.
+
+### ENTRY QUALITY
+*   **RBLX Score/Volume Discrepancy**: **FAILURE / CONCERN**. A `VOLSHADOW` log for RBLX short at 17:19:36,748 shows `score_without_vol=3` and `would_pass=false` for volume. However, the `CLOSED TRADE DETAILS` for the RBLX trade indicates `score 10/12`. The `MIN_SHORT_SCORE` is 8, and the dynamic `MIN_SCORE` was raised to 9. If the `VOLSHADOW` log data (`score_without_vol=3`, `would_pass=false`) was relevant to the RBLX entry decision, the trade should not have been taken. This suggests a significant discrepancy in how entry scores/volume conditions are evaluated or recorded, or that the `VOLSHADOW` log does not correspond to the actual entry. The actual entry log for RBLX is not provided in the last 4h of logs.
+*   **Other Entries**: Multiple signals for SPY, AAPL, QQQ, NET, DDOG were skipped because `dollar_cap` led to "Position size < 1 share". PANW, AVGO, SOXL were skipped with "no allocation." NFLX, MSFT, SOXS blocked by "ORB gate." TQQQ, AMD awaiting "CONFIRM GATE." These skips indicate active risk management and filtering, which is appropriate.
+
+### EXIT QUALITY
+*   **RBLX Inconsistent Stop Hit**: **FAILURE**. As detailed in the performance audit, the RBLX trade's exit at $57.45, attributed to a `stop_hit` at $61.51 (for a short position from $54.47), is logically inconsistent. This implies either the stop order was not filled at the declared stop price, or the exit reason/price was misrecorded. This is a critical failure in exit execution or recording accuracy.
+
+### MRI ALIGNMENT
+*   The `MRI Session Distribution` is `ELEVATED` (22/100). The `Dynamic MIN_SCORE` was appropriately `raised to 9/12` due to `MRI=ELEVATED/9`, indicating that the bot acknowledges and adjusts for this condition. The RBLX trade (score 10/12) would have passed this threshold. No entries were taken at STRESSED/CRISIS levels. Position sizing adjustments (e.g., `AB-3 TQI demotion`, `VOTE-3 vol cap`) were observed for other signals, indicating appropriate responses.
+*   No issues.
+
+### LOG ANOMALIES
+*   `2026-07-06 17:19:58,528 | WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['MS']` - A warning indicating a scan timeout for at least one symbol. This could lead to stale data or missed signals.
+*   `2026-07-06 17:27:45,802 | INFO | main | [CYCLE] duration=603s | phase=midday | watchdog_headroom=117s ⚠ SLOW CYCLE` - A slow cycle warning. A 10+ minute cycle duration can compromise the responsiveness and data freshness for intraday trading.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | RBLX Exit Price Inconsistency with Stop Hit**
+    *   **Description:** For the short trade RBLX, `CLOSED TRADE DETAILS` reports `entry $54.47`, `exit $57.45`, `P&L $-2.98`, `stop_hit` as the reason, and `stop=$61.51`. This is a critical logical contradiction. If the stop at $61.51 was hit for a short position, the exit price must be at or above $61.51. The recorded exit price of $57.45 is significantly lower than the stop price, indicating a failure in stop order execution, fill price reporting, or exit reason attribution.
+    *   **Exact condition:** The `CLOSED TRADE DETAILS` entry for `RBLX` has `exit_reason='stop_hit'`, `exit_price < stop_price`, and `(entry_price - exit_price) * quantity < 0` (indicating a short loss).
+    *   **Variable involved:** `RBLX.exit`, `RBLX.stop`, `RBLX.exit_reason`.
+    *   **Value vs. should be:** `RBLX.exit` ($57.45) is less than `RBLX.stop` ($61.51). If `RBLX.exit_reason` is `stop_hit` for a short trade, `RBLX.exit` should be >= `RBLX.stop`. This constitutes a failure in fidelity between recorded execution and stated conditions.
+
+*   **ALPHA ISSUE | HIGH | RBLX Score/Volume Discrepancy (VOLSHADOW vs. CLOSED TRADE)**
+    *   **Description:** The `VOLSHADOW` log entry for RBLX short (at 17:19:36) indicates `score_without_vol=3` and `would_pass=false` due to volume. However, the `CLOSED TRADE DETAILS` for RBLX states `score 10/12`. Given `MIN_SHORT_SCORE` is 8 (dynamically 9 for this session), `score_without_vol=3` should have filtered the trade. Additionally, `would_pass=false` suggests a failed volume check. This large discrepancy indicates a potential flaw in the scoring/filtering pipeline, or an issue with the relevance of the provided `VOLSHADOW` log to the executed trade, thereby compromising entry quality validation.
+    *   **Exact condition:** A `VOLSHADOW` log entry exists for a symbol (RBLX, direction="short") with `score_without_vol` below `MIN_SHORT_SCORE` and `would_pass=false` for volume, while a `CLOSED TRADE DETAILS` entry for the same symbol shows a `score` that would have passed (e.g., `10/12`).
+    *   **Variable involved:** `RBLX.VOLSHADOW.score_without_vol`, `RBLX.VOLSHADOW.would_pass`, `MIN_SHORT_SCORE`, `RBLX.CLOSED_TRADE_DETAILS.score`.
+    *   **Value vs. should be:** `RBLX.VOLSHADOW.score_without_vol` (3) is less than `MIN_SHORT_SCORE` (8), and `RBLX.VOLSHADOW.would_pass` is `false`, which should prevent entry. Yet `RBLX.CLOSED_TRADE_DETAILS.score` is `10/12` and the trade occurred. This constitutes a failure of consistency in signal evaluation or trade reporting.
+
+*   **INFRASTRUCTURE | MEDIUM | Signal Generator `phase-1 global timeout`**
+    *   **Description:** The `strategy.signal_generator` reported a `phase-1 global timeout`, resulting in `MS` being abandoned. This means the signal generation for `MS` (and potentially other symbols if this is a recurring issue) was incomplete, leading to potentially missed trading opportunities or decisions based on an incomplete universe of signals.
+    *   **Exact condition:** Log message `WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['MS']` is present.
+    *   **Variable involved:** `strategy.signal_generator`'s internal timeout mechanism and symbol processing queue.
+    *   **Value vs. should be:** The signal generation phase should complete for all symbols. A timeout indicates a bottleneck or performance issue, preventing complete analysis for `MS`. This is a failure in maintaining full market coverage.
+
+*   **INFRASTRUCTURE | LOW | Slow Cycle Warning**
+    *   **Description:** A `⚠ SLOW CYCLE` warning was logged, with a cycle duration of 603 seconds (over 10 minutes). While `watchdog_headroom` exists, consistently long cycle times can lead to decisions being made on stale market data and reduced agility in a fast-moving intraday environment.
+    *   **Exact condition:** Log message `INFO | main | [CYCLE] duration=603s | phase=midday | watchdog_headroom=117s ⚠ SLOW CYCLE` is present.
+    *   **Variable involved:** `main` loop execution duration.
+    *   **Value vs. should be:** An intraday trading bot's cycle duration should be significantly shorter to ensure timely reaction to market events. 603 seconds is too long and reduces the bot's responsiveness.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL**: Immediately investigate the RBLX exit price discrepancy. Trace the exact order submission and fill records from Alpaca for the RBLX trade to determine if the stop was truly hit at $61.51 or if the recorded exit price/reason is erroneous. Verify the logic for recording `stop_hit` events and actual fill prices.
+2.  **ALPHA / INFRA | HIGH**: Investigate the RBLX scoring and volume discrepancy. Determine why the `VOLSHADOW` log's `score_without_vol` and `would_pass` conditions do not align with the `CLOSED TRADE DETAILS` score. This could indicate either a faulty `VOLSHADOW` log, a bypass in the entry filtering logic, or issues with how `CLOSED TRADE DETAILS` are populated. Ensure `VOLSHADOW` accurately reflects pre-entry conditions.
+3.  **INFRASTRUCTURE | MEDIUM**: Review the `strategy.signal_generator` performance to address the `phase-1 global timeout` and overall `SLOW CYCLE` warnings. Identify bottlenecks in data retrieval, signal calculation, or symbol processing to reduce cycle duration and prevent abandoned symbols.

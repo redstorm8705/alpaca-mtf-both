@@ -1,0 +1,69 @@
+Nightly Gemini Audit — 2026-06-03
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'monthly_review.py', 'reconcile_eod.py', 'config.py', 'execution/entry_logic.py', 'execution/trade_engine.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py', 'tests/test_reconcile_eod.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Persistent ANOMALY-2**: Multiple symbols ([COIN], [CRM], [MSTR]) repeatedly log `confirm_gate=X scans but no entry — risk.open_positions=1 vs tracker=1 | MAX_OPEN_POSITIONS=4`. This warning appears in almost every `strategy.run_cycle` log entry (e.g., `18:42:14`, `18:53:48`, `19:04:26`, `19:15:25`, `19:25:38`, `19:36:09`, `19:46:41`, `19:57:01`). This suggests a logic error where the `confirm_gate` state for these symbols is not correctly resetting or reconciling with actual open positions, potentially preventing new entries or indicating a deeper state mismatch.
+*   **Persistent ANOMALY-3**: `TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` This warning also appears in every `strategy.run_cycle` log entry, indicating a recurring issue with trade quality. While not a code bug, it's a critical performance anomaly that requires attention.
+*   **Frequent `gc.collect()` warnings**: `gc.collect() took Xms, collected 64 objects — heap may be growing` (e.g., `18:36:42`, `18:48:20`, `18:58:57`, `19:09:46`, `19:20:11`, `19:30:42`, `19:41:12`, `19:51:33`, `20:00:47`). The repeated occurrence and `heap may be growing` message suggest a potential memory leak or inefficient memory management, which could lead to performance degradation or eventual crashes over longer run times.
+*   **FIFO Reconciliation Critical Error**: `2026-06-03 20:00:08,873 | CRITICAL | execution.portfolio_tracker | [FIFO] NFLX: closing sell with no open long lots (net_qty=-5, qty=1, price=81.84). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` This indicates that the bot attempted to close a short position for NFLX, but its internal FIFO ledger did not have matching open long lots, implying a state corruption or mismatch, possibly due to a restart. This is a severe data integrity issue for P&L calculation.
+*   **Position Count Drift**: `2026-06-03 20:01:45,114 | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=1. Correcting to tracker count.` This indicates an inconsistency between the `RiskManager`'s count of open positions and the `PortfolioTracker`'s count at startup, which could lead to incorrect risk sizing or entry blocking. The bot corrects it, but the drift itself is an anomaly.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All visible P&L signs (e.g., AMZN long: entry $272.11, exit $263.42, P&L -8.69 (correct loss); QCOM long: entry $254.90, exit $230.60, P&L -24.30 (correct loss); NVDA long: entry $216.41, exit $216.41, P&L 0.0 (correct)). The MSTR stop_hit P&L is +24.46 for a short position exiting at $162.95, which would be correct if the entry price was higher than $162.95. The NFLX FIFO error mentions `net_qty=-5, qty=1, price=81.84`, then `pnl=4.03` in `trade_events` for an exit. If it was a short, exit price of 83.66 resulting in 4.03 PnL implies entry was higher than 83.66. Assuming FIFO handling is correcting this based on underlying fills, the individual P&L calculations appear generally consistent with the direction and price movements.
+*   **Trades with pnl=0.0**: SPY and NVDA had 0.0 P&L exits. For NVDA, the entry and exit price are identical ($216.41), so 0.0 P&L is correct. For SPY, entry price is not provided, but a 0.0 P&L is plausible if the trade was closed exactly at entry or minimal profit/loss was rounded to zero.
+*   **Score→Outcome correlation**: Hard to definitively assess from the limited data provided, but the `ANOMALY-3: TQI degradation` suggests an overall underperformance related to signal quality or exit strategy.
+*   **Stop-hit rate vs. win rate**: The overall win rate is 41.7%, with 2 explicit stop hits (AMZN, QCOM) and 1 partial followed by stop-hit (MSTR) in the last 10 trades. This indicates a higher loss rate which aligns with the overall `win_rate` but needs improvement as highlighted by the `TQI degradation`.
+*   **Avg R-Multiple inconsistency**: The `all_time_stats` report `avg_r_multiple: -0.046` despite `total_pnl: 332.73` and `profit_factor: 1.16`. This `avg_r_multiple` calculation or interpretation appears incorrect, as a positive total P&L and profit factor would typically imply a positive average R-multiple.
+
+### TRADE INTEGRITY
+*   **FIFO State Corruption**: The `[FIFO] NFLX: closing sell with no open long lots` error is a critical trade integrity issue, indicating a discrepancy between the bot's internal tracking of open lots and actual market activity, leading to "synthetic short" creation for accounting purposes. This suggests a problem in how `portfolio_tracker` or its persistence layer (`open_lots_prior_day.json`) maintains state across restarts or market events.
+
+### MODIFIED FILE FINDINGS
+*   **main.py**:
+    *   **METHODOLOGY DISAGREEMENT**: The configuration constant `MAX_DAILY_LOSS_PCT` in `config.py` is `0.07` for the "paper" profile, but `main.py` explicitly overrides this to `0.15` at runtime (`config.MAX_DAILY_LOSS_PCT = 0.15`, line 179). While documented as a "BoD-3" fix for aggressive paper trading, it directly violates the `CONFIG CONSTANTS` provided for audit.
+        *   **Trace**: `main()` function -> `profile = config.PROFILES.get(args.profile, config.PROFILES["live"])` -> `for key, val in profile.items(): setattr(config, key, val)` -> `if args.profile == "paper" and getattr(config, "MAX_DAILY_LOSS_PCT", 1.0) > 0.15: config.MAX_DAILY_LOSS_PCT = 0.15`.
+        *   **Runtime vs. Intended**: At runtime, for the 'paper' profile, `config.MAX_DAILY_LOSS_PCT` is set to 0.15. The `CONFIG CONSTANTS` list provided explicitly states `MAX_DAILY_LOSS_PCT = 0.07`. The runtime value is twice the documented constant.
+        *   **Failure Condition**: The bot's kill switch will trigger at a 15% daily loss instead of the documented 7% for the 'paper' profile, exposing the paper account to higher risk than intended by the `CONFIG CONSTANTS`.
+        *   **Config Constant**: `MAX_DAILY_LOSS_PCT = 0.07`.
+        *   **Alternative fix**: In `main.py`, remove lines 178-180 and ensure the `config.py` `PROFILES` dictionary accurately reflects the desired `MAX_DAILY_LOSS_PCT` for the 'paper' profile.
+*   **execution/portfolio_tracker.py**:
+    *   **BUG**: `_fifo_reconstruct()` logs a `CRITICAL` error and sends a Slack alert if a `sell` or `sell_short` order is encountered without matching open long lots (`net_qty <= 0`). While this is a good failsafe, the subsequent line `current.append({"qty": qty, "price": price, "side": "short"})` synthetically creates a short position. If the original position was indeed a long one that was lost (e.g., due to a prior state corruption/bot restart), this `synthetic short` might incorrectly re-establish a short position in the internal ledger, leading to further miscalculations if the actual market position is different.
+        *   **Function**: `_fifo_reconstruct` (execution/portfolio_tracker.py, lines 403-418).
+        *   **Trace**: `_fifo_reconstruct` is called with `fills` and `prior_lots`. If a fill `side` is `sell` or `sell_short` and `net_qty` (sum of existing `lots` for `sym`) is `<= 0`, the critical log path is taken. Instead of raising an error or skipping the fill, it adds a new lot of `side: "short"` to `lots[sym]`.
+        *   **Runtime vs. Intended**: The runtime creates a "synthetic short" lot in the internal `lots` dictionary. This might be intended as a workaround for corrupted state, but if the original position was truly a long one that was accidentally removed, this can create an *incorrect* synthetic short position in the tracker's mental model of the portfolio. The `net_qty` calculation is based on `prior_lots`, which might be missing. If a *long* position was somehow lost from `prior_lots`, a subsequent sell would trigger this and incorrectly record a *short*.
+        *   **Failure Condition**: If `prior_lots` is corrupted and a `long` position is implicitly closed (e.g., manually on Alpaca or via another bot instance) or otherwise lost from the tracker, a subsequent `sell` fill (intended to close that missing `long`) will be erroneously recorded as opening a `synthetic short` in the bot's internal ledger, leading to skewed P&L and risk calculations.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **FIXED** (Alpaca data handling, yfinance removal).
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED** (source not provided).
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **UNTOUCHED**. `GateState` replaces previous globals, but daily clearing mechanism not evident.
+*   P5-H2 | Fill price crosstalk: **FIXED** (`fetch_actual_fill_price` in `execution/fill_helpers.py` uses `submitted_after` and `created_at` sorting).
+*   P5-H3 | Orphan GTC 404 path: **UNTOUCHED** (source not provided).
+*   P5-H4 | Rule 2 dead code: **FIXED** (`TOD_MARKET_OPEN_BUFFER_MINS` in `config.py` is now the single source of truth, runtime override removed).
+*   P5-H5 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED** (per queue, no new log evidence).
+*   P5-M1 | Cycle watchdog restart loop: **FIXED** (`fcntl.FD_CLOEXEC` added to lockfile handler in `main.py`).
+*   P5-M2 | MRI score cached stale across sessions: **FIXED/SUPERSEDED** (`market-top-detector cache` explicitly loaded with date check).
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED** (mechanism for pruning not visible).
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED** (logic not visible).
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **TRIGGERED** (EOD summary write at `20:00:09` followed by `FIFO CRITICAL` at `20:00:08`, indicating a race or incorrect ordering).
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED** (source not provided).
+
+### NEW BUGS FOUND
+*   **PERFORMANCE ANOMALY** | MEDIUM | EOD Snapshot `all_time_stats` | `avg_r_multiple = -0.046` despite `total_pnl = 332.73` and `profit_factor = 1.16`. The `avg_r_multiple` metric's calculation or interpretation is inconsistent with other P&L statistics.
+    *   **Exact failure condition**: The calculated `avg_r_multiple` for all-time stats is negative (-0.046) even when the `total_pnl` is positive ($332.73) and the `profit_factor` is greater than 1.0 (1.16), suggesting a logical error in its computation or a misunderstanding of what it represents in the context of other P&L metrics.
+*   **EXECUTION BUG** | HIGH | `execution/entry_logic.py` | Repeated `[ANOMALY-2] [COIN] confirm_gate=5 scans but no entry` for symbols with open positions.
+    *   **Exact failure condition**: The `confirm_gate` mechanism (managed via `GateState.entry_confirm_buffer`) fails to correctly identify existing open positions for certain symbols (e.g., COIN, CRM, MSTR), leading to repeated `ANOMALY-2` warnings across multiple strategy cycles. This indicates that the `entry_confirm_buffer` is not cleared or decremented when a position for that symbol is opened or when the market regime prevents new entries, causing the bot to believe it's stuck in a confirmation loop for positions that are either already open or legitimately blocked, potentially impacting future trade attempts.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate and resolve the persistent ANOMALY-2**: Immediately audit the logic within `execute_entries()` and `rc8_clear_buffers()` (in `strategy/scoring.py`) for how `GateState.entry_confirm_buffer` and `conviction_streak` are managed, particularly for symbols that already have open positions or are blocked from new entries due to other gates (e.g., MRI STRESSED). Ensure `entry_confirm_buffer` is properly reset or decremented for legitimately open or fully blocked positions.
+2.  **Address the FIFO CRITICAL error and Position Count Drift**: Prioritize fixing the underlying cause of `[FIFO] NFLX: closing sell with no open long lots`. Review `_fifo_reconstruct` and the persistence mechanism for `_LOTS_STATE_FILE` in `execution/portfolio_tracker.py`, especially how it handles bot restarts and synchronization with Alpaca. Also, investigate the `POSITION COUNT DRIFT` at startup in `orphan_manager.py` to prevent state inconsistencies.
+3.  **Review `MAX_DAILY_LOSS_PCT` override**: Reconcile the `MAX_DAILY_LOSS_PCT` discrepancy between `config.py` and `main.py`. Either update `config.py` to `0.15` for the 'paper' profile if that is the intended behavior, or remove the override in `main.py` if `0.07` is the actual target, ensuring a single source of truth.
+4.  **Analyze `avg_r_multiple` calculation**: Correct the calculation or clarify the intended meaning of `avg_r_multiple` in the `all_time_stats` to ensure it aligns logically with total P&L and profit factor, providing a reliable risk-adjusted performance metric.
+5.  **Investigate `TQI degradation` and `gc.collect()` warnings**: While not critical code bugs, the consistent `ANOMALY-3` points to a systemic performance issue that requires a strategy review. The `gc.collect()` warnings suggest a potential memory leak or inefficient resource usage that could impact long-term bot stability and performance.

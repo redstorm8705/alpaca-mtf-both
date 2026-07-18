@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-05-14",
+  "run_ts": "2026-05-14T10:30:03.930915-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 38,
+    "levels": {
+      "STRESSED": 32,
+      "ELEVATED": 6
+    },
+    "last_score": 40,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 42,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-14 14:01:06,109 | WARNING  | strategy.run_cycle | Risk day (Export Prices MoM) \u2014 sizing at 50%",
+      "2026-05-14 14:01:35,899 | WARNING  | alerts | send_slack failed: The read operation timed out",
+      "2026-05-14 14:01:39,985 | WARNING  | alerts | send_slack failed: The read operation timed out",
+      "2026-05-14 14:01:44,071 | WARNING  | alerts | send_slack failed: The read operation timed out",
+      "2026-05-14 14:06:44,709 | WARNING  | strategy.run_cycle | Risk day (Export Prices MoM) \u2014 sizing at 50%"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

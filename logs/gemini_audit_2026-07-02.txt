@@ -1,0 +1,82 @@
+Nightly Gemini Audit — 2026-07-02
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['weekly_review.py', 'autonomous_patch_generator.py', 'execution/quarterly_hold_manager.py', 'execution/orphan_manager.py', 'execution/exit_logic.py', 'strategy/run_cycle.py', 'strategy/movers/strategy.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 3
+1.  `strategy/movers/strategy.py` | Multi-bot ownership conflict (unauthorized flattening of positions) | All 6 trades on 2026-07-02 (TSLA, MARA, SNOW, RIVN, PANW, HOOD) and prior QHM NVDA/GOOGL positions.
+2.  `execution.portfolio_tracker` (internal) | P&L Drift: Alpaca $0.00 vs. Tracker $-251.12 due to timestamp parsing error | All P&L calculations for 2026-07-02 are impacted.
+3.  `execution/orphan_manager.py` `cancel_and_reconcile_gtc_stops` | QHM GTC stops unconditionally cancelled if `quarterly_holds.json` file is absent | No specific trade impacted *today* but a critical vulnerability exists on new deployments/file loss.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **P&L DRIFT / Timestamp Parsing Error**: `WARNING | execution.portfolio_tracker | [fill_date] Could not parse timestamp '2026-07-02T15:32:55.77875Z': Invalid isoformat string: '2026-07-02T15:32:55.77875+00:00' — using raw slice`. This warning repeats multiple times (e.g., 19:11:20, 19:19:07, 19:34:40, 19:42:43, 19:57:09). It indicates a recurring issue in `PortfolioTracker` where a timestamp string (which contains `Z` for UTC) is misinterpreted or mishandled when attempting to parse, leading to `+00:00` in the error message and an invalid format. This directly correlates with the `EOD P&L DRIFT: Alpaca=$0.00 tracker=$-251.12 drift=$+251.12` entries, suggesting the parsing failure prevents correct reconciliation with Alpaca.
+*   **ANOMALY-2: CRM Confirm Gate Block**: `WARNING | strategy.run_cycle | [ANOMALY-2] [CRM] confirm_gate=5 scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=7`. CRM repeatedly fails to enter despite sufficient open position capacity. This indicates a consistent failure to meet the `confirm_gate` conditions.
+*   **ANOMALY-3: TQI Degradation**: `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement`. Acknowledged by the bot as a performance concern.
+*   **Signal Generator Timeout**: `WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['TQQQ', 'SQQQ']`. Leverage ETF scans (Bucket A) are timing out, leading to missed opportunities for potentially high-score trades.
+*   **News Monitor Timeout**: `WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['truth_social']`. Indicates incomplete news data fetching.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: All P&L signs for today's trades (TSLA, RIVN, PANW, HOOD) are consistent with entry/exit price difference. MARA and SNOW having 0.0 P&L because entry == exit price is correct.
+*   **`pnl_pct` Computation**: `pnl_pct` (e.g., RIVN 1.42%) is correctly computed from the original full position value, not the remaining quantity, per requirements.
+*   **Partial P&L Accumulation**: `partial_exit` events (RIVN, HOOD) in `TRADE EVENTS` explicitly state `"pnl": 0.0`. While `exit_logic.py` attempts to calculate and accumulate `_tph_pnl` into `trade["partial_pnl"]`, the `_log_trade_event` function (used to generate `TRADE EVENTS`) is not provided this `pnl` for partial exits, causing `0.0` to be recorded. The `EOD SNAPSHOT` confirms `partial_pnl: 0.0` for RIVN and HOOD. This is a recording bug for partial exits.
+*   **Entry/Exit Prices Plausible**: The wide losses on PANW (entry 355.1, exit 172.31) and TSLA (entry 428.23, exit 347.0033) are highly implausible for a bot operating with a 1% stop loss (Movers) or even typical intraday ATR-based stops, especially given all positions exited via "external_close". This points to the multi-bot ownership conflict as the cause of these adverse exits.
+*   **Score→Outcome Correlation**: For today's 6 trades, higher 12-point scores (12-13, P&L -81.23) resulted in worse P&L than lower scores (10-11, P&L -169.89 for more trades). This is an extremely small sample size (2 vs 4 trades), but it is counter-intuitive for strategy efficacy. Overall `all_time_stats` show poor performance (`win_rate=44.7`, `profit_factor=0.84`, `avg_r_multiple=-0.182`), indicating the bot is not capturing its intended edge (target 2.5R).
+*   **Stop-Hit Rate vs. Win Rate**: No explicit `stop_hit` events were recorded for today's trades; all exited via `external_close`. This suggests a bypass of the bot's intended stop-loss mechanisms, which is a significant risk management failure and contributes to poor `avg_r_multiple`.
+
+### TRADE INTEGRITY
+
+*   **`pnl=0.0` Anomalies**: The `pnl: 0.0` for partial exits in `TRADE EVENTS` is an anomaly, as internal code calculates `_tph_pnl`. This is a logging/recording bug for partial P&L.
+*   **`external_close` as Dominant Exit Reason**: All 6 trades on 2026-07-02 exited due to `external_close`. This is confirmed by the `EOD SNAPSHOT` `exit_reasons` and individual `trade_events`. This indicates that a mechanism external to the bot's primary entry/exit logic (TP/SL/ATR stops) is unilaterally closing positions. As identified below, this is `strategy/movers/strategy.py`'s `reconcile_on_startup()` (before its fix).
+
+### MODIFIED FILE FINDINGS
+
+1.  **`execution/orphan_manager.py`**
+    *   **New Bug (CATASTROPHIC)**: In `cancel_and_reconcile_gtc_stops` (lines L134-L167 and L290), the `_qhm_load_failed` flag is only set if `quarterly_holds.json` *exists but is unreadable/corrupt*. If `_qhm_state_path.exists()` is `False` (file not found), `_qhm_load_failed` is not set, and `_qhm_protected` remains an empty `frozenset()`.
+        *   **Exact failure condition**: If `data/state/quarterly_holds.json` does not exist (e.g., first run, clean install, or manually deleted), `_qhm_protected` will be an empty set. The condition `symbol in _qhm_protected or _qhm_load_failed` (L290) will then evaluate to `False` for all symbols. This results in an unconditional cancellation of all GTC stops (`logger.info(f"[{symbol}] Cancelling GTC stop {order_id} before RTH")`), including any QHM positions, leaving them unprotected. This bypasses the intended fail-closed mechanism.
+
+2.  **`execution/exit_logic.py`**
+    *   **New Bug (MEDIUM)**: `_record_partial_tqi` calculates a `partial_tqi` and logs it to `logger.info`, but this value is not stored in the `trade` dictionary or passed to `_log_trade_event`.
+        *   **Exact failure condition**: In `check_partial_exits` (L235), `_log_trade_event("partial_exit", symbol=symbol, price=_tph_fill, size=_qty_to_adv, tranche=_trail_phase, pnl=0.0, atr_value=atr_value)` implicitly uses `pnl=0.0` from its default arguments, instead of the calculated `_tph_pnl`. This leads to `partial_exit` records in `trade_events` consistently showing `pnl: 0.0`, masking the actual profit/loss of tranches.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash | strategy/signal_generator.py + main.py _find_recent_fvgs()**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError | run_movers.py:19 imports DataFetcher which doesn't exist**: LIKELY FIXED (EXTERNAL) - The `strategy/movers/strategy.py` was heavily modified and its `reconcile_on_startup` executed, implying `run_movers.py` is operational. The import error likely resolved in the external `run_movers.py` script not provided.
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk | order fill price ambiguity when multiple orders in flight simultaneously**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path | order-not-found returns WARNING but doesn't clear tracker → stranded stops**: FIXED - `orphan_manager.py` (L186) explicitly clears the `gtc_stop_order_id` if the order is not found.
+*   **P5-H4 | Rule 2 dead code | TOD_MARKET_OPEN_BUFFER_MINS referenced but possibly overridden to no-op**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED (from prior report)
+*   **P5-M1 | Cycle watchdog restart loop | os.execv() re-entry without clearing lockfile → instant re-lock**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions | mri_state.json not validated on load**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth | appends forever, never pruned**: UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed | final day P&L understated**: UNTOUCHED - The `Startup R-GUARD` in `run_cycle.py` handles crash recovery for EOD sentinel but not timing of EOD file write.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+
+1.  **CATEGORY: INFRASTRUCTURE** | SEVERITY: CRITICAL | `execution/portfolio_tracker` (internal function responsible for timestamp parsing) | **Timestamp Parsing Error** | `Invalid isoformat string: '2026-07-02T15:32:55.77875+00:00'` logged repeatedly during EOD P&L calculations. The Python `datetime.fromisoformat` expects either a `Z` or `+HH:MM` but not a string that results in both or an invalid combination. This error likely causes `PortfolioTracker` to fail to process fill data, leading to the observed `EOD P&L DRIFT` (Alpaca reporting $0.00 P&L).
+2.  **CATEGORY: ALPHA ISSUE** | SEVERITY: CRITICAL | `strategy/movers/strategy.py` | **Multi-bot ownership conflict (unauthorized flattening of positions)** | The `reconcile_on_startup()` function in `MoversStrategy` was previously adopting positions owned by `quarterly_hold_manager` and the main bot (`trade_log.json`). This resulted in `MoversStrategy` unilaterally flattening these positions via its `check_exits()` logic, causing large, uncontrolled losses (e.g., PANW -51.48%, TSLA -18.97%) as evidenced by the `external_close` reasons in `TRADE EVENTS` and the `EOD SNAPSHOT` for 2026-07-02, and explicitly acknowledged by comments in `strategy/movers/strategy.py` as a "2026-07-02 incident". *Note: While a fix for this bug has been added in the provided source, the logs and trade events confirm it was active today, prior to or immediately around the fix deployment.*
+3.  **CATEGORY: RISK MANAGEMENT** | SEVERITY: CATASTROPHIC | `execution/orphan_manager.py` | **QHM GTC stops unconditionally cancelled if `quarterly_holds.json` file is absent** | In `cancel_and_reconcile_gtc_stops`, if `data/state/quarterly_holds.json` does not exist (meaning `_qhm_state_path.exists()` is false), `_qhm_load_failed` remains false and `_qhm_protected` remains empty. This bypasses the fail-closed logic, leading to all existing GTC stops (including those for QHM positions) being unconditionally cancelled, leaving positions unprotected.
+4.  **CATEGORY: INFRASTRUCTURE** | SEVERITY: HIGH | `autonomous_patch_generator.py` `_call_llm` | **Potential LLM API rate limit vulnerability** | The AWP audit fix (2026-07-01) for Groq's TPD exhaustion involves routing calls primarily to Gemini (which is assumed to have "no TPD wall in our usage"). This introduces a new dependency on another free-tier assumption for a critical component (patch generation), risking a similar "0 processed" failure if Gemini introduces TPD limits or if the assumption proves incorrect.
+5.  **CATEGORY: P&L RECORDING** | SEVERITY: MEDIUM | `execution/exit_logic.py` `_record_partial_tqi` and `check_partial_exits` | **Inaccurate P&L recording for partial exits in `trade_events`** | Although `_tph_pnl` is calculated and accumulated into `trade["partial_pnl"]` within `check_partial_exits`, the `_log_trade_event` call (L235) for `partial_exit` explicitly passes `pnl=0.0`, resulting in `TRADE EVENTS` records showing no P&L for tranches.
+
+### FIX VALIDATION
+
+*   **P5-H3 (Orphan GTC 404 path)**: FIX VALIDATION: PASS
+    *   `orphan_manager.py` (L186) now explicitly clears the `gtc_stop_order_id` if the order is not found at Alpaca, resolving the issue of stranded stops.
+*   **A-2 (trail_stop not floor-bounded by promoted stop after partial exit)**: FIX VALIDATION: PASS
+    *   `execution/exit_logic.py` (L209) in `check_partial_exits` correctly incorporates `_stop_floor` (which represents the promoted stop price) into the `new_trail` stop calculation using `max()`, preventing the trail stop from falling below the promoted stop.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE**: Address the critical bug in `execution/orphan_manager.py` (CATASTROPHIC Alert #3) to prevent unconditional cancellation of QHM GTC stops when `quarterly_holds.json` is missing. Change the logic to *retain all GTC stops* if `_qhm_state_path.exists()` is `False` OR `_qhm_load_failed` is `True`.
+2.  **IMMEDIATE**: Investigate and fix the `Invalid isoformat string` timestamp parsing error in `execution.portfolio_tracker` (CATASTROPHIC Alert #2) to resolve the `EOD P&L DRIFT`. Ensure `datetime.fromisoformat` is used correctly, handling `Z` vs. `+00:00` or standardizing the input format.
+3.  **HIGH**: Deploy the fix for the multi-bot ownership conflict in `strategy/movers/strategy.py` (New Bug #2) to all active `run_movers.py` instances immediately to prevent further unauthorized flattening of positions.
+4.  **HIGH**: Investigate the root cause of `[ANOMALY-2] [CRM] confirm_gate=5 scans but no entry` and `phase-1 global timeout — abandoned symbols: ['TQQQ', 'SQQQ']` to resolve entry blocks and missed scans for high-value symbols.
+5.  **MEDIUM**: Correct the P&L recording for partial exits in `execution/exit_logic.py` (New Bug #5) by passing the calculated `_tph_pnl` to `_log_trade_event` instead of `0.0`.

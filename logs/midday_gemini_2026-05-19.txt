@@ -1,0 +1,53 @@
+Midday Gemini Audit — 2026-05-19
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+Not enough data from the current session for a comprehensive performance audit, as `Entries: 0`, `Exits: 0`, and `Closed trades: 0`. The `Total P&L: $0.00` and `Partials: 1` are contradictory given no closed trades are recorded. If a partial exit occurred, it should contribute to P&L and likely result in a partial reduction of an open position. However, since no specific trade details are provided for this partial, and no P&L is recorded, it's not possible to audit its integrity or if it correctly reduced position size.
+
+### ENTRY QUALITY
+No new entries were attempted during this log window (`Entries: 0`). The bot correctly identified a `STRESSED` MRI regime (score=41) and logged `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`. This demonstrates proper adherence to entry restrictions under adverse market conditions. It also applied appropriate sizing reductions (`Risk day (ADP Employment Change Weekly) — sizing at 50%`, `Mid-day doldrums — sizing at 75%`, `MRI STRESSED (score=41) — size floor 0.70x applied`).
+
+### EXIT QUALITY
+The bot is actively monitoring overnight positions for reversal signals and breakeven breaches.
+*   Multiple "Overnight reversal signal: scan 1/10" were detected for MSTR, SMCI, COIN, PLTR, TOST, indicating the bot is initiating its multi-scan confirmation process for potential exits. These signals subsequently decayed for MSTR, SMCI, COIN, PLTR, and TOST, meaning the initial reversal conditions did not persist to full confirmation. This is expected behavior for a confirmation-based exit strategy.
+*   For COIN and SMCI, `OVERNIGHT BREAKEVEN` breaches were logged and escalated (`breach count 0 → 1/9`, `1 → 2/9`, `2 → 3/9` for COIN; `0 → 1/9` for SMCI). This indicates the bot is correctly identifying when price approaches the breakeven threshold for overnight positions and is counting breaches as per its internal logic. No actual breakeven *exit* was logged during this period, so there's no evidence of holding losers too long or cutting too slowly based on these specific events, as the bot's logic involves a multi-breach threshold before an actual exit.
+
+### MRI ALIGNMENT
+The bot shows excellent MRI alignment.
+*   `MRI refreshed: score=41 level=STRESSED`.
+*   `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` - Correctly prevents new entries.
+*   `INFO | strategy.run_cycle | MRI STRESSED (score=41) — size floor 0.70x applied.` - Correctly applies sizing adjustments.
+*   `INFO | vol_regime | Volatility regime: NORMAL (VIX: 17.8)`. While VIX is normal, the MRI score includes other factors (e.g., `news_alerts` contributing 35 points to score 41), justifying the `STRESSED` level. This indicates a robust multi-factor risk assessment.
+
+### LOG ANOMALIES
+*   **Frequent `VOLSHADOW compute error`**: A persistent warning across numerous symbols (QCOM, NVDA, AAPL, TSLA, AMD, PLTR, COIN, SMCI, TOST, SOFI, MSTR, CRWD, CRM, PANW, UBER, AMZN, META, NFLX, SPY, QQQ, INTC) for both long and short computations. This suggests a fundamental issue in the `VOLSHADOW` indicator's calculation or data handling.
+*   **Slow `gc.collect()` and `SLOW CYCLE`**: Recurring `WARNING | main | gc.collect() took Xms, collected 64 objects — heap may be growing` with durations up to 5726.3ms (5.7 seconds). This is followed by `INFO | main | [CYCLE] duration=X | watchdog_headroom=Y ⚠ SLOW CYCLE` where cycle durations are frequently long (e.g., 353s, 481s, 351s, 379s). The 481-second cycle is particularly concerning, as it significantly prolongs the strategy's execution, potentially leading to stale market data or delayed decision-making. The "heap may be growing" message could indicate a memory leak.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL** | **Inconsistent P&L Summary (Partial Exit)**
+    *   **Variable/Metric involved**: `Partials` count, `Total P&L`, `Closed trades` count in the session summary.
+    *   **Value vs. What it should be**: The session summary reports `Partials: 1` and `Total P&L: $0.00`, but `Closed trades: 0`. A partial exit, by definition, involves closing a portion of an open position, which should either result in a non-zero P&L (unless the exit price exactly matches the entry for that portion, which is unlikely to yield $0.00 *and* be counted as a partial *exit* if not explicitly recorded as such) or, at minimum, increment `Closed trades` or a specific "Partial trades closed" counter. The `Partials: 1` count without a corresponding P&L and no closed trades suggests an internal counter increment without the actual trade execution/accounting taking place, or a bug in how "partials" are defined and reported. The known benign pattern for `Exit P&L = $0.00 on overnight_breakeven exit reason` applies *only* if an exit actually occurs with `stop_price` pushed to `entry_price`; here, no exit is recorded, only a "partial" count.
+    *   **Condition**: Occurs when `Partials: 1` is reported in the session summary, `Total P&L: $0.00`, and `Closed trades: 0`. The exact trigger of this "partial" is unclear from the provided logs, as no actual exit is logged.
+
+2.  **INFRASTRUCTURE | HIGH** | **`VOLSHADOW` Compute Error across multiple symbols**
+    *   **Variable/Metric involved**: Internal `VOLSHADOW long compute error` and `VOLSHADOW short compute error`.
+    *   **Value vs. What it should be**: The log repeatedly shows `Object of type bool is not JSON serializable` for various symbols (QCOM, NVDA, AAPL, etc.) during `VOLSHADOW` calculations. This indicates that the `VOLSHADOW` function is returning a boolean value at some point where a JSON-serializable data type (likely a numeric value or dictionary representing a computed score/metric) is expected. This data type mismatch prevents the proper computation or serialization of the `VOLSHADOW` score/signal, which is critical for confluence.
+    *   **Condition**: Consistently occurs during `confluence` module operations for `VOLSHADOW long` and `VOLSHADOW short` computations across a wide range of monitored symbols.
+
+3.  **INFRASTRUCTURE | HIGH** | **Excessive Cycle Duration and Potential Memory Leak**
+    *   **Variable/Metric involved**: `gc.collect()` execution time, `[CYCLE] duration`, `watchdog_headroom`.
+    *   **Value vs. What it should be**: `gc.collect()` is taking excessive time (up to 5.7 seconds), frequently accompanied by the warning "heap may be growing." This suggests inefficient memory management or a memory leak. Subsequently, the `[CYCLE]` durations are excessively long (e.g., 353s, 481s, 351s, 379s), severely impacting the bot's responsiveness to market changes. An intraday bot should ideally have cycle durations in the range of seconds or low tens of seconds, not hundreds of seconds. The `watchdog_headroom` also becomes concerningly low (e.g., 239s for a 481s cycle) when cycles are this long.
+    *   **Condition**: Occurs consistently, with `gc.collect()` warnings followed by `SLOW CYCLE` logs for multiple consecutive cycles.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: **Address `VOLSHADOW` Compute Error (HIGH URGENCY)**. Investigate the `confluence` module's `VOLSHADOW` calculation logic to determine why a boolean is being returned when a JSON-serializable object is expected. This bug is systematically corrupting a key indicator's data, potentially impacting signal generation and decision quality if `VOLSHADOW` is part of the `MIN_SCORE` calculation.
+2.  **INFRASTRUCTURE**: **Optimize Memory Management and Reduce Cycle Duration (HIGH URGENCY)**. Analyze the bot for memory leaks and optimize code sections contributing to high `gc.collect()` times. The excessively long cycle durations are a critical performance degradation that can lead to stale market data and missed trading opportunities or delayed risk management.
+3.  **EXECUTION**: **Clarify "Partial" Accounting in P&L Summary (MEDIUM URGENCY)**. Review the logic for recording `Partials` and `Closed trades` in the session summary. Ensure that `Partials: 1` accurately reflects a completed partial exit, and if so, that its P&L is correctly reflected in `Total P&L` and that `Closed trades` is appropriately incremented or a dedicated partial trades counter exists. If it's a "partial signal" not yet executed, the summary should distinguish this or not count it as a "partial" in the same category as completed trades.

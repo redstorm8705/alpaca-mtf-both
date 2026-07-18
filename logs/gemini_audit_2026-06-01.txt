@@ -1,0 +1,70 @@
+Nightly Gemini Audit — 2026-06-01
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **CRITICAL FIFO Error & State Corruption**: Repeated critical logs `[FIFO] AMZN: closing sell with no open long lots (net_qty=-34, qty=1, price=263.42). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` This error occurs multiple times, with `net_qty` consistently decreasing (e.g., -34, -35, -36), indicating a persistent issue where unexpected sell fills for AMZN are leading to the accumulation of phantom short positions in the bot's internal tracking state. This is a severe data integrity problem.
+*   **Persistent EOD P&L Drift**: The warning `EOD P&L DRIFT: Alpaca=$-24.30 tracker=$-32.99 drift=$+8.69` appears repeatedly throughout the logs. This drift is a direct consequence of the FIFO state corruption for AMZN, where the bot's internal P&L tracker diverges from Alpaca's reported P&L.
+*   **Excessive Garbage Collection Duration**: Multiple `WARNING | main | gc.collect() took ~3.4-3.6 seconds, collected 142 objects — heap may be growing` logs indicate significant pauses for garbage collection. This is a performance concern for a real-time trading bot, suggesting potential memory leaks or inefficient object management, which could lead to missed opportunities or delayed execution.
+*   **Persistent Trade Quality Degradation**: The warning `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` is logged repeatedly. This indicates a consistent issue with trade quality, suggesting the bot's recent trades are not meeting performance expectations related to exits and stop placement.
+*   **Repeated Entry Halts**: The message `execute_entries: HALTED for session — no new entries permitted.` appears even when high-score signals (e.g., SPY 12/12, CRWD 11/12, NFLX 12/12, COIN 11/12, MSTR 11/12) are generated. While `MRI ELEVATED` and `⚡ CURRENTS ALERT` with `base penalty: 100%` suggest intentional risk aversion, the generic halt message does not explicitly state the reason (e.g., "halted due to news alert"). This lack of specificity makes it harder to audit the precise conditions triggering the halt.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: Generally correct for recorded closed trades (AMZN, QCOM). However, the MSTR trade (from 2026-05-28) exhibits contradictory P&L signs and exit prices for a stated "short" direction.
+*   **MSTR Trade Inconsistency**: For MSTR (direction: short), a `partial_exit` at `144.84` with `pnl=18.11` and a `stop_hit` at `162.95` with `pnl=24.46` are logically inconsistent. If the direction was truly "short", a stop hit at a higher price (162.95) should result in a loss, not a profit. This indicates a P&L calculation error or a mismatch in the recorded trade direction/exit details.
+*   **Average R-Multiple Critical Failure**: The `all_time_stats.avg_r_multiple: -0.039` is significantly negative. This is a critical strategic failure, indicating the bot is not achieving its intended profit targets relative to its risk (configured `TARGET_ATR_MULT = 2.5`). The bot is consistently yielding poor risk-adjusted returns.
+*   **Stop-Hit Rate**: High stop-hit rate observed (6 out of 9 recent exits were stop hits), supporting the `TQI degradation` warning.
+*   **Plausible Prices**: Entry/exit prices appear plausible for the symbols and times.
+*   **Score→Outcome Correlation**: Limited data, but observed losses for lower-scoring (8/12) trades today, and prior wins for higher-scoring (10/12, 12/12) trades, suggesting a weak positive correlation without robust statistical significance from the provided logs.
+
+### TRADE INTEGRITY
+*   **MSTR P&L Contradiction**: The `MSTR` trade details in `TRADE EVENTS` (partial_exit at 144.84, pnl 18.11; stop_hit at 162.95, pnl 24.46, direction short) are inconsistent. For a short position, a stop hit at a higher price (162.95) should result in a loss. This points to a recording or calculation bug in `pnl` or `direction` data.
+*   **AMZN FIFO State Corruption**: As detailed in Log Anomalies, the repeated `CRITICAL FIFO` for AMZN indicates a fundamental data integrity issue where the bot's internal representation of AMZN's open positions (`net_qty`) is becoming corrupted by "synthetic shorts," leading to an accumulating, inaccurate position.
+
+### MODIFIED FILE FINDINGS
+
+**File**: `execution/portfolio_tracker.py`
+
+*   **Function**: `_fifo_reconstruct`
+    *   **Trace**: During the processing of Alpaca `FILL` activities, specifically when a `sell` order is encountered for a symbol (`AMZN`) where the calculated `net_qty` is `0` or negative (indicating no open long positions for that sell to close, or even existing short positions). The intention is to detect an anomalous state.
+    *   **Runtime vs. Intended**: The runtime produces a critical log message, and then proceeds to `current.append({"qty": to_sell, "price": price, "side": "short"})` (line 239). This behavior *adds* a new "synthetic short" lot to the current internal list of `lots` for that symbol. The intent of detecting state corruption is achieved, but the subsequent action of creating a synthetic position *perpetuates* and *exacerbates* the corruption, as demonstrated by the `net_qty` repeatedly decreasing in subsequent log entries (e.g., -34, -35, -36). This phantom short is then persisted via `_save_open_lots_state`, leading to continuous P&L drift and a misrepresentation of the bot's actual positions.
+    *   **Failure Condition**: The `_fifo_reconstruct` function, upon encountering a `sell` fill that cannot be matched to an existing long position, creates and persists an incorrect "synthetic short" position, leading to an ever-growing phantom short position in the bot's internal state for that symbol.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED
+*   P5-H2 | Fill price crosstalk: UNTOUCHED (The current `_fifo_reconstruct` does not directly address `fill price crosstalk` but instead has its own FIFO-related critical flaw.)
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/portfolio_tracker.py:_fifo_reconstruct**
+    *   **Description**: The logic for handling unexpected `sell` fills, where `net_qty` is zero or negative, creates a "synthetic short" position. This synthetic position is added to the bot's internal state and persisted, leading to an accumulating, phantom short position and continuous P&L drift.
+    *   **Exact failure condition**: When `_fifo_reconstruct` processes a `sell` fill for a symbol where its calculated `net_qty` is `0` or negative, it appends a new short lot `current.append({"qty": to_sell, "price": price, "side": "short"})` (line 239), thereby creating a non-existent short position in the bot's tracker that contradicts Alpaca's actual position (as implied by the P&L drift and lack of `alpaca_per_trade` entry).
+*   **DATA INTEGRITY | HIGH | TRADE EVENTS (MSTR pnl)**
+    *   **Description**: The MSTR trade from 2026-05-28 shows inconsistent P&L, exit prices, and direction. A "short" trade experiencing a "stop hit" at a higher price should result in a loss, not a profit, yet positive P&L is recorded.
+    *   **Exact failure condition**: The `pnl` values (18.11, 24.46) for the MSTR `partial_exit` (144.84) and `stop_hit` (162.95), combined with the `direction: short`, are mathematically contradictory. This indicates an error in P&L calculation or the recording of trade parameters.
+*   **PERFORMANCE | CRITICAL | All-time stats (avg_r_multiple)**
+    *   **Description**: The `all_time_stats.avg_r_multiple` is recorded as `-0.039`. This indicates a fundamental failure of the strategy to generate positive returns commensurate with the risk taken, failing to achieve the stated `TARGET_ATR_MULT = 2.5` edge.
+    *   **Exact failure condition**: The calculated `avg_r_multiple` is negative, implying that the average profit per unit of risk is consistently below zero, which contradicts the goal of a profitable trading strategy and the expectation from a 2.5x profit target.
+*   **INFRASTRUCTURE | MEDIUM | main (gc.collect() duration)**
+    *   **Description**: The `gc.collect()` function consistently takes over 3 seconds to execute, suggesting a memory leak or inefficient object management within the bot.
+    *   **Exact failure condition**: Garbage collection pauses, lasting several seconds, introduce significant latency into the main execution loop, potentially impacting the bot's ability to react to real-time market events.
+
+### FIX VALIDATION
+No prior fixes were proposed for the specific issues identified above.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE**: Investigate and resolve the `execution/portfolio_tracker.py:_fifo_reconstruct` bug that creates "synthetic short" positions for AMZN. This is causing data corruption and P&L drift. Modify the `sell` handling logic to prevent the creation of phantom positions when `net_qty` is unexpectedly non-positive. Instead, log a severe alert and quarantine the unmatched fill for manual review.
+2.  **HIGH PRIORITY**: Debug the `MSTR` trade P&L inconsistency from 2026-05-28. Determine if it's a P&L calculation error, a data recording error, or an incorrect `direction` assignment in the trade events. This may indicate a broader issue with P&L accuracy for certain trade types or scenarios.
+3.  **HIGH PRIORITY**: Address the consistently negative `all_time_stats.avg_r_multiple`. This metric indicates a fundamental flaw in the trading strategy's performance. Review the `TARGET_ATR_MULT` of 2.5x against actual profit captures and overall win rate. Recalibrate entry, exit, stop, and target logic.
+4.  **MEDIUM PRIORITY**: Investigate the root cause of the prolonged `gc.collect()` pauses. Profile memory usage and object lifetimes to identify and eliminate memory leaks or optimize object handling to reduce GC overhead and improve real-time responsiveness.
+5.  **MEDIUM PRIORITY**: Enhance the `execute_entries: HALTED for session` log message to explicitly state the reason for the halt (e.g., "Halted due to news alert", "Halted due to MRI level", "Halted due to TOD_EOD_NO_ENTRY_MINS"). This improves auditability and troubleshooting.

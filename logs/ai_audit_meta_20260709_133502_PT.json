@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-07-09 01:35 PM PT",
+  "ts_iso": "2026-07-09T13:35:15.939396-07:00",
+  "prompt_chars": 472971,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 472971,
+  "gai_prompt_chars": 473047,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.32,
+    "error": "400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "### 1. TRADE-BY-TRADE VERDICT\n\n- **07-06 RIVN (Score 10)**: entry $19.73 (long) → exited 07-07 at $17.32. **VERDICT: entry_error.** Stopped out for a full loss. The wide ATR stop (14%+) resulted in a significant drag on equity.\n- **07-06 AVGO (Score 11)**: entry $376.78 (long) → exited 07-08 at $387.58. **VERDICT: edge_confirmed.** Profitable trade truncated by `MRI=STRESSED` panic override. Alpha was left on the table as momentum continuation was interrupted.\n- **07-06 MS (Score 12)**: entry $221.41 (long) → exited 07-08 at $216.76. **VERDICT: regime_error.** Exited due to `MRI=STRESSED` panic override.\n- **07-06 SNOW (Score 12)**: entry $262.28 (long) → exited 07-08 at $257.61. **VERDICT: regime_error.** Exited due to `MRI=STRESSED` panic override.\n- **07-09 NET (Score 12)**: entry $274.36 (long) → Open. **VERDICT: unknown.** \n- **07-09 RIVN (Score 10)**: entry $18.06 (long) → Open. **VERDICT: unknown.**\n- **07-09 HOOD (Score 12)**: entry $116.50 (long) → Open. **VERDICT: unknown.**\n\n### 2. PATTERN ANALYSIS\n\n**PATTERN 1: MRI Panic Override Truncating Winners (Negative)**\nThe bot's `mri=STRESSED` state triggers a blunt, blanket liquidation of all open positions, regardless of their individual performance or relative strength. On 07-08, this forced the exit of **AVGO** (which was profitable and had already been pushed to breakeven) and locked in losses on **MS**, **SNOW**, **HOOD**, and **MARA**. This violates the Asness/Jegadeesh principles of letting winners run; the bot is truncating momentum continuation on assets that are demonstrating relative strength during market stress.\n\n**PATTERN 2: Sub-Kelly Position Sizing & Capital Inefficiency (Negative)**\nDespite a `MAX_RISK` of 4% (~$112 on a $2,800 account), the bot is consistently risking less than 1% on high-conviction (Score 12) setups. For example, **NET** (Score 12) risked only $16.07 (0.57% of equity), and **HOOD** (Score 12) risked $24.44 (0.87%). This indicates the `KELLY_FRACTION=0.25` is far too conservative. Furthermore, the ATR stops are excessively wide for momentum trades (e.g., **RIVN** entry at $18.06 with a stop at $15.39 is a 14.7% risk distance), which forces the bot to buy fewer shares to stay under risk limits, severely suppressing the edge.\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n\n*No active directives to verify (Prior status: context_only).*\n\n### 4. WEEKLY DIRECTIVES\n\n**[DIRECTIVE-1] Modify MRI=STRESSED Panic Override**\n*Action*: Disable the blanket market exit for positions that are currently profitable or have already been pushed to breakeven. Allow relative strength winners to ride out the stress.\n*Evidence*: 07-08/AVGO/edge_confirmed (profitable trade truncated by panic override).\n*Expected impact*: Capture full momentum continuation on winning trades during market stress, improving average R and overall P&L.\n\n**[DIRECTIVE-2] Increase KELLY_FRACTION for High-Conviction Setups**\n*Action*: Increase `KELLY_FRACTION` to 0.5 (Half-Kelly) or adjust the base risk allocation to utilize the full 4% `MAX_RISK` per trade for Score 11/12 setups.\n*Evidence*: 07-09/NET/unknown (risking only 0.57% of equity on a 12/12 score setup).\n*Expected impact*: Properly leverage the confirmed edge, increasing absolute returns and preventing alpha from being left on the table.\n\n**[DIRECTIVE-3] Cap ATR Stop Distance for Low-Priced Stocks**\n*Action*: Implement a percentage-based cap on ATR stops (e.g., max 5-8% distance from entry) to prevent excessively wide stops on high-beta or low-priced stocks.\n*Evidence*: 07-09/RIVN/unknown (stop placed 14.7% away from entry).\n*Expected impact*: Better capital efficiency, allowing for larger share quantities within the risk limit, and higher R-multiples on winning trades.\n\n### 5. FINAL VERDICT\n\n**WARN** — The bot is successfully identifying high-quality momentum setups, but its edge is being severely suppressed by sub-Kelly position sizing, excessively wide ATR stops, and a blunt MRI panic override that truncates winning trades.\n\n### 6. STRUCTURED FINDINGS\n\n```json\n[\n  {\n    \"file\": \"scan_to_html.py\",\n    \"finding\": \"_fetch_options_data fails with 'cannot convert float NaN to integer' when options data contains NaNs.\",\n    \"recommended_fix\": \"Add a check for NaN values (e.g., `math.isnan(val)` or `pd.isna(val)`) before attempting to cast floats to integers, or use `.fillna(0)` on the dataframe/series.\",\n    \"rc_class\": \"RC-3\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 303902,
+    "elapsed_s": 87.13,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "audit_date": "2026-06-15",
+  "run_ts": "2026-06-15T10:30:02.649465-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TOST",
+      "UBER"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "ELEVATED": 29
+    },
+    "last_score": 37,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 88,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-15 15:18:49,004 | WARNING  | scan_to_html | [scan] _fetch_options_data fetch failed \u2014 returning None: cannot convert float NaN to integer",
+      "2026-06-15 15:18:50,512 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$0.00 tracker=$-3.28 drift=$+3.28",
+      "2026-06-15 15:24:01,480 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=15.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-15 15:25:23,519 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$0.00 tracker=$-3.28 drift=$+3.28",
+      "2026-06-15 15:31:01,760 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=15.0/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "TOST",
+      "status": "rc=2",
+      "entry": 22.79,
+      "exit": 25.36
+    },
+    {
+      "symbol": "UBER",
+      "status": "rc=2",
+      "entry": 70.46,
+      "exit": 71.82
+    }
+  ],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -73.32000000000001,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -36.660000000000004,
+    "best": {
+      "symbol": "UBER",
+      "pnl": -1.3599999999999994,
+      "entry_price": 70.46,
+      "exit_price": 71.82,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 74.3,
+      "target": 62.77
+    },
+    "worst": {
+      "symbol": "TOST",
+      "pnl": -71.96000000000001,
+      "entry_price": 22.79,
+      "exit_price": 25.36,
+      "size": 28.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 25.39,
+      "target": 17.62
+    },
+    "trades": [
+      {
+        "symbol": "TOST",
+        "pnl": -71.96000000000001,
+        "entry_price": 22.79,
+        "exit_price": 25.36,
+        "size": 28.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 25.39,
+        "target": 17.62
+      },
+      {
+        "symbol": "UBER",
+        "pnl": -1.3599999999999994,
+        "entry_price": 70.46,
+        "exit_price": 71.82,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 74.3,
+        "target": 62.77
+      }
+    ]
+  }
+}

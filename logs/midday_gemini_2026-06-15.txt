@@ -1,0 +1,65 @@
+Midday Gemini Audit — 2026-06-15
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L Signs:** Correctly calculated for both closed trades. For TOST ($22.79 entry, $25.36 exit, $-71.96 P&L) and UBER ($70.46 entry, $71.82 exit, $-1.36 P&L), a negative P&L with exit price > entry price confirms both were correctly identified as losing short positions.
+*   **TOST Exit Plausibility:** The exit price ($25.36) for TOST is plausible for a `stop_hit` event, as it is very close to the stated stop price ($25.39).
+*   **Win Rate and Profit Factor:** The 0% win rate and 100% stop-hit rate from two closed trades (both losses) indicates severe underperformance for this session. This is inconsistent with a robust trading edge.
+*   **Score-Outcome Correlation:** Both trades had high confluence scores (TOST: 12/12, UBER: 10/12), which should theoretically indicate high-conviction entries. However, both resulted in stop-hit losses. This indicates a significant disconnect between the calculated confluence score and the actual trade outcome, suggesting the scoring mechanism is not accurately identifying high-probability trades or that other factors are overriding its predictive power.
+*   **Stop-hit rate:** A 100% stop-hit rate for the session's closed trades strongly indicates that the strategy's entries are systematically in unfavorable conditions, stop placement is too tight for the volatility, or the market regime is highly unfavorable to the strategy's edge.
+
+### ENTRY QUALITY
+
+*   **MRI Context:** Entries were taken under `MRI=ELEVATED`. The log confirms the bot applied a `size floor 0.85x` multiplier, indicating awareness and adjustment for elevated risk, which is aligned with configured behavior.
+*   **High Confluence Scores Leading to Losses:** As noted in the Performance Audit, entries with high scores (10/12, 12/12) resulted in 100% losses, indicating poor entry quality despite the internal scoring.
+*   **Stale Data for Entry Signals (Severe):** The bot is attempting to generate "intraday" signals (`Mode: intraday`, `TOD: midday`) using significantly stale data, as evidenced by `bar_age_min` values of over 13 hours. This makes all signal generation decisions fundamentally flawed.
+
+### EXIT QUALITY
+
+*   **UBER Exit Discrepancy (Bug):** The recorded exit price for UBER ($71.82) is significantly below its stated stop price ($74.30) despite the exit reason being `stop_hit`. This discrepancy of $2.48 suggests an execution or reporting error.
+
+### MRI ALIGNMENT
+
+*   **MRI=ELEVATED:** The bot correctly identified the MRI as ELEVATED (score 37/100) and applied sizing adjustments (`size floor 0.85x`). This indicates correct adherence to MRI-based risk management. However, trading during ELEVATED MRI still resulted in 100% losses, suggesting that even with adjustments, the current strategy might not be suited for this regime, or the "ELEVATED" threshold itself needs re-evaluation relative to strategy performance.
+
+### LOG ANOMALIES
+
+*   `[ANOMALY-2] [MU] confirm_gate=6 scans but no entry — risk.open_positions=0 vs tracker=0 | MAX_OPEN_POSITIONS=4.` (also for PANW, AVGO, CRWD): These warnings indicate that signals passed preliminary confirmation gates but no entry was made, despite no apparent limit (MAX_POSITIONS) or internal state conflict. The log does not explicitly state the final filtering reason. While `VOLSHADOW` logs for these tickers show `would_pass: false`, this reason is not linked to `ANOMALY-2`, creating ambiguity.
+*   `[ANOMALY-3] TQI degradation: last-5-trade avg=15.0/100 < 30 — review exit discipline and stop placement.` This is a performance warning, flagging a decline in Trade Quality Index.
+*   `bar_age_min` consistently reporting >790 minutes (13+ hours) in `VOLSHADOW` logs, which contradicts `Mode: intraday` and `TOD: midday` and the system's actual after-hours time. This is a critical data staleness and time synchronization issue.
+
+### NEW BUGS / CONCERNS
+
+1.  **INFRASTRUCTURE | CRITICAL | Stale Data & Time Synchronization Discrepancy**
+    *   **Exact variable or metric involved:** `bar_age_min` (e.g., `794.3` min), Bot's internal `TOD` (`midday`), `Mode` (`intraday`), and the system's external log timestamp (e.g., `2026-06-15 17:14:16,427 PT` or `20:14:16 ET`).
+    *   **Explanation:** The `VOLSHADOW` logs consistently show `bar_age_min` values exceeding 13 hours (e.g., `794.3` minutes) for symbols being scanned. Concurrently, the bot's internal log message indicates it is operating in `intraday` mode during `midday` (e.g., `MTF cycle @ 13:20:25 ET`). However, the system's timestamp for these logs (e.g., `2026-06-15 17:14:16 PT`) translates to 20:14:16 ET, which is well after market close (16:00 ET). This means the bot is attempting to generate "intraday" signals based on data from the previous trading day or even older, while believing it is actively trading during current market hours.
+    *   **Failure:** This constitutes a critical failure in data timeliness and time synchronization. All intraday market analysis and signal generation (including confluence scoring) become fundamentally compromised as decisions are based on severely outdated information. This leads to systematic degradation in decision quality, as observed by the 100% stop-hit rate.
+    *   **Exact condition:** Occurs during scan cycles (e.g., starting `2026-06-15 17:14:16 PT` and `2026-06-15 17:20:25 PT`) when `Mode: intraday`, `TOD: midday`, and `bar_age_min` in `VOLSHADOW` logs are greater than the current trading session length (e.g., > 400 minutes).
+
+2.  **EXECUTION BUG | HIGH | UBER Stop-Hit Exit Price Discrepancy**
+    *   **Exact variable or metric involved:** `UBER: exit $71.82` (recorded exit price), `stop=$74.30` (stated stop price), `exit reason: stop_hit`.
+    *   **Explanation:** For the UBER trade, the bot recorded an exit price of $71.82. However, the exit reason is `stop_hit`, and the stated stop price was $74.30. Assuming this was a short trade (indicated by negative P&L when exit > entry), the stop loss was at $74.30.
+    *   **Failure:** A `stop_hit` exit should result in an exit price at or very near the stop price. The discrepancy of $2.48 between the recorded exit price ($71.82) and the stated stop price ($74.30) is significant (approx. 3.3% difference on the stop price). This indicates a problem with either the stop order execution (e.g., the stop was not at $74.30, or the fill was exceptionally poor and logged inaccurately), or a data reporting bug where the `stop` variable itself is incorrect for the actual trigger. This directly impacts P&L accuracy and misrepresents execution quality.
+    *   **Exact condition:** Occurs in the `CLOSED TRADE DETAILS` for UBER, where `exit $71.82` with `stop_hit` reason and `stop=$74.30`.
+
+3.  **ALPHA ISSUE / LOGGING | MEDIUM | Ambiguous `ANOMALY-2` for Unentered Trades**
+    *   **Exact variable or metric involved:** `[ANOMALY-2]` log message, `confirm_gate` count, absence of specific reason for non-entry.
+    *   **Explanation:** The bot frequently logs `[ANOMALY-2]` stating "confirm_gate=X scans but no entry" for various tickers (MU, PANW, AVGO, CRWD), explicitly ruling out `MAX_OPEN_POSITIONS` or `risk.open_positions` issues. However, the log message does not specify *why* the entry was ultimately not made. The concurrent `VOLSHADOW` logs for these tickers *do* show `"would_pass": false`, strongly suggesting that a volume-related or similar filter was the actual reason.
+    *   **Failure:** If `would_pass: false` is indeed the reason, then `ANOMALY-2` is a misnomer; the entries were correctly filtered. However, the lack of explicit logging of the actual filtering reason makes `ANOMALY-2` ambiguous and misleading. It prevents efficient debugging and understanding of why potential signals are not being acted upon. If `would_pass: false` is *not* the reason, then the bot is failing to enter trades for an unknown, unlogged reason.
+    *   **Exact condition:** When `WARNING | strategy.run_cycle | [ANOMALY-2]` is logged, and for the same ticker, recent `INFO | confluence | [TICKER] VOLSHADOW` logs show `"would_pass": false`, but `ANOMALY-2` doesn't state "filtered by X condition".
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE: CRITICAL | Investigate and Fix Time Synchronization / Stale Data:**
+    *   **Action:** Immediately halt the bot. Audit the system's timezone configuration, the bot's internal clock synchronization, and data feed timestamps. Ensure `intraday` mode logic relies exclusively on real-time data from the current trading session and that the bot's `TOD` (Time Of Day) state accurately reflects actual market hours. The `bar_age_min` should never be hours old for an intraday strategy.
+2.  **EXECUTION: HIGH | Debug UBER Exit Price Discrepancy:**
+    *   **Action:** Review the trade execution and logging logic for stop-loss orders. Trace the exact sequence of events for the UBER trade: initial stop placement, market conditions leading to the trigger, the actual order sent to Alpaca, and the fill confirmation. Determine if the `stop` price was miscalculated, the `stop_hit` reason was erroneously applied, or if Alpaca's fill reporting on paper accounts leads to such wide discrepancies. Implement logging for `actual_stop_trigger_price` and `actual_fill_price_at_stop` for better auditability.
+3.  **ALPHA: MEDIUM | Improve `ANOMALY-2` Logging Clarity and Strategy Evaluation:**
+    *   **Action:** Modify the `ANOMALY-2` logging to explicitly state the reason a `confirm_gate` passed signal did not result in an entry (e.g., "filtered by volume ratio," "filtered by rsi," etc.). Concurrently, initiate a thorough backtest and forward test of the strategy's confluence scoring logic against recent market data, specifically focusing on periods of `ELEVATED` MRI and `VOLATILITY_TIER_HIGH_THRESHOLD` conditions, to address the 0% win rate and high scores leading to losses. The `ANOMALY-3` TQI degradation confirms this need.

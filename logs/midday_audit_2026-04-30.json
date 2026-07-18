@@ -1,0 +1,164 @@
+{
+  "audit_date": "2026-04-30",
+  "run_ts": "2026-04-30T09:15:02.475538-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 3,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.25,
+    "flagged_entries": [
+      {
+        "symbol": "UBER",
+        "ts": "2026-04-30 08:53:21",
+        "score": 11,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 74.1,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "TOST",
+        "ts": "2026-04-29 07:21:25",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 28.59,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SMCI",
+        "ts": "2026-04-29 07:21:38",
+        "score": 11,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 25.63,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "UBER",
+      "TOST",
+      "COIN",
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 9,
+    "levels": {
+      "STRESSED": 8,
+      "HIGH": 1
+    },
+    "last_score": 55,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 0,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "COIN",
+      "status": "rc=2",
+      "entry": 197.36,
+      "exit": 184.15
+    },
+    {
+      "symbol": "SMCI",
+      "status": "rc=2",
+      "entry": 25.63,
+      "exit": 27.37
+    },
+    {
+      "symbol": "TOST",
+      "status": "rc=2",
+      "entry": 28.59,
+      "exit": 28.64
+    }
+  ],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 2,
+    "losses": 1,
+    "total_pnl": 11.549999999999983,
+    "win_rate": 0.6666666666666666,
+    "profit_factor": 0.6843869731800761,
+    "avg_win": 21.43500000000001,
+    "avg_loss": -31.320000000000036,
+    "best": {
+      "symbol": "COIN",
+      "pnl": 39.630000000000024,
+      "entry_price": 197.36,
+      "exit_price": 184.15,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 209.69,
+      "target": 166.59
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": -31.320000000000036,
+      "entry_price": 25.63,
+      "exit_price": 27.37,
+      "size": 18.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 27.37,
+      "target": 21.25
+    },
+    "trades": [
+      {
+        "symbol": "COIN",
+        "pnl": 39.630000000000024,
+        "entry_price": 197.36,
+        "exit_price": 184.15,
+        "size": 3.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "HIGH",
+        "stop": 209.69,
+        "target": 166.59
+      },
+      {
+        "symbol": "TOST",
+        "pnl": 3.239999999999995,
+        "entry_price": 28.59,
+        "exit_price": 28.05,
+        "size": 6.0,
+        "exit_event": "partial_exit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 29.73,
+        "target": 25.75
+      },
+      {
+        "symbol": "SMCI",
+        "pnl": -31.320000000000036,
+        "entry_price": 25.63,
+        "exit_price": 27.37,
+        "size": 18.0,
+        "exit_event": "exit",
+        "score": 11,
+        "mri_level": "STRESSED",
+        "stop": 27.37,
+        "target": 21.25
+      }
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+Midday Gemini Audit — 2026-04-30
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry prices plausible**: Pass. Entry prices are plausible for the symbols and timeframes.
+*   **Exit prices consistent with stated exit reason**: Fail.
+    *   **COIN**: The trade is logged as a `stop_hit` with a stop price of $209.69. However, the exit price is $184.15, which is nowhere near the stop price. This exit price is, in fact, below T2 ($185.05), suggesting a target hit rather than a stop hit. This is a critical data inconsistency or logic error.
+    *   **SMCI**: Exit price ($27.37) is exactly at the stated stop price ($27.37). Consistent with a stop hit.
+    *   **TOST**: Exit price ($28.05) is very close to T1 ($28.02). Consistent with a target-based partial exit.
+*   **P&L signs correct**: Pass. All P&L signs are consistent with the implied trade direction (short for COIN, TOST, SMCI given their target structures).
+*   **Win rate and profit factor consistent with bot's edge claims?**: Fail.
+    *   While the reported win rate is 67% (2 wins / 1 loss), the average win ($21.44) is significantly smaller than the average loss ($-31.32). This results in an unfavorable average R:R of ~0.68:1.
+    *   The profit factor is ~1.37 ($42.88 / $31.32), which is marginal. Given the low R:R, a win rate of 67% is insufficient to demonstrate a robust edge or sustained profitability in the long run. The total P&L of $11.55 on a $2.5K paper account is negligible and indicative of systematic degradation.
+*   **Score→outcome correlation?**: Inconclusive due to limited data points. The single loss (SMCI) had a slightly lower score (11/12) and `STRESSED` MRI, which aligns with poorer outcomes. However, a 12/12 score trade (TOST) also occurred in `STRESSED` MRI and was a win.
+*   **Stop-hit rate indicate strategy thesis misaligned?**: Fail.
+    *   The reported stop-hit rate is 25% (1 stop). However, if the COIN trade was correctly identified as a target hit and not a stop hit, then 1 out of 3 closed trades (SMCI) was a stop out, representing a 33% stop-hit rate. This rate, coupled with the poor R:R (0.68:1), strongly indicates the strategy's thesis is misaligned with the current regime or inherently flawed. It implies the bot is frequently exposed to significant losses for relatively smaller gains.
+*   **P&L = 0.0 but entry ≠ exit price (recording bug)**: None detected.
+*   **Partial exit that doesn't reduce position size correctly**: Cannot audit without position size data.
+
+### ENTRY QUALITY
+*   **Systematic reduction of edge**: Yes.
+    *   **High MRI**: All three flagged entries (UBER, TOST, SMCI) and two of the three closed trades (TOST, SMCI) were taken when `MRI=STRESSED`. This indicates a systematic failure to appropriately filter entries or reduce risk under unfavorable market conditions, directly leading to degraded decision quality.
+    *   **Low score**: SMCI and UBER entries had a score of 11/12. While not "low" on its own, taking entries with less than a perfect 12/12 score *especially* under `MRI=STRESSED` conditions further reduces the edge and increases risk.
+
+### EXIT QUALITY
+*   **Holding winners too long / cutting losers too slowly**:
+    *   Losers (SMCI) were cut promptly at the stop price.
+    *   Winners (COIN, TOST) exited near or beyond target levels, suggesting effective profit-taking.
+    *   The primary concern here is the mislabeling of the COIN exit reason, which hinders accurate assessment of exit strategy effectiveness.
+
+### MRI ALIGNMENT
+*   **Regime mismatch**: Fail.
+    *   The bot exhibited severe MRI misalignment. The `MRI SESSION DISTRIBUTION` shows 8 out of 9 samples were `STRESSED`, indicating the bot operated almost exclusively in an unfavorable market regime.
+    *   Crucially, 2 out of 3 closed trades (TOST, SMCI) and all 3 flagged entries (UBER, TOST, SMCI) were initiated under `MRI=STRESSED`. This consistent entry into stressed conditions, combined with the poor overall performance metrics (low P&L, unfavorable R:R), signifies a profound regime mismatch and a failure to adapt or de-risk.
+*   **Position sizing adjusted appropriately**: Cannot determine without position sizing data. If standard position sizing was used during `STRESSED` MRI, it would exacerbate the problem.
+
+### LOG ANOMALIES
+*   None detected (No log data provided).
+
+### NEW BUGS / CONCERNS
+*   **High Severity | Critical Trade Logging Discrepancy**: The COIN trade (entry $197.36 → exit $184.15) is recorded with an `exit_reason=stop_hit` and `stop=$209.69`. The exit price is far from the stop price and instead aligns closely with a profit target (T2=$185.05). This fundamental inconsistency means the bot's self-reporting of trade outcomes is unreliable, preventing accurate performance analysis and hindering future strategy development or bug fixes.
+    *   **Exact condition**: `closed_trades.COIN.exit_reason != 'stop_hit'` given `closed_trades.COIN.exit_price` is significantly below `closed_trades.COIN.stop_price` for an implied short trade, and instead correlates to a profit target.
+*   **Medium Severity | Systemic Exposure to STRESSED MRI**: The bot's decision to enter trades repeatedly during `MRI=STRESSED` (8 out of 9 samples in session distribution, 2/3 closed trades, all flagged entries) indicates either a lack of effective MRI filtering or an inability to appropriately reduce risk in adverse conditions. This severely compromises the bot's long-term profitability and capital preservation.
+    *   **Exact condition**: `MRI_SESSION_DISTRIBUTION['STRESSED'] > 50%` and `FLAGGED_ENTRIES` all have `MRI=STRESSED`.
+*   **Medium Severity | Negative Expectancy Model**: The combination of a 67% win rate and a 0.68:1 average R:R ratio ($21.44 avg win / $31.32 avg loss) implies a negative expectancy for the strategy. Without a significantly higher win rate (e.g., > 75-80% for this R:R), the strategy is mathematically guaranteed to lose money over a larger sample size.
+    *   **Exact condition**: `total_P&L < 0` for a larger sample size given `(wins / (wins+losses)) < 0.75` AND `(avg_win / abs(avg_loss)) < 1.0`.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Debug COIN Trade Exit Logic and Reporting.** Investigate the `COIN` trade (and similar instances) to determine whether the `stop_hit` flag is a data logging error, a bug in stop-loss execution, or an incorrect assignment of exit reasons. This data integrity issue is paramount for accurate performance evaluation.
+2.  **IMMEDIATE: Enforce Stricter MRI-Based Entry Filters and Dynamic Position Sizing.** Modify the bot's logic to either prevent entries entirely during `MRI=STRESSED` (especially for entries with scores less than 12/12) or to significantly scale down position sizes (e.g., by 50-75%) when MRI is not `HIGH` or `MODERATE`.
+3.  **SHORT-TERM: Re-evaluate and Adjust Risk Management and Target Profit Strategy.** Analyze historical trades to identify the root cause of the unfavorable average R:R. Adjust target profit levels (T1, T2, T3) to capture larger gains or refine stop-loss placement to minimize average losses, aiming for an R:R of at least 1:1, or a much higher win rate to compensate for the current R:R.

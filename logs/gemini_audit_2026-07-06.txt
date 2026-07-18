@@ -1,0 +1,106 @@
+Nightly Gemini Audit — 2026-07-06
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['options_scanner.py', 'weekly_review.py', 'monthly_review.py', 'reconcile_eod.py', 'ui_tokens.py', 'scan_to_html.py', 'config.py', 'generate_dashboard.py', 'execution/orphan_manager.py', 'execution/portfolio_tracker.py', 'data/fetcher.py', 'strategy/delta_shadow.py', 'reporting/pnl_ledger.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+
+*   **execution/portfolio_tracker.py** | Position tracking corruption: `HOOD` trade recorded full exit (size 3, P&L $23.85) followed by multiple phantom partial exits and a final exit for remaining shares (size 1, P&L $0.00, P&L $-0.01), indicating `self.open_trades` was not correctly cleared.
+*   **execution/portfolio_tracker.py** | Fill attribution failure: `A-4/FIFO gap` reported `fills=12, attributed=0` for a closed trade, indicating severe inability to match Alpaca fills to bot-tracked exits, leading to inaccurate intra-day P&L calculations affecting live risk decisions.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   `[ANOMALY-2] ... confirm_gate=X scans but no entry`: Repeated warnings for AAPL, PANW, NET, DDOG, TSLA. This is expected behavior as `MAX_OPEN_POSITIONS=7` was reached, blocking further entries.
+*   `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30`: This is a warning about strategy performance, not a bug in bot logic or execution.
+*   `alert_crash: sentinel stat/remove failed — [Errno 1] Operation not permitted: '/tmp/mtf_planned_restart'`: This indicates a permission issue during a graceful shutdown (SIGTERM), preventing the alert system from cleaning up a sentinel file. While not critical to trading, it's an infrastructure misconfiguration.
+*   `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=7. Correcting to tracker count.`: This critical log entry signifies an inconsistency in the in-memory `risk.open_positions` state compared to the disk-persisted `tracker` at bot startup. The system correctly attempts to reconcile, but the drift itself points to an underlying state persistence issue, likely related to non-graceful shutdowns (e.g., SIGKILL, or in this case, a SIGTERM not fully flushing state before process termination).
+
+### PERFORMANCE AUDIT
+
+*   **RBLX (short) trade (opened 2026-07-02, closed 2026-07-06):**
+    *   Entry: Price $54.47, Stop $61.51, Target $39.86. Score 10/12.
+    *   Exit: Price $57.45 (stop hit), P&L $-2.98.
+    *   P&L correctness: For a short trade, entry ($54.47) < exit ($57.45) correctly results in a loss. P&L $-2.98 is accurate for size 1.
+    *   `pnl_pct` in EOD Snapshot: `-5.47%` from `-2.98 / 54.47 * 100`. Correct.
+    *   Exit reason consistency: Exit price $57.45 is above the stated overnight stop threshold of $56.34, consistent with a stop hit on a short position.
+    *   Risk:Reward ratio: Calculated R:R is 2.075, closely matching the `paper` profile's target of `INTRADAY_TARGET_ATR_MULT (2.5) / INTRADAY_STOP_ATR_MULT (1.2) = ~2.083`. The bot is generally capturing its intended edge.
+
+*   **HOOD (long) trade (opened 2026-07-01):**
+    *   This trade exhibits severe P&L recording and position tracking issues as detailed in the CATASTROPHIC ALERT. The initial full exit on 2026-07-02T06:22:42.180745-07:00 (size 3, P&L $23.85) correctly closed the position. However, subsequent `partial_exit` and `exit` events for HOOD on the same day indicate a corrupted position state.
+
+*   **Other Trades (Exits on 2026-07-02 with `external_close` reason):**
+    *   GOOGL, MARA, NVDA, PANW, RIVN, SNOW, TSLA were all closed with `external_close` reason.
+    *   TSLA and PANW exits show significant losses ($-81.23 and $-182.79 respectively), consistent with their stated entry/exit prices.
+    *   MARA, SNOW, RIVN were closed at their entry prices, resulting in $0.00 P&L.
+    *   NVDA and GOOGL show `price: null, price_pending: true` in some `trade_events` records, but later have valid P&L in the same timestamp range (e.g., GOOGL 2026-06-30 had +$4.49). This indicates a delay in price attribution or intermediate logging states.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording for HOOD:** As noted in the CATASTROPHIC ALERT, the HOOD trade recorded phantom partial exits after a full position closure. This indicates a fundamental flaw in `PortfolioTracker`'s ability to correctly manage and clear positions, leading to P&L corruption (`pnl=0.0` or `pnl=-0.01` for shares that should no longer exist).
+    *   **Exact failure condition:** The `PortfolioTracker`'s `self.open_trades` dictionary is not being fully cleared for a symbol upon a trade's final exit (e.g., `record_exit` function call for full `qty`). Subsequent operations (e.g., `record_partial_exit` from an `external_close`) attempt to process shares for a position that should already be closed, leading to erroneous P&L attribution and inflated `closed_trades` history.
+
+*   **Alpaca FIFO Unattributed Fills:** The persistent `A-4/FIFO gap: Alpaca P&L=$0 despite 1 closed trade(s) (fills=12, attributed=0, reason=alpaca_fifo_unattributed)` warning indicates that the bot's internal FIFO reconciliation logic in `execution/portfolio_tracker.py` is failing to match actual Alpaca fills (`fills=12`) to the bot's closed trade records (`attributed=0`). This means the real-time P&L in the bot's `tracker` can be incorrect, impacting the daily kill switch and Kelly sizing.
+    *   **Exact failure condition:** The `_fifo_reconstruct` function in `execution/portfolio_tracker.py` fails to find matching `open_lots` for `fills` retrieved from Alpaca, specifically when `fills` exist for a `closed trade(s)` but are not being attributed. This suggests a mismatch between the bot's internal tracking of `open_lots` and the Alpaca's execution records or an issue in the matching logic of `_fifo_reconstruct`.
+
+### MODIFIED FILE FINDINGS
+
+*   **monthly_review.py:**
+    *   **Bug:** P&L Inconsistency for `_day_cell`
+    *   **Trace:** The `_day_cell` function, responsible for rendering daily P&L in the calendar, retrieves P&L using `eod.get("pnl_today", 0)`. However, `reconcile_eod.py` now populates `pnl_today_intraday`, `pnl_today_qhm`, and `pnl_today_total`. By using `pnl_today`, `monthly_review.py` is defaulting to the intraday P&L only, which may exclude QHM P&L for that day, leading to an understated or inconsistent total daily P&L compared to the newly available authoritative `pnl_today_total`.
+    *   **Failure condition:** The `monthly_review.html` page's daily P&L figures do not reflect the complete daily realized P&L (intraday + QHM) as computed by the `pnl_ledger.py` and stored by `reconcile_eod.py`.
+*   **generate_dashboard.py:**
+    *   **Bug:** Inconsistent Scan Interval in `_scan_countdown`
+    *   **Trace:** The `_scan_countdown` function determines the `interval` for displaying the "next scan" time using `interval = 5 if is_market_open else 10`. `config.SCAN_INTERVAL_INTRADAY` is 5 minutes, which matches the `is_market_open` condition. However, `config.SCAN_INTERVAL_SWING` is 60 minutes. The `else 10` clause hardcodes a 10-minute interval for when the market is not open, which incorrectly represents the actual swing mode scan interval of 60 minutes.
+    *   **Failure condition:** The dashboard displays an inaccurate "next scan" countdown when the market is closed and the bot is presumably running in swing mode (or at least using a swing interval).
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED. (`strategy/signal_generator.py` and `main.py` were not in the provided diff).
+*   **P5-C2 | run_movers.py ImportError:** FIXED. (`data/fetcher.py` now defines `class DataFetcher`, resolving the `ImportError`.)
+*   **P5-H1 | OBSOLETE — PDT enforcement:** OBSOLETE. (As per instructions, PDT logic has been permanently removed).
+*   **P5-H2 | Fill price crosstalk:** TRIGGERED. (The `A-4/FIFO gap` logs and the `fills=12, attributed=0` warning indicate continued issues with fill price attribution, despite new FIFO logic in `execution/portfolio_tracker.py` and the diagnostic `reporting/pnl_ledger.py`.)
+*   **P5-H3 | Orphan GTC 404 path:** FIXED. (`execution/orphan_manager.py` now clears `gtc_stop_order_id` if the order is not found, preventing stranded stops.)
+*   **P5-H4 | Rule 2 dead code:** FIXED. (`config.TOD_MARKET_OPEN_BUFFER_MINS` is correctly referenced and used in `execution/orphan_manager.py`'s `get_tod_phase` function.)
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today:** FIXED. (Marked as fixed in the P5 queue).
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED. (Not in the provided diff).
+*   **P5-M2 | MRI score cached stale across sessions:** PARTIALLY FIXED. (`scan_to_html.py`'s VIX fetch was improved, and `generate_dashboard.py` implemented robust state validation for `_load_hybrid_state()`. While `mri_state.json` specific loading/validation wasn't directly shown, these related changes suggest an improved approach to state freshness.)
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED. (Not in the provided diff).
+*   **P5-L1 | _classify_loss_driver() returns empty label:** UNTOUCHED. (Not in the provided diff).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** FIXED. (`reconcile_eod.py` now correctly gates the `_reconcile_ts` sentinel until post-market close, allowing the live bot to continue flushing current EOD snapshots during RTH.)
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED. (Not in the provided diff).
+
+### NEW BUGS FOUND
+
+*   **TRADE INTEGRITY** | CRITICAL | `execution/portfolio_tracker.py` | Position tracking corruption: The HOOD trade on 2026-07-02 shows a full position exit followed by phantom partial exits for shares that should no longer be tracked. This leads to erroneous P&L calculations and indicates a failure in correctly managing the `self.open_trades` state upon full position closure.
+*   **ALPHA ISSUE** | CRITICAL | `execution/portfolio_tracker.py` | Unattributed Alpaca fills: Despite recent FIFO improvements, the log shows `A-4/FIFO gap: Alpaca P&L=$0 despite 1 closed trade(s) (fills=12, attributed=0, reason=alpaca_fifo_unattributed)`. This indicates a severe failure to match executed fills from Alpaca to the bot's internal trade records, leading to inaccurate intra-day P&L for risk management and Kelly sizing decisions. The P&L `$-2.98` is being used as `FLAGGED-unreconciled fallback`, but the inability to attribute is a core problem.
+*   **REPORTING** | MEDIUM | `monthly_review.py` | P&L Inconsistency: The `_day_cell` function uses `pnl_today` from the EOD file, which may only reflect intraday P&L. This is inconsistent with `reconcile_eod.py` now storing `pnl_today_intraday`, `pnl_today_qhm`, and `pnl_today_total`, resulting in an incomplete representation of daily P&L on the `monthly_review.html` page.
+*   **REPORTING** | LOW | `generate_dashboard.py` | Inconsistent Scan Interval Display: The `_scan_countdown` function uses a hardcoded 10-minute interval for calculating the "next scan" time when the market is closed. This contradicts the `config.py` `SCAN_INTERVAL_SWING = 60` minutes, leading to an inaccurate countdown display.
+
+### FIX VALIDATION
+
+*   **P5-H3 (Orphan GTC 404 path):** FIX VALIDATION: PASS. The change in `execution/orphan_manager.py` (line 198) explicitly clears `gtc_stop_order_id` if `get_order(order_id)` returns `None`, which directly resolves the bug.
+*   **P5-L2 (eod_YYYY-MM-DD.json written before positions closed):** FIX VALIDATION: PASS. The `_is_post_close()` guard in `reconcile_eod.py` (lines 53-59) correctly prevents the `_reconcile_ts` sentinel from being set before market close, ensuring the live bot continues to update EOD files during RTH.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Investigate and Fix HOOD P&L Corruption:**
+    *   **File:** `execution/portfolio_tracker.py`
+    *   **Action:** Audit `record_exit` and `record_partial_exit` functions. Ensure `self.open_trades` is completely cleared for a symbol when its entire position is closed, regardless of the exit reason or source (bot-initiated or external close). Implement robust logging to trace `qty_remaining` and `self.open_trades` state transitions.
+
+2.  **URGENT: Address Persistent A-4/FIFO Fill Attribution Failure:**
+    *   **File:** `execution/portfolio_tracker.py`
+    *   **Action:** Deep-dive into `_fifo_reconstruct` and `write_eod_summary`. The `fills=12, attributed=0` indicates a significant disconnect. Verify `_weighted_avg_exit_price` logic and how Alpaca fill IDs are used (or not used) in matching. Consider cross-referencing against the `reporting/pnl_ledger.py`'s more robust FIFO logic for inspiration or direct integration (post Phase 2b).
+
+3.  **Correct Monthly Review P&L Display:**
+    *   **File:** `monthly_review.py`
+    *   **Action:** Update the `_day_cell` function to use `eod.get("pnl_today_total", 0)` for displaying daily P&L, ensuring consistency with the full P&L figures now available from `reconcile_eod.py`. Provide separate display for `pnl_today_qhm` if required by design.
+
+4.  **Refine Dashboard Scan Countdown:**
+    *   **File:** `generate_dashboard.py`
+    *   **Action:** Modify `_scan_countdown` to dynamically load `config.SCAN_INTERVAL_SWING` for the `else` condition (when `is_market_open` is false) to accurately reflect the actual scan schedule.
+
+5.  **Address Startup Position Count Drift:**
+    *   **File:** `main.py` (related to `execution/orphan_manager.py`)
+    *   **Action:** Investigate the root cause of `POSITION COUNT DRIFT` at bot startup. While `orphan_manager` corrects it, a consistent `risk.open_positions=0 vs tracker=7` suggests either `risk_manager` or `portfolio_tracker` isn't persisting `open_positions` correctly or loading it in `main.py` at startup before `orphan_manager` attempts reconciliation. Ensure `risk.open_positions` is loaded from `portfolio_tracker`'s `open_trades` at startup to prevent this in-memory/disk inconsistency.

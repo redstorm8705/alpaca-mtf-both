@@ -1,0 +1,77 @@
+Midday Gemini Audit — 2026-07-02
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1.  Stop loss not respected, or severe slippage/execution failure | NVDA
+2.  Significant P&L corruption affecting live risk decisions | Alpaca vs. Tracker P&L
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry prices plausible**: All recorded entry prices appear plausible for the respective symbols.
+*   **Exit prices consistent with stated exit reason**:
+    *   **Failure**: For NVDA, the `exit price` ($197.96) is significantly below its stated `stop` price ($206.54) for a long position. This indicates either a failure to execute the stop order at or near the intended price, or extreme slippage that renders the stop ineffective. This directly contradicts the `Stop-hit rate: 0% (0 stops)` reported in the `SESSION P&L SUMMARY`.
+    *   **Variable involved**: NVDA `entry $215.76`, `exit $197.96`, `stop=$206.54`, and `SESSION P&L SUMMARY` variable `Stop-hit rate`.
+    *   **Condition**: Occurred for symbol NVDA.
+*   **P&L signs correct**: All P&L signs (profit/loss) are correctly calculated based on the entry and exit prices for long positions.
+*   **Win rate and profit factor consistent with the bot's edge claims**: The session resulted in a 29% win rate (2 wins / 7 trades) and a total P&L of $-34.59. While the average win ($14.50) is slightly higher than the average loss ($-12.72), the low win rate indicates that the bot currently lacks a profitable edge. No specific 'edge claims' were provided for comparison, but the current performance is not indicative of a robust trading strategy.
+*   **Score→outcome correlation**:
+    *   **Failure**: The three highest-scoring trades (12/12 for NVDA, SNOW, TSLA) all resulted in losses. Conversely, the two winning trades (RIVN, HOOD) had slightly lower scores (10/12, 11/12). This demonstrates a negative correlation between the highest `confluence` score and profitable outcomes.
+    *   **Variable involved**: `score` and `P&L` from `CLOSED TRADE DETAILS`.
+    *   **Condition**: Observed across NVDA (score 12/12, loss), SNOW (score 12/12, loss), and TSLA (score 12/12, loss).
+*   **Stop-hit rate indicates the strategy thesis is misaligned**: The `SESSION P&L SUMMARY` states "Stop-hit rate: 0% (0 stops)". This is directly contradicted by the NVDA trade's exit significantly below its stop. If stops are being hit but not recorded as such, or are failing to execute effectively, it points to fundamental issues in risk management and reporting, indicating strategy misalignment or execution failure.
+*   **P&L = 0.0 but entry ≠ exit price**: No such instances found.
+*   **Partial exit that doesn't reduce position size correctly**: `Partials: 4` is reported, but no specific details on these partial exits are provided in `CLOSED TRADE DETAILS`. Cannot verify if position sizes were correctly reduced.
+
+### ENTRY QUALITY
+*   All entries occurred at `MRI=ELEVATED`, which is handled by the bot's `size floor 0.85x applied` logic, indicating appropriate risk adjustment for this level. No entries were at `STRESSED` or `CRISIS` MRI levels.
+*   All entries met the `MIN_LONG_SCORE = 8` requirement, with scores ranging from 10 to 12. However, as noted in the Performance Audit, the correlation between high scores and profitable outcomes is negative, indicating an `ALPHA ISSUE` with the scoring mechanism itself.
+*   `VOLSHADOW` logs indicate that some symbols fail volume checks (`would_pass: false`), but specific `VOLSHADOW` data for the *exact time of entry* for the closed trades is not provided, making a full assessment of entry volume quality impossible. RIVN had a `would_pass: true` log entry, but the exact entry timestamp is not matched.
+*   No entry timestamps are provided, preventing verification of compliance with `TOD_MARKET_OPEN_BUFFER_MINS` or `TOD_EOD_NO_ENTRY_MINS`.
+
+### EXIT QUALITY
+*   The bot failed to cut the NVDA losing trade effectively, as the `exit price` was significantly below the designated `stop` price, leading to an amplified loss. This confirms an `ALPHA ISSUE` with `exit discipline` and `stop placement`.
+*   For other losing trades (SNOW, TSLA, MARA, PANW), exits were above their stops. Without specific exit logic or timestamps, it cannot be definitively determined if these losers were cut "too slowly," but they were not designated as stop hits by the bot.
+
+### MRI ALIGNMENT
+*   All trades occurred during an `ELEVATED` MRI regime (score=29), and the bot logged `size floor 0.85x applied`, indicating appropriate sizing adjustments were made based on the perceived risk level.
+*   However, `WARNING` logs (`MRI VIX: FMP None + cache stale`, `MRI JPY: FMP USDJPY failed`) show that the underlying data sources for `MRI` (FMP for VIX and JPY) are frequently stale or failing, forcing reliance on fallback data (`yfinance`) that is noted as `_vix_confirmed=False` or `scoring 0pts (safe default)`. This compromises the accuracy and reliability of the `MRI` score, which could lead to suboptimal risk adjustments even if the `ELEVATED` status is generally correct. This is an `INFRASTRUCTURE` concern affecting `ALPHA` quality.
+
+### LOG ANOMALIES
+*   `2026-07-02 17:15:35,564 | WARNING | execution.portfolio_tracker | [fill_date] Could not parse timestamp '2026-07-02T15:32:55.77875Z': Invalid isoformat string: '2026-07-02T15:32:55.77875+00:00' — using raw slice`: Recurring timestamp parsing warning in `portfolio_tracker`. While the bot attempts to recover, this indicates a fragile data ingestion point that could lead to data integrity issues or delayed processing.
+*   `2026-07-02 17:15:35,602 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$0.00 tracker=$-251.12 drift=$+251.12`: A substantial `EOD P&L DRIFT` of $251.12 between Alpaca's P&L and the bot's internal tracker P&L. This represents a 10% discrepancy relative to the $2.5K account and is a critical financial accounting issue, potentially leading to inaccurate `daily gain` calculations and flawed risk-sizing decisions.
+*   `2026-07-02 17:15:35,857 | INFO | main | [CYCLE] duration=532s | phase=midday | watchdog_headroom=188s ⚠ SLOW CYCLE`: Persistent `SLOW CYCLE` events (e.g., 532 seconds) with low `watchdog_headroom`. This indicates a performance bottleneck, increasing latency in decision-making and raising the risk of missed market opportunities or delayed responses.
+*   `2026-07-02 17:20:43,875 | WARNING | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=17.0. _vix_confirmed=False, news capped at 20pts.` (and similar for JPY): Repeated warnings about primary `MRI` data sources (FMP) failing or being stale, forcing reliance on unconfirmed or default fallback data. This degrades the reliability of `MRI` calculations and, by extension, risk adjustments.
+*   `2026-07-02 17:21:07,209 | WARNING | strategy.run_cycle | [ANOMALY-2] [MSTR] confirm_gate=3 scans but no entry`: Repeated warning for `MSTR` being scanned multiple times without entry, potentially indicating a persistent but non-actionable signal, or an underlying issue preventing entry despite a signal.
+*   `2026-07-02 17:21:07,209 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`: The bot's internal Trade Quality Index (TQI) is flagging consistent degradation, specifically calling for a review of `exit discipline and stop placement`. This self-diagnostic directly validates the observed `ALPHA ISSUE` with stop loss execution. This warning is repeated.
+*   `2026-07-02 17:22:37,240 | WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['TQQQ', 'SQQQ']`: Persistent `global timeout` during signal generation, leading to specific symbols (`TQQQ`, `SQQQ`) being `abandoned`. This reduces the bot's market coverage and can cause missed trading opportunities.
+*   `2026-07-02 17:20:49,605 | INFO | macro_risk_index | MRI news injection PARTIAL-GATED: 28 alert(s) → +35pts capped at +20pts (VIX unavailable, weak confirmation only).`: News alerts are being capped due to unreliable VIX data, potentially hindering the bot's ability to react appropriately to significant market news events.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Stop Loss Execution Failure and Inconsistent Reporting**
+    *   **Description**: The `exit price` for NVDA ($197.96) was substantially below its defined `stop` price ($206.54), yet the `SESSION P&L SUMMARY` reports a "Stop-hit rate: 0% (0 stops)". This indicates either a severe failure in stop order execution (e.g., massive slippage, order not placed/active) or a critical reporting error where stop hits are not correctly identified and accounted for.
+    *   **Exact condition**: NVDA `entry $215.76` (long), `exit $197.96`, `stop=$206.54`. `Stop-hit rate` value of 0%.
+*   **ALPHA ISSUE | HIGH | Inverse Correlation of High Scores to Profitability**
+    *   **Description**: The highest possible `confluence score` (12/12) is consistently associated with losing trades (NVDA, SNOW, TSLA), while the two winning trades had lower scores (10/12, 11/12). This suggests a fundamental flaw in the `confluence` scoring model, where the highest-conviction signals are actually leading to losses.
+    *   **Exact condition**: NVDA (score 12/12, P&L $-53.41), SNOW (score 12/12, P&L $-2.76), TSLA (score 12/12, P&L $-0.89). RIVN (score 10/12, P&L +$5.17), HOOD (score 11/12, P&L +$23.82).
+*   **INFRASTRUCTURE | CRITICAL | Unacceptable EOD P&L Drift**
+    *   **Description**: A significant `EOD P&L DRIFT` of $251.12 was observed between Alpaca's $0.00 P&L and the bot's internal tracker P&L of $-251.12. This is a substantial discrepancy (10% of account) that goes beyond benign "paper fills gap" behavior and indicates a severe problem in trade accounting or reconciliation.
+    *   **Exact condition**: `EOD P&L DRIFT: Alpaca=$0.00 tracker=$-251.12 drift=$+251.12`.
+*   **INFRASTRUCTURE | MEDIUM | Persistent MRI Data Source Instability**
+    *   **Description**: Key `MRI` components (VIX, JPY) are frequently relying on stale cache or fallback `yfinance` data due to `FMP` data failures. The fallback data is noted as unconfirmed or uses default scoring (0pts), which compromises the accuracy and reliability of the overall `MRI` calculation.
+    *   **Exact condition**: Repeated logs: `MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=17.0. _vix_confirmed=False, news capped at 20pts.` and `MRI JPY: FMP USDJPY failed — yfinance JPY=X=161.0580. No prior close available — JPY scoring 0pts (safe default).`
+*   **INFRASTRUCTURE | MEDIUM | Cycle Performance Degradation and Scan Timeouts**
+    *   **Description**: The bot consistently experiences `SLOW CYCLE` durations and `watchdog_headroom` warnings, coupled with `signal_generator` timeouts leading to `abandoned symbols`. This indicates chronic performance issues affecting the bot's ability to process market data and generate signals promptly.
+    *   **Exact condition**: Logs showing `[CYCLE] duration=532s | watchdog_headroom=188s ⚠ SLOW CYCLE` and `run_scan: phase-1 global timeout — abandoned symbols: ['TQQQ', 'SQQQ']`.
+*   **ALPHA ISSUE | MEDIUM | System-Reported TQI Degradation**
+    *   **Description**: The bot's internal `TQI` (Trade Quality Index) is consistently below its threshold (`last-5-trade avg=28.0/100 < 30`), and the bot itself recommends reviewing `exit discipline and stop placement`. This confirms an observed `ALPHA ISSUE` and highlights a critical area for strategy improvement.
+    *   **Exact condition**: Repeated log: `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / ALPHA | CRITICAL | Address Stop Loss Execution and Reporting Failure**: Immediately investigate the `NVDA` stop loss failure and the contradiction with the `Stop-hit rate: 0%`. This is a fundamental risk management failure. Verify stop order placement, monitoring, and execution, and ensure `SESSION P&L SUMMARY` accurately reflects stop-hit events.
+2.  **INFRASTRUCTURE | CRITICAL | Reconcile Alpaca vs. Tracker P&L Discrepancy**: Prioritize investigating the root cause of the $251.12 `EOD P&L DRIFT`. Ensure robust reconciliation of fills and closed positions between Alpaca and the internal `portfolio_tracker` to prevent P&L corruption from impacting risk management and strategy evaluation.
+3.  **ALPHA | HIGH | Re-evaluate Confluence Scoring and Exit Discipline**: Conduct an urgent review of the `confluence` scoring model, specifically the components that contribute to the highest scores, given the observed inverse correlation with profitability. Concurrently, re-evaluate and refine `exit discipline` and `stop placement` logic as flagged by the `TQI degradation` warning, to improve overall win rate and loss cutting.

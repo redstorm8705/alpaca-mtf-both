@@ -1,0 +1,200 @@
+{
+  "audit_date": "2026-05-04",
+  "run_ts": "2026-05-04T10:30:01.852284-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 3,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.4,
+    "flagged_entries": [
+      {
+        "symbol": "CRWD",
+        "ts": "2026-05-04 09:22:58",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 470.77,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "XOM",
+        "ts": "2026-05-04 09:51:09",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 154.04,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SPY",
+        "ts": "2026-04-30 09:19:57",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 715.19,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "AAPL",
+        "ts": "2026-05-01 09:05:22",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 284.91,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "AMD",
+        "ts": "2026-04-30 09:19:46",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 349.04,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "CRWD",
+      "XOM",
+      "SPY",
+      "AAPL",
+      "AMD"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 14,
+    "levels": {
+      "ELEVATED": 6,
+      "STRESSED": 8
+    },
+    "last_score": 52,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 1,
+    "warning_count": 999,
+    "watchdog_count": 2,
+    "error_samples": [
+      "2026-05-04 10:09:13,583 | ERROR    | execution.broker | [AAPL] GTC stop order failed: {\"code\":42210000,\"market_price\":\"277.885\",\"message\":\"stop price "
+    ],
+    "warning_samples": [
+      "2026-05-04 10:07:44,284 | WARNING  | main | gc.collect() took 2777.0ms, collected 99 objects \u2014 heap may be growing",
+      "2026-05-04 10:09:04,936 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions remain. Bot can be restarted safel",
+      "2026-05-04 10:09:11,238 | WARNING  | macro_risk_index | MRI state 62.3h stale (>20h) \u2014 starting fresh.",
+      "2026-05-04 10:09:13,165 | WARNING  | execution.orphan_manager | [QQQ] Emergency GTC stop submitted (Patch 1): 1 shares sell @ stop $660.32 | order 407",
+      "2026-05-04 10:09:13,310 | WARNING  | execution.orphan_manager | [AMD] Emergency GTC stop submitted (Patch 1): 1 shares sell @ stop $349.04 | order 864"
+    ],
+    "watchdog_lines": [
+      "2026-05-04 15:00:33,367 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting.",
+      "2026-05-04 16:47:42,667 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [
+    {
+      "symbol": "AAPL",
+      "status": "rc=2",
+      "entry": 284.91,
+      "exit": 278.14
+    },
+    {
+      "symbol": "AMD",
+      "status": "rc=2",
+      "entry": 349.04,
+      "exit": 349.04
+    },
+    {
+      "symbol": "SPY",
+      "status": "rc=2",
+      "entry": 715.19,
+      "exit": 715.15
+    }
+  ],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -33.89000000000027,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -11.296666666666757,
+    "best": {
+      "symbol": "AMD",
+      "pnl": 0.0,
+      "entry_price": 349.04,
+      "exit_price": 349.04,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 331.94,
+      "target": 391.69
+    },
+    "worst": {
+      "symbol": "AAPL",
+      "pnl": -33.85000000000019,
+      "entry_price": 284.91,
+      "exit_price": 278.14,
+      "size": 5.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 278.14,
+      "target": 301.83
+    },
+    "trades": [
+      {
+        "symbol": "AMD",
+        "pnl": 0.0,
+        "entry_price": 349.04,
+        "exit_price": 349.04,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 331.94,
+        "target": 391.69
+      },
+      {
+        "symbol": "SPY",
+        "pnl": -0.04000000000007731,
+        "entry_price": 715.19,
+        "exit_price": 715.15,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 708.5,
+        "target": 731.85
+      },
+      {
+        "symbol": "AAPL",
+        "pnl": -33.85000000000019,
+        "entry_price": 284.91,
+        "exit_price": 278.14,
+        "size": 5.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 278.14,
+        "target": 301.83
+      }
+    ]
+  }
+}

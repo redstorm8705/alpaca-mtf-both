@@ -1,0 +1,82 @@
+Nightly Gemini Audit — 2026-04-30
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'weekly_review.py', 'broker.py', 'generate_dashboard.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `(bot.log not found)`: The absence of a `bot.log` file is a significant anomaly for an auditor. It means critical real-time ERROR/WARNING/CRITICAL messages are unavailable, hindering immediate issue detection and debugging.
+*   **P&L Recording Discrepancy**: While not explicitly a log anomaly, the severe inconsistencies in P&L aggregation within the `EOD SNAPSHOT` (detailed below) indicate silent failures in financial reporting that should be surfaced in logs.
+*   **Inconsistent Exit Reason for Stop Hit**: The SMCI trade (2026-04-30T09:05:38) shows an `exit` event with `reason: "overnight_breakeven | 9-scan breach"`, despite the exit price being *exactly* the stop price (which would typically be `stop_hit`). This indicates a categorization inconsistency between the `event` type and `reason` field.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness**: For the explicitly traced trades (COIN, TOST, SMCI, PANW), P&L signs and magnitudes are correctly calculated based on entry/exit prices and direction.
+*   **`pnl_pct` computed**: Appears to be correctly computed from the original full position value for the checked trades (e.g., COIN's `pnl_pct` of 5.06% is (29.98 / (197.36 * 3)) * 100).
+*   **`partial_pnl` accumulated correctly**: Checked for COIN and TOST trades; the `pnl_remaining` and `partial_pnl` sum correctly to the total `pnl` reported for the trade in the `EOD SNAPSHOT`.
+*   **Trades with `pnl=0.0`**: No recent trades show `pnl=0.0` where entry and exit prices are different.
+*   **Entry/exit prices plausible**: Exit prices are consistent with stated stop/trail_stop levels or `external_close` reasons. No implausible price movements were observed.
+*   **Score→outcome correlation**: The `score_buckets` and `score_16pt_buckets` in the `EOD SNAPSHOT` show incorrect P&L aggregations, rendering any score-outcome correlation analysis unreliable.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats.win_rate` of 53.8% (for 39 trades) is positive. The observed stop-level exits (SMCI, COIN) are consistent with active risk management.
+*   **Profit factor and R:R**: `all_time_stats.profit_factor` of 1.58 is positive, suggesting overall profitability. However, `all_time_stats.avg_r_multiple` is `0.032`, which is anomalously low and appears incorrect given the `avg_win` of $24.21 and `avg_loss` of -$17.85 (a ratio of ~1.35). This suggests a bug in the R-multiple calculation.
+
+### TRADE INTEGRITY
+*   **Critical P&L Recording Discrepancy**: There is a severe inconsistency in the `EOD SNAPSHOT`'s aggregated P&L metrics for today (`pnl_today`, `alpaca_pnl`, `tracker_pnl`, and `score_buckets.pnl`) compared to the sum of the P&L from the individual closed `trades` listed for today.
+    *   Sum of individual trade P&Ls: `29.98 (COIN) + 0.88 (TOST) - 31.32 (SMCI) - 0.06 (PANW) = -0.52`.
+    *   `EOD SNAPSHOT.pnl_today` and `EOD SNAPSHOT.alpaca_pnl` are both reported as `0.0`.
+    *   `EOD SNAPSHOT.tracker_pnl` is `-17.28`.
+    *   `EOD SNAPSHOT.score_buckets["10-11"].pnl` is `-18.1`, but should be `-1.34` (`29.98 - 31.32`).
+    *   This discrepancy indicates a fundamental issue in how daily P&L and score bucket P&L are aggregated and reported, making all top-level performance metrics unreliable.
+
+### MODIFIED FILE FINDINGS
+*   **`main.py`**:
+    *   **Fix**: The addition of `col_lower.get("high", "High")` in `_find_recent_fvgs()` likely fixes `P5-C1 | FVG MultiIndex silent crash`.
+    *   **Improvement**: Implemented `_last_cycle_lock` for `_last_cycle_complete` (watchdog robustness). Guarding `_spy_200d_ma` fetches with `_spy_200d_ma_date`. Enhanced debugging for `_SECTOR_MAP` bypasses.
+    *   **Logic Change**: `_LINEAR_SCORE_MIN` was raised from 9 to 10, meaning score 9 entries will now receive a smaller position size.
+    *   **New Bug (LOW)**: `_tqi_history` is marked as "max 10" but lacks explicit pruning logic, potentially leading to unbounded memory growth.
+    *   **New Bug (LOW)**: `_partial_fail_counts` is used to trigger alerts, but no explicit reset on successful partial exits could lead to premature alerts.
+    *   **Minor Issue**: The reset logic for `_last_weekly_review_spawn_date` is not explicitly visible, which could affect `weekly_review` execution across bot restarts.
+*   **`weekly_review.py`**:
+    *   **Fix**: `_fmt_reason()` addresses `P5-L1` implicitly by normalizing exit reason strings (C-3).
+    *   **Improvement**: `_strategy_validation_html()` now correctly references `trade_log.json`, confirming `A-3` is fixed. Improved date handling for archive weeks.
+*   **`broker.py`**:
+    *   **Critical Fix**: The extensive changes to `submit_gtc_stop_order()` (hard 3s wait, 60s polling, `pending_cancel` guard, `related_orders` cancellation) directly address and fix `P5-H5 | GTC stop suppressed` and related `GTC-RACE` issues.
+    *   **Improvement**: Introduced `_idem_id` for market orders to prevent duplicate submissions. `submit_day_stop_order()` now attempts to `cancel_open_orders_for_symbol` and retry on "insufficient buying_power" errors.
+*   **`generate_dashboard.py`**:
+    *   **Fix**: `_load_hybrid_state()` now includes `today_et` and `scans_left > 0` guards, preventing the dashboard from displaying stale `hybrid_state.json` data (related to `P5-M2`).
+    *   **Major Improvement**: The calculation `alpaca_daily_pnl = equity - alpaca.get("last_equity", equity)` provides an authoritative daily P&L directly from Alpaca, which addresses `A-4` for dashboard display and improves accuracy for `daily_pnl_cache.json`.
+    *   **Improvement**: Integration of `_pdt_reset_display` for clearer PDT information on the dashboard.
+*   **`events/macro_risk_index.py`**:
+    *   **Major Fix**: `inject_news_state()` now implements a "Market-reaction-first gate," capping news bonus at +10pts if `price_score == 0`. This is a critical fix for false-positive MRI amplification based solely on news. Idempotent news injection and clearing of stale news contributions.
+    *   **Improvement**: VIX linear interpolation improves scoring granularity. `_alpaca_session_pct()` now uses `TF_DAILY` for reliability (C-3 fix). Global `socket.setdefaulttimeout(5.0)` for yfinance calls for robustness.
+    *   **New Bug (MEDIUM)**: The `_compute()` function sets a global socket timeout but lacks a `finally` block to guarantee its restoration, potentially causing side-effects on other parts of the bot if `_compute()` fails unexpectedly.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash:** **FIXED**
+*   **P5-C2 | run_movers.py ImportError:** **UNTOUCHED**
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** **UNTOUCHED (mitigated by `broker.py` level PDT checks)**
+*   **P5-H2 | Fill price crosstalk:** **UNTOUCHED**
+*   **P5-H3 | Orphan GTC 404 path:** **UNTOUCHED**
+*   **P5-H4 | Rule 2 dead code:** **FIXED/CLARIFIED**
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today:** **FIXED**
+*   **P5-M1 | Cycle watchdog restart loop:** **UNTOUCHED (deployment issue)**
+*   **P5-M2 | MRI score cached stale across sessions:** **FIXED**
+*   **P5-M3 | score_comparison JSON unbounded growth:** **UNTOUCHED**
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** **UNTOUCHED (mitigated by `_fmt_reason` in `weekly_review.py` for display only)**
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** **UNTOUCHED (dashboard display improved, but the underlying EOD file generation can still be understated)**
+*   **P5-L3 | live_data_writer.py no reconnect logic:** **UNTOUCHED (mitigated by external script)**
+
+### NEW BUGS FOUND
+*   **HIGH** | P&L Recording Discrepancy | `EOD SNAPSHOT` generation logic (likely in `main.py`'s `write_eod_summary` or `PortfolioTracker`) | The aggregated daily P&L figures (`pnl_today`, `alpaca_pnl`, `tracker_pnl`, `score_buckets.pnl`) in the `EOD SNAPSHOT` are demonstrably incorrect and inconsistent with the sum of individual closed trade P&Ls for today, indicating a critical data aggregation flaw.
+*   **MEDIUM** | `events/macro_risk_index.py` | `_compute()` function | The global `socket.setdefaulttimeout(5.0)` is set within `_compute()` without a guaranteed `finally` block to restore the original timeout. If an exception occurs before the internal `finally` block within `_compute()`, the global socket timeout could remain at 5 seconds, impacting other bot components.
+*   **MEDIUM** | `main.py` | `avg_r_multiple` calculation | `all_time_stats.avg_r_multiple` is `0.032`, which is anomalously low and inconsistent with the reported `avg_win` and `avg_loss` values, suggesting a bug in the R-multiple calculation.
+*   **LOW** | `main.py` | `_last_weekly_review_spawn_date` reset logic | The global `_last_weekly_review_spawn_date` lacks explicit daily reset logic, which could prevent `weekly_review` from being spawned if the bot restarts mid-day after an initial successful run.
+*   **LOW** | `main.py` | `_tqi_history` never pruned/limited | The `_tqi_history` list is commented as "max 10" but no visible logic prunes or limits its size, potentially leading to unbounded memory consumption over long bot uptimes.
+*   **LOW** | `main.py` | `_partial_fail_counts` dictionary reset | `_partial_fail_counts` which tracks consecutive partial close failures, lacks logic to reset counts on *successful* partial exits, potentially leading to false-positive alerts.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT**: Address the **P&L Recording Discrepancy** in the `EOD SNAPSHOT` and `PortfolioTracker` aggregation. Debug the logic responsible for calculating `pnl_today`, `alpaca_pnl`, `tracker_pnl`, and `score_buckets.pnl` to ensure consistency with individual trade P&Ls.
+2.  **HIGH**: Modify `events/macro_risk_index.py:_compute()` to include a top-level `try...finally` block that reliably restores the original `socket.setdefaulttimeout` value, preventing unintended global side-effects.
+3.  **HIGH**: Investigate and correct the `avg_r_multiple` calculation logic, likely within `PortfolioTracker` or a related statistics module, as its current value is illogical and inconsistent with other reported P&L metrics.
+4.  **MEDIUM**: Implement explicit daily reset logic for `_last_weekly_review_spawn_date` in `main.py` to ensure reliable daily execution of the `weekly_review` process.
+5.  **MEDIUM**: Add pruning logic to `_tqi_history` (e.g., using a `collections.deque` or manual `popleft()` after append) and reset mechanisms for `_partial_fail_counts` upon successful partial exits to maintain data integrity and prevent memory issues/false alerts.

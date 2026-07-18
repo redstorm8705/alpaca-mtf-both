@@ -1,0 +1,76 @@
+Midday Gemini Audit — 2026-06-26
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+1.  **ALPHA ISSUE** - **Excessive Stop Slippage for NVDA**
+    *   **Variable/Metric**: `NVDA exit price` and `NVDA stop price`.
+    *   **Value vs. should be**: The `NVDA exit price` was $193.23. The `NVDA stop price` was $206.54. For a `stop_hit` exit reason on a long position, the exit price should be at or very close to the stop price, ideally $206.54 or slightly below. The actual exit price is $13.31 (approximately 6.4%) below the set stop price. This constitutes a failure to exit at the defined risk limit, leading to a significantly larger loss than the strategy intended.
+    *   **Condition**: The closed trade for `NVDA` with `exit reason=stop_hit` shows an `entry $215.76` and a `stop=$206.54`, but the actual `exit price $193.23`.
+
+2.  **ALPHA ISSUE** - **High Score Trade Resulting in Significant Loss**
+    *   **Variable/Metric**: `NVDA trade score` and `NVDA trade outcome (P&L)` with `exit reason`.
+    *   **Value vs. should be**: The `NVDA trade score` was `12/12`, which is the maximum possible score (and matches the dynamically raised `MIN_SCORE` observed later in the logs). A high score like this indicates a high-conviction entry. Despite this, the trade resulted in a `$-67.59` loss due to a `stop_hit` with substantial slippage. This suggests a potential misalignment between the confluence scoring model and actual market outcomes, or that execution failures are negating the alpha.
+    *   **Condition**: A `NVDA` long trade with a `score 12/12` resulted in a `stop_hit` exit with an unacceptably large price difference from the intended stop.
+
+### ENTRY QUALITY
+
+1.  **ALPHA ISSUE** - **Trade Entry Despite Failing Volume/Score Criteria in Logs**
+    *   **Variable/Metric**: `NVDA trade score` (from Closed Trade Details) vs. `VOLSHADOW score_without_vol` and `would_pass` (from Bot Log).
+    *   **Value vs. should be**: The `Closed Trade Details` explicitly states the `NVDA` trade had a `score 12/12`. However, multiple `VOLSHADOW` log entries for `NVDA` (e.g., `2026-06-26 17:12:34,738` and `17:19:16,740`) show `score_without_vol: 5` for the `long` direction and `would_pass: false`. Given that `MIN_SCORE = 9` (and was dynamically raised to `12/12` during the session), an entry with `score 5` and `would_pass: false` should have been explicitly filtered out. This is a critical contradiction, indicating a severe logic error in either the scoring, filtering, or trade reporting mechanism.
+    *   **Condition**: `NVDA` trade recorded `score 12/12` in `Closed Trade Details`, but current `VOLSHADOW` log entries for `NVDA` consistently report `score_without_vol: 5` and `would_pass: false` for the `long` direction, which should violate the `MIN_SCORE` constant.
+
+### EXIT QUALITY
+
+*   See "Performance Audit" for finding on excessive stop slippage.
+
+### MRI ALIGNMENT
+
+1.  **ALPHA ISSUE** - **Inconsistent MRI Reporting for Trade vs. Session**
+    *   **Variable/Metric**: `NVDA trade MRI` vs. `MRI SESSION DISTRIBUTION` and `Log reported MRI`.
+    *   **Value vs. should be**: The `NVDA` trade in `Closed Trade Details` reports `MRI=ELEVATED`. However, the `MRI SESSION DISTRIBUTION` summary indicates all `26 samples` for the session were `STRESSED`. Similarly, all explicit log mentions of MRI (e.g., `17:13:41,965`, `17:19:01,302`, `17:20:18,670`) refer to `MRI=STRESSED`. This discrepancy suggests either a recording/reporting bug where the trade's MRI is not accurately reflected or captured at the time of entry/exit, or that the trade was initiated in conditions (ELEVATED) that quickly deteriorated to a STRESSED state, highlighting a potential timing issue in MRI assessment.
+    *   **Condition**: `NVDA` trade `MRI=ELEVATED` in `Closed Trade Details` when the `MRI SESSION DISTRIBUTION` and multiple log entries indicate the market was consistently `STRESSED` throughout the logged period.
+
+### LOG ANOMALIES
+
+*   **WARNING**: `EOD P&L DRIFT: Alpaca=$-25.56 tracker=$-7.97 drift=$-17.59` (Occurs twice at 17:13:45,276 and 17:27:36,098).
+*   **WARNING**: `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` (Occurs at 17:19:01,307).
+*   **WARNING**: `gc.collect() took 2777.4ms, collected 99 objects — heap may be growing` (Occurs at 17:27:38,957).
+*   **WARNING**: `[CYCLE] duration=530s | phase=midday | watchdog_headroom=190s ⚠ SLOW CYCLE` (Occurs at 17:27:38,958).
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL** - **Severe Stop Order Execution Failure (Slippage)**
+    *   **Description**: The stop-loss order for the NVDA long trade failed to execute at or near the specified stop price, resulting in a significantly larger capital loss than dictated by the strategy's risk parameters.
+    *   **Exact variable involved**: `NVDA exit price ($193.23)` vs. `NVDA stop price ($206.54)`.
+    *   **Why it's a failure**: This directly violates the bot's intended risk management by exceeding the maximum acceptable loss for a given trade. Such a large deviation ($13.31 per share) indicates either a fundamental issue with stop order placement (e.g., using market orders instead of limit/stop-limit, or incorrect order parameters) or a severe liquidity problem at the time of the stop hit that the bot did not account for.
+    *   **Exact condition**: `NVDA` trade recorded as `stop_hit`, where the `exit price ($193.23)` is substantially lower (by $13.31) than the `stop price ($206.54)`.
+
+2.  **EXECUTION BUG | HIGH** - **Inconsistent P&L Tracking (Alpaca vs. Internal Tracker)**
+    *   **Description**: A significant divergence (drift) exists between Alpaca's reported P&L and the bot's internal tracker P&L during EOD reconciliation.
+    *   **Exact variable involved**: `Alpaca pnl_today` (`$-25.56`) vs. `tracker pnl_today` (`$-7.97`), resulting in a `drift` of `$-17.59`.
+    *   **Why it's a failure**: Accurate and consistent P&L tracking is fundamental for reliable risk management (e.g., adherence to `MAX_DAILY_LOSS_PCT`) and for feeding correct data to other modules like Kelly sizing. A drift can lead to incorrect risk decisions, miscalculation of position sizes, and an inaccurate view of the bot's actual performance. This is not covered by the "0 fills" benign pattern.
+    *   **Exact condition**: `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-25.56 tracker=$-7.97 drift=$-17.59` logged at `2026-06-26 17:13:45,276` and `2026-06-26 17:27:36,098`.
+
+3.  **INFRASTRUCTURE | CRITICAL** - **Excessive Garbage Collection Pauses and Slow Cycle Duration**
+    *   **Description**: The bot is experiencing significant operational delays due to long-duration garbage collection cycles and an overall slow execution cycle, reducing the watchdog headroom.
+    *   **Exact variable involved**: `gc.collect() duration` (`2777.4ms`), `[CYCLE] duration` (`530s`), and `watchdog_headroom` (`190s`).
+    *   **Why it's a failure**: For an intraday trading bot, a garbage collection pause of nearly 3 seconds (2777.4ms) is critical, as it halts the bot's processing and prevents real-time reaction to market events. An overall cycle duration of 530 seconds (8.8 minutes) is unacceptably slow, indicating the bot is lagging significantly in processing data and executing its strategy, severely compromising its ability to trade effectively intraday. The reduced watchdog headroom suggests it's approaching a state where it might crash or be forcibly restarted, indicating instability.
+    *   **Exact condition**: `WARNING | main | gc.collect() took 2777.4ms, collected 99 objects — heap may be growing` immediately followed by `INFO | main | [CYCLE] duration=530s | phase=midday | watchdog_headroom=190s ⚠ SLOW CYCLE` at `2026-06-26 17:27:38,957` and `17:27:38,958`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / ALPHA** - **CRITICAL**: Immediately investigate the `NVDA` trade, specifically:
+    *   Reconcile the `score 12/12` reported in the `Closed Trade Details` with the `VOLSHADOW` log showing `score_without_vol: 5` and `would_pass: false`. Determine the exact logic path that allowed this trade to enter despite failing core confluence/volume criteria.
+    *   Conduct a deep dive into the `NVDA` stop-loss execution. Analyze fill details, order type used, and market conditions around the stop hit to understand why slippage was so extreme. Review the implementation of stop orders.
+2.  **INFRASTRUCTURE** - **CRITICAL**: Prioritize addressing the performance degradation:
+    *   Profile the bot's memory usage and identify sources of excessive object creation or memory leaks leading to long `gc.collect()` pauses.
+    *   Optimize code paths contributing to the `SLOW CYCLE` duration. Ensure real-time market data processing and decision-making are not bottlenecked.
+3.  **EXECUTION / INFRASTRUCTURE** - **HIGH**: Resolve the `EOD P&L DRIFT`:
+    *   Thoroughly audit the `execution.portfolio_tracker` logic to identify discrepancies between its internal P&L calculations and Alpaca's reported values. This includes verifying how fills, commissions, and other adjustments are recorded and synchronized.

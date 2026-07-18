@@ -1,0 +1,44 @@
+Midday Gemini Audit — 2026-06-12
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No trades were opened or closed in the audited log period, thus no entry/exit integrity, P&L sign checks, score→outcome correlation, or stop rate analysis can be performed for this session. The P&L summary correctly reflects $0.00 for all metrics.
+
+### ENTRY QUALITY
+No entries were taken during this session. The bot successfully identified an unfavorable market regime (MRI STRESSED) and actively prevented new entries, as indicated by `CRITICAL | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` Additionally, all `VOLSHADOW` logs showed `would_pass: false` and `score_without_vol` consistently below the `MIN_SCORE` of 9, further preventing entries. News alerts also applied 100% penalties, which would gate entries. This demonstrates effective entry prevention under adverse conditions.
+
+### EXIT QUALITY
+No exits occurred during this session that were recorded in the P&L summary. A single log entry for `[TOST] Reversal signal neutral — counter decayed 1 → 0` suggests a prior open position for TOST where a reversal signal was being monitored, but no exit was triggered within this log window or counted in the session summary. The recurring `[ANOMALY-3] TQI degradation` warning indicates a historical issue with exit discipline and stop placement from previous trades, but it doesn't reflect active exit quality for this specific session.
+
+### MRI ALIGNMENT
+The bot demonstrated correct alignment with the MRI. The MRI was consistently reported as `STRESSED` with a score of 42/100. In response, the bot applied a `size floor 0.70x` and, more critically, enforced a `⛔ BV-5: MRI=STRESSED — no new entries until regime improves` rule. This behavior is consistent with the goal of reducing exposure during high-risk periods. The VIX levels (18.5-18.8) are below `VIX_BE_WIDEN_THRESHOLD_1 = 20.0`, suggesting other factors (like `news_alerts` contributing 35 points to the MRI score) are driving the `STRESSED` state, which the bot correctly interprets.
+
+### LOG ANOMALIES
+*   `2026-06-12 16:58:01,050 | WARNING | main | gc.collect() took 3756.3ms, collected 64 objects — heap may be growing`
+*   `2026-06-12 17:10:02,659 | WARNING | main | gc.collect() took 4721.8ms, collected 64 objects — heap may be growing`
+*   `2026-06-12 17:22:32,650 | WARNING | main | gc.collect() took 3935.4ms, collected 64 objects — heap may be growing`
+*   `2026-06-12 17:22:32,657 | INFO | main | [CYCLE] duration=444s | phase=midday | watchdog_headroom=276s ⚠ SLOW CYCLE` (and prior cycles also show increasing duration)
+
+### NEW BUGS / CONCERNS
+
+**1. INFRASTRUCTURE | CRITICAL | Severe GC Latency and Increasing Cycle Duration**
+  *   **Exact variable/metric involved**: `gc.collect()` execution time, `CYCLE duration`, `watchdog_headroom`.
+  *   **Explanation of value vs. should be**: `gc.collect()` is taking between 3.7 and 4.7 seconds to complete. This is an unacceptably high latency for a live trading bot, indicating that the bot is effectively "frozen" and unable to react to market events for several seconds at a time. This severely compromises real-time responsiveness. Concurrently, the overall `CYCLE duration` is increasing (e.g., from 365s to 444s), and one cycle is explicitly flagged as a `⚠ SLOW CYCLE`. The `watchdog_headroom` is decreasing, raising concerns about potential watchdog resets if the cycle duration continues to grow. Ideally, `gc.collect()` should be near instantaneous (sub-100ms), and cycle durations should be stable and significantly shorter to allow for frequent market data processing and decision-making. The "heap may be growing" message suggests a memory leak or inefficient memory management leading to increased garbage collector workload.
+  *   **Exact condition under which this occurs**: These warnings occur at the end of each major processing `CYCLE`. For instance, `2026-06-12 17:22:32,650` shows `gc.collect() took 3935.4ms` immediately followed by `2026-06-12 17:22:32,657 | INFO | main | [CYCLE] duration=444s ... ⚠ SLOW CYCLE`. This pattern repeats throughout the provided log.
+
+**2. ALPHA ISSUE | MEDIUM | Persistent TQI Degradation Indicating Underlying Strategy Weakness**
+  *   **Exact variable/metric involved**: `last-5-trade avg` for TQI (Trade Quality Index).
+  *   **Explanation of value vs. should be**: The bot is repeatedly logging a warning: `[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.` The `last-5-trade avg` value of 22.4/100 is below the implied threshold of 30, signaling an issue. While the bot is currently prevented from new entries due to MRI, this persistent warning points to a systemic flaw in the strategy's performance *when it was actively trading*. A healthy TQI should ideally be above 30, reflecting sound exit discipline and stop placement. The fact that it's consistently below 30 and not improving (even with no new trades in this log) means the prior trades, which contribute to this metric, were problematic.
+  *   **Exact condition under which this occurs**: The warning `[ANOMALY-3] TQI degradation` is logged at the end of every `strategy.run_cycle`, specifically after the MRI checks and sizing adjustments, e.g., `2026-06-12 17:04:08,927`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: **Immediately investigate and resolve the `gc.collect()` performance degradation and increasing cycle durations.** This is critical as it indicates severe execution latency which can lead to missed opportunities, poor fill prices, or failed order submissions when trading resumes. (CRITICAL)
+2.  **ALPHA**: **Conduct a thorough post-mortem analysis of recent trades contributing to the persistent `TQI degradation`.** Focus on the efficacy of entry conditions, initial stop/target placement, and dynamic exit logic to identify and correct systematic issues in trade management. (HIGH)
+3.  **INFRASTRUCTURE**: **Implement more granular logging or monitoring for memory usage and object allocation patterns.** This will help pinpoint the source of the "heap may be growing" issue and guide optimization efforts. (MEDIUM)

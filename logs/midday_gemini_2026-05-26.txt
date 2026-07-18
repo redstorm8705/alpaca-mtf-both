@@ -1,0 +1,72 @@
+Midday Gemini Audit — 2026-05-26
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Stop-hit rate & Win Rate**: The 100% stop-hit rate and 0% win rate across all three closed trades indicate a complete failure of the strategy to generate positive expectancy in the current market conditions. All entries, despite scoring a perfect 12/12, resulted in losses, suggesting a fundamental misalignment between the confluence scoring model and actual market outcomes, or severe issues in trade management.
+*   **Risk-Reward (R:R) Ratio Misalignment**: For all closed trades (PANW, AMZN, TOST), the first profit target (T1) is set at a distance significantly smaller than the calculated stop distance.
+    *   PANW (short): Stop distance $7.90; T1 distance $3.95 (R:R approx. 0.5:1).
+    *   AMZN (long): Stop distance $9.12; T1 distance $3.66 (R:R approx. 0.4:1).
+    *   TOST (short): Stop distance $2.60; T1 distance $1.03 (R:R approx. 0.39:1).
+    This contradicts the `TARGET_ATR_MULT = 2.5` (implying a target 2.5x the stop distance) and makes the strategy mathematically unprofitable. This is a severe alpha issue that needs immediate correction.
+
+### ENTRY QUALITY
+No specific issues with entry quality were detected based on the provided data beyond the general performance issues noted above (high score not correlating with win rate). All entries were taken with a perfect 12/12 confluence score. Entries were taken when MRI was at HIGH/ELEVATED levels, but the log indicates dynamic sizing adjustments were in place for "Risk day" and "Mid-day doldrums".
+
+### EXIT QUALITY
+*   **PANW Stop Overrun**: The exit price for PANW ($247.26) is drastically above its stated stop price ($180.21) for a short trade. This represents an extreme stop overrun, leading to a much larger loss ($-224.85) than intended. This is a critical execution failure.
+*   **TOST Exit Reason Inconsistency**: The TOST trade exited with a $0.00 P&L at its entry price ($22.79), but the stated exit reason is `stop_hit`, with a stop price of $25.39. If the stop at $25.39 was hit, the exit price should have been near $25.39 and resulted in a loss. This inconsistency makes performance analysis unreliable.
+
+### MRI ALIGNMENT
+Entries were taken under 'HIGH' or 'ELEVATED' MRI conditions, which are higher risk. However, the system showed dynamic risk adjustments (e.g., "Risk day — sizing at 50%", "Mid-day doldrums — sizing at 75%"). Later in the session, the MRI normalized to 'NORMAL'. While trading into higher MRI conditions with a 0% win rate is concerning, no specific MRI *alignment bug* was identified in the logic itself, rather it contributed to the overall poor alpha performance.
+
+### LOG ANOMALIES
+*   `2026-05-26 17:12:05,779 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-10.62 tracker=$-23.56 drift=$+12.94` (and similar at 17:24:11,715): Indicates an inconsistency between the bot's internal P&L tracking and Alpaca's reported P&L, which can lead to unreliable risk management decisions (e.g., kill switch activation, sizing).
+*   `2026-05-26 17:17:42,584 | WARNING | strategy.run_cycle | [ANOMALY-5] _fetch_actual_fill_price returned fallback price 3x today — fill poll window may be too short. P&L records may be inaccurate.` Repeated use of fallback fill prices compromises the accuracy of P&L calculations and trade metrics. This could contribute to the P&L drift and potentially affect stop/target validation.
+*   `2026-05-26 17:24:16,359 | WARNING | main | gc.collect() took 4527.0ms, collected 99 objects — heap may be growing`: A 4.5-second garbage collection pause is critically long for a live trading bot, indicating significant memory pressure and potential for unresponsiveness.
+*   `2026-05-26 17:24:16,360 | INFO | main | [CYCLE] duration=426s | phase=midday | watchdog_headroom=294s ⚠ SLOW CYCLE`: A cycle duration of 7 minutes (426 seconds) means the bot is operating with extreme latency, making real-time market reactions impossible and invalidating any intraday edge. This is a direct consequence of the GC issue.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Stop execution failure (PANW)**
+    *   **Variable/Metric involved**: `exit price` (PANW), `stop price` (PANW).
+    *   **Value vs. should be**: The `exit price` for PANW was $247.26, while the `stop price` was $180.21. For a short trade where the stop is above the entry, the actual exit should be at or very close to the stop price. The observed exit price ($67.05 above the stop) represents a catastrophic failure of the stop-loss mechanism.
+    *   **Condition**: Occurs for short trade PANW, where the market price moved substantially past the defined stop loss before the exit was executed. Source not provided.
+
+2.  **ALPHA ISSUE | CRITICAL | Target Price vs. Stop Distance Miscalculation / Misreporting**
+    *   **Variable/Metric involved**: `TARGET_ATR_MULT`, `stop distance`, `T1 price`.
+    *   **Value vs. should be**: The `TARGET_ATR_MULT` is configured to 2.5, implying profit targets should be 2.5 times the stop distance. However, for all three trades, the first target (T1) is consistently less than half of the stop distance. This leads to extremely unfavorable theoretical Risk:Reward ratios (e.g., 0.4:1 instead of 2.5:1), making the strategy fundamentally unprofitable and contradicting the stated configuration.
+    *   **Condition**: Systematically occurs across all closed trades for which target levels are reported, indicating a fundamental error in the target calculation logic. Source not provided.
+
+3.  **EXECUTION BUG | HIGH | Inconsistent Exit Reason (TOST)**
+    *   **Variable/Metric involved**: `exit reason` (TOST), `P&L` (TOST), `entry price` (TOST), `exit price` (TOST), `stop price` (TOST).
+    *   **Value vs. should be**: The `exit reason` is `stop_hit`, yet `P&L` is $0.00 and `exit price` ($22.79) matches `entry price` ($22.79). The stated `stop price` was $25.39. If the stop at $25.39 was hit, the trade would have incurred a loss. If it was a breakeven exit, the reason should reflect that. This is a logical contradiction in trade reporting.
+    *   **Condition**: Occurs when a trade closes at its entry price for zero P&L, but the exit reason is recorded as `stop_hit` while the actual stop price is different from the exit price. Source not provided.
+
+4.  **INFRASTRUCTURE | CRITICAL | Severe Cycle Latency and Resource Exhaustion**
+    *   **Variable/Metric involved**: `gc.collect() duration`, `[CYCLE] duration`.
+    *   **Value vs. should be**: Garbage collection taking `4527.0ms` (4.5 seconds) and a trading cycle lasting `426s` (7 minutes) are unacceptable for an intraday bot. A healthy bot should have cycle times in seconds or milliseconds, with GC overhead minimal. This indicates severe memory/CPU resource contention or a memory leak, rendering the bot unable to process real-time data or execute orders promptly.
+    *   **Condition**: Occurred at `2026-05-26 17:24:16` and is accompanied by a `⚠ SLOW CYCLE` warning, suggesting a recurring or persistent issue during midday operations. Source not provided.
+
+5.  **INFRASTRUCTURE | HIGH | Inaccurate Fill Price Acquisition and P&L Tracking Drift**
+    *   **Variable/Metric involved**: `_fetch_actual_fill_price` fallback usage, `P&L DRIFT`.
+    *   **Value vs. should be**: The bot reported `_fetch_actual_fill_price returned fallback price 3x today`, leading to potentially "inaccurate P&L records." This, coupled with `EOD P&L DRIFT` between Alpaca and the internal tracker, means the bot's self-assessment of performance and risk is unreliable.
+    *   **Condition**: Occurred at `2026-05-26 17:17:42,584` for fallback fills, and at `17:12:05,779` and `17:24:11,715` for P&L drift, suggesting a systemic issue in trade accounting. Source not provided.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION: Debug and Fix Stop-Loss Mechanism and Exit Reason Logic (CRITICAL)**
+    *   Investigate the PANW stop overrun immediately. Determine if it's a market order slippage issue, a problem with order submission/cancellation, or a stale price data issue. Implement robust safeguards to prevent such extreme losses.
+    *   Correct the TOST exit reason logic. Ensure `stop_hit` accurately reflects a stop trigger and that other exit conditions (like breakeven) are reported appropriately for accurate performance tracking.
+
+2.  **ALPHA: Re-evaluate and Correct Target Price and R:R Calculation (CRITICAL)**
+    *   Thoroughly review the `TARGET_ATR_MULT` implementation and how profit targets (T1, T2, T3) are calculated relative to stop losses. The current setup creates an inherently unprofitable strategy (0.4:1 R:R vs. desired 2.5:1). This is a foundational issue that must be resolved.
+
+3.  **INFRASTRUCTURE: Address Performance Bottlenecks and P&L Tracking Integrity (CRITICAL)**
+    *   **Performance**: Profile the bot's memory and CPU usage to identify and eliminate the root causes of prolonged garbage collection pauses and excessively long cycle durations. Optimize code and potentially increase hardware resources to ensure sub-second responsiveness.
+    *   **P&L Tracking**: Implement strict reconciliation and error handling for P&L tracking. Ensure internal P&L matches Alpaca's, reliably fetch actual fill prices, and log any discrepancies with clear resolution steps.

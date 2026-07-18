@@ -1,0 +1,96 @@
+Nightly Gemini Audit — 2026-05-01
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['midday_audit.py', 'run_movers.py', 'nightly_audit.py', 'scripts/cron_tz_wrapper.py']
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is operational, but there are multiple critical data integrity issues in logging and P&L tracking, confirmed triggers of known architectural issues, and a major discrepancy in P&L reporting between the tracker and Alpaca. The primary bot log for the last 24 hours cannot be parsed due to a timezone error.
+
+### LOG ANOMALIES
+
+*   **Critical Logging Failure**: The `BOT LOG` section indicates a fundamental error: "(Error reading bot.log: can't compare offset-naive and offset-aware datetimes)". This means the primary source of real-time operational insight for the past 24 hours is unreadable, preventing any meaningful analysis of bot behavior, errors, or warnings. This is a critical silent failure in the audit pipeline itself, preventing the `nightly_audit.py` from functioning.
+*   **MRI Level "UNKNOWN"**: Several exit events in `TRADE EVENTS` (e.g., `QQQ` on 2026-04-25, `TOST` on 2026-04-27, `PANW` on 2026-04-27, `TOST` on 2026-04-27, `TOST` on 2026-04-30, `PANW` on 2026-04-30) show `mri_level: "UNKNOWN"`. While not an error in itself, it indicates the bot couldn't determine the MRI level for these positions at the time of exit, which could point to data fetching issues or an unhandled state in the MRI system.
+*   **`run_movers.py` Debug Logging**: The `run_movers.py` file uses `logger.debug` for `TF fetch failed {sym}: {e}`. Failures in fetching multi-timeframe data are critical for confluence scoring. These events should be logged at `INFO` or `WARNING` level to ensure visibility without requiring debug logging, as they can directly impact signal quality.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Discrepancy (UBER)**: For the UBER trade, the `EOD SNAPSHOT` lists `pnl: -16.66` within the `trades` list and `score_buckets` section, but `alpaca_pnl: -9.24` for the entire day. The `alpaca_per_trade` list also sums to `-9.24` for the UBER exit. This results in a `pnl_drift: 7.42`. This is a significant discrepancy for a single trade and suggests a fundamental error in P&L calculation, recording, or reconciliation between the bot's internal tracker and Alpaca's reported fills. The `midday_audit.py`'s `analyse_pnl` calculations likely contribute to this.
+*   **Overnight Breakeven Misnomer (A-1 Confirmed)**: The exit reason `overnight_breakeven` for `QQQ` (2026-04-28), `SMCI` (2026-04-30), and `UBER` (2026-05-01) correctly states `entry=$X thresh=$Y`, where `thresh` is not the entry price but `entry +/- 0.25*ATR`. This explicitly confirms Architectural Issue A-1: the name "overnight_breakeven" is misleading, as it's not exiting at the entry price. The bot behaves as described by A-1, confirming this issue.
+*   **P&L Calculation Inaccuracy (`midday_audit.py:analyse_pnl`)**: The `analyse_pnl` function calculates `raw_pnl` based on `qty = float(en.get("size") or 0)` (the original entry size). When partial exits occur, this calculation will incorrectly attribute full-position P&L to a partial exit event, or miscalculate aggregated P&L for a position if multiple partial exits happen. This is a fundamental flaw in how P&L is aggregated across a full trade cycle with partial exits and contributes directly to the `pnl_drift` observed in the EOD snapshot.
+*   **Entry/Exit P&L sign correctness**: For the UBER short trade (entry 74.1, exit 76.48), a short position exiting higher should yield a loss. `(74.1 - 76.48) * 7 = -16.66`. The `pnl: -16.66` is correct for the `tracker_pnl`. The Alpaca P&L of `-9.24` is a separate issue, but the internal P&L sign is correct.
+
+### TRADE INTEGRITY
+
+*   **SMCI Trade Event Disorder/PNL Confusion**: The `TRADE EVENTS` for `SMCI` presents conflicting `size` and `pnl` values, indicating a significant recording bug.
+    *   Entry (2026-04-27): `size: 19`, `price: 28.07` (short)
+    *   Partial Exit (2026-04-28): `size: 5`, `price: 27.1`, `pnl: 4.85`. This is correct for 5 shares: `(28.07 - 27.1) * 5 = 4.85`.
+    *   Stop Hit (2026-04-28): `size: 14`, `price: 27.46`, `pnl: 13.39`. This is correct for 14 shares: `(28.07 - 27.46) * 14 = 8.54`. However, the P&L `13.39` is incorrect. The reported `pnl` for this event is inconsistent with the price and size.
+    *   Exit (2026-04-30): `size: 18`, `price: 27.37`, `pnl: -31.32`. This `size: 18` is inconsistent with the previous partial exit of 5 shares and stop hit of 14 shares (5+14=19, the original size). It appears this final exit event is recalculating P&L for a large portion, or the entire position, instead of just the remaining shares, leading to double-counting P&L or misrepresenting the remaining quantity. The P&L of `-31.32` would be for 18 shares at `27.37` from an entry of `25.63`, which also implies a different entry price or position. This is a severe P&L recording error.
+*   **UBER Contradictory Trade Status**: The `EOD SNAPSHOT` for UBER lists `status: "closed"` but also `qty_remaining: 7`, which matches the initial `qty`. A closed trade should have `qty_remaining: 0`. This is a direct contradiction and indicates an error in trade status management within the `PortfolioTracker`.
+*   **Inconsistent Open Trade Count**: The `EOD SNAPSHOT` `all_time_stats.open_trades` reports `5` open trades. However, the `overnight_holds` list only explicitly lists `3` symbols (QQQ, AMD, SPY). This leaves 2 unaccounted for open positions, indicating an inconsistency or incompleteness in the tracking or reporting of open trades.
+*   **`_exit_tod_last` field**: The `_exit_tod_last` field in the `EOD SNAPSHOT` for UBER is "midday". However, the `exit_time` is `2026-05-01T09:03:20-07:00` (9:03 AM PT), which is morning, not midday. This field either has a bug in its assignment or definition.
+
+### MODIFIED FILE FINDINGS
+
+*   **midday_audit.py**:
+    *   **P&L Calculation Error**:
+        *   **Line Context**: `analyse_pnl` function, specifically lines calculating `raw_pnl` (`midday_audit.py:173`).
+        *   **Exact Failure Condition**: For a partial exit event `ex`, `raw_pnl = (xp - ep) * qty` uses `qty = float(en.get("size") or 0)` (the original entry size) instead of the actual `ex.get("size")` (the quantity of the partial exit). This leads to incorrect P&L accumulation and reporting as detailed in the `PERFORMANCE AUDIT` section.
+    *   **Entry Matching Inconsistency**:
+        *   **Line Context**: `run_signal_postmortem` function, specifically `entries = {en["symbol"]: en for en in _pm_entries}` (`midday_audit.py:230`).
+        *   **Exact Failure Condition**: This dictionary comprehension will only retain the *last* entry event for a given symbol if multiple entries for the same symbol occur on the same day. This will cause `postmortem_recorder.py` to miss earlier, closed trades of that symbol for analysis, providing an incomplete feedback loop.
+
+*   **nightly_audit.py**:
+    *   **Critical Log Reading Failure**:
+        *   **Line Context**: `_collect_log_lines()` function, specifically `if ts < cutoff:` (`nightly_audit.py:108`).
+        *   **Exact Failure Condition**: `datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")` creates a timezone-naive datetime object. `cutoff = datetime.now(PT) - timedelta(hours=24)` creates a timezone-aware datetime object. Comparing a naive and an aware datetime raises a `TypeError`, causing the entire `bot.log` reading to fail with the observed error "(Error reading bot.log: can't compare offset-naive and offset-aware datetimes)". This prevents the nightly audit from accessing any bot log data.
+    *   **Redundant `_SSL_CTX` instantiation**:
+        *   **Line Context**: `try`/`except` block for `_SSL_CTX` in `nightly_audit.py:34` and `midday_audit.py:28`.
+        *   **Exact Failure Condition**: The `_SSL_CTX` is instantiated within a `try...except ImportError` block that specifically targets `certifi`. However, `ssl.create_default_context()` itself should be sufficient for most cases, and this specific `certifi` handling is duplicated in both audit scripts. If `certifi` fails to import, it correctly falls back, but this block is largely boilerplate if `certifi` is a standard dependency.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | UNTOUCHED (The import path is correct and `run_movers.py`'s log suggests `DataFetcher` is functional, indicating the original bug reason may be stale or unrelated to the explicit import line.)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | UNTOUCHED
+*   P5-H2 | Fill price crosstalk | UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path | UNTOUCHED
+*   P5-H4 | Rule 2 dead code | UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today | FIXED (As per description and lack of re-occurrence in logs).
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | UNTOUCHED (The P&L discrepancy points to a calculation bug, not necessarily the timing of the file write affecting open positions).
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+*   A-1 | overnight_breakeven exit fires at entry-0.25×ATR, not at entry price — name is misleading | TRIGGERED (Confirmed by multiple entries with "overnight_breakeven" reason and `thresh` calculation).
+*   A-2 | trail_stop not floor-bounded by promoted stop after partial exit — can exit below entry | UNTOUCHED
+*   A-3 | nightly_audit trade_log.json reference was stale (file never existed) — fixed 2026-04-21 | FIXED (Reference to `trade_events.jsonl` is correct).
+*   A-4 | Alpaca paper fills API returns empty for same-day closures until overnight settlement | TRIGGERED (Confirmed by the `pnl_drift` between `alpaca_pnl` and `tracker_pnl` for the UBER trade closed today).
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | nightly_audit.py | `_collect_log_lines` TypeError on datetime comparison | `nightly_audit.py:108`**
+    *   **Description**: The `_collect_log_lines` function creates a timezone-naive datetime object from log lines and attempts to compare it with a timezone-aware `cutoff` datetime. This causes a `TypeError` and prevents `nightly_audit.py` from reading `mtf_bot.log`.
+    *   **Exact Failure Condition**: `TypeError: can't compare offset-naive and offset-aware datetimes` when `ts < cutoff` is evaluated.
+*   **HIGH | EOD SNAPSHOT / Portfolio Tracker | Contradictory Trade Status and P&L for UBER | `EOD SNAPSHOT:trades[0]` for UBER**
+    *   **Description**: The UBER trade is listed with `status: "closed"` but also `qty_remaining: 7` (matching its initial `qty`), which is contradictory for a closed position. Furthermore, the `pnl: -16.66` in the `trades` list does not match the `alpaca_pnl: -9.24` for the same trade.
+    *   **Exact Failure Condition**: `EOD_SNAPSHOT.trades[0].status == "closed"` AND `EOD_SNAPSHOT.trades[0].qty_remaining == EOD_SNAPSHOT.trades[0].qty`. Also, `EOD_SNAPSHOT.trades[0].pnl != sum(t['pnl'] for t in EOD_SNAPSHOT.alpaca_per_trade)`.
+*   **HIGH | TRADE EVENTS / Portfolio Tracker | Incorrect P&L for Partial Exit (SMCI) | `TRADE EVENTS` for SMCI (stop_hit, pnl 13.39)**
+    *   **Description**: The `stop_hit` event for SMCI (2026-04-28) states `size: 14` and `pnl: 13.39`. With entry at `28.07` and exit at `27.46`, the P&L for a short position should be `(28.07 - 27.46) * 14 = 8.54`. The reported P&L is incorrect, indicating a calculation or recording error at the event level.
+    *   **Exact Failure Condition**: `(SMCI_stop_hit_entry_price - SMCI_stop_hit_exit_price) * SMCI_stop_hit_size != SMCI_stop_hit_pnl`.
+*   **HIGH | TRADE EVENTS / Portfolio Tracker | Inconsistent Exit Size and P&L (SMCI) | `TRADE EVENTS` for SMCI (final exit, size 18)**
+    *   **Description**: The final `exit` event for SMCI (2026-04-30) shows `size: 18`. Given an initial `size: 19`, with a prior `partial_exit` of 5 and a `stop_hit` of 14, the remaining quantity should be 0. The `size: 18` here indicates a severe bug in tracking remaining quantities and recording exit events, leading to a misrepresentation of the closed position.
+    *   **Exact Failure Condition**: `SMCI_final_exit_size + SMCI_partial_exit_size + SMCI_stop_hit_size != SMCI_initial_entry_size`.
+*   **MEDIUM | EOD SNAPSHOT / Portfolio Tracker | Inaccurate `_exit_tod_last` Field | `EOD SNAPSHOT:trades[0]._exit_tod_last` for UBER**
+    *   **Description**: The `_exit_tod_last` field for the UBER trade is "midday", but the `exit_time` is `2026-05-01T09:03:20-07:00` (9:03 AM PT), which is in the morning session.
+    *   **Exact Failure Condition**: `trade._exit_tod_last` does not accurately reflect the time of day of `trade.exit_time`.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE FIX (P5-C3)**: Modify `nightly_audit.py`'s `_collect_log_lines` function to correctly handle datetime comparisons by making the parsed log timestamps timezone-aware *before* comparing them to the timezone-aware `cutoff`. This is critical to restore visibility into bot operations.
+2.  **URGENT FIX**: Rectify the P&L and trade status inconsistencies observed in the UBER trade within the `EOD SNAPSHOT`. Investigate the `PortfolioTracker` to understand why `qty_remaining` is not zeroed for closed trades and why `tracker_pnl` diverges from `alpaca_pnl`.
+3.  **REFACTOR**: Overhaul the P&L calculation logic in `midday_audit.py`'s `analyse_pnl` to accurately track and accumulate P&L across multiple partial exits for a single position, instead of treating each exit event as a full trade based on original entry size.
+4.  **INVESTIGATE & FIX**: Thoroughly investigate the `SMCI` trade events (and similar cases) to identify the root cause of the conflicting `size` and `pnl` values, which indicates a severe bug in position sizing and P&L attribution for multi-tranche trades.
+5.  **IMPROVE LOGGING**: Adjust the logging level for `TF fetch failed` events in `run_movers.py` from `DEBUG` to at least `INFO` or `WARNING` to ensure critical data fetching issues impacting confluence scoring are visible in standard logs.

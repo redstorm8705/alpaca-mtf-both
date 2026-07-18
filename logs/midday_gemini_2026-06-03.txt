@@ -1,0 +1,57 @@
+Midday Gemini Audit — 2026-06-03
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+Cannot fully assess performance due to lack of trade activity in the audited session.
+*   Entries: 0 | Exits: 0 | Closed trades: 0.
+*   No P&L generated to evaluate entry/exit prices, win rates, or profit factors.
+*   Stop-hit rate of 0% is consistent with no trades.
+*   No score→outcome correlation can be determined.
+
+### ENTRY QUALITY
+No issues detected. The bot correctly refrained from opening new positions.
+*   The Macro Risk Index (MRI) was consistently at `STRESSED` level (score=45) throughout the observed period (e.g., `17:05:14,835 CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves`). This correctly prevented new entries.
+*   All `VOLSHADOW` logs show `score_without_vol` values (0, 2, 4, 6, 8) that are below the `MIN_SCORE = 9` threshold, indicating that even if MRI conditions were favorable, most potential candidates would not have met the minimum confluence score for entry.
+*   Position sizing was correctly adjusted for the `STRESSED` MRI regime (`size floor 0.70x applied`) and `Mid-day doldrums — sizing at 75%`, indicating proper risk scaling.
+
+### EXIT QUALITY
+No issues detected. No trades were opened in this session that required exit management.
+*   The log `[NFLX] Reversal signal neutral — counter decayed 1 → 0` suggests internal signal processing for an existing position, but given "Entries: 0" and "No closed trades" in the summary, this does not indicate an actual trade in the current session.
+
+### MRI ALIGNMENT
+No issues detected. The bot correctly responded to the MRI `STRESSED` level.
+*   MRI was `STRESSED` (score=45) consistently.
+*   The bot applied an appropriate sizing reduction (`size floor 0.70x applied`).
+*   New entries were explicitly blocked due to the `STRESSED` regime (`⛔ BV-5: MRI=STRESSED — no new entries until regime improves`).
+
+### LOG ANOMALIES
+*   **Recurring Garbage Collection Warnings:** Repeated warnings about `gc.collect() took Xms, collected 64 objects — heap may be growing` (e.g., at 16:59:44, 17:10:03, 17:20:01 PT). These warnings, occurring roughly every 10 minutes and taking 4.5-5 seconds, suggest potential memory pressure, inefficient object management, or a memory leak within the application. While 64 objects is small, the consistent high duration for collection and the "heap may be growing" message indicates a systematic issue that could impact performance and stability over longer run times.
+
+### NEW BUGS / CONCERNS
+
+1.  **ANOMALY-2: Inconsistent Position Tracking**
+    *   **CATEGORY:** EXECUTION BUG
+    *   **SEVERITY:** CRITICAL
+    *   **Description:** The log repeatedly displays `[ANOMALY-2] ... risk.open_positions=1 vs tracker=1 | MAX_OPEN_POSITIONS=4. If risk>1, CYCLE-SYNC should resolve next cycle.` This directly contradicts the `SESSION P&L SUMMARY`, which states "Entries: 0", "Closed trades: 0", and "Total P&L: $0.00", implying no open positions for the current session. The "PDT counter in sync with Alpaca: 0/3" further suggests no active trades have occurred today.
+    *   **Exact variable or metric involved:** The internal variable `risk.open_positions` (reported as `1` in the log) versus the implied `0` open positions based on the `SESSION P&L SUMMARY` and `PDT counter`.
+    *   **Value vs. What it should be and why it constitutes a failure:** The log states `risk.open_positions=1`, but the session summary and PDT counter indicate `0` open positions. This discrepancy represents a critical failure in internal state consistency. If `risk.open_positions` is truly `1`, then the `SESSION P&L SUMMARY` is inaccurate for this session, failing to report an active trade. If `risk.open_positions` should be `0`, then the `ANOMALY-2` log is reporting an incorrect internal state. This inconsistency can lead to faulty decision-making (e.g., miscalculating available capital, incorrectly applying position limits, or preventing legitimate new entries due to a phantom open position), making the bot unreliable and difficult to audit.
+    *   **Exact condition:** This warning occurs repeatedly during the `strategy.run_cycle` at log timestamps `2026-06-03 17:05:14,834`, `2026-06-03 17:15:39,960`, and `2026-06-03 17:25:24,829` (PT). It is associated with symbols like COIN, CRM, and MSTR during `confirm_gate` scans.
+
+2.  **ANOMALY-3: Stale/Incorrect TQI Degradation Metric**
+    *   **CATEGORY:** ALPHA ISSUE
+    *   **SEVERITY:** HIGH
+    *   **Description:** The log reports `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` However, the `SESSION P&L SUMMARY` indicates "Closed trades: 0" for the current session.
+    *   **Exact variable or metric involved:** The `last-5-trade avg` component of the TQI (Trade Quality Index).
+    *   **Value vs. What it should be and why it constitutes a failure:** The `last-5-trade avg` is `28.0/100`. If there are no closed trades in the current session, this metric should either not be reported in this context (implying current session performance), explicitly state it's based on historical data, or be `N/A`. Reporting a specific average without current session trades implies a misleading performance assessment for the current session. This can lead to the bot making incorrect adaptive strategy adjustments (e.g., further risk reduction) based on potentially irrelevant or outdated performance data, thereby degrading current session alpha.
+    *   **Exact condition:** This warning occurs repeatedly during the `strategy.run_cycle` at log timestamps `2026-06-03 17:05:14,835`, `2026-06-03 17:15:39,961`, and `2026-06-03 17:25:24,829` (PT).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION: Investigate and resolve `ANOMALY-2` position tracking inconsistency (CRITICAL).** Determine why `risk.open_positions` is `1` while `SESSION P&L SUMMARY` reports 0 entries and 0 closed trades. Ensure the bot's internal state accurately reflects actual open positions, and that all reporting mechanisms are in sync.
+2.  **INFRASTRUCTURE: Address recurring `gc.collect()` warnings (HIGH).** Investigate the cause of prolonged garbage collection times and the "heap may be growing" indication. This could involve memory profiling to identify leaks or optimize object allocation, or adjusting GC parameters if appropriate for the application's memory usage patterns.
+3.  **ALPHA: Clarify or correct TQI `last-5-trade avg` calculation/reporting (HIGH).** If "Closed trades: 0", the TQI metric for "last-5-trade avg" should accurately reflect the lack of current session data or clearly state its historical context to prevent misleading strategy adjustments.

@@ -1,0 +1,89 @@
+Nightly Gemini Audit — 2026-04-22
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'scan_to_html.py', 'run_movers.py', 'main.py', 'midday_audit.py', 'indicators/momentum.py', 'execution/portfolio_tracker.py', 'execution/broker.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Critical JSON Serialization Failures**: Repeated `ERROR | Atomic write failed for ... Object of type UUID is not JSON serializable` at `08:19:25`, `08:25:59`, `08:26:00` for `eod_YYYY-MM-DD.json` and `trade_log.json`. This indicates that state-saving mechanisms are failing due to `UUID` objects not being correctly serialized, threatening data integrity across restarts.
+*   **Recurring Alpaca Fills Gap (A-4)**: Frequent `WARNING | A-4 paper fills gap: Alpaca returned 0 fills despite 1 closed trade(s) — using tracker P&L ($-XX.XX) as fallback. Verify fills manually.` (seen ~12 times). This means the bot is consistently relying on its internal P&L tracking because Alpaca's paper API is not reliably providing fills for same-day closures, leading to "EOD P&L DRIFT".
+*   **Position Count Drift**: Multiple `CRITICAL | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=X. Correcting to tracker count.` (at `08:26:07`, `09:58:45`, `12:15:41`). This indicates a fundamental misalignment between the risk manager's and portfolio tracker's view of open positions.
+*   **Bot Hung and Restarted (Watchdog Trigger)**: `CRITICAL | WATCHDOG: No completed cycle in 88m during RTH — bot is hung. Firing alert and restarting.` at `12:15:35`. This shows the bot stalled for a prolonged period during regular trading hours, requiring an emergency restart.
+*   **Prolonged Signal Blocking (ANOMALY-2)**: Numerous `WARNING | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — gate may be permanently blocked. Check score vs MIN_SCORE threshold.` for high-score symbols (AAPL, AMZN, SPY, AMD, MU, NVDL), with scan counts reaching up to `18` for AMZN. This suggests strong signals are generated but persistently blocked from entry for unknown reasons.
+*   **Sizing Calibration Issues**: Frequent `WARNING | [SYMBOL] raw_shares=X × mult=0.0Y → 0 before floor (dollar_cap=$Z.ZZ, stop_dist=$10.1000) — check sizing calibration` (seen ~8 times for SPY, CRWD). This indicates the position sizing logic is producing zero shares for some calculated positions, effectively skipping valid trade opportunities.
+*   **RSS Feed Parse Errors**: Repeated `WARNING | [RSS] Feed parse error (bozo=True): ... not well-formed (invalid token) — may be HTML error page. Skipping.` This indicates issues with external news feed parsing, but these appear to be handled by skipping the malformed feed.
+
+### PERFORMANCE AUDIT
+
+*   **MSTR Stop-Hit vs. Exit P&L Inconsistency**: The MSTR short trade (entry $164.55, stop $173.79) initially recorded a `stop_hit` at $181.98 (P&L $-52.29), but was later recorded as an `exit` (reason `external_close`) at $175.08 (P&L $-31.59) in the EOD snapshot. This conflicting record for the same position indicates a critical P&L attribution and risk management flaw. The initial `stop_hit` price of $181.98 shows significant slippage ($8.19 / 4.7%) beyond the intended stop.
+*   **Realized R:R Discrepancy**: The `all_time_stats` from the EOD snapshot reports an `avg_r_multiple` of 0.251. This is significantly below the stated targets of 1:2 (intraday) and 1:3 (swing) R:R in `config.py`. This suggests the bot is not effectively capturing its intended edge, possibly due to premature exits on winners or disproportionately large losses.
+*   **Daily Stop-Hit Rate**: Today's single closed trade (MSTR) was attributed as a loss via `external_close`, following a `stop_hit` detection. This yields a 100% loss rate for the day, confirming poor performance for this session.
+*   **Score to Outcome**: The single trade closed today (MSTR, score 11/12 or 12/16) was a loss, offering no positive correlation for the day.
+
+### TRADE INTEGRITY
+
+*   **P&L Attribution Conflict for Single Trades**: As noted, the MSTR trade recorded conflicting exit events and P&L figures, indicating a flaw in how the system reconciles and attributes the final outcome of a trade, particularly when external closures or different exit mechanisms interact.
+*   **UUID JSON Serialization Failure**: The persistent `Atomic write failed ... Object of type UUID is not JSON serializable` errors indicate that critical trade logs (`trade_log.json`) and daily summaries (`eod_YYYY-MM-DD.json`) are not being saved reliably due to incorrect JSON serialization, jeopardizing data integrity.
+
+### MODIFIED FILE FINDINGS
+
+*   **`config.py`**:
+    *   `INTRADAY_STOP_ATR_MULT` / `INTRADAY_TARGET_ATR_MULT` were raised to aim for 1:2 R:R, but the `avg_r_multiple` of 0.251 indicates these targets are not being achieved, suggesting a gap between intended and realized performance.
+    *   `_LINEAR_SCORE_MIN` was raised to 10 for paper, contributing to the strict entry criteria that might cause `ANOMALY-2`.
+    *   New `TSMOM VOL-SCALING` parameters were added, indicating an intent for dynamic sizing, which is a positive but its effectiveness will depend on accurate implementation and data.
+*   **`scan_to_html.py`**: The `_scan_ticker_with_timeout` threading implementation and `fetch_vix` update using `yfinance` are robust fixes for known issues.
+*   **`run_movers.py`**: **CRITICAL ISSUE**: The file still contains `from data.fetcher import DataFetcher` at line 19. The `DataFetcher` class appears to have been refactored out of `data.fetcher`, rendering the entire Movers bot non-functional due to an `ImportError`.
+*   **`main.py`**:
+    *   **CRITICAL ISSUE**: The `_save_hybrid_state()` function (and potentially other `json.dump` calls not using `_atomic_write` from `execution.portfolio_tracker.py`) does not use the custom `_BotEncoder`. This is the likely cause of the `UUID` serialization errors, preventing reliable state persistence.
+    *   The `_find_recent_fvgs()` was modified, removing `MultiIndex` protection with an assumption about flat Alpaca data. This carries a risk if non-flat data structures are ever passed.
+    *   Significant improvements were made to order handling in `_submit_gtc_stop_order`, `_submit_day_stop_order`, `partial_close_position`, and `close_position` with robust retry, cancellation, and polling logic for `40310000` errors. This dramatically improves execution reliability for stops and partial exits.
+*   **`execution/portfolio_tracker.py`**: The `_BotEncoder` is correctly defined within this file. The `_atomic_write` function *uses* it. However, the JSON serialization errors elsewhere indicate `_BotEncoder` is not being universally applied. The `_fifo_reconstruct` and Alpaca fills authority implementation is a strong improvement for P&L accuracy, despite the `A-4` fallback.
+*   **`execution/broker.py`**: Contains significant, well-implemented improvements to order submission, cancellation, and position management, particularly for handling `held_for_orders` issues and other Alpaca API quirks.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTESTED/POTENTIALLY WORSENED**. Assumption made about input DataFrame structure rather than robust handling.
+*   **P5-C2 | run_movers.py ImportError**: **WORSENED (STILL ACTIVE)**. The `DataFetcher` import still exists, making the Movers bot non-functional.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **UNTOUCHED / POTENTIALLY MITIGATED**. Direct `_entry_confirm_buffer` clearing on daily reset not explicitly visible, but daily reset mechanism enhanced.
+*   **P5-H2 | Fill price crosstalk**: **FIXED**. `_fifo_reconstruct` and authoritative Alpaca fills resolve this.
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED**. Robust GTC stop submission and cancellation logic in `broker.py` mitigate this.
+*   **P5-H4 | Rule 2 dead code**: **FIXED**. `_get_tod_phase()` explicitly uses the config value.
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3**: **FIXED**. Confirmed by description and `broker.py` changes.
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED**. `_last_cycle_lock` and `_touch_cycle_ts()` address the root cause.
+*   **P5-M2 | MRI score cached stale across sessions**: **UNTOUCHED**. MRI state loading validation for `mri_state.json` not visible in `main.py`.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. Not addressed by visible changes.
+*   **P5-L1 | _classify_loss_driver() returns empty label**: **UNTOUCHED**. Not addressed by visible changes.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **WORSENED/STILL ACTIVE**. The `A-4` Alpaca fills gap means P&L will be understated by Alpaca's metric if fills are delayed, causing `Alpaca=$0.00` drift.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. Not addressed by visible changes.
+
+### NEW BUGS FOUND
+
+1.  **CRITICAL** | `main.py:_save_hybrid_state()` (line ~539) and other `json.dump` calls: **JSON Serialization Failure for UUIDs**.
+    *   **Description**: `json.dump` calls, specifically in `main.py`'s `_save_hybrid_state()`, are not utilizing the custom `_BotEncoder` (defined in `execution/portfolio_tracker.py`). This leads to `TypeError: Object of type UUID is not JSON serializable` errors, preventing reliable saving of crucial state files (like `hybrid_state.json`, `eod_YYYY-MM-DD.json`, and `trade_log.json`), compromising data integrity.
+    *   **Exact Failure Condition**: `main.py:539` (for `hybrid_state.json`), and potentially other `json.dump` invocations (e.g., in `trade_logger.py` or `midday_audit.py` for its `REPORT_PATH`), when attempting to serialize data containing a `UUID` object without `cls=_BotEncoder`.
+
+2.  **HIGH** | `main.py`: **Prolonged Entry Blocking Despite High Scores (`ANOMALY-2`)**.
+    *   **Description**: The `ANOMALY-2` warning, `confirm_gate=X scans but no entry — gate may be permanently blocked`, occurs for multiple symbols (e.g., AMZN, NVDA) even when they are reported with `score=12/12` and `bias=strong_bull`. This indicates that a critical, undocumented, or malfunctioning gate is preventing entries for consistently strong signals over extended periods, leading to missed profit opportunities.
+    *   **Exact Failure Condition**: A log entry like `2026-04-22 10:17:50,383 | WARNING | main | [ANOMALY-2] [AMZN] confirm_gate=18 scans but no entry — gate may be permanently blocked. Check score vs MIN_SCORE threshold.` occurs while `AMZN LONG score=12/12 bias=strong_bull` is also being logged.
+
+3.  **HIGH** | `execution/broker.py` (indirectly strategy/risk logic): **Excessive Slippage on Stop Hit**.
+    *   **Description**: The `MSTR` short trade experienced a `hard_stop` at $181.98, significantly worse than its defined stop price of $173.79 (an $8.19, or 4.7%, slippage beyond the stop). This indicates a failure to manage risk effectively at the stop level, leading to much larger losses than budgeted.
+    *   **Exact Failure Condition**: `TRADE EVENTS` record: `ts: "2026-04-22T07:00:16.176253-07:00", event: "stop_hit", symbol: "MSTR", price: 181.98`. The corresponding entry defined stop at `173.79`.
+
+4.  **MEDIUM** | `main.py` (and potentially `config.py`): **Sizing Calibration Failure Leading to Zero Shares**.
+    *   **Description**: The bot repeatedly logs `[SYMBOL] raw_shares=X × mult=0.0Y → 0 before floor ... check sizing calibration`. This implies that the calculated position size, after applying a very small `mult` factor (e.g., 0.03 or 0.04), rounds down to zero shares, causing the bot to skip valid trade opportunities.
+    *   **Exact Failure Condition**: `2026-04-22 09:32:32,665 | WARNING | main | [CRWD] raw_shares=27 × mult=0.03 → 0 before floor (dollar_cap=$716.17, stop_dist=$26.1700) — check sizing calibration`.
+
+5.  **LOW** | `config.py` (and usage in performance monitoring): **Discrepancy: Target R:R (1:2) vs. Realized `avg_r_multiple` (0.251)**.
+    *   **Description**: `config.py` explicitly sets ATR-based stop/target multipliers for a 1:2 R:R. However, the `EOD SNAPSHOT` `all_time_stats` reports an `avg_r_multiple` of 0.251. This significant gap suggests trades are, on average, exiting for profits that are only 25% of the risk taken, failing to realize the intended Reward:Risk.
+    *   **Exact Failure Condition**: `config.py` states `INTRADAY_STOP_ATR_MULT = 1.0`, `INTRADAY_TARGET_ATR_MULT = 2.0`, but `EOD SNAPSHOT` `avg_r_multiple: 0.251`.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Implement `_BotEncoder` Universally for JSON Serialization**: Audit all `json.dump` calls in `main.py` and any other relevant modules (`trade_logger.py`, `midday_audit.py`) that are not using `_atomic_write` from `execution.portfolio_tracker.py`. Ensure these calls explicitly specify `cls=execution.portfolio_tracker._BotEncoder` to resolve the critical `UUID` serialization failure and ensure data integrity.
+2.  **URGENT: Fix `run_movers.py` `ImportError` (P5-C2)**: Modify `run_movers.py` (line 19) to correctly import data fetching utilities, such as `from data.fetcher import fetch_bars`, and update its usage to align with the current `data.fetcher` module structure. The Movers bot is currently non-functional.
+3.  **HIGH: Investigate and Resolve `ANOMALY-2` (`confirm_gate` Blocking)**: Thoroughly debug the entry gate logic to understand why high-score, qualifying signals are persistently blocked. Examine the interaction between `confirm_gate`, `MIN_SCORE` thresholds, sector correlation, and any other implicit blocking conditions.
+4.  **HIGH: Refine Sizing Calibration**: Re-evaluate the `mult` factor in the position sizing calculations (e.g., in `main.py`'s linear sizing logic) and its interaction with `dollar_cap` and `stop_dist`. The current calibration frequently leads to zero-share orders, preventing valid trades.
+5.  **HIGH: Review Stop Loss Execution & Slippage**: Analyze the root cause of the excessive slippage observed in the `MSTR` stop-hit. This may involve examining Alpaca's execution fills, liquidity conditions during the stop trigger, pre-market/after-hours handling of stops, or implementing more defensive stop strategies (e.g., dynamic limit offsets on stop-market orders to manage slippage).

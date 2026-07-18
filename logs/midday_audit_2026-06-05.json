@@ -1,0 +1,53 @@
+{
+  "audit_date": "2026-06-05",
+  "run_ts": "2026-06-05T10:30:06.546234-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 18,
+    "levels": {
+      "STRESSED": 16,
+      "ELEVATED": 2
+    },
+    "last_score": 47,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 50,
+    "watchdog_count": 2,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-05 08:24:16,801 | WARNING  | main | gc.collect() took 3754.7ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-05 08:59:08,138 | WARNING  | main | gc.collect() took 4342.4ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-05 09:34:32,735 | WARNING  | main | gc.collect() took 3541.2ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-05 10:09:23,730 | WARNING  | main | gc.collect() took 3714.6ms, collected 31 objects \u2014 heap may be growing",
+      "2026-06-05 10:44:46,535 | WARNING  | main | gc.collect() took 3226.0ms, collected 31 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": [
+      "2026-06-05 16:24:59,292 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting.",
+      "2026-06-05 17:24:04,970 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

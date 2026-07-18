@@ -1,0 +1,53 @@
+Midday Gemini Audit — 2026-04-23
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+
+*   **Exit Price Consistency & Stop-Hit Discrepancy (CRITICAL FLAW)**
+    *   **Failure Condition:** The reported `Stop-hit rate: 20% (1 stops)` is inconsistent with the `Closed trades: 2 | Wins: 1 | Losses: 1` data. If there are only two closed trades and one was a win (NVDA), the loss (CRWD) must be the stop-hit, making the stop-hit rate 50% (1/2 closed trades).
+    *   **CRWD Stop Execution Failure:** Assuming CRWD (`entry $463.94 → exit $451.41 ($-12.53) | stop=$437.66`) *is* the one stop-hit, the exit price of $451.41 is $13.75 above the defined stop of $437.66. This indicates a severe failure in stop-loss execution, resulting in substantial slippage or a premature exit without hitting the actual stop level, thereby failing to protect capital effectively. If CRWD was *not* the stop hit, then the bot failed to record a stop-hit trade in the `Closed trade details`, which is a critical data integrity issue. This is a systematic failure in reporting or execution.
+*   **Score-Outcome Correlation:** There is no clear positive correlation. A trade with a perfect score (NVDA, 12/12) resulted in a win, while a trade with a near-perfect score (CRWD, 11/12) resulted in a loss. This small sample size prevents a definitive conclusion, but it does not demonstrate the expected edge from high-scoring entries.
+*   **Stop-hit Rate Indication:** The discrepancy regarding the stop-hit count (1 stop vs. 2 closed trades) makes it difficult to assess if the strategy thesis is misaligned. If the CRWD loss is representative of stop execution (i.e., poor adherence to stop levels), then the bot's risk management is severely compromised.
+
+### ENTRY QUALITY
+
+*   **CRWD Entry at "NORMAL" MRI in "STRESSED" Regime:** The CRWD trade was initiated at `MRI=NORMAL` and resulted in a loss, despite the session closing at `STRESSED` (43/100). While `NORMAL` might seem acceptable, operating within a generally `STRESSED` market environment means that even "normal" conditions might carry elevated risk for this strategy. The bot failed to generate a profit in this `NORMAL` MRI state within an overall `STRESSED` regime, suggesting its risk assessment thresholds may not be sufficiently dynamic for prevailing market conditions.
+
+### EXIT QUALITY
+
+*   **CRWD Stop-Loss Execution Failure:** As detailed in the Performance Audit, the CRWD trade exited at $451.41 against a stop of $437.66. This signifies either:
+    1.  **Massive Slippage/Poor Execution:** The bot failed to execute the stop order near the specified price, leading to a significantly worse fill ($13.75 per share away).
+    2.  **Untracked Exit Reason:** The bot exited for an undisclosed reason (e.g., time-based, discretionary, circuit breaker) *before* the defined stop was hit. In this scenario, the stop level provided is misleading, and the bot failed to cut the loser at its predetermined maximum risk, allowing for further unrealized loss up to the actual exit. In either case, the bot did not manage the losing trade effectively against its own defined stop.
+
+### MRI ALIGNMENT
+
+*   **Regime Mismatch / Permissive Thresholds:** The session closed at a `STRESSED` MRI level (43/100), with the MRI distribution showing periods of `STRESSED` (5 samples) and `CRITICAL` (2 samples). While entries for closed trades were observed at `HIGH` (NVDA) and `NORMAL` (CRWD) MRI, the loss on CRWD at `NORMAL` MRI suggests that even `NORMAL` conditions, when the broader market is `STRESSED`, might be too permissive for generating positive edge. There is no explicit evidence of position sizing adjustments based on MRI levels in the provided data, making it impossible to audit that critical risk management component.
+
+### LOG ANOMALIES
+
+*   **Significant Gaps in Scanning Frequency:**
+    *   `[1:00:53 PM PT] Scanning 26 tickers...` to `[1:33:46 PM PT] Scanning 26 tickers...` (32 minutes, 53 seconds gap). This recurring ~32-minute gap continues for several hours until the next day.
+    *   `[5:15:11 AM PT] Scanning 23 tickers...` to `[7:25:45 AM PT] Scanning 26 tickers...` (2 hours, 10 minutes, 34 seconds gap). This is an excessively long period where the bot was not scanning for opportunities or updating its portfolio stats, indicating potential periods of inactivity, data staleness, or a paused operational state without clear logging. This prolonged downtime could cause missed opportunities or delayed reactions to market events.
+*   **Fluctuating Ticker Universe:** The number of tickers scanned fluctuates (`26 -> 23 -> 24`). While potentially normal if the universe is dynamic, without context, this could indicate intermittent data feed issues or inconsistent eligibility filtering, impacting the bot's potential opportunity set.
+
+### NEW BUGS / CONCERNS
+
+*   **CRITICAL | Inconsistent Stop-Hit Reporting and Execution |** `Stop-hit rate: 20% (1 stops)` vs. `Closed trades: 2 | Wins: 1 | Losses: 1` combined with CRWD's exit price being significantly above its stop price. This is a fundamental flaw in either reporting metrics, trade execution, or stop-loss adherence.
+*   **HIGH | Undocumented Long Periods of Inactivity/Staleness |** `2+ hour gap in scanning logs from 5:15 AM to 7:25 AM PT`. The bot effectively ceased active market monitoring for a significant period during pre-market/early market hours, implying a loss of situational awareness and potential missed opportunities or delayed risk management actions.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate and Rectify Stop-Loss Execution and Reporting (URGENT):**
+    *   Clarify the exact mechanism and definition of "stop-hit rate."
+    *   Audit the CRWD trade's full execution path: did the price actually reach $437.66? If not, why was it exited? If so, why was the fill so far off?
+    *   Implement robust logging for stop-loss triggers and fills, including the exact price at which a stop order was submitted vs. filled.
+2.  **Address Scanning Log Gaps and Inactivity (HIGH PRIORITY):**
+    *   Identify the root cause of the prolonged inactivity between 5:15 AM and 7:25 AM PT, and the recurring ~32-minute gaps.
+    *   Implement watchdog alerts or internal health checks that trigger if scanning or core processing loops are paused beyond a predefined threshold.
+    *   Ensure consistent, uninterrupted market scanning and data processing during active trading hours.
+3.  **Refine MRI-Based Risk Adjustment & Entry Thresholds (MEDIUM PRIORITY):**
+    *   Review the sensitivity of "NORMAL" MRI thresholds, especially when the overall market regime is `STRESSED`.
+    *   Implement explicit logging or reporting for position sizing adjustments based on MRI levels to allow for audit of risk management effectiveness.

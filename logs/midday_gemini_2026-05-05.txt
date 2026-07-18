@@ -1,0 +1,63 @@
+Midday Gemini Audit — 2026-05-05
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+A significant discrepancy exists between the high-level session summary and the detailed log entries.
+*   **Closed Trades / Total P&L Mismatch**: The `SESSION P&L SUMMARY` reports "Closed trades: 0" and "Total P&L: $0.00", and the `CLOSED TRADE DETAILS` section states "No closed trades". This directly contradicts the bot's internal `Alpaca FIFO EOD` logs at 17:07:41,748 and 17:22:31,844, which clearly indicate `lots_closed=1` and `pnl_today=$44.97`. This suggests a reporting failure where the summary information provided to the auditor is outdated or incorrect, masking actual trading activity and performance.
+*   **Entries vs. Exits**: The `SESSION P&L SUMMARY` states "Entries: 0" and "Exits: 1". This implies a trade was opened in a prior session (e.g., an overnight hold, which is permitted by `OVERNIGHT_ENTRIES_ENABLED = True`) and then exited during the current session. While `Entries: 0` is plausible in this context, the failure to report the resulting closed trade and P&L is critical.
+
+### ENTRY QUALITY
+No new entries were made during the logged period, primarily due to `Max positions (4) reached`. This is explicitly stated in the logs:
+*   `2026-05-05 17:00:19,426 | INFO | execution.risk_manager | Max positions (4) reached. Skipping.`
+*   `2026-05-05 17:14:53,625 | INFO | execution.risk_manager | Max positions (4) reached. Skipping.`
+*   `2026-05-05 17:29:55,839 | INFO | execution.risk_manager | Max positions (4) reached. Skipping.`
+The bot also correctly identified "Risk day" and "Mid-day doldrums" conditions, applying appropriate sizing reductions. MRI was consistently "ELEVATED" (score=40), leading to a `0.85x` size floor being applied. These risk management adjustments appear to be functioning as intended.
+
+The `[ANOMALY-2]` warnings for AAPL and AMD (`confirm_gate=6/7/8 scans but no entry — risk.open_positions=4 vs tracker=4 | MAX_OPEN_POSITIONS=4`) indicate that strong signals were present but could not be acted upon due to the maximum position limit. This is a constraint of the strategy, not a bug in entry quality itself, as the bot correctly respected `MAX_POSITIONS = 4`.
+
+### EXIT QUALITY
+One trade was exited, resulting in a $44.97 profit as per the internal logs (`pnl_today=$44.97 | lots_closed=1`). No details on this specific trade's entry, exit price, or reason are provided in the `CLOSED TRADE DETAILS` section, which is a reporting failure (see New Bugs). Without these details, it is impossible to assess the quality of this specific exit.
+
+### MRI ALIGNMENT
+The MRI was consistently at `ELEVATED` level (score=40) throughout the logged period. The bot responded by applying a `size floor 0.85x`. This is consistent with the stated configuration and risk management logic. No entries were made, so no further direct alignment can be assessed.
+
+### LOG ANOMALIES
+*   **Slow Cycle & Garbage Collection**: The main execution cycle is consistently taking a long time (`duration=580s`, `586s`), triggering `⚠ SLOW CYCLE` warnings. This is exacerbated by `gc.collect()` calls consuming significant time (`3566.1ms`, `4396.5ms`) and a warning that "heap may be growing". This suggests potential memory management inefficiencies or a memory leak.
+*   **Weekly Bias Filter Skipped**: A recurring `WARNING` for `strategy.signal_generator` states `[SYMBOL] Weekly bias: insufficient data (5 bars), filter skipped` for almost every scanned symbol (e.g., AMD, PLTR, COIN, SMCI, etc.). This indicates a systematic issue with the availability of data for the weekly bias calculation or an overly aggressive lookback requirement, leading to a core signal filter being bypassed.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Inaccurate Session P&L Summary and Closed Trade Details**
+    *   **Description**: The high-level `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` sections at the beginning of the audit report are inaccurate and contradict the bot's internal `Alpaca FIFO EOD` logs. The summary reports "Closed trades: 0" and "Total P&L: $0.00" and "No closed trades", while the logs clearly indicate `lots_closed=1` and `pnl_today=$44.97`.
+    *   **Exact variable/metric**: `SESSION P&L SUMMARY: Closed trades`, `SESSION P&L SUMMARY: Total P&L`, `CLOSED TRADE DETAILS` section.
+    *   **Value vs. should be**:
+        *   `Closed trades` is 0; it should be 1.
+        *   `Total P&L` is $0.00; it should be $44.97.
+        *   `CLOSED TRADE DETAILS` shows "No closed trades"; it should list one closed trade.
+    *   **Failure condition**: The bot's reporting component (or the mechanism generating the audit summary) fails to accurately aggregate and present the results of closed trades recorded by the `execution.portfolio_tracker`. This leads to misrepresentation of the bot's performance.
+
+2.  **INFRASTRUCTURE | HIGH | Excessive `gc.collect()` duration and Slow Cycle**
+    *   **Description**: The bot's execution cycles (`main` loop) are consistently slow, with durations around 580 seconds. A significant portion of this delay is attributed to Python's garbage collector (`gc.collect()`), which takes 3.5 to 4.4 seconds per invocation, accompanied by a "heap may be growing" warning.
+    *   **Exact variable/metric**: `[CYCLE] duration`, `gc.collect()` execution time.
+    *   **Value vs. should be**:
+        *   `[CYCLE] duration` is ~580s; it should ideally be significantly shorter for an intraday bot to maintain responsiveness and capture opportunities. The current duration is approaching the typical watchdog timeout, indicated by `watchdog_headroom` decreasing.
+        *   `gc.collect()` took ~3.5-4.4 seconds; it should take negligible time (typically <100ms) for routine operations.
+    *   **Failure condition**: Inefficient memory management or a potential memory leak is causing the garbage collector to work excessively, leading to significant pauses in the bot's operation. This reduces the bot's reactivity, increases the risk of missing market events, and could lead to watchdog timeouts.
+
+3.  **ALPHA ISSUE | MEDIUM | Systematic Bypass of Weekly Bias Filter**
+    *   **Description**: The `strategy.signal_generator` repeatedly logs `[SYMBOL] Weekly bias: insufficient data (5 bars), filter skipped` for numerous symbols across multiple scan cycles. This indicates that a critical component of the strategy's signal filtering is frequently inactive.
+    *   **Exact variable/metric**: `strategy.signal_generator`'s `Weekly bias filter`.
+    *   **Value vs. should be**: The weekly bias filter is consistently `skipped`; it should be actively contributing to signal generation if it's a core part of the strategy's edge, or its data requirements should be met. If it's intended to be active, then the system is failing to provide the necessary 5 bars of data for its calculation.
+    *   **Failure condition**: The bot is operating with a reduced quality of signals because a designed filter (weekly bias) is not being applied due to insufficient data. This might lead to entries being considered under conditions the strategy intends to avoid, thereby degrading overall signal quality and potentially the win rate/profit factor.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / INFRASTRUCTURE**: Prioritize fixing the P&L summary and closed trade details reporting. Ensure the summary provided to auditors accurately reflects all closed trades and calculated P&L as captured by the internal `portfolio_tracker` logs. This may involve reviewing the summary generation script or data synchronization. (CRITICAL)
+2.  **INFRASTRUCTURE**: Immediately investigate the "SLOW CYCLE" and `gc.collect()` warnings. Profile the bot's memory usage and identify any memory leaks or areas where object allocation/deallocation can be optimized to reduce garbage collection overhead. (HIGH)
+3.  **ALPHA**: Review the `Weekly bias` filter implementation. Determine why `insufficient data (5 bars)` is a persistent issue. This could involve adjusting the data fetching mechanism, ensuring the correct bar frequency/lookback, or re-evaluating the filter's necessity if data cannot reliably be obtained. (MEDIUM)

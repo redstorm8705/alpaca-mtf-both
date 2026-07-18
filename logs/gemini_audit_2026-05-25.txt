@@ -1,0 +1,78 @@
+Nightly Gemini Audit — 2026-05-25
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'alerts.py', 'live_data_writer.py', 'scan_to_html.py', 'generate_dashboard.py', 'execution/kelly.py', 'execution/lifecycle.py', 'execution/fill_reconciler.py', 'execution/entry_logic.py', 'execution/fill_helpers.py', 'execution/gtc_manager.py', 'data/fmp_client.py', 'data/gex.py', 'state/persistence.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **`gc.collect() took Xms, collected Y objects — heap may be growing`**: This warning appears repeatedly throughout the logs (e.g., 2026-05-25 18:31:03,519; 18:36:22,473; 18:47:39,594; 19:07:54,397; etc.). It indicates the garbage collector is taking a significant amount of time (several seconds) to run, and the "heap may be growing" suggests a potential memory leak or inefficient object management. This can impact bot performance and responsiveness, especially during critical trading periods.
+*   **`CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=6. Correcting to tracker count.`**: This critical log appears twice after bot restarts (2026-05-25 18:31:16,614 and 19:19:39,106). While the bot correctly reconciles the count from `tracker` (which holds the ground truth), `risk.open_positions` should ideally be initialized to reflect the actual open positions if they persist across restarts, or the log message should be downgraded from CRITICAL to INFO if this is an expected startup synchronization. Its presence indicates that `risk.open_positions` starts at `0` even when overnight positions exist.
+
+### PERFORMANCE AUDIT
+*   **P&L=0.0 Anomalies for Exit Trades:** Several exit events (both partial and stop-hit) show `pnl: 0.0` despite differing entry and exit prices, suggesting a potential P&L calculation or recording bug:
+    *   `SOFI` partial_exit (2026-05-19T07:27:39): `price: 15.57`, `pnl: 0.0`.
+    *   `TSLA` stop_hit (2026-05-20T07:06:01): `price: 406.17`, `pnl: 0.0`. Entry was also `406.17` for `TSLA` (2026-05-18T11:20:55), indicating a perfect breakeven exit, which is plausible but uncommon for a hard stop.
+    *   `SOFI` stop_hit (2026-05-20T08:52:07): `price: 15.57`, `pnl: 0.0`. Given the prior partial exit at the same price with 0.0 P&L, this strongly suggests a P&L recording issue for `SOFI`.
+    *   `PLTR` stop_hit (2026-05-20T12:36:54): `price: 133.295`, `pnl: 0.0`. Entry was `133.29`. For a short, exiting at $133.295 from an entry of $133.29 should result in a tiny loss, not exactly 0.0. This indicates a rounding error or P&L calculation bug for small adverse movements.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats` show `win_rate: 39.7%` and `avg_win: 25.2`, `avg_loss: -14.11`. `profit_factor: 1.17`, `avg_r_multiple: -0.041`. The negative average R-multiple is concerning. The `TARGET_ATR_MULT = 2.5` and `INTRADAY_STOP_ATR_MULT = 1.25` imply a target R:R of `2.0`. An average R-multiple of `-0.041` suggests the bot is not consistently achieving its target R:R or that losses are significantly eroding gains. This could indicate a mismatch between the strategy's expected edge and its actual execution.
+
+### TRADE INTEGRITY
+*   **P&L=0.0 with `entry ≠ exit`**: As noted in the Performance Audit, the `PLTR` stop-hit (entry $133.29, exit $133.295, PnL 0.0) is a clear case of incorrect P&L recording due to a tiny difference. This can lead to inaccurate performance metrics.
+*   **`MAX_POSITIONS` Exceeded**: The `SIGTERM` logs (e.g., 2026-05-25 18:29:46) list 6 open positions: `TOST, MSTR, INTC, TQQQ, AMZN, PANW`. The `EOD SNAPSHOT` confirms `open_trades: 6`. The `CONFIG CONSTANTS` state `MAX_POSITIONS = 4`. While `BUCKET_B_MAX_POSITIONS_POWER = 5` allows a temporary expansion during power hour, 6 positions exceed both limits, indicating a violation of risk management parameters.
+
+### MODIFIED FILE FINDINGS
+*   **main.py / execution/entry_logic.py**:
+    *   **Function**: `execute_entries()` (implicitly by module global access in `main.py` and `lifecycle.py`)
+    *   **Variable**: `OVERNIGHT_ENTRIES_ENABLED`
+    *   **Code Path**: `main.py` defines `OVERNIGHT_ENTRIES_ENABLED = False` as a module global. The `CONFIG CONSTANTS` section states `OVERNIGHT_ENTRIES_ENABLED = True`. Internal code that checks `_OVERNIGHT_CANCEL_CUTOFF` and `_OVERNIGHT_ENTRY_START` (e.g., in `execution/entry_logic.py` or other lifecycle functions, which import `main as _main`) will use `main.OVERNIGHT_ENTRIES_ENABLED` which is `False`. This means overnight entries are effectively disabled in the code, contradicting the stated `CONFIG CONSTANTS`. The `profile` override loop in `main()` only applies to `config.<KEY>`, not `main.<KEY>` globals.
+    *   **Failure Condition**: Overnight entries, even if intended by `config.py` and permitted by `OVERNIGHT_ENTRIES_ENABLED = True` in `CONFIG CONSTANTS`, are silently blocked because the `main.py` module-level variable for `OVERNIGHT_ENTRIES_ENABLED` is `False`, which is consulted by the relevant logic.
+*   **scan_to_html.py**:
+    *   **Inconsistency**: The comment in `_fetch_implied_range` mentions "P5-L2 fix" regarding weekend dates for options chains. The P5 queue's L2 item refers to "eod_YYYY-MM-DD.json written before positions closed". These are unrelated issues, indicating a possible mis-labeling or outdated comment within the code. Same applies to P5-M2 comment in `fetch_vix`. (Low severity, documentation/comment error).
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **FIXED** (addressed in `execution/entry_logic.py::_find_recent_fvgs`)
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED** (source not provided)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **FIXED** (addressed in `state/persistence.py::clear_confirm_gate`)
+*   P5-H2 | Fill price crosstalk: **FIXED** (addressed in `execution/fill_helpers.py::fetch_actual_fill_price`)
+*   P5-H3 | Orphan GTC 404 path: **FIXED** (addressed in `execution/gtc_manager.py::cancel_open_gtc_orders`)
+*   P5-H4 | Rule 2 dead code: **FIXED** (comment in `main.py` confirms change to `config.py`)
+*   P5-H5 | GTC stop suppressed at PDT=3/3 + opened_today: **UNTOUCHED** (not enough code context to verify)
+*   P5-M1 | Cycle watchdog restart loop: **FIXED** (addressed in `main.py` and `live_data_writer.py` with `fcntl.FD_CLOEXEC`)
+*   P5-M2 | MRI score cached stale across sessions: **FIXED** (addressed in `generate_dashboard.py::_load_hybrid_state` and `main.py` log `MRI state ... stale`)
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED** (source not provided)
+*   P5-L1 | _classify_loss_driver() returns empty label: **UNTOUCHED** (source not provided)
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **PARTIAL** (dashboard P&L now uses live Alpaca data, mitigating symptom, but EOD file itself might still be written prematurely)
+*   P5-L3 | live_data_writer.py no reconnect logic: **FIXED** (addressed in `live_data_writer.py` with retry/backoff logic)
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | main.py / execution/entry_logic.py** | `OVERNIGHT_ENTRIES_ENABLED` inconsistency disables intended functionality. The `main.py` module-level global `OVERNIGHT_ENTRIES_ENABLED` is set to `False`, while the `CONFIG CONSTANTS` indicates it should be `True`. Code accessing `_main.OVERNIGHT_ENTRIES_ENABLED` will incorrectly evaluate it as `False`, preventing overnight entries.
+*   **EXECUTION BUG | HIGH | execution/portfolio_tracker (implied) / trade_logger (implied)** | Incorrect P&L recording for small movements. For the `PLTR` stop-hit (entry $133.29, exit $133.295), P&L is recorded as `0.0`. For a short position, an exit price slightly higher than the entry price should result in a small loss. This indicates a rounding error or logic flaw in the P&L calculation/recording for small non-zero P&L amounts. This could also be a root cause for the `SOFI` 0.0 P&L exits.
+*   **RISK MANAGEMENT | HIGH | (systemic)** | `MAX_POSITIONS` violation. The bot currently holds 6 open positions (`TOST, MSTR, INTC, TQQQ, AMZN, PANW`). This exceeds the `MAX_POSITIONS = 4` set in `CONFIG CONSTANTS` and also exceeds the `BUCKET_B_MAX_POSITIONS_POWER = 5` for power-hour expansion. This indicates that the bot either allows positions beyond its defined limits or accumulates them across sessions without proper accounting against the `MAX_POSITIONS` constraint.
+*   **INFRASTRUCTURE | MEDIUM | main.py (implicitly other modules)** | Persistent `gc.collect()` warnings. The repeated and long-duration `gc.collect()` warnings suggest a potential memory leak or inefficient memory usage pattern. While not directly leading to a trading error, it indicates a performance bottleneck that could cause latency in real-time operations.
+*   **INFRASTRUCTURE | LOW | scan_to_html.py** | Outdated/misleading comments. Comments in `_fetch_implied_range` and `fetch_vix` reference P5 items (P5-L2, P5-M2) that are not the same as the current P5 queue descriptions. This creates confusion for auditing and future development.
+
+### FIX VALIDATION
+No prior fixes to validate for the newly identified bugs. P5 fix validations are covered in the P5 Status section above.
+
+### RECOMMENDED ACTIONS
+1.  **Address `OVERNIGHT_ENTRIES_ENABLED` Inconsistency (Critical).**
+    *   **File**: `main.py`
+    *   **Code Pattern**: `OVERNIGHT_ENTRIES_ENABLED = False` (line 46 in main.py source snippet).
+    *   **Fix**: Remove the `OVERNIGHT_ENTRIES_ENABLED` global variable definition from `main.py`. Ensure that `execution/lifecycle.py` and any other module that needs this value solely imports it from `config.py` (e.g., `import config; config.OVERNIGHT_ENTRIES_ENABLED`). If `config.OVERNIGHT_ENTRIES_ENABLED` is truly `True` as per the constants, then the bot will behave as intended. If `main.py` requires a runtime override of `config.OVERNIGHT_ENTRIES_ENABLED`, ensure the `setattr(config, key, val)` mechanism is correctly applied.
+2.  **Investigate and Fix P&L Recording for Small Movements (High).**
+    *   **File**: `execution/portfolio_tracker.py` (assumed, where P&L is calculated/recorded)
+    *   **Code Pattern**: P&L calculation logic when `entry_price` and `exit_price` are very close.
+    *   **Fix**: Review the P&L calculation, especially any rounding steps, to ensure that even minimal differences between entry and exit prices are correctly translated into positive or negative P&L, rather than defaulting to `0.0`. Use a floating-point comparison epsilon if necessary to determine if a value is "effectively zero," but record the actual calculated P&L.
+3.  **Review and Enforce `MAX_POSITIONS` Limit (High).**
+    *   **File**: `execution/risk_manager.py` (where `can_open_position` would reside), `execution/entry_logic.py` (where entries are submitted).
+    *   **Code Pattern**: Logic that checks `risk.can_open_position()` before an entry.
+    *   **Fix**: Investigate how 6 positions were accumulated. If `MAX_POSITIONS` is meant to be a hard limit on *total concurrent positions*, ensure the logic prevents new entries when the count is at or above the limit, even if positions were opened on previous days or manually. If the rule only applies to new entries (not existing positions), clarify this in the configuration.
+4.  **Analyze and Optimize Memory Usage (Medium).**
+    *   **File**: Systemic, but potentially originating from data fetching, DataFrame operations, or cache management.
+    *   **Code Pattern**: Object creation/retention across scan cycles.
+    *   **Fix**: Profile the bot's memory usage to identify areas of excessive object allocation or retention. Implement explicit object destruction or clearer scope management where possible. Consider more aggressive garbage collection if memory issues persist.
+5.  **Update Inaccurate Comments in `scan_to_html.py` (Low).**
+    *   **File**: `scan_to_html.py`
+    *   **Code Pattern**: Comments mentioning "P5-L2 fix" and "P5-M2 fix" (lines 304 and 350 in scan_to_html.py snippet)
+    *   **Fix**: Correct the comments to refer to the accurate P5 issues or remove them if they refer to resolved/outdated problems.

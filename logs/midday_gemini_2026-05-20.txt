@@ -1,0 +1,99 @@
+Midday Gemini Audit — 2026-05-20
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+**1. EXECUTION BUG | CRITICAL | Inconsistent P&L and Exit Reason for SMCI**
+*   **Variable Involved**: `P&L`, `exit price`, `stop_hit` reason, `stop` price.
+*   **Value vs. What it Should Be**:
+    *   For SMCI, `entry $33.40 → exit $32.87 (+$5.83) | stop_hit | stop=$35.50`.
+    *   A profitable trade where `exit price ($32.87)` is lower than `entry price ($33.40)` indicates a **short position**. The P&L of `+$5.83` is consistent with this, implying a share quantity of 11 shares ([$33.40 - $32.87] * 11 = $5.83).
+    *   For a short position, the `stop_hit` reason typically implies the price moved *against* the position (i.e., upwards) to hit the stop-loss level. The listed `stop=$35.50` is indeed above the entry, a plausible initial stop for a short.
+    *   However, the `exit price ($32.87)` is *below* the `entry price ($33.40)`, which means the trade was profitable and the price moved *in favor* of the short position. Therefore, the stop-loss at $35.50 was not hit as a loss.
+    *   This is a failure because the `stop_hit` reason is inconsistent with the recorded profit and the listed initial stop price. If the stop was trailed to a profitable level and then hit, the `stop` variable should reflect that actual exit price, or the reason should be more specific (e.g., `trailing_stop_hit_in_profit`). As presented, it indicates either a misclassification of the exit event or incorrect data recording for the `stop` variable.
+*   **Condition**: Occurs in the `SMCI` trade summary where a profitable exit is labeled `stop_hit` with a `stop` price that was not actually triggered for the observed P&L.
+
+**2. EXECUTION BUG | CRITICAL | Incorrect Performance Metrics Calculation (Win Rate & Losses)**
+*   **Variable Involved**: `Wins`, `Losses`, `Win rate`, `Avg loss`.
+*   **Value vs. What it Should Be**:
+    *   `Closed trades: 2 | Wins: 1 | Losses: 1`
+    *   `Avg win: $5.83 | Avg loss: $0.00`
+    *   The TSLA trade had `P&L: $0.00` and `entry $406.17 → exit $406.17`. This is a breakeven trade and is explicitly noted as a "KNOWN BENIGN PATTERNS" if the stop was pushed to entry.
+    *   A breakeven trade should not be categorized as a "Loss". If TSLA is counted as 1 loss, then `Avg loss` should not be $0.00 (it should be average of actual losses). If it's not a loss, then `Losses` should be 0.
+    *   **Failure**: The metrics incorrectly categorize a breakeven trade as a "Loss", leading to a distorted `Win rate` (50% instead of 100% for decisive trades or "1 win, 0 losses, 1 breakeven") and an internally inconsistent `Avg loss` calculation (if it's a loss, why is avg loss $0.00?).
+*   **Condition**: Occurs in the "SESSION P&L SUMMARY" during the calculation of `Wins`, `Losses`, and `Win rate` when a breakeven trade is processed.
+
+**3. EXECUTION BUG | HIGH | Inconsistent Stop-Hit Count**
+*   **Variable Involved**: `Stop-hit rate`.
+*   **Value vs. What it Should Be**:
+    *   `Stop-hit rate: 100% (3 stops)`
+    *   `Closed trades: 2`
+    *   **Failure**: The number of reported stops (3) is greater than the total number of closed trades (2). This implies that either the stop-hit count is incorrect, or there is an unlisted closed trade that was exited by a stop.
+*   **Condition**: Occurs in the "SESSION P&L SUMMARY" when reporting `Stop-hit rate`.
+
+### ENTRY QUALITY
+
+**1. ALPHA ISSUE | MEDIUM | Entry at STRESSED MRI Level**
+*   **Variable Involved**: `MRI` level at entry.
+*   **Value vs. What it Should Be**:
+    *   The `SMCI` entry was flagged: `flags: MRI=STRESSED at entry`. The bot's `MRI SESSION DISTRIBUTION` shows 'STRESSED' as one of the active levels.
+    *   While `STRESSED` MRI is not explicitly prohibited by CONFIG CONSTANTS, its flagging and the nature of "STRESSED" risk typically suggest caution or reduced sizing. The bot's current log shows `MRI ELEVATED (score=40) — size floor 0.85x applied`, indicating that MRI *does* influence sizing. A `STRESSED` MRI implies even higher risk than `ELEVATED`.
+    *   **Failure**: Entering a trade during a `STRESSED` MRI level, even with a high confluence score (12/12), may expose the bot to heightened market volatility or adverse conditions that can erode edge, as confirmed by the internal flagging mechanism. This is a systematic reduction in entry quality.
+*   **Condition**: Entry for `SMCI` occurred at `2026-05-07 12:33:24 PT` when the `MRI` was `STRESSED`.
+
+### EXIT QUALITY
+
+No explicit issues in exit *timing* (premature/delayed) given the limited context, but the data integrity of the exit reason is flagged under Performance Audit.
+
+### MRI ALIGNMENT
+
+No additional issues beyond the `SMCI` entry being flagged for `MRI=STRESSED`, and the `MRI ELEVATED` causing sizing adjustments which is appropriate.
+
+### LOG ANOMALIES
+
+*   **INFRASTRUCTURE | CRITICAL | Significant EOD P&L Drift**
+    *   **Variable Involved**: `EOD P&L DRIFT`
+    *   **Value vs. What it Should Be**: `Alpaca=$-0.96 tracker=$-32.95 drift=$+31.99`
+    *   **Failure**: A P&L drift of $31.99 between Alpaca's reported P&L and the bot's internal tracker is substantial for a $2.5K paper account. While `A-4 paper fills gap` is benign, a direct P&L discrepancy implies a fundamental issue in trade accounting, position tracking, or reconciliation between the platform and the bot. This can lead to an inaccurate perception of performance and incorrect risk management decisions.
+    *   **Condition**: `2026-05-20 17:20:41,524 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT`.
+
+*   **INFRASTRUCTURE | HIGH | `score_comparison` Data Type Mismatch During EOD Summary**
+    *   **Variable Involved**: `score_comparison`
+    *   **Value vs. What it Should Be**: Expected `list`, got `dict`.
+    *   **Failure**: A type mismatch during the `write_eod_summary` process means that the `score_comparison` data (likely critical for analyzing entry quality and signal effectiveness) is being skipped and not written to the EOD summary. This leads to missing data for post-session analysis and hinders performance auditing.
+    *   **Condition**: `2026-05-20 17:20:41,568 | WARNING | execution.portfolio_tracker | write_eod_summary: score_comparison expected list, got dict — skipped`.
+
+*   **INFRASTRUCTURE | CRITICAL | Excessive Garbage Collection Pause**
+    *   **Variable Involved**: `gc.collect()` duration
+    *   **Value vs. What it Should Be**: `3702.8ms` (3.7 seconds).
+    *   **Failure**: A garbage collection pause of 3.7 seconds is extremely long for a real-time trading application. This means the bot's execution was completely halted for this duration, potentially leading to missed market events, delayed price updates, stale signals, and failure to execute trades or manage existing positions in a timely manner. The accompanying "heap may be growing" suggests a memory leak or inefficient memory management.
+    *   **Condition**: `2026-05-20 17:20:45,463 | WARNING | main | gc.collect() took 3702.8ms`.
+
+*   **INFRASTRUCTURE | CRITICAL | Significantly Slow Cycle Duration**
+    *   **Variable Involved**: `[CYCLE] duration`
+    *   **Value vs. What it Should Be**: `454s` (over 7.5 minutes).
+    *   **Failure**: A cycle duration of 7.5 minutes (flagged as `⚠ SLOW CYCLE`) is unacceptable for an intraday trading bot. This directly indicates that the bot is not responding to market conditions with adequate frequency, leading to severely delayed decision-making, missed opportunities, and ineffective risk management. This is directly correlated with the `gc.collect()` pause.
+    *   **Condition**: `2026-05-20 17:20:45,464 | INFO | main | [CYCLE] duration=454s`.
+
+*   **ALPHA ISSUE | MEDIUM | TQI Degradation Warning**
+    *   **Variable Involved**: `TQI (Trade Quality Index)`
+    *   **Value vs. What it Should Be**: `last-5-trade avg=17.4/100`, which is `< 30`.
+    *   **Failure**: The bot's internal TQI indicates a decline in recent trade quality, prompting a recommendation to "review exit discipline and stop placement." This points to a potential degradation in the strategy's effectiveness or its adaptation to current market conditions.
+    *   **Condition**: `2026-05-20 17:26:42,050 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation`.
+
+### NEW BUGS / CONCERNS
+
+None, all findings are covered in the categories above. The `[ANOMALY-2]` entries for missed entries due to `MAX_POSITIONS` being reached are categorized as a benign observation (not a bug) as `MAX_POSITIONS=4` was enforced correctly. It implies missed opportunities but not a failure in logic.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: Immediately investigate and resolve the excessive `gc.collect()` pause and the "heap may be growing" issue. This is likely the root cause of the `SLOW CYCLE` warning and critically impacts the bot's ability to operate in real-time. (CRITICAL)
+2.  **EXECUTION BUG**: Prioritize debugging the `SMCI` trade's P&L, exit reason (`stop_hit`), and `stop` price data integrity. Also, correct the logic for calculating `Wins`, `Losses`, and `Win rate` in the performance summary to properly account for breakeven trades. This data is fundamental for performance analysis. (CRITICAL)
+3.  **ALPHA / INFRASTRUCTURE**: Investigate the `EOD P&L DRIFT` and the `score_comparison` type mismatch. These indicate data integrity and reporting issues that hinder effective auditing and strategy refinement. Concurrently, analyze the `TQI degradation` to understand if a regime shift or an alpha decay requires strategy adjustments. (HIGH)

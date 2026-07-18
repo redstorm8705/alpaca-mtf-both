@@ -1,0 +1,79 @@
+Midday Gemini Audit — 2026-05-06
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/exit integrity**: The QQQ trade shows plausible prices and a positive P&L. However, the META trade exhibits a significant inconsistency (detailed in NEW BUGS / CONCERNS).
+*   **P&L sign checks**: QQQ P&L ($+42.41) is correct for entry $646.55 and exit $688.96 (presumably long). META P&L is listed as $0.00 but contradicts other data (detailed in NEW BUGS / CONCERNS).
+*   **Win rate and profit factor consistency**: With only 2 closed trades (1 win, 1 loss reported as $0.00 but likely a small loss), the win rate of 50% and average win/loss are not statistically significant for assessing the bot's edge.
+*   **Score-outcome correlation**: Both closed trades had a score of 12/12. One resulted in a win, the other in a $0.00 P&L (or small loss as per logs). This small sample size does not provide a clear indication of score correlation.
+*   **Stop-hit rate**: 20% (1 stop hit out of 5 entries, 2 closed trades). This rate is based on the total entries listed, but only one is explicitly labeled `stop_hit` in closed trades. For a low sample, it's hard to interpret as a systematic misalignment.
+*   **P&L = 0.0 but entry ≠ exit price**: The META trade summary states entry $610.25, exit $610.25, resulting in +$0.00. This is an exact match for price. However, the listed stop was $630.44 and the reason was `stop_hit`. This creates a critical inconsistency, as a `stop_hit` at $630.44 for a position entered at $610.25 should not result in $0.00 P&L (unless a short position's stop was pushed to breakeven, but this isn't the `overnight_breakeven` reason, and a hard stop implies a specific price). Further logs show an `external_close` with a `$-0.15` P&L for META, which contradicts the summary. This is flagged as an execution bug below.
+*   **Partial exit that doesn't reduce position size**: No partial exits reported in summary.
+
+### ENTRY QUALITY
+*   **MRI=STRESSED at entry**: All `FLAGGED ENTRIES` (TOST, QCOM, AAPL, META) occurred when the `MRI=STRESSED`. The bot logs repeatedly indicate `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` This is a direct contradiction and a critical failure in entry quality, as it systematically bypasses a stated risk management rule.
+
+### EXIT QUALITY
+*   **META trade inconsistency**: The `stop_hit` reason for META with $0.00 P&L and a stop price significantly different from the exit price suggests an issue with exit handling or reporting. If the actual stop was at $630.44 (likely a short based on target prices), exiting at $610.25 (entry) means the stop was not triggered at $630.44. This indicates either the stop was managed incorrectly, or the `stop_hit` reason is erroneous.
+*   **TQI Degradation**: The recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=27.8/100 < 30 — review exit discipline and stop placement.` is a self-flagged indicator of degraded exit quality.
+
+### MRI ALIGNMENT
+*   **Violation**: There is a clear violation of MRI alignment. The `MRI SESSION DISTRIBUTION` shows the `Close level: STRESSED` for all 24 samples. The bot also consistently logged `MRI STRESSED (score=49) — size floor 0.70x applied.` and `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` However, the `FLAGGED ENTRIES` explicitly show 4 entries where `MRI=STRESSED at entry`. This indicates a critical failure to enforce the no-entry rule during STRESSED MRI.
+*   **Position Sizing**: The log shows `size floor 0.70x applied.` during STRESSED MRI, indicating that a size adjustment mechanism is active. However, this is overshadowed by the complete disregard for the "no new entries" rule.
+
+### LOG ANOMALIES
+*   **P&L Drift**: `EOD P&L DRIFT: Alpaca=$-26.36 tracker=$-22.63 drift=$-3.73` and `EOD P&L DRIFT: Alpaca=$-26.38 tracker=$-22.78 drift=$-3.60`.
+*   **Orphan Position Count Drift**: `POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.`
+*   **EOD Summary Failure**: `write_eod_summary: score_comparison load failed ('str' object has no attribute 'get') — skipped`.
+*   **TQI Degradation**: `[ANOMALY-3] TQI degradation: last-5-trade avg=27.8/100 < 30`. This is a warning, but a persistent anomaly.
+*   **Confirm Gate No Entry**: `[ANOMALY-2] [NVDL] confirm_gate=3 scans but no entry — risk.open_positions=4 vs tracker=4`. (Benign as per `MAX_POSITIONS` rules).
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | CRITICAL | Entry during STRESSED MRI despite explicit restriction**
+    *   **Exact variable/metric**: `MRI` level and `strategy.run_cycle` entry condition logic.
+    *   **Value vs. what it should be and why that constitutes a failure**: The `MRI` level was consistently `STRESSED` (score 49), as seen in the `MRI SESSION DISTRIBUTION` and multiple log entries (`MRI STRESSED (score=49)`). The bot's logic dictates `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`. However, the `FLAGGED ENTRIES` section lists four entries (TOST, QCOM, AAPL, META) that occurred with `flags: MRI=STRESSED at entry`. This is a critical failure in risk management; the bot is taking entries under conditions it explicitly deems unsuitable, systematically degrading decision quality and increasing risk exposure during volatile periods.
+    *   **Exact condition**: Occurs for any new entry when the Macro Risk Index (`MRI`) is at `STRESSED` level (score 49/100), despite the `BV-5` rule being active, as demonstrated by the `FLAGGED ENTRIES` and contradictory log messages.
+
+2.  **EXECUTION BUG | HIGH | Inconsistent META trade exit reason and P&L reporting**
+    *   **Exact variable/metric**: `CLOSED TRADE DETAILS` (exit reason, P&L, stop price) vs. `BOT LOG` (actual fill, exit reason).
+    *   **Value vs. what it should be and why that constitutes a failure**:
+        *   `CLOSED TRADE DETAILS` for META state: entry $610.25 → exit $610.25 (+$0.00), exit reason `stop_hit`, stop price $630.44.
+        *   `BOT LOG` for META states: `[META] Position in tracker but NOT in Alpaca — closed externally. Recording exit at $610.40 (entry was $610.25).` followed by `[META] Exit recorded: $610.40 | P&L: $-0.15 (external_close)`.
+        *   This is a failure because the `CLOSED TRADE DETAILS` is internally inconsistent and contradicts the detailed log. If the exit was a `stop_hit` at $630.44, the P&L for a short position (implied by targets below entry) would be a loss of $19.99, not $0.00. The stated exit price of $610.25 (same as entry) is also inconsistent with a stop at $630.44. The log suggests an `external_close` at $610.40 with a P&L of `$-0.15`, which is a consistent (albeit small) loss for a short position closed at $610.40 from $610.25 entry. The `stop_hit` reason and `$0.00` P&L in the summary are incorrect and misleading, indicating a significant data integrity issue in trade reporting.
+    *   **Exact condition**: When a position is closed externally, especially with `stop_hit` reason, the `CLOSED TRADE DETAILS` summary incorrectly reports $0.00 P&L and a `stop_hit` reason, even when the actual log shows `external_close` at a different price and a non-zero P&L.
+
+3.  **INFRASTRUCTURE | MEDIUM | Persistent P&L Drift between Alpaca and Internal Tracker**
+    *   **Exact variable/metric**: `pnl_today` (Alpaca) vs. `tracker` (internal).
+    *   **Value vs. what it should be and why that constitutes a failure**: At `17:20:36`, Alpaca P&L was `$-26.36` while the tracker P&L was `$-22.63`, a drift of `$-3.73`. At `17:28:55`, the drift was `$-3.60`. The internal tracker's P&L should closely align with the broker's reported P&L for accurate risk management and performance evaluation. A sustained drift suggests an underlying calculation or synchronization issue beyond benign fill gaps, potentially leading to inaccurate daily loss calculations (`MAX_DAILY_LOSS_PCT`) or Kelly sizing.
+    *   **Exact condition**: Occurs during the `Alpaca FIFO EOD` process, consistently resulting in a drift between `pnl_today` reported by Alpaca and the bot's `tracker` P&L.
+
+4.  **INFRASTRUCTURE | HIGH | Risk Manager's `open_positions` Count Drift on Restart**
+    *   **Exact variable/metric**: `risk.open_positions` versus the actual `tracker` open position count.
+    *   **Value vs. what it should be and why that constitutes a failure**: After a SIGTERM and restart at `2026-05-06 17:29:00,505`, the log shows `POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4`. While the bot logs `Correcting to tracker count.`, there's a transient state where the risk manager incorrectly perceives zero open positions. This brief period could lead to the bot attempting to open new positions, potentially exceeding `MAX_POSITIONS` before the correction mechanism (`Risk open_positions synced`) activates. This poses a risk of over-leveraging due to incorrect state perception.
+    *   **Exact condition**: Occurs immediately upon bot restart following a `SIGTERM` signal, specifically before the full reconciliation of `risk.open_positions` with the `tracker`'s true count.
+
+5.  **EXECUTION BUG | MEDIUM | EOD Summary Generation Failure for `score_comparison`**
+    *   **Exact variable/metric**: `execution.portfolio_tracker.write_eod_summary` function attempting to process `score_comparison`.
+    *   **Value vs. what it should be and why that constitutes a failure**: The log states `WARNING | write_eod_summary: score_comparison load failed ('str' object has no attribute 'get') — skipped`. This indicates a runtime error where the `score_comparison` object is a string type, but the code expects an object (likely a dictionary) with a `.get()` method. This prevents a portion of the EOD summary from being generated and written, leading to incomplete performance reporting and analysis capabilities.
+    *   **Exact condition**: Occurs during the `write_eod_summary` process, specifically when trying to load or process `score_comparison`, resulting in a `TypeError`.
+
+6.  **ALPHA ISSUE | MEDIUM | Persistent TQI Degradation Warning**
+    *   **Exact variable/metric**: `last-5-trade avg` (Trade Quality Index - TQI).
+    *   **Value vs. what it should be and why that constitutes a failure**: The `last-5-trade avg` for TQI is consistently `27.8/100`, which is below the threshold of 30. This is a self-reported warning by the bot indicating that its recent trade performance (specifically related to exit discipline and stop placement) is degrading. While a warning, its persistence suggests a systematic issue impacting the bot's ability to maximize wins or minimize losses effectively.
+    *   **Exact condition**: Continuously logged as `[ANOMALY-3]` during `strategy.run_cycle` when the `last-5-trade avg` TQI falls below 30.
+
+### FIX VALIDATION
+No prior fixes were proposed for validation.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / ALPHA | CRITICAL**: Investigate and fix the `MRI=STRESSED` entry bypass immediately. Trace the code path where `BV-5` is evaluated and where entry orders are ultimately permitted to ensure `no new entries` rule is enforced. This is a critical risk management failure.
+2.  **EXECUTION / INFRA | HIGH**: Address the P&L calculation discrepancies and data integrity issues.
+    *   Correct the `CLOSED TRADE DETAILS` reporting for the META trade to accurately reflect the exit reason and P&L based on the actual fill data.
+    *   Investigate the P&L drift between Alpaca and the internal tracker to ensure all trade events and P&L components are consistently accounted for by both systems.
+    *   Fix the EOD summary generation failure related to `score_comparison` by ensuring the correct data type is passed or handled.
+3.  **INFRASTRUCTURE | MEDIUM**: Review the bot's state synchronization mechanisms, especially on restart. Ensure `risk.open_positions` is fully and immediately synchronized with the `portfolio_tracker`'s data *before* any new trading decisions (including signal generation checks) can occur, to prevent any window of misperception regarding available trading capacity.

@@ -1,0 +1,78 @@
+Nightly Gemini Audit — 2026-07-13
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['options_scanner.py', 'main.py', 'monthly_review.py', 'config.py', 'generate_dashboard.py', 'execution/quarterly_hold_manager.py', 'execution/broker.py', 'research/ic_engine.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1. `execution.portfolio_tracker` / `trade_log.json` | P&L discrepancy: Alpaca reports $-32.67 P&L for RIVN, while bot's internal tracker reports $-17.64. This is due to untracked Alpaca fills for RIVN at entry price 19.73. This divergence impacts all P&L-based risk limits (e.g., `MAX_DAILY_LOSS_PCT`) and overall capital management.
+2. `reporting.pnl_ledger` | Unparseable boundary `created_at '2026-05-11T20:05:14.18285Z'` stopping order history fetch, resulting in INCOMPLETE P&L history. This directly impacts the integrity and completeness of authoritative P&L reporting.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `EOD P&L DRIFT: Alpaca=$-32.67 tracker=$-17.64 drift=$-15.03` (recurring): Indicates a persistent and significant discrepancy between Alpaca's P&L and the bot's internal tracking, which is concerning for risk management and performance evaluation.
+*   `gc.collect() took 226.4ms, collected 66 objects — heap may be growing` (recurring): Suggests a potential memory leak or inefficient memory management, which could lead to performance degradation or crashes over extended operation.
+*   `news_monitor | scan_breaking_news: source timeout — skipped: ['currents']` (recurring): Indicates a transient external dependency issue. While non-critical for core trading, it means news alerts may be missed.
+*   `[ANOMALY-2] [MSTR] confirm_gate=X scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=7`: The bot identified MSTR for entry multiple times (confirm_gate active) but never entered, despite having ample `MAX_OPEN_POSITIONS` capacity (7, while `risk.open_positions` is 2). This indicates a potential silent blocking condition.
+*   `[ANOMALY-3] TQI degradation: last-5-trade avg=25.2/100 < 30 — review exit discipline and stop placement`: A performance metric warning indicating that recent trades are not meeting quality thresholds, suggesting issues with exit or stop placement.
+*   `[PLTR] Sector correlation BLOCKED: already holding NET in sector 'software' — skipping to avoid concentrated exposure.` (and for CRM): Valid blocking condition based on `_SECTOR_MAP` logic (unless NET/PLTR/CRM are misclassified, which is not evidenced here).
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: For the RIVN `stop_hit` (long, entry `18.06`, exit `17.22`, P&L `-17.64`) and HOOD `stop_hit` (long, entry `116.5`, exit `111.7`, P&L `-9.6`), the P&L signs are correct. For RBLX `stop_hit` (short, entry `54.47`, exit `57.45`, P&L `-2.98`), the P&L sign is correct.
+*   **Trades with pnl=0.0 where entry ≠ exit price (recording bug)**:
+    *   `2026-07-07T23:00:40.366062-07:00`, `event: "exit"`, `symbol: "RIVN"`, `price: 17.3218`, `size: 17`, `pnl: 0.0`, `direction: "short"`. This is a severe bug. The prior entry for RIVN with `size=17` was `long` at `19.73`. A long trade closing at `17.3218` should result in a loss of `(17.3218 - 19.73) * 17 = -40.914`, not `0.0`. The `direction: "short"` is also incorrect for closing a long position.
+*   **Entry/exit prices plausible**: Prices appear plausible given typical market fluctuations for the symbols.
+*   **Score→outcome correlation**: The last closed trade (RIVN) had a score of `10/12` and resulted in a loss. Other recent `10/12` or `12/12` entries (HOOD, MARA, SNOW, AVGO, MS) generally resulted in losses or zero P&L. This, coupled with `ANOMALY-3` (TQI degradation), suggests a poor correlation between high scores and positive outcomes, or an ineffective exit strategy.
+*   **Stop-hit rate vs. win rate**: Out of the last 10 `trade_events` with non-zero P&L, 3 were `stop_hit` resulting in losses. The reported `win_rate_today` is `0.0%`, and the `all_time_stats.win_rate` is `44.4%`. Recent performance indicates a high loss rate via stop-hits.
+*   **Profit factor and R:R vs. stated 2.5× target**: The `all_time_stats.profit_factor` is `1.2` and `avg_r_multiple` is `0.019`. The `paper` profile's `INTRADAY_TARGET_ATR_MULT = 2.5` implies a 1:2.5 R:R, but the `avg_r_multiple` is extremely low, indicating the bot is significantly underperforming its target risk/reward.
+
+### TRADE INTEGRITY
+*   **Recording Bug**: The RIVN exit event on `2026-07-07T23:00:40.366062-07:00` has `pnl: 0.0` and `direction: "short"` while closing a `long` position, with a significant price difference from entry. This is clear data corruption or mis-recording.
+*   **P&L Drift**: The `pnl_drift` of `$-15.03` is a critical integrity issue. The bot's internal `trade_log.json` and `EOD SNAPSHOT`'s `trades` list fail to account for all Alpaca fills and P&L (specifically the `19.73` entries for RIVN), causing a major divergence.
+*   **`pnl_unreconciled: false`**: This flag in the `EOD SNAPSHOT` is false, which is incorrect given the existing `pnl_drift`. The bot *is* unreconciled.
+
+### MODIFIED FILE FINDINGS
+1.  **`options_scanner.py`**
+    *   CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: `options_scanner.py` -> `_DTE_LOCK_PATH` | description: The 0DTE direction lock file `dte_direction_lock.json` path is static (`BASE_DIR / "data" / "cache" / "dte_direction_lock.json`) and lacks any date component. This can cause a 0DTE direction lock from a previous day to persist indefinitely, silently blocking 0DTE trades based on stale market conditions. | exact failure condition: If a direction lock (e.g., for SPY) is set on Monday, it will incorrectly apply on Tuesday, preventing new 0DTE entries even if Tuesday's market bias is different.
+    *   CATEGORY: INFRASTRUCTURE | SEVERITY: LOW | file: `options_scanner.py` -> `_VRP_CACHE_PATH` | description: The VRP cache file `vrp_cache.json` path is static (`BASE_DIR / "data" / "cache" / "vrp_cache.json`) and lacks expiration logic. VRP calculations might rely on stale cached data across multiple trading days, impacting options recommendations. | exact failure condition: Options recommendations (e.g., whether to buy or sell premium) could be based on outdated VRP metrics if the cache is not refreshed or invalidated daily.
+2.  **`main.py`**
+    *   CATEGORY: INFRASTRUCTURE | SEVERITY: LOW | file: `main.py` | description: Inconsistent refactoring of global state management. `GateState` was introduced for `conviction_streak` and `entry_confirm_buffer`, but many other related state variables (`_spy_risk_active`, `_last_vix`, `_orb_high`, etc.) remain as mutable module-level globals. This creates an unclear and mixed state management pattern, increasing complexity. | exact failure condition: Potential for future state-related bugs due to inconsistent patterns for managing session-level state.
+    *   CATEGORY: INFRASTRUCTURE | SEVERITY: HIGH | file: `main.py` | description: Recurring `gc.collect()` warnings (`gc.collect() took 226.4ms, collected 66 objects — heap may be growing`) indicate a potential memory leak. Despite garbage collection, the heap size appears to be consistently increasing. | exact failure condition: Over prolonged operation, the bot could experience increased latency, degraded performance, or eventually crash due to OutOfMemory (OOM) errors.
+3.  **`monthly_review.py`**
+    *   CATEGORY: REPORTING BUG | SEVERITY: MEDIUM | file: `monthly_review.py` -> `_day_cell` | description: Inconsistent P&L reporting: the displayed daily P&L in the calendar cell (`_fmt_pnl(pnl)`) prioritizes `alpaca_pnl`, but the `day_wr` (win rate) is calculated from individual `trade.pnl` values, which reflect `tracker_pnl`. If `alpaca_pnl` and `tracker_pnl` diverge for a given day, these two metrics on the same day cell will not reconcile, leading to contradictory performance information. | exact failure condition: The dashboard presents conflicting P&L information (total P&L vs. win rate implication) for a specific day when `alpaca_pnl` and `tracker_pnl` differ, confusing the operator.
+4.  **`config.py`**
+    *   CATEGORY: CONFIGURATION | SEVERITY: LOW | file: `config.py` -> `BUCKET_B_MAX_POSITIONS_POWER` | description: `BUCKET_B_MAX_POSITIONS_POWER = 5` sets a fixed maximum for Bucket B positions. However, the `paper` profile overrides `MAX_OPEN_POSITIONS` to `7`. The comment "power-hour / AH slot expansion" implies expansion *up to* the `MAX_OPEN_POSITIONS`. If `BUCKET_B_MAX_POSITIONS_POWER` is a fixed lower limit (5) rather than a dynamic baseline that expands to the overall `MAX_OPEN_POSITIONS` (7), it could contradict the intent of capital deployment. | exact failure condition: The bot may limit itself to 5 open positions during power hour, even when 7 are permitted by `MAX_OPEN_POSITIONS` in the `paper` profile, leading to under-utilization of capital.
+5.  **`execution/quarterly_hold_manager.py`**
+    *   CATEGORY: RISK MANAGEMENT | SEVERITY: HIGH | file: `execution/quarterly_hold_manager.py` -> `_DIP_ADD_CEILING_MULT` | description: The `_DIP_ADD_CEILING_MULT = 1.375` for dip-adds calculates the maximum total position size as a multiplier of the *initial `target_equity_pct`*, not the *current portfolio equity*. This means that as the portfolio value changes (grows or shrinks), the actual percentage of current equity allocated to a QHM position can drift significantly from the intended protective ceiling, potentially leading to over-concentration. | exact failure condition: A QHM position, intended to be capped at 27.5% of *initial* equity (e.g., if target_equity_pct=0.20), could represent a much higher percentage of a smaller *current* portfolio if the account has taken losses, or an inappropriately small percentage of a much larger portfolio.
+6.  **`execution/broker.py`**
+    *   CATEGORY: EXECUTION BUG | SEVERITY: HIGH | file: `execution/broker.py` -> `submit_day_stop_order` | description: The `submit_day_stop_order` function lacks the robust idempotency (`client_order_id`) and comprehensive error handling (e.g., for `40910000` duplicate orders, `40310000` shorting blocks) that are implemented in `submit_market_order` and `submit_limit_order`. This makes it vulnerable to duplicate stop orders or silent failures under transient network issues or specific Alpaca error codes. | exact failure condition: A DAY stop order might be duplicated if a network timeout occurs, or it could fail without proper logging and caching if specific `40310000` errors are encountered (e.g., symbol not shortable), leaving an RTH position unprotected.
+7.  **`research/ic_engine.py`**
+    *   CATEGORY: ALPHA ISSUE | SEVERITY: MEDIUM | file: `research/ic_engine.py` -> `_match_trades` | description: The `ret` (realized return) calculation for `partial_exit` events incorrectly treats a partial exit as if it closed the *entire original position* (`(xp - ep) / ep`), rather than calculating the P&L of the *specific tranche* being closed. This inflates or deflates the observed `ret` for partial exits, skewing IC/ICIR metrics. | exact failure condition: The `IC/ICIR` analysis will misrepresent the true performance contribution of partial exits, potentially leading to incorrect conclusions about the efficacy of the partial exiting strategy.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED (no code change seen for fix, no log trigger)
+*   **P5-C2 | run_movers.py ImportError**: UNVERIFIED (file not provided)
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: FIXED (by deletion)
+*   **P5-H2 | Fill price crosstalk**: TRIGGERED (evidenced by RIVN P&L drift and untracked Alpaca fills)
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (no specific log evidence of trigger, no fix)
+*   **P5-H4 | Rule 2 dead code**: FIXED (`config.py` aligned `TOD_MARKET_OPEN_BUFFER_MINS = 30`)
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED (acknowledged)
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED (`main.py` lockfile handling improved with `FD_CLOEXEC`)
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED (no explicit state validation logic for loaded MRI state; logs show regular refresh, but not cache load validation.)
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (no evidence of file/problem in provided context)
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED (no new evidence)
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: TRIGGERED (EOD snapshot shows `open_trades: 2`, indicating it's written before all positions are closed.)
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNVERIFIED (file not provided)
+
+### NEW BUGS FOUND
+None (all findings categorized under modified file findings or log anomalies as appropriate)
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Prioritize P&L Drift and Trade Tracking Fix**: Immediately address the critical P&L drift and trade tracking mismatch (P5-H2). The bot's internal tracking is severely misaligned with Alpaca's actual fills and P&L. This requires a robust reconciliation mechanism that correctly attributes all Alpaca fills (including multiple fills for the same symbol/entry price) to internal trade records and accurately calculates P&L per tranche. The `pnl=0.0` for a clear loss in RIVN's exit event needs immediate resolution.
+2.  **Resolve Incomplete P&L History (CRITICAL)**: Investigate and fix the `CRITICAL reporting.pnl_ledger fetch_all_orders: unparseable boundary created_at '2026-05-11T20:05:14.18285Z'` error. This issue prevents the bot from fetching a complete order history, compromising the integrity of authoritative P&L reporting.
+3.  **Enhance `submit_day_stop_order` Robustness**: Implement idempotency (`client_order_id`) and comprehensive error handling (e.g., for `40910000` duplicate orders, `40310000` shorting blocks, and retry logic) in `execution/broker.py:submit_day_stop_order` to match the robustness of other order submission functions.
+4.  **Review QHM Dip-Add Ceiling Logic**: Clarify the intended behavior and potential risk exposure of `execution/quarterly_hold_manager.py:_DIP_ADD_CEILING_MULT`. Ensure that the position sizing for dip-adds is capped as a percentage of *current portfolio equity* rather than the initial `target_equity_pct` to prevent unintended capital concentration in a single QHM position.
+5.  **Investigate Memory Leak and GC Warnings**: Address the recurring `gc.collect()` warnings in `main.py` which strongly indicate a memory leak. Profile the bot's memory usage over time to identify and resolve objects that are not being properly deallocated, ensuring long-term stability and performance.

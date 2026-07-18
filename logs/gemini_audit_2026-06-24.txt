@@ -1,0 +1,78 @@
+Nightly Gemini Audit — 2026-06-24
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'weekly_review.py', 'trade_engine.py', 'exit_logic.py', 'generate_dashboard.py', 'execution/quarterly_hold_manager.py', 'execution/kelly.py', 'execution/entry_logic.py', 'execution/trade_engine.py', 'execution/exit_logic.py', 'execution/gtc_manager.py', 'events/handlers.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**: Repeated warnings `Alpaca=$64.79 tracker=$-61.80 drift=$+126.59` (e.g., 18:37:01, 19:49:24). This indicates a significant and persistent discrepancy between the P&L reported by Alpaca and the bot's internal portfolio tracker.
+*   **`scan_results.html` Write Failure**: Warnings `scan_results.html write failed: 0` (e.g., 18:37:01, 19:49:25). This indicates the bot is failing to generate or update its HTML dashboard, hindering operational visibility.
+*   **Rejected GTC Stop Orders for Quarterly Holds**: Warnings `[NVDA] Limit order rejected — shorting not enabled` (18:45:52) and `[GOOGL] Limit order rejected — shorting not enabled` (18:45:54), followed by `QuarterlyHoldManager: NVDA GTC stop ... not on Alpaca — PENDING_STOP_REPLACE` (19:51:15) and `QuarterlyHoldManager: GOOGL GTC stop ... not on Alpaca — PENDING_STOP_REPLACE` (19:51:15). This indicates GTC stop-loss orders for long positions are being rejected by Alpaca with a misleading error, leaving quarterly hold positions unprotected.
+*   **FIFO Orphan / Unmatched Fill**: `FIFO orphan: closing fill for GOOGL has no prior lot and no tracker record — fill unmatched.` (19:49:24). This is a critical data integrity issue where Alpaca processed a closing fill that the bot's tracker could not account for, leading to P&L and position desynchronization.
+*   **Orphaned Position Adoption**: `CRITICAL | execution.orphan_manager | [NVDA] ORPHANED POSITION ADOPTED` (19:51:06) and `[GOOGL] ORPHANED POSITION ADOPTED` (19:51:11). While a recovery mechanism, the fact that positions need to be adopted implies initial entry tracking or state persistence issues, especially when coupled with rejected GTC stops and unmatched fills.
+*   **High Garbage Collection Time**: Warnings like `gc.collect() took 3936.1ms, collected 64 objects — heap may be growing` (e.g., 18:57:16). While not a functional bug, this suggests potential memory inefficiencies that could impact performance over long runs.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: P&L signs are correctly calculated for the three closed trades (all losses).
+*   **`pnl_pct` Calculation**: `pnl_pct` values are correctly computed from the original position values.
+*   **Partial P&L Accumulation**: No partial exits occurred in the provided logs (`partial_exited: false` for all trades), so this could not be verified.
+*   **Trades with P&L = 0.0**: None of the trades had a P&L of 0.0 with differing entry/exit prices.
+*   **Exit Price vs. Stop Price**: For all three closed short trades (NFLX, MSTR, TOST), the `exit_price` was significantly worse than the `stop` price, indicating a failure in the stop-loss execution or a severe slippage event. This is a critical risk management failure.
+    *   **NFLX Short**: Stop=$84.78, Exit=$93.19. Exited $8.41 beyond stop.
+    *   **MSTR Short**: Stop=$131.36, Exit=$164.55. Exited $33.19 beyond stop.
+    *   **TOST Short**: Stop=$26.60, Exit=$26.82. Exited $0.22 beyond stop.
+*   **R:R vs. Target**: The implied R:R for the full target distance (calculated as reward/risk based on entry, stop, and target prices) for NFLX (~2.0), MSTR (~2.0), and TOST (~1.99) is consistently below the `CONFIG CONSTANTS.TARGET_ATR_MULT = 2.5`. This suggests the bot is not capturing its intended edge, either due to calculation issues or consistent underperformance against its targets.
+*   **Stop-Hit Rate**: All 3 closed trades today were losses, effectively a 100% stop-hit rate for these specific exits, which is very high. Given the severe stop breaches, this indicates a serious problem with the risk management system.
+
+### TRADE INTEGRITY
+*   **Critical P&L Discrepancy for MSTR**: The EOD snapshot shows a severe inconsistency for MSTR. `alpaca_per_trade` reports an entry of $162.95 and exit of $98.16, yielding a P&L of +$64.79. However, the bot's internal `trades` list shows an entry of $118.94 and exit of $164.55, yielding a P&L of -$.61. This is a direct contradiction in prices and P&L sign, indicating critical data corruption in the bot's internal trade tracking.
+*   **FIFO Orphan/Unmatched Fill for GOOGL**: The log `FIFO orphan: closing fill for GOOGL has no prior lot and no tracker record — fill unmatched.` indicates that the bot failed to reconcile a closing trade on Alpaca with its internal records. This confirms a general issue with fill processing or position tracking.
+
+### MODIFIED FILE FINDINGS
+
+1.  **execution/exit_logic.py | HIGH | TRANCHE_SHARE vs. comment inconsistency**
+    *   **Function/Variable**: `TRANCHE_SHARE` constant (line 118).
+    *   **Code Path Trace**: The code sets `TRANCHE_SHARE = 0.33` (33% of original quantity per partial tranche). However, the comment immediately above states "each tranche closes 25% of original qty". This creates a discrepancy between the intended behavior (25% per tranche, suggesting a 4-tranche system) and the implemented behavior (33% per tranche, suggesting a 3-tranche system). The `TRANCHE_FRACS` list `[0.40, 0.60, 1.00]` further indicates 3 milestones for profit taking (T1, T2, T3 relative to total target distance), which would ideally be aligned with the distribution of shares. If the intent is 4 tranches of 25%, the bot will only execute 3 tranches (consuming 99% of shares) and will not correctly manage the last phase of profit-taking.
+    *   **Failure Condition**: The actual quantity of shares closed during a partial exit (e.g., `_qty_to_adv = round(qty_orig * TRANCHE_SHARE)`) will be 33% of the original quantity, rather than the 25% mentioned in the comment. This leads to an inconsistent partial exit strategy and potential mismanagement of the final tranche if a 4-tranche system is implicitly assumed.
+
+2.  **execution/quarterly_hold_manager.py | HIGH | GTC Stop submission failure for Long positions**
+    *   **Function/Variable**: `_dispatcher.submit_gtc_stop` (indirectly calls `broker.submit_gtc_stop_order`). `HoldPosition.stop_order_id`.
+    *   **Code Path Trace**: In `QuarterlyHoldManager.reconcile_on_startup()`, if a position is `ACTIVE` or `PENDING_STOP_REPLACE`, the bot attempts to ensure a GTC stop order is active. The log indicates that for NVDA and GOOGL, `submit_gtc_stop_order` (which internally executes a SELL STOP for a long position) is failing with `[NVDA] Limit order rejected — shorting not enabled`. This incorrect rejection from Alpaca prevents the GTC stop from being placed, causing the `pos.stop_order_id` to remain unset or invalid. The system correctly identifies this with `QuarterlyHoldManager: NVDA GTC stop ... not on Alpaca — PENDING_STOP_REPLACE`.
+    *   **Failure Condition**: Quarterly hold positions identified as long (e.g., NVDA and GOOGL in the logs) are not being protected by exchange-level GTC stop orders due to an erroneous "shorting not enabled" rejection from Alpaca when attempting to place a SELL STOP. This leaves these positions vulnerable and reliant on the bot's internal, potentially delayed, stop checks.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (explicitly handled in `execution/entry_logic.py` using `.get()` for column access).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (the specific file `run_movers.py` is not provided to audit, but related `data.premarket` is used, suggesting potential internal resolution).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **UNTOUCHED** (specific fix for this scenario not visible in provided code).
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED** (while `_fetch_actual_fill_price` uses `submitted_after`, the core issue of multiple orders leading to crosstalk if fills aren't unique per order ID isn't directly addressed in the provided code).
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED** (`execution/gtc_manager.py` `cancel_open_gtc_orders` now treats 404 (order not found) as a successful cancellation).
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (`main.py` explicitly notes `TOD_MARKET_OPEN_BUFFER_MINS` is now configured directly, removing runtime override).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED** (as stated in P5 queue; no new evidence to contradict).
+
+### NEW BUGS FOUND
+None (all issues fall under existing categories or P5 cross-checks).
+
+### FIX VALIDATION
+*   **P5-M1 (Cycle watchdog restart loop)**: **PASS**. The addition of `fcntl.fcntl(_lockfile.fileno(), fcntl.F_SETFD, fcntl.FD_CLOEXEC)` in `main.py` ensures the lockfile is properly released on process replacement via `os.execv()`. Logs show no watchdog restart loops.
+*   **P5-M2 (MRI score cached stale across sessions)**: **PASS**. The `_load_hybrid_state()` function in `trade_engine.py` (and therefore `main.py` through re-export) now includes explicit checks (`saved_at.startswith(today_et)` and `scans_left <= 0`) to prevent loading stale hybrid state from prior sessions. Logs show correct MRI state being loaded/refreshed.
+*   **P5-H3 (Orphan GTC 404 path)**: **PASS**. The `cancel_open_gtc_orders()` function in `execution/gtc_manager.py` (via re-export from `trade_engine.py`) now correctly interprets a 404 (order not found) from Alpaca as the order being confirmed gone, clearing the `_gtc_stop_order_id` and preventing infinite retry loops for ghost orders.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE: Investigate and Resolve Critical P&L and Fill Reconciliation Discrepancies**:
+    *   Debug the `PortfolioTracker`'s fill processing and the `FIFO orphan` logic. The MSTR trade's contradictory P&L and prices between Alpaca and the bot's internal records is a critical data corruption issue that invalidates P&L tracking and Kelly sizing.
+    *   **File**: `execution/portfolio_tracker.py` (source not provided, but indicated by logs)
+    *   **Context**: The interaction between Alpaca's fill reporting and the bot's `record_exit()` and `promote_pending_to_active()` needs a thorough review.
+2.  **IMMEDIATE: Address Quarterly Hold GTC Stop Rejection Issue**:
+    *   Contact Alpaca support to clarify why `SELL STOP` orders for long positions are being rejected with "shorting not enabled."
+    *   In parallel, implement a robust fallback or alternative stop-loss mechanism for `QuarterlyHoldManager` positions (e.g., a client-side stop that monitors price and submits a market order when breached) to ensure these positions are always protected.
+    *   **File**: `execution/quarterly_hold_manager.py`, `execution/broker.py` (source not provided for `submit_gtc_stop_order` implementation details).
+3.  **HIGH PRIORITY: Rectify Partial Exit Tranche Share Inconsistency**:
+    *   Clarify the intended partial exit strategy (e.g., 3 tranches of 33% or 4 tranches of 25%) and align the `TRANCHE_SHARE` constant with the `TRANCHE_FRACS` list and corresponding comments in `execution/exit_logic.py`.
+    *   **File**: `execution/exit_logic.py`, line 118.
+4.  **HIGH PRIORITY: Investigate Severe Stop Breaches**:
+    *   Analyze why the actual exit prices for closed trades are significantly worse than the configured stop prices. This points to a failure in the timely execution or cancellation of stop orders. This could be related to Alpaca's rejections of GTC stops or a lag in the bot's internal stop-loss checks.
+    *   **File**: `execution/exit_logic.py` (specifically `check_exits` and `check_partial_exits` logic).
+5.  **MEDIUM PRIORITY: Diagnose `scan_results.html` Write Failure**:
+    *   Investigate the root cause of the dashboard HTML file failing to write (`scan_results.html write failed: 0`), as this impacts the operator's ability to monitor the bot's real-time status.
+    *   **File**: `strategy.run_cycle` (logging source), `generate_dashboard.py` (implied writer).

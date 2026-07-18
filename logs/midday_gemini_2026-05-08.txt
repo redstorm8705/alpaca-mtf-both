@@ -1,0 +1,61 @@
+Midday Gemini Audit — 2026-05-08
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades were recorded for the current session (Entries: 0 | Exits: 0 | Partials: 0). Consequently, metrics such as win rate, profit factor, average win/loss, and stop-hit rate cannot be assessed for this session. Entry/exit price plausibility and P&L sign correctness also cannot be audited without actual trade data. The `Alpaca FIFO EOD` messages confirm `pnl_today=$0.00` and `fills=3` but `lots_closed=0`, which is consistent with the `SESSION P&L SUMMARY`. The `[BV-2 Option B]` note indicates the bot is correctly handling Alpaca's paper account fill reporting quirks.
+
+### ENTRY QUALITY
+*   **Strategy Paralysis due to Interlocking Rules**
+    *   While no new entries were made this session, the logs consistently report `Max positions (4) reached. Skipping.` or `Position limit reached — stopping entries.` This is further compounded by the `🔴 RULE 1 — PREMARKET RED LOCKOUT` actively blocking all long entries and the `SHORTS_BANNED` flag blocking all short entries. This combination creates a scenario where the bot is completely unable to initiate *any* new trades.
+    *   **Failure**: This represents a significant opportunity cost. The bot is actively generating high-conviction signals (e.g., TQQQ `confirm_gate` repeatedly increasing), but these signals are systematically being missed. If the existing 4 (unseen) positions are underperforming or stagnant, the bot's inability to rotate capital into new, potentially higher-quality opportunities is a major ALPHA ISSUE. It indicates an inflexible capital allocation strategy when multiple risk constraints are active.
+
+### EXIT QUALITY
+No exits occurred in this session. Cannot assess exit quality.
+
+### MRI ALIGNMENT
+The bot correctly identified the MRI as `ELEVATED` (score 39-40/100) throughout the session. In response, it appropriately applied a `size floor 0.85x` and dynamically raised the `MIN_SCORE` threshold to 11/12. This demonstrates proper alignment and adjustment of risk parameters in response to the overall macro-risk environment. The presence of a `BULL` volatility regime simultaneously with an `ELEVATED` MRI is not a contradiction, but rather reflects the different scope of each risk indicator; the bot correctly prioritized the comprehensive MRI in its sizing and scoring adjustments.
+
+### LOG ANOMALIES
+*   **`WARNING | strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped`**: This warning is pervasive, appearing for almost every scanned ticker in every cycle. It indicates a persistent problem with the weekly bias filter not receiving sufficient historical data, potentially degrading signal quality.
+*   **`WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['truth_social']`**: Occurred once (17:23:24,910). This indicates an intermittent or persistent failure of the `truth_social` news source to respond within the expected timeout, leading to potentially incomplete news coverage.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | MEDIUM | EOD Summary Data Type Corruption**
+    *   **Description**: The `write_eod_summary` function failed to load `score_comparison` data, reporting `'str' object has no attribute 'get'`. This indicates that a critical data point intended for audit and performance comparison is being stored or retrieved as an incorrect data type, making the EOD summary incomplete.
+    *   **Exact variable**: `score_comparison` within the `execution.portfolio_tracker` module during `write_eod_summary`.
+    *   **Value vs. Should be**: The variable was a `str` object. It should be a dictionary-like object (or another type that supports the `.get()` method) to allow proper data loading and comparison.
+    *   **Failure**: The EOD summary generated is incomplete, lacking the `score_comparison` data. This hinders post-session analysis and auditing of the correlation between confluence scores and trade outcomes.
+    *   **Condition**: Occurs consistently during `write_eod_summary` calls (17:18:12,115 and 17:27:49,289).
+    *   **Source not provided.**
+
+2.  **ALPHA ISSUE | HIGH | Strategy Paralysis with Missed High-Conviction Signals**
+    *   **Description**: The bot reached its `MAX_POSITIONS = 4` limit. Simultaneously, `PREMARKET RED LOCKOUT` blocked all long entries, and a `SHORTS_BANNED` diagnostic was active. This combination results in the bot being unable to initiate *any* new positions. This is problematic because the bot is also logging `[ANOMALY-2] [TQQQ] confirm_gate=8 scans but no entry`, indicating that high-conviction signals are being generated and confirmed but cannot be acted upon due to these intertwined restrictions.
+    *   **Exact variable**: `risk.open_positions` (current value 4), `MAX_POSITIONS` (config value 4), `PREMARKET RED LOCKOUT` rule (active with 7/9 movers red), `SHORTS_BANNED` flag (active).
+    *   **Value vs. Should be**: The conditions `risk.open_positions == MAX_POSITIONS`, active `PREMARKET RED LOCKOUT` (blocking longs), and active `SHORTS_BANNED` (blocking shorts) together create a state where no new entries are possible. While each rule works as intended, their combined effect creates an undesirable "strategy paralysis" in the current market context. The bot *should* ideally have mechanisms to manage its existing positions or adapt its capital allocation in such restrictive scenarios to avoid prolonged periods of inactivity, especially when valid signals are present.
+    *   **Failure**: Significant opportunity cost due to being unable to enter high-conviction trades (e.g., TQQQ). Potential for suboptimal capital utilization if the existing 4 positions are underperforming and cannot be reallocated.
+    *   **Condition**: Occurs whenever new signals are generated (e.g., TQQQ `confirm_gate` increasing) while `risk.open_positions` equals `MAX_POSITIONS` AND `PREMARKET RED LOCKOUT` is active AND `SHORTS_BANNED` is active.
+    *   **Source not provided.**
+
+3.  **INFRASTRUCTURE | MEDIUM | Persistent Weekly Bias Data Lag/Inadequacy**
+    *   **Description**: The warning `[SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped` is logged extensively for nearly all symbols during every scan cycle. This indicates that the system either consistently fails to retrieve enough weekly historical data or that the data is not being retained/processed correctly across sessions for the weekly bias calculation.
+    *   **Exact variable**: The input data (number of historical bars) for the weekly bias filter within `strategy.signal_generator`.
+    *   **Value vs. Should be**: The filter requires more than 4 weekly bars to compute the bias reliably. It is consistently only receiving 4 bars. It should have sufficient data to run this filter, especially after several hours of operation or across multiple days.
+    *   **Failure**: The strategy's signal filtering is compromised as a key component (weekly bias) is skipped. This could lead to lower quality signals being considered or missed opportunities if the filter's absence allows entry in less robust conditions.
+    *   **Condition**: Occurs for numerous symbols during `strategy.signal_generator` scans (e.g., 17:07:19-17:07:31, 17:14:26-17:14:38, 17:24:08-17:24:20).
+    *   **Source not provided.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **ALPHA | HIGH | Review Strategy Interlocks for Entry Paralysis**:
+    *   **Action**: Investigate the design implications of `MAX_POSITIONS` combining with `PREMARKET RED LOCKOUT` and `SHORTS_BANNED`. Evaluate if a mechanism is needed to allow exiting existing positions (if underperforming) or to prioritize entry for inverse ETFs when `PREMARKET RED LOCKOUT` is active. Consider a more dynamic capital reallocation strategy or a specific "idle" mode with a clear re-activation condition for new entries.
+2.  **EXECUTION | MEDIUM | Resolve EOD Summary `score_comparison` Data Type Issue**:
+    *   **Action**: Debug the `write_eod_summary` function to identify why `score_comparison` is a string instead of its expected dictionary-like type. Implement robust data validation and type casting or serialization/deserialization logic to ensure the correct data structure is passed for summary generation, preserving audit trail integrity.
+3.  **INFRA | MEDIUM | Investigate Weekly Bias Data Inadequacy**:
+    *   **Action**: Conduct a deep dive into the data pipeline responsible for feeding weekly historical data to the `strategy.signal_generator`. Determine if this is a data ingestion issue (not enough data available), a caching problem (data not retained), or a logic error in how the bars are queried/counted. Ensure the weekly bias filter can consistently access sufficient historical data.

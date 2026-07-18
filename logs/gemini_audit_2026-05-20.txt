@@ -1,0 +1,150 @@
+Nightly Gemini Audit — 2026-05-20
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['execution/risk_manager.py', 'strategy/confluence.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **CRITICAL: PDT count mismatch detected and corrected with external entries**:
+    `2026-05-20 20:01:13,377 | WARNING | execution.portfolio_tracker | PDT count mismatch — Alpaca reports 3, tracker has 0 in rolling window. Trades may have occurred outside this bot instance.`
+    `2026-05-20 20:01:13,384 | WARNING | execution.portfolio_tracker | Added 3 EXTERNAL entry/entries to PDT counter to match Alpaca.`
+    The bot's internal PDT counter was out of sync with Alpaca, reporting 0 when Alpaca had 3. This is a critical risk management failure as it could lead to a Pattern Day Trader violation if not manually corrected. The root cause of this mismatch is unaddressed.
+*   **CRITICAL: P&L drift between Alpaca and tracker**:
+    `2026-05-20 19:04:34,819 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-0.96 tracker=$-32.95 drift=$+31.99`
+    This substantial P&L drift recurs multiple times throughout the logs (19:18:27, 19:44:06, 19:56:07), indicating persistent issues with the bot's internal P&L accounting compared to the broker.
+*   **CRITICAL: `FIFO orphan` closing fill for PANW**:
+    `2026-05-20 19:31:02,437 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for PANW has no prior lot and no tracker record — fill unmatched.`
+    A closing fill from Alpaca could not be matched to an existing position in the bot's internal tracker, indicating a severe disconnect in position management and P&L attribution for that specific trade.
+*   **HIGH: `close_position blocked` by Alpaca (error 40310000) during RTH**:
+    `2026-05-20 19:36:52,173 | WARNING | execution.broker | [PLTR] close_position blocked (40310000 held_for_orders) — cancelling all open orders and retrying once.`
+    This blocking event occurred during regular trading hours (15:36:52 ET), which is *not* covered by the `KNOWN BENIGN PATTERNS` for error `42210000`. This prevented a trade from closing promptly, potentially leading to increased loss or missed opportunity.
+*   **CRITICAL: `FILL UNVERIFIED` for PLTR with P&L fallback**:
+    `2026-05-20 19:36:53,849 | CRITICAL | execution.fill_helpers | [PLTR] FILL UNVERIFIED: Alpaca returned 0 fills after 2 attempts (1.42s). Using entry_price $133.29 as fallback. P&L for this trade is unreliable — manual verification required.`
+    The bot failed to receive fill data from Alpaca for a critical trade closure, forcing it to use an unreliable fallback P&L calculation. Although later corrected by `fill_reconciler`, this temporary state represents P&L corruption.
+*   **HIGH: Persistent `score_comparison` format error in EOD summary**:
+    `2026-05-20 19:04:34,865 | WARNING | execution.portfolio_tracker | write_eod_summary: score_comparison expected list, got dict — skipped`
+    This recurring warning indicates a data type mismatch when attempting to write the EOD summary, suggesting a bug in the summary generation or the data structure of `score_comparison`.
+*   **MEDIUM: Prolonged `gc.collect()` execution times**:
+    `2026-05-20 19:04:39,814 | WARNING | main | gc.collect() took 4871.5ms, collected 99 objects — heap may be growing`
+    Garbage collection pauses are frequently taking several seconds (up to ~9.9s), which can impact real-time performance and introduces latency in a live trading environment.
+*   **MEDIUM: Recurring `ANOMALY-2` for `confirm_gate=X scans but no entry` for `AAPL` with high scan count**:
+    `2026-05-20 19:10:38,969 | WARNING | strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=9 scans but no entry — risk.open_positions=4 vs tracker=4 | MAX_OPEN_POSITIONS=4.`
+    While some `ANOMALY-2` messages are benign (hitting max positions outside power hour), `AAPL` shows `9 scans` of confirmation without entry. This high number suggests a potential issue where the bot repeatedly validates a signal but fails to execute, possibly due to a race condition or a subtle blocking condition not immediately apparent.
+*   **MEDIUM: Persistent `ANOMALY-3` TQI degradation**:
+    `2026-05-20 19:10:38,969 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=17.4/100 < 30 — review exit discipline and stop placement.`
+    This recurring warning signals consistently poor performance in recent trades, indicating a need to re-evaluate exit strategies or stop placement.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: Verified. All P&L signs for closed trades (TSLA, SMCI, SOFI, PLTR) correctly reflect losses given their entry, exit prices, and short direction.
+*   **pnl_pct / partial_pnl**: The initial `partial_pnl: 0.0` for SOFI in the trade events log is suspicious but appears to have been corrected in the EOD snapshot's final P&L reconciliation. The Alpaca per-trade breakdown for SOFI sums to the final P&L.
+*   **Trades with pnl=0.0 anomalies**: Two trades (`TSLA`, `PLTR`) showed `pnl: 0.0` in the `TRADE EVENTS` log, despite differing entry/exit prices, indicating an initial recording bug. These were later corrected by the `fill_reconciler` as shown in logs (`RC-4 fill_correction`) and the EOD snapshot. This highlights a transient P&L recording error.
+*   **Entry/Exit Plausibility**: Entry and exit prices appear plausible for the listed symbols.
+*   **Score→Outcome Correlation**: All four trades today resulted in losses. No positive correlation for higher scores could be observed, as all score buckets (4-5, 6-7, 10-11) showed losses.
+*   **Stop-hit rate vs. Win rate**: The bot had a 0% win rate for the 4 trades today. All trades were closed due to stop-hits or ATR buffer exits, confirming a high stop-hit rate for this session. This aligns with the `TQI degradation` warnings.
+*   **Exit Reason Consistency**:
+    *   `TSLA`: Short entry 406.17, stop 406.17, exit 409.36 (reason: `hard_stop`). The exit price is *above* the stop for a short, indicating slippage of $3.19.
+    *   `SMCI`: Short entry 29.99, stop 32.81, exit 32.87 (reason: `overnight_atr_buffer_exit`). The exit price is *above* the stop for a short, indicating slippage of $0.06.
+    *   `SOFI`: Short entry 15.57, stop 15.57, exit 15.61 (reason: `hard_stop`). The exit price is *above* the stop for a short, indicating slippage of $0.04.
+    *   Significant slippage beyond the defined stop prices is observed for three out of four trades, reducing capital protection effectiveness.
+*   **Profit Factor and R:R**: The `avg_r_multiple` for all-time stats is `-0.041`, which is extremely poor and far from the stated `TARGET_ATR_MULT = 2.5` (implying a 1:2.5 R:R). The daily performance (0% win rate) reinforces this deficiency.
+
+### TRADE INTEGRITY
+
+*   **Recording Bug: Initial P&L of 0.0 for actual losses**: `TSLA` and `PLTR` both logged initial `pnl: 0.0` in `TRADE EVENTS` despite being losses (and later corrected). This is a temporary but significant misrepresentation of P&L.
+*   **P&L Drift**: The recurring `EOD P&L DRIFT` points to a fundamental discrepancy between how the bot calculates realized P&L and how Alpaca reports it, even after reconciliation attempts. This affects accurate `daily_pnl` tracking.
+*   **FIFO Orphan**: The `FIFO orphan` for PANW indicates a breakdown in the bot's ability to match Alpaca's fills to its internal position tracking, leading to P&L calculation omissions and potential risk management gaps.
+
+### MODIFIED FILE FINDINGS
+
+**File: `execution/risk_manager.py`**
+
+1.  **BUG: `_save_kill_state` swallows logging errors silently.**
+    *   **Function**: `_save_kill_state`
+    *   **Code Path**: Inside the `try...except` block that saves the kill state, there's an inner `try...except` block around the `logger.debug` call: `except Exception as _e: try: logger.debug("kill state save error: %s", _e) except Exception: pass`.
+    *   **Runtime vs. Intended**: If an exception occurs during the `_save_kill_state` operation AND the subsequent `logger.debug` call also fails (e.g., if the logging system itself is compromised or exhausted), the second `except Exception: pass` will silently swallow this critical failure, preventing any record of the persistence failure.
+    *   **Failure Condition**: A failure to persist the kill switch state or to log that failure will go completely unrecorded, leading to an inconsistent kill switch state upon restart without any diagnostic information.
+    *   **Severity**: MEDIUM
+
+2.  **BUG: Defensive kill switch trigger masks root cause of invalid `daily_start_value`.**
+    *   **Function**: `check_kill_switch`
+    *   **Variable**: `self.daily_start_value`
+    *   **Code Path**: `if self.daily_start_value <= 0: logger.critical(...) self.killed = True; return True`.
+    *   **Runtime vs. Intended**: While defensively good to prevent trading, this check triggers the kill switch if `daily_start_value` is `0` or negative. This variable is initialized from `portfolio_value` or `daily_start_value` parameter from Alpaca. A `daily_start_value` <= 0 in a live (even paper) account implies a fundamental problem with the account's starting equity or its initialization, which is not being directly addressed, only bypassed by halting.
+    *   **Failure Condition**: The bot halts trading due to an invalid (non-positive) `daily_start_value`, but the underlying cause of this invalid financial state remains uninvestigated.
+    *   **Severity**: HIGH
+
+3.  **BUG: `update_daily_pnl_from_alpaca` misses P&L for "FIFO orphan" fills.**
+    *   **Function**: `update_daily_pnl_from_alpaca`
+    *   **Code Path**:
+        *   Lines within `elif _side == "buy_to_cover":` where `if short_lots.get(sym):` is false.
+        *   Similar implicit path within `elif _side == "sell":` where `if long_lots.get(sym):` is false.
+    *   **Runtime vs. Intended**: The function attempts to match fills to internal `long_lots` and `short_lots` queues. If a fill (e.g., `buy_to_cover` for a short position, or `sell` for a long position) occurs for a symbol where the corresponding `*_lots[sym]` queue is empty, the P&L for that fill is skipped (`fill skipped, P&L not credited`). The log shows this explicitly (`FIFO orphan: closing fill for PANW has no prior lot`). This indicates that the internal lots structure does not accurately reflect all open positions known to Alpaca.
+    *   **Failure Condition**: The `self.daily_pnl` does not accurately reflect all realized P&L from Alpaca for trades that the bot does not internally track as existing positions, leading to `P&L DRIFT`.
+    *   **Severity**: CRITICAL
+
+4.  **BUG: `get_stop_and_target` lacks validation for `atr_mult_override` (H2 scalar).**
+    *   **Function**: `get_stop_and_target`
+    *   **Variable**: `h2_scalar = kwargs.get("atr_mult_override", None)`
+    *   **Code Path**: `if h2_scalar is not None: stop_mult *= h2_scalar; target_mult *= h2_scalar`.
+    *   **Runtime vs. Intended**: There is no check to ensure `h2_scalar` (which modifies stop and target multipliers) is positive. If `h2_scalar` were to become zero or negative due to an upstream calculation error, it would lead to calculated `stop_dist` or `target_dist` being zero or negative, resulting in invalid stop/target prices.
+    *   **Failure Condition**: An invalid (non-positive) `h2_scalar` could cause `stop_price` or `target_price` to be incorrectly calculated, potentially leading to immediate unintended exits or rejected orders.
+    *   **Severity**: HIGH
+
+5.  **BUG: `calculate_position_size` uses hardcoded 95% portfolio cap, ignoring `BUCKET_A_ALLOCATION_PCT`.**
+    *   **Function**: `calculate_position_size`
+    *   **Code Path**: `max_position_value = self.portfolio_value * 0.95`.
+    *   **Runtime vs. Intended**: This line hardcodes a maximum position value as 95% of `portfolio_value`, with a comment attributing it to "Bucket B max allocation". However, `config.BUCKET_A_ALLOCATION_PCT = 0.05` exists, implying a different allocation for Bucket A tickers. This hardcoded `0.95` value might be inappropriate for Bucket A tickers (which should be 5%), or might not align with a more dynamic allocation strategy if the bot trades outside "Bucket B" (which TQQQ is, from `BUCKET_A_TICKERS`). This can lead to incorrect position sizing for specific asset types.
+    *   **Failure Condition**: Position size calculation may incorrectly cap `BUCKET_A` positions at 95% of the portfolio value instead of 5%, or generally misapply an arbitrary 95% cap across all positions regardless of their intended allocation bucket.
+    *   **Severity**: HIGH
+
+**File: `strategy/confluence.py`**
+
+1.  **BUG: Hardcoded `volume_confirmed` weight when `BUCKET_A_TICKERS` auto-pass.**
+    *   **Function**: `score_long_signal`, `score_short_signal`
+    *   **Code Path**: `score += weights.get("volume_confirmed", 1)`
+    *   **Runtime vs. Intended**: When `VOLUME_CONFIRMATION_ENABLED` is `True` and the symbol is a `BUCKET_A_TICKER`, the code uses `weights.get("volume_confirmed", 1)` to add points. This means if `"volume_confirmed"` is not explicitly defined in `config.SCORE_WEIGHTS`, it defaults to `1` point. Other scoring conditions explicitly access `weights["condition_name"]`. This inconsistency could lead to `BUCKET_A` tickers receiving a fixed `1` point for volume confirmation, even if a higher or lower weight is intended in `config.SCORE_WEIGHTS`.
+    *   **Failure Condition**: `BUCKET_A` tickers may receive an incorrect (defaulted) score for the `volume_confirmed` condition if it's not explicitly defined in `config.SCORE_WEIGHTS`.
+    *   **Severity**: LOW
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTOUCHED** (Source not provided).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (Source not provided).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **TRIGGERED** (Logs show `PDT count mismatch` at EOD, which is a broader symptom of PDT tracking failure).
+*   **P5-H2 | Fill price crosstalk**: **TRIGGERED** (Logs show `FILL UNVERIFIED` for PLTR and subsequent `RC-4 fill_correction`, indicating issues with fill data integrity).
+*   **P5-H3 | Orphan GTC 404 path**: **TRIGGERED** (Log shows `FIFO orphan: closing fill for PANW`, which is an orphan fill event, similar in nature to a GTC 404 impacting tracker records).
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED** (Source not provided).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED** (Log `[TQQQ] GTC STOP submitted` confirms GTC stops are being submitted).
+*   **P5-M1 | Cycle watchdog restart loop**: **UNTOUCHED** (Logs show long `gc.collect()` times but no direct evidence of a watchdog restart loop).
+*   **P5-M2 | MRI score cached stale across sessions**: **UNTOUCHED** (No direct evidence in logs of stale MRI data being loaded without validation).
+*   **P5-M3 | score_comparison JSON unbounded growth**: **TRIGGERED** (Logs show `write_eod_summary: score_comparison expected list, got dict — skipped`, indicating an ongoing data format issue related to `score_comparison`).
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED** (Not visible in logs).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **UNTOUCHED** (Logs show EOD summaries but not the exact timing relative to all positions being closed).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED** (Source not provided).
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | Implied in `execution/portfolio_tracker` | PDT Counter Root Cause Undiagnosed**
+    *   **Description**: The system detected a PDT count mismatch (`Alpaca reports 3, tracker has 0`) and applied a band-aid fix (`Added 3 EXTERNAL entry/entries`). This indicates a critical failure in the bot's ability to track day trades accurately, either by missing its own day trades or failing to detect external ones, leaving the system vulnerable to PDT violations.
+    *   **Exact Failure Condition**: The internal PDT counter maintained by the bot (`self.pdt_count` or similar) diverges from Alpaca's authoritative count, causing misrepresentation of the bot's PDT status.
+*   **EXECUTION BUG | HIGH | Implied in `execution/broker` | Order Blocking During RTH (`40310000`)**
+    *   **Description**: An Alpaca error `40310000` blocked a `close_position` order for `PLTR` during regular trading hours (15:36 ET). This error is not listed as a known benign pattern.
+    *   **Exact Failure Condition**: A critical order to close a position is blocked by Alpaca with an unhandled error code (`40310000`) during market hours, preventing timely risk management.
+*   **INFRASTRUCTURE | MEDIUM | `main` (implied in bot orchestrator) | Excessive `gc.collect()` Latency**
+    *   **Description**: `gc.collect()` operations are frequently taking several seconds to complete (`4.2s` to `9.9s`). This high latency indicates potential memory leaks or excessive object churn, which can negatively impact the bot's responsiveness and trading performance.
+    *   **Exact Failure Condition**: Garbage collection cycles exceed acceptable latency thresholds (e.g., consistently over 1 second), potentially delaying critical trade decision-making and execution.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Diagnose and fix the root cause of PDT count mismatch.** This is a critical regulatory risk. Implement robust real-time synchronization or reconciliation of PDT status with Alpaca.
+2.  **IMMEDIATE: Investigate and implement handling for Alpaca error `40310000` during RTH.** The `close_position blocked` event is a severe operational failure.
+3.  **HIGH PRIORITY: Implement comprehensive P&L reconciliation with Alpaca.** The `P&L DRIFT` and `FIFO orphan` issues indicate the bot's internal P&L accounting is unreliable. `update_daily_pnl_from_alpaca` should be the authoritative source, and all Alpaca fills must be processed, even orphaned ones, to ensure correct P&L attribution.
+4.  **HIGH PRIORITY: Enhance `RiskManager` initialization to prevent invalid `daily_start_value`.** Validate `portfolio_value` and `daily_start_value` at system start to ensure they are always positive and reasonable, preventing premature kill switch triggers.
+5.  **MEDIUM PRIORITY: Optimize memory management.** Address the cause of prolonged `gc.collect()` times to improve system responsiveness and prevent potential performance degradation.

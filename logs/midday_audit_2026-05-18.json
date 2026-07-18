@@ -1,0 +1,54 @@
+{
+  "audit_date": "2026-05-18",
+  "run_ts": "2026-05-18T10:30:02.554954-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TOST",
+      "MSTR"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 34,
+    "levels": {
+      "STRESSED": 27,
+      "NORMAL": 6,
+      "ELEVATED": 1
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 1168,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-18 06:30:05,233 | WARNING  | execution.portfolio_tracker | write_eod_summary: score_comparison expected list, got dict \u2014 skipped",
+      "2026-05-18 06:30:05,398 | WARNING  | strategy.run_cycle | Overnight scan HTML write failed: 0",
+      "2026-05-18 06:30:36,573 | WARNING  | execution.portfolio_tracker | write_eod_summary: score_comparison expected list, got dict \u2014 skipped",
+      "2026-05-18 06:30:41,756 | WARNING  | main | gc.collect() took 4913.5ms, collected 99 objects \u2014 heap may be growing",
+      "2026-05-18 06:31:39,440 | WARNING  | macro_risk_index | MRI state 58.6h stale (>20h) \u2014 starting fresh."
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

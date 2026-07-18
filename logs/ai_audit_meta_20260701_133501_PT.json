@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-07-01 01:35 PM PT",
+  "ts_iso": "2026-07-01T13:35:05.935001-07:00",
+  "prompt_chars": 51124,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 51124,
+  "gai_prompt_chars": 51200,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.26,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "### 1. TRADE-BY-TRADE VERDICT\n\n*Note: All entries on 2026-07-01 lack chart context (`atr14d=None`, `trend=UNKNOWN`), making trend alignment impossible to verify.*\n\n- **[SNOW long 12 ELEVATED]** → held overnight (AH stop at $245.45) → **VERDICT: unknown**\n- **[RIVN long 10 ELEVATED]** → held overnight (AH stop at $16.20) → **VERDICT: unknown**\n- **[HOOD long 11 ELEVATED]** → held overnight (AH stop at $104.85) → **VERDICT: entry_error** *(ATR calculation failed, resulting in a 0-ATR stop placed exactly at entry price)*\n- **[TSLA long 12 ELEVATED]** → held overnight (AH stop at $406.97) → **VERDICT: unknown**\n- **[MARA long 10 ELEVATED]** → held overnight (AH stop at $11.28) → **VERDICT: unknown**\n- **[PANW long 10 ELEVATED]** → held overnight (AH stop at $329.75) → **VERDICT: unknown**\n\n### 2. PATTERN ANALYSIS\n\n**PATTERN 1: Silent ATR & Chart Context Failure (Negative)**\nEvery single entry on 2026-07-01 (SNOW, RIVN, HOOD, TSLA, MARA, PANW) logged `[chart] 5d=None% vs_SPY=None% ema20_dist=None% trend=UNKNOWN atr14d=None`. The bot is flying blind without volatility or trend data. \n*Impact:* For HOOD, the missing ATR caused the bot to calculate `0.5R = $0.00`. Despite the trade being in profit by $3.77/share ($108.65 vs $104.88 entry), the bot placed the GTC stop exactly at the entry price ($104.85 after offset). This guarantees a premature stop-out on normal market noise, leaving at least ~$11.31 of open profit (on 3 shares) on the table.\n\n**PATTERN 2: State Management Corruption / Double-Records (Negative)**\nThe portfolio tracker is failing to properly move closed trades out of the open state. The logs explicitly warn: `[NVDA] _load_log: same entry_time in open AND closed — double-record (failed pop)?` and the same for `[GOOGL]`. \n*Impact:* This corrupts the bot's internal tracking of available capital and risk exposure. If the bot thinks it still holds NVDA and GOOGL, it may artificially suppress new entries due to perceived capital constraints, leaving alpha on the table.\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n\n- No prior directives to evaluate (All listed as N/A).\n\n### 4. WEEKLY DIRECTIVES\n\n⚠️ **[INSUFFICIENT_SAMPLE — N=19]**\n*Statistical guardrail active. No parameter changes (MIN_SCORE, stop size, targets, sizing) are prescribed.*\n\n**Observations for Future Tuning:**\n- **Sub-Kelly Sizing due to Missing Volatility:** The bot deployed ~$1,908 across 6 positions on 07-01. However, because `atr14d=None`, the bot's risk-sizing math is likely defaulting to hardcoded minimums or failing to scale up for low-volatility setups. Once the ATR bug is fixed, we need to evaluate if the `KELLY_FRACTION=0.25` is actually being utilized or if the bot is artificially capping size.\n- **Momentum Truncation:** Jegadeesh + Titman's momentum continuation principles are being violated by the HOOD trade. The stock moved into profit, but the broken ATR math dragged the stop right to the entry price, effectively choking out any room for momentum to breathe. \n\n### 5. FINAL VERDICT\n\n**WARN** — The strategy's logic is currently being undermined by critical infrastructure bugs (missing ATR data causing 0-width stops, and state corruption in the portfolio tracker), which will actively truncate winners and miscalculate risk.\n\n### 6. STRUCTURED FINDINGS\n\n```json\n[\n  {\n    \"file\": \"strategy/run_cycle.py\",\n    \"finding\": \"Chart context and ATR calculations are failing (returning None), which caused HOOD to calculate a 0.5R of $0.00 and place a stop exactly at the entry price.\",\n    \"recommended_fix\": \"Add validation to ensure ATR is successfully fetched/calculated before order submission. Implement a fallback percentage-based stop (e.g., 2%) if ATR returns None, or block the entry entirely.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"Double-record bug where trades exist in both open and closed states simultaneously (failed pop), causing state corruption for NVDA and GOOGL.\",\n    \"recommended_fix\": \"Ensure that when a trade is appended to closed_trades, it is successfully popped/removed from the open_trades dictionary. Add a deduplication check in reconcile_eod.py.\",\n    \"rc_class\": \"RC-3\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 33350,
+    "elapsed_s": 40.84,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

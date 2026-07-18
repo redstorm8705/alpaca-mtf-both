@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-05-27",
+  "run_ts": "2026-05-27T10:30:02.150733-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 21,
+    "levels": {
+      "ELEVATED": 21
+    },
+    "last_score": 39,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 68,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-27 14:06:07,980 | WARNING  | execution.entry_logic | execute_entries: HALTED for session \u2014 no new entries permitted.",
+      "2026-05-27 14:11:05,129 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$23.45 tracker=$0.00 drift=$+23.45",
+      "2026-05-27 14:11:10,458 | WARNING  | main | gc.collect() took 4821.7ms, collected 175 objects \u2014 heap may be growing",
+      "2026-05-27 14:16:11,616 | WARNING  | strategy.run_cycle | Risk day (FOMC Minutes May meeting \u2014 50% size) \u2014 sizing at 50%",
+      "2026-05-27 14:18:22,652 | WARNING  | execution.entry_logic | execute_entries: HALTED for session \u2014 no new entries permitted."
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

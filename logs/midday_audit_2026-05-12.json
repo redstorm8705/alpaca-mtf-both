@@ -1,0 +1,93 @@
+{
+  "audit_date": "2026-05-12",
+  "run_ts": "2026-05-12T10:30:01.942056-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TQQQ"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 37,
+    "levels": {
+      "STRESSED": 37
+    },
+    "last_score": 52,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 18,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-12 13:36:26,393 | WARNING  | execution.gtc_manager | RTH DAY stops: 4 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market",
+      "2026-05-12 14:04:32,697 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 \u2014 review exit discipline and sto",
+      "2026-05-12 14:10:14,662 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 \u2014 review exit discipline and sto",
+      "2026-05-12 14:16:19,465 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 \u2014 review exit discipline and sto",
+      "2026-05-12 14:22:17,189 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "TQQQ",
+      "status": "rc=2",
+      "entry": 75.96,
+      "exit": 73.36
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -2.5999999999999943,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -2.5999999999999943,
+    "best": {
+      "symbol": "TQQQ",
+      "pnl": -2.5999999999999943,
+      "entry_price": 75.96,
+      "exit_price": 73.36,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 65.38,
+      "target": 97.21
+    },
+    "worst": {
+      "symbol": "TQQQ",
+      "pnl": -2.5999999999999943,
+      "entry_price": 75.96,
+      "exit_price": 73.36,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 65.38,
+      "target": 97.21
+    },
+    "trades": [
+      {
+        "symbol": "TQQQ",
+        "pnl": -2.5999999999999943,
+        "entry_price": 75.96,
+        "exit_price": 73.36,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 65.38,
+        "target": 97.21
+      }
+    ]
+  }
+}

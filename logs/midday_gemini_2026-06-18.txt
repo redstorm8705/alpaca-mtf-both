@@ -1,0 +1,59 @@
+Midday Gemini Audit — 2026-06-18
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit Integrity**: The NFLX trade (`entry $77.54 → exit $76.38 (+$1.16)`) is plausible as a short trade, given that the profit ($1.16) is positive when the exit price is lower than the entry price. The profit targets (T1=$76.40, T2=$75.25, T3=$71.82) and stop price ($80.29) are consistent with a short position. The partial exit at $76.38 is very close to T1=$76.40, indicating successful profit-taking at a target level.
+*   **P&L Sign Checks**: P&L sign is correct for a short trade.
+*   **Score→Outcome Correlation**: The NFLX trade had a score of 12/12, which is a high score (above the dynamic MIN_SCORE of 11/12 observed in the logs). This high score resulted in a winning trade, showing positive correlation for this single instance.
+*   **Stop Rate Analysis**: With only one trade closed and zero stops hit, the stop-hit rate of 0% is not statistically significant but indicates no immediate stop-loss failures for the recorded trade.
+*   **P&L = 0.0 but entry ≠ exit**: Not applicable, P&L is $1.16.
+*   **Partial Exit Position Size Reduction**: Source not provided to audit whether the partial exit correctly reduced the position size.
+
+### ENTRY QUALITY
+No issues detected based on available data. The NFLX trade met the score criteria (12/12 vs. dynamic MIN_SCORE 11/12). The MRI was ELEVATED, and the bot correctly applied a size floor. The actual entry time is not available in the provided log snippet to verify TOD constraints, nor is explicit volume data for NFLX at entry.
+
+### EXIT QUALITY
+No issues detected. The partial exit for NFLX at $76.38 was very close to the stated T1 of $76.40, indicating disciplined profit-taking. Without further log details on price action after the exit, it's difficult to assess if the bot held winners too long or cut losers too slowly in this single instance.
+
+### MRI ALIGNMENT
+*   The overall session MRI level was `ELEVATED` (38/100), as reported in the MRI session distribution and confirmed in the logs (`2026-06-18 17:26:26,833`).
+*   The bot explicitly adjusted position sizing due to this: `2026-06-18 17:26:43,284 | INFO | strategy.run_cycle | MRI ELEVATED (score=38) — size floor 0.85x applied.`. This demonstrates appropriate risk management and alignment with the MRI regime.
+*   The NFLX trade was noted as occurring under `MRI=ELEVATED`. This is consistent with the general session risk environment and the bot's adaptive sizing.
+
+### LOG ANOMALIES
+*   **Excessive Garbage Collection & Slow Cycle**:
+    *   `2026-06-18 17:21:17,652 | WARNING | main | gc.collect() took 3048.4ms, collected 99 objects — heap may be growing`
+    *   `2026-06-18 17:21:17,653 | INFO | main | [CYCLE] duration=432s | phase=midday | watchdog_headroom=288s ⚠ SLOW CYCLE`
+    *   A garbage collection pause of over 3 seconds is substantial and indicates potential memory management issues (e.g., heap growth, memory leaks) leading to noticeable performance degradation. This directly caused a "SLOW CYCLE" lasting 7.2 minutes (432 seconds), impacting the bot's responsiveness and ability to react to real-time market conditions.
+*   **Internal TQI Degradation Warning**:
+    *   `2026-06-18 17:26:59,363 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 — review exit discipline and stop placement.`
+    *   This is a self-diagnostic warning indicating that the bot's internal Trade Quality Index (TQI) for the last five trades has fallen below an acceptable threshold. While a warning, it signals potential systematic issues in strategy performance (Alpha) that the bot has detected itself.
+*   **Risk Day Sizing Adjustment**:
+    *   `2026-06-18 17:26:18,194 | WARNING | strategy.run_cycle | Risk day (Quad Witching Q2 — moved to Thu (Jun 19 = Juneteenth market holiday)) — sizing at 50%`
+    *   This is not an anomaly but a positive indication of adaptive risk management, showing the bot correctly identifies and reacts to special market conditions by reducing sizing.
+
+### NEW BUGS / CONCERNS
+
+**1. P&L Reporting Discrepancy**
+*   CATEGORY: EXECUTION BUG
+*   SEVERITY: CRITICAL
+*   description: There is a significant and concerning discrepancy between the reported P&L figures for the session. The `SESSION P&L SUMMARY` states a Total P&L of $1.16. However, the `Alpaca FIFO EOD` log entry reports `pnl_today=$1.10`, and the bot's internal `tracker` P&L reports `$-14.49`. This results in a `EOD P&L DRIFT` of `$+15.59`. Multiple P&L values for the same session indicate a fundamental issue in trade accounting, P&L aggregation, or synchronization with the Alpaca broker. This can lead to incorrect risk calculations, position sizing, and inaccurate performance assessment.
+*   exact condition: `SESSION P&L SUMMARY`'s `Total P&L ($1.16)` differs from `execution.portfolio_tracker`'s `Alpaca FIFO EOD` for `pnl_today ($1.10)` and `tracker ($-14.49)` values logged at `2026-06-18 17:21:14,499` and `2026-06-18 17:28:09,477`.
+
+**2. Persistent Slow Cycle Due to Garbage Collection**
+*   CATEGORY: INFRASTRUCTURE
+*   SEVERITY: HIGH
+*   description: The bot experienced a prolonged garbage collection pause (`gc.collect() took 3048.4ms`) which directly contributed to a significantly long processing cycle (`duration=432s`). This indicates potential memory pressure or inefficient object management within the bot's codebase, leading to reduced responsiveness. A cycle duration of 7.2 minutes for an intraday bot is excessively slow, increasing the risk of missing market opportunities, delayed order submissions, or stale data usage. The `⚠ SLOW CYCLE` flag confirms this is beyond normal operational parameters.
+*   exact condition: `gc.collect()` logs a duration exceeding a reasonable threshold (e.g., >500ms for a trading bot) followed immediately by `[CYCLE] duration` being excessive (e.g., > 1-2 minutes for typical intraday cycles), as seen at `2026-06-18 17:21:17,652` and `2026-06-18 17:21:17,653`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / INFRASTRUCTURE**: Investigate and resolve the P&L discrepancy immediately. Trace the flow of P&L calculation from Alpaca fills, through the internal tracker, to the final `SESSION P&L SUMMARY`. Ensure a single, consistent source of truth for daily P&L. Confirm how `EOD P&L DRIFT` is handled and if it correctly reconciles the various P&L figures.
+2.  **INFRASTRUCTURE**: Profile the bot's memory usage and identify the root cause of the prolonged garbage collection pauses and slow cycles. Optimize object creation/destruction, consider using more memory-efficient data structures, or implement a more aggressive GC strategy if appropriate. This is critical for maintaining real-time performance.
+3.  **ALPHA**: Address the `TQI degradation` warning. Review the recent trade history (last 5 trades) to understand why the TQI is degrading. Focus on exit discipline and stop placement as suggested by the bot's self-diagnostic. This indicates a potential systematic drift in strategy performance against current market conditions.

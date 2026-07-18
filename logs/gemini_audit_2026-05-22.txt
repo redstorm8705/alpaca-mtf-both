@@ -1,0 +1,75 @@
+Nightly Gemini Audit — 2026-05-22
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['execution/exit_logic.py', 'strategy/run_cycle.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing**: Observed at 19:17:24 ET (4466.7ms) and 19:56:55 ET (4552.1ms). Indicates persistent performance issues with garbage collection, potentially causing significant processing delays.
+*   **Recurring WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30**: Observed at 19:23:19, 19:30:12, 19:43:16, 19:50:25. This is an internal bot warning signaling consistently poor trade quality (TQI average of 12.4/100 is far below the 30 threshold), suggesting critical issues with exit discipline and/or stop placement.
+*   **WARNING | strategy.run_cycle | scan_results.html write failed: 0**: Observed at 19:27:58. The error message `0` for a failed write operation is uninformative and obscures the root cause of the failure, hindering debugging.
+*   **CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=6. Correcting to tracker count**: Observed at 19:29:02 immediately after a `SIGTERM` and restart. Indicates a severe state inconsistency between the `RiskManager` and `PortfolioTracker` upon startup, despite the system attempting self-correction.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness**: Generally correct for observed trades, except for one identified discrepancy (see "New Bugs Found" for AMZN).
+*   **pnl=0.0 anomalies**: `PLTR` (short, exit `133.295`, entry `133.29`) reported `pnl=0.0`. This is a minor floating-point rounding issue resulting in a recorded breakeven despite a tiny loss, which might slightly affect TQI calculation.
+*   **Score→outcome correlation**: No strong positive correlation is evident from the limited recent trades. Higher-scoring trades (e.g., NFLX score 12, TSLA score 10) still resulted in losses or breakeven.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats` show a `win_rate` of 39.7%, meaning over 60% of trades are losing. This is consistent with the frequency of `stop_hit` and `overnight_atr_buffer_exit` reasons in recent `TRADE EVENTS`. The `avg_r_multiple` of -0.041 further confirms that the bot is not effectively capturing its theoretical 2.5x target edge and is instead experiencing larger average losses relative to risk. This aligns with the `[ANOMALY-3] TQI degradation`.
+*   **Exit reason consistency**:
+    *   `PLTR` `overnight_atr_buffer_exit` (`2026-05-20T12:36:54`): Entry `133.29`, threshold `136.16`. The exit price was `133.295`. For a `short` trade, an overnight ATR buffer exit should trigger *above* the threshold. `133.295` is *below* `136.16`, which is inconsistent with the stated exit logic (a short exit at `133.295` when `136.16` is the threshold suggests it exited *before* the buffer was breached).
+
+### TRADE INTEGRITY
+*   **AMZN P&L discrepancy**: For the `partial_exit` of `AMZN` (`2026-05-21T10:38:53`), the `price` (`268.25`), `size` (`1`), and the `entry` price from `alpaca_per_trade` (`247.26`) indicate a P&L of `(268.25 - 247.26) * 1 = 20.99`. However, the recorded `pnl` is `3.44`. This is a significant discrepancy in P&L calculation or recording for a partial exit.
+
+### MODIFIED FILE FINDINGS
+*   **execution/exit_logic.py**:
+    *   **Function**: `check_partial_exits`
+    *   **Variable**: `new_trail`
+    *   **Code Path**: Lines 175-177. For `short` trades, the logic `min(round(current_price + trail_dist, 2), _stop_floor) if _stop_floor` conditionally applies the `_stop_floor`. If `_stop_floor` evaluates to `0.0` (which can happen if `trade.get("stop")` is `None` and defaults to `0.0`), the `min` comparison is skipped, and `new_trail` is simply `round(current_price + trail_dist, 2)`.
+    *   **Failure Condition**: For a `short` trade, if `trade["stop"]` is `None` or `0.0`, the calculated `new_trail` variable will not be effectively bounded by the original stop price (since `min(X, 0.0)` for a positive `X` doesn't provide the intended upper bound), potentially allowing the trailing stop to move *above* the initial risk level.
+    *   **Function**: `check_partial_exits`
+    *   **Variable**: `_tr_adj_px`
+    *   **Code Path**: Lines 190-192. A random offset `_tr_offset` (0.01 to 0.05) is subtracted/added to `_cur_trail_px` before submitting the Alpaca DAY stop order.
+    *   **Failure Condition**: The actual stop price on Alpaca (`_tr_adj_px`) will randomly diverge from the internally tracked `trade.get("trail_stop")` value, creating desynchronization and potentially leading to unexpected stop triggers or discrepancies in risk management.
+*   **strategy/run_cycle.py**:
+    *   **Function**: `run_cycle`
+    *   **Variable**: `_e` (exception object)
+    *   **Code Path**: Line 163 and 190: `logger.warning(f"Pre-market HTML write failed: {_e}")`.
+    *   **Failure Condition**: When `scan_results.html` write fails, the exception object `_e` is logged as `0` (`scan_results.html write failed: 0`), which is not an informative error message and obscures the actual cause of the failure.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: TRIGGERED (Pre-market mover scan failed or timed out. This error is consistent with the reported ImportError.)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED
+*   P5-H2 | Fill price crosstalk: UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED (although POSITION COUNT DRIFT is related, it's not the specific 404 path)
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: UNTOUCHED
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT on restart**: Upon bot restart (following SIGTERM), `risk.open_positions` is `0` while `tracker` has `6` open positions, indicating a failure in correctly reloading or synchronizing risk manager state.
+*   **EXECUTION BUG | HIGH | execution/exit_logic.py | AMZN P&L discrepancy in TRADE EVENTS**: The partial exit P&L for AMZN (`pnl: 3.44`) does not match the calculated P&L (`20.99`) based on the provided entry, exit, and quantity for the `partial_exit` event.
+*   **EXECUTION BUG | MEDIUM | execution/exit_logic.py | Trailing stop randomized offset for Alpaca orders**: The `submit_day_stop_order` function for trail stops uses a randomized `_tr_offset`, leading to the Alpaca exchange stop price differing from the bot's internal calculation.
+*   **EXECUTION BUG | MEDIUM | execution/exit_logic.py | Trailing stop bounding error for short positions**: The `new_trail` calculation for short positions in `check_partial_exits` fails to correctly bound the trailing stop by the original stop price when `trade["stop"]` is `None` or `0.0`, potentially allowing increased risk.
+*   **ALPHA ISSUE | HIGH | strategy.run_cycle | Recurring [ANOMALY-3] TQI degradation**: The bot's self-reported TQI consistently indicates poor exit discipline and stop placement, impacting profitability and average R-multiple.
+*   **INFRASTRUCTURE | MEDIUM | strategy/run_cycle.py | Obscure HTML write error message**: The log `scan_results.html write failed: 0` provides no useful information for debugging the HTML generation failure.
+*   **INFRASTRUCTURE | LOW | main | Excessive gc.collect() runtime**: The garbage collector frequently pausing the bot for several seconds (`4466.7ms`, `4552.1ms`) introduces latency that can affect trade execution and responsiveness.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate and resolve the `POSITION COUNT DRIFT` bug in `execution.orphan_manager`** to ensure consistent state across all risk management components after restarts. This is a critical data integrity issue.
+2.  **URGENT: Debug and correct the `AMZN` P&L calculation discrepancy in `execution/exit_logic.py`**. Verify the P&L calculation logic for all partial exits to ensure accurate financial reporting and performance metrics.
+3.  **Prioritize addressing the `[ANOMALY-3] TQI degradation` (Alpha Issue)**. This requires a comprehensive review of the strategy's exit logic, stop placement, and profit-taking mechanisms to improve overall trade quality and profitability.
+4.  **Fix the trailing stop calculation in `execution/exit_logic.py`**:
+    *   Remove the random `_tr_offset` when submitting Alpaca stop orders.
+    *   Correct the `new_trail` bounding logic for short positions to ensure stops are always correctly constrained.
+5.  **Enhance error reporting for `scan_results.html` write failures** in `strategy/run_cycle.py` to provide specific exception details rather than an ambiguous `0` error code.

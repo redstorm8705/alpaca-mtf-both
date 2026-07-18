@@ -1,0 +1,95 @@
+Nightly Gemini Audit — 2026-05-06
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['monthly_review.py', 'run_movers.py', 'execution/orphan_manager.py', 'execution/risk_manager.py', 'execution/trade_engine.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py', 'execution/gtc_manager.py', 'events/news_monitor.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring `Weekly bias: insufficient data (4 bars), filter skipped` warnings**: This warning appears hundreds of times across multiple symbols. It indicates a persistent issue with data fetching or availability for the `TF_WEEKLY` timeframe, preventing the weekly bias filter from being applied. This can lead to signals being generated without a crucial confluence factor.
+*   **Recurring `[RSS] Feed parse error (bozo=True)` warnings**: Multiple RSS feeds are failing to parse due to being malformed or returning non-XML content (e.g., HTML error pages). This means the bot is not receiving all expected news alerts from these sources, leading to a gap in real-time news intelligence.
+*   **Recurring `EOD P&L DRIFT` warnings**: The bot consistently reports significant P&L drift between Alpaca and its internal tracker (e.g., `drift=$-61.40`, `drift=$-3.60`). While the system has a guard to prioritize Alpaca's P&L (or keep the larger loss), persistent drift indicates a fundamental discrepancy in how P&L is being calculated or attributed by the internal tracker. This can affect the accuracy of `daily_pnl` and, consequently, risk management.
+*   **`Alpaca API load failed / Alpaca fills FIFO failed` CRITICAL errors**: The bot experienced network connectivity issues leading to Alpaca API failures. Crucially, `Alpaca fills FIFO failed` means the authoritative P&L source was unavailable, forcing a fallback to the potentially drifting internal tracker P&L. This jeopardizes accurate P&L accounting and kill switch sensitivity.
+*   **`send_slack failed` WARNING**: Slack alerts are failing due to network errors. This means critical notifications (e.g., `FILL UNVERIFIED`, `GTC CANCEL FAILED`) are not being delivered to operators, significantly impairing incident response.
+*   **`gc.collect() took 2550.7ms, collected 573 objects — heap may be growing` WARNING**: This indicates long garbage collection pauses. It suggests potential memory leaks or inefficient memory usage, which could lead to performance degradation or out-of-memory errors over extended runtime.
+*   **`POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.` CRITICAL**: After a `SIGTERM` and restart, `risk.open_positions` (which drives new entry gating) was `0` while `tracker` showed `4` open positions. While the bot corrects to the `tracker` count, this indicates `risk.open_positions` is not robustly persisted or restored across restarts, leading to a transient but critical risk management gap where the bot might incorrectly perceive itself as having no open positions.
+*   **`DAY stop blocked (40310000 / insufficient buying_power)` WARNING**: An attempt to place a DAY stop order failed due to insufficient buying power. This leaves a position unprotected by an exchange-level stop, which is a significant risk. The bot retries, but a retry on insufficient buying power is unlikely to succeed without a position being closed first.
+*   **`write_eod_summary: score_comparison load failed ('str' object has no attribute 'get') — skipped` WARNING**: This confirms an issue with loading the `score_comparison` data (P5-M3), indicating potential data corruption or an unexpected format.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Recording Inconsistency for QQQ**: The `TRADE EVENTS` explicitly shows a `QQQ` exit for `price: 688.96` with a `pnl: 28.64` due to `reason: target` (score 12, long). However, the `EOD SNAPSHOT`'s `trades` list for `QQQ` shows `pnl: 0.0` and `exit_price: 660.32` (which is the entry price). This is a direct contradiction and indicates a critical bug in the EOD P&L aggregation for `QQQ` specifically. This also incorrectly impacts `win_rate_today` (reported as `0.0`) and `score_buckets` (QQQ was a score 12 win, but 12-13 bucket shows 0 wins).
+*   **P&L/Direction Inconsistency for AAPL**: The `TRADE EVENTS` and `CRITICAL | execution.orphan_manager` log clearly state an `AAPL` `long` entry at `$286.21`. However, the `EOD SNAPSHOT` `alpaca_per_trade` lists an `AAPL` `short` trade with `entry: 276.21`, `exit: 286.21`, and `pnl: -10.0`. This is a severe discrepancy in trade attribution or recording, either misrepresenting the trade direction or associating the wrong entry price/PNL with the recorded position.
+*   **Extremely Poor R-Multiple**: `all_time_stats.avg_r_multiple: -0.028`. This is very concerning, especially given `TARGET_ATR_MULT = 2.5` (implying a target R:R of 1:2.5). An average R-multiple of -0.028 indicates the bot is not capturing its intended edge, suffering frequent small losses, or stops are being hit much more often than targets. This is a severe performance issue, suggesting a fundamental problem with the strategy's risk/reward capture or its ability to let winners run.
+
+### TRADE INTEGRITY
+
+*   **Recording Bug in EOD Summary (QQQ P&L)**: As noted in the Performance Audit, the `EOD SNAPSHOT`'s `trades` list shows `QQQ` with `pnl: 0.0` despite the `TRADE EVENTS` showing a positive P&L. This is a direct bug in the EOD summary generation, leading to inaccurate daily performance reporting.
+*   **P&L Drift between Alpaca and Tracker**: The persistent P&L drift is a trade integrity issue. While Alpaca's data is prioritized, the tracker's `daily_pnl` is an important internal metric for the kill switch and Kelly sizing. Large, unaddressed drift can lead to misinformed risk decisions.
+
+### MODIFIED FILE FINDINGS
+
+*   **`execution/trade_engine.py`**:
+    *   **Function**: `execute_entries`
+    *   **Variable**: `_main._spy_risk_magnitude`
+    *   **Description**: The line `_main._spy_risk_magnitude = globals().get("_main._spy_risk_magnitude" ...)` is attempting to assign a value to `_main._spy_risk_magnitude` (a global variable from `main.py`). The right-hand side, `globals().get("_main._spy_risk_magnitude", default_value)`, attempts to retrieve a variable *named literally* `_main._spy_risk_magnitude` from the `trade_engine.py` module's local global scope. This variable does not exist in `trade_engine.py`.
+    *   **Code Path**: When `execute_entries` is called, `globals().get("...")` will return `None` (or its default if provided, likely `0.0`). This `None`/`0.0` is then assigned to `_main._spy_risk_magnitude`.
+    *   **Failure Condition**: The `_spy_risk_magnitude` variable in `main.py` (which determines SPY-related risk adjustments like entry blocking or size multipliers) will be incorrectly reset to `None` or `0.0` every time `execute_entries` runs. This will effectively neutralize SPY risk adjustments, potentially allowing entries when they should be blocked or using an incorrect `news_size_mult`, leading to unintended risk exposure.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: FIXED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED (P5 description seems stale, code looks okay)
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: UNTOUCHED
+*   **P5-H2 | Fill price crosstalk**: FIXED
+*   **P5-H3 | Orphan GTC 404 path**: FIXED
+*   **P5-H4 | Rule 2 dead code**: FIXED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: FIXED
+*   **P5-M3 | score_comparison JSON unbounded growth**: TRIGGERED (load failed, likely preventing unbounded growth but not fixing the root cause/format)
+
+### NEW BUGS FOUND
+
+*   **CATEGORY**: EXECUTION BUG
+    **SEVERITY**: CRITICAL
+    **FILE**: `execution/trade_engine.py`
+    **DESCRIPTION**: Global variable `_main._spy_risk_magnitude` from `main.py` is incorrectly reset to `None` or `0.0` in `execute_entries` due to incorrect `globals().get()` usage.
+    **EXACT FAILURE CONDITION**: `_main._spy_risk_magnitude` in `main.py` is overwritten by `None` (or `0.0` if `globals().get` has a default) every time `execute_entries` is called, leading to SPY risk management logic (e.g., entry blocking, size multipliers) being misapplied or bypassed entirely.
+
+*   **CATEGORY**: ALPHA ISSUE
+    **SEVERITY**: HIGH
+    **FILE**: `execution/portfolio_tracker.py`
+    **DESCRIPTION**: P&L for closed trades is incorrectly aggregated into the EOD summary.
+    **EXACT FAILURE CONDITION**: The `EOD SNAPSHOT` `trades` list reports `pnl: 0.0` for trades that clearly had positive P&L according to `TRADE EVENTS` (e.g., QQQ), resulting in inaccurate daily performance metrics (`win_rate_today`, `score_buckets`).
+
+*   **CATEGORY**: ALPHA ISSUE
+    **SEVERITY**: HIGH
+    **FILE**: `execution/portfolio_tracker.py`
+    **DESCRIPTION**: Discrepancy in AAPL trade direction and P&L attribution between `TRADE EVENTS` and `alpaca_per_trade` in EOD Snapshot.
+    **EXACT FAILURE CONDITION**: An `AAPL` long trade with specific entry price in `TRADE EVENTS` is shown as a short trade with a different entry price and P&L in the `alpaca_per_trade` section of the `EOD SNAPSHOT`, indicating a fundamental error in associating Alpaca fills with internal tracker trades.
+
+*   **CATEGORY**: INFRASTRUCTURE
+    **SEVERITY**: MEDIUM
+    **FILE**: `events/news_monitor.py`
+    **DESCRIPTION**: Persistent `[RSS] Feed parse error (bozo=True)` warnings indicate external RSS feeds are often malformed or serving non-XML content.
+    **EXACT FAILURE CONDITION**: The bot misses important news alerts from these failing RSS sources, resulting in incomplete real-time market intelligence.
+
+*   **CATEGORY**: INFRASTRUCTURE
+    **SEVERITY**: LOW
+    **FILE**: `strategy/signal_generator.py` (and data layers)
+    **DESCRIPTION**: Recurring `Weekly bias: insufficient data (4 bars), filter skipped` warnings indicate data retrieval issues for weekly bars.
+    **EXACT FAILURE CONDITION**: The weekly bias filter, a critical component of the MTF confluence scoring system, is frequently skipped for many symbols, potentially degrading the quality of generated signals.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE FIX for `_main._spy_risk_magnitude`**: Correct the assignment in `execution/trade_engine.py:execute_entries` to ensure `main.py`'s `_spy_risk_magnitude` is correctly accessed and used, not reset. This is a CRITICAL bug bypassing risk controls.
+2.  **Investigate and fix EOD Summary P&L Inconsistencies**: Debug `execution/portfolio_tracker.py` to ensure `_day_slice(t)` and the overall `write_eod_summary` logic correctly aggregates P&L for all closed trades, especially those with positive outcomes or partial exits, to prevent `pnl: 0.0` discrepancies.
+3.  **Address AAPL Trade Attribution Discrepancy**: Thoroughly investigate why Alpaca's P&L for AAPL differs in direction, entry, and P&L compared to the internal trade record, ensuring fills are correctly mapped to positions.
+4.  **Diagnose and Resolve Alpaca API Connectivity and Slack Alert Failures**: The recurring `urlopen error` and `send_slack failed` messages indicate underlying network or API client issues. Implement robust retry mechanisms, circuit breakers, and ensure Slack alerts are prioritized and fail-safely delivered.
+5.  **Address Persistent P&L Drift and `risk.open_positions` Desync**: Identify the root cause of the `EOD P&L DRIFT` and `POSITION COUNT DRIFT`. Ensure `risk.open_positions` is always accurately reconciled, especially after restarts, and that internal P&L calculations align with Alpaca's authoritative FIFO.

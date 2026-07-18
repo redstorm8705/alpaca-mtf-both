@@ -1,0 +1,65 @@
+Midday Gemini Audit — 2026-06-24
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **MSTR Trade Analysis**:
+    *   **Entry/Exit Plausibility**: Entry $120.63, Exit $98.16. These are plausible prices for MSTR.
+    *   **P&L Sign Correctness**: The trade was a short (entry $120.63, exit $98.16, P&L +$22.47). For a short position, profit occurs when entry price is greater than exit price. $120.63 - $98.16 = $22.47. The P&L sign is correct.
+    *   **Exit Consistency**: The exit price of $98.16 is below the stop ($140.92) and below intermediate profit targets T1 ($112.20) and T2 ($103.76), but above T3 ($78.46). This indicates a successful trade that ran beyond initial targets. The generic "exit" reason doesn't specify if it was a trailing stop hit, target partial, or discretionary close, but the outcome is positive.
+    *   **Win Rate and Profit Factor**: With only 1 closed trade, a 100% win rate and $22.47 average win are not statistically significant to assess consistency with the bot's edge claims.
+    *   **Score→Outcome Correlation**: The MSTR trade had a perfect 12/12 score and resulted in a win. This is a positive indicator for this single trade, but insufficient data for broader correlation.
+    *   **Stop-hit Rate**: 0% on 1 trade. Insufficient data to assess regime alignment.
+    *   **P&L Recording Bugs**: No trades with P&L = $0.00 where entry ≠ exit were observed. The `EOD P&L DRIFT` is a known benign pattern for Alpaca paper accounts.
+    *   **Partial Exits**: No partial exits were recorded in the session summary.
+
+### ENTRY QUALITY
+No issues found for the *executed* MSTR trade based on provided summary. The entry had a maximum confluence score (12/12 > `MIN_SCORE=9`) and occurred during an `ELEVATED` MRI regime where the bot correctly applied a size floor (`0.85x`). It was also during the "midday doldrums" which applied `75%` sizing.
+
+### EXIT QUALITY
+No issues detected based on the single MSTR trade. The exit was profitable and well past intermediate targets.
+
+### MRI ALIGNMENT
+The bot demonstrated proper MRI alignment:
+*   The MSTR trade occurred when MRI was `ELEVATED`. The log confirms that an `MRI ELEVATED (score=40) — size floor 0.85x applied` rule was active, indicating appropriate sizing adjustment.
+*   Later in the session, when MRI reached `STRESSED (score=45)`, the bot correctly applied a further size floor (`0.70x`) and, crucially, issued a `CRITICAL` alert `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`, halting new entries. This indicates correct risk management in deteriorating conditions.
+
+### LOG ANOMALIES
+*   **ANOMALY-3 TQI Degradation**: The bot's internal TQI metric is signaling a problem.
+*   **Memory/Performance Warnings**: Repeated `gc.collect()` taking significant time, leading to `SLOW CYCLE` warnings.
+*   **QuarterlyHoldManager Failures**: Repeated warnings about failing to fetch entry gate data for NVDA and GOOGL.
+*   **Unexplained Entry Halts**: Repeated `WARNING` messages indicating that new entries are `HALTED for session` without a clear, explicitly logged reason *prior* to the `MRI=STRESSED` critical halt.
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | HIGH | TQI Degradation**: The bot's own monitoring system, ANOMALY-3, flags a systematic problem with strategy performance.
+    *   **Variable involved**: `last-5-trade avg` for TQI (Trade Quality Index).
+    *   **Value vs. What it should be**: The current value of `25.4/100` is below the stated threshold of `30`. This indicates that the recent performance of the strategy (exit discipline and stop placement) is systematically degrading, which directly impacts the bot's profitability and edge.
+    *   **Condition under which this occurs**: Logged at `2026-06-24 17:07:33,758` and `2026-06-24 17:20:29,982` as `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30`.
+
+2.  **INFRASTRUCTURE | HIGH | Excessive GC Time and Slow Cycles**: The garbage collection process is taking an unacceptably long time, leading to significantly extended cycle durations. This suggests potential memory leaks or inefficient resource management, which directly impacts the bot's responsiveness to market changes and ability to execute trades in a timely manner.
+    *   **Variable involved**: `gc.collect() duration` and `[CYCLE] duration`.
+    *   **Value vs. What it should be**: `gc.collect()` is observed taking `2788.4ms` (2.7 seconds) and `3365.1ms` (3.3 seconds). Concurrently, `[CYCLE]` durations reach `451s` (7.5 minutes), flagged as `⚠ SLOW CYCLE`. An intraday trading bot requires near real-time processing; these durations are orders of magnitude too high and should ideally be under a few seconds for `gc.collect()` and under 60 seconds for the entire cycle. This constitutes a failure as the bot cannot react efficiently to fast-moving intraday conditions.
+    *   **Condition under which this occurs**: Logged at `2026-06-24 17:14:56,876` and `2026-06-24 17:26:33,228` (for GC) and `2026-06-24 17:14:56,877` (for slow cycle).
+
+3.  **INFRASTRUCTURE | MEDIUM | QuarterlyHoldManager Entry Gate Failures**: The QuarterlyHoldManager repeatedly fails to fetch entry gate data for specific symbols, preventing these symbols from being properly evaluated for a particular strategy.
+    *   **Variable involved**: `entry gate fetch` status for `QuarterlyHoldManager`.
+    *   **Value vs. What it should be**: The system consistently logs `entry gate fetch failed: -2`. This indicates a failure to retrieve or process necessary data for these symbols, whereas it should successfully fetch and evaluate the gate condition. This prevents the bot from considering valid trades for these symbols under this specific strategy.
+    *   **Condition under which this occurs**: Logged repeatedly, e.g., `2026-06-24 17:07:34,610 | WARNING | execution.quarterly_hold_manager | QuarterlyHoldManager: NVDA entry gate fetch failed: -2` and for GOOGL.
+
+4.  **ALPHA ISSUE | MEDIUM | Unexplained Session Halted for Entries**: The bot repeatedly halts new entries for the session without providing an explicit, immediately preceding log message indicating *why* this halt occurred (e.g., specific risk rule violation, time-of-day constraint, or explicit MRI level). While a later `MRI=STRESSED` condition *does* provide a reason, the earlier `HALTED` warnings are unexplained.
+    *   **Variable involved**: `execution.entry_logic` internal state regarding permission for new entries.
+    *   **Value vs. What it should be**: The internal state for new entries is `HALTED` (false), but should be `ALLOWED` (true) unless a specific and auditable rule has been triggered and logged. The lack of a clear, preceding explanation for the halt makes it impossible to audit the decision-making process. This constitutes a degradation in decision quality as potential valid entries might be missed without cause.
+    *   **Condition under which this occurs**: Logged at `2026-06-24 17:02:20,783` and `2026-06-24 17:08:37,200` as `execute_entries: HALTED for session — no new entries permitted.` without an immediately preceding log indicating the specific rule or condition that triggered this halt.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE | CRITICAL**: Investigate and resolve the root cause of high `gc.collect()` times and `SLOW CYCLE` warnings. This is likely a memory leak or an inefficient data processing pattern. This impacts the bot's ability to operate in real-time.
+2.  **ALPHA | HIGH**: Review and debug the `[ANOMALY-3] TQI degradation` logic, focusing on recent exit discipline and stop placement. This self-identified warning indicates a systematic problem in strategy performance.
+3.  **INFRASTRUCTURE | MEDIUM**: Debug the `QuarterlyHoldManager` entry gate fetch failures (error code -2) for NVDA and GOOGL to ensure all eligible symbols are properly evaluated for entry.
+4.  **ALPHA | MEDIUM**: Enhance logging for the `execute_entries: HALTED for session` condition to explicitly state the reason for the halt immediately before the warning is issued. This improves auditability and ensures that entries are halted only for justified, auditable reasons.

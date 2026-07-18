@@ -1,0 +1,63 @@
+Midday Gemini Audit — 2026-05-01
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Inversion/Misreporting (CRITICAL):**
+    *   **UBER:** `entry $74.10 → exit $76.48 ($-16.66) | score 11/12 | MRI=STRESSED | exit | stop=$76.48`.
+    *   This is a fundamental discrepancy.
+        *   If UBER was a **LONG** trade: Entry $74.10, Exit $76.48 should result in a **profit** ($2.38/share), not `$-16.66`.
+        *   If UBER was a **SHORT** trade: Entry $74.10, Exit $76.48 would result in a **loss** ($2.38/share), consistent with `$-16.66`. However, the `Stop-hit rate: 0%` directly contradicts the `exit | stop=$76.48` reason.
+    *   Either the P&L calculation is fundamentally flawed/inverted, the trade direction (long/short) is misidentified or not explicitly stated (making audit impossible), or the stop-hit rate tracking is broken. This represents a severe data integrity and accounting failure.
+*   **Stop-Hit Rate Inconsistency:** The `Stop-hit rate: 0% (0 stops)` is directly contradicted by the `UBER` trade's explicit `exit | stop=$76.48` reason, which indicates a stop was indeed hit. This is a reporting bug.
+*   **Score-to-Outcome Correlation:** With only one closed trade (UBER, score 11/12, loss) and one open (AAPL, score 12/12), there is insufficient data to assess correlation. However, the only closed trade being a loss despite a high score (11/12) is not a positive indicator, especially considering the `MRI=STRESSED` condition.
+
+### ENTRY QUALITY
+
+*   **Persistent Stressed MRI Entries (MAJOR):** Both entries (`AAPL` and `UBER`) were initiated under `MRI=STRESSED` conditions, as explicitly flagged. The `MRI SESSION DISTRIBUTION` confirms the bot was operating entirely within a `STRESSED` market environment (14/14 samples). While a `0.70x size floor` was applied, the bot still elected to enter trades during systematically unfavorable conditions, leading to the only closed trade being a loss. This indicates either insufficient penalization for `STRESSED` MRI or a fundamental misalignment of the strategy's edge in such regimes.
+
+### EXIT QUALITY
+
+*   **Stop-Loss Execution:** The `UBER` trade's exit at `$76.48` matches its stated stop price. This indicates correct execution of the stop-loss mechanism *at the specified price*, although the discrepancy with the `stop-hit rate` and P&L remains. No information is available to assess whether winners are held too long or losers cut too slowly.
+
+### MRI ALIGNMENT
+
+*   **Consistent MRI=STRESSED Conditions:** The system correctly identified and continuously reported `MRI=STRESSED` (53/100 to 54/100) throughout the audited period.
+*   **Insufficient Reaction to Stressed MRI:** Despite constant `STRESSED` MRI, the bot still entered two high-score trades. The application of a `0.70x size floor` is a mitigation, but the continuous entries and the loss on the only closed trade suggest this mitigation may be insufficient, or the underlying signals generated during STRESSED conditions are inherently lower quality, regardless of internal score. The bot does not appear to have an adaptive mechanism to *pause* trading or drastically reduce risk when conditions are persistently stressed.
+
+### LOG ANOMALIES
+
+*   **Widespread "Weekly Bias" Data Issue (Recurring WARNING):**
+    *   `2026-05-01 17:09:10,187 | WARNING | strategy.signal_generator | [NVDA] Weekly bias: insufficient data (4 bars), filter skipped` (and for 20+ other symbols including all major tech and ETFs).
+    *   This recurring warning for a large majority of scanned tickers indicates a systematic failure to gather or compute "Weekly bias" data. If this filter is critical for signal quality, its widespread skipping means signals are being generated and considered for execution without a key validation step, potentially introducing significant degradation in entry quality.
+*   **Bot Hang and Watchdog Restart (CRITICAL):**
+    *   `2026-05-01 17:20:41,314 | CRITICAL | main | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.`
+    *   The bot became unresponsive for 12 minutes during regular trading hours. This represents a critical operational failure, preventing any monitoring, risk management, or trade execution during that period. While the watchdog performs a necessary recovery, the underlying cause of the hang is a severe instability issue.
+*   **Orphaned Position Adoption Leading to Risk Limit Breach (CRITICAL):**
+    *   `2026-05-01 17:21:26,666 | CRITICAL | main | [META] ORPHANED POSITION ADOPTED — Alpaca: -1 shares @ $610.25 ...`
+    *   `2026-05-01 17:21:35,642 | INFO | main | Risk open_positions synced to 5 after reconciliation.`
+    *   This occurred immediately after the watchdog restart. The bot adopted an untracked position, immediately bringing its total open positions to 5, which violates the stated `MAX_OPEN_POSITIONS=4`. Although the bot subsequently attempts to `skip` new entries due to the position limit being "reached" (i.e., it believes it's at 4, but is actually at 5), it is *already operating in breach of its maximum position policy*. This is a critical risk management failure and a severe flaw in post-crash reconciliation logic.
+*   **Shorting Pre-Flight Failure (WARNING):**
+    *   `2026-05-01 17:24:28,579 | WARNING | main | Shorting pre-flight FAILED — buying_power=$1908.93, shorting_enabled=True. Blocking shorts this cycle.`
+    *   A short signal for NFLX was skipped due to a pre-flight check failure despite `shorting_enabled=True` and seemingly sufficient buying power. The reason for this failure needs immediate investigation. Furthermore, the associated `RC-8 BUFFER CLEAR` penalizes the signal by requiring fresh confirmation, which is detrimental if the pre-flight check itself is erroneous.
+
+### NEW BUGS / CONCERNS
+
+*   **CRITICAL | Persistent Position Limit Breach Post-Restart:**
+    *   **Description:** The bot's post-restart reconciliation resulted in a violation of `MAX_OPEN_POSITIONS`. After adopting an orphaned `META` position, `Risk open_positions synced to 5`, while the configured `MAX_OPEN_POSITIONS` is 4. The bot then correctly prevents *new* entries by stating `Max positions (4) reached`, but it is already operating with 5 open positions, creating an active breach of its risk policy.
+    *   **Exact condition:** `Risk open_positions synced to 5 after reconciliation.` at `2026-05-01 17:21:35,642` with `MAX_OPEN_POSITIONS=4`.
+*   **MAJOR | P&L Inconsistency and Stop-Hit Rate Misreporting:**
+    *   **Description:** The P&L for the UBER trade is logically inconsistent with the entry/exit prices depending on trade direction. If long, it's a profit not a loss. If short, the stated `stop-hit rate: 0%` is incorrect. This points to a severe bug in P&L calculation, trade direction tracking, or performance metric reporting.
+    *   **Exact condition:** `UBER: entry $74.10 → exit $76.48 ($-16.66)` and `Stop-hit rate: 0%`.
+*   **MAJOR | Widespread Signal Filter Failure (Weekly Bias):**
+    *   **Description:** A critical "Weekly bias" filter is being skipped for the vast majority of scanned symbols due to "insufficient data." This systematically degrades the quality of signals considered for entry, as a key validation step is absent.
+    *   **Exact condition:** Multiple `WARNING | strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (4 bars), filter skipped` entries for core symbols.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE: Fix Post-Restart Position Reconciliation and Risk Limit Enforcement.** Implement logic to *never* exceed `MAX_OPEN_POSITIONS` post-reconciliation. If adopting an orphaned position would lead to a breach, the bot must enter an emergency `HALTED` state, close positions to conform, or explicitly alert for manual intervention.
+2.  **URGENT: Investigate and Correct P&L Calculation/Reporting and Stop-Hit Rate Discrepancy.** Determine the root cause of the UBER P&L inconsistency and the `0% Stop-hit rate` reporting bug. This affects fundamental accounting and performance analysis.
+3.  **HIGH PRIORITY: Resolve Widespread "Weekly Bias" Data Issue.** Diagnose why "insufficient data" is common for the weekly bias filter. This may require reviewing data fetching, bar aggregation, or the calculation logic. Restore this filter's functionality to improve overall signal quality.

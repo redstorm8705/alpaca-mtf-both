@@ -1,0 +1,52 @@
+Midday Gemini Audit — 2026-07-16
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. P&L corruption affecting live risk decisions | P&L values for the session are inconsistent across multiple reporting variables/sources, ranging from $0.00 to $-13.44, directly impacting dynamic risk calculations.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit Prices & P&L Signs**: For the RIVN trade, `entry $18.06 → exit $17.42 ($-13.44)`. The exit price is below the entry price, consistent with a loss for a long trade. The P&L sign is correct.
+*   **Win rate and Profit Factor**: The session closed with 1 trade, resulting in 1 loss, a 0% win rate, and a total P&L of $-13.44. A single trade is statistically insufficient to assess consistency with the bot's historical Kelly stats (long_intraday WR 40.4%, PF 1.96).
+*   **Score→Outcome Correlation**: The RIVN trade had a score of 10/12, which met the dynamically adjusted `MIN_LONG_SCORE` of 9/12. Despite this high score, it resulted in a loss. One trade is not enough to draw a correlation, but it highlights a need for further performance analysis over more trades.
+*   **Stop-hit Rate**: The RIVN trade's exit reason was "exit", not a stop-hit. The exit price ($17.42) was above the stated stop ($15.39), so the 0% stop-hit rate for the session is accurate.
+*   **P&L = 0.0 but entry ≠ exit price**: Not observed.
+*   **Partial exit**: No partial exits observed.
+
+### ENTRY QUALITY
+*   **RIVN Entry Score**: The RIVN trade (score 10/12) met the dynamically adjusted `MIN_LONG_SCORE` of 9/12, which was raised due to `MRI=ELEVATED/9` and other factors (as seen at `2026-07-16 17:23:08,159`). This indicates the trade met the minimum quality threshold for entry based on the internal scoring system.
+*   **Missing Entry Log for RIVN**: The provided log snippet begins *after* the RIVN trade had already closed (the EOD summary at 17:23:14 contains RIVN, while the log starts at 17:21:56). Therefore, specific entry conditions (e.g., `VOLSHADOW` status for RIVN at entry, ORB gate status for RIVN) cannot be verified from the provided log data.
+
+### EXIT QUALITY
+*   **Ambiguous and Potentially Suboptimal Exit for RIVN**: The RIVN trade exited at $17.42 for a loss ($-13.44) with an unspecified reason "exit". This price is significantly above its hard stop ($15.39) and below its T1 target ($19.17). This implies an early, non-stop-loss, non-take-profit exit, likely due to a trailing stop, time-based exit, or discretionary logic. The lack of a specific exit reason trace for a losing trade makes it difficult to audit its quality. This finding is reinforced by the `[ANOMALY-3] TQI degradation` warning, which explicitly flags issues with "exit discipline and stop placement."
+
+### MRI ALIGNMENT
+*   The single closed trade (RIVN) was entered when MRI was `ELEVATED`, which is consistent with the `MRI SESSION DISTRIBUTION` (15/19 samples were 'ELEVATED').
+*   The bot correctly applied a `size floor 0.85x` and dynamically raised the `MIN_SCORE` to 9/12 due to `MRI=ELEVATED/9` (as seen at `2026-07-16 17:28:32,095` and `17:23:08,159`), demonstrating appropriate risk adjustments based on MRI.
+
+### LOG ANOMALIES
+*   **EOD P&L Drift**: `2026-07-16 17:23:14,588 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-5.25 tracker=$0.00 drift=$-5.25`. This indicates a significant discrepancy between Alpaca's reported P&L and the bot's internal tracker at EOD processing. Further logs reveal other conflicting P&L values ($0.00 from `update_daily_pnl_from_alpaca`, $0.51 from `pnl_ledger`, and $-13.44 in the session summary). This constitutes a critical P&L corruption issue.
+*   **ANOMALY-2: Entry Signal Not Executing**: `2026-07-16 17:28:44,882 | WARNING | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=4 scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20. If risk>3, CYCLE-SYNC should resolve next cycle.` An entry signal for PANW passed `confirm_gate` four times but no trade was entered. The number of open positions was well below the maximum allowed, indicating a failure in the final execution step after signal confirmation.
+*   **ANOMALY-3: TQI Degradation**: `2026-07-16 17:28:44,883 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 — review exit discipline and stop placement.` The bot is self-reporting a degradation in its Trade Quality Index, indicating systemic issues with recent trade performance, particularly concerning exit management and stop placement.
+*   **Consistent ORB Gate Blocks**: Multiple `INFO` logs show `ORB gate BLOCK` for various high-scoring signals (e.g., COIN, MSTR, AMZN) in both scan cycles (e.g., `17:23:08,606` and `17:30:01,028`). While not a bug, this pattern indicates that the bot's signal generation is identifying numerous potential trades that are consistently filtered out by the ORB entry gate. This suggests a potential misalignment between signal generation and the ORB entry filter parameters, hindering trade frequency.
+
+### NEW BUGS / CONCERNS
+*   **INFRASTRUCTURE | CRITICAL**: **P&L Reporting Inconsistency/Corruption.**
+    *   **Description**: Multiple distinct P&L values for the current session are reported by different components/variables, leading to a fragmented and contradictory view of daily P&L. At `2026-07-16 17:23:09,300`, `update_daily_pnl_from_alpaca` reports `alpaca=$0.00`. At `2026-07-16 17:23:10,788`, `Alpaca FIFO EOD` reports `pnl_today=$-5.25`. At `2026-07-16 17:23:14,587`, `pnl_today from pnl_ledger (authoritative)` reports `$0.51 intraday`. The `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` ultimately report `$-13.44`.
+    *   **Exact condition**: Occurs during EOD processing (around 17:23:09-17:23:14) and subsequent reporting. The variables involved are `alpaca` reported P&L, `tracker` P&L, `pnl_ledger`, and the final summary P&L. This constitutes a failure because the bot's internal state for P&L is inconsistent, directly impacting live risk management decisions, such as the `Dynamic MIN_SCORE` which used `P&L=+0.0%` (at `17:23:08,159`) when the actual loss recorded was significantly higher.
+*   **EXECUTION BUG | HIGH**: **Unexecuted Confirmed Signal (ANOMALY-2).**
+    *   **Description**: A signal for PANW passed the `confirm_gate` for four consecutive scans but no entry order was placed.
+    *   **Exact condition**: `[ANOMALY-2] [PANW] confirm_gate=4 scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20.` This occurs at `2026-07-16 17:28:44,882`. The number of open positions (`risk.open_positions=3`) is well below the `MAX_OPEN_POSITIONS=20` (config), indicating that position limits are not the cause. This points to a breakdown in the final execution stage after a signal has been confirmed.
+*   **ALPHA ISSUE | HIGH**: **Ambiguous and Potentially Suboptimal RIVN Exit.**
+    *   **Description**: The RIVN trade resulted in a loss ($-13.44) with a generic "exit" reason. The exit price ($17.42) was not at the defined hard stop ($15.39) nor did it reach any profit target (T1=$19.17, T2=$20.28, T3=$23.60).
+    *   **Exact condition**: `RIVN: entry $18.06 → exit $17.42 ($-13.44) | exit | stop=$15.39 | T1=$19.17`. This constitutes a failure in exit clarity and potentially quality, as it suggests a losing trade was closed without triggering the primary stop, or without a transparently logged alternative exit reason. This is explicitly noted by the bot's own `[ANOMALY-3] TQI degradation` warning regarding exit discipline.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: (CRITICAL) Investigate and immediately resolve the P&L reporting inconsistency across `alpaca` reported P&L, `tracker` P&L, `pnl_ledger`, and `SESSION P&L SUMMARY`. Implement robust P&L reconciliation to ensure a single, authoritative, and accurate daily P&L value is consistently used for all risk management (e.g., dynamic `MIN_SCORE` adjustments, `MAX_DAILY_LOSS_PCT` checks) and reporting.
+2.  **EXECUTION**: (HIGH) Debug the `[ANOMALY-2]` condition for PANW to identify why a signal that passed `confirm_gate` four times failed to result in an entry. This is a critical silent failure in the order submission pipeline.
+3.  **ALPHA**: (HIGH) Enhance logging for all trade exits to capture the explicit reason for closure (e.g., "trailing stop hit", "time-based exit", "intraday profit lock", "discretionary close due to X"). This is crucial for auditability and for addressing the self-reported `[ANOMALY-3] TQI degradation` related to exit discipline and stop placement.

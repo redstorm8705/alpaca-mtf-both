@@ -1,0 +1,88 @@
+{
+  "audit_date": "2026-07-06",
+  "run_ts": "2026-07-06T10:30:03.269136-07:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.3333333333333333,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "HOOD",
+      "MARA",
+      "RBLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 17,
+    "levels": {
+      "ELEVATED": 17
+    },
+    "last_score": 22,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 120,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-06 15:47:36,358 | WARNING  | strategy.run_cycle | [ANOMALY-2] [SPY] confirm_gate=6 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | M",
+      "2026-07-06 15:47:36,358 | WARNING  | strategy.run_cycle | [ANOMALY-2] [QQQ] confirm_gate=6 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | M",
+      "2026-07-06 15:47:36,358 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=6 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | ",
+      "2026-07-06 15:47:36,358 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AMD] confirm_gate=5 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | M",
+      "2026-07-06 15:47:36,359 | WARNING  | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=5 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | "
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -2.980000000000004,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -2.980000000000004,
+    "best": {
+      "symbol": "RBLX",
+      "pnl": -2.980000000000004,
+      "entry_price": 54.47,
+      "exit_price": 57.45,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 61.51,
+      "target": 39.86
+    },
+    "worst": {
+      "symbol": "RBLX",
+      "pnl": -2.980000000000004,
+      "entry_price": 54.47,
+      "exit_price": 57.45,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 61.51,
+      "target": 39.86
+    },
+    "trades": [
+      {
+        "symbol": "RBLX",
+        "pnl": -2.980000000000004,
+        "entry_price": 54.47,
+        "exit_price": 57.45,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 61.51,
+        "target": 39.86
+      }
+    ]
+  }
+}

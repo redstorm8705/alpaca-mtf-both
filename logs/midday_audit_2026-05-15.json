@@ -1,0 +1,112 @@
+{
+  "audit_date": "2026-05-15",
+  "run_ts": "2026-05-15T10:30:02.441631-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NVDA",
+      "NFLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 39,
+    "levels": {
+      "STRESSED": 39
+    },
+    "last_score": 51,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 61,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-15 06:42:32,230 | WARNING  | main | gc.collect() took 2930.6ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-15 07:18:45,600 | WARNING  | main | gc.collect() took 2629.3ms, collected 99 objects \u2014 heap may be growing",
+      "2026-05-15 07:54:50,796 | WARNING  | main | gc.collect() took 3111.7ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-15 08:30:35,658 | WARNING  | main | gc.collect() took 4157.9ms, collected 31 objects \u2014 heap may be growing",
+      "2026-05-15 09:05:51,871 | WARNING  | main | gc.collect() took 6224.7ms, collected 31 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "NFLX",
+      "status": "rc=2",
+      "entry": 86.75,
+      "exit": 87.48
+    },
+    {
+      "symbol": "NVDA",
+      "status": "rc=2",
+      "entry": 235.7,
+      "exit": 225.53
+    }
+  ],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -24.72,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -12.36,
+    "best": {
+      "symbol": "NFLX",
+      "pnl": -4.380000000000024,
+      "entry_price": 86.75,
+      "exit_price": 87.48,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 89.59,
+      "target": 81.12
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": -20.339999999999975,
+      "entry_price": 235.7,
+      "exit_price": 225.53,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 225.61,
+      "target": 255.85
+    },
+    "trades": [
+      {
+        "symbol": "NFLX",
+        "pnl": -4.380000000000024,
+        "entry_price": 86.75,
+        "exit_price": 87.48,
+        "size": 6.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 89.59,
+        "target": 81.12
+      },
+      {
+        "symbol": "NVDA",
+        "pnl": -20.339999999999975,
+        "entry_price": 235.7,
+        "exit_price": 225.53,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 225.61,
+        "target": 255.85
+      }
+    ]
+  }
+}

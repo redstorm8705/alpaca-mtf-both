@@ -1,0 +1,73 @@
+Midday Gemini Audit — 2026-06-02
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit Integrity**: Entry and exit prices are plausible. P&L signs are correct for the long SPY and short NFLX trades. NVDA's $0.00 P&L with entry=exit is consistent with a breakeven exit and falls under "KNOWN BENIGN PATTERNS" if attributed to `overnight_breakeven` or a similar protective measure.
+*   **Exit Price Consistency**:
+    *   SPY's exit ($757.06) is significantly above its highest target (T3=$730.89), suggesting the bot allowed the winner to run. This is generally good and does not indicate a failure unless a strict "exit at T3" rule was violated.
+    *   NFLX's exit ($83.66) is between T2 ($84.89) and T3 ($80.68) for a short trade, indicating effective profit-taking.
+*   **Win Rate and Profit Factor**: The session win rate of 67% (2/3 wins) is high but based on a very small sample size and is not statistically significant. The overall Kelly statistics, however, show a significant concern: `short_intraday | WR 28.6% | PF 0.41` and `long_intraday | WR 31.8% | PF 1.13`. A profit factor of 0.41 for short trades indicates a consistently losing strategy in the long run. While this session was profitable, the underlying long-term performance shown by Kelly stats is problematic for strategy viability.
+*   **Score → Outcome Correlation**: All three closed trades had a confluence score of 12/12. With all trades at the maximum score, no meaningful correlation between score and outcome can be derived from this session's data.
+*   **Stop-hit Rate**: A 0% stop-hit rate is positive for this session, but again, given only 3 trades, it's not broadly indicative of consistent stop placement.
+*   **P&L = $0.00 but entry ≠ exit price**: No such instances detected.
+*   **Partial Exits**: No partial exits recorded.
+
+### ENTRY QUALITY
+*   **SPY Entry at STRESSED MRI**: The SPY entry on 2026-04-20 was flagged with `MRI=STRESSED`. While the trade was profitable, entering under stressed market conditions requires explicit risk mitigation (e.g., reduced position size, wider stops due to VIX, or a decision to avoid entries). The configuration `VIX_BE_WIDEN_THRESHOLD` and `VIX_STOP_WIDEN_THRESHOLD` constants suggest mechanisms for adapting to high VIX environments, but the flag highlights the decision to enter nonetheless. This points to a systematic risk tolerance issue that should be reviewed.
+
+### EXIT QUALITY
+*   No explicit issues detected with exit quality in terms of mistimed exits against stated TP/SL for the *profitable* trades. SPY was allowed to run beyond targets (a positive). NFLX achieved profit within its target range. NVDA successfully exited at breakeven.
+*   However, the bot's self-reported `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30` suggests that overall exit discipline or stop placement has been suboptimal recently, leading to lower trade quality. This aligns with the concerning Kelly stats (low win rate and low profit factor for short trades).
+
+### MRI ALIGNMENT
+*   The entry for SPY at `MRI=STRESSED` is a concern. While the bot has mechanisms to widen stops/breakevens based on VIX (part of MRI calculation), the decision to initiate a trade during a `STRESSED` MRI period, especially if it indicates higher overall market risk, should be evaluated against the bot's risk appetite and potential for dynamic position sizing adjustments. The session's `MRI refreshed: score=10 level=NORMAL` indicates the current environment is stable, but past entries at `STRESSED` level need attention.
+
+### LOG ANOMALIES
+*   `2026-06-02 17:17:08,202 | WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` - **CRITICAL**
+*   `2026-06-02 17:21:47,491 | CRITICAL | execution.portfolio_tracker | [FIFO] SPY: closing sell with no open long lots (net_qty=-26, qty=1, price=757.05). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` - **CRITICAL**
+*   `2026-06-02 17:21:47,779 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-9.27 tracker=$-23.66 drift=$+14.39` - **HIGH**
+*   `2026-06-02 17:21:51,735 | WARNING | main | gc.collect() took 3849.2ms, collected 142 objects — heap may be growing` - **HIGH**
+*   `2026-06-02 17:28:32,455 | CRITICAL | execution.portfolio_tracker | [FIFO] SPY: closing sell with no open long lots (net_qty=-27, qty=1, price=757.05). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` - **CRITICAL**
+*   `2026-06-02 17:28:32,729 | CRITICAL | execution.portfolio_tracker | [FIFO] PLTR: closing sell with no open long lots (net_qty=0, qty=1, price=152.22). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` - **CRITICAL**
+*   `2026-06-02 17:28:32,962 | CRITICAL | execution.portfolio_tracker | [FIFO] PLTR: closing sell with no open long lots (net_qty=-1, qty=1, price=152.26). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` - **CRITICAL**
+*   `2026-06-02 17:28:33,208 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$9.21 tracker=$-23.66 drift=$+32.87` - **HIGH**
+*   `2026-06-02 17:27:16,180 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` - **MEDIUM**
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Unexplained Session Halt**:
+    *   **Variable/Metric Involved**: `execution.entry_logic`'s internal state variable controlling entry permission.
+    *   **Value vs. Should be**: The bot's `execute_entries` function reported `HALTED for session` (value) at `17:17:08 PT`, preventing it from taking new trades. This should be `ACTIVE` (should be) as the `MAX_DAILY_LOSS_PCT` (0.07, and P&L was positive $52.65) was not hit, no PDT violation (`PDT: 0/3` shown in a subsequent cycle), and it was within regular trading hours, not in the `TOD_MARKET_OPEN_BUFFER_MINS` or `TOD_EOD_NO_ENTRY_MINS` windows. This constitutes a critical failure as it causes the bot to miss valid trading opportunities with high-score signals (e.g., TSLA, UBER, QQQ, all score 12/12) for an unknown reason, directly impacting potential profitability.
+    *   **Condition**: Occurs at `2026-06-02 17:17:08,202` during the strategy run cycle, despite the bot meeting all explicit conditions for making new entries according to the CONFIG CONSTANTS provided.
+
+2.  **EXECUTION BUG | CRITICAL | Persistent FIFO State Corruption for Closed Trades**:
+    *   **Variable/Metric Involved**: `execution.portfolio_tracker`'s internal `open_lots` data structure and `net_qty` for symbols.
+    *   **Value vs. Should be**: The bot repeatedly logs `CRITICAL | [FIFO] <SYMBOL>: closing sell with no open long lots` (value), indicating a closing order was received from Alpaca that did not match an existing open long position in the bot's internal tracker. This implies missing or corrupted open lot data, where the tracker should accurately reflect all open positions (should be). This is a critical failure because it leads to fundamental data integrity issues, causes `EOD P&L DRIFT`, and distorts the bot's understanding of its current portfolio, potentially leading to incorrect risk management, position sizing, or even unintended short positions (`Recording as synthetic short`).
+    *   **Condition**: Occurs for SPY at `2026-06-02 17:21:47,491` and `2026-06-02 17:28:32,455` (with `net_qty` values -26 then -27), and for PLTR at `2026-06-02 17:28:32,729` and `2026-06-02 17:28:32,962` (with `net_qty` values 0 then -1). These repeated critical errors after state saves indicate a persistent problem.
+
+3.  **EXECUTION BUG | HIGH | Significant and Growing P&L Drift**:
+    *   **Variable/Metric Involved**: `pnl_today` as reported by Alpaca versus `pnl_today` calculated by the bot's `tracker`.
+    *   **Value vs. Should be**: The `EOD P&L DRIFT` shows a discrepancy of `$14.39` and later `$32.87` (value). This drift should ideally be `$0.00` or negligible (should be) for accurate real-time accounting. This is a high-severity failure as large, growing P&L discrepancies mean the bot is operating with an inaccurate view of its financial standing, potentially miscalculating daily loss limits (`MAX_DAILY_LOSS_PCT`) or overall portfolio risk. This is a direct consequence of the FIFO state corruption errors.
+    *   **Condition**: Occurs at `2026-06-02 17:21:47,779` and `2026-06-02 17:28:33,208` during end-of-day (EOD) P&L reconciliation.
+
+4.  **INFRASTRUCTURE | HIGH | Excessive Garbage Collection Time**:
+    *   **Variable/Metric Involved**: `gc.collect()` execution duration.
+    *   **Value vs. Should be**: The garbage collection operation took `3849.2ms` (value), which is approximately 3.8 seconds. For a low-latency trading bot, such an operation should complete in tens or hundreds of milliseconds at most (e.g., `<100ms`, should be) to ensure responsiveness. This constitutes a high-severity issue because prolonged pauses in execution due to garbage collection can lead to missed market data, delayed signal processing, and slow order submission/cancellation, which is critical for intraday trading. The accompanying message `heap may be growing` suggests a memory leak or inefficient memory usage pattern.
+    *   **Condition**: Occurs at `2026-06-02 17:21:51,735`.
+
+5.  **ALPHA ISSUE | MEDIUM | Systemic Underperformance of Short Strategy**:
+    *   **Variable/Metric Involved**: `kelly` stats for `short_intraday` strategy (Win Rate and Profit Factor).
+    *   **Value vs. Should be**: The `short_intraday` strategy has a `Win Rate` of `28.6%` and a `Profit Factor` of `0.41` (value). A profitable trading strategy generally requires a Profit Factor above `1.0` (should be). A value below 1.0 indicates that, on aggregate, the short strategy is consistently losing money. This is a medium-severity alpha issue as it indicates a fundamental flaw in the short-side strategy's edge, requiring a re-evaluation of its underlying logic, entry conditions, or risk management.
+    *   **Condition**: Evident from the `kelly` stats logged at `2026-06-02 17:17:08,202` and `2026-06-02 17:28:29,507`, reflecting aggregate historical performance.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION | CRITICAL**: Immediately investigate and resolve the `HALTED for session` logic. Trace the exact conditions that trigger this state, as it is incorrectly preventing new entries despite favorable account and market conditions. This is a silent trading halt.
+2.  **EXECUTION | CRITICAL**: Prioritize debugging and fixing the persistent `FIFO orphan lot seeded` and `closing sell with no open long lots` errors. This likely involves reviewing position tracking mechanisms, restart logic, and reconciliation procedures with Alpaca, as state corruption is leading to severe P&L drift and an inaccurate view of the portfolio.
+3.  **INFRASTRUCTURE | HIGH**: Investigate the excessive `gc.collect()` times and the "heap may be growing" warning. This suggests a memory leak or inefficient object management. Profile memory usage to identify and optimize resource-intensive components to ensure consistent, low-latency performance.

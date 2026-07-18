@@ -1,0 +1,65 @@
+Midday Gemini Audit — 2026-05-29
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/exit prices**: The TQQQ trade shows a plausible entry at $76.22 and exit at $85.04. The exit price is above the stated T1 target of $84.12, indicating a successful profit realization.
+*   **P&L signs**: Correct for the TQQQ long trade (exit $85.04 > entry $76.22 resulted in a profit of +$8.82).
+*   **Win rate/profit factor**: With only one closed trade (1 win, 0 losses), the win rate of 100% and profit factor cannot be meaningfully assessed for consistency or long-term edge.
+*   **Score→outcome correlation**: The TQQQ entry score of 10/12 meets the `MIN_SCORE = 9` threshold, and the trade was profitable, which is consistent with the strategy's intention.
+*   **Stop-hit rate**: 0% (0 stops hit) for the single closed trade.
+*   **P&L = $0.00 but entry ≠ exit price**: Not observed.
+*   **Partial exit not reducing position size**: No partial exits recorded.
+
+### ENTRY QUALITY
+No entries were executed or flagged within the provided log timeframe. The bot consistently noted `DRY-RUN OVERNIGHT` or `Market closed — updating scan prices, no entries`, or `Already at MAX positions (5/4). Blocking new entries.`
+
+### EXIT QUALITY
+The TQQQ trade exited at $85.04, which is beyond its T1 of $84.12 and far from its stop of $56.49. This indicates good exit quality for this particular trade, suggesting a timely and profitable liquidation.
+
+### MRI ALIGNMENT
+The TQQQ trade occurred while MRI was `ELEVATED`. The bot successfully executed a profitable trade under this condition, and the configuration does not define explicit restrictions for an `ELEVATED` MRI level other than VIX-based adjustments which are not shown to be misapplied. The MRI later decayed to `NORMAL` in the log, suggesting dynamic adaptation. No systematic MRI alignment issues detected based on the provided data.
+
+### LOG ANOMALIES
+*   **Garbage Collection Pauses**: The `gc.collect()` calls repeatedly show warnings about long execution times (`2918.1ms`, `2958.8ms`, `9437.4ms`), with the longest pause approaching 10 seconds. This indicates potential performance bottlenecks and memory issues.
+*   **PDT Count Mismatch**: A `PDT count mismatch` was observed, though it was quickly `reconciled down` by the bot. While reconciliation occurred, the initial discrepancy warrants attention if external factors are not the sole cause.
+*   **EOD P&L Drift**: A significant `EOD P&L DRIFT` of `$-49.25` was reported between Alpaca's P&L ($-40.43) and the bot's tracker ($8.82). This is a critical discrepancy in financial accounting.
+*   **Emergency GTC Stop Submissions**: The log indicates `Emergency GTC stop submitted (Patch 1)` for NFLX and NVDA, suggesting that the standard stop submission process may be unreliable or require a fallback mechanism.
+*   **Orphaned Positions**: Multiple `ORPHANED POSITION ADOPTED` messages (for AMZN, QCOM, SPY) were logged as `CRITICAL` on startup, indicating state synchronization issues or imperfect shutdown/restart handling that leads to positions needing re-adoption.
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | CRITICAL | MAX_POSITIONS Violation outside Power Hour**
+    *   **Variable/Metric involved:** `open_positions` count (5) vs. `MAX_POSITIONS` (4).
+    *   **Value vs. Should Be:** The bot's `MAX_POSITIONS` configuration constant is `4`. The log explicitly states `P0-STARTUP: Already at MAX positions (5/4). Blocking new entries.` (timestamp `2026-05-30 01:30:20,035`). The bot is holding 5 positions. The `BUCKET_B_MAX_POSITIONS_POWER = 5` rule, which allows for 5 positions, is only active during 9:35–10:00 AM ET. The log timestamp is 1:30 AM ET, which is outside this window. Therefore, the bot is operating outside its defined risk parameters. It should only hold a maximum of 4 positions in the current time regime.
+    *   **Condition:** Occurs during the bot's startup (`P0-STARTUP`) at `2026-05-30 01:30:20,035` after reconciling orphaned positions from a previous session where `NFLX`, `NVDA`, `AMZN`, `QCOM`, and `SPY` were active.
+    *   **Source not provided.**
+
+2.  **INFRASTRUCTURE | CRITICAL | Excessive Garbage Collection Latency**
+    *   **Variable/Metric involved:** Time taken by `gc.collect()`.
+    *   **Value vs. Should Be:** The garbage collection cycles are recorded as taking `2918.1ms`, `2958.8ms`, and most concerningly, `9437.4ms` (9.4 seconds). For an intraday trading bot requiring real-time responsiveness, any GC pause exceeding a few hundred milliseconds is considered detrimental, let alone multiple seconds. A 9.4-second pause can lead to missed market data, delayed order submissions/cancellations, or desynchronized internal state, severely impacting execution quality and risk management.
+    *   **Condition:** Observed periodically within the `main` cycle (`[CYCLE] duration=... | phase=closed`), specifically at `2026-05-30 00:49:51,886`, `2026-05-30 01:25:28,954`, and `2026-05-30 01:35:23,277`.
+    *   **Source not provided.**
+
+3.  **EXECUTION BUG | CRITICAL | EOD P&L Drift between Alpaca and Tracker**
+    *   **Variable/Metric involved:** `pnl_today` reported by Alpaca versus the bot's internal `tracker` P&L at End-of-Day.
+    *   **Value vs. Should Be:** Alpaca reports a daily P&L of `$-40.43`, whereas the bot's tracker reports `$8.82`, resulting in a `drift=$-49.25`. This is a massive discrepancy for a $2.5K paper account. The bot's internal P&L must accurately reflect the broker's record for proper performance tracking, risk management, and capital allocation (e.g., Kelly sizing). While the bot explicitly handles "A-4 paper fills gap" for 0 fills, this "EOD P&L DRIFT" is distinct and implies a deeper mismatch in trade accounting.
+    *   **Condition:** Occurs during `Alpaca FIFO EOD` processing at `2026-05-30 01:29:55,962` following a `SIGTERM` shutdown.
+    *   **Source not provided.**
+
+4.  **EXECUTION BUG | HIGH | "Emergency GTC Stop" indicates GTC Order Management Fragility**
+    *   **Variable/Metric involved:** GTC stop order submission mechanism.
+    *   **Value vs. Should Be:** The log contains `WARNING` messages stating `[NFLX] Emergency GTC stop submitted (Patch 1)` and `[NVDA] Emergency GTC stop submitted (Patch 1)`. The term "Emergency" implies a deviation from the standard, robust process for placing stop-loss orders. Reliance on an "Emergency Patch" suggests an underlying flaw or inconsistency in the primary GTC stop order handling, which is a critical component of risk management.
+    *   **Condition:** Occurs at `2026-05-30 01:30:05,873` and `2026-05-30 01:30:06,285` after pre-RTH cancellation of existing GTC stops and subsequent re-submission during bot startup.
+    *   **Source not provided.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **ALPHA | CRITICAL | Implement Strict Position Limit Enforcement:** The bot must ensure `open_positions` never exceeds `MAX_POSITIONS` (4) outside of the designated `BUCKET_B_MAX_POSITIONS_POWER` (power hour) window. This involves modifying the `orphan_manager` to either not adopt excess positions or implementing an immediate post-reconciliation check that liquidates positions if the limit is violated outside the allowed time.
+2.  **INFRA | CRITICAL | Profile and Optimize Memory Usage:** Conduct a detailed memory profiling of the bot to identify sources of heap growth and long `gc.collect()` pauses. Optimize data structures, reduce object allocations, or explore alternative memory management strategies to minimize latency and ensure consistent performance.
+3.  **EXECUTION | HIGH | Investigate and Correct P&L Discrepancy:** Thoroughly audit the P&L calculation logic within the bot's tracker against Alpaca's reported P&L, especially considering fees, corporate actions, and potential variations in fill reporting for paper accounts. The bot's internal record must reconcile accurately with the broker for reliable operation.

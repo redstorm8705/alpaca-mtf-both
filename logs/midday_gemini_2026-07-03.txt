@@ -1,0 +1,43 @@
+Midday Gemini Audit — 2026-07-03
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No entries or exits occurred during this session, making it impossible to audit specific trade performance metrics such as entry/exit plausibility, P&L accuracy, win rate, profit factor, score-outcome correlation, or stop-hit rate.
+
+### ENTRY QUALITY
+No entries were made. However, log analysis reveals potential issues in the pre-entry scoring logic's `would_pass` flag (see NEW BUGS / CONCERNS).
+
+### EXIT QUALITY
+No exits occurred.
+
+### MRI ALIGNMENT
+The `MRI Session Distribution` reported no samples. The `vol_regime` log at `2026-07-03 17:03:40,448` indicates a `BULL` regime with `VIX/VIX3M=0.785 (NORMAL)`. Without MRI distribution, no alignment assessment can be made, but the reported regime itself does not suggest conditions that would systematically reduce edge or necessitate position sizing adjustments based on high stress/crisis levels.
+
+### LOG ANOMALIES
+*   **Time-of-Day (TOD) Discrepancy**: The bot's `strategy.run_cycle` reports an internal `MTF cycle @ 13:11:49 ET` and `phase=midday`, while the actual log timestamp `2026-07-03 17:11:49,192` (5:11 PM PT) corresponds to 8:11 PM ET. This means the bot's internal calculation or representation of the current market time and phase is inconsistent with the actual time. While the `Market closed — updating scan prices, no entries.` message correctly prevented trades, this underlying discrepancy is a significant logical flaw.
+*   **Continuous Scoring on Stale Data**: The bot continues to perform detailed `confluence` `VOLSHADOW` scoring on a wide range of symbols (e.g., NVDA, AAPL, TSLA, etc.) with `bar_age_min` consistently above 2200 minutes (over 37 hours), even after logging `Market closed`. While `watchdog_headroom` appears healthy, this represents inefficient resource utilization for no actionable trading purpose during market off-hours.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | HIGH | Inconsistent Time-of-Day (TOD) Determination**:
+    *   **Exact variable/metric involved**: The internal "current market time" and `phase` variables, as reflected in the `strategy.run_cycle` log message, vs. the actual execution timestamp.
+    *   **Value vs. what it should be and why that constitutes a failure**: At `2026-07-03 17:11:49,192` (5:11 PM PT / 8:11 PM ET), the bot logs `─── MTF cycle @ 13:11:49 ET | Mode: intraday | TOD: midday | TQI:35 ───` followed by `Market closed — updating scan prices, no entries.`. The actual time (8:11 PM ET) is after market close, indicating the `phase` should be `post_market` and the `ET` time reported for the cycle should reflect the actual 8:11 PM ET, not 1:11 PM ET. This constitutes a failure because the bot's internal understanding of the market's time-of-day and phase is fundamentally incorrect. Although the explicit "Market closed" check currently prevents erroneous entries, this internal inconsistency could lead to misapplied time-dependent logic (e.g., using `midday` parameters) or errors if the "Market closed" gate were ever bypassed or miscalculated.
+    *   **Exact condition under which this occurs**: Consistently observed in `strategy.run_cycle` log entries (e.g., `2026-07-03 17:11:49,192` and `2026-07-03 17:23:31,790`) where the system's actual time is post-market hours (5 PM PT / 8 PM ET), but the log reports an internal `ET` time corresponding to regular market hours (1 PM ET) and a `midday` phase.
+
+*   **ALPHA ISSUE | MEDIUM | Misleading `would_pass` flag in `VOLSHADOW` scoring**:
+    *   **Exact variable/metric involved**: The `would_pass` boolean flag and `score_without_vol` integer in `VOLSHADOW` log messages, in relation to `MIN_LONG_SCORE` (8) and `MIN_SHORT_SCORE` (8) from CONFIG CONSTANTS.
+    *   **Value vs. what it should be and why that constitutes a failure**: For several symbols, the `would_pass` flag is `true` even when `score_without_vol` is explicitly below the required `MIN_LONG_SCORE` or `MIN_SHORT_SCORE`. For example, for RIVN (long) at `2026-07-03 17:02:54,673`, `score_without_vol: 5` (should be >= 8) yet `would_pass: true`. Similarly for CRWD (long) with `score_without_vol: 0` at `2026-07-03 17:12:25,482`, and TSLA (long) with `score_without_vol: 2` at `2026-07-03 17:11:59,768`. This constitutes a failure because if `would_pass` is meant to indicate final entry eligibility, it is giving a false positive based on the visible `score_without_vol` component. This indicates either a miscalculation in `would_pass`, a critical component of the score is missing from `score_without_vol` (making the log misleading), or the entry logic is flawed. This could lead to entries that violate minimum score thresholds in live trading.
+    *   **Exact condition under which this occurs**: Observed in multiple `VOLSHADOW` log entries (e.g., `RIVN` long, `CRWD` long, `TSLA` long, `TSLA` short, `CRWD` short) where `score_without_vol` is less than the respective `MIN_LONG_SCORE` or `MIN_SHORT_SCORE`, but `would_pass` is `true`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL**: Investigate and correct the bot's internal Time-of-Day (TOD) and market `phase` determination logic. Ensure that the reported `MTF cycle @ ... ET` time and `phase` (e.g., `midday`) are consistent with the system's actual time and the market's open/closed status. (Highest urgency due to fundamental internal state corruption).
+2.  **ALPHA | HIGH**: Clarify or correct the `VOLSHADOW`'s `would_pass` flag logic. Either ensure `would_pass` is `false` when `score_without_vol` is below the minimum required score, or modify the logging to include the *final* aggregated score that `would_pass` is actually evaluating against. (High urgency to prevent potential mis-scored entries).
+3.  **INFRASTRUCTURE | LOW**: Optimize off-market-hours processing. When the market is closed, consider pausing or significantly reducing the frequency of detailed confluence scoring on stale data to conserve computational resources.

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-30 01:35 PM PT",
+  "ts_iso": "2026-06-30T13:35:05.932996-07:00",
+  "prompt_chars": 51474,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 51474,
+  "gai_prompt_chars": 51550,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.32,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "An analysis of the Alpaca paper trading bot's activity over the past 7 days reveals critical infrastructure and state-management issues, alongside some successful momentum captures. \n\n### 1. TRADE-BY-TRADE VERDICT\n*Note: Times converted to PT to match bot logs where applicable.*\n\n- **[MSTR LONG]** 06-24 07:56 PT entry @ $98.16 → Exit 06-24 11:16 PT @ $164.55. \n  **VERDICT: edge_confirmed** (Note: The massive price discrepancy suggests a paper-trading anomaly or stock split, but the system executed the entry/exit cleanly).\n- **[GOOGL LONG]** 06-24 11:39 PT entry @ $345.18 → Exit 06-26 08:22 PT @ $342.15. \n  **VERDICT: regime_error**. Position was held through a severe macro degradation (MRI spiked to 70/HIGH on 06-24, then sustained STRESSED levels through 06-26). \n- **[NVDA LONG]** 06-24 11:39 PT entry @ $198.17 → Exit 06-26 07:43 PT @ $193.23. \n  **VERDICT: regime_error**. Stopped out. Similar to GOOGL, the bot failed to cut risk proactively when the MRI regime shifted violently against the long bias.\n- **[GOOGL LONG]** 06-29 07:08 PT entry @ $348.85 → Exit 06-30 06:32 PT @ $351.41. \n  **VERDICT: edge_confirmed**. Clean momentum capture as MRI cooled from STRESSED to ELEVATED.\n- **[NVDA LONG]** 06-29 07:08 PT entry @ $192.44 → Exit 06-30 06:30 PT @ $195.75. \n  **VERDICT: edge_confirmed**. \n\n### 2. PATTERN ANALYSIS\n- **State Desynchronization (Critical):** The bot's internal position tracker is losing sync with the broker's actual state. The logs explicitly flag `risk.open_positions=2 vs tracker=0`. This desync is causing the bot to fire phantom exit events (e.g., `EXIT NVDA | score=0 | mri=N/A | qty=1 | pdt=0` on 06-27 and 06-30) as it attempts to reconcile unknown positions. If the bot thinks it has 0 positions when it actually has 2, it risks over-leveraging and violating `MAX_OPEN_POSITIONS`.\n- **Regime Blindness on Open Positions:** The bot enters trades during NORMAL MRI regimes but fails to dynamically adjust stops or exit when the MRI spikes to HIGH/STRESSED (as seen on 06-24 to 06-26). The edge is being eroded by holding long positions through macro-driven volatility expansions.\n- **System Degradation:** The bot is experiencing severe cycle slowdowns (`duration=427s`) correlated with a massive garbage collection event (`gc.collect() took 2775.7ms, collected 31 objects`). This points to a memory leak, likely from unbounded historical data arrays or un-cleared signal objects.\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n- Week 2026-W25 & W26: No actionable directives were issued (N/A or context_only). \n\n### 4. WEEKLY DIRECTIVES\n⚠️ **[INSUFFICIENT_SAMPLE — N=9]** \n*Statistical guardrail active. No parameter changes prescribed.*\n- **Observation (Sub-Kelly Sizing):** The bot's win rate on the limited sample is decent, but the TQI (Trade Quality Index) is degrading (`last-5-trade avg=28.0/100 < 30`). This suggests exits are sub-optimal. \n- **Observation (Momentum Truncation):** The bot may be cutting winners too early on the 06-29 entries, though without `spy_bar_pct` data, it is difficult to confirm if the exits were technically justified or overly conservative.\n\n### 5. FINAL VERDICT\n**FAIL** — While the core MTF confluence logic is finding profitable entries, critical infrastructure bugs (state desync between tracker and broker) and a severe memory leak threaten the bot's operational safety and must be patched immediately.\n\n### 6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"strategy/run_cycle.py\",\n    \"finding\": \"Internal position tracker desyncs from broker state (risk.open_positions=2 vs tracker=0), leading to phantom exits and potential over-allocation.\",\n    \"recommended_fix\": \"Implement a hard state reconciliation at the start of each cycle. Query the Alpaca API for open positions and overwrite the internal tracker state to ensure the broker is the single source of truth.\",\n    \"rc_class\": \"RC-3\"\n  },\n  {\n    \"file\": \"main.py\",\n    \"finding\": \"Garbage collection is taking >2.7 seconds (gc.collect() took 2775.7ms), causing cycle durations to spike to 427s, indicating a memory leak.\",\n    \"recommended_fix\": \"Profile memory usage to identify unbounded data structures (e.g., tick history, old signal objects, or log histories) and implement a rolling window or explicit deletion for stale objects.\",\n    \"rc_class\": \"RC-2\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 33746,
+    "elapsed_s": 48.04,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

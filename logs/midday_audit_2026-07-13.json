@@ -1,0 +1,86 @@
+{
+  "audit_date": "2026-07-13",
+  "run_ts": "2026-07-13T10:30:03.349800-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "RIVN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 20,
+    "levels": {
+      "ELEVATED": 20
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 47,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-13 16:04:25,036 | WARNING  | strategy.run_cycle | [ANOMALY-2] [MSTR] confirm_gate=3 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | ",
+      "2026-07-13 16:04:25,036 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-13 16:05:55,048 | WARNING  | strategy.signal_generator | run_scan: phase-1 global timeout \u2014 abandoned symbols: ['NVDL', 'TQQQ', 'SQQQ', 'MU', ",
+      "2026-07-13 16:15:56,155 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) \u2014 T4 yfinance ^VIX fallback=16.3. _vix_confirmed=Fa",
+      "2026-07-13 16:15:56,753 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=162.3370. No prior close available \u2014 JPY scoring 0"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -17.639999999999997,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -17.639999999999997,
+    "best": {
+      "symbol": "RIVN",
+      "pnl": -17.639999999999997,
+      "entry_price": 18.06,
+      "exit_price": 17.22,
+      "size": 21.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 15.39,
+      "target": 23.6
+    },
+    "worst": {
+      "symbol": "RIVN",
+      "pnl": -17.639999999999997,
+      "entry_price": 18.06,
+      "exit_price": 17.22,
+      "size": 21.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 15.39,
+      "target": 23.6
+    },
+    "trades": [
+      {
+        "symbol": "RIVN",
+        "pnl": -17.639999999999997,
+        "entry_price": 18.06,
+        "exit_price": 17.22,
+        "size": 21.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 15.39,
+        "target": 23.6
+      }
+    ]
+  }
+}

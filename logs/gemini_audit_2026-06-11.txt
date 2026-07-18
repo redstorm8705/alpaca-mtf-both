@@ -1,0 +1,79 @@
+Nightly Gemini Audit — 2026-06-11
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'autonomous_patch_generator.py', 'alerts.py', 'autonomous_review.py', 'config.py', 'auto_ai_audit.py', 'weekly_postmortem.py', 'earnings_preflight.py', 'execution/quarterly_hold_manager.py', 'execution/kelly.py', 'execution/lifecycle.py', 'execution/orphan_manager.py', 'execution/broker.py', 'execution/entry_logic.py', 'execution/trade_engine.py', 'execution/exit_logic.py', 'execution/portfolio_tracker.py', 'events/handlers.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring `gc.collect()` duration**: The log shows `WARNING | main | gc.collect() took Xms, collected 64 objects — heap may be growing` with durations up to `7497.3ms` (7.5 seconds). While it states objects were collected, such long garbage collection pauses can cause significant latency in a live trading bot, potentially leading to missed market events, delayed stop executions, or slower order submissions. This is a recurring issue suggesting memory pressure or inefficient object management.
+*   **News source timeout**: `WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['currents']` occurs repeatedly (e.g., 18:40:10,861). This indicates a failure to fetch news from a critical source, which could lead to the bot operating without up-to-date market information, especially impacting the `news_alerts` component of the MRI.
+*   **Position count drift**: `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=2. Correcting to tracker count.` (2026-06-11 20:01:42,970). This critical warning indicates that the `RiskManager`'s internal count of open positions became desynchronized from the `PortfolioTracker` at startup. While `orphan_manager` correctly self-corrects, the initial drift is a serious state management issue that could lead to incorrect PDT calculations or position sizing decisions if not caught and corrected.
+*   **TQI degradation**: `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.` This is a persistent warning occurring at each `run_cycle` when MRI is STRESSED. While the bot flags it as an anomaly for review, the continuous low TQI suggests poor trade quality and warrants investigation into stop placement and exit discipline as recommended.
+
+### PERFORMANCE AUDIT
+The audit requested the last 10 trades, but the provided `TRADE EVENTS` section only contains 3 trades from June 5th and June 8th. The EOD snapshot shows `trades_today: 0` and `open_trades: 2` (UBER, TOST).
+Based on the available information:
+
+*   **P&L Sign Correctness**: The two `stop_hit` events for MSTR and NFLX show P&L matching `entry_price - exit_price` for short positions, which is correct.
+*   **Partial P&L**: No partial exits are present in the provided `TRADE EVENTS` to audit.
+*   **Recording Anomalies**:
+    *   **Critical P&L Statistics Contradiction**: The `EOD SNAPSHOT` `all_time_stats` present a significant contradiction: `total_pnl: 302.42` (positive) but `avg_r_multiple: -0.06` (negative). This is mathematically impossible if `avg_r_multiple` is `total_pnl / total_risk_taken`. Additionally, `win_rate: 40.5`, `avg_win: 23.95`, `avg_loss: -14.34`, and `profit_factor: 1.14` imply an overall positive P&L (`0.405 * 23.95 * total_trades` wins vs `0.595 * 14.34 * total_trades` losses yields a positive P&L), which further contradicts the negative `avg_r_multiple`. This indicates a critical bug in performance metric calculation or reporting.
+*   **Entry/Exit Plausibility**: The entry/exit prices for the recorded MSTR and NFLX stop-outs appear plausible given the P&L and stop levels.
+*   **Score-Outcome Correlation**: With only two closed trades from the provided data, a correlation analysis is not feasible. The `ANOMALY-3` log, however, suggests that overall TQI (which includes score) is low.
+*   **Stop-hit rate vs. win rate**: The all-time `win_rate` is 40.5%, which means 59.5% are losses (including stop-hits). This isn't necessarily a regime mismatch, but it highlights the importance of the positive profit factor and win-loss ratios.
+*   **Exit Reason Consistency**: Both recorded `stop_hit` exits are described as `overnight_atr_buffer_exit | 9-scan breach` and the exit price is past the calculated threshold, which is consistent.
+
+### TRADE INTEGRITY
+*   **Critical P&L Statistics Contradiction**: As detailed in "Performance Audit", the contradiction between `total_pnl` and `avg_r_multiple` in the `EOD SNAPSHOT` indicates a severe issue with how trading performance is being aggregated and reported.
+
+### MODIFIED FILE FINDINGS
+*   **`main.py` | `_spy_risk_scans_left` global state (undeclared)**
+    *   **Description**: The `_spy_risk_scans_left` variable is documented as being decremented by `run_cycle()` and is used in `_save_hybrid_state()` and `_load_hybrid_state()` (which are re-exported from `execution/trade_engine.py`). However, `_spy_risk_scans_left` is not explicitly declared as a global variable in `main.py` alongside other related `_spy_risk_` variables.
+    *   **Code Path & Failure Condition**: In `main.py`, the code block initializing global state variables (`_spy_risk_active`, `_spy_risk_direction`, `_spy_risk_magnitude`, `_spy_event_type`) is missing `_spy_risk_scans_left`. If `_load_hybrid_state()` fails or is not called before `run_cycle()` attempts to modify `_main._spy_risk_scans_left`, it could lead to an `AttributeError` or, if `run_cycle()` is not properly referencing `_main`, it could create a local variable `_spy_risk_scans_left` that desynchronizes from the intended global state, leading to incorrect behavior for the SPY risk gate.
+
+*   **`config.py` | `BUCKET_B_MAX_POSITIONS_POWER` documentation discrepancy**
+    *   **Description**: The `CONFIG CONSTANTS` section states `BUCKET_B_MAX_POSITIONS_POWER = 5` is for "power-hour expansion (9:35–10:00 AM ET)". However, in `config.py` itself, the related constant `TOD_EXPANSION_WINDOW_START = 15 * 60 + 30` is set to "3:30 PM ET".
+    *   **Code Path & Failure Condition**: This is a documentation bug. The bot's logic will use `TOD_EXPANSION_WINDOW_START` (3:30 PM ET) as the trigger for power-hour position expansion, not 9:35 AM ET as stated in the configuration documentation. This discrepancy leads to misaligned expectations about the bot's behavior.
+
+*   **`execution/exit_logic.py` | PDT-dynamic rules vs. PDT removal documentation**
+    *   **Description**: The module docstring for `execution/exit_logic.py` states `PDT removed S52 (SEC/FINRA rule amendment, board S50 28-0)`. Immediately following this, the `check_partial_exits()` function describes `PDT-dynamic rules` for partial exits based on `0 PDT used`, `1 PDT used`, etc.
+    *   **Code Path & Failure Condition**: This creates a contradiction: either PDT rules are removed (making the PDT-dynamic logic dead code or an error) or they are still in effect (making the docstring incorrect). If the PDT rules are truly removed, the presence of this complex, conditional logic creates unnecessary complexity and can be misleading. If PDT is not completely removed from the Alpaca API/account setup, this logic could still be erroneously triggered. Given that the bot is paper trading, PDT is often enforced by Alpaca even for paper accounts, so the removal of the *rules* needs to be explicitly validated. As `config.py` and logs don't show active PDT tracking, this is likely dead code causing confusion.
+
+*   **`execution/quarterly_hold_manager.py` | `_ATR_BARS` calculation for `_ATR_PERIOD_WEEKS`**
+    *   **Description**: The constants define `_ATR_PERIOD_WEEKS = 14` for ATR calculation, with a comment `McKinney fix: 14wk × 5d = 70 bars; use 65 for buffer`. The actual `_ATR_BARS` constant is set to `65`.
+    *   **Code Path & Failure Condition**: If `_ATR_PERIOD_WEEKS = 14` truly means a 14-week lookback using *daily* bars (as implied by `14wk x 5d = 70 bars`), then fetching only `65` bars would provide incomplete data for the ATR calculation, using ~13 weeks instead of 14. This might lead to slightly inaccurate ATR values, which in turn affect stop-loss calculations (defined by `_ATR_MULT`). This is a minor data integrity bug for the QHM ATR.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (The logic in `_find_recent_fvgs` (now in `execution/entry_logic.py`) has been updated to handle column access robustly, and comments indicate MultiIndex is no longer an issue with Alpaca Data).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (File not modified, no relevant logs).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED** (PDT rules have been removed per S52, making the underlying issue moot. The `_pdt_htf_gate` is now a stub).
+*   **P5-H2 | Fill price crosstalk**: **FIXED** (Idempotency keys `client_order_id` are used for market orders, and `fetch_actual_fill_price` uses `submitted_after` timestamp for disambiguation).
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED** (`execution/orphan_manager.py` explicitly handles `order is None` and clears `gtc_stop_order_id`).
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (`main.py` removed the runtime override, and `config.py` now consistently sets `TOD_MARKET_OPEN_BUFFER_MINS = 30`).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **UNTOUCHED** (Already marked as fixed, no new evidence of re-triggering).
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED** (`main.py` adds `fcntl.F_SETFD, fcntl.FD_CLOEXEC` to the lockfile, preventing re-locking by `os.execv()`).
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED** (Multiple components (`hybrid_state.json`, `market_top_detector`, `ftd_state.json`) now include date validation on load. MRI itself refreshes frequently).
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED** (No code changes address this architectural issue).
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED** (File not modified, no relevant logs).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **FIXED** (The `portfolio_tracker.py` now uses Alpaca fills as the authoritative source for EOD P&L reconciliation, ensuring accuracy).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED** (File not modified, no relevant logs).
+
+### NEW BUGS FOUND
+*   **P&L REPORTING | CRITICAL | EOD SNAPSHOT / PortfolioTracker.get_stats()**
+    *   **Description**: The `all_time_stats` in the `EOD SNAPSHOT` displays `total_pnl: 302.42` (positive) but `avg_r_multiple: -0.06` (negative). This is a mathematical impossibility for a trade history with overall positive P&L.
+    *   **Exact Failure Condition**: The `PortfolioTracker.get_stats()` method (not fully shown) or its underlying calculations incorrectly computes `avg_r_multiple`. The sum of all closed trade P&L (positive $302.42) divided by total risk taken should yield a positive average R-multiple. This indicates a critical error in performance aggregation, rendering the `avg_r_multiple` metric unreliable and potentially misleading the user about the bot's true edge.
+
+*   **INFRASTRUCTURE | HIGH | main.py (implicitly via gc module)**
+    *   **Description**: Persistent `WARNING | main | gc.collect() took Xms, collected 64 objects — heap may be growing` with execution times reaching up to 7.5 seconds.
+    *   **Exact Failure Condition**: While Python's garbage collector prevents memory exhaustion, these extended pauses indicate significant memory churn or a memory leak accumulating many small, short-lived objects. In a live trading environment, a 7.5-second pause can directly lead to unacceptable latency in responding to market events (e.g., failing to submit a stop-loss order quickly enough, leading to larger losses, or missing entry signals). The increasing time over cycles suggests the problem is either compounding or a workload spike.
+
+### FIX VALIDATION
+No prior fixes were provided for validation in this audit.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate P&L Metrics Contradiction**: Immediately audit the `PortfolioTracker.get_stats()` and `KellySizer.get_summary()` implementations to resolve the `total_pnl` vs. `avg_r_multiple` discrepancy. This is critical for accurate performance assessment.
+2.  **Optimize Memory Usage/Garbage Collection**: Investigate the root cause of the long `gc.collect()` pauses. Profile memory usage to identify potential leaks or areas for optimization (e.g., object pooling, explicit del/None assignment for large data structures, reducing object churn).
+3.  **Address News Monitor Timeouts**: Implement more robust error handling and retry mechanisms in `news_monitor` for source timeouts. Consider alternative news feeds or a higher timeout for critical news sources to ensure comprehensive market awareness.
+4.  **Clarify PDT Logic**: Resolve the documentation/code contradiction regarding PDT-dynamic rules in `execution/exit_logic.py`. If PDT is truly removed, remove the corresponding code block. If it's still applicable (e.g., for certain Alpaca account types), clarify its configuration and ensure it's correctly applied.
+5.  **Verify QHM ATR Calculation**: Correct `_ATR_BARS` in `execution/quarterly_hold_manager.py` to `70` if `_ATR_PERIOD_WEEKS = 14` is intended to use 14 weeks of daily bars for ATR calculation, or `14` if it means 14 weekly bars.

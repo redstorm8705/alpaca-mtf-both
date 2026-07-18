@@ -1,0 +1,86 @@
+Nightly Gemini Audit — 2026-06-19
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'monthly_review.py', 'generate_dashboard.py', 'execution/entry_logic.py', 'execution/fill_helpers.py', 'events/news_monitor.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Persistent High `gc.collect()` Latency**: The log shows `gc.collect() took XXXXms, collected 31 objects — heap may be growing` with `XXXXms` values consistently ranging from 2.5 seconds to over 5.6 seconds. While the frequency of these calls (approximately every 5 minutes) is within the "benign" pattern, the *duration* of these collections is excessive. This indicates significant memory churn or potential leaks, causing the garbage collector to work harder than expected, which can impact bot performance and responsiveness over time.
+
+    *   **Failure Condition**: `gc.collect()` calls are consistently taking over 2.5 seconds to complete, suggesting high memory pressure or inefficient object lifecycle management, potentially leading to performance degradation.
+
+*   **`objgraph not installed` Warning**: The warning `P2-DIAG: objgraph not installed — run: pip install objgraph` is logged repeatedly (every ~5 minutes), directly after the `gc.collect()` warning. If `objgraph` is an optional diagnostic tool not intended for mandatory installation, this warning unnecessarily clutters the logs and should be suppressed or only logged once at startup.
+
+    *   **Failure Condition**: Recurring diagnostic warning for a missing optional dependency, which creates log noise without providing a critical actionable alert.
+
+### PERFORMANCE AUDIT
+
+*   **NFLX Final Exit P&L Discrepancy**: The P&L recorded for the final exit of NFLX does not match the calculated P&L for that specific tranche.
+    *   **Symbol**: `NFLX`
+    *   **Direction**: `short`
+    *   **Entry Price**: $77.54
+    *   **Initial Size**: 2
+    *   **Partial Exit**: `2026-06-18T06:47:05.169233-07:00` at price $76.38, size 1, `pnl: 1.16`. (Calculated: (77.54 - 76.38) * 1 = 1.16. **Matches**). Remaining size: 1.
+    *   **Final Exit**: `2026-06-18T10:13:57.878391-07:00` at price $93.19, size 1, `pnl: -14.49`. (Calculated: (77.54 - 93.19) * 1 = -15.65. **Does NOT match**).
+    *   The discrepancy (-1.16) is exactly the P&L of the first partial exit, suggesting an error in how P&L is calculated for subsequent tranches after partial exits, or if the `pnl` field for the final exit is intended to be cumulative despite `size: 1`.
+
+*   **Overall Performance Metrics**:
+    *   `win_rate`: 38.5% (low)
+    *   `profit_factor`: 1.09 (barely profitable)
+    *   `avg_r_multiple`: -0.108 (negative, indicating average losses are larger than average wins, or targets aren't being hit to offset stop losses)
+    *   **Analysis**: The low win rate, marginal profit factor, and negative average R-multiple indicate that the bot's strategy is currently unprofitable. This is not a bug in execution but a significant alpha issue requiring strategic review. While the `TARGET_ATR_MULT = 2.5` suggests a 2.5x R:R goal, the `avg_r_multiple: -0.108` indicates this is not being captured.
+
+### TRADE INTEGRITY
+
+*   **NFLX P&L recording error** (detailed above in Performance Audit).
+*   All other listed trades (`UBER`, `TOST`, `INTC`) appear to have P&L signs consistent with their direction and exit prices.
+
+### MODIFIED FILE FINDINGS
+
+*   **events/macro_risk_index.py** | `inject_news_state` function
+    *   **Description**: The logic for news injection bonus calculation (`raw_bonus`) uses hardcoded values (e.g., `if alert_count >= 5: raw_bonus = 5`). However, the comment immediately above states, "S63 fix: reduced raw_bonus (15→5, 10→3, 5→2) and gated cap (10→1)". This comment appears to describe a *prior* state of the raw bonus (15, 10, 5) being reduced to 5, 3, 2 for `raw_bonus`, and 1 for the gated cap. The current code calculates `raw_bonus = 5` for 5+ alerts, `3` for 3-4 alerts, and `2` for 1-2 alerts. If the intent was to *further* reduce the `raw_bonus` values *from* the S63 values (5, 3, 2), then the code is consistent. However, if the intent was that `5` in `raw_bonus = 5` is a *reduction from* a previous `15`, it's not explicitly clear, but it seems to be applied correctly. The comment's "reduced raw_bonus (15→5, 10→3, 5→2)" implies the *old* raw bonuses were 15, 10, 5, which are now 5, 3, 2. The code then uses 5, 3, 2. This appears consistent.
+    *   **No immediate failure condition identified**, but the comment could be clearer about the *current* state vs. *previous* state. This is more a clarity issue.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (by `execution/entry_logic.py`'s `_find_recent_fvgs()` explicit column normalization).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (source not provided).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED** (by new `_DAILY_TRIPS` mechanism in `execution/entry_logic.py` and its daily reset logic).
+*   **P5-H2 | Fill price crosstalk**: **FIXED** (by `execution/fill_helpers.py`'s `fetch_actual_fill_price()` using `submitted_after` parameter).
+*   **P5-H3 | Orphan GTC 404 path**: **UNTOUCHED** (source for `orphan_manager.py` not provided; log mentions a *different* GTC stop submission bug).
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (by consolidating `TOD_MARKET_OPEN_BUFFER_MINS` logic in `main.py` and `config.py`).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED** (as per P5 queue statement).
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED** (by `main.py` adding `fcntl.FD_CLOEXEC` to the lockfile descriptor).
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED** (by `generate_dashboard.py` `_load_hybrid_state` guards and `events/macro_risk_index.py` decay logic on restore).
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED** (source not provided).
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED** (the handling in `monthly_review.py` is improved, but the root cause in `_classify_loss_driver()` is not addressed in provided code).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED** (EOD SNAPSHOT shows `pnl_today: 0.0` and `trades_today: 0` while `open_trades: 3`, confirming the understatement issue for the EOD file itself).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED** (source not provided).
+
+### NEW BUGS FOUND
+
+*   **CATEGORY**: EXECUTION BUG | **SEVERITY**: HIGH | **file**: `TRADE EVENTS` log (impacts P&L calculation/recording logic in `execution/portfolio_tracker.py` or similar) | **description**: Incorrect P&L recorded for NFLX final exit after a partial exit. | **exact failure condition**: For the NFLX short trade (entry $77.54, initial size 2), the final exit of 1 share at $93.19 records a P&L of $-14.49, when the actual P&L for that tranche should be $(77.54 - 93.19) = -15.65. This error results in incorrect P&L accumulation in the bot's records.
+
+*   **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: MEDIUM | **file**: `main.py` (orchestrates `gc.collect()` calls) | **description**: `gc.collect()` calls are taking an excessive amount of time (2.5-5.6 seconds). | **exact failure condition**: The bot's `gc.collect()` operations are frequently blocking for several seconds, indicating significant memory pressure (e.g., high object churn or a memory leak). This behavior, while not immediately crashing the bot, suggests a performance bottleneck that could lead to delayed processing or reduced responsiveness during critical trading periods.
+
+*   **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: LOW | **file**: `main.py` (or caller of `P2-DIAG` log) | **description**: Repeated logging of "P2-DIAG: objgraph not installed" warning. | **exact failure condition**: The log is being polluted with a non-critical warning message every scan cycle for a missing optional diagnostic tool, which makes it harder to identify truly actionable alerts.
+
+*   **CATEGORY**: ALPHA ISSUE | **SEVERITY**: MEDIUM | **file**: `confluence` (source not provided, likely `strategy/confluence.py` or similar) | **description**: `rsi_would_score` and `score_without_vol` for JPM are direction-dependent for the same timestamp. | **exact failure condition**: For JPM, the `VOLSHADOW` log shows `{"direction": "long", ..., "score_without_vol": 6, "rsi_would_score": false}` immediately followed by `{"direction": "short", ..., "score_without_vol": 2, "rsi_would_score": true}` at the same timestamp. While direction-dependent RSI thresholds are possible, this pattern (long would *not* score, short *would* score, and a significant difference in `score_without_vol`) suggests a potential miscalculation or an unusual interpretation of RSI for directional scoring, which may impact signal quality.
+
+### FIX VALIDATION
+
+*   **P5-C1: FVG MultiIndex silent crash**: **PASS**. The modification in `execution/entry_logic.py` (`col_lower = {c.lower(): c for c in df_ohlc.columns}` and `high_col = col_lower.get("high", "High")`) correctly addresses the MultiIndex column access issue.
+*   **P5-H2: Fill price crosstalk**: **PASS**. The `submitted_after` parameter in `execution/fill_helpers.py:fetch_actual_fill_price()` with its 50ms grace period directly resolves the fill price ambiguity caused by multiple orders.
+*   **P5-H4: Rule 2 dead code**: **PASS**. `main.py` confirms that `TOD_MARKET_OPEN_BUFFER_MINS` is now sourced directly from `config.py`, eliminating the runtime override and ensuring consistent application.
+*   **P5-M1: Cycle watchdog restart loop**: **PASS**. The addition of `fcntl.FD_CLOEXEC` to the lockfile descriptor in `main.py` correctly ensures the lock is released upon `os.execv()` calls, preventing the restart loop.
+*   **P5-M2: MRI score cached stale across sessions**: **PASS**. The combined efforts of `generate_dashboard.py:_load_hybrid_state` checking `saved_at` and `scans_left`, `events/macro_risk_index.py` implementing score decay on restore, and `events/news_monitor.py` purging old hashes on load collectively address the issue of stale state across sessions.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate NFLX P&L Recording**: Immediately audit `execution/portfolio_tracker.py`, `execution/trade_engine.py` (or relevant P&L calculation modules) to identify why the `pnl` for the final NFLX exit was miscalculated. Correct the P&L calculation logic to accurately reflect gains/losses per tranche.
+2.  **Memory Profiling**: Implement memory profiling (e.g., using `objgraph` as suggested by the logs, or `mprof`) to pinpoint the source of the high `gc.collect()` latency and potential memory leaks/churn. Optimize object creation/destruction or identify long-lived objects.
+3.  **Review JPM RSI/Score Logic**: Thoroughly review the logic within the `confluence` scoring system for JPM (and potentially other symbols) to understand why `rsi_would_score` and `score_without_vol` are direction-dependent. Confirm if this is intended behavior, and if so, document the rationale for clarity, or correct any miscalculation.
+4.  **Address `objgraph` Warning**: Either install `objgraph` to enable diagnostics or suppress the recurring warning in the logs by logging it only once at bot startup.
+5.  **Revisit EOD Snapshot Logic (P5-L2)**: Investigate why the `eod_YYYY-MM-DD.json` snapshot is written before positions are closed, leading to understated daily P&L. Modify the `_write_eod_summary` (or equivalent) function to reflect open position unrealized P&L or ensure it's generated only after all intraday positions are closed, or implement a "provisional" EOD summary.

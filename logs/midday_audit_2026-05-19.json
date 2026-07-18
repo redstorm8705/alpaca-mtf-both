@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-05-19",
+  "run_ts": "2026-05-19T10:30:02.757880-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 18,
+    "levels": {
+      "STRESSED": 18
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 1336,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-05-19 06:37:45,533 | WARNING  | confluence | [SPY] VOLSHADOW long compute error: Object of type bool is not JSON serializable",
+      "2026-05-19 06:37:45,538 | WARNING  | confluence | [SPY] VOLSHADOW short compute error: Object of type bool is not JSON serializable",
+      "2026-05-19 06:37:49,067 | WARNING  | confluence | [QQQ] VOLSHADOW long compute error: Object of type bool is not JSON serializable",
+      "2026-05-19 06:37:49,072 | WARNING  | confluence | [QQQ] VOLSHADOW short compute error: Object of type bool is not JSON serializable",
+      "2026-05-19 06:41:22,889 | WARNING  | main | gc.collect() took 3725.6ms, collected 31 objects \u2014 heap may be growing"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

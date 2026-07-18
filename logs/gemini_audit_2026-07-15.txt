@@ -1,0 +1,85 @@
+Nightly Gemini Audit — 2026-07-15
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'midday_audit.py', 'scan_to_html.py', 'config.py', 'nightly_audit.py', 'execution/risk_manager.py', 'execution/entry_logic.py', 'execution/exit_logic.py', 'data/premarket.py', 'data/gex.py', 'strategy/confluence.py', 'strategy/signal_generator.py', 'events/handlers.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1.  reporting.pnl_ledger | unparseable boundary created_at '2026-05-13T06:00:16.06547Z' — stopping; order history may be INCOMPLETE | N/A (systemic)
+2.  EOD Snapshot vs. Bot Log | PNL ledger authoritative flag (`pnl_ledger_authoritative: true`) contradicts critical log `order history may be INCOMPLETE` | N/A (systemic)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Critical P&L Ledger Error**: The log shows `2026-07-15 19:40:08,486 CRITICAL reporting.pnl_ledger fetch_all_orders: unparseable boundary created_at '2026-05-13T06:00:16.06547Z' — stopping; order history may be INCOMPLETE` and again at `2026-07-15 20:00:12,539`. This indicates a recurring and unresolved issue with P&L history fetching, making the ledger potentially unreliable.
+*   **TQI Degradation Warning**: `2026-07-15 19:27:03,176 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=21.2/100 < 30 — review exit discipline and stop placement.` This warning recurs multiple times, indicating consistent poor trade quality outcomes.
+*   **Confirmation Gate Anomaly**: `2026-07-15 19:47:27,798 | WARNING | strategy.run_cycle | [ANOMALY-2] [CRWD] confirm_gate=3 scans but no entry — risk.open_positions=4 vs tracker=4 | MAX_OPEN_POSITIONS=20. If risk>4, CYCLE-SYNC should resolve next cycle.` This anomaly indicates that a symbol (CRWD) qualified for entry through confirmation scans but no order was placed. This specific anomaly recurs for CRWD. While `MAX_OPEN_POSITIONS` is 20, and `risk.open_positions` is 4, indicating no position limit was reached, no explicit blocking reason (e.g., sector correlation, buying power) is logged immediately after the "Linear sizing" step. This points to a silent failure mode in the `execute_entries` path. This also applies to MSTR and CRM, which were sized but no orders were placed.
+*   **Garbage Collection Warning**: `2026-07-15 19:34:37,509 | WARNING | main | gc.collect() took 224.1ms, collected 66 objects — heap may be growing` and `2026-07-15 19:53:44,188 | WARNING | main | gc.collect() took 294.6ms, collected 66 objects — heap may be growing`. These warnings suggest potential memory management issues, possibly leading to performance degradation or OOM errors over longer runtimes.
+*   **Market Closed Entry Block**: `2026-07-15 20:01:13,528 | WARNING | execution.entry_logic | execute_entries: market closed (after-hours gate) — skipping all entries.` This occurred after 4 PM ET (20:00:00 is 4 PM), which is normal behavior (`TOD_MARKET_CLOSE = 16 * 60`).
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All closed trades reviewed from `TRADE EVENTS` (MARA, MSTR, HOOD, SNOW, AVGO, MS, NET, RIVN, SOXL) show correct P&L signs relative to entry and exit prices.
+*   **Partial P&L Accumulation**: No partial exits occurred in the provided `TRADE EVENTS` or `EOD SNAPSHOT`, so accumulation could not be verified.
+*   **Trades with P&L = 0.0**: No trades with P&L = 0.0 where entry ≠ exit price were observed.
+*   **Entry/Exit Prices Plausibility**: Prices appear plausible given the context.
+*   **Score→Outcome Correlation**:
+    *   The `EOD SNAPSHOT` shows `win_rate_today: 0.0` for 2 trades, and `score_buckets` for `12-13` scores having 0 wins and 2 losses (`pnl: -25.61`).
+    *   Across the 10 most recent `TRADE EVENTS`, 7/10 are losses. Higher score entries (e.g., HOOD 12, NET 12, SOXL 12) all resulted in losses. MSTR (score 9) and AVGO (score 7) were wins. RIVN (score 10) was a loss. MARA (score 2) and SNOW (score 5) were losses. This small sample doesn't show a strong positive correlation where higher-score entries outperform lower-score ones; if anything, the higher-score trades in the `EOD SNAPSHOT` were all losses.
+*   **Stop-hit rate vs. Win Rate**: Today's 2 closed trades are NET (exit reason `external_close`) and SOXL (`stop_hit`). This means 1 out of 2 closed trades resulted in a stop-hit, a 50% stop-hit rate. This meets the `STOP_HIT_WARN = 0.5` threshold flagged by `midday_audit.py`. This high stop-hit rate, combined with the `[ANOMALY-3] TQI degradation` warning, suggests a misalignment between strategy thesis and market conditions, or an issue with stop placement/management.
+*   **Exit Reason Consistency**: For the stop-hit trades (HOOD, RIVN, SOXL), the exit price is consistently above the `original_stop` but below the stated `thresh` for `overnight_atr_buffer_exit`. This is consistent with an `atr_buffer_exit` mechanism that uses a dynamic threshold higher than the hard stop.
+*   **Profit Factor and R:R**: The `EOD SNAPSHOT` shows `all_time_stats.avg_r_multiple = 0.012`. This is significantly lower than the `config.INTRADAY_TARGET_ATR_MULT / config.INTRADAY_STOP_ATR_MULT = 2.5 / 1.2 = 2.08` target R:R. This indicates the bot is failing to capture its intended edge, either due to stops being hit too frequently (as suggested by the high stop-hit rate), or positions not reaching targets, or both.
+
+### TRADE INTEGRITY
+*   **P&L Ledger Contradiction**: The `EOD SNAPSHOT` states `"pnl_ledger_authoritative": true`, but the `BOT LOG` critically warns `reporting.pnl_ledger fetch_all_orders: unparseable boundary created_at '2026-05-13T06:00:16.06547Z' — stopping; order history may be INCOMPLETE`. This is a direct, critical contradiction. The authoritative flag is misleading if the underlying data fetching is failing.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/exit_logic.py` | `_compute_tqi` function**:
+    *   **Failure Condition**: With `config.py`'s updated `MIN_LONG_SCORE = 8` and `CONVICTION_FULL_MIN = 9` (paper profile), a valid entry with score 8 or 9 contributes 0 points to the `score_pts` component of the Trade Quality Index (TQI). The calculation `round(max(0.0, (entry_score - 9) / 3 * 25))` means scores < 10 (specifically 8 and 9) result in `max(0.0, negative_value)` which is 0.
+    *   **Code Path**: `execution/exit_logic.py`, `_compute_tqi` function, line `score_pts = round(max(0.0, (entry_score - 9) / 3 * 25))`.
+    *   **Intended vs. Runtime**: Intended: A "full conviction" (score 9) and "half conviction" (score 8) entry should contribute some points to TQI, as they are considered valid entries. Runtime: Both score 8 and 9 entries will yield 0 `score_pts`. This devalues these entries in the TQI feedback loop despite being valid according to the new config.
+*   **`main.py` | Global variable `_spy_event_type`**:
+    *   **Failure Condition**: The global variable `_spy_event_type` is declared with a detailed comment about its possible values and purpose ("Source of truth for intraday risk..."), but no logic is provided in the `main.py` excerpt to set or update this variable, nor is it referenced anywhere else in the provided code.
+    *   **Code Path**: `main.py`, global scope, line `_spy_event_type: str = ""`.
+    *   **Intended vs. Runtime**: Intended: `_spy_event_type` should reflect market reaction events and influence risk. Runtime: It remains an empty string, effectively dead code, and provides no actual risk signal. This is a silent failure of an intended risk mechanism.
+*   **`strategy/confluence.py` | `score_long_signal` and `score_short_signal` functions**:
+    *   **Failure Condition**: The `VOLSHADOW` log messages (lines 201-228 for long, 303-330 for short) contain a hardcoded `"bucket": "B"`.
+    *   **Code Path**: `strategy/confluence.py`, `score_long_signal` and `score_short_signal` functions.
+    *   **Intended vs. Runtime**: Intended: `config.py` states "UNIFIED TIER ALLOCATION (Bucket A/B collapsed 2026-07-15)". The concept of separate buckets has been removed from the allocation strategy. Runtime: The log messages continue to refer to a deprecated "Bucket B", which is misleading for auditing and analysis, especially as it interacts with `config.LEVERAGED_TICKERS`. While not critical, it creates confusion and could misinform future analysis if the audit relies on this tag.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: FIXED (`execution/entry_logic.py` removed MultiIndex guard).
+*   **P5-C2 | run_movers.py ImportError**: FIXED (`data/premarket.py` updated imports to use `data.fetcher` and `alpaca.data.requests`, removing `DataFetcher` dependency).
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: FIXED (Marked as obsolete per audit rules).
+*   **P5-H2 | Fill price crosstalk**: FIXED (`events/handlers.py` and `execution/exit_logic.py` use `submitted_after` timestamp for fill price reconciliation).
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (Not addressed in modified files).
+*   **P5-H4 | Rule 2 dead code**: FIXED (`main.py` confirms `TOD_MARKET_OPEN_BUFFER_MINS` aligned in `config.py`, runtime override removed).
+*   **P5-H5 | FIXED 2026-04-21**: FIXED (Acknowledged as fixed).
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED (`main.py` implements `fcntl.FD_CLOEXEC` to prevent re-lock after `os.execv()`).
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED (Cannot verify without `events/macro_risk_index.py`).
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (Not addressed in modified files).
+*   **P5-L1 | _classify_loss_driver() returns empty label**: UNTOUCHED (Not addressed in modified files).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: UNTOUCHED (Cannot verify without `write_eod_summary` implementation).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED (Not addressed in modified files; `data/gex.py` is called by it but doesn't fix its core issue).
+*   **A-1 | overnight_breakeven exit fires at entry-0.25×ATR, not at entry price**: UNTOUCHED (Still fires at a threshold, not entry price, based on provided log output for SOXL).
+*   **A-2 | trail_stop not floor-bounded by promoted stop after partial exit**: FIXED (`execution/exit_logic.py` uses `max(..., _stop_floor)` for long and `min(..., _stop_floor)` for short, where `_stop_floor` is `trade.get("stop", 0.0)` which gets updated upon breakeven promotion).
+*   **A-3 | nightly_audit trade_log.json reference was stale**: FIXED (Acknowledged as fixed).
+*   **A-4 | Alpaca paper fills API returns empty for same-day closures**: FIXED (Marked as benign pattern).
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | `reporting.pnl_ledger` function (not provided) & EOD Snapshot**: The critical log entry `unparseable boundary created_at ...` indicates `reporting.pnl_ledger` is failing to parse order history. This directly contradicts the `pnl_ledger_authoritative: true` flag in the `EOD SNAPSHOT`. This means the P&L data used for daily performance metrics might be incomplete or inaccurate, potentially affecting risk decisions if the bot relies on it for dynamic risk adjustments (e.g., in `RiskManager.check_kill_switch` if it were not phantom-proof).
+*   **ALPHA ISSUE | HIGH | `execution/exit_logic.py` | `_compute_tqi` function**: The TQI `score_pts` calculation `round(max(0.0, (entry_score - 9) / 3 * 25))` assigns 0 points to valid entries with a score of 8 or 9. Given `config.MIN_LONG_SCORE = 8` (half size) and `config.CONVICTION_FULL_MIN = 9` (full size), these entries should contribute a positive value to their TQI score to correctly reflect their conviction level in the performance feedback loop. This biases the TQI lower for these trades, potentially misinforming Kelly sizing.
+*   **ALPHA ISSUE | HIGH | `config.py` (INTRADAY_TARGET_ATR_MULT / INTRADAY_STOP_ATR_MULT) vs. Observed Performance (all_time_stats.avg_r_multiple)**: The configured intraday R:R is `2.5 / 1.2 = 2.08:1`. However, the `EOD SNAPSHOT` shows `all_time_stats.avg_r_multiple = 0.012`. This massive discrepancy indicates that the bot is failing significantly in capturing its intended risk-reward profile, suggesting a fundamental problem with either target achievement, stop management, or the R-multiple calculation in `all_time_stats`.
+*   **INFRASTRUCTURE | MEDIUM | `main.py` | Global variable `_spy_event_type`**: The global variable `_spy_event_type` is declared but appears to be unused and uninitialized in the provided code. This represents a partially implemented or abandoned feature that is cluttering the global state without contributing to functionality or logging.
+*   **ALPHA ISSUE | LOW | `strategy/confluence.py` | `score_long_signal`, `score_short_signal` functions**: The `VOLSHADOW` log messages contain a hardcoded `"bucket": "B"` tag. With the recent "Bucket A/B collapsed" change in `config.py`, this tag is misleading and refers to a deprecated concept in the bot's allocation strategy.
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PASS** for **A-2 | trail_stop not floor-bounded by promoted stop after partial exit**. The code now explicitly floors the `new_trail` stop by the existing `_stop_floor` (which would be the promoted breakeven stop), preventing it from moving below the entry price for longs, and correctly bounds it for shorts.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate P&L Ledger Corruption**: Immediately address the `CRITICAL reporting.pnl_ledger fetch_all_orders` error. This includes:
+    *   Tracing the `fetch_all_orders` function path to identify the exact parsing failure point for `created_at '2026-05-13T06:00:16.06547Z'`.
+    *   Implementing robust error handling within `fetch_all_orders` to prevent future unparseable boundaries from halting order history processing.
+    *   Correcting the `pnl_ledger_authoritative` flag in the EOD snapshot to accurately reflect the integrity of the P&L data.
+2.  **URGENT: Address TQI Calculation Inconsistency**: Modify `execution/exit_logic.py`, `_compute_tqi` function, to align `score_pts` calculation with the new `config.CONVICTION_FULL_MIN = 9` and `config.CONVICTION_HALF_MIN = 8`. Ensure that entries with scores 8 and 9 receive appropriate positive contributions to their TQI `score_pts`.
+3.  **Investigate Silent Entry Blocks**: Trace the `execute_entries` function in `execution/entry_logic.py` to identify why symbols like CRWD, MSTR, and CRM, after passing confirmation and sizing, are not proceeding to order submission without an explicit log message for the blocking condition. Implement clear `logger.warning` or `logger.info` messages for *all* blocking conditions before an order is placed.
+4.  **Audit R:R Capture Discrepancy**: Conduct a deeper analysis of the `all_time_stats.avg_r_multiple` (0.012) versus the configured `2.08:1` target. This should involve reviewing actual trade outcomes (stops hit, targets reached, average P&L per trade), and verifying the `avg_r_multiple` calculation in `PortfolioTracker` (not provided).
+5.  **Review TQI Degradation and High Stop-Hit Rate**: Analyze the recent trades that resulted in low TQI scores and high stop-hit rates (50% today). This might indicate a need to adjust stop loss placement (e.g., `INTRADAY_STOP_ATR_MULT`), entry criteria (`MIN_LONG_SCORE`/`MIN_SHORT_SCORE`), or exit logic (e.g., `check_partial_exits`) to better suit current market conditions or the bot's observed behavior.

@@ -1,0 +1,67 @@
+Midday Gemini Audit — 2026-05-18
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **P&L Summary Inconsistency:** The `SESSION P&L SUMMARY` reports 0 closed trades and $0.00 Total P&L. However, log entries from `execution.portfolio_tracker` clearly state `lots_closed=6` and `pnl_today=$-49.80` (from Alpaca). This represents a critical data inconsistency at the highest level of performance reporting, rendering the session summary unreliable.
+*   **Alpaca P&L Drift:** The `EOD P&L DRIFT` consistently shows Alpaca's daily P&L ($-49.80) to be different from the bot's internal tracker ($0.00). This impacts the accuracy of risk management controls like `MAX_DAILY_LOSS_PCT`.
+*   **No other performance metrics can be reliably assessed** (e.g., win rate, profit factor, score-outcome correlation, stop-hit rate) due to the lack of correctly reported closed trades and the `score_comparison` data being skipped.
+
+### ENTRY QUALITY
+*   **ORB Gate Blocking:** The bot correctly blocked potential entries for multiple symbols (e.g., NVDA, AMD, PANW) due to the `ORB gate BLOCK: SPY 736.80 ≤ ORB_H 740.06` condition, indicating appropriate adherence to its entry criteria during periods of no confirmed breakout.
+*   **Risk Adjustments:** Position sizing adjustments were correctly applied for `Risk day (Fed Venable Speech) — sizing at 50%` and `Mid-day doldrums — sizing at 75%`, indicating the bot is responding to perceived market conditions.
+*   **No actual entries were made**, so no specific entry quality issues to flag beyond the blocking conditions.
+
+### EXIT QUALITY
+*   No trades were exited (as per the summary, though logs suggest otherwise), so no exit quality issues to assess.
+
+### MRI ALIGNMENT
+*   The MRI registered `score=10` and `level=NORMAL` during the observed cycles, despite a high number of news alerts that were `GATED` due to `price_score=0`. This indicates the bot's logic deemed the market conditions not stressed enough for reduced sizing or halted entries based on price confirmation. This aligns with the fact that no entries were taken during these "NORMAL" MRI periods, and entries were blocked by ORB gates. The sizing adjustments for "Risk day" and "Mid-day doldrums" are consistent with adaptive behavior.
+
+### LOG ANOMALIES
+*   Repeated `VOLSHADOW long/short compute error: Object of type bool is not JSON serializable` for various symbols.
+*   `gc.collect()` taking excessive time (`3944.7ms`, `4306.5ms`) and reporting "heap may be growing" and `⚠ SLOW CYCLE`.
+*   Repeated `EOD P&L DRIFT: Alpaca=$-49.80 tracker=$0.00 drift=$-49.80`.
+*   Repeated `write_eod_summary: score_comparison expected list, got dict — skipped`.
+
+### NEW BUGS / CONCERNS
+
+1.  **CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL**
+    *   **DESCRIPTION:** The `SESSION P&L SUMMARY` presents fundamentally incorrect trading statistics, reporting 0 closed trades and $0.00 total P&L. This directly contradicts log entries from `execution.portfolio_tracker` which clearly show `lots_closed=6` and `pnl_today=$-49.80` (from Alpaca). This renders the primary performance dashboard completely unreliable and makes objective auditing impossible.
+    *   **VARIABLE/METRIC INVOLVED:** `Closed trades` and `Total P&L` in the session summary; `lots_closed` and `pnl_today` (Alpaca) as reported by `execution.portfolio_tracker`.
+    *   **VALUE VS. SHOULD BE & FAILURE EXPLANATION:** The `Closed trades` value is 0, but should be 6. The `Total P&L` is $0.00, but should reflect the P&L from 6 closed trades (e.g., $-49.80 as per Alpaca). This is a critical failure in the bot's trade tracking and reporting logic, providing misleading information about its actual activity and performance.
+    *   **EXACT CONDITION:** This systemic data discrepancy is evident when comparing the P&L Summary block with the `execution.portfolio_tracker` log messages (e.g., `2026-05-18 17:11:52,035 | INFO | execution.portfolio_tracker | Alpaca FIFO EOD: pnl_today=$-49.80 | cumulative=$392.58 | tracker=$0.00 | fills=10 lots_closed=6`).
+
+2.  **CATEGORY: EXECUTION BUG | SEVERITY: HIGH**
+    *   **DESCRIPTION:** There is a persistent P&L drift between the Alpaca paper account's reported daily P&L and the bot's internal tracker. The log indicates `Alpaca=$-49.80` while the `tracker=$0.00`, with a drift of `$-49.80`. This is an internal inconsistency, particularly perplexing given `update_daily_pnl_from_alpaca` reports Alpaca P&L as $0.00 just prior. This discrepancy means risk management controls like `MAX_DAILY_LOSS_PCT` (7% kill switch) operate on unreliable P&L data, potentially leading to missed kill-switch triggers or incorrect position sizing adjustments.
+    *   **VARIABLE/METRIC INVOLVED:** `Alpaca`'s `pnl_today` vs. the bot's `tracker` `pnl_today` within `execution.portfolio_tracker`.
+    *   **VALUE VS. SHOULD BE & FAILURE EXPLANATION:** Alpaca's `pnl_today` is reported as $-49.80 during the `EOD P&L DRIFT` log, but the bot's internal `tracker` `pnl_today` remains $0.00. Both values should be synchronized to ensure accurate risk management and performance assessment. The failure lies in the bot's inability to reconcile its internal P&L with the broker's, especially when Alpaca *is* providing a non-zero P&L for the day, contradicting the "A-4 paper fills gap" benign pattern if Alpaca *is* providing data.
+    *   **EXACT CONDITION:** Occurs repeatedly during EOD processing, specifically when `execution.portfolio_tracker` logs `EOD P&L DRIFT: Alpaca=$-49.80 tracker=$0.00 drift=$-49.80` (e.g., at 2026-05-18 17:11:52,035 and 17:24:24,372), immediately following `update_daily_pnl_from_alpaca: 10 fills → alpaca=$0.00`.
+
+3.  **CATEGORY: ALPHA ISSUE | SEVERITY: HIGH**
+    *   **DESCRIPTION:** The `VOLSHADOW` indicator computation fails consistently across numerous symbols, logging `Object of type bool is not JSON serializable`. This prevents the indicator from correctly contributing to the MTF confluence scoring. If `VOLSHADOW` is a necessary component for the `MIN_SCORE = 9` threshold, its failure likely causes valid signals to be missed or inaccurate signals to be processed, directly impacting signal generation quality.
+    *   **VARIABLE/METRIC INVOLVED:** The calculated value of the `VOLSHADOW` indicator, which is expected to be a numeric type but is returning a boolean.
+    *   **VALUE VS. SHOULD BE & FAILURE EXPLANATION:** The indicator is returning a boolean (`True`/`False`) instead of a numerical value that can be JSON serialized. This means the intended calculation is either incorrect or not completing, resulting in corrupted or missing data for a key confluence component. This directly compromises the integrity of the bot's signal generation logic.
+    *   **EXACT CONDITION:** Occurs frequently for many scanned symbols (e.g., NVDA, AAPL, TSLA, AMD, PLTR, COIN, SMCI, etc.) when the `confluence` module attempts to compute `VOLSHADOW` for both long and short contexts (e.g., `2026-05-18 17:07:03,774 | WARNING | confluence | [NVDA] VOLSHADOW long compute error: Object of type bool is not JSON serializable`).
+
+4.  **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM**
+    *   **DESCRIPTION:** The garbage collector (`gc.collect()`) is taking an unacceptably long time (~4 seconds per cycle) and the log reports "heap may be growing" along with `⚠ SLOW CYCLE`. This indicates potential memory leaks or inefficient memory management, leading to performance degradation. Slow cycles increase latency in processing market data and reacting to trade conditions (entries, exits, risk management), potentially resulting in stale data usage or missed opportunities.
+    *   **VARIABLE/METRIC INVOLVED:** `gc.collect()` execution duration and `main` cycle duration.
+    *   **VALUE VS. SHOULD BE & FAILURE EXPLANATION:** `gc.collect()` durations of ~4000ms are excessively long for an intraday bot, indicating significant computational overhead for memory cleanup. This contributes to `SLOW CYCLE` warnings, where cycle duration can reach 448s. Ideally, GC should be fast, and cycles should be consistently below the watchdog threshold to maintain responsiveness. The current values imply systematic performance bottlenecks.
+    *   **EXACT CONDITION:** Logged by `main` module at the end of cycles (e.g., `2026-05-18 17:11:56,124 | WARNING | main | gc.collect() took 3944.7ms, collected 99 objects — heap may be growing` and `2026-05-18 17:24:28,795 | INFO | main | [CYCLE] duration=448s | phase=midday | watchdog_headroom=272s ⚠ SLOW CYCLE`).
+
+5.  **CATEGORY: EXECUTION BUG | SEVERITY: LOW**
+    *   **DESCRIPTION:** The `write_eod_summary` function logs a warning: `score_comparison expected list, got dict — skipped`. This indicates a data type mismatch, causing the detailed comparison of confluence scores (crucial for post-analysis of strategy effectiveness) to be omitted from the EOD summary. While not impacting live trading, it hinders auditability and future alpha development.
+    *   **VARIABLE/METRIC INVOLVED:** The `score_comparison` data structure passed to `write_eod_summary`.
+    *   **VALUE VS. SHOULD BE & FAILURE EXPLANATION:** The function expects `score_comparison` to be a `list`, but it receives a `dict`. This type mismatch causes the data to be `skipped`, meaning valuable analytical data on signal quality is not being archived. The variable should be converted to or structured as a list before being passed to this function.
+    *   **EXACT CONDITION:** Occurs during the EOD summary write process by `execution.portfolio_tracker` (e.g., `2026-05-18 17:11:52,080 | WARNING | execution.portfolio_tracker | write_eod_summary: score_comparison expected list, got dict — skipped`).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION: CRITICAL - Address P&L Reporting and Reconciliation:** Prioritize fixing the discrepancy between Alpaca's reported P&L and the bot's internal tracker, as well as the inconsistency between closed trades logged and reported in the session summary. This is vital for accurate risk management (`MAX_DAILY_LOSS_PCT`) and reliable performance evaluation.
+2.  **ALPHA: HIGH - Debug VOLSHADOW Indicator:** Investigate and resolve the `Object of type bool is not JSON serializable` error in the `VOLSHADOW` indicator computation. Ensure the indicator returns correct numerical values to maintain the integrity of the MTF confluence scoring and prevent missed or mis-scored trading opportunities.
+3.  **INFRA: MEDIUM - Optimize Memory Management and Cycle Performance:** Analyze the `gc.collect()` long execution times and `SLOW CYCLE` warnings. Identify and mitigate potential memory leaks or inefficient data structures/operations to ensure the bot's responsiveness and stability, especially during active trading hours.

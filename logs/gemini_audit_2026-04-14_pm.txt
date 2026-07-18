@@ -1,0 +1,174 @@
+ALPACA MTF BOT — POST-MARKET AUDIT
+Date: 2026-04-14 (Tuesday)
+Generated: ~1:30 PM PT (post-market close)
+Audit type: Automated Gemini daily audit
+Bot PID: 18022 | Build: GEM-1–6 + GHOST-1/2 applied
+
+════════════════════════════════════════════════════════════
+P&L SUMMARY
+════════════════════════════════════════════════════════════
+Realized P&L today:      +$41.80 (+4.41%)
+Unrealized P&L (open):   ~+$11.71 (AMZN 1 share, entry $236.78)
+Equity-baseline P&L:     +$29.16 (Alpaca equity − prev-close baseline @ 11:59 ET)
+Equity (post-market):    $2,777.71
+
+════════════════════════════════════════════════════════════
+CLOSED TRADE — AMZN LONG
+════════════════════════════════════════════════════════════
+Symbol:         AMZN
+Direction:      LONG
+Qty (original): 4 shares
+Entry:          $236.78 | Apr 13 7:12 AM ET (overnight hold)
+Score:          10/12 (16pt logged: 9/16)
+Exit reason:    trail_stop
+
+Tranche breakdown:
+  T1: 1 share @ $246.78 (9:39 AM ET) | P&L $10.00
+  T2: 1 share @ $246.82 (9:39 AM ET) | P&L $10.04
+  T3: 1 share @ $246.83 (9:39 AM ET) | P&L $10.05
+  Final: 1 share @ $248.49 (12:04 PM ET) | P&L $11.71
+  Total realized P&L: $41.80
+
+Exit notes:
+  - DAY stop set at RTH open: $228.58 (4 shares)
+  - T1–T3 partials fired at 9:39 AM ET (~profit tranche level 3)
+  - Trail stop ($248.76) hit at 12:04 PM ET on final 1 share
+  - 40310000 error on final close (1 share held_for_orders)
+  - P&L recorded correctly by tracker despite fill error
+  - GEM-4 auto-recovery triggered but 1 share remained open
+  - Orphan reconciler re-adopted at 19:24 PT restart
+
+════════════════════════════════════════════════════════════
+OPEN POSITIONS (overnight)
+════════════════════════════════════════════════════════════
+AMZN | 1 share | LONG | Overnight
+  Entry:       $236.78 (orphan adoption at 19:24 PT)
+  Stop:        $228.04
+  Target:      $254.26
+  Unrealized:  ~+$11.71 (eod pnl_remaining)
+  GTC stop:    NOT YET placed (AH window: 4:05–10 PM ET)
+  PDT note:    3/3 — same-day close blocked. GTC is only protection.
+
+════════════════════════════════════════════════════════════
+SESSION WIN RATE & PROFIT FACTOR
+════════════════════════════════════════════════════════════
+Today: 1/1 trades = 100% WR
+
+All-time (14 closed trades):
+  Win Rate:       71.4%
+  Total P&L:      $255.47
+  Avg Win:        $31.69
+  Avg Loss:       -$15.35
+  Profit Factor:  5.16
+  Sharpe Ratio:   9.32
+  Sortino Ratio:  19.21
+  Avg R-Multiple: 0.37x
+
+════════════════════════════════════════════════════════════
+WATCHDOG / CRASHES / RESTARTS
+════════════════════════════════════════════════════════════
+Restarts today: 4 (all graceful SIGTERM — manual user restarts for patch sessions)
+  00:04 PT — SIGTERM, restart (PID 58015 → 58134)
+  00:10 PT — SIGTERM, restart (PID 58134 → ?)
+  08:44 PT — SIGTERM, restart during RTH
+  19:24 PT — SIGTERM, restart for GEM patches (PID → 17718)
+  19:47 PT — SIGTERM, restart for GHOST patches (PID 17718 → 18022) [final]
+
+Watchdog fires: 0
+RTH hang alarms: 0
+Cycle headroom: 560–720s (healthy)
+No os.execv() restarts triggered.
+
+════════════════════════════════════════════════════════════
+RISK METRICS
+════════════════════════════════════════════════════════════
+PDT count:          3/3 (MAXED)
+PDT window rolls:   Apr 15 9:30 AM ET → 1 slot reopens (SMCI Apr 13 oldest)
+Overnight exposure: 1 position (AMZN 1 share) = 100% of max overnight budget
+Overnight %:        ~$237 / $2,778 equity = 8.5% (within limits)
+Size multiplier:    1.0x (MRI NORMAL, session P&L positive)
+Kill switch:        NOT triggered (daily P&L positive)
+
+PDT INTEGRITY WARNING (persistent):
+  Alpaca reports: 1 day trade
+  Bot tracker:    3 in rolling window
+  Bot action:     Conservatively keeping 3/3 (safe)
+  Root cause:     EXTERNAL entry in pdt_slots_used (Apr 13 00:13 ET)
+                  Plus SMCI close Apr 13 (counted as day trade)
+  Recommendation: Manual Alpaca account review on Apr 15 morning
+
+════════════════════════════════════════════════════════════
+GTC / DAY STOP ORDER STATUS
+════════════════════════════════════════════════════════════
+AMZN final 1 share:
+  DAY stop at RTH open: $228.58 (4 shares) — properly placed
+  Re-submitted x3 after each partial: $243.45 → $243.51 → $243.50
+  Final DAY stop: order 14612e5c (1 share @ $243.50) — ACTIVE during RTH
+  After trail stop hit + 40310000: 1 share now held as orphan overnight
+  GTC stop for overnight: NOT yet in logs (AH window runs 4:05–10 PM ET)
+  Expected: GHOST-2 AH loop will submit GTC stop before or at next AH cycle
+
+Order issues:
+  - 40310000 on AMZN final close at 12:04 PM ET — GEM-4 recovery fired, but
+    1 share remained in account. P&L was correctly recorded. Orphan adopted.
+  - AMD entry blocked 40310100 × 2 (08:37, 10:25 PT) — correct PDT behavior
+  - TOST entry blocked 40310100 × 2 (12:49, 12:56 PT) — correct PDT behavior
+
+════════════════════════════════════════════════════════════
+SIGNAL FILTER RATE
+════════════════════════════════════════════════════════════
+RTH cycles scanned: ~18 (10:04 AM – 1:00 PM ET)
+Signals per cycle: 6–9 (peak 9 in final cycles)
+PDT gate cycles blocked: 45
+New entries taken: 0 (PDT=3/3 blocked all)
+
+Top signals blocked by PDT conviction streak gate:
+  QQQ  LONG  12/12  (streak=1/3 @ 10:05 ET, 2/3 @ 10:13 ET — never hit 3)
+  NVDA LONG  11/12
+  AMZN LONG  11/12
+  SPY  LONG  11/12
+  NVDL LONG  11/12
+
+Note: GEM-5 changed streak threshold from 3→2 effective 19:47 PT restart.
+RTH ran on pre-GEM build (streak needed 3). After market, PID 18022 uses 2.
+Tomorrow: QQQ/SPY/NVDA at 12/12 would need only 2 consecutive scans to enter.
+
+════════════════════════════════════════════════════════════
+BUGS / ALERTS / IMPORT ERRORS
+════════════════════════════════════════════════════════════
+Errors today: 1
+  [ERROR] execution.broker — [AMZN] 40310000 at 12:04 PM ET (trail stop close)
+  Status: GEM-4 recovery triggered. P&L recorded. Orphan reconciler resolved.
+  Risk: 1 share was unprotected 12:04–19:24 PT (7h20m). Internal stop tracking
+         only — no exchange stop during that window.
+
+Warnings today: 22 (mostly news_monitor CAUTION alerts — GEO_CONFLICT/Iran)
+Critical alerts: 6 (PDT INTEGRITY mismatch, repeated each cycle)
+Import errors: 0
+Alert failures: 0 (Slack send_slack working per alerts.py)
+
+════════════════════════════════════════════════════════════
+MACRO / MRI STATE
+════════════════════════════════════════════════════════════
+MRI Score:    10/100 — NORMAL
+Event type:   MACRO_FX
+VIX:          18.4 (normal range)
+VIX term:     0.889 (normal)
+JPY:          -0.52% (USD/JPY strength = risk-off) → +10 MRI pts
+TLT:          +0.57% (bond rally)
+Credit:       -0.10% (HYG−LQD divergence, neutral)
+Oil (USO):    -2.49% (falling, Iran peace hopes)
+Gold (GLD):   +1.22%
+Global:       null (EWJ/EWG fetch failed)
+
+Active alerts: 2 (GEO_CONFLICT — Iran/Hormuz war)
+War state:    ACTIVE | Macro risk state: ACTIVE
+news_size_mult: 1.0 (CAUTION only, no HALT)
+Regime: BULL | VIX/VIX3M=0.882 | SPY/50SMA=+3.01% | 20d-rvol=20.0%
+
+════════════════════════════════════════════════════════════
+SLACK DELIVERY NOTE
+════════════════════════════════════════════════════════════
+Slack webhook delivery FAILED: sandbox outbound HTTPS blocked (proxy 403).
+Audit saved to: logs/gemini_audit_2026-04-14_pm.txt
+To manually send: run send_slack_audit.py in bot directory

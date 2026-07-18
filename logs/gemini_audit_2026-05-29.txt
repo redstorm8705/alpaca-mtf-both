@@ -1,0 +1,92 @@
+Nightly Gemini Audit — 2026-05-29
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['autonomous_review.py', 'execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **EOD P&L DRIFT**: `2026-05-30 01:29:55,962 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-40.43 tracker=$8.82 drift=$-49.25`. This indicates a significant discrepancy between Alpaca's recorded P&L and the bot's internal tracking, which suggests fundamental issues in trade accounting and position reconciliation.
+*   **ORPHANED POSITION ADOPTION & DIRECTION MISMATCH**: `2026-05-30 01:30:07,015 | CRITICAL | execution.orphan_manager | [AMZN] ORPHANED POSITION ADOPTED — Alpaca: 1 shares @ $272.11 (long)...` and similar for SPY and QCOM. These orphaned positions, particularly for AMZN and SPY, are adopted as `long` by the `orphan_manager` at restart, but the `EOD SNAPSHOT`'s `alpaca_per_trade` section (reflecting Alpaca's actual activity) indicates these were `closed short` trades on the previous day. This is a severe state inconsistency and direction error.
+*   **MAX POSITIONS VIOLATION**: `2026-05-30 01:30:20,035 | CRITICAL | main | P0-STARTUP: Already at MAX positions (5/4). Blocking new entries.` The bot reports being over its `MAX_POSITIONS` limit of 4 (CONFIG CONSTANT) outside of the power-hour window (`TOD_MARKET_OPEN_BUFFER_MINS` / `BUCKET_B_MAX_POSITIONS_POWER` rules do not apply at 01:30 ET). This is a direct consequence of the `orphan_manager` adopting multiple positions, leading to new entry blocks.
+*   **HEAP GROWTH / EXCESSIVE GC**: Multiple `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing` entries (e.g., `2026-05-30 00:13:56,591` and `01:35:23,277`). Long garbage collection pauses with minimal objects collected indicate a potential memory leak or inefficient object management, which can lead to performance degradation and eventual crashes.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: Appears generally correct for the limited subset of trades where entry/exit are visible (TQQQ long profit, AMZN/SPY short losses from `alpaca_per_trade`). TOST `pnl=0.0` is plausible given `entry=price`.
+*   **`pnl_pct` Computation**: TQQQ `pnl_pct` is correctly calculated based on `entry_price` and `pnl`.
+*   **Partial P&L Accumulation**: MSTR partial exit P&L of 18.11, with a subsequent stop hit P&L of 24.46 (likely total), seems reasonable.
+*   **Score→Outcome Correlation**: With only a few recent closed trades, it's hard to draw definitive conclusions. High-score trades (TQQQ, MSTR, INTC) resulted in wins in the displayed log.
+*   **Stop-Hit Rate vs. Win Rate**: All-time win rate of 43.5% is below 50%, which is acceptable for a positive profit factor (1.31) with a stated `TARGET_ATR_MULT` of 2.5.
+*   **Exit Reason Consistency**: Exit prices are generally consistent with reasons (e.g., stop_hit prices are near stop levels, or in TOST's case, exactly at entry).
+*   **Profit factor and R:R**: `profit_factor: 1.31` is healthy. However, `avg_r_multiple: -0.011` is highly suspicious and contradictory to the positive profit factor and average win/loss values. This metric appears to be miscalculated.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording & State Discrepancy**: As detailed in `LOG ANOMALIES` and `MODIFIED FILE FINDINGS`, there is a critical failure in `PortfolioTracker` to reconcile with Alpaca's actual trade closes, leading to incorrect P&L reporting, P&L drift, and phantom open positions with incorrect direction upon restart.
+
+### MODIFIED FILE FINDINGS
+
+**File: `execution/portfolio_tracker.py`**
+
+1.  **EXECUTION BUG | CRITICAL | `PortfolioTracker._save_log`, `_fifo_reconstruct`, EOD Snapshot generation logic**
+    *   **Variables involved**: `self.closed_trades`, `self.open_trades`, `alpaca_pnl`, `tracker_pnl`, and the `trades` list within the EOD snapshot.
+    *   **Code path**:
+        1.  At EOD on 2026-05-29, the bot's internal `self.closed_trades` only contained the TQQQ exit (P&L $8.82), making `tracker_pnl = $8.82`.
+        2.  `_fetch_alpaca_fills_for_date` correctly fetched all Alpaca `FILL` activities, including TQQQ, AMZN (short exit, P&L $-7.34), and SPY (short exit, P&L $-41.91). The total Alpaca realized P&L for the day was $-40.43.
+        3.  `_fifo_reconstruct` would process these fills. While it likely computes the correct total P&L, its output (`today_pnl` and `remaining_lots`) is not fully integrated to update `PortfolioTracker`'s `self.closed_trades` to reflect *all* Alpaca-reported closed positions.
+        4.  Consequently, the `EOD SNAPSHOT` shows `alpaca_pnl: 8.82` and `trades` only containing TQQQ, *understating Alpaca's total P&L for the day* and ignoring AMZN and SPY closures, despite `alpaca_per_trade` (within the same snapshot) listing their exits.
+        5.  The log entry `EOD P&L DRIFT: Alpaca=$-40.43 tracker=$8.82 drift=$-49.25` explicitly confirms this P&L accounting failure by comparing Alpaca's true P&L against the bot's.
+        6.  Upon restart, `orphan_manager` subsequently adopts AMZN and SPY as *open positions*, demonstrating a critical failure of the EOD process to correctly persist or reconcile the `PortfolioTracker`'s internal state with Alpaca's.
+    *   **Exact failure condition**: The `PortfolioTracker` fails to accurately record all of Alpaca's daily realized P&L and closed positions, leading to `P&L DRIFT` and leaving `self.open_trades` in a state that doesn't match Alpaca's reality. This propagates to subsequent bot runs, causing `MAX_POSITIONS` violations and attempts to manage positions already closed or misidentified.
+
+2.  **EXECUTION BUG | CRITICAL | `execution.orphan_manager` (external, behavior observed)**
+    *   **Variables involved**: `direction` of adopted orphaned positions.
+    *   **Code path**: When the bot restarts (`SIGTERM` at `01:29:55 ET`), `orphan_manager` queries Alpaca for currently open positions. It subsequently logs `[AMZN] ORPHANED POSITION ADOPTED — Alpaca: 1 shares @ $272.11 (long)` and `[SPY] ORPHANED POSITION ADOPTED — Alpaca: 1 shares @ $757.06 (long)`. However, the `EOD SNAPSHOT`'s `alpaca_per_trade` section from the previous day (2026-05-29) clearly lists `AMZN` and `SPY` with `side: "short"`.
+    *   **Exact failure condition**: The `orphan_manager` incorrectly determines the `direction` (long vs. short) of positions it adopts from Alpaca's current holdings, directly contradicting the previous day's Alpaca activity log. This fundamental error can lead to inverted risk management (e.g., placing a stop for a long position on what was originally a short) and further P&L issues.
+
+**File: `autonomous_review.py`**
+*   No issues found that directly impact the trading bot's live operations or financial integrity. The observed `_slack` calls for API failures and git push failures are part of the autonomous review process, not the trading bot itself.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: TRIGGERED (initial stale state observed in logs `PDT count mismatch`, but successfully reconciled by `portfolio_tracker`).
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (not directly triggered by a 404, but the broader orphaned position issue is active).
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED (PDT counter appears to be reconciling, and no suppression was observed when PDT was 1/3).
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (cannot confirm from provided data, EOD summary is fine).
+*   **P5-L1 | _classify_loss_driver() returns empty label**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: TRIGGERED (confirmed by EOD snapshot having P&L drift and missing closed trades despite `alpaca_per_trade` data being present, and later log showing actual drift).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **INFRASTRUCTURE | MEDIUM | main (context for gc.collect()) | Excessive GC pauses and heap growth**
+    *   **Description**: The bot frequently logs `gc.collect() took Xms, collected Y objects — heap may be growing` with long execution times (e.g., ~2-9 seconds) and very few or zero objects collected.
+    *   **Exact failure condition**: This pattern indicates a memory leak or inefficient object lifecycle management within the bot. Continued heap growth will lead to increasing performance degradation (longer GC pauses affecting trading responsiveness) and eventually may result in an Out-Of-Memory (OOM) error, causing the bot to crash or require a system restart.
+
+*   **EXECUTION BUG | HIGH | PortfolioTracker.get_stats() (inferred)**
+    *   **Description**: The `avg_r_multiple` reported in `all_time_stats` (`-0.011`) is mathematically inconsistent with other positive performance metrics like `profit_factor` (1.31) and positive `avg_win` (24.41) and `avg_loss` (-14.35).
+    *   **Exact failure condition**: The `avg_r_multiple` metric is calculated incorrectly, providing misleading information about the bot's risk/reward performance and potentially leading to poor analytical conclusions or strategy adjustments.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Prioritize Fixing P&L/Position Reconciliation (`execution/portfolio_tracker.py` and `orphan_manager`)**:
+    *   Immediately investigate why `PortfolioTracker`'s internal `self.closed_trades` and `self.open_trades` are not being fully reconciled with Alpaca's `FILL` activities at EOD.
+    *   Ensure `_fifo_reconstruct`'s output (total P&L and `remaining_lots`) is robustly integrated into `PortfolioTracker`'s state management.
+    *   Address the `orphan_manager`'s incorrect determination of position direction for AMZN and SPY.
+    *   Proposed Fix: Enhance the EOD reconciliation loop to explicitly query Alpaca for *all* daily closed trades (not just fills) and synchronize `PortfolioTracker`'s `self.closed_trades` accordingly *before* the `EOD SNAPSHOT` is generated and `_save_open_lots_state` is called. For orphaned positions, ensure `orphan_manager` queries Alpaca's *current portfolio holdings* accurately, specifically verifying `side` (long/short).
+2.  **Investigate and Resolve Memory Leak (Heap Growth)**: Profile the bot's memory usage to identify the source of uncollected objects. Address the root cause of the `gc.collect()` warnings.
+3.  **Correct `avg_r_multiple` Calculation**: Review the `PortfolioTracker.get_stats()` function (or equivalent) to fix the mathematical inconsistency in `avg_r_multiple`.
+4.  **Review `_fifo_reconstruct` logic for short positions**: Given the `orphan_manager` found longs when Alpaca fills indicated shorts, re-evaluate how `_fifo_reconstruct` handles `sell_short` entries and `buy_to_cover` fills, especially in edge cases with missing `prior_lots`.
+5.  **Refine EOD Snapshot Timing**: Ensure the `EOD SNAPSHOT` generation occurs *after* all Alpaca fills for the day have been processed and `PortfolioTracker`'s state is fully reconciled, to avoid understating daily P&L (P5-L2).

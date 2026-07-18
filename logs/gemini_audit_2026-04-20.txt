@@ -1,0 +1,127 @@
+Nightly Gemini Audit — 2026-04-20
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['preflight_simulation.py', 'trade_logger.py', 'log_fill.py', 'scan_to_html.py', 'generate_dashboard.py', 'backtest_12pt.py', 'audit_signals.py', 'options_scanner.py', 'main.py', 'audit_final.py', 'midday_audit.py', 'nightly_audit.py', 'live_data_writer.py', 'execution/portfolio_tracker.py', 'events/news_monitor.py', 'events/calendar.py', 'events/macro_risk_index.py', 'data/fmp_client.py', 'strategy/signal_generator.py', 'strategy/movers/scanner.py', 'strategy/movers/strategy.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **PDT Mismatch & Incorrect Reconciliation:**
+    *   `2026-04-17 17:14:16,749 | WARNING | execution.portfolio_tracker | PDT count mismatch — Alpaca reports 2, tracker has 3 in rolling window. Trades may have occurred outside this bot instance.`
+    *   `2026-04-17 17:14:16,793 | INFO | execution.portfolio_tracker | PDT reconciled down: removed 1 phantom entry/entries (SYNC) (Alpaca=2, was 3). New rolling count: 3/3` - **CRITICAL CONTRADICTION**: If Alpaca reports 2 and a phantom entry is removed from 3, the new count should be 2, not 3. This indicates a logic error in the `SYNC` reconciliation path, leading to an artificially inflated PDT count and potential false lockouts. This pattern repeats on `2026-04-18 09:48:01,355`. The later reconciliation (`2026-04-18 10:00:29,966`) correctly sets to `2/3` but highlights the inconsistency of the `SYNC` mechanism.
+*   **GTC Stop Suppressed for PDT Overnight Trade:**
+    *   `2026-04-17 12:58:22,517 | WARNING | main | [SPY] PDT=3/3 — GTC stop SUPPRESSED for overnight entry (clearing house not reset). Internal stop=$698.31 active. Monitor manually.` This is a recurring issue (also seen at `13:33:25`, `14:05:09`, `14:37:07`, `15:08:48`, `15:40:41`, `16:12:21`, `16:44:15`, `17:15:34`, `17:47:10`, `18:18:36`). While an internal stop is active, the explicit instruction to "Monitor manually" highlights a dependency on human intervention, which is a risk management gap for an automated bot.
+*   **MRI State Stale on Startup:**
+    *   `2026-04-18 11:06:15,929 | WARNING | macro_risk_index | MRI state 22.3h stale (>20h) — starting fresh.`
+    *   `2026-04-18 11:06:15,929 | INFO | main | market_top_latest.json absent or stale — Layer 5 using 52w-high-only mode.`
+    *   `2026-04-18 11:06:15,930 | INFO | main | macro_regime_latest.json absent or stale — Layer 6 inactive.`
+    *   `2026-04-18 11:06:15,930 | INFO | main | ftd_state.json absent or stale — Layer 7 inactive (neutral).` These are expected for a bot startup after extended downtime, but collectively indicate a period where several risk layers are operating at reduced effectiveness or are inactive.
+*   **MACRO RISK STATE ACTIVATED:**
+    *   `2026-04-18 11:19:55,099 | CRITICAL | news_monitor | 🚨 MACRO RISK STATE ACTIVATED — 3 macro-risk alerts in last 24h across domains. MRI will reflect elevated background. Sizing managed by MacroRiskIndex.` This critical alert confirms high-level macro risk, correctly impacting sizing via `MacroRiskIndex`.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness:** All closed trades in `LAST 10 TRADES` and `EOD SNAPSHOT` show correct P&L signs (positive P&L for profitable trades, negative for losses).
+*   **`pnl_pct` & `partial_pnl` Computation:**
+    *   The `NVDL` trade (`entry_price=94.203333`, `exit_price=93.82`, `partial_pnl=1.99`, `pnl_remaining=-0.77`, `pnl=1.22`) shows correct arithmetic for partial and remaining P&L based on the assumed initial quantity (3 shares).
+    *   The `SPY` trade (`entry_price=710.166667`, `exit_price=707.6`, `pnl=-7.7`) also shows correct arithmetic.
+*   **P&L=0.0 anomalies:** No trades with `pnl=0.0` where entry ≠ exit price were found.
+*   **Entry/Exit Prices Plausibility:** Prices appear plausible for the respective symbols and trading periods.
+*   **Score-Outcome Correlation:**
+    *   `NVDL`: score=10/12, pnl_pct=0.43% (small win).
+    *   `SPY`: score=12/12, pnl_pct=-0.36% (small loss).
+    *   Based on these two trades, there's no strong correlation evident. The overall `all_time_stats` show an `avg_win` of $28.51 and `avg_loss` of -$13.82, which is favorable.
+*   **Stop-hit rate vs. Win rate:** The `all_time_stats` report a 75.0% win rate, which is very high. `SPY` exit reason `overnight_breakeven | 9-scan breach` indicates a stop was hit, even if it was a moved breakeven stop. The overall stop-hit rate is low given the high win rate, suggesting the strategy avoids frequent full stop-outs.
+*   **R:R vs. Stated Target:** The `avg_r_multiple` is `0.399`. This is significantly lower than the `INTRADAY_TARGET_ATR_MULT` of `2.50x` and `INTRADAY_STOP_ATR_MULT` of `1.25x` (resulting in a 1:2 R:R target). The bot is failing to capture its theoretical edge, indicating either poor target attainment, frequent partial exits reducing overall R, or aggressive stop placement cutting into profits/losses.
+
+### TRADE INTEGRITY
+
+*   **P&L Drift (Critical):** The `EOD SNAPSHOT` shows `alpaca_pnl: 0.0` and `pnl_drift: 8.47`. Despite two trades (`NVDL`, `SPY`) closing for a total tracker P&L of -8.47 today, the Alpaca-reported P&L for the day is 0.0. This indicates a significant bug in how daily P&L is being fetched or calculated from Alpaca fills, leading to inaccurate daily performance reporting.
+
+### MODIFIED FILE FINDINGS
+
+1.  **`preflight_simulation.py`**:
+    *   **Fix 1 Validation (R-multiple):** The simulation tests for R-multiple calculation with trailed stops and partial exits correctly pass, confirming the new logic.
+    *   **Fix 2 Validation (bulk close poll_secs & redundant import):** The checks indicate `main.py` was correctly patched.
+    *   **New Bug (LOW):** Silent exit if run during RTH (L16-19). The script exits without a `print()` message, making it appear to silently fail.
+2.  **`trade_logger.py`**:
+    *   No issues found. The `log_event` function seems robust in type handling and event logging.
+3.  **`log_fill.py`**:
+    *   No issues found for its specific function of logging Robinhood options fills. This script operates independently from the main bot's Alpaca activities.
+4.  **`generate_dashboard.py`**:
+    *   The implementation for loading hybrid state and Alpaca data appears sound. The `pnl_drift` issue originates from `execution/portfolio_tracker.py`, which this module calls.
+5.  **`backtest_12pt.py`**:
+    *   **New Bug (LOW):** Silent exit if run during RTH (L22-25). Similar to `preflight_simulation.py`, the script exits without an explanatory message.
+6.  **`audit_signals.py`**:
+    *   **New Bug (LOW):** Silent exit if run during RTH (L19-22). Similar to `preflight_simulation.py`, the script exits without an explanatory message.
+7.  **`options_scanner.py`**:
+    *   This script manages an independent manual options trading system. No direct issues affecting the Alpaca bot were found.
+8.  **`main.py`**:
+    *   **P5-H1 Fix Confirmation:** The log `Daily reset fired for 2026-04-18 — ... conviction/confirm buffers cleared` explicitly confirms the fix for P5-H1 (PDT=3/3 confirm buffer stale at RTH open).
+    *   **_last_cycle_lock:** The addition of this lock for `_last_cycle_complete` addresses a known race condition (BUG-W2), which is a positive change.
+    *   **GTC Stop Suppression (Warning):** The repeated warnings about GTC stops being suppressed for PDT-forced overnight entries, relying on internal stops and manual monitoring, indicate an inherent limitation due to Alpaca's PDT rules and is a risk management gap.
+9.  **`audit_final.py`**:
+    *   **New Bug (LOW):** Silent exit if run during RTH (L16-19). Similar to other utility scripts, it exits without an explanatory message. The checks for `scan_to_html.py` and `dashboard.html` indicate refactoring for module-level functions and correct call chains.
+10. **`live_data_writer.py`**:
+    *   **LDW-4 (Network Error Backoff):** The implementation correctly differentiates network errors from logic errors for backoff, improving resilience.
+    *   **Singleton Lock:** Uses `fcntl.flock` for singleton enforcement, which is robust.
+    *   **New Bug (MEDIUM):** Redundant module import in loop (L62). `from generate_dashboard import generate` occurs inside the `while True` loop. While Python's module caching mitigates immediate issues, this is inefficient and can lead to unpredictable behavior if `generate_dashboard.py` is modified on disk during runtime.
+11. **`execution/portfolio_tracker.py`**:
+    *   **New Bug (HIGH):** PDT Reconciliation Logic Failure (specific logic in `_reconcile_pdt_counts()` or its callers). The logs (e.g., `2026-04-17 17:14:16,793`) show the tracker incorrectly retaining a `3/3` PDT count even when Alpaca reports `2` after attempting reconciliation.
+    *   **New Bug (HIGH):** Daily Alpaca P&L Reporting Failure (specific logic in `get_total_pnl_today_from_alpaca_fills()` or `_fetch_alpaca_fills_for_date()`). The `eod_snapshot` `alpaca_pnl: 0.0` contradicts closed trades today, indicating a failure to correctly aggregate daily P&L from Alpaca fills. This issue directly relates to the new "P2: Alpaca fills as EOD P&L authority" rule.
+    *   **Atomic Write:** Uses atomic write for `trade_log.json`, which is a strong protective measure.
+12. **`events/news_monitor.py`**:
+    *   No new issues found. The architecture for market-reaction-first sizing (news for display, SPY price action for sizing) is clear and consistently implemented.
+13. **`events/calendar.py`**:
+    *   No new issues found. The static events require annual updates as noted in comments.
+14. **`events/macro_risk_index.py`**:
+    *   **P5-M2 Fix Confirmation:** The log `MRI state 22.3h stale (>20h) — starting fresh.` confirms that MRI state is indeed validated for staleness, indicating P5-M2 is fixed.
+    *   No other new issues found.
+15. **`data/fmp_client.py`**:
+    *   No new issues found. Caching mechanism for API calls is appropriate.
+16. **`strategy/signal_generator.py`**:
+    *   No new issues found from the provided snippets. The weekly bias logic and new features (PEAD cache, sector map, intraday override) appear well-integrated.
+17. **`strategy/movers/scanner.py`**: Not listed as modified, no issues directly found within the snippet.
+18. **`strategy/movers/strategy.py`**: Not listed as modified, no issues directly found within the snippet.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED (File modified, but specific fix not confirmed, no log evidence of trigger)
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED (File not modified, bug likely active and prevents `run_movers.py` from executing)
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** FIXED (Confirmed by `main.py` log `conviction/confirm buffers cleared` during daily reset)
+*   **P5-H2 | Fill price crosstalk:** UNTOUCHED (File modified, but specific fix not confirmed, no clear log evidence of trigger)
+*   **P5-H3 | Orphan GTC 404 path:** UNTOUCHED (File modified, but specific fix not confirmed, no `404` errors in logs)
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED (File modified, but specific bug not found in snippet)
+*   **P5-M1 | Cycle watchdog restart loop:** FIXED (Implied by `_last_cycle_lock` addition in `main.py` for watchdog thread safety)
+*   **P5-M2 | MRI score cached stale across sessions:** FIXED (Confirmed by `macro_risk_index` log `MRI state 22.3h stale (>20h) — starting fresh.`)
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED (File not modified)
+*   **P5-L1 | Weekly review PDT label:** UNTOUCHED (File modified, but specific fix not confirmed, display bug)
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** TRIGGERED/WORSENED (The `alpaca_pnl: 0.0` issue indicates P&L is *not* captured for today, which is a worse state than merely understated. This is directly related to daily P&L reporting).
+*   **P5-L3 | live_data_writer.py no reconnect logic:** FIXED (The `live_data_writer.py` now includes robust retry and backoff logic for network-related failures, addressing "no reconnect logic" for HTTP calls).
+
+### NEW BUGS FOUND
+
+*   **HIGH | `execution/portfolio_tracker.py` | PDT Reconciliation Logic Failure**
+    *   *Description*: The `SYNC` reconciliation path for PDT counts in `portfolio_tracker.py` fails to correctly update the internal rolling day trade count to match Alpaca's reported value when the tracker's count is higher.
+    *   *Exact Failure Condition*: `2026-04-17 17:14:16,793` (and repeated), where Alpaca reports 2 trades, the tracker had 3, and after removing a phantom entry, the rolling count is incorrectly reported as `3/3` instead of `2/3`. This leads to persistent, incorrect PDT lockout.
+
+*   **HIGH | `execution/portfolio_tracker.py` | Daily Alpaca P&L Reporting Failure**
+    *   *Description*: The `get_total_pnl_today_from_alpaca_fills()` function (or its helper `_fetch_alpaca_fills_for_date()`) is not accurately aggregating or reporting today's P&L from Alpaca fill activities.
+    *   *Exact Failure Condition*: `EOD SNAPSHOT` reports `alpaca_pnl: 0.0` and `pnl_drift: 8.47` for `2026-04-20`, despite two trades (`NVDL`, `SPY`) closing today for a combined P&L of -8.47. This misrepresents the bot's daily performance.
+
+*   **MEDIUM | `live_data_writer.py` | Redundant Module Import in Loop**
+    *   *Description*: The `live_data_writer.py` imports `from generate_dashboard import generate` inside its infinite `while True` loop. This is inefficient and could lead to unpredictable behavior if the `generate_dashboard.py` module file were to be modified on disk while the `live_data_writer.py` is running.
+    *   *Exact Failure Condition*: `live_data_writer.py` L62: `from generate_dashboard import generate` is called on every iteration of the `while True` loop.
+
+*   **LOW | `preflight_simulation.py` (L16-19), `backtest_12pt.py` (L22-25), `audit_signals.py` (L19-22), `audit_final.py` (L16-19) | Silent RTH Exit**
+    *   *Description*: These utility scripts exit via `sys.exit(1)` when run during Regular Trading Hours without printing an explanatory message to the console.
+    *   *Exact Failure Condition*: Execution during RTH results in an unannounced termination, which can be confusing to a user expecting an informative message about the blocked operation.
+
+### RECOMMENDED ACTIONS
+
+1.  **HIGH PRIORITY: Resolve PDT Reconciliation Logic (New Bug)**: Immediately investigate and fix the reconciliation logic in `execution/portfolio_tracker.py` responsible for syncing PDT counts, specifically the `SYNC` path that incorrectly retains a higher internal count. This is critical to ensure accurate PDT management and prevent false trade blocks.
+2.  **HIGH PRIORITY: Rectify Daily Alpaca P&L Reporting (New Bug & P5-L2)**: Prioritize debugging `get_total_pnl_today_from_alpaca_fills()` and `_fetch_alpaca_fills_for_date()` in `execution/portfolio_tracker.py`. Ensure that all closed trades for the current day are correctly identified, their P&L aggregated, and accurately reflected in the `alpaca_pnl` field of the EOD snapshot. This is a critical P&L data integrity issue.
+3.  **HIGH PRIORITY: Fix `run_movers.py` ImportError (P5-C2)**: Address the `ImportError` in `run_movers.py` (L19) immediately. This critical bug prevents the entire movers strategy from initializing and operating.
+4.  **MEDIUM PRIORITY: Optimize `live_data_writer.py` Module Import (New Bug)**: Move the `from generate_dashboard import generate` statement in `live_data_writer.py` from inside the `while True` loop to the module's top level. This improves efficiency and reduces potential risks from unexpected module re-evaluations.
+5.  **LOW PRIORITY: Enhance RTH Block Messages (New Bug)**: Add clear `print()` statements before `sys.exit(1)` in `preflight_simulation.py`, `backtest_12pt.py`, `audit_signals.py`, and `audit_final.py` to inform users why these scripts are blocked during RTH.

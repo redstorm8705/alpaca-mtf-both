@@ -1,0 +1,72 @@
+Midday Gemini Audit — 2026-06-29
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades or flagged entries were recorded in this session. Therefore, a performance audit regarding entry/exit integrity, P&L sign checks, score-to-outcome correlation, or stop rate analysis cannot be performed for this session. The "Entries: 0 | Exits: 0" summary indicates no trading activity.
+
+### ENTRY QUALITY
+No entries were taken in this session. However, the logs indicate several reasons why potential signals did not result in entries:
+
+1.  **Persistent Volume Filtering**: Every `VOLSHADOW` log entry for all scanned symbols consistently shows `"would_pass": false`, regardless of the calculated `score_without_vol` or `rsi_would_score`. This indicates that all potential signals are failing the volume liquidity criteria, preventing any entries. For example:
+    *   `2026-06-29 17:05:11,829 | INFO     | confluence | [CRWD] VOLSHADOW {"direction": "short", "vol_ratio": 0.765, ..., "would_pass": false, ...}`
+    *   `2026-06-29 17:05:30,859 | INFO     | confluence | [QQQ] VOLSHADOW {"direction": "long", "vol_ratio": 0.477, ..., "would_pass": false, "bucket": "B", "score_without_vol": 7, ...}`
+    This suggests either the volume filter is too stringent, or the market for the scanned universe is consistently illiquid based on the bot's criteria.
+
+2.  **Weekly Bias Filtering**: Several signals were explicitly filtered out by a `weekly bias`. For example:
+    *   `2026-06-29 17:05:45,940 | INFO | strategy.signal_generator | [NVDA] LONG signal filtered by weekly bias (BEARISH)`
+    *   `2026-06-29 17:05:46,582 | INFO | strategy.signal_generator | [UBER] SHORT signal filtered by weekly bias (BULLISH)`
+    *   `2026-06-29 17:05:47,179 | INFO | strategy.signal_generator | [QQQ] LONG signal filtered by weekly bias (BEARISH)`
+    This is an expected filtering mechanism, reducing potential entries under conflicting longer-term biases.
+
+3.  **Dynamic MIN_SCORE Adjustment**: The `Dynamic MIN_SCORE` was consistently `raised to 12/12` throughout the session. This increase from the base `MIN_LONG_SCORE = 10` and `MIN_SHORT_SCORE = 10` was triggered, in part, by the `MRI=STRESSED/12` condition, as well as `P&L=+0.0%/10`, `ATH=2.78%/11`, and `MTD=50/2` metrics. This proactive risk management filtered out signals that might have otherwise met the base minimum score but were deemed not strong enough under current market conditions. For example:
+    *   `2026-06-29 17:05:47,254 | INFO | strategy.run_cycle | Dynamic MIN_SCORE: raised to 12/12 [SPY=CLEAR/10 VIX=17.9/10 MRI=STRESSED/12 P&L=+0.0%/10 ATH=2.78%/11 MTD=50/2 Regime=Broadening/10 FTD=none/10 GEX=POSITIVE/10 → effective=12/12] — 3 signal(s) filtered out.`
+    This behavior is consistent with risk-averse operation in a stressed environment.
+
+### EXIT QUALITY
+No closed trades, so cannot assess.
+
+### MRI ALIGNMENT
+The bot demonstrated correct alignment with the observed MRI level:
+
+*   **MRI Level**: The MRI was consistently `STRESSED (41/100)` for all 33 samples.
+*   **Dynamic MIN_SCORE Adjustment**: As noted in Entry Quality, the `Dynamic MIN_SCORE` was raised to `12/12`, explicitly citing `MRI=STRESSED/12` as a contributing factor. This is a sound risk management decision to require stronger signals in a stressed market.
+*   **Position Sizing Adjustments**: The bot logged two sizing adjustments:
+    *   `2026-06-29 17:10:48,023 | INFO | strategy.run_cycle | Mid-day doldrums — sizing at 75%`
+    *   `2026-06-29 17:11:00,779 | INFO | strategy.run_cycle | MRI STRESSED (score=41) — size floor 0.70x applied.`
+    These indicate appropriate reductions in potential position size, which is critical for capital preservation during midday doldrums and stressed market conditions.
+*   **News Alerts**: The news monitor detected alerts (`news_alerts: {'value': 45, 'pts': 35, 'gated': False}`) contributing significantly to the `STRESSED` MRI score. For example:
+    *   `2026-06-29 17:29:58,851 | INFO | macro_risk_index | MRI refreshed: score=41 level=STRESSED event=TECHNICAL | {'vix': {'value': 17.8, 'pts': 6}, ..., 'news_alerts': {'value': 44, 'pts': 35, 'gated': False}}`
+    This shows the system is actively incorporating news sentiment into its risk assessment.
+
+### LOG ANOMALIES
+*   **[ANOMALY-3] TQI degradation**: This warning recurred across multiple `strategy.run_cycle` logs:
+    *   `2026-06-29 17:11:01,089 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`
+    *   `2026-06-29 17:17:35,434 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`
+    *   `2026-06-29 17:23:46,536 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`
+    Although no trades occurred in the current session, this warning references `last-5-trade avg`, indicating a persistent historical issue with the bot's trade quality, specifically related to exit discipline or stop placement. The threshold of `30` is not being met.
+
+### NEW BUGS / CONCERNS
+*   **ALPHA ISSUE | HIGH | Persistent Volume Filter Blocking All Entries**
+    *   **Description**: The `VOLSHADOW` log repeatedly shows `would_pass: false` for all scanned symbols, regardless of their `score_without_vol` or `rsi_would_score`. This indicates that the volume filter (which evaluates `vol_ratio` against an implicit threshold, source not provided) is preventing any potential signals from becoming actionable entries. While intended to screen for liquidity, a filter that prevents *all* entries across multiple cycles and various symbols (e.g., QQQ, AMZN, NVDA, TSLA) suggests it might be too restrictive for the current market conditions or the chosen universe. With `MIN_LONG_SCORE`/`MIN_SHORT_SCORE` at 10, some symbols show `score_without_vol` higher than or equal to this (e.g., QQQ Long with score 7, but dynamic MIN_SCORE 12; AMD Long with score 7 but dynamic MIN_SCORE 12). However, even if they met the dynamic MIN_SCORE, the volume filter universally blocked them.
+    *   **Exact condition**: The `would_pass` field within the `VOLSHADOW` log dictionary is `false` for every log entry observed in the provided data. For example, in `2026-06-29 17:05:30,859 | INFO | confluence | [QQQ] VOLSHADOW {"direction": "long", "vol_ratio": 0.477, "avg_vol_20d": 52729643.0, "cur_vol": 25153250.0, "would_pass": false, "bucket": "B", "score_without_vol": 7, "rsi_would_score": true, "bar_age_min": 785.5, "valid_bars": 20}`.
+
+*   **ALPHA ISSUE | MEDIUM | Persistent TQI Degradation Warning**
+    *   **Description**: The `[ANOMALY-3] TQI degradation` warning indicates that the `last-5-trade avg` is consistently below the `30` threshold (currently `28.0/100`). This is flagged as requiring a "review exit discipline and stop placement." Even though no trades were placed in the current session, this recurring warning suggests a systematic issue with the bot's past performance in managing exits, which could erode P&L over time. The warning itself acts as a signal of degraded historical trade quality.
+    *   **Exact condition**: The log message `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` appearing at `2026-06-29 17:11:01,089`, `2026-06-29 17:17:35,434`, and `2026-06-29 17:23:46,536`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA: Investigate Volume Filter & Market Selection** (High Urgency)
+    *   Review the volume filtering logic (specifically how `vol_ratio` relates to `would_pass` and any associated thresholds like `VOLATILITY_TIER_HIGH_THRESHOLD`, etc., which are provided in config but their application in `VOLSHADOW` is not explicitly detailed). Evaluate if the current thresholds are appropriate for the selected universe and market conditions, as the current configuration is preventing *all* trades.
+2.  **ALPHA: Address Persistent TQI Degradation** (Medium Urgency)
+    *   Conduct a deeper dive into the historical trades that contribute to the `last-5-trade avg TQI` being below `30`. Analyze exit reasons, actual exit prices versus target/stop levels, and initial stop placement to identify the root cause of poor TQI.
+3.  **INFRASTRUCTURE: Review News Alert Integration Impact** (Low Urgency)
+    *   Verify if the `[Currents] CAUTION` news alert, specifically the one related to "Teso Life eyes Brooks location..." with keywords `['ppi']`, is genuinely market-impacting for intraday trading. Confirm that the `base penalty: 100%` is intended for such granular news events, ensuring that valid, high-quality signals aren't being unnecessarily penalized by non-systemic news.

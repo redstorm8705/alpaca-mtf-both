@@ -1,0 +1,99 @@
+Nightly Gemini Audit — 2026-06-08
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'run_cycle.py', 'weekly_review.py', 'monthly_review.py', 'alerts.py', 'scan_to_html.py', 'config.py', 'generate_dashboard.py', 'execution/quarterly_hold_manager.py', 'execution/kelly.py', 'execution/lifecycle.py', 'execution/orphan_manager.py', 'execution/broker.py', 'execution/entry_logic.py', 'execution/trade_engine.py', 'execution/exit_logic.py', 'execution/portfolio_tracker.py', 'data/gex.py', 'strategy/run_cycle.py', 'events/handlers.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**: Recurring warning `2026-06-08 18:28:52,680 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$0.00 tracker=$-9.45 drift=$+9.45`. This indicates a significant discrepancy where the bot's internal tracker recorded a loss (`$-9.45`) for the day, but Alpaca's reported daily P&L is `$0.00`. This is not the benign "A-4 paper fills gap" scenario (where Alpaca provides zero fills, prompting the bot to rely on its internal tracker), but rather a direct contradiction between Alpaca's explicit $0.00 and the tracker's recorded loss for the MSTR trade. This raises concerns about accurate P&L reconciliation.
+*   **TQI Degradation**: Recurring warning `2026-06-08 18:34:23,476 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` This highlights a persistent issue with trade execution quality or exit discipline, indicating potential strategy performance problems.
+*   **GC Pause Latency**: Recurring warning `2026-06-08 18:40:21,458 | WARNING | main | gc.collect() took 3971.1ms, collected 66 objects — heap may be growing`. Multiple occurrences (e.g., 4587.3ms, 3233.8ms) suggest potential memory leaks or inefficient memory management, leading to significant garbage collection pauses. These pauses can introduce latency, impacting real-time market data processing and order execution.
+*   **Close Position Blocked**: `2026-06-08 19:41:28,082 | WARNING | execution.broker | [NFLX] close_position blocked (40310000 held_for_orders) — cancelling all open orders and retrying once.` This is a critical operational failure where the bot could not immediately close a position (NFLX) due to `held_for_orders`. While the bot attempts to mitigate by canceling other orders, the initial failure to execute a direct risk management command is severe.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: For recorded trades (AMZN, QCOM, MSTR, NFLX), the P&L signs (all losses from stop hits) are consistent with entry/exit prices.
+*   **`pnl=0.0` Anomalies**: The log for 2026-06-08 EOD shows `pnl_today: 0.0` with `tracker_pnl: -9.45` and `alpaca_pnl: 0.0`. This discrepancy for the MSTR trade is a critical P&L recording issue, not a simple `pnl=0.0` in a trade. (See Log Anomalies and New Bugs).
+*   **Partial P&L Accumulation**: Not enough information in the provided logs to verify `partial_pnl` accumulation, as no partial exits are explicitly detailed for P&L tracking within the events.
+*   **Entry/Exit Prices Plausibility**: Entry and exit prices for the visible trades (MSTR, NFLX) appear plausible.
+*   **Score-Outcome Correlation**: MSTR (score 9) was a loss. The sample size is too small to draw meaningful conclusions on score-outcome correlation.
+*   **Stop-hit Rate**: Out of the last 4 closed trades with specific P&L details (AMZN, QCOM, MSTR, NFLX), all were stop-hit losses (100% stop-hit rate). This is a very high rate and suggests potential issues with entry timing, stop placement, or market regime mismatch, though the sample is small.
+*   **Exit Reason Consistency**:
+    *   MSTR (short): `entry=$118.94`, `stop=131.61`, `thresh=$124.01`, `exit=$128.39`. The `overnight_atr_buffer_exit` triggered at $128.39, which is above the threshold $124.01 (as expected for a loss).
+    *   NFLX (short): `entry=$81.84`, `thresh=$82.48`, `exit=$82.83`. The `overnight_atr_buffer_exit` triggered at $82.83, above the threshold $82.48 (as expected for a loss).
+*   **Profit Factor and R:R**: The `all_time_stats` show an `avg_r_multiple: -0.056`. This is concerning for a system aiming for 1:2 or 1:3 R:R targets, indicating that losses are significantly eroding any gains.
+
+### TRADE INTEGRITY
+*   **P&L Discrepancy (MSTR)**: The `EOD P&L DRIFT` highlights an issue where Alpaca's record of the day's total P&L is $0.00, while the bot's tracker correctly recorded a $-9.45 loss for the MSTR trade (which was the only closed trade today). This indicates a failure in reconciling Alpaca's final P&L with the bot's internal records, leading to incorrect performance reporting.
+
+### MODIFIED FILE FINDINGS
+*   **File**: `config.py`
+    *   **Variable**: `KELLY_MAX_RISK_PCT`
+    *   **Description**: The `paper` profile is labeled "aggressive test settings." While `KELLY_FRACTION` is set to a more aggressive `0.35`, `KELLY_MAX_RISK_PCT` is set to `0.045`, which is *lower* than the `0.06` default (live profile) Kelly cap. This creates a contradictory risk posture for an "aggressive test profile" by imposing a tighter maximum risk limit.
+    *   **Code Path**: `config.py` in the `PROFILES["paper"]` dictionary, `KELLY_MAX_RISK_PCT: 0.045`.
+    *   **Runtime vs. Intended**: The runtime will cap individual trade risk at 4.5% of portfolio, which is less aggressive than the default profile's 6% cap. This deviates from the stated intent of "aggressive test settings" for the paper profile.
+    *   **Failure Condition**: The paper testing environment will not fully stress-test the bot's behavior under higher-risk scenarios if the Kelly sizing is artificially constrained by a low `MAX_RISK_PCT`, potentially masking issues related to higher exposure.
+
+*   **File**: `execution/orphan_manager.py`
+    *   **Function**: `_fifo_reconstruct`
+    *   **Description**: Inconsistent handling of synthetic lots during FIFO reconstruction. When processing a "buy_to_cover" that has no matching open short lots, the bot logs a `CRITICAL` error and *explicitly avoids* appending a synthetic lot, citing a board vote to prevent phantom accumulation. However, when processing a "sell" (intended to close a long position) that has no matching open long lots, the bot logs a `CRITICAL` error but then *does* append a synthetic short lot. This inconsistency can lead to phantom short positions being tracked in the bot's FIFO system, which contradicts the principle of preventing phantom lots.
+    *   **Code Path**: Lines 370-377 (for `buy_to_cover` side, explicitly `// Intentionally no lot append`) vs. lines 393-405 (for `sell` side, `current.append({"qty": qty, "price": price, "side": "short"})`).
+    *   **Runtime vs. Intended**: The runtime will prevent phantom lots for `buy_to_cover` but will create them for `sell`. Intended is to prevent phantom lots consistently as per board vote.
+    *   **Failure Condition**: If `open_lots_prior_day.json` is corrupted or out of sync, a "sell" order without a corresponding long lot will create a phantom short position in `lots` (and persist in `open_lots_prior_day.json`), which could lead to erroneous P&L calculations and inflated "open positions" count for subsequent trading days until manual intervention.
+
+*   **File**: `execution/exit_logic.py`
+    *   **Function**: `_compute_tqi`
+    *   **Variable**: `qty`
+    *   **Description**: Potential `ZeroDivisionError` if the `qty` value in a trade record is `0`. The line `qty = trade.get("qty", 1) or 1` will return `0` if `trade["qty"]` is explicitly set to `0`. If `qty` is `0`, `risk_base` becomes `0`, causing a `ZeroDivisionError` when calculating `r_mult`.
+    *   **Code Path**: Line 78: `qty = trade.get("qty", 1) or 1`. This `qty` is then used in line 80: `risk_base = abs(entry - stop) * qty`.
+    *   **Runtime vs. Intended**: Runtime will crash with `ZeroDivisionError` if `trade["qty"]` is 0. Intended is to safely compute TQI or default without crashing.
+    *   **Failure Condition**: An upstream error or API anomaly leading to a trade being recorded with `qty=0` would cause the bot to crash when attempting to compute TQI for that trade, preventing its proper closure, Kelly updates, and EOD summaries.
+
+*   **File**: `execution/exit_logic.py`
+    *   **Function**: `_record_partial_tqi`
+    *   **Variable**: `qty_closed`
+    *   **Description**: Potential `ZeroDivisionError` if `qty_closed` is `0`. The line `risk_base = abs(entry - stop) * qty_closed` will become `0` if `qty_closed` is `0`, leading to a `ZeroDivisionError` when calculating `r_mult`.
+    *   **Code Path**: Line 140: `risk_base = abs(entry - stop) * qty_closed`. `qty_closed` is directly passed as an argument to this function.
+    *   **Runtime vs. Intended**: Runtime will crash with `ZeroDivisionError` if `qty_closed` is 0. Intended is to safely compute partial TQI or default without crashing.
+    *   **Failure Condition**: If a partial exit is processed with `qty_closed=0` (due to upstream issues), the bot will crash when attempting to record its partial TQI.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (by switching data source from yfinance to Alpaca Data, which returns flat columns, and updating `_find_recent_fvgs` accordingly).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (source file not provided, cannot verify).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED** (by removal of PDT rules via board vote S50).
+*   **P5-H2 | Fill price crosstalk**: **MITIGATED** (implementation of `_fetch_actual_fill_price` with `submitted_after` timestamp parameter helps filter fills, but crosstalk is inherently complex).
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED** (`cancel_and_reconcile_gtc_stops` in `execution/orphan_manager.py` now clears `gtc_stop_order_id` if order is not found).
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (`TOD_MARKET_OPEN_BUFFER_MINS` is explicitly aligned in `config.py` and its runtime override removed).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED** (specific bug removed due to PDT rule change; general `held_for_orders` issue is now robustly handled in `submit_gtc_stop_order` with extensive retry/poll logic).
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED** (`fcntl.FD_CLOEXEC` added to lockfile management in `main.py` ensures the lock is released on `os.execv()`).
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED** (`hybrid_state.json` load logic in `trade_engine.py` now explicitly validates `saved_at` (today's date) and `scans_left > 0` before restoring, preventing stale state).
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED** (source for unbounded growth is not definitively located in provided files).
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED** (display handled by `monthly_review.py` for empty labels, but the underlying issue of empty label generation in `_classify_loss_driver()` is not addressed).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **FIXED** (`run_cycle.py` now checks for `_reconcile_ts` in `eod_YYYY-MM-DD.json` before writing the EOD summary, ensuring final Alpaca-reconciled P&L).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED** (mitigation exists via `launch_bots.sh` restart loop, but `live_data_writer.py`'s internal reconnect logic is not implemented in the provided code).
+
+### NEW BUGS FOUND
+*   **P&L RECORDING ISSUE** | **HIGH** | `execution/portfolio_tracker.py` | `EOD P&L DRIFT` indicates tracker/Alpaca P&L mismatch. The Alpaca API returned `$0.00` for the day's P&L, but the tracker recorded a `$-9.45` loss for MSTR. This suggests `verify_fills_and_reconcile` (or its sub-components `_fetch_alpaca_fills_for_date`, `_fifo_reconstruct`) failed to correctly reflect Alpaca's final trade settlement or its P&L calculation for the day.
+*   **CONFIGURATION ANOMALY** | **MEDIUM** | `config.py` | `KELLY_MAX_RISK_PCT` in `paper` profile is lower (0.045) than default (0.06), contradicting "aggressive test settings" intent.
+*   **INFRASTRUCTURE** | **HIGH** | `main.py` | Recurring `gc.collect()` warnings with long durations (3-7 seconds) indicate potential memory leaks or inefficient memory management, leading to significant garbage collection pauses that can impact real-time trading performance.
+*   **EXECUTION BUG** | **CRITICAL** | `execution/broker.py`, `execution/exit_logic.py` | `close_position blocked (40310000 held_for_orders)` on NFLX. The bot failed to close a position on command. While mitigation exists, the initial failure exposes the position to uncontrolled risk.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate P&L Drift for MSTR**:
+    *   **Location**: `execution/portfolio_tracker.py` (specifically `verify_fills_and_reconcile` and `_fifo_reconstruct`).
+    *   **Action**: Thoroughly debug why Alpaca's reported daily P&L was `$0.00` while the tracker recorded a loss for MSTR. Verify that `_fetch_alpaca_fills_for_date` is correctly retrieving all fills, and that `_fifo_reconstruct` correctly processes these fills and updates the `eod_YYYY-MM-DD.json` in `write_eod_summary` before drift is calculated.
+2.  **URGENT: Correct `ZeroDivisionError` in TQI Computation**:
+    *   **Location**: `execution/exit_logic.py`, function `_compute_tqi` (line 78) and `_record_partial_tqi` (line 140).
+    *   **Action**: Modify `qty = trade.get("qty", 1) or 1` to `qty = max(1, int(trade.get("qty", 1)))` in `_compute_tqi`. For `_record_partial_tqi`, add `qty_closed = max(1, qty_closed)` at the beginning of the function. This prevents crashes if `qty` or `qty_closed` is zero.
+3.  **HIGH: Address `close_position` Blocking and `held_for_orders`**:
+    *   **Location**: `execution/broker.py` (`close_position`, `submit_gtc_stop_order`, `submit_day_stop_order`) and `execution/exit_logic.py`.
+    *   **Action**: Review the `held_for_orders` mitigation strategy. Consider implementing a more aggressive escalation in `execution/broker.py` to force a market order close if `held_for_orders` persists beyond initial retries, perhaps with a short timeout.
+4.  **HIGH: Resolve Inconsistent FIFO Synthetic Lot Handling**:
+    *   **Location**: `execution/portfolio_tracker.py`, function `_fifo_reconstruct` (lines 393-405).
+    *   **Action**: Align the "sell" side logic to explicitly *not* create a synthetic short lot if `net_qty <= 0`, mirroring the "buy_to_cover" logic. Instead, log a critical error for manual review without corrupting the FIFO state with phantom positions.
+5.  **MEDIUM: Optimize Memory Management to Reduce GC Pauses**:
+    *   **Location**: System-wide, affecting `main.py` (GC logs), and potentially data fetching/processing modules.
+    *   **Action**: Implement memory profiling to identify specific components causing heap growth. Optimize data structures and consider more explicit memory management strategies to reduce garbage collection frequency and duration, improving bot responsiveness.

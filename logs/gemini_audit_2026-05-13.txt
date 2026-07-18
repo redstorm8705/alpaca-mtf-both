@@ -1,0 +1,59 @@
+Nightly Gemini Audit — 2026-05-13
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT:** At `2026-05-13 06:00:16,329`, the bot reported `risk.open_positions=0 vs tracker=1`. This indicates a critical internal state inconsistency regarding open positions after a SIGTERM restart, even if a correction was attempted.
+*   **CRITICAL | execution.fill_reconciler | FILL RECONCILIATION EXPIRED:** Multiple occurrences at `2026-05-13 14:01:57 ET` for `QQQ`, `CRM`, `QCOM`. The log explicitly states "P&L remains unreliable. Manual verification required." This is a severe P&L recording failure, distinct from the benign `A-4` pattern.
+*   **WARNING | execution.portfolio_tracker | EOD P&L DRIFT:** At `2026-05-13 06:02:13,541`, a drift of `$+31.72` was reported between Alpaca and the internal tracker. This indicates a persistent P&L recording discrepancy that is not fully resolved by `A-4`'s benign behavior.
+*   **WARNING | execution.broker | close_position blocked (40310000 held_for_orders):** At `2026-05-13 13:36:36,418` for `NVDL`. This indicates a race condition or incorrect state management where an attempt to close a position or submit an order is blocked by shares already allocated to other orders. While the bot attempts to recover, the underlying conflict is a serious issue that could delay critical exits.
+*   **WARNING | main | gc.collect() took ... heap may be growing:** Multiple occurrences (`04:32:03`, `16:32:22`, `19:12:17`). This suggests a potential memory leak or inefficient garbage collection, which could lead to performance degradation or crashes over extended operation.
+*   **WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['truth_social']:** At `2026-05-13 16:26:44,627`. A news source timeout means the bot is operating with incomplete news data, potentially impacting alpha generation.
+
+### PERFORMANCE AUDIT
+*   **Missing Entry Data:** Several exit events (NVDL, NVDA, CRWD, AMZN, TSLA, SMCI, MSTR) in the `TRADE EVENTS` list do not have their corresponding entry events within the 7-day log window. This makes it impossible to fully verify P&L sign correctness, profit target adherence, and the full lifecycle of these trades. For `NVDL`, which was explicitly listed as an `overnight_hold` since `2026-05-07`, its entry should be visible but is absent.
+*   **Inconsistent Target Exit P&L:** The `QCOM` exit on `2026-05-07T08:42:54` explicitly states `reason: "target"` but shows `pnl: 0.0` with the exit `price: 190.43` matching the entry `price: 190.43`. A target exit should generally result in a positive P&L, not breakeven, indicating a logic error in target handling or P&L calculation for such exits.
+*   **Low Average R-multiple:** The `all_time_stats.avg_r_multiple` is reported as `-0.029`. This is significantly below the theoretical target of `2.0` (derived from `TARGET_ATR_MULT / INTRADAY_STOP_ATR_MULT = 2.5 / 1.25`). This indicates a fundamental failure to capture the intended edge, suggesting issues with stop/target placement, execution slippage, or an inaccurate underlying strategy model.
+*   **High Loss Rate (Observation):** While `all_time_stats.win_rate` is `40.7%`, recent observable exits (excluding partials, including NVDL without entry verification) show a significant number of losses (9/14 or more), supporting the low average R-multiple and indicating potential strategy underperformance or market regime mismatch.
+
+### TRADE INTEGRITY
+*   **P&L=0.0 with Target Exit:** As noted in the Performance Audit, the `QCOM` exit (`2026-05-07T08:42:54`) showing `pnl=0.0` despite `reason="target"` is a trade recording bug or a logic flaw.
+
+### MODIFIED FILE FINDINGS
+No issues found. (No source files modified in last 24h)
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | UNTOUCHED (observed PDT logging inconsistency but no false lockout)
+*   P5-H2 | Fill price crosstalk | **TRIGGERED** (by `FILL RECONCILIATION EXPIRED` errors)
+*   P5-H3 | Orphan GTC 404 path | **TRIGGERED** (by `POSITION COUNT DRIFT` and `Emergency GTC stop submitted` which suggests recovery from an orphan stop state)
+*   P5-H4 | Rule 2 dead code | UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | FIXED
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **TRIGGERED** (P&L from NVDL exit not included in `EOD SNAPSHOT.pnl_today`)
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+
+### NEW BUGS FOUND
+*   **P&L RECORDING ISSUE | CRITICAL | (source not provided - likely `execution.trade_logger` or `execution.portfolio_tracker`) | Missing Entry Data in Trade Events:** The `TRADE EVENTS` list is incomplete, lacking entry records for several positions (e.g., NVDL, NVDA, CRWD) that were active and had exit events within the 7-day period. This severely hinders auditing the full lifecycle and P&L calculation of these trades.
+    *   exact failure condition: `TRADE EVENTS` list does not contain `event: "entry"` records for all `symbol`s that subsequently have `event: "exit"` records within the same 7-day period. For example, `NVDL` was held since `2026-05-07` and exited on `2026-05-13`, both within the 7-day log, yet its entry is absent.
+*   **P&L RECORDING ISSUE | HIGH | (source not provided - likely `main` or `execution.portfolio_tracker`) | EOD Snapshot `pnl_today` excludes P&L from overnight positions closed today:** The `EOD SNAPSHOT.pnl_today` for `2026-05-13` is `0.0`, but the `NVDL` position, an overnight hold, was closed today for a profit of `$18.48`. The `pnl_today` should aggregate P&L from all trades closed today, irrespective of when they were opened, leading to an understatement of daily performance. (This is a specific instance/re-triggering of P5-L2 but flagged as new due to its explicit impact on daily reporting).
+    *   exact failure condition: `EOD SNAPSHOT.pnl_today` is reported as `0.0` when one or more positions opened on a prior day are closed on the current day with a non-zero P&L.
+*   **LOGGING/REPORTING ISSUE | LOW | `strategy.run_cycle` (for logging `PDT`) | Inconsistent PDT status in `strategy.run_cycle` log vs. actual `pdt_used` in trade events:** The `INFO | strategy.run_cycle | ... PDT: 0/3 ...` message is displayed consistently, even when `TRADE EVENTS` for specific trades (e.g., `TQQQ entry` on `2026-05-08` with `pdt_used=1`) indicate day trades have been consumed. This creates confusion regarding the actual PDT status visible in the main log stream.
+    *   exact failure condition: The `PDT` counter reported in the `strategy.run_cycle` log line consistently remains `0/3` even when `pdt_used` in `TRADE EVENTS` for a position indicates a day trade was consumed by an overnight position exiting during RTH.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate and Fix Fill Reconciliation Failures:** Prioritize fixing the `CRITICAL | execution.fill_reconciler | FILL RECONCILIATION EXPIRED` bug for `QQQ`, `CRM`, `QCOM`. P&L reporting explicitly being "unreliable" is unacceptable. This may involve addressing P5-H2 (Fill price crosstalk).
+2.  **Resolve Position Count Drift:** Investigate the root cause of `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT` and related `close_position blocked` warnings. Ensure internal state is always consistent with the broker's actual open positions to prevent trading errors and ensure timely exits. This likely involves addressing P5-H3 (Orphan GTC 404 path).
+3.  **Complete Trade History Recording:** Implement a robust mechanism to ensure all entry and exit events for a trade (including partials) are recorded consistently in the `TRADE EVENTS` data structure, enabling complete P&L verification for all positions.
+4.  **Correct P&L Reporting in EOD Snapshot:** Ensure `EOD SNAPSHOT.pnl_today` accurately reflects all P&L from trades closed on the current day, regardless of their entry date, by fixing the identified issue (P5-L2 triggered).
+5.  **Audit Strategy Effectiveness (R-multiple):** Immediately investigate the low `all_time_stats.avg_r_multiple: -0.029`. This indicates a severe performance issue where the bot is consistently losing more than it's winning on a risk-adjusted basis. This requires a deep dive into strategy logic, execution, and risk management parameters.

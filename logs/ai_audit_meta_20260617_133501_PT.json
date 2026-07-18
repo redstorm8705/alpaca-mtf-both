@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-17 01:35 PM PT",
+  "ts_iso": "2026-06-17T13:35:05.192785-07:00",
+  "prompt_chars": 49083,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "ds_prompt_chars": 49083,
+  "gai_prompt_chars": 49159,
+  "deepseek": {
+    "text": null,
+    "model": "deepseek-chat",
+    "tokens": null,
+    "elapsed_s": 1.14,
+    "error": "402 Client Error: Payment Required for url: https://api.deepseek.com/chat/completions"
+  },
+  "gemini": {
+    "text": "An analysis of the bot's recent performance and logs reveals critical infrastructure failures that are actively corrupting state and preventing risk management, alongside severe underperformance in the short-selling regime.\n\n### 1. TRADE-BY-TRADE VERDICT\n*Note: Several entries occurred prior to the 7-day log window but were closed within it.*\n- **UBER (Long)**: ENTRY unknown → STOP_HIT @ $71.82. **VERDICT: unknown** (insufficient context).\n- **TOST (Long)**: ENTRY unknown → STOP_HIT @ $25.36. **VERDICT: unknown** (insufficient context).\n- **INTC (Long)**: ENTRY @ $127.65 (Score 12, ELEVATED) → STOP_HIT @ $119.75. **VERDICT: regime_error**. Entered long during a period where the bot's long expectancy is marginal (PF 1.09) and took a full 1R loss.\n- **TOST (Short)**: ENTRY @ $24.92 (Score 12, ELEVATED) → BREAKEVEN_PUSH @ $24.29. **VERDICT: edge_confirmed**. Successfully captured initial momentum and protected capital by moving the stop to breakeven.\n- **SMCI (Short)**: ENTRY @ $28.91 (Score 12, ELEVATED) → Open. **VERDICT: unknown**.\n- **NFLX (Short)**: ENTRY @ $77.54 (Score 12, ELEVATED) → Open. **VERDICT: unknown**.\n- **MSTR (Short)**: ENTRY @ $120.63 (Score 12, ELEVATED) → Open. **VERDICT: unknown**.\n\n### 2. PATTERN ANALYSIS\n**PATTERN 1: Short-Selling State Corruption (Critical)**\nThe bot's portfolio tracker is fundamentally mishandling short entries. When the bot executes a `sell_short` (e.g., NFLX at 18:28), the tracker interprets it as a closing `sell` for a long position. Finding no open long lots, it throws a `[FIFO] closing sell with no open long lots` error and records a \"synthetic short.\" This corrupts the FIFO state, breaks P&L tracking (EOD P&L drift of $-42.63), and blinds the bot to its actual short exposure.\n\n**PATTERN 2: GTC Buy Stop Rejections on Shorts (Critical)**\nThe bot is failing to place protective GTC buy stops for its short positions. For TOST, the bot attempted to place a buy stop at $24.97, but the broker's market price was $24.975. Alpaca rejected the order (`code: 42210000`) because a buy stop must be placed *above* the current market price. The bot lacks a fallback mechanism to handle this, leaving the short position completely unhedged overnight.\n\n**PATTERN 3: Sub-Optimal Kelly Sizing vs. Realized Expectancy**\nThe bot is sizing at `KELLY_FRACTION=0.25`, but the realized metrics do not support this aggression. The `short_intraday` strategy has a 26.3% win rate and a Profit Factor of 0.36 (negative expectancy). The `long_intraday` strategy has a 35.0% win rate and a PF of 1.09. Sizing at quarter-Kelly on a system with a PF of 0.36 is mathematically guaranteed to cause severe drawdown.\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n- **Week 2026-W24**: `failed_permanent` — No specific directives were issued to verify.\n\n### 4. WEEKLY DIRECTIVES\n*⚠️ STATISTICAL GUARDRAIL ACTIVE: N=10 fills. No parameter changes prescribed.*\n- **[INSUFFICIENT_SAMPLE — N=10]** The bot entered four highly correlated short positions (TOST, SMCI, NFLX, MSTR) within an hour. While this indicates strong breadth confirmation, it exposes the portfolio to massive systemic risk if the market reverses, especially given the broken GTC stop logic.\n- **[INSUFFICIENT_SAMPLE — N=10]** The Kelly fraction of 0.25 is objectively too high for the current win rates (26.3% short / 35.0% long). Once the sample size threshold is met, a drastic reduction in `KELLY_FRACTION` or a suspension of the short strategy will be required until the edge is repaired.\n\n### 5. FINAL VERDICT\n**FAIL** — Critical infrastructure bugs in short-selling state tracking and GTC stop order placement are actively corrupting the bot's state and leaving positions unhedged overnight.\n\n### 6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"Tracker misinterprets short entries as closing long positions, leading to 'closing sell with no open long lots' errors and corrupted FIFO state.\",\n    \"recommended_fix\": \"Update the transaction parser to explicitly handle 'sell_short' as an opening transaction for short lots, rather than a closing transaction for long lots.\",\n    \"rc_class\": \"RC-3\"\n  },\n  {\n    \"file\": \"strategy/run_cycle.py\",\n    \"finding\": \"GTC buy stop orders for short positions are rejected (code 42210000) when the calculated stop price is below the broker's current market price.\",\n    \"recommended_fix\": \"Implement a pre-submission check for buy stops: if stop_price <= current_market_price, immediately execute a market buy to cover (if during RTH) or adjust the stop price to be valid.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"execution/risk_manager.py\",\n    \"finding\": \"risk.open_positions initializes to 0 on startup despite the tracker having 4 open positions, causing a position count drift warning.\",\n    \"recommended_fix\": \"Ensure risk_manager initializes its open position count directly from the broker API or a persisted state file on startup, rather than defaulting to 0.\",\n    \"rc_class\": \"RC-2\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 32785,
+    "elapsed_s": 52.92,
+    "error": null
+  },
+  "summary": {
+    "ds_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

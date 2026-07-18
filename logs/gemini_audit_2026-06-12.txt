@@ -1,0 +1,81 @@
+Nightly Gemini Audit — 2026-06-12
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['run_movers.py', 'execution/orphan_manager.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Heap may be growing**: Persistent `gc.collect() took Xms, collected 64 objects — heap may be growing` warnings are observed. The `Xms` value consistently increases across cycles (e.g., 4007ms, 4310ms, 6431ms, 5918ms). This indicates a potential memory leak or inefficient memory management, where the heap is growing without sufficient garbage collection, which can lead to performance degradation or eventual Out-of-Memory errors.
+*   **TQI Degradation**: The `[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30` warning is a recurring message across all log cycles. This points to a consistent issue with trade quality, specifically indicating problems with exit discipline or stop placement that need review.
+*   **GTC Stop PENDING_CANCEL**: The log for PLTR at 2026-06-12 19:39:33,455 contains `gtc_pending_cancel_cycles` which is part of the GTC-PENDING-CANCEL-FIX. While this is a controlled escalation, the persistence (`_pc_cycles >= 3`) could indicate a systemic issue with Alpaca's order cancellation for specific orders, requiring manual review as alerted.
+
+### PERFORMANCE AUDIT
+
+*   **Stop-Hit Consistency**: For the two exited trades (MSTR and NFLX), both were `stop_hit` with prices higher than the stated stop threshold (`MSTR: exit=$128.39, thresh=$124.01; NFLX: exit=$82.83, thresh=$82.48`). While slippage is a possibility, the significant difference in MSTR's exit price compared to its threshold warrants investigation. It implies the actual stop triggered was not at the intended `overnight_atr_buffer_exit` threshold, or the "9-scan breach" logic has a broader tolerance.
+*   **P&L Sign Correctness**: For both MSTR and NFLX, the P&L sign is correct based on the short direction and the exit price relative to the entry price.
+*   **All-Time Stats vs. Logs**: The `all_time_stats` report a `win_rate` of 40.5% against `total_trades` of 81. The log snippet provided only shows 3 trades, 2 of which are losses (`stop_hit`). This limited sample prevents a robust performance audit, but the recurring TQI degradation warning suggests the recent win rate (or R-multiple) might be worse than the all-time average.
+
+### TRADE INTEGRITY
+
+*   No explicit recording bugs, `pnl=0.0` anomalies (where entry≠exit), or partial exit errors are evident in the provided `TRADE EVENTS` or `EOD SNAPSHOT`. The `SF-01 GUARD` in `orphan_manager.py` (discussed below) handles a scenario where `entry_price=None` to prevent P&L calculation errors, which is a positive.
+
+### MODIFIED FILE FINDINGS
+
+#### `run_movers.py`
+
+*   **Function Name**: `main` (specifically in the main loop handling `_now_et.weekday() < 5 and _now_et.hour * 60 + _now_et.minute >= 9 * 60 + 28`)
+    *   **Description**: The `run_movers.py` `main` loop contains an explicit check: `if _now_et.weekday() < 5 and _now_et.hour * 60 + _now_et.minute >= 9 * 60 + 28: logger.info("9:28 AM ET — terminating before RTH open, handing off to main.py")`. This terminates the `run_movers.py` process at 9:28 AM ET.
+    *   **Problem**: While a handoff might be intentional, the log states "terminating *before* RTH open", which is 9:30 AM ET. This means the `run_movers` process *never* operates during the critical first minutes of RTH. The problem description states the bot is "live Alpaca paper-trading bot" and `run_movers.py` is a "Standalone Movers Bot runner". If the bot is meant to capture market-open volatility with this runner, terminating two minutes early could miss prime opportunities.
+    *   **Failure Condition**: The `run_movers.py` bot will consistently terminate at 9:28 AM ET on weekdays, preventing it from executing any logic or scans during the final two minutes of pre-market and the initial RTH minute (9:28:00 - 9:29:59 ET), potentially missing opportunities.
+    *   **Severity**: MEDIUM (missed opportunity / inconsistent market participation).
+
+#### `execution/orphan_manager.py`
+
+*   **Function Name**: `cancel_and_reconcile_gtc_stops`
+    *   **Description**: The function attempts to load `_qhm_protected` symbols from `quarterly_holds.json`. If this file read fails for any reason, `_qhm_protected` defaults to an empty set, and a warning is logged: "QHM state file read failed — treating all symbols as unprotected".
+    *   **Problem**: While an exception is caught and logged, treating all QHM symbols as unprotected by default constitutes a silent fallback to a less secure state. GTC stops for actual QHM positions would be cancelled, potentially exposing these positions to unmanaged risk until manual intervention. This bypasses the intended long-term holding protection without requiring explicit acknowledgment or a more robust retry/escalation.
+    *   **Failure Condition**: If `quarterly_holds.json` is missing, corrupted, or unreadable, all GTC stops for symbols intended to be protected by QHM will be unconditionally cancelled by the bot, creating an unintended risk exposure.
+    *   **Severity**: HIGH (risk management bypass under specific failure conditions).
+
+*   **Function Name**: `cancel_and_reconcile_gtc_stops` (within the `elif "pending_cancel" in status` block)
+    *   **Description**: The logic increments a `gtc_pending_cancel_cycles` counter for positions stuck in `PENDING_CANCEL` state. If this counter reaches 3, a critical log and Slack alert are fired, stating "PENDING_CANCEL persisting 3 cycles — manual Alpaca review required".
+    *   **Problem**: The description of this fix states "Orphan adoption in reconcile_positions() will attempt a fresh GTC stop at the next premarket cycle (submits when ID is None)." However, the GAI-FIX-2026-05-11 explicitly states "Do NOT clear gtc_stop_order_id here" to prevent eviction from `get_overnight_gtc_positions()`. This means that if an order truly gets stuck in `PENDING_CANCEL` and never resolves to `CANCELED`, its `gtc_stop_order_id` is *never cleared* by this reconciliation logic. Consequently, a fresh GTC stop *will never be resubmitted* for this position, leaving it potentially unprotected after the original stop becomes truly inert (e.g., if Alpaca eventually force-cancels it, but the bot never clears the ID). It only logs and alerts, but doesn't take corrective action within the bot's GTC management loop itself.
+    *   **Failure Condition**: A GTC stop order permanently stuck in `PENDING_CANCEL` by Alpaca will prevent the bot from clearing its `gtc_stop_order_id`, thus blocking the resubmission of a new protective GTC stop for that position, leaving it without automated stop protection.
+    *   **Severity**: CRITICAL (potential for unprotected positions).
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | FIXED (import and `reset_day` issues appear resolved)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | UNTOUCHED
+*   P5-H2 | Fill price crosstalk | UNTOUCHED (mitigation of symptoms, not root cause)
+*   P5-H3 | Orphan GTC 404 path | FIXED (`order is None` now correctly clears `gtc_stop_order_id`)
+*   P5-H4 | Rule 2 dead code | UNTOUCHED (the config variable is used; the issue is inconsistent application of buffer logic in `run_movers.py`, re-flagged as new bug)
+*   P5-H5 | FIXED 2026-04-21 | FIXED
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | UNTOUCHED
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **INFRASTRUCTURE** | HIGH | main | `gc.collect()` increasing duration with persistent `heap may be growing` warnings. This indicates a potential memory leak or inefficient object retention, leading to performance degradation or eventual Out-of-Memory errors.
+*   **RISK MANAGEMENT** | MEDIUM | `run_movers.py` | `run_movers_cycle` function has inconsistent market open buffer logic. It returns early for 9:30-9:45 ET, but then proceeds for 9:45-10:00 ET, even though `config.TOD_MARKET_OPEN_BUFFER_MINS` (30 mins) implies a full buffer until 10:00 ET. While `tod_size_multiplier` might prevent entries, the internal `run_movers_cycle` logic itself is confusing and inconsistent with global config.
+*   **RISK MANAGEMENT** | HIGH | `execution/orphan_manager.py` | `cancel_and_reconcile_gtc_stops` function (lines ~100-117) | Silent fallback to unprotected state if `quarterly_holds.json` fails to load. If the file is unreadable, all GTC stops for QHM-protected symbols will be cancelled, exposing them to unmanaged risk, despite a warning being logged.
+*   **EXECUTION BUG** | CRITICAL | `execution/orphan_manager.py` | `cancel_and_reconcile_gtc_stops` function (within `pending_cancel` block) | GTC stop orders permanently stuck in `PENDING_CANCEL` state are never cleared from the tracker's `gtc_stop_order_id`, preventing the bot from resubmitting new protective GTC stops for those positions. This leaves positions effectively unprotected if Alpaca's `PENDING_CANCEL` state is terminal for the original order.
+
+### FIX VALIDATION
+
+*   No prior fixes to validate for the newly identified bugs.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate Memory Leak/Heap Growth (HIGH PRIORITY)**: Analyze the Python application for memory leaks or excessive object retention. Profile memory usage over time to identify specific components or data structures that are not being properly released, causing `gc.collect()` to take longer.
+2.  **Address GTC `PENDING_CANCEL` Handling (CRITICAL PRIORITY)**: Modify `orphan_manager.py` to implement a robust retry mechanism for `PENDING_CANCEL` GTC stops. If an order remains in `PENDING_CANCEL` for a configurable number of cycles (e.g., 3-5), the bot should attempt to explicitly `cancel_order` again, and if that fails, clear the `gtc_stop_order_id` while raising an explicit, actionable critical alert for immediate manual intervention and resubmission of a new stop.
+3.  **Strengthen QHM State Loading (HIGH PRIORITY)**: Implement a more robust loading mechanism for `quarterly_holds.json` in `orphan_manager.py`. If the file cannot be read, the bot should refuse to proceed with GTC stop cancellation for *any* positions and enter a safe, non-trading state (or at minimum, a "protective only" state) until the QHM status can be verified and loaded successfully.
+4.  **Harmonize Market Open Buffer in `run_movers.py` (MEDIUM PRIORITY)**: Modify `run_movers.py` to use `orphan_manager.get_tod_phase()` and `tod_size_multiplier()` for all its market open time-of-day checks, ensuring consistency with `config.TOD_MARKET_OPEN_BUFFER_MINS` and avoiding redundant/inconsistent hardcoded buffers.
+5.  **Review MSTR/NFLX Stop Hits (MEDIUM PRIORITY)**: Investigate why `stop_hit` prices for MSTR and NFLX were significantly (MSTR) or moderately (NFLX) past the stated `thresh` price. This may indicate high slippage, an unlogged secondary stop trigger, or a miscalculation of the stop threshold itself, impacting the bot's risk management effectiveness.

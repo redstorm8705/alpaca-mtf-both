@@ -1,0 +1,46 @@
+Midday Gemini Audit — 2026-06-04
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades or entry/exit events occurred during this session as per the "SESSION P&L SUMMARY" and "CLOSED TRADE DETAILS". Therefore, it is not possible to assess entry/exit price plausibility, P&L sign correctness, win rate, profit factor, score-to-outcome correlation, or stop-hit rate for this session.
+
+### ENTRY QUALITY
+
+**1. ALPHA ISSUE | HIGH | Misconfigured Stop Multiplier for Leveraged ETF (NVDL)**
+*   **Exact variable/metric involved:** `stop multiplier` (derived from ATR in `execution.risk_manager`)
+*   **Explanation:** The log indicates an ATR-based stop calculation for NVDL as `stop 4.6875x`. The bot also logs `[NVDL] VOTE-3 vol cap 0.37x (vol_ratio=0.55x avg)`. A `vol_ratio` of 0.55 falls into the `VOLATILITY_TIER_HIGH` category (since `VOLATILITY_TIER_HIGH_THRESHOLD = 0.50`). The `CONFIG CONSTANTS` state that for the high volatility tier, the stop multiplier should be `VOL_TIER_HIGH_STOP_INTRADAY = 1.75`. Even if NVDL is specifically classified as an `EXTREME` volatility tier symbol (as per the `MSTR, COIN, NVDL` example in the comments), the corresponding multiplier would be `VOL_TIER_EXTREME_STOP_INTRADAY = 2.5`. The logged `4.6875x` is significantly higher than either `1.75x` (by a factor of ~2.678) or `2.5x` (by a factor of ~1.875), and the configuration does not provide explicit rules for such a high multiplier. This discrepancy artificially inflates the stop distance, leading to an excessively small calculated position size (`dollar_cap=$51.89` and `dollar_cap=$57.16`), which subsequently prevents entries due to `[NVDL] Position size < 1 share`.
+*   **Failure condition:** The bot is systematically miscalculating the stop multiplier for NVDL, leading to inflated stop distances and ultimately preventing all attempted entries for this symbol by making the calculated position size too small. This represents a systematic degradation in entry quality for NVDL.
+*   **Exact condition:** Occurs repeatedly during entry evaluation for [NVDL], specifically when `execution.risk_manager` logs the `ATR-based stop` as `stop 4.6875x` (e.g., `2026-06-04 17:18:54,456` and `2026-06-04 17:25:41,176`), causing `execution.entry_logic` to skip the trade due to `Size→0`.
+
+**2. ALPHA ISSUE | MEDIUM | Persistent ANOMALY-2 for TQQQ and NVDL (Unspecified Entry Failure)**
+*   **Exact variable/metric involved:** `confirm_gate` (internal counter for consecutive failed entry attempts) and the implicitly missing `entry_rejection_reason`.
+*   **Explanation:** The log shows recurring warnings `[ANOMALY-2] [TQQQ] confirm_gate=6 scans but no entry — risk.open_positions=1 vs tracker=1` and `[ANOMALY-2] [NVDL] confirm_gate=3 scans but no entry — risk.open_positions=1 vs tracker=1`. While `risk.open_positions=1 vs tracker=1` suggests a single position is open and accounted for, it's unclear if this open position is TQQQ or NVDL.
+    *   **For NVDL:** We identified the root cause as the miscalculated stop multiplier leading to `Size→0`. The `ANOMALY-2` here is a symptom of this sizing bug.
+    *   **For TQQQ:** The bot repeatedly attempts to enter TQQQ for 6 scans, but "no entry" occurs, and no specific rejection reason (like `Rule 1 BLOCKED` or `Size→0`) is logged. This lack of detail makes it impossible to diagnose the persistent failure for TQQQ, indicating a missing or insufficient logging mechanism for entry rejection reasons when `confirm_gate` counts up without an entry. This leads to missed trading opportunities and obfuscates potential logic errors.
+*   **Failure condition:** The bot is repeatedly failing to enter trades for TQQQ without logging a clear reason, or it is incorrectly attempting to enter/scale into an existing TQQQ position. This represents a systematic failure to either execute valid signals or adequately log diagnostic information when entries are rejected.
+*   **Exact condition:** Occurs repeatedly in `strategy.run_cycle` for [TQQQ] and [NVDL], as seen in logs `2026-06-04 17:17:40,274` and `2026-06-04 17:24:30,234`, where `confirm_gate` increments but no entry is made, and no specific rejection cause is logged for TQQQ.
+
+### EXIT QUALITY
+No closed trades or exit events in the provided logs. No issues to flag.
+
+### MRI ALIGNMENT
+The MRI session distribution shows periods of 'STRESSED' and 'ELEVATED' levels, but the current `MRI SESSION DISTRIBUTION` close level is 'NORMAL' (10/100), and current VIX is 15.4 (NORMAL). The bot correctly applied dynamic `MIN_SCORE` adjustments (raised to 11/12) and various sizing reductions (e.g., `Risk day (Fed Barkin Speech) — sizing at 50%`, `Mid-day doldrums — sizing at 75%`, `Breadth WEAKENING (score=29) — size floor 0.85x applied`). These actions demonstrate appropriate risk management and alignment with market conditions and MRI levels. No issues detected.
+
+### LOG ANOMALIES
+
+*   `2026-06-04 17:17:40,274 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` (Repeated at `2026-06-04 17:24:30,234`)
+    *   While not an execution bug, the persistent `ANOMALY-3` warning indicates a continuous decline in trade quality (TQI below the 30/100 threshold). This is a critical performance indicator suggesting that the strategy's edge might be degrading, particularly concerning exit discipline and stop placement. This recurring warning flags a need for immediate strategic review.
+
+### NEW BUGS / CONCERNS
+None beyond those already detailed above.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA: Investigate NVDL Stop Multiplier Logic:** Immediately analyze the code path responsible for calculating the `ATR-based stop` multiplier for leveraged ETFs, specifically NVDL. Confirm whether `VOL_TIER_HIGH_STOP_INTRADAY` (1.75x) or `VOL_TIER_EXTREME_STOP_INTRADAY` (2.5x) should apply, and identify any additional multipliers that result in the observed `4.6875x`. Rectify the calculation to ensure it aligns with the intended risk profile and configured constants. (HIGH urgency)
+2.  **ALPHA: Enhance TQQQ Entry Rejection Logging:** Implement more verbose logging within the `entry_logic` module for cases where `confirm_gate` increments for TQQQ but no entry is made. The log should explicitly state the exact reason for the entry rejection (e.g., specific rule violation, sizing constraint, etc.) to enable proper debugging. (MEDIUM urgency)
+3.  **ALPHA: Review TQI Degradation and Exit Strategy:** Conduct a detailed post-mortem on recent trades contributing to the `ANOMALY-3` (TQI degradation) to understand the causes of poor performance in exit discipline and stop placement. This review should aim to identify patterns of sub-optimal exits and potential adjustments to the strategy's stop/target management. (MEDIUM urgency)

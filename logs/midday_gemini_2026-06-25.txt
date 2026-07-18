@@ -1,0 +1,55 @@
+Midday Gemini Audit — 2026-06-25
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No entries or exits occurred during this session, preventing a comprehensive performance audit of trade execution, P&L accuracy, win rate, or score-to-outcome correlation. The bot correctly avoided new entries due to `MRI=STRESSED` and low confluence scores, demonstrating adherence to strategy filters.
+
+### ENTRY QUALITY
+No issues detected. The bot correctly refrained from making new entries due to the prevailing `MRI=STRESSED` condition (score=45), as explicitly stated at `2026-06-25 17:10:51,233` and `2026-06-25 17:23:57,950`. All `VOLSHADOW` logs indicate `would_pass: false` and `score_without_vol` below the `MIN_SCORE=9` threshold, implying no qualifying entry setups were identified.
+
+### EXIT QUALITY
+No issues detected. No exits were triggered during the monitored period. The decay of the `[NVDA] Reversal signal counter` from 2 to 0 without an exit is normal behavior if the signal strength diminished or other exit conditions were not met.
+
+### MRI ALIGNMENT
+No issues detected. The bot correctly identified the `MRI` as `STRESSED` (score=45) at `2026-06-25 17:10:23,950` and again at `2026-06-25 17:23:27,201`. It appropriately applied a `size floor 0.70x` for position sizing and, critically, prevented all new entries with the `⛔ BV-5: MRI=STRESSED — no new entries until regime improves` directive. This demonstrates correct alignment with the macro risk framework.
+
+### LOG ANOMALIES
+*   **Slow Cycle Duration & Watchdog Restart**:
+    *   `2026-06-25 17:05:10,851 | INFO | main | [CYCLE] duration=471s | phase=midday | watchdog_headroom=249s ⚠ SLOW CYCLE`
+    *   `2026-06-25 17:18:00,254 | INFO | main | [CYCLE] duration=466s | phase=midday | watchdog_headroom=254s ⚠ SLOW CYCLE`
+    *   `2026-06-25 17:22:57,056 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.`
+    The bot consistently exceeds its 5-minute scan interval, with cycles taking approximately 7.7 minutes. This eventually led to a watchdog alert and a full bot restart, indicating a severe performance degradation.
+*   **Garbage Collection Performance**:
+    *   `2026-06-25 17:05:10,847 | WARNING | main | gc.collect() took 4315.0ms, collected 64 objects — heap may be growing`
+    *   `2026-06-25 17:18:00,250 | WARNING | main | gc.collect() took 3185.1ms, collected 64 objects — heap may be growing`
+    *   `2026-06-25 17:29:31,738 | WARNING | main | gc.collect() took 3249.0ms, collected 64 objects — heap may be growing`
+    Frequent and long-running `gc.collect()` calls, collecting a minimal number of objects, suggest memory leak issues or inefficient object management. These pauses contribute significantly to the slow cycle durations and increased risk of watchdog events.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Kelly Fraction Mismatch**
+    *   (1) Variable involved: `Kelly fraction` for position sizing.
+    *   (2) The bot reported `Kelly config: fraction=0.35` at `2026-06-25 17:23:02,459`. The provided `BOT CONFIG CONSTANTS` state `KELLY_FRACTION = 0.25`. This constitutes a failure because the bot is operating with a significantly different risk-sizing parameter than configured, potentially leading to over-leveraging and higher capital risk per trade than intended by the `KELLY_FRACTION` constant.
+    *   (3) Condition: Bot startup after watchdog restart, specifically when initializing Kelly stats (`2026-06-25 17:23:02,459`).
+
+2.  **EXECUTION BUG | HIGH | Position Count Drift During Reconciliation**
+    *   (1) Variable involved: `risk.open_positions` (internal state) vs. `tracker` (source of truth for open trades).
+    *   (2) The log shows `POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=2` at `2026-06-25 17:23:10,914`. The internal `risk.open_positions` variable was `0`, while the `tracker` correctly identified `2` open positions. This constitutes a failure because the bot's real-time risk management system momentarily lost track of open positions, which could lead to incorrect position sizing for new trades or miscalculation of overall portfolio risk if not immediately corrected. While the log states "Correcting to tracker count", the drift itself indicates a flaw in state persistence or recovery.
+    *   (3) Condition: Bot startup after watchdog restart during position reconciliation, specifically at `2026-06-25 17:23:10,914`.
+
+3.  **EXECUTION BUG | MEDIUM | Overnight Entries Enabled Configuration Inconsistency**
+    *   (1) Variable involved: `OVERNIGHT_ENTRIES_ENABLED`.
+    *   (2) At startup, the bot logged `OVERNIGHT_ENTRIES_ENABLED=False (profile: paper)` at `2026-06-25 17:23:01,064`. However, the provided `BOT CONFIG CONSTANTS` explicitly states `OVERNIGHT_ENTRIES_ENABLED = True # overnight holds are permitted by design`. This constitutes a failure in configuration consistency; the runtime behavior (disallowing overnight entries) contradicts the declared constant value. If paper trading is intended to disallow overnight holds, this conditional logic is not reflected in the primary `CONFIG CONSTANTS` list provided for audit.
+    *   (3) Condition: Bot startup after watchdog restart, specifically at `2026-06-25 17:23:01,064`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: Prioritize investigation and resolution of the slow cycle durations, excessive garbage collection, and watchdog restarts. This is critical for bot stability and responsiveness. Examine memory usage patterns and CPU load during cycles.
+2.  **EXECUTION**: Immediately review the Kelly Fraction configuration. Determine if `KELLY_FRACTION = 0.25` is the correct intended value, or if `0.35` is an intended override for the paper profile. If it's an override, update the `CONFIG CONSTANTS` documentation to reflect conditional values. If `0.25` is correct, fix the code overriding it.
+3.  **EXECUTION**: Investigate the root cause of the `POSITION COUNT DRIFT` to prevent future inconsistencies in risk management. Ensure all internal state variables are robustly synchronized with the tracker and Alpaca on startup and during runtime.

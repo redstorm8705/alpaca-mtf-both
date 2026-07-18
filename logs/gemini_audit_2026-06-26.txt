@@ -1,0 +1,79 @@
+Nightly Gemini Audit — 2026-06-26
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['strategy/run_cycle.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Kill Switch/Entry Block**: Multiple occurrences of `WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` (e.g., `19:14:29`, `19:20:58`, `19:54:00`, `20:00:33`). This consistently blocks new trade entries, even for high-score signals (e.g., AMD score=12/12), which is a critical operational failure. The kill switch itself (due to daily loss limit) is not triggered, indicating another entry halting mechanism.
+*   **P&L Drift**: Persistent `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-25.56 tracker=$-7.97 drift=$-17.59` recorded every ~15 minutes. This indicates a consistent discrepancy between the bot's internal P&L tracking and Alpaca's reported P&L, specifically due to a mismatched entry price for NVDA.
+*   **Performance Degradation (GC Pauses)**: Recurring `WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing` (e.g., `3603.0ms`, `3675.5ms`, `3673.0ms`). These ~3.6-second pauses are excessively long for a live trading bot and indicate potential memory leaks or inefficient object management, impacting real-time responsiveness.
+*   **Trade Quality Index (TQI) Degradation**: Persistent `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` This indicates a consistent issue with the quality of recent trades, potentially pointing to poor exit management.
+*   **Premarket Mover Scan Failure**: `WARNING | strategy.run_cycle | Pre-market mover scan failed or timed out ... skipping movers this session, proceeding with core watchlist only.` This occurred at `19:02:58` (pre-market equivalent for this bot's UTC-7 time zone). While gracefully handled, this indicates a recurring failure to expand the watchlist with movers, potentially missing trading opportunities.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All P&L signs for closed trades (`NVDA`, `GOOGL`, and `NFLX`, `MSTR`, `TOST` from `2026-06-24`) are correct given the entry and exit prices and direction.
+*   **`pnl_pct` Computation**: `pnl_pct` appears to be correctly calculated from the original full position value for both NVDA and GOOGL.
+*   **`partial_pnl` Accumulation**: Not applicable; `partial_exited` is false for all trades today.
+*   **`pnl=0.0` Anomalies**: No trades with `pnl=0.0` and `entry ≠ exit` prices were observed.
+*   **Entry/Exit Prices Plausibility**: Entry and exit prices for NVDA and GOOGL are plausible values for the respective stocks. However, the *discrepancy* in NVDA's entry price between the bot's tracker (`$198.17`) and Alpaca's reported filled entry (`$215.76`) is a critical issue causing the P&L drift.
+*   **Score→Outcome Correlation**: Both trades closed today (NVDA, GOOGL) had a score of 7 and resulted in losses. `MIN_SCORE` is configured to 9, and the MRI level `STRESSED` implies a `min_score_floor` of 11. Entering trades with a score of 7 is a direct violation of configuration and risk management. This indicates a fundamental flaw in the entry gating or score application.
+*   **Stop-hit Rate vs. Win Rate**: Today's win rate is 0.0 (2 losses). One loss (`NVDA`) was a `stop_hit` (or buffer exit related to a scan breach below stop). The `TQI degradation` warning (last-5-trade avg=28.0/100 < 30) further confirms poor trade quality or exit discipline, suggesting a regime mismatch or ineffective stop placement.
+*   **Exit Reason Consistency**: The `NVDA` exit price (`$193.23`) is above its original stop (`$189.07`) but below the calculated threshold (`$194.38`), consistent with the `overnight_atr_buffer_exit | 9-scan breach` reason.
+
+### TRADE INTEGRITY
+*   **P&L Recording Bug**: The `P&L DRIFT` is a direct P&L recording issue. For NVDA, the bot's internally recorded `entry_price` ($198.17) does not match the Alpaca-reported fill price ($215.76). This leads to a substantial discrepancy in P&L for that trade, driving the overall daily P&L drift. This also indicates `A-4` (Alpaca paper fills gap) is either misunderstood or this is a different variant where fills *are* provided, but they differ from the bot's assumption.
+*   **MIN_SCORE Violation**: Trades with score 7 were executed despite `MIN_SCORE = 9` and an MRI-adjusted `min_score_floor = 11`. This is a severe logic error impacting trade quality.
+
+### MODIFIED FILE FINDINGS
+
+**`strategy/run_cycle.py`**
+*   **Function**: `run_cycle`
+*   **Bug**: **Silent Failure for EOD Reconciliation Trigger**
+    *   **Code Path**: In the `Startup R-GUARD` block, `subprocess.Popen` is used to trigger `reconcile_eod.py`. The `stderr=_sr_sp.DEVNULL` argument redirects the subprocess's standard error to `/dev/null`.
+    *   **Runtime vs. Intended**: If `reconcile_eod.py` encounters an error (e.g., due to an unexpected data format or API issue), its error messages will be suppressed. The `run_cycle.py` script will not capture or log these errors, effectively masking a critical failure in the P&L reconciliation process.
+    *   **Failure Condition**: A crash or error within `reconcile_eod.py` goes unnoticed, leaving P&L data uncorrected and potentially impacting subsequent trading decisions based on stale/incorrect financial data. This is an `INFRASTRUCTURE` bug.
+*   **Function**: `run_cycle` (loop building `_sym_52w_high_cache`)
+*   **Bug**: **Silent Disabling of Risk Management (ATH Gate)**
+    *   **Code Path**: If `fetch_bars` fails for a specific symbol while populating `_main._sym_52w_high_cache` (e.g., `_ath_df is None or _ath_df.empty` or an exception), `_main._sym_52w_high_cache[_ath_sym]` is set to `float("inf")`.
+    *   **Runtime vs. Intended**: The comment states "ATH gate disabled (inf sentinel)", indicating this is intentional to prevent `fetch_bars` failure from blocking the entire pre-market scan. However, by setting the 52-week high to infinity, the "ATH proximity gate" (designed to scrutinize trades near all-time highs) is permanently disabled for that symbol until the bot restarts and a successful `fetch_bars` occurs.
+    *   **Failure Condition**: Consistent data fetch failures for a symbol will silently disable a key risk management control (the ATH proximity gate) for that symbol without explicit user notification (beyond a warning log). This could lead to elevated risk if the bot enters trades near the actual 52-week high for a problematic symbol. This is an `ALPHA ISSUE` / `RISK MANAGEMENT` gap.
+
+**`events/macro_risk_index.py`**
+*   **Function**: `_compute`
+*   **Bug**: **Unnecessary `socket.setdefaulttimeout` change**
+    *   **Code Path**: `_mri_old_to = _mri_sock.getdefaulttimeout(); _mri_sock.setdefaulttimeout(5.0)` is called at the start of `_compute`, and `_mri_sock.setdefaulttimeout(_mri_old_to)` is called in the `finally` block.
+    *   **Runtime vs. Intended**: While the timeout is correctly restored, `socket.setdefaulttimeout` affects *all* sockets in the process, not just those created by `_req` or `yf` within this function. While the current usage is contained by the `finally` block, this global setting/restoring is an anti-pattern. If other threads or parts of the application assume a certain default timeout, this momentary change could introduce subtle race conditions or unexpected behavior if a socket operation is initiated by another part of the code during the `_compute` execution. The `requests` library (used implicitly) can set its own timeouts per request, making a global change unnecessary.
+    *   **Failure Condition**: Potential for unexpected network behavior or subtle race conditions in other parts of the application if they rely on the default socket timeout during the execution of `_compute`. This is a `LOW` severity `INFRASTRUCTURE` issue.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **UNTOUCHED**
+*   P5-C2 | run_movers.py ImportError: **TRIGGERED** (Log shows pre-market mover scan failed/timed out, consistent with a failure in the mover scan.)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **TRIGGERED** (Entry logic `HALTED for session` repeatedly, without kill switch, consistent with this issue.)
+*   P5-H2 | Fill price crosstalk: **UNTOUCHED / UNCONFIRMED**
+*   P5-H3 | Orphan GTC 404 path: **UNTOUCHED / UNCONFIRMED**
+*   P5-H4 | Rule 2 dead code: **UNTOUCHED / UNCONFIRMED**
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED** (No logs indicating this issue.)
+*   P5-M1 | Cycle watchdog restart loop: **UNTOUCHED / UNCONFIRMED**
+*   P5-M2 | MRI score cached stale across sessions: **FIXED** (Robust staleness detection and overrides in `macro_risk_index.py` mitigate this.)
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED / UNCONFIRMED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED / UNCONFIRMED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **UNTOUCHED** (The `_reconcile_ts` check is a mitigation, but the core problem of potentially writing a premature EOD is still present if reconciliation is delayed.)
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED / UNCONFIRMED**
+
+### NEW BUGS FOUND
+1.  **EXECUTION BUG** | CRITICAL | Entry Logic (function name unknown, likely within `_main.execute_entries`) | Bot enters trades that violate `MIN_SCORE` | The bot entered NVDA and GOOGL trades with `score=7` today, despite `CONFIG.MIN_SCORE = 9` and an MRI `STRESSED` level requiring `MIN_SCORE base + 2 = 11`. This is a direct bypass of the minimum score filter.
+2.  **INFRASTRUCTURE** | CRITICAL | `main._load_hybrid_state()` (source not provided) and `execution.fill_reconciler` | P&L drift due to Alpaca entry price differing from bot's tracked entry price for `_adopted_orphan` trades | The bot's `entry_price` for NVDA (`198.17`) diverged from Alpaca's filled `entry` (`215.76`), leading to significant P&L drift. This indicates a failure in correctly reconciling or adopting fill prices from Alpaca, especially for `_adopted_orphan` positions, contradicting the implied behavior of `A-4`.
+3.  **INFRASTRUCTURE** | MEDIUM | `main` (implicit) | Excessive garbage collection pauses and heap growth | Repeated log warnings `gc.collect() took Xms, collected 99 objects — heap may be growing` with X being ~3.6 seconds, occurring every ~15 minutes. This indicates a potential memory leak or highly inefficient object management.
+4.  **INFRASTRUCTURE** | LOW | `events/macro_risk_index.py` (function `_compute`) | Unnecessary global `socket.setdefaulttimeout` modification | The `_compute` function temporarily changes the global `socket.setdefaulttimeout` to 5.0 seconds. While restored, this global modification is an anti-pattern and could potentially introduce subtle race conditions or unexpected behavior in other threads/modules if they attempt socket operations during this window, especially since specific API calls typically allow per-request timeouts.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE DEBUG: MIN_SCORE Violation & Entry Halting**: Prioritize debugging the trade entry logic to enforce `CONFIG.MIN_SCORE` and `MRI_min_score_floor` correctly. Simultaneously, investigate the cause of the `execute_entries: HALTED for session` message, focusing on the PDT state (P5-H1). These two issues are actively preventing desired trading behavior and executing non-compliant trades.
+2.  **P&L DRIFT / FILL RECONCILIATION AUDIT**: Conduct a deep audit of the `_adopted_orphan` logic and fill reconciliation process (`execution.fill_reconciler`), especially how `entry_price` is established and validated against Alpaca's confirmed fills. Address the specific NVDA P&L drift. Re-evaluate `A-4` in light of this.
+3.  **IMPROVE EOD RECONCILIATION ERROR REPORTING**: Modify the `Startup R-GUARD` in `strategy/run_cycle.py` to capture and log `stderr` from the `reconcile_eod.py` subprocess, converting the silent failure into an actionable log.
+4.  **MEMORY LEAK / GC OPTIMIZATION**: Begin profiling the bot's memory usage to identify and resolve the root cause of the long `gc.collect()` pauses and "heap may be growing" warnings.
+5.  **ATH GATE STALENESS REVIEW**: Implement a mechanism to alert or escalate if specific symbols consistently fail to update their 52-week high cache in `strategy/run_cycle.py`, preventing the silent disabling of a risk control.

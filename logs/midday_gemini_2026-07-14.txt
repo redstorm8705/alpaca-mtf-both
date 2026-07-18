@@ -1,0 +1,66 @@
+Midday Gemini Audit — 2026-07-14
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+The bot's P&L reporting for the current session is inaccurate, misrepresenting live risk decisions.
+  P&L Summary discrepancy | HOOD (open long position)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry prices plausible**: The entry for HOOD at $112.01 (estimate $112.00, gap=0.01%) appears plausible and within acceptable slippage for a market order.
+*   **Exit prices consistent**: No closed trades in this session.
+*   **P&L signs correct**: No closed trades. However, the `SESSION P&L SUMMARY` reports `Total P&L: $0.00` and `Entries: 0` despite a long position in HOOD being opened. This is a critical reporting failure for current session P&L and open positions.
+*   **Win rate and profit factor consistent**: No closed trades in this session.
+*   **Score→outcome correlation**: No closed trades in this session.
+*   **Stop-hit rate**: No closed trades in this session.
+*   **P&L = 0.0 but entry ≠ exit price**: Not applicable.
+*   **Partial exit doesn't reduce position size**: Not applicable.
+
+### ENTRY QUALITY
+*   The bot successfully identified a LONG signal for HOOD with a strong score of `10/12`, which is above the `MIN_LONG_SCORE = 8`.
+*   Various filtering gates (Weekly Bias, Correlation, ORB, Earnings) successfully blocked other potential signals (SOFI, UBER, AMZN, GOOGL, AVGO, RBLX, INTC, ADBE, AAPL, MSTR, SPY, QQQ, DDOG, JPM, AMD, COIN, SMCI, SOXS). This indicates robust pre-entry filtering.
+*   Position sizing was dynamically adjusted for HOOD, with a base linear sizing of $1,174.69 being significantly reduced to $155.05 due to `Kelly adj`, `TQI demotion`, `TSMOM vol-scale`, and `VOTE-3 vol cap`, followed by a slight increase by `FVG ↑ 1.08x`. This suggests appropriate risk management adjustments are being applied, aligning position size with prevailing conditions (e.g., lower historical trade quality, low current volatility).
+
+### EXIT QUALITY
+No closed trades in this session to evaluate.
+
+### MRI ALIGNMENT
+*   The `MRI score=23` indicating `ELEVATED` risk level was correctly identified.
+*   In response to the `ELEVATED` MRI, the `Dynamic MIN_SCORE` was appropriately `raised to 9/12`, filtering out `6 signal(s)`. This demonstrates proper risk-adaptive behavior.
+*   The bot also applied `Post-release normalization active (CPI Jun 2026 — 50% size)` and `Mid-day doldrums — sizing at 75%`, further adjusting its sizing strategy based on macro events and time of day.
+*   The overall MRI alignment and response (increased `MIN_SCORE`, sizing adjustments) appears to be functioning as intended, showing no systematic degradation.
+
+### LOG ANOMALIES
+*   `2026-07-14 17:20:15,759 | WARNING | trade_logger | trade_events.jsonl write failed: Object of type bool is not JSON serializable`
+*   `2026-07-14 17:24:43,888 | WARNING | main | gc.collect() took 206.2ms, collected 66 objects — heap may be growing`
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Discrepancy in Session P&L Reporting**:
+    *   **Variable involved**: `Entries`, `Exits`, `Closed trades`, `Total P&L` in `SESSION P&L SUMMARY`; `pnl_today` in `Alpaca FIFO EOD` and `pnl_today from pnl_ledger`.
+    *   **Value vs. should be**: The `SESSION P&L SUMMARY` reports `Entries: 0 | Exits: 0 | Closed trades: 0 | Total P&L: $0.00`. However, the log clearly shows an entry for HOOD: `2026-07-14 17:20:15,754 | INFO | execution.portfolio_tracker | [HOOD] Entry recorded: long 1 @ $112.01`. The summary should reflect at least `Entries: 1` and a non-zero, mark-to-market `Total P&L` if the position is open. Similarly, `pnl_today=$0.00` in the `Alpaca FIFO EOD` and `pnl_today from pnl_ledger` is incorrect if there is an active open position. This failure misrepresents the current session's trading activity and P&L, potentially leading to incorrect live risk decisions (e.g., miscalculating daily loss against `MAX_DAILY_LOSS_PCT`).
+    *   **Condition**: Occurs after a trade is successfully entered but before it is closed, specifically when the `SESSION P&L SUMMARY` is generated and daily P&L is aggregated/reported.
+
+*   **INFRASTRUCTURE | HIGH | `trade_events.jsonl` Write Failure**:
+    *   **Variable involved**: The unnamed `Object of type bool` being serialized for writing to `trade_events.jsonl`.
+    *   **Value vs. should be**: A trade event record was not successfully written to `trade_events.jsonl`. It should have been written correctly. This failure indicates a bug in the data serialization logic for trade events, leading to incomplete audit trails and potential data loss for trade history analysis.
+    *   **Condition**: Occurs at `2026-07-14 17:20:15,759` immediately following the recording of the HOOD entry.
+
+*   **INFRASTRUCTURE | MEDIUM | `gc.collect()` Performance Warning**:
+    *   **Variable involved**: `gc.collect()` execution time.
+    *   **Value vs. should be**: The garbage collection routine took `206.2ms`. While not explicitly a failure, this duration suggests a potential performance bottleneck or excessive object churn within the bot's memory space. The accompanying "heap may be growing" message indicates a possible memory leak or inefficient memory management. If left unaddressed, this could lead to increased cycle latency and reduced responsiveness over extended runtimes.
+    *   **Condition**: Occurs at `2026-07-14 17:24:43,888` at the end of a processing cycle.
+
+*   **EXECUTION BUG | MEDIUM | Inconsistent Fill Count Reporting**:
+    *   **Variable involved**: `fills` count reported in `update_daily_pnl_from_alpaca` and `Alpaca FIFO EOD`.
+    *   **Value vs. should be**: Logs at `2026-07-14 17:20:19,362` and `2026-07-14 17:24:40,194` both report `fills=2`. However, only one entry (`[HOOD] BUY 1 shares`) is visible in the provided logs for this session. This discrepancy could indicate an unlogged fill or a miscount where a historical fill is being re-counted as a current-day fill. While "A-4 paper fills gap" is benign, an incorrect fill count could lead to P&L miscalculations or an inaccurate understanding of execution activity.
+    *   **Condition**: Occurs during P&L updates and EOD processing while an open position exists.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL**: Immediately investigate and rectify the P&L reporting mechanism for open positions and current session totals. The `SESSION P&L SUMMARY` and `pnl_today` metrics must accurately reflect all trading activity, including open positions, to ensure correct live risk management against limits like `MAX_DAILY_LOSS_PCT`.
+2.  **INFRASTRUCTURE | HIGH**: Debug the `trade_events.jsonl` write failure. Identify the `bool` object that is causing the JSON serialization error and ensure all data destined for trade event logging is properly formatted and persisted. Data integrity for trade history is paramount for audit and analysis.
+3.  **INFRASTRUCTURE | MEDIUM**: Conduct a memory profile analysis to address the `gc.collect()` warning. Investigate potential memory leaks or areas of high object churn to optimize memory usage and reduce garbage collection overhead, preventing performance degradation and ensuring bot responsiveness.

@@ -1,0 +1,88 @@
+Nightly Gemini Audit — 2026-04-13
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['scan_to_html.py', 'generate_dashboard.py', 'options_scanner.py', 'main.py', 'live_data_writer.py', 'indicators/rsi.py', 'events/news_monitor.py']
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is in a FAIL state. The log indicates repeated, critical failures preventing the main bot process from running for a significant portion of the last 24 hours. Furthermore, audit of the trade log reveals active data integrity issues with P&L calculation and trade object consistency, and several critical/high-severity new bugs were identified, including silent fallbacks and risk management gaps. Several P5 bugs are actively triggered or worsened.
+
+### LOG ANOMALIES
+
+*   **Critical Repeated Startup Failure**: The log is saturated with `ERROR: Another bot instance is already running. Exiting.` entries, indicating a persistent failure in the bot's launch mechanism. This prevents the primary `main.py` process from running for an extended period, rendering the bot inoperable. This directly triggers P5-M1.
+*   **Stale MRI State**: `WARNING | macro_risk_index | MRI state 58.9h stale (>20h) — starting fresh.` indicates the Macro Risk Index state was significantly outdated. While the system attempts to recover by "starting fresh," this suggests a gap in either persistence, data fetching, or a prolonged period of bot inactivity/failures. (P5-M2 is addressed here, but the underlying staleness is an anomaly).
+*   **Emergency GTC Stop Submissions**: Multiple `WARNING | main | [SYM] Emergency GTC stop submitted (Patch 1)` entries (for AMD, QQQ, SPY) indicate an emergency stop submission mechanism is active. While intended as a safeguard, the `trade_log.json` audit shows `gtc_stop_order_id: null` for these open positions, which is problematic (see Trade Integrity and New Bugs).
+
+### TRADE INTEGRITY
+
+*   **Incorrect `partial_pnl` Calculation/Recording**:
+    *   **COIN (short)**: `partial_pnl: 38.43` for 4 shares. Expected: `(179.97 - 167.675) * 4 = 49.18`. Discrepancy of $10.75.
+    *   **TOST (short)**: `partial_pnl: 47.96` for 41 shares. Expected: `(26.82 - 24.9799995) * 41 = 75.44`. Discrepancy of $27.48.
+    *   **AMD (long)**: `partial_pnl: 49.21` for 3 shares. Expected: `(248.2816 - 231.25) * 3 = 51.09`. Discrepancy of $1.88.
+    *   *Finding*: The `partial_pnl` field in `trade_log.json` for partially exited trades does not match a straightforward calculation from `entry_price` and `partial_exit_price`. This could lead to misrepresentation of trade profitability and incorrect aggregate P&L statistics.
+*   **Inconsistent TSLA Trade State**:
+    *   **TSLA (short)**: `qty: 3`, `qty_remaining: 2`, yet `partial_exited: false`. This is an inconsistent state. If 1 share was removed from the original 3, `partial_exited` should be `true` and a `partial_pnl` should exist. If no partial exit occurred, `qty_remaining` should be 3. The `pnl` field (`7.36`) and `pnl_remaining` (`7.36`) are consistent with 2 shares exiting at `343.32` from `347.0`, suggesting the initial `qty: 3` was never fully established or 1 share was removed without proper record.
+    *   *Finding*: The trade object for TSLA is in an inconsistent state, making its P&L and share count history unreliable.
+*   **Missing GTC Stop Order IDs for Open Positions**:
+    *   For `QQQ` and `SPY` open positions in `trade_log.json`, `gtc_stop_order_id` is `null`. However, the bot log explicitly shows GTC STOP orders being submitted for these symbols (`Order ID: 21164780-db6d-4ce8-b836-60a669b97015` for QQQ, `f9418652-a30e-4ca5-ac26-62c688a10651` for SPY).
+    *   *Finding*: The bot is submitting GTC stop orders but failing to record their IDs in the `trade_log.json` trade objects, leading to potential "stranded stops" (P5-H3 triggered) that cannot be managed or cancelled by the bot effectively.
+*   **EOD Snapshot Not Final**: The `EOD SNAPSHOT` for `2026-04-13` explicitly states `open_trades: 3`. This confirms the `pnl_today` and `all_time_stats` figures are not final for the day, as they do not include the realized P&L from these open positions when they eventually close. This leads to an understated (or overstated, depending on outcome) final daily P&L. (P5-L2 triggered).
+
+### MODIFIED FILE FINDINGS
+
+*   **scan_to_html.py**:
+    *   **Medium | Silent fallback in `_fetch_implied_range` (`scan_to_html.py:126-127`)**: If `call_bid` or `put_bid` is 0 (no market maker bid), `ac["lastPrice"]` or `ap["lastPrice"]` is used as a proxy for the mid-price. `lastPrice` can be stale or from a low-volume transaction, especially for illiquid options or during off-market hours. This can lead to inaccurate implied range calculations without explicit warning.
+*   **options_scanner.py**:
+    *   **Medium | Silent fallbacks in Black-Scholes `bs_d1` and `bs_theta` (`options_scanner.py:84, 97`)**: The functions return `0.0` if `T <= 0`, `sigma <= 0`, `S <= 0`, or `K <= 0`. These are critical inputs for the Black-Scholes model. Returning `0.0` for `d1` results in a fixed delta of 0.5 (calls) or -0.5 (puts), masking invalid input data or model applicability limits. This can lead to misleading options recommendations based on an effectively broken model.
+    *   **Low | Hardcoded `RISK_FREE_RATE` (`options_scanner.py:44`)**: The `RISK_FREE_RATE` is fixed at `0.045`. This rate should be dynamic (e.g., fetched from a T-bill yield API) or at least regularly updated in config, as it directly impacts Black-Scholes option pricing (delta, theta). A stale rate leads to inaccurate option valuation.
+*   **live_data_writer.py**:
+    *   **Low | Heuristic startup delay (`live_data_writer.py:32`)**: The `time.sleep(15)` at startup is a brittle heuristic to allow `main.py` to write its initial dashboard. `main.py`'s startup time can vary. This could lead to `live_data_writer` producing stale/incomplete data if `main.py` is slow, or unnecessary delays if `main.py` starts quickly. A more robust inter-process synchronization mechanism is needed.
+*   **indicators/rsi.py**:
+    *   **Low | `idxmin`/`idxmax` ambiguity in divergence detection (`indicators/rsi.py:65, 81`)**: When detecting divergence, `window["close"].idxmin()` or `idxmax()` is used. If multiple identical price lows/highs exist within the `lookback` window, these methods return the *first* occurrence. This might not be the most representative point for divergence analysis, potentially leading to missed or false signals.
+*   **main.py**:
+    *   **Minor positive change**: The addition of `_rth_day_stops_submitted_dates: set = set()` and the `Daily reset fired ... conviction/confirm buffers cleared` log entries suggest attempts to address issues like duplicate stop submissions and stale PDT buffers (P5-H1 fixed).
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTOUCHED**. No evidence of fix or trigger in logs.
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED**. `run_movers.py` not provided; no logs indicate this was triggered.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED**. Log entry `conviction/confirm buffers cleared` explicitly states the fix has been implemented and active.
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED**. No direct evidence of fix or trigger in logs.
+*   **P5-H3 | Orphan GTC 404 path**: **TRIGGERED / WORSENED**. The log shows GTC stops submitted, but `trade_log.json` explicitly shows `gtc_stop_order_id: null` for open trades (QQQ, SPY). This means GTC orders are submitted but not tracked by the trade object, creating orphan stops.
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED**. No evidence of fix or trigger in logs.
+*   **P5-M1 | Cycle watchdog restart loop**: **TRIGGERED**. The log is filled with `ERROR: Another bot instance is already running. Exiting.`, which is the direct symptom of this problem. While `fcntl.flock` correctly prevents multiple *concurrent* instances, the external orchestration is repeatedly attempting to launch, causing a continuous loop of failures.
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED**. Log entry `MRI state 58.9h stale (>20h) — starting fresh.` indicates validation and refresh mechanism is in place and working.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. No evidence of fix or trigger in logs.
+*   **P5-L1 | Weekly review PDT label**: **UNTOUCHED**. No evidence of fix or trigger in logs.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED**. The EOD snapshot shows `open_trades: 3`, confirming that the P&L captured is not final for the day.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED (or partially mitigated)**. The `_load_alpaca` function in `generate_dashboard.py` (called by `live_data_writer.py`) uses REST, not WebSockets, making the "WebSocket drop" specific condition obsolete. However, the general "no reconnect logic" for REST API failures would still apply if Alpaca's REST endpoint became unreachable, though errors would be logged.
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | External Orchestrator / main.py | Repeated Bot Instance Launch Loop**
+    *   Description: The `main.py` process is being repeatedly launched by an external orchestrator (e.g., `launch_bots.sh` or a systemd unit) without first verifying if an instance is already running. While `main.py`'s `fcntl.flock` correctly prevents concurrent execution, the continuous attempts to launch lead to the log being saturated with `ERROR: Another bot instance is already running. Exiting.`, consuming resources and rendering the bot non-operational. This is the root cause of the P5-M1 symptom.
+    *   Exact failure condition: The external script or service that calls `python main.py` does not perform a pre-check (e.g., for the lockfile's existence or by parsing previous exit codes) to avoid redundant launches, resulting in an infinite loop of failed startups.
+
+*   **HIGH | generate_dashboard.py | `_load_alpaca` & `_load_json` silent failures / default values**
+    *   Description: The `_load_alpaca` and `_load_json` functions extensively use `.get(key, default_value)` or `or 0` for critical financial data. While this prevents crashes, it can silently mask real API issues or unexpected `null` responses from Alpaca by substituting `0` (or another default) without a specific, actionable warning. This can lead to a dashboard displaying `0` for metrics like `equity` or `cash` even if the API is failing to provide valid data.
+    *   Exact failure condition: An Alpaca API field, e.g., `equity` or `cash`, consistently returns `null` or a non-numeric value, which is then absorbed by `float(acct.get("equity", 0) or 0)` and reported as `0.0` on the dashboard, masking the underlying data problem.
+
+*   **HIGH | main.py / trade_log.json | Incorrect `partial_pnl` Calculation/Recording**
+    *   Description: For trades with partial exits (e.g., COIN, TOST, AMD), the `partial_pnl` recorded in `trade_log.json` does not align with the P&L calculated directly from the `entry_price`, `partial_exit_price`, and implied number of shares for that partial exit. This indicates a bug in the P&L calculation, recording, or aggregation for multi-tranche exits, leading to inaccurate performance metrics.
+    *   Exact failure condition: `(trade['entry_price'] - trade['partial_exit_price']) * (trade['qty'] - trade['qty_remaining'])` does not equal `trade['partial_pnl']` for short trades, or `(trade['partial_exit_price'] - trade['entry_price']) * (trade['qty'] - trade['qty_remaining'])` for long trades. (See Trade Integrity section for specific examples and values).
+
+*   **HIGH | main.py / trade_log.json | Inconsistent TSLA Trade Object State**
+    *   Description: The `TSLA` trade object has `qty: 3` and `qty_remaining: 2`, but `partial_exited: false` and no `partial_pnl` field. This indicates a corrupted or inconsistent state in the trade object. A share was seemingly removed from the initial quantity without a recorded partial exit, leading to an unreliable representation of the trade's history and metrics.
+    *   Exact failure condition: A trade object has `qty > qty_remaining`, but `partial_exited` is `false` and no `partial_pnl` field is present.
+
+*   **MEDIUM | main.py | PDT GTC stop order IDs not recorded in trade objects**
+    *   Description: Although the bot successfully submits GTC stop orders at startup (as seen in the logs for QQQ, SPY), the corresponding `gtc_stop_order_id` field in the `trade_log.json` entries for these open positions remains `null`. This prevents the bot from correctly tracking and managing these critical stop orders, potentially leading to them being "stranded" or incorrectly cancelled, and is a direct trigger of P5-H3.
+    *   Exact failure condition: A log message `INFO | execution.broker | [SYMBOL] GTC STOP submitted: ... | Order ID: <UUID>` is followed by the `trade_log.json` entry for `SYMBOL` showing `"gtc_stop_order_id": null`.
+
+### RECOMMENDED ACTIONS
+
+1.  **Prioritize Fixing Repeated Bot Instance Launch Loop (CRITICAL)**: Investigate and fix the external orchestration mechanism (e.g., `launch_bots.sh`, systemd service) that is repeatedly attempting to launch `main.py` without proper checks. The orchestrator must wait for `main.py` to exit cleanly, or verify the lockfile status, before attempting a restart. This is fundamental to bot uptime.
+2.  **Immediate Audit and Correction of `partial_pnl` Calculation/Recording (HIGH)**: Thoroughly review the logic for recording `partial_pnl` in `main.py` (or related execution modules) to ensure it accurately reflects the realized profit/loss from partial exits. Correct the discrepancies found in COIN, TOST, and AMD trades. Ensure `pnl_pct` is correctly calculated based on the original full position value.
+3.  **Address `gtc_stop_order_id` Tracking for Open Trades (HIGH)**: Ensure that when GTC stop orders are submitted (especially at startup for overnight positions), their `order_id` is correctly stored in the corresponding trade object in `trade_log.json`. This is crucial for managing these orders (e.g., modification, cancellation) and prevents P5-H3 (Orphan GTC 404 path).
+4.  **Review Black-Scholes Silent Fallbacks in `options_scanner.py` (MEDIUM)**: Replace `0.0` return values for invalid inputs (`T, sigma, S, K <= 0`) in `bs_d1` and `bs_theta` with a more robust error handling (e.g., raise an exception, return `None` and log a warning). Returning `0.0` masks fundamental issues with input data or model applicability. Similarly, address the `lastPrice` fallback in `scan_to_html.py`.
+5.  **Finalize EOD P&L Capture (P5-L2 Triggered)**: Implement a mechanism to ensure the `eod_YYYY-MM-DD.json` snapshot accurately reflects *final* P&L for the day, including all closed positions. This likely means generating the snapshot after the market close and after any remaining intraday positions have been closed or converted to overnight.

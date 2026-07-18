@@ -1,0 +1,93 @@
+Nightly Gemini Audit — 2026-05-14
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **`execution.fill_reconciler` | CRITICAL | [QQQ], [CRM], [QCOM] RC-4 FILL RECONCILIATION EXPIRED: fill_unverified trade outside 5-min window — P&L remains unreliable.**
+    *   **Trace**: The bot attempts to reconcile trade fills but fails to verify them within a 5-minute window, leading to explicit logging that P&L for these specific trades is unreliable. This occurred for QQQ at 14:01:31 ET, CRM at 14:01:35 ET, and QCOM at 14:01:39 ET.
+    *   **Failure Condition**: The system cannot confirm the exact fill price or details for executed trades from Alpaca, leading to potentially inaccurate P&L calculations and tracking. This contradicts the "A-4 paper fills gap" benign pattern, as the bot is *not* correctly falling back to reliable tracker P&L if it explicitly states P&L is "unreliable".
+
+*   **`alerts` | WARNING | send_slack failed: The read operation timed out.**
+    *   **Trace**: The bot attempts to send a Slack alert but the network operation times out (e.g., at 14:01:35 ET and 14:01:39 ET, immediately following `RC-4` critical errors).
+    *   **Failure Condition**: Important operational alerts, potentially including critical errors, are not reliably delivered to human operators, increasing the risk of delayed response to system failures.
+
+*   **`execution.portfolio_tracker` | WARNING | write_eod_summary: score_comparison expected list, got dict — skipped.**
+    *   **Trace**: The `write_eod_summary` function in `execution.portfolio_tracker` expects the `score_comparison` data structure to be a list but repeatedly receives a dictionary, causing this data to be skipped from the EOD summary file. This occurs in almost every cycle where an EOD summary might be written (e.g., 18:06:44 ET, 18:15:20 ET, 18:23:43 ET, etc.).
+    *   **Failure Condition**: Critical performance analysis data (`score_comparison`) is not being correctly logged in the EOD summary, preventing accurate post-hoc evaluation of strategy effectiveness across different score buckets.
+
+*   **`strategy.run_cycle` | WARNING | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=4.**
+    *   **Trace**: Multiple symbols (e.g., NVDL, CRWD, SPY, QQQ, TQQQ) repeatedly pass the `confirm_gate` threshold for entry (e.g., `scan 3/3`, `scan 4/4`, `scan 5/5`), indicating strong signals, but no actual trade entry occurs. The log explicitly states `risk.open_positions=2 vs tracker=2` while `MAX_OPEN_POSITIONS=4`, implying there are available slots. This is observed from 19:04:23 ET onwards. While `[AMD] Sector correlation BLOCKED` explains some missed entries, it does not account for all `ANOMALY-2` warnings for other symbols.
+    *   **Failure Condition**: The bot is systematically missing valid trade entry opportunities despite qualifying signals and available risk capacity, significantly hindering alpha generation. The internal logic preventing entry despite available `MAX_OPEN_POSITIONS` is flawed.
+
+*   **`main` | WARNING | gc.collect() took Xms, collected Y objects — heap may be growing.**
+    *   **Trace**: The Python garbage collector is taking an unusually long time (e.g., 200.1ms at 17:06:08 ET, 217.9ms at 17:45:11 ET) to collect a relatively small number of objects, and the message explicitly states "heap may be growing".
+    *   **Failure Condition**: This indicates potential memory inefficiency, a memory leak, or inefficient object management within the bot, which could lead to increased resource consumption, degraded performance, or eventually crashes over extended operational periods.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: Generally correct for verified trades (TOST, TSLA, AMZN, TQQQ).
+*   **pnl=0.0 anomalies**: **Confirmed bug.**
+    *   `CRM` `stop_hit` at `2026-05-07T07:02:48Z`: `price=184.0`, `pnl=0.0`. Direction `short`. A stop hit on a short position implies a loss (price moved against position or hit hard stop). P&L of 0.0 is incorrect and highly improbable.
+    *   `QCOM` `target` at `2026-05-07T08:42:54Z`: `price=190.43`, `pnl=0.0`. Direction `long`. A target hit on a long position implies a profit. P&L of 0.0 is incorrect and highly improbable.
+    *   **Failure condition**: The P&L calculation and recording for certain exit events (stop hits, target hits) is erroneous, reporting 0.0 P&L instead of the actual gain or loss. This directly skews performance metrics.
+*   **Stop-hit rate vs. win rate**:
+    *   `all_time_stats` reports `total_trades=60` and `win_rate=41.7%`. This implies a loss rate of 58.3% (`(1 - 0.417) * 60 = 34.98` losses vs `0.417 * 60 = 25.02` wins). Since the loss rate (58.3%) is greater than 50%, this indicates a potential regime mismatch where the strategy is incurring more losses than wins overall.
+*   **Profit factor and R:R vs. stated 2.5× target**:
+    *   `avg_win=25.2`, `avg_loss=-13.03`. Calculated R:R = `25.2 / 13.03 = 1.93`. This is below the implied `TARGET_ATR_MULT = 2.5` (which defines the profit target relative to stop distance, suggesting an intended R:R > 1.0, ideally around 2.5).
+    *   `all_time_stats.avg_r_multiple` is `0.009`. This figure is catastrophically low and inconsistent with the `avg_win` and `avg_loss` values, which suggest an R:R of 1.93. The calculation of `avg_r_multiple` is severely flawed.
+    *   **Failure condition**: The `avg_r_multiple` metric is miscalculated, providing highly misleading and inaccurate data for assessing the strategy's risk-adjusted performance. The actual R:R of 1.93, while positive, is also below the configured `TARGET_ATR_MULT` of 2.5.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording Bugs**: As detailed above, the `pnl=0.0` for `CRM` and `QCOM` exits is a critical recording error. The `RC-4 FILL RECONCILIATION EXPIRED` errors also indicate unreliable P&L recording.
+*   **Partial Exit Errors**: Not enough information to verify partial exit calculation, but `NVDA` `partial_exit` on 2026-05-11 shows `pnl=3.86` which is positive and plausible.
+
+### MODIFIED FILE FINDINGS
+
+No source files were modified in the last 24h.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED (no log evidence of PDT=3/3 occurring)
+*   P5-H2 | Fill price crosstalk: UNTOUCHED (though `RC-4 FILL RECONCILIATION EXPIRED` could be a symptom of related underlying order issues)
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED (no specific log evidence of "404")
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED (MRI refreshes are logged, but initial load cannot be verified)
+*   P5-M3 | score_comparison JSON unbounded growth: **TRIGGERED** (Log shows repeated `write_eod_summary: score_comparison expected list, got dict — skipped`, indicating incorrect handling of this data structure, which is a symptom or cause of this bug).
+
+### NEW BUGS FOUND
+
+*   **CATEGORY: P&L RECORDING | SEVERITY: CRITICAL**
+    *   **Description**: `all_time_stats.avg_r_multiple` is severely miscalculated.
+    *   **File**: `execution.portfolio_tracker` (implied from EOD snapshot context)
+    *   **Exact failure condition**: The `avg_r_multiple` in the `all_time_stats` section of the EOD snapshot (`0.009`) does not reflect the `avg_win` (`25.2`) and `avg_loss` (`-13.03`) values, which would imply an R:R closer to 1.93. This metric is fundamentally broken.
+
+*   **CATEGORY: ALPHA ISSUE | SEVERITY: HIGH**
+    *   **Description**: Bot fails to enter trades despite qualifying signals and available position slots (`ANOMALY-2`).
+    *   **File**: `strategy.run_cycle`
+    *   **Exact failure condition**: Multiple `WARNING | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=4` logs demonstrate that the bot passes confirmation gates for new entries (e.g., SPY, QQQ, NVDL, TQQQ, CRWD) but does not execute the trades, despite `MAX_POSITIONS=4` and only 2 open positions, causing missed trading opportunities.
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: LOW**
+    *   **Description**: Potential memory leak or inefficiency indicated by slow garbage collection.
+    *   **File**: `main` (context of `gc.collect()`)
+    *   **Exact failure condition**: Logs show `gc.collect()` taking over 200ms and warning "heap may be growing", suggesting inefficient memory usage that could lead to performance degradation or instability over time.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT**: Investigate and fix the `RC-4 FILL RECONCILIATION EXPIRED` errors and the `pnl=0.0` recording anomaly for CRM and QCOM. This is critical for reliable P&L tracking and risk management.
+2.  **HIGH**: Address the `ANOMALY-2` issue to determine why qualifying signals are not leading to trade entries, given available position slots. This represents significant missed alpha.
+3.  **HIGH**: Correct the calculation of `all_time_stats.avg_r_multiple` and ensure `score_comparison` data is correctly logged in the EOD summary (`P5-M3` related). Inaccurate metrics lead to flawed strategy evaluation.
+4.  **MEDIUM**: Diagnose and resolve the `send_slack failed` timeout to ensure critical alerts are reliably delivered.
+5.  **LOW**: Investigate the `gc.collect()` warnings for potential memory leaks or inefficiencies.

@@ -1,0 +1,101 @@
+Nightly Gemini Audit — 2026-05-04
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['weekly_review.py', 'reconcile_eod.py', 'preflight_simulation.py', 'alerts.py', 'midday_audit.py', 'run_movers.py', 'execution/orphan_manager.py', 'execution/risk_manager.py', 'execution/trade_engine.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py', 'strategy/run_cycle.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is currently experiencing a critical operational failure: it silently stops trading activity during RTH hours if an upstream API call (`is_market_open()`) fails. This is not a kill switch and leaves existing positions unprotected by dynamic stop management. Additionally, a core risk management constraint (`MAX_OPEN_POSITIONS`) is being violated, allowing more open positions than intended. Multiple reconciliation and P&L accounting issues also persist, indicating fundamental flaws in tracking and reporting.
+
+### LOG ANOMALIES
+*   **CRITICAL | strategy.run_cycle | Silent Trading Halt during RTH:** The log indicates `portfolio_tracker.write_eod_summary` is being called during RTH hours (e.g., 14:26 ET), implying `strategy.run_cycle` has incorrectly entered its "Market closed" branch due to `is_market_open()` failing. This leads to the bot ceasing all trading operations (entries, exits, dynamic stop management) for the remainder of the session without a `KILL SWITCH` alert, and instead only updates HTML/status. This is a critical operational failure.
+*   **CRITICAL | strategy.run_cycle | Position Count Desync/Violation:** Repeated `[ANOMALY-2] ... risk.open_positions=5 vs tracker=5 | MAX_OPEN_POSITIONS=4` clearly shows the bot holding 5 positions when `MAX_OPEN_POSITIONS` is configured to 4. This is a direct violation of a critical risk management rule.
+*   **WARNING | execution.portfolio_tracker | Recurring EOD P&L DRIFT:** The warning `EOD P&L DRIFT: Alpaca=$-43.57 tracker=$-33.89 drift=$-9.68` appears repeatedly in the log. While `reconcile_eod.py` is designed to zero this out *after* market close, its appearance *during RTH* (e.g., at 14:26 ET) confirms that `portfolio_tracker.write_eod_summary` is prematurely generating EOD reports, and the drift is active mid-day. This is symptomatic of the "silent trading halt" issue described above.
+*   **WARNING | main | Excessive Garbage Collection:** Frequent `gc.collect() took Xms, collected 99 objects — heap may be growing` entries suggest potential memory leaks or inefficient memory management, leading to performance degradation (e.g., 3945.6ms = almost 4 seconds for GC).
+*   **WARNING | strategy.signal_generator | Phase-1 Global Timeout:** `run_scan: phase-1 global timeout — abandoned symbols: ['QCOM', 'MSFT']` indicates some symbols are not being fully processed, potentially leading to missed trading opportunities.
+*   **INFO | execution.orphan_manager | POSITION COUNT DRIFT (Startup Recovery):** `POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=5. Correcting to tracker count.` after `SIGTERM` indicates `risk.open_positions` state is not properly persisted across restarts, requiring recovery from `tracker`. While a recovery mechanism, it highlights a state management gap.
+*   **WARNING | strategy.signal_generator | Insufficient Weekly Bias Data:** Many `[SYM] Weekly bias: insufficient data (5 bars), filter skipped` warnings suggest that the weekly bias filter is frequently inactive due to data availability, potentially reducing the confluence score for many symbols.
+
+### PERFORMANCE AUDIT
+*   **SPY Trade P&L Inconsistency:** The `SPY` trade (long entry $715.19, stop $715.19) exited at $715.15 for a PnL of $-0.04, with `exit_reason: external_close`. For a long position, exiting below the stop price should trigger a `stop_hit`, not an `external_close`. This suggests a logic error in identifying exit reasons or processing stop breaches near breakeven.
+*   **AMD Trade P&L Plausibility:** The `AMD` trade (long entry $349.04, original stop $331.94) exited at $349.04 for a PnL of $0.00 with `exit_reason: hard_stop`. While mathematically possible for a breakeven stop to hit exactly, combined with the SPY inconsistency, it warrants investigation into the precision and order execution for stop hits.
+*   **Overall Win Rate & R-Multiple Discrepancy:** While the `all_time_stats` show a decent `profit_factor` of 1.37, the `avg_r_multiple` is -0.018. A negative average R-multiple suggests that, on average, losses are larger relative to their initial risk than wins are, which contradicts a positive profit factor unless there are very few, extremely large wins or a miscalculation in how R-multiple is derived from partial exits and trailed stops.
+*   **High Stop-Hit Rate Today:** Today's performance indicates a 66% stop-hit rate (2 out of 3 closed trades hit their stop/breakeven), exceeding the `STOP_HIT_WARN` threshold of 50% defined in `midday_audit.py`. This suggests a poor regime match for today's market conditions.
+
+### TRADE INTEGRITY
+*   **EOD P&L Drift (Pre-Reconciliation):** The `EOD P&L DRIFT` warnings show `Alpaca=$-43.57 tracker=$-33.89 drift=$-9.68`. This indicates a significant discrepancy between the bot's internal P&L tracking and Alpaca's authoritative figures *before* reconciliation. While `reconcile_eod.py` aims to resolve this, its occurrence during RTH is problematic.
+*   **`partial_pnl` and `pnl_remaining`:** The logic in `portfolio_tracker.py:_day_slice` and `_rebuild_score_buckets` in `reconcile_eod.py` explicitly handles `partial_pnl` and `pnl_remaining` for overnight positions. This is a critical detail for correct P&L attribution and appears to be correctly implemented for accounting for P&L belonging to "today".
+
+### MODIFIED FILE FINDINGS
+*   **`execution/portfolio_tracker.py`**:
+    *   **CRITICAL | Premature EOD Summary Generation:** The `write_eod_summary()` function is observed to be called *during RTH hours* (e.g., 14:26 ET), triggered by `strategy/run_cycle.py`'s flawed market-open check. This leads to `eod_YYYY-MM-DD.json` being written with incomplete P&L data and incorrect timing, violating its purpose as an End-Of-Day snapshot.
+    *   **CORRECT | FIFO Reconstruction:** The `_fifo_reconstruct` function correctly implements net-position-aware FIFO matching for fills, addressing complex scenarios like `buy_to_cover` and ensuring accurate daily P&L attribution from Alpaca.
+*   **`strategy/run_cycle.py`**:
+    *   **CRITICAL | Silent Trading Halt Logic:** The `if not _rcy_market_open:` block (which relies on `is_market_open()`) creates a silent failure mode. If `is_market_open()` returns `False` or raises an exception during RTH, the bot enters a "Market closed" state, ceasing all trading activities (entries, exits, dynamic stop management) for the session, but continues logging and updating HTML, misleading the operator.
+    *   **IMPROVEMENT | Logging Headers:** The addition of `PDT`, `SPY`, and `TQI` to the cycle header improves immediate operational awareness.
+*   **`execution/orphan_manager.py`**:
+    *   **FIXED | P5-H3 (Orphan GTC 404):** `cancel_and_reconcile_gtc_stops` now correctly clears `gtc_stop_order_id` if an order is not found, resolving stranded stops.
+    *   **FIXED | P5-H5 (GTC PDT=3/3 Suppressed):** The code now includes explicit guards (`_p1_pdt_full and tracker.opened_today(_sym)`) to skip GTC stop submission for PDT-exhausted positions opened today, preventing Alpaca 403 errors and false alerts.
+    *   **CORRECT | `pending_cancel` Handling:** The prompt clearing of `gtc_stop_order_id` for `PENDING_CANCEL` orders is a deliberate, accepted risk to prevent prolonged share locks.
+*   **`execution/risk_manager.py`**:
+    *   **CRITICAL | Kill Switch Robustness:** The `reset_daily()` function includes a crucial guard `if self.killed: logger.critical(...) return`, preventing a mid-session reset from clearing an active kill switch. `_load_kill_state` ensures persistence across watchdog restarts.
+    *   **CORRECT | R:R Preservation:** The `get_stop_and_target` logic correctly scales target multipliers proportionally when VIX or volatility tiers widen the stop, preserving the R:R ratio and preventing trade deadlock.
+    *   **CORRECT | Alpaca P&L Integration:** `update_daily_pnl_from_alpaca` is correctly set as the authoritative source for `self.daily_pnl` via FIFO matching against Alpaca fills.
+*   **`execution/fill_helpers.py`**:
+    *   **FIXED | P5-H2 (Fill Price Crosstalk):** The `fetch_actual_fill_price` function now uses the `submitted_after` timestamp to filter Alpaca orders, preventing attribution of stale fills to current closes.
+    *   **ROBUST | Fallback Mechanism:** Robust polling with retries, and fallback to `entry_price` (never stop/trail price) upon failure, with critical logging and Slack alerts, is well-implemented.
+*   **`events/macro_risk_index.py`**:
+    *   **FIXED | P5-M2 (MRI Stale State):** The `_restore()` logic now correctly validates `saved_at` against `today_et`, preventing stale MRI data from prior sessions.
+    *   **CORRECT | News Injection Logic:** The "market-reaction-first" gate for `inject_news_state` (capping bonus if `price_score == 0`) correctly addresses prior false-positive patterns.
+    *   **CORRECT | VIX Scoring:** The linear interpolation for VIX 15-20 pts is correctly implemented as per board vote.
+*   **`preflight_simulation.py`**:
+    *   **OUTDATED | P5-H5 Status:** The script (dated May 4) refers to P5-H5 as a "NEW BUG" (Apr 8), despite the global P5 queue (updated Apr 21) marking it as `FIXED`. This creates confusion and indicates that internal documentation/tests are not fully synchronized with bug fixes.
+    *   **FIXED | A1/A2 (R-multiple):** Tests confirm correct R-multiple calculation post-patch (using original risk base, not trailed stop).
+*   **`weekly_review.py`**:
+    *   **FIXED | `_fmt_reason`:** Correctly normalizes exit reason strings for display.
+    *   **TRUNCATED FILE:** Unable to audit the full file content.
+*   **`midday_audit.py`**:
+    *   **FIXED | `read_today_trade_events`:** Addresses `BUG-P&L-1` by injecting prior-day entries for overnight positions, ensuring correct P&L calculation.
+    *   **TRUNCATED FILE:** Unable to audit the full file content.
+*   **`run_movers.py`**:
+    *   **ARCHITECTURAL FLAW | Ambiguous Role:** The script operates as a standalone bot with its own `AlpacaBroker` etc., yet claims to "terminate ... handing off to main.py". This ambiguity is an architectural risk.
+    *   **POOR PRACTICE | Module Aliasing:** Importing `strategy.movers.strategy as movers_config` is confusing; a strategy module should not be aliased as a config module.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash:** FIXED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED (Import path is valid; original P5 description might be outdated)
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** UNTOUCHED (Explicitly noted as unfixed in `preflight_simulation.py` comments)
+*   **P5-H2 | Fill price crosstalk:** FIXED
+*   **P5-H3 | Orphan GTC 404 path:** FIXED
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED (Cannot verify without `config.py`)
+*   **P5-H5 | GTC stop suppressed at PDT=3/3 + opened_today:** FIXED (Confirmed in `orphan_manager.py`, `preflight_simulation.py` comment is outdated)
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED (Cannot verify without `main.py`/`watchdog.py`)
+*   **P5-M2 | MRI score cached stale across sessions:** FIXED
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED (File not provided)
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** UNTOUCHED (Function not provided)
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** TRIGGERED (Confirmed active in logs and by `strategy/run_cycle.py` logic)
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED (File not provided)
+
+### NEW BUGS FOUND
+*   **CRITICAL | strategy/run_cycle.py & execution/portfolio_tracker.py | Bot stops trading silently if `is_market_open()` API fails during RTH**
+    *   **Description:** The bot's core trading loop in `strategy/run_cycle.py` can enter a "Market closed" state prematurely during RTH if the `is_market_open()` API call fails (e.g., due to network issues). In this state, the bot ceases all new entries and dynamic exit management (hard stops, trailing stops, partial exits) for the remainder of the session. It continues to run other non-trading tasks (like updating HTML and prematurely calling `portfolio_tracker.write_eod_summary()`), giving a false sense of operational health while actual trading is halted. This is not a kill switch and leaves live positions vulnerable.
+    *   **Exact failure condition:** `strategy/run_cycle.py` `if not _rcy_market_open:` block is entered during regular trading hours (e.g., 14:26 ET), which then bypasses `execute_entries()` and `check_exits()`.
+*   **CRITICAL | strategy/run_cycle.py & risk_manager.py | Position count desync / `MAX_OPEN_POSITIONS` violation**
+    *   **Description:** The bot explicitly logs that it has `risk.open_positions=5` (and `tracker=5`) while `MAX_OPEN_POSITIONS=4`. This indicates a direct breach of the maximum allowed open positions, which is a fundamental risk management failure.
+    *   **Exact failure condition:** Log message `2026-05-04 18:33:01,555 | WARNING | strategy.run_cycle | [ANOMALY-2] ... risk.open_positions=5 vs tracker=5 | MAX_OPEN_POSITIONS=4`.
+*   **HIGH | execution/portfolio_tracker.py | Incorrect P&L calculation for SPY hard_stop near breakeven**
+    *   **Description:** For a `long` position (`SPY` entry $715.19, stop $715.19), an exit at $715.15 resulting in a PnL of $-0.04 should be categorized as a `stop_hit`, not `external_close`. The classification of exit reason and potentially the exact P&L calculation for positions exiting just below a breakeven stop are flawed.
+    *   **Exact failure condition:** `TRADE EVENTS` record for `SPY` showing `exit_price: 715.15`, `stop: 715.19`, `direction: long`, `exit_reason: external_close`.
+*   **MEDIUM | main | Excessive garbage collection leading to potential memory issues**
+    *   **Description:** The recurring `gc.collect() took Xms, collected 99 objects — heap may be growing` warnings, with GC times up to 3.9 seconds, indicate potentially inefficient memory usage or a memory leak. This can impact bot performance and stability over long periods.
+    *   **Exact failure condition:** Frequent log entries like `2026-05-04 18:26:31,381 | WARNING | main | gc.collect() took 3945.6ms, collected 99 objects — heap may be growing`.
+*   **LOW | run_movers.py | Architectural ambiguity and confusing module aliasing**
+    *   **Description:** The `run_movers.py` script presents contradictory architectural design choices. It is structured as an independent bot with its own `AlpacaBroker`, `RiskManager`, etc., yet it logs an intention to "terminate ... handing off to main.py". Additionally, it imports `strategy.movers.strategy as movers_config`, which is semantically confusing and suggests an anti-pattern where a strategy module might be inappropriately used as a configuration store. This ambiguity could lead to unmaintained code or inconsistent state management.
+    *   **Exact failure condition:** `run_movers.py` line `import strategy.movers.strategy as movers_config` and the `logger.info("9:28 AM ET — terminating before RTH open, handing off to main.py")` in its `main()` function.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE: Fix Silent Trading Halt (CRITICAL):** Rework the `is_market_open()` check in `strategy/run_cycle.py`. If this API call fails or returns `False` during detected RTH, the bot must either (a) raise a critical exception to force a restart/investigation, (b) implement a robust fallback mechanism (e.g., using local time-based checks with a grace period for API recovery), or (c) activate a clear "HALT" state with specific alerts, rather than silently stopping trading.
+2.  **IMMEDIATE: Resolve `MAX_OPEN_POSITIONS` Violation (CRITICAL):** Debug why `risk.open_positions` is exceeding `MAX_OPEN_POSITIONS`. This requires reviewing how positions are opened, how `risk.register_open()` is called, and how `risk.open_positions` is synchronized with `tracker.open_trades` post-restart. Correct `MAX_OPEN_POSITIONS` in `config.py` if the current limit (4) is unintended.
+3.  **HIGH: Correct EOD Summary Generation Timing:** Ensure `portfolio_tracker.write_eod_summary()` is strictly called only *once* after the market truly closes (4:00 PM ET) and *after* `reconcile_eod.py` has run and finalized today's P&L in the `eod.json` file. This eliminates premature EOD reports and confusing drift warnings during RTH.
+4.  **HIGH: Refine Stop-Hit & Exit Reason Logic:** Investigate the `SPY` trade exit logic. Ensure all stop breaches (including those at breakeven levels) are correctly identified as `stop_hit` and that the exit price matches expectations based on Alpaca fills, not derived values.
+5.  **MEDIUM: Address Memory Usage and GC Performance:** Profile the bot's memory usage to identify potential leaks or inefficient object handling. Optimize data structures and object lifecycles to reduce the frequency and duration of garbage collection cycles.

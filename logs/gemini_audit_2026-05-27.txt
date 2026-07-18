@@ -1,0 +1,132 @@
+Nightly Gemini Audit — 2026-05-27
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'weekly_perf_audit.py', 'alerts.py', 'auto_ai_audit.py', 'nightly_audit.py', 'execution/entry_logic.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **`CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.`** (`2026-05-27 20:01:42,248`): At startup, the internal `RiskManager`'s position count (`risk.open_positions`) is initialized to `0` despite `PortfolioTracker` indicating `4` open positions. While corrected, this represents an initial state desync and reliance on a reactive correction.
+*   **`CRITICAL | main | P0-STARTUP: Already at MAX positions (4/4). Blocking new entries.`** (`2026-05-27 20:01:42,311`): This log follows the position count drift correction and immediately sets the bot into a "blocking new entries" state due to reaching `MAX_POSITIONS=4`. This log *itself* confirms the subsequent `HALTED for session` warnings.
+*   **`WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.`** (repeatedly at `18:57:45`, `19:04:42`, `19:16:50`, etc.): This warning appears even during `power_hour` (e.g., `19:02:47 ET | ... | TOD: power_hour`), indicating that the bot is blocking new entries despite `config.BUCKET_B_MAX_POSITIONS_POWER = 5` explicitly allowing for an increased position limit during this period. The 'halted' state from reaching `MAX_POSITIONS` is not dynamically adjusted.
+*   **`WARNING | main | gc.collect() took 8059.8ms, collected 132 objects — heap may be growing`** (e.g., `2026-05-27 20:01:04,631`): Repeated occurrences of `gc.collect()` taking unusually long (up to 8 seconds) with a warning that the "heap may be growing" indicates potential memory leaks or inefficient memory management, leading to performance degradation.
+*   **`WARNING | strategy.run_cycle | scan_results.html write failed: 0`** (`2026-05-27 20:00:21,796`): Upon receiving `SIGTERM`, the bot failed to write `scan_results.html`. The error `0` is ambiguous for a failure, suggesting a potential logic error in error handling or file system issue during shutdown, leading to loss of final scan data.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: For `SMCI`, `PANW`, and `AMZN`, the P&L signs and values for partial exits and stop hits are consistent with the reported prices and directions.
+*   **Trades with pnl=0.0 anomalies**: `TSLA` (short, stop_hit at `406.17`, pnl=`0.0`) and `SOFI` (short, stop_hit at `15.57`, pnl=`0.0`) record zero P&L on a stop hit without an explicit `entry=$X.XX` justification in the log, making it highly improbable to be accurate unless their entry prices were exactly the stop prices. This suggests a P&L recording error. (See NEW BUGS FOUND #5).
+*   **Score→outcome correlation**: Cannot fully assess correlation without more historical trade data and outcomes for a wider range of scores.
+*   **Profit factor and R:R vs. stated 2.5× target**: The `all_time_stats` report `avg_r_multiple: -0.034`. This is mathematically inconsistent with the reported `win_rate: 40.9%`, `avg_win: $24.26`, and `avg_loss: -$14.35`. Based on these figures, the `avg_r_multiple` should be approximately `0.10`. The negative R-multiple is misleading and raises concerns about the bot's true risk-adjusted performance. (See NEW BUGS FOUND #8).
+
+### TRADE INTEGRITY
+
+*   **EOD Snapshot inconsistencies**: The `EOD snapshot` for 2026-05-27 reports `trades_today: 0` while simultaneously listing a completed trade for `MSTR` in `alpaca_per_trade` (short, `pnl: 6.35`, `filled_at: 2026-05-27T13:45:40.481428Z`). This is a direct contradiction. (See NEW BUGS FOUND #6).
+*   **Position tracking error for MSTR**: The `MSTR` trade is listed in `alpaca_per_trade` as having been closed on 2026-05-27, but it is *also* present in the `overnight_holds` list. A position cannot be both closed today and held overnight. This indicates a critical error in position tracking and state management. (See NEW BUGS FOUND #7 and P5 STATUS #P5-L2).
+
+### MODIFIED FILE FINDINGS
+
+#### `main.py`
+*   **Variable**: `OVERNIGHT_ENTRIES_ENABLED` (line 120)
+    *   **Code path**: The `CONFIG CONSTANTS` section states `OVERNIGHT_ENTRIES_ENABLED = True`. However, in `main.py` at line 120, `OVERNIGHT_ENTRIES_ENABLED` is hardcoded to `False`. This assignment takes precedence over the value loaded from `config.py`.
+    *   **Runtime produces vs. intended**: The runtime produces an effective `OVERNIGHT_ENTRIES_ENABLED = False`, disabling all overnight entries. The intended behavior, as per `CONFIG CONSTANTS` and its comment ("overnight holds are permitted by design"), is `True`.
+    *   **Failure condition**: The bot is currently prevented from executing overnight entries due to a hardcoded override in `main.py` (line 120), directly violating the documented `CONFIG CONSTANTS` and design intent. (See NEW BUGS FOUND #11).
+*   **Variable**: `config.MAX_DAILY_LOSS_PCT` (lines 88-94)
+    *   **Code path**: The `CONFIG CONSTANTS` section specifies `MAX_DAILY_LOSS_PCT = 0.07`. However, in `main.py`, the "BoD-3: Paper kill switch guard" block (lines 88-94) unconditionally overrides `config.MAX_DAILY_LOSS_PCT` to `0.15` when running in the "paper" profile, if the value is greater than 0.15.
+    *   **Runtime produces vs. intended**: For the "paper" profile, the bot operates with a `MAX_DAILY_LOSS_PCT` of `0.15`. The intended value, as documented in `CONFIG CONSTANTS`, is `0.07`.
+    *   **Failure condition**: The bot's kill switch threshold for daily losses in "paper" mode is effectively 15%, which is more than double the documented `CONFIG CONSTANT` of 7%. This means the bot will tolerate significantly larger daily losses than stated before halting. (See NEW BUGS FOUND #12).
+
+#### `weekly_perf_audit.py`
+*   **Function name**: `_build_vix_lookup`
+    *   **Code path**: In `_build_vix_lookup` (line 330), `stdev` is calculated as `math.sqrt(variance) if variance > 0 else 1.0`.
+    *   **Runtime produces vs. intended**: If `variance` is `0`, `stdev` is incorrectly set to `1.0`. Mathematically, if variance is zero (meaning all data points are identical), the standard deviation should also be `0.0`. While in the current formula, this might still lead to a `zscore` of `0` (because `rec["close"] - mean` would also be `0`), it represents a subtle logical flaw in the statistical calculation.
+    *   **Failure condition**: The `stdev` variable in `_build_vix_lookup` is incorrectly assigned `1.0` when `variance` is `0`, which is mathematically unsound and could lead to misinterpretation or errors if `stdev` is used independently or if the `zscore` calculation encounters floating-point deviations. (See NEW BUGS FOUND #9).
+
+#### `auto_ai_audit.py`
+*   **Function name**: `_fetch_week_fills`, `_fetch_chart_proxies`, `_fetch_macro_events_week`
+    *   **Code path**: Within data fetching functions (`_fetch_week_fills` lines 339, 353; `_fetch_chart_proxies` line 417; `_fetch_macro_events_week` line 477), error and warning messages are printed directly to `sys.stderr` using `print()`.
+    *   **Runtime produces vs. intended**: These messages appear on `sys.stderr`. All diagnostic and error messages should be routed through the `logger` object for consistent capture, filtering, and reporting via the configured logging handlers.
+    *   **Failure condition**: The `auto_ai_audit.py` script's error logging is inconsistent, bypassing the standard logging framework. This creates a logging gap where important operational warnings/errors might not be properly collected, aggregated, or processed by monitoring tools. (See NEW BUGS FOUND #10).
+
+#### `execution/entry_logic.py`
+*   No new bugs directly identified in the modified code within this file, but its interaction with `main.py` regarding `OVERNIGHT_ENTRIES_ENABLED` is affected by the `main.py` override.
+*   The removal of `MultiIndex` guard in `_find_recent_fvgs` is a valid fix related to P5-C1.
+*   The new `Rule 1`, `Rule 2`, and `SPY Direction Gate` appear logically sound as implemented.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash: `FIXED`
+*   P5-C2 | run_movers.py ImportError: `UNTOUCHED`
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: `UNTOUCHED`
+*   P5-H2 | Fill price crosstalk: `UNTOUCHED`
+*   P5-H3 | Orphan GTC 404 path: `UNTOUCHED`
+*   P5-H4 | Rule 2 dead code: `FIXED`
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: `FIXED`
+*   P5-M1 | Cycle watchdog restart loop: `FIXED`
+*   P5-M2 | MRI score cached stale across sessions: `UNTOUCHED`
+*   P5-M3 | score_comparison JSON unbounded growth: `UNTOUCHED`
+*   P5-L1 | _classify_loss_driver() returns empty label: `UNTOUCHED`
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: `TRIGGERED` (and confirms a new critical bug - see NEW BUGS FOUND #7)
+*   P5-L3 | live_data_writer.py no reconnect logic: `UNTOUCHED`
+
+### NEW BUGS FOUND
+
+1.  CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | file: `RiskManager` (implicit) / `execution/entry_logic.py` | description: `BUCKET_B_MAX_POSITIONS_POWER` (power-hour position limit expansion) is not honored.
+    *   **Exact failure condition**: During `power_hour` (e.g., `19:02:47 ET`), if the bot is already at `config.MAX_POSITIONS` (4), `execution.entry_logic.execute_entries` (via `_get_halt_entries()`) incorrectly blocks new entries with the "HALTED for session" warning. This fails to leverage the intended `config.BUCKET_B_MAX_POSITIONS_POWER = 5` for power-hour position expansion, effectively limiting the bot to 4 positions at all times.
+
+2.  CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: `main.py` | description: Increasing memory usage and prolonged garbage collection.
+    *   **Exact failure condition**: The `main.py` process frequently experiences garbage collection cycles (`gc.collect()`) that take several seconds (e.g., `8059.8ms`), accompanied by warnings like "heap may be growing". This indicates a persistent increase in memory consumption that Python's garbage collector struggles to reclaim efficiently, signaling a potential memory leak or inefficient object management.
+
+3.  CATEGORY: EXECUTION BUG | SEVERITY: HIGH | file: `execution.orphan_manager` / `main.py` | description: `risk.open_positions` initial state desync at startup.
+    *   **Exact failure condition**: Upon bot startup, `risk.open_positions` is initialized to `0` instead of loading from persisted state or Alpaca, leading to a `CRITICAL | POSITION COUNT DRIFT` log where it's later "Correcting to tracker count" (e.g., 4). This results in a transient period where the risk manager's view of open positions is incorrect, relying on a reactive reconciliation.
+
+4.  CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: `strategy.run_cycle` (implicit) | description: `scan_results.html` write failure during shutdown.
+    *   **Exact failure condition**: When `SIGTERM` is received, the bot attempts to write `scan_results.html` but logs `WARNING | strategy.run_cycle | scan_results.html write failed: 0`. The reported error `0` is anomalous for a failure, indicating a problem in error reporting or file writing logic, and the final `scan_results.html` report is not successfully saved.
+
+5.  CATEGORY: P&L RECORDING | SEVERITY: HIGH | file: P&L calculation logic (source not provided) | description: `pnl=0.0` for `stop_hit` events without justification.
+    *   **Exact failure condition**: For `TSLA` and `SOFI` entries in the `TRADE EVENTS` log, `stop_hit` events show `pnl=0.0`. Unlike other similar entries for `PLTR` and `TOST` that explicitly state `entry=$X.XX thresh=$Y.YY` to justify `pnl=0.0`, `TSLA` and `SOFI` lack this context. It is highly improbable for a hard stop to hit *exactly* the entry price, suggesting an error in P&L calculation or recording for these specific stop-out scenarios, potentially masking actual losses.
+
+6.  CATEGORY: P&L RECORDING | SEVERITY: HIGH | file: EOD Snapshot generation logic (source not provided) | description: `trades_today` inconsistent with `alpaca_per_trade` in EOD Snapshot.
+    *   **Exact failure condition**: The `EOD snapshot` for `2026-05-27` reports `trades_today: 0` despite `alpaca_per_trade` explicitly listing one closed trade for `MSTR` (short, `pnl: 6.35`) with a `filled_at` timestamp on `2026-05-27`. This indicates a counting error or logical inconsistency in how daily trade activity is aggregated and reported.
+
+7.  CATEGORY: P&L RECORDING | SEVERITY: CRITICAL | file: `PortfolioTracker` / EOD Snapshot generation logic (source not provided) | description: `MSTR` recorded as both closed today and an `overnight_hold`.
+    *   **Exact failure condition**: The `EOD snapshot` shows `MSTR` in `alpaca_per_trade` as a successfully closed trade on `2026-05-27`, yet `MSTR` is also listed under `overnight_holds`. This is a critical data inconsistency; a position cannot be simultaneously closed on the current day and held overnight, indicating a severe logic error in position tracking and reporting that directly contradicts bot state.
+
+8.  CATEGORY: ALPHA ISSUE | SEVERITY: HIGH | file: `PortfolioTracker` / `all_time_stats` calculation (source not provided) | description: Incorrect `avg_r_multiple` calculation.
+    *   **Exact failure condition**: The `EOD snapshot`'s `all_time_stats` section reports `avg_r_multiple: -0.034`. This value is mathematically inconsistent with the provided `win_rate: 40.9%`, `avg_win: $24.26`, and `avg_loss: -$14.35`, which would yield an approximate `avg_r_multiple` of `0.10`. This indicates a miscalculation or incorrect definition of the R-multiple metric, presenting a misleading view of performance.
+
+9.  CATEGORY: STATISTICAL BUG | SEVERITY: LOW | file: `weekly_perf_audit.py` | description: Incorrect `stdev` calculation for zero variance.
+    *   **Function name and variable involved**: `weekly_perf_audit.py` in `_build_vix_lookup` (line 330), variable `stdev`.
+    *   **Exact failure condition**: Within `_build_vix_lookup`, if `variance` is `0`, `stdev` is incorrectly set to `1.0` instead of `0.0`. While `zscore` might still resolve to `0` in this specific scenario, the underlying `stdev` value is mathematically incorrect, which could lead to subtle issues if `stdev` is used for other calculations or if the context of `zscore` interpretation changes.
+
+10. CATEGORY: INFRASTRUCTURE | SEVERITY: LOW | file: `auto_ai_audit.py` | description: Inconsistent logging using `print()` instead of `logger`.
+    *   **Function name and variable involved**: `auto_ai_audit.py` in functions like `_fetch_week_fills` (lines 339, 353), `_fetch_chart_proxies` (line 417), and `_fetch_macro_events_week` (line 477).
+    *   **Exact failure condition**: These functions emit error and warning messages directly to `sys.stderr` using `print()` statements. This bypasses the configured `logging` system, making these messages inconsistent with other bot logs and potentially overlooked by log aggregation and monitoring tools.
+
+11. CATEGORY: CONFIGURATION VIOLATION | SEVERITY: HIGH | file: `main.py` | description: `OVERNIGHT_ENTRIES_ENABLED` hardcoded override.
+    *   **Function name and variable involved**: `main.py` (line 120) and `OVERNIGHT_ENTRIES_ENABLED`.
+    *   **Exact failure condition**: `main.py` explicitly sets `OVERNIGHT_ENTRIES_ENABLED = False` (line 120). This contradicts the `CONFIG CONSTANT` which states `OVERNIGHT_ENTRIES_ENABLED = True` (overnight holds are permitted by design). This hardcoded override disables a designed trading behavior.
+
+12. CATEGORY: CONFIGURATION VIOLATION | SEVERITY: HIGH | file: `main.py` | description: `MAX_DAILY_LOSS_PCT` overridden for paper profile.
+    *   **Function name and variable involved**: `main.py` (lines 88-94) and `config.MAX_DAILY_LOSS_PCT`.
+    *   **Exact failure condition**: The `main.py` script overrides `config.MAX_DAILY_LOSS_PCT` to `0.15` (15%) for the "paper" profile, directly conflicting with the `CONFIG CONSTANT` value of `0.07` (7%). This means the bot will tolerate 15% daily losses before triggering its kill switch, significantly higher than the documented 7%.
+
+### FIX VALIDATION
+
+*   No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Address MSTR Position Tracking Inconsistency**: Investigate why `MSTR` is simultaneously marked as closed for the day and an `overnight_hold` in the EOD Snapshot (NEW BUG #7). This is a critical data corruption issue. Prioritize fixing the logic that determines a position's status, ensuring accurate recording of exits and open positions.
+2.  **URGENT: Implement Dynamic Position Limit for Power Hour**: Modify the `RiskManager` to dynamically adjust `max_positions` to `config.BUCKET_B_MAX_POSITIONS_POWER` (5) during `power_hour` (9:35–10:00 AM ET) and ensure this overrides any general "halted for session" state due to `MAX_POSITIONS` being reached (NEW BUG #1).
+3.  **Review and Correct P&L Calculation/Reporting**:
+    *   Fix the `all_time_stats["avg_r_multiple"]` calculation (NEW BUG #8) to be mathematically consistent with `win_rate`, `avg_win`, and `avg_loss`.
+    *   Investigate and correct `pnl=0.0` for `stop_hit` events for `TSLA` and `SOFI` (NEW BUG #5), ensuring actual P&L is recorded.
+    *   Resolve the `trades_today` vs. `alpaca_per_trade` inconsistency in the EOD Snapshot (NEW BUG #6).
+4.  **Resolve Configuration Overrides**:
+    *   Remove the hardcoded `OVERNIGHT_ENTRIES_ENABLED = False` override in `main.py` (line 120) to align with the `CONFIG CONSTANT = True` (NEW BUG #11). If a dry-run is needed, use profile-based configuration.
+    *   Clarify or adjust the `CONFIG CONSTANT` for `MAX_DAILY_LOSS_PCT` to reflect the intended `0.15` for the "paper" profile, or remove the runtime override in `main.py` if `0.07` is the true target (NEW BUG #12).
+5.  **Address Memory Growth and Logging Inconsistencies**:
+    *   Investigate the "heap may be growing" warnings and prolonged `gc.collect()` times (NEW BUG #2) to identify and mitigate potential memory leaks or inefficient object usage within the bot.
+    *   Standardize logging in `auto_ai_audit.py` to use the `logger` object consistently instead of `print()` to `sys.stderr` (NEW BUG #10).
+    *   Fix the `scan_results.html` write failure during shutdown (NEW BUG #4) to ensure all final scan data is saved and error reporting is accurate.

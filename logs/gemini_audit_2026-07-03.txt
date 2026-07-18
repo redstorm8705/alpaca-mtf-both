@@ -1,0 +1,81 @@
+Nightly Gemini Audit — 2026-07-03
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['midday_audit.py', 'autonomous_review.py', 'nightly_audit.py', 'scripts/audit_slack.py', 'execution/quarterly_hold_manager.py', 'execution/risk_manager.py', 'execution/portfolio_tracker.py', 'data/gex.py', 'strategy/run_cycle.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `trade_events.jsonl` (underlying bot logic) | The `trade_events` for HOOD show a full `exit` for the entire position (`size: 3`) followed by subsequent `partial_exit` and `exit` events for the same symbol from the same initial entry. This indicates a severe logical flaw in position tracking and closure recording. | HOOD trade starting `2026-07-01T07:55:04.721953-07:00`.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `2026-07-03 20:00:30,404 | WARNING | alerts | alert_crash: sentinel stat/remove failed — [Errno 1] Operation not permitted: '/tmp/mtf_planned_restart'` - A permission error occurred during crash handling when attempting to manage a restart sentinel file.
+*   `2026-07-03 20:01:05,983 | WARNING | strategy.run_cycle | Overnight scan HTML write failed: 0` - The HTML output for the overnight scan failed to be written, indicating a reporting or file system issue.
+*   `2026-07-03 20:01:47,608 | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=2. Correcting to tracker count.` - A critical discrepancy was detected between the risk manager's internal count of open positions and the portfolio tracker's, indicating a potential state synchronization issue. The system self-corrected.
+
+### PERFORMANCE AUDIT
+*   **P&L Recording for Multi-Tranche Exits**: The `midday_audit.py::analyse_pnl` function is designed to match each entry to the *next chronological exit*. This approach is inadequate for trades involving multiple exit events (e.g., partial exits at T1/T2/T3, or sequential full exits due to a bug), as it will only account for the P&L of the *first* exit, misrepresenting the total realized P&L, win rate, and profit factor for the entire trade. This violates the audit requirement to verify "partial_pnl accumulated correctly across T1/T2/T3 tranches".
+*   **Exit Reason Consistency (PANW)**: The PANW trade (entry `2026-07-01T10:47:50.120250-07:00` at price 355.1) exited at 172.31 (`pnl: -182.79`) with the reason "external_close". This exit price is significantly below its stated stop price of 329.76. While an "external_close" can occur at any price (e.g., due to a global flattening or manual intervention), such a large deviation without triggering the calculated stop indicates a loss event that bypassed the intended in-strategy risk management, representing a significant capital drawdown.
+
+### TRADE INTEGRITY
+*   **Trade Event Data Inconsistency for HOOD**: As flagged in the CATASTROPHIC ALERT, the `trade_events.jsonl` contains a logical contradiction for HOOD. A full `exit` event for `size: 3` at `2026-07-02T06:22:42.180745-07:00` (which should close the position) is followed by multiple `partial_exit` and another `exit` event later for the same symbol. This indicates a fundamental flaw in the bot's position lifecycle management or event recording, where a position is not correctly marked as fully closed.
+
+### MODIFIED FILE FINDINGS
+*   **midday_audit.py**:
+    *   **Function**: `analyse_pnl`
+        *   **Description**: The `analyse_pnl` function incorrectly attributes P&L when multiple exit events (partial or full) occur for the same entry. It uses `ex_list.pop(0)` to process only the first chronological exit, discarding all subsequent events for that symbol.
+        *   **Exact Failure Condition**: The `analyse_pnl` function in `midday_audit.py:L144` will only consider the P&L from the first exit event (whether partial or full) for a given entry. This leads to an inaccurate representation of the overall trade's profitability, especially for tranche-based exits.
+*   **nightly_audit.py**:
+    *   **Function**: `_collect_trade_events`
+        *   **Description**: The `_collect_trade_events` function recalculates and overwrites the `T1`, `T2`, `T3` values for `entry` events present in the `trade_events.jsonl` records before including them in the audit report.
+        *   **Exact Failure Condition**: The `entry` event dict `ev` is modified by lines such as `ev["T1"] = round(_ep + 0.20 * (_tgt - _ep), 2)` in `nightly_audit.py:L142`. The audit report will thus display re-computed T1/T2/T3 values instead of the exact values recorded by the trading bot at the time of entry, violating audit verification discipline #3.
+    *   **Function**: `_collect_log_lines`
+        *   **Description**: The timestamp parsing and filtering logic in `_collect_log_lines` can inadvertently include log lines older than 24 hours.
+        *   **Exact Failure Condition**: If `datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")` raises a `ValueError` for a log line's timestamp, the `except ValueError` block is triggered, bypassing the `if ts < cutoff:` check. This allows the line to be added to the `lines` list if it contains any `keep_keywords`, regardless of its actual age (see `nightly_audit.py:L114-120`).
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: TRIGGERED (Log shows "Pre-market mover scan failed or timed out")
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted: OBSOLETE
+*   P5-H2 | Fill price crosstalk: UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED (orphan_manager logged a `POSITION COUNT DRIFT`)
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3: FIXED
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: FIXED (Log confirms MRI refresh at startup)
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: TRIGGERED (EOD Snapshot shows 2 open positions: MSTR, RBLX)
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+*   A-3 | nightly_audit trade_log.json reference was stale (file never existed): FIXED (as per P5 queue description)
+*   A-4 | Alpaca paper fills API returns empty for same-day closures until overnight settlement: MITIGATED (internal FIFO reconstruction improved)
+
+### NEW BUGS FOUND
+*   No additional new bugs found beyond those detailed above.
+
+### FIX VALIDATION
+*   **execution/risk_manager.py**:
+    *   **BUG-ADV-1: Kill switch state persistence**: PASS. The `_load_kill_state` and `_save_kill_state` functions, including new hardening for corrupt files and persistence of `daily_start_value <= 0` kill, are robustly implemented.
+    *   **AWP audit fix (2026-06-28): `_safe_lev_mult`**: PASS. The `_safe_lev_mult` function (`execution/risk_manager.py:L129`) correctly validates leverage multipliers, preventing zero-width stops/targets.
+    *   **B6 hardening: `check_kill_switch` persistence**: PASS. The kill triggered by `daily_start_value <= 0` (`execution/risk_manager.py:L186`) now correctly persists via `_save_kill_state`.
+    *   **ATH proximity scalar (2026-06-30)**: PASS. The implementation in `get_stop_and_target` (`execution/risk_manager.py:L268`) correctly applies the ATH scalar and preserves R:R.
+*   **execution/portfolio_tracker.py**:
+    *   **B1 fix (2026-07-03): `_parse_alpaca_ts`**: PASS. The function (`execution/portfolio_tracker.py:L76`) correctly handles variable fractional-second precision in Alpaca timestamps, resolving the `Invalid isoformat string` error.
+    *   **`processed_fill_ids` dedup (2026-06-27)**: PASS. The `_fifo_reconstruct` and `_load_prior_day_lots` functions (`execution/portfolio_tracker.py:L206`, `L324`) correctly implement fill-level dedup, preventing duplicate lots and P&L drift.
+    *   **QHM ownership (2026-07-01)**: PASS. QHM symbols are correctly excluded from intraday FIFO P&L calculation.
+*   **data/gex.py**:
+    *   **GREEKS SOURCE (2026-07-03 fix)**: PASS. The module (`data/gex.py`) correctly computes gamma locally and fetches OI from the contract object, resolving the zero valid datapoints issue and correctly labeling "UNKNOWN" for zero contracts.
+*   **strategy/run_cycle.py**:
+    *   **SPY 52w-high persistence (2026-07-01 fix)**: PASS. The persistence and conservative bootstrap logic (`strategy/run_cycle.py:L70`) correctly addresses the ATH protection issue.
+    *   **Per-symbol 52w high cache (Bug 3 fix)**: PASS. The caching mechanism in `run_cycle` (`strategy/run_cycle.py:L142`) correctly populates `_main._sym_52w_high_cache` for per-symbol ATH checks.
+    *   **Analyst sentiment per-symbol try/except (M-14)**: PASS. The per-symbol error handling (`strategy/run_cycle.py:L173`) ensures batch processing is not entirely aborted on single FMP failures.
+*   **execution/quarterly_hold_manager.py**:
+    *   **AWP audit fix (2026-06-28): `PENDING_EARNINGS` in `_QHM_ACTIVE_STATES`**: PASS. The fix (`execution/quarterly_hold_manager.py:L233`) correctly ensures `PENDING_EARNINGS` positions are tracked in the shared registry, preventing conflicting intraday entries.
+    *   **HOLE-2 guard**: PASS. The `cancel_stray_sell_orders()` is correctly called at startup (`execution/quarterly_hold_manager.py:L316`) to prevent unintended liquidations.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate HOOD Trade Event Data Inconsistency**: Immediately investigate the root cause of the conflicting `exit` and `partial_exit` events for the HOOD trade on 2026-07-02. This represents a critical bug in the bot's position tracking, Alpaca reconciliation, or event logging. Focus investigation on `execution/portfolio_tracker.py` (how `_load_log` and `register_close` interact with Alpaca's data and internal state) and `main.py`'s `check_exits` and `execute_entries` logic for proper position closure.
+2.  **Fix `midday_audit.py::analyse_pnl` for Multi-Tranche Trades**: Revise `midday_audit.py` to correctly aggregate P&L across all `partial_exit` and `exit` events associated with a single logical trade. The current logic in `midday_audit.py:L144` (`ex_list.pop(0)`) should be replaced with an approach that accumulates P&L and adjusts quantity for each tranche or exit event, accurately reflecting the full trade outcome.
+3.  **Fix `nightly_audit.py::_collect_trade_events` T1/T2/T3 Recalculation**: Modify `nightly_audit.py:L142` to *not* recalculate T1/T2/T3 values. The script should instead directly extract and use the `T1`, `T2`, and `T3` values already present in the `trade_events.jsonl` entry records to maintain data integrity and comply with audit verification discipline #3.
+4.  **Address P5-C2 (`run_movers.py ImportError`)**: The log entry "Pre-market mover scan failed or timed out" indicates a failure in the pre-market movers scan. Investigate `run_movers.py` and its dependencies (e.g., `DataFetcher`) to resolve the `ImportError` (P5-C2) which is likely causing this scan to fail.
+5.  **Investigate `alert_crash: sentinel stat/remove failed` Permission Error**: Investigate the `[Errno 1] Operation not permitted` warning regarding `/tmp/mtf_planned_restart` in the `alerts` module. Ensure the bot process has the necessary write and delete permissions for files in the `/tmp` directory to prevent potential issues during crash recovery and restart handling.

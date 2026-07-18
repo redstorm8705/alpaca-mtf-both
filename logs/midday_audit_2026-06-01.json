@@ -1,0 +1,126 @@
+{
+  "audit_date": "2026-06-01",
+  "run_ts": "2026-06-01T10:30:07.857537-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [
+      {
+        "symbol": "QCOM",
+        "ts": "2026-05-06 07:14:00",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 190.43,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "QCOM",
+      "AMZN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 20,
+    "levels": {
+      "STRESSED": 10,
+      "ELEVATED": 10
+    },
+    "last_score": 37,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 80,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-01 13:23:02,628 | WARNING  | main | gc.collect() took 3702.7ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-01 13:33:03,556 | WARNING  | execution.gtc_manager | RTH DAY stops: 5 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market",
+      "2026-06-01 13:44:20,906 | WARNING  | execution.exit_logic | [AMZN] Stop breach 1/3: $262.56 vs stop $264.04 \u2014 monitoring.",
+      "2026-06-01 13:55:26,119 | WARNING  | execution.exit_logic | [QCOM] Stop breach 1/3: $229.65 vs stop $230.85 \u2014 monitoring.",
+      "2026-06-01 14:00:31,191 | WARNING  | strategy.run_cycle | Risk day (ISM Manufacturing Employment) \u2014 sizing at 50%"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "AMZN",
+      "status": "rc=2",
+      "entry": 273.11,
+      "exit": 263.42
+    },
+    {
+      "symbol": "QCOM",
+      "status": "rc=2",
+      "entry": 190.43,
+      "exit": 230.6
+    }
+  ],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": 60.95999999999998,
+    "win_rate": 0.5,
+    "profit_factor": 4.145510835913313,
+    "avg_win": 80.33999999999997,
+    "avg_loss": -19.379999999999995,
+    "best": {
+      "symbol": "QCOM",
+      "pnl": 80.33999999999997,
+      "entry_price": 190.43,
+      "exit_price": 230.6,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 179.88,
+      "target": 216.95
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": -19.379999999999995,
+      "entry_price": 273.11,
+      "exit_price": 263.42,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 263.99,
+      "target": 291.41
+    },
+    "trades": [
+      {
+        "symbol": "QCOM",
+        "pnl": 80.33999999999997,
+        "entry_price": 190.43,
+        "exit_price": 230.6,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 179.88,
+        "target": 216.95
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -19.379999999999995,
+        "entry_price": 273.11,
+        "exit_price": 263.42,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 263.99,
+        "target": 291.41
+      }
+    ]
+  }
+}

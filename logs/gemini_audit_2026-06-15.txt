@@ -1,0 +1,58 @@
+Nightly Gemini Audit — 2026-06-15
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: []
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   `WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer`: Repeatedly observed (19:29:14, 19:44:26, 19:59:24), indicating a persistent data fetching/parsing issue for options data.
+*   `WARNING | strategy.run_cycle | [ANOMALY-2] [PANW/GS/CRWD/AMZN] confirm_gate=X scans but no entry — risk.open_positions=1 vs tracker=1 | MAX_OPEN_POSITIONS=4. If risk>1, CYCLE-SYNC should resolve next cycle.`: This critical anomaly is repeatedly logged for multiple symbols (PANW up to 13 scans) indicating qualifying signals are consistently blocked from entry despite open position capacity (1/4 positions used, `MAX_POSITIONS=4`). This is a functional issue preventing trades.
+*   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=15.0/100 < 30 — review exit discipline and stop placement.`: Persistently logged, indicating a degradation in the Trade Quality Index.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All reviewed trades (UBER, TOST, NFLX, MSTR from `TRADE EVENTS`) show correct P&L signs relative to entry/exit prices and direction.
+*   **`pnl_pct` Calculation**: `pnl_pct` for UBER (-1.93%) and TOST (-3.93%) are correctly calculated based on their entry and exit prices.
+*   **Partial P&L Accumulation**: Not applicable for the two closed trades today as `partial_exited: false`.
+*   **Trades with `pnl=0.0` where entry ≠ exit price**: The `EOD SNAPSHOT` reports `pnl_today: 0.0` despite two trades closing today with combined P&L of -3.28. This is a P&L recording discrepancy in the EOD summary, where `pnl_today` does not reflect the total P&L from trades closed on the current day, instead showing Alpaca's unsettled P&L.
+*   **Entry/Exit Prices Plausibility**: All entry and exit prices for the symbols and times provided appear plausible.
+*   **Score→Outcome Correlation**: Two trades with score 10/12 (UBER, TOST) resulted in losses today. This limited sample shows no immediate positive correlation for high-scoring trades today. The `ANOMALY-3` about TQI degradation and the overall negative `avg_r_multiple` (-0.072) across all-time trades suggests a systemic issue where the bot is not consistently capturing its theoretical edge.
+*   **Stop-hit Rate vs. Win Rate**: Today's 100% stop-hit rate (2/2 trades) is significantly higher than the all-time win rate of 39.5%, indicating a current regime mismatch or deteriorating exit discipline.
+*   **Exit Reason Consistency**:
+    *   **UBER (short)**: `hard_stop` exit at `71.82`. However, the `EOD SNAPSHOT` shows `stop: 70.46` for the same trade. This implies the exit occurred significantly past the intended stop level of 70.46, or there is an inconsistency in the reported stop.
+    *   **TOST (short)**: `overnight_atr_buffer_exit` at `25.36`. The exit reason mentions `thresh=$24.98`, but the `EOD SNAPSHOT` shows `stop: 25.85`. The actual exit price is between the stated `thresh` and `stop`, indicating an inconsistency in which price level was the definitive stop that was triggered.
+*   **Profit Factor and R:R**: The all-time `profit_factor` (1.13) and `avg_r_multiple` (-0.072) are significantly below expectations, especially given the stated `TARGET_ATR_MULT` of 2.5. This confirms the bot is not capturing its theoretical edge and suffers from poor risk-adjusted returns.
+
+### TRADE INTEGRITY
+*   **P&L Recording Discrepancy**: The `EOD SNAPSHOT` reports `pnl_today: 0.0` while `tracker_pnl: -3.28`. This is a bug in how `pnl_today` is aggregated for the EOD summary, potentially relying on unsettled `alpaca_pnl` rather than the internally tracked `tracker_pnl` for same-day performance, leading to understatement. This triggers P5-L2.
+*   **Stop Price Inconsistency**: For UBER, the `stop` value in the `EOD SNAPSHOT` (70.46) is inconsistent with the actual `exit_price` (71.82) logged during the `stop_hit`. For TOST, the `stop` in `EOD SNAPSHOT` (25.85) is inconsistent with the `thresh` (24.98) mentioned in the exit reason, with `exit_price` (25.36) falling in between. This indicates issues with stop price tracking, potential slippage, or ambiguous exit logic.
+
+### MODIFIED FILE FINDINGS
+No issues found.
+
+### P5 STATUS
+*   P5-C1 | UNTOUCHED
+*   P5-C2 | UNTOUCHED
+*   P5-H1 | UNTOUCHED
+*   P5-H2 | UNTOUCHED
+*   P5-H3 | UNTOUCHED
+*   P5-H4 | UNTOUCHED
+*   P5-H5 | FIXED
+*   P5-M1 | UNTOUCHED
+*   P5-M2 | UNTOUCHED
+*   P5-M3 | UNTOUCHED
+*   P5-L1 | UNTOUCHED
+*   P5-L2 | TRIGGERED
+*   P5-L3 | UNTOUCHED
+
+### NEW BUGS FOUND
+*   **CATEGORY**: EXECUTION BUG | **SEVERITY**: HIGH | **file**: `strategy.run_cycle` (and likely `execution.entry_logic`) | **description**: Repetitive `[ANOMALY-2]` entries indicate the bot fails to enter trades for qualifying high-score signals despite having open position capacity. Example: PANW (and GS, CRWD, AMZN) consistently shows incrementing `confirm_gate` counts (up to 13 for PANW) with no corresponding entry order. | **exact failure condition**: `strategy.run_cycle` or `execution.entry_logic` evaluates entry conditions, finds them met (indicated by high `score` and `confirm_gate` incrementing), yet a trade is not placed even when `risk.open_positions` is below `MAX_OPEN_POSITIONS` and no explicit block (like sector correlation) is logged.
+*   **CATEGORY**: EXECUTION BUG | **SEVERITY**: MEDIUM | **file**: `execution.portfolio_tracker` (and stop management functions) | **description**: Inconsistent reporting and potential slippage/malfunction of stop prices. For UBER, the `EOD SNAPSHOT` `stop` (70.46) does not match the `stop_hit` `price` (71.82). For TOST, the `EOD SNAPSHOT` `stop` (25.85) and exit reason `thresh` (24.98) are inconsistent with the `exit_price` (25.36). | **exact failure condition**: The actual exit price for a stop-hit trade deviates significantly from the last recorded or intended stop price, and the internal tracker's stop value (in EOD snapshot) does not consistently reflect the stop price that was actually hit, or the effective threshold that triggered the exit.
+*   **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: LOW | **file**: `scan_to_html` (and related data fetching) | **description**: `_fetch_options_data fetch failed — returning None: cannot convert float NaN to integer`. This indicates a data quality or parsing issue when retrieving options data, which could lead to incomplete analysis or downstream errors if this data is used for scoring or risk assessment. | **exact failure condition**: The `_fetch_options_data` function attempts to convert a `NaN` float to an integer, resulting in a `TypeError` or `ValueError` that causes it to return `None`, implying a failure to fetch or process options data for analysis.
+
+### RECOMMENDED ACTIONS
+1.  **HIGH PRIORITY: Investigate persistent entry blocks (ANOMALY-2)**: Debug the logic in `strategy.run_cycle` and `execution.entry_logic` that determines if a trade should be placed after `confirm_gate` conditions are met, ensuring that trades are actually entered when `MAX_OPEN_POSITIONS` allows.
+2.  **HIGH PRIORITY: Resolve P&L recording discrepancy (P5-L2 triggered)**: Modify the EOD snapshot generation to report `pnl_today` based on `tracker_pnl` rather than `alpaca_pnl` to provide an accurate reflection of daily performance, acknowledging the `A-4` benign pattern.
+3.  **MEDIUM PRIORITY: Audit stop management and consistency**: Review the code responsible for setting, modifying, and executing stop orders (e.g., `execution.entry_logic`, `portfolio_tracker`). Ensure that the `stop` price recorded in the `EOD SNAPSHOT` accurately reflects the active stop at the time of exit, and minimize slippage where possible.
+4.  **MEDIUM PRIORITY: Address TQI degradation and negative R-multiple**: Conduct a deeper analysis of recent losing trades (ANOMALY-3) to identify patterns in stop placement, target capture, and exit discipline that contribute to the negative average R-multiple.
+5.  **LOW PRIORITY: Fix options data fetching error**: Debug the `_fetch_options_data` function in `scan_to_html` to handle `NaN` values gracefully, preventing `None` returns and ensuring consistent options data availability for scoring.

@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-04-22
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+-   **Exit Price Inconsistency (MSTR Stop-Loss Failure):** The MSTR short trade, flagged as `stop_hit`, recorded an exit price of $181.98 against a stated stop price of $173.79. This represents a significant adverse deviation of $8.19 per share (or 4.7% beyond the stop), indicating catastrophic slippage or a failure in stop-loss order execution. This directly increased the loss beyond the intended risk.
+-   **Score-Outcome Mismatch:** The MSTR trade, despite achieving a very high score of 11/12, resulted in a loss ($-52.29). This single data point indicates a negative correlation between high entry scores and profitable outcomes, especially under the noted STRESSED MRI conditions and poor execution.
+-   **P&L Reporting Discrepancy:** The `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` correctly report a P&L of `$-52.29` for the MSTR trade. However, the `Alpaca FIFO EOD` log states `tracker=$-31.59` as the P&L for closed trades. This is a critical internal P&L accounting inconsistency for the same trading activity.
+-   **Win Rate/Profit Factor:** With only one closed trade resulting in a loss, the 0% win rate provides no evidence of a positive edge.
+
+### ENTRY QUALITY
+-   **MRI=STRESSED at entry (MSTR):** The bot initiated the MSTR trade while the market environment was designated `STRESSED`. Entering trades under stressed conditions, especially without clear evidence of adjusted position sizing, systematically increases risk and undermines potential edge, as demonstrated by the resulting loss.
+-   **PDT Pressure (MSTR):** The MSTR entry occurred when PDT was `2/3`, placing the account one trade away from triggering a Pattern Day Trader violation. This is poor resource management for a PDT-constrained account, limiting subsequent intraday flexibility and potentially forcing undesirable overnight holds.
+
+### EXIT QUALITY
+-   **Critical Stop-Loss Execution Failure (MSTR):** The bot failed to execute the MSTR short trade near its defined stop price of $173.79, exiting instead at $181.98. This $8.19/share difference constitutes an unacceptable level of slippage or a complete failure to honor the stop-loss order, leading to a significantly larger loss than intended and highlighting a severe flaw in the bot's risk management and order execution.
+
+### MRI ALIGNMENT
+-   **Direct Misalignment on MSTR Entry:** The decision to enter the MSTR trade at an `MRI=STRESSED` level is a direct contradiction of sound risk management principles. While the MRI later normalized for the current session, the initial entry decision during a stressed regime without evident mitigating actions (e.g., reduced size) is a fundamental misalignment.
+
+### LOG ANOMALIES
+-   **`main` | Prolonged Inactivity:** A significant gap of over 11 hours was observed in the "Scanning X tickers..." log entries on 2026-04-22 (from 10:44:54 AM PT to 9:48:39 PM PT). Despite eventually receiving a `SIGTERM`, the absence of active processing logs for such an extended period indicates a silent stall, unexpected pause, or degradation in continuous operation, which is critical for an intraday bot.
+
+### NEW BUGS / CONCERNS
+-   **Critical | Execution Failure: Excessive Stop-Loss Slippage (MSTR)**
+    -   Description: The bot failed to close the MSTR short position at its stop price, incurring an additional $8.19 per share loss due to the exit price ($181.98) being significantly above the defined stop ($173.79). This indicates a fundamental flaw in risk management or order execution.
+    -   Exact Condition: `MSTR: entry $164.55 → exit $181.98 ($-52.29) | stop_hit | stop=$173.79`
+-   **Critical | Data Integrity: Inconsistent P&L Reporting**
+    -   Description: The bot's internal portfolio tracker logged a different P&L ($-31.59) for the day's closed trades compared to the accurately calculated P&L ($-52.29) reported in the `CLOSED TRADE DETAILS` section for the MSTR trade. This points to a severe bug in the bot's financial accounting.
+    -   Exact Condition: `CLOSED TRADE DETAILS MSTR P&L: $-52.29` vs. `BOT LOG Alpaca FIFO EOD: tracker=$-31.59`
+-   **Major | Operational Stability: Unexplained Extended Downtime/Stall**
+    -   Description: The bot ceased logging active scanning for over 11 hours within a presumed operational period, suggesting it either stalled silently, was paused without logging, or experienced a significant processing interruption. This undermines the reliability required for a live trading system.
+    -   Exact Condition: Absence of `Scanning X tickers...` logs between `[10:44:54 AM PT]` and `[21:48:39 PM PT]` in the `BOT LOG`.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Investigation into Stop-Loss Execution:** Prioritize debugging and rectifying the stop-loss mechanism. Analyze order types, market data latency, and broker execution reports to understand and prevent future catastrophic slippage.
+2.  **Urgent P&L Reconciliation and Audit:** Debug and correct the `portfolio_tracker`'s P&L calculation and reporting logic to ensure absolute consistency across all internal and external P&L summaries. A discrepancy in financial accounting is critical.
+3.  **Enhance Operational Robustness and MRI Adherence:** Investigate the prolonged logging inactivity and implement watchdog timers or health checks to detect and recover from silent stalls. Furthermore, strictly enforce MRI-based entry rules (e.g., prohibit entries during STRESSED/CRISIS or enforce severe position sizing reductions) to prevent trades in adverse conditions.

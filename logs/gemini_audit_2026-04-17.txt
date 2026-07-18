@@ -1,0 +1,87 @@
+Nightly Gemini Audit — 2026-04-17
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['generate_dashboard.py', 'weekly_review.py', 'options_scanner.py', 'main.py', 'execution/portfolio_tracker.py', 'execution/risk_manager.py', 'data/fetcher.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Double Daily Reset**: Two "Daily reset" log entries appear seconds apart at startup (`10:20:29,774` and `10:20:31,190`), each reporting a slightly different portfolio value. This indicates a potential double invocation or race condition in the daily reset logic, leading to an inconsistent daily P&L baseline.
+*   **Conflicting Sizing Rules**: A `CRITICAL` "MACRO RISK STATE ACTIVATED" alert is triggered at `10:27:09,683`, but immediately after, the MRI score is logged as `ELEVATED` then quickly `NORMAL` due to aggressive capping (`MRI news injection GATED`) because `price_score=0` and macro indicators are "silent". This capping effectively downgrades a critical alert, potentially leading to insufficient risk reduction. Meanwhile, `main` consistently logs "Risk day (...) — sizing at 50%". The actual sizing logic under critical macro risk appears contradictory or over-mitigated by the capping.
+*   **Close Position Blocked**: A `WARNING` at `11:18:31,200` indicates `[QQQ] close_position blocked (40310000 held_for_orders) — cancelling all open orders and retrying once.` This suggests an underlying issue with order management where active orders are preventing position closure, potentially delaying exits and impacting P&L.
+*   **Incorrect "Existing" Position Value in Overnight Cap**: Multiple `WARNING` messages for `OVERNIGHT CAP` checks (e.g., `NVDA`, `META`, `AAPL`, `QQQ` from `12:29:58` onwards) show an "existing $188" for various symbols, which is highly suspicious for multiple distinct positions. The `QQQ` entry explicitly states "existing $2319" while the `trade_log.json` indicates QQQ had no open positions at that time. This suggests a bug in retrieving or caching current position values for the capital allocation check, leading to potentially incorrect entry blocks or accidental over-leveraging.
+*   **Forced Overnight Trade Risk**: An `INFO` message at `12:58:22,515` shows `[SPY] Tagged overnight=True (PDT=3/3 forced overnight)`. This is immediately followed by a `WARNING` at `12:58:22,517` that `GTC stop SUPPRESSED for overnight entry` and instructs to "Monitor manually". Forcing overnight positions due to PDT rules and suppressing automated GTC stops is a significant risk management gap, relying on manual intervention for a critical safety mechanism.
+
+### TRADE INTEGRITY
+*   **CRITICAL P&L Error (QQQ Short Position)**: The most recent closed QQQ trade (`symbol: "QQQ", direction: "short"`) shows incorrect P&L calculations.
+    *   `entry_price: 635.805714`, `partial_exit_price: 636.59`, `partial_pnl: 22.65`. For a short, if `partial_exit_price` > `entry_price`, it's a loss. `(635.805714 - 636.59) * 1 = -0.784286`. The recorded `partial_pnl` of `22.65` is incorrect and indicates a sign error in calculation for short positions.
+    *   This error propagates to the total `pnl` for the trade (`10.76`), which should be `(-0.784286 for partial exit) + ( (635.805714 - 647.7) = -11.894286 for remaining 1 share) = -12.678572`. The reported `10.76` is drastically wrong.
+    *   The `pnl_pct` is also incorrect as a result. This is a fundamental flaw in the P&L accounting for short trades with partial exits.
+
+### MODIFIED FILE FINDINGS
+*   **`generate_dashboard.py`**:
+    *   `_load_alpaca()`: The fallback from `certifi` to `ssl.create_default_context()` for SSL context creation is a silent fallback (`generate_dashboard.py:L74-78`). While functional, it might bypass intended security enhancements if `certifi` is preferred for explicit trust anchor management.
+*   **`weekly_review.py`**:
+    *   `_rolling_pdt_count()`: The function re-implements the business day window logic locally for display (`weekly_review.py:L114-123`). This duplicates logic that `execution.portfolio_tracker.compute_rolling_pdt_count` already handles, creating a risk of inconsistency if the two implementations diverge or if holidays are not handled uniformly.
+    *   `_strategy_validation_html()`: Manually calculates overall statistics (`total_trades`, `win_rate`, `P&L`, etc.) from `closed` trades (`weekly_review.py:L178-185`) instead of directly consuming the `stats` dictionary that `portfolio_tracker` already computes and saves to `trade_log.json`. This is duplicated logic, making maintenance harder and introducing potential inconsistencies.
+*   **`options_scanner.py`**:
+    *   `_bs_d1()`: Silently returns `0.0` if `T <= 0`, `sigma <= 0`, `S <= 0`, or `K <= 0` (`options_scanner.py:L109-110`). This masks invalid input data that should ideally trigger an error or explicit warning, potentially leading to incorrect delta calculations.
+*   **`main.py`**:
+    *   **CRITICAL Logic Error**: `OVERNIGHT_ENTRIES_ENABLED` is explicitly set to `False` (`main.py:L62`), yet the bot successfully enters and logs an overnight SPY position (`2026-04-17 12:58:22,515`). This indicates a critical bypass of a global safety switch, allowing high-risk overnight trades despite the explicit configuration to disable them. This is a severe risk management failure.
+    *   `_last_daily_reset_date`: This global variable is intended to track daily resets. Given the two "Daily reset" log entries at startup, there's a risk of inconsistent state if `_last_daily_reset_date` is only updated once, making subsequent resets partially ineffective.
+*   **`execution/portfolio_tracker.py`**:
+    *   **CRITICAL P&L Calculation Bug**: As detailed in "TRADE INTEGRITY", the P&L calculation for short positions, specifically with partial exits, is fundamentally incorrect due to a sign error (`execution/portfolio_tracker.py` in `register_close` or `_process_partial_exit_data` not visible in snippet). This is a critical data corruption issue.
+    *   `write_eod_summary()`: While it attempts to include partial P&L from open positions to address understatement (P5-L2), the underlying P&L calculation bug means the values recorded in `eod_YYYY-MM-DD.json` for today will be incorrect, not just potentially understated.
+*   **`execution/risk_manager.py`**:
+    *   **Silent Kill Switch Bypass**: `check_kill_switch()` contains a silent fallback (`execution/risk_manager.py:L41-43`) that skips the kill switch check if `self.daily_start_value <= 0`. While preventing `ZeroDivisionError`, a zero or negative `daily_start_value` represents a critical account state that should trigger an immediate emergency stop or alert, not a silent bypass of risk controls.
+    *   **Inconsistent Position Sizing**: `calculate_position_size()` applies a `max_position_value` cap of `95%` of `self.portfolio_value` (`execution/risk_manager.py:L82-83`). However, `main.py` logs `OVERNIGHT CAP (80%)` for blocking entries. This inconsistency between 95% and 80% suggests multiple, potentially conflicting, capital allocation rules are in play.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | **UNTOUCHED**
+*   P5-C2 | run_movers.py ImportError | **FIXED** (class `DataFetcher` added to `data/fetcher.py`)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | **FIXED** (daily reset now explicitly clears buffers)
+*   P5-H2 | Fill price crosstalk | **UNTOUCHED**
+*   P5-H3 | Orphan GTC 404 path | **UNTOUCHED**
+*   P5-H4 | Rule 2 dead code | **UNTOUCHED**
+*   P5-M1 | Cycle watchdog restart loop | **UNTOUCHED** (specific `os.execv` part)
+*   P5-M2 | MRI score cached stale across sessions | **UNTOUCHED** (no explicit validation on load)
+*   P5-M3 | score_comparison JSON unbounded growth | **UNTOUCHED**
+*   P5-L1 | Weekly review PDT label | **UNTOUCHED** (cannot confirm from provided code)
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **WORSENED** (attempt to fix understatement made; however, actual P&L recorded is incorrect due to new bug in P&L calculation for shorts, and it was **TRIGGERED** today as `pnl_today` in EOD Snapshot is incorrect).
+*   P5-L3 | live_data_writer.py no reconnect logic | **UNTOUCHED**
+
+### NEW BUGS FOUND
+*   **CRITICAL | execution/portfolio_tracker.py (P&L calculation error for short positions with partial exits)**
+    *   **Description**: The P&L calculation for short positions, particularly when a partial exit occurs, has a sign error, leading to a positive P&L being reported when it should be a loss. This fundamentally corrupts trade performance metrics.
+    *   **Exact failure condition**: `trade_log.json` (most recent QQQ trade, closed): `entry_price: 635.805714`, `partial_exit_price: 636.59`, `partial_pnl: 22.65`. Actual partial P&L for 1 share at `636.59` should be `(635.805714 - 636.59) = -0.784286`, not `22.65`. This error propagates to the total `pnl` for the trade.
+*   **CRITICAL | main.py (Bypass of `OVERNIGHT_ENTRIES_ENABLED` safety switch)**
+    *   **Description**: Despite `OVERNIGHT_ENTRIES_ENABLED` being explicitly set to `False`, the bot initiates an overnight SPY trade. The `pdt_forced_overnight` mechanism bypasses this global safety control.
+    *   **Exact failure condition**: `main.py:L62 OVERNIGHT_ENTRIES_ENABLED = False`. Log `2026-04-17 12:58:22,515 | INFO | main | [SPY] Tagged overnight=True (PDT=3/3 forced overnight)`. `trade_log.json` confirms `overnight: true` for the SPY position.
+*   **HIGH | main.py (Incorrect or stale "existing" position value in overnight capital checks)**
+    *   **Description**: The value for "existing" position size used in `OVERNIGHT CAP` calculations is consistently `$188` for multiple symbols, which is highly implausible, or `$2319` for QQQ when no open QQQ position exists in the `trade_log.json`. This indicates a bug in retrieving or caching live position data for capital checks, leading to erroneous entry blocks.
+    *   **Exact failure condition**: Log `2026-04-17 12:29:58,644 | WARNING | main | [NVDA] OVERNIGHT CAP (80%): existing $188 + new $2616 = $2805 > cap $2323 ...`. Repeated for NVDA, META, AAPL. Also `2026-04-17 12:58:29,912 | WARNING | main | [QQQ] OVERNIGHT CAP (80%): existing $2319 + new $2595 = $4914 > cap $2323 ...`.
+*   **HIGH | main.py (GTC stop suppression for forced overnight trades)**
+    *   **Description**: PDT-forced overnight entries lead to suppression of GTC stop orders, with the bot relying on an internal stop and manual monitoring. This removes a critical, automated safety net for overnight positions, increasing exposure to unforeseen market moves or bot failures.
+    *   **Exact failure condition**: Log `2026-04-17 12:58:22,517 | WARNING | main | [SPY] PDT=3/3 — GTC stop SUPPRESSED for overnight entry (clearing house not reset). Internal stop=$698.31 active. Monitor manually.`
+*   **HIGH | execution/risk_manager.py (Silent kill switch bypass on zero or negative `daily_start_value`)**
+    *   **Description**: The `check_kill_switch` method bypasses its logic if `self.daily_start_value <= 0`. While preventing a `ZeroDivisionError`, this silently disables a core risk control mechanism during a potentially critical account state (e.g., if the account is near zero), which should instead trigger a system-wide halt and alert.
+    *   **Exact failure condition**: `execution/risk_manager.py:L41-43` `if self.daily_start_value <= 0: logger.warning(...) return False`
+*   **MEDIUM | main.py + execution/risk_manager.py (Conflicting and double daily reset initialization)**
+    *   **Description**: Two "Daily reset" messages appear seconds apart at startup with slightly different portfolio values. This suggests redundant or conflicting invocations of the daily reset, leading to an inconsistent `daily_start_value` in `RiskManager` and an inaccurate P&L baseline for the day.
+    *   **Exact failure condition**: Log `2026-04-17 10:20:29,774 | INFO | execution.risk_manager | Daily reset. Portfolio: $2,902.02`. Followed by `2026-04-17 10:20:31,190 | INFO | execution.risk_manager | Daily reset. Portfolio: $2,900.48`.
+*   **MEDIUM | macro_risk_index (Aggressive capping of macro risk alerts)**
+    *   **Description**: Despite multiple macro-risk alerts triggering a `CRITICAL` news monitor state, the `MRI news injection GATED` logic aggressively caps the score increase (e.g., +35pts capped to +10pts) if `price_score=0` and macro indicators are "silent". This may suppress legitimate macro risk warnings if market reaction is delayed or nuanced, leading to insufficient risk adjustments.
+    *   **Exact failure condition**: Log `2026-04-17 10:27:09,683 | CRITICAL | news_monitor | 🚨 MACRO RISK STATE ACTIVATED...`. Followed by multiple `MRI news injection GATED: X alert(s) would add +35pts but price_score=0 ... capped at +10pts.` entries.
+*   **MEDIUM | execution/risk_manager.py (Inconsistent position sizing caps)**
+    *   **Description**: `calculate_position_size()` in `risk_manager.py` enforces a 95% portfolio value cap for positions, but `main.py` logs `OVERNIGHT CAP (80%)` for blocking entries. This inconsistency between modules suggests conflicting definitions of maximum position size, leading to unpredictable sizing behavior.
+    *   **Exact failure condition**: `execution/risk_manager.py:L82-83` (`max_position_value = self.portfolio_value * 0.95`). Log `2026-04-17 12:29:58,644 | WARNING | main | [NVDA] OVERNIGHT CAP (80%): existing $188 + new $2616 = $2805 > cap $2323 ...`.
+*   **LOW | generate_dashboard.py (`_load_alpaca()` `certifi` silent fallback)**
+    *   **Description**: The `_load_alpaca()` function uses a `try/except ImportError` for `certifi`, falling back to `ssl.create_default_context()`. This is a silent fallback that might use a less secure or less controlled SSL context if `certifi` is intended to provide specific certificate authority management.
+    *   **Exact failure condition**: `generate_dashboard.py:L74-78`.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE: Halt Bot Operation and Investigate P&L Calculation**: The critical P&L error for short positions with partial exits is a data corruption issue impacting all performance metrics and potentially future risk decisions. This must be fixed and validated *before* any further trading.
+2.  **CRITICAL: Rectify Overnight Entry Bypass**: Address the `OVERNIGHT_ENTRIES_ENABLED` flag bypass. If overnight entries are disallowed, the mechanism for `PDT=3/3 forced overnight` must either be disabled or re-engineered to respect the primary safety switch.
+3.  **HIGH: Implement Robust Overnight Stop Management**: For any permitted overnight positions, develop an automated, persistent, and reliable stop-loss mechanism that does not rely on "manual monitoring" or GTC order suppression, especially when PDT rules force overnight holds.
+4.  **HIGH: Debug Position Value Retrieval for Overnight Cap Checks**: Investigate why "existing" position values are incorrect or stale in the overnight capital calculation. Ensure `main.py` fetches the most accurate and up-to-date position values from `portfolio_tracker` or Alpaca.
+5.  **HIGH: Enhance Kill Switch for Critical Account States**: Modify `execution/risk_manager.py` to treat a `daily_start_value <= 0` as a critical system failure. Instead of skipping the check, it should trigger an emergency halt and a high-severity alert.

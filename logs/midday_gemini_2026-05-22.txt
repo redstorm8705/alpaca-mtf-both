@@ -1,0 +1,81 @@
+Midday Gemini Audit — 2026-05-22
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+1.  **P&L Summary Inconsistency: `Exits` count**
+    *   **Variable/Metric:** `Exits` count in Session P&L Summary.
+    *   **Value vs. Should be:** The value is `0`. It should be at least `1` because there is `1` closed trade. Additionally, `Partials: 2` suggests two partial exits occurred, which are also a form of exit. The total `Exits` count should reflect all instances where position size was reduced or a trade was closed.
+    *   **Failure:** The Session P&L Summary provides inconsistent trade event counts, leading to a misrepresentation of trading activity. A "closed trade" logically entails at least one exit event (either a full exit or the final partial exit).
+    *   **Condition:** Occurs during the generation of the Session P&L Summary at the end of the logged period (or upon bot restart, based on the `EOD summary written` log).
+    *   **Category:** EXECUTION BUG | SEVERITY: MEDIUM
+
+2.  **Critical Stop Loss Failure and Excessive Loss for PANW**
+    *   **Variable/Metric:** `exit price` ($253.92) compared to `stop=$180.21` for the PANW trade.
+    *   **Value vs. Should be:** The exit price was $253.92. Based on the calculated P&L ($-81.61), this was a short trade with an entry at $172.31 and a stop loss set at $180.21. The trade should have exited near or at $180.21 to limit losses. The actual exit at $253.92 means the loss was $73.71 (per share) greater than the intended maximum. This is an extreme deviation from the defined stop.
+    *   **Failure:** The stop loss mechanism completely failed to protect the position, resulting in a loss far exceeding the predefined risk. This indicates either a problem with stop order submission, monitoring, or execution by the exchange, leading to a catastrophic risk management breakdown. The bot's own `[ANOMALY-3] TQI degradation` warning corroborates this issue with "exit discipline and stop placement."
+    *   **Condition:** Occurs when the price moves significantly against a short position (PANW, entry $172.31), breaching the stop loss ($180.21), and the position is not closed until a much higher price ($253.92). This suggests either slippage or a failed stop order. The log entry `RTH DAY stops: all overnight positions already have exchange-level stop protection` implies a stop should have been active.
+    *   **Category:** EXECUTION BUG | SEVERITY: CRITICAL
+
+3.  **Stop-hit rate Misrepresentation**
+    *   **Variable/Metric:** `Stop-hit rate` (reported as `0% (0 stops)`).
+    *   **Value vs. Should be:** The value is 0%. If the PANW trade was meant to be stopped out at $180.21 but exited at $253.92, it represents a failure of stop loss, which should be reflected in risk metrics. While not a "stop-hit" in the exact sense of an order filling at the stop price, it's a critical risk event. If the system distinguishes between a "stop hit" (order filled at or very near stop) and a "stop overrun" (order filled far beyond stop), this distinction is not captured in the summary and leads to misleading performance metrics.
+    *   **Failure:** The stop-hit rate metric does not accurately reflect risk management failures or significant deviations from intended stop loss execution, obscuring a critical aspect of trade performance.
+    *   **Condition:** Occurs when a trade is closed at a price significantly worse than its defined stop loss but is not categorized or counted as a "stop hit" in the summary.
+    *   **Category:** ALPHA ISSUE / EXECUTION BUG | SEVERITY: MEDIUM
+
+### ENTRY QUALITY
+No new entries were made during the observed log window due to all signals being blocked by the ORB gate. Therefore, no entry quality issues can be assessed from the provided log snippet. The PANW trade was an existing position.
+
+### EXIT QUALITY
+
+1.  **Failure to adhere to Stop Loss (PANW)**
+    *   (Details as described in Performance Audit, finding #2). The bot failed catastrophically in exiting the PANW short trade, allowing a loss $73.71 per share beyond the defined stop. This is a severe deficiency in exit discipline and risk control.
+    *   **Category:** ALPHA ISSUE / EXECUTION BUG | SEVERITY: CRITICAL
+
+### MRI ALIGNMENT
+
+1.  **High Overnight Exposure Preceding Sizing Adjustments**
+    *   **Variable/Metric:** `Overnight exposure: $1,949 notional` relative to `Portfolio: $2,841.16`.
+    *   **Value vs. Should be:** Overnight exposure is ~68.6% of the portfolio. While `OVERNIGHT_ENTRIES_ENABLED = True` confirms overnight holds are permitted, such a large proportion of the portfolio held overnight indicates potentially aggressive exposure from prior sessions, especially given the current `MRI ELEVATED (score=38)`. This then forces extreme sizing reductions (`intraday size mult 0.31x` combined with other reductions, likely reducing to <10% of standard sizing) for *new* intraday entries.
+    *   **Failure:** While the bot correctly *reacts* to the situation by reducing new entry sizing, the underlying large overnight exposure (which persisted into an elevated MRI environment) suggests that the bot's risk-taking in prior sessions might be too high, or that it is holding positions for longer than advisable given its risk profile. This can limit its ability to take new, high-quality trades.
+    *   **Condition:** Occurs when existing overnight positions constitute a significant portion of the portfolio value, particularly under an `ELEVATED` MRI regime.
+    *   **Category:** ALPHA ISSUE | SEVERITY: LOW
+
+### LOG ANOMALIES
+
+1.  **POSITION COUNT DRIFT on Startup**
+    *   **Variable/Metric:** `risk.open_positions` vs. `tracker` count during reconciliation.
+    *   **Value vs. Should be:** `risk.open_positions=0` while `tracker=6`. These internal counts should ideally be consistent. While the bot corrected to `tracker=6`, the initial drift indicates an internal state management issue.
+    *   **Failure:** A critical discrepancy between the internal risk manager's perception of open positions and the authoritative tracker's count was detected on startup. Although corrected, this drift could lead to incorrect risk calculations, position sizing, or even missed opportunities if not handled robustly during the drift period.
+    *   **Condition:** Occurs during bot startup/reconciliation at `2026-05-22 17:23:16,787`.
+    *   **Category:** INFRASTRUCTURE / EXECUTION BUG | SEVERITY: HIGH
+
+2.  **Excessive Open Positions outside Power Hour**
+    *   **Variable/Metric:** `open_positions` count (synced to 6 after drift).
+    *   **Value vs. Should be:** There are 6 open positions. The `MAX_POSITIONS` constant is `4`. The `BUCKET_B_MAX_POSITIONS_POWER = 5` exception is only for 9:35–10:00 AM ET. The current time is `17:23:16 ET` (`midday`).
+    *   **Failure:** The bot is managing a number of open positions (6) that exceeds its configured maximum limit (4) outside of the designated "power-hour" exception window. This violates a fundamental risk management constraint and exposes the paper account to unapproved levels of concurrent risk.
+    *   **Condition:** Occurs during midday trading, specifically identified after the startup position reconciliation.
+    *   **Category:** EXECUTION BUG / ALPHA ISSUE | SEVERITY: HIGH
+
+3.  **Self-Reported TQI Degradation**
+    *   **Variable/Metric:** `TQI degradation: last-5-trade avg`.
+    *   **Value vs. Should be:** The average is `12.4/100`, which is significantly below the internal threshold of `30`.
+    *   **Failure:** The bot's internal quality indicator signals a systematic degradation in trade quality, specifically highlighting "exit discipline and stop placement." This is a severe, self-identified problem aligning with the observed PANW stop loss failure.
+    *   **Condition:** Triggered when the average Trade Quality Index of the last 5 trades falls below 30.
+    *   **Category:** ALPHA ISSUE | SEVERITY: HIGH
+
+### NEW BUGS / CONCERNS
+None beyond those already detailed above.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / ALPHA**: Immediately investigate the PANW stop loss failure. Trace the full lifecycle of the PANW trade, from entry to exit, to identify *why* the exchange-level stop protection failed or was overridden, leading to an exit price so far from the intended stop. This is a critical risk control failure.
+2.  **EXECUTION / INFRASTRUCTURE**: Address the `POSITION COUNT DRIFT` and `Excessive Open Positions` issues. Determine why `risk.open_positions` diverged from the `tracker` and how the bot came to manage 6 positions when `MAX_POSITIONS` is 4 outside power hour. This indicates a breach in core risk management rules.
+3.  **ALPHA**: Review the bot's overall exposure management, especially in relation to overnight holds and `ELEVATED` MRI conditions. The high overnight exposure forcing extreme new-entry sizing reductions suggests prior risk decisions might be too aggressive, or that the exit strategy for overnight positions needs adjustment.

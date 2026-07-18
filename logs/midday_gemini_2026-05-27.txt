@@ -1,0 +1,57 @@
+Midday Gemini Audit — 2026-05-27
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is operating under a severe time synchronization issue, leading to a silent trading halt during what it perceives as market hours. This fundamental miscalibration renders the bot effectively non-operational for intraday trading and indicates a critical infrastructure fault. Additionally, a persistent P&L discrepancy between the bot's internal tracker and Alpaca's reported values, and an alarming increase in cycle duration due to garbage collection, highlight systematic degradation in operational integrity.
+
+### PERFORMANCE AUDIT
+
+*   **No closed trades, wins, or losses**: The session P&L summary reports 0 entries, 0 exits, and $0.00 total P&L. This prevents evaluation of entry/exit prices, P&L signs, win rate, profit factor, or score-to-outcome correlation.
+*   **Stop-hit rate**: Cannot be assessed due to no trades.
+
+### ENTRY QUALITY
+
+*   **Systematic Halt**: No entries were taken because the bot consistently reports `execute_entries: HALTED for session — no new entries permitted.` This halt is likely a safety mechanism triggered by the actual system time being outside RTH, even though the bot's internal perception is that it is `midday` and eligible for trading. This is a critical failure in the bot's operational readiness.
+*   **Signal Generation During Off-Hours (Perceived Mid-day)**: The bot continues to generate signals (e.g., `TSLA LONG score=12/12`) and apply confluence checks (e.g., `VOLSHADOW`) even when entries are universally halted due to time. While `VOLSHADOW {"would_pass": false}` and `⚡ CURRENTS ALERT ... base penalty: 100%` indicate valid filtering mechanisms *if* active during market hours, the overarching issue of incorrect time context means these filtering decisions are made in a context where trading is impossible.
+
+### EXIT QUALITY
+
+*   **Cannot Assess**: With no closed trades, exit quality cannot be evaluated. The log shows `Overnight reversal signal` scans for existing positions (INTC, TQQQ, NFLX), indicating active exit logic for overnight holds, but no exits were triggered in the provided log.
+
+### MRI ALIGNMENT
+
+*   **Sizing Adjustment**: MRI is reported as `ELEVATED (score=39)`, and the bot correctly applies a size floor `0.85x`. `Overnight exposure: $607 notional → intraday size mult 0.79x`. This shows the bot's risk management reacting appropriately to the elevated MRI and existing exposure, *given its internal (incorrect) time context*.
+*   **VIX Regime**: VIX is reported as `16.7` and then `16.8`, which aligns with a `NORMAL` volatility regime, implying no VIX-related stop widening (VIX_STOP_WIDEN_THRESHOLD_1 = 25.0, VIX_STOP_WIDEN_THRESHOLD_2 = 30.0). This appears to be correctly interpreted by the bot.
+
+### LOG ANOMALIES
+
+*   **Persistent EOD P&L Drift**: `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$23.45 tracker=$6.35 drift=$+17.10` appears consistently with every EOD flush (e.g., 17:06:46, 17:19:27, 17:27:07). This indicates a significant and recurring discrepancy in the bot's internal accounting vs. the broker's record.
+*   **Slow Cycle / High GC Overhead**: `WARNING | main | gc.collect() took 3741.4ms, collected 99 objects — heap may be growing` logged at `2026-05-27 17:19:31,780`. This indicates a significant performance bottleneck due to garbage collection, causing a `⚠ SLOW CYCLE` (duration=461s). This could lead to missed market opportunities, stale data, or watchdog resets.
+
+### NEW BUGS / CONCERNS
+
+1.  **INFRASTRUCTURE | CRITICAL | Time Synchronization Failure**:
+    *   **Variable**: Bot's internal perceived time (`TOD: midday`, `MTF cycle @ 13:xx:xx ET`) vs. system's wall-clock time (`2026-05-27 17:xx:xx PT` in log timestamps).
+    *   **Value vs. should be**: The bot perceives itself to be operating at `13:xx ET` (e.g., `13:11:46 ET`). However, the system log timestamps (which are `PT`) show that the operations are occurring at `17:xx:xx PT` (e.g., `17:11:46 PT`). Converting `17:xx:xx PT` to ET results in `20:xx:xx ET`. This means the bot is operating 7 hours behind the actual market time. It *should* have its internal time correctly synchronized and aligned with the system's actual wall-clock time in the operating market's timezone.
+    *   **Condition**: This occurs throughout the log (e.g., `2026-05-27 17:06:44,818 | WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` at the same time the bot is processing signals at what it *thinks* is `midday`). The discrepancy is evident when comparing `2026-05-27 17:11:46,704` (system PT) with `MTF cycle @ 13:11:46 ET` (bot's perceived ET). This fundamental time mismatch results in the bot attempting to trade after market hours, leading to a session-long halt of new entries, rendering it non-functional for intraday operations.
+
+2.  **EXECUTION BUG | HIGH | Persistent P&L Tracker Drift**:
+    *   **Variable**: `Alpaca=$<value>` (broker reported P&L) vs `tracker=$<value>` (bot's internal P&L).
+    *   **Value vs. should be**: At `2026-05-27 17:27:07,615`, Alpaca's reported daily P&L is `$23.45`, while the bot's internal tracker records `$6.35`, resulting in a drift of `+$17.10`. The bot's internal P&L tracker *should* accurately reflect the broker's P&L after reconciliation. A drift of this magnitude ($17.10 on a $2.5K paper account, ~0.68%) indicates a serious accounting inconsistency or a bug in the reconciliation process.
+    *   **Condition**: This drift occurs repeatedly and is flagged as a `WARNING` in the EOD summary log (`EOD P&L DRIFT`) during crash-safety flushes (e.g., `2026-05-27 17:06:46,260`, `2026-05-27 17:19:27,891`, `2026-05-27 17:27:07,615`).
+
+3.  **INFRASTRUCTURE | MEDIUM | Excessive Garbage Collection Overhead**:
+    *   **Variable**: `gc.collect()` duration, `main | [CYCLE] duration`.
+    *   **Value vs. should be**: A single `gc.collect()` call took `3741.4ms` (3.7 seconds), leading to a total cycle duration of `461s` and a `⚠ SLOW CYCLE` warning. Ideally, garbage collection should be optimized to be quick and non-blocking, typically in milliseconds. A 3.7-second pause is unacceptable for an intraday trading bot and suggests memory leaks or inefficient memory management.
+    *   **Condition**: Occurs at `2026-05-27 17:19:31,780`. This specific instance is observed after a `duration=461s` cycle (from `2026-05-27 17:11:46` to `2026-05-27 17:19:31`). This can cause delays in signal processing, order submission, and overall bot responsiveness.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE: CRITICAL: Investigate and Resolve Time Synchronization Issue**: Immediately halt operations until the bot's internal time perception is correctly aligned with real-world market hours and the system clock. Review timezone configurations, NTP settings, and any internal time-tracking logic that determines `TOD` (Time Of Day) state. This is the most critical issue, as it effectively renders the bot non-functional during intended trading hours.
+2.  **EXECUTION: HIGH: Reconcile P&L Drift between Tracker and Alpaca**: Investigate the root cause of the `EOD P&L DRIFT`. This could involve differences in how fills are recorded, partial fills, commissions, or adjustments. Ensure the bot's internal P&L accounting accurately reflects the broker's. If the discrepancy persists after thorough investigation, flag it to the Alpaca support team for clarification on their paper-trading P&L reporting.
+3.  **INFRASTRUCTURE: MEDIUM: Optimize Memory Management and Reduce GC Overhead**: Profile the bot's memory usage and identify components that are causing excessive garbage collection. Look for potential memory leaks, large object allocations, or inefficient data structures that lead to long `gc.collect()` pauses. Reducing this overhead will improve cycle times and overall responsiveness.

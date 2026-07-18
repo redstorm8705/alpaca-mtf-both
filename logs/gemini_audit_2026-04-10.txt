@@ -1,0 +1,129 @@
+Nightly Gemini Audit — 2026-04-10
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['scan_to_html.py', 'generate_dashboard.py', 'run_movers.py', 'main.py', 'nightly_audit.py', 'live_data_writer.py', 'indicators/rsi.py', 'events/news_monitor.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Recurring Bot Hangs and Restarts**:
+    *   `2026-04-10 10:35:46,416 | CRITICAL | main | WATCHDOG: No completed cycle in 52m during RTH — bot is hung. Firing alert and restarting.`
+    *   `2026-04-10 11:01:07,318 | CRITICAL | main | WATCHDOG: No completed cycle in 21m during RTH — bot is hung. Firing alert and restarting.`
+    *   **Problem**: The bot repeatedly becomes unresponsive during Regular Trading Hours (RTH), triggering critical watchdog restarts. A 52-minute hang is a severe failure mode, indicating deep instability (e.g., API call hangs, infinite loops, resource issues) that prevents `run_cycle()` completion.
+*   **Alpaca API Connectivity Failures on Restart**:
+    *   `2026-04-10 10:35:47,370 | CRITICAL | main | Startup validation FAILED: cannot reach Alpaca API — HTTPSConnectionPool(...) Failed to resolve (...)`
+    *   **Problem**: Immediately following a watchdog restart, the bot completely fails to resolve the Alpaca API hostname, leading to a full shutdown (`Exiting.`). This highlights fragility in network resilience or startup sequence, as a transient network issue causes a critical process termination rather than a graceful retry.
+*   **Persistent GTC Stop Placement Failures for PDT-constrained Entries**:
+    *   `2026-04-10 07:56:09,441 | WARNING | main | [AAPL] ENTRY BLOCKED: PDT=3/3 — GTC stop cannot be placed (Alpaca 40310100). Refusing entry to avoid unprotected overnight.` (and similar for TOST multiple times)
+    *   **Problem**: Multiple high-score `(score=12/12)` entry signals are consistently blocked because Alpaca rejects GTC stop orders (`40310100`). While the bot correctly refuses unprotected entries, this critically impacts trading, especially under PDT rules. The `40310100` error typically indicates invalid order parameters or a rejection by Alpaca's system, likely stemming from attempting to place a GTC stop when the PDT count is exhausted for the day.
+*   **PDT Counter Discrepancy and Reconciliation**:
+    *   `2026-04-10 17:03:21,636 | WARNING | execution.portfolio_tracker | PDT count mismatch — Alpaca reports 2, tracker has 3 in rolling window.`
+    *   `2026-04-10 17:03:21,646 | INFO | execution.portfolio_tracker | PDT reconciled down: removed 1 phantom entry/entries (Alpaca=2, was 3). New rolling count: 3/3`
+    *   **Problem**: The bot's internal PDT counter diverged from Alpaca's official count, indicating a logic flaw in how the bot records or tracks day trades. Although reconciled, the presence of a "phantom entry" suggests earlier PDT gate decisions might have been based on incorrect data, leading to improper trade blocking or, conversely, accidental PDT violations.
+*   **Missing Weekly Bias Data for Multiple Symbols**:
+    *   `2026-04-10 11:11:13,512 | WARNING | strategy.signal_generator | [TOST] Weekly bias: insufficient data (0 bars), filter skipped` (repeated for 12+ symbols including SOFI, MSTR, CRM, PANW, UBER, AMZN, META, NFLX, SPY, QQQ)
+    *   **Problem**: A core filter of the MTF confluence system, "weekly bias," is routinely skipped for a large portion of the watchlist due to `0 bars` data. This means a critical risk and signal confirmation layer is absent, potentially allowing trades that should have been filtered out, increasing overall trading risk.
+*   **Ambiguous Macro Risk State**:
+    *   Frequent `CRITICAL | news_monitor | 🚨 MACRO RISK STATE ACTIVATED` messages immediately followed by `INFO | macro_risk_index | MRI refreshed: score=0 level=NORMAL`.
+    *   **Problem**: The "Macro Risk State" alarm is triggered with a critical log level, yet the `MRI` score often resets to `0 (NORMAL)` within the same cycle, despite potentially elevated VIX readings (e.g., `20.0, pts: 10`). This creates confusion about the actual risk level, potentially leading to misjudged market conditions.
+
+### TRADE INTEGRITY
+
+*   **P&L Calculation Error for Partial Exits (COIN)**:
+    *   **Trade Log Entry**: `symbol: "COIN"`, `direction: "short"`, `qty: 6`, `entry_price: 179.97`. First partial exit `partial_exit_price: 167.675` for 4 shares.
+    *   **Calculated P&L**: (179.97 - 167.675) * 4 = **$49.18**.
+    *   **Recorded `partial_pnl`**: **$38.43**.
+    *   **Problem**: There is a significant discrepancy between the calculated and recorded partial P&L, indicating a bug in the P&L calculation for partial exits.
+*   **P&L Calculation Error for Partial Exits (TOST)**:
+    *   **Trade Log Entry**: `symbol: "TOST"`, `direction: "short"`, `qty: 45`, `entry_price: 26.82`. First partial exit `partial_exit_price: 24.979999542236328` for 41 shares.
+    *   **Calculated P&L**: (26.82 - 24.98) * 41 = **$75.44**.
+    *   **Recorded `partial_pnl`**: **$47.96**.
+    *   **Problem**: Another substantial discrepancy in recorded partial P&L for TOST.
+*   **Inconsistent Trade Object State (TSLA)**:
+    *   **Trade Log Entry**: `symbol: "TSLA"`, `qty: 3`, `qty_remaining: 2`, `partial_exited: false`, `exit_price: 343.32`, `pnl: 7.36`, `pnl_remaining: 7.36`.
+    *   **Problem**: The `qty_remaining: 2` and `partial_exited: false` are contradictory if the trade is fully closed. If 3 shares were entered and 0 remaining, `qty_remaining` should be 0. If it was a partial exit, `partial_exited` should be true. The recorded `pnl` (7.36) and `pnl_remaining` (7.36) for `qty_remaining: 2` implies only 2 shares were closed (347-343.32)*2 = $7.36. This trade object is internally inconsistent regarding its quantity and P&L accounting.
+
+### MODIFIED FILE FINDINGS
+
+#### `scan_to_html.py`
+*   **Bug: Infinite Loop or `NameError` in PDT Reset Date Calculation**:
+    *   **Line Context**: `scan_to_html.py` line ~88 (within `_pdt_reset_display` function).
+    *   **Description**: The loop `while d.weekday() >= 5: d -= _` is intended to find the most recent business day. However, the variable `_` is not defined in this scope to represent `timedelta(days=1)`. This will either result in a `NameError` or, if `_` is implicitly resolved to an integer `0`, an infinite loop if `d.weekday() >= 5` evaluates to true. This will prevent the `scan_results.html` dashboard from updating.
+
+#### `generate_dashboard.py`
+*   **Risk Management Gap: Misleading Zero Values on Alpaca API Failure**:
+    *   **Line Context**: `generate_dashboard.py` lines 86-89 (within `_load_alpaca` function's `except` block).
+    *   **Description**: Upon any exception during Alpaca API calls, the function returns critical account metrics (`equity`, `cash`, `buying_power`, `pdt_count`) as `0`. While an `error` message is logged, displaying `0` for live account values can be highly misleading to a user who might interpret them as actual values rather than an API failure, masking a severe data retrieval problem.
+
+#### `run_movers.py`
+*   **Risk Management Gap: Silent `DataFetcher` Exceptions in Confluence Step**:
+    *   **Line Context**: `run_movers.py` lines 94-96.
+    *   **Description**: When fetching multi-timeframe data for confluence scoring, any `Exception` is caught and logged at `DEBUG` level (`logger.debug(f"TF fetch failed {sym}: {e}")`) and the symbol is silently skipped from `tf_cache`. This can lead to `add_confluence_score` receiving incomplete data, resulting in inaccurate or absent confluence scores without higher-level alerts.
+
+#### `main.py`
+*   **Architectural Flaw: Excessive Global Mutable State**:
+    *   **Line Context**: `main.py` lines 18-42 (multiple global variables like `_SHORTING_ENABLED`, `_premarket_movers_cache`, `_spy_risk_active`, `_conviction_streak`, etc.).
+    *   **Description**: The heavy reliance on global mutable variables introduces significant risks of race conditions (especially with implied threading/restarts), unexpected state changes, and makes debugging difficult due to implicit dependencies and side effects. This contributes to system fragility and unpredictability.
+*   **Configuration Discrepancy: `OVERNIGHT_ENTRIES_ENABLED` Comment vs. Value**:
+    *   **Line Context**: `main.py` line ~45.
+    *   **Description**: The comment states "Phase 1: DRY-RUN. Set True only after 5-night dry-run validation passes." while the code sets `OVERNIGHT_ENTRIES_ENABLED = False`. This discrepancy causes confusion about the intended state of overnight entries and suggests either the dry-run phase is incomplete, or the flag needs updating.
+*   **Risk Management Gap: Incomplete `_SECTOR_MAP` for Correlation Protection**:
+    *   **Line Context**: `main.py` lines 61-90 (the `_SECTOR_MAP` definition).
+    *   **Description**: The `_SECTOR_MAP` is severely incomplete, listing only a few symbols. The comment "Symbols not in the map are treated as 'uncorrelated' and always allowed" means the sector correlation protection mechanism is largely ineffective. This allows the bot to concentrate exposure in highly correlated but unmapped assets (e.g., multiple tech stocks), increasing risk during sector-specific downturns.
+*   **Risk Management Gap: Stale SPY Risk State Due to Fetch Failures**:
+    *   **Line Context**: `main.py` line ~36 (comment on `_spy_fetch_failures`).
+    *   **Description**: The logic to "suppress decay at ≥3" for `_spy_risk_active` when `SPY/QQQ` data fetches fail means that a `RISK_DN` or `RISK_UP` state could persist indefinitely if data fetching is impaired. This would cause the bot to unnecessarily block entries based on stale risk information, even if market conditions have stabilized.
+
+#### `live_data_writer.py`
+*   **Risk Management Gap: Silent Dashboard Update Failures**:
+    *   **Line Context**: `live_data_writer.py` lines 39-41 (within `main` loop).
+    *   **Description**: Any `Exception` during `generate_dashboard.generate()` is caught and logged at `DEBUG` level, and the dashboard update is silently skipped. This means the dashboard could become stale without generating a visible `WARNING` or `ERROR` log entry for the user, masking critical data retrieval or rendering issues.
+
+#### `indicators/rsi.py`
+*   **Minor: Redundant `avg_gain` Calculation**:
+    *   **Line Context**: `indicators/rsi.py` lines 14-15 (within `add_rsi` function).
+    *   **Description**: The line `avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()` is duplicated. While not a functional error, it's redundant code that affects maintainability.
+
+#### `events/news_monitor.py`
+*   **Dead Code / Misleading Comment: `PRICE_CONFIRM_THRESHOLD` and Sizing Architecture**:
+    *   **Line Context**: `events/news_monitor.py` lines 27-31 (`PRICE_CONFIRM_THRESHOLD` definition and surrounding comments).
+    *   **Description**: `PRICE_CONFIRM_THRESHOLD = 0.5` is defined with specific conditions for applying a "softer multiplier," directly contradicting the "MARKET-REACTION-FIRST" architecture which explicitly states "keyword-based sizing is REMOVED" and `get_news_size_multiplier()` "returns 1.0 always except HALT=0.0." This indicates either dead code or highly misleading documentation, creating a significant maintenance risk.
+*   **Risk Management Gap: Inflexible `KEYWORDS_HALT` for Systemic Risk**:
+    *   **Line Context**: `events/news_monitor.py` lines 65-72 (`KEYWORDS_HALT`).
+    *   **Description**: The `KEYWORDS_HALT` list is extremely narrow (e.g., "nuclear strike"). While the market-reaction-first approach is good for most news, in non-nuclear, severe systemic global crises (e.g., major financial infrastructure cyberattack, unprecedented pandemic causing market closures), the bot might continue trading because these keywords are not included, leading to unmitigated exposure during severe, novel risk events.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTOUCHED**
+*   **P5-C2 | run_movers.py ImportError**: **INACCURATE DESCRIPTION / UNTOUCHED**. The bug description is inaccurate based on the provided code; `DataFetcher` is correctly imported. `run_movers.py` was touched, but not in a way that resolves this *specific* bug as described, and it wasn't triggered in logs.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **TRIGGERED**. Logs show "PDT=3/3 gate BLOCKED: score=12/12 streak=X/3 consecutive ≥12/12 scans required (ALL buckets) — not entering.", consistent with a stale confirmation buffer preventing entries. `main.py` was touched, but the issue persists.
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED**
+*   **P5-H3 | Orphan GTC 404 path**: **TRIGGERED**. The `ENTRY BLOCKED: PDT=3/3 — GTC stop cannot be placed (Alpaca 40310100)` log entry indicates the core problem (unprotected positions due to stop placement issues) is active, even if the error code isn't "404". `main.py` was touched, but this critical issue persists.
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED**
+*   **P5-M1 | Cycle watchdog restart loop**: **TRIGGERED**. Multiple `WATCHDOG: No completed cycle in Xm during RTH — bot is hung. Firing alert and restarting.` entries confirm the underlying instability this bug targets. `main.py` was touched.
+*   **P5-M2 | MRI score cached stale across sessions**: **UNTOUCHED**. `nightly_audit.py` does not address this.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**
+*   **P5-L1 | Weekly review PDT label**: **UNTOUCHED**
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED**. The `EOD SNAPSHOT` clearly shows `open_trades: 3` while `pnl_today` is only `49.21` (from one partial exit). `Daily reset` logs also occur before all positions are closed, confirming the P&L baseline is reset with open trades. `generate_dashboard.py` and `nightly_audit.py` interact with EOD snapshots.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. `live_data_writer.py` was modified, but the changes do not introduce reconnect logic. The `Loop error: ('Connection aborted.', RemoteDisconnected(...))` log further suggests connectivity issues persist without explicit retry/reconnect handling.
+
+### NEW BUGS FOUND
+
+*   **CRITICAL** | `scan_to_html.py` | Infinite Loop or `NameError` in PDT Reset Date Calculation | `scan_to_html.py` line ~88: The loop `d -= _` will cause a `NameError` (if `_` is undefined) or an infinite loop (if `_` is `0` or similar), preventing `scan_results.html` from generating.
+*   **HIGH** | `main.py` | Ineffective Sector Correlation Protection | `main.py` lines 61-90 (`_SECTOR_MAP`): The `_SECTOR_MAP` is highly incomplete, rendering the sector correlation blocking mechanism ineffective and allowing the bot to take on concentrated, correlated exposure.
+*   **HIGH** | `main.py` | Stale SPY Risk State Due to Fetch Failures | `main.py` line ~36 (`_spy_fetch_failures` comment): The logic to "suppress decay at ≥3" for `_spy_risk_active` can indefinitely block new entries based on stale risk data if SPY/QQQ data fetches consistently fail.
+*   **MEDIUM** | `main.py` | Undocumented Global Variable Dependencies | `main.py` lines 18-42: Extensive use of global mutable variables without clear documentation introduces high complexity, potential for race conditions, and makes system behavior difficult to predict and debug, especially across restart cycles.
+*   **MEDIUM** | `live_data_writer.py` | Silent Dashboard Update Failures | `live_data_writer.py` lines 39-41: Any `Exception` during dashboard generation (`generate()`) is caught and logged at `DEBUG` level, silently leading to a stale dashboard without an obvious error or warning.
+*   **LOW** | `indicators/rsi.py` | Redundant `avg_gain` Calculation | `indicators/rsi.py` lines 14-15: The `avg_gain` calculation is duplicated, representing a minor code quality issue.
+
+### RECOMMENDED ACTIONS
+
+1.  **Immediate Hotfix: `scan_to_html.py` `_` variable**: Correct `d -= _` to `d -= timedelta(days=1)` in `scan_to_html.py` to prevent dashboard generation from hanging or crashing.
+2.  **Investigate and Fix P&L Calculation Bugs**: Immediately diagnose and correct the P&L calculation logic for partial exits and overall trade closure (`trade_log.json`). This issue corrupts performance metrics and risk assessments.
+3.  **Resolve GTC Stop Placement Failures (Alpaca 40310100)**: Deep-dive into why Alpaca is rejecting GTC stop orders under PDT conditions. This is critically blocking entries and poses an unprotected overnight risk.
+4.  **Enhance Bot Stability and Watchdog Reliability**: Identify and resolve the root causes of the frequent RTH hangs and watchdog restarts. Implement robust error handling, API call retries with exponential backoff, and more graceful state recovery.
+5.  **Strengthen Risk Management Gates**:
+    *   Fully implement and maintain the `_SECTOR_MAP` in `main.py`.
+    *   Address the "Weekly bias: insufficient data" issue in `strategy.signal_generator`.
+    *   Revisit the logic for `_spy_fetch_failures` to prevent indefinite blocking from stale risk states.

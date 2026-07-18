@@ -1,0 +1,97 @@
+Midday Gemini Audit — 2026-07-10
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+
+1.  **Stop-Hit Exit Discrepancy (HOOD)**:
+    *   The `stop_hit` exit reason for HOOD is inconsistent with the recorded `stop` price.
+    *   For HOOD, the `stop` variable is `$104.28`, but the `exit` price is `$111.70`. For a long trade, a stop-hit implies an exit at or below the stop price (allowing for slippage). An exit price `$7.42` above the stop price is not consistent with a `stop_hit` reason.
+    *   This constitutes a failure because the stated exit mechanism (`stop_hit`) does not align with the recorded prices, indicating a potential misclassification of the exit reason, a dynamic stop not being properly reflected in the `stop` variable, or an execution error.
+    *   Condition: `CLOSED TRADE DETAILS` for HOOD: `exit $111.70` > `stop=$104.28` for a `stop_hit` long trade.
+
+2.  **Score-Outcome Correlation**:
+    *   The single closed trade (HOOD) had a `score 12/12`, which is the maximum possible score and well above the `MIN_LONG_SCORE = 8`. Despite this high score, the trade resulted in a loss (`$-9.60`) and was a `stop_hit`.
+    *   While statistically insignificant with one trade, this initial observation suggests a potential disconnect between the high confluence score and immediate outcome for this session. A score of 12/12 should ideally lead to a higher probability of profit or at least not a direct stop-out at a price significantly above the intended stop. This points to a potential `ALPHA ISSUE` related to the predictive power of the score or the robustness of stop placement/management.
+
+### ENTRY QUALITY
+
+1.  **Overly Aggressive Position Sizing Reduction (AMD)**:
+    *   The `dollar_cap` variable for AMD was reduced to `$179.32`, which is `< 1sh@$556.85`, leading to the trade being skipped. This occurred despite AMD receiving a `score=10/12` (well above `MIN_LONG_SCORE=8`).
+    *   The value of `dollar_cap` became too low due to a stacking of multiple scaling multipliers: `Kelly adj 0.71x`, `TSMOM vol-scale: 0.75x`, `VOTE-3 vol cap 0.25x`, `Mid-day doldrums — sizing at 75%`, `MRI STRESSED (score=46) — size floor 0.70x applied`, `Session P&L mult: 0.95x`, `Overnight exposure: $654 notional → intraday size mult 0.76x`.
+    *   This constitutes a failure as the bot is preventing high-scoring, potentially valid entries due to an excessively conservative cumulative sizing effect from multiple independent factors. This systematic over-reduction of position size can significantly impact win rate and overall P&L, transforming viable signals into missed opportunities.
+    *   Condition: Log entry `2026-07-10 17:25:21,940 | INFO | execution.entry_logic | [AMD] Size→0: dollar_cap=$179.32 < 1sh@$556.85` where the symbol's `score_without_vol` was 7 for AMD LONG (`2026-07-10 17:24:11,239`), resulting in a final score of 10/12.
+
+### EXIT QUALITY
+
+1.  **Premature/Incorrect Stop-Hit Exit for HOOD**:
+    *   The HOOD trade, categorized as a `stop_hit` exit, occurred at `$111.70`, which is significantly higher than the recorded `stop` price of `$104.28`.
+    *   This indicates a problem with either the interpretation of a "stop_hit" event, the accuracy of the recorded stop price, or the logic that triggers exits. If the actual stop was effectively higher than $104.28 (e.g., a trailing stop that moved up), then the `stop=$104.28` value in `CLOSED TRADE DETAILS` is misleading, or the "stop_hit" definition needs clarification. If $104.28 was the active hard stop, then the exit at $111.70 was premature and not a true stop-hit.
+    *   This failure suggests that the bot's exit discipline for this trade was either flawed or misrecorded, leading to a larger loss than might have occurred if the stop at $104.28 was allowed to be tested, or a loss where a more appropriate exit reason should have been given.
+    *   Condition: `CLOSED TRADE DETAILS` for HOOD shows `exit $111.70` and `stop=$104.28` with `stop_hit` as the reason.
+
+### MRI ALIGNMENT
+
+1.  **MRI-Based Sizing Impact**:
+    *   The session was mostly `STRESSED` (12 samples) and `ELEVATED` (9 samples) for MRI.
+    *   For the HOOD trade, MRI was `ELEVATED`. The bot correctly applied sizing reductions due to MRI (`MRI STRESSED (score=46) — size floor 0.70x applied`).
+    *   The aggressive scaling down of AMD due to multiple factors (including `MRI STRESSED`) prevented a high-scoring trade. While intended for risk management, the combined effect of scaling factors appears to be too punitive, especially during `STRESSED` periods where high-quality signals might still emerge but are then untradable. This is consistent with the `ALPHA ISSUE` raised in Entry Quality.
+
+### LOG ANOMALIES
+
+1.  **ANOMALY-2: Missed Entry for Validated Signals**:
+    *   Multiple `WARNING` logs indicate `[ANOMALY-2] [SYMBOL] confirm_gate=3 scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=7`. This occurred for `AAPL`, `SPY`, `QQQ`, `MU` at `2026-07-10 17:24:00,754`.
+    *   This pattern shows that the confluence system passed symbols (`confirm_gate=3` implies signal confirmation), but the execution logic failed to place an entry order despite available capacity (`risk.open_positions=2` vs `MAX_OPEN_POSITIONS=7`).
+    *   This is a recurring warning pattern that points to a systemic failure in the entry pipeline after signal confirmation, leading to missed opportunities.
+
+2.  **ANOMALY-3: TQI Degradation Warning**:
+    *   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30 — review exit discipline and stop placement.` (2026-07-10 17:24:00,755).
+    *   This is a self-diagnostic warning indicating a systematic issue with the strategy's performance, specifically flagging `exit discipline and stop placement`. This directly correlates with the `ALPHA ISSUE` identified in the HOOD trade's exit.
+
+3.  **Heap Growth Warning**:
+    *   `WARNING | main | gc.collect() took 223.2ms, collected 66 objects — heap may be growing` (2026-07-10 17:18:21,888).
+    *   While only a single occurrence in the provided log, this warning indicates that garbage collection is taking a noticeable amount of time, suggesting potential memory pressure or memory leaks. Recurring occurrences could lead to performance degradation over longer runtimes.
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | HIGH | Discrepancy between Recorded Stop Price and Stop-Hit Exit Price**
+    *   **Description**: The `stop_hit` exit reason is logged for HOOD with an `exit` price ($111.70) significantly higher than the recorded `stop` price ($104.28). This contradicts the definition of a `stop_hit` event.
+    *   **Exact condition**: For HOOD, `CLOSED TRADE DETAILS` shows `exit $111.70`, `stop=$104.28`, and `stop_hit` as the exit reason.
+    *   **Why it's a failure**: This indicates a fundamental misunderstanding or misrepresentation of the stop-loss mechanism. Either the `stop` price recorded is not the effective stop that triggered the exit, or the trade exited for a different reason but was mislabeled as `stop_hit`. This can lead to incorrect backtesting results, inaccurate performance analysis, and potentially suboptimal live trading decisions if the true exit logic is not reflected.
+
+2.  **EXECUTION BUG | HIGH | Failure to Initiate Entry for Confirmed Signals (ANOMALY-2)**
+    *   **Description**: The bot logged `[ANOMALY-2]` for multiple symbols (AAPL, SPY, QQQ, MU), indicating that signals passed `confirm_gate=3` (met entry criteria) but `no entry` was made. This occurred despite the `risk.open_positions=2` being well below `MAX_OPEN_POSITIONS=7`.
+    *   **Exact condition**: Log entries `2026-07-10 17:24:00,754` for `AAPL`, `SPY`, `QQQ`, `MU` stating `confirm_gate=3 scans but no entry`.
+    *   **Why it's a failure**: This is a direct execution failure. The bot identifies high-quality entry signals and confirms them, yet fails to act on them, resulting in missed trading opportunities. This bypasses the entire alpha generation process, rendering it ineffective. The log's suggestion that `CYCLE-SYNC should resolve next cycle` if `risk>2` is irrelevant here as `risk=2`.
+
+3.  **ALPHA ISSUE | MEDIUM | Overly Conservative Cumulative Sizing Preventing Valid Entries**
+    *   **Description**: The combined effect of multiple position sizing multipliers (Kelly adjustment, TSMOM vol-scale, VOTE-3 vol cap, midday doldrums, MRI stress, P&L mult, overnight exposure) led to a high-scoring `AMD` trade being sized down to less than one share, effectively preventing entry.
+    *   **Exact condition**: Log entries `2026-07-10 17:25:20,135` through `2026-07-10 17:25:21,940` for `[AMD]`, showing a signal with `score=10/12` but `Size→0: dollar_cap=$179.32 < 1sh@$556.85`.
+    *   **Why it's a failure**: While individual risk management components are valuable, their combined, multiplicative application creates an overly punitive sizing mechanism. This prevents the bot from capitalizing on otherwise high-conviction signals, especially during market conditions (like `STRESSED` MRI or midday doldrums) where strong signals may be rarer but still valid. This systematically reduces the bot's ability to generate P&L from its alpha.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **ALPHA / EXECUTION**: Investigate and rectify the `stop_hit` exit logic and recording.
+    *   Determine why the HOOD trade exited at $111.70 when the recorded stop was $104.28, labeled as `stop_hit`.
+    *   Trace the exact code path for stop order submission, modification, and execution, ensuring the `stop` variable recorded in `CLOSED TRADE DETAILS` accurately reflects the *active* stop price at the time of the event.
+    *   Ensure exit reasons are precisely categorized (e.g., `stop_hit_slippage`, `trailing_stop_hit`, `reversal_exit`, etc.) if multiple stop types are in play.
+    *   (Relates to `NEW BUGS: #1` and `ALPHA ISSUE: TQI degradation`)
+
+2.  **EXECUTION**: Address the `[ANOMALY-2]` "no entry" bug.
+    *   Identify the exact condition that causes signals with `confirm_gate=3` to fail to generate an entry order despite available position slots and sufficient sizing (when sizing isn't the issue, as seen with AMD).
+    *   This is a critical flaw that renders validated alpha signals useless.
+    *   (Relates to `NEW BUGS: #2`)
+
+3.  **ALPHA**: Review and recalibrate the cumulative position sizing multipliers.
+    *   Analyze the interaction between Kelly, TSMOM, VOTE-3, MRI, TOD, P&L, and overnight exposure multipliers.
+    *   Consider alternative approaches (e.g., additive caps, setting a minimum effective multiplier, or capping the total reduction percentage) to prevent viable trades from being completely scaled out.
+    *   The current system prevents capital deployment even for high-conviction signals under multiple (but individually reasonable) risk-reduction conditions.
+    *   (Relates to `NEW BUGS: #3`)

@@ -1,0 +1,71 @@
+Midday Gemini Audit — 2026-07-07
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+  1. Kill switch triggered due to -73.86% daily loss, while all 7 closed trades report +$0.00 P&L. | N/A (system-wide P&L calculation)
+  2. Systemic failure to recover verified close fills for 6 trades, leading to unreliable P&L recording for risk decisions. | SNOW, HOOD, MS, MSTR, MARA, AVGO
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **Entry/Exit/P&L plausibility**:
+    *   Entry prices are plausible for the symbols.
+    *   Exit prices (as recorded) are consistent with $0.00 P&L because they are explicitly set to match entry prices due to a fallback mechanism (`FILL UNVERIFIED`). This means the recorded P&L for individual trades is not a true reflection of market performance.
+    *   P&L signs are incorrect and inconsistent: The "SESSION P&L SUMMARY" reports "Losses: 7" and "Total P&L: $0.00". The "CLOSED TRADE DETAILS" shows all 7 trades as "(+$0.00)". This directly contradicts the summary's "Losses: 7" and, more critically, the log entry `CRITICAL | execution.risk_manager | KILL SWITCH TRIGGERED: Daily loss -73.86% exceeds limit of 7.00%.`
+*   **Win rate and profit factor consistency**: The reported win rate (0%) and total P&L ($0.00) from the `SESSION P&L SUMMARY` are inconsistent with the `KILL SWITCH TRIGGERED` due to a -73.86% daily loss. This indicates a severe disparity between the reported performance metrics and the actual risk management calculations.
+*   **Score→outcome correlation**: Cannot assess due to unverified fills and unreliable $0.00 P&L recording for all closed trades.
+*   **Stop-hit rate**: Reported as 0% (0 stops). This cannot be reliably assessed as exit prices are fallbacks and not actual market-executed stops.
+*   **P&L = 0.0 but entry ≠ exit price**: Not observed. All closed trades with $0.00 P&L explicitly have entry price matching exit price due to the `FILL UNVERIFIED` fallback.
+*   **Partial exit**: None recorded.
+
+### ENTRY QUALITY
+*   **Policy Mismatch for Orphaned Short**: One orphaned RIVN short position (entry $17.32) was adopted. However, the bot logged `WARNING | main | Shorting: DISABLED — account equity $743.26 < $2,000 minimum for margin short selling. Short signals will be SKIPPED.` This indicates a policy conflict where an existing short position is managed while new short entries are disallowed. While the `OVERNIGHT_ENTRIES_ENABLED` constant is `NOT FOUND`, if it's meant to prevent overnight positions, then a long-held short position being adopted and managed contradicts this.
+
+### EXIT QUALITY
+*   Cannot be reliably assessed. The `FILL UNVERIFIED` errors resulted in all trades being recorded as `closed externally` at their entry price, effectively masking the true exit performance.
+
+### MRI ALIGNMENT
+*   All 7 closed trades occurred with `MRI=ELEVATED`. The bot's `MRI startup refresh` showed `level=NORMAL score=12`, but later samples showed `ELEVATED (27/100)`. If the bot is configured to trade during `ELEVATED` MRI, this is not a violation. However, the overall negative outcome (triggering kill switch) suggests that if it *was* trading during `ELEVATED` conditions, the strategy may be misaligned or the market regime was particularly challenging for the bot.
+
+### LOG ANOMALIES
+
+*   `2026-07-07 14:14:04,031 | WARNING | main | Shorting: DISABLED — account equity $743.26 < $2,000 minimum for margin short selling. Short signals will be SKIPPED.`
+*   `2026-07-07 14:14:06,582 | CRITICAL | execution.orphan_manager | [RIVN] ORPHANED POSITION ADOPTED — Alpaca: -17 shares @ $17.32 (short). Stop=$18.81 target=$14.23 [ATR-based (atr=$1.24, stop=1.2×, tgt=2.5×)]. overnight=True`
+    *   This RIVN orphan is distinct from the RIVN trade listed in `CLOSED TRADE DETAILS` (entry $19.73, implied long). The adopted RIVN short position is not accounted for in the summary's `Closed trades: 7` or `Total P&L: $0.00`, suggesting it is still open or its closure isn't reported.
+*   `2026-07-07 14:14:13,631 | CRITICAL | execution.fill_helpers | [SNOW] FILL UNVERIFIED: could not recover a verified close fill. Using entry_price $262.28 as fallback. P&L for this trade is unreliable — manual verification required. [fallback #1 today]` (and 5 similar entries for HOOD, MS, MSTR, MARA, AVGO).
+    *   This indicates a systemic failure in retrieving verifiable fill information from Alpaca.
+*   `2026-07-07 14:14:13,899 | WARNING | execution.orphan_manager | [SNOW] Position in tracker but NOT in Alpaca (double-confirmed) — closed externally (external_close). Recording exit at $262.28 (entry was $262.28).` (and 5 similar entries for HOOD, MS, MSTR, MARA, AVGO).
+    *   This indicates a severe discrepancy between the bot's internal portfolio tracker and the actual Alpaca account state.
+*   `2026-07-07 14:14:30,984 | INFO | execution.risk_manager | Daily reset. Portfolio: $2,844.28`
+    *   The portfolio value jumped from `$743.09` at `14:13:54` to `$2,844.28` at `14:14:30`. This large unexplained increase/recapitalization needs investigation.
+*   `2026-07-07 14:14:31,130 | CRITICAL | execution.risk_manager | KILL SWITCH TRIGGERED: Daily loss -73.86% exceeds limit of 7.00%. Halting new entries.`
+    *   This is the most severe anomaly, as it directly contradicts all reported individual trade P&L.
+
+### NEW BUGS / CONCERNS
+
+*   **EXECUTION BUG | CRITICAL | P&L Inconsistency and Kill Switch Malfunction**
+    *   **Description**: The daily P&L calculation used by the `risk_manager` to trigger the kill switch is grossly inconsistent with the individual trade P&L reported in the `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS`. The bot triggered its `MAX_DAILY_LOSS_PCT` limit due to a -73.86% loss, yet all 7 closed trades are reported with a +$0.00 P&L and the `Total P&L` is stated as $0.00. This indicates a fundamental corruption in how P&L is accounted for risk management decisions vs. performance reporting. The reported $0.00 P&L for `external_close` trades masks the actual losses that triggered the kill switch.
+    *   **Exact condition**: Variable `Daily loss` calculated by `execution.risk_manager` evaluates to -73.86% at `2026-07-07 14:14:31,130`, exceeding `MAX_DAILY_LOSS_PCT = 0.07`. Simultaneously, the `Total P&L` in `SESSION P&L SUMMARY` is $0.00 and all `CLOSED TRADE DETAILS` show `+$0.00`. This suggests the actual P&L causing the kill switch to trigger is not reflected in the reported closed trade P&L.
+
+*   **INFRASTRUCTURE | CRITICAL | Systemic Fill Verification and Position Reconciliation Failure**
+    *   **Description**: The bot failed to recover verified close fills for 6 out of 7 closed trades (`FILL UNVERIFIED`). This led to these positions being marked as `Position in tracker but NOT in Alpaca`, prompting an `external_close` at the entry price, thus reporting a $0.00 P&L. This indicates a severe, widespread issue with the bot's ability to communicate with Alpaca for trade verification and maintain accurate state, which makes all reported P&L and performance metrics unreliable.
+    *   **Exact condition**: The `execution.fill_helpers` module consistently logs `CRITICAL | FILL UNVERIFIED: could not recover a verified close fill. Using entry_price $X.XX as fallback. P&L for this trade is unreliable — manual verification required.` for SNOW, HOOD, MS, MSTR, MARA, and AVGO. This is immediately followed by `WARNING | execution.orphan_manager | [SYMBOL] Position in tracker but NOT in Alpaca (double-confirmed) — closed externally (external_close).`
+
+*   **ALPHA ISSUE | HIGH | Shorting Policy Inconsistency with Orphaned Positions**
+    *   **Description**: The bot adopted an orphaned short position for RIVN while `Shorting: DISABLED` due to insufficient account equity. While adopting existing positions might be a necessary feature, its continued management and the lack of a clear policy (e.g., immediate closure if it violates current trading rules) introduces inconsistency. Furthermore, the adopted RIVN short position (entry $17.32) is a different trade than the RIVN reported in `CLOSED TRADE DETAILS` (entry $19.73, implied long), indicating potential for confusion or misidentification of trades.
+    *   **Exact condition**: `WARNING | main | Shorting: DISABLED — account equity $743.26 < $2,000 minimum for margin short selling.` at `14:14:04`. `CRITICAL | execution.orphan_manager | [RIVN] ORPHANED POSITION ADOPTED — Alpaca: -17 shares @ $17.32 (short)` at `14:14:06`. The `CLOSED TRADE DETAILS` shows a separate `RIVN: entry $19.73 → exit $19.73 (+$0.00)` which is implied long.
+
+*   **INFRASTRUCTURE | MEDIUM | Unexplained Portfolio Value Jump**
+    *   **Description**: The bot reported an initial `equity $743.09` at `14:13:54` during startup validation, but then `Daily reset. Portfolio: $2,844.28` at `14:14:30`. This significant and rapid increase in portfolio value is unexplained by the provided logs and suggests a potential issue with account balance retrieval, daily reset logic, or a manual account funding that was not fully logged or reconciled.
+    *   **Exact condition**: `2026-07-07 14:13:54,831 | INFO | main | Startup validation: Alpaca account ACTIVE | equity $743.09` followed by `2026-07-07 14:14:30,984 | INFO | execution.risk_manager | Daily reset. Portfolio: $2,844.28`.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION | CRITICAL**: Investigate and resolve the discrepancy between the `risk_manager`'s P&L calculation (which triggered the kill switch) and the reported `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS`. The bot's internal P&L accounting for risk management must accurately reflect realized and unrealized P&L, especially from `external_close` trades. Prioritize fixing the `FILL UNVERIFIED` and `Position in tracker but NOT in Alpaca` issues, as they are likely the root cause of the P&L reporting corruption.
+2.  **INFRASTRUCTURE | CRITICAL**: Debug and fix the systemic `FILL UNVERIFIED` and `Position in tracker but NOT in Alpaca` issues. This may involve enhanced Alpaca API error handling, more robust fill polling, or better synchronization mechanisms between the bot's internal state and the broker's actual positions.
+3.  **ALPHA | HIGH**: Implement a clear policy for orphaned positions that conflict with current trading rules (e.g., disabled shorting). The bot should either liquidate such positions immediately upon adoption if they violate current constraints, or the kill switch logic needs to explicitly account for and allow such inherited positions to run to cover if they are not considered "new entries". Also, investigate the two distinct RIVN records to ensure there's no trade misidentification.

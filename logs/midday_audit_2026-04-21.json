@@ -1,0 +1,67 @@
+{
+  "audit_date": "2026-04-21",
+  "run_ts": "2026-04-21T10:30:00.910329-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "NFLX",
+        "ts": "2026-04-21 08:38:02",
+        "score": 11,
+        "pdt": 2,
+        "mri": "STRESSED",
+        "price": 93.19,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "NFLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 22,
+    "levels": {
+      "NORMAL": 7,
+      "STRESSED": 8,
+      "HIGH": 6,
+      "CRITICAL": 1
+    },
+    "last_score": 93,
+    "last_level": "CRITICAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 53,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-04-21 06:31:28,934 | WARNING  | main | RTH DAY stops: 4 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market orders now.",
+      "2026-04-21 07:00:46,531 | WARNING  | main | Risk day (ADP Employment Change Weekly) \u2014 sizing at 50%",
+      "2026-04-21 07:10:08,872 | WARNING  | main | Risk day (ADP Employment Change Weekly) \u2014 sizing at 50%",
+      "2026-04-21 07:19:17,956 | WARNING  | main | Risk day (ADP Employment Change Weekly) \u2014 sizing at 50%",
+      "2026-04-21 07:28:03,269 | WARNING  | main | Risk day (ADP Employment Change Weekly) \u2014 sizing at 50%"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

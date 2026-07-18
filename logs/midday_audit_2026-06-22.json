@@ -1,0 +1,99 @@
+{
+  "audit_date": "2026-06-22",
+  "run_ts": "2026-06-22T10:30:02.932538-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 23,
+    "levels": {
+      "NORMAL": 23
+    },
+    "last_score": 8,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 10,
+    "warning_count": 52,
+    "watchdog_count": 0,
+    "error_samples": [
+      "2026-06-22 16:29:00,426 | ERROR    | execution.broker | [TOST] Partial close failed: {\"code\":40410000,\"message\":\"position does not exist\"}",
+      "2026-06-22 16:29:00,427 | ERROR    | execution.exit_logic | [TOST] Partial close FAILED (consecutive=1) \u2014 position may be locked by a held GTC order. ",
+      "2026-06-22 16:35:46,373 | ERROR    | execution.broker | [TOST] Partial close failed: {\"code\":40410000,\"message\":\"position does not exist\"}",
+      "2026-06-22 16:35:46,374 | ERROR    | execution.exit_logic | [TOST] Partial close FAILED (consecutive=2) \u2014 position may be locked by a held GTC order. ",
+      "2026-06-22 16:55:02,660 | ERROR    | execution.broker | [TOST] Partial close failed: {\"code\":40410000,\"message\":\"position does not exist\"}"
+    ],
+    "warning_samples": [
+      "2026-06-22 14:10:14,949 | WARNING  | execution.portfolio_tracker | [fill_date] Could not parse timestamp '2026-06-22T13:44:11.75157Z': Invalid isoform",
+      "2026-06-22 14:10:17,668 | WARNING  | main | gc.collect() took 2586.7ms, collected 99 objects \u2014 heap may be growing",
+      "2026-06-22 14:15:52,995 | WARNING  | execution.exit_logic | [SMCI] HARD STOP CONFIRMED (3 scans): $34.41 (>= $34.09) \u2014 closing.",
+      "2026-06-22 14:15:53,070 | WARNING  | execution.broker | [SMCI] close_position: position not found on Alpaca \u2014 already closed externally or by concurre",
+      "2026-06-22 14:15:55,107 | WARNING  | execution.lifecycle | Session short ban activated: trigger=hard_stop:SMCI, expires=23:59 ET"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "SMCI",
+      "status": "rc=2",
+      "entry": 28.91,
+      "exit": 28.91
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": 0.0,
+      "entry_price": 28.91,
+      "exit_price": 28.91,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 34.09,
+      "target": 18.13
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": 0.0,
+      "entry_price": 28.91,
+      "exit_price": 28.91,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 34.09,
+      "target": 18.13
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": 0.0,
+        "entry_price": 28.91,
+        "exit_price": 28.91,
+        "size": 3.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 34.09,
+        "target": 18.13
+      }
+    ]
+  }
+}

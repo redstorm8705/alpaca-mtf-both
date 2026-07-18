@@ -1,0 +1,63 @@
+Midday Gemini Audit — 2026-06-30
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+NVDA long trade stop-loss mechanism failure leading to exacerbated loss | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry Price Plausibility:** The entry price of $215.76 for NVDA is a specific numeric value and appears plausible as a market price. Without specific market data for the entry timestamp, no further analysis is possible, but it does not present an obvious malformation or error.
+*   **Exit Price Consistency with Exit Reason:**
+    *   For the NVDA trade, the `stop` was recorded at $206.54. The `exit` price was $203.22. This constitutes a significant deviation below the intended stop price for a long position.
+    *   The "Stop-hit rate: 0%" in the SESSION P&L SUMMARY explicitly states no stops were hit. If the stop was indeed not hit, the position was closed via a generic `exit` reason well below the intended stop price. This indicates either a failure to place/monitor the stop order, or severe slippage that the bot does not classify as a "stop-hit" but still resulted in a loss far beyond the defined risk. This is a critical failure in risk management.
+*   **P&L Signs:** For NVDA, entry $215.76 and exit $203.22 for a long trade correctly resulted in a negative P&L ($-37.60). The P&L sign is correct.
+*   **Win Rate and Profit Factor:** With only one closed trade resulting in a loss, the win rate is 0% and no profit factor can be meaningfully assessed. This single data point is insufficient to evaluate the bot's edge claims.
+*   **Score→Outcome Correlation:** The NVDA entry had a high score of 12/12 (the dynamic MIN_SCORE), yet resulted in a loss. With only one trade, no correlation can be established.
+*   **Stop-hit Rate:** The stated "Stop-hit rate: 0%" is inconsistent with the behavior observed for the NVDA trade. The price moved significantly past the stop level ($206.54) to $203.22 before exiting. If this was not classified as a stop-hit, it implies the stop order either failed to trigger, was not active, or the reporting mechanism is flawed.
+*   **P&L = 0.0 but entry ≠ exit:** No such instances observed.
+*   **Partial Exits:** No partial exits recorded.
+
+### ENTRY QUALITY
+*   **High MRI:** The Macro Risk Index (MRI) was ELEVATED (score=38/100) at the time of scanning and potential entry. This is noted by the bot, and the log `MRI ELEVATED (score=38) — size floor 0.85x applied` indicates that position sizing was appropriately adjusted due to this elevated risk level.
+*   **Low Score:** The NVDA entry scored 12/12. The `MIN_LONG_SCORE` is 10, and the `Dynamic MIN_SCORE` was raised to 12/12 (`effective=12/12`). The entry met the required score.
+*   **Thin Volume:** The provided logs show `VOLSHADOW` for multiple symbols indicating `would_pass: false` due to `vol_ratio` being below an implicit threshold for those signals. However, for NVDA, the specific entry details (volume at entry, vol_ratio) are not provided in `CLOSED TRADE DETAILS` or `FLAGGED ENTRIES`. The `VOLSHADOW` log for NVDA at `17:21:45,530` shows `vol_ratio: 0.375` and `would_pass: false` for a potential LONG signal, but this is a *signal* filtered later by `weekly bias (BEARISH)`, not the actual trade entry. Without specific entry volume data for the *actual* NVDA trade, a definitive statement cannot be made.
+*   **Bad Timing:** Entries occurred during the "midday doldrums" (`sizing at 75%`) and during a "Risk day (Q2 Quarter-End / Window Dressing — 65% size, caution near close)". These factors correctly led to position sizing reductions (75% * 65% = 48.75% of base size, further modified by 0.85x MRI floor), indicating appropriate timing-based risk adjustments were in place.
+
+### EXIT QUALITY
+*   **Cutting Losers Too Slowly:** The most significant issue is the NVDA trade, where the actual exit price ($203.22) was substantially below the programmed stop-loss price ($206.54). This indicates a failure to cut the loser at the specified risk threshold, resulting in a larger loss than intended by the strategy. The "Stop-hit rate: 0%" further implies that the bot did not even register this as a stop-loss event, suggesting a fundamental problem with stop order execution, monitoring, or reporting.
+*   **Holding Winners Too Long:** Not applicable for the NVDA trade, as it was a losing trade.
+
+### MRI ALIGNMENT
+*   The MRI was correctly detected as ELEVATED (score 38/100).
+*   The bot appropriately applied a size reduction: `MRI ELEVATED (score=38) — size floor 0.85x applied`. This demonstrates correct alignment with the MRI risk indicator.
+*   No significant regime mismatch is explicitly indicated beyond the general "Broadening" regime which seems to be accounted for in the dynamic MIN_SCORE.
+
+### LOG ANOMALIES
+*   **Persistent `[ANOMALY-2] risk.open_positions vs tracker` mismatch:**
+    *   Occurrences: `2026-06-30 17:15:05,435`, `2026-06-30 17:21:34,884`, `2026-06-30 17:27:52,952` for `[AMD]` and `[QQQ]`.
+    *   The log states `risk.open_positions=2 vs tracker=0 | MAX_OPEN_POSITIONS=4`. This indicates a recurring internal state inconsistency where the risk module believes it has 2 open positions (for AMD and QQQ), but the internal tracker (which likely reflects actual Alpaca positions) shows 0. This warning persists across multiple cycles and the self-correction (`CYCLE-SYNC should resolve next cycle`) does not appear to be fully effective, or the condition is immediately re-occurring. This could lead to incorrect position sizing calculations or prevent new entries unnecessarily.
+*   **Persistent `[ANOMALY-3] TQI degradation`:**
+    *   Occurrences: `2026-06-30 17:15:05,436`, `2026-06-30 17:21:34,884`, `2026-06-30 17:27:52,953`.
+    *   The bot reports `last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement`. This is a crucial self-assessment of the bot's performance, explicitly pointing to issues with exit discipline and stop placement, which is corroborated by the NVDA trade's poor exit.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Stop-loss mechanism failure:**
+    *   **Description:** For the NVDA trade, the `exit price` ($203.22) was significantly below the `stop price` ($206.54) for a long position. The `SESSION P&L SUMMARY` also reports a "Stop-hit rate: 0%", implying the bot did not recognize this as a stop-loss execution. This indicates a failure in the stop-loss mechanism, either through incorrect order placement, monitoring, or severe unmanaged slippage, leading to losses greater than the defined risk.
+    *   **Exact condition:** NVDA long trade, `entry $215.76`, `stop $206.54`, `exit $203.22`. The difference between exit and stop is $3.32, which is substantial.
+*   **INFRASTRUCTURE | HIGH | Inconsistent Open Position State (`ANOMALY-2`):**
+    *   **Description:** The internal `risk.open_positions` variable reports 2 open positions (for AMD and QQQ), while the `tracker` reports 0. This state mismatch is persistent across multiple cycles and suggests a bug in how open positions are tracked or synchronized internally. While `MAX_OPEN_POSITIONS=4` means it's not currently preventing *all* new trades, it's a critical inconsistency that can lead to incorrect risk calculations, erroneous signal filtering (as hinted by `confirm_gate` message), or a false sense of security regarding open exposure.
+    *   **Exact condition:** Repeated log entry `[ANOMALY-2] [AMD] confirm_gate=3 scans but no entry — risk.open_positions=2 vs tracker=0 | MAX_OPEN_POSITIONS=4.` (and similar for QQQ) at `2026-06-30 17:15:05,435`, `17:21:34,884`, `17:27:52,952`.
+
+*   **ALPHA ISSUE | HIGH | Degradation in Exit Discipline (`ANOMALY-3`):**
+    *   **Description:** The bot's self-reporting mechanism `TQI degradation` indicates that the "last-5-trade avg=28.0/100" is below the threshold of 30, and specifically advises to "review exit discipline and stop placement." This directly points to a systematic problem with the strategy's exit logic, aligning with the actual NVDA trade outcome where the loss exceeded the intended stop. This is an alpha quality concern that could lead to consistent underperformance and unmanaged risk.
+    *   **Exact condition:** Repeated log entry `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` at `2026-06-30 17:15:05,436`, `17:21:34,884`, `17:27:52,953`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / ALPHA | CRITICAL:** Immediately investigate the NVDA stop-loss failure. Determine if the stop order was submitted to Alpaca, if it was active, and why the exit occurred significantly below the stop price without being registered as a stop-hit. This is a fundamental breakdown in risk management.
+2.  **INFRASTRUCTURE | HIGH:** Debug the persistent `[ANOMALY-2] risk.open_positions vs tracker` mismatch for AMD and QQQ. Identify why `risk.open_positions` is reporting phantom positions and ensure `CYCLE-SYNC` properly reconciles internal state with the `tracker` (and actual Alpaca positions).
+3.  **ALPHA | HIGH:** Review the bot's exit discipline and stop placement logic (as highlighted by `[ANOMALY-3] TQI degradation`) in light of the NVDA trade's actual exit far below its stop. This suggests a systematic issue in cutting losses effectively.

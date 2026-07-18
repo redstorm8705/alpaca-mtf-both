@@ -1,0 +1,67 @@
+Nightly Gemini Audit — 2026-07-09
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+execution.portfolio_tracker | P&L corruption and direction mismatch for exit: RIVN trade at 2026-07-07T23:00:40.366062-07:00 shows direction 'short' for a 'long' entry and 'pnl': 0.0 despite price difference (19.73 entry vs 17.3218 exit).
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Recurring ANOMALY-2**: `strategy.run_cycle` repeatedly logs `[ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=7`. This occurs at 19:38:15, 19:45:09, 19:53:11, and 20:00:43 for multiple symbols (SPY, PANW, AAPL, SOXL, MU, QCOM, AMD, AVGO). The stated reason implies a position limit might be the cause if `risk>3`, but `risk.open_positions` is consistently 3, which is below `MAX_OPEN_POSITIONS=7`. This indicates a significant number of high-quality signals are being blocked by an unstated or mis-diagnosed condition.
+*   **Repeated `VOTE-5 vol-target cap produced 0 shares`**: `execution.entry_logic` logs `[AMD] VOTE-5 vol-target cap produced 0 shares (σ_20d=0.835 ann | equity=$2780 | price=$546.42) — skipping entry.` at 2026-07-09 19:46:55,983 and 2026-07-09 19:54:31,002. This is a silent failure to enter a trade for AMD, despite it likely passing initial scoring, due to a position sizing calculation resulting in zero shares.
+*   **`_fetch_options_data fetch failed`**: `scan_to_html` logs `[scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer` at 2026-07-09 19:47:48,646 and 2026-07-09 20:02:58,666. Although logged as INFO, this indicates a data quality issue (NaN values) when fetching options data, potentially impacting downstream calculations or strategy decisions that rely on this data.
+*   **Unnecessary signal generation after market close**: `strategy.run_cycle` generates high-score entry signals for COIN, NET, DDOG at `20:02:08,557`, immediately followed by `execution.entry_logic | execute_entries: market closed (after-hours gate) — skipping all entries.` at `20:02:08,617`. While the entry block is correct, generating and processing these signals after regular trading hours is inefficient for an "intraday" trade mode.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: For the last 10 explicitly exited trades where P&L was non-zero, the sign and magnitude are correct given the entry/exit prices and sizes.
+    *   MS exit `price=216.76`, entry `221.41` (long) -> `(216.76 - 221.41) * 1 = -4.65`. Correct.
+    *   AVGO exit `price=387.58`, entry `376.78` (long) -> `(387.58 - 376.78) * 1 = 10.8`. Correct.
+    *   SNOW exit `price=257.61`, entry `262.28` (long) -> `(257.61 - 262.28) * 1 = -4.67`. Correct.
+    *   HOOD exit `price=110.1`, entry `115.68` (long) -> `(110.1 - 115.68) * 2 = -11.16`. Correct.
+    *   MSTR exit `price=93.04`, entry `100.26` (short) -> `(100.26 - 93.04) * 1 = 7.22`. Correct.
+    *   MARA exit `price=11.81`, entry `13.31` (long) -> `(11.81 - 13.31) * 16 = -24.0`. Correct.
+*   **Trades with `pnl=0.0` where entry ≠ exit price**:
+    *   **CRITICAL ISSUE**: The RIVN exit at `2026-07-07T23:00:40.366062-07:00` has `pnl=0.0` but `price=17.3218`. Its corresponding entry at `2026-07-06T10:35:58.509315-07:00` was `price=19.73`. For a long position, the P&L should be `(17.3218 - 19.73) * 17 = -40.99`. This is a severe P&L recording error, compounded by the `direction: short` in the exit record for a `long` entry. This issue is flagged in CATASTROPHIC ALERT.
+    *   Other `pnl=0.0` exits (AVGO, MARA, MSTR, MS, HOOD, SNOW, RIVN at 07-07T06:38) are for `external_close` reasons where the exit price matches the entry price, correctly yielding zero P&L.
+*   **Score→outcome correlation**: The `all_time_stats.avg_r_multiple` is `0.028`, which is extremely low, especially when `INTRADAY_TARGET_ATR_MULT = 2.5` (implying a target R:R of ~2.08 relative to the stop). This suggests the bot is failing to capture its intended profit edge, either by not reaching targets, exiting too early, or suffering from P&L calculation errors that distort this metric (e.g., the RIVN P&L corruption).
+*   **Stop-hit rate vs. win rate**: Not enough recent stop-hit/take-profit events to definitively analyze. The overall `win_rate` is `45.6%`, and `avg_win` ($20.87) is greater than `abs(avg_loss)` ($13.89), with a `profit_factor` of `1.26`, which are positive indicators. However, the extremely low `avg_r_multiple` raises significant concerns about the actual profit capture.
+
+### TRADE INTEGRITY
+*   **CRITICAL P&L recording error**: The RIVN trade `2026-07-07T23:00:40.366062-07:00` is a recording bug with P&L corruption and direction mismatch. See CATASTROPHIC ALERT.
+*   **`external_close` without explicit price**: Trades at `2026-07-02T07:08:09.929608-07:00` (NVDA) and `2026-07-02T07:08:10.530353-07:00` (GOOGL) show `price: null` and `price_pending: true`. This indicates a potential issue where the actual exit price was not immediately available or recorded, possibly related to P5-H2 or A-4. While the next records for these symbols show P&L (NVDA 2.08, GOOGL 0.86 at 06:32:55), the `external_close` events later on 07-02 show valid prices for these symbols (NVDA 197.9555, GOOGL 359.79), it seems that the null price is a temporary state. The concern is if this temporary state persists and leads to an untracked P&L.
+
+### MODIFIED FILE FINDINGS
+No source files modified in last 24h.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted: UNTOUCHED (Benign)
+*   P5-H2 | Fill price crosstalk: **TRIGGERED**. The RIVN exit `2026-07-07T23:00:40.366062-07:00` exhibits P&L corruption and a direction mismatch, strongly indicative of fill price crosstalk or incorrect P&L reconciliation.
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED. No explicit 404 error, but `external_close_detected` implies external intervention for several positions without clear P&L reconciliation.
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED (Benign)
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED (Cannot assess from provided logs)
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: UNTOUCHED (Cannot assess from provided logs)
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **ALPHA ISSUE | CRITICAL | strategy.run_cycle | Persistent `ANOMALY-2` without clear blocking reason**: The system repeatedly reports `confirm_gate=X scans but no entry` for multiple symbols over several cycles, even though `risk.open_positions=3` is well below `MAX_OPEN_POSITIONS=7`. This indicates a significant number of qualified signals are being blocked, severely impacting the bot's ability to enter trades. The specific condition preventing entry is not clearly stated in the log for these instances.
+*   **EXECUTION BUG | HIGH | execution.entry_logic | Silent entry failure due to `VOTE-5 vol-target cap produced 0 shares`**: The `execution.entry_logic` function calculates `0 shares` to purchase for high-scoring symbols (e.g., AMD) due to `VOTE-5 vol-target cap`, leading to a silent failure to enter a trade. This prevents potentially profitable trades without providing a clear, actionable reason in the `ANOMALY-2` type logs.
+*   **INFRASTRUCTURE | MEDIUM | scan_to_html._fetch_options_data | Options data fetching failure with NaN conversion error**: The `_fetch_options_data` function fails to convert a `float NaN to integer` at least twice, returning `None`. This suggests either corrupted or missing options data is being supplied, which could lead to incorrect signal generation or risk management decisions if other parts of the system rely on this data without robust error handling for `None` or `NaN`.
+*   **ALPHA ISSUE | MEDIUM | strategy.run_cycle | Inefficient signal generation past market close**: The `strategy.run_cycle` continues to generate high-scoring entry signals (e.g., COIN, NET, DDOG at 20:02:08,557) moments before the `after-hours gate` blocks them. For an "intraday" trading mode, generating signals after market close is inefficient and wastes processing cycles.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT**: Investigate and fix the P&L corruption and direction mismatch in `external_close` events, specifically demonstrated by the RIVN trade at `2026-07-07T23:00:40.366062-07:00`. Ensure that the `direction` field in exit events always reflects the original entry direction and that P&L is correctly calculated for all exits, regardless of the `exit_reason`. This directly impacts `P5-H2`.
+2.  Investigate the root cause of the persistent `[ANOMALY-2]` entries being blocked when `risk.open_positions < MAX_OPEN_POSITIONS`. Log the *specific* reason for rejection more verbosely within the `ANOMALY-2` message (e.g., "sector correlation block", "news penalty block", "liquidity block" etc.) to aid in debugging.
+3.  Review and adjust the `VOTE-5 vol-target cap` logic in `execution.entry_logic` to prevent generating `0 shares` for valid entry signals. Re-evaluate the volatility scaling for position sizing to ensure it doesn't overly restrict entries for high-quality signals.
+4.  Implement robust error handling in `scan_to_html._fetch_options_data` (and any other functions calling it) for `NaN` values and `None` returns. Ensure that data fetching failures are handled gracefully without propagating `NaN` errors or silently failing to provide critical data.
+5.  Optimize the `strategy.run_cycle` to cease or modify signal generation for "intraday" trades after market close, preventing wasted processing on unexecutable orders.

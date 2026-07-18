@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-22 01:35 PM PT",
+  "ts_iso": "2026-06-22T13:35:05.490694-07:00",
+  "prompt_chars": 49337,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 49337,
+  "gai_prompt_chars": 49413,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "GROQ_API_KEY not set in environment"
+  },
+  "gemini": {
+    "text": "1. TRADE-BY-TRADE VERDICT\n- **TOST (Short)**: Entry 06-17 @ $24.92. Breakeven push to $24.29. Exit @ $24.95. \n  **VERDICT: edge_confirmed**. The trade went into profit, the stop was moved to breakeven, and it was stopped out for a scratch. The initial directional edge was correct.\n- **SMCI (Short)**: Entry 06-17 @ $28.91. Stop hit. Fill shows $34.24. \n  **VERDICT: gap_forced / entry_error**. The event logged the stop at the entry price ($28.91), but the actual fill was $34.24. This indicates a massive weekend gap-up against the short position, resulting in severe slippage.\n- **NFLX (Short)**: Entry 06-17 @ $77.54. Partial exit @ $76.38. Exit @ $77.60. \n  **VERDICT: edge_confirmed**. Captured partial profit, and the remainder was stopped out at breakeven.\n- **MSTR (Short)**: Entry 06-17 @ $120.63. Currently open, price at $109.53. \n  **VERDICT: edge_confirmed**. Deep in profit ($11.10/share), though the bot is attempting to place an AH GTC stop at the entry level ($120.65) rather than trailing it.\n\n2. PATTERN ANALYSIS\n- **Premature Breakeven Truncation [INSUFFICIENT_SAMPLE — N=16]**: The bot is aggressively moving stops to breakeven once a trade is in profit, which is truncating momentum. TOST and NFLX were both stopped out at breakeven after showing initial profit. MSTR is currently $11 in profit, yet the AH GTC stop is being placed at $120.65 (entry level) rather than trailing behind the current price to lock in gains. This leaves significant alpha on the table.\n- **Event vs. Fill Price Discrepancy**: There is a mismatch between the price logged in the `EXIT` events and the actual Alpaca fills. For example, the NFLX exit event logged at $93.19, but the actual fill was $77.60. The SMCI stop hit event logged at $28.91, but filled at $34.24. While SMCI is explained by weekend gap slippage, the NFLX discrepancy suggests the event logger may be capturing an unadjusted trigger price or experiencing data latency.\n\n3. PRIOR DIRECTIVES COMPLIANCE\n- Week 2026-W24 (x4): N/A → **CANNOT_VERIFY** (No specific directives were provided in the prompt).\n\n4. WEEKLY DIRECTIVES\n*⚠️ STATISTICAL GUARDRAIL ACTIVE: DIRECTIVES BLOCKED (N=16 < 20).*\n- **Observation on Trailing Stops**: The current logic for moving stops to breakeven (e.g., `profit dist $11.10 < 0.5R $0.00 or at loss`) appears to be failing mathematically. By calculating 0.5R as $0.00, the bot anchors the stop to the entry price even when deep in profit (like MSTR), risking the surrender of substantial unrealized gains.\n- **Observation on Gap Risk**: The SMCI short suffered a severe adverse excursion (entry $28.91, fill $34.24). This highlights the risk of holding highly volatile stocks overnight/over the weekend without guaranteed stops or options-based hedging.\n\n5. FINAL VERDICT\n**WARN** — The core confluence edge is successfully identifying profitable entries (TOST, NFLX, MSTR all went into profit), but a mathematical bug in the R-multiple calculation is preventing trailing stops from locking in gains, and infrastructure warnings (memory leaks, timestamp parsing) require immediate attention.\n\n6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"Fails to parse ISO 8601 timestamps with 'Z' or '+00:00' timezone offsets (e.g., '2026-06-22T13:44:11.75157Z').\",\n    \"recommended_fix\": \"Update timestamp parsing logic to handle 'Z' by replacing it with '+00:00' or use dateutil.parser.parse() for robust ISO 8601 parsing.\",\n    \"rc_class\": \"RC-3\"\n  },\n  {\n    \"file\": \"main.py\",\n    \"finding\": \"Garbage collection is taking excessively long (3954.8ms) and warning that the heap may be growing, indicating a potential memory leak.\",\n    \"recommended_fix\": \"Profile memory usage during the MTF cycle to identify uncollected objects (e.g., unclosed aiohttp sessions or accumulating dataframe copies) and ensure proper cleanup.\",\n    \"rc_class\": \"RC-2\"\n  },\n  {\n    \"file\": \"strategy/run_cycle.py\",\n    \"finding\": \"R-multiple (0.5R) is being calculated as $0.00 for MSTR ('profit dist $11.10 < 0.5R $0.00'), causing the trailing stop logic to fail and default to the entry price.\",\n    \"recommended_fix\": \"Ensure ATR or risk basis is properly initialized and not zero when calculating R-multiples for trailing stops. Add a fallback minimum risk value to prevent division/multiplication by zero.\",\n    \"rc_class\": \"RC-4\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 33261,
+    "elapsed_s": 54.83,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

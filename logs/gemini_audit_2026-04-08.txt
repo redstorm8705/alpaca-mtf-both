@@ -1,0 +1,106 @@
+Nightly Gemini Audit — 2026-04-08
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['alerts.py', 'config.py', 'log_fill.py', 'generate_dashboard.py', 'weekly_review.py', 'options_scanner.py', 'main.py', 'nightly_audit.py', 'live_data_writer.py', 'execution/portfolio_tracker.py', 'execution/broker.py', 'execution/risk_manager.py', 'events/macro_risk_index.py', 'data/fetcher.py', 'strategy/signal_generator.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Excessive "Another bot instance is already running" ERRORs:** The log is saturated with hundreds of these errors. This indicates a severe issue with the bot's launch mechanism (e.g., cron job, launchd, or watchdog) repeatedly attempting to start new instances of `main.py` (and possibly `live_data_writer.py`) that immediately fail due to a lockfile. This causes significant log noise, wastes system resources, and obscures real issues.
+*   **Critical Failure of Overnight GTC Stop Orders due to PDT:** All 5 open positions (AMD, COIN, TSLA, TOST, QQQ) are marked `overnight: true` in `trade_log.json`. The log shows multiple `ERROR: GTC stop order failed: {"code":40310100,"message":"trade denied due to pattern day trading protection"}` followed by `WARNING: AH GTC stop FAILED — gtc_stop_order_id cleared. NO exchange-level stop overnight. Check Alpaca manually.` This confirms that the bot entered trades after 3:30 PM ET with `PDT: 3/3`, but then Alpaca's PDT rule prevented it from placing exchange-level stop-loss orders. These positions are now completely unprotected at the exchange level.
+
+### TRADE INTEGRITY
+
+*   **Unprotected Overnight Positions:** All 5 currently `open` trades (AMD, COIN, TSLA, TOST, QQQ) explicitly state `"gtc_stop_order_id": null` and `"overnight": true`. This is a direct result of the "trade denied due to pattern day trading protection" error when attempting to place after-hours GTC stop orders, as seen in the logs. This leaves substantial capital exposed to unmitigated overnight gap risk.
+*   **PDT=3/3 Conviction Rule Violation (QQQ):** The `QQQ` trade, entered at `2026-04-08T13:37:37.759432-04:00` (1:37 PM ET) has a `score: 8`. This directly contradicts the `config.py` rule `CONVICTION_PDT_SOFT_MIN = 10` for entries when `PDT=3/3`. Although the trade has `_adopted_orphan: true`, if the bot is managing it, it should either adhere to its own risk rules or explicitly mark it as a manual/unmanaged trade.
+*   **P&L Calculations:** P&L, P&L %, entry, and exit prices for closed trades appear to be calculated correctly based on the provided data.
+
+### MODIFIED FILE FINDINGS
+
+*   **alerts.py:** No issues found. The SSL context fix and robust alert logic are good.
+*   **config.py:**
+    *   **Inaccurate WATCHLIST Comment:** The comment "Trimmed to 10 tickers — avoids Alpaca free tier rate limits" (line 27) is misleading. The `WATCHLIST` currently contains 24 tickers. This discrepancy suggests potential for increased API calls that could hit rate limits or slow down scan cycles.
+    *   **PDT Conviction Rule Conflict:** `CONVICTION_PDT_SOFT_MIN = 10` (line 49) directly conflicts with the observed `QQQ` entry (`score=8`) when `PDT=3/3`.
+    *   New constants for leveraged ETFs and bucket allocations are well-defined.
+*   **log_fill.py:**
+    *   **Ambiguous P&L Calculation for External Closes:** When `args.exit` is provided but no matching open position is found (lines 68-71), the script logs a new "closed" trade using `args.premium` as the `entry_premium`. If `args.premium` is not the actual entry premium of the externally closed trade, the calculated `pnl` and `pnl_pct` will be incorrect. This allows for manual data entry errors that won't be flagged.
+*   **generate_dashboard.py:**
+    *   **Redundant PDT Logic:** The `_pdt_rolling_count` function (lines 112-132) re-implements PDT counting logic (including hardcoded holidays) that already exists in `execution/portfolio_tracker.py`. This redundancy creates a maintenance burden and a risk of inconsistent PDT reporting if the canonical logic changes.
+    *   The fix for `.env` loading in `_load_alpaca` is good.
+*   **weekly_review.py:**
+    *   **Redundant PDT Logic:** Similar to `generate_dashboard.py`, `_pdt_for_date` and `_rolling_pdt_count` (lines 94-118) duplicate PDT counting logic from `execution/portfolio_tracker.py`. This introduces potential for discrepancies.
+*   **options_scanner.py:** No issues found. This is a manual helper script, and its logic for options selection, risk, and holiday awareness appears robust for its intended purpose.
+*   **main.py:**
+    *   **Lockfile Issue:** The widespread `ERROR: Another bot instance is already running. Exiting.` indicates a persistent problem with the lockfile mechanism or the bot's launching system, causing multiple instances to attempt to start.
+    *   **Overnight Entry Logic Flaw:** The logs show `PDT gate: rolling_dt=3/3 but after 3:30 PM ET — power-hour/close entries permitted, gate inactive`. This "inactive" gate permits entries, but then the GTC stop placement fails due to PDT. This indicates a critical logical inconsistency between entry permission and risk management.
+    *   `OVERNIGHT_ENTRIES_ENABLED = False` (line 34) is confusing given that trades *are* being held overnight. This flag likely controls a distinct "after-hours specific entry" feature, but the current behavior of intraday trades becoming overnight (and then unprotected) is problematic.
+    *   The new global variables like `_last_vix`, `_feed_age_history`, `_SECTOR_MAP` show good development toward more robust risk management and data quality monitoring.
+*   **nightly_audit.py:** No issues found. Its function as an external auditor seems correctly implemented.
+*   **live_data_writer.py:**
+    *   As noted in P5-L3, while it attempts to `generate()` the dashboard regularly and catches exceptions, `_load_alpaca` (in `generate_dashboard.py`) itself lacks robust retry/reconnect logic for transient API fetch failures (beyond the initial `.env` check). This could lead to a stale or error-state dashboard for a full `INTERVAL` (30 seconds) before the next attempt, rather than immediate retries for data freshness.
+*   **execution/portfolio_tracker.py:**
+    *   `_atomic_write` is a good, robust implementation.
+    *   This module holds the canonical PDT counting logic, which is good. The redundant implementations elsewhere are the issue.
+*   **execution/broker.py:**
+    *   The `_short_blocked_symbols` cache and retry logic (`_is_retryable`) are good for robustness.
+    *   **Core Problem:** This module correctly *identifies and rejects* GTC stop orders when PDT rules are violated (e.g., `40310100` error). The problem is that the `main.py` logic attempts to place these orders in the first place after allowing PDT-constrained entries in the afternoon.
+*   **execution/risk_manager.py:** The VIX stop widening with proportional target adjustment is a well-implemented fix to maintain risk-reward ratios under high volatility, addressing previous issues. Volatility tier adjustments also look good.
+*   **events/macro_risk_index.py:** The `_restore()` method with score decay for downtime correctly addresses the P5-M2 bug. The new MRI scoring, levels, and size/score floors enhance risk awareness.
+*   **data/fetcher.py:** The inclusion of `class DataFetcher` fixes P5-C2. Rate limiting and exponential backoff are good. Relying on Wikipedia for `get_universe()` is an external dependency risk, but not a bug in the bot's code itself.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** **UNTOUCHED**. Relevant code (`_find_recent_fvgs()`) not visible.
+*   **P5-C2 | run_movers.py ImportError:** **FIXED**. `data/fetcher.py` now defines `class DataFetcher`.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** **UNTOUCHED**. No specific fix visible for `_entry_confirm_buffer` staleness at RTH open.
+*   **P5-H2 | Fill price crosstalk:** **UNTOUCHED**. No direct changes found addressing this.
+*   **P5-H3 | Orphan GTC 404 path:** **UNTOUCHED**. `broker.py` only warns; `main.py` clears ID only on *submission* failure, not subsequent 404.
+*   **P5-H4 | Rule 2 dead code:** **UNTOUCHED (or removed without resolution)**. `TOD_MARKET_OPEN_BUFFER_MINS` not found in code.
+*   **P5-M1 | Cycle watchdog restart loop:** **TRIGGERED / WORSENED**. Logs show rampant "Another bot instance is already running. Exiting." errors, indicating a persistent lockfile issue with process restarts.
+*   **P5-M2 | MRI score cached stale across sessions:** **FIXED**. `events/macro_risk_index.py`'s `_restore()` method now includes logic for decay based on downtime.
+*   **P5-M3 | score_comparison JSON unbounded growth:** **UNTOUCHED**. No `score_comparison.json` or related pruning visible.
+*   **P5-L1 | Weekly review PDT label:** **UNTOUCHED**. Cannot verify HTML output from provided code.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** **UNTOUCHED**. Trades open at EOD are intentionally not included in `pnl_today`, by design.
+*   **P5-L3 | live_data_writer.py no reconnect logic:** **UNTOUCHED**. `_load_alpaca` uses REST and lacks robust retry logic for API fetch failures beyond initial exception handling.
+
+### NEW BUGS FOUND
+
+1.  **CRITICAL | main.py, execution/broker.py, trade_log.json | Unprotected Overnight Positions due to PDT on GTC Stops**
+    *   **Description:** The bot's logic permits entries when `PDT=3/3` during power-hour/after-hours (e.g., after 3:30 PM ET), assuming these trades will be held overnight. However, Alpaca's PDT rules prevent the placement of necessary Good-Til-Canceled (GTC) stop-loss orders for these trades (`code=40310100`), leaving all current overnight positions (AMD, COIN, TSLA, TOST, QQQ) with no exchange-level stop protection. This exposes the account to significant, unmitigated overnight risk.
+    *   **Exact Failure Condition:** Log: `2026-04-08 12:59:51,322 | INFO | main | PDT gate: rolling_dt=3/3 but after 3:30 PM ET — power-hour/close entries permitted, gate inactive`. Subsequently: `2026-04-08 13:33:52,567 | ERROR | execution.broker | [AMD] GTC stop order failed: {"code":40310100,"message":"trade denied due to pattern day trading protection"}` and `2026-04-08 13:33:52,571 | WARNING | main | [AMD] AH GTC stop FAILED — gtc_stop_order_id cleared. NO exchange-level stop overnight. Check Alpaca manually.` Confirmed by `trade_log.json` showing `gtc_stop_order_id: null` for all open trades.
+
+2.  **HIGH | config.py, main.py, trade_log.json | PDT 3/3 Conviction Rule Violation**
+    *   **Description:** The bot entered a QQQ Long trade with a `score=8` on 2026-04-08 at 13:37 ET, when the `PDT` counter was `3/3`. This directly violates the `config.py` rule `CONVICTION_PDT_SOFT_MIN = 10`, which mandates that entries with a score below 10 should be skipped when PDT is exhausted. The `_adopted_orphan: true` flag suggests a non-standard entry, but if the bot is managing the trade, its risk rules should apply.
+    *   **Exact Failure Condition:** `config.py` line 49: `CONVICTION_PDT_SOFT_MIN = 10`. `main.py` log `2026-04-08 13:31:51,771 | INFO | main | ─── MTF cycle @ 16:31:51 ET | Mode: intraday | TOD: closed | PDT: 3/3 ───`. `trade_log.json` for QQQ: `{"symbol": "QQQ", ..., "score": 8, ..., "entry_time": "2026-04-08T13:37:37.759432-04:00", ..., "overnight": true, ..., "_adopted_orphan": true}`.
+
+3.  **MEDIUM | config.py, data/fetcher.py | Inaccurate WATCHLIST Comment & Potential Rate Limits**
+    *   **Description:** The `config.py` file (line 27) comments state the `WATCHLIST` is "Trimmed to 10 tickers — avoids Alpaca free tier rate limits". However, the actual `WATCHLIST` defined immediately below contains 24 tickers. This outdated comment is misleading and indicates a potential for the bot to hit Alpaca's free tier rate limits more frequently, potentially impacting data freshness and scan performance despite internal throttling mechanisms.
+    *   **Exact Failure Condition:** `config.py` line 27-28 comment vs. `config.py` lines 30-38 actual `WATCHLIST` definition.
+
+4.  **LOW | generate_dashboard.py, weekly_review.py | Redundant PDT Logic Re-implementation**
+    *   **Description:** Both `generate_dashboard.py` (`_pdt_rolling_count`) and `weekly_review.py` (`_pdt_for_date`, `_rolling_pdt_count`) contain independently implemented PDT counting logic, including hardcoded holiday lists. This is a redundant implementation of a core function that already exists and is canonical in `execution/portfolio_tracker.py`. This increases maintenance overhead and creates a risk of subtle inconsistencies in PDT reporting if the logic diverges across files.
+    *   **Exact Failure Condition:** `generate_dashboard.py` lines 112-132 (`_pdt_rolling_count`). `weekly_review.py` lines 94-118 (`_pdt_for_date`, `_rolling_pdt_count`).
+
+5.  **LOW | EOD SNAPSHOT | Misleading "pdt_slots_used" for SYNC entries**
+    *   **Description:** The `EOD SNAPSHOT` `pdt_slots_used` array explicitly lists "SYNC" entries as if they consumed a PDT slot for the day (`"symbol": "SYNC", "timestamp": "2026-04-07", ...`). However, the actual PDT counting logic in `generate_dashboard.py` and `weekly_review.py` explicitly *excludes* "SYNC" entries from the rolling 5-day count (`t.get("symbol") != "SYNC"`). This inconsistency is misleading in the report, giving a false impression of PDT slot usage.
+    *   **Exact Failure Condition:** `EOD SNAPSHOT: pdt_slots_used` for 2026-04-07 and 2026-04-08 includes `{"symbol": "SYNC", ...}` entries, while `generate_dashboard.py` line 130 and `weekly_review.py` line 116 explicitly filter out `"SYNC"` symbols when calculating the actual count.
+
+### RECOMMENDED ACTIONS
+
+1.  **CRITICAL: Immediately address unprotected overnight positions.**
+    *   Manually place stop-loss orders for all open positions in the Alpaca paper account.
+    *   Revise the bot's PDT gate logic to *never permit new entries* when `PDT=3/3` if exchange-level stop-loss orders cannot be placed (e.g., during power-hour/after-hours). The current behavior is a critical risk management flaw.
+
+2.  **CRITICAL: Fix multiple bot instance launch failures.**
+    *   Investigate and correct the system-level configuration (e.g., cron job, launchd, or watchdog) that is causing repeated attempts to launch `main.py` when an instance is already running. Ensure the lockfile mechanism is properly respected and that only one instance of the bot runs at a time.
+
+3.  **HIGH: Enforce PDT conviction rules consistently.**
+    *   Investigate why the QQQ trade (score 8) was entered when `CONVICTION_PDT_SOFT_MIN` (10) should have blocked it on a `PDT=3/3` day. Clarify how `_adopted_orphan: true` trades are handled and ensure they either adhere to bot risk rules or are clearly segregated as manually managed.
+
+4.  **MEDIUM: Centralize PDT counting logic.**
+    *   Refactor `generate_dashboard.py` and `weekly_review.py` to use the canonical PDT counting methods provided by `execution/portfolio_tracker.py` instead of re-implementing the logic. This will ensure consistency and ease future maintenance.
+
+5.  **LOW: Update `config.py` and clarify `log_fill.py` behavior.**
+    *   Correct the `WATCHLIST` comment in `config.py` to reflect the actual number of tickers.
+    *   Modify `log_fill.py` to require an explicit `entry_premium` argument when logging an external trade's close without a matching open position, to prevent erroneous P&L calculations.

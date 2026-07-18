@@ -1,0 +1,117 @@
+Nightly Gemini Audit — 2026-06-29
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['run_movers.py', 'execution/quarterly_hold_manager.py', 'execution/risk_manager.py', 'execution/broker.py', 'execution/gtc_manager.py', 'indicators/momentum.py', 'indicators/macd.py', 'strategy/run_cycle.py', 'strategy/signal_generator.py', 'strategy/movers/strategy.py', 'events/calendar.py', 'events/news_monitor.py', 'events/macro_risk_index.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **[ANOMALY-3] TQI degradation**: Recurring warning seen at 18:50:11, 18:56:43, 19:02:56, 19:14:30, 19:20:49, 19:27:22, 19:33:33, 19:39:57. This indicates that the average TQI score for the last 5 trades is consistently below the 30/100 threshold, suggesting a persistent issue with exit discipline or stop placement.
+*   **`gc.collect() took 3219.1ms`**: This warning from `main` at 2026-06-29 19:09:07 indicates a lengthy garbage collection cycle, which could point to memory pressure, a growing heap, or inefficient object management within the bot.
+
+### PERFORMANCE AUDIT
+The `trade_events` log shows only 7 trades from June 24-27.
+*   **P&L Sign Correctness**: For the `NVDA` `stop_hit` on 2026-06-26T07:43:09.159676-07:00, the entry was $198.17 (from reason string) and the exit price was $193.23 (less than entry for a long trade), resulting in `pnl: -4.94`. This is correct.
+*   **pnl=0.0 anomalies**: Two `exit` events (NFLX and GOOGL at 2026-06-27T12:11:01 and 12:11:02 respectively) show `price: null` and `price_pending: true`, with no `pnl` recorded in the `trade_events` JSON itself. While "A-4 paper fills gap: Alpaca returned 0 fills" is a benign pattern, the expectation is that the bot "falls back to tracker P&L correctly." The absence of `pnl` in the *recorded exit event* implies the specific event log is incomplete, even if the overall tracker P&L might be updated later. This is a recording inconsistency.
+*   **Score→Outcome Correlation**: The overall `all_time_stats` show `avg_r_multiple: -0.056`, `win_rate: 44.4%`, and `profit_factor: 1.19`. An average R-multiple of -0.056 suggests the average loss size is greater than the average win size, indicating the bot is not effectively capturing its edge or that risk-reward is inverted in practice. This corroborates the recurring `[ANOMALY-3] TQI degradation` warnings. The bot is not meeting the stated 2.5x R:R target.
+
+### TRADE INTEGRITY
+*   **Missing P&L on `external_close_detected`**: For the `NVDA` and `GOOGL` exits on 2026-06-27 with `price: null`, the `pnl` field is entirely missing from the `trade_events` JSON record.
+    *   **Failure condition**: The `trade_events` JSON record does not contain the `pnl` value for exits where `price` is null (specifically `qhm_external_close`). This makes direct auditing of P&L for these specific events impossible from the `trade_events` log alone. While `A-4` states the bot falls back to tracker P&L, this specific log entry is deficient.
+    *   **Intended behavior**: Even if `price` is null, a placeholder `pnl` (e.g., `0.0`) should be recorded in the trade event, or a flag indicating P&L is deferred to the tracker.
+    *   **Source**: `trade_logger.py` `log_event()` function is likely missing logic to explicitly write `pnl=0.0` or a sentinel for `price=null` exits. Or `execution/quarterly_hold_manager.py`'s exit logic, which is the source of `qhm_external_close`, is not passing a P&L value to the logger for these events.
+
+### MODIFIED FILE FINDINGS
+1.  **file**: `run_movers.py`
+    *   **Function**: `run_movers_cycle`
+    *   **Description**: Inconsistent use of configuration constants for market open/close buffer times. The script uses hardcoded values (9:45 AM ET for open, 3:45 PM ET for EOD flattening) instead of `config.TOD_MARKET_OPEN_BUFFER_MINS` (30 mins) and `config.TOD_EOD_NO_ENTRY_MINS` (15 mins).
+    *   **Code path**:
+        ```python
+        # run_movers.py, lines 74-75
+        if total_mins < (9 * 60 + 45): # Should use config.TOD_MARKET_OPEN_BUFFER_MINS
+            logger.info("Waiting — first 15 mins (9:30-9:45)")
+            return
+        if total_mins > (15 * 60 + 45): # Aligns with config.TOD_EOD_NO_ENTRY_MINS (15min before 4PM)
+            logger.info("EOD window — flattening intraday")
+            strategy.flatten_intraday()
+            return
+        ```
+    *   **Failure condition**: `config.TOD_MARKET_OPEN_BUFFER_MINS` (30, implying 10:00 AM start) is ignored, and trades may be attempted earlier (from 9:45 AM) than intended by the general config. `config.TOD_EOD_NO_ENTRY_MINS` is not directly referenced but the hardcoded value (15:45) is consistent with it. This is a configuration violation for the opening buffer.
+
+2.  **file**: `execution/broker.py`
+    *   **Function**: `submit_day_stop_order`
+    *   **Description**: A critical path for submitting RTH DAY stop orders has a side effect of canceling other orders (tranche limits, for example) if Alpaca rejects the stop due to `40310000 / insufficient buying power` (which often indicates held_for_orders). This cancellation is not followed by a re-submission of the *cancelled* orders, potentially leaving portions of the original strategy (e.g., partial exits) unexecuted for the remainder of the session.
+    *   **Code path**:
+        ```python
+        # execution/broker.py, lines 400-406
+        if "40310000" in err or "insufficient" in err.lower():
+            logger.warning(
+                f"[{symbol}] DAY stop blocked (40310000 / insufficient buying power) — "
+                f"clearing blocking orders and retrying once."
+            )
+            cancel_open_orders_for_symbol(symbol) # This cancels other orders
+            # ... retry logic ...
+        ```
+    *   **Failure condition**: If `cancel_open_orders_for_symbol` cancels a `gtc_partial_order_id` (a limit order for a partial exit) that was blocking the DAY stop, and the DAY stop subsequently succeeds, the `gtc_partial_order_id` is now gone. No mechanism in `broker.py` or its caller (`execution/gtc_manager.py`) attempts to re-establish these cancelled partial exit orders. This silently disables partial exits for that symbol for the rest of the RTH session.
+
+3.  **file**: `events/macro_risk_index.py`
+    *   **Function**: `__del__`
+    *   **Description**: The `__del__` method attempts to `_yf_executor.shutdown(wait=True, cancel_futures=True)`. While `MacroRiskIndex` instances are typically long-lived, this `wait=True` call can introduce blocking delays (up to 8 seconds if a yfinance request is in-flight) if the bot is shut down or if, in a future refactor, `MacroRiskIndex` objects become short-lived and are frequently garbage collected. The comment acknowledges this as a "WARNING" for future refactors but it's a design choice with potential performance implications for system responsiveness during shutdown/cleanup.
+    *   **Code path**:
+        ```python
+        # events/macro_risk_index.py, lines 102-111
+        def __del__(self) -> None:
+            # ...
+            try:
+                self._yf_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
+        ```
+    *   **Failure condition**: If a yfinance call is active when `__del__` is invoked, the process shutdown or garbage collection of the object can block for up to 8 seconds, potentially delaying other critical shutdown tasks or impacting system responsiveness.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED (not visible in provided code).
+*   **P5-C2 | run_movers.py ImportError | run_movers.py:19 imports DataFetcher which doesn't exist**: FIXED (DataFetcher is correctly imported and exists).
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE (per audit instructions).
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED (not explicitly addressed in modified files).
+*   **P5-H3 | Orphan GTC 404 path**: FIXED (gtc_manager now correctly handles 404 from get_order as confirmed gone).
+*   **P5-H4 | Rule 2 dead code**: TRIGGERED (run_movers.py does not use config.TOD_MARKET_OPEN_BUFFER_MINS).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed**: FIXED (status already provided).
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED (not visible in provided code).
+*   **P5-M2 | MRI score cached stale across sessions**: FIXED (MacroRiskIndex's _restore() and _startup_stale logic addresses this).
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (not explicitly addressed in modified files).
+*   **P5-L1 | _classify_loss_driver() returns empty label**: UNTOUCHED (not visible in provided code).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: UNTOUCHED (run_cycle.py's logic might still write an EOD summary before final closes if not reconciled).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED (not visible in provided code).
+
+### NEW BUGS FOUND
+*   **CATEGORY**: TRADE INTEGRITY
+    *   **SEVERITY**: HIGH
+    *   **File**: `trade_logger.py` (impacted by `execution/quarterly_hold_manager.py`)
+    *   **Description**: The `trade_events` JSON records for `qhm_external_close` exits (e.g., NVDA, GOOGL on 2026-06-27) are missing the `pnl` field. This omission means P&L for these specific closure events cannot be directly audited from the primary log, creating a gap in trade integrity reporting.
+    *   **Exact failure condition**: `trade_events` JSON objects with `event: "exit"` and `exit_reason: "external_close_detected"` do not contain a `pnl` key.
+
+*   **CATEGORY**: EXECUTION BUG
+    *   **SEVERITY**: HIGH
+    *   **File**: `execution/broker.py` and `execution/gtc_manager.py`
+    *   **Description**: When submitting a DAY stop order, if it's initially rejected due to insufficient buying power (typically caused by other open limit orders), the system `cancel_open_orders_for_symbol` and retries. If this retry succeeds, the original blocking limit orders (e.g., `gtc_partial_order_ids` for partial exits) are permanently cancelled without re-submission, effectively disabling that part of the strategy for the session for that symbol.
+    *   **Exact failure condition**: A call to `broker.submit_day_stop_order()` triggers `cancel_open_orders_for_symbol(symbol)`, which removes active limit orders. If the DAY stop then succeeds, the cancelled limit orders are not re-submitted by either `broker.py` or `gtc_manager.py`, leading to unintended inactivation of trading intent (e.g., partial profit taking).
+
+*   **CATEGORY**: INFRASTRUCTURE
+    *   **SEVERITY**: MEDIUM
+    *   **File**: `events/macro_risk_index.py`
+    *   **Description**: The `__del__` method's `self._yf_executor.shutdown(wait=True)` can introduce blocking during process shutdown or unexpected object garbage collection. While acknowledged as a "warning" for future refactors, it's a current design choice that can impact system responsiveness.
+    *   **Exact failure condition**: If the `MacroRiskIndex` object is garbage collected or the process terminates while `_yf_executor` has an active `yfinance` request, the `__del__` method will block for up to 8 seconds, delaying application shutdown.
+
+### FIX VALIDATION
+No prior fixes to validate for new bugs found. All AWP audit fixes (2026-06-28) in the provided code snippets are confirmed to be correctly implemented as described.
+
+### RECOMMENDED ACTIONS
+1.  **HIGH**: Implement re-submission logic for cancelled limit orders in `execution/broker.py` or ensure `execution/gtc_manager.py` handles the re-establishment of `gtc_partial_order_ids` if they are cancelled during DAY stop submission. This prevents unintended inactivation of profit-taking logic.
+2.  **HIGH**: Modify `trade_logger.py` or `execution/quarterly_hold_manager.py` to explicitly record a `pnl` value (e.g., `0.0`) in `trade_events` JSON records for `external_close_detected` events where `price` is null, ensuring P&L auditability for all exit events.
+3.  **MEDIUM**: Review and adjust the hardcoded market timing in `run_movers.py` (`9*60+45` and `15*60+45`) to consistently use `config.TOD_MARKET_OPEN_BUFFER_MINS` and `config.TOD_EOD_NO_ENTRY_MINS` from `config.py` to centralize configuration.
+4.  **MEDIUM**: Investigate the persistent `[ANOMALY-3] TQI degradation` warnings and the negative `avg_r_multiple`. Review exit discipline, stop placement, and partial exit logic for all strategies to improve profitability and risk-reward profile.
+5.  **MEDIUM**: Address the `gc.collect() took ... heap may be growing` warning. Profile memory usage, identify potential memory leaks, and optimize object lifecycle management or data structures to reduce garbage collection overhead.

@@ -1,0 +1,57 @@
+Midday Gemini Audit — 2026-05-21
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+No entries or exits were recorded for the current session (Total P&L: $0.00, Wins: 0, Losses: 0). Therefore, entry/exit integrity, P&L sign checks, score→outcome correlation, and stop rate analysis cannot be performed for this session's trades. Historical Kelly stats show `short_intraday` WR 25.0% PF 0.29 and `long_intraday` WR 37.1% PF 1.5, which do not reflect current session performance.
+
+### ENTRY QUALITY
+No issues with entry *timing* were observed (e.g., ORB gate block is an intentional filter). However, systematic issues are preventing entries, as detailed in the "New Bugs / Concerns" section below (Max Positions Violation, Intraday Entries Blocked by Excessive Overnight Notional).
+
+### EXIT QUALITY
+No closed trades or exits occurred in this session, thus exit quality cannot be assessed. An overnight trade for [MSTR] is being monitored for a reversal signal, which is consistent with `OVERNIGHT_ENTRIES_ENABLED = True`.
+
+### MRI ALIGNMENT
+The bot correctly identified the MRI level as `ELEVATED (score=39)` at `2026-05-21 17:24:04,696` and applied a `size floor 0.85x`. This demonstrates correct MRI alignment and risk adjustment. The `Volatility regime: NORMAL (VIX: 17.1)` is also correctly identified and consistent with the VIX level being below relevant thresholds for stop widening.
+
+### LOG ANOMALIES
+*   `2026-05-21 17:18:43,415 | WARNING | main | gc.collect() took 6093.9ms, collected 99 objects — heap may be growing`
+*   `2026-05-21 17:18:43,415 | INFO | main | [CYCLE] duration=585s | phase=midday | watchdog_headroom=135s ⚠ SLOW CYCLE`
+*   `2026-05-21 17:24:46,160 | WARNING | strategy.run_cycle | [ANOMALY-2] [CRWD] confirm_gate=3 scans but no entry — risk.open_positions=6 vs tracker=6 | MAX_OPEN_POSITIONS=4. If risk>6, CYCLE-SYNC should resolve next cycle.`
+*   `2026-05-21 17:24:46,160 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30 — review exit discipline and stop placement.`
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Max Positions Violation**
+    *   **Variable or metric involved:** `risk.open_positions` vs. `MAX_POSITIONS`
+    *   **Value vs. what it should be and why it constitutes a failure:** The bot's internal state `risk.open_positions` is 6, while the configured `MAX_POSITIONS` is 4. This is a critical failure as the bot is holding 2 more positions than its hard limit. This is explicitly outside the `BUCKET_B_MAX_POSITIONS_POWER` window (power-hour expansion to 5 positions) as the timestamp `17:24:46` is 1:24 PM ET. While the bot successfully blocked a new entry for [CRWD] due to this limit, the underlying issue of exceeding `MAX_POSITIONS` remains unaddressed.
+    *   **Condition under which this occurs:** Log entry `2026-05-21 17:24:46,160 | WARNING | strategy.run_cycle | [ANOMALY-2] [CRWD] confirm_gate=3 scans but no entry — risk.open_positions=6 vs tracker=6 | MAX_OPEN_POSITIONS=4. If risk>6, CYCLE-SYNC should resolve next cycle.`
+    *   **Source not provided.**
+
+2.  **ALPHA ISSUE | HIGH | Intraday Entries Blocked by Excessive Overnight Notional**
+    *   **Variable or metric involved:** `intraday_size_mult` based on `Overnight exposure notional` vs. `portfolio value`
+    *   **Value vs. what it should be and why it constitutes a failure:** The bot reports `Overnight exposure: $2,973 notional` which is `106.3% of $2,798 portfolio`. This results in an `intraday size mult 0.00x`, effectively preventing any new intraday entries. While `OVERNIGHT_ENTRIES_ENABLED = True`, allowing overnight exposure to consume more than 100% of the portfolio (notionally) and consequently shutting down all intraday activity, indicates a miscalibrated risk or capital allocation strategy, or an implicit assumption that portfolio value would continue to grow, which isn't guaranteed. This significantly reduces the bot's ability to capitalize on intraday opportunities.
+    *   **Condition under which this occurs:** Log entry `2026-05-21 17:24:04,696 | INFO | strategy.run_cycle | Overnight exposure: $2,973 notional → intraday size mult 0.00x (106.3% of $2,798 portfolio)`.
+    *   **Source not provided.**
+
+3.  **INFRASTRUCTURE | HIGH | Excessive Garbage Collection Time & Slow Cycle**
+    *   **Variable or metric involved:** `gc.collect()` duration, `CYCLE duration`, `watchdog_headroom`
+    *   **Value vs. what it should be and why it constitutes a failure:** A garbage collection cycle (`gc.collect()`) took an excessive `6093.9ms` (over 6 seconds). This is far too long for routine operations and directly contributes to the reported `CYCLE duration=585s` (almost 10 minutes). Such a slow cycle drastically reduces the bot's responsiveness, making it prone to missing fast-moving signals, operating on stale data, and eventually exhausting its `watchdog_headroom` leading to a forced restart. The `heap may be growing` message suggests a potential memory leak or inefficient memory usage that exacerbates this issue over time.
+    *   **Condition under which this occurs:** Log entries `2026-05-21 17:18:43,415 | WARNING | main | gc.collect() took 6093.9ms, collected 99 objects — heap may be growing` and `2026-05-21 17:18:43,415 | INFO | main | [CYCLE] duration=585s | phase=midday | watchdog_headroom=135s ⚠ SLOW CYCLE`.
+    *   **Source not provided.**
+
+4.  **ALPHA ISSUE | MEDIUM | TQI Degradation**
+    *   **Variable or metric involved:** `TQI` (Trade Quality Index)
+    *   **Value vs. what it should be and why it constitutes a failure:** The calculated `last-5-trade avg=12.4/100` is below the threshold of 30. The bot's self-diagnosis indicates a systematic degradation in recent trade quality, specifically citing `exit discipline and stop placement`. While not an execution bug, it flags a significant issue with the strategy's current performance, suggesting a misalignment with market conditions or flawed trade management rules.
+    *   **Condition under which this occurs:** Log entry `2026-05-21 17:24:46,160 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30 — review exit discipline and stop placement.`
+    *   **Source not provided.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / ALPHA | URGENT:** Investigate and fix the `MAX_POSITIONS` override. Ensure the bot strictly adheres to `MAX_POSITIONS = 4` outside of the defined power-hour window. This may involve reviewing the position tracking logic or the condition for increasing `MAX_POSITIONS` to ensure it only applies during the correct market hours. Also, review the logic that calculates `Overnight exposure notional` and its interaction with intraday sizing to prevent total operational paralysis.
+2.  **INFRASTRUCTURE | HIGH:** Profile the bot's memory usage and identify the source of the excessive garbage collection time and slow cycles. This likely indicates a memory leak or inefficient data structures/operations. Optimizing these will improve responsiveness and prevent watchdog resets.
+3.  **ALPHA | MEDIUM:** Conduct a deep dive into the strategy's recent performance to understand the `TQI degradation`. Focus on `exit discipline and stop placement` for the trades contributing to the low TQI score to determine if parameter adjustments or logic modifications are required.

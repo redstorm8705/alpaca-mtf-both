@@ -1,0 +1,46 @@
+Midday Gemini Audit — 2026-06-17
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No entries or exits occurred in this session, resulting in $0.00 P&L and 0% win rate. Therefore, direct assessment of entry/exit integrity, P&L signs, and score-outcome correlation for *this session* is not possible. The stop-hit rate is 0% as no stops were triggered.
+
+A significant concern, however, is the recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30`. While this audit cannot verify the performance of *those specific past trades*, the bot's self-reporting of degraded Trade Quality Index (TQI) is a strong indicator of systematic issues in recent exit discipline or stop placement, which directly impacts overall performance.
+
+### ENTRY QUALITY
+No issues. The bot demonstrated good discipline by not taking any new entries. This was due to the `MRI=STRESSED` condition triggering the `⛔ BV-5` entry block, and no `VOLSHADOW` signals observed reaching the `MIN_SCORE = 9` threshold. Risk adjustments (50% for FOMC, 75% for mid-day doldrums, 0.70x for STRESSED MRI) were correctly applied, further reducing potential sizing.
+
+### EXIT QUALITY
+No issues observed in this session as no trades were closed. However, the recurring `[ANOMALY-3] TQI degradation` warning points to a systematic problem with exit quality in recent historical trades, indicating a need for review of stop placement and exit discipline in those instances.
+
+### MRI ALIGNMENT
+No issues. The bot correctly identified the `MRI` as `STRESSED` with a score of 44, primarily due to `news_alerts` contributions (35 pts). As per design, this correctly triggered the `⛔ BV-5` critical alert, preventing any new entries, and applied a size floor of 0.70x, demonstrating appropriate risk management in a high-risk regime.
+
+### LOG ANOMALIES
+*   `gc.collect()` warnings with increasing duration: `16:53:56,826`, `17:05:10,404`, `17:17:15,552`, `17:28:43,741`. Each instance shows `took Xms, collected Y objects — heap may be growing`. The duration increased from 2.7s to 3.5s over 1.5 hours.
+*   `SLOW CYCLE` warnings: `16:53:56,827` (`duration=432s`), `17:17:15,559` (`duration=421s`). These indicate that some processing cycles exceeded their typical duration, which correlates with the long `gc.collect()` times.
+
+### NEW BUGS / CONCERNS
+
+**1. INFRASTRUCTURE | HIGH | Memory Leak / Pressure**
+*   **Variable**: `gc.collect()` execution time and the accompanying log message "heap may be growing".
+*   **Value is vs. what it should be and why that constitutes a failure**: The `gc.collect()` durations are consistently high (2.7s to 3.5s) and show a trend of increasing. The log explicitly states "heap may be growing", indicating that memory is not being released effectively, or new allocations are steadily increasing the heap size. This constitutes a failure because prolonged garbage collection pauses bot operation, increasing overall cycle times and reducing responsiveness. A growing heap suggests a memory leak or inefficient memory management, which can lead to eventual resource exhaustion and bot instability or crashes, especially in a long-running intraday environment.
+*   **Condition**: Occurs repeatedly at the end of a `main` processing cycle, logged as `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing`.
+*   **Source**: source not provided.
+
+**2. ALPHA ISSUE | HIGH | Persistent TQI Degradation**
+*   **Variable**: `last-5-trade avg` for TQI (Trade Quality Index).
+*   **Value is vs. what it should be and why that constitutes a failure**: The `last-5-trade avg` TQI is consistently reported as 20.0/100. The warning condition is triggered when this value is `< 30`. This constitutes a failure because the bot's self-assessment mechanism indicates that recent trade management, specifically related to exit discipline and stop placement, is significantly underperforming the acceptable threshold. A low TQI suggests that the strategy's historical entries, when closed, are not being managed effectively to preserve or capture profit, directly impacting the bot's profitability and capital preservation.
+*   **Condition**: Occurs at the beginning of every `strategy.run_cycle` when the computed `last-5-trade avg` TQI is below 30, logged as `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30`.
+*   **Source**: source not provided.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: **Immediately investigate and address the persistent `gc.collect()` warnings and "heap may be growing" indication.** This suggests a memory leak or excessive memory usage. Implement memory profiling tools to identify the specific components or data structures that are retaining memory across cycles and optimize their lifecycle management.
+2.  **ALPHA**: **Conduct a deep dive into the historical trades contributing to the `TQI degradation` (last-5-trade average of 20/100).** Analyze the entry conditions, exit reasons, actual P&L, and distance from original TP/SL for these specific trades. The goal is to identify systematic issues in stop placement, trailing stop logic, or profit-taking strategies that are leading to poor quality exits.
+3.  **ALPHA**: **Review the `MRI` calculation, especially the `news_alerts` component.** While the `STRESSED` regime correctly blocked entries, the `news_alerts` contributed 35 of 44 MRI points. Assess if the news parsing and scoring mechanism is overly sensitive or misinterpreting market-neutral news as high-risk, potentially causing the bot to sit out profitable periods.

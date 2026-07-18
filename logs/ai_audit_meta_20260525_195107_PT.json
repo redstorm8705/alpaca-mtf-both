@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "ts_pt": "2026-05-25 07:51 PM PT",
+  "ts_iso": "2026-05-25T19:51:07.869328-07:00",
+  "prompt_chars": 128842,
+  "prompt_preview": "META-AUDIT CROSS-REVIEW — alpaca-mtf-bot trading system\n\nYou are an independent auditor reviewing Gemini's automated audit reports for an Alpaca paper trading bot.\nThe nightly and midday reports below were produced by Gemini (gemini-2.5-flash). Your job:\n\n1. CONFIRM findings you agree are critical —…",
+  "deepseek": {
+    "text": null,
+    "model": "deepseek-chat",
+    "tokens": null,
+    "elapsed_s": 1.18,
+    "error": "402 Client Error: Payment Required for url: https://api.deepseek.com/chat/completions"
+  },
+  "gemini": {
+    "text": "Here is the meta-audit of Gemini’s midday and nightly reports, evaluated against the provided raw logs and event data.\n\n### 1. CONFIRMED FINDINGS (Agreed & Critical)\n*   **INFRASTRUCTURE | Excessive Garbage Collection Time (P2)**\n    *   **Confirm:** The logs explicitly show `gc.collect() took 3854.5ms` and `3803.6ms`. A nearly 4-second pause for garbage collection is unacceptable for an intraday trading system and confirms a likely memory leak or severe object-retention issue.\n*   **RISK MANAGEMENT | `MAX_POSITIONS` Violation (P2)**\n    *   **Confirm:** The bot is holding 6 open positions, which exceeds both the standard `MAX_POSITIONS = 4` and the power-hour expansion limit of 5. While the logs show the bot is correctly blocking *new* overnight entries (`6 active position(s) — overnight max is 1, skip`), the system somehow allowed the portfolio to breach its maximum capacity in a prior session.\n\n### 2. CHALLENGED FINDINGS (Disagree / Hallucinations)\n*   **CHALLENGE: \"Incorrect Market Time of Day (TOD) and Phase Reporting\"**\n    *   **Gemini's Claim:** The bot incorrectly reports `phase=midday` and `TOD: midday` while the market is closed.\n    *   **Evidence:** Gemini completely hallucinated this. The raw logs explicitly state `phase=closed` and `TOD: closed` (e.g., `[CYCLE] duration=319s | phase=closed` and `TOD: closed | PDT: 0/3`). The bot is perfectly aware of the market state.\n*   **CHALLENGE: \"Stale Bar Data Used for Confluence Scoring\"**\n    *   **Gemini's Claim:** `bar_age_min` values over 5000 minutes indicate a critical data freshness bug.\n    *   **Evidence:** Gemini failed basic date math. The logs are from Tuesday, May 26, 2026, at ~02:00 AM ET. The previous market close was Friday, May 22 at 16:00 ET (May 25 is Memorial Day). The elapsed time is exactly ~94 hours, which is ~5640 minutes. The `bar_age_min` of ~5647 is mathematically perfect. The data is not stale; it is the most recent available data from Friday's close.\n*   **CHALLENGE: \"Incorrect P&L recording for small movements (PLTR)\"**\n    *   **Gemini's Claim:** The PLTR stop-hit recorded a `0.0` P&L for a tiny price difference, indicating a rounding bug.\n    *   **Evidence:** Gemini missed the subsequent event. Exactly 5.3 seconds after the `stop_hit` event, the JSONL shows an `exit_pnl_correction` event that explicitly fixes this: `original_pnl: 0.0, corrected_pnl: -6.61`. The reconciler is working exactly as intended.\n*   **CHALLENGE: \"`OVERNIGHT_ENTRIES_ENABLED` inconsistency disables intended functionality\"**\n    *   **Gemini's Claim:** A module-level variable in `main.py` is silently blocking overnight entries.\n    *   **Evidence:** The raw logs show `[DRY-RUN OVERNIGHT] 6 active position(s) — overnight max is 1, skip`. This proves the overnight entry logic is actively executing and evaluating position counts, not being silently bypassed by a boolean flag.\n\n### 3. SURFACED ISSUES (Missed by Gemini)\n*   **EXECUTION / SLIPPAGE | P1 | Massive Slippage on PLTR Stop & Misleading Alert**\n    *   **Issue:** The PLTR short position hit its stop at `$133.295`. However, the `exit_pnl_correction` event shows the actual fill price was `$136.60`. This is a massive **$3.30 (~2.5%) slippage** on a hard stop during midday trading (12:36 PT).\n    *   **Slack Proxy Impact:** Because the initial Slack alert fires on the `stop_hit` event, the operator received a false alert claiming a breakeven exit (`pnl: 0.0`). Unless the `exit_pnl_correction` event *also* triggers a Slack alert, the operator is completely unaware they just took a -$6.61 loss due to severe slippage.\n*   **UX / ALERT FATIGUE | P2 | Slack Notification Spam**\n    *   **Issue:** The prompt notes that every MRI change in the JSONL triggers a Slack alert. The JSONL contains `mri_refresh` events every ~12 minutes. If the bot is firing an alert for every single refresh row (even when the score remains static at 41/STRESSED for hours), the operator is being severely spammed. Alerts should be debounced and only fire on actual state *transitions* (e.g., ELEVATED -> STRESSED).\n\n### 4. FINAL VERDICT\n**VERDICT: WARN (monitor)**\n\n**Reasoning:** The bot is fundamentally safe right now—it correctly identifies that the market is closed, accurately calculates bar age over a holiday weekend, and its risk manager is successfully blocking new overnight entries due to the portfolio being full. However, the ~4-second garbage collection pauses (P2), the unexplained accumulation of 6 positions (P2), and the massive, poorly-alerted slippage on PLTR (P1) require engineering investigation before scaling up capital. Gemini's audit was highly unreliable here, hallucinating log text and failing to account for holiday schedules.",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 62365,
+    "elapsed_s": 64.9,
+    "error": null
+  },
+  "summary": {
+    "ds_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

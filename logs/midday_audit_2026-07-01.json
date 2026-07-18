@@ -1,0 +1,60 @@
+{
+  "audit_date": "2026-07-01",
+  "run_ts": "2026-07-01T10:30:02.433399-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "SNOW",
+      "RIVN",
+      "HOOD",
+      "TSLA",
+      "MARA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 19,
+    "levels": {
+      "ELEVATED": 19
+    },
+    "last_score": 23,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 4,
+    "warning_count": 103,
+    "watchdog_count": 0,
+    "error_samples": [
+      "2026-07-01 17:05:24,246 | ERROR    | execution.exit_logic | [GOOGL] QHM COLLISION: main-bot position present for a QHM-held symbol \u2014 main-bot exit man",
+      "2026-07-01 17:05:24,552 | ERROR    | execution.exit_logic | [NVDA] QHM COLLISION: main-bot position present for a QHM-held symbol \u2014 main-bot exit mana",
+      "2026-07-01 17:11:34,159 | ERROR    | execution.exit_logic | [NVDA] QHM COLLISION: main-bot position present for a QHM-held symbol \u2014 main-bot exit mana",
+      "2026-07-01 17:11:34,420 | ERROR    | execution.exit_logic | [GOOGL] QHM COLLISION: main-bot position present for a QHM-held symbol \u2014 main-bot exit man"
+    ],
+    "warning_samples": [
+      "2026-07-01 15:38:35,369 | WARNING  | execution.entry_logic | [DDOG] Sector correlation BLOCKED: already holding SNOW in sector 'software' \u2014 skipping t",
+      "2026-07-01 15:44:52,286 | WARNING  | main | gc.collect() took 3910.2ms, collected 369 objects \u2014 heap may be growing",
+      "2026-07-01 15:50:00,420 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) \u2014 T4 yfinance ^VIX fallback=16.1. _vix_confirmed=Fa",
+      "2026-07-01 15:50:01,084 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=162.4380. No prior close available \u2014 JPY scoring 0",
+      "2026-07-01 15:50:33,874 | WARNING  | strategy.run_cycle | [ANOMALY-2] [TSLA] confirm_gate=8 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | "
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

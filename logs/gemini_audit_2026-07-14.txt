@@ -1,0 +1,100 @@
+Nightly Gemini Audit — 2026-07-14
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['options_scanner.py', 'weekly_review.py', 'config.py', 'generate_dashboard.py', 'execution/entry_logic.py', 'execution/forever_hold_manager.py', 'research/edge_fifo_prototype.py', 'research/ic_engine.py', 'research/fifo_reconcile.py', 'events/catalyst_engine.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=5. The RiskManager's internal count of open positions was reset to 0 after a SIGTERM, while the PortfolioTracker correctly maintained 5 positions. This creates a state desync where the bot *believed* it had no open positions, risking opening new trades beyond its intended maximum exposure. While corrected via "syncing UP", the root cause of the desync remains unaddressed. | Applicable to: NET, META, SOXL, HOOD, RIVN (the open positions at SIGTERM)
+*   alerts.alert_crash | sentinel stat/remove failed: The system failed to remove a sentinel file (`/tmp/mtf_planned_restart`) after a SIGTERM. This could indicate incomplete cleanup post-shutdown, potentially leading to persistent lock files or preventing a clean restart and triggering P5-M1. | Impacted: Bot restart process.
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring ANOMALY-2 (Failed Entry after Confirmation Gate):** The log repeatedly shows `[ANOMALY-2] [PANW] confirm_gate=5 scans but no entry — risk.open_positions=5 vs tracker=5 | MAX_OPEN_POSITIONS=7`. For `PANW` at 19:48:16,265 and 19:55:15,766, a strong signal (score=10/12), linear sizing was computed (19:37:21,924), and the confirmation gate accumulated 5 scans. Despite having available slots (5/7 positions open), no entry occurred. This suggests an unlogged gating condition or a logic error preventing entry after the `BoD-1 CONFIRM GATE` is met.
+*   **Recurring ANOMALY-3 (TQI Degradation):** `[ANOMALY-3] TQI degradation: last-5-trade avg=25.2/100 < 30 — review exit discipline and stop placement.` This is a performance warning, not a bug, but it's recurring and indicates underperformance or suboptimal exit strategy.
+*   **Scan Results HTML Write Failure:** `strategy.run_cycle | scan_results.html write failed: 0` at 20:00:15,453. This is a minor issue impacting reporting, possibly due to permissions or a race condition during shutdown.
+*   **Garbage Collection Warning:** `main | gc.collect() took 225.8ms, collected 280 objects — heap may be growing` at 20:01:25,246. This indicates potential memory pressure or a memory leak, which could lead to performance degradation over longer runtimes.
+
+### PERFORMANCE AUDIT
+All observed `pnl` calculations for `HOOD` and `RIVN` exits are arithmetically correct, including `safe_close_all` exits triggered by `MRI_LEVEL=STRESSED`. Exit prices align with dynamically adjusted thresholds (`overnight_atr_buffer_exit`) rather than static stop levels.
+
+*   **P&L Sign Correctness:** Verified for `HOOD` (`-9.6`) and `RIVN` (`-17.64`) where explicit P&L was recorded. The `safe_close_all` exits on 2026-07-08 also show correct P&L signs (e.g., `MARA -24.0`, `MSTR +7.22`).
+*   **pnl=0.0 anomalies:** The `pnl=0.0` for all 2026-07-07 exits is a `KNOWN BENIGN PATTERN` (A-4 paper fills gap), so it is not flagged as a recording bug.
+*   **Score→Outcome Correlation:** With only a few recent trades, a strong correlation cannot be assessed. However, the `EOD SNAPSHOT` reports `all_time_stats` with `win_rate=44.4%` and `profit_factor=1.2`. `avg_r_multiple=0.019` is low, indicating that average profit per unit of risk is minimal, or that many trades are closing for very small gains/losses relative to their risk. This warrants attention but is not a bug in itself.
+*   **Exit reason consistency:** For `HOOD` and `RIVN`, exits were due to `overnight_atr_buffer_exit` which appears to be a dynamic stop/threshold, not a fixed stop. The exit prices were consistent with the mentioned `thresh` values.
+
+### TRADE INTEGRITY
+No recording bugs, `pnl=0.0` anomalies, or partial exit errors were found that violate the specified `VERIFICATION DISCIPLINE` or are not covered by `KNOWN BENIGN PATTERNS`.
+
+### MODIFIED FILE FINDINGS
+
+**1. `options_scanner.py`**
+*   No issues found. The code handles `MultiIndex` related column access gracefully, and `yfinance` fallback is robust. Black-Scholes calculations include checks for non-positive inputs.
+
+**2. `weekly_review.py`**
+*   No issues found. The P&L reporting correctly shifts towards the Alpaca-FIFO reconciled cache.
+
+**3. `config.py`**
+*   No issues found. `MIN_LONG_SCORE`, `MIN_SHORT_SCORE`, `MAX_OPEN_POSITIONS`, `KELLY_FRACTION`, `INTRADAY_STOP_ATR_MULT`, `MAX_DAILY_LOSS_PCT` values align with paper profile overrides. `CATALYST_GATE_ENABLED = True` is a configured behavior.
+
+**4. `generate_dashboard.py`**
+*   No issues found. Alpaca API fetching is robust, and P&L calculations prioritize live Alpaca data, ensuring accuracy.
+
+**5. `execution/entry_logic.py`**
+*   **MEDIUM | Redundant `nonlocal` for `_short_live_verified`:**
+    *   **Context:** `execution/entry_logic.py` lines around 310-311.
+    *   **Description:** The `_verify_shorting_live` function declares `nonlocal _short_live_verified` even when `_short_live_verified` is still `None` in the enclosing scope and its value is set *within* the function on first call. `nonlocal` is only necessary if the variable is modified after being assigned in the outer scope, and then modified again within the nested function. Here, it's effectively an initial assignment.
+    *   **Failure Condition:** While not a functional bug, it's an unnecessary keyword that could be confusing.
+*   **HIGH | `POSITION COUNT DRIFT` reconciliation inconsistency:**
+    *   **Context:** `execution/entry_logic.py` lines 360-366.
+    *   **Description:** The code explicitly states: `elif _tracker_open_count < risk.open_positions: logger.critical(...) Ignoring tracker — decreases must happen via register_close().` While the intent is to avoid premature decreases due to potential tracker corruption, if the tracker *is* genuinely more accurate (e.g., positions were closed out-of-band or `risk.register_close()` failed for some reason), `risk.open_positions` will remain artificially high. This could lead to a silent "halt" on new entries, as the bot would believe it has fewer open slots than it actually does. The log entry at 20:01:45,416 shows `risk.open_positions=0 vs tracker=5`, which was correctly reconciled *upwards*. However, the code's explicit *refusal* to reconcile downwards if `tracker < risk` is a logic hole for future scenarios.
+    *   **Failure Condition:** `risk.open_positions` can become inflated relative to `tracker.open_trades`, leading to unnecessary blocking of new entries due to an overestimated open position count.
+*   **MEDIUM | ANOMALY-2 (Failed Entry) Root Cause Obscured:**
+    *   **Context:** `execution/entry_logic.py` the `execute_entries` function's main loop.
+    *   **Description:** The log repeatedly shows `[ANOMALY-2] [PANW] confirm_gate=5 scans but no entry`. The log shows `PANW` was sized for (19:37:21,924) and continued to qualify, and `risk.open_positions=5` against `MAX_OPEN_POSITIONS=7` (indicating available capacity). The code does not log the *specific reason* why an entry was skipped after meeting the confirmation gate and having available slots. Without this logging, debugging such anomalies is difficult.
+    *   **Failure Condition:** Undiagnosed skipping of high-conviction trades, potentially missing opportunities.
+
+**6. `execution/forever_hold_manager.py`**
+*   No issues found. The module adheres to `FOREVER6_ENABLED = False` in `config.py` and operates in `LOG-ONLY` mode, as specified. The catalyst gate integration is correctly performed in this dark mode.
+
+**7. `research/edge_fifo_prototype.py`**
+*   No issues found. This is a research prototype.
+
+**8. `research/ic_engine.py`**
+*   No issues found. This is a research prototype.
+
+**9. `research/fifo_reconcile.py`**
+*   No issues found. This is a research prototype.
+
+**10. `events/catalyst_engine.py`**
+*   No issues found. `CATALYST_GATE_ENABLED = True` activates the blocking logic in `entry_logic.py`, which appears correctly implemented. The attribution logic for news to symbols (`co-tag false positives found live`) is an important fix.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash:** **FIXED**. The addition of `col_lower = {c.lower(): c for c in df_ohlc.columns}` in `execution/entry_logic.py` addresses the potential for KeyError due to inconsistent column naming conventions, implicitly handling the MultiIndex concern.
+*   **P5-C2 | run_movers.py ImportError:** **UNTOUCHED**. `run_movers.py` was not included in the modified files.
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted:** **OBSOLETE**. Confirmed by audit instructions.
+*   **P5-H2 | Fill price crosstalk:** **MITIGATED**. `research/fifo_reconcile.py` and its use in `weekly_review.py` and `generate_dashboard.py` provide an authoritative, Alpaca-sourced FIFO P&L. While internal `trade_log.json` may still have `pnl=0.0` or ambiguities, the external reporting and live risk calculations now use reliable sources.
+*   **P5-H3 | Orphan GTC 404 path:** **UNTOUCHED**. No relevant code in modified files.
+*   **P5-H4 | Rule 2 dead code:** **APPEARS ADDRESSED**. `config.py` confirms `TOD_MARKET_OPEN_BUFFER_MINS = 30`, indicating an active non-zero buffer.
+*   **P5-H5 | FIXED 2026-04-21:** **FIXED**. Confirmed by prior audit finding.
+*   **P5-M1 | Cycle watchdog restart loop:** **UNTOUCHED (Potentially triggered)**. The `sentinel stat/remove failed` alert suggests a component of this bug may have triggered.
+*   **P5-M2 | MRI score cached stale across sessions:** **LIKELY FIXED**. Log `MRI startup refresh complete` indicates MRI state is refreshed at startup. `generate_dashboard.py` also validates state freshness.
+*   **P5-M3 | score_comparison JSON unbounded growth:** **UNTOUCHED**. No pruning logic for `score_comparison` was found in modified files.
+*   **P5-L1 | _classify_loss_driver() returns empty label:** **UNTOUCHED**. `reporting/metrics.py` was not included in the modified files.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** **UNTOUCHED (but mitigated)**. The problem likely persists for the EOD file, but live P&L reporting in `generate_dashboard.py` is now derived from authoritative Alpaca account equity, mitigating the impact on operational decisions.
+*   **P5-L3 | live_data_writer.py no reconnect logic:** **UNTOUCHED (mitigated externally)**. External mitigation is noted.
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/entry_logic.py | Position Count Drift Root Cause:**
+    *   **Description:** The log at 20:01:45,416 shows `POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=5. Correcting to tracker count.` While `entry_logic.py` correctly reconciles upwards, the core issue is that `risk.open_positions` became `0` after `SIGTERM` while the `tracker` maintained a correct count. This implies `RiskManager`'s state is not fully recovered/synced on restart, creating a dangerous window where the bot might bypass position limits.
+    *   **Exact Failure Condition:** `RiskManager.open_positions` is initialized/reset to `0` on bot startup/restart, failing to load its actual count from persistent storage, leading to divergence from `PortfolioTracker.open_trades`.
+
+### FIX VALIDATION
+No prior fixes were explicitly proposed in the provided text for the new issues found.
+
+### RECOMMENDED ACTIONS
+1.  **CRITICAL**: Investigate and fix the root cause of `RiskManager.open_positions` resetting to `0` on startup/SIGTERM (seen at 20:01:45,416). Ensure `RiskManager` correctly loads its open position count from persistent state or reliably syncs with `PortfolioTracker` immediately after startup, *before* any new entry decisions are made. This is to prevent any window where the bot believes it has no open positions.
+2.  **HIGH**: Implement detailed logging within `execution/entry_logic.py` to trace *why* a trade that has passed all confirmation gates and has available position slots fails to enter. Specifically, log each gate check outcome immediately before the `order_placement_attempt` for signals that fully qualify but don't result in an order (e.g., `[PANW] ANOMALY-2`).
+3.  **MEDIUM**: Review and refine the `execution/entry_logic.py` logic around `_tracker_open_count < risk.open_positions`. While designed to prevent premature position count reductions, if `risk.open_positions` becomes incorrectly inflated, it can silently block entries. Consider adding a mechanism to periodically prune `risk.open_positions` if it significantly and consistently exceeds `tracker.open_trades` (with appropriate safeguards).
+4.  **LOW**: Address the `scan_results.html write failed` error. This could involve checking file permissions or adding retry logic/error handling around the file write operation, especially during shutdown sequences.
+5.  **LOW**: Investigate the recurring `gc.collect() took ... heap may be growing` warning. This could point to memory leaks or inefficient memory usage that might impact long-term bot stability.

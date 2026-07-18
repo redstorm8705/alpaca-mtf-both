@@ -1,0 +1,73 @@
+Midday Gemini Audit — 2026-06-08
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+
+1.  **Stop-hit vs. Profitable Exit Contradiction:**
+    *   The `stop_hit` indicator in `CLOSED TRADE DETAILS` for MSTR is inconsistent with the recorded `exit_price` and `P&L`.
+    *   **Variable/Metric:** `exit_reason`, `exit_price`, `stop_price`, `P&L`, `trade_direction`.
+    *   **Value vs. What it should be:** The MSTR trade is listed as `stop_hit` with `entry $162.95`, `exit $128.39`, `P&L +$103.68`, and `stop=$185.17`. For a profitable trade where `entry > exit` (implying a short position), a `stop_hit` should occur when the price moves *against* the position (up to $185.17 for a short), resulting in a loss and an exit price near the stop. Instead, the `exit_price` ($128.39) is significantly below the `entry_price` ($162.95), indicating a profit, and is far from the stated `stop_price`. This means the trade was *not* closed due to the stop at $185.17.
+    *   **Why it constitutes a failure:** This represents a fundamental misclassification of the trade's exit condition. It severely degrades the accuracy of performance analysis metrics (e.g., stop-hit rate, win rate, average R-multiple per exit reason) and can lead to flawed insights into strategy effectiveness and areas for improvement. It falsely indicates a loss-limiting mechanism triggered when the trade was, in fact, profitable.
+    *   **Condition:** Occurs for the MSTR trade (the only closed trade), where `exit_reason = 'stop_hit'` is recorded for a short position that closed profitably at a price significantly different from the stated stop price and in the trade's favor.
+
+2.  **Win Rate / Stop-Hit Rate Discrepancy:**
+    *   The `Stop-hit rate: 100% (1 stops)` contradicts `Wins: 1 | Losses: 0 | Win rate: 100%` in the `SESSION P&L SUMMARY`.
+    *   **Variable/Metric:** `Stop-hit rate`, `Win rate`, `Wins`, `Losses`.
+    *   **Value vs. What it should be:** If the only closed trade was a stop-hit, it should be categorized as a loss, making the `Win rate` 0% and `Losses` 1. Conversely, if it was a win, it cannot be a stop-hit (unless an unlikely scenario of breakeven stop move leading to a tiny profit/loss exists, which is not the case here given the substantial profit).
+    *   **Why it constitutes a failure:** This directly results from the `stop_hit` misclassification mentioned above. It creates conflicting performance metrics, rendering the session summary unreliable for understanding the bot's true performance characteristics.
+    *   **Condition:** When a profitable trade is erroneously flagged as a `stop_hit`, leading to a contradiction in aggregate performance statistics like win rate and stop-hit rate.
+
+### ENTRY QUALITY
+No issues detected in the logs for attempted entries. Signals were correctly filtered by dynamic MIN_SCORE, weekly bias, and ORB gate.
+
+### EXIT QUALITY
+
+1.  **Misclassified Profitable Exit:**
+    *   **Variable/Metric:** `exit_reason` (for MSTR trade).
+    *   **Value vs. What it should be:** As detailed in the Performance Audit, the MSTR short trade exited at $128.39, generating a profit of +$103.68. The `stop_price` for this short was $185.17. The `exit_reason` is recorded as `stop_hit`. This is incorrect. The price moved significantly in favor of the short position, reaching between Target 2 ($145.15) and Target 3 ($118.46). It should have been categorized as a profit target hit, or a discretionary exit.
+    *   **Why it constitutes a failure:** This misclassification prevents accurate analysis of the bot's exit strategies. It's crucial to understand when the bot is hitting stops (losses) versus when it's hitting targets or taking discretionary profits. This mislabeling distorts historical performance data, making it difficult to evaluate the effectiveness of different exit conditions and tune the strategy.
+    *   **Condition:** A short trade for MSTR, entered at $162.95, exited profitably at $128.39 (far below the stop of $185.17) is labeled with `exit_reason='stop_hit'`.
+
+### MRI ALIGNMENT
+
+1.  **Inconsistent MRI Level Recording:**
+    *   **Variable/Metric:** `MRI level` associated with the MSTR trade, and `MRI SESSION DISTRIBUTION`.
+    *   **Value vs. What it should be:** The `CLOSED TRADE DETAILS` for MSTR show `MRI=ELEVATED`. However, the `MRI SESSION DISTRIBUTION` states `{'NORMAL': 22}`, and log entries like `2026-06-08 17:12:53,130 | INFO | macro_risk_index | MRI refreshed: score=10 level=NORMAL` consistently indicate the MRI level was `NORMAL` throughout the entire session.
+    *   **Why it constitutes a failure:** This discrepancy means that the per-trade MRI context recorded at the time of trade execution or closure is inconsistent with the overall session-level MRI reporting. This makes it impossible to correctly audit trade performance against specific MRI regimes. If the trade was indeed entered/exited during an `ELEVATED` MRI, the session distribution is incomplete. If `MRI=ELEVATED` is a mislabel, it's a data quality issue.
+    *   **Condition:** The single closed trade (MSTR) reports `MRI=ELEVATED`, while all 22 samples in `MRI SESSION DISTRIBUTION` and multiple `macro_risk_index` log entries report `NORMAL`.
+
+### LOG ANOMALIES
+
+*   **ANOMALY-3: TQI Degradation:**
+    *   `2026-06-08 17:13:21,193 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.`
+    *   `2026-06-08 17:19:56,255 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.`
+    *   This is a self-flagged warning indicating sustained poor trade quality over the last 5 trades. Given the misclassification of the MSTR exit, this warning may be indicative of underlying issues in exit management. While the bot flags it itself, it's an anomaly that needs to be addressed.
+*   **High Garbage Collection Latency:**
+    *   `2026-06-08 17:25:49,183 | WARNING | main | gc.collect() took 4076.4ms, collected 66 objects — heap may be growing`
+    *   A garbage collection pause of over 4 seconds is excessively long for a live trading bot and indicates a potential memory management issue. The "heap may be growing" message suggests a possible memory leak.
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | CRITICAL | Mislabeled Profitable Exit as Stop-Hit**
+    *   **Description:** The system incorrectly labels a profitable exit as a `stop_hit`, leading to distorted performance metrics and an inaccurate understanding of trade outcomes. This affects the bot's ability to learn from its trades and make proper strategic adjustments.
+    *   **Exact condition:** A short position on MSTR (entry $162.95, exit $128.39, P&L +$103.68) is logged with `exit_reason = 'stop_hit'` despite the exit price being significantly in profit territory and far from the stated stop price ($185.17).
+
+2.  **ALPHA ISSUE | MEDIUM | MRI Data Inconsistency**
+    *   **Description:** There is a discrepancy between the MRI level recorded for a specific trade (`MRI=ELEVATED` for MSTR) and the session-wide MRI distribution which consistently logs `NORMAL`. This hinders the ability to analyze strategy performance under varying market risk conditions.
+    *   **Exact condition:** The `MRI` field in `CLOSED TRADE DETAILS` for MSTR is `ELEVATED`, while `MRI SESSION DISTRIBUTION` shows all 22 samples as `NORMAL`, and `macro_risk_index` logs consistently show `level=NORMAL`.
+
+3.  **INFRASTRUCTURE | HIGH | Excessive Garbage Collection Latency and Potential Memory Leak**
+    *   **Description:** The bot experienced a significant pause (over 4 seconds) due to garbage collection, which can severely impact real-time decision-making, lead to stale data, or cause missed trading opportunities. The associated "heap may be growing" suggests a potential memory leak.
+    *   **Exact condition:** Log entry `2026-06-08 17:25:49,183` shows `gc.collect() took 4076.4ms` and `heap may be growing`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / ALPHA:** Investigate and correct the logic for categorizing trade exits (e.g., `stop_hit` vs. `target_hit` vs. `discretionary_exit`). This is critical for accurate performance tracking and strategy improvement. (Urgency: HIGH)
+2.  **ALPHA:** Implement consistent MRI logging for both session-level and per-trade data. Ensure the MRI recorded for a trade is an accurate reflection of the conditions at the time of entry/exit. (Urgency: MEDIUM)
+3.  **INFRASTRUCTURE:** Profile the bot's memory usage to identify and resolve any memory leaks or inefficient object handling that lead to prolonged garbage collection pauses. This is essential for maintaining responsiveness and reliability. (Urgency: HIGH)

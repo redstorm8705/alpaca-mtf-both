@@ -1,0 +1,69 @@
+Midday Gemini Audit — 2026-06-19
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+No entries or exits occurred during the audited session, so direct performance metrics (win rate, P&L, entry/exit price plausibility, stop-hit rate, score-outcome correlation) cannot be assessed.
+
+### ENTRY QUALITY
+No entries were taken. The log consistently states "Market closed — updating scan prices, no entries." The bot continued to evaluate `VOLSHADOW` confluence scores, but no trades were attempted due to the market being closed. However, a significant data quality issue affecting potential entries was identified.
+
+### EXIT QUALITY
+No trades were closed, so exit quality cannot be assessed.
+
+### MRI ALIGNMENT
+The bot reported "Composite regime: BULL | VIX/VIX3M=0.818 (NORMAL)". No entries were taken, so there is no direct evidence of entries taken at STRESSED/CRISIS MRI levels or misaligned position sizing.
+
+### LOG ANOMALIES
+*   Repeated `WARNING | main | gc.collect() took Xms, collected 31 objects — heap may be growing` with X being 3-6 seconds.
+*   Repeated `WARNING | main | P2-DIAG: objgraph not installed — run: pip install objgraph`.
+*   Consistent logging of `VOLSHADOW` evaluations with `bar_age_min` values tens of hours old while the market is closed.
+
+### NEW BUGS / CONCERNS
+
+1.  **Stale Market Data Usage**
+    *   **CATEGORY:** INFRASTRUCTURE
+    *   **SEVERITY:** CRITICAL
+    *   **DESCRIPTION:** The bot is evaluating confluence scores using severely stale market data, indicated by extremely high `bar_age_min` values. For an intraday trading bot, this means that the core decision-making input is based on irrelevant historical information rather than current market conditions.
+    *   **VARIABLE/METRIC INVOLVED:** `bar_age_min` within `VOLSHADOW` log entries.
+    *   **VALUE VS. WHAT IT SHOULD BE:** The `bar_age_min` values are consistently reported in the range of ~2214 to ~2249 minutes (approximately 36.9 to 37.5 hours). For live intraday trading, `bar_age_min` should be very low (e.g., single-digit minutes or less) to reflect real-time market conditions. A value of over 36 hours is indicative of data from previous trading days or a severe data fetching/caching issue.
+    *   **WHY IT CONSTITUTES A FAILURE:** While the "Market closed, no entries" message prevented trades during this specific session, the underlying data quality issue is critical. If the market were open, trades would be initiated based on data that is several days old, leading to entirely incorrect and potentially disastrous trading decisions, irrespective of the strategy's alpha.
+    *   **EXACT CONDITION:** Occurs consistently during all `VOLSHADOW` evaluations throughout the log, for every symbol scanned (e.g., `2026-06-19 16:54:46,153 | INFO | confluence | [PANW] VOLSHADOW {"direction": "short", "vol_ratio": 1.274, "avg_vol_20d": 9026282.0, "cur_vol": 11503375.0, "would_pass": false, "bucket": "B", "score_without_vol": 2, "rsi_would_score": true, "bar_age_min": 2214.8, "valid_bars": 20}`).
+
+2.  **Excessive Garbage Collection Duration & Memory Growth Indication**
+    *   **CATEGORY:** INFRASTRUCTURE
+    *   **SEVERITY:** HIGH
+    *   **DESCRIPTION:** The Python garbage collector (`gc.collect()`) is taking an unacceptably long time (multiple seconds) to execute at the end of each main cycle, indicating significant memory pressure or a potential memory leak. The accompanying log message "heap may be growing" further reinforces this concern.
+    *   **VARIABLE/METRIC INVOLVED:** `gc.collect() duration` and the diagnostic message "heap may be growing".
+    *   **VALUE VS. WHAT IT SHOULD BE:** `gc.collect()` durations are reported as `6102ms` (6.1 seconds), `4730ms` (4.7 seconds), and `3134ms` (3.1 seconds). In a performance-critical trading application, GC pauses should typically be in the order of milliseconds, not seconds, to maintain responsiveness. The heap should not be continuously growing without clear justification for increased resource utilization.
+    *   **WHY IT CONSTITUTES A FAILURE:** Such long GC pauses can introduce unacceptable latency into the bot's operation, potentially causing missed entry/exit opportunities, delayed order submissions, or inaccurate real-time calculations. A continuously growing heap will eventually lead to resource exhaustion and bot instability or crashes.
+    *   **EXACT CONDITION:** Occurs consistently at the end of each `main` cycle approximately every 5-6 minutes (e.g., `2026-06-19 17:00:41,057 | WARNING | main | gc.collect() took 6102ms, collected 31 objects — heap may be growing`).
+
+3.  **Missing Memory Profiling Tool**
+    *   **CATEGORY:** INFRASTRUCTURE
+    *   **SEVERITY:** LOW
+    *   **DESCRIPTION:** The `objgraph` library, a diagnostic tool for memory analysis, is reported as not installed. This hinders effective debugging and investigation of the memory growth issues identified.
+    *   **VARIABLE/METRIC INVOLVED:** Availability of the `objgraph` library.
+    *   **VALUE VS. WHAT IT SHOULD BE:** The log states `objgraph not installed`. For effective diagnostics, especially when memory issues are suspected, this tool should be installed as recommended by the bot's own warning message.
+    *   **WHY IT CONSTITUTES A FAILURE:** It's a failure of the diagnostic capabilities of the system. While not directly impacting trading, it prevents the team from properly addressing critical infrastructure issues like memory leaks.
+    *   **EXACT CONDITION:** Occurs consistently at the end of each `main` cycle after the `gc.collect()` warning (e.g., `2026-06-19 17:00:41,060 | WARNING | main | P2-DIAG: objgraph not installed — run: pip install objgraph`).
+
+4.  **Inefficient `VOLSHADOW` Scanning During Market Closed Hours**
+    *   **CATEGORY:** ALPHA ISSUE / INFRASTRUCTURE
+    *   **SEVERITY:** MEDIUM
+    *   **DESCRIPTION:** The bot continues to perform resource-intensive `VOLSHADOW` confluence scoring scans for numerous symbols even after logging "Market closed — updating scan prices, no entries." This represents inefficient resource utilization and unnecessary processing.
+    *   **VARIABLE/METRIC INVOLVED:** `strategy.run_cycle` logic and `confluence` module logging.
+    *   **VALUE VS. WHAT IT SHOULD BE:** The bot's `strategy.run_cycle` explicitly identifies "Market closed" and states "no entries". Ideally, in this state, computationally expensive tasks like scanning for new `VOLSHADOW` opportunities should be paused or significantly scaled back, as no action can be taken.
+    *   **WHY IT CONSTITUTES A FAILURE:** Performing these calculations when no trades are possible wastes CPU cycles, contributes to overall system load, and potentially exacerbates the observed memory growth/GC issues. It indicates a lack of an optimized "off-hours" operational mode.
+    *   **EXACT CONDITION:** Observed immediately following the `Market closed` message in each `strategy.run_cycle` (e.g., `2026-06-19 17:05:41,621 | INFO | strategy.run_cycle | Market closed — updating scan prices, no entries.` followed by `VOLSHADOW` logs from `17:05:45` onwards).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE:** **Prioritize immediate investigation and resolution of the stale market data issue.** This is a fundamental data integrity failure. Verify all data fetching, caching, and timestamping mechanisms to ensure the bot operates with real-time, accurate market data. (Urgency: CRITICAL)
+2.  **INFRASTRUCTURE:** **Address the excessive garbage collection times and potential memory leaks.** Profile the bot's memory usage to pinpoint where memory is being allocated and not released. Optimize data structures and object lifecycles. Install `objgraph` to aid in this process (`pip install objgraph`). (Urgency: HIGH)
+3.  **ALPHA / EXECUTION:** **Implement a robust "market closed" operational mode.** When the market is closed, the bot should significantly reduce or halt computationally intensive activities like `VOLSHADOW` scanning, as no trading actions can be taken. This conserves resources and prevents processing of irrelevant or stale data. (Urgency: MEDIUM)

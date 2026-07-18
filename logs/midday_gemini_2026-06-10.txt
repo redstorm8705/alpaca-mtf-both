@@ -1,0 +1,53 @@
+Midday Gemini Audit — 2026-06-10
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades were recorded in this session (`Entries: 0`, `Exits: 0`, `Closed trades: 0`). Therefore, performance metrics such as entry/exit prices, P&L signs, win rate, profit factor, score-outcome correlation, and stop-hit rate cannot be evaluated for this specific session. No issues related to P&L=0 with non-zero price difference or partial exit size could be identified due to the absence of trades.
+
+### ENTRY QUALITY
+No entries were taken during this session. The bot successfully and explicitly avoided new entries due to multiple layers of risk management, which indicates good entry quality control:
+*   **MRI STRESSED Regime**: The bot logged `CRITICAL | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` (score 50-55, consistently above the threshold that presumably triggers this entry block).
+*   **Insufficient Confluence Score**: All `VOLSHADOW` logs consistently show `score_without_vol` significantly below the `MIN_SCORE = 9` threshold required for an entry, preventing any potential entries from even reaching a final approval stage.
+*   **News Alerts**: News-based `CAUTION` alerts applied a `base penalty: 100%`, further gating any potential entries.
+This behavior demonstrates adherence to strategy rules and effective risk mitigation in adverse market conditions.
+
+### EXIT QUALITY
+No exits occurred in this session due to the absence of entries. However, the recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.` warning indicates a potential systematic issue with exit quality or stop placement from prior trading periods. While not an active bug in *this* session's log, it highlights an area for strategy review.
+
+### MRI ALIGNMENT
+The bot demonstrated proper MRI alignment and adherence to risk management:
+*   The MRI score consistently indicated `STRESSED` conditions (scores of 50 and 55, confirmed by `MRI Session Distribution` showing all 20 samples at STRESSED).
+*   The bot correctly applied a `size floor 0.70x` due to the `STRESSED` MRI.
+*   Critically, all new entries were explicitly blocked with `CRITICAL | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`, preventing trading during a high-risk regime.
+
+### LOG ANOMALIES
+*   **Recurring long garbage collection pauses**:
+    *   **Value:** `gc.collect()` took `3968.3ms`, `3857.9ms`, and `3988.9ms` at 16:59:29, 17:12:29, and 17:23:34 respectively.
+    *   **Should be:** Garbage collection pauses should ideally be much shorter, typically under 500ms, to avoid impacting real-time operations.
+    *   **Failure:** These prolonged pauses consume significant CPU time, leading to `⚠ SLOW CYCLE` events (e.g., `duration=475s` at 17:12:29 compared to `duration=341s` or `360s` for other cycles) and reduced `watchdog_headroom`. This indicates the bot's processing is being interrupted, which could lead to delayed market data processing, missed trading signals, or delayed order submissions if trades were active. The accompanying "heap may be growing" suggests a potential memory leak or inefficient memory management.
+    *   **Condition:** Repeated `WARNING | main | gc.collect() took XXXXms, collected 64 objects — heap may be growing` messages.
+
+### NEW BUGS / CONCERNS
+
+**INFRASTRUCTURE | HIGH | Excessive Garbage Collection Pauses and Potential Memory Leak**
+*   **Variable Involved**: `gc.collect()` execution time, `watchdog_headroom`.
+*   **Value vs. What it Should Be**: The `gc.collect()` function is taking ~4 seconds to complete, which is significantly longer than acceptable for a real-time trading system (should be <0.5 seconds). This directly correlates with `SLOW CYCLE` reports and reduced `watchdog_headroom` (e.g., 245s at 17:12:29). The log also explicitly states "heap may be growing," indicating inefficient memory usage or a memory leak.
+*   **Why it Constitutes a Failure**: Such prolonged pauses can cause the bot to miss market events, process stale data, or delay critical order actions (like placing or modifying stops), leading to slippage, incorrect fills, or larger than intended losses. It suggests systematic degradation in the bot's runtime environment, which would be critical under active trading conditions.
+*   **Exact Condition**: Occurs approximately every 10-15 minutes, indicated by the pattern: `WARNING | main | gc.collect() took XXXXms, collected 64 objects — heap may be growing` followed by `INFO | main | [CYCLE] duration=YYYs | watchdog_headroom=ZZZs ⚠ SLOW CYCLE`.
+
+**ALPHA ISSUE | MEDIUM | Persistent TQI Degradation Indication**
+*   **Variable Involved**: `last-5-trade avg` TQI (Trade Quality Index).
+*   **Value vs. What it Should Be**: The reported `last-5-trade avg=22.4/100` is consistently below the implied threshold of `30` (as the warning triggers when `< 30`). This metric is designed to reflect the quality of recent trades.
+*   **Why it Constitutes a Failure**: Although no trades were taken in this session, the continuous warning indicates that when trades *are* taken (from previous sessions), their overall quality, particularly concerning exit discipline and stop placement, is sub-optimal. A persistently low TQI suggests a fundamental flaw in the strategy's alpha or its trade management logic, which needs immediate review to prevent future losses once trading resumes.
+*   **Exact Condition**: Repeated `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30 — review exit discipline and stop placement.` during each strategy cycle.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE**: Immediately investigate and resolve the root cause of the excessive `gc.collect()` durations and the "heap may be growing" warning. This may involve profiling memory usage, optimizing data structures, or identifying memory leaks. This is critical for the bot's real-time responsiveness and reliability.
+2.  **ALPHA**: Conduct a thorough review of the strategy's historical trade data, focusing specifically on trades that contribute to the `[ANOMALY-3] TQI degradation` warning. Analyze entry and exit logic, especially stop placement and profit-taking mechanisms, to identify systematic flaws.
+3.  **INFRASTRUCTURE**: Enhance logging for memory usage and garbage collection, potentially including more detailed metrics on heap size before/after collection and object lifetimes, to better diagnose and monitor this issue.

@@ -1,0 +1,52 @@
+Midday Gemini Audit — 2026-07-08
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit/P&L Sign Consistency**: P&L signs are consistent with the inferred trade direction (MSTR appears to be a short trade, others long) and the entry/exit prices. All reported P&L values are non-zero when entry and exit prices differ. No recording bugs found where P&L = $0.00 but entry ≠ exit.
+*   **Exit Price Consistency**: All closed trades had an exit reason of "exit" and the `Stop-hit rate: 0%`. This is consistent with losses being cut before the hard stop or wins being taken before stated targets were hit. The exit prices for losing trades (HOOD, MARA, MS, SNOW) were consistently above their respective stop prices, confirming no stop hits.
+*   **Win Rate and Profit Factor**: The session exhibited a 33% win rate (2 wins / 4 losses) and a negative total P&L ($-26.46). This performance for intraday long trades (1 win, 4 losses) contradicts the reported `long_intraday` Kelly statistic Profit Factor of 2.19. This suggests a systematic degradation in the quality of long signals or exit management in the current market regime.
+*   **Score→Outcome Correlation**: There is no positive correlation between higher scores and positive outcomes in this session. Trades with the highest score (12/12 for HOOD, MS, SNOW) resulted in 3 losses out of 3, while an 11/12 (AVGO) was a win, and 10/12 (MSTR) was a win and another (MARA) was a loss. This indicates that the scoring mechanism is not effectively identifying higher-edge trades in the current market.
+*   **Stop-hit Rate**: A 0% stop-hit rate is generally positive, indicating trades are managed before hard stops. However, the overall negative P&L suggests that losses, though cut before the hard stop, are still occurring too frequently or are too large relative to wins, pointing to issues with initial entry quality or an aggressive profit-taking strategy for winners.
+
+### ENTRY QUALITY
+*   **MRI Context**: All closed trades were entered under an `MRI=ELEVATED` condition. The bot's `Dynamic MIN_SCORE` was raised to `10/12`, and `MIN_LONG_SCORE`/`MIN_SHORT_SCORE` are 8. While entries were halted later in the session due to a `STRESSED` MRI and other risk factors, the `ELEVATED` MRI level at the time of entry did not prevent a majority of trades from becoming losses. This suggests the strategy's edge may not hold up sufficiently in `ELEVATED` MRI conditions, or the `ELEVATED` threshold itself is too broad.
+*   **Volume Filtering Discrepancy (Bug)**: There's a significant inconsistency regarding volume and score filtering. For example, at `2026-07-08 17:19:07,642`, `strategy.run_cycle` identifies `HOOD LONG score=11/12` as a top signal. However, the `confluence.VOLSHADOW` log entry for HOOD long at `2026-07-08 17:19:40,777` (within the same cycle) shows `score_without_vol: 7` and `would_pass: false` (due to `vol_ratio: 0.319`). The `MIN_LONG_SCORE` is 8, and the dynamic `MIN_SCORE` was 10. A `score_without_vol` of 7 should not have passed the minimum score threshold. Furthermore, `would_pass: false` indicates a failure in volume criteria. This suggests a critical logical flaw where signals that should be filtered are still being processed and potentially executed. `HOOD` was indeed traded and resulted in a loss. Similar discrepancies are seen for `COIN` and `AAPL`.
+
+### EXIT QUALITY
+*   **TQI Degradation and Exit Discipline**: The bot explicitly flagged `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` This internal warning directly supports the observation that exit discipline or stop placement is underperforming. While losses were cut before the hard stop, the frequent small losses for long trades indicate that the soft exit logic might be too slow or the entries are prone to immediate adverse price action, requiring more aggressive loss cutting or tighter stops.
+
+### MRI ALIGNMENT
+*   The system correctly identified a `STRESSED` MRI state later in the session and applied appropriate risk management (halting new entries, applying a 0.70x sizing floor). For the trades recorded, all entries occurred during an `ELEVATED` MRI. The primary concern is not a failure to adapt to `STRESSED` MRI (as entries were stopped), but rather that the `ELEVATED` MRI level might be too permissive given the poor performance of trades initiated in that state this session.
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**: Repeated `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-10.90 tracker=$-26.46 drift=$+15.56`. This indicates a significant and persistent discrepancy between Alpaca's reported P&L and the bot's internal tracker. Although the tracker P&L is explicitly `GUARDED` for live risk decisions, such a drift suggests a fundamental data integrity issue or accounting mismatch that needs investigation.
+*   **TQI Degradation Warning**: `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` This is a healthy self-correction mechanism but highlights an underlying alpha problem.
+*   **Options Data Fetch Failure**: `WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer`. This suggests a data instability issue for options data, which might impact signal generation or other features relying on this data.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Signal Scoring and Volume Filtering Discrepancy**
+    *   **Variable**: `score` (reported in `strategy.run_cycle`) vs. `score_without_vol` and `would_pass` (reported in `confluence.VOLSHADOW`).
+    *   **Value vs. Should Be**: For HOOD, `strategy.run_cycle` reported `score=11/12` for a LONG signal, leading to its consideration and eventual trade (closed at 12/12). However, `confluence.VOLSHADOW` for HOOD LONG reported `score_without_vol: 7` and `would_pass: false`. Given `MIN_LONG_SCORE = 8` and `Dynamic MIN_SCORE = 10`, a `score_without_vol` of 7 should cause the signal to be filtered out. Additionally, `would_pass: false` (likely due to low `vol_ratio`) should further disqualify the signal.
+    *   **Failure Condition**: The bot is allowing signals to proceed through the entry pipeline (being identified as "Top X signals") despite a component of its signal generation (the `confluence` module's `VOLSHADOW` report) indicating that the signal fails to meet basic score and/or volume requirements. This indicates a potential bypass or miscommunication between signal generation and filtering stages, leading to entries based on fundamentally flawed signals.
+*   **INFRASTRUCTURE | CRITICAL | EOD P&L Tracker/Alpaca Drift**
+    *   **Variable**: `Alpaca` P&L (`pnl_today`) versus `tracker` P&L (`tracker`).
+    *   **Value vs. Should Be**: At 17:19:52 and 17:26:37, Alpaca's `pnl_today` was `$-10.90` while the bot's `tracker` P&L was `$-26.46`, resulting in a drift of `$+15.56`. These values should be reconciled to be identical or very close.
+    *   **Failure Condition**: A recurring and significant P&L drift between the broker's reported figures and the bot's internal accounting, even if internally `GUARDED`, poses a data integrity risk and complicates reconciliation, auditing, and potential future decisions if the `GUARDED` mechanism were to fail or if external P&L reporting is required.
+*   **INFRASTRUCTURE | HIGH | Options Data Fetch Failure**
+    *   **Variable**: Return value of `_fetch_options_data`.
+    *   **Value vs. Should Be**: The function returned `None` due to "cannot convert float NaN to integer", implying a failure to retrieve or process valid options data. It should return valid data or a structured error.
+    *   **Failure Condition**: If options data is used in signal scoring, risk management, or other critical decision-making processes, this failure could lead to sub-optimal decisions, stale data usage, or missed opportunities. Its impact on live trading isn't fully clear without knowing its exact usage.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / ALPHA**: Immediately investigate and fix the **Signal Scoring and Volume Filtering Discrepancy**. This is paramount as the bot appears to be trading signals that fail its own stated criteria (`score_without_vol` < `MIN_SCORE` and `would_pass: false`). Trace the execution path from `strategy.signal_generator` through `confluence` to `strategy.run_cycle` to ensure consistent application of all filtering criteria (score, volume, bias overrides). (CRITICAL)
+2.  **INFRASTRUCTURE**: Investigate the **EOD P&L Tracker/Alpaca Drift**. Determine the root cause of the discrepancy between Alpaca's reported P&L and the bot's internal tracker. This may involve reviewing fill processing, fee calculations, or Alpaca API interaction. Ensure robust reconciliation and logging for auditability. (CRITICAL)
+3.  **ALPHA**: Review and adjust **Exit Discipline and Stop Placement** as flagged by the internal TQI degradation anomaly. Analyze the characteristics of losing trades that are exited before hitting the hard stop to identify patterns. Consider tighter trailing stops, earlier partial profit taking, or more dynamic risk reduction based on market conditions or trade progression. (HIGH)

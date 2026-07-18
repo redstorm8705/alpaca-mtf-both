@@ -1,0 +1,66 @@
+Midday Gemini Audit — 2026-06-16
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit Integrity (INTC Trade)**:
+    *   **P&L signs**: Correctly calculated. For INTC (long trade implied by entry > exit for loss): entry $127.65, exit $119.75, loss $-7.90. This is consistent.
+    *   **Stop-hit rate**: 100% (1 loss, 1 stop). Given only one trade, this is not statistically significant.
+    *   **Score-outcome correlation**: The single trade (INTC) had a very high confluence score of 12/12 but resulted in a loss. With only one data point, no strong correlation can be assessed, but it highlights that high scores do not guarantee wins, especially in potentially stressed market conditions.
+
+### ENTRY QUALITY
+*   **MRI Context for INTC**: The trade occurred with an `MRI=ELEVATED`. The subsequent log entries show the bot transitioning to `MRI STRESSED` and correctly halting new entries with `⛔ BV-5`. This indicates the bot's MRI-based entry filters are functioning.
+*   **Confluence Score**: INTC entry score 12/12 is above `MIN_SCORE = 9`, indicating a high-quality entry signal based on the strategy's internal scoring.
+*   **Volume Filter**: The numerous `VOLSHADOW` logs show many symbols with `vol_ratio` below 0.5 and `would_pass: false`. This indicates that the bot's volume filter is actively screening out low-volume opportunities, which is a positive sign for entry quality.
+
+### EXIT QUALITY
+*   **Stop Placement/Reporting (INTC)**: Significant discrepancy found.
+    *   **Variable**: `trade.exit_reason`, `trade.exit_price`, `trade.stop_price`
+    *   **Value vs. Should Be**: The INTC trade has `exit_reason: stop_hit`, `exit_price: $119.75`, and a reported `stop: $109.26`. If the `stop_hit` reason is accurate, the `exit_price` should be very close to the reported `stop_price` (allowing for slippage). However, $119.75 is significantly higher than $109.26. This implies one of two critical failures:
+        1.  The price never actually reached the reported stop price of $109.26, meaning the `stop_hit` reason is incorrect.
+        2.  The `stop_price` was dynamically adjusted (e.g., a trailing stop or breakeven stop) and hit at $119.75, but the summary's `stop=$109.26` still reflects the *initial* stop, leading to misleading reporting. If this is the case, the system should report the *actual* stop price that was hit.
+    *   **Failure**: Misrepresenting the actual stop price or exit reason severely degrades the reliability of trade analytics and makes it difficult to assess exit discipline or strategy performance. The bot's `stop=$109.26` implies a much larger potential loss than the actual $7.90 incurred, further complicating analysis.
+    *   **Condition**: Occurs in the closed trade for INTC: `INTC: entry $127.65 → exit $119.75 ($-7.90) | score 12/12 | MRI=ELEVATED | stop_hit | stop=$109.26`.
+
+### MRI ALIGNMENT
+*   The bot correctly applied a `size floor 0.70x` and issued a `CRITICAL | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves` when the MRI score reached 47 (STRESSED level). This demonstrates proper alignment of risk management with detected market regimes by scaling down and then halting new entries in adverse conditions. The single INTC trade occurred while MRI was `ELEVATED`, which is an acceptable condition for entry based on the `MRI SESSION DISTRIBUTION`.
+
+### LOG ANOMALIES
+*   **WARNING: `_fetch_options_data` fetch failed**:
+    *   `2026-06-16 17:02:58,244 | WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer` (repeated at 17:09:49,911).
+*   **WARNING: `gc.collect()` took too long**:
+    *   `2026-06-16 17:20:13,442 | WARNING | main | gc.collect() took 4164.2ms, collected 64 objects — heap may be growing`.
+*   **WARNING: `[ANOMALY-2] confirm_gate=X scans but no entry`**:
+    *   `2026-06-16 17:08:20,987 | WARNING | strategy.run_cycle | [ANOMALY-2] [COIN] confirm_gate=6 scans but no entry — risk.open_positions=0 vs tracker=0 | MAX_OPEN_POSITIONS=4.` (repeated for CRM, MSTR, and across multiple cycles at 17:15:31,539 and 17:25:47,471).
+
+### NEW BUGS / CONCERNS
+
+*   **EXECUTION BUG | CRITICAL | Stop-hit reason vs. actual exit price discrepancy**
+    *   **Variable Involved**: `trade.exit_reason`, `trade.exit_price`, `trade.stop_price`
+    *   **Value vs. What it should be and why it's a failure**: For the INTC trade, the `trade.exit_reason` is stated as `stop_hit`, and the `trade.stop_price` is `$109.26`. However, the `trade.exit_price` is `$119.75`. If the exit was due to a stop hit at $109.26, the exit price should be at or very near $109.26 (allowing for slippage). An exit price of $119.75, when the declared stop is $109.26 and the reason is "stop_hit", indicates that either the exit reason is falsely reported (the price didn't hit $109.26) or the stop price that was actually triggered was different from the one reported in the summary. This is a critical failure as it directly misrepresents how the trade was managed and closed, making P&L attribution and strategy analysis unreliable.
+    *   **Exact Condition**: Occurs for the INTC closed trade: `INTC: entry $127.65 → exit $119.75 ($-7.90) | score 12/12 | MRI=ELEVATED | stop_hit | stop=$109.26`.
+
+*   **INFRASTRUCTURE | HIGH | Prolonged Garbage Collection Pause**
+    *   **Variable Involved**: `gc.collect()` execution duration.
+    *   **Value vs. What it should be and why it's a failure**: The `gc.collect()` function took `4164.2ms` (over 4 seconds). In an intraday trading bot, such a long pause is unacceptable. The bot effectively ceases processing market data, evaluating strategies, or sending/managing orders for this duration. This can lead to significant missed opportunities, increased slippage on order fills (especially in fast markets), and delays in reacting to critical market events or managing open positions.
+    *   **Exact Condition**: `2026-06-16 17:20:13,442 | WARNING | main | gc.collect() took 4164.2ms, collected 64 objects — heap may be growing`.
+
+*   **INFRASTRUCTURE | MEDIUM | Options Data Fetch Failure**
+    *   **Variable Involved**: `_fetch_options_data` return value and internal data processing.
+    *   **Value vs. What it should be and why it's a failure**: The `_fetch_options_data` call failed and returned `None` due to "cannot convert float NaN to integer". If options data is used for crucial calculations such as implied volatility for dynamic stop/target adjustments, position sizing, or volatility regime detection, this failure means those calculations might be based on stale or default values, or outright fail themselves. This introduces an unknown risk and potential degradation in decision quality. Source not provided, so the exact impact on logic is unclear, but the error itself points to data quality or parsing issues.
+    *   **Exact Condition**: `2026-06-16 17:02:58,244 | WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer` (also at `17:09:49,911`).
+
+*   **ALPHA ISSUE | MEDIUM | Ambiguous [ANOMALY-2] Entry Block Warning**
+    *   **Variable Involved**: `strategy.run_cycle`'s entry gate logic and logging.
+    *   **Value vs. What it should be and why it's a failure**: The `[ANOMALY-2]` warning states that symbols (e.g., COIN, CRM, MSTR) passed `confirm_gate` multiple times but no entry was made, despite `risk.open_positions=0` and available capacity (`MAX_OPEN_POSITIONS=4`). This message is immediately followed by the `CRITICAL BV-5` message indicating new entries are blocked due to a `STRESSED` MRI. The `ANOMALY-2` message is ambiguous because if the `BV-5` MRI block is the *sole* reason for no entry, the `ANOMALY-2` should clearly state that the entry was blocked by the MRI, rather than implying an unexplained failure to enter despite seemingly favorable conditions. This ambiguity makes it harder to diagnose if there's another hidden entry-blocking mechanism or if the `confirm_gate` is evaluating conditions that are then immediately overridden by the MRI check without clear logging.
+    *   **Exact Condition**: Occurs when `confirm_gate` passes for symbols like COIN, CRM, MSTR (e.g., `confirm_gate=6 scans`), but no entry happens, and the log is immediately followed by a `CRITICAL BV-5: MRI=STRESSED` message preventing new entries (at 17:08:20,987, 17:15:31,539, 17:25:47,471).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL | Investigate and Fix Stop-Hit Reporting/Logic**: Thoroughly review the trade exit logic to ensure that `stop_hit` events are accurately reported with the *actual* stop price that triggered the exit. If dynamic stops are in use (e.g., trailing or breakeven stops), the system must log the final triggered stop price in the trade summary. This is crucial for accurate performance analysis and trust in the bot's execution.
+2.  **INFRASTRUCTURE | HIGH | Optimize Python Garbage Collection**: Identify and address the cause of the prolonged `gc.collect()` pauses (over 4 seconds). This might involve profiling memory usage, reducing object churn, or explicitly managing memory more efficiently. Long pauses are detrimental to intraday trading performance.
+3.  **INFRASTRUCTURE/ALPHA | MEDIUM | Address Options Data Fetch Failure**: Investigate why `_fetch_options_data` is failing with "cannot convert float NaN to integer". Ensure robust error handling for external data sources and data type conversions. Determine if this data is critical for any strategy components (like volatility tiering or stop/target calculations) and assess the impact of its absence.

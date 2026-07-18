@@ -1,0 +1,66 @@
+Midday Gemini Audit — 2026-07-13
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+
+*   **RIVN Entry/Exit Integrity:**
+    *   **Entry Price Plausibility:** The entry price of `$18.06` for RIVN is a plausible value.
+    *   **Exit Price Consistency with Stated Exit Reason (`stop_hit`):**
+        *   VARIABLE: `exit` price for RIVN is $17.22. `stop` price for RIVN is $15.39.
+        *   FAILURE: The trade for RIVN is recorded as a `stop_hit` exit. Typically, a stop hit implies the exit price should be at or very close to the stated stop price, accounting for minimal slippage. However, the recorded `exit $17.22` is significantly *above* the `stop=$15.39` price by $1.83. If the actual stop was at $15.39, the loss per share would be $18.06 - $15.39 = $2.67. Given the actual P&L of `$-17.64`, the implied loss per share is $0.84 ($18.06 - $17.22). This implies approximately 21 shares were traded. If 21 shares hit a stop at $15.39, the total loss would be $56.07, not $17.64. This discrepancy indicates either (1) the `stop=$15.39` value recorded in `CLOSED TRADE DETAILS` does not reflect the *actual* active stop price at the time of exit (e.g., a trailing stop moved higher), or (2) there's a significant error in how `stop_hit` exits are logged or executed.
+        *   CONDITION: Trade RIVN, where `exit $17.22` for `stop_hit` reason, but `stop=$15.39`.
+    *   **P&L Signs Correctness:** For RIVN (a long trade), entry $18.06 and exit $17.22 results in a loss, which is correctly reflected as `$-17.64`.
+    *   **Win Rate and Profit Factor:** Only one trade was closed, resulting in a 0% win rate. This is insufficient data to assess consistency with the bot's claimed edge or profit factor.
+    *   **Score-Outcome Correlation:** One trade with a `score 10/12` (high score) resulted in a loss. This single data point is insufficient to establish a correlation.
+    *   **Stop-Hit Rate:** A 100% stop-hit rate (1 stop) for the single closed trade. This is insufficient to indicate a systematic regime mismatch.
+    *   **P&L = $0.00 but entry ≠ exit price:** Not found in the provided data.
+    *   **Partial exit that doesn't reduce position size correctly:** No partial exits occurred.
+
+### ENTRY QUALITY
+
+*   **MRI Context:** The bot initiated an entry for RIVN with `MRI=ELEVATED`. The `strategy.run_cycle` log confirms that `MRI ELEVATED (score=36)` was detected, and a `size floor 0.85x` was applied. The `Dynamic MIN_SCORE` was also correctly raised to `9/12`. RIVN's entry score of `10/12` met this dynamic minimum. This indicates appropriate risk adjustments were made under elevated MRI conditions.
+*   **Other Filtered Entries:** Several potential entries (COIN, SMCI, SNOW, DDOG, MSTR, NET, RIVN, HOOD) were appropriately filtered by `MINIMUM-LOT`, `CONFIRM GATE`, `ORB gate BLOCK`, or `no allocation` due to dynamic score or allocation logic, demonstrating active entry quality control.
+
+### EXIT QUALITY
+
+*   **RIVN Exit Discrepancy:** As noted in the Performance Audit, the significant difference between the `exit $17.22` and the `stop=$15.39` for RIVN under a `stop_hit` exit reason is a concern. This implies the stop management (e.g., trailing stop logic) is either not updating the `stop` variable for `CLOSED TRADE DETAILS` correctly, or the stop execution experienced very favorable fill *relative to the recorded stop price*, which is unusual for a stop hit. If the `$15.39` was the initial hard stop and a tighter stop was effectively hit, the reporting is misleading. This suggests a potential alpha issue in how stops are managed or an execution bug in how exit details are recorded.
+
+### MRI ALIGNMENT
+
+*   **Consistent MRI Level:** The `MRI SESSION DISTRIBUTION` shows `{'ELEVATED': 20}` for all samples, indicating the market was consistently in an `ELEVATED` risk state.
+*   **Appropriate Bot Response:** The bot correctly identified the `ELEVATED` MRI, applied a `size floor 0.85x`, and dynamically raised the `MIN_SCORE` to `9/12`. This demonstrates proper alignment and adaptation to market conditions by increasing entry criteria and reducing size.
+
+### LOG ANOMALIES
+
+*   `2026-07-13 17:20:27,335 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.2/100 < 30 — review exit discipline and stop placement.`
+*   `2026-07-13 17:21:44,742 | INFO | execution.entry_logic | [COIN] AB-3 TQI demotion: rolling 10-trade avg 29.1/100 < 50 → Kelly adj 0.71x | dollar_cap → $156.05`
+*   `2026-07-13 17:26:23,827 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-32.67 tracker=$-17.64 drift=$-15.03`
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | HIGH | RIVN Stop Price Misrepresentation / Stop Management:**
+    *   **Description:** The `CLOSED TRADE DETAILS` for RIVN reports a `stop_hit` exit at `$17.22` with a `stop=$15.39`. The actual exit price is significantly higher than the reported stop price. If `$15.39` was the intended loss limit, the bot exited well before that price. This implies that the `stop` value logged for the trade (or shown in the summary) is either stale (e.g., the initial stop rather than a dynamically moved trailing stop) or fundamentally incorrect for the trade's actual exit. This obfuscates the true risk management behavior for analysis.
+    *   **Exact condition:** Trade `RIVN` where `exit $17.22` occurs for `stop_hit` reason, but the reported `stop=$15.39` is substantially different from the actual exit price.
+
+2.  **ALPHA ISSUE | HIGH | Persistent TQI Degradation:**
+    *   **Description:** The bot reported `[ANOMALY-3] TQI degradation` for `last-5-trade avg=25.2/100 < 30` and subsequently applied an `AB-3 TQI demotion` for COIN based on `rolling 10-trade avg 29.1/100 < 50`. This indicates a consistent and acknowledged systematic issue with the strategy's recent performance, specifically concerning "exit discipline and stop placement." While the bot attempts to mitigate this via Kelly adjustment, the underlying cause of degradation remains flagged as a significant issue.
+    *   **Exact condition:** `strategy.run_cycle` logs `[ANOMALY-3] TQI degradation` with average TQI below configured thresholds, leading to `AB-3 TQI demotion` in `execution.entry_logic`.
+
+3.  **INFRASTRUCTURE / EXECUTION BUG | HIGH | EOD P&L Drift between Alpaca and Tracker:**
+    *   **Description:** There's a notable discrepancy in the End-Of-Day P&L between Alpaca (`$-32.67`) and the bot's internal tracker (`$-17.64`), resulting in a drift of `$-15.03`. While the log states `GUARDED` implying the tracker P&L is prioritized for *current* risk decisions, this large drift raises concerns about the reliability of Alpaca's reporting, the bot's reconciliation process, or potential missed fills/order states. If external systems or manual reviews rely on Alpaca's figures, this could lead to confusion or incorrect understanding of performance.
+    *   **Exact condition:** `execution.portfolio_tracker` logs `EOD P&L DRIFT: Alpaca=$-32.67 tracker=$-17.64 drift=$-15.03`.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+
+1.  **ALPHA: Investigate RIVN Stop Price Discrepancy:** Review the code path for stop calculation, placement, and reporting. Ensure that the `stop` variable recorded in `CLOSED TRADE DETAILS` accurately reflects the *active* stop price at the time of execution for a `stop_hit` exit. If dynamic stop management (e.g., trailing stops) is in use, consider adding a `final_stop_price` field to distinguish from the initial stop.
+2.  **ALPHA: Root Cause Analysis for TQI Degradation:** Conduct a deeper dive into the specific trades contributing to the `TQI degradation` (the 5-10 trades preceding the anomaly). Analyze common patterns in those trades related to entry conditions, price action post-entry, and exit scenarios to pinpoint systematic issues with exit discipline or stop placement in the current market regime.
+3.  **INFRA: Reconcile Alpaca vs. Tracker P&L Drift:** Investigate the `$-15.03` P&L drift between Alpaca and the internal tracker. Determine if this is due to Alpaca's reporting delays, discrepancies in commission/fee calculations, or a gap in the bot's trade reconciliation logic (e.g., handling partial fills, corporate actions). Ensure that `[BV-2 Option B]` is robust and fully prevents the misreported Alpaca P&L from influencing live risk decisions.

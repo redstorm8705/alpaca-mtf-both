@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-06-16
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: []
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Recurring `gc.collect()` warnings:** Multiple `WARNING | main | gc.collect() took Xms, collected 64 objects — heap may be growing` entries are observed, occurring approximately every 5-10 minutes. The duration (ranging from 3.6 to 5.8 seconds) indicates significant pauses in the main process, which is problematic for a live trading bot sensitive to latency. The "heap may be growing" message suggests an underlying memory leak or inefficient memory management.
+*   **Redundant `ANOMALY-2` warnings:** The bot consistently logs `WARNING | strategy.run_cycle | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry` for multiple symbols (e.g., COIN, CRM, MSTR). These warnings appear in conjunction with `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` This implies the anomaly warning is firing for a perfectly expected and intentional outcome (no entry due to macro risk constraints).
+*   **`TQI degradation` warning:** The bot logged `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=20.0/100 < 30 — review exit discipline and stop placement.` This indicates a consistent underperformance in trade quality, suggesting either poor trade selection or suboptimal exit strategies are leading to a lower average return per trade. While not a bug in execution, it's a critical performance red flag.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness:** The single closed trade today for INTC (`entry_price=127.65`, `exit_price=119.75`, `pnl=-7.9`) correctly reflects a loss for a long position.
+*   **`pnl_pct` Calculation:** For INTC, `pnl_pct: -6.19`. Calculation: (-7.9 / 127.65) * 100 = -6.19%. This is correct for the original full position value.
+*   **Partial P&L Accumulation:** Not applicable, as no partial exits occurred for the `INTC` trade (`partial_exited: false`).
+*   **Trades with `pnl=0.0` where `entry ≠ exit`:** No such anomalies were observed in the provided `EOD SNAPSHOT` or `TRADE EVENTS`.
+*   **Entry/Exit Prices Plausibility:** The entry and exit prices for INTC (127.65 and 119.75 respectively) are plausible for an equity trading around those levels.
+*   **Score→Outcome Correlation:** With only one trade (`INTC`, score 12, loss), there is insufficient data in this 24h period to assess score-to-outcome correlation effectively. The `all_time_stats` show a `win_rate` of 39.0%, and `avg_r_multiple` of -0.076, indicating overall underperformance, which aligns with the `TQI degradation` warning.
+*   **Stop-hit Rate vs. Win Rate:** Of the four `TRADE EVENTS` provided for the last 7 days, all are `stop_hit` events (UBER, TOST, INTC). Today's single trade was also a stop hit, leading to `win_rate_today: 0.0`. This high stop-hit rate (3/3 or 1/1 for today) is concerning and consistent with the `TQI degradation` warning.
+*   **Exit Reason Consistency:** The `INTC` trade exited with `reason="overnight_atr_buffer_exit | 9-scan breach | entry=$127.65 thresh=$122.75"`. The actual `exit_price` was 119.75, which is below the calculated `thresh=$122.75`. This suggests a stop order triggering at the threshold but filling at a worse price due to market conditions/slippage, which is a plausible scenario, especially in paper trading where fills might simulate real-world slippage.
+
+### TRADE INTEGRITY
+No issues.
+
+### MODIFIED FILE FINDINGS
+No issues found (as no files were modified in the last 24 hours).
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | UNTOUCHED
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | UNTOUCHED
+*   P5-H2 | Fill price crosstalk | UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path | UNTOUCHED
+*   P5-H4 | Rule 2 dead code | UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | FIXED
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | UNTOUCHED (condition for trigger not met)
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: HIGH | file: main.py**
+    *   **Description:** Frequent, long-duration `gc.collect()` calls indicate significant memory pressure, potential memory leak, or inefficient object management within the `main` execution loop.
+    *   **Exact failure condition:** The `gc.collect()` function, likely called or wrapped in `main.py`, is frequently taking 3-5+ seconds to execute (`took 3659.6ms` to `5842.1ms`), as evidenced by `WARNING | main | gc.collect() ... heap may be growing` logs. These long pauses introduce unacceptable latency into the trading bot's operation, leading to delayed signal processing, stale market data reads, or untimely order submissions/cancellations, thus degrading trade execution quality and potentially causing missed opportunities or larger slippage. The recurring "heap may be growing" suggests an unaddressed memory leak that could eventually lead to an out-of-memory error.
+
+*   **CATEGORY: EXECUTION BUG | SEVERITY: MEDIUM | file: strategy.run_cycle**
+    *   **Description:** The `ANOMALY-2` warning is inappropriately triggered when new entries are explicitly blocked by a higher-level risk management rule (`BV-5: MRI=STRESSED`).
+    *   **Exact failure condition:** The `strategy.run_cycle` function generates `WARNING | strategy.run_cycle | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry` logs for symbols (e.g., COIN, CRM, MSTR) during periods when `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` is also active. The runtime produces a warning that implies an unexpected failure to enter a trade, despite trade entry being intentionally and correctly suppressed by the `BV-5` macro risk gate. This leads to false positive warnings, creating unnecessary log noise and potentially causing operators to become desensitized to `ANOMALY-2` warnings that *do* indicate a genuine, unexpected entry failure.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate and Optimize Memory Usage (CRITICAL):** Address the frequent and long `gc.collect()` pauses in `main.py`. Profile memory allocation to identify and fix any memory leaks or excessive object creation/retention. This is crucial for maintaining low-latency operations.
+2.  **Refine `ANOMALY-2` Logic (MEDIUM):** Modify the `strategy.run_cycle` module to suppress `ANOMALY-2` warnings when trade entries are explicitly blocked by higher-level risk management rules (e.g., `BV-5` due to `MRI=STRESSED`). This will reduce log noise and ensure warnings only flag true, unexpected anomalies.
+3.  **Review `TQI` Degradation (HIGH):** Conduct a deeper analysis into the `TQI degradation` (last-5-trade avg=20.0/100 < 30) to understand the root causes of poor trade quality. This may involve reviewing entry criteria, stop placement, profit targets, or position sizing against actual market behavior.
+4.  **Audit MRI `news_alerts` Contribution (MEDIUM):** Note the high `news_alerts` contribution to the MRI score (e.g., `value=78, pts=35` out of `score=47`). While news is a valid macro risk factor, ensure its weighting and penalty mechanisms are calibrated appropriately to avoid excessive market gating that might be overly conservative or based on non-actionable news.
+5.  **Expand P&L Reporting for `score_without_vol` (LOW):** Consider logging the `volume_score` component or the *final* computed score alongside `score_without_vol` in `VOLSHADOW` messages, especially when `would_pass: true`, to improve transparency and make it easier to verify why a signal passed the `MIN_SCORE` threshold.

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-25 01:35 PM PT",
+  "ts_iso": "2026-06-25T13:35:04.779885-07:00",
+  "prompt_chars": 37268,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 37268,
+  "gai_prompt_chars": 37344,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.23,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "### 1. TRADE-BY-TRADE VERDICT\n\n- **NFLX (Short Cover)**: 06-18 buy @ $76.38 and $77.60. Prior entry 06-17 @ $77.54.\n  **VERDICT: edge_confirmed**. Covered for a small gain/scratch. The initial short edge was valid but lacked deep continuation.\n- **SMCI (Short Cover)**: 06-22 buy @ $34.24. Prior entry 06-17 @ $28.91.\n  **VERDICT: regime_error / gtc_forced**. Covered at a massive loss due to a weekend gap-up. Shorting a high-beta momentum stock and holding it over the weekend without hedging is a critical regime error.\n- **TOST (Short Cover)**: 06-22 buy @ $24.95. Prior entry 06-17 @ $24.92.\n  **VERDICT: edge_confirmed**. Scratched after holding over the weekend. \n- **MSTR (Long)**: 06-24 buy @ $98.16. Exited 06-24 @ $164.55.\n  **VERDICT: edge_confirmed**. Massive intraday gain captured, though the extreme price delta suggests a possible paper-trading artifact, split, or severe volatility event.\n- **NVDA (Long)**: 06-24 buy @ $198.17.\n  **VERDICT: unknown**. Open position, no exit logged in the provided window.\n- **GOOGL (Long)**: 06-24 buy @ $345.18.\n  **VERDICT: unknown**. Open position, no exit logged in the provided window.\n\n### 2. PATTERN ANALYSIS\n\n- **[INSUFFICIENT_SAMPLE — N=9] Momentum Truncation via Weekend Gap Risk**: *(Jegadeesh + Titman lens)* The SMCI short held over the weekend resulted in a severe gap-up loss (entry $28.91, cover $34.24). TOST was also held over the weekend for a scratch. While momentum continuation is a valid factor, holding high-beta shorts over the weekend exposes the portfolio to unmanaged gap risk that completely overrides the intraday momentum edge.\n- **[INSUFFICIENT_SAMPLE — N=9] Missing Sell Fills / State Desync**: There are `EXIT` events logged on 06-24 for NFLX, MSTR, and TOST, but no corresponding \"sell\" fills exist in the Alpaca fills list. Furthermore, TOST and NFLX had exits on 06-24 despite seemingly being covered earlier in the week with no new long entries logged. This strongly suggests a desync between the bot's internal portfolio tracker and Alpaca's actual positions, or incomplete fill logging.\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n\n- No actionable parameter directives were issued in the prior week (only context/verdicts were provided).\n\n### 4. WEEKLY DIRECTIVES\n\n⚠️ **DIRECTIVES BLOCKED** — insufficient sample (N=9 < 20). I cannot prescribe parameter changes, but I note the following observations regarding missed alpha:\n\n- **Ed Thorp Lens (Opportunity Cost)**: The bot is trading very infrequently (only 3 new entries this week). The sole entry gate (SPY 5-min bar-over-bar) combined with `MIN_SCORE=10/12` is likely overly restrictive. By artificially reducing the number of bets placed, the strategy is operating at a sub-Kelly frequency, leaving significant alpha on the table.\n- **Cliff Asness Lens (Signal Persistence)**: The Kelly stats rebuilt from 72 closed trades indicate historical data exists and the edge is present, but the current parameters are choking the signal flow. \n\n### 5. FINAL VERDICT\n\n**WARN** — Insufficient sample size to evaluate the edge, but weekend gap risk on shorts caused significant damage, and there are glaring discrepancies between logged fills and exit events indicating a potential state desync.\n\n### 6. STRUCTURED FINDINGS\n\n```json\n[\n  {\n    \"file\": \"main.py\",\n    \"finding\": \"Garbage collection is taking >3 seconds (3252.9ms) and warning that the heap may be growing, indicating a potential memory leak in the main loop or state tracking.\",\n    \"recommended_fix\": \"Profile memory usage in the main loop. Ensure that old trade objects, historical data arrays, or log strings are not being appended to unbounded lists/dicts without periodic cleanup.\",\n    \"rc_class\": \"RC-4\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 26255,
+    "elapsed_s": 58.54,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

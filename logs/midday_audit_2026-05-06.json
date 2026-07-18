@@ -1,0 +1,166 @@
+{
+  "audit_date": "2026-05-06",
+  "run_ts": "2026-05-06T10:30:01.849994-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 3,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.2,
+    "flagged_entries": [
+      {
+        "symbol": "TOST",
+        "ts": "2026-05-06 07:13:53",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 28.73,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "QCOM",
+        "ts": "2026-05-06 07:14:00",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 190.43,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "AAPL",
+        "ts": "2026-05-06 07:33:08",
+        "score": 11,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 286.21,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "META",
+        "ts": "2026-05-01 08:51:27",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 610.25,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "TOST",
+      "QCOM",
+      "AAPL",
+      "QQQ",
+      "META"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 24,
+    "levels": {
+      "STRESSED": 24
+    },
+    "last_score": 49,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 1,
+    "warning_count": 661,
+    "watchdog_count": 0,
+    "error_samples": [
+      "2026-05-06 09:21:41,710 | ERROR    | generate_dashboard | Alpaca API load failed \u2014 dashboard will show zeros: <urlopen error [Errno 8] nodename nor se"
+    ],
+    "warning_samples": [
+      "2026-05-06 06:35:39,028 | WARNING  | execution.gtc_manager | RTH DAY stops: 3 overnight position(s) have no exchange stop \u2014 submitting DAY stop-market",
+      "2026-05-06 06:35:47,603 | WARNING  | execution.broker | [QQQ] close_position blocked (40310000 held_for_orders) \u2014 cancelling all open orders and retry",
+      "2026-05-06 07:02:57,328 | WARNING  | strategy.signal_generator | [NVDA] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-06 07:02:57,955 | WARNING  | strategy.signal_generator | [AAPL] Weekly bias: insufficient data (4 bars), filter skipped",
+      "2026-05-06 07:02:58,546 | WARNING  | strategy.signal_generator | [TSLA] Weekly bias: insufficient data (4 bars), filter skipped"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "META",
+      "status": "rc=2",
+      "entry": 610.25,
+      "exit": 610.25
+    },
+    {
+      "symbol": "QQQ",
+      "status": "rc=2",
+      "entry": 646.55,
+      "exit": 688.96
+    }
+  ],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": 42.41000000000008,
+    "win_rate": 0.5,
+    "profit_factor": null,
+    "avg_win": 42.41000000000008,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "QQQ",
+      "pnl": 42.41000000000008,
+      "entry_price": 646.55,
+      "exit_price": 688.96,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 635.35,
+      "target": 674.51
+    },
+    "worst": {
+      "symbol": "META",
+      "pnl": 0.0,
+      "entry_price": 610.25,
+      "exit_price": 610.25,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 630.44,
+      "target": 560.8
+    },
+    "trades": [
+      {
+        "symbol": "QQQ",
+        "pnl": 42.41000000000008,
+        "entry_price": 646.55,
+        "exit_price": 688.96,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "HIGH",
+        "stop": 635.35,
+        "target": 674.51
+      },
+      {
+        "symbol": "META",
+        "pnl": 0.0,
+        "entry_price": 610.25,
+        "exit_price": 610.25,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 630.44,
+        "target": 560.8
+      }
+    ]
+  }
+}

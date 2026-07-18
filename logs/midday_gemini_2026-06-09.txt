@@ -1,0 +1,54 @@
+Midday Gemini Audit — 2026-06-09
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades during the audited period, thus no assessment can be made on entry/exit integrity, P&L accuracy, win rate, or profit factor for this session. The log does report "[ANOMALY-3] TQI degradation: last-5-trade avg=22.4/100 < 30", indicating a historical systematic issue with strategy performance (exit discipline and stop placement). This is a qualitative assessment of past performance rather than an audit of current session's trade mechanics.
+
+### ENTRY QUALITY
+No new entries were flagged in the log. The bot consistently identified `MRI STRESSED` conditions (scores 50, 45, 55) and, correctly, critical-logged `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` Additionally, `VOLSHADOW` logs showed `would_pass: false` and `score_without_vol` generally below the `MIN_SCORE = 9`, preventing entries based on confluence. This indicates appropriate risk-averse behavior given the prevailing market conditions and strategy parameters.
+
+### EXIT QUALITY
+The bot is monitoring existing positions. For `[UBER]`, "Overnight reversal signal: scan 1/10" and "scan 2/10" indicate the bot is actively tracking an overnight position for a reversal-based exit, which is permitted by `OVERNIGHT_ENTRIES_ENABLED = True`. For `[UBER]` and `[TOST]`, "Reversal signal neutral — counter decayed 1 → 0" indicates that previous reversal signals faded. No exits were triggered during this log window, so the effectiveness of exit execution cannot be assessed. However, the recurring `TQI degradation` warning suggests a systemic issue with exit quality on *past* trades, requiring further investigation.
+
+### MRI ALIGNMENT
+The bot correctly identifies the `MRI STRESSED` regime (score 50, 45, 55) and takes appropriate actions:
+*   `size floor 0.70x applied` due to STRESSED MRI.
+*   Critically blocks new entries: `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`
+*   Applies `sizing at 50%` due to a detected `Risk day (ADP Employment Change Weekly)`.
+These actions are in line with conservative risk management during stressed market conditions. The VIX levels (e.g., 21.6, 22.1, 21.0) are above `VIX_BE_WIDEN_THRESHOLD_1 = 20.0`, suggesting breakeven buffers should widen, which is consistent with the configuration and a risk-off stance.
+
+### LOG ANOMALIES
+*   `2026-06-09 17:01:59,140 | WARNING | main | gc.collect() took 3940.0ms, collected 64 objects — heap may be growing`
+*   `2026-06-09 17:01:59,148 | INFO | main | [CYCLE] duration=428s | phase=midday | watchdog_headroom=292s ⚠ SLOW CYCLE`
+*   `2026-06-09 17:12:24,642 | WARNING | main | gc.collect() took 5211.1ms, collected 64 objects — heap may be growing`
+*   `2026-06-09 17:12:24,651 | INFO | main | [CYCLE] duration=319s | phase=midday | watchdog_headroom=401s`
+*   `2026-06-09 17:23:31,078 | WARNING | main | gc.collect() took 3268.1ms, collected 64 objects — heap may be growing`
+*   `2026-06-09 17:23:31,086 | INFO | main | [CYCLE] duration=362s | phase=midday | watchdog_headroom=358s`
+
+### NEW BUGS / CONCERNS
+
+**1. INFRASTRUCTURE | HIGH | Excessive Garbage Collection Time & Heap Growth**
+*   **Variable/Metric Involved**: `gc.collect()` execution time and the "heap may be growing" log message.
+*   **Value vs. Should be**: The garbage collection calls are taking excessive amounts of time (e.g., 3.9 seconds, 5.2 seconds, 3.2 seconds). In a live trading bot, pauses of this magnitude are significant and can lead to missed market opportunities or delayed responses. The accompanying "heap may be growing" message strongly suggests a memory leak or inefficient memory management, leading to increasing memory pressure and triggering these long GC cycles. Ideally, `gc.collect()` should either be negligible in runtime, or memory should be stable enough not to require such frequent, long collections.
+*   **Condition**: Occurs repeatedly during the `midday` phase, specifically at `2026-06-09 17:01:59`, `17:12:24`, and `17:23:31`.
+
+**2. INFRASTRUCTURE | HIGH | Slow Cycle Duration**
+*   **Variable/Metric Involved**: `[CYCLE] duration` and the `⚠ SLOW CYCLE` flag.
+*   **Value vs. Should be**: The trading bot's main cycle is taking a very long time to complete (e.g., 428 seconds, 319 seconds, 362 seconds), which translates to cycles running approximately every 5-7 minutes. While the `watchdog_headroom` shows the bot isn't crashing, such infrequent cycles for an "intraday" bot mean decisions are based on potentially stale data or critical real-time market events could be missed. Intraday strategies typically require much faster feedback loops, ideally within seconds or low minutes, not many minutes.
+*   **Condition**: Occurs at `2026-06-09 17:01:59`, `17:12:24`, and `17:23:31` in conjunction with the `gc.collect()` warnings.
+
+**3. ALPHA ISSUE | MEDIUM | Persistent TQI Degradation**
+*   **Variable/Metric Involved**: `TQI degradation: last-5-trade avg=22.4/100`.
+*   **Value vs. Should be**: The bot is consistently reporting that its `last-5-trade avg` TQI is 22.4, which is below the internal threshold of 30. This indicates a systematic degradation in the quality of recently *closed* trades, specifically citing a need to "review exit discipline and stop placement." This implies the strategy is not performing as intended in terms of managing risk and reward after entry, even if the entries themselves were justified at the time.
+*   **Condition**: Occurs at `2026-06-09 17:07:36`, `17:18:03`, and `17:29:04` during the `strategy.run_cycle` phase.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE**: Prioritize an investigation into the memory profile of the bot. Debug the root cause of the increasing heap size and prolonged `gc.collect()` pauses. This is critical as it directly impacts responsiveness and overall bot health.
+2.  **ALPHA**: Conduct a detailed post-mortem analysis of the trades contributing to the `TQI degradation`. Focus on `exit discipline and stop placement` to identify patterns of poor performance and adjust strategy parameters or logic accordingly.
+3.  **INFRASTRUCTURE**: Profile the `strategy.run_cycle` to identify bottlenecks that are leading to the `SLOW CYCLE` warnings. Optimizing these bottlenecks is crucial for maintaining real-time responsiveness for an intraday strategy, potentially by optimizing data processing or splitting long-running tasks.

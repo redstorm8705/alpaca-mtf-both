@@ -1,0 +1,41 @@
+Midday Gemini Audit — 2026-04-21
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Trade Reconciliation Failure (CRITICAL):** The session summary explicitly states "Entries: 1 | Exits: 1" but then reports "Closed trades: 0 | Wins: 0 | Losses: 0 | Total P&L: $0.00". This is a severe, fundamental discrepancy. An exit should lead to a closed trade and a calculated P&L. The NFLX trade was entered, an exit indicator was detected, yet no corresponding closed trade or P&L is recorded. This suggests a critical failure in the trade lifecycle management, P&L calculation, or logging system.
+*   **P&L Drift Discrepancy (CRITICAL):** The `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$0.00 tracker=$-5.38 drift=$+5.38` recurs four times within the logged session (09:54, 10:06, 10:15, 10:28 PT). This not only indicates a persistent disagreement between the bot's internal P&L tracking and Alpaca's records, but also that "EOD" reconciliation is happening multiple times intraday, which is anomalous. The P&L summary showing $0.00 directly contradicts the tracker's $-5.38. This is a severe data integrity issue.
+*   **Untestable Metrics:** Due to zero closed trades, metrics like `Win rate`, `Avg win/loss`, `Profit Factor`, and `score→outcome correlation` are all reported as $0.00$ or unquantifiable.
+*   **Stop-hit rate:** `0% (0 stops)` is misleading given no trades were formally closed.
+
+### ENTRY QUALITY
+*   **NFLX Entry under STRESSED MRI:** The only flagged entry, NFLX, was taken at `MRI=STRESSED`. While sizing adjustments are in place for higher MRI levels, entering at STRESSED conditions inherently carries elevated risk. This is consistent with the flag.
+*   **Systematic Long Blockage:** The bot repeatedly logs `🔴 RULE 1 — PREMARKET RED LOCKOUT: ... ALL LONGS BLOCKED this session. Shorts + inverse ETFs only.` This is a valid risk management rule. However, the signal generator continues to produce high-score `LONG` signals (e.g., AMD, AVGO with score=12/12) that are immediately filtered out. This indicates a potential inefficiency or mismatch in the signal generation logic for the prevailing market regime.
+*   **TQQQ Logic Conflict (CRITICAL FLAW):** Despite `RULE 1` explicitly stating "Shorts + inverse ETFs only" and the bot detecting strong `TQQQ SHORT score=12/12` signals (which is a bearish play on QQQ and aligns with the lockout), the bot consistently skips these opportunities due to `[TQQQ] Bucket A long-only — skipping short signal`. This is a severe, systematic logic error where a high-conviction, regime-aligned signal is ignored due to an internal configuration that contradicts the overarching market conditions and risk rules for the day. This represents substantial missed edge.
+
+### EXIT QUALITY
+*   **NFLX Exit Indicator but No Closure:** For the NFLX entry, an exit indicator (`MACD bullish cross`) was detected at `10:23:22,626 PT`, leading to `[NFLX] RTH reversal signal: scan 1/6 — waiting for 30-min confirmation.` However, the session summary reports `Exits: 1` but `Closed trades: 0`. This indicates a failure in executing the exit or fully reconciling the trade's closure and P&L, leaving the position in an undefined state.
+
+### MRI ALIGNMENT
+*   The bot successfully detected escalating macro risk, with MRI levels moving from STRESSED (at NFLX entry) through HIGH, back to STRESSED (after refresh), and finally closing the session at `CRITICAL (93/100)`.
+*   Position sizing was adjusted accordingly (`0.55x` for HIGH, `0.70x` for STRESSED, `0.40x` for CRITICAL).
+*   **Concern:** The MRI sizing multipliers show an inconsistency: `MRI HIGH (score=80) — size floor 0.55x applied.` followed by `MRI STRESSED (score=58) — size floor 0.70x applied.`. If STRESSED is typically considered less severe than HIGH, a 0.70x multiplier (less restrictive) for STRESSED (58) compared to 0.55x for HIGH (80) is plausible *if* the numerical score directly dictates the multiplier, but it breaks the typical hierarchical understanding of MRI *levels*. This requires clarification.
+
+### LOG ANOMALIES
+*   **`WARNING | execution.portfolio_tracker | EOD P&L DRIFT`:** Persistent, intraday P&L discrepancies between Alpaca and the internal tracker.
+*   **`WARNING | main | [ANOMALY-2] [TQQQ] confirm_gate=X scans but no entry`:** Recurring, misleading warning. The actual reason for TQQQ short entries being blocked is a `Bucket A long-only` configuration, not a score threshold issue. The warning misdiagnoses the problem.
+*   **`WARNING | news_monitor | [RSS] Feed parse error (bozo=True)`:** Recurring RSS feed parsing errors, which could lead to missed or delayed macro news alerts, potentially impacting MRI calculation accuracy.
+*   **`⚠ SLOW CYCLE`:** Two instances of `[CYCLE] duration=439s | phase=midday | watchdog_headroom=281s ⚠ SLOW CYCLE` and `duration=433s | phase=midday | watchdog_headroom=287s ⚠ SLOW CYCLE` indicate performance bottlenecks. These long cycle durations can delay signal processing, entry/exit decisions, and risk management actions in a fast-moving intraday environment.
+
+### NEW BUGS / CONCERNS
+*   **Critical | `trade_reconciliation.py`**: The most glaring issue is the fundamental failure to reconcile trades. The NFLX trade, with both entry and exit signals, is not closed, and P&L is not recorded. This suggests a core flaw in the `portfolio_tracker` or `trade_manager` module's ability to finalize trades and update the P&L summary.
+*   **Critical | `pnl_tracker.py`**: The constant `EOD P&L DRIFT` warning and the mismatch between the tracker and Alpaca's P&L indicate a severe bug in the P&L tracking and reconciliation mechanism. The "EOD" label for intraday events is also a logical error.
+*   **Major | `strategy.signal_filter.py` (TQQQ logic)**: The `Bucket A long-only` rule for TQQQ directly contradicts the `Premarket Red Lockout` rule, causing the bot to bypass high-quality, regime-aligned short signals. This configuration or rule hierarchy is critically flawed.
+*   **Minor | `risk_manager.py` (Max Positions)**: `Max positions (4) reached. Skipping.` is logged while the summary only lists 1 open position (NFLX). This implies either a hidden inventory of positions not reported, or a logic error in how `max_positions` is evaluated.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate Trade Reconciliation and P&L Drift (Files: `portfolio_tracker.py`, `trade_manager.py`, `pnl_tracker.py`)**: Immediately debug why trades are not being closed after an exit signal and why P&L discrepancies (EOD P&L DRIFT) are occurring consistently and intraday. This is paramount for accurate reporting and risk management.
+2.  **HIGH: Rectify TQQQ Strategy Logic (Files: `strategy.signal_filter.py`, `config.py`)**: Resolve the conflict between the "Premarket Red Lockout" and the "TQQQ Bucket A long-only" configuration. Ensure the bot can act on appropriate signals (e.g., TQQQ shorts during bearish market conditions). Update `ANOMALY-2` warning message to reflect the true cause.
+3.  **MEDIUM: Optimize Cycle Performance (Files: `main.py`, various strategy modules)**: Address the `⚠ SLOW CYCLE` warnings. Investigate the cause of prolonged cycle durations to ensure timely decision-making and prevent missed opportunities or delayed risk mitigation.

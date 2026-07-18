@@ -1,0 +1,66 @@
+Midday Gemini Audit — 2026-07-09
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Entry prices plausible**: N/A, no entries were executed in this session.
+*   **Exit prices consistent**: N/A, no exits in this session.
+*   **P&L signs correct**: Total P&L is $0.00, consistent with 0 closed trades.
+*   **Win rate and profit factor consistent**: N/A, no closed trades.
+*   **Score→outcome correlation**: N/A, no closed trades.
+*   **Stop-hit rate**: 0% (0 stops), consistent with 0 closed trades.
+*   **P&L = 0.0 but entry ≠ exit price**: N/A, no closed trades.
+*   **Partial exit not reducing position size**: N/A, no partial exits.
+
+### ENTRY QUALITY
+*   **MRI alignment**: The bot detected `MRI: ELEVATED (37/100)` and correctly reacted by raising the `Dynamic MIN_SCORE` from 8 to 9/12 and applying a `size floor 0.85x`. This indicates appropriate caution in adverse market conditions.
+*   **Entry Suppression**: Multiple signals that met or exceeded the dynamic `MIN_SCORE` of 9 were prevented from entering:
+    *   **Excessive sizing caps**: `SOXL` (12/12), `MU` (12/12), `AMD` (10/12), `AVGO` (10/12) were all skipped because cumulative dollar-cap adjustments (TQI demotion, TSMOM vol-scale, VOTE-3/VOTE-5 vol caps) reduced the calculated position size to less than 1 share. This indicates an overly conservative sizing mechanism, or that the current parameters are not suitable for a $2.5K paper account, especially for higher-priced stocks.
+    *   **ORB gate blocks**: `SOXS` (12/12) and `MSFT` (implied score from context, VOLSHADOW score_without_vol: 5, rsi_would_score: true for short) were blocked by the `ORB gate` due to SPY not confirming a breakdown below the range. This is an intentional strategy gate.
+    *   **Unexplained "no allocation"**: `PANW` (9/12), `SPY` (9/12), `QCOM` (9/12) were skipped with the message `Score X/12 — no allocation. Skipping.`. This is distinct from the "size < 1 share" issue, as the detailed Kelly and dollar_cap calculations that precede the size check did not run for these symbols. This suggests an earlier filter or sizing step might be incorrectly preventing allocation for qualifying scores.
+*   **TQI Degradation**: `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30` indicates a systematic issue with the quality of recent trades, implying poor entry or exit quality over the last 5 closed trades (from prior sessions, as none closed this session). This suggests the strategy's edge is degrading.
+
+### EXIT QUALITY
+No closed trades in this session; cannot assess exit quality.
+
+### MRI ALIGNMENT
+MRI was `ELEVATED (37/100)`. The bot responded by increasing the dynamic `MIN_SCORE` to 9 and applying an `0.85x` sizing floor. This indicates that MRI signals are correctly influencing risk parameters to reduce exposure in elevated risk conditions.
+
+### LOG ANOMALIES
+*   `2026-07-09 17:20:40,799 | WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer` - This indicates an issue fetching or processing options data, potentially due to upstream data quality or a bug in the conversion logic.
+*   `2026-07-09 17:26:01,638 | WARNING | strategy.run_cycle | [ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=7. If risk>2, CYCLE-SYNC should resolve next cycle.` (Repeated for 9 symbols: SPY, PANW, AAPL, SOXL, MU, QCOM, AMD, RIVN, AVGO) - This warning indicates signals passed initial confirmation gates but entries were not generated. Although some were later explained by sizing to 0 or ORB blocks, the warning suggests a more general problem in the entry pipeline or state management that might prevent otherwise valid entries.
+*   `2026-07-09 17:26:01,639 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` - This is a self-reported performance degradation metric, indicating a problem with the strategy's recent performance history.
+
+### NEW BUGS / CONCERNS
+*   **ALPHA ISSUE | HIGH | Excessive position sizing caps leading to 0 shares for high-score signals.**
+    *   **Description**: For several highly-scored signals (e.g., SOXL, MU, AMD, AVGO with scores 10/12 or 12/12), the bot applied multiple dollar-cap adjustments (TQI demotion, TSMOM vol-scale, VOTE-3 vol cap, VOTE-5 vol-target cap) that cumulatively reduced the allocated capital to a point where fewer than 1 share could be purchased, leading to the entry being skipped. This behavior effectively prevents the bot from entering trades for high-priced stocks on a $2.5K account even when the strategy identifies strong signals.
+    *   **Exact Condition**: Occurs when `dollar_cap` (an internal variable representing allocated capital for a trade) is progressively reduced by `AB-3 TQI demotion`, `TSMOM vol-scale`, `VOTE-3 vol cap`, and `VOTE-5 vol-target cap`, resulting in `dollar_cap < price_per_share`.
+    *   **Verbatim Evidence**: `2026-07-09 17:27:22,433 | WARNING | execution.entry_logic | [SOXL] VOTE-5 vol-target cap produced 0 shares (σ_20d=2.287 ann | equity=$2778 | price=$201.20) — skipping entry.` and similar logs for MU, AMD, AVGO.
+
+*   **EXECUTION BUG | MEDIUM | Unexplained "no allocation" for qualifying scores.**
+    *   **Description**: For symbols like PANW, SPY, and QCOM, which achieved a score of 9/12 (meeting the dynamic `MIN_SCORE` of 9/12), the entry logic explicitly skipped them with the message `Score X/12 — no allocation. Skipping.`. This differs from the "position size < 1 share" scenario as the detailed Kelly and subsequent dollar-cap adjustments are not logged, implying an earlier, undocumented, or incorrectly configured filter preventing *any* allocation from being determined for these qualifying scores.
+    *   **Exact Condition**: A signal's calculated score (`score_without_vol` or final `score`) meets or exceeds `MIN_LONG_SCORE` (or `MIN_SHORT_SCORE`), but the entry logic path leading to Kelly and dollar_cap adjustments is bypassed, and the log records `Score X/12 — no allocation. Skipping.`.
+    *   **Verbatim Evidence**: `2026-07-09 17:27:31,843 | INFO | execution.entry_logic | [PANW] Score 9/12 — no allocation. Skipping.` and `2026-07-09 17:27:32,857 | INFO | execution.entry_logic | [SPY] Score 9/12 — no allocation. Skipping.` and `2026-07-09 17:27:34,069 | INFO | execution.entry_logic | [QCOM] Score 9/12 — no allocation. Skipping.`. `MIN_LONG_SCORE` was `9`.
+
+*   **INFRASTRUCTURE | MEDIUM | Persistent `ANOMALY-2` warnings for unfulfilled `confirm_gate` signals.**
+    *   **Description**: Multiple `[ANOMALY-2]` warnings report that symbols reached a `confirm_gate` count but no entry occurred, despite the `risk.open_positions` being well below `MAX_OPEN_POSITIONS`. While some entries were later explained by other filters (sizing, ORB), the consistent reporting of this anomaly for a large set of symbols suggests a potential flaw in how `confirm_gate` states are managed or how signals transition to actual entry attempts. The advisory in the log itself (`If risk>2, CYCLE-SYNC should resolve next cycle.`) does not apply as `risk` is 2, indicating the resolution mechanism is not triggering or is insufficient.
+    *   **Exact Condition**: The log shows `[ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry` when `risk.open_positions` is less than `MAX_OPEN_POSITIONS`, and the issue persists across cycles.
+    *   **Verbatim Evidence**: `2026-07-09 17:26:01,638 | WARNING | strategy.run_cycle | [ANOMALY-2] [SPY] confirm_gate=14 scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=7. If risk>2, CYCLE-SYNC should resolve next cycle.` (repeated for 9 symbols).
+
+*   **INFRASTRUCTURE | LOW | `_fetch_options_data` failure due to NaN conversion.**
+    *   **Description**: A warning indicates that fetching options data failed due to a `cannot convert float NaN to integer` error. If options data is used in any capacity for signal generation, risk assessment, or market analysis, this data corruption could lead to degraded inputs, even if not directly causing trade execution errors.
+    *   **Exact Condition**: `_fetch_options_data` encounters a floating-point NaN value that it attempts to convert to an integer.
+    *   **Verbatim Evidence**: `2026-07-09 17:20:40,799 | WARNING | scan_to_html | [scan] _fetch_options_data fetch failed — returning None: cannot convert float NaN to integer`
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA: Review and Calibrate Position Sizing Caps for Small Accounts.** The aggressive stacking of dollar caps (TQI, TSMOM, VOTE-3/5) effectively prevents entries for high-priced stocks on a $2.5K paper account, even for high-score signals. Evaluate if these caps are too punitive or if a minimum share count/dollar value should override some caps for small accounts to allow *any* entry on valid signals.
+2.  **EXECUTION: Investigate "No Allocation" for Qualifying Scores.** Determine why signals that meet the `MIN_SCORE` are getting `Score X/12 — no allocation. Skipping.` without proceeding to the full sizing calculation. This suggests a silent filter or logic gap that needs to be made explicit and verifiable.
+3.  **INFRASTRUCTURE: Address `ANOMALY-2` Confirmation Gate Failures.** Investigate the root cause of the recurring `confirm_gate=X scans but no entry` warnings. Trace the full lifecycle of a signal through the `confirm_gate` to identify where it drops off the pipeline, especially when `risk.open_positions` is low. This indicates potential missed trading opportunities or inefficient signal processing.

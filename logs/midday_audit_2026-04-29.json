@@ -1,0 +1,109 @@
+{
+  "audit_date": "2026-04-29",
+  "run_ts": "2026-04-29T09:15:01.738680-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 0,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "TOST",
+        "ts": "2026-04-29 07:21:25",
+        "score": 12,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 28.59,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SMCI",
+        "ts": "2026-04-29 07:21:38",
+        "score": 11,
+        "pdt": 0,
+        "mri": "STRESSED",
+        "price": 25.63,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "TOST",
+      "SMCI",
+      "PANW",
+      "COIN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 9,
+    "levels": {
+      "STRESSED": 7,
+      "NORMAL": 2
+    },
+    "last_score": 43,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 0,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 33.51000000000005,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 33.51000000000005,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "COIN",
+      "pnl": 33.51000000000005,
+      "entry_price": 197.36,
+      "exit_price": 186.19,
+      "size": 3.0,
+      "exit_event": "partial_exit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 209.69,
+      "target": 166.59
+    },
+    "worst": {
+      "symbol": "COIN",
+      "pnl": 33.51000000000005,
+      "entry_price": 197.36,
+      "exit_price": 186.19,
+      "size": 3.0,
+      "exit_event": "partial_exit",
+      "score": 12,
+      "mri_level": "HIGH",
+      "stop": 209.69,
+      "target": 166.59
+    },
+    "trades": [
+      {
+        "symbol": "COIN",
+        "pnl": 33.51000000000005,
+        "entry_price": 197.36,
+        "exit_price": 186.19,
+        "size": 3.0,
+        "exit_event": "partial_exit",
+        "score": 12,
+        "mri_level": "HIGH",
+        "stop": 209.69,
+        "target": 166.59
+      }
+    ]
+  }
+}

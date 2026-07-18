@@ -1,0 +1,72 @@
+Midday Gemini Audit — 2026-05-12
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+The session recorded a single closed trade, TQQQ, resulting in a loss of $-2.60.
+*   **P&L signs**: Correctly recorded as a loss since exit price ($73.36) was lower than entry price ($75.96) for a long position.
+*   **Win rate/Profit factor**: With only one trade, the 0% win rate and negative P&L are not statistically significant for assessing the bot's edge claims.
+*   **Stop-hit rate**: 0% stop-hit rate is observed. This means the single losing trade, TQQQ, was not closed by hitting its predefined stop loss, but by another exit mechanism, which is noted as 'exit'.
+*   **Score→outcome correlation**: The TQQQ trade had a high score (12/12), which is above the `MIN_SCORE=9` threshold, yet it resulted in a loss. With only one trade, no correlation can be established.
+
+**Specific finding:**
+*   **Variable/Metric Involved**: `Risk-to-Reward (R:R) ratio` for the TQQQ trade (derived from `entry_price`, `stop_price`, and `T1` target).
+*   **Value vs. What it Should Be**:
+    *   Entry: $75.96
+    *   Stop: $65.38. Stop distance = $75.96 - $65.38 = $10.58.
+    *   T1 Target: $80.21. T1 distance = $80.21 - $75.96 = $4.25.
+    *   Actual R:R (using T1 as reward) = Target distance / Stop distance = $4.25 / $10.58 = 0.40.
+    *   Expected R:R based on CONFIG CONSTANTS `TARGET_ATR_MULT = 2.5` and `INTRADAY_STOP_ATR_MULT = 1.25` (assuming no volatility tier override making the stop wider relative to ATR) implies a theoretical R:R of `2.5 / 1.25 = 2.0`.
+    *   The actual R:R of 0.40 is significantly lower than the implied target R:R of 2.0.
+*   **Why it Constitutes a Failure**: A risk-to-reward ratio of 0.40 means the potential reward (to T1) is less than half the risk taken. This indicates a poorly structured trade setup where the stop loss is disproportionately wide relative to the profit target, or the profit target is set too conservatively relative to the stop. This systematically reduces the expected value of trades, even with a high win rate (which is not observed here). This constitutes an ALPHA ISSUE as it reflects a flaw in the strategy's risk management or target setting logic.
+*   **Condition**: Occurs during the calculation and setting of `stop_price` and `T1` for the TQQQ entry, prior to trade execution. Source not provided, but derived from the "CLOSED TRADE DETAILS" summary.
+
+### ENTRY QUALITY
+*   The TQQQ trade was entered with a "score 12/12", which exceeds the `MIN_SCORE = 9` requirement.
+*   The MRI at the time of entry for TQQQ was "ELEVATED". This MRI level does not trigger the `⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` restriction. Therefore, the entry itself was valid given the MRI at the time.
+*   No other new entries were observed or attempted in the provided logs, which consistently show the MRI level as "STRESSED", where new entries are prohibited. This indicates proper adherence to the `BV-5` rule.
+
+### EXIT QUALITY
+*   The TQQQ trade exited at $73.36, which was above its stop price of $65.38 and below its T1 target of $80.21. The exit reason is simply "exit".
+*   The log shows "Overnight reversal signal: scan X/10 — waiting for confirmation" for other open positions (CRWD, NVDL, NVDA). It is possible a similar, unlogged, or incomplete reversal signal logic was applied to TQQQ, leading to an early exit before the stop was hit.
+*   While the exit mechanism itself didn't fail (i.e., didn't miss a stop or execute at an incorrect price), the *reason* for the exit isn't transparent. The main concern for exit quality stems from the **ALPHA ISSUE** regarding the poor R:R ratio identified in the performance audit, which implies the initial trade setup was suboptimal.
+
+### MRI ALIGNMENT
+*   The "MRI SESSION DISTRIBUTION" shows all 37 samples recorded the MRI level as `STRESSED (52/100)`.
+*   The logs consistently show "MRI refreshed: score=52 level=STRESSED" or "score=53 level=STRESSED".
+*   Crucially, the bot logs `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves. Exits and partials managed normally.` This indicates the bot is correctly identifying the STRESSED MRI regime and adhering to the no-new-entries rule.
+*   Existing "Overnight exposure" is managed with "intraday size mult 0.71x", showing the bot is adjusting to the regime for open positions.
+*   The TQQQ entry MRI was "ELEVATED", which means it was entered in an acceptable regime when the trade was initiated (likely prior to the logged period where MRI shifted to STRESSED).
+*   Overall, the bot demonstrates good alignment with the MRI regime rules for entries and adjustments for open positions.
+
+### LOG ANOMALIES
+*   **None detected**.
+*   The "EOD summary written" and "Alpaca FIFO EOD" entries occur roughly every 5 minutes, consistent with crash-safety flushes.
+*   `news_monitor` warnings are part of the intended behavior for flagging caution-level news and applying a penalty.
+*   `CRITICAL` log level for `⛔ BV-5` is for a strategic decision, not an operational error.
+*   `watchdog_headroom` values are high, indicating no performance issues.
+*   PDT counter is shown as `1/3` and confirmed in sync, indicating proper tracking.
+
+### NEW BUGS / CONCERNS
+
+1.  **CATEGORY**: ALPHA ISSUE
+    **SEVERITY**: HIGH
+    **Description**: The TQQQ trade was entered with a calculated stop loss and profit target (T1) that results in a highly unfavorable risk-to-reward (R:R) ratio, significantly deviating from the strategy's implied R:R target.
+    **Exact condition**: For TQQQ, the `entry_price` was $75.96, `stop_price` was $65.38, and `T1` was $80.21. This yields a stop distance of $10.58 and a T1 distance of $4.25. The actual R:R is 0.40 ($4.25 / $10.58). This is much lower than the theoretical R:R of 2.0 (calculated from `TARGET_ATR_MULT=2.5` / `INTRADAY_STOP_ATR_MULT=1.25`). This implies an error in the ATR calculation, stop placement, or target placement logic, or a misapplication of volatility tier overrides if TQQQ falls into such a tier (which should make the stop wider, not narrower relative to target distance).
+
+2.  **CATEGORY**: EXECUTION BUG (Auditing impact)
+    **SEVERITY**: LOW
+    **Description**: The "exit" reason for closed trades (e.g., TQQQ: `exit`) is too generic, making it difficult to audit the specific logic path that triggered the closure.
+    **Exact condition**: When a trade is closed due to a non-stop-loss or non-profit-target reason (e.g., reversal signal, time-based exit, break-even move), the "CLOSED TRADE DETAILS" simply states "exit". This lack of specificity impacts future auditing and strategy refinement. For example, the logs show "Overnight reversal signal: scan X/10 — waiting for confirmation" for CRWD/NVDL/NVDA. If TQQQ also exited due to a reversal signal (confirmed or partial confirmation), it should be specified.
+    **Note**: This is categorized as an execution bug related to reporting, as it affects the traceability and verification of executed exit logic.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **ALPHA**: Investigate and rectify the risk-to-reward calculation for trade setups, specifically for TQQQ and similar leveraged ETFs. Ensure that `stop_price` and `T1` (and other targets) are set such that the implied R:R ratio aligns with strategy expectations based on `TARGET_ATR_MULT` and `INTRADAY_STOP_ATR_MULT` (or `VOL_TIER_*_STOP_INTRADAY` if applicable). (Urgency: HIGH)
+2.  **EXECUTION**: Enhance logging for trade exits. When a trade is closed, the `exit` reason in the "CLOSED TRADE DETAILS" summary and internal logs should explicitly state the specific trigger (e.g., "reversal_exit", "time_exit", "breakeven_hit_dynamic_stop", "trailing_stop_hit"). (Urgency: MEDIUM)
+3.  **ALPHA**: Review the current performance of open overnight positions, especially those showing "Overnight reversal signal: scan X/10". While the bot correctly manages exits in STRESSED MRI, the efficacy of this multi-scan reversal logic needs to be confirmed. (Urgency: MEDIUM)

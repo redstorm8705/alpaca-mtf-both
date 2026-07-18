@@ -1,0 +1,99 @@
+Nightly Gemini Audit — 2026-04-23
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['weekly_review.py', 'run_movers.py', 'main.py', 'midday_audit.py', 'live_data_writer.py', 'execution/portfolio_tracker.py', 'execution/broker.py', 'data/sectors.py', 'strategy/signal_generator.py']
+================================================================================
+
+### VERDICT: WARN
+
+The bot is operational, and several critical historical bugs have received robust fixes, particularly in P&L tracking, order submission, and error handling. However, a critical import error prevents a key component (`run_movers.py`) from functioning, and persistent data inconsistencies (`all_time_stats` in EOD snapshot) undermine performance reporting. Recurring "fills gap" warnings, though mitigated by fallbacks, indicate an ongoing external dependency issue (Alpaca paper API). The bot also experienced a watchdog-triggered restart due to an 88-minute hang.
+
+### LOG ANOMALIES
+
+*   **CRITICAL | Atomic write failed (UUID not serializable)**: `2026-04-22 08:19:25,465 | ERROR | execution.portfolio_tracker | Atomic write failed for ... Object of type UUID is not JSON serializable` and `2026-04-22 08:26:00,450 | ERROR | execution.portfolio_tracker | Atomic write failed for ... Object of type UUID is not JSON serializable`. This error recurred multiple times, indicating a failure to persist critical data (e.g., `eod_YYYY-MM-DD.json`, `trade_log.json`). While `_BotEncoder` was added to `portfolio_tracker.py` to fix this (as per modified files), its continued appearance in the logs suggests the fix is either not fully deployed/integrated or is incomplete.
+*   **CRITICAL | WATCHDOG Triggered**: `2026-04-22 12:15:35,736 | CRITICAL | main | WATCHDOG: No completed cycle in 88m during RTH — bot is hung. Firing alert and restarting.`. The bot main loop hung for 88 minutes during regular trading hours, leading to a critical watchdog restart. This indicates a severe operational blockage.
+*   **CRITICAL | POSITION COUNT DRIFT**: `2026-04-22 08:26:07,668 | CRITICAL | main | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=3. Correcting to tracker count.` and `2026-04-22 09:58:45,102 | CRITICAL | main | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.` This recurring drift between the risk manager's and portfolio tracker's understanding of open positions is concerning. While corrected, it points to a synchronization issue, especially with `risk.open_positions=0` when positions are clearly held.
+*   **WARNING | A-4 paper fills gap (Persistent)**: `2026-04-22 08:19:25,211 | WARNING | execution.portfolio_tracker | A-4 paper fills gap: Alpaca returned 0 fills despite 1 closed trade(s) — using tracker P&L ($-52.29) as fallback. Verify fills manually.` This warning occurs extremely frequently, indicating that Alpaca's paper trading API often fails to return fills for same-day closures. While the bot correctly falls back to its internal tracker P&L, this represents a significant external dependency issue and requires manual verification for all such trades.
+*   **WARNING | ANOMALY-2 (Persistent Entry Block)**: `2026-04-22 08:17:17,929 | WARNING | main | [ANOMALY-2] [AAPL] confirm_gate=7 scans but no entry — gate may be permanently blocked. Check score vs MIN_SCORE threshold.` This repeatedly appears for multiple symbols (AAPL, AMZN, SPY, MU, AMD), with `confirm_gate` counts rising to high numbers (e.g., 17 for AMZN). This indicates that many high-scoring signals are consistently failing to lead to entries. Combined with the "Sector correlation BLOCKED" warnings for the same symbols, it implies the sector gate is the final blocker, but the `ANOMALY-2` message's implication of "permanently blocked" and suggestion to check `MIN_SCORE` is misleading if other filters (like sector correlation) are the actual cause.
+*   **WARNING | Sizing Calibration**: `2026-04-22 08:29:13,969 | WARNING | main | [SPY] raw_shares=16 × mult=0.04 → 0 before floor (dollar_cap=$168.74, stop_dist=$10.1000) — check sizing calibration`. This is a very frequent warning, indicating that the sizing logic often results in zero shares for potentially valid signals (e.g., SPY with a score of 10/12). This suggests a calibration issue where risk parameters or account size constraints lead to no trade being placed.
+*   **WARNING | RSS Feed Parse Error**: `2026-04-22 08:16:42,407 | WARNING | news_monitor | [RSS] Feed parse error (bozo=True): <unknown>:19:27: not well-formed (invalid token) — may be HTML error page. Skipping.` This recurring error suggests a flaky RSS feed source or a parsing vulnerability that could impact news data quality.
+*   **INFO | MRI news injection GATED (Silent Market Reaction)**: `2026-04-22 08:16:44,696 | INFO | macro_risk_index | MRI news injection GATED: 268 alert(s) would add +35pts but price_score=0 (no market reaction) — capped at +10pts. VIX/TLT/JPY/credit all silent.` This frequent log indicates numerous macro news alerts are not translating into observable market price reactions for key macro instruments (VIX, TLT, JPY, credit), leading to a cap on the MRI score increase. This might be desired robust filtering, but it's notable how consistently the `price_score` is zero.
+*   **INFO | Stale/Absent Data Layers**: `2026-04-22 08:26:06,128 | INFO | main | market_top_latest.json absent or stale — Layer 5 using 52w-high-only mode.`, `macro_regime_latest.json absent or stale — Layer 6 inactive.`, `ftd_state.json absent or stale — Layer 7 inactive (neutral).` These messages recur on every bot restart, indicating that certain market intelligence layers are frequently inactive or using fallback modes due to missing or stale data files.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: All P&L signs (`NVDA`, `CRWD`, `MSTR`) appear to be correctly calculated based on entry/exit prices and direction (long/short).
+*   **`partial_pnl` Accumulation**: The `NVDA` trade demonstrates correct accumulation of `partial_pnl` (`3.19`) and `pnl_remaining` (`2.16`), leading to a correct total `pnl` (`5.35`).
+*   **`pnl=0.0` Anomalies**: No trades with `pnl=0.0` but `entry ≠ exit` prices were observed.
+*   **Entry/Exit Price Plausibility**: All entry/exit prices logged appear plausible for the respective symbols and trading times.
+*   **Score→Outcome Correlation**:
+    *   For `2026-04-23`, `score_buckets` shows `10-11` (1 loss, -12.53) and `12-13` (1 win, +5.35). With only two closed trades, this sample size is too small to draw meaningful conclusions.
+    *   However, the `all_time_stats` block in the `EOD SNAPSHOT` is internally inconsistent (see **New Bugs** below), which fundamentally undermines any conclusions about score-to-outcome correlation from historical data.
+*   **Stop-hit rate vs. Win Rate**:
+    *   For `2026-04-23` (based on closed trades), there's 1 win (`NVDA`, `trail_stop`) and 1 loss (`CRWD`, `overnight_breakeven`). No direct "stop_hit" event for today's closures. The `midday_audit`'s stop-hit rate is calculated using *all* today's closed trades, and if `stop_hits / entries > 0.5`, it warns. The `MSTR` stop hit on `2026-04-22` (-52.29) would have flagged for that day.
+*   **Exit Reason Consistency**: The `NVDA` trail stop exit price of `201.11` is consistent with its `trail_stop` of `201.3` (very close to the stop price), indicating proper stop execution.
+*   **Profit Factor and R:R vs. Target**: The `all_time_stats` from the `EOD SNAPSHOT` reports `profit_factor=3.55` and `avg_r_multiple=0.22`. The `profit_factor` of `3.55` *conflicts* with the reported `avg_win=27.06` and `avg_loss=-13.56` (which yield `27.06 / 13.56 = 1.99`). The `avg_r_multiple=0.22` is also extremely low for a healthy strategy. This indicates a severe inconsistency in the overall performance metrics, making it impossible to verify if the bot is capturing its edge or achieving its target R:R.
+
+### TRADE INTEGRITY
+
+*   The `Object of type UUID is not JSON serializable` error severely compromises trade integrity by preventing the atomic saving of `eod_YYYY-MM-DD.json` and `trade_log.json`. This leads to potential data loss or corruption of critical trade history and P&L records, directly impacting accountability and analysis.
+*   The frequent `A-4 paper fills gap` warnings, while mitigated by fallback, mean that the bot's internal tracker is frequently the *only* source of P&L information for same-day paper trades. This introduces a reliance on the bot's internal state, increasing the risk of discrepancies if the tracker itself has subtle bugs.
+
+### MODIFIED FILE FINDINGS
+
+*   **`weekly_review.py`**:
+    *   **No issues found**. The `_fmt_reason` normalization (`C-3`) and the comprehensive `_strategy_validation_html` P&L calculations are sound. The internal arithmetic of `_strategy_validation_html` correctly derives performance metrics from the `closed` trades list, which highlights that the inconsistency lies elsewhere (in the `EOD SNAPSHOT`'s `all_time_stats`).
+*   **`run_movers.py`**:
+    *   **CRITICAL | ImportError (P5-C2 active)**: `run_movers.py:19 | from data.fetcher import DataFetcher`. This import is incorrect as `DataFetcher` is not a class in `data/fetcher.py` (which provides functions like `fetch_bars`). This prevents the Movers Bot from running entirely, as confirmed by `P5-C2`.
+*   **`main.py`**:
+    *   **No issues found** in the visible snippet, apart from its interaction with `_entry_confirm_buffer` and `_conviction_streak` (see **New Bugs** below). The `fcntl.flock` with `_last_cycle_lock` for the watchdog is a good improvement (addressing an internal `BUG-W2`). The `_find_recent_fvgs` column normalization seems to be a correct fix for `P5-C1`.
+*   **`midday_audit.py`**:
+    *   **Medium | Inconsistent Timezone Handling (New Bug)**: The mixture of `AUDIT_DATE` (PT) and `AUDIT_DATE_ET` (ET) for filtering trade events and logs around midnight ET can lead to edge-case mismatches and data omission. A single, consistent timezone (e.g., ET) should be used for all daily audit filtering.
+    *   `read_today_trade_events` correctly attempts to backfill prior-day entry events for overnight positions, addressing `BUG-P&L-1`.
+*   **`live_data_writer.py`**:
+    *   **P5-L3 Fixed**: The new retry logic with exponential backoff and network error handling significantly improves the robustness of the live data writer, addressing `P5-L3`. The use of `fcntl.flock` with `FD_CLOEXEC` ensures singleton behavior and proper lock release on process exit.
+*   **`execution/portfolio_tracker.py`**:
+    *   **CRITICAL | UUID Serialization Fix Incomplete**: The `_BotEncoder` (designed to handle `UUID` serialization) is present, yet the `UUID is not JSON serializable` error persists in the logs. This indicates the fix is not fully effective or consistently applied where needed.
+    *   **P5-H2 Mitigated**: The integration of `_fetch_alpaca_fills_for_date` and `_fifo_reconstruct` for authoritative P&L calculation directly addresses fill price ambiguity and data sources for `P5-H2`.
+    *   **P5-L2 Mitigated/Improved**: The use of `_day_slice()` and Alpaca fills for `write_eod_summary` improves accuracy for end-of-day P&L reporting.
+*   **`execution/broker.py`**:
+    *   **New Bug | `cancel_open_orders_for_symbol` Silent Failure (Low)**: The function `cancel_open_orders_for_symbol` unconditionally increments `cancelled` even if `cancel_order` (which returns a `bool`) fails to cancel an order. This can lead to an inaccurate count of actually cancelled orders.
+    *   **New Bug | `close_position` Fractional Share Edge Case (Low)**: The `close_position` function implicitly closes the entire position. If a minuscule fractional share remains due to rounding or prior partial fills, Alpaca's API might reject the implicit `close_position` call, potentially leaving a tiny position stranded.
+    *   **P5-H5 Confirmed Fixed**: The robust error handling, retry logic, and blocking order cancellation in `submit_gtc_stop_order` and `submit_day_stop_order` effectively address the complexities of stop order submission, confirming `P5-H5` as fixed.
+    *   `Bug 4 fix` in `partial_close_position` (auto-cancelling blockers) is a solid improvement.
+*   **`data/sectors.py`**:
+    *   **No issues found**. The sector maps are clearly defined and support the intended correlation filtering.
+*   **`strategy/signal_generator.py`**:
+    *   **No issues found** in the visible snippet. The `NEW-2` PEAD caching, `P2-WEEKLY-BIAS-CONFIRM` logic, `Fix B` for intraday override, and the expanded `calculate_score_16pt` (log-only) all appear to be correctly implemented according to their design.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (addressed by column normalization in `main.py` `_find_recent_fvgs`).
+*   **P5-C2 | run_movers.py ImportError**: **ACTIVE/UNRESOLVED** (`run_movers.py` still attempts `from data.fetcher import DataFetcher`).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **UNTOUCHED** (the specific `_entry_confirm_buffer` and `_conviction_streak` are not reset in `main.py`'s `_daily_reset()`).
+*   **P5-H2 | Fill price crosstalk**: **MITIGATED/FIXED** (Alpaca FIFO fills are now authoritative).
+*   **P5-H3 | Orphan GTC 404 path**: **MITIGATED/FIXED** (tracker reconciliation in `main.py` handles external closes).
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED** (no evidence of modification or explicit fix).
+*   **P5-H5 | FIXED 2026-04-21**: **CONFIRMED FIXED** (robust stop order submission logic implemented).
+*   **P5-M1 | Cycle watchdog restart loop**: **UNRESOLVED/ACTIVE** (lack of `FD_CLOEXEC` on `main.py`'s internal lock can cause deadlock on `os.execv()` restart; not visible in snippet but inferred).
+*   **P5-M2 | MRI score cached stale across sessions**: **PARTIALLY ADDRESSED/CLARIFICATION NEEDED** (`hybrid_state.json` is protected, but specific `mri_state.json` validation for staleness is unclear).
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED** (no evidence of modification).
+*   **P5-L1 | _classify_loss_driver() returns empty label**: **UNTOUCHED** (no evidence of modification).
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **MITIGATED/IMPROVED** (Alpaca fills and `_day_slice` logic for P&L).
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **FIXED** (robust retry and network error handling added).
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | `execution/portfolio_tracker.py` | P&L Inconsistency in `all_time_stats`** | The `all_time_stats` block in the `EOD SNAPSHOT` exhibits internal arithmetic inconsistencies. Specifically, the reported `profit_factor=3.55` conflicts with `avg_win=27.06` and `avg_loss=-13.56` (which yield a profit factor of `1.99`). Furthermore, `total_pnl=364.98` does not align with `(total_trades * win_rate * avg_win) + (total_trades * (1-win_rate) * avg_loss)`. This indicates a fundamental flaw in how these summary statistics are calculated or aggregated within `PortfolioTracker.get_stats()` or `write_eod_summary()`, leading to a misrepresentation of overall performance.
+*   **CRITICAL | `execution/portfolio_tracker.py` | `_BotEncoder` Fix Incomplete for UUID** | Despite the `_BotEncoder` being implemented in `execution/portfolio_tracker.py` to handle `UUID` serialization, the `ERROR | Object of type UUID is not JSON serializable` log reappears for `eod_YYYY-MM-DD.json`. This implies either the `_BotEncoder` isn't consistently applied to all JSON serialization points that might involve `UUID` objects (e.g., when saving `eod_YYYY-MM-DD.json`), or a `UUID` object is being introduced in an unexpected data structure that bypasses the encoder.
+*   **HIGH | `main.py` | `_entry_confirm_buffer` and `_conviction_streak` not reset daily** | The global state variables `_entry_confirm_buffer` and `_conviction_streak` (used for multi-scan entry gating, seen in `ANOMALY-2` logs) are not explicitly cleared in `main.py`'s `_daily_reset()` function. This can lead to these counters accumulating across trading days or bot restarts, potentially blocking otherwise valid entries indefinitely (if a symbol only qualifies for a few scans before a daily reset, and then accumulates on subsequent days without a proper reset). This is particularly problematic given the `ANOMALY-2` logs warning of "permanently blocked" entries.
+*   **MEDIUM | `midday_audit.py` | Inconsistent Timezone Handling for Audit Date** | The script uses both `AUDIT_DATE` (local PT date) and `AUDIT_DATE_ET` (ET date) to filter trade events and logs. This dual-timezone approach, relying on string `startswith()` for filtering, can cause off-by-one-day errors or missed events during timezone transitions (e.g., around midnight ET when it's still the previous day in PT). All date-based filtering and comparisons should be standardized to a single timezone, preferably ET for consistency with Alpaca's timestamps.
+*   **LOW | `execution/broker.py` | `cancel_open_orders_for_symbol` Silent Failure** | The function `cancel_open_orders_for_symbol` unconditionally increments its `cancelled` counter for each order it attempts to cancel, regardless of the `bool` return value of the underlying `cancel_order` call (which can return `False` on failure). This can lead to an inflated count of "freed" orders and mask actual failures in cancelling orders.
+*   **LOW | `execution/broker.py` | `close_position` Fractional Share Edge Case** | The `close_position` function relies on Alpaca's API to close an entire position implicitly. If a position holds a very small fractional quantity of a share (e.g., `0.0001` shares), the implicit "close all" request might fail if Alpaca requires an integer quantity or a quantity above a minimum threshold, potentially leaving tiny residual positions stranded. Explicit handling or rounding for such edge cases would enhance robustness.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE**: Resolve `P5-C2 | run_movers.py ImportError` by correcting the `DataFetcher` import in `run_movers.py`. This is a blocking bug preventing a critical bot component from functioning.
+2.  **CRITICAL**: Address the persistent `Object of type UUID is not JSON serializable` error. Investigate why the `_BotEncoder` fix in `portfolio_tracker.py` is not fully effective, ensuring all JSON serialization paths handling `UUID` objects utilize the custom encoder.
+3.  **CRITICAL**: Rectify the `all_time_stats` P&L inconsistencies in the `EOD SNAPSHOT`. Review `PortfolioTracker.get_stats()` to ensure accurate aggregation and calculation of `total_pnl`, `profit_factor`, `avg_win`, and `avg_loss`.
+4.  **HIGH**: Implement a daily reset for `_entry_confirm_buffer` and `_conviction_streak` in `main.py`'s `_daily_reset()` function to prevent indefinite blocking of entries flagged by `ANOMALY-2`.
+5.  **HIGH**: Investigate the root cause of the `WATCHDOG: No completed cycle in 88m` hang. Analyze logs preceding the hang for API call timeouts or infinite loops. Ensure `main.py`'s internal lock file explicitly sets `FD_CLOEXEC` (per `P5-M1`) to prevent self-deadlock on `os.execv()` restarts.

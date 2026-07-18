@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-26 01:35 PM PT",
+  "ts_iso": "2026-06-26T13:35:05.631986-07:00",
+  "prompt_chars": 39090,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 39090,
+  "gai_prompt_chars": 39166,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.39,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "### 1. TRADE-BY-TRADE VERDICT\n*Note: Entry scores/MRI are inferred as they occurred prior to the 7-day log window.*\n\n* **[GOOGL long]** → Exit at $342.15 (Entry $345.18). **VERDICT: unknown** (Exited at score=7; likely a trailing stop or score degradation, but lacks entry context).\n* **[NVDA long]** → Stop hit at $193.23 (Entry $198.17). **VERDICT: unknown** (Stopped out at score=7; standard risk management execution).\n* **[MSTR long]** → Exit at $164.55 (Entry $98.16). **VERDICT: edge_confirmed** (Massive gain captured, exited while score was still a very strong 11).\n* **[TOST long]** → Exit at $26.82 (Entry $24.95). **VERDICT: edge_confirmed** (Solid momentum continuation, exited at score=10).\n* **[SMCI long]** → No exit logged (Entry $34.24). **VERDICT: unknown** (Position likely still open).\n\n### 2. PATTERN ANALYSIS\n* **Sub-Optimal Directional Exposure (Thorp Lens)**: The bot's historical Kelly stats reveal a stark contrast. Longs have a WR of 46.2% and a payoff ratio of 2.95 (1.21R/0.41R), yielding an implied full Kelly of ~28%. The bot's `KELLY_FRACTION=0.25` is beautifully tuned for longs. However, shorts have a WR of 22.9% and a payoff ratio of 0.58 (0.48R/0.82R), yielding a deeply *negative* Kelly. Despite this, the bot's weekly bias is currently set to BEARISH, actively filtering out valid long signals (e.g., AAPL, NVDA, SPY). `[INSUFFICIENT_SAMPLE — N=9]`\n* **Premature Winner Truncation (Asness Lens)**: MSTR and TOST were exited while their confluence scores were still highly elevated (11 and 10, respectively). Exiting while the signal is still fundamentally intact suggests the bot is cutting winners too early rather than letting momentum persist until the thesis actually degrades. `[INSUFFICIENT_SAMPLE — N=9]`\n* **Overly Restrictive Dynamic Scoring**: The dynamic `MIN_SCORE` scaled to a maximum 12/12 (perfect confluence) due to `MRI=STRESSED` and other macro factors. This extreme conservatism filtered out 5 signals and halted entries entirely, mathematically demanding perfection and likely leaving alpha on the table. `[INSUFFICIENT_SAMPLE — N=9]`\n\n### 3. PRIOR DIRECTIVES COMPLIANCE\n* N/A (No prior directives to evaluate).\n\n### 4. WEEKLY DIRECTIVES\n⚠️ **DIRECTIVES BLOCKED** — insufficient sample (N=9 < 20). \n\n* `[INSUFFICIENT_SAMPLE — N=9]` **Observation:** The bot should theoretically suspend short entries entirely given the negative implied Kelly, and rely purely on long setups where the edge is mathematically proven (PF 2.51).\n* `[INSUFFICIENT_SAMPLE — N=9]` **Observation:** The weekly bias filter is actively working against the bot's historical edge by blocking longs. If sample size permitted, a directive would be issued to override the weekly bias for high-scoring longs.\n* `[INSUFFICIENT_SAMPLE — N=9]` **Observation:** Exiting trades while scores are ≥10 truncates the fat tail of momentum. A hold-until-score-degrades logic (e.g., hold until score < 8) would likely capture more alpha.\n\n### 5. FINAL VERDICT\n**WARN** — The bot is exhibiting severe long/short performance asymmetry and potential P&L tracking drift, but the sample size is too small to mandate parameter changes.\n\n### 6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"EOD P&L DRIFT: Alpaca=$-25.56 tracker=$-7.97 drift=$-17.59 indicates state mismatch between broker and internal tracker.\",\n    \"recommended_fix\": \"Implement a daily reconciliation job that hard-syncs internal tracker state with Alpaca's actual account equity and positions.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"main.py\",\n    \"finding\": \"gc.collect() took 4424.6ms, collected 99 objects — heap may be growing, indicating a potential memory leak.\",\n    \"recommended_fix\": \"Profile memory usage to identify uncollected objects (e.g., appending to unbounded lists in memory) and ensure proper cleanup per cycle.\",\n    \"rc_class\": \"RC-2\"\n  },\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"FIFO orphan lot seeded: GOOGL 1sh @ $345.18 (long) — no prior lot found (orphan/legacy entry).\",\n    \"recommended_fix\": \"Ensure all entries are properly recorded in the local database/state file at the time of fill to prevent orphan lots during EOD reconciliation.\",\n    \"rc_class\": \"RC-4\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 25649,
+    "elapsed_s": 42.79,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

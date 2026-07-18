@@ -1,0 +1,56 @@
+Midday Gemini Audit — 2026-05-13
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Variable/Metric Involved**: `Session P&L Summary` metrics: `Exits`, `Closed trades`, `Partials`, `Total P&L`. `strategy.run_cycle` log metric: `P&L`.
+*   **Value vs. Should Be**:
+    *   The `Session P&L Summary` reports `Exits: 1`, but `Closed trades: 0` and `Partials: 0`. This is a logical contradiction. If a trade exit occurred (`Exits: 1`), it should either result in a `Closed trade` (if fully closed) or a `Partial` exit (if partially closed). Having 1 exit with neither a closed trade nor a partial exit suggests an event that did not fully materialize as a realized trade closure.
+    *   The `Session P&L Summary` states `Total P&L: $0.00`. However, the `strategy.run_cycle` logs consistently report a `P&L +18.48` (e.g., `2026-05-13 15:59:42,884`).
+    *   **Why this constitutes a failure**: The `Session P&L Summary` provides inconsistent and contradictory information regarding trade execution and financial performance. The discrepancy between reported `Exits`, `Closed trades`, and `Partials` makes it impossible to accurately assess trade activity. The direct contradiction between the `$0.00` total P&L in the summary and the `$18.48` P&L reported in the cycle logs indicates a critical flaw in P&L aggregation or reporting, leading to an inaccurate representation of the bot's daily performance.
+*   **Condition**: This inconsistency is observed in the `Session P&L Summary` at the top of the audit report, specifically when comparing its values (`Exits: 1 | Closed trades: 0 | Partials: 0 | Total P&L: $0.00`) against the `[Build #4] Session P&L mult: 1.03x (daily gain: +0.6% | kill limit 7% | P&L +18.48)` entries pervasive throughout the provided bot log.
+
+### ENTRY QUALITY
+*   **No issues**: The bot correctly abstained from opening new positions. The logs consistently show `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves. Exits and partials managed normally.` This behavior is appropriate for the identified market regime.
+
+### EXIT QUALITY
+*   **No issues**: Due to the contradictory `Session P&L Summary` and the absence of `Closed Trade Details`, it is not possible to audit the quality of the reported `Exits: 1`. No specific trade details (entry price, exit price, stop/target levels, P&L) are provided for any completed exit event.
+
+### MRI ALIGNMENT
+*   **Variable/Metric Involved**: `MRI session distribution`, `macro_risk_index` log output, `strategy.run_cycle` log output.
+*   **Value vs. Should Be**:
+    *   The `MRI session distribution` shows `Close level: STRESSED (41/100)` for all 39 samples.
+    *   The `macro_risk_index` logs consistently report `MRI refreshed: score=41 level=STRESSED`.
+    *   The `strategy.run_cycle` logs consistently display `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves. Exits and partials managed normally.`
+    *   **Why this constitutes a success**: The bot accurately detected and responded to the `STRESSED` MRI regime by implementing a no-new-entries policy. This aligns with a conservative risk management approach, preventing trades in potentially volatile or unfavorable conditions. The `vol_regime` being `NORMAL` with VIX around 18.0-18.1 while MRI is `STRESSED (score=41)` indicates that MRI incorporates other factors (like `news_alerts` with high points: 35-36) beyond VIX alone to determine the overall market stress level, which is a valid strategy design.
+*   **Condition**: This alignment is evident across all logged cycles where MRI is refreshed and entries are attempted.
+
+### LOG ANOMALIES
+*   `2026-05-13 16:32:22,742 | WARNING | main | gc.collect() took 213.6ms, collected 0 objects — heap may be growing`: This warning indicates a garbage collection cycle took over 200ms but collected no objects, suggesting potential memory management inefficiencies or a slow-growing heap that is not being effectively managed by the default garbage collection.
+*   `2026-05-13 16:26:44,627 | WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['truth_social']`: A news source (`truth_social`) timed out and was skipped. While not critical for overall operation, repeated or widespread source timeouts could lead to incomplete information for the `news_alerts` component of the MRI.
+
+### NEW BUGS / CONCERNS
+*   **CATEGORY**: EXECUTION BUG
+    *   **SEVERITY**: CRITICAL
+    *   **Description**: **P&L Reporting Discrepancy**. The `Total P&L` in the `Session P&L Summary` (`$0.00`) directly contradicts the `P&L` value reported in the `strategy.run_cycle` logs (`+18.48`). This represents a fundamental error in how the bot's financial performance is being aggregated and reported.
+    *   **Exact condition**: `Session P&L Summary -> Total P&L` is `$0.00` concurrently with `strategy.run_cycle` logs repeatedly showing `P&L +18.48` for the daily gain.
+
+*   **CATEGORY**: EXECUTION BUG
+    *   **SEVERITY**: HIGH
+    *   **Description**: **Inconsistent Trade Event Counting**. The `Session P&L Summary` reports `Exits: 1` but `Closed trades: 0` and `Partials: 0`. This logical inconsistency suggests an issue in how successful trade closure events are defined and tracked. It's unclear what the single "exit" refers to if no trade was actually closed or partially closed.
+    *   **Exact condition**: `Session P&L Summary -> Exits = 1`, while `Session P&L Summary -> Closed trades = 0` and `Session P&L Summary -> Partials = 0`.
+
+*   **CATEGORY**: INFRASTRUCTURE
+    *   **SEVERITY**: LOW
+    *   **Description**: **Garbage Collection Inefficiency**. A `gc.collect()` operation took a noticeable amount of time (213.6ms) but did not collect any objects. While a single instance might not be critical, if this pattern persists or becomes more frequent, it could indicate a memory leak or inefficient object retention, potentially leading to increased memory footprint and degraded performance over longer runtimes.
+    *   **Exact condition**: `2026-05-13 16:32:22,742 | WARNING | main | gc.collect() took 213.6ms, collected 0 objects — heap may be growing`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: Prioritize the investigation and resolution of the P&L reporting discrepancy and inconsistent trade event counting in the `Session P&L Summary`. Ensure all trade-related metrics (entries, exits, partials, closed trades, realized P&L) are accurately and consistently reflected across all reporting components. (CRITICAL)
+2.  **INFRA**: Monitor `gc.collect()` warnings closely for recurrence and increasing processing times. If the issue persists, profile memory usage and object lifecycles to identify potential memory leaks or areas for optimization in resource management. (MEDIUM)
+3.  **INFRA**: Implement enhanced error handling and retry mechanisms for news monitor source timeouts, specifically for `truth_social`, to ensure comprehensive news coverage and prevent data gaps that could impact MRI calculation. (LOW)

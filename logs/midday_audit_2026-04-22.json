@@ -1,0 +1,104 @@
+{
+  "audit_date": "2026-04-22",
+  "run_ts": "2026-04-22T21:51:19.108250-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [
+      {
+        "symbol": "MSTR",
+        "ts": "2026-04-21 12:44:33",
+        "score": 11,
+        "pdt": 2,
+        "mri": "STRESSED",
+        "price": 164.55,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "CRWD",
+      "MSTR"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 26,
+    "levels": {
+      "NORMAL": 26
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 2,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-04-22 21:48:39,463 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions remain. Bot can be restarted safel",
+      "2026-04-22 21:48:40,050 | WARNING  | execution.portfolio_tracker | A-4 paper fills gap: Alpaca returned 0 fills despite 1 closed trade(s) \u2014 using trac"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [
+    {
+      "symbol": "MSTR",
+      "status": "rc=2",
+      "entry": 164.55,
+      "exit": 181.98
+    }
+  ],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -52.289999999999935,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -52.289999999999935,
+    "best": {
+      "symbol": "MSTR",
+      "pnl": -52.289999999999935,
+      "entry_price": 164.55,
+      "exit_price": 181.98,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 173.79,
+      "target": 141.61
+    },
+    "worst": {
+      "symbol": "MSTR",
+      "pnl": -52.289999999999935,
+      "entry_price": 164.55,
+      "exit_price": 181.98,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 173.79,
+      "target": 141.61
+    },
+    "trades": [
+      {
+        "symbol": "MSTR",
+        "pnl": -52.289999999999935,
+        "entry_price": 164.55,
+        "exit_price": 181.98,
+        "size": 3.0,
+        "exit_event": "stop_hit",
+        "score": 11,
+        "mri_level": "STRESSED",
+        "stop": 173.79,
+        "target": 141.61
+      }
+    ]
+  }
+}

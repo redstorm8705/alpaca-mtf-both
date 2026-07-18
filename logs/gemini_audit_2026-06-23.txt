@@ -1,0 +1,104 @@
+Nightly Gemini Audit — 2026-06-23
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'run_cycle.py', 'monthly_review.py', 'entry_logic.py', 'trade_logger.py', 'autonomous_review.py', 'auto_ai_audit.py', 'portfolio_tracker.py', 'generate_dashboard.py', 'execution/quarterly_hold_manager.py', 'execution/kelly.py', 'execution/orphan_manager.py', 'execution/broker.py', 'execution/entry_logic.py', 'execution/exit_logic.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py', 'strategy/run_cycle.py', 'events/calendar.py', 'events/news_monitor.py', 'events/macro_risk_index.py']
+================================================================================
+
+### VERDICT: WARN
+(Issues found: bot repeatedly hung and restarted, a critical quarterly hold entry gate failed with a DataFrame error, a P&L recording inconsistency was identified, and memory warnings persist. Operational, but with significant underlying fragility and potential for missed trades/incorrect P&L reporting.)
+
+### LOG ANOMALIES
+
+*   **Memory Growth Warning**: Repeated occurrences of `gc.collect() took Xms, collected 64 objects — heap may be growing` (e.g., `2026-06-23 18:37:51,773` and subsequent entries around every 5-10 minutes). This indicates that Python's garbage collector is taking a long time (consistently >2 seconds, sometimes >3 seconds) to free memory. While not a crash, it suggests a potential memory leak or inefficient object management, which can lead to performance degradation and eventual out-of-memory errors in a long-running process.
+*   **Bot Hung / Restarted**: The log shows `2026-06-23 18:55:41,136 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.` and subsequent `SIGTERM received` messages (`2026-06-23 19:07:11,056`, `2026-06-23 19:40:23,038`). This indicates the bot process is unstable, frequently hanging or being externally terminated and then restarting. Although the restart mechanism appears robust (e.g., `POSITION COUNT DRIFT` is corrected), the underlying cause of the hangs/crashes is unresolved.
+*   **QuarterlyHoldManager DataFrame Error**: Multiple warnings like `2026-06-23 19:41:11,924 | WARNING | execution.quarterly_hold_manager | QuarterlyHoldManager: NVDA entry gate fetch failed: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().` and similarly for `GOOGL`. This indicates a runtime error within the `QuarterlyHoldManager` preventing the proper evaluation of entry conditions for these symbols.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: Reviewed trades show correct P&L signs for long (exit > entry = profit) and short (entry > exit = profit) positions.
+    *   `INTC` (long, stop_hit): `entry=127.65`, `exit=119.75`, `pnl=-7.9`. Correct.
+    *   `NFLX` (short, partial_exit): `entry=77.54`, `exit=76.38`, `pnl=1.16`. Correct.
+    *   `NFLX` (short, exit): `entry=77.54`, `exit=93.19`, `pnl=-14.49`. Correct.
+    *   `TOST` (short, exit): `entry=24.92`, `exit=24.95`, `pnl=-0.15`. Correct.
+*   **Score→Outcome Correlation**: All recorded entries in the trade events are `score: 12`. The observed outcomes (3 losses, 1 flat, 1 open out of 5 from `2026-06-16` to `2026-06-22`) suggest that a perfect 12-point score does not consistently lead to profitable trades. The `all_time_stats` show a `win_rate=38.0%`, `profit_factor=1.09`, and `avg_r_multiple=-0.107`. A negative average R-multiple is concerning and contradicts the stated `TARGET_ATR_MULT=2.5`, indicating that on average, losses are larger relative to initial risk than wins. This suggests an issue with risk management, stop placement, or signal edge effectiveness.
+*   **Stop-Hit Rate vs. Win Rate**: The `win_rate=38.0%` is low, and combined with `avg_r_multiple=-0.107`, indicates that the strategy is not capturing its intended edge. The `[ANOMALY-3] TQI degradation` warnings (average 25.4/100 < 30) further support a review of exit discipline and stop placement.
+*   **Exit Reason Consistency**:
+    *   `NFLX` (exit, `2026-06-18`) with `reason: external_close` at `93.19` is far above its entry (`77.54`) and original stop (`80.29`) for a short position, resulting in a large loss. While `external_close` implies manual intervention or a broker-side event, its significant deviation from the intended stop-loss is notable and represents an unmanaged loss.
+    *   `SMCI` (stop_hit, `2026-06-22`) shows `pnl: 0.0` with `entry=28.91` and `exit=28.91`, for a `hard_stop`. A `hard_stop` typically implies a loss. This exact `0.0` P&L suggests the stop was effectively at breakeven, which is inconsistent with a "hard_stop" reason if it was intended to be below the entry for a short. This could point to a miscategorization or an unlogged stop adjustment.
+
+### TRADE INTEGRITY
+
+*   **P&L Drift Reporting**: The `EOD SNAPSHOT` reports `alpaca_pnl: 0.0`, `tracker_pnl: 0`, and `pnl_drift: 0.0`. However, the `Portfolio: $2,798.25` (live Alpaca value) implies a lifetime P&L of `$298.25` relative to the initial $2.5K account. The `all_time_stats.total_pnl` is `$252.99`. This creates a true drift of `$45.26` (`298.25 - 252.99`), which contradicts the `pnl_drift: 0.0` stated in the snapshot. This indicates an inconsistency in P&L calculation or reporting.
+
+### MODIFIED FILE FINDINGS
+
+*   **`execution/portfolio_tracker.py`**:
+    *   **Inconsistent FIFO Handling for Synthetic Lots**: The `_fifo_reconstruct` function (around line 330) contains a critical inconsistency. For `buy_to_cover` when `net_qty < 0` and no open short lots are found, it explicitly logs a CRITICAL error and "DO NOT append synthetic lot" (line 289), aligning with the S49 board decision. However, for a `sell` when `net_qty > 0` and no open long lots are found, it logs a critical error but then *does* append a synthetic short lot: `current.append({"qty": qty, "price": price, "side": "short"})` (line 330). This allows phantom short positions to accumulate, directly contradicting the principle of preventing synthetic lot creation.
+*   **`events/news_monitor.py`**:
+    *   **Misleading "Base Penalty" Log Message**: The `BreakingNewsAlert.__str__` method (around line 718) reports `base penalty: 100%` for `CAUTION` risk level alerts. According to `_get_size_mult_internal` (line 890), `CAUTION` alerts result in a `1.0` size multiplier (i.e., no penalty). The `100% base penalty` wording is highly misleading, as it implies a `0.0` multiplier. This could confuse operators about the actual risk adjustment being applied.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED**. Architectural shift to Alpaca Data (T1) and removal of `yfinance` for bars, plus removal of the MultiIndex guard, resolves this.
+*   **P5-C2 | run_movers.py ImportError**: **TRIGGERED**. The log shows `Pre-market mover scan failed or timed out`. While `run_movers.py` source is not provided to confirm the specific `ImportError`, the pre-market scanner is clearly failing, indicating an unresolved issue preventing mover analysis.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED**. PDT functionality has been fully removed from the bot (S50, S52), rendering this issue obsolete.
+*   **P5-H2 | Fill price crosstalk**: **FIXED**. `execution/fill_helpers.py` now uses the `after` timestamp parameter and sorting by `created_at` to accurately match specific fills.
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED**. `execution/orphan_manager.py` explicitly clears `gtc_stop_order_id` if the order is not found, preventing stranded stops.
+*   **P5-H4 | Rule 2 dead code**: **FIXED**. `TOD_MARKET_OPEN_BUFFER_MINS` is now a single source of truth in `config.py`, and the 30-minute opening buffer is correctly applied.
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED**. The issue was marked as fixed in a prior audit, and the current `broker.py` logic for GTC stops shows robust handling for quantity issues. PDT removal also makes parts of this irrelevant.
+*   **P5-M1 | Cycle watchdog restart loop**: **FIXED** (lockfile part), but **TRIGGERED** (underlying hang). The lockfile fix (`FD_CLOEXEC` in `main.py`) prevents re-locking. However, the logs clearly show the watchdog *still triggering* (`WATCHDOG: No completed cycle... bot is hung.`), indicating the bot continues to hang, requiring restarts. The root cause of the hang is unfixed.
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED**. `events/macro_risk_index.py` implements robust logic to restore `mri_state.json` and decay the score based on downtime, or start fresh if too old.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. Source for this file/variable was not provided.
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED**. Source for this function was not provided. No obvious direct impact in logs beyond `monthly_review.py` handling an empty string.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **UNTOUCHED**. The `Startup R-GUARD` addresses crash recovery but not the primary issue of EOD summary being generated before all positions are fully settled by Alpaca.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. Source for this file was not provided.
+
+### NEW BUGS FOUND
+
+1.  **CATEGORY: LOGIC ERROR | SEVERITY: HIGH | file: `execution/portfolio_tracker.py`**
+    *   **Description**: Inconsistent FIFO handling in `_fifo_reconstruct`. While `buy_to_cover` operations explicitly "DO NOT append synthetic lot" if no open short lots are found, a `sell` operation finding no open long lots *does* append a "synthetic short". This directly contradicts the board's intention to prevent phantom position accumulation.
+    *   **Exact failure condition**: A `sell` fill for a symbol with no corresponding open long positions in the tracker will create a new synthetic short position in the `current` lots, which can then persist into `open_lots_prior_day.json` and accumulate phantom positions.
+
+2.  **CATEGORY: EXECUTION BUG | SEVERITY: HIGH | file: `execution/quarterly_hold_manager.py`**
+    *   **Description**: The `QuarterlyHoldManager` is encountering a `ValueError: The truth value of a DataFrame is ambiguous` when evaluating entry gates for symbols like `NVDA` and `GOOGL`. This is a pandas error that occurs when attempting a boolean evaluation (e.g., `if df:`) on a DataFrame or Series with multiple elements. This blocks `QuarterlyHoldManager` from making entry decisions for these symbols.
+    *   **Exact failure condition**: A condition check within a QHM entry gate (likely in `_passes_entry_gate` or `_passes_day3_reconfirm`) or its data fetching sub-routines attempts to evaluate the truthiness of a pandas DataFrame or Series, causing a runtime `ValueError` and blocking the entry process for the affected symbols.
+
+3.  **CATEGORY: PERFORMANCE / INFRASTRUCTURE | SEVERITY: MEDIUM | file: `main.py`**
+    *   **Description**: Persistent warnings about `gc.collect()` taking excessively long (`>2-3s`) suggest a memory leak or highly inefficient object lifecycle management. While not causing immediate crashes, this can degrade performance over time, consume more CPU, and eventually lead to out-of-memory errors in a long-running process, potentially contributing to the detected bot hangs.
+    *   **Exact failure condition**: The Python garbage collector consistently reports collection times exceeding expected thresholds (`gc.collect() took >2000ms`), indicating a growing heap size over time not adequately managed by normal operations, leading to resource strain.
+
+4.  **CATEGORY: ALPHA ISSUE / MONITORING | SEVERITY: LOW | file: `events/news_monitor.py`**
+    *   **Description**: The logged message `base penalty: 100%` for `CAUTION` alerts is misleading. The actual `news_size_mult` for `CAUTION` alerts (which are not `HALT`) is `1.0` (i.e., `0% penalty`), as confirmed by the `_get_size_mult_internal()` logic. This inconsistency could confuse operators about whether an actual risk reduction is being applied.
+    *   **Exact failure condition**: A `BreakingNewsAlert` with `risk_level="CAUTION"` (e.g., from `TruthSocial` or `Currents`) generates a log message that misrepresents the `size_mult` value, showing a "100% base penalty" when the effective penalty is 0%.
+
+5.  **CATEGORY: TRADE INTEGRITY | SEVERITY: LOW | file: `strategy/run_cycle.py`**
+    *   **Description**: The `_log_trade_event` calls (e.g., for `breadth_refresh`) still include `pdt_used=0` as an argument, even though the PDT functionality has been officially removed (S50, S52). This adds redundant and obsolete data to the trade logs.
+    *   **Exact failure condition**: `trade_events.jsonl` contains a `pdt_used` field for events where PDT tracking is no longer active or relevant to the bot's operation, due to `_log_trade_event` being called with this parameter in `run_cycle.py`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE**: Investigate and fix the `ValueError: The truth value of a DataFrame is ambiguous` occurring in `execution/quarterly_hold_manager.py` for `NVDA` and `GOOGL`. This is preventing QHM entries.
+    *   **File**: `execution/quarterly_hold_manager.py`
+    *   **Line Context**: Likely within `_passes_entry_gate` or `_passes_day3_reconfirm` or data fetching within these functions.
+    *   **Alternative fix**: Review DataFrame boolean evaluations to use explicit methods like `.empty`, `.any()`, `.all()`, or `.item()`.
+
+2.  **HIGH URGENCY**: Modify `execution/portfolio_tracker.py` to prevent the creation of synthetic short lots when a `sell` order is received without corresponding open long positions. This aligns with the `buy_to_cover` logic and board's intent to avoid phantom positions.
+    *   **File**: `execution/portfolio_tracker.py`
+    *   **Line Context**: Around line 330 in `_fifo_reconstruct`.
+    *   **Alternative fix**: Replace `current.append({"qty": qty, "price": price, "side": "short"})` with a CRITICAL log message and no lot append, similar to the `buy_to_cover` handling.
+
+3.  **HIGH URGENCY**: Prioritize diagnosing and resolving the root cause of the bot's frequent hangs and restarts, indicated by `WATCHDOG` triggers and `SIGTERM` events. Start by using memory profiling tools to identify and address the `heap may be growing` issue.
+    *   **File**: `main.py` (global), `run_cycle.py` (runtime execution)
+    *   **Alternative fix**: Implement targeted memory profiling in `run_cycle.py` and its dependencies (e.g., signal generation, data fetching) to pinpoint memory leaks or high object churn and optimize resource usage.
+
+4.  **MEDIUM URGENCY**: Correct the misleading `base penalty: 100%` log message for `CAUTION` news alerts in `events/news_monitor.py` to reflect the actual `1.0` (0% penalty) size multiplier, improving operational clarity.
+    *   **File**: `events/news_monitor.py`
+    *   **Line Context**: Around line 718 in `BreakingNewsAlert.__str__`.
+    *   **Alternative fix**: Change the log string to accurately represent `(1 - self.size_mult):.0%` for clarity.
+
+5.  **LOW URGENCY**: Remove the redundant `pdt_used=0` argument from `_log_trade_event` calls in `strategy/run_cycle.py` (e.g., line 3470) now that PDT functionality has been officially removed from the bot.
+    *   **File**: `strategy/run_cycle.py`
+    *   **Line Context**: Line 3470 and similar `_log_trade_event` calls.
+    *   **Alternative fix**: Delete `pdt_used=0` from these function calls.

@@ -1,0 +1,46 @@
+Midday Gemini Audit — 2026-04-28
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **CRITICAL P&L Calculation Error (QQQ)**: The QQQ trade is reported as `entry $663.73 → exit $655.12 ($-8.61)`. For a short position, an entry price higher than the exit price should result in a *profit*, not a loss. The actual profit should be $663.73 - $655.12 = +$8.61. This fundamental error in P&L calculation for short trades severely skews the session's reported performance metrics (Total P&L, Win rate, Avg loss). The bot incorrectly recorded a win as a loss.
+*   **Win Rate and Profit Factor Discrepancy**: Due to the QQQ P&L error, the reported `Win rate: 67%` and `Avg loss: $-8.61` are incorrect. If QQQ's P&L was correctly recorded as +$8.61, the actual win rate would be 100% (3 wins, 0 losses) and the total P&L would be $16.71 + $18.43 + $8.61 = $43.75. The bot's self-assessment of performance is critically flawed.
+*   **Incomplete Exit Level Information**: For SMCI and QQQ, `levels=unknown`. This prevents auditing whether exit prices are consistent with pre-defined target levels (T1, T2, etc.) or stop-loss mechanisms, thereby hindering verification of exit strategy adherence.
+*   **Score→Outcome Correlation Not Auditable**: All entries are `score 12/12`. This data provides no variability to assess correlation between entry score and trade outcome. It either suggests the bot only takes maximal-score trades or the scoring mechanism isn't providing a useful range for analysis.
+*   **Partial Exit Position Sizing**: The provided data does not include position sizes, making it impossible to audit if partial exits correctly reduced the position size.
+
+### ENTRY QUALITY
+*   **Consistent Elevated MRI Environment**: All 9 MRI samples for the session show `ELEVATED` risk. This indicates the bot operated throughout the session in conditions above `NORMAL` risk. While not explicitly `STRESSED/CRISIS`, consistently operating in an `ELEVATED` regime without clear justification or adaptive adjustments (e.g., position sizing) could systematically reduce edge if the strategy is optimized for `NORMAL` conditions.
+*   **Entry at MRI=HIGH**: The COIN trade was entered under `MRI=HIGH`. This is a higher risk level compared to `NORMAL`. While this specific trade was profitable, entering at such levels warrants scrutiny regarding risk management and strategy fit, especially when the session-wide MRI is also `ELEVATED`.
+
+### EXIT QUALITY
+*   **Undeterminable for SMCI and QQQ**: The `levels=unknown` for SMCI and QQQ makes it impossible to verify if winners were held appropriately or if losers (or, in QQQ's case, miscategorized winners) were cut efficiently against predefined targets or stops.
+*   **COIN Partial Exit**: The COIN partial exit at $191.79 is consistent with the stated T1 of $191.21, suggesting a disciplined execution of the profit-taking strategy.
+
+### MRI ALIGNMENT
+*   **Persistent ELEVATED MRI**: The entire session's MRI was `ELEVATED`. This suggests a potential regime mismatch if the strategy is designed for `NORMAL` conditions, or indicates that the bot continued to trade despite market conditions being consistently above baseline risk. Without information on how position sizing or other parameters were adjusted in response to this sustained `ELEVATED` state, it's impossible to confirm appropriate risk management.
+*   **MRI 'HIGH' entry inconsistency**: The `MRI=HIGH` for COIN raises questions about the definition and categorization of MRI levels across the system (e.g., `NORMAL`, `HIGH`, `ELEVATED`, `STRESSED`, `CRISIS`). Clarification is needed on how individual trade MRI (`HIGH`/`NORMAL`) relates to the session's overall `ELEVATED` distribution.
+
+### LOG ANOMALIES
+*   **None detected**: This is a critical anomaly in itself. The audit explicitly states `(no log data)` for the last 4 hours, despite expecting `WARNING/ERROR/key events` and periodic crash-safety flushes. The complete absence of logs is a severe failure of monitoring and auditability, implying the logging system is either down, misconfigured, or not reporting.
+
+### NEW BUGS / CONCERNS
+*   **CRITICAL | P&L Calculation Error for Short Positions**:
+    *   **Description**: The bot incorrectly calculates the P&L for short trades, reporting a profit as a loss.
+    *   **Exact Condition**: `QQQ: entry $663.73 → exit $655.12 ($-8.61)`. (Actual profit: +$8.61).
+*   **CRITICAL | System Logging Failure**:
+    *   **Description**: No log data (`(no log data)`) was available for the last 4 hours of operation, rendering the system opaque and unauditable for internal events, errors, or warnings.
+    *   **Exact Condition**: `BOT LOG (last 4h — WARNING/ERROR/key events): (no log data)`.
+*   **HIGH | Missing Trade Level Parameters**:
+    *   **Description**: Key trade-level parameters (Take Profit, Stop Loss) are not recorded or displayed for several closed trades, making performance verification impossible.
+    *   **Exact Condition**: `SMCI: levels=unknown`, `QQQ: levels=unknown`.
+*   **MEDIUM | Ambiguity in MRI Level Definitions**:
+    *   **Description**: Inconsistency or lack of clarity between `MRI SESSION DISTRIBUTION` levels (e.g., `ELEVATED (40/100)`) and individual trade `MRI` attributes (`HIGH`, `NORMAL`).
+    *   **Exact Condition**: Session reported as `ELEVATED` consistently, yet trades are marked `MRI=HIGH` or `MRI=NORMAL`.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE**: **Halt trading and debug the P&L calculation logic for short positions.** This is a fundamental error that compromises all performance reporting. Verify and correct P&L for all historical short trades.
+2.  **URGENT**: **Restore and verify the logging system's functionality.** Ensure all critical events (entries, exits, errors, warnings, internal state changes) are correctly logged and accessible for real-time monitoring and post-session analysis.
+3.  **HIGH PRIORITY**: **Implement comprehensive recording and reporting of all trade parameters.** For every entry, document the intended stop-loss, take-profit levels (T1, T2, T3), and the reason for exit, enabling full auditability of strategy execution.

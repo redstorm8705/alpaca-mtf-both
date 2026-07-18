@@ -1,0 +1,55 @@
+Midday Gemini Audit — 2026-06-05
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Status**: No trades were executed or closed during this session.
+    *   Entries: 0 | Exits: 0 | Partials: 0
+    *   Closed trades: 0 | Wins: 0 | Losses: 0
+    *   Total P&L: $0.00 | Win rate: 0%
+    *   Avg win: $0.00 | Avg loss: $0.00
+*   **Assessment**: Due to the lack of trading activity, it is not possible to assess entry/exit price plausibility, P&L sign correctness, win rate, profit factor, score-to-outcome correlation, or stop-hit rate for this session.
+
+### ENTRY QUALITY
+*   **Observation**: No entries were taken. The bot correctly identified a `STRESSED` MRI regime and prevented new entries, as indicated by `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.`.
+*   **Analysis**: The `VOLSHADOW` logs show many potential entries with `score_without_vol` values below `MIN_SCORE = 9`, and `would_pass: false`. This, combined with the MRI restriction, indicates that the bot's entry filters (confluence score, macro risk index) are functioning as intended to prevent entries under unfavorable conditions.
+*   **No issues** identified in entry *attempts* or *prevention*.
+
+### EXIT QUALITY
+*   **Observation**: No trades were closed.
+*   **Assessment**: Not applicable, as no positions were exited.
+
+### MRI ALIGNMENT
+*   **Observation**: The bot consistently identified a `STRESSED` MRI regime (score=47 at 17:11:37,886 and 17:24:33,083) and responded by applying a `size floor 0.70x` and, more importantly, triggering the `BV-5: MRI=STRESSED — no new entries until regime improves` critical block.
+*   **Analysis**: The MRI system successfully detected elevated risk and correctly implemented its defensive measures, preventing new entries. This demonstrates proper alignment with the stated risk management policy for stressed regimes. The news injection `MRI news injection: 37 macro alert(s) → +35 pts (12 → 47, level=STRESSED, price_score=12)` shows a dynamic response to external events impacting the MRI score.
+*   **No issues** identified in MRI alignment.
+
+### LOG ANOMALIES
+*   `2026-06-05 17:06:26,536 | WARNING | main | gc.collect() took 4026.4ms, collected 64 objects — heap may be growing`
+*   `2026-06-05 17:19:09,974 | WARNING | main | gc.collect() took 4651.0ms, collected 64 objects — heap may be growing`
+*   `2026-06-05 17:19:09,983 | INFO | main | [CYCLE] duration=458s | phase=midday | watchdog_headroom=262s ⚠ SLOW CYCLE`
+*   `2026-06-05 17:24:04,970 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.`
+*   `2026-06-05 17:24:12,043 | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=2. Correcting to tracker count.`
+
+### NEW BUGS / CONCERNS
+
+1.  **INFRASTRUCTURE | CRITICAL | Excessive Garbage Collection & Watchdog Trigger**:
+    *   **Variable involved**: `gc.collect()` duration, `CYCLE duration`, `watchdog_headroom`, `monitoring.watchdog` state.
+    *   **Value vs. should be**: The `gc.collect()` calls took `4026.4ms` and `4651.0ms`. For a real-time trading bot operating on a 5-minute cycle, garbage collection pauses should ideally be in the sub-millisecond to low-millisecond range to avoid significant execution delays. A `CYCLE duration` of `458s` is significantly longer than the configured `Scan interval: 5 min` (300s), causing a `SLOW CYCLE` warning. This prolonged cycle duration directly resulted in the `monitoring.watchdog` detecting `No completed cycle in 12m` (720s) and triggering a critical restart. The bot became unresponsive for an extended period, which is a systematic degradation of real-time operational capability.
+    *   **Condition**: Occurs at `2026-06-05 17:06:26,536` and `2026-06-05 17:19:09,974` (gc pauses) leading to `2026-06-05 17:19:09,983` (slow cycle) and ultimately `2026-06-05 17:24:04,970` (watchdog trigger and restart).
+
+2.  **EXECUTION BUG | HIGH | Position Count Drift**:
+    *   **Variable involved**: `risk.open_positions` and `tracker`'s open position count.
+    *   **Value vs. should be**: The log indicates `risk.open_positions=0` versus `tracker=2`. These two internal state variables, both representing the number of open positions, *must* remain in sync to ensure accurate risk management, position sizing, and adherence to `MAX_POSITIONS = 4`. A drift implies an inconsistency in the bot's understanding of its live exposure. While the bot logs `Correcting to tracker count`, the occurrence of this drift itself is a failure in maintaining consistent internal state. This could lead to incorrect decisions regarding new entries, partial exits, or overall risk exposure if the correction mechanism were to fail or be delayed.
+    *   **Condition**: Occurs during the bot's restart sequence at `2026-06-05 17:24:12,043` (`POSITION COUNT DRIFT`).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **INFRASTRUCTURE**: Immediately investigate the root cause of the prolonged `gc.collect()` pauses and subsequent watchdog trigger. This likely points to memory leaks or inefficient data structures that lead to excessive object creation/retention. Profile memory usage and CPU during cycle execution to pinpoint bottlenecks.
+2.  **EXECUTION**: Address the `POSITION COUNT DRIFT`. Analyze the code path where `risk.open_positions` is updated (or not updated) to identify why it diverges from the `tracker`'s count. Ensure atomicity or transactionality in state updates related to open positions.
+3.  **ALPHA**: Review the `macro_risk_index` news injection logic and its weighting (`+35 pts`). While the bot correctly responds to the STRESSED MRI, evaluate if the current news aggregation and scoring (37 alerts leading to +35 pts) might be overly sensitive or prone to noise, potentially causing premature or overly aggressive entry blocks. This is a lower priority than the critical infrastructure/execution bugs.

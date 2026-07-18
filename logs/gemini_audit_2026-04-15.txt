@@ -1,0 +1,84 @@
+Nightly Gemini Audit — 2026-04-15
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['alerts.py', 'preflight_simulation.py', 'trade_logger.py', 'config.py', 'scan_to_html.py', 'generate_dashboard.py', 'backtest_12pt.py', 'weekly_review.py', 'audit_signals.py', 'main.py', 'audit_final.py', 'midday_audit.py', 'execution/portfolio_tracker.py', 'execution/broker.py', 'events/news_monitor.py', 'events/macro_risk_index.py', 'data/alpaca_data.py', 'data/fmp_client.py', 'data/market_breadth.py', 'data/fetcher.py', 'strategy/signal_generator.py']
+================================================================================
+
+### VERDICT: FAIL
+
+The bot is currently experiencing a critical operational failure, preventing it from running effectively, evidenced by hundreds of "Another bot instance is already running. Exiting." errors. Furthermore, critical risk management systems (PDT tracking, GTC stops for adopted positions) show significant integrity issues, and data inconsistencies are present in the trade log.
+
+### LOG ANOMALIES
+
+*   **CRITICAL & Recurring Operational Failure**: The log is saturated with `ERROR: Another bot instance is already running. Exiting.` (hundreds of instances). This indicates a severe underlying problem, likely with the bot's startup script, scheduler, or lockfile management (P5-M1). The bot is repeatedly failing to initiate its main process.
+*   **CRITICAL & Recurring PDT Desynchronization**: Multiple entries like `PDT count mismatch — Alpaca reports 1, tracker has 3 in rolling window. Trades may have occurred outside this bot instance.` and `CRITICAL | PDT INTEGRITY: Alpaca reports 1 but bot recorded 2 real trades in rolling window. Manual review required. Keeping local count (3) for safety.` show a persistent and fundamental discrepancy in PDT tracking. The bot's internal rolling window count does not match Alpaca's, yet the bot defers to its higher internal count for safety, leading to premature PDT lockouts (P5-H1 actively triggered, and a new critical bug found in PDT sync logic).
+*   **WARNING: Position Quantity Mismatch**: `[QQQ] Qty mismatch — Alpaca=3, tracker=2. Updating tracker to match Alpaca.` indicates a specific discrepancy in the quantity of an open position (`QQQ`) between the bot's internal tracker and Alpaca. While the bot logs a "correction," the `trade_log.json` still exhibits an impossible state for QQQ.
+*   **CRITICAL: Macro Risk State Activation**: `🚨 MACRO RISK STATE ACTIVATED — 5 macro-risk alerts in last 24h across domains. MRI will reflect elevated background. Sizing managed by MacroRiskIndex.` This indicates the bot has entered an elevated risk state based on numerous news alerts. While intended, the mechanism for triggering this state based on news *count* rather than market reaction (as explicitly stated in `news_monitor.py`) is problematic (new low-severity bug).
+*   **WARNING: PDT-Forced Overnight Holds**: `[SPY] AH GTC skipped — PDT=3/3 and opened today. Alpaca will reject (code 40310100). Relying on next-morning restart.` (and for QQQ, AMD, NVDL) confirms the PDT lockout mechanism is active and preventing same-day closing of these trades. This is a correct protective measure but highlights the consequence of hitting the PDT limit.
+
+### TRADE INTEGRITY
+
+*   **QQQ Open Position Quantity Inconsistency**: The `QQQ` open position in `trade_log.json` has `"qty": 2` but `"qty_remaining": 3`. This is a logical impossibility. This indicates a severe data integrity flaw in how position quantities are recorded or updated after reconciliation, partial exits, or adoption, potentially leading to incorrect P&L calculations and order management errors.
+*   **Missing GTC Stop Orders for Adopted Orphan Positions**: Several open positions (AMD, NVDL, and QQQ where `rth_day_stop_order_id` is null) are marked `_adopted_orphan: true` but have `"gtc_stop_order_id": null`. While these positions were discovered, the bot fails to establish crucial GTC stop-loss orders for overnight risk management upon adoption, leaving them exposed.
+*   All other P&L signs, percentages, and partial exit accounting for the last 10 closed trades appear correct. Entry and exit prices are plausible.
+
+### MODIFIED FILE FINDINGS
+
+*   **`execution/portfolio_tracker.py`**:
+    *   **CRITICAL LOGIC FLAW**: The `update_day_trades_from_alpaca` function implements an asymmetrical PDT reconciliation. It only adds "EXTERNAL" trades to the local tracker if Alpaca's `daytrade_count` is *higher* than the bot's recorded trades for the day. It has no corresponding logic to *reduce* the bot's internal rolling PDT count if Alpaca reports fewer day trades, perpetuating desynchronization (as seen in logs where Alpaca reports 1, but the tracker has 3).
+    *   **FIXED (P5-L2 Partial)**: `write_eod_summary` now includes `partial_pnl` from open positions, addressing the issue of understated P&L on daily reports for partially exited trades.
+*   **`main.py`**:
+    *   **UNTOUCHED (P5-M1 root cause)**: The provided snippet does not contain a fix for the underlying cause of the recurring "Another bot instance is already running. Exiting." error, which is preventing normal bot operation.
+    *   **NEW FEATURE**: Introduces `_last_cycle_lock` (a fix for BUG-W2), `_feed_age_history`, and `_systemic_stale_alerted` for detecting stale data feeds, enhancing operational resilience (detection only, not reconnection, related to P5-L3).
+    *   **NEW FEATURE**: `OVERNIGHT_ENTRIES_ENABLED` is `False`, confirming dry-run mode. New parameters for leveraged ETF notional caps (`_BUCKET_A_LEVERAGE`, `_BUCKET_A_MAX_NOTIONAL_PCT`) are defined.
+*   **`events/macro_risk_index.py`**:
+    *   **NEW LOGIC (LOW-severity bug)**: The `inject_news_state` function now directly forces the MRI score to a minimum of 40 (`STRESSED` level) if 3 or more macro-risk news alerts are active from `news_monitor.py`. This mechanism, based purely on news *count* rather than price confirmation, contradicts the "MARKET-REACTION-FIRST" architecture principle of `news_monitor.py` and can lead to over-penalization from news chatter alone.
+    *   **FIXED (P5-M2)**: `_restore()` logic improved to decay or recompute MRI score after prolonged downtime, preventing stale cached MRI scores.
+*   **`data/alpaca_data.py`**:
+    *   **SILENT FAILURE (LOW-severity bug)**: `get_latest_trade()` logs `real-time data requires paid plan` (status code 402) at `debug` level. This means if the bot lacks a paid Alpaca data plan, it silently falls back to potentially stale bar data for critical real-time price inputs, which should be flagged as a `warning`.
+*   **`data/fetcher.py`**:
+    *   **FIXED (P5-C1 Partial)**: `fetch_bars` now includes logic to handle `MultiIndex` DataFrames by using `df.xs(symbol, level="symbol")`, mitigating a potential source of silent crashes.
+    *   **FIXED (P5-C2)**: The addition of a `DataFetcher` class wrapper resolves the `ImportError` for `run_movers.py`.
+*   **`scan_to_html.py`**:
+    *   **FIXED (P5-L2)**: `_fetch_implied_range` now filters weekend options expirations, improving data quality for implied range calculations.
+*   **All other modified files (`alerts.py`, `preflight_simulation.py`, `trade_logger.py`, `config.py`, `backtest_12pt.py`, `weekly_review.py`, `audit_signals.py`, `audit_final.py`, `midday_audit.py`, `execution/broker.py`, `events/news_monitor.py`, `data/fmp_client.py`, `data/market_breadth.py`, `strategy/signal_generator.py`)**: No new critical or high-severity bugs were found within the visible code.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED (partial)**. `data/fetcher.py` directly addresses `MultiIndex` handling, preventing the specified KeyErrors in data loading. Further verification needed if `_find_recent_fvgs()` in `main.py` has its own, un-patched `MultiIndex` issues.
+*   **P5-C2 | run_movers.py ImportError**: **FIXED**. The `DataFetcher` class has been added to `data/fetcher.py`.
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **TRIGGERED / UNTOUCHED (root cause)**. Logs clearly show ongoing PDT count mismatches. The core `portfolio_tracker.py` PDT sync logic is flawed in a way that contributes to this.
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED**. No changes were observed related to this issue.
+*   **P5-H3 | Orphan GTC 404 path**: **TRIGGERED (symptomatic) / UNTOUCHED (root cause)**. The presence of adopted orphan positions without GTC stops is a symptom. `execution/broker.py`'s `get_order` logs warnings but doesn't show tracker cleanup.
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED**. No changes were observed related to this issue.
+*   **P5-M1 | Cycle watchdog restart loop**: **TRIGGERED / WORSENED**. This bug is actively preventing the bot from running normally, as seen in the repeated `ERROR` logs.
+*   **P5-M2 | MRI score cached stale across sessions**: **FIXED**. `events/macro_risk_index.py` now includes explicit logic to decay or recompute MRI on startup after downtime.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. No changes were observed related to this issue.
+*   **P5-L1 | Weekly review PDT label**: **UNTOUCHED**. Not explicitly addressed in the visible code.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **FIXED (partial)**. `execution/portfolio_tracker.py` now includes `partial_pnl` for EOD reports, addressing the "understated P&L" aspect.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED (root cause), DETECTED (symptom)**. While `main.py` now implements detection for stale data feeds, the underlying reconnect logic in `live_data_writer.py` (which was not modified) remains unaddressed.
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | `execution/portfolio_tracker.py` | PDT Sync Asymmetry**
+    *   **Description**: The `update_day_trades_from_alpaca` function only accounts for scenarios where Alpaca reports *more* day trades than the bot. It lacks logic to correctly reconcile when Alpaca reports *fewer* day trades than the bot's internal rolling window, perpetuating internal-external PDT count mismatches.
+    *   **Exact failure condition**: `execution/portfolio_tracker.py`, within `update_day_trades_from_alpaca`, specifically the absence of a code path to decrease the bot's internal `_day_trades` (or appropriately adjust the rolling count) when `alpaca_account.daytrade_count` is less than `self.get_rolling_day_trade_count()`.
+*   **HIGH | `trade_log.json` (Open Positions) | Missing GTC Stop Orders for Adopted Orphans**
+    *   **Description**: The bot's `_adopted_orphan` processing logic fails to place GTC stop-loss orders for adopted positions (e.g., AMD, NVDL, and QQQ if its `rth_day_stop_order_id` is null) upon discovery. This leaves critical overnight positions without a fundamental risk management safeguard.
+    *   **Exact failure condition**: `trade_log.json` showing `status: "open"`, `overnight: true`, `_adopted_orphan: true`, and `gtc_stop_order_id: null` for a symbol.
+*   **MEDIUM | `trade_log.json` (QQQ Open Position) | Quantity Inconsistency**
+    *   **Description**: The `trade_log.json` shows an impossible state for the `QQQ` open position: `"qty": 2, "qty_remaining": 3`. This indicates a data corruption or update flaw in `PortfolioTracker` (likely in `_save_log` or position reconciliation) after quantity adjustments, such as adoption or partial exits.
+    *   **Exact failure condition**: `trade_log.json`, `{"symbol": "QQQ", "direction": "long", "qty": 2, "qty_remaining": 3, ...}`.
+*   **LOW | `events/macro_risk_index.py` | News Count Over-penalization**
+    *   **Description**: The `inject_news_state` function directly forces the MRI score to `STRESSED` (score >= 40) if `news_monitor.py` reports 3 or more macro-risk alerts, irrespective of actual cross-asset price action. This conflicts with the "MARKET-REACTION-FIRST" principle and could lead to overly conservative sizing based purely on news volume.
+    *   **Exact failure condition**: `events/macro_risk_index.py`, line `if alert_count >= 3: self._raw_score = max(self._raw_score, 40)`.
+*   **LOW | `data/alpaca_data.py` | Silent Real-time Data Failure**
+    *   **Description**: `get_latest_trade()` logs "real-time data requires paid plan" (status code 402) at `debug` level. This masks a critical data fidelity issue, allowing the bot to operate with potentially stale or inaccurate real-time trade data without a clear `warning` alert.
+    *   **Exact failure condition**: `data/alpaca_data.py`, `get_latest_trade` function, `elif resp.status_code == 402:` logging at `debug` level.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Fix Bot Startup Failure (P5-M1)**: Immediately investigate and resolve the `ERROR: Another bot instance is already running. Exiting.` issue. This likely involves reviewing the startup script, cron jobs, `os.execv()` calls, and ensuring robust lockfile creation and cleanup mechanisms are in place upon bot start and graceful shutdown.
+2.  **CRITICAL: Implement Symmetrical PDT Synchronization**: Refactor `execution/portfolio_tracker.py`'s `update_day_trades_from_alpaca` to properly reconcile PDT counts in both directions: add "EXTERNAL" trades if Alpaca's count is higher, and *adjust or clear* the local rolling `_day_trades` entries if Alpaca's count is genuinely lower, ensuring full synchronization.
+3.  **HIGH: Mandate GTC Stops for All Overnight Positions**: Enhance the `PortfolioTracker`'s logic for processing `_adopted_orphan` positions. Upon adoption, the bot *must* attempt to place a GTC stop-loss order for any overnight position that does not already have one associated with it. This is a critical risk management gap.
+4.  **MEDIUM: Resolve Trade Log Quantity Inconsistencies**: Debug the `PortfolioTracker`'s `_save_log` function and any internal quantity update logic to ensure that `qty` and `qty_remaining` in `trade_log.json` always represent a logically consistent state (`qty_remaining <= qty`).
+5.  **LOW: Review MRI News-based Over-penalization**: Re-evaluate the direct MRI score override in `events/macro_risk_index.py` based on news article count. Consider either removing the direct score override, raising the threshold for activation significantly, or requiring price confirmation (e.g., a SPY reaction) even for news-triggered MRI elevation, to align with the "Market-Reaction-First" principle.

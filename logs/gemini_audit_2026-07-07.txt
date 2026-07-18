@@ -1,0 +1,79 @@
+Nightly Gemini Audit — 2026-07-07
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['weekly_field_gate.py', 'test_ui_tokens.py', 'generate_dashboard.py', 'execution/state_io.py', 'execution/fifo_pnl.py', 'execution/portfolio_tracker.py', 'data/gex.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 4
+execution.portfolio_tracker | RIVN P&L corruption: long position with stop breach (gap-down implied by prices) logged with "gap-up" and resulted in $0.00 P&L despite entry/exit price difference.
+execution.orphan_manager | RIVN orphaned position adopted: position direction incorrectly identified as 'short' (-17 shares @ $17.32) when the original position was 'long' (17 shares @ $19.73).
+execution.fill_helpers | Multiple symbols (SNOW, HOOD, MS, MSTR, MARA, AVGO) reported "FILL UNVERIFIED" with `entry_price` fallback and subsequent `external_close` resulting in $0.00 P&L, severely corrupting daily P&L.
+execution.risk_manager | Kill Switch triggered due to -73.86% daily loss, but this loss is based on corrupted P&L data from unverified fills and state mismatch, indicating bot is operating on incorrect capital basis.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **WARNING | main | gc.collect() took Xms, collected 64 objects — heap may be growing**: Occurs periodically (e.g., 13:04:08, 13:19:28). While individual occurrences are benign, the recurring nature suggests potential memory pressure. Further monitoring is advised to detect if collection time increases significantly or objects collected grows beyond 64.
+*   **CRITICAL | execution.gtc_manager | [RIVN] STOP BREACHED at RTH open (gap-up): stop $18.39 vs market $17.32 — covering now (market close); no valid stop placeable.** (2026-07-07 13:38:20,332): The log states "gap-up" but the market price ($17.32) is below the stop price ($18.39) for a long position, which would imply a gap-down hitting the stop. This is a logical inconsistency in the log message. More critically, the subsequent P&L recorded is $0.00.
+*   **CRITICAL | execution.fill_helpers | [RIVN] FILL UNVERIFIED: could not recover a verified close fill. Using entry_price $19.73 as fallback.** (2026-07-07 13:38:22,854) and **CRITICAL | execution.fill_reconciler | [RIVN] RC-4 FILL RECONCILIATION EXPIRED: fill_unverified trade outside 5-min window — P&L remains unreliable.** (2026-07-07 14:02:57,331): This indicates a persistent problem with verifying fills for RIVN, leading to unreliable P&L and eventual expiration of reconciliation attempts.
+*   **CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.** (2026-07-07 14:13:41,445): The bot experienced a complete halt during RTH, necessitating a restart. This is a severe operational disruption.
+*   **CRITICAL | execution.orphan_manager | [RIVN] ORPHANED POSITION ADOPTED — Alpaca: -17 shares @ $17.32 (short). Stop=$18.81 target=$14.23**. (2026-07-07 14:14:06,582): This is a critical anomaly. The original RIVN entry (2026-07-06T10:35:58) was a `long` position. Adopting it as a `short` position indicates a fundamental misunderstanding of the actual position or severe state corruption. This directly impacts risk management (stop/target levels are for a short position, not the original long).
+*   **WARNING | main | Shorting: DISABLED — account equity $743.26 < $2,000 minimum for margin short selling.** (2026-07-07 14:14:04,031): This is a direct consequence of the massive daily loss calculated based on the corrupted P&L. While the behavior itself is intended (disabling shorting below a threshold), the underlying cause is problematic.
+*   **CRITICAL | execution.fill_helpers | [SNOW] FILL UNVERIFIED: could not recover a verified close fill. Using entry_price $262.28 as fallback.** (2026-07-07 14:14:13,631) and similar for HOOD, MS, MSTR, MARA, AVGO: This pattern of unverified fills leading to fallback `entry_price` and then `external_close` with `pnl=0.0` is a widespread P&L recording failure for 7 distinct trades.
+*   **WARNING | execution.orphan_manager | [SNOW] Position in tracker but NOT in Alpaca (double-confirmed) — closed externally (external_close). Recording exit at $262.28 (entry was $262.28).** (2026-07-07 14:14:13,899) and similar for HOOD, MS, MSTR, MARA, AVGO: These confirm the bot losing sync with Alpaca regarding position closures, leading to the `pnl=0.0` issue.
+*   **CRITICAL | execution.risk_manager | KILL SWITCH TRIGGERED: Daily loss -73.86% exceeds limit of 7.00%. Halting new entries.** (2026-07-07 14:14:31,130): This is a critical outcome. The kill switch correctly triggered based on the reported P&L, but the underlying P&L is demonstrably unreliable due to the mass of unverified fills.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness & Anomalies (Last 10 trades)**: All 7 `exit` events from 2026-07-07 show `pnl=0.0`, despite having entry prices (e.g., RIVN entry $19.73, SNOW $262.28, HOOD $115.68). This is a critical P&L recording bug. For RIVN, the log indicated a "STOP BREACHED", which should result in a loss, not $0.00. The `external_close` reason for the other 6 positions indicates the bot lost track of actual fills.
+*   **`pnl_pct` computation**: Cannot verify from `trade_events` as `pnl_pct` is not explicitly listed in the exit records. However, given `pnl=0.0`, any `pnl_pct` would also be 0, which is incorrect.
+*   **`partial_pnl` accumulated correctly**: Not applicable for the most recent batch of exits which all show `pnl=0.0`.
+*   **Entry/exit prices plausible**: The entry prices (e.g., RIVN $19.73) seem plausible. The exit prices are reported as identical to entry prices for the `external_close` trades, which is the source of the `pnl=0.0` issue.
+*   **Score→outcome correlation**: Impossible to evaluate from today's exits as all P&L is `0.0` or unreliable, despite high entry scores (e.g., HOOD score=12, SNOW score=12). This makes any performance analysis based on these trades meaningless.
+*   **Stop-hit rate vs. win rate**: The reported daily loss of -73.86% (before restart) combined with the numerous `FILL UNVERIFIED` and `external_close` events means current stop-hit rates and win rates are corrupted and cannot be reliably assessed.
+
+### TRADE INTEGRITY
+*   **P&L Recording Bug**: For 7 trades (RIVN, SNOW, HOOD, MS, MSTR, MARA, AVGO), the P&L is incorrectly recorded as $0.00 upon exit (2026-07-07).
+    *   **Failure Condition**: `execution.portfolio_tracker.py` is called by `write_eod_summary` and `_fifo_reconstruct` is expected to calculate realized P&L based on Alpaca fills. However, for these trades, `_fetch_alpaca_fills_for_date` either returned no matching fills or `_fifo_reconstruct` found "no open long lots" (or similar for short), leading to the bot using a fallback price (likely the entry price) and marking P&L as zero when reporting `external_close`. The critical log messages indicate fills could not be recovered (`FILL UNVERIFIED`).
+    *   **Trace**: The log `[SYMBOL] Position in tracker but NOT in Alpaca (double-confirmed) — closed externally (external_close). Recording exit at $X.XX (entry was $X.XX).` (e.g., 2026-07-07 14:14:13,899 for SNOW) explicitly states the exit price is equal to the entry price, leading to `pnl=0.0`. This path is taken when the bot's internal tracker believes a position is closed, but it cannot verify an Alpaca fill, possibly due to A-4 (Alpaca paper fills API returns empty for same-day closures until overnight settlement). The `_fifo_reconciled_closed` flag handled in `_load_log` (execution/portfolio_tracker.py:202) is intended for such cases, but the P&L calc itself in this "external_close" path seems to be the culprit.
+*   **RIVN Specific P&L Inconsistency**: The RIVN `stop_breach_cover` event (2026-07-07T06:38:24.055903-07:00) also records `pnl=0.0`, which is inconsistent with a stop being breached on a gap-down (or up, as per conflicting log).
+
+### MODIFIED FILE FINDINGS
+*   **`execution/portfolio_tracker.py`**:
+    *   **Bug: Incorrect P&L for `_fifo_reconciled_closed` trades**:
+        *   **Function**: `_load_log` (execution/portfolio_tracker.py:199-210)
+        *   **Code Path**: `if _t.get("_fifo_reconciled_closed"): ... self.closed_trades.append(t)`. This path moves a trade to `closed_trades` when it's detected as externally closed via FIFO but never formally processed for P&L. The intention is to remove it from `open_trades`. However, the P&L for these trades, as seen in the trade events, is consistently `0.0` (e.g., SNOW, HOOD exits on 2026-07-07). This indicates that when a trade is marked `_fifo_reconciled_closed` and moved to `closed_trades`, its `pnl` field is not correctly recomputed/attributed, or it's incorrectly set to 0.0, leading to P&L corruption.
+        *   **Failure Condition**: A position tracked by the bot is closed by Alpaca (e.g., via a GTC stop overnight), but the fill is not successfully retrieved by `_fetch_alpaca_fills_for_date`. The `_fifo_reconciled_closed` flag is set, and the trade is moved to `closed_trades` without a proper P&L calculation, resulting in `pnl=0.0`. This causes a cascade of issues: misreporting daily P&L, triggering the Kill Switch prematurely (or with false values), and distorting all performance metrics.
+*   **`execution/fifo_pnl.py`**:
+    *   **Bug: Missing Fill-ID in Alpaca API calls for reconciliation (potential)**:
+        *   **Function**: `_fetch_alpaca_fills_for_date` (execution/fifo_pnl.py:112)
+        *   **Code Path**: The function queries Alpaca for FILL activities using `after` and `until` parameters. While it handles pagination with `after_id`, it does not explicitly pass a list of *expected order IDs* or fill IDs to Alpaca's API. Alpaca's activity API returns *all* fills within a time range. If there's an issue with Alpaca's API (e.g., delayed fills, fills not appearing in activity for a short window), the `_fifo_reconstruct` logic which relies on these fills will fail to find them, leading to `FILL UNVERIFIED` logs and $0.00 P&L.
+        *   **Failure Condition**: Alpaca's API returns incomplete fill data for a recent period, or a specific order fill is missing from the general `FILL` activity query. `_fifo_reconstruct` (execution/fifo_pnl.py:201) relies on these fills to match against `prior_lots`. If a closing fill is absent from the fetched `fills` list, `_fifo_reconstruct` will log a CRITICAL warning (`closing sell with no open long lots`) and fail to attribute P&L, leading to the `external_close` with `pnl=0.0`.
+*   **`data/gex.py`**:
+    *   **Policy Change (not a bug)**: `_expiry_range` (data/gex.py:126) changed from a 21-day / 3-expiry window to "this week's expiries only".
+        *   **Impact**: This is an intentional change to focus GEX computation on near-term options, as stated in the comments. It will alter the GEX output (`label`, `flip_strike`) and consequently affect `kelly.py` and `run_cycle Layer 8` if these components use the GEX regime for sizing or entry/exit decisions. This is a strategic decision that needs to be tracked for its performance implications.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk**: TRIGGERED (Widespread `FILL UNVERIFIED` and `external_close` indicate a fundamental problem with fill reconciliation, possibly exacerbated by multiple simultaneous orders or API issues, resulting in corrupted P&L.)
+*   **P5-H3 | Orphan GTC 404 path**: TRIGGERED (RIVN orphan adoption and `no existing stop found` indicates the bot's state tracking for overnight positions and their stops is failing, resulting in orphaned positions with potentially incorrect parameters.)
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed**: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | `execution/portfolio_tracker.py`**: Inconsistent RIVN position direction. The bot initially opens RIVN `long`, then reports a `stop_breach_cover`, and later adopts an `ORPHANED POSITION` for RIVN as `short`.
+    *   **Exact failure condition**: A trade (RIVN) transitions from `long` to an `orphaned short` without a clear, correctly attributed closing of the initial `long` position. This indicates severe state corruption within the portfolio tracker or orphan manager, leading to incorrect risk parameters (stop/target) being applied.
+*   **EXECUTION BUG | CRITICAL | `execution/portfolio_tracker.py` & `execution/fifo_pnl.py`**: Systemic P&L corruption for `external_close` trades.
+    *   **Exact failure condition**: Multiple `_fill_unverified` trades that are subsequently marked `external_close` (due to Alpaca-side closure not confirmed by fill retrieval) are recorded with `pnl=0.0`. This dramatically understates losses (or gains), leading to an incorrect `Daily loss` calculation (e.g., -73.86%) and a distorted view of account equity. The problem lies in the handling of P&L attribution when a verified fill cannot be obtained for an externally closed position, falling back to a $0.00 P&L.
+*   **INFRASTRUCTURE | CRITICAL | `generate_dashboard.py`**: Dashboard displays an "error" for Alpaca API key loading even when keys might be present in environment.
+    *   **Exact failure condition**: `generate_dashboard.py` contains `_dotenv_e` logging at startup (line 34). While it attempts a `load_dotenv(override=True)` within `_load_alpaca()` (line 89), the initial `print` statement for `_dotenv_e` might show a "load failed" even if keys are ultimately found in the environment. This creates unnecessary noise and could obscure genuine API key issues.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **IMMEDIATE**: Address the critical P&L corruption issue where `_fill_unverified` and `external_close` events result in `pnl=0.0`. This involves ensuring that when a position is determined to be externally closed, its P&L is *accurately* calculated based on the entry price and the *last known market price* (or the stop price if a stop was hit), even if a verified Alpaca fill record is unavailable. This is crucial for the kill switch to operate on reliable data.
+2.  **HIGH**: Investigate the RIVN position state corruption (long to orphaned short) in `execution.orphan_manager`. This requires a thorough review of how positions are reconciled during restarts and how `_fifo_reconciled_closed` flags are set and processed. Ensure consistent interpretation of position direction and accurate loading of corresponding stop/target levels.
+3.  **HIGH**: Implement robust fill reconciliation logic for `FILL UNVERIFIED` errors. If `_fetch_alpaca_fills_for_date` is failing, consider alternative methods to retrieve fills (e.g., explicitly querying Alpaca for orders by ID to check their status and fill price, rather than just activity feeds).
+4.  **MEDIUM**: Review and refine the `_load_log` and `write_eod_summary` logic in `execution/portfolio_tracker.py` to ensure `_fifo_reconciled_closed` trades always have correct P&L attribution when moved to `closed_trades`.
+5.  **LOW**: Refactor the `.env` loading and error reporting in `generate_dashboard.py` to avoid misleading "dotenv load failed" messages if keys are successfully loaded from environment variables later.

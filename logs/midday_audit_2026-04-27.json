@@ -1,0 +1,39 @@
+{
+  "audit_date": "2026-04-27",
+  "run_ts": "2026-04-27T06:15:02.130057-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 0,
+    "levels": {}
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 0,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

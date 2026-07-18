@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-07-06 01:35 PM PT",
+  "ts_iso": "2026-07-06T13:35:12.831066-07:00",
+  "prompt_chars": 58834,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 58834,
+  "gai_prompt_chars": 58910,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.46,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "1. TRADE-BY-TRADE VERDICT\n- 07-01 ENTRY SNOW [long 12 ELEVATED] → exit at loss → VERDICT: regime_error (mass exit at open)\n- 07-01 ENTRY RIVN [long 10 ELEVATED] → exit at profit → VERDICT: edge_confirmed (but truncated)\n- 07-01 ENTRY HOOD [long 11 ELEVATED] → exit at profit → VERDICT: edge_confirmed (strong winner, truncated)\n- 07-01 ENTRY TSLA [long 12 ELEVATED] → exit at loss → VERDICT: regime_error (mass exit at open)\n- 07-01 ENTRY MARA [long 10 ELEVATED] → exit at profit → VERDICT: edge_confirmed\n- 07-01 ENTRY PANW [long 10 ELEVATED] → exit at loss → VERDICT: regime_error\n- 07-02 ENTRY MSTR [short 10 ELEVATED] → open → VERDICT: unknown\n- 07-02 ENTRY RBLX [short 10 ELEVATED] → stopped out → VERDICT: entry_error\n- 07-06 ENTRY HOOD [long 12 ELEVATED] → open → VERDICT: unknown\n- 07-06 ENTRY MARA [long 10 ELEVATED] → open → VERDICT: unknown\n- 07-06 ENTRY RIVN [long 10 ELEVATED] → open → VERDICT: unknown\n- 07-06 ENTRY AVGO [long 11 ELEVATED] → open → VERDICT: unknown\n- 07-06 ENTRY MS [long 12 ELEVATED] → open → VERDICT: unknown\n- 07-06 ENTRY SNOW [long 12 ELEVATED] → open → VERDICT: unknown\n\n2. PATTERN ANALYSIS\n- **Open-Volatility Mass Exits (Negative)**: The bot is using `score=0` as a hard exit condition. Because the SPY 5-min bar-over-bar gate is applied continuously, it frequently fails at the market open (09:32 ET) due to opening volatility, dropping all scores to 0 and triggering mass liquidations. Evidence: 07-02 06:32 PT mass exit of 8 positions (HOOD, RIVN, MARA, SNOW, TSLA, PANW, GOOGL, NVDA). This truncates momentum on overnight holds.\n- **Sub-Kelly Risk Allocation (Negative)**: Despite a 4% MAX_RISK parameter ($112 on ~$2,800 equity), the bot is sizing based on fixed capital allocation rather than risk distance. Evidence: 07-06 entries show actual risk taken is a fraction of the budget (AVGO risk $31.29, MS risk $11.93, HOOD risk $18.14). This leaves massive alpha on the table by under-leveraging high-conviction setups.\n\n3. PRIOR DIRECTIVES COMPLIANCE\n(No prior directives to evaluate.)\n\n4. WEEKLY DIRECTIVES\n[DIRECTIVE-1] Decouple position sizing from fixed capital allocation and use true risk-based sizing. | Evidence: 07-06 entries (e.g., AVGO risk $31.29, MS risk $11.93) are utilizing only 10-28% of the $112 MAX_RISK budget. | Expected impact: 3-4x increase in alpha capture on winning trades by fully utilizing the risk budget.\n[DIRECTIVE-2] Remove the SPY 5-min bar-over-bar gate from the continuous exit logic (or suppress it during the first 15 mins of the open). | Evidence: 07-02 06:32 PT mass exit of 8 positions due to score=0, caused by the SPY gate failing at the open. | Expected impact: Prevents premature truncation of overnight momentum holds, allowing winners to run.\n[DIRECTIVE-3] Stop exiting positions purely because the entry score drops to 0; rely on structural stops. | Evidence: 07-02 mass exit truncated strong winners like HOOD (entry 104.88, exited 114.92 on noise, missing further upside). | Expected impact: Increases average R-multiple by letting trades hit their ATR trailing stops instead of exiting on noise.\n\n5. FINAL VERDICT\nFAIL — The bot is severely handicapping its edge through sub-Kelly sizing and a fragile continuous exit logic that mass-liquidates overnight holds at the market open.\n\n6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"alpaca_fifo_unattributed error causing Alpaca P&L to report as $0 despite closed trades, falling back to tracker P&L.\",\n    \"recommended_fix\": \"Fix the FIFO matching logic in reconcile_eod to correctly attribute Alpaca fill P&L to closed lots.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"strategy/run_cycle.py\",\n    \"finding\": \"Multiple EXIT events logged for the same position (e.g., score=0 mass exit followed by score=10 exit and EXIT_PNL_CORRECTION), indicating position state is not cleared immediately upon exit order submission.\",\n    \"recommended_fix\": \"Implement a pending_exit state lock on positions to prevent duplicate exit signals while orders are in flight.\",\n    \"rc_class\": \"RC-3\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 45538,
+    "elapsed_s": 88.61,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

@@ -1,0 +1,103 @@
+Nightly Gemini Audit — 2026-06-25
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['config.py', 'execution/risk_manager.py', 'data/gex.py', 'strategy/run_cycle.py', 'strategy/confluence.py', 'Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/config.py', 'Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/data/gex.py', 'Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/strategy/confluence.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **CRITICAL | WATCHDOG Restart**: `2026-06-25 19:39:40,623 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH — bot is hung. Firing alert and restarting.` The bot hung during Regular Trading Hours, necessitating a watchdog restart. This indicates an underlying performance or deadlock issue.
+*   **CRITICAL | STATE DESYNC**: `2026-06-25 18:51:49,864 | CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (0) < RiskManager (2). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.` and `2026-06-25 19:39:53,957 | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=2. Correcting to tracker count.` These two critical logs clearly show a persistent desynchronization between the `RiskManager`'s internal position count and the `PortfolioTracker`. The `RiskManager`'s count was corrected after the watchdog restart, but the underlying cause of the drift is not resolved and indicates inconsistent state management.
+*   **WARNING | Memory Growth**: Repeated `gc.collect() took Xms, collected Y objects — heap may be growing` messages (e.g., `2026-06-25 19:09:41,502`). While not immediately critical, these warnings suggest potential memory leaks or inefficient memory usage, which can contribute to performance degradation and may have led to the bot hanging, triggering the watchdog.
+*   **WARNING | Pre-market Mover Scan Failure**: `2026-06-25 19:39:52,441 | INFO | main | MRI startup refresh complete: level=NORMAL score=18 elapsed=6.3s` followed by `Pre-market mover scan failed or timed out` (implied by context from P5-C2 status). This indicates the pre-market mover scanner failed to complete, meaning the bot might be missing trading opportunities from volatile pre-market stocks.
+
+### PERFORMANCE AUDIT
+*   **Low Average R-Multiple**: The `EOD SNAPSHOT` shows `avg_r_multiple = -0.047`. Given `INTRADAY_TARGET_ATR_MULT = 2.5` (from CONFIG CONSTANTS, implying a 1:2 R:R minimum with `INTRADAY_STOP_ATR_MULT = 1.25`), this negative average R-multiple suggests that, on average, the bot is losing money relative to its risk unit, or is not effectively capturing its intended risk-reward targets. This is a significant performance gap.
+*   **Exit Reasons "external_close"**: All three trade events on 2026-06-24 have `reason: "external_close"`. With negative P&L on these positions, this suggests manual intervention or an external process closed the positions, rather than the bot's internal stop-loss or target-profit logic. This could indicate a failure in the bot's own exit management or that positions are being held beyond their programmed exit conditions.
+
+### TRADE INTEGRITY
+*   **P&L Sign Correctness**: For the listed `TRADE EVENTS`, P&L signs (negative for short positions where exit price > entry price, which is implied by the loss) appear correct.
+*   **Truncated `update_daily_pnl_from_alpaca`**: The source code for `RiskManager.update_daily_pnl_from_alpaca` is truncated, preventing a full audit of its FIFO logic. This is an auditing gap, not a bug *per se*.
+
+### MODIFIED FILE FINDINGS
+
+**1. `config.py`**
+*   **CONFIGURATION VIOLATION | SEVERITY: HIGH | `config.py` | `INTRADAY_STOP_ATR_MULT` and `VOL_TIER_HIGH_STOP_INTRADAY` value mismatch with CONFIG CONSTANTS.**
+    *   **Trace**: The `CONFIG CONSTANTS` at the top of the prompt state `INTRADAY_STOP_ATR_MULT = 1.25`. However, in the `config.py` source provided, the global `INTRADAY_STOP_ATR_MULT` is `1.0`. While the `paper` profile overrides this to `1.20`, the `live` profile would use `1.0`, which is tighter than the `1.25` specified in the `CONFIG CONSTANTS`. Similarly, `CONFIG CONSTANTS` specify `VOL_TIER_HIGH_STOP_INTRADAY = 1.75`, while `config.py` has `VOL_TIER_HIGH_STOP_INTRADAY = 2.0`.
+    *   **Failure Condition**: If `CONFIG CONSTANTS` represents the *intended* or *runtime-verified* values, then the provided `config.py` is out of sync. For `live` profile (the default in `config.py` for `ACTIVE_PROFILE`), this leads to `INTRADAY_STOP_ATR_MULT` being `1.0` instead of `1.25`, resulting in tighter-than-intended stops. The `VOL_TIER_HIGH_STOP_INTRADAY` also uses a `2.0` multiplier instead of `1.75`, applying a wider-than-intended stop.
+
+**2. `execution/risk_manager.py`**
+*   **METHODOLOGY DISAGREEMENT | SEVERITY: MEDIUM | `RiskManager.get_stop_and_target` | VIX stop widening implements linear ramp instead of step functions.**
+    *   **Trace**: The `CONFIG CONSTANTS` define `VIX_STOP_WIDEN_THRESHOLD_1 = 25.0`, `VIX_STOP_WIDEN_THRESHOLD_2 = 30.0`, `VIX_STOP_WIDEN_MULT_1 = 1.5`, `VIX_STOP_WIDEN_MULT_2 = 2.0`. These imply a step-function approach for VIX-based stop widening. The code, however, uses `_vix_scalar = 1.0 + max(0.0, vix - 20.0) * 0.1` and `_vix_scalar = min(_vix_scalar, 2.0)`, which applies a *linear scaling* from VIX 20 to VIX 30.
+    *   **Runtime difference**: For VIX values between 20 and 25 (exclusive), the code applies a multiplier between 1.0x and 1.5x (e.g., VIX=22 -> 1.2x). For VIX values between 25 and 30 (exclusive), it applies a multiplier between 1.5x and 2.0x (e.g., VIX=28 -> 1.8x). The `CONFIG CONSTANTS` imply 1.5x for VIX > 25 (e.g., VIX=28 -> 1.5x, not 1.8x) until VIX > 30.
+    *   **Failure Condition**: The VIX stop widening does not follow the discrete threshold-based multipliers specified in `CONFIG CONSTANTS`, potentially applying different stop distances than intended.
+    *   **Alternative fix**:
+        ```python
+        # In execution/risk_manager.py, function get_stop_and_target
+        # ...
+        elif vix > 0:
+            _vix_scalar = 1.0
+            if vix > config.VIX_STOP_WIDEN_THRESHOLD_2:
+                _vix_scalar = config.VIX_STOP_WIDEN_MULT_2
+            elif vix > config.VIX_STOP_WIDEN_THRESHOLD_1:
+                _vix_scalar = config.VIX_STOP_WIDEN_MULT_1
+            stop_mult   *= _vix_scalar
+            target_mult *= _vix_scalar
+        # ...
+        ```
+
+*   **EXECUTION BUG | SEVERITY: MEDIUM | `RiskManager.calculate_position_size` | Truncation of shares to zero for fractional values.**
+    *   **Trace**: The line `shares = int(dollar_risk / risk_per_share)` explicitly truncates any fractional share calculation. The subsequent check `if shares < 1:` then prevents any position less than 1 whole share from being opened.
+    *   **Failure Condition**: Since Alpaca supports fractional shares, this logic can prevent valid (but small) position sizes from being executed, especially for high-priced stocks or small portfolio allocations, causing missed trading opportunities.
+
+*   **RISK MANAGEMENT GAP | SEVERITY: LOW | `RiskManager.register_close` | Silent P&L default to 0.0.**
+    *   **Trace**: The line `pnl = pnl or 0.0` inside `register_close` allows `None` to be passed as `pnl` and silently defaults it to 0.0.
+    *   **Failure Condition**: If upstream P&L calculation fails and passes `None`, the `daily_pnl` accumulated by the `RiskManager` will be understated, potentially masking actual losses and delaying kill switch activation or misrepresenting daily performance. A warning should be logged if `pnl` is `None`.
+
+**3. `data/gex.py`**
+*   **ALPHA ISSUE | SEVERITY: MEDIUM | `_contract_type` and GEX strike parsing | Brittle parsing of OCC symbols.**
+    *   **Trace**: The `_contract_type` function's logic `for i, ch in enumerate(occ_symbol): if ch in ("C", "P") and i > 0 and occ_symbol[i - 1].isdigit(): return ch` assumes a specific OCC symbol format. Similarly, `_compute_gex` uses `strike = int(sym[-8:]) / 1000.0` for strike parsing. The `logger.debug("GEX: unparseable OCC symbol %r — skipping strike contribution", sym)` message indicates that this parsing logic already fails in some cases.
+    *   **Failure Condition**: Any deviation from the assumed OCC symbol format will lead to incorrect contract type classification or strike price extraction, resulting in incomplete or inaccurate GEX calculations. This directly impacts the quality of the GEX data which is intended to be used for edge multipliers.
+
+**4. `strategy/run_cycle.py`**
+*   **EXECUTION BUG | SEVERITY: HIGH | `_main._sym_52w_high_cache` | ATH proximity gate disabled by `float("inf")` sentinel on `fetch_bars` failure.**
+    *   **Trace**: Within `run_cycle`, in the "Per-symbol 52w high cache" block, if `fetch_bars` fails for a symbol (`except Exception as _ath_sym_err:`), `_main._sym_52w_high_cache[_ath_sym]` is set to `float("inf")`.
+    *   **Failure Condition**: When the ATH proximity gate later checks if `(1 - current_price / sym_52w_high)` is below `ATH_MIN_SCORE_RAISE_PCT`, `current_price / float("inf")` becomes `0`. This makes `(1 - 0)` (which is `1`) always greater than any realistic `ATH_MIN_SCORE_RAISE_PCT`, effectively *disabling* the dynamic `MIN_SCORE` increase for that symbol, even if it is near a 52-week high. This bypasses a critical risk management gate.
+
+**5. `strategy/confluence.py`**
+*   **LOW | `score_short_signal` | Misleading condition name "macd_bullish_cross".**
+    *   **Trace**: In `score_short_signal`, the condition `conditions["macd_bullish_cross"] = macd_score >= 2` is used for adding points to a short signal, despite `macd_score` being derived from `dual_macd_agreement(df, "short")` (which correctly checks for bearish agreement).
+    *   **Failure Condition**: This is a cosmetic error in logging/reporting the condition name. The functionality is likely correct as `macd_score` reflects bearish agreement, but the label `macd_bullish_cross` is misleading for a short signal.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: **SOURCE NOT PROVIDED**.
+*   P5-C2 | run_movers.py ImportError: **TRIGGERED**.
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **UNTOUCHED**.
+*   P5-H2 | Fill price crosstalk: **UNTOUCHED**.
+*   P5-H3 | Orphan GTC 404 path: **TRIGGERED**.
+*   P5-H4 | Rule 2 dead code: **FIXED**.
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED**.
+*   P5-M1 | Cycle watchdog restart loop: **TRIGGERED**.
+*   P5-M2 | MRI score cached stale across sessions: **UNTOUCHED**.
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED**.
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED**.
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **UNTOUCHED**.
+*   P5-L3 | live_data_writer.py no reconnect logic: **SOURCE NOT PROVIDED**.
+
+### NEW BUGS FOUND
+*   CATEGORY: CONFIGURATION | SEVERITY: HIGH | `config.py` | `INTRADAY_STOP_ATR_MULT` and `VOL_TIER_HIGH_STOP_INTRADAY` value mismatch with CONFIG CONSTANTS. See Modified File Findings for details.
+*   CATEGORY: EXECUTION BUG | SEVERITY: MEDIUM | `execution/risk_manager.py` | Truncation of shares to zero for fractional values. See Modified File Findings for details.
+*   CATEGORY: ALPHA ISSUE | SEVERITY: MEDIUM | `data/gex.py` | Brittle parsing of OCC symbols in `_contract_type` and GEX strike calculation. See Modified File Findings for details.
+*   CATEGORY: RISK MANAGEMENT | SEVERITY: HIGH | `strategy/run_cycle.py` | ATH proximity gate disabled by `float("inf")` sentinel on `fetch_bars` failure. See Modified File Findings for details.
+*   CATEGORY: INFRASTRUCTURE | SEVERITY: LOW | `execution/risk_manager.py` | Truncated source code for `update_daily_pnl_from_alpaca` prevents full audit. (This is an audit finding, not a bot bug).
+*   CATEGORY: INFRASTRUCTURE | SEVERITY: LOW | `strategy/confluence.py` | Misleading condition name "macd_bullish_cross" used for short signals. See Modified File Findings for details.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT**: Investigate and resolve the `WATCHDOG` trigger (bot hang) and `STATE DESYNC`/`POSITION COUNT DRIFT` issues. These indicate severe stability and state management problems. Prioritize P5-M1 and P5-H3 investigation.
+2.  **HIGH**: Correct the `config.py` discrepancies for `INTRADAY_STOP_ATR_MULT` and `VOL_TIER_HIGH_STOP_INTRADAY` to align with the intended `CONFIG CONSTANTS` values or update the `CONFIG CONSTANTS` documentation to reflect the actual `config.py` values if they are intentional.
+3.  **HIGH**: Fix the ATH proximity gate in `strategy/run_cycle.py` to handle `fetch_bars` failures gracefully without inadvertently disabling the risk check using `float("inf")`.
+4.  **MEDIUM**: Refine the VIX stop widening logic in `execution/risk_manager.py` to match the intended step-function behavior implied by `CONFIG CONSTANTS` or update the constants if the linear ramp is the desired strategy.
+5.  **MEDIUM**: Address the `gc.collect()` warnings to identify and mitigate potential memory leaks or inefficiencies that contribute to system instability. This may involve profiling the bot's memory usage.

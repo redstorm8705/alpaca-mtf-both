@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-06-29",
+  "run_ts": "2026-06-29T10:30:02.933299-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 33,
+    "levels": {
+      "STRESSED": 33
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 37,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-06-29 13:05:22,284 | WARNING  | main | gc.collect() took 3659.5ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-29 13:21:09,160 | WARNING  | main | gc.collect() took 5012.0ms, collected 64 objects \u2014 heap may be growing",
+      "2026-06-29 14:01:43,738 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-29 14:08:22,997 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-06-29 14:14:48,858 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

@@ -1,0 +1,106 @@
+Nightly Gemini Audit — 2026-06-22
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['autonomous_review.py', 'auto_ai_audit.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **Recurring Timestamp Parsing Error:** Multiple occurrences of `WARNING | execution.portfolio_tracker | [fill_date] Could not parse timestamp '2026-06-22T13:44:11.75157Z': Invalid isoformat string: '2026-06-22T13:44:11.75157+00:00' — using raw slice`. This indicates a consistent failure to parse a specific timestamp format, with an undocumented fallback to a "raw slice" that could lead to data integrity issues.
+*   **Critical Position Count Drift:** A `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=1. Correcting to tracker count.` event occurred. While a correction mechanism is in place, the existence of such a drift is a severe risk management inconsistency.
+*   **TQI Degradation:** Repeated `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 — review exit discipline and stop placement.` alerts indicate persistent underperformance and potential issues with the bot's trade management or stop placement logic.
+*   **Excessive Garbage Collection Pauses:** Multiple `WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing` entries (e.g., 4468.3ms, 2844.1ms, 3954.8ms). These long pauses suggest potential memory leaks or inefficient memory management, which can impact bot responsiveness and overall stability.
+*   **`scan_results.html` Write Failure:** `WARNING | strategy.run_cycle | scan_results.html write failed: 0`. The log reports a write failure, yet the return code is 0, which typically indicates success. This is an inconsistent and confusing log message.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness:** Reviewed 7 recent closed trades. P&L calculations appear correct for all trades where entry/exit prices were explicitly provided or could be deduced (TOST, INTC, SMCI, NFLX).
+*   **`pnl=0.0` Anomalies:** The SMCI trade (`entry_price: 28.91, exit_price: 28.91, pnl: 0.0`) is consistent, indicating a stop-hit at entry price (breakeven).
+*   **Entry/Exit Plausibility:** Entry and exit prices seem plausible for the symbols and events reported. The UBER entry price could not be verified as it was not present in the provided `TRADE EVENTS` list.
+*   **Score-Outcome Correlation:** All 2 trades closed today had a score of 12/12 and resulted in losses, showing no positive correlation for this small sample.
+*   **Stop-Hit Rate vs. Win Rate:** Today's trades resulted in 0 wins and 2 losses, with both exits due to `hard_stop` or `external_close` near breakeven/stop. The overall win rate of 38.0% and the persistent `TQI degradation` warnings (average R of -0.107) indicate a significant underperformance against the `TARGET_ATR_MULT = 2.5` profit target, suggesting exit discipline and stop placement need review.
+
+### TRADE INTEGRITY
+
+*   **P&L Drift:** The EOD snapshot shows `alpaca_pnl: 0.0` and `tracker_pnl: -0.15`, with `pnl_drift: 0.15`. This is a known benign pattern (`A-4 paper fills gap`) for paper accounts where same-day fills are not immediately available from Alpaca.
+*   No issues found with partial P&L accumulation across tranches (NFLX partial exit was calculated correctly).
+
+### MODIFIED FILE FINDINGS
+
+**autonomous_review.py**
+
+*   **Function:** `_call_gemini` and `_call_gemini_rest`
+    *   **Variable/Context:** `_GEMINI_MAX_TOKENS = 16384` for `_GEMINI_MODEL = "gemini-2.5-flash"`
+    *   **Code Path:** The `_GEMINI_MAX_TOKENS` constant is set to 16384. `_call_gemini` uses this value in `types.GenerateContentConfig(max_output_tokens=_GEMINI_MAX_TOKENS)`, and `_call_gemini_rest` uses it in the JSON payload `maxOutputTokens`.
+    *   **Runtime vs. Intended:** The `gemini-2.5-flash` model typically has a maximum output token limit of 2048. Setting a higher value like 16384 will be ignored by the API, and responses exceeding the actual 2048 limit will be silently truncated by the Gemini API, even though the bot intends to allow up to 16384 tokens.
+    *   **Failure Condition:** Gemini API responses exceeding 2048 tokens will be silently truncated, leading to incomplete AI audit results being stored and presented, potentially masking crucial information in the autonomous review process.
+    *   **Severity:** HIGH
+
+*   **Function:** `_process_pending_item`
+    *   **Variable/Context:** `gro_head = gro_text.upper()[:500]`, `gai_head = gai_text.upper()[:500]`
+    *   **Code Path:** The code determines `gro_verdict` and `gai_verdict` by checking for "APPROVE" or "REJECT" within the first 500 characters of the AI responses (`gro_head` and `gai_head`).
+    *   **Runtime vs. Intended:** If an AI model's response contains its verdict later than the first 500 characters (e.g., after an extended explanation), the verdict will be missed, and the system will incorrectly classify the response as "UNCLEAR".
+    *   **Failure Condition:** Critical decisions on patch approval/rejection (routing to `queued_for_review`) are based on an incomplete assessment of the AI's verdict, potentially leading to patches with a "REJECT" verdict being forwarded for manual approval, or critical issues being missed because the verdict was not properly parsed.
+    *   **Severity:** HIGH
+
+*   **Function:** `main`
+    *   **Variable/Context:** `commit_msg` construction, specifically `Co-Authored-By: autonomous_review.py <noreply@anthropic.com>`
+    *   **Code Path:** The hardcoded co-author email domain for autonomous review commits is `anthropic.com`.
+    *   **Runtime vs. Intended:** The script uses Groq and Gemini APIs, not Anthropic's Claude. The attribution in the Git commit history is factually incorrect.
+    *   **Failure Condition:** Git commit history misattributes the AI co-authorship for patches processed by Groq and Gemini to Anthropic.
+    *   **Severity:** LOW
+
+**auto_ai_audit.py**
+
+*   **Variable/Context:** `_GEMINI_MODEL = "gemini-3.1-pro-preview"`
+    *   **Code Path:** The `_GEMINI_MODEL` constant is set to `"gemini-3.1-pro-preview"`.
+    *   **Runtime vs. Intended:** This script (the meta-auditor) uses `gemini-3.1-pro-preview`, while `autonomous_review.py` (which processes pending patches from `CCR`) uses `gemini-2.5-flash`. This creates an inconsistency in the AI models used across different stages of the autonomous pipeline for similar auditing tasks.
+    *   **Failure Condition:** The meta-audit (performed by `auto_ai_audit.py`) is evaluating the overall system using a different, potentially more capable, Gemini model than the one used for the initial patch review (in `autonomous_review.py`). This can lead to a misaligned assessment if the models have different capabilities or response characteristics, creating discrepancies in expected AI behavior throughout the pipeline.
+    *   **Severity:** MEDIUM
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open:** UNTOUCHED
+*   **P5-H2 | Fill price crosstalk:** UNTOUCHED (No clear trigger in logs)
+*   **P5-H3 | Orphan GTC 404 path:** UNTOUCHED (No clear trigger in logs)
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today:** FIXED
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED (No specific log evidence of stale cache)
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED (Cannot confirm from logs alone)
+*   **P5-L1 | _classify_loss_driver() returns empty label:** UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** TRIGGERED
+    *   **Explanation:** The EOD snapshot (`open_trades: 1` for `MSTR`) indicates that positions are still open when the daily P&L summary is generated, leading to an understatement of the actual daily and total P&L, consistent with the P5-L2 description.
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: HIGH | main**
+    *   **Description:** The garbage collector (`gc.collect()`) is consistently taking several seconds (e.g., 4468.3ms, 2844.1ms, 3954.8ms) and the log message explicitly states "heap may be growing".
+    *   **Exact failure condition:** The bot experiences significant pauses (multiple seconds) due to garbage collection, which can lead to missed market data, delayed signal processing, or delayed order submissions/cancellations, impacting execution quality. Continuous heap growth could eventually lead to an OutOfMemory error and bot crash.
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | strategy.run_cycle**
+    *   **Description:** The `strategy.run_cycle` function reported a `scan_results.html write failed: 0`. A return code of 0 typically indicates success, yet the log level is WARNING and the message explicitly states "write failed".
+    *   **Exact failure condition:** `scan_results.html` might not be written or be incomplete, despite a misleading success code in the log, making it difficult to debug scan results. Alternatively, the log message is incorrect for a successful operation.
+
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | execution.portfolio_tracker**
+    *   **Description:** The `execution.portfolio_tracker` consistently logs `Could not parse timestamp '2026-06-22T13:44:11.75157Z': Invalid isoformat string: '2026-06-22T13:44:11.75157+00:00' — using raw slice`. The log message shows two different timestamp strings ('A' and 'B') for the same error event.
+    *   **Exact failure condition:** The log message about timestamp parsing failure is internally inconsistent, hindering diagnosis of the actual problematic string or the source of the parsing error. This also implies a fallback to an undocumented "raw slice" method which might lead to inaccurate time-based data.
+
+*   **CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | execution.orphan_manager**
+    *   **Description:** The bot logged `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=1. Correcting to tracker count.` This indicates a fundamental disagreement between the bot's internal state (`risk.open_positions`) and its `tracker` module regarding the number of open positions.
+    *   **Exact failure condition:** If the correction mechanism fails or is invoked too late, the bot might make trading decisions (e.g., attempting new entries, calculating PDT) based on an incorrect number of open positions, leading to PDT violations, exceeding max position limits, or miscalculating portfolio exposure.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate and Optimize Memory Usage:** Profile memory consumption to identify and address the root cause of the increasing heap size and prolonged garbage collection pauses. This is critical for bot responsiveness and long-term stability.
+2.  **Resolve `POSITION COUNT DRIFT`:** Thoroughly investigate the `CRITICAL` position count drift in `execution.orphan_manager`. This inconsistency is a severe risk management failure and requires immediate attention to ensure correct position tracking and compliance.
+3.  **Correct Gemini Token Limit in `autonomous_review.py`:** Update `_GEMINI_MAX_TOKENS` in `autonomous_review.py` to match the actual `gemini-2.5-flash` limit (e.g., 2048) to prevent silent truncation of AI responses.
+4.  **Improve AI Verdict Parsing in `autonomous_review.py`:** Increase the character slice used for extracting AI verdicts (`gro_head`, `gai_head`) to a significantly larger value (e.g., 2000 characters) to ensure that verdicts embedded deeper within AI responses are not missed.
+5.  **Standardize Timestamp Parsing and Logging:** Refactor timestamp parsing logic in `execution.portfolio_tracker` (and other data loading modules) to gracefully handle various ISO 8601 formats (e.g., `Z` vs. `+00:00`) and ensure consistent, accurate logging of the problematic string when errors occur.

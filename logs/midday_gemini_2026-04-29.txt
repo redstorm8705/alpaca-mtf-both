@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-04-29
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry Price Plausibility:** Entry prices for COIN ($197.36) appear plausible given the symbol. TOST and SMCI entry prices are not provided, preventing full assessment.
+*   **Exit Price Consistency:** The COIN exit price ($186.19) is consistent with the `partial_exit` reason, aligning closely with Target 2 ($185.05).
+*   **P&L Sign Consistency:** For COIN (short trade: entry $197.36, exit $186.19), the calculated profit of $11.17 per share ($197.36 - $186.19) leads to a total P&L of $33.51, implying a position size of 3 shares. The profit sign is correct for a short position.
+*   **Win Rate and Profit Factor:** With only one closed trade, the 100% win rate and stated profit figures are statistically insignificant and cannot be used to assess consistency with bot's edge claims.
+*   **Score→Outcome Correlation:** With only one closed trade (COIN: 12/12 score, win), no meaningful correlation can be drawn.
+*   **Stop-Hit Rate:** A 0% stop-hit rate on one closed trade is not indicative of strategy alignment or misalignment.
+*   **P&L=0.0 with entry≠exit:** No such cases.
+*   **Partial Exit Position Sizing:** Cannot audit. The audit data lacks information on initial position size and remaining position size for the COIN `partial_exit`, preventing verification of correct position reduction.
+
+### ENTRY QUALITY
+*   **Systematic Degradation due to MRI:** Two out of four entries (TOST and SMCI) were taken when the system MRI was explicitly `STRESSED`. The session MRI distribution further confirms the bot operated predominantly in a `STRESSED` state (7 out of 9 samples). Taking new positions under such conditions indicates a systematic failure in risk management and likely reduces edge.
+*   **Score/PDT Pressure:** Scores (11/12, 12/12) were generally high, and PDT pressure was not a factor (0/3). These aspects do not indicate reduced edge.
+
+### EXIT QUALITY
+*   **COIN Partial Exit:** The exit at $186.19 for COIN, positioned between T1 ($191.21) and T2 ($185.05), suggests reasonable execution for a partial profit capture. No indication of holding winners too long or cutting losers too slowly from this limited data.
+
+### MRI ALIGNMENT
+*   **Regime Mismatch:** The bot initiated two new entries (TOST, SMCI) while the MRI was `STRESSED`. This indicates a significant regime mismatch and a critical failure to adjust trading behavior (e.g., reducing or halting entries) in adverse market conditions, directly contradicting responsible risk management. The session-wide `STRESSED` MRI (43/100) further highlights this systemic issue.
+*   **Position Sizing Adjustment:** No data is provided to verify if position sizing was adjusted appropriately for the STRESSED entries. This lack of visibility is a concern.
+
+### LOG ANOMALIES
+*   **Critical Log Absence:** The entire `BOT LOG` section is empty (`(no log data)`). This is a critical anomaly. The audit context explicitly states "periodic crash-safety flushes" every ~5 minutes, which *must* generate log data. The complete absence of any logs for the "last 4h" indicates a severe underlying infrastructure or logging system failure, preventing any meaningful debugging or operational oversight.
+
+### NEW BUGS / CONCERNS
+*   **CRITICAL | Data Reporting Inconsistency | `P&L SUMMARY`:**
+    *   The `P&L SUMMARY` states "Exits: 0" while simultaneously stating "Closed trades: 1" and detailing an exit for COIN (`entry $197.36 → exit $186.19`). For a trade to be closed, an exit must occur. This is a direct contradiction and indicates fundamental data integrity issues in the reporting system.
+*   **HIGH | Misleading Partial Exit Designation | `CLOSED TRADE DETAILS`:**
+    *   If COIN was truly a `partial_exit` as stated, then the trade should technically remain open with a reduced position size. However, it is listed under "Closed trades: 1", implying the entire position was exited. This suggests the label `partial_exit` is either misleading (it was a full exit using partial logic) or the "Closed trades" count is incorrect, leading to confusion about active positions.
+*   **HIGH | Systematic Risk Management Failure | `FLAGGED ENTRIES` / `MRI SESSION DISTRIBUTION`:**
+    *   The bot *systematically* ignored its own MRI signals, taking new trades (TOST, SMCI) under `STRESSED` conditions when prudent risk management would dictate reducing or halting new entries. This isn't an isolated incident but a pattern observed across 50% of recorded new entries.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate and Restore Logging System:** Immediately identify why no log data is present and restore full, robust logging. Without logs, critical debugging and operational monitoring are impossible.
+2.  **CRITICAL: Rectify MRI-Based Risk Management Logic:** Review and enforce logic that prevents or significantly scales down entries when the MRI is `STRESSED` or `CRISIS`. The current behavior indicates a systematic failure to respect internal risk signals.
+3.  **HIGH: Correct Data Reporting Inconsistencies:** Fix the P&L summary and trade details reporting to accurately reflect exits, closed trades, and the true nature of partial vs. full exits. The current data makes auditing and understanding bot behavior unreliable.

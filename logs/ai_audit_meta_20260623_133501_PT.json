@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-23 01:35 PM PT",
+  "ts_iso": "2026-06-23T13:35:05.358717-07:00",
+  "prompt_chars": 44264,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 44264,
+  "gai_prompt_chars": 44340,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0,
+    "error": "GROQ_API_KEY not set in environment"
+  },
+  "gemini": {
+    "text": "1. TRADE-BY-TRADE VERDICT\n- **TOST (Short)**: Entry 06-17 @ $24.92. Breakeven push 06-17 @ $24.29. Exit 06-22 @ $24.95. \n  **VERDICT: edge_confirmed**. Initial directional edge was correct, allowing a breakeven push. Stopped out for a scratch.\n- **SMCI (Short)**: Entry 06-17 @ $28.91. Stop hit 06-22. Logged price $28.91, filled @ $34.24. \n  **VERDICT: gtc_forced / regime_error**. Held over the weekend, suffered a massive gap-up against the short position resulting in severe slippage ($15.99 loss on 3 shares).\n- **NFLX (Short)**: Entry 06-17 @ $77.54. Partial exit 06-18 @ $76.38. Exit 06-18 @ $93.19 (log) / $77.60 (fill). \n  **VERDICT: edge_confirmed**. Captured partial profit, remainder stopped at breakeven. Note: Logged exit price ($93.19) diverges wildly from fill price ($77.60).\n- **MSTR (Short)**: Entry 06-17 @ $120.63. No exit logged. \n  **VERDICT: unknown**. Position remains open.\n\n2. PATTERN ANALYSIS\n- **Negative Expectancy & Over-Sizing (Thorp Violation)**: The bot is actively taking short trades despite the Kelly stats explicitly showing `short_intraday` has a Profit Factor of 0.26 and a 25% win rate (negative Kelly). Taking the SMCI, TOST, NFLX, and MSTR shorts cost the portfolio at least ~$15 in avoidable losses this week. Furthermore, the empirical Kelly for `long_intraday` is ~2.8% (WR 35%, Reward/Risk 2.02), yet the bot uses a hardcoded `KELLY_FRACTION=0.25`. The system is massively over-sizing relative to its actual edge (nearly 9x optimal Kelly).\n- **Intraday Strategy Holding Overnight/Weekends**: Trades labeled as `short_intraday` are being held for multiple days and over the weekend (e.g., TOST and SMCI entered Wed 06-17, exited Mon 06-22). This exposes the bot to massive gap risk, as seen in the SMCI trade which slipped from $28.91 to $34.24, costing $15.99 in pure slippage alpha.\n- **Aggressive Breakeven Pushes Truncating Momentum (Jegadeesh + Titman)**: Both TOST and NFLX had their stops moved to breakeven relatively quickly. TOST was scratched at $24.95, and NFLX's remainder was scratched at $77.60. Moving stops to breakeven too early truncates momentum continuation, turning potential winners into scratches.\n\n3. PRIOR DIRECTIVES COMPLIANCE\n- TRADE-BY-TRADE VERDICT (Week 2026-W25): CONFIRMED_IMPLEMENTED. The prior audit correctly identified the TOST and SMCI dynamics.\n\n4. WEEKLY DIRECTIVES\n⚠️ DIRECTIVES BLOCKED — insufficient sample (N=13 < 20).\n- [INSUFFICIENT_SAMPLE — N=13]: Consider implementing a Kelly Profit Factor floor (e.g., PF > 1.0) to disable directional trading when the edge is negative.\n- [INSUFFICIENT_SAMPLE — N=13]: Consider enforcing end-of-day liquidations for strategies designated as `intraday` to prevent overnight/weekend gap risk.\n- [INSUFFICIENT_SAMPLE — N=13]: Consider dynamically calculating the Kelly fraction based on the trailing WR and R-multiples rather than using a hardcoded 0.25.\n\n5. FINAL VERDICT\nWARN — The bot is successfully managing risk on winners (breakeven pushes, partials), but is taking short trades in a negative-expectancy regime and holding intraday trades overnight, exposing it to severe gap risk and violating core Kelly sizing principles.\n\n6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/risk_manager.py\",\n    \"finding\": \"STOP_HIT and EXIT events log the expected/trigger price (e.g., SMCI logged $28.91, NFLX logged $93.19) instead of the actual Alpaca fill prices ($34.24 and $77.60), masking severe slippage.\",\n    \"recommended_fix\": \"Refactor order resolution to await the Alpaca fill event and log `filled_avg_price` instead of the local state's trigger price.\",\n    \"rc_class\": \"RC-3\"\n  },\n  {\n    \"file\": \"main.py\",\n    \"finding\": \"gc.collect() took 2891.4ms, indicating a potential memory leak or excessive object retention in the main loop.\",\n    \"recommended_fix\": \"Profile memory usage in the main loop, ensure dataframes or large objects are properly dereferenced and garbage collected.\",\n    \"rc_class\": \"RC-4\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 32406,
+    "elapsed_s": 69.31,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

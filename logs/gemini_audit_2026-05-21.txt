@@ -1,0 +1,68 @@
+Nightly Gemini Audit — 2026-05-21
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['main.py', 'weekly_review.py', 'reconcile_eod.py', 'execution/orphan_manager.py', 'execution/entry_logic.py', 'execution/portfolio_tracker.py', 'strategy/run_cycle.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Persistent `ANOMALY-2` Warning**: The log frequently shows `[ANOMALY-2] [AAPL] confirm_gate=X scans but no entry — risk.open_positions=6 vs tracker=6 | MAX_OPEN_POSITIONS=4. If risk>6, CYCLE-SYNC should resolve next cycle.` This indicates a recurring issue where new entries are blocked because the bot detects 6 open positions, exceeding the configured `MAX_POSITIONS=4` (or `BUCKET_B_MAX_POSITIONS_POWER=5` during power hour). The `confirm_gate` counter continuously increases (e.g., from 6 to 9 for AAPL), suggesting that the entry confirmation buffer is not being cleared for these blocked symbols.
+*   **`gc.collect()` Performance Warning**: Multiple occurrences of `WARNING | main | gc.collect() took Xms, collected 99 objects — heap may be growing` with X ranging from 4225.3ms to 4990.7ms. This suggests potential memory management or object lifecycle issues, leading to significant garbage collection pauses that could introduce latency in critical trading decision cycles.
+*   **`ANOMALY-3` TQI Degradation**: The log consistently shows `[ANOMALY-3] TQI degradation: last-5-trade avg=12.4/100 < 30 — review exit discipline and stop placement.` This indicates a recognized performance issue with recent trade quality, suggesting suboptimal exit strategy or stop placement.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All sample `alpaca_per_trade` entries show correct P&L signs (long exit > entry = profit).
+*   **P&L Recording for Partial Exits**: The `AMZN` partial exits in the `trade_events` and `EOD snapshot` show `pnl: 3.44` and `pnl: 3.87` respectively, correctly reflecting the P&L for the exited tranche. This indicates the mechanism for calculating P&L on partial fills is functional.
+*   **SOFI Zero P&L**: The `trade_events` for `SOFI` show both a `partial_exit` and a subsequent `stop_hit` with `pnl: 0.0`. This suggests that for this specific trade, no profit was realized on any portion of the position, or exits occurred exactly at the entry price. While not a bug in calculation, it highlights potentially poor performance for that trade.
+*   **Overall Performance**: `all_time_stats` show a `win_rate: 39.7` (below 50%) but a `profit_factor: 1.17` and `avg_win: 25.2` vs `avg_loss: -14.11`. This suggests the bot is profitable on average wins outweighing losses. However, the `avg_r_multiple: -0.041` indicates that, on average, trades are not hitting their target multiples, which aligns with the `ANOMALY-3` TQI degradation warning and suggests the bot is not consistently capturing its stated edge (2.5x target).
+*   **Stop-hit Rate**: Without a full breakdown of exit types for all 67 trades, it's difficult to calculate an exact stop-hit rate. However, the `ANOMALY-3` warning points to issues with exit discipline and stop placement.
+
+### TRADE INTEGRITY
+*   **Excessive Open Positions**: The bot consistently reports having `risk.open_positions=6` while the `MAX_OPEN_POSITIONS` constant is `4`, and the expanded `BUCKET_B_MAX_POSITIONS_POWER` for power hour is `5`. This is a direct violation of position sizing constraints. The `ANOMALY-2` warnings confirm this is preventing new entries. The `SIGTERM` log and `EOD Snapshot` confirm 6 positions were carried overnight (`TOST, MSTR, INTC, TQQQ, AMZN, PANW`).
+
+### MODIFIED FILE FINDINGS
+*   **`main.py`**
+    *   **Configuration Inconsistency**: The `CONFIG CONSTANTS` section states `OVERNIGHT_ENTRIES_ENABLED = True`, but `main.py` explicitly sets `OVERNIGHT_ENTRIES_ENABLED = False` at line ~300 with a comment `"# Rachel Okonkwo: flip after Phase 1 validates"`.
+        *   **Trace**: The `CONFIG CONSTANTS` define the intended or default configuration. `main.py` then hardcodes a different value for the same variable. This creates a discrepancy between the documented configuration and runtime behavior. While the comment clarifies intent, it's a source of confusion for auditing and maintenance, especially if other modules directly import `config.OVERNIGHT_ENTRIES_ENABLED`.
+        *   **Failure Condition**: Misleading documentation regarding overnight entry capability. This is not a functional bug *if* the intent is truly to disable new overnight entries despite the `CONFIG CONSTANTS` value, and existing intraday trades are permitted to be held overnight. However, it's a clear documentation oversight.
+*   **`execution/entry_logic.py`**
+    *   **Logic Error: Max Positions Violation Handling**: In `execute_entries`, at line ~749, the `BUG-POS-1 fix` correctly synchronizes `risk.open_positions` with `len(tracker.open_trades)`. However, if `len(tracker.open_trades)` is `6` (as seen in logs), then `risk.open_positions` is set to `6`. This *syncs* the number but does not *correct* the underlying over-limit state where `MAX_OPEN_POSITIONS=4` (or `5` in power hour).
+        *   **Trace**: The runtime correctly sets `risk.open_positions` to `6` because `tracker.open_trades` holds 6 positions. Subsequently, `risk.can_open_position()` (called upstream) will evaluate `6 > config.MAX_OPEN_POSITIONS` (which is 4 or 5) as True, blocking all new entries. The `ANOMALY-2` warning clearly indicates this blocking is active. The bug is allowing 6 positions to exist in `tracker.open_trades` when the maximum allowed is 4 (or 5).
+        *   **Failure Condition**: The system allows the accumulation of more open positions than explicitly configured (6 vs. MAX 4 or 5), leading to a violation of risk management rules and an effective halt on new entries until positions are closed.
+*   **`execution/portfolio_tracker.py`**
+    *   **Logic Error: Cumulative P&L Calculation in `record_partial_exit`**: In `record_partial_exit`, around line ~556, the `_trade["pnl"]` field is updated as `_trade["pnl"] = round(_new_pnl + _trade.get("pnl_remaining", 0.0), 2)`.
+        *   **Trace**: `_new_pnl` calculates the profit/loss for the *current tranche being exited*. `_trade["partial_pnl"]` (correctly) accumulates the total realized P&L from all partial exits. `_trade["pnl"]` is typically expected to reflect the *total realized P&L for the trade so far*. By summing `_new_pnl` (current tranche) with `pnl_remaining` (which represents the P&L of *shares still open if exited at a specific price* or is 0), `_trade["pnl"]` does not accurately represent the cumulative realized P&L from all tranches that have been closed. For example, if two partial tranches yield P&L of 50 and 100 respectively, `partial_pnl` will correctly become 150, but `pnl` would show 100 after the second tranche (assuming `pnl_remaining` is 0).
+        *   **Failure Condition**: The `pnl` field in `open_trades` (and potentially in some `trade_events` records) does not accurately reflect the total cumulative realized profit/loss after multiple partial exits, leading to misleading internal state for a live trade.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | **FIXED** (by removing yfinance and using Alpaca Data with flat columns)
+*   P5-C2 | run_movers.py ImportError | **FIXED** (premarket movers now scanned via `data.premarket` directly, bypassing `run_movers.py`)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | **TRIGGERED** and **WORSENED** (Confirmed by `ANOMALY-2` logs showing continuously increasing `confirm_gate` counts)
+*   P5-H2 | Fill price crosstalk | **FIXED** (New FIFO accounting in `reconcile_eod.py` and `portfolio_tracker.py` addresses this)
+*   P5-H3 | Orphan GTC 404 path | **FIXED** (`orphan_manager.py` explicitly clears `gtc_stop_order_id` if order not found)
+*   P5-H4 | Rule 2 dead code | **FIXED** (`main.py` explicitly removed runtime override, aligning `TOD_MARKET_OPEN_BUFFER_MINS` in `config.py`)
+*   P5-H5 | FIXED 2026-04-21 | **FIXED** (as per queue update)
+*   P5-M1 | Cycle watchdog restart loop | **FIXED** (`main.py` implemented `fcntl.FD_CLOEXEC` for lockfile)
+*   P5-M2 | MRI score cached stale across sessions | **FIXED** (Startup logic and `run_cycle` MRI refresh ensure state is current)
+*   P5-M3 | score_comparison JSON unbounded growth | **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | **UNTOUCHED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **FIXED** (`reconcile_eod.py` and `Startup R-GUARD` ensure post-market correction)
+*   P5-L3 | live_data_writer.py no reconnect logic | **UNTOUCHED**
+
+### NEW BUGS FOUND
+*   **CONFIGURATION | LOW | main.py** | **Configuration Inconsistency for Overnight Entries**: The `CONFIG CONSTANTS` documentation states `OVERNIGHT_ENTRIES_ENABLED = True`, but the `main.py` source code (line ~300) hardcodes `OVERNIGHT_ENTRIES_ENABLED = False`. This is a discrepancy between expected configuration and actual runtime behavior, even if justified by a comment.
+    *   **Exact failure condition**: The `main.py` module-level variable `OVERNIGHT_ENTRIES_ENABLED` holds a different value (`False`) than the one explicitly listed in `CONFIG CONSTANTS` (`True`), leading to potential confusion for auditors and developers relying on the `CONFIG CONSTANTS` as the source of truth.
+*   **EXECUTION BUG | CRITICAL | execution/entry_logic.py** | **Max Positions Violation & Entry Blocking**: The bot consistently allows `risk.open_positions` to reach `6` when `MAX_OPEN_POSITIONS` is `4` (or `BUCKET_B_MAX_POSITIONS_POWER=5` during power hour). The `BUG-POS-1` fix in `execute_entries` (line ~749) only synchronizes `risk.open_positions` to the current (over-limit) `tracker` count, rather than enforcing or correcting the position limit.
+    *   **Exact failure condition**: The bot holds 6 open positions, which exceeds both the standard `MAX_POSITIONS` (4) and the power-hour expanded limit (`5`), directly violating risk management policy. This over-limit state then correctly triggers downstream entry gates, leading to all new entries being blocked (as seen in recurring `ANOMALY-2` logs). The root cause is that positions are allowed to accumulate beyond limits, not that the entry gate fails to block new trades.
+*   **EXECUTION BUG | MEDIUM | execution/portfolio_tracker.py** | **Inaccurate Cumulative P&L in `record_partial_exit`**: The `_trade["pnl"]` variable in `record_partial_exit` (line ~556) is updated by summing the current tranche's P&L (`_new_pnl`) with `_trade.get("pnl_remaining", 0.0)`.
+    *   **Exact failure condition**: If a trade has multiple partial exits, the `_trade["pnl"]` field will not accurately reflect the total cumulative realized P&L from all previously closed tranches. Instead, it will only reflect the sum of the *most recent tranche's P&L* and the placeholder `pnl_remaining`, leading to an understatement or misrepresentation of the total realized P&L for a live trade.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate and Resolve Max Positions Violation**: Immediately audit the logic that *allows* `tracker.open_trades` to exceed `MAX_POSITIONS` (4) or `BUCKET_B_MAX_POSITIONS_POWER` (5) even during power hour. This is a critical risk management bypass. Once the root cause is found, implement a hard limit to prevent opening/holding more than the configured maximum positions.
+2.  **Address `ANOMALY-2` Persistent Confirmation Gate**: Fix the `P5-H1` bug. The `confirm_gate` buffers (`gate_state.conviction_streak` and `gate_state.entry_confirm_buffer`) must be reliably cleared when an entry is externally blocked (e.g., by `MAX_POSITIONS` or other non-signal-quality gates) to prevent them from becoming stale and blocking future valid signals.
+3.  **Correct Cumulative P&L Calculation**: Modify `execution/portfolio_tracker.py::record_partial_exit` (line ~556) to ensure `_trade["pnl"]` accurately reflects the *total cumulative realized P&L* from all partial exits (which is the value of `_trade["partial_pnl"]`), rather than summing `_new_pnl` with `pnl_remaining`.
+4.  **Review TQI Degradation and Exit Discipline**: Analyze recent trade history and the `ANOMALY-3` warnings to identify patterns contributing to poor TQI. Focus on stop placement, trailing stop logic, and profit-taking at targets.
+5.  **Optimize `gc.collect()` Performance**: Investigate the cause of long garbage collection pauses. This may involve profiling memory usage, reducing object churn, or ensuring long-lived objects are managed efficiently to minimize performance impact on critical trading cycles.

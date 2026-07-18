@@ -1,0 +1,47 @@
+Midday Gemini Audit — 2026-05-25
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No trades were executed or closed during this session (Entries: 0 | Exits: 0 | Closed trades: 0), so direct performance audit metrics such as win rate, profit factor, entry/exit price plausibility, and P&L sign checks cannot be performed.
+However, the `VOLSHADOW` logs consistently show `bar_age_min` values in the thousands of minutes (e.g., 5087.9 minutes, 5098.0 minutes, etc.). This indicates that the underlying bar data used for confluence scoring is significantly stale (several days old). While the bot correctly identified the market as closed and did not attempt entries, processing such old data for real-time strategy calculations points to a potential data freshness or update mechanism issue that would degrade decision quality if the market were open.
+
+### ENTRY QUALITY
+No entries were made, primarily because the log repeatedly states "Market closed — updating scan prices, no entries." This is the correct behavior given the log timestamps (16:47 PT onward, which is after 13:00 PT / 16:00 ET market close). Additionally, all `VOLSHADOW` entries show `"would_pass": false` and `score_without_vol` values below the `MIN_SCORE = 9` threshold. Therefore, no issues are found regarding the bot correctly abstaining from entries in this specific session.
+
+### EXIT QUALITY
+No issues, as no trades were opened and thus no exits were necessary.
+
+### MRI ALIGNMENT
+No MRI samples were recorded ("Samples: 0") and no trades were made. Therefore, MRI alignment with entries or position sizing cannot be assessed for this session.
+
+### LOG ANOMALIES
+*   **Frequent and Long `gc.collect()` calls**: The log shows repeated `WARNING` messages from `main` indicating `gc.collect()` took an excessively long time (e.g., 3379.5ms, 3236.1ms, 3271.0ms, 2839.8ms). This is accompanied by the message "heap may be growing," suggesting a potential memory leak or inefficient memory management. These long pauses consume significant CPU resources and can indicate systematic degradation in performance.
+*   **Incorrect Time of Day (TOD) and phase reporting**: The `main` and `strategy.run_cycle` logs consistently report `phase=midday` and `TOD: midday` even when the log timestamps clearly indicate the bot is running after market hours (e.g., 16:52 PT = 19:52 ET).
+
+### NEW BUGS / CONCERNS
+
+1.  **INFRASTRUCTURE | HIGH | Excessive Garbage Collection Time & Potential Memory Leak**
+    *   **(1) Variable/Metric involved**: `gc.collect()` execution time.
+    *   **(2) Value vs. Should be**: The observed values for `gc.collect()` are between 2839.8ms and 3379.5ms. This is an excessively long duration for garbage collection for an intraday trading bot, which requires high responsiveness. Ideally, `gc.collect()` should take milliseconds, or under 1 second at most for a significant collection. The accompanying message "heap may be growing" further suggests that objects are being retained inefficiently or there's a memory leak, leading to increasingly burdensome garbage collection cycles. This constitutes a failure as it indicates systematic degradation, consuming CPU cycles that should be available for critical trading operations, and could eventually lead to performance bottlenecks or instability.
+    *   **(3) Condition under which this occurs**: This occurs repeatedly at regular intervals (approximately every 10-11 minutes) in the `main` module, as seen at `2026-05-25 16:52:54,946`, `17:03:56,447`, `17:14:09,653`, and `17:24:52,207`.
+
+2.  **EXECUTION BUG | MEDIUM | Incorrect Market Time of Day (TOD) and Phase Reporting**
+    *   **(1) Variable/Metric involved**: `TOD` and `phase` status reported in `strategy.run_cycle` and `main` logs.
+    *   **(2) Value vs. Should be**: The bot reports `TOD: midday` and `phase=midday`. The current log timestamps (e.g., 16:57:55 PT, which is 19:57:55 ET) are significantly after the 16:00 ET market close. The `TOD` and `phase` should correctly reflect an `after_hours` or `market_closed` state. This constitutes a failure because relying on an incorrect time-of-day status could lead to logical errors in other parts of the bot's operation if those parts use `TOD`/`phase` for decision-making (e.g., specific strategy adjustments, data fetching logic) and are not solely guarded by the explicit "Market closed" check. While entries were prevented, the internal state reporting is inaccurate.
+    *   **(3) Condition under which this occurs**: This occurs consistently during cycles executed after regular market hours, as seen in log entries like `2026-05-25 16:52:54,947`, `17:03:56,447`, `17:14:09,654`, and `17:24:52,208`.
+
+3.  **ALPHA ISSUE | MEDIUM | Stale Bar Data Used for Confluence Scoring**
+    *   **(1) Variable/Metric involved**: `bar_age_min` reported in `confluence | [SYMBOL] VOLSHADOW` logs.
+    *   **(2) Value vs. Should be**: The `bar_age_min` values are consistently over 5000 minutes (e.g., 5087.9, 5098.0). For an intraday trading bot, bar data used for strategy calculations, especially confluence scoring, should be fresh (typically minutes, not days, old). While the market was closed and no trades were placed, the bot is still performing calculations using critically stale data. This constitutes a failure in data freshness for alpha generation. If the bot were to mistakenly enter a trade using such aged data (e.g., due to a timing bug that circumvents the "market closed" check), it would lead to severely degraded entry quality based on outdated market conditions.
+    *   **(3) Condition under which this occurs**: This is observed in all `VOLSHADOW` log entries throughout the audited period, for all symbols, e.g., `2026-05-25 16:47:53,754` for SMCI, and repeated across all cycles.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE**: Investigate and address the root cause of the prolonged `gc.collect()` times and the "heap may be growing" warning. This likely indicates a memory leak or inefficient object management. (High urgency)
+2.  **EXECUTION**: Correct the internal logic responsible for determining and reporting the current `TOD` (Time of Day) and `phase` to accurately reflect `after_hours` or `market_closed` when applicable. (Medium urgency)
+3.  **ALPHA**: Review the data fetching and bar aggregation logic to ensure that stale bar data (`bar_age_min` in thousands of minutes) is not used for real-time strategy calculations, even when the market is closed. Implement checks to only process fresh data or to explicitly skip calculations when data is too old. (Medium urgency)

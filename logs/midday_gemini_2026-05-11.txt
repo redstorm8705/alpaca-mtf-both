@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-05-11
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+The single closed trade (NVDA) shows a successful outcome: entry $200.57 → exit $219.62 (+$19.05). The exit price is significantly above the highest stated target (T3=$212.85), indicating effective profit capture for this specific trade. The entry score of 12/12 is well above `MIN_SCORE = 9`, correlating with a positive trade outcome. The stop-hit rate is 0%, which is excellent, though based on only one trade. No instances of P&L=$0.00 with non-matching entry/exit prices were observed, nor any issues with partial exit size reduction (no data provided to verify this specific point).
+
+### ENTRY QUALITY
+No new entries were taken during the logged period. The bot consistently logged `CRITICAL | strategy.run_cycle | ⛔ BV-5: MRI=STRESSED — no new entries until regime improves.` and `MRI STRESSED (score=41) — size floor 0.70x applied.`. This indicates that the bot is correctly adhering to its risk management rules, which prevent new entries during a STRESSED market regime. This is an intentional and appropriate response, not a failure in entry quality. News alerts were frequent, applying a `base penalty: 100%`, which further supports the decision to avoid new entries.
+
+### EXIT QUALITY
+The single closed trade (NVDA) demonstrates good exit quality, realizing significant profit beyond stated targets. However, the persistent warning `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` in every cycle log entry indicates a systematic issue with exit quality or stop placement across the last five trades. This suggests that while the NVDA trade was successful, other recent exits are underperforming the expected quality threshold. The `[AMZN] OVERNIGHT BREAKEVEN` event indicates active management of overnight positions, attempting to mitigate losses.
+
+### MRI ALIGNMENT
+The bot is correctly identifying the market regime as `STRESSED` with an MRI score of 41 (above 30, below 50). This aligns with the `MRI SESSION DISTRIBUTION` showing all 35 samples as `STRESSED`. Consequently, the bot is appropriately restricting `no new entries` and applying a `size floor 0.70x` and `intraday size mult 0.42x` for overnight exposure. This demonstrates proper MRI alignment and risk adjustment.
+
+### LOG ANOMALIES
+*   `2026-05-11 17:03:49,240 | WARNING | main | gc.collect() took 204.1ms, collected 0 objects — heap may be growing`
+
+### NEW BUGS / CONCERNS
+
+1.  **ALPHA ISSUE | HIGH | Persistent TQI Degradation Warning**
+    *   **description**: The log shows a continuous warning: `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30 — review exit discipline and stop placement.` This indicates that the average TQI (Trade Quality Index) for the last five trades is 26.0 out of 100, which is below the internal threshold of 30. This constitutes a failure because it signals a consistent underperformance in trade execution quality (likely poor entries, mistimed exits, or ineffective stop placement) that is impacting the strategy's overall edge, despite the recent positive NVDA trade.
+    *   **exact condition**: The metric `last-5-trade avg` has a value of 26.0, which is less than the internal hardcoded or configured threshold of 30. This condition is present in every strategy run cycle log entry throughout the provided 4-hour log. Source not provided for TQI calculation logic or threshold configuration.
+
+2.  **INFRASTRUCTURE | MEDIUM | Memory Management Issue (gc.collect())**
+    *   **description**: A warning `gc.collect() took 204.1ms, collected 0 objects — heap may be growing` suggests a potential memory leak or inefficient memory management. The `gc.collect()` function is spending a significant amount of time (204.1ms) attempting to free memory, but failing to reclaim any objects (collected 0 objects). This constitutes a failure as it indicates that memory usage might be steadily increasing, leading to performance degradation, increased latency in bot cycles, and potentially an out-of-memory error or crash over longer runtimes.
+    *   **exact condition**: The Python garbage collector, `gc.collect()`, is explicitly called (or automatically triggered) and logs a completion time of 204.1ms while reporting 0 objects collected. This occurs specifically at `2026-05-11 17:03:49,240`. Source not provided for the code path that triggers `gc.collect()` or manages memory.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA**: **Urgent investigation into TQI degradation.** The persistent `[ANOMALY-3] TQI degradation` warning requires immediate attention. Analyze detailed trade history beyond the summary, specifically focusing on the last 5-10 trades to understand the common factors leading to low TQI scores (e.g., specific market conditions, asset types, entry/exit signal interactions, stop placement effectiveness).
+2.  **INFRA**: **Memory profiling and optimization.** Address the `gc.collect()` warning by implementing memory profiling tools to identify and fix any memory leaks or inefficient object handling within the bot. Focus on areas that process large datasets or have long-lived objects.
+3.  **ALPHA**: **Review of overnight position management.** While `OVERNIGHT_ENTRIES_ENABLED` is `True`, the `Overnight exposure: $1,656 notional → intraday size mult 0.42x (57.6% of $2,875 portfolio)` and `[AMZN] OVERNIGHT BREAKEVEN` indicate significant capital tied up and active management. Verify that the overnight strategy and its risk management (e.g., breakeven triggers, overall exposure limits) are performing optimally and not contributing to the TQI degradation.

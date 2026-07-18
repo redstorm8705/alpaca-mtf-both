@@ -1,0 +1,59 @@
+Nightly Gemini Audit — 2026-05-19
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: []
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **Recurring `VOLSHADOW compute error`**: Many symbols (NVDA, AAPL, TSLA, AMD, PLTR, COIN, SMCI, TOST, SOFI, MSTR, CRWD, CRM, PANW, UBER, AMZN, META, NFLX, SPY, QQQ, INTC, QCOM) consistently report `VOLSHADOW long compute error: Object of type bool is not JSON serializable` and `VOLSHADOW short compute error: Object of type bool is not JSON serializable` in the `confluence` module. This occurs in every `MTF cycle` and indicates a widespread calculation failure for a component of the confluence scoring system.
+*   **Excessive `gc.collect()` duration**: The `main` module logs `gc.collect() took Xms, collected 64 objects — heap may be growing` with `X` ranging from ~4 seconds to over 12 seconds. These long garbage collection pauses can impact real-time performance and responsiveness.
+*   **P5-L2 Triggered**: The `EOD SNAPSHOT` for `2026-05-19` shows `pnl_today: 0.0` despite a closed trade on `2026-05-19` (`COIN` P&L: $-15.84), indicating the end-of-day summary is not correctly reflecting the day's P&L.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness**: The `COIN` exit on `2026-05-19` (`entry=$186.30`, `price=194.22`, `direction=short`, `pnl=-15.84`) correctly reflects a loss, as `entry < exit` for a short position.
+*   **partial_pnl accumulation**: For the `SOFI` partial exit on `2026-05-19` (`price=15.57`, `size=8`, `pnl=0.0`), the P&L is recorded as `0.0`. This is suspicious as a partial exit at a price different from the entry price should accrue some P&L for that tranche, or at least reflect the profit/loss of that specific tranche if the intent is to record P&L on tranches. This suggests a potential recording bug (see New Bugs Found).
+*   **Entry/exit prices plausible**: The prices observed in the trade events appear plausible for the specified symbols.
+*   **Score→outcome correlation**: One recent stop-hit for `COIN` has a `score=5` (likely lowered due to MRI=STRESSED). Without entry scores for `SOFI`, `SMCI`, `PLTR`, `TOST`, `MSTR`, `TSLA` (currently held overnight), a definitive correlation analysis is not possible. However, the consistent `MRI STRESSED` and `⛔ BV-5` critical logs indicate the bot is currently in a risk-off state, preventing new entries.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats` show a `win_rate` of 43.1%, which is less than 50% but not necessarily a "regime mismatch" without more context. The `avg_r_multiple` is `-0.012`, which is concerning, as it implies the strategy is not capturing its theoretical edge (`TARGET_ATR_MULT = 2.5`). This suggests that either targets are rarely hit, or losses are significantly larger than gains, or both.
+*   **Exit reason consistency**: The `COIN` `stop_hit` price (`194.22`) is very close to its `thresh=$193.54`, indicating consistent stop execution.
+
+### TRADE INTEGRITY
+*   The `pnl=0.0` for partial exits for `SOFI` is a recording integrity issue.
+*   The `pnl_today: 0.0` in the EOD snapshot when a trade with P&L was closed today (`COIN`) is a recording integrity issue (P5-L2 confirmed).
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24h, so no audit could be performed for this section.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED (source not provided, no log evidence)
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED (source not provided, no log evidence)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: UNTOUCHED (no log evidence of buffer being stale, PDT counter is 0/3)
+*   P5-H2 | Fill price crosstalk: UNTOUCHED (no log evidence of this issue)
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED (no log evidence of 404 errors in orphan_manager)
+*   P5-H4 | Rule 2 dead code: UNTOUCHED (source not provided, no specific log evidence)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: FIXED (as per description, no new evidence)
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED (no log evidence of restart loop, `gc.collect` is slow but doesn't cause restarts)
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED (MRI is refreshed regularly)
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED (source not provided, no log evidence)
+*   P5-L1 | _classify_loss_driver() returns empty label: UNTOUCHED (no log evidence)
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **TRIGGERED** (EOD snapshot shows `pnl_today: 0.0` despite a closed trade with P&L today).
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED (no log evidence of network drops or process dying)
+
+### NEW BUGS FOUND
+*   **VOLSHADOW Compute Error** | CRITICAL | confluence module | The `VOLSHADOW long/short` calculation consistently fails for multiple symbols, logging `Object of type bool is not JSON serializable`. This indicates a boolean value is being incorrectly serialized as JSON, leading to a `TypeError`.
+    *   **Exact failure condition**: The `VOLSHADOW` component of the confluence score, critical for trade signal generation, fails computation due to an internal `TypeError`. This renders the `VOLSHADOW` input to the 12-point score invalid or forces it to a default, thus corrupting the overall strategy's decision-making process for trade entries and exits. This is a continuous, system-wide issue affecting all monitored symbols.
+*   **Excessive Garbage Collection Pauses** | MEDIUM | main module | The `gc.collect()` function is consistently taking an unacceptably long time to execute (4-12+ seconds).
+    *   **Exact failure condition**: Prolonged garbage collection pauses block the main execution thread for several seconds during each strategy cycle. This introduces significant latency into real-time market data processing, indicator calculations, and order management, which could lead to missed trading opportunities, execution at stale prices, or a general degradation of bot responsiveness and P&L.
+*   **Inaccurate Partial Exit P&L Recording** | MEDIUM | execution.portfolio_tracker | For partial exits, the `pnl` field is recorded as `0.0`, even when the exit price differs from the entry price.
+    *   **Exact failure condition**: The `execution.portfolio_tracker` module incorrectly logs `pnl=0.0` for partial exits (e.g., `SOFI`). This prevents accurate P&L attribution to individual tranches of a trade and leads to an incomplete or misleading P&L history for partially closed positions.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Prioritize and fix `VOLSHADOW` compute error (CRITICAL)**: Immediately investigate and resolve the `TypeError` preventing `VOLSHADOW` calculations. This is likely a type mismatch or an attempt to log/store a boolean directly where a string/number is expected.
+2.  **Address `gc.collect()` performance (MEDIUM)**: Profile memory usage and object lifecycles to reduce the frequency or duration of garbage collection cycles. Optimizing object creation/destruction or using a more memory-efficient data structure could mitigate these pauses.
+3.  **Resolve `P5-L2` triggered (Daily P&L Understated) and Partial Exit P&L (MEDIUM)**: Ensure the `EOD SNAPSHOT`'s `pnl_today` accurately reflects all closed trades for the day. Simultaneously, ensure that P&L for partial exits is correctly calculated and recorded in `trade_events` to provide granular performance tracking.
+4.  **Investigate negative `avg_r_multiple`**: Analyze historical trade data to understand why the average R-multiple is negative, despite a `TARGET_ATR_MULT = 2.5`. This could indicate issues with target attainment, stop placement, or position sizing leading to larger-than-expected losses.
+5.  **Review MRI STRESSED regime behavior**: While intended, the continuous `MRI STRESSED` state blocking new entries is a significant factor. Monitor if this regime is too sensitive or if the bot is unable to operate effectively under current market conditions, impacting overall activity.

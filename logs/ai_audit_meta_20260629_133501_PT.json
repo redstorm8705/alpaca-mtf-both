@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-06-29 01:35 PM PT",
+  "ts_iso": "2026-06-29T13:35:04.850955-07:00",
+  "prompt_chars": 45445,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 45445,
+  "gai_prompt_chars": 45521,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.36,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": null,
+    "model": "gemini-3.1-pro-preview",
+    "tokens": null,
+    "elapsed_s": 80.19,
+    "error": "peer closed connection without sending complete message body (incomplete chunked read)"
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": false,
+    "both_ok": false,
+    "partial": false,
+    "both_failed": true
+  }
+}

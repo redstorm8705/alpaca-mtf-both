@@ -1,0 +1,113 @@
+Nightly Gemini Audit — 2026-05-12
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['reconcile_eod.py', 'config.py', 'portfolio_tracker.py', 'execution/orphan_manager.py', 'execution/trade_engine.py', 'execution/exit_logic.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **RC-4 FILL RECONCILIATION EXPIRED**: Repeated critical warnings (`[QQQ] RC-4 FILL RECONCILIATION EXPIRED`, `[CRM] RC-4 FILL RECONCILIATION EXPIRED`, `[QCOM] RC-4 FILL RECONCILIATION EXPIRED`) occurring at 14:04:31 ET on 2026-05-12. These relate to trades that closed on 2026-05-06 and 2026-05-07, indicating a persistent failure in P&L reconciliation for past trades. The message explicitly states "P&L remains unreliable."
+*   **POSITION COUNT DRIFT**: `CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=4. Correcting to tracker count.` appears at every bot restart (e.g., 04:28, 05:14, 06:00 ET). While the log states "Correcting", this repeated `CRITICAL` suggests `risk.open_positions` is not persisting correctly across restarts, or there's an inefficient re-initialization sequence.
+*   **close_position blocked (40310000 held_for_orders)**: Recurring warnings (`[TQQQ] close_position blocked (40310000 held_for_orders)`) at 15:14:26 ET and (`[CRWD] close_position blocked (40310000 held_for_orders)`) at 18:37:03 ET. This indicates shares are being held by existing open orders, preventing immediate position closure, despite the `BUG-2 fix` in `exit_logic.py` which aims to cancel and resubmit stops on trail ratchet. The bot attempts recovery, but this is a persistent reliability issue.
+*   **ANOMALY-3 TQI degradation**: Frequent warnings (`[ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30`) throughout the day. This indicates underperformance in the strategy's exit discipline or stop placement, particularly under the prevailing `MRI STRESSED` regime.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: For the TQQQ trade, `entry=$75.96`, `exit=$73.36`, `pnl=$-2.60` (long trade, exit < entry = loss), which is correct. The CRWD trade log shows `pnl=$49.59` (long trade, exit > entry = profit), which is also correct.
+*   **P&L Recording for Today**: The `EOD SNAPSHOT` for `2026-05-12` shows `trades_today: 0` and `pnl_today: 0.0`. This is incorrect, as logs indicate TQQQ (`$-2.60`) and CRWD (`$49.59`) exited today, totaling `$46.99`. This is a significant data integrity issue.
+*   **Missing CRWD Trade Event**: The `TRADE EVENTS` list does not include the CRWD exit from today, despite it being logged in the `BOT LOG`. This makes the `TRADE EVENTS` history incomplete and unreliable.
+*   **Score→Outcome Correlation**: With `MRI STRESSED` active for most of the trading day, `BV-5` prevented new entries. Only two overnight positions exited. One was a loss (TQQQ, entry score 12) and one a gain (CRWD, exit event not in JSON, but log shows target exit and score 10). The `TQI degradation` anomaly indicates that recent higher-score trades (based on `last-5-trade avg=25.6/100`) are underperforming, which warrants strategy review.
+*   **Stop-Hit Rate vs. Win Rate**: Only two exits today. TQQQ was an `overnight_atr_buffer_exit` (akin to a managed stop/breakeven), CRWD was a `target`. The overall `all_time_stats` show `win_rate: 39.3%` and `avg_r_multiple: -0.069`, suggesting a higher loss rate and poor risk-adjusted returns overall.
+*   **Exit Reason Consistency**: TQQQ `overnight_atr_buffer_exit` was at $73.36 against a calculated threshold of $74.55 (entry $75.96), which is consistent.
+*   **Profit factor and R:R vs. stated 2.5× target**: `all_time_stats` shows `profit_factor: 1.22` and `avg_r_multiple: -0.069`. The `paper` profile `INTRADAY_TARGET_ATR_MULT` is `2.5`, implying a 1:2 R:R. The negative average R-multiple suggests the bot is not consistently capturing its edge.
+
+### TRADE INTEGRITY
+
+*   **Reconciliation Flagging Error**: The `RC-4 FILL RECONCILIATION EXPIRED` errors for QQQ, CRM, and QCOM trades (closed May 6/7) indicate that `_fill_unverified` flags on these trades are not being cleared after P&L reconciliation. This suggests `reconcile_eod.py` is not properly updating the trade state to mark fills as verified.
+*   **Stale EOD Snapshot P&L**: As noted in the performance audit, `pnl_today` and `trades_today` in the `EOD SNAPSHOT` are incorrect for today's trading activity. This compromises daily P&L reporting.
+*   **Missing CRWD Exit from `TRADE EVENTS`**: The `TRADE EVENTS` JSON array does not reflect the CRWD exit from today, leading to an incomplete trade history.
+
+### MODIFIED FILE FINDINGS
+
+1.  **`reconcile_eod.py`**:
+    *   **Bug**: Reconciliation logic does not clear `_fill_unverified` flag.
+    *   **Function**: `reconcile` (main function)
+    *   **Code Path**: After `trade["_pnl_note"] = (...)` (around line 434), the `trade` dictionary is updated with corrected `exit_price`, `pnl`, etc. However, the `_fill_unverified` flag (which `portfolio_tracker.py` uses to track unverified fills) is *not* explicitly set to `False`.
+    *   **Runtime vs. Intended**: At runtime, `reconcile_eod.py` updates the `eod_YYYY-MM-DD.json` file with correct P&L. However, the `_fill_unverified` status within `portfolio_tracker.py` (which powers the `fill_reconciler` module during the trading day) remains `True` for these trades. The intended behavior is that once `reconcile_eod.py` has confirmed fills from Alpaca, the trade should no longer be considered "unverified".
+    *   **Failure Condition**: `execution.fill_reconciler` will repeatedly log `CRITICAL | RC-4 FILL RECONCILIATION EXPIRED` errors for trades that `reconcile_eod.py` has already successfully reconciled post-market. This leads to false positives in error reporting and indicates a state synchronization bug between the `reconcile_eod` script and the bot's live `PortfolioTracker` instance (which gets loaded from `trade_log.json`).
+
+2.  **`config.py`**:
+    *   No issues found. `paper` profile overrides and `validate_config` logic appear sound.
+
+3.  **`portfolio_tracker.py`**:
+    *   **Bug**: The `_unverified_exits` index is not being correctly cleared by `reconcile_eod.py`, which then causes `get_unverified_exits` to repeatedly list expired reconciliation tasks.
+    *   **Function**: `get_unverified_exits`
+    *   **Code Path**: The function correctly filters out `_fill_unverified` entries that are too old or have `_patch_applied_ts`. However, because `reconcile_eod.py` does not clear `_fill_unverified`, trades reconciled by `reconcile_eod.py` are *not* automatically marked as patched or unverified. This leads to `get_unverified_exits` continually finding these trades on subsequent bot restarts/cycles.
+    *   **Runtime vs. Intended**: At runtime, `get_unverified_exits` returns trades that `reconcile_eod.py` has already processed, leading to the `fill_reconciler` logging `RC-4 CRITICAL` errors for days-old trades. The intended behavior is for reconciled trades to be removed from the unverified queue.
+    *   **Failure Condition**: `portfolio_tracker.py`'s internal `_unverified_exits` index holds stale entries because `reconcile_eod.py` (the post-market reconciliation script) does not clear the `_fill_unverified` flag in the `trade_log.json` records.
+
+4.  **`execution/orphan_manager.py`**:
+    *   `cancel_and_reconcile_gtc_stops`'s `PENDING_CANCEL` logic was refined (`GAI-FIX-2026-05-11`). This logic is working, as indicated by `⚠️ ESCALATED: PENDING_CANCEL persisting 3 cycles`. No new bugs in this file related to today's activity, but it contributes to the `held_for_orders` context.
+
+5.  **`execution/trade_engine.py`**:
+    *   No issues found. The module appropriately delegates exit logic and handles entry gates.
+
+6.  **`execution/exit_logic.py`**:
+    *   `BUG-2 fix` (sync Alpaca exchange stop on trail ratchets) is implemented. While this is a positive fix, the recurring `held_for_orders` issues suggest an underlying broker API reliability issue or a timing problem that this fix cannot fully overcome. No new bugs introduced here.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED** (Comment in `trade_engine.py` indicates removal of MultiIndex guard due to Alpaca Data API).
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED** (Source not provided; no direct evidence of trigger in logs).
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: **FIXED** (Logs show `PDT counter synced from Alpaca` at every restart and `_traded_today_date` logic in `portfolio_tracker.py` ensures daily reset).
+*   **P5-H2 | Fill price crosstalk**: **WORSENED** (The newly identified bug in `reconcile_eod.py` regarding not clearing `_fill_unverified` exacerbates issues related to fill reconciliation and reliability, causing `RC-4` errors for past trades).
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED** (`orphan_manager.py` explicitly handles `order is None` by clearing the stored ID).
+*   **P5-H4 | Rule 2 dead code**: **FIXED** (`config.TOD_MARKET_OPEN_BUFFER_MINS` is correctly used by `orphan_manager.get_tod_phase` and `trade_engine.tod_size_multiplier`).
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED** (As per queue status).
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | `reconcile_eod.py`**
+    *   **Description**: `reconcile_eod.py` fails to clear the `_fill_unverified` flag on `trade` records after successfully reconciling P&L using Alpaca fills. This leaves trades permanently marked as `_fill_unverified` in `trade_log.json`.
+    *   **Exact failure condition**: `reconcile_eod.py` updates `trade["exit_price"]`, `trade["pnl"]`, `trade["pnl_remaining"]`, `trade["_pnl_source"]`, and `trade["_pnl_note"]`, but does not include `trade["_fill_unverified"] = False` in its update logic. Consequently, `portfolio_tracker.py`'s `get_unverified_exits()` continues to report these reconciled trades to the `fill_reconciler`, leading to repeated `CRITICAL | RC-4 FILL RECONCILIATION EXPIRED` errors for days-old trades.
+
+*   **INFRASTRUCTURE | HIGH | (EOD Summary generation mechanism, and `reconcile_eod.py`)**
+    *   **Description**: The `EOD SNAPSHOT` reports `trades_today: 0` and `pnl_today: 0.0` for 2026-05-12, despite two trades (TQQQ, CRWD) exiting with net P&L. This indicates the initial EOD summary was generated with stale data, and `reconcile_eod.py` either failed to run or did not correctly update these aggregate fields in the final EOD snapshot.
+    *   **Exact failure condition**: The `EOD SNAPSHOT` for `2026-05-12` contains `{"trades_today": 0, "pnl_today": 0.0}`, which contradicts `BOT LOG` entries showing `[TQQQ] Exit recorded: $73.36 | P&L: $-2.60` and `[CRWD] Exit recorded: $552.08 | P&L: $49.59`.
+
+*   **EXECUTION BUG | HIGH | `portfolio_tracker.py` (via `_log_trade_event`)**
+    *   **Description**: The `TRADE EVENTS` JSON array is missing the CRWD exit from today. This indicates a failure in recording a critical trade event to the persistent `TRADE EVENTS` log.
+    *   **Exact failure condition**: The `TRADE EVENTS` JSON array (provided in the audit input) does not contain an `exit` event for `CRWD` on `2026-05-12`, despite the `BOT LOG` explicitly showing `2026-05-12 11:37:04,094 | INFO | execution.portfolio_tracker | [CRWD] Exit recorded: $552.08 | P&L: $49.59`.
+
+*   **INFRASTRUCTURE | MEDIUM | `execution/broker.py` (implicitly `close_position`)**
+    *   **Description**: `close_position` operations are repeatedly blocked by Alpaca's `40310000 held_for_orders` error. This suggests an underlying broker API reliability issue or a race condition where `cancel_open_orders_for_symbol` (implicitly called by `close_position`) fails to release shares from existing stop orders, even with `BUG-2 fix` aiming to manage stops.
+    *   **Exact failure condition**: Log entries such as `[TQQQ] close_position blocked (40310000 held_for_orders)` and `[CRWD] close_position blocked (40310000 held_for_orders)` prevent immediate and clean position closures, introducing slippage risk and indicating API-level interaction issues.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Immediate Fix for `reconcile_eod.py`**:
+    *   Modify `reconcile_eod.py` to set `trade["_fill_unverified"] = False` for all `trade` records where `exit_price` or `pnl` are corrected.
+    *   **File**: `reconcile_eod.py`
+    *   **Context**: Within the `reconcile` function, after the lines updating `trade["_pnl_source"]` and `trade["_pnl_note"]` (around line 434-437), add:
+        ```python
+        trade["_fill_unverified"] = False
+        ```
+
+2.  **Investigate and Correct EOD Snapshot / `TRADE EVENTS` Inconsistencies**:
+    *   Thoroughly audit the `write_eod_summary` (or equivalent) logic to ensure it captures all daily exits and P&L correctly *before* saving the EOD snapshot.
+    *   Verify that `reconcile_eod.py` is robustly updating the `pnl_today`, `trades_today`, `alpaca_pnl`, and `tracker_pnl` fields in the EOD snapshot file.
+    *   Audit `_log_trade_event` and `PortfolioTracker.record_exit` to determine why the CRWD exit was not recorded in the `TRADE EVENTS` array.
+
+3.  **Enhance `close_position` Robustness and Error Handling for `held_for_orders`**:
+    *   Investigate if `execution.broker.cancel_open_orders_for_symbol` (used internally by `close_position`) requires more aggressive retry logic or a pre-emptive explicit cancellation strategy before calling Alpaca's `close_position`.
+    *   Consider adding specific Slack alerts or increasing log severity if `close_position` is blocked by `held_for_orders` more than once for the same symbol in a session.
+
+4.  **Review Strategy Performance for TQI Degradation**:
+    *   Conduct an in-depth analysis of trades contributing to the `[ANOMALY-3] TQI degradation` warning. Focus on recent exit reasons, R-multiples, and stop placement. This might involve adjusting `INTRADAY_STOP_ATR_MULT` or `TARGET_ATR_MULT` in `config.py` based on current market regimes.
+
+5.  **Audit `POSITION COUNT DRIFT` Startup Behavior**:
+    *   While corrected, investigate if `risk.open_positions` can be initialized from `PortfolioTracker`'s `open_trades` directly at startup, rather than being reset to 0 and then corrected. This would remove a `CRITICAL` log noise.

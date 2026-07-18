@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-07-08 01:35 PM PT",
+  "ts_iso": "2026-07-08T13:35:15.589977-07:00",
+  "prompt_chars": 283261,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 283261,
+  "gai_prompt_chars": 283337,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.53,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "1. TRADE-BY-TRADE VERDICT\n- 07-02 MSTR (Score 10): entry $100.26 (short) → exited 07-08 at $93.04. VERDICT: edge_confirmed. Strong short momentum captured; profitable cover during market stress.\n- 07-02 RBLX (Score 10): entry $54.47 (short) → stopped 07-06 at $57.45. VERDICT: entry_error. Trend reversed against the short.\n- 07-06 HOOD (Score 12): entry $115.68 (long) → exited 07-08 at $110.10. VERDICT: regime_error. Exited due to MRI=STRESSED panic override.\n- 07-06 MARA (Score 10): entry $13.31 (long) → exited 07-08 at $11.81. VERDICT: regime_error. Exited due to MRI=STRESSED panic override.\n- 07-06 RIVN (Score 10): entry $19.73 (long) → exited 07-07 at $17.32. VERDICT: unknown. Exited at a loss; likely a stop-loss hit but logged ambiguously.\n- 07-06 AVGO (Score 11): entry $376.78 (long) → exited 07-08 at $387.58. VERDICT: edge_confirmed. Winner cut short by MRI=STRESSED override.\n- 07-06 MS (Score 12): entry $221.41 (long) → exited 07-08 at $216.76. VERDICT: regime_error. Exited due to MRI=STRESSED despite maintaining a strong confluence score of 10.\n- 07-06 SNOW (Score 12): entry $262.28 (long) → exited 07-08 at $257.61. VERDICT: regime_error. Exited due to MRI=STRESSED panic override.\n\n2. PATTERN ANALYSIS\n- **Overly Conservative Macro Overrides (Negative)**: The bot uses `mri=STRESSED` as a blunt panic button to liquidate the entire portfolio, regardless of individual asset strength. On 07-08, MS (Score 10) and AVGO (Score 7, in profit) were liquidated solely due to the MRI flag. This truncates momentum continuation (Jegadeesh + Titman) and costs alpha by ignoring the bot's own high-conviction signals.\n- **Sub-Optimal Kelly Sizing (Negative)**: The bot is operating at `KELLY_FRACTION=0.25`. With a confirmed edge and a robust history of 83 closed R-multiples, quarter-Kelly is overly cautious. Ed Thorp's principles suggest moving to Half-Kelly (0.50) to capture significantly more absolute returns on high-conviction (Score 10+) setups.\n- **Phantom Exit Logging & State Desync (Negative)**: The bot logs `EXIT` events with entry prices when no broker fill occurs (e.g., 07-07 07:14 for SNOW, HOOD, MS, MSTR, MARA, AVGO). This indicates a severe state desync, leading to the reported EOD P&L drift (`Alpaca=$-10.90 tracker=$-26.46 drift=$+15.56`).\n\n3. PRIOR DIRECTIVES COMPLIANCE\n- Week 2026-W27 (07-07): CONFIRMED_IMPLEMENTED. The bot ceased taking early partial exits on Score 10+ setups in the current week's trading, allowing winners to run until the macro override hit.\n\n4. WEEKLY DIRECTIVES\n- [DIRECTIVE-1] Action: Remove `mri=STRESSED` blanket exit override for positions with Score >= 10. | Evidence: 07-08/MS/exited at $216.76 (loss) despite having a strong confluence score of 10. | Expected impact: Allows idiosyncratic momentum to persist during broader market stress, capturing the right tail of strong assets and preventing unnecessary realized losses.\n- [DIRECTIVE-2] Action: Increase `KELLY_FRACTION` from 0.25 to 0.50. | Evidence: The bot has 83 R-multiples and a confirmed edge (e.g., AVGO, MSTR wins). | Expected impact: Doubles position sizing, directly increasing absolute P&L for high-conviction setups without risking ruin.\n- [DIRECTIVE-3] Action: Fix phantom EXIT logging and state desync. | Evidence: 07-07/SNOW/phantom exit logged at entry price $262.28 with no broker fill, followed by actual exit on 07-08. | Expected impact: Prevents state desync, eliminates P&L drift, and ensures accurate tracking of open lots.\n\n5. FINAL VERDICT\nWARN — The core confluence edge is genuine and profitable, but absolute returns are being heavily suppressed by quarter-Kelly sizing and a blunt, panic-driven MRI override that truncates momentum.\n\n6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution/portfolio_tracker.py\",\n    \"finding\": \"Bot logs phantom EXIT events using entry prices instead of actual fill prices (e.g., on 07-07 at 07:14), causing P&L drift and state desync.\",\n    \"recommended_fix\": \"Refactor exit logging to only trigger upon receiving a confirmed fill event from the broker webhook/API, and use the actual execution price.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"scan_to_html.py\",\n    \"finding\": \"_fetch_options_data crashes with 'cannot convert float NaN to integer' when options data is missing or malformed.\",\n    \"recommended_fix\": \"Add a NaN check (e.g., `pd.isna()`) or fillna(0) before casting options volume/open interest to integer.\",\n    \"rc_class\": \"RC-3\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 191096,
+    "elapsed_s": 122.97,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

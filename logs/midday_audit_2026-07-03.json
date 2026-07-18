@@ -1,0 +1,43 @@
+{
+  "audit_date": "2026-07-03",
+  "run_ts": "2026-07-03T10:30:03.047094-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 0,
+    "levels": {}
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 3,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-03 14:30:40,248 | WARNING  | main | gc.collect() took 203.8ms, collected 31 objects \u2014 heap may be growing",
+      "2026-07-03 17:00:22,534 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions: MSTR, RBLX.",
+      "2026-07-03 17:00:25,560 | WARNING  | alerts | alert_crash: sentinel stat/remove failed \u2014 [Errno 1] Operation not permitted: '/tmp/mtf_planned_restart'"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

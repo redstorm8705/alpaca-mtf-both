@@ -1,0 +1,103 @@
+Nightly Gemini Audit — 2026-05-28
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['audit_signals.py', 'log_fill.py', 'oci_flex_retry.py', 'options_scanner.py', 'main.py', 'run_macro_regime.py', 'compare_logs.py', 'weekly_review.py', 'monthly_review.py', 'reconcile_eod.py', 'weekly_perf_audit.py', 'generate_wtp.py', 'preflight_simulation.py', 'run_market_top.py', 'alerts.py', 'trade_logger.py', 'midday_audit.py', 'run_ftd.py', 'scan_to_html_check.py', 'live_data_writer.py', 'run_movers.py', 'scan_to_html.py', 'config.py', 'auto_ai_audit.py', 'audit_final.py', 'generate_dashboard.py', 'nightly_audit.py', 'backtest_12pt.py', 'scripts/generate_migration_pdf.py', 'scripts/preflight_sim.py', 'scripts/cron_tz_wrapper.py', 'monitoring/__init__.py', 'monitoring/watchdog.py', 'execution/kelly.py', 'execution/lifecycle.py', 'execution/orphan_manager.py', 'execution/risk_manager.py', 'execution/broker.py', 'execution/fill_reconciler.py', 'execution/__init__.py', 'execution/entry_logic.py', 'execution/param_engine.py', 'execution/trade_engine.py', 'execution/exit_logic.py', 'execution/portfolio_tracker.py', 'execution/fill_helpers.py', 'execution/gtc_manager.py', 'indicators/vwap.py', 'indicators/__init__.py', 'indicators/momentum.py', 'indicators/rsi.py', 'indicators/macd.py', 'indicators/moving_averages.py', 'data/fetcher.py', 'data/bar_cache.py', 'data/premarket.py', 'data/__init__.py', 'data/market_breadth.py', 'data/alpaca_data.py', 'data/fmp_client.py', 'data/gex.py', 'data/sectors.py', 'strategy/run_cycle.py', 'strategy/confluence.py', 'strategy/scoring.py', 'strategy/__init__.py', 'strategy/trend_filter.py', 'strategy/volatility_regime.py', 'strategy/signal_generator.py', 'strategy/movers/strategy.py', 'strategy/movers/__init__.py', 'strategy/movers/scanner.py', 'state/persistence.py', 'state/__init__.py', 'events/calendar.py', 'events/handlers.py', 'events/news_monitor.py', 'events/__init__.py', 'events/macro_risk_index.py', 'events/earnings_fetcher.py', 'reporting/metrics.py', 'reporting/__init__.py']
+================================================================================
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**:
+    *   **Function/Variable**: `execution.portfolio_tracker`, `drift`
+    *   **Code Path**: Multiple `WARNING` messages, such as `2026-05-28 19:48:55,868 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-0.09 tracker=$62.23 drift=$-62.32`, indicate a recurring discrepancy between Alpaca's reported P&L and the bot's internal tracker P&L.
+    *   **Failure Condition**: The bot's internal `tracker_pnl` (`$62.23`) is significantly out of sync with the broker's `Alpaca_pnl` (`$-0.09`), resulting in a `$-62.32` drift. While the `reconcile_eod.py` script is designed to correct this post-market, these warnings occur during active trading hours from `portfolio_tracker.py`, indicating a live, unaddressed discrepancy in the bot's internal P&L accounting throughout the session.
+*   **Heap Growth**:
+    *   **Function/Variable**: `main`, `gc.collect()`
+    *   **Code Path**: Recurring `WARNING | main | gc.collect() took 3513.7ms, collected 99 objects — heap may be growing` messages.
+    *   **Failure Condition**: The garbage collector is taking over 3 seconds to run, which suggests the bot's memory footprint may be growing unbounded, leading to performance degradation, potential memory leaks, or eventual Out-Of-Memory (OOM) errors.
+
+### PERFORMANCE AUDIT
+*   **MSTR Trade P&L Discrepancy**:
+    *   **Trade Data**:
+        *   `EOD SNAPSHOT`: `MSTR` short trade, `entry_price: 162.95`, `qty: 3`, `partial_pnl: 24.46` (labeled as total pnl for tranche 2), `profit_tranche_level: 2`, `exit_price: 150.36`, `pnl: 62.23`.
+        *   `TRADE EVENTS`: `partial_exit` on `MSTR` (`tranche: 2`, `price: 144.84`, `pnl: 18.11`). `stop_hit` on `MSTR` (`price: 162.95`, `pnl: 24.46`).
+    *   **Trace**:
+        1.  Initial position: Short 3 shares of `MSTR` at `$162.95`.
+        2.  First partial exit (tranche 2, assuming 1 share based on `partial_pnl` of `$18.11`): Exit 1 share at `$144.84`. Profit = `(162.95 - 144.84) * 1 = $18.11`. Remaining shares: 2.
+        3.  The `EOD SNAPSHOT` `partial_pnl: 24.46` does not match the `TRADE EVENTS` `partial_exit` `pnl: 18.11`. This is a direct contradiction in the recorded P&L for the partial exit.
+        4.  Final exit: The `TRADE EVENTS` show a `stop_hit` at `$162.95` with `pnl: 24.46`. If this `pnl` is for the remaining 2 shares, it implies a price of `$150.725` (`(162.95 - X) * 2 = 24.46`). This contradicts the reported `stop_hit` price of `$162.95`.
+        5.  The `EOD SNAPSHOT` lists a final `exit_price: 150.36` (presumably after reconciliation) for the remaining shares. The profit for the remaining 2 shares would be `(162.95 - 150.36) * 2 = $25.18`.
+        6.  Total expected P&L: `$18.11` (tranche 2) + `$25.18` (remaining 2 shares) = `$43.29`.
+        7.  Total reported `pnl` in `EOD SNAPSHOT`: `$62.23`.
+    *   **Failure Condition**: The calculated total P&L (`$43.29`) from the sequence of trade events (partial exit, then final exit price from EOD) does not match the `pnl` (`$62.23`) reported in the `EOD SNAPSHOT`, nor does the `partial_pnl` field accurately reflect the individual tranche profit. This indicates a significant bug in how P&L is accumulated and reconciled for multi-tranche trades, particularly in `reconcile_eod.py` or `PortfolioTracker`.
+
+*   **Negative Average R-Multiple**:
+    *   **Metric**: `all_time_stats.avg_r_multiple` is `$-0.02`.
+    *   **Trace**: The `avg_r_multiple` is a critical measure of risk-adjusted performance. A negative value indicates that, on average, for every dollar risked, the strategy is losing money. This is concerning, even with a positive `profit_factor` (`1.28`), as it suggests the risk management or position sizing (`execution.kelly.py`, `execution.risk_manager.py`) is leading to a pattern of many small losses (or wins with very little risk) and fewer large wins (or wins with higher risk) over time, eroding alpha per unit of risk.
+    *   **Failure Condition**: The strategy, despite a positive `profit_factor`, has an `avg_r_multiple` of -0.02, signaling fundamental issues in risk management and return generation on a per-trade-risk basis.
+
+### TRADE INTEGRITY
+*   **P&L Drift**: As detailed in "Log Anomalies", the core P&L drift between Alpaca and the tracker is an integrity issue. The bot's internal view of its performance is inaccurate.
+*   **MSTR P&L Discrepancy**: As detailed in "Performance Audit", the inconsistency in the recorded P&L for the `MSTR` trade signifies a deep integrity flaw in trade accounting.
+
+### MODIFIED FILE FINDINGS
+*   **`main.py`**
+    *   **Description**: Misleading log message for `MAX_DAILY_LOSS_PCT`.
+    *   **Code Path**: In `main.py`, the `BoD-3: Paper kill switch guard` block:
+        ```python
+        if args.profile == "paper" and getattr(config, "MAX_DAILY_LOSS_PCT", 1.0) > 0.15:
+            config.MAX_DAILY_LOSS_PCT = 0.15
+            _old_pct = config.PROFILES.get("paper", {}).get("MAX_DAILY_LOSS_PCT", 0.30) * 100
+            logger.info(f"BoD-3: Paper kill switch capped at 15% (was {_old_pct:.0f}% in PROFILES dict)")
+        ```
+        The provided `config.py` explicitly sets `MAX_DAILY_LOSS_PCT = 0.07` in the `paper` profile. Thus, `getattr(config, "MAX_DAILY_LOSS_PCT", 1.0)` would return `0.07`. The condition `0.07 > 0.15` is `False`, so the `if` block would not execute. The log message `(was 0.30% in PROFILES dict)` is misleading because the *current* `config.py`'s `paper` profile value is `0.07`, not `0.30`. This could cause confusion regarding the actual kill switch percentage in effect.
+    *   **Failure Condition**: The log output does not accurately reflect the `MAX_DAILY_LOSS_PCT` value as defined in the provided `config.py`, causing confusion and potential misinterpretation of the bot's risk settings.
+*   **`execution/portfolio_tracker.py`**
+    *   **Description**: Potential issue with P&L calculation in `_fifo_reconstruct` or `update_daily_pnl_from_alpaca` leading to persistent drift.
+    *   **Code Path**: The `_fifo_reconstruct` function is responsible for calculating `today_realized_pnl` from Alpaca fills. The `update_daily_pnl_from_alpaca` then sets the `RiskManager`'s `daily_pnl` based on this. The persistent `EOD P&L DRIFT` (as seen in the logs and EOD snapshot) strongly suggests that the logic within these functions is not accurately capturing all P&L movements or is misinterpreting fill data, resulting in a systemic discrepancy between the bot's tracker and Alpaca.
+    *   **Failure Condition**: `portfolio_tracker.py`'s `daily_pnl` becomes inconsistent with Alpaca's P&L, misrepresenting the bot's real-time performance. This affects all subsequent `RiskManager` and `KellySizer` calculations.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: FIXED
+*   **P5-C2 | run_movers.py ImportError**: FIXED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: UNRESOLVED
+*   **P5-H2 | Fill price crosstalk**: FIXED
+*   **P5-H3 | Orphan GTC 404 path**: FIXED
+*   **P5-H4 | Rule 2 dead code**: FIXED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED
+*   **P5-M2 | MRI score cached stale across sessions**: FIXED
+*   **P5-M3 | score_comparison JSON unbounded growth**: FIXED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: FIXED
+*   **P5-L3 | live_data_writer.py no reconnect logic**: FIXED
+
+### NEW BUGS FOUND
+*   **CATEGORY**: EXECUTION BUG | ALPHA ISSUE
+    *   **SEVERITY**: CRITICAL
+    *   **File**: `reconcile_eod.py`, `execution/portfolio_tracker.py`, `execution/exit_logic.py`
+    *   **Description**: Inaccurate P&L accumulation and reconciliation for multi-tranche trades.
+    *   **Exact Failure Condition**: For the `MSTR` trade, the `EOD SNAPSHOT` `pnl` (`$62.23`) does not align with the sum of individual trade event P&Ls (`$43.29`) and the `partial_pnl` field is inconsistent. This indicates that `_compute_trade_pnl` (in `reconcile_eod.py`) or the update logic in `portfolio_tracker.py` is miscalculating the combined profit from multiple tranches or misinterpreting Alpaca fill data, leading to a corrupted final P&L figure for a closed trade.
+*   **CATEGORY**: ALPHA ISSUE
+    *   **SEVERITY**: HIGH
+    *   **File**: `execution/kelly.py`, `reporting/metrics.py`
+    *   **Description**: Persistent negative `avg_r_multiple` in `all_time_stats`.
+    *   **Exact Failure Condition**: The `all_time_stats.avg_r_multiple` is `$-0.02`, implying that the strategy is, on average, losing money for every unit of risk taken. This is a critical metric for strategy validation. It suggests that while the `profit_factor` is positive, the overall risk-reward profile is unfavorable due to too many small losses or insufficient risk taken on winning trades, eroding potential alpha.
+*   **CATEGORY**: INFRASTRUCTURE
+    *   **SEVERITY**: MEDIUM
+    *   **File**: `main.py`
+    *   **Description**: Incomplete refactoring of global state variables.
+    *   **Exact Failure Condition**: Module-level global variables like `_spy_risk_active`, `_spy_risk_direction`, `_spy_risk_magnitude`, `_spy_risk_scans_left`, `_spy_event_type` (`main.py`) and `_SHORTING_ENABLED` (`execution/lifecycle.py`) are still present and accessed globally, despite documentation (`main.py` docstring states "Phase 2: extracts to strategy/scoring.py") indicating a move towards encapsulated state management. This increases code coupling, reduces modularity, and introduces potential for unintended side effects or race conditions in a multithreaded environment.
+
+### FIX VALIDATION
+*   **FIX VALIDATION**: PASS (for fixes validated by `preflight_simulation.py`)
+    *   Fix 1 (R-multiple with trailed stop and partial exit)
+    *   Fix 2 (Bulk close poll_secs and redundant import time)
+    *   Fix 3 (AH PDT lockout guard)
+    *   Fix 4 (GTC instant-fill check)
+
+### RECOMMENDED ACTIONS
+1.  **Prioritize P&L Reconciliation Bug Fix**: Immediately investigate the `MSTR` trade's P&L discrepancy. Trace the execution path through `execution/exit_logic.py` (partial exits, trailing stop), `execution/portfolio_tracker.py` (recording), and `reconcile_eod.py` (`_compute_trade_pnl`, `_fifo_reconstruct`) to identify the exact point of error.
+2.  **Address P5-H1 (PDT=3/3 Confirmation Buffer)**: Prioritize the resolution of the `PDT=3/3 confirm buffer stale at RTH open` bug, which leads to `PDT-forced overnight exit degradation` as confirmed by `preflight_simulation.py`.
+3.  **Review Strategy Risk/Reward Profile**: Analyze the root causes of the `$-0.02` `avg_r_multiple`. This includes re-evaluating stop-loss and take-profit multiples (e.g., `INTRADAY_STOP_ATR_MULT`, `INTRADAY_TARGET_ATR_MULT` in `config.py`), Kelly sizing (in `execution/kelly.py`), and how risk is defined and managed per trade.
+4.  **Investigate Memory Management**: Conduct profiling to identify the source(s) of the recurring `gc.collect()` warnings and heap growth. Optimize code or object lifecycle to reduce memory consumption.
+5.  **Complete Global State Refactoring**: Continue the ongoing refactoring efforts to move global variables into encapsulated state objects or pass them explicitly as parameters, adhering to the documented Phase 2 architectural goals.

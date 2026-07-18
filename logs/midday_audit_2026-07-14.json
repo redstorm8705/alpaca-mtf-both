@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-07-14",
+  "run_ts": "2026-07-14T10:30:02.642306-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 20,
+    "levels": {
+      "ELEVATED": 20
+    },
+    "last_score": 23,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 47,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-14 15:49:38,294 | WARNING  | main | gc.collect() took 259.5ms, collected 66 objects \u2014 heap may be growing",
+      "2026-07-14 15:54:47,147 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) \u2014 T4 yfinance ^VIX fallback=16.4. _vix_confirmed=Fa",
+      "2026-07-14 15:54:47,952 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=162.1360. No prior close available \u2014 JPY scoring 0",
+      "2026-07-14 15:55:03,491 | WARNING  | execution.broker | [NET] DAY stop blocked (40310000 / insufficient buying_power) \u2014 cancelling blocking orders and",
+      "2026-07-14 15:55:13,176 | WARNING  | strategy.run_cycle | [ANOMALY-2] [RIVN] confirm_gate=4 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | "
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

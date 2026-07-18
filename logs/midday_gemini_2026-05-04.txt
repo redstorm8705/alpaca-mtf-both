@@ -1,0 +1,49 @@
+Midday Gemini Audit — 2026-05-04
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit Plausibility & P&L Signs:**
+    *   **AMD:** Entry $349.04 → Exit $349.04 (+$0.00). The trade is recorded as a `stop_hit` with a stop price of $331.94. For a long position, if the stop at $331.94 was hit, the exit price should be near that value, not the entry price, and the P&L should be negative. A +$0.00 P&L on a stop_hit implies a fundamental miscalculation or reporting error.
+    *   **SPY:** Entry $715.19 → Exit $715.15 ($-0.04). Plausible for a small loss.
+    *   **AAPL:** Entry $284.91 → Exit $278.14 ($-33.85). The exit price matches the declared stop ($278.14). P&L sign is correct.
+*   **Win Rate and Profit Factor:** Win rate is 0% (0 wins / 3 closed trades). Total P&L is negative ($-33.89). This is catastrophic for a trading day and suggests no edge is being captured. Profit factor is undefined/zero.
+*   **Score→Outcome Correlation:** All closed trades (AMD, SPY, AAPL) and all flagged entries were scored 12/12, yet resulted in losses or suspicious break-evens. This indicates a severe lack of correlation between the 'score' and actual trade outcome, suggesting the scoring model is either broken or overly optimistic, failing to filter poor setups.
+*   **Stop-hit rate:** A 40% stop-hit rate (2 out of 3 closed trades) combined with a 0% win rate points to a strategy thesis that is either fundamentally flawed or entirely misaligned with current market conditions, especially given the consistent MRI=STRESSED conditions.
+
+### ENTRY QUALITY
+*   **Persistent MRI=STRESSED entries:** All 5 flagged entries (CRWD, XOM, SPY, AAPL, AMD) were taken at MRI=STRESSED. The bot is repeatedly initiating trades in adverse market conditions, despite explicitly logging "flags: MRI=STRESSED at entry".
+*   **Ineffective Sizing Adjustments:** Although the bot logs "MRI STRESSED... size floor 0.70x applied" and "intraday size mult 0.55x", these adjustments are evidently insufficient to prevent significant losses and a 0% win rate during these periods. The bot is *still trading*, and *losing*, when conditions are stressed.
+*   **Weekly Bias Warnings:** Frequent "Weekly bias: insufficient data (5 bars), filter skipped" for numerous symbols (NVDA, AAPL, TSLA, AMD, etc.) could indicate a systemic lack of robust weekly directional filtering for a significant portion of the scan universe. This may lead to entries without a critical confluence factor, exacerbating issues in stressed environments.
+
+### EXIT QUALITY
+*   **AMD Stop-Hit Discrepancy:** The recorded exit of AMD at the entry price (+$0.00) despite a `stop_hit` event is a critical error. If the stop at $331.94 was indeed hit, the bot failed to execute the exit correctly or record the loss, indicating a severe flaw in stop-loss enforcement or trade accounting.
+*   **Slow Cutting of Losers (AAPL):** The AAPL trade resulted in a $-33.85 loss, representing a significant portion of the daily P&L. While the stop was hit, the overall performance suggests that either entries are too risky, or the stop placement is allowing for excessive losses relative to the account size or potential gains (zero wins).
+
+### MRI ALIGNMENT
+*   **Consistent MRI=STRESSED Trading:** The bot is heavily biased towards operating in STRESSED MRI conditions (8 out of 14 samples were STRESSED, with a close level of STRESSED). Despite acknowledging these conditions and applying sizing multipliers, the strategy demonstrably fails to perform, leading to a 0% win rate and negative P&L. This is a severe regime mismatch. The current risk management (sizing) is not effectively mitigating the systemic risk of trading in STRESSED conditions.
+
+### LOG ANOMALIES
+*   `2026-05-04 17:00:16,033 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-43.57 tracker=$-33.89 drift=$-9.68` (and repeated later)
+    *   **Severity: CRITICAL.** A discrepancy of $9.68 between Alpaca's P&L and the bot's internal tracker is a serious accounting failure. This means the bot's internal capital management, risk calculations, and P&L reporting are operating on incorrect data.
+*   `2026-05-04 17:00:31,499 | WARNING | main | gc.collect() took 15169.0ms, collected 99 objects — heap may be growing` (and repeated later with 7393.6ms)
+    *   **Severity: CRITICAL.** Garbage collection cycles taking 15+ seconds (and 7+ seconds) are indicative of a severe memory leak or highly inefficient object management. This will cause critical pauses, impacting the bot's real-time responsiveness and ability to react to market changes (e.g., executing stops, confirming signals).
+*   `2026-05-04 17:00:31,500 | INFO | main | [CYCLE] duration=741s | phase=midday | watchdog_headroom=0s ⚠ SLOW CYCLE` (and repeated later with 764s)
+    *   **Severity: CRITICAL.** Cycle durations of over 12 minutes (741s, 764s) for an intraday bot are unacceptable. Combined with `watchdog_headroom=0s`, this confirms the bot is barely functional, potentially missing market events and critical price movements. This directly impacts the bot's ability to operate as an *intraday* system.
+*   `2026-05-04 17:08:53,509 | WARNING | strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['QCOM', 'MSFT']` (and repeated for more symbols later)
+    *   **Severity: HIGH.** The signal generator is failing to scan all target symbols within its allotted time, leading to symbols being "abandoned." This results in an incomplete and potentially biased signal universe, leading to missed opportunities or sub-optimal trade selection. The recurrence and increase in abandoned symbols (['XOM', 'JPM', 'BAC', 'GS', 'QCOM', 'MSFT'] in the second instance) suggest an escalating performance problem in the signal generation module.
+*   `WARNING | strategy.signal_generator | [SYMBOL] Weekly bias: insufficient data (5 bars), filter skipped`
+    *   **Severity: MEDIUM.** While context states this is a "filter skipped," the sheer volume of these warnings across numerous symbols (e.g., UBER, AMZN, META, NFLX, SPY, QQQ, INTC, XOM, JPM, BAC, GS, QCOM, MSFT) suggests a pervasive issue with the availability or processing of weekly data for a core component of the strategy's bias filtering. This weakens the overall signal quality.
+
+### NEW BUGS / CONCERNS
+*   **CRITICAL | Trade Accounting Error (AMD Stop-Hit):** The $0.00 P&L and entry=exit price for a `stop_hit` (AMD) is a critical bug in trade accounting or stop-loss execution logic. The actual loss was not realized or recorded.
+*   **CRITICAL | System Instability (Memory Leak / Slow Cycles):** Persistent long garbage collection times (15+ seconds) and extremely slow cycle durations (12+ minutes) are indicative of a memory leak or severe performance bottlenecks, rendering the bot unfit for real-time intraday trading.
+*   **HIGH | Ineffective Signal Scoring (12/12 on All Losers):** The scoring mechanism is consistently returning 12/12 for all entries, including those that resulted in significant losses. This score is completely uninformative and gives a false sense of conviction, failing to discriminate between high-probability and low-probability setups.
+*   **HIGH | Scan Timeout Degradation:** The signal generator's scan timeout issues are not isolated, but recurring and worsening, indicating a systemic problem with the scanning efficiency or available compute resources.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Investigation of Critical Bugs:** Prioritize fixing the P&L drift, AMD stop-hit accounting error, and system performance issues (memory leak/GC, slow cycles, scan timeouts). These are fundamental failures compromising data integrity and operational viability.
+2.  **Review MRI-Conditional Trading & Risk Management:** Re-evaluate the strategy's logic for trading during MRI=STRESSED conditions. The current sizing adjustments are demonstrably insufficient. Consider a hard-stop on entries during STRESSED conditions or a significant re-tuning of the strategy's parameters for such environments, given the 0% win rate.
+3.  **Audit Signal Scoring Logic & Weekly Bias Filter:** Investigate why all entries receive a 12/12 score regardless of outcome, and address the "insufficient data" warnings for the weekly bias filter. The scoring needs to be predictive and the filters must be robustly applied to provide reliable signals.

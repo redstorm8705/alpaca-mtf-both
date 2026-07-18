@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "mode": "meta-audit",
+  "adversarial_mode": true,
+  "ts_pt": "2026-07-07 01:35 PM PT",
+  "ts_iso": "2026-07-07T13:35:15.469077-07:00",
+  "prompt_chars": 108504,
+  "prompt_preview": "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\nYOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\nDEFAULT STANCE: Assume the worst interpretation of ambiguous data. Challenge every apparent win. Surface hidden fragility.\nANALYTICAL LENSES:\n  -…",
+  "gro_prompt_chars": 108504,
+  "gai_prompt_chars": 108580,
+  "gro": {
+    "text": null,
+    "model": "llama-3.3-70b-versatile",
+    "tokens": null,
+    "elapsed_s": 0.4,
+    "error": "413 Client Error: Payload Too Large for url: https://api.groq.com/openai/v1/chat/completions"
+  },
+  "gemini": {
+    "text": "1. TRADE-BY-TRADE VERDICT\n- 07-01 HOOD (Score 11): entry $104.88 → exited 07-02 at $114.92-$116.81. VERDICT: edge_confirmed. Strong momentum continuation, but alpha was left on the table due to early partial exits.\n- 07-01 RIVN (Score 10): entry $17.39 → exited 07-02 at $18.11-$18.18. VERDICT: edge_confirmed.\n- 07-01 MARA (Score 10): entry $13.72 → exited 07-02 at $13.89-$13.91. VERDICT: edge_confirmed.\n- 07-01 TSLA (Score 12): entry $428.23 → exited 07-02 at $425.32. VERDICT: regime_error.\n- 07-01 SNOW (Score 12): entry $261.76 → exited 07-02 at $259.33. VERDICT: regime_error.\n- 07-01 PANW (Score 10): entry $355.10 → exited 07-02 at $348.55. VERDICT: regime_error.\n- 07-02 MSTR (Score 10, Short): entry $100.26 → no exit fill. VERDICT: unknown (state mismatch / phantom exit).\n- 07-02 RBLX (Score 10, Short): entry $54.47 → stopped 07-06 at $57.45. VERDICT: regime_error.\n- 07-06 HOOD (Score 12): entry $115.68 → phantom exit. VERDICT: unknown.\n- 07-06 MARA (Score 10): entry $13.31 → phantom exit. VERDICT: unknown.\n- 07-06 RIVN (Score 10): entry $19.73 → exited 07-07 at $17.32. VERDICT: regime_error.\n- 07-06 AVGO (Score 11): entry $376.78 → phantom exit. VERDICT: unknown.\n- 07-06 MS (Score 12): entry $221.41 → phantom exit. VERDICT: unknown.\n- 07-06 SNOW (Score 12): entry $262.28 → phantom exit. VERDICT: unknown.\n\n2. PATTERN ANALYSIS\n- **Phantom Exits / State Desync (Negative)**: On 07-07 at 07:14 PT, the bot logged exits for SNOW, HOOD, MS, MSTR, MARA, and AVGO at the *exact same price* as their entries. However, there are no corresponding Alpaca fills for these exits. The bot is clearing its internal state without actual execution, leaving the portfolio exposed to unmanaged risk.\n- **Truncated Right Tail via Early Partials (Negative)**: On 07-02, the bot executed multiple `PARTIAL_EXIT` events for HOOD and RIVN. HOOD ran from $104.88 to $116.81 (+11%), but the bot scaled out in pieces, reducing the overall R-multiple. Applying the Asness/Jegadeesh lens, this violates momentum continuation principles by cutting winners too early.\n- **Spurious Kill Switch Activation (Negative)**: On 07-07, the bot's kill switch was active all afternoon (\"Kill switch active — no new entries this session\"), preventing it from taking high-conviction Score 12 signals on AAPL, TSLA, AMZN, and PANW. This is likely tied to an overly conservative daily drawdown limit (triggered by the ~$41 RIVN loss, which is only ~1.4% of equity), leaving significant alpha on the table.\n\n3. PRIOR DIRECTIVES COMPLIANCE\n(No prior directives to evaluate.)\n\n4. WEEKLY DIRECTIVES\n[DIRECTIVE-1] Fix Phantom Exits & State Desync | Evidence: 07-07/SNOW, HOOD, MS, MSTR, MARA, AVGO/Logged exits at entry price with no Alpaca fills | Expected impact: Prevents unmanaged portfolio exposure and ensures accurate PnL tracking.\n[DIRECTIVE-2] Remove Early Partial Exits | Evidence: 07-02/HOOD, RIVN/Scaled out of strong momentum runs early | Expected impact: Increases average R-multiple by allowing momentum to run, aligning with Jegadeesh/Titman.\n[DIRECTIVE-3] Relax Session Kill Switch | Evidence: 07-07/AAPL, TSLA, AMZN/Score 12 signals ignored due to kill switch | Expected impact: Recaptures missed alpha on high-conviction setups by preventing premature session termination from overly tight daily loss limits.\n\n5. FINAL VERDICT\nFAIL — Critical state desync (phantom exits) and spurious kill switch activation are completely breaking the bot's ability to manage risk and capture alpha.\n\n6. STRUCTURED FINDINGS\n```json\n[\n  {\n    \"file\": \"execution.py\",\n    \"finding\": \"Bot logs EXIT events using the entry price and clears internal state without confirming Alpaca fills (phantom exits).\",\n    \"recommended_fix\": \"Require Alpaca fill confirmation (via websocket or order status polling) before logging an EXIT and clearing position state. Use actual fill price for PnL.\",\n    \"rc_class\": \"RC-3\"\n  },\n  {\n    \"file\": \"strategy.py\",\n    \"finding\": \"Kill switch is spuriously activated for the entire session, blocking high-conviction Score 12 entries.\",\n    \"recommended_fix\": \"Audit kill switch trigger conditions (e.g., daily drawdown, PDT limits). Ensure it resets correctly and doesn't trigger prematurely on minor drawdowns.\",\n    \"rc_class\": \"RC-4\"\n  },\n  {\n    \"file\": \"risk_manager.py\",\n    \"finding\": \"Partial exit logic scales out of winning trades too early, truncating momentum continuation.\",\n    \"recommended_fix\": \"Replace fixed percentage scale-outs with a trailing stop based on ATR to allow momentum winners to run.\",\n    \"rc_class\": \"RC-4\"\n  }\n]\n```",
+    "model": "gemini-3.1-pro-preview",
+    "tokens": 76493,
+    "elapsed_s": 76.63,
+    "error": null
+  },
+  "summary": {
+    "gro_ok": false,
+    "gai_ok": true,
+    "both_ok": false,
+    "partial": true,
+    "both_failed": false
+  }
+}

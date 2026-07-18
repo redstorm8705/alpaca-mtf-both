@@ -1,0 +1,116 @@
+Nightly Gemini Audit — 2026-05-15
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['main.py', 'reconcile_eod.py', 'execution/risk_manager.py', 'execution/fill_reconciler.py', 'execution/portfolio_tracker.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **P&L Drift Persistence**: The log consistently reports a significant `EOD P&L DRIFT` between Alpaca's calculated P&L and the bot's internal tracker P&L across multiple `SIGTERM` shutdowns (e.g., `Alpaca=$15.16 tracker=$-24.72 drift=$+39.88`). This indicates a fundamental and unresolved discrepancy in P&L accounting that persists even with reconciliation mechanisms in place.
+*   **Fill Reconciliation Failure**: Repeated `CRITICAL | execution.fill_reconciler | [SYM] RC-4 FILL RECONCILIATION EXPIRED` warnings for QQQ, CRM, and QCOM trades at multiple timestamps (e.g., 14:02:29, 16:17:43, 17:52:04). This signifies that the bot failed to verify actual fill prices within the 5-minute window, leading to unreliable P&L for these specific trades and requiring manual intervention.
+*   **Memory Growth Warning**: Frequent `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing` with collection times exceeding 6 seconds (e.g., `6157.4ms`). This pattern suggests a potential memory leak or inefficient memory management, which can lead to performance degradation and eventual out-of-memory errors over extended runtime.
+*   **News Source Timeouts**: `WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['truth_social']` (10:54:02) and `WARNING | news_monitor | scan_breaking_news: source timeout — skipped: ['finnhub']` (12:41:50). While news alerts continue from other sources, these timeouts indicate intermittent failures to fetch data from configured news providers.
+*   **Alpaca Position Not Found on Close**: `WARNING | execution.broker | [NVDA] close_position: position not found on Alpaca — already closed externally or by concurrent process. Returning True so record_exit() cleans up tracker.` (14:47:59). While the bot logs a cleanup, the underlying reason for the position not being found (external closure or concurrent process) is concerning, especially for a live environment, as it could indicate unexpected state changes or race conditions.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: For the two closed trades today (NFLX short, NVDA long), the P&L signs are correct relative to entry and exit prices.
+    *   NFLX (short): Entry $86.75, Exit $87.48. Loss of $-4.38 (exit > entry for short = loss).
+    *   NVDA (long): Entry $235.70, Exit $225.53. Loss of $-20.34 (exit < entry for long = loss).
+*   **`pnl_pct` Computation**: `pnl_pct` appears correctly calculated based on total initial position value for NFLX (-0.84%) and NVDA (-4.31%).
+*   **Partial P&L Accumulation**: Neither NFLX nor NVDA were partial-exited before their final close, so this is not applicable for these specific trades. The EOD snapshot `partial_exited: false` confirms this.
+*   **Trades with P&L = 0.0**: No trades with `pnl = 0.0` where entry ≠ exit price were observed in the last 10 events.
+*   **Entry/Exit Price Plausibility**: Exit prices for NFLX ($87.48 vs. breakeven $87.44) and NVDA ($225.53 vs. stop $225.61) are plausible for stop/breakeven market orders.
+*   **Score→Outcome Correlation**: With only two trades (both score 12, both losses), no meaningful correlation can be drawn. The `all_time_stats.avg_r_multiple` of -0.012 is concerning, suggesting that on average, trades are losing money.
+*   **Stop-Hit Rate vs. Win Rate**: Both trades today resulted in losses due to `overnight_atr_buffer_exit | 9-scan breach`. The daily win rate is 0.0%, contributing to the `all_time_stats.win_rate` of 43.1%. The high number of stop/breakeven exits (`9-scan breach`) and the negative `avg_r_multiple` suggest an unfavorable risk-reward profile or frequent stop-outs.
+*   **Exit Reason Consistency**: The exit prices are very close to the reported `thresh` values in the exit reasons, indicating consistency between the triggered condition and the recorded exit price.
+*   **Profit Factor and R:R**: `all_time_stats.profit_factor` is 1.31, which is positive but `avg_r_multiple` is -0.012. This indicates that the average loss size relative to the risk taken is slightly worse than the average gain. Despite `TARGET_ATR_MULT = 2.5` suggesting a 1:2.5 R:R, the bot is not consistently capturing this edge.
+
+### TRADE INTEGRITY
+
+*   **P&L Drift**: As noted in Log Anomalies, the `EOD P&L DRIFT` is a severe trade integrity issue, as the bot's internal P&L records do not match the broker's.
+*   **RC-4 Fill Reconciliation**: The `RC-4` critical errors indicate that for certain symbols (QQQ, CRM, QCOM), the P&L recorded for those closed trades within the bot's tracker `closed_trades` is explicitly marked as unreliable, suggesting potential inaccuracies in the exit price and derived P&L figures.
+*   **Partial Exit Errors**: Not directly observed in the provided logs for the latest trades, but `reconcile_eod.py` and `portfolio_tracker.patch_exit_pnl` include sophisticated logic for handling `partial_pnl` and `_qty_at_close`, implying this area is complex and prone to errors if not perfectly handled.
+
+### MODIFIED FILE FINDINGS
+
+#### `main.py`
+
+*   **Function/Variable**: `OVERNIGHT_ENTRIES_ENABLED`
+*   **Code Path**: In `main.py`, `OVERNIGHT_ENTRIES_ENABLED` is explicitly set to `False` (`OVERNIGHT_ENTRIES_ENABLED = False`). However, the `TRADE EVENTS` and `EOD SNAPSHOT` clearly show trades with `"overnight": true` (e.g., NFLX, NVDA entries on 2026-05-14).
+*   **Failure Condition**: The bot is taking overnight positions despite the global configuration flag `OVERNIGHT_ENTRIES_ENABLED` being set to `False`. This indicates a logic error where this flag is either not being honored or is being overridden by an unknown mechanism elsewhere in the codebase, leading to a violation of intended trading behavior.
+
+*   **Function/Variable**: `main()` and `gc.collect()`
+*   **Code Path**: The `main` logger frequently reports `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing`. For example, at `2026-05-15 10:18:23,343`, `gc.collect()` took `6157.4ms`. While `gc.collect()` is explicitly called (not shown in provided `main.py` code, but implied by log source), unusually long execution times and the "heap may be growing" message indicate that Python's garbage collector is struggling to reclaim memory efficiently.
+*   **Failure Condition**: The bot is potentially experiencing a memory leak or excessive memory churn, causing `gc.collect()` to take an unacceptably long time and indicating a growing heap size. This can lead to degraded performance and system instability over time.
+
+#### `reconcile_eod.py`
+
+*   **Function/Variable**: `reconcile()` and `eod["trades"]`
+*   **Code Path**: The `reconcile()` function includes `_recover_closed_trades_from_log(date_str)` if `eod.get("trades", [])` is empty. This suggests that `eod_YYYY-MM-DD.json` files may be prematurely or incorrectly written, sometimes lacking closed trade data. The recovery mechanism attempts to pull closed trades from `trade_log.json`.
+*   **Failure Condition**: The `eod_YYYY-MM-DD.json` file is sometimes written in an incomplete state (e.g., with empty `trades` list) at the end of the trading day, requiring a fallback recovery mechanism. This directly contributes to or is a symptom of the `EOD P&L DRIFT`.
+
+#### `execution/risk_manager.py`
+
+*   **No issues found.** The `update_daily_pnl_from_alpaca()` logic for FIFO and conservative P&L (BV-2 Option B) is robust. The stop and target calculation, including dynamic multipliers for volatility and VIX, appears well-designed. The kill switch persistence and guard against mid-session reset (`reset_daily()`) are also good.
+
+#### `execution/fill_reconciler.py`
+
+*   **Function/Variable**: `run_fill_reconciliation()` and `tracker.mark_fill_expired()`
+*   **Code Path**: When reconciliation fails to find a fill within `max_age_minutes=5`, `logger.critical` is invoked (e.g., `[QQQ] RC-4 FILL RECONCILIATION EXPIRED`). It then calls `tracker.mark_fill_expired(sym)` to prevent re-queuing on restart.
+*   **Failure Condition**: Trades that are `_fill_unverified` are not being successfully reconciled by `run_fill_reconciliation()` for certain symbols, resulting in `CRITICAL` logs and permanently unreliable P&L for those specific trades. This indicates a persistent failure to obtain or match Alpaca fill data for these entries, impacting P&L accuracy.
+
+#### `execution/portfolio_tracker.py`
+
+*   **Function/Variable**: `patch_exit_pnl()` and `_trade["_fill_unverified"]`
+*   **Code Path**: `patch_exit_pnl` is designed to clear `_fill_unverified` and set `_patch_applied_ts` upon successful reconciliation. However, the persistent `RC-4 FILL RECONCILIATION EXPIRED` messages indicate that `patch_exit_pnl` is either not being called successfully for these trades or is failing internally to apply the patch, leaving the `_fill_unverified` flag as true until expiry.
+*   **Failure Condition**: The `patch_exit_pnl` mechanism is not consistently resolving unverified fills, leading to `RC-4` expiry and leaving specific trades with `_fill_unverified = True` for the duration of the reconciliation window.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash: **UNTOUCHED** (source not provided)
+*   P5-C2 | run_movers.py ImportError: **UNTOUCHED** (source not provided)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open: **UNTOUCHED** (no log evidence)
+*   P5-H2 | Fill price crosstalk: **TRIGGERED** (RC-4 errors imply underlying fill reconciliation issues.)
+*   P5-H3 | Orphan GTC 404 path: **UNTOUCHED** (no log evidence of 404 from GTC manager)
+*   P5-H4 | Rule 2 dead code: **FIXED** (Explicit comment in `main.py` confirms fix.)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: **FIXED** (Stated as fixed in queue.)
+*   P5-M1 | Cycle watchdog restart loop: **FIXED** (Explicit comment in `main.py` and clean restarts in logs confirm fix.)
+*   P5-M2 | MRI score cached stale across sessions: **FIXED** (Log evidence of MRI refreshes and loading from `logs/macro_regime_latest.json`.)
+*   P5-M3 | score_comparison JSON unbounded growth: **UNTOUCHED** (No relevant code provided.)
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: **UNTOUCHED** (Source not provided.)
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: **WORSENED** (The underlying issue causing P&L drift and sometimes empty EOD trade lists still manifests (EOD P&L DRIFT), despite `reconcile_eod.py` having a recovery mechanism.)
+*   P5-L3 | live_data_writer.py no reconnect logic: **UNTOUCHED** (Source not provided.)
+
+### NEW BUGS FOUND
+
+*   **CATEGORY**: EXECUTION BUG
+    *   **SEVERITY**: CRITICAL
+    *   **File**: `main.py`
+    *   **Description**: The `OVERNIGHT_ENTRIES_ENABLED` global variable is set to `False` in `main.py`, implying a policy to prevent new overnight positions. However, the `TRADE EVENTS` and `EOD SNAPSHOT` clearly indicate that overnight positions (`NFLX`, `NVDA`) were initiated.
+    *   **Exact Failure Condition**: `OVERNIGHT_ENTRIES_ENABLED = False` at `main.py` startup, but trades logged as `{"overnight": true}` are present (e.g., NFLX, NVDA entries on 2026-05-14). This flag is not effectively preventing overnight trades.
+
+*   **CATEGORY**: EXECUTION BUG
+    *   **SEVERITY**: CRITICAL
+    *   **File**: `execution/portfolio_tracker.py`, `execution/risk_manager.py`, potentially `reconcile_eod.py`
+    *   **Description**: Despite multiple mechanisms (periodic `update_daily_pnl_from_alpaca()` in `RiskManager`, `reconcile_eod.py` script) designed to ensure P&L accuracy and resolve drift, the `EOD P&L DRIFT` consistently reports a substantial discrepancy (`$+39.88` for a $2.5K account) between Alpaca's calculated P&L and the bot's internal tracker P&L upon bot shutdown. This indicates a fundamental failure in either the execution or persistence of P&L reconciliation.
+    *   **Exact Failure Condition**: Multiple log entries show `EOD P&L DRIFT: Alpaca=$15.16 tracker=$-24.72 drift=$+39.88` upon `SIGTERM` shutdown, implying that the bot's internal P&L accounting is persistently incorrect.
+
+*   **CATEGORY**: INFRASTRUCTURE
+    *   **SEVERITY**: HIGH
+    *   **File**: `main.py` (and potentially dependent modules)
+    *   **Description**: The bot frequently logs `WARNING | main | gc.collect() took Xms, collected Y objects — heap may be growing`, with `gc.collect()` operations taking several seconds (e.g., `6157.4ms`). This indicates a potential memory leak or inefficient memory management leading to excessive heap growth and costly garbage collection cycles.
+    *   **Exact Failure Condition**: Recurring log messages like `2026-05-15 10:18:23,343 | WARNING | main | gc.collect() took 6157.4ms, collected 31 objects — heap may be growing`.
+
+### FIX VALIDATION
+
+*   **No prior fixes to validate**
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate `OVERNIGHT_ENTRIES_ENABLED` Bypass (CRITICAL)**: Immediately determine why overnight positions are being taken when `OVERNIGHT_ENTRIES_ENABLED` is `False`. Trace the code path for entry logic in `strategy/run_cycle.py` and `execution/trade_engine.py` to identify where this flag is bypassed or overridden.
+2.  **Resolve Persistent P&L Drift and RC-4 Failures (CRITICAL)**: Prioritize the `EOD P&L DRIFT` and `RC-4 FILL RECONCILIATION EXPIRED` issues. Verify the complete lifecycle of fill data: fetching, matching, and persisting corrections. Confirm `reconcile_eod.py` is executing correctly *after* `EOD P&L DRIFT` is logged and its corrections are being properly applied and persisted back to the main `trade_log.json` and `PortfolioTracker` state. Review the `_weighted_avg_exit_price` and `_fifo_reconstruct` logic for any edge cases.
+3.  **Address Memory Leak / Heap Growth (HIGH)**: Profile the bot's memory usage over time to identify the source of the "heap may be growing" warnings. Optimize memory-intensive operations or identify and fix objects that are not being properly garbage collected.
+4.  **Enhance Fill Reconciliation Robustness (HIGH)**: Investigate why `RC-4 FILL RECONCILIATION EXPIRED` is occurring for specific symbols (QQQ, CRM, QCOM). This could be due to API data issues, incorrect matching logic in `execution/fill_reconciler.py`, or timing problems. Consider increasing the reconciliation window or implementing more aggressive fallback mechanisms.
+5.  **Audit EOD Summary Generation (MEDIUM)**: Review the process that generates `eod_YYYY-MM-DD.json` to prevent it from being written prematurely or with incomplete data (P5-L2), thereby reducing the reliance on the `_recover_closed_trades_from_log` mechanism.

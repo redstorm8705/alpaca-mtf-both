@@ -1,0 +1,75 @@
+Nightly Gemini Audit — 2026-04-16
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['run_macro_regime.py', 'scan_to_html.py', 'generate_dashboard.py', 'weekly_review.py', 'run_ftd.py', 'main.py', 'run_market_top.py', 'midday_audit.py', 'live_data_writer.py', 'execution/portfolio_tracker.py', 'execution/risk_manager.py', 'events/macro_risk_index.py', 'data/alpaca_data.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **CRITICAL: `Loop error: 'NoneType' object has no attribute 'level'`**
+    *   `2026-04-16 08:55:35,508 | ERROR | main | Loop error: 'NoneType' object has no attribute 'level'`
+    *   This error occurred immediately after a QQQ partial exit, indicating that the `mri` object, an instance of `MacroRiskIndex`, was unexpectedly `None` when `main.py` attempted to access `mri.level()`. This is a critical failure in the bot's core state management, likely interrupting its risk assessment and subsequent decision-making loop.
+*   **WARNING: Repeated "ATH+PDT=3/3 BLOCKED" messages with SPY as universal reference**
+    *   Numerous entries like `[QQQ] ATH+PDT=3/3 BLOCKED: SPY is -0.24% from 52w high $699.94 (threshold 1.0%) — forced overnight at ATH is unacceptable tail risk. Skipping.` and similar for `AMD`.
+    *   While PDT and ATH are valid risk considerations, the bot consistently blocks entries for *any* symbol (e.g., QQQ, AMD) based on *SPY's* proximity to its 52-week high. This is a logic flaw: individual tickers should be evaluated against their *own* ATH or a more nuanced market-wide ATH condition. This overly broad application of a single index's ATH significantly limits potential trades, especially when combined with active PDT status.
+*   **INFO: Consistent "Breadth WEAKENING (score=28) — size floor 0.85x applied."**
+    *   The breadth score consistently remaining at `28` with an `0.85x` size floor applied suggests persistent underlying market weakness or a stale breadth calculation. While not an error, its continuous presence combined with other blocking factors (PDT, ATH) indicates a consistently defensive stance that prevents signal execution.
+*   **INFO: Frequent "No signals passed PDT HTF gate this cycle."**
+    *   This message, often appearing after `PDT gate ACTIVE (rolling_dt=3/3)`, highlights that even when high-conviction signals are generated, the combination of PDT restrictions and higher-timeframe confirmation requirements leads to zero executable trades. This suggests the bot's risk filters might be too stringent given its PDT constraints.
+
+### TRADE INTEGRITY
+
+*   **CRITICAL: QQQ Partial P&L Discrepancy (Trade Log vs. `trade_log.json`)**
+    *   The bot log at `2026-04-16 08:55:35,232` states: `[QQQ] T2 PARTIAL EXIT: 1 shares @ $641.01 | P&L $10.04 | Level 2/3 | PDT 3/3`.
+    *   However, the `trade_log.json` for QQQ shows `partial_exit_price: 641.01` but `partial_pnl: 17.03`.
+    *   The correct P&L for 1 share, given an `entry_price` of `630.9675` and `partial_exit_price` of `641.01`, is `641.01 - 630.9675 = $10.0425`. The log is correct, but the `trade_log.json` (and thus `execution/portfolio_tracker.py`) recorded an incorrect `partial_pnl` of $17.03. This is a severe accounting error for realized P&L.
+*   All other trades in the `LAST 10 TRADES` appear consistent with their P&L calculations based on entry and exit prices and quantities.
+
+### MODIFIED FILE FINDINGS
+
+*   **`main.py`**
+    *   **New Bug (CRITICAL - MRI object failure):** The log anomaly `Loop error: 'NoneType' object has no attribute 'level'` points directly to `main.py` attempting to access `mri.level()` when `mri` is `None`. This indicates a critical flaw in how the `MacroRiskIndex` object is initialized, refreshed, or managed within the main loop.
+    *   **New Bug (HIGH - Universal ATH Blocking):** The logic causing non-SPY tickers (e.g., QQQ, AMD) to be blocked due to SPY's proximity to its 52-week high is present in `main.py`'s ATH+PDT gate. This is an oversimplification of market risk.
+    *   **Fixed (Race Condition):** The introduction of `_last_cycle_lock` and `_touch_cycle_ts()` correctly implements a thread-safe mechanism to update `_last_cycle_complete`, addressing potential watchdog race conditions.
+    *   **Observation (`_SHORTING_ENABLED`):** The variable `_SHORTING_ENABLED` is initialized to `False`. Past `short` trades are visible in `trade_log.json`, implying this variable is correctly updated at runtime (e.g., during Alpaca account status check). Assuming this happens as intended.
+*   **`execution/portfolio_tracker.py`**
+    *   **New Bug (CRITICAL - P&L Discrepancy):** This file is responsible for saving the `trade_log.json`. The observed `partial_pnl` discrepancy for QQQ indicates an error in the logic within `PortfolioTracker` for calculating, accumulating, or persisting `partial_pnl` for partially exited positions.
+*   **`live_data_writer.py`**
+    *   **No issues found:** The implementation of `fcntl.flock` with `FD_CLOEXEC` for singleton enforcement and the exponential backoff with Slack alerting for `generate_dashboard` failures are robust and well-designed, addressing error handling effectively.
+*   **`events/macro_risk_index.py`**
+    *   **No issues found:** The `_restore()` method correctly implements logic to decay the MRI score over downtime, preventing stale data issues. The general scoring and level mapping logic appears sound.
+*   **`run_macro_regime.py`, `scan_to_html.py`, `generate_dashboard.py`, `weekly_review.py`, `run_ftd.py`, `run_market_top.py`, `midday_audit.py`, `execution/risk_manager.py`, `data/alpaca_data.py`**
+    *   **No issues found** within the visible code snippets. The RTH blocks and API key checks are correctly implemented where present.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | PDT=3/3 confirm buffer stale at RTH open**: UNTOUCHED
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-M1 | Cycle watchdog restart loop**: FIXED
+*   **P5-M2 | MRI score cached stale across sessions**: FIXED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+*   **P5-L1 | Weekly review PDT label**: UNTOUCHED (The Python logic seems to handle PDT counting correctly, but the specific display formatting issue, if it exists in HTML, is not visible in the provided code.)
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: FIXED
+*   **P5-L3 | live_data_writer.py no reconnect logic**: FIXED
+
+### NEW BUGS FOUND
+
+*   **CRITICAL | `main.py` | MRI Object `None` Error**: The `mri` object becomes `None` at a critical point, leading to an `AttributeError` when `mri.level()` is accessed. This immediately follows a P&L event, suggesting a possible race condition or an unhandled exception during MRI state updates that causes the object to be de-referenced or set to `None`.
+    *   **Exact failure condition**: `2026-04-16 08:55:35,508 | ERROR | main | Loop error: 'NoneType' object has no attribute 'level'` at the line where `mri.level()` is called.
+*   **CRITICAL | `execution/portfolio_tracker.py` & `trade_log.json` | `partial_pnl` Calculation Discrepancy**: The `partial_pnl` value recorded in `trade_log.json` for the QQQ partial exit (`$17.03`) does not match the P&L reported in the bot's live log (`$10.04`). This indicates a fundamental error in how partial P&L is calculated, attributed, or persisted, leading to inaccurate financial records.
+    *   **Exact failure condition**: `trade_log.json` shows `partial_pnl: 17.03` for QQQ, while `2026-04-16 08:55:35,232` log shows `P&L $10.04` for the same event.
+*   **HIGH | `main.py` | Universal SPY ATH Blocking for Non-SPY Tickers**: The bot applies the condition of `SPY` being within a threshold of its 52-week high to block entries for *all* other symbols (e.g., `QQQ`, `AMD`). This is an inappropriate generalization of risk that prevents trading signals in individual stocks or other ETFs that may not be at their own relative highs.
+    *   **Exact failure condition**: `main.py` logs `[QQQ] ATH+PDT=3/3 BLOCKED: SPY is -0.12% from 52w high $699.94 (threshold 1.0%) ... Skipping.` and similar for `AMD`.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Investigate and fix the `NoneType` error for the `mri` object in `main.py`.** This is a critical runtime error that can halt the bot's risk assessment. Ensure `MacroRiskIndex` is always instantiated and remains valid throughout the trading cycle.
+2.  **CRITICAL: Debug and correct the `partial_pnl` calculation and persistence in `execution/portfolio_tracker.py`.** Resolve the observed P&L discrepancy in `trade_log.json` to ensure accurate financial reporting and bot performance metrics.
+3.  **HIGH: Revise the ATH blocking logic in `main.py`.** Implement symbol-specific 52-week high checks for individual tickers, or a more sophisticated market-wide ATH proxy that doesn't solely rely on SPY's level to block diverse trading opportunities.
+4.  **HIGH: Prioritize investigation of P5-C1 (FVG MultiIndex silent crash) and P5-C2 (run_movers.py ImportError).** These are critical bugs that remain untouched and could severely impact signal generation.
+5.  **MEDIUM: Review the cumulative impact of PDT, HTF confirmation, Breadth, and ATH gates.** Evaluate if the combined risk filters are excessively restrictive, leading to an unacceptable number of missed high-conviction signals, especially given PDT constraints.

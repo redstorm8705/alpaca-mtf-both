@@ -1,0 +1,88 @@
+Midday Gemini Audit — 2026-06-01
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Consistency:** P&L signs for QCOM (long, exit > entry = profit) and AMZN (long, exit < entry = loss) are consistent with their respective entry and exit prices.
+*   **Entry Price Plausibility:** Entry prices for QCOM ($190.43) and AMZN ($273.11) are plausible for typical stock prices.
+*   **Exit Price Consistency vs. Stated Reason:**
+    *   **QCOM:** The trade exited at $230.60 with a profit of +$80.34, yet the `exit_reason` is stated as `stop_hit` with a stop price of $179.88. This is highly inconsistent. A stop hit at $179.88 from an entry of $190.43 would be a significant loss, not a profit above the T3 target ($216.95). This indicates a mislabeling of the exit reason, suggesting an issue with trade outcome attribution or state management.
+    *   **AMZN:** The trade exited at $263.42 for a loss of $-19.38, with a stop price of $263.99. The exit price is slightly below the stop price, indicating stop slippage. While slippage is common, the system should track it for performance analysis.
+*   **Win Rate and Profit Factor:** With only two trades, a 50% win rate and a profit factor of 4.14 are not statistically significant enough to confirm or deny the bot's edge claims.
+*   **Score-Outcome Correlation:** Both trades were 12/12 score. One won, one lost. This sample size is too small to draw conclusions about score-outcome correlation.
+*   **Stop-hit Rate:** The reported 100% stop-hit rate is concerning. For QCOM, it's a mislabeled win. For AMZN, it's a legitimate stop hit with slippage. A high true stop-hit rate (meaning trades closing at or near the initial stop for a loss) would indicate potential issues with entry timing or stop placement, which is partially corroborated by the `[ANOMALY-3] TQI degradation` warning in the logs.
+*   **P&L=0.0 but Entry≠Exit Price:** No such instances detected.
+*   **Partial Exits:** No partial exits occurred.
+
+### ENTRY QUALITY
+
+*   **QCOM entry @ MRI=STRESSED:** The entry for QCOM was taken under `MRI=STRESSED` conditions. While `OVERNIGHT_ENTRIES_ENABLED = True` means entries are generally permitted, and the CONFIG CONSTANTS do not explicitly forbid entries at `STRESSED` MRI (they only detail stop widening and sizing adjustments based on VIX and implicitly MRI for sizing floors, e.g., `MRI ELEVATED (score=37) — size floor 0.85x applied`), the fact that `MRI=STRESSED at entry` is flagged indicates this is considered an undesirable condition by the bot's designers, potentially reducing edge.
+
+### EXIT QUALITY
+
+*   **QCOM Exit Reason Mismatch:** The exit reason for QCOM being `stop_hit` for a profitable trade far exceeding its take-profit levels is a clear error in exit classification. This makes it difficult to accurately analyze exit discipline.
+*   **AMZN Stop Slippage:** The AMZN exit showed slippage below the stop price. This might be acceptable depending on market conditions but should be tracked and accounted for in performance metrics.
+*   **TQI Degradation:** The bot itself reported `[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30`. This is a system-level self-diagnosis indicating a problem with exit discipline and/or stop placement across recent trades.
+
+### MRI ALIGNMENT
+
+*   **QCOM Entry at STRESSED MRI:** As noted in Entry Quality, the QCOM entry occurred during `STRESSED` MRI. Although specific entry prevention rules for `STRESSED` MRI are not provided in the CONFIG CONSTANTS, the system flags it as an issue. The log confirms MRI influences sizing (`MRI ELEVATED [...] size floor 0.85x applied`), so it should be reviewed if `STRESSED` MRI should trigger more aggressive risk reduction (e.g., zero entries or larger sizing reduction). The `MRI SESSION DISTRIBUTION` shows 50% of the recent session samples were `STRESSED`, indicating it's a frequently encountered state.
+
+### LOG ANOMALIES
+
+*   `2026-06-01 17:20:21,216 | WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` (repeated at 17:27:29,777): This is a critical anomaly. The bot is actively preventing itself from making new entries despite identifying high-score signals (e.g., AMD, PLTR, NFLX at 12/12) and not hitting the daily loss limit (`MAX_DAILY_LOSS_PCT = 0.07`). The underlying reason for this halt is unclear from the logs provided, but it represents a systematic failure to execute the strategy.
+*   `2026-06-01 17:20:22,675 | CRITICAL | execution.portfolio_tracker | [FIFO] AMZN: closing sell with no open long lots (net_qty=-23, qty=1, price=263.42). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.` This is a severe error indicating potential data corruption or desynchronization of the bot's internal portfolio state with the broker or an ungraceful restart. It directly impacts accurate position tracking and P&L calculations.
+*   `2026-06-01 17:20:22,971 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-44.39 tracker=$-32.99 drift=$-11.40`: This warning indicates a significant discrepancy between Alpaca's reported P&L and the bot's internal P&L tracker. This drift can lead to incorrect risk management decisions, such as miscalculating the distance to the kill switch or misapplying sizing multipliers.
+*   `2026-06-01 17:25:57,166 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.` This is a self-reported system issue related to strategy performance.
+
+### NEW BUGS / CONCERNS
+
+*   **EXECUTION BUG | CRITICAL**
+    *   **Description:** Misclassification of trade exit reason and associated P&L attribution.
+    *   **Variable/Metric Involved:** `QCOM` trade's `exit_reason` and resulting P&L analysis.
+    *   **Value vs. Should be:** The `exit_reason` is recorded as `stop_hit` while the trade resulted in a profit (+$80.34) and exited at $230.60, which is significantly above the stated stop price ($179.88) and even T3 ($216.95). The `exit_reason` should accurately reflect how the trade was closed (e.g., `take_profit_hit`, `trailing_stop_hit`, `manual_exit`), not `stop_hit` when it's a substantial winner. This indicates a logic error in determining the final exit condition for successful trades, leading to corrupted performance metrics.
+    *   **Condition:** Occurs for the QCOM trade where entry $190.43, exit $230.60, P&L +$80.34, but `exit_reason=stop_hit` and `stop=$179.88`.
+
+*   **EXECUTION BUG | CRITICAL**
+    *   **Description:** Portfolio tracker state corruption leading to incorrect position accounting.
+    *   **Variable/Metric Involved:** `execution.portfolio_tracker`'s internal representation of `AMZN`'s open lots and `net_qty`.
+    *   **Value vs. Should be:** The bot attempted to perform a `closing sell` for `AMZN` but reported `no open long lots` while indicating a `net_qty=-23`. This suggests the bot believes it has a short position of 23 shares or is missing 23 shares from a previous long position, even though it was processing a sell for a single share. This severe discrepancy (net_qty=-23 vs. a single closing sell) indicates a fundamental corruption of the portfolio's state, likely due to a prior ungraceful restart or a bug in lot tracking, leading to `Recording as synthetic short`. This can have cascading effects on risk management and subsequent trade decisions.
+    *   **Condition:** Log entry `2026-06-01 17:20:22,675 | CRITICAL | execution.portfolio_tracker | [FIFO] AMZN: closing sell with no open long lots (net_qty=-23, qty=1, price=263.42). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.`
+
+*   **INFRASTRUCTURE | HIGH**
+    *   **Description:** Persistent discrepancy between Alpaca's reported daily P&L and the bot's internal tracker P&L.
+    *   **Variable/Metric Involved:** `Alpaca` reported `pnl_today` and bot's `tracker` P&L.
+    *   **Value vs. Should be:** Alpaca's `pnl_today` was `$-44.39` while the bot's `tracker` reported `$-32.99`, resulting in a drift of `$-11.40`. This `EOD P&L DRIFT` (and potentially intraday drift) implies that the bot's internal risk management systems (e.g., kill switch, dynamic sizing based on P&L) are operating on potentially inaccurate data. This is a recurring warning, suggesting a systematic problem in P&L reconciliation.
+    *   **Condition:** Log entry `2026-06-01 17:20:22,971 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-44.39 tracker=$-32.99 drift=$-11.40`.
+
+*   **ALPHA ISSUE | HIGH**
+    *   **Description:** Bot halted new entries for the session without clear justification, preventing execution of valid, high-score signals.
+    *   **Variable/Metric Involved:** Internal `session_halted` flag or similar in `execution.entry_logic`.
+    *   **Value vs. Should be:** The bot identified multiple high-score signals (e.g., AMD, PLTR, NFLX, all score 12/12) which meet the dynamically raised `MIN_SCORE` of 11/12. However, it logged `HALTED for session — no new entries permitted`. This halt is not attributable to the `MAX_DAILY_LOSS_PCT` (7% or $175) kill switch, as the session P&L was only around -1.2% (or $-32.99). This indicates an erroneous or poorly configured halt condition, causing the bot to miss potential trading opportunities.
+    *   **Condition:** Log entry `2026-06-01 17:20:21,216 | WARNING | execution.entry_logic | execute_entries: HALTED for session — no new entries permitted.` (and repeated).
+
+*   **ALPHA ISSUE | MEDIUM**
+    *   **Description:** Self-identified degradation in Trade Quality Index (TQI), indicating systemic issues with trade management post-entry.
+    *   **Variable/Metric Involved:** `TQI` (Trade Quality Index) calculated over the last 5 trades.
+    *   **Value vs. Should be:** The `last-5-trade avg=28.0/100`, which is below the acceptable threshold of 30. This internal monitoring flag suggests a systematic problem with the bot's exit discipline or stop placement logic, potentially leading to suboptimal trade outcomes (e.g., premature stop-outs, holding losers too long, poor take-profit execution).
+    *   **Condition:** Log entry `2026-06-01 17:25:57,166 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 — review exit discipline and stop placement.`
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION: Investigate and Resolve Portfolio Tracker State Corruption and P&L Drift (CRITICAL)**
+    *   Prioritize debugging the `CRITICAL` FIFO error for AMZN and the `EOD P&L DRIFT`. These issues indicate a fundamental problem with the bot's internal accounting and synchronization with Alpaca, which compromises all subsequent risk management and performance analysis.
+    *   Review mechanisms for handling restarts, API desynchronization, and order fills. Ensure positions are correctly reconciled at startup and throughout the day.
+
+2.  **ALPHA: Debug "HALTED for session" Logic (HIGH)**
+    *   Determine the exact condition causing the `execute_entries: HALTED for session` warning. This halt is preventing the bot from trading despite viable signals and not hitting the primary kill switch. This is severely impacting the bot's ability to operate and realize profits.
+    *   Review the logic that triggers this session halt to ensure it aligns with the intended risk management policies.
+
+3.  **ALPHA: Rectify Exit Reason Attribution and TQI Degradation (HIGH/MEDIUM)**
+    *   Address the incorrect `exit_reason` classification (e.g., QCOM `stop_hit` being a large winner). Ensure that trade outcomes are accurately attributed to their respective exit conditions (take-profit, trailing stop, initial stop, time-based, etc.).
+    *   Deep-dive into the `[ANOMALY-3] TQI degradation` by analyzing recent closed trades (beyond the two provided) to understand if stops are too tight, targets too far, or if trailing stop logic is failing. This may require adjusting `INTRADAY_STOP_ATR_MULT`, `TARGET_ATR_MULT`, or volatility tier multipliers.

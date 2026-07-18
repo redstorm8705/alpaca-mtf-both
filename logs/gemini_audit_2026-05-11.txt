@@ -1,0 +1,111 @@
+Nightly Gemini Audit — 2026-05-11
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['monthly_review.py', 'generate_dashboard.py', 'execution/orphan_manager.py', 'execution/trade_engine.py', 'data/fetcher.py', 'data/fmp_client.py']
+================================================================================
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **CRITICAL: GTC Stop Failures & Unprotected Positions (TQQQ, AMZN)**: Multiple critical warnings indicate `Emergency GTC stop FAILED` for TQQQ and AMZN, leaving positions unprotected overnight. The root cause appears to be a race condition during bot startup/pre-market reconciliation where newly cleared GTC order IDs (due to `PENDING_CANCEL` status) are immediately targeted for re-submission by the emergency GTC stop logic, before the original cancellation propagates on Alpaca. This leads to `40310000 held_for_orders` errors.
+    *   `2026-05-11 06:00:18,327 | CRITICAL | execution.orphan_manager | [TQQQ] Emergency GTC stop FAILED — position unprotected overnight.`
+    *   `2026-05-11 06:00:20,141 | CRITICAL | execution.orphan_manager | [AMZN] Emergency GTC stop FAILED — position unprotected overnight.`
+*   **CRITICAL: POSITION COUNT DRIFT**: At startup, `risk.open_positions` was 0 while `tracker` indicated 6, suggesting a desync in risk manager state initialization. While corrected, the root cause for the initial discrepancy is a concern.
+    *   `2026-05-11 06:00:21,427 | CRITICAL | execution.orphan_manager | POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=6. Correcting to tracker count.`
+*   **CRITICAL: Fill Reconciliation Expired (QQQ, CRM, QCOM)**: Three critical messages indicate `RC-4 FILL RECONCILIATION EXPIRED` for QQQ, CRM, and QCOM, meaning P&L for these trades remains unreliable and requires manual verification. This points to a deeper issue with how fills are tracked and confirmed over time.
+    *   `2026-05-11 14:06:09,158 | CRITICAL | execution.fill_reconciler | [QQQ] RC-4 FILL RECONCILIATION EXPIRED: fill_unverified trade outside 5-min window — P&L remains unreliable. Manual verification required.` (and similar for CRM, QCOM)
+*   **WARNING: close_position blocked (TSLA, AMZN)**: During RTH, exit attempts for TSLA and AMZN were blocked by `40310000 held_for_orders`. This confirms that GTC orders were still holding shares, despite the `orphan_manager`'s pre-market reconciliation attempts. While the bot retries, this introduces delays and potential slippage.
+    *   `2026-05-11 14:48:10,854 | WARNING | execution.broker | [TSLA] close_position blocked (40310000 held_for_orders) — cancelling all open orders and retrying once.` (and similar for AMZN)
+*   **WARNING: TQI Degradation**: The bot consistently logs `[ANOMALY-3] TQI degradation: last-5-trade avg=26.0/100 < 30`, indicating poor recent trade performance or exit discipline. This is a recurring performance issue.
+*   **WARNING: Heap Growing with No Objects Collected**: Multiple warnings show `gc.collect()` taking time (e.g., 201.0ms, 789.9ms) but `collected 0 objects`. This suggests potential memory leaks or inefficient memory management, leading to heap growth without successful garbage collection.
+    *   `2026-05-11 15:52:54,048 | WARNING | main | gc.collect() took 201.0ms, collected 0 objects — heap may be growing`
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: Checked TSLA exit (`price: 420.14`, `entry: $428.36`, `pnl: $-16.44`) and AMZN exit (`price: 270.765`, `entry: $273.11`, `pnl: $-4.69`). Both are long positions, exit price < entry price, resulting in negative P&L. This is **correct**. NVDA partial exit (`price: 219.62`, `pnl: 3.86`) is correct as it's a positive P&L partial.
+*   **pnl_pct computation**: Source code not provided for `pnl_pct` calculation; cannot verify.
+*   **partial_pnl accumulation**: The `execution/orphan_manager.py` Patch 2 logic (`_trade["partial_pnl"] = round(_trade.get("partial_pnl", 0.0) + _pnl, 2)`) indicates correct accumulation across tranches.
+*   **Trades with pnl=0.0**: The `TRADE EVENTS` show `AMD` and `CRM` exits with `pnl: 0.0` but `stop_hit` as reason. `QCOM` exit also shows `pnl: 0.0` with `target` as reason. This indicates a recording bug where actual small P&L (or small loss near stop) is being rounded to zero for recording purposes, which could skew win rate/profit factor.
+*   **Entry/exit prices plausible**: Prices seem plausible for the symbols and general market context.
+*   **Score→outcome correlation**: Not enough data in the provided logs to establish strong correlation, but the `TQI degradation` warnings suggest lower quality outcomes recently.
+*   **Stop-hit rate vs. win rate**: The log shows `[ANOMALY-3] TQI degradation` and `Rolling 10-trade avg: 26.7/100` (for AMZN exit). `all_time_stats` shows `win_rate: 40.7` and `avg_r_multiple: -0.058`. A negative average R-multiple suggests the bot is losing more than it makes on average per unit of risk, indicating a lack of edge or poor risk/reward capture, despite the `profit_factor: 1.28`. The `win_rate` itself is below 50%, and with a negative R-multiple, profitability is difficult.
+*   **Exit reason consistency**: TSLA and AMZN exits due to `overnight_atr_buffer_exit | 9-scan breach` are consistent with prices below entry.
+
+### TRADE INTEGRITY
+
+*   **P&L recording bug (EOD snapshot)**: The EOD snapshot (`EOD SNAPSHOT["pnl_today"]` is `0.0`, `EOD SNAPSHOT["alpaca_pnl"]` is `0.0`, `EOD SNAPSHOT["tracker_pnl"]` is `0`) incorrectly shows zero daily P&L despite TSLA ($-16.44) and AMZN ($-4.69) exits today. This is a critical P&L misrepresentation for daily reporting and `monthly_review.py`. This is `P5-L2` triggered.
+*   **"pdt_used: 0" for overnight_atr_buffer_exit**: The trade log shows `pdt_used: 0` for `TSLA` and `AMZN` exits (both `overnight_atr_buffer_exit`). While these are overnight positions, any round-trip within the same trading day (entry on one day, exit on another, if both fall within the 3-day window) typically counts as a day trade for PDT purposes. If the entry and exit are indeed on separate calendar days, this may be benign, but the system logs `PDT counter synced from Alpaca: 1 day trades today`, which only accounts for the `NVDA` partial exit. This merits clarification if PDT accounting is strictly "same-day open AND close" based on Alpaca.
+
+### MODIFIED FILE FINDINGS
+
+*   **`monthly_review.py`**:
+    *   **P&L Reporting Issue**: The function `_day_cell` (line 144) correctly attempts to display `eod.get("pnl_today", 0)`. However, the underlying `eod_YYYY-MM-DD.json` file is failing to capture the actual realized P&L, as evidenced by the `EOD SNAPSHOT`. The `generate_dashboard.py` module *does* compute `alpaca_daily_pnl = equity - alpaca.get("last_equity")` which is the correct way, but this value is not persisted to `eod_YYYY-MM-DD.json` for `monthly_review.py` to pick up.
+        *   **File:** `monthly_review.py`
+        *   **Function/Variable:** `_day_cell`, `pnl` (line 144)
+        *   **Code Path**: `_day_cell` retrieves `pnl = float(eod.get("pnl_today", 0) or 0)`. The `eod` dictionary is loaded from `eod_YYYY-MM-DD.json`. The `EOD SNAPSHOT` shows `pnl_today: 0.0` for 2026-05-11, even though there were two closed trades with actual P&L.
+        *   **Failure Condition**: The `eod_YYYY-MM-DD.json` file is not being updated with realized intraday P&L, leading `monthly_review.py` to report incorrect (zero) P&L for days with activity, misrepresenting performance.
+*   **`generate_dashboard.py`**:
+    *   No issues found. This file correctly identifies and calculates the `today_pnl` from Alpaca for display on the dashboard (`alpaca_daily_pnl = equity - alpaca.get("last_equity", equity)`).
+*   **`execution/orphan_manager.py`**:
+    *   **CRITICAL: GTC Stop Resubmission Race Condition (Patch 1 flaw)**: The `cancel_and_reconcile_gtc_stops` function is designed to handle `PENDING_CANCEL` orders by logging a critical error and clearing the `gtc_stop_order_id`. However, immediately after this (within the same function call), "Patch 1" attempts to resubmit an emergency GTC stop for any position lacking a `gtc_stop_order_id`. This creates a race condition where the new stop is submitted *before* the previous `PENDING_CANCEL` order has been fully processed by Alpaca, leading to the `held_for_orders` error and leaving the position unprotected. The comment "Orphan adoption in reconcile_positions() will attempt a fresh GTC stop at the next premarket cycle" in the `GTC-PENDING-CANCEL-FIX` section is contradicted by Patch 1's immediate resubmission.
+        *   **File:** `execution/orphan_manager.py`
+        *   **Function/Variable:** `cancel_and_reconcile_gtc_stops`, Patch 1 section (line 218 onwards). Specifically, the conditional `if _trade.get("gtc_stop_order_id") is None:` is met after a prior `PENDING_CANCEL` order's ID is cleared within the same function call.
+        *   **Code Path**: Bot restarts, `cancel_and_reconcile_gtc_stops` runs. For positions like TQQQ and AMZN, an existing `PENDING_CANCEL` order is detected (e.g., `2026-05-11 06:00:18,327` for TQQQ). The `gtc_stop_order_id` is cleared (per the `GTC-PENDING-CANCEL-FIX`). Immediately after, the "Patch 1" block iterates through `open_trades`, finds TQQQ/AMZN now have `gtc_stop_order_id = None`, and tries to `submit_gtc_stop_order`. This submission is blocked by `40310000 held_for_orders` because the prior `PENDING_CANCEL` has not yet fully propagated on Alpaca.
+        *   **Failure Condition**: Positions with `PENDING_CANCEL` GTC orders are left unprotected overnight because the bot attempts to resubmit new GTC orders too quickly, resulting in Alpaca rejections due to shares being `held_for_orders`.
+    *   **Bug: `gtc_pending_cancel_cycles` reset typo**: In the `PENDING_CANCEL` block (line 122), `tracker.open_trades[symbol]["gtc_pending_cancel_cycles"] = 0` is set *before* the log message `(detected cycle {_pc_cycles})`. This means the counter is always reset to 0 *before* being used, so `_pc_cycles` will always be 1 for the first detection in a cycle. It should be incremented.
+        *   **File:** `execution/orphan_manager.py`
+        *   **Function/Variable:** `cancel_and_reconcile_gtc_stops`, `_pc_cycles` (line 122)
+        *   **Code Path**: `_pc_cycles = trade.get("gtc_pending_cancel_cycles", 0) + 1` (line 121) is immediately followed by `tracker.open_trades[symbol]["gtc_pending_cancel_cycles"] = 0` (line 122). This resets the value to 0 before it can be truly incremented and stored across cycles for subsequent detections, rendering the `_pc_cycles` tracking ineffective beyond the current function call.
+        *   **Failure Condition**: The `gtc_pending_cancel_cycles` counter, intended to track persistence of `PENDING_CANCEL` states, is immediately reset to 0, preventing proper tracking across multiple detection cycles.
+*   **`execution/trade_engine.py`**:
+    *   No issues found beyond P5 items marked as fixed.
+*   **`data/fetcher.py`**:
+    *   No issues found. The `days_back` calculation fix for `was 400 floor — caused 400-day fetches for 19-bar ATR requests, leaking heap` (line 103) is a good performance/memory improvement.
+*   **`data/fmp_client.py`**:
+    *   No issues found. Caching logic seems robust and handles API limits.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash | **FIXED** (explicit column name handling, yfinance removed)
+*   P5-C2 | run_movers.py ImportError | **FIXED** (DataFetcher class added to fetcher.py)
+*   P5-H1 | PDT=3/3 confirm buffer stale at RTH open | **UNTOUCHED**
+*   P5-H2 | Fill price crosstalk | **UNTOUCHED**
+*   P5-H3 | Orphan GTC 404 path | **FIXED** (order `None` explicitly handled by clearing ID)
+*   P5-H4 | Rule 2 dead code | **FIXED** (TOD logic correctly implemented in orphan_manager and applied in trade_engine)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today | **FIXED** (explicit guards in `trade_engine` and `orphan_manager` Patch 1)
+*   P5-M1 | Cycle watchdog restart loop | **UNTOUCHED**
+*   P5-M2 | MRI score cached stale across sessions | **FIXED** (log shows stale data is detected and discarded)
+*   P5-M3 | score_comparison JSON unbounded growth | **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label | **UNTOUCHED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **TRIGGERED** (EOD snapshot shows 0 P&L today despite exits)
+*   P5-L3 | live_data_writer.py no reconnect logic | **UNTOUCHED**
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | execution/orphan_manager.py**: GTC Stop Resubmission Race Condition. When `cancel_and_reconcile_gtc_stops` clears a `gtc_stop_order_id` for a `PENDING_CANCEL` order, the "Patch 1" section immediately tries to re-submit a new GTC order for that symbol in the same function call. This creates a race condition where the new order is blocked by `held_for_orders` because the prior cancellation hasn't propagated on Alpaca yet, leaving the position unprotected overnight.
+    *   **Exact failure condition**: `Emergency GTC stop FAILED` logs for TQQQ and AMZN at 06:00 ET due to `blocked by PENDING_CANCEL order`, directly caused by `orphan_manager` clearing the ID and then attempting immediate resubmission within the same function execution.
+*   **INFRASTRUCTURE | CRITICAL | reporting/eod_snapshot**: EOD P&L Misrepresentation. The `eod_YYYY-MM-DD.json` file, used by `monthly_review.py` and displayed in the `EOD SNAPSHOT`, shows `pnl_today: 0.0` and `alpaca_pnl: 0.0` despite actual realized P&L from exits today (e.g., TSLA $-16.44, AMZN $-4.69). This is `P5-L2` actively triggered.
+    *   **Exact failure condition**: `EOD SNAPSHOT["pnl_today"]` and `EOD SNAPSHOT["alpaca_pnl"]` are `0.0` at the end of a day with closed positions that incurred actual P&L.
+*   **EXECUTION BUG | HIGH | execution/broker**: Intra-day `close_position blocked (40310000 held_for_orders)` for TSLA and AMZN. This signifies that even after pre-market reconciliation, GTC orders can still hold shares during RTH, interfering with managed exits.
+    *   **Exact failure condition**: `close_position blocked (40310000 held_for_orders)` warning appears during RTH for active positions when attempting to close them.
+*   **EXECUTION BUG | MEDIUM | execution/orphan_manager.py**: `gtc_pending_cancel_cycles` counter bug. The counter is reset to 0 immediately after being read, making `_pc_cycles` always '1' and preventing accurate tracking of `PENDING_CANCEL` persistence across cycles.
+    *   **Exact failure condition**: `tracker.open_trades[symbol]["gtc_pending_cancel_cycles"] = 0` (line 122) immediately follows its use for `_pc_cycles`, causing the counter to always show 1.
+*   **INFRASTRUCTURE | MEDIUM | main**: `gc.collect() collected 0 objects` warnings. Frequent `gc.collect()` calls taking time but reporting 0 objects collected, along with "heap may be growing" warnings, suggest a memory leak or inefficient object retention pattern within the bot.
+    *   **Exact failure condition**: Multiple log entries showing `gc.collect() took Xms, collected 0 objects — heap may be growing`.
+
+### FIX VALIDATION
+
+*   **P5-H5 (GTC stop suppressed at PDT=3/3)**: **PASS**. The logs show GTC stops are correctly submitted for non-PDT maxed positions (e.g., NVDL, CRWD, NVDA, TSLA) at startup, indicating the suppression logic is working as intended.
+*   **P5-H3 (Orphan GTC 404 path)**: **PASS**. The `orphan_manager.py` code (`if order is None: ... tracker.clear_gtc_stop_order_id(symbol)`) correctly handles orders not found at Alpaca.
+*   **P5-C1 (FVG MultiIndex)**: **PASS**. `trade_engine.py`'s `_find_recent_fvgs` method explicitly handles column names and mentions that `yfinance` (which could produce MultiIndex) is no longer used.
+*   **P5-C2 (run_movers.py ImportError)**: **PASS**. `data/fetcher.py` now includes a `DataFetcher` class, resolving the `ImportError`.
+*   **P5-M2 (MRI score cached stale across sessions)**: **PASS**. The log entry `MRI state 58.3h stale (>20h) — starting fresh.` confirms that the bot correctly detects and discards stale MRI data on startup.
+*   **No prior fixes to validate for new bugs.**
+
+### RECOMMENDED ACTIONS
+
+1.  **Address EOD P&L Recording**: Modify the EOD snapshot generation to correctly capture and persist intraday realized P&L into `eod_YYYY-MM-DD.json` (e.g., by using the same logic as `generate_dashboard.py` for `alpaca_daily_pnl`).
+2.  **Fix GTC Stop Resubmission Race Condition**: Refactor `execution/orphan_manager.py` to prevent immediate re-submission of GTC stops for positions whose IDs were just cleared due to `PENDING_CANCEL` status within the same `cancel_and_reconcile_gtc_stops` function call. Ensure re-submission respects the "next premarket cycle" logic without racing Alpaca's order system.
+3.  **Investigate POSITION COUNT DRIFT**: Diagnose why `risk.open_positions` initializes to 0 at bot startup when the `PortfolioTracker` shows active positions. Ensure `RiskManager` correctly loads or syncs its internal state.
+4.  **Resolve P&L Rounding to Zero**: Investigate `pnl=0.0` trades in the `TRADE EVENTS` log (e.g., AMD, CRM, QCOM) where entry ≠ exit price but the reason is `stop_hit` or `target`. Ensure P&L is accurately recorded, even for very small gains/losses.
+5.  **Address Memory Leak Warnings**: Investigate the `gc.collect() collected 0 objects` warnings to identify and mitigate potential memory leaks or inefficient object lifetime management within the bot.
