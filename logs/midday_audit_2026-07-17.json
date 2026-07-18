@@ -1,0 +1,104 @@
+{
+  "audit_date": "2026-07-17",
+  "run_ts": "2026-07-17T10:30:06.462368-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "META",
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 15,
+    "levels": {
+      "HIGH": 6,
+      "STRESSED": 5,
+      "ELEVATED": 4
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 57,
+    "watchdog_count": 2,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-17 15:58:44,432 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=24.2/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-17 16:00:15,945 WARNING ledger_sync ledger_sync wall-time 12.1s (fills=387 orders=2005)",
+      "2026-07-17 16:00:26,927 | WARNING  | strategy.signal_generator | run_scan: phase-1 global timeout \u2014 abandoned symbols: ['SOXL', 'SOXS', 'TSLL', 'NVDL'",
+      "2026-07-17 16:00:42,644 | WARNING  | execution.entry_logic | [AAPL] Sector correlation BLOCKED: already holding META in sector 'bigtech' \u2014 skipping to",
+      "2026-07-17 16:14:47,138 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) \u2014 T4 yfinance ^VIX fallback=17.7. _vix_confirmed=Fa"
+    ],
+    "watchdog_lines": [
+      "2026-07-17 16:14:30,695 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting.",
+      "2026-07-17 16:33:03,933 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 14m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": -32.279999999999994,
+    "win_rate": 0.5,
+    "profit_factor": 0.08451503119682353,
+    "avg_win": 2.979999999999997,
+    "avg_loss": -35.25999999999999,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": 2.979999999999997,
+      "entry_price": 29.99,
+      "exit_price": 27.01,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 34.33,
+      "target": 21.28
+    },
+    "worst": {
+      "symbol": "META",
+      "pnl": -35.25999999999999,
+      "entry_price": 668.96,
+      "exit_price": 633.7,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 623.61,
+      "target": 763.24
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": 2.979999999999997,
+        "entry_price": 29.99,
+        "exit_price": 27.01,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 34.33,
+        "target": 21.28
+      },
+      {
+        "symbol": "META",
+        "pnl": -35.25999999999999,
+        "entry_price": 668.96,
+        "exit_price": 633.7,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 623.61,
+        "target": 763.24
+      }
+    ]
+  }
+}

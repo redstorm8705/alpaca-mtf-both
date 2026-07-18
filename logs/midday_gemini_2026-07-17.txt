@@ -1,0 +1,61 @@
+Midday Gemini Audit — 2026-07-17
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+STATE DESYNC: Tracker (2) < RiskManager (3). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required. | Impacted components: `Tracker` and `RiskManager` position counts.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **P&L Consistency**: P&L signs for both closed trades (SMCI: +$2.98, META: -$35.26) are consistent with their implied trade directions and entry/exit prices. SMCI appears to be a short trade (entry > exit = profit), and META appears to be a long trade (entry < exit = loss).
+*   **Entry/Exit Plausibility**:
+    *   SMCI (short): Entry $29.99, Exit $27.01. Target T1=$28.25, T2=$26.51. Exit $27.01 is between T1 and T2, which is a plausible profit-taking exit for a partial trade.
+    *   META (long): Entry $668.96, Exit $633.70. Stop $623.61. The exit price $633.70 is above the stated stop price $623.61, indicating a favorable fill near the stop loss, which is acceptable.
+*   **Win Rate and Profit Factor**: The session has 1 win and 1 loss (50% win rate). Average win $2.98, average loss $-35.26. This results in a negative profit factor (0.08:1) for this small sample size (2 trades). This is not indicative of an edge and would warrant concern if sustained over more trades, but is not definitive with just two.
+*   **Score→Outcome Correlation**: Both trades had a high score of 10/12, which is above the `MIN_LONG_SCORE`/`MIN_SHORT_SCORE` of 8 and the dynamically adjusted MIN_SCORE of 9/12. One resulted in a win, one in a loss. With only two trades, no definitive correlation can be drawn.
+*   **Stop-Hit Rate**: A 50% stop-hit rate (1 out of 2 trades) is high but not statistically significant for this very small sample.
+*   **P&L = 0.0 Recording Bug**: No trades with P&L = $0.00 were recorded when entry ≠ exit price.
+*   **Partial Exit Position Size**: Source not provided to verify reduction in position size, only P&L.
+
+### ENTRY QUALITY
+*   **MRI Consideration**: The META trade was entered with MRI=ELEVATED. However, the bot successfully raised the `Dynamic MIN_SCORE` to 9/12 (from a base of 8/12) as a response to the ELEVATED MRI. The META trade still qualified with a score of 10/12, indicating it met the stricter criteria.
+*   **Volumetric Filtering & Sizing Adjustments**: Multiple entries (SNOW, PANW, NET, JPM) were correctly skipped because the calculated `dollar_cap` resulted in a position size of less than 1 share after various adjustments (e.g., `AB-3 TQI demotion`, `TSMOM vol-scale`, `VOTE-3 vol cap`, `FVG`). This indicates appropriate risk management and adherence to sizing logic under prevailing conditions (including `rolling 10-trade avg 25.8/100 < 50` for TQI demotion).
+*   **ORB Gate Blocking**: UBER and MSFT short signals were correctly blocked by the `ORB gate BLOCK` due to SPY not breaking down below the range, indicating proper filtering.
+
+### EXIT QUALITY
+*   **SMCI (Partial Exit)**: The exit at $27.01 for a short trade (entry $29.99) is between target levels T1 ($28.25) and T2 ($26.51), suggesting a valid partial profit capture.
+*   **META (Stop Hit)**: The exit at $633.70 due to a stop hit for a long trade (entry $668.96) is above the hard stop price of $623.61. This represents a good fill relative to the stop price.
+
+### MRI ALIGNMENT
+*   The overall MRI Close level for the session was ELEVATED.
+*   The bot's response of dynamically raising the `MIN_SCORE` to 9/12 when MRI was ELEVATED demonstrates alignment with risk-averse behavior for higher-risk regimes.
+*   The numerous instances of trade filtering and `dollar_cap` reductions (e.g., `AB-3 TQI demotion`, `TSMOM vol-scale`, `VOTE-3 vol cap`) reflect appropriate position sizing adjustments in potentially less favorable market conditions, aligning with a cautious approach during ELEVATED MRI.
+
+### LOG ANOMALIES
+*   `2026-07-17 17:26:06,953 | CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (2) < RiskManager (3). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.`
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Position Count Desynchronization**:
+    *   **Description**: The internal `Tracker` and `RiskManager` components have a desynchronized understanding of the number of open positions. The `Tracker` reports 2 open positions, while the `RiskManager` reports 3.
+    *   **Exact variable/metric involved**: `Tracker` (value: 2), `RiskManager` (value: 3). These values should be equal.
+    *   **Why it constitutes a failure**: This inconsistency is catastrophic because the `RiskManager` is responsible for overall risk decisions, including new entry approvals and position sizing based on available capacity. If `RiskManager` erroneously believes there is an additional open position (3 instead of 2), it could lead to:
+        1.  Prematurely blocking new entries by incorrectly reporting that `MAX_OPEN_POSITIONS` is met sooner.
+        2.  Skewing Kelly sizing calculations, as position count is a critical input to overall risk exposure.
+        3.  Requiring manual intervention ("Manual reconciliation required") which indicates a critical failure in the automated state management.
+        The log specifically states "Ignoring tracker — decreases must happen via register_close()", implying a `register_close()` call for one position might have failed or been missed, leading to the `RiskManager` retaining an extra count. This directly impacts live risk decisions.
+    *   **Exact condition**: `Tracker (2) < RiskManager (3)`, observed during the `[CYCLE-SYNC]` check within `execution.entry_logic`.
+
+*   **ALPHA ISSUE | LOW | Inconsistent ATR Multiplier Explanation**:
+    *   **Description**: The ATR-based stop and target multipliers shown in the logs (`stop 1.875x`, `target 3.90625x`, `stop 1.38914x`, etc.) do not directly match the `INTRADAY_STOP_ATR_MULT` (1.2) and `INTRADAY_TARGET_ATR_MULT` (2.5) configuration constants. While the ratio between the observed stop and target multipliers remains consistent (approx 1:2.1), and other VIX/Volatility tier constants suggest dynamic adjustments are possible, the specific logic or state that triggers these exact multipliers (e.g., 1.5625x adjustment for SNOW/PANW/NET, 1.1576x for JPM, 1.067x for BAC) is not explicitly stated or derivable from the provided logs/config.
+    *   **Exact variable/metric involved**: `stop Xx` and `target Yx` in `execution.risk_manager` log entries.
+    *   **Why it constitutes a failure**: This is a minor issue. It doesn't indicate a failure in execution or logic, but rather a lack of transparency in how the final ATR multipliers are derived. It makes auditing dynamic risk adjustments more difficult without the underlying formula or the current volatility/VIX state used in the calculation. It prevents full verification of "what the value is vs. what it should be."
+    *   **Exact condition**: Observed variability in `ATR-based stop` and `target` multipliers across different symbols (e.g., `SNOW` vs `JPM` vs `BAC`), which are not simply `INTRADAY_STOP_ATR_MULT` or `INTRADAY_TARGET_ATR_MULT`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | CRITICAL**: Immediately investigate and resolve the `[CYCLE-SYNC] STATE DESYNC` bug. This requires tracing the `register_close()` and position tracking logic to understand why the `RiskManager`'s internal count of open positions is not decrementing correctly. Implement robust error handling or a self-correction mechanism for this desynchronization.
+2.  **ALPHA | MEDIUM**: Enhance logging for ATR-based stop/target calculations. Specifically, log the exact volatility input or the specific `VIX_STOP_WIDEN_MULT_X` or `VOL_TIER_..._STOP_INTRADAY` multiplier that is applied to the base `INTRADAY_STOP_ATR_MULT` and `INTRADAY_TARGET_ATR_MULT` values. This will improve auditability of dynamic risk adjustments.
+3.  **ALPHA | LOW**: Continue to monitor the win rate and profit factor. While the sample size is small, a negative profit factor for high-scoring trades warrants close attention as more trades accumulate, especially given the conservative sizing adjustments already in place.

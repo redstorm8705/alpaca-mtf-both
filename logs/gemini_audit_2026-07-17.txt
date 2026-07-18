@@ -1,0 +1,94 @@
+Nightly Gemini Audit — 2026-07-17
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'execution/fill_reconciler.py', 'execution/exit_logic.py', 'execution/portfolio_tracker.py', 'strategy/run_cycle.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   **execution/portfolio_tracker.py | get_unverified_exits**: An unparseable `exit_time` for the SMCI trade prevents it from ever entering the reconciliation pipeline, resulting in permanent P&L corruption in the tracker.
+*   **execution/entry_logic.py (implied)** | `risk.open_positions` vs `tracker.open_positions` desync: Recurring `[CYCLE-SYNC] STATE DESYNC: Tracker (5) < RiskManager (6)` indicates a fundamental mismatch in the number of open positions between the RiskManager and PortfolioTracker, potentially leading to incorrect risk assessments or entry blocks.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring `[SMCI] get_unverified_exits: unparseable exit_time`**: Multiple warnings (e.g., `2026-07-17 19:28:09,870`) indicate a persistent failure to parse the `exit_time` for the SMCI trade. This is directly linked to P&L reconciliation issues.
+*   **Recurring `[ANOMALY-2] [SYMBOL] confirm_gate=X scans but no entry — risk.open_positions=6 vs tracker=5`**: Many warnings (e.g., `2026-07-17 19:28:09,871` for PANW, BAC, JPM, AAPL) indicate that several symbols are repeatedly passing a confirmation gate but not resulting in entries, coupled with a `risk.open_positions` / `tracker.open_positions` mismatch. This suggests a silent entry block or a desync in position tracking.
+*   **Recurring `[CYCLE-SYNC] STATE DESYNC: Tracker (5) < RiskManager (6)`**: This critical log message (e.g., `2026-07-17 19:29:31,636`) confirms a state inconsistency where the RiskManager reports more open positions than the PortfolioTracker. The bot explicitly states it's "Ignoring tracker" and calls for "Manual reconciliation required," indicating an unresolved and potentially impactful issue.
+*   **Recurring `[ANOMALY-3] TQI degradation: last-5-trade avg=25.6/100 < 30`**: This warning (e.g., `2026-07-17 19:28:09,871`) indicates a sustained drop in the Trade Quality Index. While informational, it highlights poor recent trade execution or exit discipline, and if based on corrupted P&L, is misleading.
+*   **Recurring `EOD P&L DRIFT`**: The bot consistently logs `EOD P&L DRIFT: Alpaca=$-30.10 tracker=$-32.68 drift=$+2.58` (e.g., `2026-07-17 19:36:30,270`). This indicates a discrepancy between the authoritative Alpaca P&L and the bot's internal tracker, which is a key symptom of the `_fill_unverified` and reconciliation issues.
+
+### PERFORMANCE AUDIT
+
+*   **P&L sign correctness**: For the two trades on 2026-07-17, META (long, entry 668.96, exit 633.70) correctly shows -35.26 P&L. SMCI (short, entry 27.01, partial exit 27.01, final exit 24.43) correctly shows 0.0 for partial P&L and 2.58 for remaining P&L (based on tracker's numbers). The *sign* of P&L is correct based on the tracker's recorded prices.
+*   **P&L recording bug (SMCI)**: There is a significant discrepancy between the tracker's P&L for SMCI and Alpaca's reported fills.
+    *   Tracker total for SMCI (from `EOD SNAPSHOT -> trades`): 0.0 (`partial_pnl`) + 2.58 (`pnl_remaining`) = 2.58.
+    *   Alpaca total for SMCI (from `EOD SNAPSHOT -> alpaca_per_trade`): 3.09 + 2.07 = 5.16.
+    *   The tracker recorded the first tranche at entry price (27.01) resulting in 0.0 P&L, but Alpaca's fill for that share was 23.92 (yielding 3.09 P&L). The tracker recorded the second tranche exit at 24.43 (yielding 2.58 P&L), but Alpaca's fill was 24.94 (yielding 2.07 P&L). This represents a clear P&L recording bug stemming from failed reconciliation.
+*   **`pnl_pct` computation**: For the SMCI trade, `pnl_pct: 4.78` is derived from `(tracker_pnl / (entry_price * original_qty)) * 100 = (2.58 / (27.01 * 2)) * 100 = 4.78`. This calculation is internally consistent with the tracker's (corrupted) P&L data.
+*   **Trades with `pnl=0.0`**: The partial exit for SMCI recorded `pnl=0.0` at a price equal to entry price (27.01). While plausible for a breakeven partial exit, the Alpaca fills show this was not a breakeven exit, but rather a profitable one (exit at 23.92, for a short trade). This highlights the P&L corruption.
+*   **Entry/exit prices plausibility**: Prices seem plausible for the symbols and general market activity.
+*   **Score→outcome correlation**: With only two trades today, no strong correlation can be drawn. One score 10 trade resulted in a loss, and one score 12 trade resulted in a win (per tracker). The `[ANOMALY-3] TQI degradation` suggests overall performance issues.
+*   **Stop-hit rate vs. win rate**: Today's win rate is 50% (1 win, 1 loss). All-time win rate is 42.4%. `avg_r_multiple` of -0.002 is extremely poor and indicates the bot is not capturing its edge.
+*   **Exit reason consistency**: META's `stop_hit` at 633.70 is below the threshold of 655.54 (for a long trade), which is consistent with a stop being hit.
+
+### TRADE INTEGRITY
+
+*   **P&L recording failure on `_fill_unverified` trades**: The SMCI trade, marked `_fill_unverified`, has an `exit_time` that is unparseable by `datetime.fromisoformat`. This prevents the `execution/fill_reconciler.py` from processing it, leading to the tracker's P&L diverging from Alpaca's actual fills. The `_fill_unverified` mechanism is designed to handle this, but the unparseable timestamp creates a silent bypass.
+*   **Incomplete state cleanup for `_unverified_exits`**: Because trades with unparseable `exit_time` are skipped by `get_unverified_exits` and `mark_fill_expired`, they remain indefinitely in the `_unverified_exits` dictionary. This leads to a stale, incorrect internal state.
+
+### MODIFIED FILE FINDINGS
+
+*   **`config.py`**:
+    *   **New Design Intent**: `MIN_LONG_SCORE` (8), `MIN_SHORT_SCORE` (8), `CONVICTION_FULL_MIN` (9), `CONVICTION_HALF_MIN` (8), and `KELLY_FRACTION` (0.50) have been changed to reflect an "aggressiveness mandate." These are intentional configuration changes, not bugs.
+    *   **RC4_RECONCILE_WINDOW_MINUTES**: Set to 90. This value, along with the floor clamp in `fill_reconciler.py`, directly addresses the previous structural inability of the reconciler to operate, which is a positive change.
+*   **`execution/fill_reconciler.py`**:
+    *   **BUG**: `run_fill_reconciliation` function, specifically within `get_unverified_exits()` (line 335 in `portfolio_tracker.py` which is called here) and `run_fill_reconciliation()` (line 76 for `entry_time` parsing).
+        *   **Failure condition**: If a trade's `exit_time` or `entry_time` (as retrieved by `trade.get("exit_time")` or `trade.get("entry_time")`) is an invalid ISO 8601 format (e.g., the `2026-07-17T16:51:32.786323Z` string for SMCI), the `datetime.fromisoformat()` call fails.
+        *   **Code path**: The `except (ValueError, TypeError)` block catches this. It logs a `WARNING` but then executes `continue`.
+        *   **Runtime vs. Intended**: The runtime *skips* processing that specific trade for reconciliation in the current cycle. The intended behavior is for the reconciler to either successfully patch the P&L or mark the trade as `expired` after a timeout, triggering a `CRITICAL` alert. By continually skipping, the trade remains perpetually `_fill_unverified` and unreconciled, leading to permanent P&L corruption without triggering the intended `CRITICAL` expiry alert.
+    *   **Bug A fix (`submitted_after=None`)**: The fix to use `submitted_after=None` in `_fetch_actual_fill_price` (line 120) for the external-close path is correct and addresses a critical P&L corruption bug (Bug A).
+*   **`execution/exit_logic.py`**:
+    *   **TQI Calculation (`_compute_tqi`)**: The TQI score calculation logic has been updated to reflect the new `CONVICTION_SKIP_BELOW` (8) and correctly scales points for entry scores between 8 and 12. This is accurate as per the new config.
+    *   **`_record_tqi` `_fill_unverified` guard**: The addition of `if trade.get("_fill_unverified"): return` (line 284) is a crucial fix (`UNVERIFIED-FILL GUARD`). It prevents feeding fabricated P&L (from unreconciled trades) into the Kelly sizer's rolling TQI history, thus preventing potentially incorrect sizing adjustments.
+*   **`execution/portfolio_tracker.py`**:
+    *   **BUG**: `get_unverified_exits` (line 335) and `mark_fill_expired` (line 442): Both functions contain the same `continue` logic when `exit_time` parsing fails. This prevents unparseable trades from being processed by either the reconciliation or expiry mechanisms. (This is a duplicate of the `fill_reconciler.py` bug, as `fill_reconciler` calls these functions.)
+    *   **`patch_exit_pnl` `_qty_at_close` fix**: The fix for `_qty_at_close` (lines 393-404) correctly handles cases where `_qty_at_close` might be `0` or non-numeric, ensuring proper P&L calculation for partial exits.
+    *   **TQI REPAIR logic**: The logic added to `patch_exit_pnl` (lines 429-440) to recompute and append TQI to Kelly history *after* a fill is verified is a correct and necessary part of the `UNVERIFIED-FILL GUARD`.
+*   **`strategy/run_cycle.py`**:
+    *   **SPY 52w-high persistence**: The addition of `_save_spy_52w_high` and `_load_spy_52w_high` (lines 35-71) provides a robust fallback mechanism for the ATH proximity gate, preventing it from silently failing open.
+    *   **Per-symbol 52w high cache**: The new `_sym_52w_high_cache` logic (lines 318-336) correctly addresses Bug 3, ensuring individual symbols are compared against their own 52w highs.
+
+### P5 STATUS
+
+*   **P5-C1 (FVG MultiIndex silent crash)**: UNTOUCHED
+*   **P5-C2 (run_movers.py ImportError)**: UNTOUCHED
+*   **P5-H1 (OBSOLETE — PDT enforcement)**: OBSOLETE (per Architecture Invariant)
+*   **P5-H2 (Fill price crosstalk)**: TRIGGERED (by SMCI P&L drift and unparseable `exit_time` leading to reconciliation failure)
+*   **P5-H3 (Orphan GTC 404 path)**: UNTOUCHED
+*   **P5-H4 (Rule 2 dead code)**: UNTOUCHED (The constant is present, but code leveraging it for rule 2 not visible).
+*   **P5-H5 (GTC stop suppressed at PDT=3/3)**: FIXED (per P5 description)
+*   **P5-M1 (Cycle watchdog restart loop)**: UNTOUCHED (can't assess from provided code)
+*   **P5-M2 (MRI score cached stale across sessions)**: UNTOUCHED (can't fully verify from provided code/logs)
+*   **P5-M3 (score_comparison JSON unbounded growth)**: FIXED (by design of daily EOD summary files)
+*   **P5-L1 (_classify_loss_driver() returns empty label)**: UNTOUCHED
+*   **P5-L2 (eod_YYYY-MM-DD.json written before positions closed)**: BEING ADDRESSED (by `write_eod_summary` calling `_load_log`, and the `_startup_reconcile_checked` triggering `reconcile_eod.py`).
+*   **P5-L3 (live_data_writer.py no reconnect logic)**: UNTOUCHED
+
+### NEW BUGS FOUND
+
+1.  **CATEGORY**: EXECUTION BUG
+    **SEVERITY**: CRITICAL
+    **FILE**: `execution/portfolio_tracker.py`
+    **DESCRIPTION**: P&L reconciliation silently fails for trades with unparseable `exit_time` or `entry_time`, leading to permanent P&L corruption in the tracker.
+    **EXACT FAILURE CONDITION**: In `get_unverified_exits` (line 335) and `mark_fill_expired` (line 442) of `portfolio_tracker.py`, and in `run_fill_reconciliation` (line 76) of `fill_reconciler.py` for `entry_time`, the `except (ValueError, TypeError)` block on `datetime.fromisoformat()` logs a warning but uses `continue`. This prevents the affected `_fill_unverified` trade from being added to the `pending` or `expired` lists, or marked as expired. Consequently, the trade remains indefinitely in the `_unverified_exits` index, never gets reconciled, and never triggers the intended `CRITICAL` alert for expiry, perpetuating P&L drift.
+
+### RECOMMENDED ACTIONS
+
+1.  **Address CRITICAL P&L Reconciliation Failure (New Bug 1)**:
+    *   **File**: `execution/portfolio_tracker.py` (lines 335, 442), `execution/fill_reconciler.py` (line 76).
+    *   **Fix**: Modify the error handling for `datetime.fromisoformat()` parsing within `get_unverified_exits`, `mark_fill_expired`, and `run_fill_reconciliation` to explicitly mark trades with unparseable timestamps as "unreconcilable/expired" and evict them from `_unverified_exits`, triggering a `CRITICAL` alert and Slack notification, rather than `continue`ing and silently retaining them.
+    *   **Alternative fix**: If `_exit_dt` (or `_et_str`) cannot be parsed, assign a sentinel `datetime` (e.g., `datetime.min`) and flag the trade with `_unparseable_timestamp = True`. Then, adjust the `_exit_dt < cutoff` comparison to correctly handle the sentinel, ensuring such trades eventually transition to the `expired` state.
+2.  **Investigate `[CYCLE-SYNC] STATE DESYNC`**: Immediately investigate the root cause of `risk.open_positions=6 vs tracker=5`. This requires auditing the `register_close()` function in RiskManager and all paths that modify `risk.open_positions` and `tracker.open_positions` to ensure consistency.
+3.  **Review `[ANOMALY-2]` Entry Blocks**: Analyze why multiple symbols (e.g., PANW, BAC, JPM, AAPL) are repeatedly passing `confirm_gate` but not entering, especially given the `CYCLE-SYNC` desync. This could be due to unexpected risk management blocks or an incorrect state.
+4.  **Monitor `[ANOMALY-3] TQI Degradation`**: Continue to monitor TQI. Once P&L reconciliation issues are resolved, TQI will reflect true execution quality, which is currently degraded.
+5.  **Audit P5-C2 (run_movers.py ImportError)**: This is a critical bug (`run_movers.py:19 imports DataFetcher which doesn't exist`) that crashes pre-market scans. It needs immediate attention as it impacts signal generation.

@@ -69,6 +69,21 @@ logs/*
 !logs/pending_claude_session_*.md
 !logs/f6_activation_BLOCKED_*.md
 !logs/f6_prereq*_design_*.md
+!logs/reports_durability_design_*.md
+# Routine cron report outputs — durable cross-account persistence (Option B, board 3-1 + Gro,
+# 2026-07-18). Un-ignored so scripts/sync_reports.py can commit them → any account's `git pull`
+# sees 100% of routine AUDIT reports. See logs/reports_durability_design_2026-07-18.md.
+# (weekly_*.html / monthly_*.html dashboards stay under the global *.html ignore — they are
+# human-facing, served via the OCI web server, and regenerate daily; a separate decision.)
+!logs/gemini_audit_*.txt
+!logs/midday_audit_*.json
+!logs/midday_gemini_*.txt
+!logs/meta_audit_latest.json
+!logs/ai_audit_meta_*.json
+!logs/gex_daily_audit_*.json
+!logs/wtp_*.md
+!logs/weekly_audit_rollup_*.md
+!logs/score16_report.json
 
 # ── Generated HTML dashboards ──────────────────────────────────────────────────
 *.html
