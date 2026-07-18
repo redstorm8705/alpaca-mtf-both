@@ -1,48 +1,58 @@
 # alpaca-mtf-bot — Project State (current, overwritten each session)
-**As of 2026-07-06 10:18 PM PT**
+**As of 2026-07-18 (Sat, interactive — Rafael present)**
 
 ## Bot
-All 4 OCI services active, HEAD `1952bef` (local = GitHub = OCI, in sync). Paper equity **$2,798.53**.
-9 open positions: AVGO long 1 · GOOGL long 1 (QHM) · HOOD long 2 · MARA long 16 · MS long 1 ·
-MSTR short 1 · NVDA long 1 (QHM) · RIVN long 17 · SNOW long 1.
-PDT abolished | Profile paper | MIN_SCORE=9/12 | KELLY_FRACTION=0.25.
+All 4 OCI services active. HEAD `858c7df` (local = GitHub = OCI, in sync). Market CLOSED (next open Mon
+2026-07-20). Paper. 5 open positions (Alpaca=tracker=5, verified at startup). `OWNERSHIP_GUARD_ENFORCE=False`
+(never-sell floor still DORMANT — arming is gated behind F6 prereq #2). PDT abolished | Profile paper |
+MIN_SCORE=9/12 | KELLY_FRACTION=0.25.
 
-## Active Program — Options page redesign + 0DTE strategy reframe (DESIGN STAGE, NOT SHIPPED)
-Rafael reframed 0DTE: it is NOT premium-selling; it is intraday-capture (breakouts / mean-reversion
-exploiting IV·delta·volatility — i.e. buying 0DTE directionally / for vol). 0DTE universe = 10 names
-(MAG7 + SPY/SPX/QQQ); Weekly directional = full universe. Sequencing = STRATEGY FIRST, then a
-pixel-exact page ("mockup = exactly what ships, no exceptions"). Three parts, in order:
-1. **Design the 0DTE intraday-capture signals** (Feature Design + board + Gro + GAI). **NEXT ACTION.**
-2. **SPX data source — BLOCKER:** Alpaca has no SPX index options. Decision pending from Rafael
-   (provider+key / SPX-less-now / SPY-proxy).
-3. **Build two-column `options_scanner.py`** to match the saved mockup exactly (Weekly | 0DTE, VRP+Δ,
-   no words, live clock + last-scanned + timers, mobile stack). Only after Part 1.
-Mockup (chat-only, standalone) saved: `logs/mockups/options_scanner_mockup_2026-07-06.html` — its 0DTE
-column still shows the OLD "premium selling" placeholder; that is a stub, not the spec.
+## This session (2026-07-18) — SHIPPED + LIVE
+- **`d93be65` — F6 D-obs + OBS-A (DARK/inert, zero live change).** Never-sell-guard hardening, prereq-2
+  arming condition (b). OBS-A: a type-corrupt ownership-ledger qty now fails CLOSED for a cached-protected
+  symbol (and pages), fails OPEN (keystone) otherwise — never crashes the exit path (function-boundary
+  never-raises wrappers on close/partial/stop; Exec-risk's PLTR −$16k blocked-stop scenario averted,
+  runtime-proven 13/13). D-obs: `page_floor_blind` — throttled (kind,symbol / 30-min) phone+Slack page on
+  fail-closed AMBIGUITY (ledger/Alpaca unreadable, drift-freeze, type-corrupt); deterministic floor-binding
+  rejects stay log-only. Files: alerts.py, execution/ownership_guard.py, execution/broker.py. Gate: 5-voice
+  board (Reliability+Exec-risk+Observability+Gro+GAI) all APPROVE-WITH-CHANGES → cold-2nd PASS → statics →
+  self-test 13/13 → FINAL preship (broker/alerts real Gro+GAI APPROVE; ownership_guard gai=APPROVE
+  gro=WAIVED on Groq TPM). Design `logs/f6_dobs_obsa_design_2026-07-18.md`.
+- **Verified this session:** F6 prereq #3 was already DONE+LIVE (`b5d519c`/`4c3ced6`) — the prior handoff
+  checkpoint's "WIP/uncommitted" was STALE. Reports durability (Option B) confirmed cross-account: 269
+  routine reports in git + OCI (Gemini midday/nightly, meta-audit, wtp). Gemini routine reports are NOT in
+  Master Brain (only project-state is) — optional future add.
+- **RAM diagnosed (Rafael: no spend).** Box is 956MB + 4GB swap — undersized; bot RSS 550–600MB during RTH →
+  free RAM 58–95MB is NORMAL → the two redundant watchdogs (memory_watchdog <200MB */30, ram_watch <80MB
+  */6) alarm on steady state → Slack spam; and swap-thrash slows scan cycles → the cycle-hang watchdog
+  restarted the bot twice mid-RTH on 7/17. Fix path = software levers only (box relocation from Phoenix is
+  locked; no spend): recalibrate/collapse the alerts + trim the pandas working set. DEFERRED this session.
 
 ## Open Items (priority)
-1. Options/0DTE Part 1 — 0DTE intraday-capture signal design (board + Gro + GAI).
-2. SPX source decision (Part 2 blocker).
-3. Options page build (Part 3) — after Part 1.
-4. OPT-2 event-sourced replay (after M1, which shipped `1952bef`) — spec `logs/M1_decomp_spec.md`.
-5. CLAUDE.md §OPEN QUESTION PROTOCOL loophole removal (gated edit).
-6. Groq UA / Cloudflare-1010 fix (un-stalls autonomous pipeline) — memory `reference_groq_ua_cloudflare_block`.
-7. RBLX phantom short-lot cleanup in `open_lots_prior_day.json`.
-
-## Recent Ships (live on OCI)
-- `1952bef` M1 mechanical extract → fifo_pnl.py + state_io.py (zero logic change).
-- `654d507` portfolio_tracker repeat-run FIFO attribution fix (persist+accumulate day P&L).
-- `504bd8f` GEX: compute on this-week expiry only + standalone dashboard card.
+1. **F6 v2 alert-polish** (before arming): cycle-rollup + recovery/all-clear + heartbeat; `load_ledger`
+   qty-type validation at source. → then live-verify a rejected sell (paper canary) → **prereq #2 = arm
+   `OWNERSHIP_GUARD_ENFORCE=True`** (LAST; `logs/f6_activation_BLOCKED_2026-07-17.md`). NO SEED until #2.
+2. **RAM alert-spam recalibration** (deferred, cheap win): collapse the 2 watchdogs into 1; alert on
+   swap-pressure/RSS-near-ceiling not raw free-MB; keep off-hours auto-restart.
+3. **Slack Gemini-report format fix**: audit→Slack renderer emits broken/duplicated fragments (literal `**`,
+   truncated sentences, same finding 3–4×). Renderer bug in nightly_audit.py / midday_audit.py block builder.
+4. **Checkpoint automation "B"** (dedicated `session-checkpoint` branch) — Rafael wanted it; other account's
+   push-to-main version abandoned (stranded uncommitted: scripts/checkpoint_hook.py, logs/session_checkpoint.md).
+5. Options/0DTE program (design stage): 0DTE intraday-capture signal design (board+Gro+GAI); SPX source
+   BLOCKER (Alpaca has no SPX); two-column options_scanner build after signals.
+6. UX total redesign of 5 HTML pages (queued behind bugs). Evolution mandate (learning loops).
 
 ## Hard Invariants
 - paper=True hardcoded in execution/broker.py — never change without full board vote.
-- SPY 5-min bar-over-bar is the SOLE entry gate.
-- All P&L from Alpaca fills API only — tracker math is cross-check only.
+- SPY 5-min bar-over-bar is the SOLE entry gate. All P&L from Alpaca fills API only (tracker = cross-check).
 - T1 (Alpaca) for all equity/ETF data — yfinance only for ^VIX, ^VIX3M, JPY=X.
-- Gro/GAI lean prompts (no leading conclusions); ship only after BOTH APPROVE the exact final diff.
+- Never-sell floor: fail OPEN for a NON-protected symbol (keystone — blocking a legit exit is the worse error);
+  fail CLOSED only for a genuinely-protected symbol on ambiguity. Never mask a loss.
+- Gro/GAI lean prompts (no leading conclusions); ship only after BOTH APPROVE the exact final diff
+  (Gro-WAIVE allowed only on a confirmed Groq rate/TPD limit, GAI still required).
 - Board + Gro + GAI POV on EVERY fork BEFORE it reaches Rafael (Open Question Protocol, no exemptions).
 
 ## Way of Working
-- Cross-account durability: every session's work lands in git + Master Brain; chat-only artifacts are
-  not an acceptable record. Mockup = exactly what ships. Kill words (dense, number-first UI).
-- Execute don't ask which item next; surface genuine external blockers (e.g. SPX key).
+- Cross-account durability: every session's work lands in git + handoff.md + Master Brain; chat-only artifacts
+  are not an acceptable record. Resume = `git pull` → read handoff.md ⏩ block → query Master Brain.
+- Execute don't ask which item next; surface genuine external blockers. No spend without Rafael's OK.
