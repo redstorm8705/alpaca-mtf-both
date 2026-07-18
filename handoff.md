@@ -7,7 +7,7 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-17 interactive) — pick up here
+## ⏩ LATEST (2026-07-18 autonomous CCR) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
@@ -36,14 +36,18 @@ logs + .md + Master Brain at EVERY step so any account/session can pick up mid-s
 - **✅ PREREQ #1 COMPLETE:** C-1 lock (`800815e`) + C-2/C-3 post-buy verify loop + persisted
   seed-block flag (`9ad926d`, DARK/inert). Both fully gated (design board + statics + cold-2nd +
   Gro/GAI preship). OCI restart deferred (C-1 is a live cron-path change; C-2/C-3 inert).
-- **⏳ PREREQ #3 (NEXT):** GTC/DAY stop-submission floor check (or F6-symbol skip) in
-  `execution/broker.py:submit_gtc_stop_order`/day-stop path — close the resting-stop hole so an
-  orphan-adopted anchor can't get a live sell-stop. Its own full gate. Inert until floor armed.
-- **⏳ PREREQ #2 (LAST):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556) — ONLY after #1 (ledger
-  populated + protected_symbols.json present) AND #3 land, AND a live-verified rejected sell on a
-  protected symbol. This is the one dangerous flip; it changes the close path for ALL tiers.
-**NO SEED (execute_starter) until all 3 land.** ⏩ NEXT EXACT STEP: implement prereq #3 (GTC floor
-check) per the design doc ordering. Seed plan ready in `logs/f6_activation_BLOCKED_2026-07-17.md`.
+- **🔶 PREREQ #3 — APPROVAL PACKAGE READY (2026-07-18 CCR):** Patch for GTC/DAY stop floor
+  check in `execution/broker.py` is fully gated (board 2-0 APPROVE, cold second-agent 3 rounds
+  PASS after two bugs caught and fixed). **PENDING: Gro+GAI preship on exact diff** (no .env in
+  CCR). See `logs/pending_approval_f6_prereq3_2026-07-18.md` + `logs/pending_patch_2026-07-18_f6_prereq3.patch`.
+  **⏩ NEXT EXACT STEP:** Run Gro+GAI on the exact diff in the approval package → both APPROVE → apply
+  the patch → commit + push → OCI `git pull --ff-only` (no restart needed; patch is DORMANT).
+- **⏳ PREREQ #2 (LAST):** arm `OWNERSHIP_GUARD_ENFORCE=True` (config.py:556) — ONLY after #1 AND #3
+  land, AND ledger F6 floors populated + protected_symbols.json present + live-verify a rejected sell.
+  Binding pre-ARMING conditions from Reliability seat (before prereq #2 flip, not before prereq #3 ship):
+  (a) promote `ownership_guard.py:134-145` cache write failure to CRITICAL+Slack;
+  (b) document multi-tier coexistence gap in operator runbook (guard blocks entire stop, not qty-bounded).
+**NO SEED (execute_starter) until all 3 land.** Seed plan ready: `logs/f6_activation_BLOCKED_2026-07-17.md`.
 
 **🔴 STILL BLOCKED — FOREVER-6 ARMING (do NOT flip FOREVER6_ENABLED=True until all 3 prereqs land).**
 Full analysis: **`logs/f6_activation_BLOCKED_2026-07-17.md`**. Rafael directed "turn F6 on + seed

@@ -8255,3 +8255,61 @@ over main for a message typo — THIS audit entry is the authoritative record.
   (outer try/except wrapper)→PASS re-verify + Gro APPROVE + GAI APPROVE preship b7c8d1ee.
 - PREREQ #1 COMPLETE (C-1 800815e + C-2/C-3 9ad926d). NEXT: prereq #3 (GTC/DAY stop floor
   check in broker.py) → prereq #2 (arm OWNERSHIP_GUARD_ENFORCE=True) LAST. NO SEED until all 3.
+
+## 2026-07-18 (autonomous CCR) — F6 prereq #3: GTC/DAY stop floor check in broker.py
+
+**File audited:** `execution/broker.py` (931 lines — full read complete, 4 chunks, Read tool)
+**Purpose:** Block a live Alpaca sell-stop on an F6-protected symbol submitted from a non-QHM tier.
+A GTC/DAY stop triggered by Alpaca bypasses `close_position()`'s never-sell-floor check — this is the only intercept point.
+
+### 10-Point Audit
+
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis (py_compile/mypy/ruff) — baseline | PASS (all 3 tools clean) |
+| 2 | End-to-end trade path | GTC stop path: run_cycle.py → submit_gtc_stop_order; DAY path: gtc_manager.py, exit_logic.py, lifecycle.py, entry_logic.py → submit_day_stop_order. All orphan paths (orphan_manager L790/1252/1606) use tier="intraday" (default). QHM path (qhm.py L341) uses tier="qhm". |
+| 3 | Adversarial scenarios | OWNERSHIP_GUARD_ENFORCE=False: block DORMANT ✓. floor=0: block skipped ✓. QHM tier: explicitly excluded ✓. Non-sell (buy) stops: condition gated on side=="sell" ✓. LedgerError on protected sym: fail-closed (skip stop) ✓. LedgerError on non-protected: fail-open (proceed) ✓. |
+| 4 | Full read | COMPLETE: 931 lines, all functions read |
+| 5 | Cross-references | All callers of submit_gtc_stop_order and submit_day_stop_order identified. 17 total call sites; none pass tier="forever6" (F6 never submits stops by design). QHM correctly uses tier="qhm" at L341. |
+| 6 | Conflicting directions | None. close_position() already has the floor check. This adds it to the GTC/DAY submission path — the only other path where Alpaca can execute a sell. |
+| 7 | Redundancy scan | No dead code. New blocks are inert until OWNERSHIP_GUARD_ENFORCE=True. |
+| 8 | State persistence | No file I/O in the new code. Ledger is read-only here. |
+| 9 | Data source tier | Not applicable (no data fetches). |
+| 10 | Timezone + logging | Not applicable. All log messages at WARNING level with [symbol] prefix. |
+
+### RC Scan (new code only)
+- RC-1: No datetime calls ✓
+- RC-2: No path references ✓
+- RC-3: `except _og_p3.LedgerError` — logs warning (not silent pass) ✓
+- RC-4: No record_exit calls ✓
+- RC-5: No file writes ✓
+- RC-6: No API field assumptions ✓
+- RC-7: No share sizing ✓
+- RC-8: No scan buffers ✓
+
+### Static Analysis on Final Revised Draft (after all bug fixes)
+- `py_compile`: **PASS**
+- `mypy --warn-unreachable`: **PASS** (0 errors)
+- `ruff check --select E,W,F,B`: **PASS** (0 violations)
+- `git apply --check`: **PASS** (base `9107d23`)
+- Patch SHA256: `bf242f1d20bfcba5f655c8f250edf38350efd8f7b9640006d07c976db8b16317`
+
+### Patch Revision History (bugs caught and fixed by cold second-agent rounds)
+- **R1 FAIL:** `protected_floor()` returns F6+QHM combined → would block intraday stops on QHM-only symbols. **Fix:** `tier_qty(ledger, symbol, "forever6")`.
+- **R2 FAIL:** `FOREVER6_SYMBOLS` does not exist in config.py (it's `FOREVER6_UNIVERSE`). `getattr()` returned `[]` → LedgerError fallback was dead code. **Fix:** `FOREVER6_SYMBOLS` → `FOREVER6_UNIVERSE` in both blocks + comment.
+- **R3 PASS:** All four checks clear. Confirmed: `_cached_protected_symbols()` returns `set`; `FOREVER6_UNIVERSE` is a list of strings; absent ledger returns empty ledger (no LedgerError); all terminal states correct.
+
+### Board Vote
+- **Reliability seat:** **APPROVE** (conditions before ARMING, not before ship)
+- **Execution-risk seat (Harris/Thorp):** **APPROVE** (race gap documented in comment ✓)
+
+### Cold Second-Agent
+- R1: FAIL → fixed
+- R2: FAIL → fixed
+- **R3: PASS**
+
+### Gro/GAI — NOT AVAILABLE (no .env in CCR session; must be run in interactive session before ship)
+
+**Status:** BOARD 2-0 APPROVE + cold second-agent PASS. PENDING Gro+GAI (next interactive session).
+Approval package: `logs/pending_approval_f6_prereq3_2026-07-18.md`
+Patch file: `logs/pending_patch_2026-07-18_f6_prereq3.patch`

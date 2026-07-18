@@ -57,6 +57,7 @@ logs/*
 !logs/pending_ds_gai_*.json
 !logs/pending_patch_*.patch
 !logs/pending_approvals_*.md
+!logs/pending_approval_*.md
 # Whitelisted for research memos (quarterly holds, session analysis):
 !logs/quarterly_holds_research_*.md
 # Whitelisted for failure log (approach history across sessions):

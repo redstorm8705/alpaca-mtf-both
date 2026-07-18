@@ -1,0 +1,77 @@
+--- execution/broker.py	2026-07-16 22:02:21.224686011 +0000
++++ b/execution/broker.py	2026-07-18 04:36:42.218289456 +0000
+@@ -356,6 +356,40 @@
+         logger.warning(f"[{symbol}] GTC stop skipped: qty={qty}, stop=${stop_price}")
+         return None
+ 
++    # F6 PREREQ #3 — never-sell-floor guard on GTC stop path.
++    # DORMANT while OWNERSHIP_GUARD_ENFORCE=False. A GTC stop triggered by
++    # Alpaca overnight bypasses close_position's floor check — this is the
++    # only intercept point. Inert today; activates only once prereq #2 ships.
++    # tier="qhm" excluded: QHM has independent share ownership and may stop its own qty.
++    # RACE NOTE: floor=0 during C-2 verify-loop (0–14s post-F6-buy) → guard does not block
++    # during that window; fresh anchor is exposed until ledger syncs. Prereq #2 must verify
++    # ledger-reflected before flipping OWNERSHIP_GUARD_ENFORCE=True.
++    import config as _p3cfg
++    if side == "sell" and tier != "qhm" and getattr(_p3cfg, "OWNERSHIP_GUARD_ENFORCE", False):
++        from execution import ownership_guard as _og_p3
++        try:
++            _p3_ledger = _og_p3.load_ledger()
++            _p3_f6_qty = _og_p3.tier_qty(_p3_ledger, symbol, "forever6")
++            if _p3_f6_qty > _og_p3._QTY_EPS:
++                logger.warning(
++                    f"[{symbol}] submit_gtc_stop_order SKIPPED (tier={tier!r}) — "
++                    f"forever6 qty={_p3_f6_qty:.0f} share(s); "
++                    f"live stop would bypass floor if triggered overnight."
++                )
++                return None
++        except _og_p3.LedgerError as _p3e:
++            # F6-only fallback: intersect protected cache with FOREVER6_UNIVERSE so we
++            # never fail-closed on QHM-only symbols during ledger errors.
++            _p3_f6_set = _og_p3._cached_protected_symbols() & set(
++                getattr(_p3cfg, "FOREVER6_UNIVERSE", [])
++            )
++            if symbol in _p3_f6_set:
++                logger.warning(
++                    f"[{symbol}] submit_gtc_stop_order SKIPPED (tier={tier!r}) — ledger "
++                    f"unreadable for F6-protected symbol (fail-closed): {_p3e}"
++                )
++                return None
++
+     client     = _get_trading_client()
+     order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
+     order_data = StopOrderRequest(
+@@ -473,6 +507,33 @@
+         logger.warning(f"[{symbol}] DAY stop skipped: qty={qty}, stop=${stop_price}")
+         return None
+ 
++    # F6 PREREQ #3 — never-sell-floor guard on DAY stop path (mirrors GTC guard above).
++    # DORMANT while OWNERSHIP_GUARD_ENFORCE=False. tier="qhm" excluded.
++    # RACE NOTE: same sync-gap caveat as GTC block above — see that comment.
++    import config as _p3cfg
++    if side == "sell" and tier != "qhm" and getattr(_p3cfg, "OWNERSHIP_GUARD_ENFORCE", False):
++        from execution import ownership_guard as _og_p3
++        try:
++            _p3_ledger = _og_p3.load_ledger()
++            _p3_f6_qty = _og_p3.tier_qty(_p3_ledger, symbol, "forever6")
++            if _p3_f6_qty > _og_p3._QTY_EPS:
++                logger.warning(
++                    f"[{symbol}] submit_day_stop_order SKIPPED (tier={tier!r}) — "
++                    f"forever6 qty={_p3_f6_qty:.0f} share(s); "
++                    f"live stop would bypass floor if triggered during RTH."
++                )
++                return None
++        except _og_p3.LedgerError as _p3e:
++            _p3_f6_set = _og_p3._cached_protected_symbols() & set(
++                getattr(_p3cfg, "FOREVER6_UNIVERSE", [])
++            )
++            if symbol in _p3_f6_set:
++                logger.warning(
++                    f"[{symbol}] submit_day_stop_order SKIPPED (tier={tier!r}) — ledger "
++                    f"unreadable for F6-protected symbol (fail-closed): {_p3e}"
++                )
++                return None
++
+     client     = _get_trading_client()
+     order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
+ 
