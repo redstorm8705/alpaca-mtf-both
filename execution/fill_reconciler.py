@@ -151,14 +151,17 @@ def run_fill_reconciliation(tracker, kelly=None, risk=None) -> None:  # noqa: AR
                 "skipping this cycle.", sym,
             )
             continue
-        try:
-            from datetime import datetime
-            datetime.fromisoformat(_et_str)
-        except (ValueError, TypeError) as _date_e:
+        # RC-4 datetime fix (2026-07-19): tolerant parse (defense-in-depth — entry_time is
+        # bot-generated PT-aware today, but Alpaca Z/fraction forms now also validate). MINIMAL
+        # skip on a genuinely-unparseable entry_time — the trade just retries next cycle; RC-4
+        # expiry surfaces it if it never resolves (board: fill_reconciler stays MINIMAL, since
+        # recovery is bounded by entry_time and a corrupt entry_time can't bound the query).
+        from execution.state_io import _iso_to_dt
+        if _iso_to_dt(_et_str) is None:
             logger.warning(
-                "[fill_reconciler] entry_time parse failed for %s (%r) — skipping "
-                "this cycle to avoid an unbounded/stale fill match: %s",
-                sym, _et_str[:80], _date_e,
+                "[fill_reconciler] entry_time parse failed for %s (%r) — skipping this cycle "
+                "to avoid an unbounded/stale fill match.",
+                sym, _et_str[:80],
             )
             continue
 

@@ -1,3 +1,4 @@
+# ruff: noqa: E501  — dense logger strings run long (project convention; matches execution/broker.py)
 """
 execution/portfolio_tracker.py
 Tracks open trades, P&L, day trades, and trade history.
@@ -22,7 +23,7 @@ sys.path.insert(0, str(_ROOT))
 # M1 (2026-07-06): stateless FIFO helpers + shared IO extracted to leaf modules.
 # DAG: portfolio_tracker → fifo_pnl → state_io (no cycle). Call sites unchanged.
 # noqa: E402 — intentional post-sys.path.insert placement (mirrors trade_logger).
-from execution.state_io import _PT, _atomic_write  # noqa: E402
+from execution.state_io import _PT, _atomic_write, _iso_to_dt  # noqa: E402
 from execution.fifo_pnl import (  # noqa: E402
     _fetch_alpaca_fills_for_date,
     _fifo_reconstruct,
@@ -162,16 +163,39 @@ class PortfolioTracker:
                 _exit_str = trade.get("exit_time") or ""
                 if not _exit_str:
                     continue
+                # RC-4 datetime fix (2026-07-19, BGG HARDENED): tolerant parse (handles the
+                # Alpaca Z/variable-fraction filled_at that a raw fromisoformat rejected). A
+                # genuinely-unparseable exit_time (None) is NOT silently skipped — it is routed
+                # to `expired` so mark_fill_expired surfaces ONE RC-4 CRITICAL and stamps
+                # _patch_applied_ts. That breaks the previous SILENT permanent-stuck (the trade
+                # was dropped before the expiry check → never reconciled, never marked, re-queued
+                # every restart, no alert ever). _iso_to_dt never raises.
+                # Explicit None handling is PRIMARY (Reliability seat); the try/except is a
+                # backstop that mirrors patch_exit_pnl's (_iso_to_dt never raises, so it is
+                # defense-in-depth). On EITHER a None parse or any unexpected error, the trade
+                # is routed to EXPIRED — never silently dropped/stuck.
                 try:
-                    _exit_dt = datetime.fromisoformat(_exit_str)
-                    if _exit_dt.tzinfo is None:
+                    _exit_dt = _iso_to_dt(_exit_str)
+                    if _exit_dt is None:
+                        # WARNING not CRITICAL: fill_reconciler fires the single authoritative
+                        # operator CRITICAL+Slack for this `expired` symbol (cold-2nd 2026-07-19).
+                        logger.warning(
+                            "[%s] get_unverified_exits: unparseable exit_time %r — routing to "
+                            "EXPIRED for manual verification (never silently stuck).",
+                            sym, _exit_str,
+                        )
+                        if sym not in expired:
+                            expired.append(sym)
+                        continue
+                    if _exit_dt.tzinfo is None:  # naive stored time → assume PT (prior behavior)
                         _exit_dt = _exit_dt.replace(tzinfo=_PT)
-                except (ValueError, TypeError) as _e:
+                except Exception as _e:          # backstop — should not fire; surface, never drop
                     logger.warning(
-                        "[%s] get_unverified_exits: unparseable exit_time"
-                        " %r — skipping (%s)",
-                        sym, _exit_str, _e,
+                        "[%s] get_unverified_exits: unexpected exit_time error %r (%s) — "
+                        "routing to EXPIRED.", sym, _exit_str, _e,
                     )
+                    if sym not in expired:
+                        expired.append(sym)
                     continue
                 if _exit_dt < cutoff:
                     if sym not in expired:
@@ -285,10 +309,22 @@ class PortfolioTracker:
             _new_pnl_remaining = round((exit_price - _entry_px) * _qty * _dir_mult, 4)
             _new_total_pnl     = round(_new_pnl_remaining + _partial_pnl, 4)  # 4dp
 
+        # RC-4 datetime fix (2026-07-19): tolerant parse. _delay_secs is a LOG METRIC only —
+        # it never feeds P&L (that comes from exit_price+entry_price below), so a None/naive
+        # timestamp just leaves the metric 0.0. Explicit None + tz guards (Data-integrity seat)
+        # so the aware/naive subtraction can't TypeError; the try/except is a belt-and-suspenders.
         _delay_secs = 0.0
         try:
-            _exit_dt    = datetime.fromisoformat(_trade.get("exit_time") or "")
-            _delay_secs = (datetime.now(_PT) - _exit_dt).total_seconds()
+            _exit_dt = _iso_to_dt(_trade.get("exit_time") or "")
+            if _exit_dt is not None:
+                if _exit_dt.tzinfo is None:      # naive → assume PT so the subtraction is aware/aware
+                    _exit_dt = _exit_dt.replace(tzinfo=_PT)
+                _delay_secs = (datetime.now(_PT) - _exit_dt).total_seconds()
+            else:
+                logger.warning(
+                    "[patch_exit_pnl] unparseable exit_time %r for %s — delay metric left 0.0",
+                    _trade.get("exit_time"), symbol,
+                )
         except Exception as _e:
             logger.warning(
                 "[patch_exit_pnl] Could not parse exit_time for %s: %s",
@@ -400,17 +436,34 @@ class PortfolioTracker:
             if _t.get("_patch_applied_ts"):
                 continue
             _exit_str = _t.get("exit_time", "")
+            # RC-4 datetime fix (2026-07-19, BGG HARDENED): tolerant parse. Explicit None handling
+            # is PRIMARY; the try/except is a backstop (mirrors patch_exit_pnl; _iso_to_dt never
+            # raises). On None OR any unexpected error, MARK expired (stamp _patch_applied_ts FIRST
+            # so get_unverified_exits + _load_log exclude it → the RC-4 alert fires once, no re-queue).
             try:
-                _exit_dt = datetime.fromisoformat(_exit_str)
+                _exit_dt = _iso_to_dt(_exit_str)
+                if _exit_dt is None:
+                    _t["_patch_applied_ts"]       = now.isoformat()
+                    _t["_fill_reconcile_expired"] = True
+                    found = True
+                    logger.warning(     # WARNING: fill_reconciler emits the one operator CRITICAL+Slack
+                        "[%s] mark_fill_expired: unparseable exit_time %r — marked expired for "
+                        "manual verification (breaks the re-queue loop).",
+                        symbol, _exit_str,
+                    )
+                    continue
                 if _exit_dt.tzinfo is None:
                     _exit_dt = _exit_dt.replace(tzinfo=_PT)
                 else:
                     _exit_dt = _exit_dt.astimezone(_PT)
                 if _exit_dt >= cutoff:
                     continue  # fresh trade — leave for patch_exit_pnl
-            except Exception as _e:
+            except Exception as _e:      # backstop — should not fire; mark expired, never loop
+                _t["_patch_applied_ts"]       = now.isoformat()
+                _t["_fill_reconcile_expired"] = True
+                found = True
                 logger.warning(
-                    "[%s] mark_fill_expired: unparseable exit_time %r — skipping (%s)",
+                    "[%s] mark_fill_expired: unexpected exit_time error %r (%s) — marked expired.",
                     symbol, _exit_str, _e,
                 )
                 continue

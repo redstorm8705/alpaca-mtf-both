@@ -16,6 +16,7 @@ import shutil
 import ssl
 import tempfile
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -30,6 +31,35 @@ except ImportError:
 
 _ET = ZoneInfo("America/New_York")
 _PT = ZoneInfo("America/Los_Angeles")
+
+# ── Tolerant ISO-8601 parser (RC-4 datetime fix, board+Gro+GAI 2026-07-19) ────
+# Python 3.10's datetime.fromisoformat rejects a trailing 'Z' and any fractional
+# seconds that is not exactly 3 or 6 digits. Alpaca `filled_at` values (which can be
+# stored as a trade's exit_time) carry both. A raw parse there fails and the P&L
+# reconciliation silently skips the trade (permanent corruption / re-queue loop).
+_FRAC_RE = re.compile(r"\.(\d+)")
+
+
+def _iso_to_dt(ts):
+    """Parse an ISO-8601 timestamp tolerant of Alpaca's variable-length fractional
+    seconds (1-9 digits) and the 'Z' suffix. Pads/truncates the fraction to exactly 6
+    digits and maps 'Z'->'+00:00'. Returns an AWARE datetime when the input carries an
+    offset/'Z', a NAIVE datetime for an offset-less string, or None on genuine failure.
+    NEVER raises — callers decide how to degrade. Kept here (not imported from
+    reporting/pnl_ledger, whose identical helper would be a circular import: pnl_ledger
+    imports execution.quarterly_hold_manager)."""
+    if not ts:
+        return None
+    try:
+        _t = ts.strip().replace("Z", "+00:00")
+        m = _FRAC_RE.search(_t)
+        if m:
+            _frac6 = (m.group(1) + "000000")[:6]
+            _t = _t[:m.start() + 1] + _frac6 + _t[m.end():]
+        return datetime.fromisoformat(_t)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
 
 # ── numpy-safe JSON encoder ───────────────────────────────────────────────────
 try:
