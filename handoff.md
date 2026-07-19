@@ -64,10 +64,18 @@ cross-account-switch need):**
   preserved), exact-dedup, word-boundary truncation. Gate: cold-2nd PASS + statics + tests + FINAL preship real
   Gro+GAI APPROVE. Effect visible on next midday/post-market cards.
 - **🌙 AUTONOMOUS (Rafael asleep 2026-07-19, authorized "activate BGG, audit, validate, ship+commit next
-  approved items"):** working RTH audit-flagged bugs first (per autonomous protocol), then the non-F6 queue.
-  Ship BGG-aligned, queue unaligned. Remaining queue: checkpoint automation "B" (dedicated branch); F6 v2
-  alert-polish (before arming); options/0DTE (SPX-source BLOCKED); UX redesign. Gemini routine reports NOT in
-  Master Brain (only project-state) — optional add.
+  approved items"):** shipped the Slack-format fix, then began the #1 open RTH bug.
+- **⏸️ HALTED ON SESSION LIMIT (resets 5:40am PT 2026-07-19).** The next item is FULLY PREPPED but NOT shipped:
+  **⏩⏩ NEXT EXACT STEP — RC-4 datetime-parse P&L fix (CATASTROPHIC 7/17).** Design + full-read gate COMPLETE
+  (`logs/datetime_parse_pnl_fix_design_2026-07-19.md`; portfolio_tracker.py 1896L + fill_reconciler.py 206L +
+  state_io.py 111L all read). Root: raw `datetime.fromisoformat()` at portfolio_tracker.py:166/290/404 +
+  fill_reconciler.py:156 fails on Alpaca `Z`/variable-fraction timestamps → SMCI trade never reconciles
+  (permanent P&L corruption) + re-queue loop + false EXPIRED. FIX: add tolerant `_iso_to_dt` to
+  `execution/state_io.py`, route the 4 sites through it. **BGG NOT RUN (session limit killed both board seats).
+  Do NOT ship until board + Gro + GAI align on the design + the MINIMAL-vs-HARDENED fail-mode fork.** Resume:
+  run BGG on the design → implement → statics/cold-2nd/preship → ship. Risk-REDUCING (never masks a loss).
+- **Remaining queue after that:** checkpoint automation "B" (dedicated branch); F6 v2 alert-polish (before
+  arming); options/0DTE (SPX-source BLOCKED); UX redesign. Gemini routine reports NOT in Master Brain — optional add.
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").

@@ -8373,4 +8373,20 @@ over main for a message typo — THIS audit entry is the authoritative record.
   `core[0] if core else text`; exact-dedup; colon-required _CONT_FIELD) → cold-2nd re-verify PASS (never-raise
   verified, callers unaffected); FINAL preship real Gro+GAI APPROVE (roll 3; GAI's 1st reject genuine —
   `_clean_md` over-strip — fixed; rest flash-noise micro-edges cold-2nd cleared). Callers nightly_audit.py /
-  midday_audit.py unaffected (contract unchanged). Effect visible on next midday/post-market audit cards. [SHA on ship]
+  midday_audit.py unaffected (contract unchanged). Effect visible on next midday/post-market audit cards.
+- SHIPPED + LIVE: `9341516` (2026-07-19, OCI git pull, no restart — renderer picked up on next audit cron; import OK).
+
+## 2026-07-19 (autonomous, Sun night) — RC-4 datetime-parse P&L fix — DESIGNED + FULL-READ DONE, GATE NOT RUN (session limit)
+- #1 open RTH bug (CATASTROPHIC 7/17): raw `datetime.fromisoformat()` at portfolio_tracker.py:166/290/404 +
+  fill_reconciler.py:156 fails on Alpaca `Z`/variable-fraction timestamps (exit_time can be a filled_at,
+  pt:1093) → get_unverified_exits skips → PERMANENT P&L corruption (SMCI); mark_fill_expired skips →
+  re-queue loop; fill_reconciler skips → false EXPIRED. FIX: add tolerant `_iso_to_dt` to
+  `execution/state_io.py` (leaf module; pnl_ledger's copy can't be reused — circular), route all 4 sites
+  through it. Full design + fork (MINIMAL vs HARDENED fail-mode on genuine-garbage) in
+  `logs/datetime_parse_pnl_fix_design_2026-07-19.md`.
+- Full-read gate DONE: portfolio_tracker.py 1896L (Explore verbatim), fill_reconciler.py 206L, state_io.py 111L.
+- **BGG NOT RUN — both cold board seats + Gro/GAI terminated on the session limit (resets 5:40am PT).** NOT
+  implemented, NOT shipped (no alignment). NEXT SESSION: run board (Data-integrity + Reliability/P&L seats
+  design prompts are in this session's transcript) + Gro + GAI on the design → resolve the fail-mode fork →
+  implement (state_io._iso_to_dt + 4 call sites) → statics + cold-2nd + preship → ship. It is risk-REDUCING
+  (makes stuck P&L reconcile; never masks a loss; kill switch Alpaca-sourced).
