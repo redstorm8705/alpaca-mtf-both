@@ -484,29 +484,62 @@ VOLUME_MIN_VALID_BARS        = 15      # min non-NaN bars in iloc[-21:-1] requir
 VOLUME_REQUIRE_TWO_BAR       = False   # Levitt C2: 2 consecutive above-threshold days (deferred)
 # VOLUME_GRADED_ENABLED = False        # reserved S25 — do not implement until 60-session shadow
 
-# ─── GEX (GAMMA EXPOSURE) ─────────────────────────────────────────────────────
-# Board unanimous S50b originally gated activation on a 30-session shadow review.
-# Rafael mandate 2026-07-03 (sole mandate authority): activate now — the shadow
-# clock never ran (data pipeline was dead until the 2026-07-03 repair), and the
-# operator wants live impact data instead. Compensating control: mandatory DAILY
-# audit via scripts/gex_daily_audit.py (cron 4:30 PM ET) — labels timeline,
-# Layer-8 floor raises, Kelly edge-mult applications, and affected entries.
-# Effects when True: run_cycle Layer 8 raises MIN_SCORE +1 while SPY GEX=NEGATIVE;
-# kelly.py multiplies kelly_risk by the staged values below for signal types past
-# 30-trade warmup (both are, as of 2026-07-03), capped by KELLY_MAX_RISK_PCT;
-# no multiplier on Fridays (0DTE carve-out).
-GEX_ENABLED             = True    # ACTIVE (Rafael 2026-07-03) — daily audit mandated
+# ─── GEX (GAMMA EXPOSURE) — DEMOTED TO DISPLAY-ONLY / SHADOW (S0, 2026-07-19) ──
+# STATUS: SHADOW — NOT IN SIZING. GEX has ZERO effect on entry gating or position
+# sizing. It still computes, logs, and accrues history; it does not touch capital.
+#
+# WHY (BGG aligned 2026-07-19 — Board 4/4 + Gro APPROVE + GAI APPROVE; full design
+# in logs/gex_0dte_evaluator_design_2026-07-19.md):
+#   1. The flip level is currently TAUTOLOGICAL, not a measurement. _compute_gex
+#      (data/gex.py:384-397) sweeps STRIKES at a FIXED spot and then argmin-selects
+#      the crossing NEAREST SPOT. A real gamma flip is the hypothetical spot S* at
+#      which net dealer gamma, REPRICED at S*, crosses zero — gamma must be
+#      recomputed at each candidate spot, and it never is. Under Black-Scholes,
+#      gamma peaks at K≈spot, so the crossing lands near spot BY CONSTRUCTION.
+#      Evidence: post-fix SPY flip printed 755.0/755.0/755.0 against spot 754.68.
+#      (The earlier flip=694 was a separate, already-CLOSED pre-fix artifact —
+#      commit aad518a landed 2026-07-15 10:02 PT, the 694 record is 06:37 PT.)
+#   2. Accuracy is UNMEASURED and cannot be measured soon. Effective sample is
+#      ~1.2 observations/day (open interest is T+1-constant intraday, so the 26
+#      snapshots are not 26 observations; SPY and QQQ are highly correlated), and
+#      label serial correlation rho~0.7 gives a variance inflation factor of 5.67
+#      => ~960 trading days for a defensible verdict on the current design.
+#   3. The blast radius is LEVERAGE, not one trade. get_gex_regime feeds kelly.py's
+#      edge multiplier, so a mis-specified GEX edge is a sizing error applied
+#      MULTIPLICATIVELY ACROSS THE ENTIRE BOOK — not just to GEX-motivated entries.
+#      Errors in bet sizing are not symmetric with errors in signal generation.
+#
+# WHAT STILL RUNS (deliberately — the evidence clock must keep accruing):
+#   - refresh_gex() is called from live_data_writer.py:97 and is NOT gated on this
+#     flag, so logs/gex_snapshot.json + logs/gex_history.jsonl keep being written.
+#   - run_cycle.py:1571-1584 reads and logs the Layer-8 shadow record BEFORE the
+#     GEX_ENABLED check at 1585, so the label timeline keeps accumulating.
+#   - scripts/gex_daily_audit.py (cron 4:30 PM ET) keeps producing the daily audit.
+#
+# RE-ARMING IS A HUMAN DECISION, NOT AN AUTOMATIC ONE. Do not flip this back on a
+# favorable-looking early sample: the board's guard is that any re-arm requires
+# (a) _compute_gex re-specified as a proper root-find in S*, (b) the flip-on-spot
+# regression showing the flip carries information independent of spot (slope~1 and
+# R^2~1 proves it does not), and (c) a fresh board vote. Changing any threshold in
+# this block resets the evidence clock to zero.
+GEX_ENABLED             = False   # SHADOW — demoted from True (S0, 2026-07-19). Neutralizes BOTH
+                                  # consumers: kelly.py:331 edge multiplier (stays 1.0) AND
+                                  # run_cycle.py:1585 Layer-8 MIN_SCORE bump (stays _base_min — the
+                                  # same neutral value the other seven layers contribute when
+                                  # quiescent, so the max() at run_cycle.py:1591 is provably
+                                  # unchanged). Both fail-neutral when False; a MISSING attr also
+                                  # fails neutral, since both call sites use getattr(..., False).
 GEX_STALE_MINUTES       = 30      # 45→30 at activation (Kyle + GAI condition: 45 min = 3 stale
                                   # bars on the 15-min cadence before STALE triggers; 30 = 2)
-# STAGED MULTIPLIERS (Thorp + GAI activation condition, 2026-07-03): full values
-# 1.30 / 1.15 were board-approved S50b, but the label is freshly repaired and the
-# account is in a sub-20%-WR stretch — the multiplier only ever INCREASES risk.
-# Staged to 1.10 / 1.05 until rolling 20-trade WR >= 35% or board review, then
-# revert to 1.30 / 1.15. All decision paths and daily-audit data flow either way.
-GEX_EDGE_MULT_MOMENTUM  = 1.10    # staged (S50b full value 1.30) — see note above
-GEX_EDGE_MULT_MR        = 1.05    # staged (S50b full value 1.15) — see note above
+# Multipliers neutralized to 1.00 as defense-in-depth (belt-and-suspenders): even if
+# GEX_ENABLED were flipped True by accident or by a stale branch, sizing would be
+# unchanged. Prior staged values were 1.10 / 1.05 (S50b full values 1.30 / 1.15);
+# both are recorded here so a future board re-arm has the history, but neither is
+# live. Restoring a non-1.00 value requires the re-arm conditions above.
+GEX_EDGE_MULT_MOMENTUM  = 1.00    # neutralized (was 1.10 staged; S50b full 1.30)
+GEX_EDGE_MULT_MR        = 1.00    # neutralized (was 1.05 staged; S50b full 1.15)
 GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN
-GEX_MIN_SCORE_NEG_BUMP  = 1       # MIN_SCORE +1 when GEX=NEGATIVE (requires stronger signal)
+GEX_MIN_SCORE_NEG_BUMP  = 0       # neutralized (was 1) — no MIN_SCORE raise on GEX=NEGATIVE
 
 # ─── TSMOM VOL-SCALING (board vote 2026-04-22, 17-0) ─────────────────────────
 # Vol-scaled sizing multiplier: target_vol / ewma_vol_60d, capped to [FLOOR, CAP].
