@@ -65,17 +65,25 @@ cross-account-switch need):**
   Gro+GAI APPROVE. Effect visible on next midday/post-market cards.
 - **🌙 AUTONOMOUS (Rafael asleep 2026-07-19, authorized "activate BGG, audit, validate, ship+commit next
   approved items"):** shipped the Slack-format fix, then began the #1 open RTH bug.
-- **⏸️ HALTED ON SESSION LIMIT (resets 5:40am PT 2026-07-19).** The next item is FULLY PREPPED but NOT shipped:
-  **⏩⏩ NEXT EXACT STEP — RC-4 datetime-parse P&L fix (CATASTROPHIC 7/17).** Design + full-read gate COMPLETE
-  (`logs/datetime_parse_pnl_fix_design_2026-07-19.md`; portfolio_tracker.py 1896L + fill_reconciler.py 206L +
-  state_io.py 111L all read). Root: raw `datetime.fromisoformat()` at portfolio_tracker.py:166/290/404 +
-  fill_reconciler.py:156 fails on Alpaca `Z`/variable-fraction timestamps → SMCI trade never reconciles
-  (permanent P&L corruption) + re-queue loop + false EXPIRED. FIX: add tolerant `_iso_to_dt` to
-  `execution/state_io.py`, route the 4 sites through it. **BGG NOT RUN (session limit killed both board seats).
-  Do NOT ship until board + Gro + GAI align on the design + the MINIMAL-vs-HARDENED fail-mode fork.** Resume:
-  run BGG on the design → implement → statics/cold-2nd/preship → ship. Risk-REDUCING (never masks a loss).
-- **Remaining queue after that:** checkpoint automation "B" (dedicated branch); F6 v2 alert-polish (before
-  arming); options/0DTE (SPX-source BLOCKED); UX redesign. Gemini routine reports NOT in Master Brain — optional add.
+- **✅ RC-4 DATETIME-PARSE P&L FIX — SHIPPED + LIVE (`c1d5998`, 2026-07-19, OCI restarted, market closed,
+  DEPLOY_OK + services active; `_iso_to_dt(Z/frac)` verified parsing live).** The CATASTROPHIC 7/17 bug: raw
+  `datetime.fromisoformat()` at portfolio_tracker.py:166/290/404 + fill_reconciler.py:156 failed on Alpaca
+  `Z`/variable-fraction timestamps → SMCI never reconciled (permanent P&L corruption) + re-queue loop + false
+  EXPIRED. FIX: tolerant `_iso_to_dt` in `execution/state_io.py`, routed the 4 sites through it. BGG 4/4
+  APPROVE-WITH-CHANGES → HARDENED (corrupt ts → route to EXPIRED/stamp `_patch_applied_ts`, surface once, no
+  loop; fill_reconciler MINIMAL). Design `logs/datetime_parse_pnl_fix_design_2026-07-19.md`. FOLLOW-UPS
+  (BGG-logged, NOT shipped): (C) entry_time-bounded recovery for a corrupt-exit/valid-entry fill; pt:448
+  `.startswith(today)` UTC-vs-PT overnight mis-bucketing (`_pt_date`-style fix).
+- **✅ SOP — DISAGREEMENT PROTOCOL now MANDATORY on ANY reject (`c230c03`, Rafael 2026-07-19):** any reviewer
+  reject (cold-2nd/board/Gro/GAI/preship) MUST counter-prompt with the refuting evidence — blind re-rolling
+  PROHIBITED. `preship_audit.py` gained a `--evidence <file>` counter-prompt path (MACHINE-LOCAL — `.claude/`
+  is git-ignored; each machine needs the same one-time add; the SOP documents the manual fallback).
+- **⏭️ STE-Lite report readability (Rafael APPROVED STE-Lite + clickable GitHub-SHA links + TL;DR):**
+  BGG 4/4 aligned; design `logs/ste_report_readability_design_2026-07-19.md`. Rafael sharpened: the CEO line
+  = TRUE LAYMAN plain English (no jargon), the evidence line = full technical for engineers. NEXT BUILD after
+  the queue below. **Remaining queue:** OCI provider pivot research (Rafael's stated next priority — free OCI
+  ARM A1.Flex 24GB vs Hetzner); checkpoint automation "B"; F6 v2 alert-polish; options/0DTE (SPX BLOCKED);
+  UX redesign. Gemini routine reports NOT in Master Brain — optional add.
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").
