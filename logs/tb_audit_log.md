@@ -8390,3 +8390,5 @@ over main for a message typo — THIS audit entry is the authoritative record.
   design prompts are in this session's transcript) + Gro + GAI on the design → resolve the fail-mode fork →
   implement (state_io._iso_to_dt + 4 call sites) → statics + cold-2nd + preship → ship. It is risk-REDUCING
   (makes stuck P&L reconcile; never masks a loss; kill switch Alpaca-sourced).
+
+- 2026-07-19 — OCI ARM A1.Flex migration SCOPED (BGG 4/4: DevOps+Reliability seats + Gro + GAI aligned). Runbook: logs/oci_arm_migration_runbook_2026-07-19.md. NOT executed (needs Rafael go + weekend flip). One open item: IP reserve-vs-new (verify OCI console).

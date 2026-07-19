@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-18 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-07-19 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -81,7 +81,17 @@ cross-account-switch need):**
 - **⏭️ STE-Lite report readability (Rafael APPROVED STE-Lite + clickable GitHub-SHA links + TL;DR):**
   BGG 4/4 aligned; design `logs/ste_report_readability_design_2026-07-19.md`. Rafael sharpened: the CEO line
   = TRUE LAYMAN plain English (no jargon), the evidence line = full technical for engineers. NEXT BUILD after
-  the queue below. **Remaining queue:** OCI provider pivot research (Rafael's stated next priority — free OCI
+  the queue below. **✅ OCI ARM A1.Flex MIGRATION — SCOPED (BGG 4/4 aligned, 2026-07-19). NOT executed.**
+Runbook: `logs/oci_arm_migration_runbook_2026-07-19.md`. Move E2.1.Micro (1GB, swap-thrash `deactivating` hangs) →
+free A1.Flex ARM 24GB (fall back 2/12), same Phoenix region, $0. All 4 voices (DevOps + Reliability board seats +
+Gro + GAI) aligned: rebuild venv from `requirements.lock` (NEVER copy x86 venv; `--only-binary=:all:` +
+`file …so`=aarch64 proof); git clone (not copy); **single-writer flip** (stop+disable OLD trading & `crontab -r`
+BEFORE any NEW writer/cron starts); **authoritative state snapshot taken ONLY after OLD writers stopped** (graceful
+stop, no `kill -9`, sha256 witness); **weekend/market-CLOSED cutover only**; keep E2 as hot rollback ≥5 sessions.
+**ONE open item = IP:** reserve+reassign `129.153.208.32` (consensus) — VERIFY IN OCI CONSOLE whether the ephemeral
+IP can move off a *running* E2 (GAI: needs poweroff; board: convert→reserved live); fallback = new IP + update 8
+hardcoded refs (enumerated in runbook). **⏩ NEXT:** Rafael's go → Phase 0–4 staging (anytime) → weekend flip.
+**Remaining queue:** OCI provider pivot research (Rafael's stated next priority — free OCI
   ARM A1.Flex 24GB vs Hetzner); checkpoint automation "B"; F6 v2 alert-polish; options/0DTE (SPX BLOCKED);
   UX redesign. Gemini routine reports NOT in Master Brain — optional add.
 
