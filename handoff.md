@@ -11,10 +11,48 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**🎯 EXACT NEXT ACTION (2026-07-19, newest first): Rafael to APPROVE/REJECT the aligned GEX/0DTE
-evaluator scope in `logs/gex_0dte_evaluator_design_2026-07-19.md`. On APPROVE → ship S0 (demote GEX
-to display-only: `GEX_EDGE_MULT`→1.0, MIN_SCORE bump→0) FIRST, through the full mandatory patch
-sequence + FINAL PRE-SHIP Gro+GAI gate on the exact diff.**
+**🎯 EXACT NEXT ACTION (2026-07-19, newest first): convene the BOARD SEATS on Rafael's two new
+directives (Gro + GAI already returned — see "GEX RE-SPEC" below). Two Gro/GAI splits need the board
+as tie-breaker: (1) is the gamma-weighted centroid spot-INDEPENDENT? Gro says yes, GAI says no-but-
+not-1:1 (GAI's reasoning is the more rigorous — gamma weights are computed at S0, so it cannot be
+fully independent; this must be settled BEFORE building, or we rebuild the same tautology); (2)
+outright long 0DTE (Gro) vs defined-risk DEBIT VERTICAL (GAI). Then bring the aligned package to
+Rafael. Do NOT start building until the centroid's spot-dependence is resolved.**
+
+**✅ S0 SHIPPED + DEPLOYED + VERIFIED (2026-07-19, commit `2219f70`) — GEX IS NOW DISPLAY-ONLY.**
+`config.py`: `GEX_ENABLED` True→False, `GEX_EDGE_MULT_MOMENTUM` 1.10→1.00, `GEX_EDGE_MULT_MR`
+1.05→1.00, `GEX_MIN_SCORE_NEG_BUMP` 1→0. GEX now has ZERO effect on sizing (kelly.py:331 edge
+multiplier) and ZERO effect on gating (run_cycle.py:1585 Layer-8 MIN_SCORE bump). Verified ON THE BOX:
+all 4 services active, dashboard 200, HEAD=2219f70, values confirmed via `venv/bin/python3 -c "import
+config"`. **Evidence clock still accruing by design** — `refresh_gex()` (live_data_writer.py:97) is
+NOT gated on the flag, and run_cycle.py:1571-1584 logs the Layer-8 shadow record BEFORE the flag check.
+Gate: statics 3/3 + cold-agent PASS + preship Gro APPROVE / GAI APPROVE (GAI rejected first on a false
+premise — `_gex_min_score` contributing `_base_min` to the `max()` — refuted by showing all 8 layers
+initialize to `_base_min` and `max(S ∪ {m}) == max(S)` when `max(S) ≥ m`; its `-999999` sentinel would
+have leaked into the operator-facing `_score_reason` log at run_cycle.py:1607. One counter-prompt round.)
+
+**🧭 GEX RE-SPEC — Rafael directives 2026-07-19 (Gro + GAI in; BOARD SEATS STILL NEEDED):**
+Rafael: *"the gex should be measuring the weekly midpoint and flips for that week only"* and *"the 0DTE
+spy recommendation should be price-action based, but I'd leave that to the bgg."* Prompt:
+`…/scratchpad/bgg_respec_prompt.md`. Gro+GAI AGREE on: weekly midpoint = **gamma-weighted centroid**
+`Σ(K·|GEX_K|)/Σ|GEX_K|`; re-key `strike_gex` to **(expiry, strike)** with per-expiry subtotals;
+**EXCLUDE 0DTE** from the weekly measure (its OI is T+1-stale AND it carries ~7× the gamma weight, so
+it hijacks a number meant to describe the week); **DROP the flip concept** entirely in favour of the
+centroid + a positive/negative gamma BAND; price-action trigger = reuse SPY 5-min bar-over-bar
+(Architecture Invariant #1) + VWAP reclaim/rejection; emit ONE direction or NO call (current both-legs
+behavior makes hit rate mechanically ~50% and unfalsifiable); replace the hardcoded 10:05-10:20 window
+with a trigger-driven entry; score in **P&L-in-R / breakeven-move hit rate**, NOT directional hit rate
+(theta dominates); ship as SHADOW first. GAI adds the key normalization problem: the measure must stay
+**comparable across weekdays** as the expiry set shrinks Mon→Fri — it proposes a FIXED expiry set (the
+first two non-0DTE Friday expiries) so the number means the same thing every day.
+
+**⚠️ THE UNRESOLVED CRUX (board must settle):** GAI states plainly that the centroid is **NOT
+spot-independent**, because each Γ_i is evaluated at the current spot S₀ — it argues the dependence is
+not 1:1 and that the centroid tracks the SHAPE of the gamma distribution rather than spot. Gro asserts
+it IS independent. **If GAI is right and the dependence is strong, we would rebuild the same
+tautology under a new name.** The decisive pre-build test is the same one that killed the flip:
+regress the proposed centroid on spot across a month of sessions — slope≈1 and R²≈1 means it carries
+no independent information. RUN THAT TEST ON HISTORICAL DATA BEFORE WRITING THE PRODUCTION PATH.
 
 **🔬 GEX / 0DTE ACCURACY AUDIT — BGG ALIGNED 2026-07-19 (Board 4/4 + Gro APPROVE + GAI APPROVE).**
 Full design: `logs/gex_0dte_evaluator_design_2026-07-19.md`. Alignment reached in ONE counter-prompt

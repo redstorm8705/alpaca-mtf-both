@@ -8414,3 +8414,28 @@ re-rolls (DISAGREEMENT PROTOCOL satisfied).
 RC classes: no new RC instance opened (RC-6-adjacent: OI/greeks provenance — tracked in design doc).
 Design: logs/gex_0dte_evaluator_design_2026-07-19.md. Awaiting Rafael APPROVE/REJECT.
 NO code changed this turn — alignment-only durable sync per CLAUDE.md §DURABLE SYNC RULE.
+
+## 2026-07-19 — S0 SHIPPED: GEX demoted to display-only (commit 2219f70)
+File: config.py (single-file diff, 53+/20-). GEX_ENABLED True->False;
+GEX_EDGE_MULT_MOMENTUM 1.10->1.00; GEX_EDGE_MULT_MR 1.05->1.00;
+GEX_MIN_SCORE_NEG_BUMP 1->0.
+Full read gate: kelly.py 466L (2 chunks), config.py 670L (3 chunks), gex.py partial+board,
+run_cycle.py 2064L (Explore subagent, verbatim GEX regions + structural map). Declared.
+10-pt audit + RC-1..RC-8: no new RC instance introduced (constants + comment only; no control
+flow, no I/O, no datetime, no paths). Cold second-agent: PASS on all 4 checks (logic inversion,
+boundary, missing conditions, branch completeness) — verified both consumers fail-neutral, and
+that refresh_gex()/shadow logging survive.
+Statics: py_compile PASS | mypy --warn-unreachable clean | ruff E,W,F,B clean (config.py AND
+execution/kelly.py AND strategy/run_cycle.py — no pre-existing-error carve-out needed).
+FINAL PRE-SHIP: Gro APPROVE. GAI REJECT -> counter-prompt (DISAGREEMENT PROTOCOL, no blind
+re-roll) -> APPROVE in one round. GAI's reject premise was false: it claimed _gex_min_score
+contributing _base_min to the max() at run_cycle.py:1591 is a non-neutral effect. Refuted with
+(a) all 8 layers initialize to _base_min (lines 1498/1511/1515/1529/1535/1557/1563/1569), and
+(b) max(S union {m}) == max(S) when max(S) >= m. Its proposed GEX_MIN_SCORE_NEG_BUMP=-999999
+would have leaked into the operator-facing _score_reason f-string at run_cycle.py:1607
+("GEX=NEGATIVE/-999991"), violated the 0-12 score domain, and silently poisoned the re-arm path.
+Conceded its one valid point (comment wording "Kills" -> "Neutralizes", now precise).
+Deploy: git single channel. push -> OCI git pull --ff-only -> restart -> DEPLOY_OK received.
+Health: 4/4 services active, dashboard HTTP 200, HEAD=2219f70, values confirmed on box.
+NOTE (pre-existing, NOT caused by this change): startup log still shows
+"POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=5" — the known open STATE-DESYNC P0.
