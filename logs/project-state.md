@@ -28,6 +28,15 @@ MIN_SCORE=9/12 | KELLY_FRACTION=0.25.
   restarted the bot twice mid-RTH on 7/17. Fix path = software levers only (box relocation from Phoenix is
   locked; no spend): recalibrate/collapse the alerts + trim the pandas working set. DEFERRED this session.
 
+## 2026-07-19 (later, autonomous) — also shipped + a halted item
+- ✅ **Slack Gemini-report format fix — SHIPPED + LIVE** (`9341516`): audit→Slack renderer now one clean
+  grouped entry per finding (no `**` leak, no dup, no 3–4× repeats, word-boundary truncation).
+- ⏸️ **RC-4 datetime-parse P&L fix — PREPPED, NOT SHIPPED (halted on session limit, resets 5:40am PT).**
+  #1 open RTH bug (CATASTROPHIC): raw `datetime.fromisoformat()` (portfolio_tracker.py:166/290/404 +
+  fill_reconciler.py:156) fails on Alpaca `Z`/variable-fraction timestamps → SMCI never reconciles
+  (permanent P&L corruption) + re-queue loop. Design + full-read gate DONE; BGG gate NOT run. Resume per
+  handoff ⏩ / `logs/datetime_parse_pnl_fix_design_2026-07-19.md`. Fix = tolerant `_iso_to_dt` in state_io.
+
 ## Open Items (priority)
 1. **F6 v2 alert-polish** (before arming): cycle-rollup + recovery/all-clear + heartbeat; `load_ledger`
    qty-type validation at source. → then live-verify a rejected sell (paper canary) → **prereq #2 = arm
