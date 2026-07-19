@@ -32,14 +32,18 @@ the NEXT STEP — execute in a MARKET-CLOSED window.**
     dashboard HTTP 200. Fixed: recreated the runtime `public/` serve-dir (symlinks, not in git). VERIFIED:
     Alpaca positions == 7 (DDOG:1 GOOGL:2 HOOD:2 NVDA:2 RIVN:10 TQQQ:1 XOM:3), ownership_ledger intact (37
     positions), **swap=0, RAM ~11.3GB avail**, 0 errors in log. Bot trades on this box Monday.
-- **⏩⏩ NEXT EXACT STEP — IP / DEPLOY-TARGET (the ONLY remaining flip task):** The bot runs fine on
-  `137.131.51.250`, but the hardcoded `129.153.208.32` in the session-start skill + deploy scripts + CLAUDE.md
-  still points at the OLD (stopped) box → deploys/session-checks would hit the wrong box. Resolve ONE of:
-  (A) **Move the IP (BGG-preferred):** OCI reserve old ephemeral `129.153.208.32` → detach from old → (remove
-  new box's ephemeral `137...`) → attach reserved `129...` to new box. Keeps SAME IP, zero ref-updates. Fiddly
-  via OCI CLI (the CLI IS configured on the Mac). OR (B) **Update refs** `129.153.208.32`→`137.131.51.250` in
-  `.claude/skills/session-start`, deploy scripts, CLAUDE.md (gated edits). Until this is done, DEPLOY manually to
-  `137.131.51.250`.
+- **✅ IP / DEPLOY-TARGET — DONE (option B, ref-update).** OCI ephemeral IPs can't be moved, so kept the new
+  box's own IP `137.131.51.250` and updated all hardcoded `129.153.208.32` refs → `137.131.51.250` in:
+  `scripts/deploy_to_oci.sh`, `scripts/service_watchdog.sh`, `scripts/failback_to_mac.sh`,
+  `scripts/auto_continue_prompt.txt`, the `~/.claude/skills/session-start` skill (9 refs), and
+  `.claude/settings.local.json`. **DEPLOY TARGET IS NOW `137.131.51.250`.** (Optional future robustness:
+  reserve a public IP for the new box so it survives even termination.)
+- **✅ 5 HTML REPORTS — accessible on the new box, SAME login, NEW IP.** Served by nginx **:8080 with basic
+  auth** (never :80 — `:80=404` on BOTH boxes, unchanged). New URLs: `http://137.131.51.250:8080/dashboard.html`
+  · `/scan_results.html` · `/options.html` · `/weekly_review.html` · `/monthly_review.html` (same credentials —
+  copied `/etc/nginx/.htpasswd` old→new). Copied the generated HTMLs + `logs/{weekly,monthly}_*.html` from old→new
+  (they're gitignored) so they render immediately; crons refresh them on the new box going forward.
+- **MIGRATION FULLY COMPLETE.** Old box stays as a stopped rollback ≥7 days.
 - Migration runbook `7401a17` (BGG 4/4). Bundle for reference: Mac `…/scratchpad/migrate/`.
 
 ---

@@ -12,7 +12,7 @@ set -e
 
 BOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OCI_USER="ubuntu"
-OCI_IP="129.153.208.32"
+OCI_IP="137.131.51.250"
 OCI_PATH="/home/ubuntu/mtf-bot"
 SSH_KEY="$HOME/.ssh/mtf_bot_oracle"
 RESTART=true

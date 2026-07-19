@@ -110,7 +110,7 @@ done
             # Wording: the counter is shared across services, so state what is
             # actually true — N checks saw A service down — not that THIS service
             # failed N times (board accuracy catch 2026-07-16).
-            if slack ":rotating_light: MTF service DOWN on OCI: ${DOWN}— ${n} consecutive checks had a service down (>= $((GRACE * 5)) min). ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 (throttled 30m)"; then
+            if slack ":rotating_light: MTF service DOWN on OCI: ${DOWN}— ${n} consecutive checks had a service down (>= $((GRACE * 5)) min). ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250 (throttled 30m)"; then
                 echo "$now" > "$STAMP"
                 echo "$(TZ=America/Los_Angeles date): DOWN: ${DOWN}(check $n) — ALERT SENT" >> "$LOG"
             else
@@ -157,7 +157,7 @@ done
 # most likely real outage would also disarm the watchdog. If we see a service down but
 # no counter state on disk, alert UNTHROTTLED (state is broken; throttling needs state).
 if [ -n "$DOWN" ] && [ ! -s "$FAILS" ]; then
-    slack ":rotating_light: MTF WATCHDOG STATE WRITE FAILED (${FAILS} unwritable — disk full?) while services are DOWN: ${DOWN}— alerting UNTHROTTLED. ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32"
+    slack ":rotating_light: MTF WATCHDOG STATE WRITE FAILED (${FAILS} unwritable — disk full?) while services are DOWN: ${DOWN}— alerting UNTHROTTLED. ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250"
     echo "$(TZ=America/Los_Angeles date): STATE WRITE FAILED while DOWN: ${DOWN}— unthrottled alert attempted" >> "$LOG"
 fi
 

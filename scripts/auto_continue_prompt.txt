@@ -11,8 +11,8 @@ MANDATORY RULES (always active — CLAUDE.md governs):
 - DS/GAI gate: SKIPPED for this session per user authorization for non-RTH items only
 - Cold second-agent on every patch
 - py_compile + mypy + ruff must PASS before proposing
-- Rsync to OCI after each patch: rsync -avz -e "ssh -i ~/.ssh/mtf_bot_oracle" [file] ubuntu@129.153.208.32:/home/ubuntu/mtf-bot/[file]
-- Restart: ssh -i ~/.ssh/mtf_bot_oracle ubuntu@129.153.208.32 "sudo systemctl restart mtf-bot && sleep 4 && systemctl is-active mtf-bot mtf-writer mtf-http nginx"
+- Rsync to OCI after each patch: rsync -avz -e "ssh -i ~/.ssh/mtf_bot_oracle" [file] ubuntu@137.131.51.250:/home/ubuntu/mtf-bot/[file]
+- Restart: ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250 "sudo systemctl restart mtf-bot && sleep 4 && systemctl is-active mtf-bot mtf-writer mtf-http nginx"
 - Update logs/tb_audit_log.md and logs/bug_counter.json after each patch
 
 CONSTRAINT: Do NOT touch any function that runs during RTH (9:30 AM–4:00 PM ET). Safe targets: reconcile_eod.py, weekly_review.py, generate_dashboard.py, reporting scripts.

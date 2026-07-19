@@ -15,7 +15,7 @@ set -e
 BOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG="$BOT_DIR/logs/failback.log"
 PYTHON="/usr/local/bin/python3.10"
-OCI_IP="129.153.208.32"
+OCI_IP="137.131.51.250"
 
 mkdir -p "$BOT_DIR/logs"
 echo "$(date): failback_to_mac.sh started" | tee -a "$LOG"
