@@ -8357,3 +8357,20 @@ over main for a message typo — THIS audit entry is the authoritative record.
   working-set trim stays a LIVE item. Design: `logs/ram_alert_recalibration_design_2026-07-19.md`.
 - SHIPPED + LIVE: `5050b6e` (2026-07-19, OCI `git pull --ff-only` + crontab `*/30`→`*/6` on memory_watchdog +
   ram_watch.sh cron line retired; NO bot restart — cron-script change; services active; crontab backup saved).
+
+## 2026-07-19 (interactive→autonomous, Sun) — Slack Gemini-report FORMAT fix (scripts/audit_slack.py)
+- DISPLAY-ONLY (audit→Slack renderer; no trading logic; code-computed P&L + validate_no_pnl_rewrite + `$…`
+  masking UNCHANGED). Fixed 4 garbling bugs in `findings_from_report()`: (1) literal `**` leak (Gemini emits
+  GitHub `**bold**`; Slack uses `*`) → `_clean_md` converts emphasis to plain text, PRESERVES backticks +
+  `2*ATR` arithmetic (only whitespace-bounded stray `*` dropped); (2) `*title* — title` duplication →
+  `_finding_line` render guard drops ` — detail` when detail==title/empty; (3) same finding repeated 3–4× +
+  mis-severitied fragments → the mapper now GROUPS continuation lines (`**Why**`/`**SEVERITY**`/`**EXACT
+  FAILURE**`) into their finding (new finding only on a bullet/number marker or a non-continuation bold lead),
+  + exact-title dedup; (4) mid-word truncation → `_word_trunc` word-boundary. Rafael picked "one clean line per
+  finding."
+- Gate: full-read 293L; statics (py_compile/ruff/mypy clean); functional test (garbled→clean, ALL PASS) +
+  `_clean_md` 6/6 preservation unit; cold-2nd FAIL→fixed (Threat 1 IndexError on pipe-only `core` empty →
+  `core[0] if core else text`; exact-dedup; colon-required _CONT_FIELD) → cold-2nd re-verify PASS (never-raise
+  verified, callers unaffected); FINAL preship real Gro+GAI APPROVE (roll 3; GAI's 1st reject genuine —
+  `_clean_md` over-strip — fixed; rest flash-noise micro-edges cold-2nd cleared). Callers nightly_audit.py /
+  midday_audit.py unaffected (contract unchanged). Effect visible on next midday/post-market audit cards. [SHA on ship]

@@ -118,68 +118,156 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
 
 # ── Gemini-report → findings mapper ──────────────────────────────────────────
 
+# A line STARTS a new finding if it carries an explicit list marker...
+_ITEM_MARKER = re.compile(r"^\s{0,3}(?:[-•]|\d+[.)]|\*(?!\*))\s+")
+# ...or leads with a bolded title (`**Foo**`) that is NOT one of these continuation
+# sub-field labels. Gemini writes each finding as a title line + **Why**/**SEVERITY**/…
+# detail lines; those detail lines must fold INTO the finding, not become their own.
+# The trailing `...:` requirement keeps a real bug TITLE that merely starts with one of
+# these words (e.g. "**Fix validation bypassed**") from being mistaken for a sub-field
+# label ("**Why ...**:", "**SEVERITY**:") and wrongly folded into the previous finding.
+_CONT_FIELD = re.compile(
+    r"^\**\s*(why|severity|exact failure|impact|recommendation|root cause|"
+    r"fix|evidence|explanation|reason|mitigation|detail)\b[^:\n]{0,60}:", re.I)
+_BOLD_LEAD = re.compile(r"^\*\*[^*]")
+_TAGS = {"EXECUTION BUG", "ALPHA ISSUE", "INFRASTRUCTURE",
+         "CRITICAL", "HIGH", "MEDIUM", "LOW"}
+_STOP_HEADERS = ("VERDICT", "LOG ANOMALIES", "PERFORMANCE AUDIT",
+                 "TRADE INTEGRITY", "MODIFIED FILE", "P5 STATUS",
+                 "FIX VALIDATION", "RECOMMENDED", "ENTRY QUALITY",
+                 "EXIT QUALITY", "MRI ALIGNMENT")
+
+
+def _clean_md(s: str) -> str:
+    """Convert Gemini's GitHub-style emphasis (`**bold**` / `*em*`) to plain text so it does
+    not leak as literal asterisks — render_card owns the single-`*` Slack bolding. PRESERVES
+    inline-code backticks (Slack renders them) and arithmetic/globs like `2*ATR` (only
+    whitespace-bounded stray `*` markers are dropped, never a `*` between non-space chars).
+    Collapses whitespace. Never raises."""
+    s = re.sub(r"\*{1,2}([^*]+?)\*{1,2}", r"\1", s)   # paired *x* / **x** → x
+    s = s.replace("**", "")                            # any leaked double-asterisk marker
+    s = re.sub(r"(?<!\S)\*|\*(?!\S)", "", s)           # stray whitespace-bounded * (keep 2*ATR)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _word_trunc(s: str, n: int) -> str:
+    """Truncate with an ellipsis, preferring a word boundary. Falls back to a hard cut only
+    for a single token longer than the limit (a URL/hash with no interior space, where no
+    word boundary exists). Never raises."""
+    if len(s) <= n:
+        return s
+    cut = s[:n].rsplit(" ", 1)[0].rstrip(" .,;:—-")
+    return (cut or s[:n]).rstrip() + "…"
+
+
+def _is_tag(seg: str) -> bool:
+    u = seg.upper()
+    return u.startswith(("CATEGORY:", "SEVERITY:")) or u in _TAGS
+
+
 def findings_from_report(report: str) -> list[dict]:
-    """Map a Gemini audit report (### CATASTROPHIC ALERT / ### NEW BUGS sections)
-    onto the card's 3-severity model. CATASTROPHIC lines → critical; NEW BUGS
-    lines → high (CRITICAL/HIGH tag) or low (MEDIUM/LOW tag). Lenient by design:
-    unparseable lines are skipped, never raised — the audit must post regardless."""
-    _stop_headers = ("VERDICT", "LOG ANOMALIES", "PERFORMANCE AUDIT",
-                     "TRADE INTEGRITY", "MODIFIED FILE", "P5 STATUS",
-                     "FIX VALIDATION", "RECOMMENDED", "ENTRY QUALITY",
-                     "EXIT QUALITY", "MRI ALIGNMENT")
-    _tags = {"EXECUTION BUG", "ALPHA ISSUE", "INFRASTRUCTURE",
-             "CRITICAL", "HIGH", "MEDIUM", "LOW"}
+    """Map a Gemini audit report (### CATASTROPHIC ALERT / ### NEW BUGS sections) onto the
+    card's 3-severity model — ONE clean entry per real finding.
+
+    Gemini writes each finding as a title line followed by **Why**/**SEVERITY**/… detail
+    lines. The prior version made EACH line its own finding (3–4× repeats, mis-severitied
+    fragments, literal `**` leaks, title==detail duplication). This groups continuation
+    lines into their finding, strips markdown, dedups near-identical titles, and truncates
+    on word boundaries. Lenient by design: unparseable input is skipped, never raised — the
+    audit must post regardless."""
     findings: list[dict] = []
-    section = None
+    section: Optional[str] = None
+    cur: Optional[dict] = None
+
+    def _flush() -> None:
+        nonlocal cur
+        if not cur or not cur["raw"]:
+            cur = None
+            return
+        text = _clean_md(" ".join(cur["raw"]))
+        # Mask any dollar figure the LLM wrote — authoritative numbers are code-injected
+        # P&L fields (validate_no_pnl_rewrite enforces this); full figures live in the file.
+        text = re.sub(r"−?-?\$[0-9][0-9,]*(?:\.[0-9]{1,2})?", "$…", text)
+        if not text or text.lower().startswith("none"):
+            cur = None
+            return
+        up = text.upper()
+        if cur["section"] == "cat" or "CATASTROPHIC" in up:
+            sev = "critical"
+        elif "CRITICAL" in up or "HIGH" in up:
+            sev = "high"
+        else:
+            sev = "low"
+        parts = [p.strip() for p in text.split("|") if p.strip()]
+        core = [p for p in parts if not _is_tag(p)] or parts
+        title = core[0] if core else text          # pipe-only text → fall back, never IndexError
+        detail = " — ".join(core[1:]) if len(core) > 1 else ""
+        if not detail and ". " in title:          # no |-structure → split off first sentence
+            title, detail = title.split(". ", 1)
+        title = title.strip()
+        if not title:                              # degenerate (e.g. text began with ". ") — skip
+            cur = None
+            return
+        findings.append({
+            "severity": sev,
+            "title": _word_trunc(title, 120),
+            "detail": _word_trunc(detail.strip(), 240),
+        })
+        cur = None
+
     for raw in report.splitlines():
         line = raw.strip()
         s = line.lstrip("#* ").strip()
         if s.upper().startswith("CATASTROPHIC ALERT"):
+            _flush()
             section = "cat"
             continue
         if s.upper().startswith("NEW BUGS"):
+            _flush()
             section = "bugs"
             continue
-        if s.upper().startswith(_stop_headers):
+        if s.upper().startswith(_STOP_HEADERS):
+            _flush()
             section = None
             continue
-        if not section or not line:
+        if not section:
             continue
-        body = line.lstrip("0123456789.•*->— ").strip().strip("*").strip()
-        if not body or body.lower().startswith("none"):
+        if not line:                               # blank line closes the current finding
+            _flush()
             continue
-        # Mask any dollar figure the LLM wrote — the card's only authoritative
-        # numbers are the code-injected P&L fields (validate_no_pnl_rewrite
-        # enforces this); full figures live in the report file.
-        body = re.sub(r"−?-?\$[0-9][0-9,]*(?:\.[0-9]{1,2})?", "$…", body)
-        parts = [p.strip().strip("*").strip("`") for p in body.split("|")]
+        stripped = line.lstrip("0123456789.)•*->— \t").strip()
+        if not stripped:
+            continue
+        new_item = bool(_ITEM_MARKER.match(raw)) or (
+            bool(_BOLD_LEAD.match(line)) and not _CONT_FIELD.match(line))
+        if cur is not None and not new_item:
+            cur["raw"].append(stripped)            # continuation → fold into current finding
+            continue
+        _flush()
+        cur = {"section": section, "raw": [stripped]}
+    _flush()
 
-        def _is_tag(seg: str) -> bool:
-            u = seg.upper()
-            return (u.startswith(("CATEGORY:", "SEVERITY:")) or u in _tags)
-
-        if section == "cat":
-            title = next((p for p in parts if p and not _is_tag(p)), parts[0])
-            findings.append({
-                "severity": "critical",
-                "title": title[:120],
-                "detail": (" — ".join(p for p in parts if p and p != title)
-                           or title)[:300],
-            })
-        else:
-            up = body.upper()
-            if "CATASTROPHIC" in up:
-                sev = "critical"
-            elif "CRITICAL" in up or "HIGH" in up:
-                sev = "high"
-            else:
-                sev = "low"
-            title = next((p for p in parts if p and not _is_tag(p)), parts[0])
-            findings.append({"severity": sev, "title": title[:120], "detail": body[:300]})
-    return findings[:12]  # card stays scannable; full narrative lives in the report file
+    # Dedup near-identical titles (belt-and-suspenders vs any residual repeats).
+    out: list[dict] = []
+    seen: list[str] = []
+    for f in findings:
+        k = f["title"].lower().strip()
+        if not k or k in seen:                     # exact-title dedup — never drop a distinct substring title
+            continue
+        seen.append(k)
+        out.append(f)
+    return out[:12]  # card stays scannable; full narrative lives in the report file
 
 
 # ── Card renderer ────────────────────────────────────────────────────────────
+
+def _finding_line(f: dict) -> str:
+    """`*Title* — detail`, but drop the ` — detail` when detail is empty or identical to
+    the title (the old renderer printed `*title* — title` for prose findings)."""
+    t = str(f.get("title", "")).strip()
+    d = str(f.get("detail", "")).strip()
+    return f"*{t}* — {d}" if d and d != t else f"*{t}*"
+
 
 def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
                 findings: list[dict], dist_footer: Optional[list] = None,
@@ -233,13 +321,13 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
     # FINDINGS — Critical, High, then Low (collapse >2)
     for f in crits:
         blocks.append({"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*🔴 Critical*\n*{f['title']}* — {f['detail']}"}})
+            "text": f"*🔴 Critical*\n{_finding_line(f)}"}})
     for f in highs:
         blocks.append({"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*🟡 High*\n*{f['title']}* — {f['detail']}"}})
+            "text": f"*🟡 High*\n{_finding_line(f)}"}})
     if lows:
         if len(lows) <= _LOW_INLINE_MAX:
-            body = "\n".join(f"• {f['detail']}" for f in lows)
+            body = "\n".join(f"• {f.get('detail') or f.get('title')}" for f in lows)
             blocks.append({"type": "section",
                            "text": {"type": "mrkdwn", "text": f"*✓ Low*\n{body}"}})
         else:

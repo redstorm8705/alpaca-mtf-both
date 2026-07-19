@@ -58,9 +58,16 @@ cross-account-switch need):**
   before startup reads it; needs alerts.py+main.py redesign), swap-pressure alert (true leading indicator),
   trailing-baseline dynamic threshold. **NOT a fix for the RAM tightness** — box size-up (REFUSED) / working-set
   trim stays LIVE.
-- **Remaining non-F6 queue:** Slack Gemini-report format fix (broken/dup fragments in the audit→Slack renderer);
-  checkpoint automation "B" (dedicated branch); options/0DTE program. Reports confirmed cross-account in git+OCI
-  (269 files); Gemini routine reports NOT in Master Brain (only project-state is) — optional add.
+- **✅ SLACK GEMINI-REPORT FORMAT FIX — SHIPPED (2026-07-19, `scripts/audit_slack.py`).** Display-only. Fixed
+  the 4 garbling bugs (`**` leak, `title — title` dup, 3–4× repeats/mis-severity, mid-word truncation) in
+  `findings_from_report()` — now one clean grouped entry per finding, markdown stripped (backticks + `2*ATR`
+  preserved), exact-dedup, word-boundary truncation. Gate: cold-2nd PASS + statics + tests + FINAL preship real
+  Gro+GAI APPROVE. Effect visible on next midday/post-market cards.
+- **🌙 AUTONOMOUS (Rafael asleep 2026-07-19, authorized "activate BGG, audit, validate, ship+commit next
+  approved items"):** working RTH audit-flagged bugs first (per autonomous protocol), then the non-F6 queue.
+  Ship BGG-aligned, queue unaligned. Remaining queue: checkpoint automation "B" (dedicated branch); F6 v2
+  alert-polish (before arming); options/0DTE (SPX-source BLOCKED); UX redesign. Gemini routine reports NOT in
+  Master Brain (only project-state) — optional add.
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").
