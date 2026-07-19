@@ -7,7 +7,39 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-18 interactive) — pick up here
+## ⏩ LATEST (2026-07-19 interactive) — pick up here
+
+**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**🚚 OCI ARM A1.Flex MIGRATION — PHASE 1 + PHASE 2 DONE + VALIDATED (2026-07-19). PHASE 3 (cutover flip) is
+the NEXT STEP — execute in a MARKET-CLOSED window.**
+- **NEW A1 box `137.131.51.250`** — VM.Standard.A1.Flex, aarch64, 2 OCPU / **11.9GB RAM / swap=0**, Ubuntu
+  22.04.5, py3.10.12. = 12.5× the old 956MB → swap-thrash / 12-14min-hang problem structurally solved.
+  Provisioned via OCI CLI (caught A1 capacity in phx AD-1), commit `9487b0c`. SSH: `~/.ssh/mtf_bot_oracle`.
+- **OLD prod box `129.153.208.32`** — E2.1.Micro 956MB, STILL LIVE + trading, HEAD `7401a17` (has datetime fix
+  `c1d5998` + all ships). Untouched = production until the flip.
+- **✅ PHASE 2 (software bring-up) DONE + VALIDATED on the new box:** apt deps + `git clone` (HEAD 9487b0c) +
+  venv + `pip install` (ALL 78 deps from aarch64 wheels — ZERO source builds/errors) + `.env` (600) + data/state
+  (13 files; re-copied FRESH at the flip). systemd units INSTALLED but **DISABLED** (no trading until flip).
+  crontab NOT installed yet (avoids double-cron). ARM verify: 11/11 bot modules import OK, main.py compiles,
+  `_iso_to_dt` works. Bundle staged: Mac `…/scratchpad/migrate/` + new-box `/tmp/mig/` (secrets wiped; re-push at flip).
+- **⏩⏩ NEXT EXACT STEP — PHASE 3 CUTOVER FLIP (market-closed):** SINGLE SAFETY RULE = exactly ONE bot active
+  (never two trading the same paper account).
+  1. (OCI console) RESERVE old box's ephemeral IP `129.153.208.32` so it can be moved (keeps SAME IP → zero
+     hardcoded-ref updates; BGG-recommended over new-IP+update-all-refs).
+  2. STOP old bot: `sudo systemctl stop mtf-bot mtf-writer mtf-http nginx && crontab -r` on 129.153.208.32.
+  3. FINAL state snapshot old→Mac→new: re-copy `.env` + `data/state/` (authoritative last state).
+  4. New box: `crontab /tmp/mig/crontab.txt`; `sudo systemctl enable --now mtf-bot mtf-writer mtf-http nginx`.
+  5. OCI console: detach reserved IP from old → attach to new box.
+  6. VERIFY: 4 services active, positions == Alpaca, ownership_ledger intact, a full scan cycle < watchdog
+     threshold, swap stays 0.
+  7. ROLLBACK: keep old box (stopped, state intact) ≥7 days; if new misbehaves → stop new, re-attach IP to old,
+     re-enable old services + crontab.
+- Migration runbook `7401a17` (BGG 4/4). data/state re-copied fresh at flip because the bot writes it live.
+
+---
+
+## ⏩ PRIOR (2026-07-18 interactive)
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP POINT (if usage limit hit → other Claude Gmail account resumes here):**
 Sequence: `git pull` → read this block → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
