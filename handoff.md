@@ -11,6 +11,38 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🎯 EXACT NEXT ACTION (2026-07-19, newest first): Rafael to APPROVE/REJECT the aligned GEX/0DTE
+evaluator scope in `logs/gex_0dte_evaluator_design_2026-07-19.md`. On APPROVE → ship S0 (demote GEX
+to display-only: `GEX_EDGE_MULT`→1.0, MIN_SCORE bump→0) FIRST, through the full mandatory patch
+sequence + FINAL PRE-SHIP Gro+GAI gate on the exact diff.**
+
+**🔬 GEX / 0DTE ACCURACY AUDIT — BGG ALIGNED 2026-07-19 (Board 4/4 + Gro APPROVE + GAI APPROVE).**
+Full design: `logs/gex_0dte_evaluator_design_2026-07-19.md`. Alignment reached in ONE counter-prompt
+round (Gro+GAI initially split on 3 points; all reversed when shown the board's code/git evidence —
+disagreement protocol worked as designed, zero blind re-rolls). Headline findings:
+- **flip=694 is a CLOSED pre-fix artifact.** `aad518a` committed 2026-07-15 10:02:11 -0700; the 694
+  record is timestamped 06:37 AM PT the SAME DAY (3h25m earlier). Also arithmetically impossible under
+  current code (`_FLIP_WINDOW_PCTILE=0.05` → band [714.4, 789.6] at spot 752). Do NOT re-diagnose it.
+- **THE LIVE DEFECT: the 7/14–7/15 fix made the flip TAUTOLOGICAL.** `gex.py:384-397` sweeps strikes K
+  at FIXED spot and argmin-selects the crossing nearest spot — it never reprices Γ at candidate spots,
+  so it is not a gamma flip at all. Post-fix SPY flip = 755.0/755.0/755.0 vs spot 754.68. A wrong
+  answer that looked absurd (694, caught in a day) was replaced by an uninformative one that looks
+  plausible forever. **Decisive check (no new instrumentation): regress emitted `flip` on `spot` —
+  slope≈1, R²≈1 proves zero independent information.**
+- Other confirmed: per-expiry collapse (`gex.py:327`, Γ∝1/√T so 0DTE dominates + its OI is T+1-stale);
+  67.4% chain censoring that deletes ATM preferentially (where gamma is maximal); `_MAX_CONTRACT_PAGES=2`
+  truncation that drops PUTS first (biases net_gex positive); `raw_gex_m` ~100× mislabelled (missing the
+  `×0.01`); `_get_spot` on IEX with no cross-check; `"—"` string sentinel in a float column.
+- **0DTE is a RETENTION gap, not a logging gap** — `options_scanner.py:1173-1175` already writes the full
+  rec dict, then `os.replace` destroys it every 15 min. Fix ≈12 lines. No archive exists → reconstruction
+  has NO substrate (and `_get_vix_tertile` would inject look-ahead into the ADMISSION criterion).
+- **Statistical floor: effective N ≈ 1.2 obs/day; with ρ≈0.7 (VIF 5.67) a verdict needs ~960 sessions.**
+  The unlock: score the vol-regime claim at 15-MIN resolution with AFML average-uniqueness weights →
+  ~37–90 sessions. GEX weight → ZERO meanwhile (it feeds `kelly.py`, so a bad edge is a LEVERAGE error
+  across the whole book). REJECTED unanimously: reconstruction, auto-degrade, flip/pin evaluator, and
+  "staged-ACTIVE" as a state. Q4 dynamic sourcing DEFERRED to ≥60 clean sessions (deriving thresholds
+  from today's history would fit parameters to the defects).
+
 **🚚 OCI ARM A1.Flex MIGRATION — PHASE 1 + PHASE 2 DONE + VALIDATED (2026-07-19). PHASE 3 (cutover flip) is
 the NEXT STEP — execute in a MARKET-CLOSED window.**
 - **NEW A1 box `137.131.51.250`** — VM.Standard.A1.Flex, aarch64, 2 OCPU / **11.9GB RAM / swap=0**, Ubuntu

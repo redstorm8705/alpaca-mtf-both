@@ -8392,3 +8392,25 @@ over main for a message typo — THIS audit entry is the authoritative record.
   (makes stuck P&L reconcile; never masks a loss; kill switch Alpaca-sourced).
 
 - 2026-07-19 — OCI ARM A1.Flex migration SCOPED (BGG 4/4: DevOps+Reliability seats + Gro + GAI aligned). Runbook: logs/oci_arm_migration_runbook_2026-07-19.md. NOT executed (needs Rafael go + weekend flip). One open item: IP reserve-vs-new (verify OCI console).
+
+## 2026-07-19 — GEX/0DTE accuracy audit: BGG ALIGNED (design only, NO code shipped)
+Voices: Board 4/4 (Derman / López de Prado / Sinclair-Sosnoff-Nathan / Majors-McKinney, all cold
+Explore subagents with FULL reads of data/gex.py 537L + options_scanner.py 1905L) + Gro APPROVE +
+GAI APPROVE. Gro/GAI split on 3 points on the first pass (auto-degrade, reconstruction, Q3 root
+cause); resolved in ONE counter-prompt round carrying the board's git/code evidence — no blind
+re-rolls (DISAGREEMENT PROTOCOL satisfied).
+- flip=694 CLOSED as pre-fix artifact (git aad518a @ 2026-07-15 10:02:11 -0700 vs record @ 06:37 PT;
+  also outside the ±5% window band [714.4,789.6] at spot 752 → unreachable by current code).
+- NEW LIVE DEFECT FOUND: flip is TAUTOLOGICAL post-fix — gex.py:384-397 sweeps K at fixed spot and
+  argmin-selects the crossing nearest spot; never reprices Γ at candidate S*. Post-fix 755.0 vs
+  spot 754.68. Not a gamma flip. Severity: HIGH (feeds kelly.py edge multiplier).
+- Also confirmed: per-expiry collapse (gex.py:327); 67.4% ATM-biased chain censoring; 2-page
+  contract truncation dropping puts first (gex.py:67); raw_gex_m ~100× mislabelled (gex.py:323
+  missing ×0.01); _get_spot IEX no cross-check (gex.py:102); "—" sentinel in float col
+  (options_scanner.py:1073,951).
+- 0DTE: retention gap not logging gap (options_scanner.py:1173-1175 os.replace clobbers the full
+  rec dict every 15 min). No archive → reconstruction rejected (no substrate + _get_vix_tertile
+  look-ahead into the admission criterion at line 618/626/1032).
+RC classes: no new RC instance opened (RC-6-adjacent: OI/greeks provenance — tracked in design doc).
+Design: logs/gex_0dte_evaluator_design_2026-07-19.md. Awaiting Rafael APPROVE/REJECT.
+NO code changed this turn — alignment-only durable sync per CLAUDE.md §DURABLE SYNC RULE.
