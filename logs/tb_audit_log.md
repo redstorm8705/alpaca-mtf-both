@@ -8334,3 +8334,24 @@ over main for a message typo — THIS audit entry is the authoritative record.
   ownership_guard.py = gai=APPROVE, gro=WAIVED (active Groq TPM rate-limit, Rafael 2026-07-07 pre-auth).
   Cold-2nd PASS (all 6 checks). v2 (cycle-rollup/all-clear/heartbeat + load_ledger qty-type validation)
   QUEUED before arming.
+
+## 2026-07-19 (interactive, Sun) — RAM alert-spam recalibration SHIPPED (scripts/memory_watchdog.sh)
+- ONE watchdog now (ram_watch.sh retired via crontab). RTH alert `<200`→two-tier: crit `<15MB` (throttle 15m)
+  / warn `<30MB` (throttle 30m) — both below the ~58MB *available* RTH floor → RTH spam gone. Relabel
+  "free"→"available" (value is `free -m` $7 = available; the mislabel caused misdiagnosis). Off-hours:
+  auto-restart ACTION UNCHANGED; ping throttled 1/day + rolling-24h count; escalate (1h) if ≥5/24h; +20-min
+  anti-thrash cooldown (cold-2nd — */6 could loop-restart off-hours + starve overnight work); dropped the
+  off-hours `<200` warn ping; parse-fail guard (non-numeric available → log+exit, never a false restart).
+  Cron `*/30`→`*/6` (detection latency; throttle still caps Slack rate — cadence≠throttle, Observability seat).
+- Gate: design board Observability+Reliability + Gro + GAI all APPROVE-WITH-CHANGES, every change applied
+  (*/6 not */30; two-tier not single-45; rate-escalation; cooldown). cold-2nd PASS (7 checks). bash -n +
+  mocked end-to-end behavior test 8/8 (RTH-crit NO restart / offhours-crit DOES restart / cooldown skip /
+  parse-safe). FINAL preship gro=APPROVE gai=APPROVE sha `9e9b82d1ac56` (GAI's awk-prune reject was
+  false-premise — the `echo >> ledger` precedes the prune so awk input is never empty — hardened with a `-s`
+  non-empty guard anyway → deterministic clear).
+- Off-hours restart SAFETY confirmed untouched (both seats: notification-only). RC-1/2/3 PASS. DEFERRED to v2:
+  "Online" self-test suppression (found BROKEN-as-designed — alert_crash `os.remove`s the sentinel before the
+  new proc's alert_startup_test, and only conditionally at main.py:638 → fails in the common overnight-holds
+  case; redesign needs alerts.py + main.py), swap-pressure RTH alert (the true leading indicator), trailing-
+  baseline dynamic threshold. NOT a fix for the underlying RAM tightness — box size-up (REFUSED, no spend) /
+  working-set trim stays a LIVE item. Design: `logs/ram_alert_recalibration_design_2026-07-19.md`. [SHA on ship]

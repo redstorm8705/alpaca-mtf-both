@@ -47,11 +47,20 @@ cross-account-switch need):**
   cycle-rollup + recovery/all-clear + heartbeat; `load_ledger` qty-type validation at source.
 - **⏩ NEXT EXACT STEP:** F6 v2 alert-polish (above) → live-verify a rejected sell on a protected symbol
   (paper canary) → then prereq #2 = arm `OWNERSHIP_GUARD_ENFORCE=True` (LAST; per
-  `logs/f6_activation_BLOCKED_2026-07-17.md`). NO SEED until #2 lands. Non-F6 queue (Rafael this session):
-  RAM alert-spam recalibration (deferred, cheap win — collapse the 2 redundant watchdogs, swap free-MB
-  thresholds for swap-pressure; box size-up REFUSED, no spend); Slack Gemini-report format fix (broken/dup
-  fragments in the audit→Slack renderer). Reports confirmed cross-account in git+OCI (269 files); Gemini
-  routine reports NOT in Master Brain (only project-state is) — optional add.
+  `logs/f6_activation_BLOCKED_2026-07-17.md`). NO SEED until #2 lands.
+- **✅ RAM ALERT-SPAM RECALIBRATION — SHIPPED (2026-07-19, `scripts/memory_watchdog.sh`).** ONE watchdog at
+  `*/6` (ram_watch.sh retired via crontab); RTH two-tier crit `<15MB`/warn `<30MB` available (below the 58MB
+  floor → RTH spam gone); relabel "free"→"available"; off-hours auto-restart ACTION unchanged, ping 1/day +
+  24h count + escalation ≥5/24h + 20-min anti-thrash cooldown; parse-fail guard. Gate: board
+  Observability+Reliability + Gro + GAI all APPROVE-WITH-CHANGES (all applied) + cold-2nd PASS + behavior test
+  8/8 + FINAL preship real Gro+GAI APPROVE. Design `logs/ram_alert_recalibration_design_2026-07-19.md`.
+  **v2 DEFERRED:** "Online" self-test suppression (found BROKEN-as-designed — sentinel eaten by alert_crash
+  before startup reads it; needs alerts.py+main.py redesign), swap-pressure alert (true leading indicator),
+  trailing-baseline dynamic threshold. **NOT a fix for the RAM tightness** — box size-up (REFUSED) / working-set
+  trim stays LIVE.
+- **Remaining non-F6 queue:** Slack Gemini-report format fix (broken/dup fragments in the audit→Slack renderer);
+  checkpoint automation "B" (dedicated branch); options/0DTE program. Reports confirmed cross-account in git+OCI
+  (269 files); Gemini routine reports NOT in Master Brain (only project-state is) — optional add.
 
 **🟢 SHIPPED (2026-07-17→18) — ⚡ ALL NOW DEPLOYED LIVE ON OCI (`4c3ced6`, restarted 2026-07-18 Sat
 while market CLOSED; per Rafael "ship everything BGG-built, nothing dark without an explicit reason").
