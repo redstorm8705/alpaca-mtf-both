@@ -102,3 +102,15 @@ Either way: the IP move happens **during the weekend flip, not at provisioning**
 
 ## Effort
 ~1 focused staging session (Phases 0–4, anytime) + a short **weekend** cutover window (Phases 5–6) + a 5-session E2 hot-standby watch before terminating E2.
+
+---
+
+## ✅ PROVISIONED — 2026-07-19 (Phase 1 DONE)
+New A1 box launched via OCI CLI (browser console iframe kept freezing; CLI retry loop caught capacity on attempt 1, AD-1). Rafael approved + gave "go".
+- **New box public IP:** `137.131.51.250` (ephemeral; the OLD box `129.153.208.32` is untouched)
+- **Instance OCID:** `ocid1.instance.oc1.phx.anyhqljri3ebloycjkowomvdyewrmzqwnaqthix2jwjcmbjzjgwx2vfmixzq`
+- Verified live: aarch64 · Ubuntu 22.04.5 LTS · Python 3.10.12 · 2 OCPU / **11.9 GB RAM, 0 swap** · AD-1
+- Free-tier note: Oracle dropped the Always-Free A1 ceiling to **2 OCPU / 12 GB** (was 4/24) — this box is at the max.
+- **OCI CLI now configured on the Mac** (`~/.oci/config`, API key `oci_api_key.pem`; fingerprint `aa:e0:dc:…:d3`). Retry loop: `scratchpad/a1_retry_loop.sh`. Reusable for the weekend IP move.
+- Launch facts (for rebuild/reference): compartment=`redstorm87(root)` tenancy=`…ntrg7eo7dpnq`; subnet=`ocid1.subnet.oc1.phx.aaaaaaaadx24xvas4zsf2xg4lzuv7s57homx7ip6d7geag6stnc74lqnmhka` (10.0.0.0/24); image=`Canonical-Ubuntu-22.04-aarch64-2026.04.30-1` (`ocid1.image.oc1.phx.aaaaaaaaufk34i3h6pc66mifse3yqpstkdbbohmlgpry7gu2ew6fq7faf5pa`).
+- **⏩ NEXT: Phase 2** — SSH in (`ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250`), apt deps, rebuild venv from `requirements.lock` (`--only-binary=:all:`), git clone, staging state copy, recreate services/crons/nginx DORMANT. All safe/anytime (box does NOT trade until the weekend single-writer flip).

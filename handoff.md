@@ -90,7 +90,7 @@ BEFORE any NEW writer/cron starts); **authoritative state snapshot taken ONLY af
 stop, no `kill -9`, sha256 witness); **weekend/market-CLOSED cutover only**; keep E2 as hot rollback ≥5 sessions.
 **ONE open item = IP:** reserve+reassign `129.153.208.32` (consensus) — VERIFY IN OCI CONSOLE whether the ephemeral
 IP can move off a *running* E2 (GAI: needs poweroff; board: convert→reserved live); fallback = new IP + update 8
-hardcoded refs (enumerated in runbook). **⏩ NEXT:** Rafael's go → Phase 0–4 staging (anytime) → weekend flip.
+hardcoded refs (enumerated in runbook). **✅ PHASE 1 DONE (2026-07-19):** new A1 box LIVE at `137.131.51.250` (ARM/Ubuntu 22.04/Py3.10.12/**11.9GB RAM,0 swap**/2 OCPU/AD-1; OCID `…jzjgwx2vfmixzq`). Launched via OCI CLI (console iframe froze; CLI caught capacity attempt-1). OCI CLI now configured on Mac (`~/.oci/config`). OLD box IP `129.153.208.32` untouched. Free A1 ceiling is now 2/12 (Oracle cut it). **⏩ NEXT: Phase 2** = SSH to new box → apt deps + venv rebuild from requirements.lock + git clone + staging state copy + recreate services/crons/nginx DORMANT (all safe/anytime; box does NOT trade till weekend flip). Then weekend single-writer cutover.
 **Remaining queue:** OCI provider pivot research (Rafael's stated next priority — free OCI
   ARM A1.Flex 24GB vs Hetzner); checkpoint automation "B"; F6 v2 alert-polish; options/0DTE (SPX BLOCKED);
   UX redesign. Gemini routine reports NOT in Master Brain — optional add.
