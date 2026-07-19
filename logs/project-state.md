@@ -1,5 +1,5 @@
 # alpaca-mtf-bot — Project State (current, overwritten each session)
-**As of 2026-07-18 (Sat, interactive — Rafael present)**
+**As of 2026-07-19 (Sun, interactive — Rafael present)**
 
 ## Bot
 All 4 OCI services active. HEAD `858c7df` (local = GitHub = OCI, in sync). Market CLOSED (next open Mon
@@ -32,8 +32,11 @@ MIN_SCORE=9/12 | KELLY_FRACTION=0.25.
 1. **F6 v2 alert-polish** (before arming): cycle-rollup + recovery/all-clear + heartbeat; `load_ledger`
    qty-type validation at source. → then live-verify a rejected sell (paper canary) → **prereq #2 = arm
    `OWNERSHIP_GUARD_ENFORCE=True`** (LAST; `logs/f6_activation_BLOCKED_2026-07-17.md`). NO SEED until #2.
-2. **RAM alert-spam recalibration** (deferred, cheap win): collapse the 2 watchdogs into 1; alert on
-   swap-pressure/RSS-near-ceiling not raw free-MB; keep off-hours auto-restart.
+2. ✅ **RAM alert-spam recalibration — SHIPPED + LIVE** (`5050b6e`, 2026-07-19): single `*/6`
+   memory_watchdog (ram_watch retired); RTH crit `<15MB`/warn `<30MB` available (below the 58MB floor →
+   spam gone); relabel "free"→"available"; off-hours restart unchanged + ping 1/day + 24h count +
+   escalation + 20-min cooldown. v2 deferred: "Online"-ping suppression (broken-as-designed), swap-pressure
+   alert, dynamic threshold. Does NOT fix the box tightness (size-up refused) — LIVE item.
 3. **Slack Gemini-report format fix**: audit→Slack renderer emits broken/duplicated fragments (literal `**`,
    truncated sentences, same finding 3–4×). Renderer bug in nightly_audit.py / midday_audit.py block builder.
 4. **Checkpoint automation "B"** (dedicated `session-checkpoint` branch) — Rafael wanted it; other account's

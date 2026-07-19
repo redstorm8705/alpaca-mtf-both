@@ -8354,4 +8354,6 @@ over main for a message typo — THIS audit entry is the authoritative record.
   new proc's alert_startup_test, and only conditionally at main.py:638 → fails in the common overnight-holds
   case; redesign needs alerts.py + main.py), swap-pressure RTH alert (the true leading indicator), trailing-
   baseline dynamic threshold. NOT a fix for the underlying RAM tightness — box size-up (REFUSED, no spend) /
-  working-set trim stays a LIVE item. Design: `logs/ram_alert_recalibration_design_2026-07-19.md`. [SHA on ship]
+  working-set trim stays a LIVE item. Design: `logs/ram_alert_recalibration_design_2026-07-19.md`.
+- SHIPPED + LIVE: `5050b6e` (2026-07-19, OCI `git pull --ff-only` + crontab `*/30`→`*/6` on memory_watchdog +
+  ram_watch.sh cron line retired; NO bot restart — cron-script change; services active; crontab backup saved).
