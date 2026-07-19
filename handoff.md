@@ -23,19 +23,24 @@ the NEXT STEP — execute in a MARKET-CLOSED window.**
   (13 files; re-copied FRESH at the flip). systemd units INSTALLED but **DISABLED** (no trading until flip).
   crontab NOT installed yet (avoids double-cron). ARM verify: 11/11 bot modules import OK, main.py compiles,
   `_iso_to_dt` works. Bundle staged: Mac `…/scratchpad/migrate/` + new-box `/tmp/mig/` (secrets wiped; re-push at flip).
-- **⏩⏩ NEXT EXACT STEP — PHASE 3 CUTOVER FLIP (market-closed):** SINGLE SAFETY RULE = exactly ONE bot active
-  (never two trading the same paper account).
-  1. (OCI console) RESERVE old box's ephemeral IP `129.153.208.32` so it can be moved (keeps SAME IP → zero
-     hardcoded-ref updates; BGG-recommended over new-IP+update-all-refs).
-  2. STOP old bot: `sudo systemctl stop mtf-bot mtf-writer mtf-http nginx && crontab -r` on 129.153.208.32.
-  3. FINAL state snapshot old→Mac→new: re-copy `.env` + `data/state/` (authoritative last state).
-  4. New box: `crontab /tmp/mig/crontab.txt`; `sudo systemctl enable --now mtf-bot mtf-writer mtf-http nginx`.
-  5. OCI console: detach reserved IP from old → attach to new box.
-  6. VERIFY: 4 services active, positions == Alpaca, ownership_ledger intact, a full scan cycle < watchdog
-     threshold, swap stays 0.
-  7. ROLLBACK: keep old box (stopped, state intact) ≥7 days; if new misbehaves → stop new, re-attach IP to old,
-     re-enable old services + crontab.
-- Migration runbook `7401a17` (BGG 4/4). data/state re-copied fresh at flip because the bot writes it live.
+- **✅ PHASE 3 CUTOVER FLIP — EXECUTED + VERIFIED (2026-07-19 Sun, market CLOSED). THE NEW A1 BOX IS NOW
+  PRODUCTION.** SINGLE SAFETY RULE held: exactly ONE bot active throughout.
+  - OLD box `129.153.208.32`: bot STOPPED + services DISABLED + crontab REMOVED (backup `crontab_preflip_*.bak`
+    on the box). Frozen, intact = ROLLBACK for ≥7 days. **Still holds its IP** (IP not moved — see below).
+  - NEW box `137.131.51.250`: final `.env`+`data/state`+`trade_log.json` snapshot restored → crontab installed
+    (31 jobs, memory_watchdog `*/6`, ram_watch retired) → all 4 services (mtf-bot/writer/http/nginx) ACTIVE →
+    dashboard HTTP 200. Fixed: recreated the runtime `public/` serve-dir (symlinks, not in git). VERIFIED:
+    Alpaca positions == 7 (DDOG:1 GOOGL:2 HOOD:2 NVDA:2 RIVN:10 TQQQ:1 XOM:3), ownership_ledger intact (37
+    positions), **swap=0, RAM ~11.3GB avail**, 0 errors in log. Bot trades on this box Monday.
+- **⏩⏩ NEXT EXACT STEP — IP / DEPLOY-TARGET (the ONLY remaining flip task):** The bot runs fine on
+  `137.131.51.250`, but the hardcoded `129.153.208.32` in the session-start skill + deploy scripts + CLAUDE.md
+  still points at the OLD (stopped) box → deploys/session-checks would hit the wrong box. Resolve ONE of:
+  (A) **Move the IP (BGG-preferred):** OCI reserve old ephemeral `129.153.208.32` → detach from old → (remove
+  new box's ephemeral `137...`) → attach reserved `129...` to new box. Keeps SAME IP, zero ref-updates. Fiddly
+  via OCI CLI (the CLI IS configured on the Mac). OR (B) **Update refs** `129.153.208.32`→`137.131.51.250` in
+  `.claude/skills/session-start`, deploy scripts, CLAUDE.md (gated edits). Until this is done, DEPLOY manually to
+  `137.131.51.250`.
+- Migration runbook `7401a17` (BGG 4/4). Bundle for reference: Mac `…/scratchpad/migrate/`.
 
 ---
 
