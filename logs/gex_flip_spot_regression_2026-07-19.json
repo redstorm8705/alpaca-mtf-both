@@ -1,0 +1,66 @@
+{
+  "generated": "2026-07-19 05:02 PM PT",
+  "method": "OLS flip ~ spot; spot = T1 15Min bar close at/<=30m before snapshot",
+  "n_rows_total": 568,
+  "n_used": 409,
+  "n_dropped": 26,
+  "regressions": {
+    "SPY": {
+      "n": 206,
+      "slope": 2.7181,
+      "intercept": -1345.8,
+      "r2": 0.0784,
+      "median_dev_pct": -8.278,
+      "mean_abs_dev_pct": 7.696,
+      "min_dev_pct": -17.183,
+      "max_dev_pct": 1.038,
+      "pct_within_1pct_of_spot": 5.3
+    },
+    "QQQ": {
+      "n": 203,
+      "slope": 0.6279,
+      "intercept": 169.94,
+      "r2": 0.0107,
+      "median_dev_pct": -14.33,
+      "mean_abs_dev_pct": 13.47,
+      "min_dev_pct": -27.275,
+      "max_dev_pct": -0.755,
+      "pct_within_1pct_of_spot": 1.0
+    },
+    "ALL": {
+      "n": 409,
+      "slope": 2.0309,
+      "intercept": -832.39,
+      "r2": 0.4745,
+      "median_dev_pct": -10.243,
+      "mean_abs_dev_pct": 10.562,
+      "min_dev_pct": -27.275,
+      "max_dev_pct": 1.038,
+      "pct_within_1pct_of_spot": 3.2
+    }
+  },
+  "era_split_spy": {
+    "SPY PRE-fix": {
+      "n": 182,
+      "slope": 2.1799,
+      "intercept": -947.28,
+      "r2": 0.062,
+      "median_dev_pct": -8.911,
+      "mean_abs_dev_pct": 8.352,
+      "min_dev_pct": -17.183,
+      "max_dev_pct": -0.93,
+      "pct_within_1pct_of_spot": 0.5
+    },
+    "SPY POST-fix": {
+      "n": 24,
+      "slope": 0.6997,
+      "intercept": 208.72,
+      "r2": 0.0088,
+      "median_dev_pct": -1.759,
+      "mean_abs_dev_pct": 2.721,
+      "min_dev_pct": -9.07,
+      "max_dev_pct": 1.038,
+      "pct_within_1pct_of_spot": 41.7
+    }
+  }
+}

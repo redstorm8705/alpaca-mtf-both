@@ -8439,3 +8439,40 @@ Deploy: git single channel. push -> OCI git pull --ff-only -> restart -> DEPLOY_
 Health: 4/4 services active, dashboard HTTP 200, HEAD=2219f70, values confirmed on box.
 NOTE (pre-existing, NOT caused by this change): startup log still shows
 "POSITION COUNT DRIFT: risk.open_positions=0 vs tracker=5" — the known open STATE-DESYNC P0.
+
+## 2026-07-19 — flip-on-spot regression RUN: INCONCLUSIVE on post-fix code (honest result)
+Script: scripts/gex_flip_spot_regression.py (commit a9521b2). Ran on OCI with T1 bars.
+Data: 568 snapshot-symbol rows from 11 gex_daily_audit_*.json; 435 non-null flips;
+409 matched to a T1 15Min bar within 30 min; 26 dropped.
+
+RESULT:
+  SPY PRE-fix  n=182  slope=+2.18  R2=0.062  median dev -8.91%  within-1%:  0.5%
+  SPY POST-fix n=24   slope=+0.70  R2=0.009  median dev -1.76%  within-1%: 41.7%
+  QQQ (all)    n=203  slope=+0.63  R2=0.011  median dev -14.33% within-1%:  1.0%
+
+INTERPRETATION — DO NOT OVERREAD. The tautology hypothesis predicted slope~1, R2~1.
+Observed R2 ~= 0. That is NOT evidence against the tautology: post-fix n=24 and SPY's
+spot range over 7/15-7/17 is only ~1.98% (740.80-755.54). With near-zero variance in the
+predictor, R2 is uninformative (classic restricted-range problem) — you cannot detect a
+relationship when x barely moves. The regression is UNDERPOWERED for the post-fix era.
+The pre-fix era has n=182 but describes code that no longer runs.
+
+WHAT THE DATA DOES SHOW: the fix moved the flip much closer to spot — SPY median
+deviation went -8.91% -> -1.76%, and the share landing within +/-1% of spot went
+0.5% -> 41.7%. Directionally consistent with the board's pinned-to-spot finding, but
+not decisive at n=24.
+
+STANDING: the tautology finding rests on the CODE READ, which is independent of sample
+size — data/gex.py:384-397 demonstrably never reprices gamma at candidate spots (spot is
+passed once at line 272 and used at 316/320/323) and _best_dist argmin-selects the
+crossing NEAREST SPOT. That reasoning is unaffected by this inconclusive regression.
+S0 (demote to display-only) is correct either way, since accuracy is unmeasured
+regardless of which reading is right.
+
+DECISIVE TEST STILL OUTSTANDING (options-chair proposal, sample-size independent):
+run _compute_gex against three SYNTHETIC chains — (i) calls-only (a true flip cannot
+exist; correct output is None), (ii) symmetric call/put OI at every strike (true flip at
+the OI centroid), (iii) put OI 3x call OI uniformly (true flip well BELOW spot). If the
+function returns ~spot in all three, the tautology is proven outright with no statistics.
+ALSO NOTE: QQQ flips sit a median 14.33% BELOW spot with R2~0 — unexplained, worth its
+own look.
