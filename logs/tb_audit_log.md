@@ -8712,3 +8712,13 @@ sentinel instead of None) · cold-2nd + FINAL preship on exact diff = see commit
 ### Inertness
 `grep allow_cancel_blocking` outside broker.py => NONE. No caller can reach the new branches. Zero
 runtime behavior change on deploy. Wiring stop_protection.py to pass False is a SEPARATE gated patch.
+
+**SHIPPED 2026-07-20 `cd81a53`** — OCI DEPLOY_OK, HEAD=cd81a53, 4/4 services active, dashboard 200,
+stop_protection harness 20/20 green on the box. Final gate: statics 3/3 · cold-2nd PASS (3 threats
+fixed) · 24-scenario invariant harness 7/7 · FINAL preship gro=APPROVE gai=APPROVE on the real
+573-line staged diff (marker sha 3cc2d9c213fe). GAI's initial preship REJECT was resolved by
+COUNTER-PROMPT per the disagreement protocol (not a re-roll); GAI conceded the never-mask-a-loss
+argument and requested the PROTECTION_UNKNOWN third state, which was adopted.
+PROCESS DEFECT CAUGHT: the first marker (4f995b74b311) was INVALID — audit ran pre-`git add`, so
+the diff was empty and the sha matched the PRE-change blob; Gro/GAI approved nothing. preship_gate
+blocked the push on sha mismatch. Rule: `git add` BEFORE `preship_audit.py`, always.

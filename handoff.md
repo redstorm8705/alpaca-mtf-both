@@ -7,9 +7,62 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-19 interactive) — pick up here
+## ⏩ LATEST (2026-07-20 interactive) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**🛑 THE "ONE-LINE WIRING PATCH" IN THE 2026-07-19 BLOCK BELOW IS CANCELLED — DO NOT SHIP IT.**
+A fresh gate (RULE C-2/C-7, all voices re-run) proved it would have made naked positions MORE
+likely. VERIFIED IN SOURCE: `stop_protection.reconcile_protection` submits a stop when it thinks a
+position is naked → Alpaca rejects 40310000 (held_for_orders) → **broker.py's recovery calls
+`cancel_open_orders_for_symbol()` (GTC L525 / DAY L623), CANCELLING THE GOOD LEGACY STOP**, then
+resubmits at a DIFFERENT price (the AH loop's breakeven/VIX/random-offset price is never written
+back to `trade["stop"]`, so the reconciler's `_intended_stop` always differs) — or, on 63s poll
+exhaustion, returns None leaving the position genuinely NAKED. This falsifies stop_protection.py's
+own headline invariant (L17-18). Board exec-risk + reliability BOTH REJECT; Gro + GAI both reversed
+to agree after counter-prompt. Also found: **5 uncovered `run_cycle` returns** hold open positions
+and never reach any proposed call site — L242 kill-switch, L431 premarket, L892, L1011 EOD,
+L1046 blackout (kill-switch + blackout are the two highest-stress days of the year); and the
+prior "Option C" guard-dict fix is a **no-op** (guard keys on stop PRICE, which structurally differs).
+
+**✅ SHIPPED + LIVE + VERIFIED 2026-07-20 (`cd81a53`, OCI DEPLOY_OK, HEAD=cd81a53, 4/4 services
+active, dashboard 200, 20/20 harness green ON THE BOX via
+`PYTHONPATH=/home/ubuntu/mtf-bot venv/bin/python3 -m unittest tests.test_stop_protection`).**
+`execution/broker.py` — **`allow_cancel_blocking` opt-out** (keyword-only, default True).
+Default = MSTR recovery (board 26-0) bit-for-bit UNCHANGED for all 14 callers. False = cancels
+NOTHING, and returns a THREE-STATE result: `PROTECTION_ALREADY_HELD` (verified stable hold →
+protected, don't page) / `PROTECTION_UNKNOWN` (order book unreadable → caller's throttled unknown
+path) / `None` (genuine failure → page). New `_hold_state()` never asserts protection it cannot
+verify. **INERT** — grep shows no caller passes it; zero runtime change. 24-scenario harness 7/7.
+
+**⏩ EXACT NEXT STEP — the reconciler-side patch (`execution/stop_protection.py`), ONE commit:**
+(1) pass `allow_cancel_blocking=False` at L322; (2) **MANDATORY same commit** — replace the
+`if order is not None:` at L323 with an explicit 4-way (`is PROTECTION_ALREADY_HELD` → count
+protected, no page; `is PROTECTION_UNKNOWN` → `_skip_unknown`; `is None` → page; else → placed).
+**Without (2) the sentinel is not-None → the reconciler takes its success branch, reads
+`getattr(order,"id","")` → `""` and OVERWRITES the live stop's real order id with an empty
+string** (cold-2nd Threat 1). THEN, still before any wiring: page-throttle on the sticky
+MANUAL-required paths, collapse N `get_open_orders(symbol)` into 1 account-wide fetch (N REST
+calls × 15s timeout vs a 12-min watchdog on a 7.4–8.8 min cycle), unconditional summary log.
+ONLY THEN wire — shadow (`place=False`) first, all sites incl. the 5 gaps, then staged placement
+site-2-first, overnight-only. Reviews/prompts: scratchpad `wiring_prompt/broker_review/gai_counter2`.
+
+**⚠️ LIVE AT 2026-07-20 14:29 ET: 3 of 9 positions had NO stop at Alpaca** — GOOGL long 2sh
+(MV $703.65 = 26% of $2,689 equity), NFLX short 2sh, SMCI short 2sh. NVDA (the other QHM hold)
+DID have its GTC stop, so this is not "QHM doesn't use stops". Surfaced to Rafael; no orders
+placed by Claude. Re-check protection state at next session start.
+
+**⚙️ PRESHIP TOOLING GOTCHA (cost a full false-APPROVE this session):** `preship_audit.py` hashes
+the **staged/committed** blob and diffs `--cached`. Run it BEFORE `git add` and it audits an EMPTY
+diff, records the PRE-change sha, and reports a meaningless `gro=APPROVE gai=APPROVE`.
+**ALWAYS `git add` FIRST, then audit, then commit.** Also: once a commit already exists ahead of
+`origin/main`, the gate checks `HEAD:` not the index — `git reset --soft origin/main` before
+re-committing an amended change. Local lint env: `python3.10` (has alpaca; mypy/ruff installed
+this session). `python3.10` lacks SSL certs → use system `python3` for Gro/GAI curl calls.
+
+---
+
+## (2026-07-19 interactive) — prior state
 
 **🛠️ ACTIVE DEEP-WORK THREAD (2026-07-19) — GTC STOP-PROTECTION DEFINITIVE REDESIGN.**
 **✅ STEP 1 SHIPPED + LIVE + VERIFIED (`1ee383e`, deployed OCI, DEPLOY_OK, 20/20 harness green ON THE BOX) —
