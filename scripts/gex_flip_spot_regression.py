@@ -44,7 +44,8 @@ from data.fetcher import fetch_bars  # noqa: E402  (T1 approved bar source)
 PT = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")
 SYMBOLS = ("SPY", "QQQ")
-# The 2026-07-15 flip fix (commit aad518a, "local nearest-spot flip") landed at 10:02 PT.
+# The 2026-07-15 flip fix (commit aad518a, "local nearest-spot flip")
+# landed at 10:02 PT.
 FIX_TS = datetime(2026, 7, 15, 10, 2, tzinfo=PT).astimezone(UTC)
 MAX_LAG_MIN = 30  # a snapshot with no bar within this window is dropped, not guessed
 
@@ -58,10 +59,12 @@ def ols(xs, ys):
     sxx = sum((x - mx) ** 2 for x in xs)
     if sxx == 0:
         return None
-    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sxx
     intercept = my - slope * mx
     ss_tot = sum((y - my) ** 2 for y in ys)
-    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+    ss_res = sum(
+        (y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys, strict=True)
+    )
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
     return slope, intercept, r2, n
 
@@ -177,7 +180,8 @@ def main():
         matched.append(r)
 
     print(f"\nsnapshot-symbol rows      : {len(rows)}")
-    print(f"  with non-null flip      : {sum(1 for r in rows if r['flip'] is not None)}")
+    _n_flip = sum(1 for r in rows if r["flip"] is not None)
+    print(f"  with non-null flip      : {_n_flip}")
     print(f"  matched to a bar (USED) : {len(matched)}")
     print(f"  dropped, no bar <= {MAX_LAG_MIN}m: {unmatched}")
     if not matched:
