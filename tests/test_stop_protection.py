@@ -79,6 +79,7 @@ class StopProtectionInvariant(unittest.TestCase):
         sp._recent_placements.clear()
         sp._skip_streak.clear()
         sp._unknown_page_streak.clear()
+        sp._page_throttle.clear()
 
     def _run(self, *, open_orders, position, trade, session="rth", place=True,
              submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
@@ -385,6 +386,132 @@ class StopProtectionInvariant(unittest.TestCase):
                       position=_position("long", 3, 110.0), trade=_trade())
         self.assertTrue(any("STOP-PROTECT [" in line for line in cm.output),
                         "a healthy sweep must still leave a trace")
+
+
+class PageThrottle(unittest.TestCase):
+    """PRE-WIRE-BLOCKER-1: per-(symbol, reason) page throttle. Proves the FIRST page always
+    fires, repeats within the reason's TTL are suppressed (but still recorded in summary), a
+    resolved-then-recurring condition re-pages immediately, tiers differ, keys are per-symbol,
+    the tuple-keyed prune persists the key while open (the silent-no-op landmine) and drops it
+    on close, and loop-error is a blind-spot page recorded in `skipped` only."""
+
+    def setUp(self):
+        sp._recent_placements.clear()
+        sp._skip_streak.clear()
+        sp._unknown_page_streak.clear()
+        sp._page_throttle.clear()
+
+    def _sweep(self, *, open_orders, position, trade, session="rth", place=True,
+               submit_day=_DEF_ORDER, close_ok=True, mono=1000.0, tracker=None):
+        tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
+        page = mock.Mock()
+        with mock.patch.object(sp, "get_open_orders", mock.Mock(return_value=open_orders)), \
+             mock.patch.object(sp, "get_open_position", mock.Mock(return_value=position)), \
+             mock.patch.object(sp, "submit_day_stop_order", mock.Mock(return_value=submit_day)), \
+             mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=_DEF_ORDER)), \
+             mock.patch.object(sp, "close_position", mock.Mock(return_value=close_ok)), \
+             mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
+             mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp.time, "monotonic", mock.Mock(return_value=mono)), \
+             mock.patch.object(sp, "_page", page):
+            summary = sp.reconcile_protection(tracker, _Risk(), session=session, place=place)
+        return summary, page
+
+    # T1 — the first occurrence of a (symbol, reason) ALWAYS pages and arms the throttle key.
+    def test_first_page_always_fires(self):
+        s, page = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0))
+        self.assertTrue(page.called)
+        self.assertEqual(s["paged"][0][1], "no stop level")
+        self.assertIn(("X", "no stop level"), sp._page_throttle)
+
+    # T2 — a repeat within the TTL suppresses the PAGE but STILL records the occurrence.
+    def test_repeat_within_ttl_suppressed_but_recorded(self):
+        _, p1 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=1000.0)
+        s2, p2 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=1000.0 + 899.0)
+        self.assertTrue(p1.called)
+        self.assertFalse(p2.called, "within the 900s naked TTL the page must be suppressed")
+        self.assertEqual(len(s2["paged"]), 1, "the occurrence is still recorded in the summary")
+
+    # T3 — after the TTL elapses, the page fires again.
+    def test_fires_again_after_ttl(self):
+        _, p1 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=1000.0)
+        _, p2 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=1000.0 + 901.0)
+        self.assertTrue(p1.called)
+        self.assertTrue(p2.called, "after the TTL elapses the reminder must re-fire")
+
+    # T4 — tiers differ: conflict (60m) still suppresses where naked (15m) would have re-fired;
+    #      an unmapped/mistyped reason falls to the SHORT loud tier (fail loud, never quiet).
+    def test_tiered_ttl_values(self):
+        self.assertEqual(sp._ttl_for("no stop level"), 900.0)
+        self.assertEqual(sp._ttl_for("cover failed"), 900.0)
+        self.assertEqual(sp._ttl_for("loop error"), 900.0)
+        self.assertEqual(sp._ttl_for("over-covered"), 3600.0)
+        self.assertEqual(sp._ttl_for("resting reducing order conflict"), 3600.0)
+        self.assertEqual(sp._ttl_for("totally-unmapped-typo"), 900.0, "unmapped reason must default to SHORT/loud")
+        # behavioural: over-covered (conflict) is still suppressed at 1000s elapsed
+        _, p1 = self._sweep(open_orders=[_order("sell", qty=10)], position=_position("long", 3, 110.0), trade=_trade(), mono=0.0)
+        s2, p2 = self._sweep(open_orders=[_order("sell", qty=10)], position=_position("long", 3, 110.0), trade=_trade(), mono=1000.0)
+        self.assertTrue(p1.called)
+        self.assertFalse(p2.called, "conflict tier (3600s) still suppresses at 1000s elapsed")
+        self.assertEqual(s2["paged"][0][1], "over-covered")
+
+    # T5 — resolve clears the key; a recurrence within the original TTL pages FRESH (never masked).
+    def test_resolve_rearms_fresh_page(self):
+        _, p1 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=0.0)
+        self.assertTrue(p1.called)
+        s2, _ = self._sweep(open_orders=[_order("sell", qty=3)], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=10.0)
+        self.assertEqual(len(s2["already_protected"]), 1)
+        self.assertNotIn(("X", "no stop level"), sp._page_throttle, "a definite good outcome must clear the throttle key")
+        _, p3 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=20.0)
+        self.assertTrue(p3.called, "resolved-then-recurring within the TTL must page immediately, never be masked")
+
+    # T6 — keys are per-symbol: two naked symbols both page; both keys persist independently.
+    def test_keys_independent_per_symbol(self):
+        tr1 = _Tracker({"X": _trade(stop=0.0), "Y": _trade(stop=0.0)})
+        _, p1 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=0.0, tracker=tr1)
+        self.assertEqual(p1.call_count, 2, "both symbols page on first occurrence")
+        self.assertIn(("X", "no stop level"), sp._page_throttle)
+        self.assertIn(("Y", "no stop level"), sp._page_throttle)
+
+    # T7 — LANDMINE: the tuple key must PERSIST across the end-of-sweep prune while the symbol
+    #      is open (a bare-symbol prune would drop it every sweep → throttle is a silent no-op),
+    #      and must be dropped once the symbol leaves the book (bounded memory).
+    def test_tuple_key_persists_while_open_and_prunes_on_close(self):
+        _, p1 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=0.0)
+        self.assertIn(("X", "no stop level"), sp._page_throttle,
+                      "key must survive the sweep prune while X is open — else the throttle is a no-op")
+        _, p2 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=100.0)
+        self.assertFalse(p2.called, "persisted key must suppress the repeat (behavioural proof the prune did not drop it)")
+        _, p3 = self._sweep(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0), mono=200.0, tracker=_Tracker({}))
+        self.assertNotIn(("X", "no stop level"), sp._page_throttle, "a closed symbol's throttle key must be pruned")
+
+    # T8 — cover-failed RECURS (rejected close re-enters _cover each cycle) → throttled at naked tier.
+    def test_cover_failed_recurs_and_is_throttled(self):
+        s1, p1 = self._sweep(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), close_ok=False, mono=0.0)
+        self.assertEqual(s1["paged"][0][1], "cover failed")
+        self.assertTrue(p1.called)
+        s2, p2 = self._sweep(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), close_ok=False, mono=100.0)
+        self.assertFalse(p2.called, "cover failed recurs but the page is throttled within the naked TTL")
+        self.assertEqual(len(s2["paged"]), 1, "still recorded every sweep")
+
+    # T9 — loop-error is a BLIND-SPOT page: recorded in `skipped` ONLY (never inflates `paged`),
+    #      pages on first occurrence, and lives on the SHORT/loud tier.
+    def test_loop_error_blind_spot_skipped_only(self):
+        boom = mock.Mock(side_effect=RuntimeError("kaboom"))
+        page = mock.Mock()
+        with mock.patch.object(sp, "get_open_orders", mock.Mock(return_value=[])), \
+             mock.patch.object(sp, "get_open_position", mock.Mock(return_value=_position("long", 3, 110.0))), \
+             mock.patch.object(sp, "submit_day_stop_order", boom), \
+             mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=_DEF_ORDER)), \
+             mock.patch.object(sp, "close_position", mock.Mock(return_value=True)), \
+             mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
+             mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp.time, "monotonic", mock.Mock(return_value=500.0)), \
+             mock.patch.object(sp, "_page", page):
+            s = sp.reconcile_protection(_Tracker({"X": _trade(stop=95.0)}), _Risk(), session="rth", place=True)
+        self.assertTrue(any("loop error" in str(r[1]) for r in s["skipped"]), "loop error must be recorded in skipped")
+        self.assertEqual([r for r in s["paged"] if r[1] == "loop error"], [], "loop error must NOT inflate paged")
+        self.assertTrue(page.called, "a blind-spot loop error must page on first occurrence")
 
 
 if __name__ == "__main__":

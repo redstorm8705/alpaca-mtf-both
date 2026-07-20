@@ -97,6 +97,68 @@ _skip_streak: dict = {}
 # (protected / broker-held / placed / covered), and pruned when it leaves the book.
 _unknown_page_streak: dict = {}
 
+# PRE-WIRE-BLOCKER-1 (2026-07-20, board 3-0 exec-risk+reliability+GAI): per-(symbol, reason)
+# page throttle for the sticky MANUAL-required states. Those states take a human hours to
+# resolve but recur every 5-min cycle; unthrottled they page ~12x/hr/symbol and BURY the rare
+# one-shot urgent pages. This throttle pages the FIRST occurrence of each (symbol, reason)
+# IMMEDIATELY, then re-reminds at most once per that reason's TTL until the symbol reaches a
+# DEFINITE outcome (protected / placed / covered / broker-held / flat), which clears its keys so
+# a fresh problem pages instantly again. It gates ONLY the operator page — every placement/cover
+# action still runs every cycle. Keyed by (symbol, reason) on the MONOTONIC clock (never
+# wall-time); pruned each sweep. Independent of _skip_streak / _unknown_page_streak, whose
+# correctly-throttled paths are left untouched.
+_page_throttle: dict = {}
+# Tiered TTL by severity (exec-risk asymmetry + reliability fail-loud): a position that is
+# unprotected NOW, or a blind spot where the reconciler cannot even evaluate protection,
+# re-reminds on the SHORT tier; a conflict that still has a live stop re-reminds on the LONG
+# tier. _ttl_for() returns LONG only for the explicit conflict set — ANY other (incl. an
+# unmapped/mistyped) reason resolves to the SHORT loud tier, so a typo fails LOUD, never quiet.
+_PAGE_TTL_NAKED_SEC = 900.0      # 15 min — position unprotected NOW, or module blind to it
+_PAGE_TTL_CONFLICT_SEC = 3600.0  # 60 min — a stop is live; manual reconcile needed
+_NAKED_REASONS = frozenset((
+    "no stop level", "place failed", "cover failed", "under-covered",
+    "sub-share qty", "unknown direction", "loop error",
+))
+_CONFLICT_REASONS = frozenset((
+    "over-covered", "resting reducing order conflict", "place-guard suppressed",
+))
+
+
+def _ttl_for(reason: str) -> float:
+    """TTL for a page reason. Known conflict → LONG; naked/blind OR anything unmapped → SHORT
+    (fail loud on an unmapped/mistyped reason, never silently quiet)."""
+    if reason in _CONFLICT_REASONS:
+        return _PAGE_TTL_CONFLICT_SEC
+    if reason not in _NAKED_REASONS:
+        # A reason in NEITHER set is a mistyped/new string — it still gets the SHORT/loud tier
+        # (never silently quiet), but surface it so the miss is visible and can be mapped.
+        logger.debug("STOP-PROTECT: page reason %r is unmapped — defaulting to SHORT/loud tier.", reason)
+    return _PAGE_TTL_NAKED_SEC
+
+
+def _throttled_page(symbol: str, reason: str, msg: str, now_mono: float) -> None:
+    """Page at most once per _ttl_for(reason) per (symbol, reason). The FIRST occurrence of a
+    (symbol, reason) key ALWAYS pages (last is None); repeats within the TTL are log-only.
+    SUMMARY-FREE by design — the CALLER owns the summary bucket, so converting a site is a pure
+    `_page(...)` → `_throttled_page(...)` swap that CANNOT double-count. Never raises (delegates
+    to _page, which never raises)."""
+    key = (symbol, reason)
+    last = _page_throttle.get(key)
+    ttl = _ttl_for(reason)
+    if last is None or (now_mono - last) >= ttl:
+        _page(symbol, msg)
+        _page_throttle[key] = now_mono
+    else:
+        logger.warning("[%s] STOP-PROTECT: %s still unresolved — page throttled (~%.0fm to next).",
+                       symbol, reason, (ttl - (now_mono - last)) / 60.0)
+
+
+def _clear_page_throttle(symbol: str) -> None:
+    """Drop ALL throttle keys for a symbol on a DEFINITE outcome (protected / placed / covered /
+    broker-held / flat) so a condition that resolves then recurs pages FRESH immediately."""
+    for _k in [k for k in _page_throttle if k[0] == symbol]:
+        _page_throttle.pop(_k, None)
+
 
 def _qhm_symbols() -> set:
     """Quarterly-hold symbols this reconciler must NOT manage (intraday-only). Never raises."""
@@ -242,8 +304,10 @@ def reconcile_protection(
                 continue
             direction = str(trade.get("direction", "")).lower()
             if direction not in ("long", "short"):
-                _page(symbol, f"open position has an unknown direction {trade.get('direction')!r} — "
-                              f"cannot determine a reducing side; MANUAL review, position may be unprotected.")
+                _throttled_page(symbol, "unknown direction",
+                                f"open position has an unknown direction {trade.get('direction')!r} — "
+                                f"cannot determine a reducing side; MANUAL review, position may be unprotected.",
+                                now_mono)
                 summary["paged"].append((symbol, "unknown direction"))
                 continue
 
@@ -261,6 +325,7 @@ def reconcile_protection(
                 # Alpaca has no position — nothing to protect (closed / stale tracker entry).
                 # Not a naked-position risk; observability only, and clear any skip streak.
                 _skip_streak.pop(symbol, None)
+                _clear_page_throttle(symbol)   # definite outcome (no position) — re-arm fresh pages
                 summary["skipped"].append((symbol, "no live Alpaca position"))
                 logger.warning("[%s] STOP-PROTECT: tracker-open but Alpaca shows no position "
                                "(closed/stale) — deferring to orphan reconcile.", symbol)
@@ -273,6 +338,7 @@ def reconcile_protection(
                 continue
             if net_qty <= _QTY_EPS:
                 _skip_streak.pop(symbol, None)
+                _clear_page_throttle(symbol)   # definite outcome (flat) — re-arm fresh pages
                 continue  # already flat
 
             # A clean evaluation from here → clear any prior unknown-state streak.
@@ -284,20 +350,25 @@ def reconcile_protection(
             # shrank the position but a full-size stop remains) → on trigger it over-sells into
             # a reverse. v1 has no resize path → PAGE, do not treat as protected-and-silent.
             if stop_cov > net_qty + _QTY_EPS:
-                _page(symbol, f"OVER-COVERED: stop qty {stop_cov:g} > position {net_qty:g} ({direction}) — "
-                              f"reverse-fill risk if triggered. MANUAL resize/cancel required.")
+                _throttled_page(symbol, "over-covered",
+                                f"OVER-COVERED: stop qty {stop_cov:g} > position {net_qty:g} ({direction}) — "
+                                f"reverse-fill risk if triggered. MANUAL resize/cancel required.",
+                                now_mono)
                 summary["paged"].append((symbol, "over-covered"))
                 continue
 
             if stop_cov >= net_qty - _QTY_EPS:
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
+                _clear_page_throttle(symbol)             # protected — re-arm fresh pages if it recurs
                 summary["already_protected"].append((symbol, net_qty, stop_cov))
                 continue  # fully protected → never touch it (additive net)
 
             # UNDER-COVERED partial stop → page (no second stop; avoids a double-stop race).
             if stop_cov > _QTY_EPS:
-                _page(symbol, f"UNDER-COVERED: stop covers {stop_cov:g} of {net_qty:g} {direction} shares — "
-                              f"{net_qty - stop_cov:g} naked. MANUAL top-up required.")
+                _throttled_page(symbol, "under-covered",
+                                f"UNDER-COVERED: stop covers {stop_cov:g} of {net_qty:g} {direction} shares — "
+                                f"{net_qty - stop_cov:g} naked. MANUAL top-up required.",
+                                now_mono)
                 summary["paged"].append((symbol, "under-covered"))
                 continue
 
@@ -306,15 +377,19 @@ def reconcile_protection(
             # order fills → PAGE for manual handling instead of auto-placing (v1 conservatism).
             other_cov = _reducing_qty(orders, direction, stop_only=False)
             if other_cov > _QTY_EPS:
-                _page(symbol, f"UNPROTECTED but a resting reducing order covers {other_cov:g} shares — "
-                              f"auto-placing a full-size stop risks a reverse if it fills. MANUAL stop required.")
+                _throttled_page(symbol, "resting reducing order conflict",
+                                f"UNPROTECTED but a resting reducing order covers {other_cov:g} shares — "
+                                f"auto-placing a full-size stop risks a reverse if it fills. MANUAL stop required.",
+                                now_mono)
                 summary["paged"].append((symbol, "resting reducing order conflict"))
                 continue
 
             intended = _intended_stop(trade)
             if intended is None:
-                _page(symbol, f"UNPROTECTED {direction} x{net_qty:g} with NO usable stop level "
-                              f"(trail_stop/stop missing) — cannot place a stop; MANUAL stop required NOW.")
+                _throttled_page(symbol, "no stop level",
+                                f"UNPROTECTED {direction} x{net_qty:g} with NO usable stop level "
+                                f"(trail_stop/stop missing) — cannot place a stop; MANUAL stop required NOW.",
+                                now_mono)
                 summary["paged"].append((symbol, "no stop level"))
                 continue
 
@@ -324,8 +399,10 @@ def reconcile_protection(
             # sub-share position that would truncate to a 0-share order).
             qty_int = int(round(net_qty))
             if qty_int < 1:
-                _page(symbol, f"UNPROTECTED sub-share {direction} position ({net_qty:g}) — cannot place an "
-                              f"integer stop; MANUAL review.")
+                _throttled_page(symbol, "sub-share qty",
+                                f"UNPROTECTED sub-share {direction} position ({net_qty:g}) — cannot place an "
+                                f"integer stop; MANUAL review.",
+                                now_mono)
                 summary["paged"].append((symbol, "sub-share qty"))
                 continue
 
@@ -336,14 +413,16 @@ def reconcile_protection(
                 continue
 
             if mkt_px > 0 and _is_breached(direction, intended, mkt_px):
-                _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary)
+                _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary, now_mono)
                 continue
 
             # Double-place guard: refuse a repeat submit of the same stop inside the visibility
             # window (a placed-but-not-yet-visible stop would otherwise be duplicated → reverse).
             if _recently_placed(symbol, side, intended, now_mono):
-                _page(symbol, f"recently placed a {side} stop @ ${intended:.2f} not yet visible in open "
-                              f"orders — NOT re-placing (double-stop guard). Verify; self-heals next cycle.")
+                _throttled_page(symbol, "place-guard suppressed",
+                                f"recently placed a {side} stop @ ${intended:.2f} not yet visible in open "
+                                f"orders — NOT re-placing (double-stop guard). Verify; self-heals next cycle.",
+                                now_mono)
                 summary["paged"].append((symbol, "place-guard suppressed"))
                 continue
 
@@ -372,6 +451,7 @@ def reconcile_protection(
                     "nothing placed, nothing cancelled.", symbol,
                 )
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
+                _clear_page_throttle(symbol)             # broker-held (protected) — re-arm fresh pages
                 summary["broker_held"].append((symbol, net_qty, side, intended))
                 continue
 
@@ -411,14 +491,26 @@ def reconcile_protection(
                 logger.warning("[%s] STOP-PROTECT: placed MISSING %s stop x%d @ $%.2f (%s) — order %s",
                                symbol, side, qty_int, intended, "GTC" if use_gtc else "DAY", oid)
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
+                _clear_page_throttle(symbol)             # placed a stop — re-arm fresh pages if it recurs
                 summary["placed"].append((symbol, oid, side, qty_int, intended))
             else:
-                _page(symbol, f"UNPROTECTED {direction} x{qty_int} and stop placement FAILED "
-                              f"(broker returned None @ ${intended:.2f}) — MANUAL stop required NOW.")
+                _throttled_page(symbol, "place failed",
+                                f"UNPROTECTED {direction} x{qty_int} and stop placement FAILED "
+                                f"(broker returned None @ ${intended:.2f}) — MANUAL stop required NOW.",
+                                now_mono)
                 summary["paged"].append((symbol, "place failed"))
 
         except Exception as _loop_err:  # one bad symbol must never abort the sweep
-            _skip_unknown(symbol, summary, f"loop error: {_loop_err!r}")
+            # BLIND SPOT (reliability seat): a loop-error means the reconciler crashed BEFORE the
+            # protection check — it literally cannot tell if this symbol is protected. Higher
+            # severity than a known-and-evaluated naked state → SHORT/loud tier, blind-spot
+            # worded, and kept in `skipped` only (an eval failure, not a market-state page).
+            summary["skipped"].append((symbol, f"loop error: {_loop_err!r}"))
+            _throttled_page(symbol, "loop error",
+                            f"evaluation FAILED for this tracker-open position ({_loop_err!r}) — the "
+                            f"reconciler is BLIND to its protection state (it could be naked). Fail-safe "
+                            f"(no order placed); VERIFY the stop manually NOW.",
+                            now_mono)
 
     # Prune guard/streak state for symbols no longer open (bounded memory).
     for _k in [k for k in _recent_placements if k[0] not in open_symbols]:
@@ -427,6 +519,12 @@ def reconcile_protection(
         _skip_streak.pop(_s, None)
     for _u in [u for u in _unknown_page_streak if u not in open_symbols]:
         _unknown_page_streak.pop(_u, None)
+    # _page_throttle is TUPLE-keyed (symbol, reason) — prune on k[0], NOT bare-key membership
+    # (open_symbols holds bare symbols; `(sym,reason) not in open_symbols` is ALWAYS true and
+    # would delete every key every sweep → the throttle never persists → the module pages every
+    # cycle → this whole patch becomes a silent no-op). Mirrors the _recent_placements prune above.
+    for _k in [k for k in _page_throttle if k[0] not in open_symbols]:
+        _page_throttle.pop(_k, None)
 
     # UNCONDITIONAL summary line (reliability seat, 2026-07-20). Previously gated on
     # `if _n_act:`, so a fully-healthy sweep left NO trace — making "wired and everything is
@@ -455,12 +553,18 @@ def _skip_unknown(symbol: str, summary: dict, reason: str) -> None:
                         symbol, reason, _skip_streak[symbol])
 
 
-def _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary) -> None:
+def _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary, now_mono) -> None:
     """Cover a breached-naked position at market and book the ACTUAL fill (RC-4)."""
     cov_ts = time.time()
     if not close_position(symbol):
-        _page(symbol, f"breached-naked {direction} and cover FAILED (close_position rejected) — "
-                      f"position NAKED, manual cover required NOW.")
+        # "cover failed" RECURS every cycle (a rejected close_position keeps the position
+        # breached-naked, so the breach path re-enters _cover next cycle) — throttle it at the
+        # tight naked tier (exec-risk). The post-cover pages below are one-shot (position goes
+        # flat) and stay raw.
+        _throttled_page(symbol, "cover failed",
+                        f"breached-naked {direction} and cover FAILED (close_position rejected) — "
+                        f"position NAKED, manual cover required NOW.",
+                        now_mono)
         summary["paged"].append((symbol, "cover failed"))
         return
     fill = fetch_actual_fill_price_or_none(symbol, trade, poll_secs=1.0, submitted_after=cov_ts)
