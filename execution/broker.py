@@ -71,8 +71,10 @@ PROTECTION_ALREADY_HELD = _ProtectionSentinel("PROTECTION_ALREADY_HELD")
 
 # qty is held, but the order book could not be read => protection status is UNKNOWN. This is
 # NOT a claim of protection and NOT a claim of failure. A caller should route this to its own
-# throttled unknown-state path (e.g. stop_protection._skip_unknown, which pages once per
-# outage episode), NOT to its "placement failed / position UNPROTECTED" path.
+# throttled unknown-state path — in stop_protection.py that is the dedicated
+# _unknown_page_streak (pages once per episode, cleared on any definite outcome), NOT
+# _skip_unknown (whose streak is already cleared before the submit) and NOT the
+# "placement failed / position UNPROTECTED" path.
 # Added 2026-07-20 at GAI's pre-ship request: distinguishing "unknown" from "failed" keeps the
 # never-mask-a-loss rule intact (we never assert unverified protection) while avoiding an
 # unthrottled false 'UNPROTECTED' page on transient API noise.
@@ -202,21 +204,35 @@ def cancel_open_orders_for_symbol(symbol: str) -> int:
 
 _HOLD_STABLE = "stable"
 _HOLD_UNSTABLE = "unstable"
+_HOLD_NO_COVER = "no_cover"
 _HOLD_UNKNOWN = "unknown"
+_HOLD_QTY_EPS = 1e-6
 
 
-def _hold_state(symbol: str) -> str:
-    """Classify whether a held_for_orders (40310000) rejection is backed by a STABLE live
-    reducing order. Used only by the allow_cancel_blocking=False opt-out paths.
+def _hold_state(symbol: str, side: str, qty: float) -> str:
+    """Classify whether a held_for_orders (40310000) rejection is backed by a live protective
+    stop that ACTUALLY COVERS the position. Used only by the allow_cancel_blocking=False
+    opt-out paths, whose STABLE answer becomes a POSITIVE claim of protection.
 
-      _HOLD_STABLE   — order book readable and no blocking order is mid-cancel: a real
-                       reducing order (almost certainly a protective stop) holds the qty.
+      _HOLD_STABLE   — the book is readable, nothing is mid-cancel, AND live orders on the
+                       REDUCING side (`side`) of type *stop* cover at least `qty`. Only this
+                       justifies telling a caller "you are protected, do not page."
       _HOLD_UNSTABLE — a blocking order is 'pending_cancel': its held qty is about to
                        release, so the position is about to be UNprotected, not protected.
-      _HOLD_UNKNOWN  — the order book could not be read (None / raise). Distinct from both
-                       of the above: we can neither assert protection nor assert its loss.
+      _HOLD_NO_COVER — the book is readable but NO reducing-side stop covers the qty. The
+                       40310000 is explained by something else (a resting profit limit, an
+                       entry order, a wrong-side/partial order). The qty is held, but NOT by
+                       protection — so this must NOT read as protected.
+      _HOLD_UNKNOWN  — the book could not be read (None / raise). We can neither assert
+                       protection nor assert its loss.
 
-    NEVER asserts protection it cannot verify (never-mask-a-loss), and never raises.
+    HARDENED 2026-07-20 (PRE-WIRE-BLOCKER-3, found by cold-2nd): the prior version returned
+    STABLE for ANY list without a pending_cancel — INCLUDING AN EMPTY LIST — and never checked
+    side, type or qty. That let PROTECTION_ALREADY_HELD be returned with zero protecting orders
+    on the book: an unverified claim of protection, i.e. exactly the never-mask-a-loss
+    violation the sentinel exists to prevent. Protection is now PROVEN, not assumed.
+
+    Never raises.
     """
     try:
         _orders = get_open_orders(symbol)
@@ -228,7 +244,58 @@ def _hold_state(symbol: str) -> str:
             return _HOLD_UNKNOWN
         if any("pending_cancel" in str(getattr(_o, "status", "")).lower() for _o in _orders):
             return _HOLD_UNSTABLE
-        return _HOLD_STABLE
+
+        # Prove a reducing-side STOP actually covers the qty. `side` is already the reducing
+        # side by this function's contract (submit_*_stop_order is called with "sell" to
+        # protect a long, "buy" to protect a short).
+        # Match ANY stop-family type on the reducing side: plain "stop", "stop_limit", and
+        # "trailing_stop" all contain "stop" and all genuinely defend the position, so counting
+        # them TOWARD cover is correct (and safer than requiring exact "stop", which would MISS a
+        # real trailing stop and wrongly read a protected position as naked). The one caveat —
+        # a stop_limit can gap through its limit and not fill — makes this a mild UNDER-page risk
+        # at worst (we'd stay quiet on a stop_limit that later gaps), never an over-claim on an
+        # empty/wrong-side book, which is the failure this function exists to prevent.
+        _want = str(side).lower()
+        _cover = 0.0
+        for _o in _orders:
+            _os = getattr(_o, "side", "")
+            if str(getattr(_os, "value", _os)).lower() != _want:
+                continue
+            _ot = getattr(_o, "type", "")
+            if "stop" not in str(getattr(_ot, "value", _ot)).lower():
+                continue
+            try:
+                _cover += abs(float(getattr(_o, "qty", 0) or 0))
+            except (TypeError, ValueError):
+                # Reliability seat 2026-07-20: log the dropped order so a malformed protective
+                # stop is not silently invisible (a false NO_COVER would otherwise be
+                # undebuggable). Fail-closed direction is unchanged — it contributes nothing.
+                logger.debug(
+                    f"[{symbol}] hold-state probe: dropped order {getattr(_o, 'id', '?')} — "
+                    f"unparseable qty {getattr(_o, 'qty', None)!r}; contributes nothing to cover."
+                )
+                continue   # unparseable qty contributes nothing — cannot count toward proof
+
+        if _cover + _HOLD_QTY_EPS >= float(qty):
+            return _HOLD_STABLE
+
+        # Reliability seat 2026-07-20: attach the book we actually saw (id/side/type/qty/status)
+        # so a FALSE NO_COVER — a real stop misclassified, e.g. an unexpected type string — is
+        # debuggable from logs alone, instead of only surfacing the aggregate shortfall.
+        _book = "; ".join(
+            f"{getattr(_o, 'id', '?')}:"
+            f"{str(getattr(getattr(_o, 'side', ''), 'value', getattr(_o, 'side', ''))).lower()}/"
+            f"{str(getattr(getattr(_o, 'type', ''), 'value', getattr(_o, 'type', ''))).lower()}/"
+            f"{getattr(_o, 'qty', '?')}/"
+            f"{str(getattr(_o, 'status', '')).lower()}"
+            for _o in _orders
+        ) or "<empty>"
+        logger.warning(
+            f"[{symbol}] hold-state probe: qty is held (40310000) but live {_want}-side stops "
+            f"cover only {_cover:g} of {float(qty):g} share(s) — the hold is NOT protection "
+            f"(likely a resting limit/entry order). NOT claiming protection. Book seen: {_book}"
+        )
+        return _HOLD_NO_COVER
     except Exception as _hse:
         logger.warning(
             f"[{symbol}] hold-state probe raised ({_hse}) — protection status UNKNOWN; "
@@ -574,6 +641,13 @@ def submit_gtc_stop_order(
         logger.warning(f"[{symbol}] GTC stop skipped: qty={qty}, stop=${stop_price}")
         return None
 
+    # The qty we were ASKED to protect, captured BEFORE any floor-bounding. _hold_state proves
+    # cover against THIS, never the possibly-shrunk qty: floor-bounding only ever REDUCES the
+    # submitted qty, so proving cover against the reduced number could report "protected" while
+    # part of the position is actually naked. Requiring cover of the full requested qty is the
+    # strictly-safer test (never over-claims protection).
+    _requested_qty = qty
+
     # Prereq #3 (F6 arming): floor-bound a RESTING sell-stop so it can never fire INTO the
     # never-sell floor (forever6+qhm). Self-gating (DORMANT unless OWNERSHIP_GUARD_ENFORCE):
     # returns qty unchanged for buy-stops / non-protected symbols, or 0 to skip entirely.
@@ -654,7 +728,7 @@ def submit_gtc_stop_order(
                 # but NOT when get_open_orders returns None — `if _existing_orders:` treats that
                 # as falsy and falls through to here. So this block must handle every case.
                 if "40310000" in err:
-                    _hs = _hold_state(symbol)
+                    _hs = _hold_state(symbol, side, _requested_qty)
                     if _hs == _HOLD_STABLE:
                         logger.warning(
                             f"[{symbol}] GTC stop not placed (40310000 held_for_orders) and "
@@ -674,9 +748,10 @@ def submit_gtc_stop_order(
                         return PROTECTION_UNKNOWN
                     logger.error(
                         f"[{symbol}] GTC stop FAILED (40310000) and allow_cancel_blocking="
-                        f"False, and the hold is UNSTABLE (a blocking order is mid-cancel, so "
-                        f"its held qty is about to release) — NOT cancelling, NOT claiming "
-                        f"protection. Position may be unprotected. Original: {e}"
+                        f"False, and the hold is NOT protection ({_hs}: a blocking order is "
+                        f"mid-cancel, or no reducing-side stop covers the qty) — NOT "
+                        f"cancelling, NOT claiming protection. Position may be unprotected. "
+                        f"Original: {e}"
                     )
                     return None
                 # Bare "insufficient qty available" text WITHOUT a 40310000 code — cannot prove
@@ -767,6 +842,13 @@ def submit_day_stop_order(
         logger.warning(f"[{symbol}] DAY stop skipped: qty={qty}, stop=${stop_price}")
         return None
 
+    # The qty we were ASKED to protect, captured BEFORE any floor-bounding. _hold_state proves
+    # cover against THIS, never the possibly-shrunk qty: floor-bounding only ever REDUCES the
+    # submitted qty, so proving cover against the reduced number could report "protected" while
+    # part of the position is actually naked. Requiring cover of the full requested qty is the
+    # strictly-safer test (never over-claims protection).
+    _requested_qty = qty
+
     # Prereq #3 (F6 arming): floor-bound a RESTING sell-stop so it can never fire INTO the
     # never-sell floor (forever6+qhm). Self-gating (DORMANT unless OWNERSHIP_GUARD_ENFORCE):
     # returns qty unchanged for buy-stops / non-protected symbols, or 0 to skip entirely.
@@ -809,7 +891,7 @@ def submit_day_stop_order(
                 # Unlike the GTC path there is no pending_cancel guard upstream here, so this
                 # block is the sole discrimination point for the DAY stop.
                 if "40310000" in err:
-                    _hs = _hold_state(symbol)
+                    _hs = _hold_state(symbol, side, _requested_qty)
                     if _hs == _HOLD_STABLE:
                         logger.warning(
                             f"[{symbol}] DAY stop not placed (40310000 held_for_orders) and "
@@ -829,9 +911,10 @@ def submit_day_stop_order(
                         return PROTECTION_UNKNOWN
                     logger.error(
                         f"[{symbol}] DAY stop FAILED (40310000) and allow_cancel_blocking="
-                        f"False, and the hold is UNSTABLE (a blocking order is mid-cancel, so "
-                        f"its held qty is about to release) — NOT cancelling, NOT claiming "
-                        f"protection. Position may be unprotected. Original: {e}"
+                        f"False, and the hold is NOT protection ({_hs}: a blocking order is "
+                        f"mid-cancel, or no reducing-side stop covers the qty) — NOT "
+                        f"cancelling, NOT claiming protection. Position may be unprotected. "
+                        f"Original: {e}"
                     )
                     return None
                 logger.error(
