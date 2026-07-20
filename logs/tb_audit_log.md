@@ -8755,3 +8755,20 @@ reject. (`--waive-gro` waives only Gro; there is no GAI waive, so a real APPROVE
 (shipped cd81a53) returns `_HOLD_STABLE` for an EMPTY order book and never checks side/type/qty,
 so `PROTECTION_ALREADY_HELD` can be returned without a verified protecting order = an unverified
 claim of protection. Cannot fire while inert. Own file → own patch sequence (RULE C-6).
+
+---
+
+### 2026-07-20 — PRE-WIRE-BLOCKER-3 CLOSED (`750c52c`, SHIPPED + LIVE + VERIFIED)
+`execution/broker.py` `_hold_state(symbol, side, qty)` hardened: STABLE now requires ≥1 live
+reducing-side stop-family order covering the qty (cover proven against `_requested_qty` captured
+BEFORE floor-bounding); readable-but-uncovered incl. empty book → `_HOLD_NO_COVER` (page);
+unreadable → `_HOLD_UNKNOWN`. Closes the unverified-claim-of-protection / never-mask-a-loss hole
+where an empty book read as STABLE. Reliability log hardening folded in. New
+`tests/test_broker_hold_state.py` (22 cases) is the regression pin. INERT (no live caller) → zero
+runtime change. Gate: full read 1422L + py_compile/mypy/ruff clean + 54/54 tests + cold-2nd PASS +
+board 2/0 APPROVE (exec-risk APPROVE, reliability APPROVE-WITH-CHANGES folded) + FINAL preship
+Gro=APPROVE GAI=APPROVE (marker df0d2632; GAI false-premise reject on a redundant `float(qty)` cast
+resolved by counter-prompt, not re-roll). OCI DEPLOY_OK, 4/4 services active, dashboard 200, 54/54
+on-box. RC scan on changed region: RC-1..8 all PASS. 2 informational wiring residuals (stop_limit
+gap under-page; `held`-status bracket legs excluded → benign over-page) — safe direction, revisit
+at wiring. 2 of 3 pre-wire blockers remain (throttle; N→1 order fetch).

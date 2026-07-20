@@ -66,18 +66,27 @@ positions = N full-account REST calls × 15s socket timeout, against a 12-min wa
 already running 7.4–8.8 min. Reliability seat measured 11.6 min at 5 positions; deterministic
 watchdog trip at 10. Add a wall-clock budget inside the sweep too.
 
-**`PRE-WIRE-BLOCKER-3: Tighten broker._hold_state — empty book must not read as STABLE`**
-Found by cold-2nd 2026-07-20 on the reconciler diff. `broker._hold_state` returns `_HOLD_STABLE`
-whenever `get_open_orders` returns any list without a `pending_cancel` — **including an empty list**
-— and never checks side, type, or qty. So `PROTECTION_ALREADY_HELD` can be returned when the book
-shows ZERO orders, or only a non-reducing / wrong-qty order, and the reconciler then records
-"protected" and deliberately does NOT page. That is an unverified claim of protection = a
-never-mask-a-loss violation. NOT a regression (the pre-fix path was strictly worse — it cancelled
-the good stop) and it cannot fire while the module is inert, but it must be fixed before wiring.
-Fix: require ≥1 live order on the REDUCING side whose type is a stop and whose qty covers the
-position, else return `_HOLD_UNKNOWN`. Own file → own full patch sequence (RULE C-6).
-Also fix in the same patch: `broker.py`'s comment claiming `_skip_unknown` "pages once per outage
-episode" is now false for the PROTECTION_UNKNOWN call path.
+**`✅ PRE-WIRE-BLOCKER-3` — SHIPPED + LIVE + VERIFIED 2026-07-20 (`750c52c`, OCI DEPLOY_OK,
+4/4 services active, dashboard 200, 54/54 tests green ON THE BOX).** `broker._hold_state(symbol,
+side, qty)` now PROVES ≥1 live reducing-side stop-family order covers the qty before returning
+`_HOLD_STABLE`; readable-but-uncovered (incl. empty book) → `_HOLD_NO_COVER` (page), unreadable →
+`_HOLD_UNKNOWN`. Callers capture `_requested_qty` BEFORE floor-bounding and prove cover against
+that (strictly safer, never over-claims). Reliability-seat log hardening folded in (NO_COVER dumps
+observed book; dropped-order debug). New `tests/test_broker_hold_state.py` (22 cases, template =
+anti-circle regression rule) pins empty/wrong-side/partial/unparseable/requested-vs-floor-reduced.
+Gate: full read 1422L + statics + 54/54 + cold-2nd PASS + board 2/0 APPROVE + preship Gro+GAI
+APPROVE (GAI false-premise reject on a redundant `float(qty)` cast resolved via counter-prompt,
+not re-roll). INERT — no live caller passes `allow_cancel_blocking=False`; zero runtime change today.
+**2 informational residuals logged for the WIRING session (both fail-safe, over-page not mask):**
+(a) a `stop_limit` counted toward cover can gap through its limit (bounded under-page); (b)
+`get_open_orders` uses `QueryOrderStatus.OPEN`, so any protective stop resting in Alpaca `held`
+status (bracket child) is excluded from cover → benign false page — confirm at wiring whether any
+protective stops legitimately rest in `held`. The `_skip_unknown` comment was already corrected in
+the `07bac0b` reconciler sync (comment now points at `_unknown_page_streak`).
+
+**⚠️ 2 PRE-WIRE BLOCKERS REMAIN (module still MUST NOT be wired until both land):**
+BLOCKER-1 (per-(symbol,reason) page throttle) and BLOCKER-2 (collapse N per-symbol get_open_orders
+into 1 account-wide fetch). Details in the two blocks above.
 
 **⏩ THEN wire** — shadow (`place=False`) FIRST, and the call sites must include the **5 gaps**
 (L242 kill-switch, L431 premarket, L892, L1011 EOD, L1046 blackout — kill-switch and blackout
@@ -86,10 +95,13 @@ being the two highest-stress days of the year), each wrapped in `try/except` + `
 `_touch_cycle_ts()` → watchdog → `os.execv` → restart loop). Then staged placement, site-2-first,
 overnight-only. Reviews/prompts: scratchpad `wiring_prompt/broker_review/gai_counter2/recon_review`.
 
-**⚠️ LIVE AT 2026-07-20 14:29 ET: 3 of 9 positions had NO stop at Alpaca** — GOOGL long 2sh
-(MV $703.65 = 26% of $2,689 equity), NFLX short 2sh, SMCI short 2sh. NVDA (the other QHM hold)
-DID have its GTC stop, so this is not "QHM doesn't use stops". Surfaced to Rafael; no orders
-placed by Claude. Re-check protection state at next session start.
+**⚠️ LIVE AT 2026-07-20 17:16 ET (after hours): GOOGL STILL NAKED.** Re-checked at session start:
+of the 3 naked at 14:29 ET, NFLX short 2sh + SMCI short 2sh are NOW protected (stop/buy/2 each),
+but **GOOGL long 2sh (MV $705 ≈ 26% of $2,689 equity) STILL has NO stop at Alpaca.** NVDA (the
+other QHM hold) DID have its GTC stop, so this is not "QHM doesn't use stops" — GOOGL-specific.
+10 positions total, 9 open orders (GOOGL the only naked one). Surfaced to Rafael; NO orders placed
+by Claude. **⏩ NEXT ACTIONABLE: read-only diagnostic on WHY GOOGL specifically has no GTC stop
+(QHM stop-submission path) while NVDA does** — then blockers 1 & 2 for the stop_protection wiring.
 
 **⚙️ PRESHIP TOOLING GOTCHA (cost a full false-APPROVE this session):** `preship_audit.py` hashes
 the **staged/committed** blob and diffs `--cached`. Run it BEFORE `git add` and it audits an EMPTY
