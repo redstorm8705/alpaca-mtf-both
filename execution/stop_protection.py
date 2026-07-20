@@ -32,6 +32,17 @@ REVIEW-HARDENED 2026-07-19 (cold board REJECT → revision; both reverse-fill pa
   * Unknown-state now PAGES (throttled), quarterly-hold symbols are excluded, session is
     validated, qty is whole-share-guarded.
 
+HARDENED 2026-07-20 (the destructive-broker-fallback fix — this is the load-bearing one):
+  Every submit passes allow_cancel_blocking=False. WITHOUT it, a 40310000 (held_for_orders)
+  rejection — the EXACT thing that happens when our get_open_orders read is stale and the
+  position is in fact protected — sent broker.py into cancel_open_orders_for_symbol(),
+  CANCELLING the good stop and resubmitting at a different level, or leaving the position
+  naked if its 63s re-poll exhausted. So the "never regresses a protected position" claim
+  above was true inside this module and FALSE through its broker dependency. It is now true
+  end-to-end. The submit result is a 4-WAY contract (PROTECTION_ALREADY_HELD /
+  PROTECTION_UNKNOWN / None / order) and MUST be matched by identity — a bare `is not None`
+  treats a sentinel as success and writes an empty order id over a live stop's real one.
+
 Data tier: T1 (Alpaca Trading REST via execution.broker). No SDK instantiation here.
 """
 from __future__ import annotations
@@ -42,6 +53,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from execution.broker import (
+    PROTECTION_ALREADY_HELD,
+    PROTECTION_UNKNOWN,
     close_position,
     get_open_orders,
     get_open_position,
@@ -74,6 +87,15 @@ _PLACEMENT_TTL_SEC = 90.0
 # Per-symbol consecutive unknown-state skip counter — pages ONCE per outage episode per
 # symbol (streak 0->1), then suppresses re-pages until the symbol evaluates cleanly again.
 _skip_streak: dict = {}
+
+# Dedicated throttle for the broker-unverifiable-hold path (PROTECTION_UNKNOWN).
+# Deliberately NOT _skip_streak: that dict is cleared on every clean evaluation, which happens
+# BEFORE the submit, so it cannot throttle anything downstream of that point (the pre-existing
+# loop-error handler has the same problem — tracked as PRE-WIRE-BLOCKER-1, which generalises
+# this into a per-(symbol,reason) throttle covering the four sticky MANUAL-required paths too).
+# Pages ONCE per episode per symbol; cleared the moment the symbol reaches any DEFINITE outcome
+# (protected / broker-held / placed / covered), and pruned when it leaves the book.
+_unknown_page_streak: dict = {}
 
 
 def _qhm_symbols() -> set:
@@ -191,6 +213,12 @@ def reconcile_protection(
         "paged": [],
         "skipped": [],       # unknown state — failed safe on the order (also paged, throttled)
         "excluded_qhm": [],
+        # Broker said the qty is already held by a stable live protective order, i.e. our
+        # get_open_orders read was STALE and the position was protected all along. Counted
+        # separately from already_protected (which is derived from our own read) because the
+        # rate of this bucket IS the measurement of get_open_orders visibility lag — the exact
+        # evidence the shadow-mode run needs before placement is enabled anywhere.
+        "broker_held": [],
     }
     if session not in _VALID_SESSIONS:
         # Unknown session → default to GTC (a stop that lasts too long is far safer than one
@@ -262,6 +290,7 @@ def reconcile_protection(
                 continue
 
             if stop_cov >= net_qty - _QTY_EPS:
+                _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 summary["already_protected"].append((symbol, net_qty, stop_cov))
                 continue  # fully protected → never touch it (additive net)
 
@@ -319,7 +348,54 @@ def reconcile_protection(
                 continue
 
             submit = submit_gtc_stop_order if use_gtc else submit_day_stop_order
-            order = submit(symbol=symbol, qty=qty_int, side=side, stop_price=round(intended, 2))
+            # allow_cancel_blocking=False is LOAD-BEARING (broker.py, 2026-07-20): without it a
+            # 40310000 (held_for_orders) rejection sends the broker into
+            # cancel_open_orders_for_symbol() — CANCELLING the very stop that caused the
+            # rejection, i.e. destroying live protection this reconciler exists to preserve,
+            # and possibly leaving the position naked if the 63s re-poll then exhausts.
+            order = submit(symbol=symbol, qty=qty_int, side=side,
+                           stop_price=round(intended, 2), allow_cancel_blocking=False)
+
+            # ── 4-WAY result contract (see broker.py sentinels) ──────────────────────────
+            # These MUST be identity checks. The sentinels are NOT None, so the old
+            # `if order is not None:` would take the SUCCESS branch on a sentinel, read
+            # getattr(order, "id", "") -> "" and persist an EMPTY order id over a live stop's
+            # real one — corrupting exactly the protection state this module protects.
+            if order is PROTECTION_ALREADY_HELD:
+                # Alpaca refused because a STABLE live reducing order already holds the qty.
+                # So the position IS protected and our get_open_orders read above was stale
+                # (visibility lag). Not a placement and NOT a failure: do not page, do not
+                # record an order id, do not arm the double-place guard (we placed nothing).
+                logger.info(
+                    "[%s] STOP-PROTECT: broker reports the qty is already held by a live "
+                    "protective order — our order-book read was stale. Treating as PROTECTED; "
+                    "nothing placed, nothing cancelled.", symbol,
+                )
+                _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
+                summary["broker_held"].append((symbol, net_qty, side, intended))
+                continue
+
+            if order is PROTECTION_UNKNOWN:
+                # Held, but the broker could not read the book to confirm a stable hold.
+                # Protection is genuinely UNKNOWN — NEVER claim it (never-mask-a-loss). Fail
+                # loud, but throttled to ONCE per outage episode per symbol via the dedicated
+                # _unknown_page_streak (NOT _skip_streak, which is already cleared by the
+                # clean-evaluation reset above and so cannot throttle anything down here).
+                _reason = "broker could not verify the protective hold (order book unreadable)"
+                summary["skipped"].append((symbol, _reason))
+                _unknown_page_streak[symbol] = _unknown_page_streak.get(symbol, 0) + 1
+                if _unknown_page_streak[symbol] == 1:
+                    _page(symbol, f"UNPROTECTED-OR-NOT-UNKNOWN {direction} x{qty_int}: the broker "
+                                  f"could not verify whether a protective stop holds this qty "
+                                  f"({_reason}). NOT claiming protection. VERIFY the stop manually. "
+                                  f"Suppressing repeats until this symbol resolves.")
+                    summary["paged"].append((symbol, "broker-unverifiable hold"))
+                else:
+                    logger.warning("[%s] STOP-PROTECT: hold still unverifiable (%s), occurrence "
+                                   "#%d — page suppressed until the symbol resolves.",
+                                   symbol, _reason, _unknown_page_streak[symbol])
+                continue
+
             if order is not None:
                 _recent_placements[_place_key(symbol, side, intended)] = now_mono
                 oid = str(getattr(order, "id", "") or "")
@@ -334,6 +410,7 @@ def reconcile_protection(
                                    "failed: %s", symbol, oid, _se)
                 logger.warning("[%s] STOP-PROTECT: placed MISSING %s stop x%d @ $%.2f (%s) — order %s",
                                symbol, side, qty_int, intended, "GTC" if use_gtc else "DAY", oid)
+                _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 summary["placed"].append((symbol, oid, side, qty_int, intended))
             else:
                 _page(symbol, f"UNPROTECTED {direction} x{qty_int} and stop placement FAILED "
@@ -348,14 +425,19 @@ def reconcile_protection(
         _recent_placements.pop(_k, None)
     for _s in [s for s in _skip_streak if s not in open_symbols]:
         _skip_streak.pop(_s, None)
+    for _u in [u for u in _unknown_page_streak if u not in open_symbols]:
+        _unknown_page_streak.pop(_u, None)
 
-    _n_act = len(summary["placed"]) + len(summary["covered"]) + len(summary["paged"])
-    if _n_act:
-        logger.info("STOP-PROTECT [%s]: protected %d | placed %d | covered %d | paged %d | skipped %d | "
-                    "qhm-excl %d | @ %s ET", session, len(summary["already_protected"]),
-                    len(summary["placed"]), len(summary["covered"]), len(summary["paged"]),
-                    len(summary["skipped"]), len(summary["excluded_qhm"]),
-                    datetime.now(ET).strftime("%H:%M:%S"))
+    # UNCONDITIONAL summary line (reliability seat, 2026-07-20). Previously gated on
+    # `if _n_act:`, so a fully-healthy sweep left NO trace — making "wired and everything is
+    # protected" indistinguishable from "silently not wired at all". For a module that spent
+    # weeks deployed-but-inert, that is the one state we cannot afford to be unable to observe.
+    logger.info("STOP-PROTECT [%s]: protected %d | broker-held %d | placed %d | covered %d | "
+                "paged %d | skipped %d | qhm-excl %d | @ %s ET", session,
+                len(summary["already_protected"]), len(summary["broker_held"]),
+                len(summary["placed"]), len(summary["covered"]), len(summary["paged"]),
+                len(summary["skipped"]), len(summary["excluded_qhm"]),
+                datetime.now(ET).strftime("%H:%M:%S"))
     return summary
 
 

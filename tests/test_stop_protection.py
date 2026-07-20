@@ -78,6 +78,7 @@ class StopProtectionInvariant(unittest.TestCase):
         # Clear module-level guard/streak state between tests (deterministic).
         sp._recent_placements.clear()
         sp._skip_streak.clear()
+        sp._unknown_page_streak.clear()
 
     def _run(self, *, open_orders, position, trade, session="rth", place=True,
              submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
@@ -249,6 +250,141 @@ class StopProtectionInvariant(unittest.TestCase):
         s2, m2 = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade())
         m2["day"].assert_not_called()
         self.assertEqual(s2["paged"][0][1], "place-guard suppressed")
+
+    # ── 2026-07-20: the destructive-broker-fallback fix (broker allow_cancel_blocking) ──
+
+    # 17 — EVERY submit must opt out of the broker's cancel-blocking-orders recovery.
+    # Without allow_cancel_blocking=False a 40310000 makes broker.py cancel the GOOD stop.
+    def test_submit_opts_out_of_cancel_blocking(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertIs(m["day"].call_args.kwargs["allow_cancel_blocking"], False,
+                      "DAY submit MUST pass allow_cancel_blocking=False")
+        # The first run armed the double-place guard for (X, sell, 95.00); clear it so the
+        # GTC leg below actually reaches submit instead of being suppressed.
+        sp._recent_placements.clear()
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         session="ah", submit_gtc=_order("sell", oid="g2"))
+        self.assertIs(m["gtc"].call_args.kwargs["allow_cancel_blocking"], False,
+                      "GTC submit MUST pass allow_cancel_blocking=False")
+
+    # 18 — PROTECTION_ALREADY_HELD => position is protected (stale read). No page, no order id
+    # written, guard NOT armed. This is the branch a bare `is not None` would corrupt.
+    def test_broker_held_treated_as_protected_not_success(self):
+        tracker = _Tracker({"X": _trade()})
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         submit_day=sp.PROTECTION_ALREADY_HELD, tracker=tracker)
+        self.assertEqual(len(s["broker_held"]), 1)
+        self.assertEqual(len(s["placed"]), 0, "a sentinel is NOT a placement")
+        self.assertEqual(len(s["paged"]), 0, "already-protected must not page")
+        self.assertFalse(m["page"].called)
+        # THE REGRESSION: must never persist an empty order id over a live stop's real one.
+        self.assertEqual(tracker.gtc_set, [])
+        self.assertNotIn("rth_day_stop_order_id", tracker.open_trades["X"])
+        self.assertEqual(sp._recent_placements, {}, "guard must not arm when nothing was placed")
+
+    # 18b — same, GTC/AH path: must not call set_gtc_stop_order_id with an empty id.
+    def test_broker_held_ah_does_not_write_empty_gtc_id(self):
+        tracker = _Tracker({"X": _trade()})
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         session="ah", submit_gtc=sp.PROTECTION_ALREADY_HELD, tracker=tracker)
+        self.assertEqual(len(s["broker_held"]), 1)
+        self.assertEqual(tracker.gtc_set, [], "must NOT overwrite a live GTC id with ''")
+
+    # 19 — PROTECTION_UNKNOWN => protection unverifiable: fail loud, never claim protected.
+    def test_broker_unknown_fails_loud(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         submit_day=sp.PROTECTION_UNKNOWN)
+        self.assertEqual(len(s["skipped"]), 1)
+        self.assertEqual(len(s["broker_held"]), 0, "UNKNOWN must never count as protected")
+        self.assertEqual(len(s["placed"]), 0)
+        self.assertTrue(m["page"].called, "unverifiable protection must page, not stay silent")
+
+    # 20 — a genuine None is still a failure and still pages (contract not weakened).
+    def test_none_still_pages_as_failure(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         submit_day=None)
+        self.assertEqual(s["paged"][0][1], "place failed")
+        self.assertEqual(len(s["broker_held"]), 0)
+
+    # 21 — the sentinels must be distinguishable from each other, from None, and from an order.
+    def test_sentinel_identity_contract(self):
+        self.assertIsNot(sp.PROTECTION_ALREADY_HELD, sp.PROTECTION_UNKNOWN)
+        self.assertIsNot(sp.PROTECTION_ALREADY_HELD, None)
+        self.assertIsNot(sp.PROTECTION_UNKNOWN, None)
+        self.assertFalse(hasattr(sp.PROTECTION_ALREADY_HELD, "id"),
+                         "sentinel must have no .id — misuse should fail loudly")
+        self.assertFalse(hasattr(sp.PROTECTION_UNKNOWN, "id"))
+
+    # 21b — PROTECTION_UNKNOWN pages ONCE per episode, then suppresses. Uses the dedicated
+    # _unknown_page_streak, NOT _skip_streak (which the clean-evaluation reset clears before
+    # the submit and so cannot throttle anything downstream of it).
+    def test_broker_unknown_pages_once_per_episode(self):
+        s1, m1 = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                           trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        s2, m2 = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                           trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        s3, m3 = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                           trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        self.assertTrue(m1["page"].called, "first UNKNOWN must page")
+        self.assertFalse(m2["page"].called, "repeat UNKNOWN must be suppressed")
+        self.assertFalse(m3["page"].called, "repeat UNKNOWN must stay suppressed")
+        # still recorded every sweep — suppression is of the PAGE, never of the record
+        for s in (s1, s2, s3):
+            self.assertEqual(len(s["skipped"]), 1)
+        self.assertEqual(len(s1["paged"]), 1)
+        self.assertEqual(len(s2["paged"]), 0)
+
+    # 21b-2 — a DEFINITE outcome ends the episode, so a later UNKNOWN pages again (no
+    # permanent suppression of a genuinely new incident).
+    def test_unknown_episode_resets_after_definite_outcome(self):
+        _, m1 = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                          trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        self.assertTrue(m1["page"].called)
+        # definite outcome: broker confirms a live protective hold
+        self._run(open_orders=[], position=_position("long", 3, 110.0),
+                  trade=_trade(), submit_day=sp.PROTECTION_ALREADY_HELD)
+        self.assertNotIn("X", sp._unknown_page_streak, "definite outcome must end the episode")
+        # a NEW unknown incident must page again
+        _, m3 = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                          trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        self.assertTrue(m3["page"].called, "a new episode must page again")
+
+    # 21b-3 — streak state is pruned when the symbol leaves the book (bounded memory).
+    def test_unknown_streak_pruned_when_symbol_closes(self):
+        self._run(open_orders=[], position=_position("long", 3, 110.0),
+                  trade=_trade(), submit_day=sp.PROTECTION_UNKNOWN)
+        self.assertIn("X", sp._unknown_page_streak)
+        self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                  tracker=_Tracker({}))          # symbol no longer open
+        self.assertNotIn("X", sp._unknown_page_streak, "must prune state for closed symbols")
+
+    # 21c — broker_held tuple shape is part of the contract consumers will read.
+    def test_broker_held_tuple_shape(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0),
+                         trade=_trade(stop=95.0), submit_day=sp.PROTECTION_ALREADY_HELD)
+        self.assertEqual(len(s["broker_held"]), 1)
+        sym, qty, side, level = s["broker_held"][0]
+        self.assertEqual((sym, qty, side, level), ("X", 3.0, "sell", 95.0))
+
+    # 21d — a SHORT position hitting a sentinel must behave identically (buy-side reducing).
+    def test_short_position_broker_held(self):
+        tracker = _Tracker({"X": _trade(direction="short", stop=105.0)})
+        s, m = self._run(open_orders=[], position=_position("short", 2, 90.0),
+                         trade=_trade(direction="short", stop=105.0),
+                         submit_day=sp.PROTECTION_ALREADY_HELD, tracker=tracker)
+        self.assertEqual(len(s["broker_held"]), 1)
+        self.assertEqual(s["broker_held"][0][2], "buy")
+        self.assertEqual(len(s["placed"]), 0)
+        self.assertEqual(tracker.gtc_set, [])
+
+    # 22 — the summary line is emitted even on a fully-healthy sweep (observability):
+    # "everything protected" must be distinguishable from "not wired at all".
+    def test_summary_emitted_when_all_protected(self):
+        with self.assertLogs("execution.stop_protection", level="INFO") as cm:
+            self._run(open_orders=[_order("sell", qty=3)],
+                      position=_position("long", 3, 110.0), trade=_trade())
+        self.assertTrue(any("STOP-PROTECT [" in line for line in cm.output),
+                        "a healthy sweep must still leave a trace")
 
 
 if __name__ == "__main__":
