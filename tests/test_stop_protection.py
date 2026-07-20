@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+# ruff: noqa: E501
+"""
+Failure-injection harness for execution/stop_protection.reconcile_protection.
+
+FORCES each failure mode and asserts the invariant holds — the piece missing for months.
+Runs with plain unittest (no pytest):  python3 -m tests.test_stop_protection
+
+Proves closed, by construction:
+  * Finding A (gate-before-submit → naked all session): no per-day gate; re-derives every call.
+  * Finding B (_TERMINAL omits "rejected"): trusts Alpaca's LIVE open orders, never a stored id.
+  * Cold-board REJECT fixes: cover books the actual fill; stop-vs-limit + over-covered page;
+    unknown-state pages; double-place guard suppresses a not-yet-visible repeat.
+"""
+from __future__ import annotations
+
+import sys
+import types
+import unittest
+from unittest import mock
+
+# Stub the Alpaca SDK so this harness runs anywhere — execution.broker imports these at load,
+# but every broker function the reconciler calls is mock-patched below.
+for _mod in ("alpaca", "alpaca.trading", "alpaca.trading.client",
+             "alpaca.trading.requests", "alpaca.trading.enums"):
+    sys.modules.setdefault(_mod, mock.MagicMock())
+
+from execution import stop_protection as sp  # noqa: E402  (after the SDK stub)
+
+
+def _order(side: str, otype: str = "stop", qty: float = 1, oid: str = "o1", status: str = "new"):
+    return types.SimpleNamespace(id=oid, symbol="X", side=side, type=otype, qty=qty, status=status, stop_price=100.0)
+
+
+_DEF_ORDER = _order("sell")  # module-level singleton default (ruff B008)
+
+
+def _position(direction: str, qty: float, price: float):
+    return types.SimpleNamespace(qty=qty, side=direction, current_price=price)
+
+
+class _Tracker:
+    def __init__(self, open_trades):
+        self.open_trades = open_trades
+        self.saved = 0
+        self.exits = []
+        self.gtc_set = []
+
+    def record_exit(self, sym, px, reason=""):
+        self.exits.append((sym, px, reason))
+        self.open_trades.pop(sym, None)
+        return 1.23
+
+    def set_gtc_stop_order_id(self, sym, oid):
+        self.gtc_set.append((sym, oid))
+
+    def _save_log(self):
+        self.saved += 1
+
+
+class _Risk:
+    def __init__(self):
+        self.closes = []
+
+    def register_close(self, pnl):
+        self.closes.append(pnl)
+
+
+def _trade(direction="long", stop=95.0, trail=None, qty=3):
+    t = {"symbol": "X", "direction": direction, "status": "open", "qty": qty, "stop": stop}
+    if trail is not None:
+        t["trail_stop"] = trail
+    return t
+
+
+class StopProtectionInvariant(unittest.TestCase):
+    def setUp(self):
+        # Clear module-level guard/streak state between tests (deterministic).
+        sp._recent_placements.clear()
+        sp._skip_streak.clear()
+
+    def _run(self, *, open_orders, position, trade, session="rth", place=True,
+             submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
+             position_raises=False, cover_fill=89.5, qhm=(), tracker=None):
+        tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
+        risk = _Risk()
+        goo = mock.Mock(return_value=open_orders)
+        gop = mock.Mock(side_effect=RuntimeError("boom") if position_raises else None, return_value=position)
+        sday = mock.Mock(return_value=submit_day)
+        sgtc = mock.Mock(return_value=submit_gtc)
+        cpos = mock.Mock(return_value=close_ok)
+        fill = mock.Mock(return_value=cover_fill)
+        qhmm = mock.Mock(return_value=set(qhm))
+        page = mock.Mock()
+        with mock.patch.object(sp, "get_open_orders", goo), \
+             mock.patch.object(sp, "get_open_position", gop), \
+             mock.patch.object(sp, "submit_day_stop_order", sday), \
+             mock.patch.object(sp, "submit_gtc_stop_order", sgtc), \
+             mock.patch.object(sp, "close_position", cpos), \
+             mock.patch.object(sp, "fetch_actual_fill_price_or_none", fill), \
+             mock.patch.object(sp, "_qhm_symbols", qhmm), \
+             mock.patch.object(sp, "_page", page):
+            summary = sp.reconcile_protection(tracker, risk, session=session, place=place)
+        return summary, dict(day=sday, gtc=sgtc, close=cpos, fill=fill, page=page,
+                             tracker=tracker, risk=risk)
+
+    # 1 — naked + valid level, RTH → a DAY stop is placed
+    def test_naked_places_day_stop(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(len(s["placed"]), 1)
+        m["day"].assert_called_once()
+        self.assertEqual(m["day"].call_args.kwargs["side"], "sell")
+        self.assertEqual(m["day"].call_args.kwargs["qty"], 3)
+        m["gtc"].assert_not_called()
+        m["close"].assert_not_called()
+
+    # 2 — naked + breached → COVER at the FETCHED fill (not market)
+    def test_naked_breached_covers_at_fill(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), cover_fill=88.75)
+        self.assertEqual(len(s["covered"]), 1)
+        self.assertEqual(len(s["placed"]), 0)
+        m["close"].assert_called_once_with("X")
+        m["fill"].assert_called_once()
+        self.assertEqual(m["tracker"].exits[0][1], 88.75, "cover must book the fetched fill, not market")
+        self.assertEqual(m["tracker"].exits[0][2], "stop_protect_cover")
+        self.assertEqual(m["risk"].closes, [1.23])
+
+    # 2b — cover but fill UNVERIFIED (None) → fall back to market + page
+    def test_cover_fill_none_falls_back_and_pages(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), cover_fill=None)
+        self.assertEqual(len(s["covered"]), 1)
+        self.assertEqual(m["tracker"].exits[0][1], 90.0, "fallback to market price when fill unverified")
+        self.assertTrue(m["page"].called)
+
+    # 3 — already protected → NOTHING touched
+    def test_protected_is_idempotent(self):
+        s, m = self._run(open_orders=[_order("sell", qty=3)], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(len(s["already_protected"]), 1)
+        m["day"].assert_not_called()
+        m["gtc"].assert_not_called()
+        m["close"].assert_not_called()
+
+    # 4 — get_open_orders None → FAIL SAFE (no place) + PAGE the knowledge gap
+    def test_orders_unavailable_fails_safe_and_pages(self):
+        s, m = self._run(open_orders=None, position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(len(s["skipped"]), 1)
+        m["day"].assert_not_called()
+        self.assertTrue(m["page"].called, "unknown state must page, not stay silent")
+
+    # 5 — get_open_position raises → FAIL SAFE + PAGE
+    def test_position_read_raises_fails_safe_and_pages(self):
+        s, m = self._run(open_orders=[], position=None, trade=_trade(), position_raises=True)
+        self.assertEqual(len(s["skipped"]), 1)
+        m["day"].assert_not_called()
+        self.assertTrue(m["page"].called)
+
+    # 6 — FINDING B: stored (rejected) id but empty open orders → places a fresh stop
+    def test_rejected_stop_not_trusted(self):
+        tr = _trade()
+        tr["gtc_stop_order_id"] = "dead-rejected-id"
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=tr)
+        self.assertEqual(len(s["placed"]), 1)
+        m["day"].assert_called_once()
+
+    # 7 — place fails → PAGE, no crash
+    def test_place_failure_pages(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), submit_day=None)
+        self.assertEqual(len(s["paged"]), 1)
+        self.assertEqual(len(s["placed"]), 0)
+
+    # 8 — under-covered stop → PAGE, no double-stop
+    def test_under_covered_pages_no_double_stop(self):
+        s, m = self._run(open_orders=[_order("sell", qty=1)], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(s["paged"][0][1], "under-covered")
+        m["day"].assert_not_called()
+
+    # 8b — OVER-covered stop (stop qty > position) → PAGE (reverse-fill risk), no silence
+    def test_over_covered_pages(self):
+        s, m = self._run(open_orders=[_order("sell", qty=10)], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(s["paged"][0][1], "over-covered")
+        self.assertEqual(len(s["already_protected"]), 0)
+        m["day"].assert_not_called()
+
+    # 8c — resting reducing LIMIT (non-stop) + no stop → PAGE, do NOT auto-place a full-size stop
+    def test_resting_limit_conflict_pages(self):
+        s, m = self._run(open_orders=[_order("sell", otype="limit", qty=3)], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(s["paged"][0][1], "resting reducing order conflict")
+        m["day"].assert_not_called()
+
+    # 9 — no usable stop level → PAGE, no place
+    def test_no_stop_level_pages(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(stop=0.0))
+        self.assertEqual(s["paged"][0][1], "no stop level")
+        m["day"].assert_not_called()
+
+    # 10 — AH session uses GTC, not DAY
+    def test_ah_uses_gtc(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         session="ah", submit_gtc=_order("sell", oid="g1"))
+        m["gtc"].assert_called_once()
+        m["day"].assert_not_called()
+        self.assertEqual(m["tracker"].gtc_set, [("X", "g1")])
+
+    # 10b — unknown session → defaults to GTC (fail-safe, never a DAY stop that expires naked)
+    def test_unknown_session_defaults_gtc(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(),
+                         session="weird", submit_gtc=_order("sell", oid="g9"))
+        m["gtc"].assert_called_once()
+        m["day"].assert_not_called()
+
+    # 11 — short: reducing side BUY; trail preferred over stop
+    def test_short_uses_buy_and_trail(self):
+        s, m = self._run(open_orders=[], position=_position("short", 2, 90.0),
+                         trade=_trade(direction="short", stop=105.0, trail=100.0))
+        m["day"].assert_called_once()
+        self.assertEqual(m["day"].call_args.kwargs["side"], "buy")
+        self.assertEqual(m["day"].call_args.kwargs["stop_price"], 100.0)
+
+    # 12 — shadow mode: nothing submitted
+    def test_shadow_mode_submits_nothing(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), place=False)
+        self.assertEqual(len(s["placed"]), 1)
+        m["day"].assert_not_called()
+
+    # 13 — cover fails → PAGE naked, no false success
+    def test_cover_failure_pages(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), close_ok=False)
+        self.assertEqual(s["paged"][0][1], "cover failed")
+        self.assertEqual(len(s["covered"]), 0)
+
+    # 14 — QHM/quarterly-hold symbol is EXCLUDED (reconciler manages intraday only)
+    def test_qhm_excluded(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), qhm=("X",))
+        self.assertEqual(s["excluded_qhm"], ["X"])
+        m["day"].assert_not_called()
+
+    # 15 — pos None (Alpaca flat) → skip quietly, no place, no crash
+    def test_pos_none_skips(self):
+        s, m = self._run(open_orders=[], position=None, trade=_trade())
+        self.assertIn(("X", "no live Alpaca position"), s["skipped"])
+        m["day"].assert_not_called()
+
+    # 16 — DOUBLE-PLACE GUARD: a placed-but-not-yet-visible stop is not re-placed next sweep
+    def test_double_place_guard(self):
+        # First sweep: naked → places (records in the guard).
+        s1, m1 = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade())
+        self.assertEqual(len(s1["placed"]), 1)
+        # Second sweep, same symbol still shows no live stop (visibility lag): must NOT re-place.
+        s2, m2 = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade())
+        m2["day"].assert_not_called()
+        self.assertEqual(s2["paged"][0][1], "place-guard suppressed")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
