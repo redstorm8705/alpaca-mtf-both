@@ -35,17 +35,56 @@ protected, don't page) / `PROTECTION_UNKNOWN` (order book unreadable → caller'
 path) / `None` (genuine failure → page). New `_hold_state()` never asserts protection it cannot
 verify. **INERT** — grep shows no caller passes it; zero runtime change. 24-scenario harness 7/7.
 
-**⏩ EXACT NEXT STEP — the reconciler-side patch (`execution/stop_protection.py`), ONE commit:**
-(1) pass `allow_cancel_blocking=False` at L322; (2) **MANDATORY same commit** — replace the
-`if order is not None:` at L323 with an explicit 4-way (`is PROTECTION_ALREADY_HELD` → count
-protected, no page; `is PROTECTION_UNKNOWN` → `_skip_unknown`; `is None` → page; else → placed).
-**Without (2) the sentinel is not-None → the reconciler takes its success branch, reads
-`getattr(order,"id","")` → `""` and OVERWRITES the live stop's real order id with an empty
-string** (cold-2nd Threat 1). THEN, still before any wiring: page-throttle on the sticky
-MANUAL-required paths, collapse N `get_open_orders(symbol)` into 1 account-wide fetch (N REST
-calls × 15s timeout vs a 12-min watchdog on a 7.4–8.8 min cycle), unconditional summary log.
-ONLY THEN wire — shadow (`place=False`) first, all sites incl. the 5 gaps, then staged placement
-site-2-first, overnight-only. Reviews/prompts: scratchpad `wiring_prompt/broker_review/gai_counter2`.
+**✅ RECONCILER-SIDE PATCH DONE** (`execution/stop_protection.py` + harness): passes
+`allow_cancel_blocking=False` on every submit; `if order is not None:` replaced by the 4-way
+identity match (`is PROTECTION_ALREADY_HELD` → new `summary["broker_held"]`, no page, no order-id
+write, guard NOT armed; `is PROTECTION_UNKNOWN` → `_skip_unknown`; `is None` → page; else →
+placed); summary log now UNCONDITIONAL. Harness 27/27 (7 new — note 2 of the 7 are invariant
+tests that would also pass pre-fix; the other 5 genuinely fail against the old contract).
+
+**🚧 PRE-WIRING BLOCKERS — the module MUST NOT be wired (even `place=False`) until ALL THREE land.
+Cite these IDs verbatim in code comments and PRs:**
+
+**`PRE-WIRE-BLOCKER-1: Per-(symbol,reason) page throttle for the sticky MANUAL-required paths`**
+`no stop level`, `over-covered`, `under-covered`, `resting reducing order conflict` are all
+human-latency (hours to resolve) and currently page EVERY cycle × every symbol (reliability seat:
+5 symbols in `no stop level` ≈ 390 pages/day, which buries the genuinely one-shot pages —
+`place failed`, `cover failed`). The pre-existing `except` loop-error handler is de-throttled the
+same way (it sits AFTER the clean-evaluation `_skip_streak.pop()`, so its streak is always 0).
+Needs a throttle keyed on `(symbol, reason)` with its own TTL (≥30 min), independent of
+`_skip_streak`, so the two correctly-throttled pre-existing `_skip_unknown` call sites (which sit
+BEFORE the pop) keep working. Also move the Slack POST off the cycle thread (blocking 4s each).
+~~`PROTECTION_UNKNOWN` de-throttle~~ — **FIXED 2026-07-20** in the reconciler patch via a dedicated
+`_unknown_page_streak` (pages once per episode; cleared on any definite outcome; pruned on close).
+GAI rejected the diff twice over it at pre-ship rather than accept it as documented-and-tracked, so
+it was fixed outright instead of argued. Pinned by `test_broker_unknown_pages_once_per_episode`,
+`test_unknown_episode_resets_after_definite_outcome`, `test_unknown_streak_pruned_when_symbol_closes`.
+
+**`PRE-WIRE-BLOCKER-2: Collapse N per-symbol get_open_orders into 1 account-wide fetch`**
+`broker.get_open_orders` does NOT filter server-side (fetches all, filters in Python), so N
+positions = N full-account REST calls × 15s socket timeout, against a 12-min watchdog on a cycle
+already running 7.4–8.8 min. Reliability seat measured 11.6 min at 5 positions; deterministic
+watchdog trip at 10. Add a wall-clock budget inside the sweep too.
+
+**`PRE-WIRE-BLOCKER-3: Tighten broker._hold_state — empty book must not read as STABLE`**
+Found by cold-2nd 2026-07-20 on the reconciler diff. `broker._hold_state` returns `_HOLD_STABLE`
+whenever `get_open_orders` returns any list without a `pending_cancel` — **including an empty list**
+— and never checks side, type, or qty. So `PROTECTION_ALREADY_HELD` can be returned when the book
+shows ZERO orders, or only a non-reducing / wrong-qty order, and the reconciler then records
+"protected" and deliberately does NOT page. That is an unverified claim of protection = a
+never-mask-a-loss violation. NOT a regression (the pre-fix path was strictly worse — it cancelled
+the good stop) and it cannot fire while the module is inert, but it must be fixed before wiring.
+Fix: require ≥1 live order on the REDUCING side whose type is a stop and whose qty covers the
+position, else return `_HOLD_UNKNOWN`. Own file → own full patch sequence (RULE C-6).
+Also fix in the same patch: `broker.py`'s comment claiming `_skip_unknown` "pages once per outage
+episode" is now false for the PROTECTION_UNKNOWN call path.
+
+**⏩ THEN wire** — shadow (`place=False`) FIRST, and the call sites must include the **5 gaps**
+(L242 kill-switch, L431 premarket, L892, L1011 EOD, L1046 blackout — kill-switch and blackout
+being the two highest-stress days of the year), each wrapped in `try/except` + `logger.exception`
+(every other risky call in run_cycle is wrapped; an unwrapped raise at the RTH site skips
+`_touch_cycle_ts()` → watchdog → `os.execv` → restart loop). Then staged placement, site-2-first,
+overnight-only. Reviews/prompts: scratchpad `wiring_prompt/broker_review/gai_counter2/recon_review`.
 
 **⚠️ LIVE AT 2026-07-20 14:29 ET: 3 of 9 positions had NO stop at Alpaca** — GOOGL long 2sh
 (MV $703.65 = 26% of $2,689 equity), NFLX short 2sh, SMCI short 2sh. NVDA (the other QHM hold)

@@ -8722,3 +8722,36 @@ argument and requested the PROTECTION_UNKNOWN third state, which was adopted.
 PROCESS DEFECT CAUGHT: the first marker (4f995b74b311) was INVALID — audit ran pre-`git add`, so
 the diff was empty and the sha matched the PRE-change blob; Gro/GAI approved nothing. preship_gate
 blocked the push on sha mismatch. Rule: `git add` BEFORE `preship_audit.py`, always.
+
+## 2026-07-20 — execution/stop_protection.py — reconciler 4-way sentinel contract (`4f14e14`)
+
+**Full Read Gate:** stop_protection.py 399L + tests/test_stop_protection.py 255L, direct Read, same session.
+**Shipped + deployed:** OCI DEPLOY_OK, HEAD=4f14e14, 4/4 services active, dashboard 200,
+harness **32/32 green ON THE BOX**, runtime contract verified on the box, **zero production call
+sites (still inert — no runtime change).**
+
+**Change:** every submit passes `allow_cancel_blocking=False`; `if order is not None:` → explicit
+4-way identity match (`PROTECTION_ALREADY_HELD` → `summary["broker_held"]`, no page / no order-id
+write / guard not armed · `PROTECTION_UNKNOWN` → dedicated `_unknown_page_streak`, pages once per
+episode, cleared on any definite outcome, pruned on close · `None` → page · order → success);
+summary log unconditional.
+
+**Gate:** statics 3/3 both files · harness 32/32 (12 new) · board exec-risk + reliability (design)
+· Gro + GAI APPROVE-WITH-CHANGES → both adopted · cold-2nd PASS · FINAL preship gro=APPROVE
+gai=APPROVE (marker 17ad098a3200, sha == index sha).
+
+**DISAGREEMENT PROTOCOL — 4 GAI preship rejects, resolved without a single blind re-roll:**
+#2 objected to a limitation being documented-and-tracked rather than fixed → **fixed outright**
+(the dedicated throttle) instead of argued. #1/#3/#4 rested on code that does not exist: a
+"missing" reset that is an added `+` line in the diff (L293); a claimed increment in the
+`order is None` branch that never references the dict; and an invented `_MAX_UNKNOWN_PAGE_STREAK`
+constant absent from the whole repo. Each refuted with verbatim source and retracted by GAI.
+Cleared via `preship_audit.py --evidence`, NOT a re-roll, NOT a waiver.
+**TOOLING CORRECTION:** CLAUDE.md states preship_audit "has NO counter-prompt path" — **STALE**.
+`--evidence <file>` IS that path and should be the documented first response to a false-premise
+reject. (`--waive-gro` waives only Gro; there is no GAI waive, so a real APPROVE is always required.)
+
+**Residual, NOT this diff — logged as PRE-WIRE-BLOCKER-3:** cold-2nd found `broker._hold_state`
+(shipped cd81a53) returns `_HOLD_STABLE` for an EMPTY order book and never checks side/type/qty,
+so `PROTECTION_ALREADY_HELD` can be returned without a verified protecting order = an unverified
+claim of protection. Cannot fire while inert. Own file → own patch sequence (RULE C-6).
