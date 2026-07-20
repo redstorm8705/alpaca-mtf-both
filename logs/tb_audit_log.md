@@ -8601,3 +8601,44 @@ REQUIRED WORK (new, not previously queued):
        Alpaca fill log (the same source pnl_ledger already treats as immutable truth), with a
        before/after diff surfaced for approval. Until this runs, EVERY all-time stat is wrong.
   P0 - determine the blast radius: how many of the 112 closed rows are phantom-contaminated?
+
+## 2026-07-19 (cross-account resume) — THORP FINDING VERIFIED AGAINST CODE: the phantom repair is a live SIZING-UP event, not neutral bookkeeping
+Prior account convened the BGG on the repair design; the Thorp (Kelly/sizing) seat flagged a counter-intuitive
+danger both Gro+GAI missed, then the session cut off before it was verified/recorded. VERIFIED this session
+against the actual code (RULE C-2: prior BGG does NOT carry — re-verified independently):
+
+MECHANISM (confirmed in kelly.py + portfolio_tracker.py):
+  - execution/kelly.py:396 `rebuild_from_trades(closed_trades)` REBUILDS kelly_stats.json R-multiples from
+    trade_log.json closed[] every EOD. Callers confirmed: portfolio_tracker.py:390 and :1207
+    (`kelly.rebuild_from_trades(self.closed_trades)`), invoked from write_eod_summary after FIFO reconcile.
+  - The existing guards in rebuild_from_trades (L409 skip `_fill_unverified`; L417 skip exit_price None/<=0)
+    DO NOT catch a phantom — a phantom row has a plausible-but-wrong exit price (e.g. PANW $172.31), passes
+    every guard, and enters Kelly as a REAL trade.
+  - Phantoms encode FAKE LOSSES (recorded exit far below entry: PANW exit 172.31 vs entry 355.10 = ~-183/sh;
+    TSLA exit 347 vs entry 428.23). Both are long_intraday. Live kelly_stats: long_intraday n=43 WR 46.5%
+    avg_loss_r 0.38, short_intraday n=33 WR 24.2% — BOTH past KELLY_MIN_SAMPLE_SIZE=30 → Kelly is ACTIVE, so
+    the contamination is suppressing LIVE sizing right now.
+
+THE INVERSION: the "obvious safe" action = clean the corrupt rows to the true Alpaca fills. But fake losses
+currently DEPRESS win rate + inflate avg_loss_r → depress kelly_full → Kelly SIZES DOWN (unintended conservative
+brake). Healing them REMOVES the fake losses → WR up, avg_loss_r down → kelly_full up → Kelly SIZES UP on the
+next EOD rebuild. The data-cleanup is therefore a RISK-INCREASING sizing change, not neutral bookkeeping. It must
+be gated as a risk-path change and the transition controlled (e.g. re-warm/freeze Kelly, or verify healed stats
+before they size up) — NOT applied as a silent correction.
+
+NARROWING (also confirmed): the ONLY live sizing channel for the contamination is rebuild_from_trades → win/loss
+R stats. The kill switch is Alpaca-EQUITY-sourced (Arch Inv #6) and Kelly A2 uses portfolio_value equity, not
+closed[] — so phantoms do NOT weaken the kill switch or A2. Single lever = the R-multiple stats.
+
+NEXT: fresh BGG (this session) on the repair SEQUENCING given this finding, then bring the aligned package + the
+Kelly-transition fork to Rafael. Repair itself = own full patch sequence (full-read portfolio_tracker.py before
+any patch there — grep was used only to confirm a caller line this session).
+
+BGG ALIGNMENT (2026-07-19, RULE C-2 fresh): Option C UNANIMOUS — heal closed[] for reporting truth NOW, keep
+healed rows excluded from rebuild_from_trades (via _fill_unverified) until a SEPARATE numerically-quantified
+board-gated Kelly re-warm. A rejected by all. Votes: exec-risk C, reliability C, data-integrity C, GAI C, Gro
+C-mechanism. BUILD METHOD (data-integrity, decisive): reproject closed[] from pnl_ledger.compute_realized()
+round_trips via NEW heal_trade_log() in reporting/pnl_ledger.py (reuse immutable fills + fail-closed $5 reconcile
+L567-581 + dry_run diff + atomic write; add timestamped backup + fsync) — NOT per-row matching (that reintroduces
+the phantom-creating heuristic). Two must-resolve-before-apply: closed[] ownership (dual-writer), entry_time
+join-key drift. AWAITING Rafael approval of the direction; no code shipped. See handoff.md ⏩ LATEST.

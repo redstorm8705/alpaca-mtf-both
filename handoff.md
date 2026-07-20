@@ -11,6 +11,36 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🧾 PHANTOM-FILL REPAIR — BGG ALIGNED 2026-07-19 (cross-account resume; Board 4/4 + Gro + GAI → Option C).
+AWAITING RAFAEL: approve design direction. NO CODE SHIPPED.** Thread: Rafael asked "was 7/2 really −$251?" → NO.
+`trade_log.json` `closed[]` still carries RC-4 phantom rows (exit prices absent from Alpaca fills). Audit: ~27.7%
+of 112 closed rows contaminated (14 PHANTOM / 14 NO_FILLS / 3 NO_EXIT_TS), −$188.48 fake P&L.
+`scripts/phantom_fill_audit.py` (read-only, committed `a42ffc7`).
+- **VERIFIED THORP FINDING** (`kelly.py:396 rebuild_from_trades` ← `portfolio_tracker.py:390/1207`): phantoms are
+  fake LOSSES currently SUPPRESSING live Kelly (`long_intraday` n=43 / `short_intraday` n=33, both ACTIVE). Its
+  guards (L409 `_fill_unverified`, L417 exit≤0) do NOT catch a plausible-but-wrong price. Healing → Kelly SIZES
+  UP on next EOD rebuild. The cleanup is a live risk-INCREASING event, not neutral bookkeeping. Only sizing lever
+  = R-multiple stats (kill switch = Alpaca-equity, unaffected; A2 = equity, unaffected).
+- **BGG ALIGNMENT (this session, RULE C-2 fresh):** **Option C** — heal `closed[]` for reporting truth NOW; keep
+  healed rows EXCLUDED from `rebuild_from_trades` (via `_fill_unverified` flag) until a SEPARATE, numerically-
+  quantified, board-gated Kelly re-warm. **A rejected by all.** Votes: exec-risk C, reliability C, data-integrity
+  C, GAI C, Gro C-mechanism (labeled B).
+- **BUILD METHOD (data-integrity seat, decisive):** do NOT per-row match (that reintroduces the exact heuristic
+  that CREATED the phantoms). REPROJECT `closed[]` from `pnl_ledger.compute_realized()['round_trips']` via a NEW
+  `heal_trade_log()` sibling to `heal_history()` in `reporting/pnl_ledger.py` — reuse its immutable
+  `fetch_all_fills` source + fail-closed $5 reconcile invariant (L567-581) + `dry_run` diff (L542-611) + atomic
+  write; ADD timestamped backup + fsync. Normalizes `pnl` by construction; catches the 4 missing-exit rows
+  (GOOGL/NVDA/MSTR/RBLX) automatically; quarantine+tag the 17 unverifiable rows.
+- **TWO MUST-RESOLVE-BEFORE-APPLY (board-flagged):** (1) `closed[]` OWNERSHIP — one-off heal then bot resumes
+  append, vs ledger-owned projection (dual-writer risk, pnl_ledger L627-633); (2) `entry_time` JOIN-KEY drift —
+  reprojection keys on fill `transaction_time`; preserve bot's original as `entry_time_bot` or verify no
+  downstream join on it.
+- **⏩ EXACT NEXT STEP:** Rafael approves Option C direction → build `heal_trade_log()` under FULL patch sequence
+  (full-read `reporting/pnl_ledger.py` + `portfolio_tracker.py`; statics; cold-2nd; preship Gro+GAI on the diff)
+  → surface exact before/after diff + Kelly re-warm as a SEPARATE decision. Nothing writes to `trade_log.json`
+  until Rafael approves the diff. (Separate: pnl-field inconsistency = reporting-only, normalized by reprojection;
+  missing-exit rows tie to the existing P0 false-drop root.)
+
 **🔓 REPORTS FIXED (2026-07-19) — MIGRATION GAP: host firewall never got the 8080 rule.**
 Rafael reported the 5 report URLs dead on the new box. The URLs were CORRECT; the blocker was
 `iptables`. The new A1 box's INPUT chain allowed only SSH (dpt:22) and then REJECTed everything
