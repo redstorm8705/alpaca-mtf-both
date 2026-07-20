@@ -45,20 +45,24 @@ tests that would also pass pre-fix; the other 5 genuinely fail against the old c
 **🚧 PRE-WIRING BLOCKERS — the module MUST NOT be wired (even `place=False`) until ALL THREE land.
 Cite these IDs verbatim in code comments and PRs:**
 
-**`PRE-WIRE-BLOCKER-1: Per-(symbol,reason) page throttle for the sticky MANUAL-required paths`**
-`no stop level`, `over-covered`, `under-covered`, `resting reducing order conflict` are all
-human-latency (hours to resolve) and currently page EVERY cycle × every symbol (reliability seat:
-5 symbols in `no stop level` ≈ 390 pages/day, which buries the genuinely one-shot pages —
-`place failed`, `cover failed`). The pre-existing `except` loop-error handler is de-throttled the
-same way (it sits AFTER the clean-evaluation `_skip_streak.pop()`, so its streak is always 0).
-Needs a throttle keyed on `(symbol, reason)` with its own TTL (≥30 min), independent of
-`_skip_streak`, so the two correctly-throttled pre-existing `_skip_unknown` call sites (which sit
-BEFORE the pop) keep working. Also move the Slack POST off the cycle thread (blocking 4s each).
-~~`PROTECTION_UNKNOWN` de-throttle~~ — **FIXED 2026-07-20** in the reconciler patch via a dedicated
-`_unknown_page_streak` (pages once per episode; cleared on any definite outcome; pruned on close).
-GAI rejected the diff twice over it at pre-ship rather than accept it as documented-and-tracked, so
-it was fixed outright instead of argued. Pinned by `test_broker_unknown_pages_once_per_episode`,
-`test_unknown_episode_resets_after_definite_outcome`, `test_unknown_streak_pruned_when_symbol_closes`.
+**`✅ PRE-WIRE-BLOCKER-1` — SHIPPED + LIVE + VERIFIED 2026-07-20 (`4a93165`, OCI DEPLOY_OK,
+4/4 services active, dashboard 200, 41/41 tests green ON THE BOX).** Per-(symbol,reason) page
+throttle: `_throttled_page` pages the FIRST occurrence of each (symbol,reason) immediately, then
+re-reminds at most once per the reason's TTL — TIERED: naked/blind reasons 15m, conflict reasons
+60m, any unmapped reason → 15m loud default (typo fails loud). Keys clear on every DEFINITE good
+outcome (already_protected/broker_held/placed/flat/no-position) so a resolved-then-recurring
+condition pages FRESH (never masks a newly-naked position). `_page_throttle` TUPLE-keyed, pruned on
+`k[0]` (a bare-key prune = silent no-op landmine, caught by the board + pinned by a test). Loop-error
+de-throttle FIXED (rerouted off `_skip_streak` to a blind-spot page in `skipped` only); cover-failed
+(recurs) throttled at naked tier, one-shot post-cover pages raw. Gates ONLY the page — every
+placement/cover still runs each cycle. INERT (unwired) — zero runtime change today. 9 new tests
+(41/41); anti-circle landmine proof done. Gate: full read 481L + statics + 41/41 + cold-2nd PASS +
+board 3-0 (exec-risk+reliability+GAI, tiered TTL + landmine + double-count + cover-failed folded) +
+FINAL preship GAI APPROVE (diff-misread reject resolved via counter-prompt) + Gro WAIVED (TPD-
+exhausted, Rafael-authorized). **⏳ FOLLOW-UP before wiring (exec-risk+reliability, NON-blocking to
+this patch): move the Slack POST off the cycle thread — the throttle cuts volume ~50-100× but does
+NOT bound a cold-start burst of simultaneous first-pages (restart w/ 5 naked → 5×~4s blocking).**
+~~`PROTECTION_UNKNOWN` de-throttle~~ — FIXED 2026-07-20 (dedicated `_unknown_page_streak`).
 
 **`PRE-WIRE-BLOCKER-2: Collapse N per-symbol get_open_orders into 1 account-wide fetch`**
 `broker.get_open_orders` does NOT filter server-side (fetches all, filters in Python), so N
@@ -84,9 +88,10 @@ status (bracket child) is excluded from cover → benign false page — confirm 
 protective stops legitimately rest in `held`. The `_skip_unknown` comment was already corrected in
 the `07bac0b` reconciler sync (comment now points at `_unknown_page_streak`).
 
-**⚠️ 2 PRE-WIRE BLOCKERS REMAIN (module still MUST NOT be wired until both land):**
-BLOCKER-1 (per-(symbol,reason) page throttle) and BLOCKER-2 (collapse N per-symbol get_open_orders
-into 1 account-wide fetch). Details in the two blocks above.
+**⚠️ 1 PRE-WIRE BLOCKER REMAINS (module still MUST NOT be wired until it lands):**
+BLOCKER-2 (collapse N per-symbol `get_open_orders` into 1 account-wide fetch). BLOCKER-1 and
+BLOCKER-3 shipped 2026-07-20 (see the ✅ blocks above). Also fold in the BLOCKER-1 Slack-off-thread
+follow-up + the BLOCKER-3 wiring residuals when wiring. **⏩ NEXT ACTIONABLE: PRE-WIRE-BLOCKER-2.**
 
 **⏩ THEN wire** — shadow (`place=False`) FIRST, and the call sites must include the **5 gaps**
 (L242 kill-switch, L431 premarket, L892, L1011 EOD, L1046 blackout — kill-switch and blackout

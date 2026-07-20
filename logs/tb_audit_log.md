@@ -8772,3 +8772,20 @@ resolved by counter-prompt, not re-roll). OCI DEPLOY_OK, 4/4 services active, da
 on-box. RC scan on changed region: RC-1..8 all PASS. 2 informational wiring residuals (stop_limit
 gap under-page; `held`-status bracket legs excluded → benign over-page) — safe direction, revisit
 at wiring. 2 of 3 pre-wire blockers remain (throttle; N→1 order fetch).
+
+---
+
+### 2026-07-20 — PRE-WIRE-BLOCKER-1 CLOSED (`4a93165`, SHIPPED + LIVE + VERIFIED)
+`execution/stop_protection.py` — per-(symbol,reason) page throttle. `_throttled_page` pages the
+FIRST occurrence of each (symbol,reason) immediately, then re-reminds at most once per the reason's
+TTL: naked/blind 15m, conflict 60m, unmapped→15m loud. Keys clear on every definite good outcome
+(protected/broker_held/placed/flat/no-position) → resolved-then-recurring pages fresh; never masks a
+newly-naked position. `_page_throttle` TUPLE-keyed, pruned on k[0] (bare-key prune = silent no-op —
+board-caught landmine, test-pinned). Loop-error de-throttle fixed (blind-spot page, skipped-only);
+cover-failed throttled at naked tier. Gates ONLY the page — placement/cover run every cycle. INERT.
+9 new tests (41/41 on-box); anti-circle landmine proof (bare-key prune → T2+T7 fail). Gate: full
+read 481L + py_compile/mypy/ruff clean + 41/41 + cold-2nd PASS + board 3-0 (exec-risk+reliability+
+GAI) + FINAL preship GAI APPROVE (diff-misread reject → counter-prompt) + Gro WAIVED (TPD-exhausted,
+Rafael-authorized per 2026-07-07 rule). OCI DEPLOY_OK, 4/4 active, dashboard 200. Follow-up before
+wiring: Slack POST off cycle thread (cold-start first-page burst). 2 of 3 pre-wire blockers closed;
+BLOCKER-2 (N→1 order fetch) remains.
