@@ -8653,3 +8653,62 @@ cold-2nd x2 PASS; board exec-risk+reliability REJECT -> revision closed 4 blocke
 stop-vs-stop double-place via non-idempotent client_order_id; stop-vs-limit over-sell; silent unknown-skip);
 FINAL preship gro=APPROVE gai=APPROVE (marker ae69e50a). SHIPPED INERT (unwired) -> zero runtime effect
 until the run_cycle wiring patch (next, own full-read gate). Phase B retires the ~13 legacy submit sites.
+
+---
+
+## 2026-07-20 — execution/broker.py — `allow_cancel_blocking` opt-out (protective-stop submitters)
+
+**Full Read Gate:** COMPLETE — 1132 lines in 4 chunks, direct Read tool (no grep, no Explore summary).
+Also full-read this session: `execution/stop_protection.py` (399L), `strategy/run_cycle.py` (2064L, 7 chunks).
+
+### Why (root cause, verified in source)
+`execution/stop_protection.py` (deployed 1ee383e, INERT — 0 production call sites confirmed) derives
+protection from `get_open_orders()`. If it wrongly concludes a position is naked and submits a stop,
+Alpaca rejects with 40310000 (held_for_orders). broker.py's recovery then calls
+`cancel_open_orders_for_symbol()` (GTC L525 / DAY L623) — **cancelling the GOOD legacy stop** — and
+resubmits at a different price, or on 63s poll exhaustion returns None leaving the position genuinely
+naked. This FALSIFIES stop_protection.py's headline invariant (L17-18: "never cancels or replaces a
+correctly-protecting stop"): true inside the module, false via its broker dependency.
+
+### 10-Point Audit
+1. Static analysis — py_compile PASS / mypy --warn-unreachable PASS / ruff E,W,F,B PASS (all on full file)
+2. Trade-path trace — protective-stop submission path only; entry/exit/P&L paths untouched
+3. Adversarial — held_for_orders, buying-power, non-matching error, opt-out x both fns: all exercised by a
+   behavioral harness (0 cancels on every opt-out path; default path bit-for-bit unchanged: 1 cancel/61 submits)
+4. Full top-to-bottom read — COMPLETE (1132L)
+5. Cross-references — 14 call sites enumerated; NONE pass the new kwarg -> default True everywhere
+6. Conflicting directions — none; close_position/partial_close_position 40310000 handlers deliberately
+   UNCHANGED (they intend to flatten, so cancelling the blocking stop is correct there)
+7. Redundancy — none introduced
+8. State persistence — no file I/O added
+9. Data tier — no data calls added (T1 trading REST only)
+10. Timezone/logging — no user-facing timestamps added; all new paths log at WARNING/ERROR
+
+### RC-1..RC-8
+| RC | Verdict | Note |
+|----|---------|------|
+| RC-1 naive datetime | PASS | no datetime use added; file uses time.time/time.sleep only |
+| RC-2 CWD-relative path | PASS | no file I/O in broker.py |
+| RC-3 silent exception | PASS (new code) | new paths log WARNING/ERROR + return. Pre-existing `except Exception: pass` at L370-374/L690-694/L940-944 are alert-send guards immediately followed by logger.critical — contextually logged, not silent |
+| RC-4 estimated exit price | N/A | broker.py never calls record_exit |
+| RC-5 non-atomic write | PASS | no writes |
+| RC-6 wrong API field | PASS | no new Alpaca field reads |
+| RC-7 zero-share sizing | PASS | existing `qty <= 0` guards (L458/L466, L582/L590) untouched and still upstream of the change |
+| RC-8 unbounded buffer | PASS | no new state; sentinel is a stateless singleton |
+
+### Change
+Additive, opt-in, keyword-only. `allow_cancel_blocking: bool = True` on `submit_gtc_stop_order` and
+`submit_day_stop_order`. Default True => MSTR-incident recovery (board 26-0, 2026-04-27) UNCHANGED.
+False => cancels nothing; returns new `PROTECTION_ALREADY_HELD` sentinel on a real 40310000
+("qty already held, likely a live stop" — so the caller does NOT page a false UNPROTECTED), or None on
+any other failure. DAY path discriminates 40310000 from a bare "insufficient" match (buying power) —
+that conflation is pre-existing; the opt-out path now separates them.
+
+### Gate
+statics 3/3 PASS · behavioral equivalence harness PASS · board exec-risk + reliability (design) ·
+Gro APPROVE-WITH-CHANGES + GAI APPROVE-WITH-CHANGES -> BOTH changes adopted (DAY discrimination +
+sentinel instead of None) · cold-2nd + FINAL preship on exact diff = see commit.
+
+### Inertness
+`grep allow_cancel_blocking` outside broker.py => NONE. No caller can reach the new branches. Zero
+runtime behavior change on deploy. Wiring stop_protection.py to pass False is a SEPARATE gated patch.

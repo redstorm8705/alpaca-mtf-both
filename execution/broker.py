@@ -22,6 +22,63 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 logger = logging.getLogger(__name__)
 
 
+# ── Protective-stop submission sentinels ──────────────────────────────────────
+# Returned by submit_gtc_stop_order / submit_day_stop_order ONLY when a caller
+# passed allow_cancel_blocking=False AND Alpaca rejected with 40310000
+# (held_for_orders). It means: "no order was placed by you, because the qty is
+# ALREADY held by a live reducing order — almost certainly a valid protective
+# stop." That is a fundamentally different outcome from None (= genuine
+# placement failure, position may be unprotected), and conflating the two makes
+# a protection-asserting caller page a FALSE 'position UNPROTECTED' every cycle.
+#
+# Callers that opt out MUST test identity explicitly, FOUR ways:
+#     order = submit_gtc_stop_order(..., allow_cancel_blocking=False)
+#     if   order is PROTECTION_ALREADY_HELD: ...  # protected by an existing stop — no page
+#     elif order is PROTECTION_UNKNOWN:      ...  # can't tell — throttled unknown path
+#     elif order is None:                    ...  # genuine failure — PAGE
+#     else:                                  ...  # newly placed
+#
+# ⚠ DO NOT rely on `__bool__` or on an `is not None` check to route this.
+# __bool__ is False, which happens to be safe for the 14 legacy callers that use
+# `if order:` truthiness — but it does NOT save a caller that tests
+# `if order is not None:`, because the sentinel IS not-None. Such a caller would
+# take its success branch and then read `getattr(order, "id", "")` -> "" and
+# persist an EMPTY order id over a live stop's real one — corrupting exactly the
+# protection state this sentinel exists to preserve. The sentinels are __slots__-ed
+# with NO `.id` attribute precisely so that misuse as an order object fails loudly
+# rather than silently at runtime. Any caller passing allow_cancel_blocking=False
+# MUST add the `is PROTECTION_ALREADY_HELD` / `is PROTECTION_UNKNOWN` branches in
+# the SAME commit.
+class _ProtectionSentinel:
+    """Non-order outcome of a protective-stop submit. Deliberately has NO `.id` attribute
+    so misuse as an order object fails loudly rather than silently persisting an empty
+    order id over a live stop's real one."""
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __repr__(self) -> str:
+        return self._name
+
+    def __bool__(self) -> bool:
+        return False
+
+
+# qty is held by a STABLE live reducing order => the position IS protected. Do not page.
+PROTECTION_ALREADY_HELD = _ProtectionSentinel("PROTECTION_ALREADY_HELD")
+
+# qty is held, but the order book could not be read => protection status is UNKNOWN. This is
+# NOT a claim of protection and NOT a claim of failure. A caller should route this to its own
+# throttled unknown-state path (e.g. stop_protection._skip_unknown, which pages once per
+# outage episode), NOT to its "placement failed / position UNPROTECTED" path.
+# Added 2026-07-20 at GAI's pre-ship request: distinguishing "unknown" from "failed" keeps the
+# never-mask-a-loss rule intact (we never assert unverified protection) while avoiding an
+# unthrottled false 'UNPROTECTED' page on transient API noise.
+PROTECTION_UNKNOWN = _ProtectionSentinel("PROTECTION_UNKNOWN")
+
+
 # ── Singleton client ──────────────────────────────────────────────────────────
 # One TradingClient for the entire bot session — same pattern as data/fetcher.py
 # Saves 5-10 auth round-trips per scan cycle and reduces failure surface.
@@ -141,6 +198,43 @@ def cancel_open_orders_for_symbol(symbol: str) -> int:
             cancelled += 1
             logger.info(f"[{symbol}] Cancelled blocking order {order.id} (type={order.type})")
     return cancelled
+
+
+_HOLD_STABLE = "stable"
+_HOLD_UNSTABLE = "unstable"
+_HOLD_UNKNOWN = "unknown"
+
+
+def _hold_state(symbol: str) -> str:
+    """Classify whether a held_for_orders (40310000) rejection is backed by a STABLE live
+    reducing order. Used only by the allow_cancel_blocking=False opt-out paths.
+
+      _HOLD_STABLE   — order book readable and no blocking order is mid-cancel: a real
+                       reducing order (almost certainly a protective stop) holds the qty.
+      _HOLD_UNSTABLE — a blocking order is 'pending_cancel': its held qty is about to
+                       release, so the position is about to be UNprotected, not protected.
+      _HOLD_UNKNOWN  — the order book could not be read (None / raise). Distinct from both
+                       of the above: we can neither assert protection nor assert its loss.
+
+    NEVER asserts protection it cannot verify (never-mask-a-loss), and never raises.
+    """
+    try:
+        _orders = get_open_orders(symbol)
+        if _orders is None:
+            logger.warning(
+                f"[{symbol}] hold-state probe: get_open_orders unavailable — protection "
+                f"status UNKNOWN (not claiming protection, not claiming failure)."
+            )
+            return _HOLD_UNKNOWN
+        if any("pending_cancel" in str(getattr(_o, "status", "")).lower() for _o in _orders):
+            return _HOLD_UNSTABLE
+        return _HOLD_STABLE
+    except Exception as _hse:
+        logger.warning(
+            f"[{symbol}] hold-state probe raised ({_hse}) — protection status UNKNOWN; "
+            f"will not claim protection."
+        )
+        return _HOLD_UNKNOWN
 
 
 def get_order(order_id: str):
@@ -443,6 +537,8 @@ def submit_gtc_stop_order(
     side: str,          # "sell" for long stops, "buy" for short stops
     stop_price: float,
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
+    *,
+    allow_cancel_blocking: bool = True,
 ) -> object:
     """
     Submit a GTC stop-market order for overnight position protection.
@@ -452,7 +548,26 @@ def submit_gtc_stop_order(
     If the GTC stop triggers overnight, Alpaca fills it and the bot
     reconciles the tracker at startup (see reconcile_overnight_gtc_stops).
 
-    Returns order object or None on failure.
+    Returns an order object, or None on failure, or — when
+    allow_cancel_blocking=False (see the sentinels at the top of this module) —
+    PROTECTION_ALREADY_HELD (a stable live reducing order already holds the qty)
+    or PROTECTION_UNKNOWN (the qty is held but the order book was unreadable, so
+    protection can be neither confirmed nor denied).
+
+    allow_cancel_blocking (keyword-only, default True = pre-existing behavior):
+      On 40310000 (held_for_orders) the DEFAULT recovery cancels ALL open orders
+      for the symbol and polls up to 63s for the qty reservation to release
+      (MSTR incident 2026-04-21, board vote 26-0). That recovery is correct for a
+      caller that KNOWS the blocking order is its own stale stop, and it is
+      UNCHANGED.
+      It is UNSAFE for a caller that is merely ASSERTING an invariant — e.g.
+      execution/stop_protection.py, which re-derives protection from Alpaca each
+      cycle. There, a 40310000 most likely means a VALID protective stop already
+      holds the qty, and cancelling it would DESTROY live protection (and, if the
+      63s poll then exhausts, leave the position genuinely naked). Such callers
+      pass False: nothing is cancelled, and the call returns immediately —
+      PROTECTION_ALREADY_HELD for a held_for_orders rejection, None for any other
+      failure. The caller re-derives protection on its next cycle.
     """
     import re as _re
     if qty <= 0 or stop_price <= 0:
@@ -522,6 +637,58 @@ def submit_gtc_stop_order(
             except Exception as _pcg:
                 logger.debug(f"[{symbol}] pending_cancel guard check failed: {_pcg}")
 
+            # OPT-OUT GUARD (2026-07-20): a protection-ASSERTING caller must never be able to
+            # cancel an order it did not place. Deliberately placed AFTER the pending_cancel
+            # guard above: if a blocking order is mid-cancel its held qty is about to release,
+            # so the position is NOT reliably protected — that case correctly returns None
+            # there (caller pages) rather than reaching the sentinel here. Reaching this point
+            # means the qty is held by a STABLE live reducing order, which for such a caller is
+            # almost certainly a valid protective stop. Cancel nothing, poll nothing.
+            #
+            # Discriminate on the ERROR CODE, mirroring submit_day_stop_order: only a literal
+            # 40310000 proves held_for_orders. A bare "insufficient qty available" text match
+            # without the code is NOT proof the qty is held, so it must NOT claim protection —
+            # it returns None so the caller pages (fail loud, never falsely reassure).
+            if not allow_cancel_blocking:
+                # NOTE the pending_cancel guard above returns None on a READABLE pending_cancel,
+                # but NOT when get_open_orders returns None — `if _existing_orders:` treats that
+                # as falsy and falls through to here. So this block must handle every case.
+                if "40310000" in err:
+                    _hs = _hold_state(symbol)
+                    if _hs == _HOLD_STABLE:
+                        logger.warning(
+                            f"[{symbol}] GTC stop not placed (40310000 held_for_orders) and "
+                            f"allow_cancel_blocking=False — NOT cancelling blocking orders: "
+                            f"the qty is held by a stable live reducing order, most likely a "
+                            f"valid protective stop. Returning PROTECTION_ALREADY_HELD."
+                        )
+                        return PROTECTION_ALREADY_HELD
+                    if _hs == _HOLD_UNKNOWN:
+                        logger.warning(
+                            f"[{symbol}] GTC stop not placed (40310000) and allow_cancel_"
+                            f"blocking=False, but the order book is UNREADABLE — protection "
+                            f"status UNKNOWN. NOT cancelling, NOT claiming protection. "
+                            f"Returning PROTECTION_UNKNOWN; caller should route this to its "
+                            f"throttled unknown-state path. Original: {e}"
+                        )
+                        return PROTECTION_UNKNOWN
+                    logger.error(
+                        f"[{symbol}] GTC stop FAILED (40310000) and allow_cancel_blocking="
+                        f"False, and the hold is UNSTABLE (a blocking order is mid-cancel, so "
+                        f"its held qty is about to release) — NOT cancelling, NOT claiming "
+                        f"protection. Position may be unprotected. Original: {e}"
+                    )
+                    return None
+                # Bare "insufficient qty available" text WITHOUT a 40310000 code — cannot prove
+                # the qty is held at all, so never claim protection.
+                logger.error(
+                    f"[{symbol}] GTC stop FAILED ('insufficient qty available' WITHOUT a "
+                    f"40310000 code) and allow_cancel_blocking=False — NOT cancelling blocking "
+                    f"orders, NOT claiming protection. Position may be unprotected. "
+                    f"Original: {e}"
+                )
+                return None
+
             cancel_open_orders_for_symbol(symbol)
             _related = _re.findall(r'"related_orders"\s*:\s*\[([^\]]*)\]', err)
             if _related:
@@ -570,6 +737,8 @@ def submit_day_stop_order(
     side: str,          # "sell" for long stops, "buy" for short stops
     stop_price: float,
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
+    *,
+    allow_cancel_blocking: bool = True,
 ) -> object:
     """
     Submit a DAY stop-market order for RTH session protection.
@@ -577,7 +746,22 @@ def submit_day_stop_order(
     Used when overnight GTC stops were blocked last AH.
     Tracked in rth_day_stop_order_id; cleared at next pre-market.
 
-    Returns order object or None on failure.
+    Returns an order object, or None on failure, or — when
+    allow_cancel_blocking=False (see the sentinels at the top of this module) —
+    PROTECTION_ALREADY_HELD (a stable live reducing order already holds the qty)
+    or PROTECTION_UNKNOWN (the qty is held but the order book was unreadable, so
+    protection can be neither confirmed nor denied).
+
+    allow_cancel_blocking (keyword-only, default True = pre-existing behavior):
+      See submit_gtc_stop_order for the full rationale. Default True leaves the
+      cancel-blocking-orders-and-retry recovery below completely UNCHANGED.
+      NOTE the asymmetry with the GTC path: this branch also fires on a bare
+      "insufficient" match, which catches insufficient BUYING POWER — a genuine
+      failure that is NOT held_for_orders. So the opt-out path below discriminates:
+      only a real 40310000 yields PROTECTION_ALREADY_HELD; any other "insufficient"
+      yields None (a true failure the caller SHOULD page). A 40310000 whose hold
+      cannot be verified yields PROTECTION_UNKNOWN. Either way an opted-out caller
+      cancels nothing.
     """
     if qty <= 0 or stop_price <= 0:
         logger.warning(f"[{symbol}] DAY stop skipped: qty={qty}, stop=${stop_price}")
@@ -616,6 +800,47 @@ def submit_day_stop_order(
         # Fix: cancel all blocking orders for the symbol, retry once. If retry succeeds,
         # the position gets stop protection. Caller must resubmit GTC limit after close.
         if "40310000" in err or "insufficient" in err.lower():
+            # OPT-OUT GUARD (2026-07-20): see submit_gtc_stop_order. A protection-asserting
+            # caller cancels NOTHING here, whatever the reason. Discriminate the two errors
+            # this branch conflates so the caller pages correctly: a real 40310000 means the
+            # qty is already held (protected → sentinel, no page); any other "insufficient"
+            # (e.g. buying power) is a genuine failure (→ None, caller SHOULD page).
+            if not allow_cancel_blocking:
+                # Unlike the GTC path there is no pending_cancel guard upstream here, so this
+                # block is the sole discrimination point for the DAY stop.
+                if "40310000" in err:
+                    _hs = _hold_state(symbol)
+                    if _hs == _HOLD_STABLE:
+                        logger.warning(
+                            f"[{symbol}] DAY stop not placed (40310000 held_for_orders) and "
+                            f"allow_cancel_blocking=False — NOT cancelling blocking orders: "
+                            f"the qty is held by a stable live reducing order, most likely a "
+                            f"valid protective stop. Returning PROTECTION_ALREADY_HELD."
+                        )
+                        return PROTECTION_ALREADY_HELD
+                    if _hs == _HOLD_UNKNOWN:
+                        logger.warning(
+                            f"[{symbol}] DAY stop not placed (40310000) and allow_cancel_"
+                            f"blocking=False, but the order book is UNREADABLE — protection "
+                            f"status UNKNOWN. NOT cancelling, NOT claiming protection. "
+                            f"Returning PROTECTION_UNKNOWN; caller should route this to its "
+                            f"throttled unknown-state path. Original: {e}"
+                        )
+                        return PROTECTION_UNKNOWN
+                    logger.error(
+                        f"[{symbol}] DAY stop FAILED (40310000) and allow_cancel_blocking="
+                        f"False, and the hold is UNSTABLE (a blocking order is mid-cancel, so "
+                        f"its held qty is about to release) — NOT cancelling, NOT claiming "
+                        f"protection. Position may be unprotected. Original: {e}"
+                    )
+                    return None
+                logger.error(
+                    f"[{symbol}] DAY stop FAILED (insufficient, non-40310000 — e.g. buying "
+                    f"power) and allow_cancel_blocking=False — NOT cancelling blocking "
+                    f"orders. This is a GENUINE placement failure, position may be "
+                    f"unprotected. Original: {e}"
+                )
+                return None
             logger.warning(
                 f"[{symbol}] DAY stop blocked (40310000 / insufficient buying_power) — "
                 f"cancelling blocking orders and retrying once."
