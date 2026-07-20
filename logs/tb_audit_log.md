@@ -8642,3 +8642,14 @@ round_trips via NEW heal_trade_log() in reporting/pnl_ledger.py (reuse immutable
 L567-581 + dry_run diff + atomic write; add timestamped backup + fsync) — NOT per-row matching (that reintroduces
 the phantom-creating heuristic). Two must-resolve-before-apply: closed[] ownership (dual-writer), entry_time
 join-key drift. AWAITING Rafael approval of the direction; no code shipped. See handoff.md ⏩ LATEST.
+
+## 2026-07-19 — GTC STOP-PROTECTION REDESIGN Step 1 SHIPPED (execution/stop_protection.py, 1ee383e)
+Definitive fix for the recurring GTC naked-position class (patched ~monthly for months). ONE stateless
+reconciler derives protection from Alpaca's LIVE open orders each cycle (no per-day gate to burn = closes
+finding A gtc_manager:77; no stored-id/terminal-status trust = closes finding B gtc_manager:381 _TERMINAL
+omits "rejected"). + tests/test_stop_protection.py (20-case failure-injection harness = the missing piece;
+each blocker is a passing test). Gate: py_compile/mypy/ruff clean; harness 20/20 (green on OCI box);
+cold-2nd x2 PASS; board exec-risk+reliability REJECT -> revision closed 4 blockers (RC-4 cover-at-market;
+stop-vs-stop double-place via non-idempotent client_order_id; stop-vs-limit over-sell; silent unknown-skip);
+FINAL preship gro=APPROVE gai=APPROVE (marker ae69e50a). SHIPPED INERT (unwired) -> zero runtime effect
+until the run_cycle wiring patch (next, own full-read gate). Phase B retires the ~13 legacy submit sites.

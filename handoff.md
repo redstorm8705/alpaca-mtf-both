@@ -11,9 +11,23 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**🛠️ ACTIVE DEEP-WORK THREAD (2026-07-19) — GTC STOP-PROTECTION DEFINITIVE REDESIGN.** Rafael: stop
-going in circles on GTC bugs (patched for months, keep recurring); wants ONE final invariant-based solution
-+ deep work, no more revisiting. PLAN: (P1) map the COMPLETE stop-protection surface — all ~5 stop concepts
+**🛠️ ACTIVE DEEP-WORK THREAD (2026-07-19) — GTC STOP-PROTECTION DEFINITIVE REDESIGN.**
+**✅ STEP 1 SHIPPED + LIVE + VERIFIED (`1ee383e`, deployed OCI, DEPLOY_OK, 20/20 harness green ON THE BOX) —
+but INERT (unwired).** New `execution/stop_protection.py` = the single-invariant reconciler (Alpaca-derived
+protection state each cycle, no per-day gate, no stored-id trust) + `tests/test_stop_protection.py` = 20-case
+failure-injection harness. Gate: statics + 20/20 harness + cold-2nd x2 PASS + board exec-risk+reliability
+REJECT → revision closing 4 blockers (RC-4 cover price; stop-vs-stop double-place via non-idempotent coid;
+stop-vs-limit over-sell; silent unknown-skip) → FINAL preship Gro APPROVE + GAI APPROVE (marker ae69e50a).
+Closes tonight's findings A (gate-before-submit naked-all-session) + B (_TERMINAL omits "rejected") BY
+CONSTRUCTION. **⏩ EXACT NEXT STEP = the WIRING PATCH:** one call to `reconcile_protection(tracker, risk,
+session=...)` in `strategy/run_cycle.py` (after check_exits) — its OWN full-read gate on run_cycle.py (2064L) +
+board + preship. THAT activates the fix. Follow-ups logged (non-blocking, fold into wiring): shadow-mode breach
+reporting fidelity; register_close-raise page label; `_cover` assumes full flatten; deterministic broker coid
+(Phase-B bulletproof idempotency). Phase B = retire the ~13 legacy submit sites + 6 status sets once shadow-proven.
+Design/reviews: scratchpad `stopprotect_*`.
+**SYSTEMIC anti-circle rule to add to CLAUDE.md (Rafael approved): NO fix ships without a regression test
+reproducing the failure** (this harness is the template). Add on the wiring patch.
+PLAN (for reference): (P1) map the COMPLETE stop-protection surface — all ~5 stop concepts
 (overnight GTC, RTH DAY, cover-on-breach, trail, breakeven) across gtc_manager/broker/run_cycle/orphan_manager/
 exit_logic/risk_manager [Explore mapping RUNNING]; (P2) design ONE invariant ("every open position always has a
 correct live protective stop during RTH, or it's flattened+alerted") + ONE stateless enforcer that re-derives
