@@ -4,24 +4,24 @@
 BACKGROUND
 ----------
 CLAUDE.md records RC-4 as "found+fixed 2026-07-03": fetch_actual_fill_price() with
-submitted_after=None matched months-old fills as today's close, writing exit prices that
-never happened (documented examples: TSLA ~$347, PANW -$182.79). The patch stopped NEW
-phantoms from being written. It did NOT clean rows already on disk. Those rows still feed
-every all-time statistic computed from closed[] — win rate, profit factor, max drawdown.
+submitted_after=None matched months-old fills as today's close, writing exit prices
+that never happened (documented: TSLA ~$347, PANW -$182.79). The patch stopped NEW
+phantoms being written. It did NOT clean rows already on disk. Those rows still feed
+every all-time stat computed from closed[] — win rate, profit factor, max drawdown.
 
 WHAT THIS DOES
 --------------
 For every closed trade, pull the underlying's ACTUAL Alpaca FILL activities on that
-trade's exit date and check whether the recorded exit_price corresponds to any real fill.
-Alpaca fills are the authoritative source per the project's P&L Sourcing Rule; trade_log
-math is a cross-check only.
+trade's exit date and check whether the recorded exit_price matches any real fill.
+Alpaca fills are authoritative per the project's P&L Sourcing Rule; trade_log math
+is a cross-check only.
 
 Classification per row:
   OK          - recorded exit price matches a real fill that day (within tolerance)
   PHANTOM     - fills exist for that symbol/date, but NONE match the recorded exit price
   NO_FILLS    - no fills at all for that symbol on that date (exit price unverifiable)
-  NO_EXIT_TS  - row has no exit_time; cannot be checked (this is the data defect that also
-                corrupts the max-drawdown ordering at weekly_review.py:528)
+  NO_EXIT_TS  - row has no exit_time; cannot be checked (the same data defect that
+                also corrupts max-drawdown ordering at weekly_review.py:528)
 
 Read-only. Never writes to trade_log.json. Emits one JSON report to logs/.
 """
@@ -116,7 +116,8 @@ def main() -> int:
             continue
         by_date[str(ex)[:10]].append(t)
 
-    print(f"distinct exit dates: {len(by_date)}   rows with NO exit_time: {len(no_exit_ts)}")
+    print(f"distinct exit dates: {len(by_date)}   "
+          f"rows with NO exit_time: {len(no_exit_ts)}")
 
     fill_cache: dict = {}
     results = {"OK": [], "PHANTOM": [], "NO_FILLS": [], "NO_EXIT_TS": []}
@@ -134,7 +135,8 @@ def main() -> int:
         bysym: dict = defaultdict(list)
         for a in day_fills:
             bysym[a["symbol"]].append(a)
-        print(f"  [{i}/{len(by_date)}] {d}: {len(day_fills)} fills, {len(rows)} closed row(s)")
+        print(f"  [{i}/{len(by_date)}] {d}: {len(day_fills)} fills, "
+              f"{len(rows)} closed row(s)")
 
         for t in rows:
             sym = t.get("symbol")
@@ -181,7 +183,8 @@ def main() -> int:
         print("  worst offenders by |pct_off|:")
         for r in sorted(results["PHANTOM"],
                         key=lambda x: -abs(x.get("pct_off") or 0))[:12]:
-            print(f"    {r['exit_date']} {r['symbol']:6s} recorded ${r['recorded_exit']:.2f} "
+            print(f"    {r['exit_date']} {r['symbol']:6s} "
+                  f"recorded ${r['recorded_exit']:.2f} "
                   f"vs actual ${r['nearest_actual']:.2f} ({r['pct_off']:+.1f}%) "
                   f"pnl={r['recorded_pnl']}")
 
