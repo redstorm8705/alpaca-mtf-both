@@ -8526,3 +8526,16 @@ CAVEATS (recorded so these controls are not overread):
 STATUS: S0 (GEX display-only) is now independently justified by Finding 2 alone.
 NEXT: the replacement measure is an OPEN DESIGN QUESTION again -- the centroid is dead.
 Any candidate must pass this probe (chain fixed, spot swept, slope ~ 0) BEFORE it is built.
+
+## 2026-07-19 — INFRA: 5 report URLs dead on new A1 box — host firewall missing 8080 rule
+Symptom: http://137.131.51.250:8080/{dashboard,scan_results,options,weekly_review,monthly_review}.html
+unreachable from outside (curl connect=0.000s, HTTP=000 — packets rejected, not a 404/500).
+Diagnosis: iptables INPUT on the new box = [established, icmp, all(lo), tcp dpt:22, REJECT all].
+No 8080 rule. nginx WAS healthy and serving: all 5 pages returned 200 on 127.0.0.1:18080 and the
+:8080 server block (with auth_basic + /etc/nginx/.htpasswd) was correctly configured. Old box had
+`-A INPUT -p tcp -m tcp --dport 8080 -j ACCEPT` — the migration carried nginx config, htpasswd and
+the generated HTMLs but not the firewall rule.
+Fix: `iptables -I INPUT 5 -p tcp --dport 8080 -m state --state NEW -j ACCEPT` (inserted BEFORE the
+catch-all REJECT) + `netfilter-persistent save`. Verified in /etc/iptables/rules.v4.
+Verified after: all 5 pages HTTP 401 from off-box (nginx reached, basic auth prompting), ~22ms connect.
+Not a code change — no patch sequence applicable. Restores parity with the prior production box.

@@ -11,6 +11,20 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🔓 REPORTS FIXED (2026-07-19) — MIGRATION GAP: host firewall never got the 8080 rule.**
+Rafael reported the 5 report URLs dead on the new box. The URLs were CORRECT; the blocker was
+`iptables`. The new A1 box's INPUT chain allowed only SSH (dpt:22) and then REJECTed everything
+else — port 8080 packets were dropped before nginx ever saw them (external `connect` failed
+outright, HTTP=000). The OLD box had `-A INPUT -p tcp --dport 8080 -j ACCEPT`; the migration
+copied nginx config, .htpasswd, and the HTMLs but NOT the firewall rule. FIX APPLIED + PERSISTED:
+`sudo iptables -I INPUT 5 -p tcp --dport 8080 -m state --state NEW -j ACCEPT` then
+`sudo netfilter-persistent save` (verified written to /etc/iptables/rules.v4, survives reboot).
+All 5 pages now return HTTP 401 externally (= nginx reached, basic-auth prompting — correct),
+connect ~22ms. Basic-auth user: `mtf`. Serve dir `/home/ubuntu/mtf-bot/public` has all 5 symlinks.
+**LESSON FOR ANY FUTURE BOX MIGRATION: the host firewall is NOT part of the app deploy — check
+`iptables-save` parity explicitly.** (options.html showing Friday's timestamp is CORRECT, not
+stale — its cron is `*/15 13-21 * * 1-5`, weekdays only; it refreshes Monday at the open.)
+
 **🎯 EXACT NEXT ACTION (2026-07-19, newest first): convene the BOARD SEATS on Rafael's two new
 directives (Gro + GAI already returned — see "GEX RE-SPEC" below). Two Gro/GAI splits need the board
 as tie-breaker: (1) is the gamma-weighted centroid spot-INDEPENDENT? Gro says yes, GAI says no-but-
