@@ -8569,3 +8569,35 @@ This is the SAME CLASS as the 8080 firewall gap: state that lives outside git di
      WARN [exec_stats] bad exit_time: 'exit_time'   <- KeyError, field absent on some trades
    These silently drop trades from hold-time and execution stats. Same RC-family as the SMCI
    exit_time corruption. Needs its own audit + patch.
+
+## 2026-07-19 — RC-4 PHANTOM FILLS STILL PRESENT IN trade_log.json (Rafael question: "was 7/2 really -$251?")
+ANSWER: NO. 7/2 was not -$251.12. That figure is the sum of trade_log.json closed[] for that date and
+is driven by TWO records whose exit prices DO NOT EXIST in Alpaca.
+
+Verified against Alpaca FILL activities for 2026-07-02 (18 fills, authoritative per the P&L Sourcing Rule):
+  PANW  trade_log exit $172.31  ->  ALPACA ACTUAL $348.55   recorded -$182.79  real ~ -$6.55
+  TSLA  trade_log exit $347.00  ->  ALPACA ACTUAL $425.32   recorded  -$81.23  real ~ -$2.91
+Those two phantoms account for ~-$264 of the -$251.
+The eod_2026-07-02.json file (_healed_by: pnl_ledger.heal_history, _healed_at 2026-07-17) reports
+pnl_today_total: +45.31 — i.e. the authoritative ledger and trade_log DISAGREE BY ~$296 on one day.
+
+SIGNIFICANCE: TSLA ~$347 and PANW -$182.79 are the EXACT phantom values documented in CLAUDE.md
+RC-4 as "found+fixed 2026-07-03" (fetch_actual_fill_price(submitted_after=None) matching months-old
+fills as today's close). The 2026-07-03 patch stopped NEW phantoms being written. It never
+BACKFILLED/CLEANED the already-corrupt historical rows. They are still in trade_log.json closed[]
+today and still feed every all-time statistic computed from that array — including the "33.9%
+all-time win rate", "PF 1.48", and "Max Drawdown $613.56" shown on the monthly page.
+
+FURTHER INCONSISTENCIES FOUND IN THE SAME 6 ROWS (not yet root-caused, flagged for follow-up):
+  - MARA + SNOW rows carry pnl = 0.0 despite having real Alpaca fills that day
+    (MARA sold 29sh @ ~13.894 vs entry 13.72 = ~+$5.05; SNOW sold 1 @ 259.33 vs entry 261.76 = -$2.43)
+  - HOOD recorded pnl 10.67 == the PER-SHARE delta (115.55-104.88) on a 3-share position (~+$32.01)
+  - RIVN recorded pnl 2.23 == 3x the per-share delta on a 9-share position (~+$6.69)
+    => the pnl field is not consistently total-position P&L across rows. Needs its own audit.
+  - GOOGL/NVDA/MSTR/RBLX all had FILL activity on 7/2 and appear in NO closed[] row for that date.
+
+REQUIRED WORK (new, not previously queued):
+  P0 - a one-off reconciliation pass that rewrites trade_log.json closed[] exit prices + pnl from the
+       Alpaca fill log (the same source pnl_ledger already treats as immutable truth), with a
+       before/after diff surfaced for approval. Until this runs, EVERY all-time stat is wrong.
+  P0 - determine the blast radius: how many of the 112 closed rows are phantom-contaminated?
