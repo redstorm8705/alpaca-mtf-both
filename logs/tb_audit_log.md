@@ -8476,3 +8476,53 @@ the OI centroid), (iii) put OI 3x call OI uniformly (true flip well BELOW spot).
 function returns ~spot in all three, the tautology is proven outright with no statistics.
 ALSO NOTE: QQQ flips sit a median 14.33% BELOW spot with R2~0 — unexplained, worth its
 own look.
+
+## 2026-07-19 — SYNTHETIC-CHAIN PROBE: decisive. Candidate centroid KILLED before build.
+Script: scripts/gex_synthetic_probe.py. Result: logs/gex_synthetic_probe_2026-07-19.json
+Design: hold the option chain COMPLETELY FIXED (strikes, call/put OI, flat IV=0.20) and
+sweep spot 700->800. Positioning is identical at every step by construction; only the
+underlying price moves. Sample-size independent (controlled experiment, not observational),
+so it cannot be defeated by the restricted-range problem that made the flip-on-spot
+regression inconclusive at n=24.
+
+FINDING 1 (DECISIVE) — the gamma-weighted centroid IS a tautology.
+  slope vs spot / R^2, chain FIXED:
+    crossover@730 : slope=+0.999  R^2=1.000
+    crossover@770 : slope=+0.999  R^2=1.000
+    calls_only    : slope=+1.001  R^2=1.000
+    symmetric OI  : slope=+1.000  R^2=1.000
+  The centroid moved 1:1 with spot in ALL FOUR chains while positioning never changed.
+  CAUSE: BS gamma decays fast away from spot, so |GEX_K| weights concentrate around
+  spot, and a weighted average of K with weights peaked at spot returns ~spot --
+  regardless of OI structure. GAI was RIGHT, Gro was WRONG (Gro asserted independence).
+  ACTION: DO NOT BUILD the gamma-weighted centroid. It reproduces the exact defect that
+  demoted the flip. This is the single highest-value result of the session -- it killed
+  the proposed replacement BEFORE implementation.
+
+FINDING 2 (NEW BUG) — the flip emits SPURIOUS levels from numerical noise.
+  On the symmetric-OI chain, call and put gamma cancel EXACTLY at every strike (BS gamma
+  is identical for a call and a put at the same strike/expiry/vol), so net GEX is ~0
+  everywhere and NO crossing exists. _compute_gex nonetheless emitted confident flips at
+  6 of 11 spots: 722.5, 717.5, 725.0, 745.0, 760.0, 797.5. Floating-point residue in the
+  running cumulative creates sign changes that are reported as real levels. There is no
+  epsilon/deadband on the sign test at data/gex.py:391.
+
+FINDING 3 — the flip is WINDOW-GATED and structurally cannot report distant structure.
+  crossover@730: flip is None for spot<=720 and spot>=770; non-None only while the true
+  crossover sits inside the +/-5% band. crossover@770: identical pattern, shifted +40.
+  So it can only ever "find" structure that happens to lie near spot -- a subtler form of
+  the same spot-dependence. Reported values also do NOT equal the true crossover
+  (true 730 -> reported 732.5/735.0/740.0/752.5).
+
+CAVEATS (recorded so these controls are not overread):
+  - My OI-imbalance-crossover control is GRID-START dependent (returned 857.5 for
+    crossover@730, None for crossover@770) -- it inherits the same "cumulative starts at
+    the window edge" flaw the board flagged in production. Not a usable measure as written.
+  - My OI-weighted centroid returned a constant 750.0 in all four chains, but that is an
+    artifact of my scenario design (total OI per strike is uniform), so it is the grid
+    midpoint and says NOTHING about whether OI-weighting is a good measure. INCONCLUSIVE.
+    A proper test needs chains with non-uniform total OI.
+
+STATUS: S0 (GEX display-only) is now independently justified by Finding 2 alone.
+NEXT: the replacement measure is an OPEN DESIGN QUESTION again -- the centroid is dead.
+Any candidate must pass this probe (chain fixed, spot swept, slope ~ 0) BEFORE it is built.

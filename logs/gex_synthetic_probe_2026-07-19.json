@@ -1,0 +1,539 @@
+{
+  "generated": "2026-07-19 05:27 PM PT",
+  "experiment": "chain held FIXED, spot swept; a level that moves with spot while positioning is unchanged is an artifact",
+  "sigma": 0.2,
+  "spots": [
+    700.0,
+    710.0,
+    720.0,
+    730.0,
+    740.0,
+    750.0,
+    760.0,
+    770.0,
+    780.0,
+    790.0,
+    800.0
+  ],
+  "scenarios": {
+    "crossover@730 (below spot-center)": {
+      "meta": {
+        "scenario": "crossover",
+        "crossover": 730.0,
+        "expiry": "2026-07-24T16:00:00-04:00",
+        "n_contracts": 242
+      },
+      "rows": [
+        {
+          "spot": 700.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 701.0,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 710.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 711.12,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 720.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 721.04,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 118
+        },
+        {
+          "spot": 730.0,
+          "flip": 752.5,
+          "label": "NEAR-FLIP",
+          "centroid": 731.01,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 740.0,
+          "flip": 740.0,
+          "label": "POSITIVE",
+          "centroid": 741.04,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 115
+        },
+        {
+          "spot": 750.0,
+          "flip": 735.0,
+          "label": "POSITIVE",
+          "centroid": 751.14,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 119
+        },
+        {
+          "spot": 760.0,
+          "flip": 732.5,
+          "label": "POSITIVE",
+          "centroid": 761.05,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 122
+        },
+        {
+          "spot": 770.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 771.05,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 116
+        },
+        {
+          "spot": 780.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 780.88,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 790.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 790.96,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 124
+        },
+        {
+          "spot": 800.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 800.93,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": 857.5,
+          "quality_ok": true,
+          "contract_count": 121
+        }
+      ],
+      "flip_vs_spot": {
+        "n": 4,
+        "slope": -0.65,
+        "r2": 0.8895
+      },
+      "centroid_vs_spot": {
+        "n": 11,
+        "slope": 0.9987,
+        "r2": 1.0
+      }
+    },
+    "crossover@770 (above spot-center)": {
+      "meta": {
+        "scenario": "crossover",
+        "crossover": 770.0,
+        "expiry": "2026-07-24T16:00:00-04:00",
+        "n_contracts": 242
+      },
+      "rows": [
+        {
+          "spot": 700.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 701.29,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 710.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 711.33,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 720.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 721.2,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 118
+        },
+        {
+          "spot": 730.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 731.01,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 740.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 741.04,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 115
+        },
+        {
+          "spot": 750.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 751.14,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 119
+        },
+        {
+          "spot": 760.0,
+          "flip": null,
+          "label": "NEGATIVE",
+          "centroid": 761.05,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 122
+        },
+        {
+          "spot": 770.0,
+          "flip": 792.5,
+          "label": "NEAR-FLIP",
+          "centroid": 771.04,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 116
+        },
+        {
+          "spot": 780.0,
+          "flip": 780.0,
+          "label": "POSITIVE",
+          "centroid": 781.06,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 790.0,
+          "flip": 775.0,
+          "label": "POSITIVE",
+          "centroid": 791.18,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 124
+        },
+        {
+          "spot": 800.0,
+          "flip": 772.5,
+          "label": "POSITIVE",
+          "centroid": 801.2,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 121
+        }
+      ],
+      "flip_vs_spot": {
+        "n": 4,
+        "slope": -0.65,
+        "r2": 0.8895
+      },
+      "centroid_vs_spot": {
+        "n": 11,
+        "slope": 0.9987,
+        "r2": 1.0
+      }
+    },
+    "calls_only (no true flip exists)": {
+      "meta": {
+        "scenario": "calls_only",
+        "crossover": null,
+        "expiry": "2026-07-24T16:00:00-04:00",
+        "n_contracts": 121
+      },
+      "rows": [
+        {
+          "spot": 700.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 700.53,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 47
+        },
+        {
+          "spot": 710.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 710.63,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 50
+        },
+        {
+          "spot": 720.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 720.63,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 51
+        },
+        {
+          "spot": 730.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 730.54,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 55
+        },
+        {
+          "spot": 740.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 740.57,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 56
+        },
+        {
+          "spot": 750.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 750.62,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 60
+        },
+        {
+          "spot": 760.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 760.59,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 62
+        },
+        {
+          "spot": 770.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 770.6,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 62
+        },
+        {
+          "spot": 780.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 780.57,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 64
+        },
+        {
+          "spot": 790.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 790.67,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 71
+        },
+        {
+          "spot": 800.0,
+          "flip": null,
+          "label": "POSITIVE",
+          "centroid": 800.65,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 70
+        }
+      ],
+      "flip_vs_spot": {
+        "n": 0,
+        "note": "too few points"
+      },
+      "centroid_vs_spot": {
+        "n": 11,
+        "slope": 1.0007,
+        "r2": 1.0
+      }
+    },
+    "symmetric OI (nets to zero)": {
+      "meta": {
+        "scenario": "symmetric",
+        "crossover": null,
+        "expiry": "2026-07-24T16:00:00-04:00",
+        "n_contracts": 242
+      },
+      "rows": [
+        {
+          "spot": 700.0,
+          "flip": null,
+          "label": "NEAR-FLIP",
+          "centroid": 701.08,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 710.0,
+          "flip": null,
+          "label": "NEAR-FLIP",
+          "centroid": 711.14,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 114
+        },
+        {
+          "spot": 720.0,
+          "flip": 722.5,
+          "label": "NEAR-FLIP",
+          "centroid": 721.11,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 118
+        },
+        {
+          "spot": 730.0,
+          "flip": null,
+          "label": "NEAR-FLIP",
+          "centroid": 731.07,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 740.0,
+          "flip": null,
+          "label": "NEAR-FLIP",
+          "centroid": 741.1,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 115
+        },
+        {
+          "spot": 750.0,
+          "flip": 717.5,
+          "label": "NEAR-FLIP",
+          "centroid": 751.13,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 119
+        },
+        {
+          "spot": 760.0,
+          "flip": 725.0,
+          "label": "NEAR-FLIP",
+          "centroid": 761.09,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 122
+        },
+        {
+          "spot": 770.0,
+          "flip": 740.0,
+          "label": "NEAR-FLIP",
+          "centroid": 771.08,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 116
+        },
+        {
+          "spot": 780.0,
+          "flip": 750.0,
+          "label": "NEAR-FLIP",
+          "centroid": 781.08,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 117
+        },
+        {
+          "spot": 790.0,
+          "flip": 760.0,
+          "label": "NEAR-FLIP",
+          "centroid": 791.17,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 124
+        },
+        {
+          "spot": 800.0,
+          "flip": 797.5,
+          "label": "NEAR-FLIP",
+          "centroid": 801.18,
+          "oi_centroid": 750.0,
+          "oi_imbalance_crossover": null,
+          "quality_ok": true,
+          "contract_count": 120
+        }
+      ],
+      "flip_vs_spot": {
+        "n": 7,
+        "slope": 0.8734,
+        "r2": 0.7059
+      },
+      "centroid_vs_spot": {
+        "n": 11,
+        "slope": 1.0005,
+        "r2": 1.0
+      }
+    }
+  }
+}
