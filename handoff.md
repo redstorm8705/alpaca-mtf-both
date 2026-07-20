@@ -11,6 +11,38 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🛠️ ACTIVE DEEP-WORK THREAD (2026-07-19) — GTC STOP-PROTECTION DEFINITIVE REDESIGN.** Rafael: stop
+going in circles on GTC bugs (patched for months, keep recurring); wants ONE final invariant-based solution
++ deep work, no more revisiting. PLAN: (P1) map the COMPLETE stop-protection surface — all ~5 stop concepts
+(overnight GTC, RTH DAY, cover-on-breach, trail, breakeven) across gtc_manager/broker/run_cycle/orphan_manager/
+exit_logic/risk_manager [Explore mapping RUNNING]; (P2) design ONE invariant ("every open position always has a
+correct live protective stop during RTH, or it's flattened+alerted") + ONE stateless enforcer that re-derives
+protection from Alpaca each cycle (no gate to burn, no id to lose across restart) — bring to Rafael for sign-off;
+(P3) build enforcer + FAILURE-INJECTION TEST HARNESS proving the invariant under rejected-stop/40310000/
+partial-fill/restart/gap (this is the missing piece — prior fixes never forced the failure); (P4) gate + ship.
+Model = pnl_ledger.py (stateless recompute killed the phantom-P&L recurrence; GTC never got that cure). SYSTEMIC
+anti-circle rule being added to CLAUDE.md: NO fix ships without a regression test reproducing the failure.
+Tonight's 2 verified GTC bugs to be SUBSUMED+proven-closed by the harness, not patched: (A) gtc_manager.py:77
+once-per-day gate burns before submission → a DAY-stop failure at open (40310000/API) is never retried → naked
+all session (premarket path is BLOCKED by run_cycle market-open gate L445 + _too_early L889 — verified); (B)
+gtc_manager.py:381/302 _TERMINAL omits "rejected" → rejected stop misread as live → close gated/deferred.
+
+**🚀 DEPLOY-TIMING POLICY CHANGED + SHIPPED (2026-07-19, `d98c719`).** Rafael mandate: fixes deploy WHEN READY,
+NOT gated on market hours. New CLAUDE.md §DEPLOY TIMING rule removes the "defer restart to next non-RTH window"
+convention in full. Safety gates unchanged — only deploy TIMING. Claude must NOT tell Rafael to wait for close
+or mark a fix "restart deferred." Startup reconcile verified benign (reliability board) so RTH restarts are safe;
+prefer landing a restart between 5-min cycles. **The deferred-restart backlog framing elsewhere in this file is
+now historical — going forward nothing waits for market hours.**
+
+**🔎 RTH BUG-HUNT DONE (2026-07-19, 4 board seats + Gro + GAI).** Ranked for Monday: P0 = gtc_manager stop
+protection (findings A+B above — being subsumed by the redesign). P1 = Kelly `long_intraday` pinned at max cap →
+~96% equity single long, CV=2.85 penalty neutered (fix: clamp `kelly_scale=min(kelly_scale,1.0)` at
+entry_logic.py:1119) — QUEUED next after GTC. VERIFIED BENIGN: POSITION COUNT DRIFT CRITICAL (downgrade log to
+INFO); false-drop of a live position (3 fail-closed guards). P2 reporting-only: exit_time UTC/PT mis-bucket
+(pt:1146, only 5pm-midnight PT fills; OCI py3.10 also drops these from weekly_review exec_stats), RC-7 1-share
+tranche skip, TQI recompute/window nondeterminism, score 8-9 dead-band. Latent: launch without --profile paper →
+3x Kelly (mitigated by launch_bots.sh).
+
 **🧾 PHANTOM-FILL REPAIR — BGG ALIGNED 2026-07-19 (cross-account resume; Board 4/4 + Gro + GAI → Option C).
 AWAITING RAFAEL: approve design direction. NO CODE SHIPPED.** Thread: Rafael asked "was 7/2 really −$251?" → NO.
 `trade_log.json` `closed[]` still carries RC-4 phantom rows (exit prices absent from Alpaca fills). Audit: ~27.7%
