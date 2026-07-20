@@ -95,13 +95,17 @@ being the two highest-stress days of the year), each wrapped in `try/except` + `
 `_touch_cycle_ts()` → watchdog → `os.execv` → restart loop). Then staged placement, site-2-first,
 overnight-only. Reviews/prompts: scratchpad `wiring_prompt/broker_review/gai_counter2/recon_review`.
 
-**⚠️ LIVE AT 2026-07-20 17:16 ET (after hours): GOOGL STILL NAKED.** Re-checked at session start:
-of the 3 naked at 14:29 ET, NFLX short 2sh + SMCI short 2sh are NOW protected (stop/buy/2 each),
-but **GOOGL long 2sh (MV $705 ≈ 26% of $2,689 equity) STILL has NO stop at Alpaca.** NVDA (the
-other QHM hold) DID have its GTC stop, so this is not "QHM doesn't use stops" — GOOGL-specific.
-10 positions total, 9 open orders (GOOGL the only naked one). Surfaced to Rafael; NO orders placed
-by Claude. **⏩ NEXT ACTIONABLE: read-only diagnostic on WHY GOOGL specifically has no GTC stop
-(QHM stop-submission path) while NVDA does** — then blockers 1 & 2 for the stop_protection wiring.
+**✅ GOOGL-NAKED — DIAGNOSED, NOT A BUG (2026-07-20 read-only diag).** The prior "GOOGL still
+naked, investigate" flag was a FALSE ALARM. GOOGL is in QHM state **`PENDING_EARNINGS`** (earnings
+**2026-07-21**); the quarterly-hold manager DELIBERATELY runs earnings-paused positions stop-less
+through the earnings window (documented "temporarily stop-less" state) to avoid an earnings-gap
+stop-out. Last GOOGL stop was 2026-07-13 (qty2 GTC, canceled) — none since, by design. Ledger clean:
+`net=2.0 qhm=2.0 protected_floor=2.0 drift=0.0` (never-sell floor still protects it from being SOLD;
+that is separate from a stop-loss). NVDA has its stop because NVDA is not in an earnings window. NO
+orders placed by Claude. **OPEN POLICY QUESTION for Rafael (not a bug, not forced): is holding a
+~26%-of-equity single name stop-less through earnings the intended risk posture? If revisit wanted,
+that is a QHM earnings-pause design review (board + Gro + GAI), separate from the stop_protection
+wiring.** ⏩ Wiring next steps unchanged: BLOCKER-1 (page throttle) + BLOCKER-2 (N→1 order fetch).
 
 **⚙️ PRESHIP TOOLING GOTCHA (cost a full false-APPROVE this session):** `preship_audit.py` hashes
 the **staged/committed** blob and diffs `--cached`. Run it BEFORE `git add` and it audits an EMPTY
