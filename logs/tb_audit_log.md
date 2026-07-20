@@ -8539,3 +8539,33 @@ Fix: `iptables -I INPUT 5 -p tcp --dport 8080 -m state --state NEW -j ACCEPT` (i
 catch-all REJECT) + `netfilter-persistent save`. Verified in /etc/iptables/rules.v4.
 Verified after: all 5 pages HTTP 401 from off-box (nginx reached, basic auth prompting), ~22ms connect.
 Not a code change — no patch sequence applicable. Restores parity with the prior production box.
+
+## 2026-07-19 — INFRA: weekly/monthly P/L pages blank — SECOND migration gap (eod_*.json)
+Symptom: both P/L pages rendered but showed no data. Monthly displayed CONTRADICTORY figures on
+one load: calendar + monthly stats said "0 closed trades" on every day, while the Strategy Edge /
+Live Validation panel on the SAME page reported 112 trades / 33.9% WR / PF 1.48. That split was
+the diagnostic — two data paths, one fed, one starved.
+ROOT CAUSE: monthly_review.py (L66) and weekly_review.py read per-day logs/eod_YYYY-MM-DD.json;
+the edge panel reads trade_log.json. trade_log.json HAD 112 closed trades (migrated fine), but the
+new box had only 1 eod_*.json (today's, written fresh) vs 114 on the old box. eod_*.json is
+gitignored (.gitignore L44 `logs/*`) so it does not travel via git, and the migration copied the
+generated HTMLs + weekly/monthly archive but NOT the eod dailies or lifetime_pnl_cache.json.
+FIX: tar'd logs/eod_????-??-??.json + logs/lifetime_pnl_cache.json from the old box, staged to
+/tmp on the new box, extracted with `tar --skip-old-files` so the new box's OWN newer
+eod_2026-07-19.json (23:54, 1418B) was preserved over the old box's (20:50, 1421B). 1 -> 114 files.
+Then regenerated both pages. RESULT: monthly now 29 trades / -$384.08 July / 17.2% WR / 168 closed
+lifetime; weekly now "5/5 days loaded" for Jul 13-17, 35052 -> 41649 bytes, 30 archived weeks.
+This is the SAME CLASS as the 8080 firewall gap: state that lives outside git did not migrate.
+
+### OPEN (found while fixing, NOT fixed — no code change made)
+1. weekly_review.py weekend default picks the UPCOMING week. Run on Sun 2026-07-19 it resolved to
+   "current week" = Mon 2026-07-20 and produced "0/5 days loaded" — an empty future week. Its cron
+   is Mon-Fri 16:20 ET so in-week behavior is correct, but any weekend/manual run shows a blank
+   page. Worked around with `--week 2026-07-13`. Proper fix: default to the last COMPLETED week
+   when today is Sat/Sun. Needs the patch sequence.
+2. Datetime parse failures persist in the review path despite the c1d5998 fix:
+     WARN [weekly_review]: hold_time parse skipped: Invalid isoformat string:
+       '2026-07-17T16:51:32.786323Z'   <- trailing 'Z' not handled by py3.10 fromisoformat
+     WARN [exec_stats] bad exit_time: 'exit_time'   <- KeyError, field absent on some trades
+   These silently drop trades from hold-time and execution stats. Same RC-family as the SMCI
+   exit_time corruption. Needs its own audit + patch.
