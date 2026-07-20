@@ -233,6 +233,22 @@ This rule exists because a concept-level Gro/GAI approval (Step 4 — on audit f
 
 Git is the SOLE deploy channel. The Mac commits + pushes to GitHub; OCI deploys by `git pull origin main --ff-only` + restart (the exact path `auto_deploy.sh` already runs). **Rsync of tracked files is PROHIBITED** — it writes bytes without a commit, dirtying OCI's git tree so the next `git pull --ff-only` aborts (this caused OCI HEAD to drift 5 commits behind GitHub, 6/29–7/3). Rollback reverts the CAPTURED patch SHA (`DEPLOY_SHA` from the commit step), never `HEAD`, because `autonomous_review.py` or a later commit may have advanced HEAD. Deploy success requires a literal `DEPLOY_OK` marker from the OCI ssh command; its absence means the pull failed and the restart was correctly skipped — do not report success.
 
+### DEPLOY TIMING — NOT gated on market hours (Rafael mandate 2026-07-19)
+
+**Fixes deploy WHEN THEY ARE READY and gated — never deferred to a market-closed window.** There is
+NO regular-trading-hours restriction on committing, pushing, restarting the OCI services, or deploying.
+The prior "defer the OCI restart to the next non-RTH window" convention is **REMOVED in full**: a ready,
+fully-gated fix ships immediately, including during RTH. A bug that is live during RTH is the *most*
+urgent to fix during RTH — not after the close. Do NOT tell Rafael to wait for market close, and do NOT
+mark a ready fix "restart deferred."
+
+This rule changes only the **timing** of deploy — every safety gate still applies (full patch sequence,
+cold-2nd, board, FINAL Gro+GAI preship on the exact diff). Operational note (not a blocker): a service
+restart runs the startup reconcile, which is verified benign/self-healing (reliability board 2026-07-19 —
+the position counter is corrected before the first trade and the exposure gates read the tracker directly).
+Prefer to land a restart between 5-minute `run_cycle` scans so it cannot interrupt an in-flight exit, but
+do NOT delay a ready fix to wait for market hours.
+
 ---
 
 ### Gro/GAI DIRECT API PROTOCOL — MANDATORY (Established S47e, 2026-06-03)
