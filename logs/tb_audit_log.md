@@ -8813,3 +8813,17 @@ preship reject (symbol-less grouping) resolved by adopting its suggested explici
 **PART B DEFERRED** to its own gated patch — 2-of-3 reject bundling; reliability seat proved B as
 designed is incomplete (broker._hold_state:238 re-fans-out get_open_orders on the submit→40310000
 path, unbounded by a loop-level budget). 6 conditions logged in handoff.
+
+## 2026-07-20 (session 2) — data/gex.py — actionable GEX PIN level (`4c657f7`)
+**Full Read Gate:** 538L, Explore verbatim. **Shipped+LIVE:** OCI DEPLOY_OK, HEAD=4c657f7, 4/4 active,
+_compute_pin runs on the box (synthetic centroid 745.0/conf 1.0). Pin computes at RTH open (cron RTH-only).
+**Change:** tautological flip → front-expiry OI-gamma centroid+wall+ATM-weighted confidence (self-describing
+dict, never bare number, "PIN not flip" caveat). raw_gex_m ×0.01 mislabel fixed (label ratio → scale-invariant).
+DISPLAY-ONLY (GEX_ENABLED=False; no sizing/gating impact — kelly reads only label). Root-find in S* deferred
+to next week behind offline checks (root = knife-edge at censored ATM strikes).
+**Gate:** statics py_compile/mypy/ruff clean + synthetic-chain tests (symmetric→spot, put-heavy→below,
+empty→none, full-ATM-censor→conf 0) + cold-2nd PASS 6/6 + FINAL preship gro=APPROVE gai=APPROVE (marker
+660a995c14d7). GAI 1st reject (front-expiry confidence inconsistency) REAL→fixed; 2nd reject (false-premise
+_pin_recs cross-call accumulation — it's function-local) → --evidence counter-prompt, not re-roll.
+**Board:** quant/options seat + GAI + Gro aligned on centroid+wall inside uncertainty envelope.
+**NEXT:** dashboard-card wiring (generate_dashboard.py); S1 rec-retention gate+ship; scanner tiering build.

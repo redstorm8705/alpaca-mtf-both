@@ -7,9 +7,59 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-20 interactive) — pick up here
+## ⏩ LATEST (2026-07-20 interactive, session 2) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ GEX ACTIONABLE PIN SHIPPED + LIVE (`4c657f7`, OCI DEPLOY_OK, HEAD=4c657f7, 4/4 services active,
+_compute_pin runs on the box).** Replaced the TAUTOLOGICAL gamma-flip (evaluated Γ once at live spot
+→ argmin nearest-spot crossing → ≈spot or null; null all 27 snapshots 7/20) with a censoring-ROBUST
+front-expiry OI-gamma CENTROID + max-|Γ·OI| WALL + ATM-weighted confidence, in `data/gex.py`
+`_compute_gex`/`_compute_pin`. Confidence = min(front-expiry near-spot capture, front-expiry ATM
+capture) → tanks to 0 when ATM censored (proven). Self-describing dict, NEVER a bare number, caveat
+"PIN not flip, OI T+1-stale". raw_gex_m ~100× mislabel fixed (×0.01; label is a ratio, scale-invariant).
+DISPLAY-ONLY (GEX_ENABLED=False; cold-2nd confirmed no sizing/gating impact — kelly reads only label).
+Auto-propagates via refresh_gex → gex_snapshot.json + gex_history.jsonl + log. Pin computes at RTH open
+(RTH-only cron). Gate: full read 538L + statics + synthetic tests + cold-2nd PASS 6/6 + preship
+gro+gai APPROVE (marker 660a995c14d7; GAI 1st reject = real front-expiry-confidence inconsistency →
+FIXED; 2nd reject = false-premise _pin_recs accumulation → --evidence counter-prompt, not re-roll).
+Design/board rationale: quant/options seat + GAI + Gro aligned on centroid+wall inside uncertainty
+envelope; ROOT-FIND in S* DEFERRED to next week behind offline discriminating checks (a root is a
+knife-edge at the censored ATM strikes — untrustworthy on the indicative feed).
+**⏩ NEXT for GEX:** wire the pin into the dashboard GEX card (`generate_dashboard.py` `_get_spy_levels`
+L106-118 + `_build_gex_section` L321-390 — add pin centroid/wall/conf cell; 1040L file → Explore read;
+own gate). Compute side already produces the pin daily.
+
+**🟡 S1 rec-retention (options_scanner.py) — DRAFTED + STATICS-CLEAN, UNCOMMITTED, gate pending.**
+`_persist_rec_history` appends every weekly+0DTE rec AND rejection to logs/options_recs_history.jsonl +
+options_rejections_history.jsonl BEFORE the 15-min os.replace, stamped code_version(git SHA)+config_hash;
+"—" sentinel→null. Insert at run_scan before os.replace. Helpers _code_version/_config_hash/_null_greeks/
+_persist_rec_history added (imports hashlib+subprocess). Working tree has the diff (stashed-safe). NEXT:
+cold-2nd + board/GAI + preship on options_scanner.py → ship. This is the substrate to SCORE the GEX pin
++ diagnose misses (e.g. SPY got no 0DTE rec 7/20 — almost certainly MAX_TRADE_DOLLARS_0DTE=$75 cap
+excluding SPY at ~$745, NOT score; a config call for Rafael).
+
+**📐 SCANNER TIERING — FULLY SCOPED (board design + Rafael decisions + Q2/Q4/Q6 BGG), BUILD PENDING.**
+See `logs/scanner_tiering_design_2026-07-20.md` (gitignored — local). Decisions: Q1 longest-TF-wins +
+always-show-all-3-horizons per row; Q3 display/quality view (augments not replaces bot gate, Invariant
+#1); Q5 expand universe (add XLE/XLF/XLV/XOM/JPM/LLY/UNH/IWM/GLD, trim redundant semi/crypto clusters
+for bot); Q7 ship on current weights, feature-importance re-weight = own gated project. BGG defaults
+(awaiting Rafael confirm): Q2 neutral bands 0.5/1.0/2.0 ATR₁₄ (SAT 2/4/8, NEUTRAL=|s|<0.25); Q4 triple
+star = all-3-same-sign AND mean|strength|≥0.50; Q6 collapsed-w-counts, triples auto-expanded+pinned
+cyan, "Signals only" toggle default ON. THREE CONTRADICTIONS found: "16pt"=really 19pt (c9 dead);
+scanner score is NOT the trigger (SPY 5min is, Invariant #1); "monthly" is net-new plumbing (TF stops
+at weekly). Build order: TF_MONTHLY plumbing → 3 horizon-state fns (completed-bars-only) → tier engine
+(pure fn, unit-tested) → direction×horizon UI → RS-vs-SPY (board #1 edge upgrade) → universe reconstitute.
+
+**📋 BGG EVALUATION QUEUE** (`logs/bgg_evaluation_queue_2026-07-20.md` — gitignored/local): financial-
+datasets MCP (QHM/forever-holds primary source — changes locked data-tier hierarchy = board vote), the
+10 data-library list (rank by edge÷cost), the session-script/ICT intraday model (test for edge vs
+curve-fit + Invariant-#1 conflict), macro/screener research prompts, NotebookLM-bridge workflows.
+
+**⏩⏩ EXACT NEXT: GEX dashboard-card wiring → S1 gate+ship → scanner tiering build (Q2/Q4/Q6 confirmed).**
+
+---
+### (2026-07-20 session 1 — earlier) — historical below
 
 **🛑 THE "ONE-LINE WIRING PATCH" IN THE 2026-07-19 BLOCK BELOW IS CANCELLED — DO NOT SHIP IT.**
 A fresh gate (RULE C-2/C-7, all voices re-run) proved it would have made naked positions MORE
