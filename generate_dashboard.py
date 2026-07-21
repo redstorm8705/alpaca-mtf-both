@@ -359,21 +359,30 @@ def _build_gex_section(gex_data: dict, open_pos: list) -> str:
         if not d or d.get("error"):
             continue
         label = d.get("label", "N/A")
-        flip  = d.get("flip_strike")
         spot  = d.get("spot")
         col   = _gex_colors.get(label, "#4a6a80")
-        if flip:
-            _flip_cell = (
-                f'${flip:,.0f}'
-                + (f' <span style="font-size:9px;color:var(--dim)">/ ${spot:,.0f} spot</span>'
-                   if spot else '')
-            )
+        # PIN (gamma-concentration centroid + wall + ATM-weighted confidence) — replaces the
+        # deprecated, null-prone zero-gamma flip (2026-07-20). Confidence colors the number so a
+        # low-confidence pin visibly reads "don't trust me": cyan ≥60%, yellow 30–60%, red <30%
+        # (ATM censored / thin data). Absent pin (old snapshot / kind=none) shows "— (low data)".
+        _pin  = d.get("pin") or {}
+        _cent = _pin.get("centroid")
+        _wall = _pin.get("wall")
+        _conf = _pin.get("confidence")
+        # A 0-confidence pin (ATM fully censored) is untrustworthy — render it as "low data",
+        # NOT a centroid the eye can anchor on. Only show a number when confidence > 0.
+        if _cent is not None and (_conf or 0) > 0:
+            _cc = ("#00e5ff" if (_conf or 0) >= 0.6 else "#ffd60a" if (_conf or 0) >= 0.3 else "#ff6b6b")
+            _spot_s = (f' <span style="font-size:9px;color:var(--dim)">/ ${spot:,.0f} spot</span>' if spot else '')
+            _wall_s = (f' <span style="font-size:9px;color:var(--muted)">· wall ${_wall:,.0f}</span>' if _wall is not None else '')
+            _conf_s = (f' <span style="font-size:9px;color:{_cc};font-weight:700">· {_conf:.0%}</span>' if _conf is not None else '')
+            _pin_cell = f'${_cent:,.0f}{_spot_s}{_wall_s}{_conf_s}'
         else:
-            _flip_cell = '<span style="color:#636680">—</span>'
+            _pin_cell = '<span style="color:#636680">— (low data)</span>'
         rows += (
             f'<tr><td style="color:var(--text);font-weight:700">{sym}</td>'
             f'<td><span style="color:{col};font-weight:700">{label}</span></td>'
-            f'<td style="text-align:right">{_flip_cell}</td></tr>'
+            f'<td style="text-align:right">{_pin_cell}</td></tr>'
         )
 
     if not rows:
@@ -382,8 +391,12 @@ def _build_gex_section(gex_data: dict, open_pos: list) -> str:
         '<div class="panel gex-card">'
         + _hdr.format(sub=_sub)
         + '<table><thead><tr><th>Symbol</th><th>Regime</th>'
-          '<th style="text-align:right">Flip / Spot</th></tr></thead>'
+          '<th style="text-align:right">Pin · Wall · Conf</th></tr></thead>'
         + f'<tbody>{rows}</tbody></table>'
+        + '<div style="padding:6px 16px;font-family:var(--mono);font-size:9px;color:#636680">'
+          'Pin = gamma-concentration centroid (front expiry) · Wall = peak-gamma strike · Conf = '
+          'ATM-weighted (low = ATM data censored). This is a PIN, NOT a zero-gamma flip and NOT a '
+          'trigger; OI is T+1-stale.</div>'
         + '</div>'
     )
 

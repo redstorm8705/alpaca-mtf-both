@@ -43,8 +43,10 @@ import os
 import sys
 import json
 import time
+import hashlib
 import logging
 import argparse
+import subprocess
 import numpy as np
 from pathlib import Path
 from datetime import datetime, date, timedelta
@@ -69,6 +71,101 @@ ROBINHOOD_TRADES  = LOGS_DIR / "robinhood_trades.json"
 OPTIONS_HTML      = BASE_DIR / "options.html"
 _VRP_CACHE_PATH   = BASE_DIR / "data" / "cache" / "vrp_cache.json"  # VIX tertile + VRP cache
 _DTE_LOCK_PATH    = BASE_DIR / "data" / "cache" / "dte_direction_lock.json"  # daily 0DTE direction lock
+# S1 — forward-only rec retention (GEX/0DTE accuracy evaluator, design 2026-07-19 Finding 4).
+# options_scan.json is os.replace-overwritten every 15 min, destroying the rec/rejection history
+# the accuracy evaluator needs. These durable JSONL logs are APPENDED (never overwritten) before
+# that replace, so recommendations AND their rejected-candidate denominator survive for scoring.
+# Both weekly and 0DTE recs are captured (each carries its own `mode` field for filtering).
+RECS_HISTORY_JSONL       = LOGS_DIR / "options_recs_history.jsonl"        # every emitted rec (weekly + 0DTE)
+REJECTIONS_HISTORY_JSONL = LOGS_DIR / "options_rejections_history.jsonl"  # the denominator (why a candidate was NOT recommended)
+
+# S1 config surface — the threshold/universe knobs that GOVERN which options get recommended.
+# The accuracy evaluator resets its evidence clock when this hash changes (design S4b tripwire):
+# tuning any of these is a new experiment, so recs logged under a different hash are a different
+# population and must not be pooled. Referenced by name via globals() so a missing/renamed knob
+# degrades to None rather than raising.
+_CONFIG_SURFACE_KEYS = (
+    "MIN_SCORE_ANY", "MIN_SCORE_HIGH", "MAX_TRADE_DOLLARS", "MAX_TRADE_DOLLARS_0DTE",
+    "LIMIT_SELL_MULT", "BAS_MAX_0DTE", "PREMIUM_LIMIT_CONDITIONAL",
+    "ZDTE_DELTA_TARGET", "ZDTE_DELTA_MIN", "ZDTE_DELTA_MAX",
+    "DELTA_TARGET_HIGH", "DELTA_TARGET_MOD", "DELTA_TARGET_SHORT",
+    "CORE_UNIVERSE", "CONDITIONAL_UNIVERSE", "ZDTE_UNIVERSE",
+)
+
+
+def _code_version() -> str:
+    """Short git SHA of the deployed scanner, or 'nogit' if unavailable. Never raises."""
+    try:
+        _sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(BASE_DIR), stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+        return _sha or "nogit"
+    except Exception:
+        return "nogit"
+
+
+def _config_hash() -> str:
+    """Stable 8-char hash of the rec-governing config surface (design S4b tripwire). Never raises."""
+    try:
+        _surface = {k: globals().get(k) for k in _CONFIG_SURFACE_KEYS}
+        return hashlib.sha256(
+            json.dumps(_surface, sort_keys=True, default=str).encode()
+        ).hexdigest()[:8]
+    except Exception:
+        return "nohash"
+
+
+def _null_greeks(rec: dict) -> dict:
+    """Return a shallow COPY with the '—' string sentinel (missing gamma/vega on the yfinance
+    path) replaced by None, so downstream isna()/float parsing works. Never mutates the live rec."""
+    out = dict(rec)
+    for _k in ("gamma", "vega"):
+        if out.get(_k) == "—":
+            out[_k] = None
+    return out
+
+
+def _persist_rec_history(weekly_recs: list, dte_recs: list, rejections: list, scan_now) -> None:
+    """S1 — append every rec (weekly + 0DTE) and every rejection to durable JSONL logs BEFORE
+    options_scan.json is os.replace-overwritten (which destroys them every 15 min). Each row is
+    stamped with a rec_id, scan_time, code_version (git SHA) and config_hash — the provenance
+    fields whose absence made the 2026-07-13..15 flip incident undiagnosable. Forward-only:
+    appends, never reconstructs. NEVER RAISES — a logging failure must not break a scan."""
+    try:
+        _cv, _ch = _code_version(), _config_hash()
+        _iso  = scan_now.isoformat()
+        _base = scan_now.strftime("%Y%m%dT%H%M%S")
+        _rows = []
+        for _i, _rec in enumerate(list(weekly_recs) + list(dte_recs)):
+            _row = _null_greeks(_rec)
+            _row["rec_id"]       = f"{_base}-{_row.get('mode', '?')}-{_row.get('symbol', '?')}-{_row.get('direction', '?')}-{_i}"
+            _row["scan_time"]    = _iso
+            _row["code_version"] = _cv
+            _row["config_hash"]  = _ch
+            _rows.append(_row)
+        if _rows:
+            with open(RECS_HISTORY_JSONL, "a") as _rf:
+                for _row in _rows:
+                    _rf.write(json.dumps(_row, default=str) + "\n")
+                _rf.flush()
+                os.fsync(_rf.fileno())
+        if rejections:
+            with open(REJECTIONS_HISTORY_JSONL, "a") as _jf:
+                for _j, _rej in enumerate(rejections):
+                    _rr = dict(_rej)
+                    _rr["rec_id"]       = f"{_base}-rej-{_rr.get('mode', 'weekly')}-{_rr.get('symbol', '?')}-{_j}"
+                    _rr["scan_time"]    = _iso
+                    _rr["code_version"] = _cv
+                    _rr["config_hash"]  = _ch
+                    _jf.write(json.dumps(_rr, default=str) + "\n")
+                _jf.flush()
+                os.fsync(_jf.fileno())
+        logger.info("S1: persisted %d recs + %d rejections to history (cv=%s cfg=%s)",
+                    len(_rows), len(rejections), _cv, _ch)
+    except Exception as _e:
+        logger.warning("S1 rec-history persist failed (non-fatal): %s", _e)
+
 
 ET = ZoneInfo("America/New_York")
 PT = ZoneInfo("America/Los_Angeles")
@@ -1168,6 +1265,12 @@ def run_scan() -> dict:
         "vix_tertile":        vix_tertile,
         "dte_lock_time":      dte_lock_time,   # HH:MM ET when direction was set, or None
     }
+
+    # S1 — persist the rec + rejection history to durable JSONL BEFORE the os.replace below
+    # overwrites options_scan.json (Finding 4: the scan already computes this wide event and then
+    # destroys it every 15 min). Forward-only substrate for the GEX/0DTE accuracy evaluator; the
+    # helper never raises, so a logging failure cannot break the scan or the JSON write.
+    _persist_rec_history(weekly_recs, dte_recs, combined_rejections, _scan_now)
 
     # Write JSON
     tmp = OPTIONS_SCAN_JSON.with_suffix(".json.tmp")
