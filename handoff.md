@@ -64,11 +64,34 @@ this patch): move the Slack POST off the cycle thread — the throttle cuts volu
 NOT bound a cold-start burst of simultaneous first-pages (restart w/ 5 naked → 5×~4s blocking).**
 ~~`PROTECTION_UNKNOWN` de-throttle~~ — FIXED 2026-07-20 (dedicated `_unknown_page_streak`).
 
-**`PRE-WIRE-BLOCKER-2: Collapse N per-symbol get_open_orders into 1 account-wide fetch`**
-`broker.get_open_orders` does NOT filter server-side (fetches all, filters in Python), so N
-positions = N full-account REST calls × 15s socket timeout, against a 12-min watchdog on a cycle
-already running 7.4–8.8 min. Reliability seat measured 11.6 min at 5 positions; deterministic
-watchdog trip at 10. Add a wall-clock budget inside the sweep too.
+**`✅ PRE-WIRE-BLOCKER-2 PART A` — SHIPPED + LIVE + VERIFIED 2026-07-20 (`3f4f72e`, OCI
+DEPLOY_OK, HEAD=3f4f72e, 4/4 services active, dashboard 200, 45/45 tests green ON THE BOX).**
+Collapsed N per-symbol `get_open_orders(symbol)` calls into ONE account-wide `get_open_orders()`
+fetch + in-memory group-by-symbol (`_orders_by_symbol.get(symbol, [])`). `get_open_position`
+stays per-symbol. LOAD-BEARING: a None fetch fails-safe EVERY symbol (never `_all_orders or []`);
+`if _all_orders is None` precedes every `.get()`. Symbol-less orders dropped (GAI preship fix).
+Semantics-preserving; NO change to placement/cover/4-way-sentinel. INERT (zero call sites). Gate:
+full read 585L + 10-pt + board reliability+exec-risk APPROVE + statics + cold-2nd PASS + 45/45
+(4 new: 1-fetch-not-N, per-symbol slicing, None-fails-all, symbol-less-dropped) + FINAL preship
+Gro APPROVE + GAI APPROVE (marker 5f3c5f6bb005) = **FULL BGG per Rafael**.
+
+**`PRE-WIRE-BLOCKER-2 PART B: wall-clock sweep budget` — DEFERRED to its own gated patch.**
+2-of-3 board voices REJECT bundling B with A (exec-risk: a mid-sweep break manufactures a TAIL
+naked-leak — the last positions in iteration order, which most need a stop placed, get skipped —
+plus fixed-order iteration = starvation; GAI: defense-in-depth fast-follow). Reliability seat wants
+it but flagged B AS DESIGNED IS INCOMPLETE: `broker._hold_state` (broker.py:238) ALSO re-fans-out
+`get_open_orders(symbol)` on the submit→40310000 path, which a loop-level budget does NOT bound —
+so on a many-visibility-lag day the O(N) broker-side fetch fan-out survives PART A. B needs its own
+design pass: (1) budget ANCHORED TO THE WATCHDOG DEADLINE (pass cycle_start+WATCHDOG−margin, NOT
+now+budget-from-entry — reliability: 480/600 from entry let the watchdog fire first; use ~300s or
+deadline-anchored); (2) `break` NOT `return` (return skips the prune L515-527 + the unconditional
+summary log → unbounded dict growth + observability blindness); (3) SEED `open_symbols =
+set(open_trades.keys())` up front from a SINGLE snapshot (else early-break prune wrongly drops
+un-visited symbols' throttle/streak keys); (4) ROTATE/prioritize iteration (fixed dict order + fixed
+break point = same tail starved every slow sweep); (5) truncation marker in summary+log+HARNESS
+(un-visited symbols absent from all buckets breaks the harness's one-bucket invariant); (6) reject
+"continue-without-submitting" (latency is in the READS, not submits). Also worth folding: bound the
+broker-side `_hold_state` fan-out. Design refs: prior-session scratchpad `blocker2_design.md`.
 
 **`✅ PRE-WIRE-BLOCKER-3` — SHIPPED + LIVE + VERIFIED 2026-07-20 (`750c52c`, OCI DEPLOY_OK,
 4/4 services active, dashboard 200, 54/54 tests green ON THE BOX).** `broker._hold_state(symbol,
@@ -91,7 +114,7 @@ the `07bac0b` reconciler sync (comment now points at `_unknown_page_streak`).
 **⚠️ 1 PRE-WIRE BLOCKER REMAINS (module still MUST NOT be wired until it lands):**
 BLOCKER-2 (collapse N per-symbol `get_open_orders` into 1 account-wide fetch). BLOCKER-1 and
 BLOCKER-3 shipped 2026-07-20 (see the ✅ blocks above). Also fold in the BLOCKER-1 Slack-off-thread
-follow-up + the BLOCKER-3 wiring residuals when wiring. **⏩ NEXT ACTIONABLE: PRE-WIRE-BLOCKER-2.**
+follow-up + the BLOCKER-3 wiring residuals when wiring. **⏩ NEXT ACTIONABLE: PRE-WIRE-BLOCKER-2 PART B (own gated design pass — see conditions above), OR the GEX/0DTE accuracy evaluator (design BGG-aligned, awaiting Rafael APPROVE/REJECT). All 3 original pre-wire blockers' PART-A/core work now shipped; PART B is the last item before the module can be WIRED.**
 
 **⏩ THEN wire** — shadow (`place=False`) FIRST, and the call sites must include the **5 gaps**
 (L242 kill-switch, L431 premarket, L892, L1011 EOD, L1046 blackout — kill-switch and blackout

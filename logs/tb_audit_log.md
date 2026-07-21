@@ -8789,3 +8789,27 @@ GAI) + FINAL preship GAI APPROVE (diff-misread reject → counter-prompt) + Gro 
 Rafael-authorized per 2026-07-07 rule). OCI DEPLOY_OK, 4/4 active, dashboard 200. Follow-up before
 wiring: Slack POST off cycle thread (cold-start first-page burst). 2 of 3 pre-wire blockers closed;
 BLOCKER-2 (N→1 order fetch) remains.
+
+## 2026-07-20 — execution/stop_protection.py — PRE-WIRE-BLOCKER-2 PART A (`3f4f72e`)
+
+**Full Read Gate:** 585L, 2 chunks, direct Read (current post-BLOCKER-1 content).
+**Shipped + deployed:** OCI DEPLOY_OK, HEAD=3f4f72e, 4/4 services active, dashboard 200,
+harness 45/45 green ON THE BOX; runtime-verified single account-wide fetch + None-before-.get
+ordering + symbol-less-drop; still INERT (zero production call sites — no runtime change).
+
+**Change:** N per-symbol `get_open_orders(symbol)` → 1 account-wide `get_open_orders()` + group by
+symbol. `get_open_position` stays per-symbol. None fetch fails-safe the WHOLE book (never
+`_all_orders or []`; `if _all_orders is None` before every `.get()`). Symbol-less orders dropped.
+Semantics-preserving; no placement/cover/4-way-sentinel change.
+
+**RC:** RC-1 PASS (datetime.now(ET) only) · RC-2 PASS (no file I/O) · RC-3 PASS (no bare pass).
+
+**Gate (FULL BGG per Rafael):** board design reliability+exec-risk APPROVE PART A (both REJECT
+bundling PART B) · statics py_compile+mypy --warn-unreachable+ruff clean · cold-2nd PASS (6/6 axes;
+None-collapse proven impossible) · harness 45/45 (4 new PART-A tests) · FINAL preship gro=APPROVE
+gai=APPROVE on exact diff (marker 5f3c5f6bb005 == index sha — genuine staged audit). GAI's first
+preship reject (symbol-less grouping) resolved by adopting its suggested explicit skip, not a re-roll.
+
+**PART B DEFERRED** to its own gated patch — 2-of-3 reject bundling; reliability seat proved B as
+designed is incomplete (broker._hold_state:238 re-fans-out get_open_orders on the submit→40310000
+path, unbounded by a loop-level budget). 6 conditions logged in handoff.
