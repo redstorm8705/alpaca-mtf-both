@@ -1,0 +1,82 @@
+--- a/execution/entry_logic.py	2026-07-16 22:02:21.224686011 +0000
++++ b/execution/entry_logic.py	(patched)
+@@ -1109,23 +1109,25 @@
+                 )
+
+             if dollar_cap == 0:
+                 logger.info(f"[{symbol}] Score {score}/12 — no allocation. Skipping.")
+                 continue
+
+             # H-8: Kelly scaling on top of linear allocation
+             try:
+-                _portfolio_val = get_portfolio_value()
+-                kelly_risk_pct = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)
+-                kelly_scale    = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
+-                dollar_cap     = dollar_cap * kelly_scale
++                _portfolio_val   = get_portfolio_value()
++                kelly_risk_pct   = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)
++                _raw_kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
++                kelly_scale      = min(_raw_kelly_scale, 1.0)
++                dollar_cap       = dollar_cap * kelly_scale
+                 logger.debug(
+-                    f"[{symbol}] Kelly scale: {kelly_scale:.3f} "
+-                    f"({kelly_risk_pct:.2%} vs {config.MAX_PORTFOLIO_RISK_PCT:.2%} baseline)"
++                    f"[{symbol}] Kelly scale: {kelly_scale:.3f}"
++                    + (f" (clamped from {_raw_kelly_scale:.3f})" if _raw_kelly_scale > 1.0 else "")
++                    + f" ({kelly_risk_pct:.2%} vs {config.MAX_PORTFOLIO_RISK_PCT:.2%} baseline)"
+                 )
+             except Exception as _ke:
+                 logger.warning(f"[{symbol}] Kelly scaling failed — using base position size: {_ke}")
+
+             # ── AB-3: TQI → Kelly confidence demotion ────────────────────────
+             # López de Prado: rolling TQI < 40/100 (10-trade avg) indicates model
+             # is in a degraded regime — step Kelly confidence down 20% per σ below 50.
+             # Thorp's feedback-loop guard: require ≥10 trades before demoting
+
+PATCH METADATA
+==============
+File:         execution/entry_logic.py
+Bug class:    SIZING — Kelly scale unclamped (P1)
+BASE_COMMIT:  18515f518fc95795e8ad3502c4a4dee6857887c2
+FILE_SHA256:  2d6575a39bc3191ae60702ba6c3b2d8799064bb1d2ca154a45d91b241db76d59
+Session:      2026-07-21 autonomous nightly
+Branch:       claude/youthful-wozniak-slwohl
+Status:       AWAITING Rafael APPROVE + FINAL Gro/GAI pre-ship audit
+
+CHANGE SUMMARY
+==============
+Line 1119 (before): kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
+Line 1119 (after):  _raw_kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
+                    kelly_scale      = min(_raw_kelly_scale, 1.0)
++ 2 log lines: show pre-clamp raw scale when clamping fires (observability)
+
+IMPACT
+======
+- Kelly can ONLY reduce sizing from linear conviction baseline; never amplify it
+- Worst-case paper profile: scale was 1.125 → now 1.0 (95.6% equity → 85% equity for score-11 long)
+- Warmup path: mathematically guaranteed clamp is a no-op (warmup always returns ≤ MAX_PORTFOLIO_RISK_PCT)
+- VOTE-5, TQI, TSMOM: all unaffected (downstream, independent)
+
+GATES CLEARED (autonomous session — Step 4b)
+=============================================
+[x] Full read: 1735 lines, 6 chunks — COMPLETE
+[x] 10-point audit + RC-1 through RC-8 — COMPLETE (see logs/tb_audit_log.md)
+[x] Board vote 3/3 PASS
+    - Agent A (Protocol Parser): PASS
+    - Agent B (Red Teamer): PASS — non-blocking Q6 log flag incorporated into patch
+    - Agent C (Quant Risk): PASS
+[x] Static analysis (py_compile + mypy + ruff): ALL PASS on both original and patched versions
+[x] Cold second-agent logic review: PASS
+
+GATES STILL REQUIRED (Rafael session)
+======================================
+[ ] Gro + GAI external audit of EXACT FINAL DIFF (see pending_gro_gai_2026-07-21_entry_logic.json)
+[ ] Rafael APPROVE
+[ ] FINAL Gro + GAI pre-ship audit of exact diff (same prompt as above)
+[ ] Apply patch, commit, push, OCI git pull --ff-only + restart
+
+HOW TO APPLY
+============
+cd /path/to/repo
+patch -p1 < logs/pending_patch_2026-07-21_entry_logic.patch
+# (or apply the 4-line change manually at entry_logic.py:1116-1128)

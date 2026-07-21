@@ -1,0 +1,42 @@
+{
+  "created": "2026-07-21",
+  "session": "autonomous nightly",
+  "target_file": "execution/entry_logic.py",
+  "bug_class": "SIZING — Kelly scale unclamped (P1)",
+  "base_commit": "18515f518fc95795e8ad3502c4a4dee6857887c2",
+  "file_sha256": "2d6575a39bc3191ae60702ba6c3b2d8799064bb1d2ca154a45d91b241db76d59",
+  "mode": "PATCH_VALIDATION",
+
+  "gro_persona": "You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging.",
+  "gai_persona": "You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed.",
+
+  "same_prompt_to_both": true,
+
+  "prompt": "AUDIT REQUEST — execution/entry_logic.py — Kelly scale clamp fix\n\nYou are performing a pre-ship patch validation audit. This audit gate runs BEFORE any code is applied. Your verdict (APPROVE or REJECT) determines whether this patch ships.\n\nORIGINAL INTENT:\nThe Kelly scaling block at entry_logic.py:1115-1128 computes `kelly_scale = kelly_risk_pct / MAX_PORTFOLIO_RISK_PCT`. When Kelly's recommended risk% exceeds the baseline (e.g., during a good run of trades), this ratio exceeds 1.0, causing `dollar_cap` to be multiplied ABOVE the conviction-linear allocation ceiling. With paper profile MAX_PORTFOLIO_RISK_PCT=0.04 and KELLY_MAX_RISK_PCT=0.045, the worst-case is scale=1.125, producing 85% × 1.125 = 95.6% of equity in a single long position. With default globals (MAX_PORTFOLIO_RISK_PCT=0.02, KELLY_MAX_RISK_PCT=0.06), worst-case is scale=3.0, producing 255% of equity notional. The fix adds `min(..., 1.0)` to cap the scale, ensuring Kelly only reduces from the linear allocation ceiling, never amplifies it.\n\nEXACT DIFF:\n```diff\n-                _portfolio_val = get_portfolio_value()\n-                kelly_risk_pct = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)\n-                kelly_scale    = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)\n-                dollar_cap     = dollar_cap * kelly_scale\n+                _portfolio_val   = get_portfolio_value()\n+                kelly_risk_pct   = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)\n+                _raw_kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)\n+                kelly_scale      = min(_raw_kelly_scale, 1.0)\n+                dollar_cap       = dollar_cap * kelly_scale\n                 logger.debug(\n-                    f\"[{symbol}] Kelly scale: {kelly_scale:.3f} \"\n-                    f\"({kelly_risk_pct:.2%} vs {config.MAX_PORTFOLIO_RISK_PCT:.2%} baseline)\"\n+                    f\"[{symbol}] Kelly scale: {kelly_scale:.3f}\"\n+                    + (f\" (clamped from {_raw_kelly_scale:.3f})\" if _raw_kelly_scale > 1.0 else \"\")\n+                    + f\" ({kelly_risk_pct:.2%} vs {config.MAX_PORTFOLIO_RISK_PCT:.2%} baseline)\"\n                 )\n```\n\nFULL CONTEXT — H-8 sizing block (entry_logic.py:1092-1155):\n```python\n        if True:\n            # Rank 2: conviction sizing — linear\n            #   score 10  → ½ size  (42.5%)\n            #   score 11+ → full    (85%)\n            _pct_min  = config.INTRA_ALLOCATION_PCT * 0.5   # 42.5%\n            _pct_max  = config.INTRA_ALLOCATION_PCT          # 85%\n            if score < _main._LINEAR_SCORE_MIN:\n                dollar_cap = 0.0\n            elif score >= _main._LINEAR_SCORE_MAX:\n                dollar_cap = risk.portfolio_value * _pct_max\n            else:\n                _fraction  = (score - _main._LINEAR_SCORE_MIN) / (_main._LINEAR_SCORE_MAX - _main._LINEAR_SCORE_MIN)\n                _pct       = _pct_min + _fraction * (_pct_max - _pct_min)\n                dollar_cap = risk.portfolio_value * _pct\n\n            if dollar_cap == 0:\n                continue\n\n            # H-8: Kelly scaling on top of linear allocation\n            try:\n                _portfolio_val   = get_portfolio_value()\n                kelly_risk_pct   = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=score)\n                _raw_kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)\n                kelly_scale      = min(_raw_kelly_scale, 1.0)   # PATCHED LINE\n                dollar_cap       = dollar_cap * kelly_scale\n                logger.debug(\n                    f\"[{symbol}] Kelly scale: {kelly_scale:.3f}\"\n                    + (f\" (clamped from {_raw_kelly_scale:.3f})\" if _raw_kelly_scale > 1.0 else \"\")\n                    + f\" ({kelly_risk_pct:.2%} vs {config.MAX_PORTFOLIO_RISK_PCT:.2%} baseline)\"\n                )\n            except Exception as _ke:\n                logger.warning(f\"[{symbol}] Kelly scaling failed — using base position size: {_ke}\")\n\n            # ── AB-3: TQI → Kelly confidence demotion (downstream, independent)\n            if len(kelly._tqi_history) >= 10:\n                _tqi_avg = sum(kelly._tqi_history) / len(kelly._tqi_history)\n                if _tqi_avg < 50:\n                    _tqi_kelly_adj = max(0.5, 1.0 - 0.20 * ((50 - _tqi_avg) / stdev_or_fallback))\n                    dollar_cap *= _tqi_kelly_adj\n```\n\nKELLY.PY RETURN RANGE (confirmed from source):\n- kelly.get_risk_pct() always returns in [KELLY_MIN_RISK_PCT, KELLY_MAX_RISK_PCT]\n- KELLY_MIN_RISK_PCT = 0.0075 (0.75%)\n- KELLY_MAX_RISK_PCT = 0.06 (6%) default, 0.045 (4.5%) paper aggressive profile\n- MAX_PORTFOLIO_RISK_PCT = 0.02 (2%) default, 0.04 (4%) paper profile\n- Warmup path: always returns ≤ MAX_PORTFOLIO_RISK_PCT (mathematically guaranteed)\n\nQUESTIONS FOR YOUR AUDIT:\n1. Is `min(_raw_kelly_scale, 1.0)` the correct clamp direction? (min vs max, upper vs lower bound)\n2. Does the clamp create any new failure scenario not present in the original code?\n3. Does the log condition `_raw_kelly_scale > 1.0` correctly identify when clamping fires?\n4. Are there any interactions with downstream sizing steps (TQI demotion, TSMOM, VOTE-3, VOTE-5) that the patch breaks?\n5. Does the patch correctly handle the case where kelly_risk_pct < MAX_PORTFOLIO_RISK_PCT (Kelly says reduce — should behave identically to pre-patch)?\n\nReturn: APPROVE or REJECT with specific technical reasoning.",
+
+  "curl_commands": {
+    "gro": "source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env && curl https://api.groq.com/openai/v1/chat/completions -H \"Authorization: Bearer $GROQ_API_KEY\" -H \"Content-Type: application/json\" -d '{\"model\":\"llama-3.3-70b-versatile\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging.\"},{\"role\":\"user\",\"content\":\"AUDIT REQUEST — execution/entry_logic.py — Kelly scale clamp fix\\n\\nYou are performing a pre-ship patch validation audit...\"}],\"max_tokens\":4096}'",
+    "gai": "source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env && curl \"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY\" -H \"Content-Type: application/json\" -d '{\"contents\":[{\"parts\":[{\"text\":\"You are Head of Quant Engineering at a systematic hedge fund...\\n\\nAUDIT REQUEST — execution/entry_logic.py — Kelly scale clamp fix...\"}]}],\"generationConfig\":{\"maxOutputTokens\":8192}}'"
+  },
+
+  "gates_cleared": {
+    "full_read": "1735 lines, 6 chunks",
+    "audit_10pt": "COMPLETE — see logs/tb_audit_log.md",
+    "rc_classes": "RC-1 through RC-8 all PASS",
+    "board_vote": "3/3 PASS — A(Protocol Parser), B(Red Teamer), C(Quant Risk)",
+    "static_analysis": {
+      "py_compile": "PASS (both original and patched)",
+      "mypy": "PASS (both original and patched)",
+      "ruff": "PASS (both original and patched)"
+    },
+    "cold_second_agent": "PASS — all 4 checks (logic inversion, boundary, missing conditions, branch completeness)"
+  },
+
+  "gates_remaining": [
+    "Gro + GAI external audit of EXACT FINAL DIFF (this file)",
+    "Rafael APPROVE",
+    "FINAL Gro + GAI pre-ship audit of exact diff (same prompt as this file)",
+    "Apply: patch -p1 < logs/pending_patch_2026-07-21_entry_logic.patch",
+    "Commit + push + OCI git pull --ff-only + restart"
+  ]
+}

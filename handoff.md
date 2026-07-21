@@ -68,6 +68,11 @@ curve-fit + Invariant-#1 conflict), macro/screener research prompts, NotebookLM-
 
 **⏩⏩ EXACT NEXT: GEX dashboard-card wiring → S1 gate+ship → scanner tiering build (Q2/Q4/Q6 confirmed).**
 
+**[2026-07-21 autonomous nightly]** RTH-chain draft complete for P1 Kelly clamp bug (`execution/entry_logic.py:1119`). Full patch sequence through Step 5 (pre-proposal gates) all cleared: full read 1735L, 10-pt audit + RC-1 through RC-8 (all PASS), board 3/3 PASS, static analysis ALL PASS, cold-2nd PASS. Two files committed to `claude/youthful-wozniak-slwohl`:
+- `logs/pending_patch_2026-07-21_entry_logic.patch` — exact diff, apply-ready
+- `logs/pending_gro_gai_2026-07-21_entry_logic.json` — Gro/GAI prompt package
+**NEXT (Rafael session):** run Gro/GAI external audit from the JSON file → get APPROVE → Rafael APPROVE → FINAL Gro/GAI preship audit → apply → ship. All other findings from tb_audit_log (Finding #2, #3) were already verified as existing queued items — nothing else was actionable autonomously tonight.
+
 ---
 ### (2026-07-20 session 1 — earlier) — historical below
 

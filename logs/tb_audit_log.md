@@ -1,6 +1,63 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-07-21 — execution/entry_logic.py — 10-Point Audit + RC-1 through RC-8 (Autonomous Session)
+
+**Full read complete: 1735 lines in 6 direct-read chunks (offset 0–1735)**
+
+### 10-Point Audit
+
+| Point | Check | Result |
+|-------|-------|--------|
+| 1 | Static analysis (py_compile, mypy, ruff) | PASS — zero errors, zero violations |
+| 2 | Trade path trace: execute_entries() is signal→size→order→fill. Path verified: gates (halt/clock/conviction/BoD-1/BoD-2) → price+ATR → stop/target → sizing (conviction-linear + Kelly H-8 + TQI + TSMOM + earnings + VOTE-3 + FVG + leveraged ring-fence) → order submit → 3× fill poll → record_entry | PASS |
+| 3 | Adversarial scenarios: Kelly scale >1.0 (CONFIRMED BUG at L1119), score at boundary, zero ATR (handled L871-878), empty daily_df (handled L882-890), negative kelly_risk_pct (handled by kelly.py's [KELLY_MIN_RISK_PCT, KELLY_MAX_RISK_PCT] clamp) | **BUG FOUND: L1119 — unclamped kelly_scale can exceed 1.0** |
+| 4 | Full top-to-bottom read — all 1735 lines read across 6 chunks | PASS |
+| 5 | Cross-references: fetch_bars, get_latest_trade, kelly.get_risk_pct, risk.get_stop_and_target, tracker.record_entry — all confirmed present | PASS |
+| 6 | Conflicting execution directions — none found | PASS |
+| 7 | Redundancy scan: `if True:` at L1092 is intentional (de-indent guard per board comment); no dead code issues | PASS |
+| 8 | State persistence: _write_confirm_gate_json() → write_confirm_gate() → _atomic_write() (tmp→replace) — atomic | PASS |
+| 9 | Data source tier: fetch_bars (T1), get_latest_trade (T1), get_latest_quote (T1), get_cached_earnings_dates (T2 FMP). No raw yfinance for equities | PASS |
+| 10 | Timezone: all datetime.now() calls use ET (L803, L1398, L1558). All RC-1 PASS | PASS |
+
+### RC Class Checks
+
+| RC | Class | Result | Evidence |
+|----|-------|--------|----------|
+| RC-1 | Naive datetime | PASS | L803, L1398, L1558 all use `datetime.now(ET)` |
+| RC-2 | CWD-relative path | PASS | Writes via `state.persistence.write_confirm_gate()` → `_atomic_write()` with absolute path |
+| RC-3 | Silent exception | PASS | All except blocks log at warning/error level; no bare pass; L831, L977, L1125, L1141, L1366 all log |
+| RC-4 | Estimated exit price | PASS | #12c exit (L704-748): 3× retry for fill_price, explicit warning on fallback. Entry fill poll (L1332-1367): same 3× retry pattern |
+| RC-5 | Non-atomic write | PASS | write_confirm_gate() → _atomic_write() (tmp→replace confirmed in state/persistence.py) |
+| RC-6 | Wrong API field name | PASS | filled_avg_price (L1340, L716) is correct Alpaca fill field (confirmed prior sessions) |
+| RC-7 | Zero-share sizing | PASS | L1244-1247: max(1, _sized) only when _can_afford_one; L1261-1262 hard cap by max_shares_by_value |
+| RC-8 | Unbounded scan buffer | PASS | _rc8_clear_buffers() called at all non-entry exit paths (L608, 616, 793, 828, 877, 889, 960, 967, 995, 1036, 1068, 1082, 1221, 1303, 1316, 1322, 748) |
+
+### PRIMARY FINDING — P1 (OPEN)
+
+**BUG-KELLY-CLAMP: execution/entry_logic.py:1119 — Kelly scale unclamped, can exceed 1.0**
+
+```python
+# Line 1119 (BEFORE):
+kelly_scale = kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)
+# Line 1119 (AFTER — proposed fix):
+kelly_scale = min(kelly_risk_pct / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001), 1.0)
+```
+
+**Impact:** `kelly.get_risk_pct()` is clamped to [KELLY_MIN_RISK_PCT=0.75%, KELLY_MAX_RISK_PCT=6.0%]. With `MAX_PORTFOLIO_RISK_PCT=0.02` (2%), the worst-case unclamped scale = 6%/2% = 3.0x. A score-11+ signal receiving 85% linear allocation gets tripled to 255% equity (capped by VOTE-5 only if sigma_20d data available), effectively neutering CV=2.85 penalty and all downstream multipliers. Fix: `min(..., 1.0)` ensures Kelly only scales DOWN from linear allocation baseline.
+
+**Board vote — 3/3 PASS:**
+- Agent A (Protocol Parser): PASS — all 10 protocol checks clear; RTH-chain confirmed; draft-only posture correct
+- Agent B (Red Teamer): PASS — all 8 adversarial scenarios checked; Q6 non-blocking flag (log clarity) incorporated into patch via `_raw_kelly_scale` log; warmup no-op confirmed by warmup code structure; no race condition
+- Agent C (Quant Risk): PASS — Kelly-as-cap-only is architecturally correct; VOTE-5 is unreliable fallback; 1.0 is the correct clamp value; min(x,1.0) makes Kelly a reducing-only operator consistent with all other multipliers
+
+**Static analysis (py_compile + mypy + ruff): ALL PASS** on both original and patched versions.
+
+**Cold second-agent logic review: PASS** — all 4 checks (logic inversion, boundary, missing conditions, branch completeness).
+
+**Patch status:** DRAFT — pending Gro/GAI external audit + Rafael APPROVE + FINAL Gro/GAI pre-ship. Files: `logs/pending_patch_2026-07-21_entry_logic.patch`, `logs/pending_gro_gai_2026-07-21_entry_logic.json`.
+
+---
 ## 2026-07-13 — QHM dip-add: OPTION-C stop-safe add (wash-trade fix) — SHIPPED
 
 The activated dip-add couldn't place a buy: each QHM position holds a GTC sell-stop and Alpaca blocks
