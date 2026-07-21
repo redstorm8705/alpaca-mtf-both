@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-07-20",
+  "run_ts": "2026-07-20T10:30:02.018831-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "STRESSED": 2,
+      "ELEVATED": 28
+    },
+    "last_score": 26,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 46,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-20 16:24:59,423 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=8421s) \u2014 T4 yfinance ^VIX fallback=17.5. _vix_confirmed=F",
+      "2026-07-20 16:25:00,276 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=162.5430. No prior close available \u2014 JPY scoring 0",
+      "2026-07-20 16:25:40,151 | WARNING  | strategy.run_cycle | [ANOMALY-2] [MSFT] confirm_gate=3 scans but no entry \u2014 risk.open_positions=5 vs tracker=5 | ",
+      "2026-07-20 16:25:40,151 | WARNING  | strategy.run_cycle | [ANOMALY-2] [UBER] confirm_gate=4 scans but no entry \u2014 risk.open_positions=5 vs tracker=5 | ",
+      "2026-07-20 16:25:40,151 | WARNING  | strategy.run_cycle | [ANOMALY-2] [NFLX] confirm_gate=13 scans but no entry \u2014 risk.open_positions=5 vs tracker=5 |"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}

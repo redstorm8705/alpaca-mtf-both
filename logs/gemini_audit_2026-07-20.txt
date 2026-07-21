@@ -1,0 +1,111 @@
+Nightly Gemini Audit — 2026-07-20
+Model: gemini-2.5-flash | Verdict: WARN
+Modified files: ['run_ftd.py', 'trade_logger.py', 'test_ui_tokens.py', 'run_premarket_gate.py', 'audit_final.py', 'live_data_writer.py', 'earnings_preflight.py', 'run_macro_regime.py', 'nightly_audit.py', 'weekly_field_gate.py', 'ui_tokens.py', 'run_ledger_sync.py', 'reconcile_eod.py', 'scan_to_html.py', 'main.py', 'generate_dashboard.py', 'weekly_review.py', 'alerts.py', 'autonomous_review.py', 'preflight_simulation.py', 'config.py', 'midday_audit.py', 'auto_ai_audit.py', 'compare_logs.py', 'weekly_perf_audit.py', 'audit_signals.py', 'autonomous_patch_generator.py', 'backtest_12pt.py', 'weekly_postmortem.py', 'options_scanner.py', 'log_fill.py', 'run_market_top.py', 'run_movers.py', 'monthly_review.py', 'scripts/gex_synthetic_probe.py', 'scripts/audit_slack.py', 'scripts/score16_aggregator.py', 'scripts/preflight_sim.py', 'scripts/session_audit_digest.py', 'scripts/cron_tz_wrapper.py', 'scripts/sync_reports.py', 'scripts/gex_daily_audit.py', 'scripts/gex_flip_spot_regression.py', 'scripts/phantom_fill_audit.py', 'data/fmp_client.py', 'data/fetcher.py', 'data/bar_cache.py', 'data/gex.py', 'data/sectors.py', 'data/alpaca_data.py', 'data/premarket.py', 'data/market_breadth.py', 'data/__init__.py', 'indicators/macd.py', 'indicators/rsi.py', 'indicators/vwap.py', 'indicators/moving_averages.py', 'indicators/momentum.py', 'indicators/__init__.py', 'strategy/confluence.py', 'strategy/run_cycle.py', 'strategy/delta_shadow.py', 'strategy/volatility_regime.py', 'strategy/signal_generator.py', 'strategy/trend_filter.py', 'strategy/scoring.py', 'strategy/__init__.py', 'strategy/movers/strategy.py', 'strategy/movers/scanner.py', 'strategy/movers/__init__.py', 'reporting/metrics.py', 'reporting/pnl_ledger.py', 'reporting/__init__.py', 'execution/fill_helpers.py', 'execution/risk_manager.py', 'execution/portfolio_tracker.py', 'execution/broker.py', 'execution/state_io.py', 'execution/kelly.py', 'execution/entry_logic.py', 'execution/stop_protection.py', 'execution/forever_hold_manager.py', 'execution/lifecycle.py', 'execution/ownership_guard.py', 'execution/orphan_manager.py', 'execution/fifo_pnl.py', 'execution/param_engine.py', 'execution/fill_reconciler.py', 'execution/gtc_manager.py', 'execution/exit_logic.py', 'execution/trade_engine.py', 'execution/quarterly_hold_manager.py', 'execution/__init__.py', 'monitoring/watchdog.py', 'monitoring/__init__.py', 'events/handlers.py', 'events/news_monitor.py', 'events/catalyst_engine.py', 'events/macro_risk_index.py', 'events/calendar.py', 'events/earnings_fetcher.py', 'events/__init__.py', 'research/fifo_reconcile.py', 'research/edge_fifo_prototype.py', 'research/ic_engine.py', 'tests/test_reconcile_eod.py', 'tests/test_stop_protection.py', 'state/persistence.py', 'state/__init__.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+
+*   **ANOMALY-2 messages for MSFT and MSTR**: `strategy.run_cycle` | `confirm_gate` variable
+    *   **Description**: Repeated warnings (e.g., `[ANOMALY-2] [MSFT] confirm_gate=3 scans but no entry — risk.open_positions=8 vs tracker=8 | MAX_OPEN_POSITIONS=20. If risk>8, CYCLE-SYNC should resolve next cycle.`) indicate that potential entry signals for MSFT and MSTR are passing initial `confirm_gate` checks, but subsequent entry logic is blocking them. The message's implied conflict ("If risk>8") is misaligned with the reported `risk.open_positions=8`, suggesting another, unstated condition is blocking. This leads to missed entries despite initial signal confirmation.
+    *   **Failure Condition**: Signals for MSFT and MSTR repeatedly pass the `confirm_gate` but entries are blocked by an unidentified (within the anomaly message) gate in `entry_logic`, leading to persistent missed entry opportunities. The `CYCLE-SYNC` resolution logic in the anomaly message is not applicable.
+*   **Repeated Correlation/Sector Gate Blocks for COIN and UBER**: `execution.entry_logic` | `rho(daily,20d)` and `sector`
+    *   **Description**: The bot frequently attempts entries for COIN and UBER, but these are consistently blocked by existing risk management rules: `[COIN] CORRELATION GATE BLOCK: rho(daily,20d)=0.86 > 0.70 with HOOD` and `[UBER] Sector correlation BLOCKED: already holding SOFI in sector 'fintech'`. While these gates function as intended, the continuous generation of signals for consistently blocked symbols suggests an inefficiency in the signal generation or filtering pipeline.
+    *   **Failure Condition**: No direct failure, as trades are correctly blocked. However, repeated signal generation for non-tradeable opportunities indicates an inefficiency in resource allocation (e.g., scanning, scoring, and then blocking).
+
+### PERFORMANCE AUDIT
+
+*   **No trades today**: The `EOD SNAPSHOT` reports `trades_today: 0` and `pnl_today: 0.0`. This means no new positions were opened or closed today, preventing a detailed audit of recent trades.
+*   **Lifetime Average R-Multiple**: `all_time_stats.avg_r_multiple: -0.002`
+    *   **Description**: The lifetime average R-multiple is nearly zero (-0.002). This indicates that, over time, the bot's realized profits are barely covering (or slightly below) its average risk per trade. Given the `INTRADAY_TARGET_ATR_MULT = 2.5` and `INTRADAY_STOP_ATR_MULT = 1.2`, the target R:R is approximately 2.08. An average of -0.002 suggests the bot is not capturing its intended edge, possibly due to poor signal quality, sub-optimal entries/exits, or high slippage/fees.
+    *   **Failure Condition**: The bot's overall performance, as indicated by a lifetime `avg_r_multiple` of -0.002, is significantly below its target R:R of ~2.08, indicating a failure to consistently capture positive edge.
+
+### TRADE INTEGRITY
+No issues (no trade events in last 7 days).
+
+### MODIFIED FILE FINDINGS
+
+1.  **file**: `run_premarket_gate.py`
+    *   **Function**: `_evaluate`
+    *   **Line Context**: Lines 183-185 (conditional check) and Lines 177-187 (comment block)
+    *   **Description**: The comment states that the consolidation ceiling check (`current_price <= prior_close + 0.50*(pm_high - prior_close)`) is redundant when `PREMARKET_RETRACE_THRESHOLD` is `0.50` and was intended to be removed. However, the condition remains in the `passed` logic. While currently harmless because `config.PREMARKET_RETRACE_THRESHOLD` is `0.50`, it represents a deviation from the stated intent and could lead to incorrect evaluations if the `PREMARKET_RETRACE_THRESHOLD` value changes in the future, introducing unintended constraints or logical inconsistencies.
+    *   **Exact Failure Condition**: MEDIUM | The `_evaluate` function's `passed` condition includes a redundant check (`current_price <= prior_close + 0.50*(pm_high - prior_close)`) that is logically equivalent to `retrace >= config.PREMARKET_RETRACE_THRESHOLD` when `config.PREMARKET_RETRACE_THRESHOLD` is `0.50`. This contradicts the comment's assertion that the redundant check was removed, posing a risk of logic errors if `PREMARKET_RETRACE_THRESHOLD` is altered.
+
+2.  **file**: `earnings_preflight.py`
+    *   **Function**: `main`
+    *   **Line Context**: Line 105 (comment)
+    *   **Description**: The comment on line 105 still describes a bug where `preload_earnings_week()` was missing the `symbols` argument, despite an "AWP audit fix (2026-06-30)" that has clearly been applied (line 107 now calls `preload_earnings_week(sorted(symbols))`). This indicates that the comment is outdated and no longer reflects the current, corrected code.
+    *   **Exact Failure Condition**: LOW | An audit comment in `earnings_preflight.py` on line 105 describes a `TypeError` due to a missing argument, but the corresponding code has been fixed. The comment is now misleading and requires an update.
+
+3.  **file**: `live_data_writer.py`
+    *   **Function**: `main`
+    *   **Line Context**: Lines 66-67 (`except ImportError`)
+    *   **Description**: The `main` function attempts to import `data.gex.refresh_gex` for GEX data refreshing. If an `ImportError` occurs, it is caught and logged at the `DEBUG` level. This means if the `data/gex.py` module exists but has a bug preventing its import (e.g., syntax error, missing dependency), the GEX refresh will silently fail at a low logging level. This prevents critical GEX data from being refreshed without a prominent warning, degrading any signals or metrics dependent on GEX.
+    *   **Exact Failure Condition**: MEDIUM | The `live_data_writer.py` `main` function's `ImportError` handling for `data.gex` logs at `DEBUG` level, masking potential module-level bugs in `data/gex.py` that would prevent its import and lead to stale GEX data without sufficient alerting.
+
+4.  **file**: `scan_to_html.py`
+    *   **Function**: `conviction_score()` (non-existent)
+    *   **Line Context**: Audit checks in `audit_final.py` for `conviction_score()` (lines 72-84)
+    *   **Description**: The `audit_final.py` script checks for the existence and usage of a `conviction_score()` function in `scan_to_html.py`. However, `scan_to_html.py` does not contain a function named `conviction_score()`; its scoring logic appears to be implemented in `sc(s, MAX)` and `cf(s, MAX)` (lines 249-257). This indicates a misalignment between the audit script's expectations and the actual codebase.
+    *   **Exact Failure Condition**: LOW | The `audit_final.py` script attempts to verify a non-existent function named `conviction_score()` in `scan_to_html.py`, indicating an outdated audit check that does not reflect the current function names (`sc()` and `cf()`).
+
+5.  **file**: `main.py`
+    *   **Function**: `_qhm_unrealized_pl`
+    *   **Line Context**: Lines 496-501 (requests.get call)
+    *   **Description**: The `_qhm_unrealized_pl` function makes a single `requests.get` call to fetch Alpaca positions. It lacks a retry mechanism for transient network issues or 429 rate limits. A single failure in this API call will cause it to return 0.0 immediately. While this defaults to a conservative kill switch calculation (account-level `equity_pnl` is more sensitive), it prevents an accurate exclusion of QHM unrealized P&L, potentially misrepresenting the true intraday risk picture for the kill switch.
+    *   **Exact Failure Condition**: MEDIUM | The `_qhm_unrealized_pl` function's `requests.get` call lacks retries for transient API errors, causing it to return `0.0` on a single failure. This can lead to an inaccurate `intraday_equity_pnl` calculation for the kill switch, as QHM unrealized P&L may not be correctly subtracted.
+
+6.  **file**: `execution/quarterly_hold_manager.py`
+    *   **Function**: `get_quarterly_hold_quantities`
+    *   **Line Context**: Lines 367-373 (`except Exception as _qhm_qty_err`)
+    *   **Description**: This function explicitly re-raises an exception if the `quarterly_holds.json` state file is present but unreadable/corrupt. While this "fail-closed" approach is designed to prevent silently dropping a protected floor, it violates the "never-raises contract" generally observed in critical cron-driven components. This could lead to crashes in dependent systems (e.g., `run_ledger_sync.py`) if they do not specifically handle this re-raised exception, causing broader system instability.
+    *   **Exact Failure Condition**: CRITICAL | The `get_quarterly_hold_quantities` function explicitly raises `Exception` if `quarterly_holds.json` is corrupted, violating the common "never-raises contract" in critical bot components. This can lead to system crashes in dependent processes like `run_ledger_sync.py` if not explicitly handled, causing wider operational instability.
+
+7.  **file**: `execution/broker.py`
+    *   **Function**: `submit_gtc_stop_order`, `submit_day_stop_order`
+    *   **Line Context**: Lines 75-87 (sentinel documentation) and `execution/gtc_manager.py` Lines 170-171 (usage example)
+    *   **Description**: The `_ProtectionSentinel` documentation (lines 75-87) explicitly warns that `getattr(order, "id", "")` could write an empty string `""` to `tracker.open_trades` if a caller uses `if order is not None:` for success checks (instead of identity checks). While `gtc_manager.py` uses `if _order:` (which correctly treats sentinels as `False`), the `str(getattr(_order, "id", ""))` pattern *would* yield `""` if `_order` *were* a sentinel. This means a subtle change to the `gtc_manager`'s success check (e.g., `if _order is not None:`) would cause valid order IDs to be overwritten with `""`, effectively losing track of live stop orders and making positions unprotected. This is a latent but critical vulnerability.
+    *   **Exact Failure Condition**: CRITICAL | `execution/gtc_manager.py` uses `str(getattr(_order, "id", ""))` to record stop order IDs. If a future change causes `_order` to be a `_ProtectionSentinel` (e.g., due to a relaxed success check like `if _order is not None:`), this would overwrite valid `rth_day_stop_order_id` or `gtc_stop_order_id` in `tracker.open_trades` with `""`, causing the loss of live stop tracking.
+
+8.  **file**: `execution/ownership_guard.py`
+    *   **Function**: `_ledger_write_lock`
+    *   **Line Context**: Lines 295-300 (lock setup error handling)
+    *   **Description**: The `_ledger_write_lock` context manager attempts to create and acquire an advisory file lock. If an `OSError` occurs during setup (e.g., directory permissions, disk space), it logs a warning and proceeds *without the lock*. This bypasses the critical concurrency control for ledger write operations. Despite `save_ledger` being atomic, the overall read-modify-write cycle is no longer protected, risking lost updates if multiple processes (like `run_ledger_sync.py` and other in-process callers) attempt to modify the ledger concurrently.
+    *   **Exact Failure Condition**: HIGH | The `_ledger_write_lock` function in `execution/ownership_guard.py` can fail to acquire the advisory lock due to `OSError` during setup, leading to concurrent, unprotected write operations on the ledger. This creates a race condition for lost updates and data inconsistency, undermining the integrity of the ownership ledger.
+
+9.  **file**: `execution/param_engine.py`
+    *   **Function**: `get_realized_vol`
+    *   **Line Context**: Lines 152-167 (fallback logic) and Lines 101-125 (`_compute_rv` error handling)
+    *   **Description**: The `get_realized_vol` function, when `_compute_rv` returns `None` (indicating a fetch failure or insufficient/malformed data), will either return a stale cached value or `_RV_BASELINE` (0.20). Specifically, `_compute_rv` itself returns `_RV_BASELINE` (0.20) if `len(closes) < 2` after data filtering. This means if a symbol has chronically bad daily data (e.g., frequent NaN/zero closes), its `rv_annualized` will consistently default to `0.20`. This constant value may not reflect the actual volatility regime, potentially leading to incorrect `atr_scalar` calculations in `RiskManager.get_stop_and_target`, resulting in improperly sized stops/targets.
+    *   **Exact Failure Condition**: HIGH | The `get_realized_vol` function defaults to `_RV_BASELINE` (0.20) for symbols with insufficient or chronically bad daily bar data. This can lead to consistently incorrect volatility assessments for affected symbols, causing `RiskManager` to set inappropriate stop/target levels that do not reflect true market volatility.
+
+### NEW BUGS FOUND
+None
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **HIGH**: Address the critical `_ProtectionSentinel` usage in `execution/broker.py` and `execution/gtc_manager.py`.
+    *   **Action**: Modify all call sites of `broker.submit_gtc_stop_order` and `broker.submit_day_stop_order` (especially within `gtc_manager.py` and `orphan_manager.py`) to explicitly handle `_ProtectionSentinel` objects using identity checks (e.g., `if order is sp.PROTECTION_ALREADY_HELD:`). Ensure no `getattr(order, "id", "")` is performed on sentinels to prevent overwriting live order IDs with empty strings.
+    *   **Priority**: High. This is a latent but critical bug that can silently delete active stop order IDs, leaving positions unprotected.
+2.  **HIGH**: Implement retry mechanisms for `main.py`'s `_qhm_unrealized_pl` and investigate `execution/quarterly_hold_manager.py`'s `get_quarterly_hold_quantities` exception handling.
+    *   **Action A**: Add exponential backoff and retry logic to the `requests.get` call within `main.py`'s `_qhm_unrealized_pl` to improve resilience against transient API failures and ensure accurate QHM unrealized P&L calculation for the kill switch.
+    *   **Action B**: Re-evaluate the "fail-closed" strategy of `execution/quarterly_hold_manager.py`'s `get_quarterly_hold_quantities` that re-raises an exception on corrupt `quarterly_holds.json`. Design a more robust fallback (e.g., loading from backup or configured picks) that avoids crashing dependent processes while still alerting to data corruption.
+    *   **Priority**: High. These issues affect kill switch accuracy and overall system stability.
+3.  **HIGH**: Fortify `execution/ownership_guard.py`'s `_ledger_write_lock` and address `param_engine.get_realized_vol` data quality.
+    *   **Action A**: Investigate and fix the `OSError` handling in `execution/ownership_guard.py`'s `_ledger_write_lock` to ensure that the advisory lock is always acquired or gracefully fails in a way that prevents concurrent write risks, rather than proceeding unprotected.
+    *   **Action B**: Enhance `param_engine.get_realized_vol` to handle consistently poor data quality (e.g., `len(closes) < 2` continually leading to `_RV_BASELINE`). Implement a mechanism to alert when a symbol's RV is consistently defaulting, indicating unreliable volatility data.
+    *   **Priority**: High. Ensures data integrity and prevents mispricing of risk.
+4.  **MEDIUM**: Refine `strategy/confluence.py`'s volume confirmation for leveraged ETFs and update `run_premarket_gate.py` logic.
+    *   **Action A**: Modify `strategy/confluence.py` to remove the unconditional `volume_confirmed = True` for `LEVERAGED_TICKERS`. Implement a check against the `MRI` level (e.g., `MRI >= STRESSED+`) to conditionally allow or block volume confirmation for these assets during stressed market conditions.
+    *   **Action B**: Remove the redundant conditional `and current_price <= prior_close + 0.50*(pm_high - prior_close)` from `run_premarket_gate.py`'s `_evaluate` function.
+    *   **Priority**: Medium. Addresses potential over-exposure in leveraged products and improves code hygiene.
+5.  **MEDIUM**: Improve `live_data_writer.py`'s GEX import error handling.
+    *   **Action**: Elevate the logging level for `ImportError` in `live_data_writer.py`'s `main` function (lines 66-67) from `DEBUG` to `WARNING` or `ERROR` for `data.gex`. This will make silent import failures more visible, ensuring GEX data degradation is promptly identified.
+    *   **Priority**: Medium. Prevents silent data degradation for a potentially critical signal.

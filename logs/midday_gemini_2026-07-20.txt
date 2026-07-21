@@ -1,0 +1,58 @@
+Midday Gemini Audit — 2026-07-20
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No closed trades or flagged entries in this session. The "SESSION P&L SUMMARY" shows 0 entries, 0 exits, and total P&L of $0.00. "CLOSED TRADE DETAILS" and "FLAGGED ENTRIES" are empty.
+Therefore, a direct audit of entry/exit prices, P&L consistency, win rate, profit factor, score-to-outcome correlation, and stop-hit rate against executed trades is not possible for this session. The Kelly stats `rebuilt from 89/112 closed trades` refers to historical data, not current session performance.
+
+### ENTRY QUALITY
+Entry gates (dynamic MIN_SCORE, ORB gate, VOLSHADOW filters, weekly bias filters) appear active and are preventing trades under current market conditions.
+- The `strategy.run_cycle` log shows `Dynamic MIN_SCORE: raised to 9/12` based on factors including `MRI=ELEVATED/9`, which correctly increased the entry threshold from the default `MIN_LONG_SCORE`/`MIN_SHORT_SCORE=8`.
+- Multiple `execution.entry_logic` logs indicate `ORB gate BLOCK (long)` for various symbols (e.g., PANW, DDOG, AVGO, MU, AMD, AMZN, NET, SOXL, TQQQ, INTC), preventing entries where SPY did not confirm a breakout. This demonstrates disciplined adherence to entry criteria.
+- `VOLSHADOW` logs consistently show `"would_pass": false`, indicating that volume conditions are not being met for potential signals, which correctly prevents entries in low-volume conditions.
+- Weekly bias filtering and overriding (e.g., QQQ, GOOGL, ADBE filtered; AMD, AVGO, SOXL overridden) is active, showing the bot's strategic filters are functioning.
+- The `Mid-day doldrums — sizing at 75%` log indicates that the bot is correctly applying time-of-day sizing adjustments.
+Overall, entry filters are robust and appropriately preventing trades in the observed session.
+
+### EXIT QUALITY
+No closed trades in this session, therefore unable to audit exit quality.
+
+### MRI ALIGNMENT
+The bot is actively responding to the 'ELEVATED' MRI level (score=26).
+- The `strategy.run_cycle` log `Dynamic MIN_SCORE: raised to 9/12 [SPY=CLEAR/8 VIX=17.9/8 MRI=ELEVATED/9 ... → effective=9/12]` shows the bot correctly incorporates the MRI score to increase its minimum entry score.
+- The log `MRI ELEVATED (score=26) — size floor 0.85x applied.` confirms appropriate position sizing adjustments are made in response to the elevated risk index.
+This indicates correct alignment and risk mitigation based on the reported MRI score. However, there are concerns regarding the accuracy of the MRI calculation due to underlying data issues (see LOG ANOMALIES and NEW BUGS).
+
+### LOG ANOMALIES
+- **Repeated ANOMALY-2 Warnings:** The bot logs `[ANOMALY-2]` for MSFT, UBER, and SOFI repeatedly (`17:23:01,375`, `17:29:27,605`). This indicates signals reached a `confirm_gate` threshold (3 or 4 scans) but no entry was made, despite `risk.open_positions=7` being well below `MAX_OPEN_POSITIONS=20`. While SOFI later shows a `[SOFI] Score 9/12 — no allocation. Skipping.` (`17:23:49,278`), this specific reason is not consistently provided for all ANOMALY-2 cases (e.g., MSFT, UBER), and the ANOMALY-2 message itself lacks specificity.
+- **MRI Data Source Degradation:**
+    - `2026-07-20 17:28:57,158 | WARNING | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs) — T4 yfinance ^VIX fallback=18.1. _vix_confirmed=False, news capped at 20pts.` The primary FMP data source for VIX is unavailable/stale, causing a fallback to yfinance and a cap on news alert points.
+    - `2026-07-20 17:28:57,823 | WARNING | macro_risk_index | MRI JPY: FMP USDJPY failed — yfinance JPY=X=162.4700. No prior close available — JPY scoring 0pts (safe default).` The primary FMP data source for USDJPY failed, leading to a yfinance fallback and JPY scoring 0pts due to missing prior close data. These indicate a systematic degradation in the reliability of primary data sources for critical MRI components, which could impact the accuracy of overall risk assessment.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | HIGH | Persistent Unexplained Entry Block (ANOMALY-2)**
+    *   **Description:** The bot consistently logs `[ANOMALY-2]` for certain symbols (MSFT, UBER) indicating signals met `confirm_gate` thresholds (3 or 4 scans) but no entry occurred. The message explicitly states `no entry` and reports `risk.open_positions=7 vs tracker=7 | MAX_OPEN_POSITIONS=20`, confirming that general position limits are not the issue. While a `no allocation` message explains why SOFI was skipped later, this explicit reason is not provided for MSFT or UBER in the log, making their `ANOMALY-2` a high concern. This suggests an unlogged or systematic blocking condition is preventing what the bot otherwise considers a confirmed signal from entering, potentially leading to missed alpha.
+    *   **Exact variable/metric involved:** `confirm_gate` counter, `risk.open_positions`.
+    *   **Value vs. should be:** `confirm_gate` is 3 or 4, indicating a strong signal, but `no entry` is logged. `risk.open_positions` (7) is less than `MAX_OPEN_POSITIONS` (20), meaning a general position limit is not the block. The bot should either execute the entry or provide a clear, auditable reason for not entering when a signal has passed `confirm_gate` and there's no general position limit. The `ANOMALY-2` implies an internal logic flow has reached an unexpected state.
+    *   **Condition:** Occurs for MSFT (`confirm_gate=3`), UBER (`confirm_gate=4`) at `2026-07-20 17:23:01,375` and `2026-07-20 17:29:27,605`. SOFI (`confirm_gate=3`) also shows `ANOMALY-2` at `2026-07-20 17:29:27,605`, but later has a `no allocation` message. The lack of a specific blocking reason for MSFT and UBER's persistent ANOMALY-2 is the core bug.
+
+2.  **INFRASTRUCTURE | MEDIUM | MRI Data Source Degradation**
+    *   **Description:** The primary data provider (FMP) for key Macro Risk Index (MRI) components (VIX, JPY) is consistently failing or providing stale data. This forces the bot to rely on fallback sources (yfinance) and sometimes results in incomplete calculations (e.g., JPY scoring 0pts due to no prior close, VIX `news capped at 20pts` due to `_vix_confirmed=False`). While fallbacks prevent a complete breakdown, the degraded reliability of primary data sources compromises the accuracy and completeness of the MRI, potentially leading to less optimal risk adjustments (e.g., `Dynamic MIN_SCORE`, sizing) than warranted by true market conditions.
+    *   **Exact variable/metric involved:** `MRI VIX` value, `_vix_confirmed` flag, `news_alerts` points for VIX, `MRI JPY` value, JPY scoring.
+    *   **Value vs. should be:** `_vix_confirmed` is `False` when robust data would make it `True`. JPY points are `0` when ideally they should reflect market movement. News alerts are capped at `20pts` when, if fully confirmed, they might contribute more to the MRI score. The system *should* be able to reliably retrieve current data from its primary sources for a complete and accurate risk picture.
+    *   **Condition:** Occurs at `2026-07-20 17:28:57,158` (VIX) and `2026-07-20 17:28:57,823` (JPY) and appears to be a recurring issue with `cache stale (age=infs)` for VIX.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE:** Address the persistent failures and staleness of primary FMP data sources for MRI components (VIX, JPY). Investigate connectivity, API quotas, or data parsing issues to ensure accurate and timely macro risk assessment. (Urgency: High, as it impacts core risk-sizing decisions).
+2.  **EXECUTION/ALPHA:** Enhance the logging around `ANOMALY-2` warnings. For signals that reach `confirm_gate` but do not result in an entry, the bot must log the precise, explicit reason for the block (e.g., "no allocation," "failed last-minute liquidity check," "max positions per symbol reached"). This will provide auditable clarity and allow for proper diagnosis of missed opportunities or unintended logic blocks. (Urgency: High, to diagnose potential lost alpha or subtle execution bugs).
+3.  **ALPHA:** Review the capital allocation logic that leads to "no allocation. Skipping." for high-scoring signals like SOFI. Ensure the allocation strategy aligns with the expected risk profile and that trades meeting the dynamic `MIN_SCORE` are either properly sized and entered, or explicitly rejected with a reason beyond a generic "no allocation." (Urgency: Medium, to ensure capital is being effectively deployed for high-quality signals).
