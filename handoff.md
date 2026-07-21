@@ -26,18 +26,28 @@ FIXED; 2nd reject = false-premise _pin_recs accumulation → --evidence counter-
 Design/board rationale: quant/options seat + GAI + Gro aligned on centroid+wall inside uncertainty
 envelope; ROOT-FIND in S* DEFERRED to next week behind offline discriminating checks (a root is a
 knife-edge at the censored ATM strikes — untrustworthy on the indicative feed).
-**⏩ NEXT for GEX:** wire the pin into the dashboard GEX card (`generate_dashboard.py` `_get_spy_levels`
-L106-118 + `_build_gex_section` L321-390 — add pin centroid/wall/conf cell; 1040L file → Explore read;
-own gate). Compute side already produces the pin daily.
+**✅ GEX DASHBOARD PIN CARD SHIPPED + LIVE (`43456c8`, OCI DEPLOY_OK, renders ON THE BOX).**
+`generate_dashboard.py` `_build_gex_section` now shows PIN centroid·wall·confidence (color-coded: cyan
+≥60% / yellow 30-60% / red <30%; 0-conf → "— (low data)", NOT a number) + caveat footer; header
+Flip/Spot→Pin·Wall·Conf. Reads `d.get("pin")` from the full snapshot dict. Pin values appear once the
+GEX cron writes them at tomorrow's RTH open; until then all symbols show "— (low data)" (graceful).
 
-**🟡 S1 rec-retention (options_scanner.py) — DRAFTED + STATICS-CLEAN, UNCOMMITTED, gate pending.**
-`_persist_rec_history` appends every weekly+0DTE rec AND rejection to logs/options_recs_history.jsonl +
-options_rejections_history.jsonl BEFORE the 15-min os.replace, stamped code_version(git SHA)+config_hash;
-"—" sentinel→null. Insert at run_scan before os.replace. Helpers _code_version/_config_hash/_null_greeks/
-_persist_rec_history added (imports hashlib+subprocess). Working tree has the diff (stashed-safe). NEXT:
-cold-2nd + board/GAI + preship on options_scanner.py → ship. This is the substrate to SCORE the GEX pin
-+ diagnose misses (e.g. SPY got no 0DTE rec 7/20 — almost certainly MAX_TRADE_DOLLARS_0DTE=$75 cap
-excluding SPY at ~$745, NOT score; a config call for Rafael).
+**✅ S1 REC-RETENTION SHIPPED + LIVE (`43456c8`, OCI DEPLOY_OK, helpers live on box).**
+`options_scanner.py` `_persist_rec_history` appends every weekly+0DTE rec + rejection to
+logs/options_recs_history.jsonl + options_rejections_history.jsonl BEFORE the 15-min os.replace,
+stamped rec_id+scan_time+code_version(git SHA)+config_hash; "—"→null. Never-raises. First rows write
+at tomorrow's RTH options cron. **Future-evaluator note:** dedup ~26 rows/day per standing rec by
+(symbol,strike,expiry,direction) within config_hash (intended snapshot design). This is the substrate
+to SCORE the GEX pin + accuracy going forward.
+
+**🟡 FOLLOW-UPS (Rafael-raised 2026-07-20, not yet actioned):**
+- **SPY-no-0DTE gap:** almost certainly `MAX_TRADE_DOLLARS_0DTE=$75` cap excluding SPY at ~$745 (a
+  0.35Δ SPY 0DTE prices >$75), NOT score. VIX was Mid (not the VIX block). A config/risk call for Rafael
+  — raise the cap or exempt core names. S1 retention will now capture the exact rejection reason to confirm.
+- **Dashboard "scanning every 5 min when market closed":** run_cycle DOES run every 5 min off-hours
+  (AH GTC stops, exit monitoring, HTML refresh) so the countdown isn't purely cosmetic, but whether the
+  full cadence is NECESSARY off-hours is a fair efficiency question — investigate (the `_scan_countdown`
+  display at generate_dashboard.py:300-318 may also be misleading vs the actual off-hours work).
 
 **📐 SCANNER TIERING — FULLY SCOPED (board design + Rafael decisions + Q2/Q4/Q6 BGG), BUILD PENDING.**
 See `logs/scanner_tiering_design_2026-07-20.md` (gitignored — local). Decisions: Q1 longest-TF-wins +

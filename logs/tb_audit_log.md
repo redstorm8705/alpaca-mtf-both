@@ -8827,3 +8827,12 @@ empty→none, full-ATM-censor→conf 0) + cold-2nd PASS 6/6 + FINAL preship gro=
 _pin_recs cross-call accumulation — it's function-local) → --evidence counter-prompt, not re-roll.
 **Board:** quant/options seat + GAI + Gro aligned on centroid+wall inside uncertainty envelope.
 **NEXT:** dashboard-card wiring (generate_dashboard.py); S1 rec-retention gate+ship; scanner tiering build.
+
+## 2026-07-20 (session 2) — GEX pin dashboard card + S1 rec-retention (`43456c8`)
+**Shipped+LIVE:** OCI DEPLOY_OK, HEAD=43456c8, 4/4 active, dashboard 200, pin card renders on box, S1 helpers live.
+- generate_dashboard.py: GEX card shows pin centroid·wall·ATM-conf (0-conf→"low data"; caveat "not a flip");
+  full read 1040L; statics + render-test + preship gro+gai APPROVE (marker 08dbdbaa47e7; GAI false-premise
+  reject — claimed a missing `if _conf is not None` guard that already exists on the line — resolved via --evidence).
+- options_scanner.py: S1 _persist_rec_history appends recs+rejections to JSONL before os.replace, stamped
+  code_version+config_hash, "—"→null; never-raises; full read 1906L; cold-2nd PASS 7/7; preship gro+gai
+  APPROVE (marker 5792e7213c3c). Both write first rows at tomorrow's RTH cron.
