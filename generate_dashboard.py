@@ -107,12 +107,13 @@ def _compute_spy_levels() -> dict:
     the last completed SPY daily bar (Alpaca Data API, T1). Standalone + fail-soft:
     every field defaults to None so the dashboard card always renders. GEX may be
     degraded (weekly expired) — pivots are always computable from the prior day."""
-    out = {"spot": None, "regime": None, "flip": None,
+    out = {"spot": None, "regime": None, "flip": None, "pin": None,
            "P": None, "R1": None, "R2": None, "S1": None, "S2": None}
     try:
         gx = _load_gex_snapshot().get("symbols", {}).get("SPY", {})
         out["regime"] = gx.get("label")
         out["flip"]   = gx.get("flip_strike")
+        out["pin"]    = gx.get("pin")   # actionable gamma-concentration pin (2026-07-20)
         out["spot"]   = gx.get("spot")
     except Exception as e:
         logger.warning(f"SPY levels: GEX snapshot read failed: {e}")
@@ -318,90 +319,7 @@ def _scan_countdown(bot_status: dict, is_market_open: bool) -> str:
         return ""
 
 
-def _build_gex_section(gex_data: dict, open_pos: list) -> str:
-    """Render the GEX title card — market anchors + open positions, WEEKLY expiry.
-    Shows the timeframe (weekly · exp Friday · DTE) and the flip strike relative to
-    spot so the flip is interpretable at a glance (Rafael 2026-07-06)."""
-    _hdr = ('<div class="ph"><span class="pt">Gamma Exposure (GEX)</span>'
-            '{sub}</div>')
-    if not gex_data or not gex_data.get("symbols"):
-        return (
-            '<div class="panel gex-card">'
-            + _hdr.format(sub='')
-            + '<div style="padding:18px 16px;font-family:var(--mono);font-size:11px;'
-              'color:#636680">GEX data unavailable — ensure live_data_writer.py is running</div>'
-            + '</div>'
-        )
-    _gex_colors = {"POSITIVE": "#30d158", "NEAR-FLIP": "#ffd60a", "NEGATIVE": "#ff3b30"}
-    sym_data = gex_data.get("symbols", {})
-    ts_str   = gex_data.get("ts", "")
-
-    # Timeframe sub-label (all symbols share the weekly window)
-    _tf = ""
-    for _s in ["SPY", "QQQ"]:
-        _d = sym_data.get(_s, {})
-        if _d and not _d.get("error") and _d.get("window"):
-            _exp   = _d.get("expiry", "")
-            _dte   = _d.get("dte")
-            _dte_s = f" · {_dte}d (cal)" if _dte is not None else ""
-            _tf    = f"Weekly · exp {_exp}{_dte_s}"
-            break
-    _sub = (f'<span class="pm" style="font-size:9px">{_tf} · {ts_str}</span>'
-            if _tf else f'<span class="pm" style="font-size:9px">{ts_str}</span>')
-
-    rows = ""
-    shown = set()
-    for sym in ["SPY", "QQQ"] + [p["symbol"] for p in open_pos]:
-        if sym in shown:
-            continue
-        shown.add(sym)
-        d = sym_data.get(sym, {})
-        if not d or d.get("error"):
-            continue
-        label = d.get("label", "N/A")
-        spot  = d.get("spot")
-        col   = _gex_colors.get(label, "#4a6a80")
-        # PIN (gamma-concentration centroid + wall + ATM-weighted confidence) — replaces the
-        # deprecated, null-prone zero-gamma flip (2026-07-20). Confidence colors the number so a
-        # low-confidence pin visibly reads "don't trust me": cyan ≥60%, yellow 30–60%, red <30%
-        # (ATM censored / thin data). Absent pin (old snapshot / kind=none) shows "— (low data)".
-        _pin  = d.get("pin") or {}
-        _cent = _pin.get("centroid")
-        _wall = _pin.get("wall")
-        _conf = _pin.get("confidence")
-        # A 0-confidence pin (ATM fully censored) is untrustworthy — render it as "low data",
-        # NOT a centroid the eye can anchor on. Only show a number when confidence > 0.
-        if _cent is not None and (_conf or 0) > 0:
-            _cc = ("#00e5ff" if (_conf or 0) >= 0.6 else "#ffd60a" if (_conf or 0) >= 0.3 else "#ff6b6b")
-            _spot_s = (f' <span style="font-size:9px;color:var(--dim)">/ ${spot:,.0f} spot</span>' if spot else '')
-            _wall_s = (f' <span style="font-size:9px;color:var(--muted)">· wall ${_wall:,.0f}</span>' if _wall is not None else '')
-            _conf_s = (f' <span style="font-size:9px;color:{_cc};font-weight:700">· {_conf:.0%}</span>' if _conf is not None else '')
-            _pin_cell = f'${_cent:,.0f}{_spot_s}{_wall_s}{_conf_s}'
-        else:
-            _pin_cell = '<span style="color:#636680">— (low data)</span>'
-        rows += (
-            f'<tr><td style="color:var(--text);font-weight:700">{sym}</td>'
-            f'<td><span style="color:{col};font-weight:700">{label}</span></td>'
-            f'<td style="text-align:right">{_pin_cell}</td></tr>'
-        )
-
-    if not rows:
-        return ""
-    return (
-        '<div class="panel gex-card">'
-        + _hdr.format(sub=_sub)
-        + '<table><thead><tr><th>Symbol</th><th>Regime</th>'
-          '<th style="text-align:right">Pin · Wall · Conf</th></tr></thead>'
-        + f'<tbody>{rows}</tbody></table>'
-        + '<div style="padding:6px 16px;font-family:var(--mono);font-size:9px;color:#636680">'
-          'Pin = gamma-concentration centroid (front expiry) · Wall = peak-gamma strike · Conf = '
-          'ATM-weighted (low = ATM data censored). This is a PIN, NOT a zero-gamma flip and NOT a '
-          'trigger; OI is T+1-stale.</div>'
-        + '</div>'
-    )
-
-
-def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=None, gex=None):
+def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=None):
     if bot_status is None:
         bot_status = {}
     if market_news is None:
@@ -571,7 +489,21 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         return f"${v:,.2f}" if isinstance(v, (int, float)) else "—"
 
     _lv_spot = _fx(_lv.get("spot"))
-    _lv_flip = _fx(_lv.get("flip")) if _lv.get("flip") else "computing"
+    # GEX PIN (gamma-concentration centroid + wall + ATM-weighted confidence) — the actionable
+    # daily level, replaces the deprecated null-prone flip in this title card (Rafael 2026-07-20).
+    # Confidence colors the % so a low-confidence pin reads "don't trust me"; a 0-confidence /
+    # absent pin (ATM censored) shows "computing" — never a number the eye can anchor on.
+    _lp = _lv.get("pin") or {}
+    _lp_c = _lp.get("centroid")
+    _lp_w = _lp.get("wall")
+    _lp_conf = _lp.get("confidence")
+    if _lp_c is not None and (_lp_conf or 0) > 0:
+        _lp_col = ("#00e5ff" if (_lp_conf or 0) >= 0.6 else "#ffd60a" if (_lp_conf or 0) >= 0.3 else "#ff6b6b")
+        _lp_wall_s = (f' · wall ${_lp_w:,.0f}' if _lp_w is not None else '')
+        _pin_disp = (f'pin ${_lp_c:,.0f}<span style="color:{_lp_col};font-weight:700"> '
+                     f'{_lp_conf:.0%}</span>{_lp_wall_s}')
+    else:
+        _pin_disp = 'pin computing'
     spy_levels_card = (
         '  <div class="kpi" style="grid-column:span 2">\n'
         '    <div class="kpi-lbl">SPY GEX &amp; Levels</div>\n'
@@ -580,7 +512,9 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         f'      <span>{_lv_spot}</span>\n'
         f'      <span class="spy-badge" style="color:{_lv_rcol};'
         f'border-color:{_lv_rcol}">GEX {_lv_regime}</span>\n'
-        f'      <span style="font-size:11px;color:var(--dim)">flip {_lv_flip}</span>\n'
+        f'      <span style="font-size:11px;color:var(--dim)" title="gamma-concentration pin '
+        f'(front expiry) — NOT a zero-gamma flip, NOT a trigger; confidence is ATM-weighted, '
+        f'OI is T+1-stale">{_pin_disp}</span>\n'
         '    </div>\n'
         '    <div class="kpi-sub" style="line-height:1.7">\n'
         f'      <b style="color:#ff453a">R2</b> {_fx(_lv.get("R2"))} · '
@@ -968,10 +902,6 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   </div>
 </div>
 
-<div style="padding:0 24px 16px;background:var(--bg)">
-{_build_gex_section(gex or {}, open_pos)}
-</div>
-
 <footer>
   <span>Auto-refreshes every 30 seconds</span>
   <span>MTF Confluence Bot · Paper Trading · $2,500 account</span>
@@ -1032,10 +962,9 @@ def generate():
     eod         = _load_today_eod()
     bot_status  = _load_bot_status()
     market_news = _load_market_news()
-    gex         = _load_gex_snapshot()
 
     html = _build_html(alpaca, trade_log, hybrid, eod,
-                       bot_status=bot_status, market_news=market_news, gex=gex)
+                       bot_status=bot_status, market_news=market_news)
 
     out_path = ROOT / "dashboard.html"
     tmp_path = out_path.with_suffix(".tmp")
