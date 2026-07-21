@@ -193,8 +193,9 @@ def _reducing_side_for(direction: str) -> str:
 
 
 def _reducing_qty(orders, direction: str, *, stop_only: bool) -> float:
-    """Total qty of LIVE (open) orders that REDUCE a `direction` position. `orders` comes
-    from get_open_orders(sym) which returns ONLY open orders, so every element is live by
+    """Total qty of LIVE (open) orders that REDUCE a `direction` position. `orders` is this
+    symbol's slice of the ONE account-wide get_open_orders() fetch (grouped by symbol in
+    reconcile_protection), which returns ONLY open orders — so every element is live by
     construction; we never inspect a terminal status. stop_only=True → protective stops;
     stop_only=False → reducing NON-stop orders (e.g. profit-taking limits)."""
     want = _reducing_side_for(direction)
@@ -292,6 +293,34 @@ def reconcile_protection(
 
     qhm = _qhm_symbols()
     now_mono = time.monotonic()
+
+    # PRE-WIRE-BLOCKER-2 (2026-07-20, board: reliability+exec-risk+GAI all APPROVE PART A):
+    # Fetch the account-wide open-order book ONCE per sweep, then look it up per symbol in the
+    # loop — instead of calling get_open_orders(symbol) PER position. broker.get_open_orders does
+    # NOT filter server-side; the symbol arg only applies a Python-side filter over the SAME full
+    # account fetch. So the old per-symbol call was N full-account REST fetches (N positions ×
+    # up to a 15s socket timeout), which trips run_cycle's 12-min watchdog near 10 positions
+    # (MAX_OPEN_POSITIONS=20). get_open_orders() (no arg) returns that same account-wide list.
+    #
+    # LOAD-BEARING (exec-risk non-negotiable): a None fetch is an API FAILURE and must fail-safe
+    # EVERY symbol (each → _skip_unknown), NEVER collapse to an empty book. `_all_orders or []`
+    # is FORBIDDEN — it would turn an outage into "0 orders", making every held position read as
+    # naked → a second stop placed over a live one → over-cover / reverse-fill. The loop below
+    # checks `if _all_orders is None` BEFORE any `.get(symbol, [])`, so the None≠empty contract
+    # (broker.get_open_orders docstring) holds for the whole book.
+    _all_orders = get_open_orders()          # account-wide; None ONLY on API failure
+    _orders_by_symbol: dict = {}
+    if _all_orders is not None:
+        for _o in _all_orders:
+            _sym = getattr(_o, "symbol", None)
+            if _sym is None:
+                # An order with no readable symbol cannot protect any position — drop it
+                # rather than bucket it under a None key (behaviour-identical to a per-symbol
+                # lookup, which would never match it, but explicit so the intent is clear and
+                # a malformed order can never be miscounted toward a real symbol).
+                continue
+            _orders_by_symbol.setdefault(_sym, []).append(_o)
+
     open_symbols = set()
 
     for symbol, trade in list(getattr(tracker, "open_trades", {}).items()):
@@ -311,11 +340,14 @@ def reconcile_protection(
                 summary["paged"].append((symbol, "unknown direction"))
                 continue
 
-            # ── Alpaca-derived truth ──
-            orders = get_open_orders(symbol)
-            if orders is None:
+            # ── Alpaca-derived truth (orders from the ONE account-wide fetch above) ──
+            # LOAD-BEARING: a None account fetch is an API FAILURE → fail-safe EVERY symbol
+            # (never an empty book). This `is None` check MUST precede the `.get(symbol, [])`
+            # below so the None≠empty contract holds for the whole book (see the fetch comment).
+            if _all_orders is None:
                 _skip_unknown(symbol, summary, "get_open_orders unavailable (API failure)")
                 continue
+            orders = _orders_by_symbol.get(symbol, [])   # [] = no open orders for this symbol (NOT None)
             try:
                 pos = get_open_position(symbol)
             except Exception as _pe:  # non-404 API error → unknown → fail safe + page

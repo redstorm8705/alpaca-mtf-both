@@ -513,6 +513,74 @@ class PageThrottle(unittest.TestCase):
         self.assertEqual([r for r in s["paged"] if r[1] == "loop error"], [], "loop error must NOT inflate paged")
         self.assertTrue(page.called, "a blind-spot loop error must page on first occurrence")
 
+    # ── PRE-WIRE-BLOCKER-2: ONE account-wide get_open_orders fetch, sliced per symbol ──
+    def _run_multi(self, *, open_trades, account_orders, positions, submit=None):
+        tracker = _Tracker(dict(open_trades))
+        goo = mock.Mock(return_value=account_orders)     # account-wide (no-arg) fetch
+        gop = mock.Mock(side_effect=lambda sym: positions.get(sym))
+        sub = submit if submit is not None else _order("sell", oid="newstop")
+        sday = mock.Mock(return_value=sub)
+        page = mock.Mock()
+        with mock.patch.object(sp, "get_open_orders", goo), \
+             mock.patch.object(sp, "get_open_position", gop), \
+             mock.patch.object(sp, "submit_day_stop_order", sday), \
+             mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=sub)), \
+             mock.patch.object(sp, "close_position", mock.Mock(return_value=True)), \
+             mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
+             mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp, "_page", page):
+            summary = sp.reconcile_protection(tracker, _Risk(), session="rth", place=True)
+        return summary, goo, sday, page
+
+    @staticmethod
+    def _osym(symbol, side="sell", otype="stop", qty=3, status="new", oid="o"):
+        return types.SimpleNamespace(id=oid, symbol=symbol, side=side, type=otype,
+                                     qty=qty, status=status, stop_price=100.0)
+
+    # THE N->1 PROPERTY: get_open_orders is called EXACTLY ONCE regardless of position count.
+    def test_partA_single_account_wide_fetch(self):
+        trades = {s: _trade() for s in ("AAA", "BBB", "CCC")}
+        pos = {s: _position("long", 3, 110.0) for s in trades}
+        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=[], positions=pos)
+        goo.assert_called_once()                          # <-- one fetch, not three
+        self.assertEqual(goo.call_args, mock.call())      # <-- no-arg (account-wide), not per-symbol
+        self.assertEqual(len(s["placed"]), 3, "all three naked positions get a stop from one fetch")
+
+    # PER-SYMBOL SLICING: a symbol sees ONLY its own orders from the shared book.
+    def test_partA_symbol_gets_only_its_own_orders(self):
+        trades = {"AAA": _trade(), "BBB": _trade()}
+        pos = {"AAA": _position("long", 3, 110.0), "BBB": _position("long", 3, 110.0)}
+        # The book has a covering stop for AAA only. BBB must NOT be seen as protected by it.
+        book = [self._osym("AAA", side="sell", otype="stop", qty=3)]
+        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=book, positions=pos)
+        goo.assert_called_once()
+        self.assertIn(("AAA", 3.0, 3.0), s["already_protected"], "AAA is covered by its own stop")
+        self.assertEqual([p[0] for p in s["placed"]], ["BBB"], "BBB is naked — AAA's stop does not protect it")
+
+    # NONE FAILS-SAFE THE WHOLE BOOK: one API failure skips ALL symbols, none placed.
+    def test_partA_none_fetch_fails_safe_all_symbols(self):
+        trades = {s: _trade() for s in ("AAA", "BBB", "CCC")}
+        pos = {s: _position("long", 3, 110.0) for s in trades}
+        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=None, positions=pos)
+        goo.assert_called_once()
+        self.assertEqual(len(s["placed"]), 0, "an account-wide API failure must place NOTHING")
+        self.assertEqual(len(s["skipped"]), 3, "every symbol fails safe on the shared None fetch")
+        sday.assert_not_called()
+        self.assertTrue(page.called)
+
+    # A symbol-less order in the account book is DROPPED, never miscounted toward a real
+    # position (fail-safe: a real position with no stop of its own still reads naked → places).
+    def test_partA_symbolless_order_dropped(self):
+        trades = {"AAA": _trade()}
+        pos = {"AAA": _position("long", 3, 110.0)}
+        _bad = types.SimpleNamespace(id="bad", side="sell", type="stop", qty=3, status="new", stop_price=100.0)
+        # _bad has NO .symbol attribute; a real AAA stop is absent → AAA must still place.
+        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=[_bad], positions=pos)
+        goo.assert_called_once()
+        self.assertEqual([p[0] for p in s["placed"]], ["AAA"],
+                         "a symbol-less order must NOT count as AAA's protection")
+        self.assertEqual(len(s["already_protected"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
