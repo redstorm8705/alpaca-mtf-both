@@ -286,6 +286,16 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     skips = {"no_quote": 0, "zero_bid": 0, "wide_spread": 0, "parse": 0, "expired": 0, "no_iv": 0}
     now_et = datetime.now(ET)
 
+    # PIN LEVEL (board 2026-07-20: quant/options seat + GAI + Gro, all aligned). The zero-gamma
+    # FLIP is a ROOT — a knife-edge set by the largest ATM gamma terms, which are exactly the ~67%
+    # the indicative feed censors, so it jumps discontinuously and is untrustworthy on this data.
+    # We instead emit an OI-gamma-weighted CENTROID + max-|Γ·OI| WALL: a weighted AVERAGE, which
+    # censoring only adds NOISE to (never a discontinuous jump). Per-contract records are retained
+    # (the old code discarded them) so the pin is computed over the FRONT (nearest) expiry only,
+    # fixing the per-expiry gamma collapse. This is a gamma-CONCENTRATION / pin statistic — NOT a
+    # zero-gamma regime boundary and NOT a trigger. Display-only.
+    _pin_recs: list = []   # (expiry_dt, strike, gdollar_abs) for surviving valid-gamma contracts
+
     for sym, snap in snapshots.items():
         oi = oi_map.get(sym)
         if not oi:
@@ -325,6 +335,9 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         total_abs += abs(contrib)
         count     += 1
         strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
+        # Retain the per-contract gamma-dollar magnitude + its expiry for the pin (centroid/wall).
+        # Weight is |Γ·OI·100·S²| = |contrib| (sign-independent — concentration, not direction).
+        _pin_recs.append((expiry, strike, abs(contrib)))
         if abs(strike - spot) <= spot * _ATM_MONEYNESS:
             atm_count += 1
         if abs(strike - spot) <= spot * _CAPTURE_WINDOW_PCTILE:
@@ -396,10 +409,20 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
                     flip_strike = round(strike, 2)
             prev_sign = curr_sign
 
+    # ── PIN LEVEL — front-expiry OI-gamma centroid + wall + confidence (2026-07-20) ──
+    # Actionable EVERY day the data allows (unlike the null-prone flip), robust to ATM censoring
+    # because a weighted average degrades gracefully where a root jumps. Computed over the FRONT
+    # (nearest) expiry only, so the 0DTE/weekly per-expiry collapse cannot blend it.
+    pin = _compute_pin(_pin_recs, spot, oi_map)
+
     return {
-        "raw_gex_m":       round(net_gex / 1_000_000, 1),
-        "label":           label,
-        "flip_strike":     flip_strike,
+        # raw_gex_m was ~100x mislabelled (omitted the per-1%-move x0.01 on the S^2 term), so a
+        # value read as "$M" was really ~$100M of that. Corrected here to a true per-1%-move GEX in
+        # $millions; the POSITIVE/NEGATIVE/NEAR-FLIP label is scale-invariant so it is unaffected.
+        "raw_gex_m":       round(net_gex * 0.01 / 1_000_000, 1),  # per-1%-move GEX, $M (was ~100x)
+        "label":           label,                                  # REGIME (censoring-stable sign)
+        "flip_strike":     flip_strike,                            # DEPRECATED root — kept for continuity, not actionable
+        "pin":             pin,                                    # ACTIONABLE pin: centroid/wall/confidence + caveats
         "contract_count":  count,
         "atm_count":       atm_count,
         "capture_ratio":   round(capture_ratio, 3),
@@ -407,6 +430,81 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         "skips":           skips,
         "model":           {"r": _RISK_FREE_RATE, "q": _DIV_YIELD, "max_spread": _MAX_SPREAD_RATIO},
     }
+
+
+def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
+    """OI-gamma-weighted gamma-CONCENTRATION pin over the FRONT (nearest) expiry.
+
+    Returns a self-describing dict that is NEVER a bare number (board real-capital guardrail):
+      centroid   — Σ|Γ·OI|·K / Σ|Γ·OI| over front-expiry contracts (primary; degrades smoothly)
+      wall       — the single strike with max |Γ·OI| gamma-dollars (secondary; can jump if the
+                   peak strike is censored, hence secondary to the centroid)
+      dispersion — |Γ·OI|-weighted std of K around the centroid (the uncertainty band)
+      confidence — min(near-spot capture, ATM capture): pessimistic, ATM-weighted, so it TANKS
+                   exactly when the ATM strikes that drive the pin are the ones censored
+      atm_capture, expiry, kind, note — the caveats that travel with the level, always.
+
+    Never raises. Returns kind="none" when there is no front-expiry data to weight."""
+    try:
+        if not pin_recs or spot <= 0:
+            return {"kind": "none", "centroid": None, "wall": None, "dispersion": None,
+                    "confidence": 0.0, "atm_capture": 0.0, "expiry": None,
+                    "note": "no valid front-expiry gamma to weight — pin unavailable"}
+        # Front expiry = the nearest expiration present in the surviving set.
+        _front = min(r[0] for r in pin_recs)
+        _front_recs = [r for r in pin_recs if r[0] == _front]
+        _wsum = sum(r[2] for r in _front_recs)
+        if _wsum <= 0:
+            return {"kind": "none", "centroid": None, "wall": None, "dispersion": None,
+                    "confidence": 0.0, "atm_capture": 0.0,
+                    "expiry": _front.strftime("%Y-%m-%d"),
+                    "note": "front-expiry gamma weights sum to zero — pin unavailable"}
+        _centroid = sum(r[1] * r[2] for r in _front_recs) / _wsum
+        _var = sum(r[2] * (r[1] - _centroid) ** 2 for r in _front_recs) / _wsum
+        _dispersion = _var ** 0.5
+        _wall = max(_front_recs, key=lambda r: r[2])[1]
+        # Confidence — FRONT-EXPIRY-CONSISTENT (GAI preship fix 2026-07-20): both captures are
+        # measured over the SAME front-expiry contracts the centroid/wall use, so the confidence
+        # reflects the data quality behind THIS pin, not a blended all-expiry chain.
+        #   win_capture = front-expiry surviving valid-gamma within ±_CAPTURE_WINDOW / front-expiry
+        #                 OI-bearing contracts in that band
+        #   atm_capture = same, restricted to ±_ATM_MONEYNESS (the ATM guardrail: overall capture
+        #                 can look fine while ATM is censored — gamma lives ATM, so this must gate)
+        _cap_lo = spot * (1.0 - _CAPTURE_WINDOW_PCTILE)
+        _cap_hi = spot * (1.0 + _CAPTURE_WINDOW_PCTILE)
+        _atm_lo = spot * (1.0 - _ATM_MONEYNESS)
+        _atm_hi = spot * (1.0 + _ATM_MONEYNESS)
+        _win_num = sum(1 for r in _front_recs if _cap_lo <= r[1] <= _cap_hi)
+        _atm_num = sum(1 for r in _front_recs if _atm_lo <= r[1] <= _atm_hi)
+        _win_oi_denom = 0
+        _atm_oi_denom = 0
+        for _osym in oi_map:
+            _p = _parse_occ(_osym)
+            if _p is None or _p[0] != _front:   # FRONT EXPIRY ONLY — consistent with the pin
+                continue
+            if _cap_lo <= _p[2] <= _cap_hi:
+                _win_oi_denom += 1
+            if _atm_lo <= _p[2] <= _atm_hi:
+                _atm_oi_denom += 1
+        _win_capture = (_win_num / _win_oi_denom) if _win_oi_denom else 0.0
+        _atm_capture = (_atm_num / _atm_oi_denom) if _atm_oi_denom else 0.0
+        _confidence = round(min(_win_capture, _atm_capture), 2)   # pessimistic, ATM-weighted
+        return {
+            "kind":        "centroid+wall",
+            "centroid":    round(_centroid, 2),
+            "wall":        round(_wall, 2),
+            "dispersion":  round(_dispersion, 2),
+            "confidence":  _confidence,
+            "atm_capture": round(_atm_capture, 2),
+            "expiry":      _front.strftime("%Y-%m-%d"),
+            "note":        ("gamma-concentration PIN (front-expiry) — NOT a zero-gamma flip, NOT a "
+                            "trigger. OI is T+1-stale (esp. 0DTE). Confidence is ATM-weighted."),
+        }
+    except Exception as _pe:
+        logger.warning("GEX pin computation failed (non-fatal): %s", _pe)
+        return {"kind": "error", "centroid": None, "wall": None, "dispersion": None,
+                "confidence": 0.0, "atm_capture": 0.0, "expiry": None,
+                "note": f"pin computation error: {_pe!r}"}
 
 
 # ── Position symbols ──────────────────────────────────────────────────────────
@@ -477,9 +575,12 @@ def refresh_gex() -> None:
         results[symbol]          = gex
         # INFO (was debug): this line IS the shadow-review record — must be visible
         # at production log level or the 30-session clock never accumulates evidence.
+        _pin = gex.get("pin", {})
         logger.info(
-            "GEX [%s]: %s $%sM | flip=%s | valid=%d/%d | skips=%s",
-            symbol, gex["label"], gex["raw_gex_m"], gex["flip_strike"],
+            "GEX [%s]: %s $%sM | PIN centroid=%s wall=%s conf=%s (atm=%s) exp=%s | valid=%d/%d | skips=%s",
+            symbol, gex["label"], gex["raw_gex_m"],
+            _pin.get("centroid"), _pin.get("wall"), _pin.get("confidence"),
+            _pin.get("atm_capture"), _pin.get("expiry"),
             gex["contract_count"], len(oi_map), gex["skips"],
         )
 
