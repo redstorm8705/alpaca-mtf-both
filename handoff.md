@@ -7,50 +7,36 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-21 autonomous, Rafael away) — pick up here
+## ⏩ LATEST (2026-07-21 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-### 🚨 P0 — THE OCI BOT IS DOWN AND HAS BEEN FOR ~2 DAYS. NEEDS RAFAEL'S DECISION.
+### ✅ P0 RESOLVED — bot is BACK UP and at current main.
 
-Verified on the box 2026-07-21 17:08 PT (`ssh mtf-bot`), NOT inferred:
+The Jul 19 shutdown P0 (prior block) is **closed**. Reconstructed from the OCI reflog + journal and
+verified on the box 2026-07-21 17:2x PT (`ssh mtf-bot`, NOT inferred):
+- All 4 services (`mtf-bot`/`mtf-writer`/`mtf-http`/`nginx`) **active + enabled**, started
+  **2026-07-20 23:00 PDT (06:00 UTC)** by a `git pull --ff-only` + restart (whoever recovered it).
+  Crontab **restored**. Startup clean: `Positions verified Alpaca=8==tracker=8 OK`, breadth 90 STRONG.
+- **OCI is now at `b395c7a` (parity with GitHub/Mac)** — pulled forward this session at Rafael's
+  direction (DEPLOY TIMING rule: ship when ready, market hours irrelevant). The Jul-20 recovery had
+  left OCI at `18515f5`, 2 commits behind — it never had TF_MONTHLY. Now it does. `DEPLOY_OK` +
+  `HEALTH_OK` confirmed, startup reconcile self-healed all GTC stops.
 
-```
-mtf-bot.service     ActiveState=inactive  SubState=dead  UnitFileState=disabled
-mtf-http.service    ActiveState=inactive  SubState=dead  UnitFileState=disabled
-mtf-writer.service  ActiveState=inactive  SubState=dead  UnitFileState=disabled
-crontab -l  ->  "no crontab for ubuntu"
-```
+**Book (paper, verified post-restart 2026-07-21):** equity **$2,700.76** / cash $130.42.
+**11 positions, 10 GTC stops** — coverage exact; only **GOOGL** stop-less, BY DESIGN
+(`protected_symbols.json = ["GOOGL","NVDA"]`, quarterly holds). No gap.
+`GOOGL +2 · HOOD +2 · MARA +11 · NET +1 · NFLX −2 · NVDA +2 · PANW +1 · RIVN +10 · SOFI −4 · TQQQ +1 · XOM +3`.
 
-All three were stopped **cleanly and simultaneously at Jul 19 20:50:27 UTC (13:50 PT)** —
-`Deactivated successfully`, then `disable`d. That is a deliberate coordinated shutdown, not a
-crash. Corroborating artifact mtimes on the box: `logs/mtf_bot.log` 0 bytes since 2026-07-20 00:00,
-`logs/trade_events.jsonl` last written 2026-07-19 13:28, `logs/gex_snapshot.json` last written
-**2026-07-17 19:50**.
+**⏩ NEXT EXACT STEP:** resume the scanner-tiering horizon build — write `strategy/horizon_state.py`
+as a PURE reimplementation of the multi-TF strength rule on COMPLETED bars (do NOT import/alter the
+live `_get_weekly_bias` gate — blindspot #5). ATR must be absolute: `(calculate_atr(df,ATR_PERIOD)/100)*close`
+(codebase idiom `entry_logic.py:853`). TF_MONTHLY plumbing it consumes is now live on the box.
 
-**⚠️ THE PRIOR HANDOFF BLOCK WAS WRONG.** It claimed "OCI DEPLOY_OK, HEAD=4c657f7, 4/4 services
-active, _compute_pin runs on the box" dated 2026-07-20 — i.e. AFTER the Jul 19 shutdown. The
-journal shows no start event after Jul 19 20:50, and `gex_snapshot.json` has not been written since
-Jul 17. The GEX pin figures verified in that session (SPY centroid 747.15 / wall 747.00 / conf 0.28)
-were produced by a **manual one-off python invocation on the box**, not by a running service.
-`_compute_pin` is correct and deployed — but nothing is calling it on a schedule. Do not treat any
-"N/N services active" line in an older block as evidence; re-verify with `systemctl show`.
+**Rolling autonomous chain:** UNVERIFIED this session (scheduled-tasks registry empty; CronList is
+session-scoped). Re-arm before next away-window.
 
-**I DID NOT RESTART THEM — deliberately.** Re-enabling a trading system that someone intentionally
-`disable`d, while Rafael is away and unreachable, is his call, not mine. The reason for the shutdown
-is not recorded anywhere I can find. **First question when he is back: was the Jul 19 shutdown
-intentional and should it stay down, or was it maintenance that never got reversed?**
-
-**Book state is NOT unprotected** (checked read-only, paper account, 2026-07-21 17:10 PT):
-equity $2,701.80 / cash $130.42 / last_equity $2,678.45. **11 open positions, 10 live GTC stops.**
-GTC stops rest at Alpaca and keep working while the bot is down. Quantity coverage is exact on all
-ten (PANW 1/1, NET 1/1, MARA 11/11, SOFI 4/4 buy-stop, NFLX 2/2 buy-stop, HOOD 2/2, XOM 3/3,
-TQQQ 1/1, RIVN 10/10, NVDA 2/2). The one position with no stop is **GOOGL (2 sh, $697.66, −$20.93)**
-— and that is BY DESIGN: `data/state/protected_symbols.json` = `["GOOGL","NVDA"]`, the quarterly
-holds. Not a gap. What IS unattended while the services are down: exits, partials, trailing-stop
-ratchets, MRI/kill-switch, and the dashboard/scanner/GEX writers.
-
-### ✅ SHIPPED THIS SESSION — TF_MONTHLY plumbing (`1df57f5`, OCI DEPLOY_OK, HEAD=1df57f5)
+### ✅ SHIPPED — TF_MONTHLY plumbing (`1df57f5`, now LIVE on OCI at `b395c7a`)
 
 First increment of the Rafael-approved scanner tiering (intraday/weekly/monthly × bull/bear).
 `config.py`: `TF_MONTHLY = "1Month"`, `BARS_TO_FETCH[TF_MONTHLY] = 36`.
@@ -66,8 +52,8 @@ PASS → preship `gai=APPROVE`, `gro=WAIVED` (TPD exhausted; Rafael authorized "
 responsive, skip it"). Live-verified against the real Alpaca API: SPY monthly = 36 bars, 10-mo SMA
 704.59. OCI venv independently confirmed `alpaca-py 0.43.3` supports `TimeFrameUnit.Month` BEFORE
 deploy (cold-2nd flagged a bad import as the one catastrophic failure mode — closed with evidence).
-**No restart was needed or performed** — nothing live consumes `TF_MONTHLY` yet, and the services
-are down anyway (see P0).
+Nothing live consumes `TF_MONTHLY` yet; it went live on OCI with the `b395c7a` parity pull +
+restart this session (services were down at ship time — that P0 is now resolved, see top block).
 
 **Two forward-looking traps the cold-2nd flagged for whoever builds the next increment:**
 1. `DataFetcher.get_bars(sym,"1Month",days_back=N)` computes `num_bars = N+1` **months**, then
