@@ -513,10 +513,18 @@ tbody.collapsed .mrow,tbody.collapsed .det{display:none!important}
 .card{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:9px 16px;border-bottom:1px solid #14172a}
 .card .c-sym{font-weight:700;font-size:14px;color:#e2e4ee}
 .card .c-px{font-size:12px;color:#b8bdd4;text-align:right;white-space:nowrap}
-.card .c-meta{display:flex;align-items:center;gap:8px;font-size:11px}
+.card .c-meta{display:flex;align-items:center;gap:8px;font-size:11px;flex-wrap:wrap}
 .card .c-right{display:flex;align-items:center;gap:8px;justify-content:flex-end;font-size:11px;white-space:nowrap}
 .card .score{font-weight:700}
 .card .tag{font-weight:800;font-size:12px;letter-spacing:.03em}
+/* Option 3 (board 4-1, Gro+GAI concur): two explicitly LABELLED registers per card —
+   STRUCTURE (horizon tier) and ACTION (12pt confluence). They are different systems and
+   may legitimately disagree; naming each is what stops the column colour from reading as
+   an instruction. */
+.card .c-struct{grid-column:1/-1;font-size:10px;display:flex;align-items:center;
+  gap:4px;flex-wrap:wrap;margin-top:1px}
+.card .reg{font-size:8px;font-weight:800;letter-spacing:.10em;color:#5a6580;
+  margin-right:5px;flex:none;min-width:58px}
 .untier-wrap{border-top:1px solid #161a28}
 @media(max-width:720px){.cols{grid-template-columns:1fr}}
 """
@@ -1126,23 +1134,47 @@ def build_active_rows(open_trades: dict, results_by_sym: dict, idx_offset: int =
 
 
 # ── 2-column BULL | BEAR renderers (2026-07-21) ──────────────────────────────
-def _card_glyph(hz: "dict | None") -> str:
-    """Compact 3-dot horizon glyph (+ TRIPLE / SPLIT flags) for a column card.
-    The tier label is omitted here — the section header already names the horizon."""
+def _card_flags(hz: "dict | None") -> str:
+    """TRIPLE / SPLIT flags for a column card.
+
+    Replaces the former 3-dot glyph. The dots encoded each horizon's state by POSITION
+    with no legend on the card — a cipher — and did it in the same colour channel the
+    column, the decision tag and the volume ratio already use. The per-horizon states are
+    now spelled out in words on the STRUCTURE line (see _structure_line), so only the two
+    genuine flags remain here. Both are explicitly preserved: TRIPLE is the concentration
+    signal, SPLIT is the disagreement warning that longest-timeframe-wins tiering exists
+    to surface (strategy/horizon_state.py notes it "lets the UI flag it in the row so the
+    intraday book never loses sight of a reversal")."""
     if not hz:
         return ""
-
-    def _dc(s):
-        return "#30d158" if s == "BULL" else "#ff3b30" if s == "BEAR" else "#4a5070"
-
-    dots = "".join(
-        f'<span style="color:{_dc((hz.get(h) or {}).get("state"))}">&#9679;</span>'
-        for h in ("intraday", "weekly", "monthly")
-    )
     trip = (' <span style="font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;'
             'background:rgba(0,229,255,.15);color:#00e5ff">TRIPLE</span>' if hz.get("triple") else "")
-    split = ' <span style="font-size:8px;color:#ff9f0a">&#9888;</span>' if hz.get("disagreement") else ""
-    return f'<span style="font-size:9px;letter-spacing:1px;margin-left:5px">{dots}</span>{trip}{split}'
+    split = (' <span style="font-size:8px;font-weight:700;color:#ff9f0a" '
+             'title="Horizons disagree">&#9888; SPLIT</span>' if hz.get("disagreement") else "")
+    return f'{trip}{split}'
+
+
+_HZ_ORDER = (("monthly", "MONTHLY"), ("weekly", "WEEKLY"), ("intraday", "INTRADAY"))
+
+
+def _structure_line(hz: "dict | None") -> str:
+    """The STRUCTURE register: each horizon's state in WORDS, longest first.
+
+    Half of the board's Option 3. The card carries two independent systems — the horizon
+    tier (structural) and the 12-point confluence (tactical) — and they can legitimately
+    disagree. Rendering them unlabelled in one visual grammar is what made a MONTHLY BULL
+    card showing SHORT (1/2) unreadable. Each register is now named."""
+    # UNTIERED means all three horizons are NEUTRAL — a full extra grid row saying
+    # "NEUTRAL, NEUTRAL, NEUTRAL" on what is typically the largest bucket. Suppress it,
+    # matching _horizon_badge_html's own early return for the same case.
+    if not hz or (hz.get("tier") or "UNTIERED") == "UNTIERED":
+        return ""
+    parts = []
+    for key, lbl in _HZ_ORDER:
+        st = (hz.get(key) or {}).get("state") or "NEUTRAL"
+        col = "#30d158" if st == "BULL" else "#ff3b30" if st == "BEAR" else "#5a6580"
+        parts.append(f'<span style="color:{col}">{lbl} {st}</span>')
+    return (' <span style="color:#4a5070">&middot;</span> '.join(parts))
 
 
 def build_card(r: dict) -> str:
@@ -1164,15 +1196,175 @@ def build_card(r: dict) -> str:
     pct = r.get("pct_change")
     pct_html = (f'<span style="color:{"#30d158" if pct >= 0 else "#ff3b30"}">'
                 f'{"+" if pct >= 0 else ""}{pct:.1f}%</span>' if pct is not None else "")
+    # SIGNED score. `use_short` is already computed above and was previously discarded
+    # before rendering, so the card showed a bare "8/12" with no indication of WHICH side
+    # produced it — on a card whose column colour said the opposite. Cheapest, highest-value
+    # element of the board's Option 3.
+    _side     = "short" if use_short else "long"
+    _hz       = r.get("horizon") or {}
+    _tier_dir = _hz.get("direction")            # "BULL" / "BEAR" / None
+    _tier_hzn = _hz.get("horizon")              # "monthly" / "weekly" / "intraday" / None
+    # COUNTER-TREND fires only when the actionable side genuinely opposes the structural
+    # tier — and only when the decision is actionable at all (a SKIP opposes nothing).
+    _act_dir  = "BEAR" if use_short else "BULL"
+    _counter  = ""
+    if (_tier_dir in ("BULL", "BEAR") and _tier_dir != _act_dir
+            and not _tag_is_skip(buy_tag)):
+        _counter = (f'<span style="color:#4a5070"> &middot; </span>'
+                    f'<span style="color:#ff9f0a;font-weight:700">COUNTER-TREND vs {_tier_hzn or "tier"}</span>')
+    _struct = _structure_line(_hz)
+    _struct_html = (
+        f'<div class="c-struct"><span class="reg">STRUCTURE</span>{_struct}'
+        f'{_card_flags(_hz)}</div>'
+    ) if _struct else ""
     return (
         f'<div class="card">'
-        f'<div class="c-sym">{sym}{_card_glyph(r.get("horizon"))}</div>'
+        f'<div class="c-sym">{sym}</div>'
         f'<div class="c-px">{px} {pct_html}</div>'
-        f'<div class="c-meta"><span class="score" style="color:{sc(score, MAX)}">{score}/{MAX}</span>'
-        f'<span class="tag" style="color:{buy_c}">{buy_tag}</span></div>'
+        f'{_struct_html}'
+        f'<div class="c-meta"><span class="reg">ACTION</span>'
+        f'<span class="tag" style="color:{buy_c}">{buy_tag}</span>'
+        f'<span style="color:#4a5070"> &middot; </span>'
+        f'<span class="score" style="color:{sc(score, MAX)}">{_side} {score}/{MAX}</span>{_counter}</div>'
         f'<div class="c-right">{vol_html(r.get("vol_ratio"))}<span style="color:{mc}">{mv}</span></div>'
         f'</div>'
     )
+
+
+_ALPACA_POS_CACHE: dict = {"data": None, "ts": None}
+_ALPACA_POS_TTL_SECS = 45
+
+
+def _alpaca_positions() -> "dict | None":
+    """{symbol: {qty, avg_entry_price, current_price, unrealized_pl, market_value}}
+    read straight from Alpaca /v2/positions.
+
+    THIS IS THE ONLY AUTHORITATIVE SOURCE FOR OPEN-POSITION P&L. The bot's tracker
+    (entry_price x qty arithmetic) is a cross-check, never the displayed figure —
+    project rule, and the tracker is demonstrably unreliable on exactly the positions
+    that reach this path (unscanned, unreconciled, possibly ghost-share).
+
+    ONE request per render, 45s cached, an 8s socket timeout and NO retry loop. The
+    absence of a retry ladder is the point: this runs synchronously on the run_cycle
+    thread (strategy/run_cycle.py calls write_scan_html after each cycle), so a retrying
+    call here delays check_exits() and leaves live stops unevaluated. The per-symbol
+    quote path this replaced could block ~30s/symbol via its 429 ladder — ~600s across a
+    full book. (`timeout=` is per socket operation, not a wall-clock cap, and does not
+    cover DNS resolution — so this is a large improvement, not a hard guarantee.)
+
+    RETURNS None ON FAILURE, {} ON A GENUINELY EMPTY BOOK. The distinction is required:
+    conflating them makes one network blip render every open position as a broker
+    reconciliation break, which destroys the indicator via its own false-positive rate.
+    """
+    now = datetime.now(ET)
+    _c = _ALPACA_POS_CACHE
+    if _c["data"] is not None and _c["ts"] is not None \
+            and (now - _c["ts"]).total_seconds() < _ALPACA_POS_TTL_SECS:
+        return _c["data"]
+    out: dict = {}
+    try:
+        import json as _j
+        import ssl as _ssl
+        import urllib.request as _ur
+        _k, _s = os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY")
+        if not _k or not _s:
+            logger.warning("_alpaca_positions: API keys absent — position P&L unavailable")
+            return None
+        try:
+            import certifi as _cert
+            _ctx = _ssl.create_default_context(cafile=_cert.where())
+        except ImportError:
+            _ctx = _ssl.create_default_context()
+        _req = _ur.Request(
+            "https://paper-api.alpaca.markets/v2/positions",
+            headers={"APCA-API-KEY-ID": _k, "APCA-API-SECRET-KEY": _s},
+        )
+        with _ur.urlopen(_req, context=_ctx, timeout=8) as _r:   # no retry ladder
+            _payload = _j.load(_r)
+            # A 200 whose body is an object (not the expected array) would iterate KEYS,
+            # and the per-row guard below would swallow every resulting TypeError — leaving
+            # an empty dict that reads as a confirmed-empty book and flags the entire book
+            # as missing. Fail to None instead. (risk_manager.py guards the same case.)
+            if not isinstance(_payload, list):
+                logger.warning("_alpaca_positions: unexpected payload type %s — treating as fetch failure",
+                               type(_payload).__name__)
+                return None
+            for p in _payload:
+                # Per-position guard: one malformed row must not discard the rows already
+                # parsed and push the whole book into a false reconciliation alarm.
+                try:
+                    out[p["symbol"]] = {
+                        "qty":              abs(float(p.get("qty", 0) or 0)),
+                        "side":             str(p.get("side", "") or "").lower(),
+                        "avg_entry_price":  float(p.get("avg_entry_price", 0) or 0),
+                        "current_price":    float(p.get("current_price", 0) or 0),
+                        "unrealized_pl":    float(p.get("unrealized_pl", 0) or 0),
+                        "market_value":     float(p.get("market_value", 0) or 0),
+                    }
+                except Exception as _pe:
+                    logger.warning("_alpaca_positions: skipping malformed position row %.80s — %s",
+                                   str(p), _pe)
+    except Exception as _ap_e:
+        logger.warning("_alpaca_positions: fetch FAILED — position P&L unavailable this render: %s",
+                       _ap_e)
+        return None
+    _c["data"], _c["ts"] = out, now
+    return out
+
+
+def _tag_is_skip(tag) -> bool:
+    """True when a decision tag represents NO actionable trade.
+
+    Matched against the exact forms decision_tag() emits ("SKIP", "SKIP · WK <bias>")
+    rather than a bare prefix or substring test. A substring test would wrongly kill
+    "LONG · WK BEAR SKIP", which IS actionable (it is a manual-review item); a bare
+    prefix test would wrongly pass a future tag like "SKIPPED-EARNINGS". Shared by
+    _is_live (which gates section collapse) and build_card (which gates the
+    COUNTER-TREND marker) so the two can never drift apart.
+    """
+    _t = str(tag or "").strip().upper()
+    return _t == "SKIP" or _t.startswith("SKIP ·") or _t.startswith("SKIP -")
+
+
+def _degraded_pos_html(sym: str, tr: dict, apos_ok: bool, pinned: bool = False) -> str:
+    """Render a position the Alpaca snapshot did not confirm — distinguishing THREE
+    causes that must never be collapsed into one alarm:
+
+      1. The fetch failed  -> we do not know anything. Say exactly that. No per-symbol
+         warning: one network blip must not emit a reconciliation alarm per position.
+      2. status == "pending_overnight" -> an UNFILLED limit order. It is not a position,
+         so Alpaca is CORRECT to have no row for it. Routine, nightly, not an anomaly.
+         (portfolio_tracker.record_pending_entry puts these in open_trades with
+         entry_price=None — the same population that must never be alarmed on.)
+      3. Genuinely missing -> the tracker claims a filled position the broker does not
+         hold. THIS is the real reconciliation break, and the only one worth waking to.
+
+    Collapsing 1 and 2 into 3 is what destroys the signal: a true orphan becomes
+    indistinguishable from routine noise.
+    """
+    _pre = '<span style="margin-left:auto">&nbsp;</span>' if pinned else ""
+    if not apos_ok:
+        return (f'{_pre}<span style="color:#8a94ae;font-weight:700">P&amp;L UNAVAILABLE</span>'
+                f'<span style="color:#5a6580">Alpaca positions unreachable this render</span>')
+    _status = str(tr.get("status") or "")
+    if _status == "pending_overnight":
+        return (f'{_pre}<span style="color:#ffd60a;font-weight:700">PENDING FILL</span>'
+                f'<span style="color:#8a94ae">limit order working &mdash; not yet a position</span>')
+    # Already-detected states. These are NOT news: the system found the break, flagged it,
+    # and is waiting on a restart or a manual reconcile. Re-alarming on them every render
+    # is what buries the one case that IS news.
+    _tq_rem = tr.get("qty_remaining")
+    if (tr.get("_fifo_reconciled_closed") or tr.get("_fill_unverified")
+            or _status == "closed" or _tq_rem == 0):
+        return (f'{_pre}<span style="color:#8a94ae;font-weight:700">ALREADY FLAGGED</span>'
+                f'<span style="color:#5a6580">closed/unverified in tracker &mdash; awaiting reconcile</span>')
+    logger.warning(
+        "[%s] context strip: tracker lists a FILLED position (status=%s, qty=%s) that "
+        "Alpaca /v2/positions does not hold — genuine reconciliation break.",
+        sym, tr.get("status"), tr.get("qty_remaining", tr.get("qty")),
+    )
+    return (f'{_pre}<span style="color:#ff9f0a;font-weight:700">&#9888; NOT AT BROKER</span>'
+            f'<span style="color:#8a94ae">tracker holds it, Alpaca does not &mdash; P&amp;L unknown</span>')
 
 
 def build_context_strip(pinned_results: list, open_trades: dict, results_by_sym: dict) -> str:
@@ -1180,6 +1372,13 @@ def build_context_strip(pinned_results: list, open_trades: dict, results_by_sym:
     positions. Compact, display-only. Returns '' when there is nothing to show."""
     rows = []
     _pinned_syms = set()
+    # ONE Alpaca snapshot for the whole strip — the authoritative source for every
+    # open-position figure rendered below (both loops). `None` means the fetch itself
+    # failed, which is NOT the same claim as "the broker has no such position" and must
+    # never be rendered as one.
+    _apos_raw = _alpaca_positions()
+    _apos_ok  = _apos_raw is not None
+    _apos     = _apos_raw or {}
     for r in pinned_results:
         sym = r["symbol"]
         _pinned_syms.add(sym)
@@ -1192,17 +1391,23 @@ def build_context_strip(pinned_results: list, open_trades: dict, results_by_sym:
         MAX = r["max_score"]
         buy_tag, buy_c = decision_tag(r)
         hz_badge = _horizon_badge_html(r.get("horizon"))
-        pos = (open_trades or {}).get(sym)
+        # Same authoritative path as the position loop below: if SPY/QQQ is actually held,
+        # every figure comes from Alpaca. Previously this branch was gated on `if pos and
+        # entry:` (truthiness — a 0.0 price silently dropped the P&L) and computed the P&L
+        # from tracker arithmetic.
+        _pap  = _apos.get(sym)
+        _ptr  = (open_trades or {}).get(sym)
         pos_html = ""
-        if pos and entry:
-            qty = pos.get("qty_remaining", pos["qty"])
-            e = pos["entry_price"]
-            d = pos["direction"]
-            pnl = (entry - e if d == "long" else e - entry) * qty
-            pc = "#30d158" if pnl >= 0 else "#ff3b30"
+        if _pap is not None:
+            _pq, _pe = _pap["qty"], _pap["avg_entry_price"]
+            _ppnl    = _pap["unrealized_pl"]
+            pc       = "#30d158" if _ppnl >= 0 else "#ff3b30"
             pos_html = (f'<span style="margin-left:auto;color:#00e5ff;font-weight:700">&#9679; IN POSITION</span>'
-                        f'<span style="color:#b8bdd4">{qty}sh @ ${e:,.2f}</span>'
-                        f'<span style="color:{pc};font-weight:700">{"+" if pnl >= 0 else ""}${pnl:,.2f}</span>')
+                        f'<span style="color:#b8bdd4">{_pq:g}sh @ ${_pe:,.2f}</span>'
+                        f'<span style="color:{pc};font-weight:700">'
+                        f'{"+" if _ppnl >= 0 else ""}${_ppnl:,.2f}</span>')
+        elif _ptr is not None:
+            pos_html = _degraded_pos_html(sym, _ptr, _apos_ok, pinned=True)
         rows.append(
             f'<div class="ctx-row"><span class="c-sym">{sym}</span>'
             f'<span style="color:#b8bdd4">{px}</span>{pct_html}'
@@ -1213,26 +1418,44 @@ def build_context_strip(pinned_results: list, open_trades: dict, results_by_sym:
     for sym, tr in (open_trades or {}).items():
         if sym in _pinned_syms:
             continue
-        r = results_by_sym.get(sym)
-        cur = r.get("price") if r else None
-        qty = tr.get("qty_remaining", tr["qty"])
-        e = tr["entry_price"]
-        d = tr["direction"]
-        dir_c = "#30d158" if d == "long" else "#ff3b30"
-        if cur:
-            pnl = (cur - e if d == "long" else e - cur) * qty
-            pc = "#30d158" if pnl >= 0 else "#ff3b30"
-            pnl_html = f'<span style="color:{pc};font-weight:700">{"+" if pnl >= 0 else ""}${pnl:,.2f}</span>'
-            cur_html = f'<span style="color:#b8bdd4">${cur:,.2f}</span>'
+        _ap = _apos.get(sym)
+        # Direction from Alpaca's own `side` when it has the position; the tracker's
+        # `direction` is only a fallback, and an absent one renders neutral rather than
+        # defaulting to bear-red beside an authoritative P&L.
+        d = (_ap or {}).get("side") or tr.get("direction") or ""
+        dir_c = "#30d158" if d == "long" else "#ff3b30" if d == "short" else "#5a6580"
+
+        if _ap is not None:
+            # AUTHORITATIVE PATH — qty, side, entry, price and P&L all straight from Alpaca.
+            # No tracker arithmetic is displayed anywhere on this row.
+            qty, e, cur = _ap["qty"], _ap["avg_entry_price"], _ap["current_price"]
+            pnl = _ap["unrealized_pl"]
+            pc  = "#30d158" if pnl >= 0 else "#ff3b30"
+            pnl_html = (f'<span style="color:{pc};font-weight:700">'
+                        f'{"+" if pnl >= 0 else ""}${pnl:,.2f}</span>')
+            cur_html = (f'<span style="color:#b8bdd4">${cur:,.2f}</span>'
+                        if cur else '<span style="color:#5a6580">&mdash;</span>')
+            qty_html = f'<span style="color:#b8bdd4">{qty:g}sh @ ${e:,.2f}</span>'
         else:
-            pnl_html = ""
+            # Never silently drop the row (that is the failure class this fix exists to
+            # remove) and never synthesize a P&L from tracker math to fill the gap.
+            # _degraded_pos_html separates "fetch failed" / "unfilled order" / "genuine
+            # reconciliation break" so the alarm keeps its meaning.
+            _tq = tr.get("qty_remaining")
+            if _tq is None:
+                _tq = tr.get("qty") or 0
+            e = tr.get("entry_price")
+            pnl_html = _degraded_pos_html(sym, tr, _apos_ok)
             cur_html = '<span style="color:#5a6580">&mdash;</span>'
+            _e_str   = f'${e:,.2f}' if isinstance(e, (int, float)) else "&mdash;"
+            _tq_str  = f'{_tq:g}' if isinstance(_tq, (int, float)) else str(_tq)
+            qty_html = f'<span style="color:#8a94ae">{_tq_str}sh @ {_e_str} (tracker)</span>'
         rows.append(
             f'<div class="ctx-row"><span style="font-size:9px;font-weight:700;padding:1px 6px;'
             f'border-radius:3px;background:rgba(0,229,255,.2);color:#00e5ff">ACTIVE</span>'
             f'<span class="c-sym">{sym}</span>{cur_html}'
             f'<span style="color:{dir_c};font-weight:700">{d.upper()}</span>'
-            f'<span style="color:#b8bdd4">{qty}sh @ ${e:,.2f}</span>{pnl_html}</div>'
+            f'{qty_html}{pnl_html}</div>'
         )
     if not rows:
         return ""
@@ -1903,7 +2126,17 @@ def write_html(data):
         f"Bucket A = leveraged ETF (5% alloc) · Bucket B = swing trade · "
         f"Stop {sm}×ATR · Target {tm}×ATR · R:R 1:{round(tm/sm,1)} · "
         f"Min score {mn}/{MAX} · "
-        f"Two columns: BULL (left) | BEAR (right) by longest-timeframe-wins horizon tier · within each column: INTRADAY &amp; WEEKLY expanded, MONTHLY collapsed (click a horizon header to toggle) · &#9650;&#9650;&#9650; = triple-confluence · &#9888; = horizons disagree · &quot;Signals only&quot; hides untiered names · pinned SPY/QQQ &amp; open positions in the strip above"
+        f"Two columns: BULL (left) | BEAR (right) by longest-timeframe-wins horizon tier · "
+        f"each card carries TWO labelled registers — STRUCTURE (the horizon tier: monthly/weekly/intraday state) "
+        f"and ACTION (the 12-pt confluence decision + the side that produced the score). They are independent systems "
+        f"and may legitimately disagree; COUNTER-TREND marks a card whose tradeable side opposes its structural tier · "
+        f"MONTHLY collapses by default ONLY when it holds no triple-confluence AND no live (non-SKIP) signal — "
+        f"a section with actionable cards is never hidden; &quot;n LIVE&quot; in a header counts them · "
+        f"click a horizon header to toggle · &#9650;&#9650;&#9650; = triple-confluence · &#9888; SPLIT = horizons disagree · "
+        f"&quot;Signals only&quot; hides untiered names · pinned SPY/QQQ &amp; open positions in the strip above · "
+        f"every open-position figure is sourced from Alpaca (/v2/positions unrealized_pl), never tracker math · "
+        f"a position Alpaca does not confirm renders PENDING FILL (unfilled limit order), "
+        f"P&amp;L UNAVAILABLE (Alpaca unreachable) or &#9888; NOT AT BROKER (genuine reconciliation break) &mdash; never a blank"
     )
 
     # Fetch live VIX
@@ -1926,9 +2159,27 @@ def write_html(data):
     # below, hidden by "Signals only" (default ON). NOTE: build_rows / build_active_rows
     # are now unused (the single-table layout is retired) — left in place for a separate
     # cleanup pass to keep this layout diff focused. Live entry gate untouched.
-    _pinned_set = set(PINNED)
-    open_trades_for_active = {k: v for k, v in open_trades.items() if k not in _pinned_set}
-    context_strip_html = build_context_strip(pinned, open_trades_for_active, results_by_sym)
+    # Pass the FULL open_trades: build_context_strip's position loop already skips
+    # pinned symbols itself, and its pinned loop needs to see a held SPY/QQQ to render
+    # the degraded state. Pre-stripping them here made that branch unreachable, so a
+    # held SPY silently vanished whenever the Alpaca fetch failed — the exact bug this
+    # change exists to remove, preserved for the pinned symbols.
+    # The strip must NEVER be able to abort the render. An exception escaping here
+    # propagates past the atomic write ~500 lines below, so scan_results.html would keep
+    # its last good content indefinitely while the page still LOOKS live (pulsing market
+    # pill, client-side clock, "Scanning now..."). Degrade visibly instead: the operator
+    # loses the strip and is told so, and the scanner columns stay current.
+    try:
+        context_strip_html = build_context_strip(pinned, open_trades, results_by_sym)
+    except Exception as _cs_e:
+        logger.warning("build_context_strip failed — degraded strip rendered, page still "
+                       "updates: %s", _cs_e, exc_info=True)
+        context_strip_html = (
+            '<div class="ctx-strip"><div class="ctx-row">'
+            '<span style="color:#ff9f0a;font-weight:700">&#9888; POSITION STRIP UNAVAILABLE</span>'
+            '<span style="color:#8a94ae">render error &mdash; see logs. '
+            'Scanner columns below are current.</span></div></div>'
+        )
 
     _KNOWN_TIERS = {"MONTHLY_BULL", "WEEKLY_BULL", "INTRADAY_BULL",
                     "MONTHLY_BEAR", "WEEKLY_BEAR", "INTRADAY_BEAR", "UNTIERED"}
@@ -1945,6 +2196,33 @@ def write_html(data):
     def _is_triple(r):
         return bool((r.get("horizon") or {}).get("triple"))
 
+    def _is_live(r):
+        """True when this card carries an ACTIONABLE decision — anything that is not a
+        plain SKIP. Weekly-bias-filtered tags ("LONG - WK BEAR SKIP") count as live:
+        they are explicit review items, not dismissals.
+
+        Why this exists: the collapse rule keyed ONLY on triple-confluence, and `triple`
+        is False BY CONSTRUCTION whenever any horizon is NEUTRAL — i.e. for exactly the
+        conflicted names. A live half-size short (CRWD 2026-07-21) therefore rendered
+        inside a collapsed-by-default accordion. Beyond the usability cost, that censors
+        a NON-RANDOM subset of signals correlated with outcome, so any later review of
+        marginal-conviction trades would run on a survivorship-biased sample.
+        """
+        # A weekly-bias-filtered card is ALWAYS a review item, whatever its tag reads.
+        # Checked on the flag, not the tag string: decision_tag's third branch emits
+        # "SKIP · WK {wb}" for any bias value other than BEARISH/BULLISH, which
+        # startswith("SKIP") would classify as dead — silently re-creating the exact
+        # hidden-signal bug this function exists to prevent.
+        if r.get("weekly_bias_filtered"):
+            return True
+        try:
+            _tag = (decision_tag(r) or ("SKIP", ""))[0]
+        except Exception as _lv_e:
+            logger.debug("_is_live(%s): decision_tag failed — treating as live: %s",
+                         r.get("symbol"), _lv_e)
+            return True   # fail OPEN: never hide a card because we could not classify it
+        return not _tag_is_skip(_tag)
+
     _buckets: dict = {}   # (direction, horizon) -> [r, ...]
     _untiered: list = []
     for _r in sorted_rest:
@@ -1958,12 +2236,16 @@ def write_html(data):
         _grp.sort(key=lambda r: (0 if _is_triple(r) else 1, -_score_of(r)))
     _untiered.sort(key=lambda r: -_score_of(r))
 
-    def _sec_header(sec_id, label, ntrip, count, collapsed):
+    def _sec_header(sec_id, label, ntrip, count, collapsed, nlive=0):
         _car  = "&#9656;" if collapsed else "&#9662;"
         _trip = f'<span class="trip"> &middot; {ntrip} &#9650;&#9650;&#9650;</span>' if ntrip else ""
+        # Actionable-count badge: makes "there are live signals in here" visible even
+        # before the section is opened.
+        _live = (f'<span style="color:#ffd60a;font-weight:700"> &middot; {nlive} LIVE</span>'
+                 if nlive else "")
         return (f'<div class="sec-h" onclick="togSec(\'{sec_id}\')">'
                 f'<span id="car-{sec_id}">{_car}</span><span>{label}</span>'
-                f'<span class="cnt"> &middot; {count}</span>{_trip}</div>')
+                f'<span class="cnt"> &middot; {count}</span>{_trip}{_live}</div>')
 
     def _build_col(direction):   # "BULL" / "BEAR"
         _label = "&#9650; BULL" if direction == "BULL" else "&#9660; BEAR"
@@ -1974,9 +2256,12 @@ def write_html(data):
             if not _grp:
                 continue
             _ntrip = sum(1 for r in _grp if _is_triple(r))
-            _collapsed = (_hz == "MONTHLY") and _ntrip == 0   # monthly collapsed unless it holds a triple
+            _nlive = sum(1 for r in _grp if _is_live(r))
+            # A section holding ANY actionable (non-SKIP) card may NEVER render collapsed.
+            # Triple-confluence is not a sufficient test — see _is_live's docstring.
+            _collapsed = (_hz == "MONTHLY") and _ntrip == 0 and _nlive == 0
             _sid = f"{direction}-{_hz}"
-            _out += _sec_header(_sid, _hz, _ntrip, len(_grp), _collapsed)
+            _out += _sec_header(_sid, _hz, _ntrip, len(_grp), _collapsed, _nlive)
             _cards = "".join(build_card(r) for r in _grp)
             _out += f'<div id="sec-{_sid}" class="sec-body{" collapsed" if _collapsed else ""}">{_cards}</div>'
         _out += "</div>"
