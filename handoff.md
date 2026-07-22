@@ -123,10 +123,73 @@ filter** `ALL | INTRADAY | WEEKLY | MONTHLY` — selecting a horizon shows every
 per-book work list) regardless of primary home. Delivers "an intraday name can also be a weekly/monthly
 hold" as a VIEW, not duplicated DOM. **NOW BUILDING through the full gate.**
 
-**⏩ NEXT EXACT STEP — build Fork B Hybrid** in `scan_to_html.py`: `build_card` adds `data-i/data-w/data-m`
-attrs + I/W/M chips (new chip renderer replaces `_card_glyph`); header gets the `ALL|INTRADAY|WEEKLY|MONTHLY`
-segmented control; CSS `body.bookview-<H> .card:not([data-<h>="1"]){display:none}`; JS `setBook(v)` that
-expands sections + hides empties under a non-ALL view. Then AFTER: step 4 RS-vs-SPY (U5).
+**⏩ NEXT EXACT STEP — ONE gated diff in `scan_to_html.py` covering the 3 P0 render defects below
+(XOM price fallback + collapse fix + CRWD STRUCTURE/ACTION lines), THEN the strip redesign, THEN
+Fork B Hybrid with its 10 required changes. Awaiting Rafael's approval to write.**
+
+### BGG ALIGNED (2026-07-21) — CRWD tier-vs-signal fork = OPTION 3
+Board 4-1 (Simons/LdP/Weinstein/Thorp for 3; Taleb dissent->concurs). Gro + GAI BOTH initially said
+Option 2 ("action owns the column"); BOTH withdrew after one counter-prompt on the board's mechanical
+refutation: `decision_tag()` returns "SKIP" below `CONVICTION_SKIP_BELOW=8` and "HOLD" for Bucket A —
+NEITHER has a direction, and SKIP is the MAJORITY of cards, so Option 2 has no placement rule for most
+of the page. **DECISION: tier keeps the column; the card gains two explicitly LABELLED registers —
+a STRUCTURE line (MONTHLY BULL / WEEKLY BEAR / INTRADAY NEUTRAL, in words not dots) and an ACTION line
+(SHORT 1/2 · short 8/12 · COUNTER-TREND vs monthly).** LdP framing was decisive: tier and decision tag
+are a META-LABEL / PRIMARY-MODEL pair — a meta-label may set size to zero but may NEVER flip the sign,
+and the column is the page's declaration of side. Also required: the score must render SIGNED
+(`SHORT 8/12`, never bare `8/12`) — `build_card` already computes `use_short` at L1152-1157 and
+discards it before rendering at L1171.
+
+### P0-1 — `_collapsed = (_hz=="MONTHLY") and _ntrip==0` HIDES LIVE SIGNALS (scan_to_html.py L1977)
+Ranked #1 by board AND Gro AND GAI. `triple` is False BY CONSTRUCTION when any horizon is NEUTRAL, i.e.
+exactly the conflicted names. CRWD's live SHORT(1/2) renders inside a collapsed-by-default accordion.
+Thorp: this censors a NON-RANDOM subset correlated with outcome, so any future "how did the half-size
+shorts do" review is computed on a survivorship-biased sample — and `CONVICTION_HALF_MIN==CONVICTION_SKIP_BELOW==8`
+means 8/12 IS the marginal bet, the population whose edge most needs measuring. FIX: a section containing
+ANY non-SKIP decision tag may never render collapsed.
+
+### P0-2 — XOM ($443 basis, ~16% of equity, LARGEST position) renders no P&L at all
+Root cause proven: `build_context_strip` L1216-1217 takes price ONLY from `results_by_sym`, which is built
+from the scan universe. **XOM is not in `config.WATCHLIST` (36 symbols), so it is never scanned** ->
+`r is None` -> `cur=None` -> em-dash and `pnl_html=""`. REGRESSION: the retired `build_active_rows`
+L894-902 fell back to `data.alpaca_data.get_latest_quote` then `get_latest_trade`. FIX: restore that
+fallback as `_live_px()` + render an explicit `NO QUOTE` state (never a bare em-dash) + count it in a
+`NO QUOTE n` aggregate. **DO NOT fix by appending held symbols to `tickers`** — `len(results)` is the
+regime denominator at L1875, so that would silently shift BULL/MIXED/BEAR classification.
+Secondary on the same path: `if cur:` is a truthiness test (0.0 falls to em-dash) — use `is not None`;
+and `qty = pos.get("qty_remaining", pos["qty"])` at L1218 renders phantom `0sh` rows after a full
+partial exit (`.get` substitutes on missing key, never on value 0).
+
+### P0-3 — context strip: 17 fields deleted down to 5, in an unalignable flex container
+`.ctx-row{display:flex;gap:10px}` (L499) means no field aligns with the same field one row down. Measured
+cost: ~365px for the strip, ~502px before the first card = 53% of a 1080p viewport. UX board designed the
+replacement: 3-column position chips + a 3px stop|entry|now|target risk rail + a 4-pane drawer restoring
+all 17 retired fields, target <=196px for 11 positions. SPY/QQQ become a separate 46px regime BAND with
+typographic inversion (9px grey key + 15px price) so they stop looking like holdings. New aggregates:
+net unrealized, L/S split, gross+net exposure vs equity, worst position, at-risk count, NO-QUOTE count.
+
+### OTHER VERIFIED FINDINGS THIS SESSION (logged in tb_audit_log.md)
+- **RC-3 metric is FALSE**: counted 0 in bug_counter.json + CLAUDE.md; actual = **61** live `except: pass`
+  repo-wide. The 3 in broker.py are defensible (they wrap only a failed Slack alert, then logger.critical
+  + fail-closed). Re-baseline touches CLAUDE.md -> its own preship gate. RAISED TO RAFAEL, not done.
+- **yfinance runs UNWRAPPED on the trading thread**: `_fetch_spy_0dte_data` (called at L2005) makes 4 bare
+  yfinance calls (L1270/1274/1287/1401) with NO timeout, synchronously inside `run_cycle.py:1982`. A Yahoo
+  stall blocks `check_exits()` with 11 open positions. Project already has the 8s ThreadPoolExecutor remedy
+  in main.py/macro_risk_index.py/options_scanner.py/weekly_perf_audit.py — and nowhere in scan_to_html.py.
+- **The scanner page can freeze while looking alive**: any render exception aborts `write_html` ~500 lines
+  before the atomic write (L2497), so the HTML never updates; the pulsing MARKET OPEN pill + client-side
+  clock keep ticking and the countdown parks on "Scanning now...". Fix: per-card try/except.
+
+### WEEKLY REVIEW AUDIT — IN FLIGHT (Rafael-directed, 2026-07-21)
+Gro + GAI in; data-integrity board seat still running. Proven root causes so far:
+- **OCI runs Python 3.10.12**; `datetime.fromisoformat()` did not accept a trailing `Z` until 3.11.
+  Verified live: `fromisoformat('2026-07-15T14:55:57.196445Z')` -> ValueError. 10 exit_times rejected.
+- **12 closed trades have NO `exit_time` field at all** (the `'exit_time'` KeyError repr in the cron log).
+- **"2/5 days loaded"** for week 2026-07-20, with Thursday rendering "Upcoming" -> a mid-week run is
+  overwriting the week's archive with a partial snapshot.
+- **AI exec summary prints "AI analysis complete" but NO summary heading exists in the rendered HTML.**
+- 44 em-dash placeholders; two case-differing "Patch health"/"Patch Health" headings (two render paths);
+  every run rewrites all 29 historical archives, flattening mtimes and producing near-identical sizes.
 
 **FUTURE (roadmap, validated build — NOT a quick config change):** **regime-relative ATR floor.** Replace the
 static 1.5% `ATR_MIN_PCT` with a floor that breathes with the cross-sectional vol regime (percentile of the

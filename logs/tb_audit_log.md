@@ -8848,3 +8848,99 @@ _pin_recs cross-call accumulation — it's function-local) → --evidence counte
 - 2026-07-21 — SHIP `scan_to_html.py` 2-COLUMN BULL|BEAR redesign (248118b, OCI LIVE): retired single-table for two-column grid (BULL left | BEAR right), full-width context strip (build_context_strip), compact cards (build_card/_card_glyph), intraday+weekly expanded/monthly collapsed, untiered hidden via Signals-only. Gate: full read, static clean, render+structural verify, cold-2nd PASS, preship gai=APPROVE(post counter-prompt)/gro=WAIVED. DEPLOY: OCI diverged (nightly report-sync local commit) → resolved via git pull --rebase + set OCI git identity; NEVER pipe the deploy pull (masks ff failure). 4b follow-ups: rm dead build_rows/build_active_rows, re-add confirm badge on cards, optional card detail.
 
 - 2026-07-21 — BGG-ALIGNED (Open Question Protocol, board 3 seats + Gro + GAI): (A) SPY/QQQ not-entering = NO bug — SPY filtered by ATR_MIN_PCT (0.97
+---
+
+## 2026-07-21 — scan_to_html.py — 10-POINT AUDIT + RC-1..RC-8 (Fork B Hybrid, step 4b)
+
+**Full read: 2,633 lines in 9 chunks (Read tool, no grep).** Scope: book-view hybrid
+(I/W/M membership chips + ALL|INTRADAY|WEEKLY|MONTHLY segmented filter).
+
+### 10-point
+1. **Static (baseline, pre-patch)** — py_compile OK · ruff E,W,F,B "All checks passed" ·
+   mypy --warn-unreachable "Success: no issues". Run on the project venv (OCI; local Mac
+   has neither ruff nor mypy installed — noted as a tooling gap). RULE C-4: nothing
+   pre-existing to fix.
+2. **Trade-path trace** — DISPLAY-ONLY. `main.py` -> `write_scan_html()` -> `run_scan()`
+   (read-only fetch + score) -> `write_html()` -> atomic tmp->`os.replace`. No order
+   submission, no trade-state mutation. Live entry gate (Arch Invariant #1) not in this file.
+3. **Adversarial** — `horizon=None` guarded at scan_ticker:398-400; unknown tier -> UNTIERED
+   (`_KNOWN_TIERS` self-heal, L1939-1943); empty sections skipped (L1974-1975); missing
+   price/pct guarded in build_card.
+4. **Full read** — COMPLETE (2,633 lines).
+5. **Cross-refs** — `build_card` called only at L1980 + L1989. `_card_glyph` called only at
+   L1169 (build_card) -> becomes dead with this patch, deleted in-diff. `_horizon_badge_html`
+   used by build_rows (dead) + build_context_strip (live).
+6. **Conflicting directions** — none; render layer only.
+7. **Redundancy** — F4: `build_rows` / `build_active_rows` dead (retired single-table
+   renderers, already queued 4b#1). F5: `confirm_gate` plumbed but unread (queued 4b#2).
+8. **State persistence** — scan_results.html tmp->replace (L2497-2501); dte_prev.json and
+   market_news.json tmp->replace+fsync. All paths anchored to `__file__`. PASS.
+9. **Data tier** — **F3 FAIL (pre-existing):** `_fetch_spy_0dte_data()` L1401 uses
+   `yfinance ticker.history(period="21d", interval="1d")` for SPY daily OHLCV (fib /
+   prior-day levels). Guardrail 1 forbids yfinance for ANY US equity/ETF OHLCV — must be
+   `data/fetcher.py` (T1). NOT fixed in this diff (different subsystem; separate item).
+10. **Timezone/logging** — all display strings PT (`pt_time`, LIVE_CLOCK_HTML, entry times).
+    New chips carry no timestamps. PASS.
+
+### RC classes
+| RC | Verdict | Note |
+|----|---------|------|
+| RC-1 naive datetime | PASS | every `datetime.now()` carries ET/PT; L1478 uses `_tz.utc`. |
+| RC-2 CWD path | PASS | all I/O via `os.path.dirname(os.path.abspath(__file__))`. |
+| RC-3 silent except | **FAIL (F1)** | `run_scan()` L426-427 bare `except Exception: pass` around delta_shadow `record()`. RC-3 is counted CLOSED(0) project-wide -> this is a live regression of a closed class. **Fixed inline in this diff** (debug log). |
+| RC-4 estimated exit price | N/A | no `record_exit` in this file. |
+| RC-5 non-atomic write | PASS | see point 8. |
+| RC-6 wrong API field | PASS | `.get()` on yfinance/option dicts, all guarded, display-only. |
+| RC-7 zero-share sizing | N/A | no sizing in this file. |
+| RC-8 unbounded buffer | **FAIL (F2)** | `_horizon_bar_cache` (L276) keyed (symbol,tf), 60-min TTL, entries NEVER evicted — only overwritten per key. Scan universe absorbs daily pre-market movers, so new keys accrue each trading day in a long-running process. NOT fixed in this diff. |
+
+### Findings summary
+- **F1** RC-3 regression, run_scan L426 — FIX INLINE (this diff).
+- **F2** RC-8 unbounded `_horizon_bar_cache` — queued (pre-existing, shipped in step 3a).
+- **F3** Guardrail-1 yfinance SPY OHLCV, L1401 — queued (pre-existing, separate subsystem).
+- **F4** dead `build_rows`/`build_active_rows` — already queued (4b#1).
+- **F5** unread `confirm_gate` — already queued (4b#2).
+
+### 2026-07-21 — BOARD FINDINGS (reliability/exec-risk cold seat) — 3 items outranking the diff
+
+**B1 — RC-3 METRIC IS FALSE. Counted 0 project-wide; actual = 61 silent handlers.**
+`logs/bug_counter.json` and CLAUDE.md's Live RC Counts table both record RC-3 as CLOSED/0.
+Verified this session by direct count: **61** `except ...: pass` sites across the repo.
+Concentrations: `execution/quarterly_hold_manager.py` (7), `options_scanner.py` (5),
+`weekly_postmortem.py` (4), `execution/orphan_manager.py` (2), `reporting/pnl_ledger.py`,
+`execution/ownership_guard.py`, `run_movers.py`, `research/*`, `scan_to_html.py:426`.
+MITIGATING (verified at source): the 3 `execution/broker.py` sites (L535, L1002, L1252) each
+wrap only the *Slack-alert* call and are immediately followed by `logger.critical` + a
+fail-closed `return 0` — those are defensible. The rest are not.
+**A defect metric reading 0 while 61 instances exist is worse than any single instance.**
+ACTION: re-baseline `bug_counter.json` + CLAUDE.md Live RC Counts table. CLAUDE.md is
+execution-governing -> its own preship gate. NOT done unilaterally; raised to Rafael.
+
+**B2 — 0DTE yfinance runs UNWRAPPED on the trading thread. Availability risk, not data risk.**
+`_fetch_spy_0dte_data()` is called unconditionally at `scan_to_html.py:2005`, inside
+`write_html`, inside `write_scan_html`, which `strategy/run_cycle.py:1982` calls
+**synchronously on the run_cycle thread**. Lines 1270/1274/1287/1401 are bare yfinance calls
+with NO timeout wrapper. `_scan_ticker_with_timeout` (L216-269) does NOT cover this path.
+While a yfinance socket stalls, `check_exits()` does not run — 11 open positions unmanaged for
+the duration. CLAUDE.md:1133 already documents "yfinance ... subject to hanging" and
+CLAUDE.md:1136-1139 documents the project's own 8s `ThreadPoolExecutor` remedy, applied in
+`main.py:479`, `events/macro_risk_index.py:128`, `options_scanner.py:396`,
+`weekly_perf_audit.py:264` — and **nowhere in scan_to_html.py**.
+This REFRAMES F3: the guardrail-tier violation is worth basis points; the unwrapped hang on the
+exit-check thread is the real exposure. Severity: MEDIUM data / **HIGH availability**.
+
+**B3 — The scanner page can silently freeze while looking alive.**
+If any exception fires inside `build_card`/`_build_col` (L1980/L1989), it propagates to
+`write_scan_html`'s catch at L2576 — which logs a warning and returns. The atomic write at
+L2497-2501 is ~500 lines further down and is NEVER REACHED, so `scan_results.html` retains the
+last successful render indefinitely. The stale page still shows a pulsing "MARKET OPEN" pill
+(L2346-2349) and a client-side ticking clock (L2337), and `scan-countdown` settles permanently
+on "Scanning now..." — which reads as health, not death. `r["horizon"]=None` is routine
+(L258 timeout, L400 compute failure), so this is reachable on day one.
+ACTION: per-card try/except returning a degraded card. REQUIRED in the Fork-B diff.
+
+**F2 requantified:** `_horizon_bar_cache` ~15 KB/symbol x ~8 new movers/day = ~2.5 MB/month,
+~30 MB/yr. Noise; TTL check (L286) prevents stale service so there is no correctness bug.
+Real fragility is L287/L290 returning the SAME DataFrame by reference (a future in-place
+column-add would poison every read for 60 min). Deferred; add `.copy()` + 3-line eviction
+when this file is next opened.
