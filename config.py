@@ -101,10 +101,16 @@ TF_4H    = "4Hour"
 TF_12H   = "12Hour"
 TF_DAILY = "1Day"
 TF_WEEKLY= "1Week"
+# TF_MONTHLY (2026-07-21) — added for the confluence-scanner MONTHLY horizon tier
+# (Rafael-approved scanner tiering: intraday/weekly/monthly × bull/bear). The monthly
+# state uses a 10-month SMA + 12-1 monthly momentum, so ~36 bars gives the 10-month SMA
+# a full history plus headroom. Alpaca supports TimeFrameUnit.Month.
+TF_MONTHLY = "1Month"
 
 BARS_TO_FETCH = {
     TF_15M:   150, TF_30M:  400, TF_1H:   100,  # S43: 500→150, 300→100 — RAM leak fix (DS+GAI Q7; EMA30 needs ~107 bars, MACD26 needs ~93)
     TF_4H:    200, TF_12H:  150, TF_DAILY: 365, TF_WEEKLY: 104,
+    TF_MONTHLY: 36,   # ~3 years — 10-month SMA + 12-1 momentum need 13+; 36 gives headroom
 }
 
 # ─── ALPACA BAR FETCH: GLOBAL RATE LIMITER + SHARED TTL CACHE ─────────────────

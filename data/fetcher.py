@@ -37,6 +37,7 @@ TF_MAP = {
     config.TF_12H:    TimeFrame(12, TimeFrameUnit.Hour),
     config.TF_DAILY:  TimeFrame(1,  TimeFrameUnit.Day),
     config.TF_WEEKLY: TimeFrame(1,  TimeFrameUnit.Week),
+    config.TF_MONTHLY: TimeFrame(1, TimeFrameUnit.Month),
 }
 
 # Intraday: only 3 TFs needed — entry timing, trend, daily bias/ATR/momentum
@@ -47,7 +48,7 @@ SWING_TFS    = [config.TF_4H, config.TF_12H, config.TF_DAILY, config.TF_WEEKLY]
 # 1Hour=6: US RTH is 6.5h (9:30-16:00 ET), floor to 6 full bars
 _BARS_PER_TRADING_DAY: dict = {
     "1Min": 390, "5Min": 78, "15Min": 26, "30Min": 13,
-    "1Hour": 6,  "4Hour": 2, "1Day":   1, "1Week":  1,
+    "1Hour": 6,  "4Hour": 2, "1Day":   1, "1Week":  1, "1Month": 1,
 }
 
 # Per-symbol fetch error dedup — first occurrence → WARNING,
@@ -202,6 +203,11 @@ def fetch_bars(
         # 8x: 7 cal days/week + holiday buffer.
         # 120-day floor → ~17 weeks ≥ signal_generator 12-bar minimum.
         days_back = max(120, n_bars * 8)
+    elif timeframe == config.TF_MONTHLY:
+        # 32x: ~30.4 cal days/month + buffer so a partial leading month never
+        # short-changes the tail(n_bars). 400-day floor → ~13 monthly bars, which
+        # keeps the 10-month SMA computable even for a small num_bars request.
+        days_back = max(400, n_bars * 32)
     else:
         days_back = max(30, n_bars * 2)  # floor; prior 400 caused heap leak
 
