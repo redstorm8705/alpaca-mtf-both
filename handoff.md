@@ -60,11 +60,26 @@ only. Footer legend updated. Gate: full read + static clean + LIVE render (heade
 unique row-ids no collision) + cold-2nd PASS + preship gai=APPROVE (post counter-prompt on a false-premise
 `_tier_div` reject: n_triple<=n and empty sections skipped → the flagged branch is unreachable) / gro=WAIVED.
 
-**⏩ NEXT EXACT STEP — build step 3c:** collapse-by-default sections + "Signals only" master toggle
-(default ON, hides UNTIERED). Needs: a `row_class` param on `build_rows` (tag each section's rows), a
-`togSec()` + `togSignals()` JS pair near `togDTE()` (~L2131), and section headers made clickable. Design:
-scanner_tiering_design_2026-07-20.md §Q6 (collapsed w/ live counts, triples auto-expanded). Then step 4 =
-RS-vs-SPY (U5) into the state math (scanner_tiering_design §U5 — the highest-value single upgrade).
+### ✅ SHIPPED (2026-07-21) — step 3c: collapsible sections + "Signals only" toggle (`d83c861`, OCI LIVE)
+
+`scan_to_html.py`: each direction×horizon section renders in its own `<tbody id="sec-KEY">`; clickable
+header (`togSec`) collapses via CSS `tbody.collapsed .mrow,.det{display:none!important}`. Collapsed-by-
+default except triple sections (auto-expanded). UNTIERED hidden by default via a "Signals only" master
+toggle (`togSignals`, default ON). Pinned+active in their own always-visible tbody. `build_rows` UNCHANGED.
+Verified interactively IN-BROWSER (collapse/expand/toggle + the collapsed-open-detail edge case, cold-2nd
+T1 fixed with `!important`). Gate: full read + static clean + browser DOM verify + cold-2nd PASS + preship
+gai=APPROVE (post counter-prompt on an inverted-label-semantics reject) / gro=WAIVED.
+
+**✅ SCANNER TIERING UI COMPLETE** (steps 2 → 3a → 3b → 3c all LIVE). The DIRECTION×HORIZON view the
+2026-07-20 design specified is fully shipped.
+
+**⏩ NEXT EXACT STEP — build step 4: RS-vs-SPY (U5), the design's HIGHEST-VALUE single upgrade.**
+scanner_tiering_design_2026-07-20.md §U5: residualize each symbol's return on its SPY beta so the scanner
+ranks true relative strength, not just market direction. The residual-momentum rank already exists in
+shadow (`signal_generator.py:381-401`) — promote it into the horizon-state math / a per-row RS column.
+Feature Design Protocol gate first (it changes what the state means); board vote likely (touches scoring
+semantics even if display-only v1). Then U1 vol-normalization, U2 feature-importance weights (separate
+gated projects per §U2).
 
 **⚠️ 2 DISPLAY-POLICY CALLS awaiting Rafael confirm (both GAI-approved, reversible one-liners, display-only):**
 (1) INTRADAY strength anchor = 30-EMA on 15m (`_INTRADAY_ANCHOR`) — chosen for cross-horizon consistency
