@@ -254,6 +254,7 @@ def _scan_ticker_with_timeout(symbol, timeout=20):
         stop_pct_long=None, target_pct_long=None,
         stop_pct_short=None, target_pct_short=None,
         rr=None, max_score=sum(config.SCORE_WEIGHTS.values()),
+        horizon=None,
     )
 
     if _t.is_alive():
@@ -268,6 +269,27 @@ def _scan_ticker_with_timeout(symbol, timeout=20):
     return _result_holder[0]
 
 
+# ── Horizon-state bar cache (60-min TTL) ──────────────────────────────────────
+# Weekly/monthly bars change slowly; caching caps the marginal RTH fetch cost of
+# the display-only horizon tiering to ~2 requests/symbol/hour (well under the
+# global 175/min limiter). Keyed (symbol, timeframe).
+_horizon_bar_cache: dict = {}
+_HORIZON_BAR_TTL_SECS = 3600
+
+
+def _cached_horizon_bars(symbol: str, tf: str):
+    """Fetch weekly/monthly bars with a 60-min per-(symbol,tf) cache. Returns a
+    DataFrame (possibly empty on fetch failure — horizon_state handles empties)."""
+    now = datetime.now(ET)
+    key = (symbol, tf)
+    c = _horizon_bar_cache.get(key)
+    if c is not None and (now - c["ts"]).total_seconds() < _HORIZON_BAR_TTL_SECS:
+        return c["df"]
+    df = fetch_bars(symbol, tf, num_bars=config.BARS_TO_FETCH.get(tf, 40))
+    _horizon_bar_cache[key] = {"df": df, "ts": now}
+    return df
+
+
 def scan_ticker(symbol):
     MAX = sum(config.SCORE_WEIGHTS.values())
     r = dict(symbol=symbol, long_score=0, short_score=0,
@@ -280,7 +302,7 @@ def scan_ticker(symbol):
              stop_short=None, target_short=None,
              stop_pct_long=None, target_pct_long=None,
              stop_pct_short=None, target_pct_short=None,
-             rr=None, max_score=MAX, error=None)
+             rr=None, max_score=MAX, error=None, horizon=None)
     try:
         raw = fetch_multi_timeframe(symbol)
         if not raw:
@@ -360,6 +382,22 @@ def scan_ticker(symbol):
             elif wb == "BULLISH" and r["short_signal"]:
                 r["short_signal"]         = False
                 r["weekly_bias_filtered"] = True
+
+        # ── Horizon-state tiering (DISPLAY-ONLY; additive, never breaks the scan) ──
+        # Reuses the 15m/1h/daily frames already fetched above; weekly+monthly come
+        # from a 60-min cache (they change slowly) so the marginal RTH fetch cost is
+        # ~2 cached requests/symbol/hour. Any failure -> r["horizon"] stays None and
+        # the row renders exactly as before. Does NOT touch the live entry gate
+        # (Architecture Invariant #1) — it only annotates the scan result.
+        try:
+            from strategy import horizon_state as _hz
+            _wk_df = _cached_horizon_bars(symbol, config.TF_WEEKLY)
+            _mo_df = _cached_horizon_bars(symbol, config.TF_MONTHLY)
+            _hstates = _hz.compute_horizon_states(daily, intra, tf.get(config.TF_1H), _wk_df, _mo_df)
+            r["horizon"] = {**_hstates, **_hz.assign_tier(_hstates)}
+        except Exception as _hz_e:
+            logger.debug("scan_ticker(%s): horizon compute failed (display-only) — %s", symbol, _hz_e)
+            r["horizon"] = None
 
     except Exception as ex:
         r["error"] = str(ex)[:80]
@@ -533,6 +571,44 @@ def conviction_score(r):
     return round(base * vol_m * prox_m * sig_m, 4)
 
 
+def _horizon_badge_html(hz: "dict | None") -> str:
+    """Compact per-row horizon indicator: 3-dot glyph (intraday/weekly/monthly, each
+    colored by its BULL/BEAR/NEUTRAL state) + the winning tier label + TRIPLE / SPLIT
+    flags. DISPLAY-ONLY. Returns '' when there is no active tier (UNTIERED or the
+    horizon compute was unavailable), so untiered rows render exactly as before.
+    Reserve cyan (#00e5ff) for the TRIPLE badge per the design UI spec."""
+    if not hz or not hz.get("tier") or hz.get("tier") == "UNTIERED":
+        return ""
+    _dir     = hz.get("direction")
+    tier_col = "#30d158" if _dir == "BULL" else "#ff3b30" if _dir == "BEAR" else "#8a94ae"
+    tier_txt = str(hz["tier"]).replace("_", " ")
+
+    def _dotc(state):
+        return "#30d158" if state == "BULL" else "#ff3b30" if state == "BEAR" else "#4a5070"
+
+    dots = "".join(
+        f'<span style="color:{_dotc((hz.get(h) or {}).get("state"))}">&#9679;</span>'
+        for h in ("intraday", "weekly", "monthly")
+    )
+    triple = (
+        '<span style="font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;'
+        'background:rgba(0,229,255,.15);color:#00e5ff;margin-left:3px;letter-spacing:.05em">TRIPLE</span>'
+        if hz.get("triple") else ""
+    )
+    split = (
+        '<span style="font-size:8px;color:#ff9f0a;margin-left:3px">&#9888; SPLIT</span>'
+        if hz.get("disagreement") else ""
+    )
+    return (
+        f'<div style="margin-top:3px;display:flex;align-items:center;gap:4px" '
+        f'title="Horizon tiers (intraday &middot; weekly &middot; monthly) — longest active horizon wins; '
+        f'TRIPLE = all three aligned, SPLIT = horizons disagree.">'
+        f'<span style="font-size:11px;letter-spacing:.06em">{dots}</span>'
+        f'<span style="font-size:9px;color:{tier_col};font-weight:700;letter-spacing:.04em">{tier_txt}</span>'
+        f'{triple}{split}</div>'
+    )
+
+
 def build_rows(sorted_r, open_now=False, idx_offset=0, pm_extra=frozenset(), pm_all=frozenset(), confirm_gate=None, open_trades=None):
     out = ""
     for _i, r in enumerate(sorted_r):
@@ -654,6 +730,7 @@ def build_rows(sorted_r, open_now=False, idx_offset=0, pm_extra=frozenset(), pm_
       {_pm_badge}
     </div>
     {_pos_badge}
+    {_horizon_badge_html(r.get("horizon"))}
     {err_html}
   </td>
   <td style="padding:10px 14px;width:110px">
