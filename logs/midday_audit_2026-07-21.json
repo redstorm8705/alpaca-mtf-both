@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-07-21",
+  "run_ts": "2026-07-21T10:30:01.708550-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 28
+    },
+    "last_score": 24,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 44,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-21 16:11:48,342 | WARNING  | execution.entry_logic | [SOXL] CORRELATION GATE BLOCK: rho(daily,20d)=0.95 > 0.70 with TQQQ \u2014 skipping entry.",
+      "2026-07-21 16:16:57,896 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=37010s) \u2014 T4 yfinance ^VIX fallback=17.2. _vix_confirmed=",
+      "2026-07-21 16:16:58,583 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=163.0110. No prior close available \u2014 JPY scoring 0",
+      "2026-07-21 16:18:47,426 | WARNING  | execution.entry_logic | [AMD] Sector correlation BLOCKED: already holding SMCI in sector 'semis' \u2014 skipping to av",
+      "2026-07-21 16:18:48,715 | WARNING  | execution.entry_logic | [INTC] Sector correlation BLOCKED: already holding SMCI in sector 'semis' \u2014 skipping to a"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}
