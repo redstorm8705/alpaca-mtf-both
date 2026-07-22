@@ -494,6 +494,31 @@ tbody.collapsed .mrow,tbody.collapsed .det{display:none!important}
   td{padding:6px 8px;font-size:11px}
   .scan-pill{font-size:10px;padding:4px 8px}
 }
+/* ── 2-column BULL | BEAR layout (2026-07-21) ─────────────────────────────── */
+.ctx-strip{padding:6px 20px 8px;border-bottom:1px solid #161a28;background:#0b0d16}
+.ctx-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #12151f;font-size:12px}
+.ctx-row:last-child{border-bottom:none}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#161a28}
+.col{background:#0d0f1a;min-width:0}
+.colhead{position:sticky;top:0;z-index:5;padding:9px 16px;font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.colhead.bull{color:#30d158;background:#0e1a12;border-bottom:1px solid #17351f}
+.colhead.bear{color:#ff3b30;background:#1a0e0e;border-bottom:1px solid #351717}
+.sec-h{display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:11px;font-weight:700;
+  letter-spacing:.07em;text-transform:uppercase;color:#8a94ae;background:#0a0d14;
+  border-top:1px solid #1e2240;cursor:pointer;user-select:none}
+.sec-h:hover{background:#0e121e}
+.sec-h .cnt{color:#5a6580;font-weight:400}
+.sec-h .trip{color:#00e5ff;font-weight:700}
+.sec-body.collapsed{display:none}
+.card{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:9px 16px;border-bottom:1px solid #14172a}
+.card .c-sym{font-weight:700;font-size:14px;color:#e2e4ee}
+.card .c-px{font-size:12px;color:#b8bdd4;text-align:right;white-space:nowrap}
+.card .c-meta{display:flex;align-items:center;gap:8px;font-size:11px}
+.card .c-right{display:flex;align-items:center;gap:8px;justify-content:flex-end;font-size:11px;white-space:nowrap}
+.card .score{font-weight:700}
+.card .tag{font-weight:800;font-size:12px;letter-spacing:.03em}
+.untier-wrap{border-top:1px solid #161a28}
+@media(max-width:720px){.cols{grid-template-columns:1fr}}
 """
 
 def sc(s, MAX):
@@ -1098,6 +1123,121 @@ def build_active_rows(open_trades: dict, results_by_sym: dict, idx_offset: int =
         '</td></tr>'
     )
     return out
+
+
+# ── 2-column BULL | BEAR renderers (2026-07-21) ──────────────────────────────
+def _card_glyph(hz: "dict | None") -> str:
+    """Compact 3-dot horizon glyph (+ TRIPLE / SPLIT flags) for a column card.
+    The tier label is omitted here — the section header already names the horizon."""
+    if not hz:
+        return ""
+
+    def _dc(s):
+        return "#30d158" if s == "BULL" else "#ff3b30" if s == "BEAR" else "#4a5070"
+
+    dots = "".join(
+        f'<span style="color:{_dc((hz.get(h) or {}).get("state"))}">&#9679;</span>'
+        for h in ("intraday", "weekly", "monthly")
+    )
+    trip = (' <span style="font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;'
+            'background:rgba(0,229,255,.15);color:#00e5ff">TRIPLE</span>' if hz.get("triple") else "")
+    split = ' <span style="font-size:8px;color:#ff9f0a">&#9888;</span>' if hz.get("disagreement") else ""
+    return f'<span style="font-size:9px;letter-spacing:1px;margin-left:5px">{dots}</span>{trip}{split}'
+
+
+def build_card(r: dict) -> str:
+    """One compact ticker card for a BULL/BEAR column. Display-only; mirrors the
+    direction/score selection of build_rows (fired signal wins, else higher score)."""
+    sym = r["symbol"]
+    if r["long_signal"] and not r["short_signal"]:
+        use_short = False
+    elif r["short_signal"] and not r["long_signal"]:
+        use_short = True
+    else:
+        use_short = r["short_score"] > r["long_score"]
+    score = r["short_score"] if use_short else r["long_score"]
+    MAX = r["max_score"]
+    buy_tag, buy_c = decision_tag(r)
+    mv, mc = mom_val(r.get("momentum"))
+    entry = r.get("price")
+    px = f'${entry:,.2f}' if entry else "&mdash;"
+    pct = r.get("pct_change")
+    pct_html = (f'<span style="color:{"#30d158" if pct >= 0 else "#ff3b30"}">'
+                f'{"+" if pct >= 0 else ""}{pct:.1f}%</span>' if pct is not None else "")
+    return (
+        f'<div class="card">'
+        f'<div class="c-sym">{sym}{_card_glyph(r.get("horizon"))}</div>'
+        f'<div class="c-px">{px} {pct_html}</div>'
+        f'<div class="c-meta"><span class="score" style="color:{sc(score, MAX)}">{score}/{MAX}</span>'
+        f'<span class="tag" style="color:{buy_c}">{buy_tag}</span></div>'
+        f'<div class="c-right">{vol_html(r.get("vol_ratio"))}<span style="color:{mc}">{mv}</span></div>'
+        f'</div>'
+    )
+
+
+def build_context_strip(pinned_results: list, open_trades: dict, results_by_sym: dict) -> str:
+    """Full-width strip above the columns: pinned SPY/QQQ market-context rows + open
+    positions. Compact, display-only. Returns '' when there is nothing to show."""
+    rows = []
+    _pinned_syms = set()
+    for r in pinned_results:
+        sym = r["symbol"]
+        _pinned_syms.add(sym)
+        entry = r.get("price")
+        px = f'${entry:,.2f}' if entry else "&mdash;"
+        pct = r.get("pct_change")
+        pct_html = (f'<span style="color:{"#30d158" if pct >= 0 else "#ff3b30"}">'
+                    f'{"+" if pct >= 0 else ""}{pct:.1f}%</span>' if pct is not None else "")
+        score = max(r["long_score"], r["short_score"])
+        MAX = r["max_score"]
+        buy_tag, buy_c = decision_tag(r)
+        hz_badge = _horizon_badge_html(r.get("horizon"))
+        pos = (open_trades or {}).get(sym)
+        pos_html = ""
+        if pos and entry:
+            qty = pos.get("qty_remaining", pos["qty"])
+            e = pos["entry_price"]
+            d = pos["direction"]
+            pnl = (entry - e if d == "long" else e - entry) * qty
+            pc = "#30d158" if pnl >= 0 else "#ff3b30"
+            pos_html = (f'<span style="margin-left:auto;color:#00e5ff;font-weight:700">&#9679; IN POSITION</span>'
+                        f'<span style="color:#b8bdd4">{qty}sh @ ${e:,.2f}</span>'
+                        f'<span style="color:{pc};font-weight:700">{"+" if pnl >= 0 else ""}${pnl:,.2f}</span>')
+        rows.append(
+            f'<div class="ctx-row"><span class="c-sym">{sym}</span>'
+            f'<span style="color:#b8bdd4">{px}</span>{pct_html}'
+            f'<span style="font-size:11px">{hz_badge}</span>'
+            f'<span class="score" style="color:{sc(score, MAX)};font-weight:700">{score}/{MAX}</span>'
+            f'<span class="tag" style="color:{buy_c};font-weight:800">{buy_tag}</span>{pos_html}</div>'
+        )
+    for sym, tr in (open_trades or {}).items():
+        if sym in _pinned_syms:
+            continue
+        r = results_by_sym.get(sym)
+        cur = r.get("price") if r else None
+        qty = tr.get("qty_remaining", tr["qty"])
+        e = tr["entry_price"]
+        d = tr["direction"]
+        dir_c = "#30d158" if d == "long" else "#ff3b30"
+        if cur:
+            pnl = (cur - e if d == "long" else e - cur) * qty
+            pc = "#30d158" if pnl >= 0 else "#ff3b30"
+            pnl_html = f'<span style="color:{pc};font-weight:700">{"+" if pnl >= 0 else ""}${pnl:,.2f}</span>'
+            cur_html = f'<span style="color:#b8bdd4">${cur:,.2f}</span>'
+        else:
+            pnl_html = ""
+            cur_html = '<span style="color:#5a6580">&mdash;</span>'
+        rows.append(
+            f'<div class="ctx-row"><span style="font-size:9px;font-weight:700;padding:1px 6px;'
+            f'border-radius:3px;background:rgba(0,229,255,.2);color:#00e5ff">ACTIVE</span>'
+            f'<span class="c-sym">{sym}</span>{cur_html}'
+            f'<span style="color:{dir_c};font-weight:700">{d.upper()}</span>'
+            f'<span style="color:#b8bdd4">{qty}sh @ ${e:,.2f}</span>{pnl_html}</div>'
+        )
+    if not rows:
+        return ""
+    return ('<div class="ctx-strip"><div class="label" style="margin:2px 0 4px">'
+            'Market context &amp; open positions</div>' + "".join(rows) + '</div>')
 
 
 def _fetch_spy_0dte_data() -> "dict | None":
@@ -1714,7 +1854,9 @@ def write_html(data):
 
     PINNED      = ["SPY", "QQQ"]
     open_trades  = data.get("open_trades") or {}
-    confirm_gate = data.get("confirm_gate") or {}
+    # confirm_gate (data["confirm_gate"]) is still plumbed by write_scan_html but no longer
+    # read here — the confirm badge lived in the retired table's build_rows; re-adding it as
+    # a per-card marker is a 4b follow-up.
     active_syms = set(open_trades.keys()) - set(PINNED)   # SPY/QQQ keep normal pinned slot
     pinned      = [r for r in results if r["symbol"] in PINNED]
     pinned.sort(key=lambda r: PINNED.index(r["symbol"]))
@@ -1761,7 +1903,7 @@ def write_html(data):
         f"Bucket A = leveraged ETF (5% alloc) · Bucket B = swing trade · "
         f"Stop {sm}×ATR · Target {tm}×ATR · R:R 1:{round(tm/sm,1)} · "
         f"Min score {mn}/{MAX} · "
-        f"Grouped by horizon tier (longest-timeframe-wins) · &#9650;&#9650;&#9650; = triple-confluence, pinned atop each section · within a section: triples first, then by score · Click row to expand"
+        f"Two columns: BULL (left) | BEAR (right) by longest-timeframe-wins horizon tier · within each column: INTRADAY &amp; WEEKLY expanded, MONTHLY collapsed (click a horizon header to toggle) · &#9650;&#9650;&#9650; = triple-confluence · &#9888; = horizons disagree · &quot;Signals only&quot; hides untiered names · pinned SPY/QQQ &amp; open positions in the strip above"
     )
 
     # Fetch live VIX
@@ -1775,85 +1917,84 @@ def write_html(data):
         logger.warning(f"yfinance news fetch failed — news data absent this cycle: {_yfe}")
 
     results_by_sym   = {r["symbol"]: r for r in results}
-    # Filter pinned symbols (SPY/QQQ) from active rows — they display in the pinned
-    # scan rows above with an inline "IN POSITION" badge instead of appearing twice.
+    # ── 2-column BULL | BEAR layout (2026-07-21, Rafael-approved mockup) ─────────
+    # Pinned SPY/QQQ + open positions render in a full-width context strip above the
+    # two columns. Each non-pinned/non-active symbol lands in the column matching its
+    # horizon-tier DIRECTION (bull=left, bear=right), grouped by HORIZON within the
+    # column. INTRADAY + WEEKLY expanded by default; MONTHLY collapsed (a monthly
+    # section holding a triple auto-expands). UNTIERED names go to a full-width section
+    # below, hidden by "Signals only" (default ON). NOTE: build_rows / build_active_rows
+    # are now unused (the single-table layout is retired) — left in place for a separate
+    # cleanup pass to keep this layout diff focused. Live entry gate untouched.
     _pinned_set = set(PINNED)
     open_trades_for_active = {k: v for k, v in open_trades.items() if k not in _pinned_set}
-    active_rows_html = build_active_rows(open_trades_for_active, results_by_sym)
-    # ── Group the watchlist by DIRECTION x HORIZON (build step 3b, 2026-07-21) ──
-    # Replaces the old conviction tiers. Section = the longest-timeframe-wins tier
-    # from horizon_state (r["horizon"]["tier"], produced in step 3a). Order: BULL
-    # side (Monthly>Weekly>Intraday) then BEAR side, then UNTIERED last. Within a
-    # section, TRIPLE-confluence names sort to the top (pinned atop their column),
-    # then by conviction score desc. A symbol whose horizon compute failed has
-    # tier=None -> UNTIERED, so nothing is ever dropped. Conviction score still
-    # drives the per-row decision label (decision_tag) — only the GROUPING changed.
+    context_strip_html = build_context_strip(pinned, open_trades_for_active, results_by_sym)
+
+    _KNOWN_TIERS = {"MONTHLY_BULL", "WEEKLY_BULL", "INTRADAY_BULL",
+                    "MONTHLY_BEAR", "WEEKLY_BEAR", "INTRADAY_BEAR", "UNTIERED"}
+
     def _score_of(r):
         return max(r.get("long_score", 0), r.get("short_score", 0))
 
     def _tier_of(r):
-        # Route any unrecognized tier into UNTIERED so a future horizon_state enum
-        # change can never silently drop a symbol from the render (cold-2nd 2026-07-21).
+        # Unknown tiers route to UNTIERED so a future horizon_state enum change can
+        # never silently drop a symbol from the render (cold-2nd 2026-07-21).
         _t = ((r.get("horizon") or {}).get("tier")) or "UNTIERED"
         return _t if _t in _KNOWN_TIERS else "UNTIERED"
 
     def _is_triple(r):
         return bool((r.get("horizon") or {}).get("triple"))
 
-    _TIER_ORDER = [
-        ("MONTHLY_BULL",  "&#9650; MONTHLY BULL",  "#30d158"),
-        ("WEEKLY_BULL",   "&#9650; WEEKLY BULL",   "#30d158"),
-        ("INTRADAY_BULL", "&#9650; INTRADAY BULL", "#30d158"),
-        ("MONTHLY_BEAR",  "&#9660; MONTHLY BEAR",  "#ff3b30"),
-        ("WEEKLY_BEAR",   "&#9660; WEEKLY BEAR",   "#ff3b30"),
-        ("INTRADAY_BEAR", "&#9660; INTRADAY BEAR", "#ff3b30"),
-        ("UNTIERED",      "UNTIERED",              "#8a94ae"),
-    ]
-    _KNOWN_TIERS = {_k for _k, _lbl, _c in _TIER_ORDER}
-    _by_tier: dict = {}
+    _buckets: dict = {}   # (direction, horizon) -> [r, ...]
+    _untiered: list = []
     for _r in sorted_rest:
-        _by_tier.setdefault(_tier_of(_r), []).append(_r)
-    for _grp in _by_tier.values():
-        # triples first, then higher conviction score first
-        _grp.sort(key=lambda r: (0 if _is_triple(r) else 1, -_score_of(r)))
-
-    def _tier_div(key, label, color, n, n_triple=0, collapsed=False):
-        _car = "&#9656;" if collapsed else "&#9662;"   # &#9656; collapsed / &#9662; expanded
-        _trip = (f'<span style="color:#00e5ff;font-weight:700"> &middot; {n_triple} &#9650;&#9650;&#9650;</span>'
-                 if n_triple else "")
-        tail = (f'<span style="color:#5a6580;font-weight:400"> &middot; {n}</span>{_trip}' if n
-                else '<span style="color:#5a6580;font-weight:400"> &mdash; none</span>')
-        return (f'<tr class="sec-hdr" onclick="togSec(\'{key}\')"><td colspan="9" style="padding:8px 14px;font-size:11px;'
-                f'font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
-                f'color:{color};background:#0a0d14;border-top:1px solid #252847">'
-                f'<span id="car-{key}" style="color:#5a6580;margin-right:6px;font-weight:400">{_car}</span>'
-                f'{label}{tail}</td></tr>')
-
-    _b = len(pinned)
-    # Pinned + active rows live in their own always-visible <tbody>.
-    rows_html = (
-        '<tbody>'
-        + build_rows(pinned, open_now, idx_offset=0, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
-        + active_rows_html
-        + '</tbody>'
-    )
-    # One <tbody> per non-empty section (step 3c). The clickable header collapses it
-    # (togSec). Collapsed-by-default EXCEPT sections containing a triple (auto-expanded),
-    # per design §Q6. UNTIERED renders hidden by default via the "Signals only" master
-    # toggle (default ON); togSignals() reveals it. Empty sections are still skipped.
-    _sec_off = _b
-    for _tier_key, _tier_label, _tier_color in _TIER_ORDER:
-        _grp = _by_tier.get(_tier_key, [])
-        if not _grp:
+        _t = _tier_of(_r)
+        if _t == "UNTIERED":
+            _untiered.append(_r)
             continue
-        _ntrip = sum(1 for r in _grp if _is_triple(r))
-        _collapsed = (_ntrip == 0) and _tier_key != "UNTIERED"
-        _hdr  = _tier_div(_tier_key, _tier_label, _tier_color, len(_grp), _ntrip, _collapsed)
-        _body = build_rows(_grp, open_now, idx_offset=_sec_off, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
-        _tb_cls   = "sec collapsed" if _collapsed else "sec"
-        _tb_style = ' style="display:none"' if _tier_key == "UNTIERED" else ''
-        rows_html += f'<tbody id="sec-{_tier_key}" class="{_tb_cls}"{_tb_style}>{_hdr}{_body}</tbody>'
-        _sec_off += 300   # unique row-id range per section (each holds far fewer than 300 rows)
+        _hz, _dir = _t.split("_")   # "MONTHLY_BULL" -> ("MONTHLY", "BULL")
+        _buckets.setdefault((_dir, _hz), []).append(_r)
+    for _grp in _buckets.values():
+        _grp.sort(key=lambda r: (0 if _is_triple(r) else 1, -_score_of(r)))
+    _untiered.sort(key=lambda r: -_score_of(r))
+
+    def _sec_header(sec_id, label, ntrip, count, collapsed):
+        _car  = "&#9656;" if collapsed else "&#9662;"
+        _trip = f'<span class="trip"> &middot; {ntrip} &#9650;&#9650;&#9650;</span>' if ntrip else ""
+        return (f'<div class="sec-h" onclick="togSec(\'{sec_id}\')">'
+                f'<span id="car-{sec_id}">{_car}</span><span>{label}</span>'
+                f'<span class="cnt"> &middot; {count}</span>{_trip}</div>')
+
+    def _build_col(direction):   # "BULL" / "BEAR"
+        _label = "&#9650; BULL" if direction == "BULL" else "&#9660; BEAR"
+        _cls   = "bull" if direction == "BULL" else "bear"
+        _out = f'<div class="col"><div class="colhead {_cls}">{_label}</div>'
+        for _hz in ("INTRADAY", "WEEKLY", "MONTHLY"):
+            _grp = _buckets.get((direction, _hz), [])
+            if not _grp:
+                continue
+            _ntrip = sum(1 for r in _grp if _is_triple(r))
+            _collapsed = (_hz == "MONTHLY") and _ntrip == 0   # monthly collapsed unless it holds a triple
+            _sid = f"{direction}-{_hz}"
+            _out += _sec_header(_sid, _hz, _ntrip, len(_grp), _collapsed)
+            _cards = "".join(build_card(r) for r in _grp)
+            _out += f'<div id="sec-{_sid}" class="sec-body{" collapsed" if _collapsed else ""}">{_cards}</div>'
+        _out += "</div>"
+        return _out
+
+    cols_html = f'<div class="cols">{_build_col("BULL")}{_build_col("BEAR")}</div>'
+
+    # UNTIERED — full-width section below the columns, hidden by default (Signals only: ON).
+    if _untiered:
+        _u_cards = "".join(build_card(r) for r in _untiered)
+        untiered_html = (
+            '<div class="untier-wrap" id="untiered-wrap" style="display:none">'
+            '<div class="sec-h" style="cursor:default"><span>UNTIERED</span>'
+            f'<span class="cnt"> &middot; {len(_untiered)} &mdash; no active horizon tier</span></div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr">{_u_cards}</div></div>'
+        )
+    else:
+        untiered_html = ""
 
     # Composite regime BAR removed (redesign 2026-07-05) — it lives on the
     # dashboard. cr is still fetched below: the 0DTE rec logic consumes it.
@@ -2239,22 +2380,9 @@ def write_html(data):
 {composite_bar_html}{implied_bar_html}
 {bot_health_bar_html}
 {dte_alert_html}
-<table>
-  <thead>
-    <tr>
-      <th>Ticker</th>
-      <th>Price</th>
-      <th>Bias</th>
-      <th>Score</th>
-      <th title="Consecutive scans confirming the same signal direction — ✓ 2/2 = confirmed on 2 consecutive scans. Bot requires 2 qualifying scans before entry (phantom flip guard).">Confirm ⓘ</th>
-      <th>Signal</th>
-      <th>Rel Vol</th>
-      <th>Momentum</th>
-      <th></th>
-    </tr>
-  </thead>
-  {rows_html}
-</table>
+{context_strip_html}
+{cols_html}
+{untiered_html}
 
 <div style="padding:10px 20px;font-size:10px;color:#b8bdd4;border-top:1px solid #161a28">
   {footer_legend}
@@ -2283,7 +2411,7 @@ function togSec(key){{
   if(car) car.innerHTML = tb.classList.contains("collapsed") ? "&#9656;" : "&#9662;";
 }}
 function togSignals(){{
-  var u=document.getElementById("sec-UNTIERED");
+  var u=document.getElementById("untiered-wrap");
   var btn=document.getElementById("signals-toggle");
   if(!u){{ if(btn) btn.innerHTML="Signals only: ON"; return; }}
   var hidden=(u.style.display==="none");
