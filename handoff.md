@@ -73,6 +73,35 @@ gai=APPROVE (post counter-prompt on an inverted-label-semantics reject) / gro=WA
 **✅ SCANNER TIERING UI COMPLETE** (steps 2 → 3a → 3b → 3c all LIVE). The DIRECTION×HORIZON view the
 2026-07-20 design specified is fully shipped.
 
+### ✅ SHIPPED (2026-07-21) — 2-COLUMN BULL | BEAR scanner redesign (`248118b`, OCI LIVE)
+
+Rafael-approved redesign (mockup `logs/mockups/scanner_2col_mockup_2026-07-21.html`). Retired the single
+table for a two-column grid: **BULL (left) | BEAR (right)**. Pinned SPY/QQQ + open positions → full-width
+context strip above the columns (`build_context_strip`). Each symbol → the column matching its horizon-tier
+direction, grouped by horizon (intraday/weekly/monthly) as compact cards (`build_card`/`_card_glyph`).
+INTRADAY+WEEKLY expanded, MONTHLY collapsed by default (triple auto-expands). UNTIERED → full-width section
+hidden by "Signals only" (`togSignals` now targets `#untiered-wrap`). `togSec` toggles the new `.sec-body`
+divs. Only the RENDER changed — scan_ticker/scoring/sizing/entry gate untouched. Gate: full read + static
+clean + render/structural verify (33 cards, BULL/BEAR×horizon, strip, monthly collapsed, untiered hidden,
+no `<table>`) + cold-2nd PASS + preship gai=APPROVE (post counter-prompt on a false-premise togSignals
+reject; SAME confusion GAI hit on 3c) / gro=WAIVED.
+
+**⚠️ 4b FOLLOW-UPS (queued):** (1) remove dead `build_rows`/`build_active_rows` (single-table renderers, now
+unused — left in place to keep the layout diff focused). (2) re-add the **confirm-gate badge** (✓2/2) as a
+per-card marker — `data["confirm_gate"]` is still plumbed by `write_scan_html` but no longer read in
+`write_html`. (3) optional per-card click-to-expand detail (entry/stop/target/conditions) — the compact
+cards dropped the old row drill-down.
+
+**🛠 DEPLOY LESSONS (2026-07-21, important):** (a) OCI `git pull --ff-only` failed non-ff because the
+audit-report-sync cron makes a LOCAL commit on OCI (`logs/*.json`) → OCI diverges from GitHub every night.
+Resolved this deploy with `git pull --rebase origin main` (report commit replays cleanly on top; it never
+touches `.py`). (b) OCI git had NO committer identity → rebase failed until `git config user.email/user.name`
+was set (repo-local, now set to bot@mtf-bot / mtf-bot). (c) **NEVER pipe the deploy pull** (`git pull ... |
+tail -1 && restart`) — the pipe's exit code is `tail`'s, so a failed pull still runs the restart on STALE
+code. Use bare `git pull --ff-only && ... && echo DEPLOY_OK`. This is the same structural gap logged in the
+Future Roadmap "autonomous_review.py pushes directly to main" item — the report-sync should push to GitHub
+(or a branch+PR) so OCI stops diverging.
+
 **⏩ NEXT EXACT STEP — build step 4: RS-vs-SPY (U5), the design's HIGHEST-VALUE single upgrade.**
 scanner_tiering_design_2026-07-20.md §U5: residualize each symbol's return on its SPY beta so the scanner
 ranks true relative strength, not just market direction. The residual-momentum rank already exists in
