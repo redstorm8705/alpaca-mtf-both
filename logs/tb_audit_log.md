@@ -8945,3 +8945,16 @@ Real fragility is L287/L290 returning the SAME DataFrame by reference (a future 
 column-add would poison every read for 60 min). Deferred; add `.copy()` + 3-line eviction
 when this file is next opened.
 - 2026-07-22: SHIPPED 6e24cb6 scanner render fixes (OCI 37f25eb, HEALTH_OK). Alpaca is now the code-enforced P&L source in build_context_strip. XOM P&L visible (+$12.88). P0 NEXT: exit_logic.py:1611 breach-counter reset = unbounded loss path. ATR board 5-0 not fit for purpose.
+- 2026-07-22: premarket.py + weekly_review.py staged, gro/gai APPROVE + sha matched, awaiting cold-2nd marker. orphan_manager BLOCKED on Rafael (widens live stops up to +212%, moves a live broker stop). Ship gate hardened: 2 verified bypasses closed, gates itself, cold-2nd now enforced, 19/19 suite.
+- 2026-07-22: exit_logic P0 review complete. FIX 1 (rolling breach window) = ship, pure risk reduction. FIX 2 (uncap right tail) = HELD, unmeasured EV, right-censored sample. FIX 3 = no-op at qty<=4.
+
+## 2026-07-22 (interactive, Rafael) — PRESHIP SHIP-GATE: 5 defects fixed + 5 cold-2nd hardenings
+Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .claude/settings.json,
+.github/{workflows/preship-verify.yml,scripts/ci_audit.py,CODEOWNERS}, .gitignore, CLAUDE.md.
+- FIX1 marker writers: .lstrip("./")→prefix-only strip (dot-leading self-gated paths audit-able; was the bootstrap lockout).
+- FIX2 _commit_worktree_mode: commit -a/--all/pathspec/chained-add audit working-tree bytes vs HEAD (commit -am bypass closed).
+- FIX3 T1 is_push bypass confirmed absent in SHIPPING blob. FIX4 .github/ staged. FIX5 test_gate.py execs staged blob + drift-FAIL (27/27).
+- Cold-2nd (2 rounds, executed code, R1 FAIL→R2 PASS): F1 _verdict fail-open (REJECT-bias + startswith); F4 CI _is_gated mirror drift; F5 push-event audit skip; F6 command/exec rsync prefixes. + round-2 Finding1 NOT-APPROVED/DISAPPROVE fail-open (startswith).
+- CODEOWNERS false claim corrected (require_code_owner_reviews live=false, not "true").
+- Static: ruff/mypy/py_compile clean. 12/12 verdict unit tests. Preship: GAI APPROVE all 11 (5 via 1-round evidence counter-prompt); Gro WAIVED on 7 (Groq TPD daily cap).
+- Live gate: ALLOWS legit commit (exit 0), BLOCKS both bypasses. Committed local; awaiting Rafael push(PR)+GitHub settings (require check "preship", tick Code-Owner review, add GEMINI/GROQ Actions secrets).

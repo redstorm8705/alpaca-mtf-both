@@ -1,0 +1,46 @@
+# CODEOWNERS — the recursion break for the ship gate.
+#
+# WHY THIS FILE EXISTS
+# `.github/workflows/preship-verify.yml` re-runs the audit server-side, where the coding
+# agent has no write access at merge time and no access to the API keys. But for a
+# `pull_request` event GitHub runs the workflow file FROM THE PR BRANCH — so an agent
+# could weaken or delete the check in the same PR that needs it.
+#
+# Two things close that, and neither is something the agent can grant itself:
+#   1. Branch protection requires a status check BY NAME ("preship"). Delete or rename
+#      the job and the required check never reports, so the PR can never merge —
+#      weakening the file permanently BLOCKS the merge rather than unblocking it.
+#   2. This file. Any change under .github/ or .claude/preship/ requires Rafael's
+#      explicit review before it can merge, enforced by
+#      "Require review from Code Owners" in the branch protection rule.
+#
+# LIVE STATE 2026-07-22 (from the branch-protection API, not assumed):
+#   enforce_admins .................... TRUE   ✓ (admins cannot bypass)
+#   allow_force_pushes ................ FALSE  ✓
+#   required_pull_request_reviews ..... present (count 0 — solo config)
+#   require_code_owner_reviews ........ FALSE  ✗  <-- MUST be enabled for this file
+#                                                    to have any teeth.
+#   required_status_checks.contexts ... []     ✗  <-- "preship" not yet required;
+#                                                    add it after the workflow's first run.
+#
+# NOTE: CODEOWNERS only has teeth when "Require review from Code Owners" is enabled on
+# the protected branch. Until that tick is on, this file is advisory only. Operator
+# action required — see the two settings in .github/ setup notes.
+
+# Default owner for everything not matched below.
+*                           @redstorm8705
+
+# ── The enforcement mechanism itself. Highest-value paths in the repo. ──────────────
+/.github/                   @redstorm8705
+/.claude/preship/           @redstorm8705
+/.gitignore                 @redstorm8705
+/CLAUDE.md                  @redstorm8705
+
+# ── Anything that reaches capital. ──────────────────────────────────────────────────
+/config.py                  @redstorm8705
+/main.py                    @redstorm8705
+/execution/                 @redstorm8705
+/strategy/                  @redstorm8705
+/data/                      @redstorm8705
+/events/                    @redstorm8705
+/indicators/                @redstorm8705

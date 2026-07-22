@@ -11,7 +11,17 @@
 secrets/
 
 # ── Claude Code local config (settings.local.json may have permissions/tokens) ─
-.claude/
+# .claude/ is ignored EXCEPT the ship-gate machinery and the hook registration.
+# 2026-07-22: the entire preship gate existed only on one Mac — not in git, never on OCI,
+# and therefore absent from Rafael's second Claude account. An unversioned enforcement
+# mechanism does not exist for anyone but its author, which defeats its purpose. The
+# scripts read every credential from the environment (verified: no literal keys).
+# settings.local.json stays ignored — machine-local permissions.
+.claude/*
+!.claude/preship/
+.claude/preship/*
+!.claude/preship/*.py
+!.claude/settings.json
 .claudeignore
 .mcp.json
 .token-savior-cache.json
@@ -70,6 +80,7 @@ logs/*
 !logs/f6_activation_BLOCKED_*.md
 !logs/f6_prereq*_design_*.md
 !logs/reports_durability_design_*.md
+!logs/session_checkpoint.md
 # Routine cron report outputs — durable cross-account persistence (Option B, board 3-1 + Gro,
 # 2026-07-18). Un-ignored so scripts/sync_reports.py can commit them → any account's `git pull`
 # sees 100% of routine AUDIT reports. See logs/reports_durability_design_2026-07-18.md.
