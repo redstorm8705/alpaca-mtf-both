@@ -1754,7 +1754,7 @@ def write_html(data):
         f"Bucket A = leveraged ETF (5% alloc) · Bucket B = swing trade · "
         f"Stop {sm}×ATR · Target {tm}×ATR · R:R 1:{round(tm/sm,1)} · "
         f"Min score {mn}/{MAX} · "
-        f"Sorted: signals first, then by score · Click row to expand"
+        f"Grouped by horizon tier (longest-timeframe-wins) · &#9650;&#9650;&#9650; = triple-confluence, pinned atop each section · within a section: triples first, then by score · Click row to expand"
     )
 
     # Fetch live VIX
@@ -1773,15 +1773,47 @@ def write_html(data):
     _pinned_set = set(PINNED)
     open_trades_for_active = {k: v for k, v in open_trades.items() if k not in _pinned_set}
     active_rows_html = build_active_rows(open_trades_for_active, results_by_sym)
-    # ── Tier the watchlist by conviction (redesign 2026-07-05) ────────────────
+    # ── Group the watchlist by DIRECTION x HORIZON (build step 3b, 2026-07-21) ──
+    # Replaces the old conviction tiers. Section = the longest-timeframe-wins tier
+    # from horizon_state (r["horizon"]["tier"], produced in step 3a). Order: BULL
+    # side (Monthly>Weekly>Intraday) then BEAR side, then UNTIERED last. Within a
+    # section, TRIPLE-confluence names sort to the top (pinned atop their column),
+    # then by conviction score desc. A symbol whose horizon compute failed has
+    # tier=None -> UNTIERED, so nothing is ever dropped. Conviction score still
+    # drives the per-row decision label (decision_tag) — only the GROUPING changed.
     def _score_of(r):
         return max(r.get("long_score", 0), r.get("short_score", 0))
-    _high  = [r for r in sorted_rest if _score_of(r) >= _full]
-    _watch = [r for r in sorted_rest if _half <= _score_of(r) < _full]
-    _below = [r for r in sorted_rest if _score_of(r) < _half]
 
-    def _tier_div(label, color, n):
-        tail = (f'<span style="color:#5a6580;font-weight:400"> &middot; {n}</span>' if n
+    def _tier_of(r):
+        # Route any unrecognized tier into UNTIERED so a future horizon_state enum
+        # change can never silently drop a symbol from the render (cold-2nd 2026-07-21).
+        _t = ((r.get("horizon") or {}).get("tier")) or "UNTIERED"
+        return _t if _t in _KNOWN_TIERS else "UNTIERED"
+
+    def _is_triple(r):
+        return bool((r.get("horizon") or {}).get("triple"))
+
+    _TIER_ORDER = [
+        ("MONTHLY_BULL",  "&#9650; MONTHLY BULL",  "#30d158"),
+        ("WEEKLY_BULL",   "&#9650; WEEKLY BULL",   "#30d158"),
+        ("INTRADAY_BULL", "&#9650; INTRADAY BULL", "#30d158"),
+        ("MONTHLY_BEAR",  "&#9660; MONTHLY BEAR",  "#ff3b30"),
+        ("WEEKLY_BEAR",   "&#9660; WEEKLY BEAR",   "#ff3b30"),
+        ("INTRADAY_BEAR", "&#9660; INTRADAY BEAR", "#ff3b30"),
+        ("UNTIERED",      "UNTIERED",              "#8a94ae"),
+    ]
+    _KNOWN_TIERS = {_k for _k, _lbl, _c in _TIER_ORDER}
+    _by_tier: dict = {}
+    for _r in sorted_rest:
+        _by_tier.setdefault(_tier_of(_r), []).append(_r)
+    for _grp in _by_tier.values():
+        # triples first, then higher conviction score first
+        _grp.sort(key=lambda r: (0 if _is_triple(r) else 1, -_score_of(r)))
+
+    def _tier_div(label, color, n, n_triple=0):
+        _trip = (f'<span style="color:#00e5ff;font-weight:700"> &middot; {n_triple} &#9650;&#9650;&#9650;</span>'
+                 if n_triple else "")
+        tail = (f'<span style="color:#5a6580;font-weight:400"> &middot; {n}</span>{_trip}' if n
                 else '<span style="color:#5a6580;font-weight:400"> &mdash; none</span>')
         return (f'<tr><td colspan="9" style="padding:8px 14px;font-size:11px;'
                 f'font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
@@ -1792,13 +1824,16 @@ def write_html(data):
     rows_html = (
         build_rows(pinned, open_now, idx_offset=0, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
         + active_rows_html
-        + _tier_div(f"&#9650; Highest Conviction &middot; score &ge; {_full}", "#30d158", len(_high))
-        + build_rows(_high, open_now, idx_offset=_b, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
-        + _tier_div(f"&#9670; Watchlist &middot; score {_half}&ndash;{_full - 1}", "#ffd60a", len(_watch))
-        + build_rows(_watch, open_now, idx_offset=_b + 300, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
-        + _tier_div(f"Below threshold &middot; score &lt; {_half}", "#8a94ae", len(_below))
-        + build_rows(_below, open_now, idx_offset=_b + 600, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
     )
+    _sec_off = _b
+    for _tier_key, _tier_label, _tier_color in _TIER_ORDER:
+        _grp = _by_tier.get(_tier_key, [])
+        if not _grp:
+            continue   # skip empty sections (collapsed-with-counts view is step 3c)
+        _ntrip = sum(1 for r in _grp if _is_triple(r))
+        rows_html += _tier_div(_tier_label, _tier_color, len(_grp), _ntrip)
+        rows_html += build_rows(_grp, open_now, idx_offset=_sec_off, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        _sec_off += 300   # unique row-id range per section (each holds far fewer than 300 rows)
 
     # Composite regime BAR removed (redesign 2026-07-05) — it lives on the
     # dashboard. cr is still fetched below: the 0DTE rec logic consumes it.
