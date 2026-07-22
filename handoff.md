@@ -28,10 +28,26 @@ verified on the box 2026-07-21 17:2x PT (`ssh mtf-bot`, NOT inferred):
 (`protected_symbols.json = ["GOOGL","NVDA"]`, quarterly holds). No gap.
 `GOOGL +2 · HOOD +2 · MARA +11 · NET +1 · NFLX −2 · NVDA +2 · PANW +1 · RIVN +10 · SOFI −4 · TQQQ +1 · XOM +3`.
 
-**⏩ NEXT EXACT STEP:** resume the scanner-tiering horizon build — write `strategy/horizon_state.py`
-as a PURE reimplementation of the multi-TF strength rule on COMPLETED bars (do NOT import/alter the
-live `_get_weekly_bias` gate — blindspot #5). ATR must be absolute: `(calculate_atr(df,ATR_PERIOD)/100)*close`
-(codebase idiom `entry_logic.py:853`). TF_MONTHLY plumbing it consumes is now live on the box.
+### ✅ SHIPPED (2026-07-21) — scanner tiering build step 2: `strategy/horizon_state.py` (`42f9d95`, OCI parity)
+
+Pure, DISPLAY-ONLY horizon-state engine (509 lines). 3 states (INTRADAY 15m+1h / WEEKLY / MONTHLY),
+each BULL/BEAR/NEUTRAL + strength∈[-1,+1]; longest-timeframe-wins tiering; TRIPLE-confluence +
+horizon-DISAGREEMENT flags. Completed-bars-only via `_drop_partial`; reimplements the weekly-bias
+RULE (2 wk closes vs 10wk SMA + split-hold) WITHOUT importing live `_get_weekly_bias` (blindspot #5).
+Imported by NOTHING — Architecture Invariant #1 (SPY 5-min gate) untouched; no OCI restart needed.
+Gate: full read + static (ruff/mypy clean) + self-test ALL PASS (on OCI too) + cold-2nd (found+fixed
+a weekly split-hold sign-vs-gate inversion in `_state_from`, now regression-guarded) + preship
+gai=APPROVE (post-counter-prompt), gro=WAIVED (TPD). Marker written, sha matches committed blob.
+
+**⏩ NEXT EXACT STEP — build step 3:** rewire `scan_to_html.py:1706-1724` grouping from the current
+conviction tiers to DIRECTION×HORIZON, consuming `horizon_state.compute_horizon_states()` +
+`assign_tier()`. Design UI spec: scanner_tiering_design_2026-07-20.md §UI + §Q6 (collapsed sections,
+triples pinned cyan, 3-dot glyph, "Signals only" toggle). Then step 4 = RS-vs-SPY (U5) into the state math.
+
+**⚠️ 2 DISPLAY-POLICY CALLS awaiting Rafael confirm (both GAI-approved, reversible one-liners, display-only):**
+(1) INTRADAY strength anchor = 30-EMA on 15m (`_INTRADAY_ANCHOR`) — chosen for cross-horizon consistency
+(all 3 anchor on a trend MA) over VWAP. (2) WEEKLY split-hold reports the HELD bias (e.g. BULL) even when
+the latest completed close is far below SMA10 — anti-whipsaw per design, vs collapsing to NEUTRAL.
 
 **Rolling autonomous chain:** UNVERIFIED this session (scheduled-tasks registry empty; CronList is
 session-scoped). Re-arm before next away-window.

@@ -8836,3 +8836,5 @@ _pin_recs cross-call accumulation — it's function-local) → --evidence counte
 - options_scanner.py: S1 _persist_rec_history appends recs+rejections to JSONL before os.replace, stamped
   code_version+config_hash, "—"→null; never-raises; full read 1906L; cold-2nd PASS 7/7; preship gro+gai
   APPROVE (marker 5792e7213c3c). Both write first rows at tomorrow's RTH cron.
+
+- 2026-07-21 — SHIP `strategy/horizon_state.py` (42f9d95): scanner tiering build step 2, pure display-only horizon engine. Cold-2nd fixed a weekly split-hold sign-vs-gate inversion in `_state_from` (regression-guarded). Static clean, self-test PASS (Mac+OCI), preship gai=APPROVE/gro=WAIVED. OCI parity, no restart (unconsumed). Next: step 3 scan_to_html DIRECTION×HORIZON rewire.
