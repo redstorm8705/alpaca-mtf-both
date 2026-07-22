@@ -123,6 +123,83 @@ filter** `ALL | INTRADAY | WEEKLY | MONTHLY` — selecting a horizon shows every
 per-book work list) regardless of primary home. Delivers "an intraday name can also be a weekly/monthly
 hold" as a VIEW, not duplicated DOM. **NOW BUILDING through the full gate.**
 
+### ✅ SHIPPED (2026-07-22) — scanner render fixes (`6e24cb6`, OCI LIVE at `37f25eb`, HEALTH_OK)
+
+**P&L SOURCE-OF-TRUTH ENFORCED IN CODE.** `build_context_strip` now reads every open-position
+figure from Alpaca `/v2/positions` (`unrealized_pl`, `avg_entry_price`, `qty`, `side`,
+`current_price`). ZERO tracker arithmetic remains in the strip — verified by grep. This closes the
+rule Rafael has restated 4x and that was violated again this session.
+- **XOM fixed** — was rendering NO P&L (not in `config.WATCHLIST` -> never scanned -> em-dash +
+  P&L silently dropped). Now live: `$152.06 LONG 3sh @ $147.77 +$12.88`. ~16% of equity, invisible
+  until now. Zero bare em-dashes left in the strip.
+- **Collapse rule fixed** — a section holding any non-SKIP card can no longer render collapsed;
+  headers show `n LIVE`. `triple` is False BY CONSTRUCTION when any horizon is NEUTRAL, so the
+  old rule hid exactly the conflicted names (CRWD's live SHORT ½).
+- **CRWD/Option 3 shipped** — cards carry two labelled registers: STRUCTURE (horizon states in
+  words) + ACTION (decision + SIGNED score + COUNTER-TREND marker). Board 4-1, Gro+GAI concur.
+- **Degraded states discriminated** (was one undifferentiated alarm): PENDING FILL (unfilled limit
+  order) / P&L UNAVAILABLE (Alpaca unreachable) / ALREADY FLAGGED (fifo-reconciled or unverified) /
+  ⚠ NOT AT BROKER (genuine reconciliation break — the ONLY one that logs a warning).
+- **Blocking risk removed:** per-symbol quote fallback (2 endpoints x 3-attempt 429 ladder,
+  ~30s/symbol, up to ~600s on the run_cycle thread behind `check_exits()`) -> ONE `/v2/positions`
+  call, 8s timeout, no retry, 45s cache. `build_context_strip` wrapped so a render exception
+  degrades visibly instead of aborting `write_html` before the atomic write (page-freeze mode).
+
+GATE: full read 2633L + 10-pt audit + RC-1..8 + 3 board seats + **3 cold-2nd rounds (2 FAILs caught
+and fixed)** + ruff/mypy/py_compile clean + live functional test + preship Gro APPROVE / GAI APPROVE
+(both after counter-prompt on false premises — GAI claimed a missing `import datetime`, refuted by
+`ruff F821` clean AND the function executing on the VM).
+DEPLOY: `git pull --rebase` (OCI diverges nightly via the report-sync cron), DEPLOY_OK + HEALTH_OK.
+
+### 🔴 P0 — THE STOP IS NOT A STOP (ATR audit, board 5-0 NOT FIT FOR PURPOSE)
+`exit_logic.py:1611-1617` — **any tick back inside the stop resets `stop_breach_count` to 0**, and
+`:1563` requires 3 distinct 15M bars to confirm. Breach->recover->breach->recover never reaches 3, so
+**a position can drift arbitrarily far below its stop and never exit.** No broker-side stop exists at
+entry (`entry_logic.py:1329` plain market order, no bracket); the >3xATR detector only logs; the AH
+position check fails open. The recorded PANW -7.21R was FABRICATED (exit px = PANW's own 4/23 entry
+px) but **the mechanism to produce a real one is live and unguarded.** THIS IS THE NEXT ITEM.
+Risk-path diff -> mandatory cold board.
+
+### ATR AUDIT — other confirmed structural findings (all type-(a), no parameter choices)
+- **The tranche ladder can NEVER realize its headline R:R.** `TRANCHE_FRACS=[0.40,0.60,1.00]` x
+  `TRANCHE_SHARE=0.33` blends to a **1.34R ceiling**, not 2.0R. Solve for 2.0R and the only solution
+  is no partials at all. Reweight 0.15/0.15/0.70 -> 1.70R ceiling, ~2.4x expectancy.
+- **Every parameter was tuned against the wrong simulator.** `backtest_12pt.simulate_trade` has no
+  ladder, no trail, no overnight BE buffer, no slippage; max win +2.0R. Live max is 1.34R and the
+  EFFECTIVE stop is ~0.4R (overnight BE buffer 0.25-0.65xATR + trail phases 0.75/0.50/0.25xATR fire
+  long before the 1.25xATR hard stop). **This is the mechanical explanation for 686 commits without
+  convergence.** No (b)-type parameter change has evidentiary standing until this is fixed.
+- **42% of trades bypass the real stop function.** `orphan_manager.py:1068,1507` multiplies raw
+  `INTRADAY_STOP_ATR_MULT` — no leverage mult, no vol tier, no VIX, no ATH. 5 of 6 leveraged-ETF
+  trades carried NO leverage multiplier (SQQQ 1.249x vs 5.625x on sibling trades, same week).
+- **Dead/unreachable constants:** `PREMARKET_ATR_MULT`, all 3 `VOL_TIER_*_OVERNIGHT` (`overnight=`
+  never passed), `VIX_STOP_WIDEN_MULT_1/2`. `INTRADAY_STOP_ATR_MULT` is itself overwritten by
+  `VOL_TIER_STD_STOP_INTRADAY=1.25` on every standard-tier trade.
+- **Invariant 12 does NOT run on the entry path** — it is the `elif` after the H2 branch, and H2 is
+  `None` only when VIX<=0.01. The AH mirror still runs Invariant 12. Parity false again, opposite direction.
+- ATR is a simple mean not Wilder (**+/-14% stop AND size error**) and reads the PARTIAL bar
+  (-1.8% to -4.4% bias, always toward tighter stops / larger size).
+
+### RECONCILIATION — the $405 gap is CLOSED
+Ex-phantom log says +$196.31; Alpaca says -$208.55. Gap = the 13 `_fill_unverified` trades (9 have
+the ENTRY price written in as the exit price -> R=0.000) + 3 in `closed` with `exit_price=None`.
+**Alpaca is right, the log is wrong — and `kelly.py:300` is sizing from that log.**
+
+### OPEN DECISION — Rafael said "make the shadows LIVE"; the board said DELETE them
+Direct conflict, unresolved. Board: every unvalidated layer inflates N in the MinBTL arithmetic
+(~30-60 trials -> 6.8-8.2yr of frozen OOS needed). Rafael's documented preference is staged
+activation over long shadow waits. RECOMMENDED THIRD OPTION (not yet put to BGG): ask which of the
+four has evidence, at what staged magnitude, with a measurement that resolves in weeks not years.
+
+### BOARD VOTE ON CONTINUE/STOP (asked after Rafael raised quitting)
+Thorp PAUSE-AND-REBUILD | Simons PAUSE-AND-REBUILD | LdP STOP | Taleb STOP | Asness CONTINUE-WITH-CHANGES
+Gro STOP | GAI STOP — **but both ran on the contaminated -$2.64/1.09 figures and neither read the repo;
+the board seat that DID read it found the phantoms.** 5 of 5 agree the numbers cannot support ANY
+conclusion, including "quit". Operative verdict: **PAUSE AND REBUILD.** Proposed kill criterion:
+150 decided trades or 6 months, expectancy >= +0.10R on Alpaca-reconciled fills, **config FROZEN**
+(any change resets the counter), 15% drawdown = immediate stop, **3 hrs/week time budget** —
+exceeded 3 consecutive weeks = stop.
+
 **⏩ NEXT EXACT STEP — ONE gated diff in `scan_to_html.py` covering the 3 P0 render defects below
 (XOM price fallback + collapse fix + CRWD STRUCTURE/ACTION lines), THEN the strip redesign, THEN
 Fork B Hybrid with its 10 required changes. Awaiting Rafael's approval to write.**

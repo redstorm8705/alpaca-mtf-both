@@ -8944,3 +8944,4 @@ ACTION: per-card try/except returning a degraded card. REQUIRED in the Fork-B di
 Real fragility is L287/L290 returning the SAME DataFrame by reference (a future in-place
 column-add would poison every read for 60 min). Deferred; add `.copy()` + 3-line eviction
 when this file is next opened.
+- 2026-07-22: SHIPPED 6e24cb6 scanner render fixes (OCI 37f25eb, HEALTH_OK). Alpaca is now the code-enforced P&L source in build_context_strip. XOM P&L visible (+$12.88). P0 NEXT: exit_logic.py:1611 breach-counter reset = unbounded loss path. ATR board 5-0 not fit for purpose.
