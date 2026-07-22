@@ -11,7 +11,32 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-### 🔧 PRESHIP SHIP-GATE — five defects fixed + hardened; COMMITTED, awaiting Rafael's push + 2 GitHub settings
+### ✅ CURRENT STATE (end of 2026-07-22 session) — read this first
+
+**Preship ship-gate: SHIPPED + hardened, and the wall is LIVE.**
+- PR #1 (`5d0cf4d` → merged `43360ec`): 5 bypass/lockout fixes + 5 cold-2nd hardenings, gate versioned.
+- PR #2 (merged `96fb465`): fixed the `git commit … 2>&1 | tail` over-block in `_commit_worktree_mode`
+  (redirects are skipped, not read as pathspecs; cold-2nd caught a first `break`-based attempt as a
+  missed ship → fixed to `continue` + bare-target skip). `test_gate.py` 36/36.
+- **Branch protection LIVE** (API-verified): `enforce_admins=true`, force-push off, direct push to `main`
+  blocked, required check **`preship`** enabled (server-side Gemini re-audit; `GEMINI_API_KEY` secret set).
+  `require_code_owner_reviews=FALSE` **on purpose** — single owner + enforce_admins would self-lockout.
+- **Cross-account:** GitHub wall is account-independent (binds every account, zero setup). Local hook
+  travels via git but needs a **one-time "trust this workspace"** approval on the other account; even if
+  skipped, the GitHub wall still binds. Master Brain `project-state.md` refreshed 2026-07-22 (stale copies
+  deleted) — it is the fully-current queryable source.
+
+**⏸ PARKED — scanner UX patch, awaiting Rafael "approved" (UNCOMMITTED in working tree):**
+`scan_to_html.py` (+176/−68, display-only, runs on run_cycle thread). BGG-aligned (Wroblewski UX lead):
+pinned SPY/QQQ rows → native `<details>` dropdowns (multi-TF horizon + bull-confluence checklist +
+regime); routine open-positions list deleted (redundant w/ dashboard) → replaced by a silent-until-broken
+amber "NOT AT BROKER" reconciliation alarm (one shared `_is_genuine_break()` predicate; dashboard has no
+equivalent alarm — verified). Full-read+audit, static, functional tests, **cold-2nd PASS** all done.
+Next step on approval: FINAL Gro+GAI preship on exact diff + cold2 marker → commit → PR.
+
+---
+
+### 🔧 PRESHIP SHIP-GATE — five defects fixed + hardened (PR #1, SHIPPED — merged `43360ec`)
 
 A prior session shipped the preship gate in a state that was **worse than none**: it allowed both
 bypasses AND had locked itself out of repair. All fixed this session and verified against the
