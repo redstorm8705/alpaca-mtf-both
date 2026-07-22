@@ -49,12 +49,22 @@ untouched. Fully guarded: any failure → `r["horizon"]=None`, row renders as be
 (2358L) + static clean + LIVE functional test (SPY=MONTHLY_BULL) + cold-2nd PASS + preship gai=APPROVE/
 gro=WAIVED. Verified on served page: 33 badges (14 MO-BULL / 11 MO-BEAR / 6 WK-BEAR / 2 WK-BULL).
 
-**⏩ NEXT EXACT STEP — build step 3b:** rewire the grouping block in `scan_to_html.py:write_html`
-(currently `_high`/`_watch`/`_below` conviction tiers + `_tier_div()` at ~L1699-1724, shifted +~55 lines
-by 3a) to DIRECTION×HORIZON sections consuming `r["horizon"]["tier"]`. Design UI spec:
-scanner_tiering_design_2026-07-20.md §UI + §Q6 (collapsed-by-default sections w/ live counts, triples
-pinned cyan atop their column, "Signals only" master toggle default ON). Data already flows from 3a.
-Then step 4 = RS-vs-SPY (U5) into the state math.
+### ✅ SHIPPED (2026-07-21) — step 3b: DIRECTION×HORIZON regroup (`6fb244b`, OCI LIVE, restarted)
+
+`scan_to_html.py:write_html` grouping block: replaced conviction tiers (`_high`/`_watch`/`_below`) with
+7 horizon sections (`_TIER_ORDER`: Monthly>Weekly>Intraday BULL, then BEAR, then UNTIERED) keyed on
+`r["horizon"]["tier"]`. Within a section: triples sort first, then score desc; header shows live count +
+cyan triple count. Empty sections skipped; **unknown tiers route to UNTIERED (`_KNOWN_TIERS` self-heal,
+cold-2nd)**. Per-row rendering / pinned / active / scoring / sizing / entry gate all unchanged — grouping
+only. Footer legend updated. Gate: full read + static clean + LIVE render (headers in exact order, 38
+unique row-ids no collision) + cold-2nd PASS + preship gai=APPROVE (post counter-prompt on a false-premise
+`_tier_div` reject: n_triple<=n and empty sections skipped → the flagged branch is unreachable) / gro=WAIVED.
+
+**⏩ NEXT EXACT STEP — build step 3c:** collapse-by-default sections + "Signals only" master toggle
+(default ON, hides UNTIERED). Needs: a `row_class` param on `build_rows` (tag each section's rows), a
+`togSec()` + `togSignals()` JS pair near `togDTE()` (~L2131), and section headers made clickable. Design:
+scanner_tiering_design_2026-07-20.md §Q6 (collapsed w/ live counts, triples auto-expanded). Then step 4 =
+RS-vs-SPY (U5) into the state math (scanner_tiering_design §U5 — the highest-value single upgrade).
 
 **⚠️ 2 DISPLAY-POLICY CALLS awaiting Rafael confirm (both GAI-approved, reversible one-liners, display-only):**
 (1) INTRADAY strength anchor = 30-EMA on 15m (`_INTRADAY_ANCHOR`) — chosen for cross-horizon consistency
