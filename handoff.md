@@ -102,7 +102,41 @@ code. Use bare `git pull --ff-only && ... && echo DEPLOY_OK`. This is the same s
 Future Roadmap "autonomous_review.py pushes directly to main" item — the report-sync should push to GitHub
 (or a branch+PR) so OCI stops diverging.
 
-**⏩ NEXT EXACT STEP — build step 4: RS-vs-SPY (U5), the design's HIGHEST-VALUE single upgrade.**
+### ✅ BGG-ALIGNED DECISIONS (2026-07-21, Open Question Protocol — board 3 seats + Gro + GAI)
+
+**Fork A — SPY/QQQ "not entering" diagnosis (RESOLVED, no bug):** SPY & QQQ ARE in WATCHLIST + the entry
+path and HAVE traded (Alpaca: SPY 18 fills last ~Jun 2, QQQ 19 fills last ~May 6). The `SPY` code in
+`entry_logic.py` is the market-RISK gate (SPY-as-reference), not a block on trading SPY. Real reason: the
+entry scan (`signal_generator.run_scan` → `build_scan_universe(run_atr_filter=True)`) drops symbols with
+14-day daily ATR < `config.ATR_MIN_PCT` (1.5%). **SPY ATR is currently 0.97% → filtered out** (too calm;
+traded fine Apr-May when livelier). **QQQ ATR 2.0% → passes**, just not clearing the confluence score lately.
+No hidden block. **DECISION (Rafael, board unanimous): KEEP the ATR floor as-is** — do NOT statically lower
+it, do NOT whitelist SPY (Thorp/Taleb: 0.97% ATR = decayed edge/whipsaw, Kelly≈0; cost rationale is weakest
+for SPY but the edge rationale holds). Regime-relative floor = separate FUTURE validated project (below).
+
+**Fork B — scanner multi-membership: BUILD THE HYBRID (Rafael approved).** A name that qualifies on multiple
+horizons should be reachable per-book WITHOUT physical triplication (unanimous board caveat: naked duplicate
+cards invite treating one underlying as 3 independent bets → correlated over-exposure, Taleb/Thorp/Brandt).
+Hybrid = (1) per-card **I/W/M membership chips** (filled+colored when that horizon is non-neutral, ringed on
+the card's primary/longest home, hollow when neutral) replacing the 3-dot glyph; (2) a **book-view segmented
+filter** `ALL | INTRADAY | WEEKLY | MONTHLY` — selecting a horizon shows every card active on it (complete
+per-book work list) regardless of primary home. Delivers "an intraday name can also be a weekly/monthly
+hold" as a VIEW, not duplicated DOM. **NOW BUILDING through the full gate.**
+
+**⏩ NEXT EXACT STEP — build Fork B Hybrid** in `scan_to_html.py`: `build_card` adds `data-i/data-w/data-m`
+attrs + I/W/M chips (new chip renderer replaces `_card_glyph`); header gets the `ALL|INTRADAY|WEEKLY|MONTHLY`
+segmented control; CSS `body.bookview-<H> .card:not([data-<h>="1"]){display:none}`; JS `setBook(v)` that
+expands sections + hides empties under a non-ALL view. Then AFTER: step 4 RS-vs-SPY (U5).
+
+**FUTURE (roadmap, validated build — NOT a quick config change):** **regime-relative ATR floor.** Replace the
+static 1.5% `ATR_MIN_PCT` with a floor that breathes with the cross-sectional vol regime (percentile of the
+watchlist ATR distribution / vol-adjusted), keeping an absolute hard floor beneath so the universe can go
+near-empty in a dead tape (Weinstein Stage-1 = stand down). GATE FIRST on measured net-of-cost expectancy
+for sub-1.5%-ATR names on the bot's OWN fills (LdP: frameworks point, the trade log settles it). Board+Gro+GAI
+split keep-as-is (Gro, exec-risk) vs make-it-dynamic (GAI, quant-signal) — all reject a static lower / SPY
+whitelist. Files: `data/premarket.py:build_scan_universe/atr_filter`, `config.py:ATR_MIN_PCT`.
+
+### ⏸ (was NEXT) step 4: RS-vs-SPY (U5), the design's HIGHEST-VALUE single upgrade — now AFTER Fork B.
 scanner_tiering_design_2026-07-20.md §U5: residualize each symbol's return on its SPY beta so the scanner
 ranks true relative strength, not just market direction. The residual-momentum rank already exists in
 shadow (`signal_generator.py:381-401`) — promote it into the horizon-state math / a per-row RS column.
