@@ -8838,3 +8838,5 @@ _pin_recs cross-call accumulation — it's function-local) → --evidence counte
   APPROVE (marker 5792e7213c3c). Both write first rows at tomorrow's RTH cron.
 
 - 2026-07-21 — SHIP `strategy/horizon_state.py` (42f9d95): scanner tiering build step 2, pure display-only horizon engine. Cold-2nd fixed a weekly split-hold sign-vs-gate inversion in `_state_from` (regression-guarded). Static clean, self-test PASS (Mac+OCI), preship gai=APPROVE/gro=WAIVED. OCI parity, no restart (unconsumed). Next: step 3 scan_to_html DIRECTION×HORIZON rewire.
+
+- 2026-07-21 — SHIP `scan_to_html.py` step 3a (f883043, OCI LIVE): display-only horizon tiering wired into scanner. Per-row 3-dot glyph + tier + TRIPLE/SPLIT via `_horizon_badge_html`; `scan_ticker` attaches `r["horizon"]` (60-min weekly/monthly cache). Guarded fallback, no grouping change. Gate: full read 2358L, static clean, live test SPY=MONTHLY_BULL, cold-2nd PASS, preship gai=APPROVE/gro=WAIVED. Verified 33 badges on served page. Next: 3b DIRECTION×HORIZON regroup.

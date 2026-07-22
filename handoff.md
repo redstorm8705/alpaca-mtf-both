@@ -39,10 +39,22 @@ Gate: full read + static (ruff/mypy clean) + self-test ALL PASS (on OCI too) + c
 a weekly split-hold sign-vs-gate inversion in `_state_from`, now regression-guarded) + preship
 gai=APPROVE (post-counter-prompt), gro=WAIVED (TPD). Marker written, sha matches committed blob.
 
-**⏩ NEXT EXACT STEP — build step 3:** rewire `scan_to_html.py:1706-1724` grouping from the current
-conviction tiers to DIRECTION×HORIZON, consuming `horizon_state.compute_horizon_states()` +
-`assign_tier()`. Design UI spec: scanner_tiering_design_2026-07-20.md §UI + §Q6 (collapsed sections,
-triples pinned cyan, 3-dot glyph, "Signals only" toggle). Then step 4 = RS-vs-SPY (U5) into the state math.
+### ✅ SHIPPED (2026-07-21) — step 3a: horizon tiering wired into the scanner (`f883043`, OCI LIVE, restarted)
+
+`scan_to_html.py`: `scan_ticker` attaches `r["horizon"]=compute_horizon_states()+assign_tier()` (reuses
+the 15m/1h/daily frames already fetched; weekly+monthly via a NEW 60-min `_cached_horizon_bars` cache,
+~2 req/sym/hr). `build_rows` renders a compact 3-dot glyph + tier label + TRIPLE/SPLIT flags via new
+`_horizon_badge_html()`, inside the existing ticker cell — NO grouping/colspan change, live entry gate
+untouched. Fully guarded: any failure → `r["horizon"]=None`, row renders as before. Gate: full read
+(2358L) + static clean + LIVE functional test (SPY=MONTHLY_BULL) + cold-2nd PASS + preship gai=APPROVE/
+gro=WAIVED. Verified on served page: 33 badges (14 MO-BULL / 11 MO-BEAR / 6 WK-BEAR / 2 WK-BULL).
+
+**⏩ NEXT EXACT STEP — build step 3b:** rewire the grouping block in `scan_to_html.py:write_html`
+(currently `_high`/`_watch`/`_below` conviction tiers + `_tier_div()` at ~L1699-1724, shifted +~55 lines
+by 3a) to DIRECTION×HORIZON sections consuming `r["horizon"]["tier"]`. Design UI spec:
+scanner_tiering_design_2026-07-20.md §UI + §Q6 (collapsed-by-default sections w/ live counts, triples
+pinned cyan atop their column, "Signals only" master toggle default ON). Data already flows from 3a.
+Then step 4 = RS-vs-SPY (U5) into the state math.
 
 **⚠️ 2 DISPLAY-POLICY CALLS awaiting Rafael confirm (both GAI-approved, reversible one-liners, display-only):**
 (1) INTRADAY strength anchor = 30-EMA on 15m (`_INTRADAY_ANCHOR`) — chosen for cross-horizon consistency
