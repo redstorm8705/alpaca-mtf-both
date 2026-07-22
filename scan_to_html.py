@@ -463,6 +463,13 @@ thead th{padding:7px 14px;text-align:left;font-size:10px;font-weight:500;color:#
 .mrow{border-bottom:1px solid #1e2240;cursor:pointer;transition:background .1s}
 .mrow:hover{background:#1e2240!important}
 .det{display:none;background:#13162a;border-bottom:2px solid #252847}
+.sec-hdr{cursor:pointer}
+.sec-hdr:hover td{background:#12151f!important}
+tbody.collapsed .mrow,tbody.collapsed .det{display:none!important}
+.sig-toggle{font-size:11px;font-weight:600;color:#b8bdd4;cursor:pointer;padding:5px 11px;
+  border:1px solid #2a2f48;border-radius:6px;white-space:nowrap;user-select:none;
+  transition:color .15s,border-color .15s}
+.sig-toggle:hover{color:#e2e4ee;border-color:#4a5070}
 
 .bar-bg{width:100%;height:4px;background:#252847;border-radius:2px;margin-top:4px}
 .bar-fill{height:100%;border-radius:2px}
@@ -1810,29 +1817,42 @@ def write_html(data):
         # triples first, then higher conviction score first
         _grp.sort(key=lambda r: (0 if _is_triple(r) else 1, -_score_of(r)))
 
-    def _tier_div(label, color, n, n_triple=0):
+    def _tier_div(key, label, color, n, n_triple=0, collapsed=False):
+        _car = "&#9656;" if collapsed else "&#9662;"   # &#9656; collapsed / &#9662; expanded
         _trip = (f'<span style="color:#00e5ff;font-weight:700"> &middot; {n_triple} &#9650;&#9650;&#9650;</span>'
                  if n_triple else "")
         tail = (f'<span style="color:#5a6580;font-weight:400"> &middot; {n}</span>{_trip}' if n
                 else '<span style="color:#5a6580;font-weight:400"> &mdash; none</span>')
-        return (f'<tr><td colspan="9" style="padding:8px 14px;font-size:11px;'
+        return (f'<tr class="sec-hdr" onclick="togSec(\'{key}\')"><td colspan="9" style="padding:8px 14px;font-size:11px;'
                 f'font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
                 f'color:{color};background:#0a0d14;border-top:1px solid #252847">'
+                f'<span id="car-{key}" style="color:#5a6580;margin-right:6px;font-weight:400">{_car}</span>'
                 f'{label}{tail}</td></tr>')
 
     _b = len(pinned)
+    # Pinned + active rows live in their own always-visible <tbody>.
     rows_html = (
-        build_rows(pinned, open_now, idx_offset=0, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
+        '<tbody>'
+        + build_rows(pinned, open_now, idx_offset=0, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate, open_trades=open_trades)
         + active_rows_html
+        + '</tbody>'
     )
+    # One <tbody> per non-empty section (step 3c). The clickable header collapses it
+    # (togSec). Collapsed-by-default EXCEPT sections containing a triple (auto-expanded),
+    # per design §Q6. UNTIERED renders hidden by default via the "Signals only" master
+    # toggle (default ON); togSignals() reveals it. Empty sections are still skipped.
     _sec_off = _b
     for _tier_key, _tier_label, _tier_color in _TIER_ORDER:
         _grp = _by_tier.get(_tier_key, [])
         if not _grp:
-            continue   # skip empty sections (collapsed-with-counts view is step 3c)
+            continue
         _ntrip = sum(1 for r in _grp if _is_triple(r))
-        rows_html += _tier_div(_tier_label, _tier_color, len(_grp), _ntrip)
-        rows_html += build_rows(_grp, open_now, idx_offset=_sec_off, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        _collapsed = (_ntrip == 0) and _tier_key != "UNTIERED"
+        _hdr  = _tier_div(_tier_key, _tier_label, _tier_color, len(_grp), _ntrip, _collapsed)
+        _body = build_rows(_grp, open_now, idx_offset=_sec_off, pm_extra=_pm_extra, pm_all=_pm_all, confirm_gate=confirm_gate)
+        _tb_cls   = "sec collapsed" if _collapsed else "sec"
+        _tb_style = ' style="display:none"' if _tier_key == "UNTIERED" else ''
+        rows_html += f'<tbody id="sec-{_tier_key}" class="{_tb_cls}"{_tb_style}>{_hdr}{_body}</tbody>'
         _sec_off += 300   # unique row-id range per section (each holds far fewer than 300 rows)
 
     # Composite regime BAR removed (redesign 2026-07-05) — it lives on the
@@ -2177,6 +2197,7 @@ def write_html(data):
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:16px">
+    <span id="signals-toggle" class="sig-toggle" onclick="togSignals()" title="Hide UNTIERED names (no active horizon tier). Click to show all.">Signals only: ON</span>
     <a href="options.html" style="font-size:11px;font-weight:600;color:#b8bdd4;text-decoration:none;
       padding:5px 11px;border:1px solid #2a2f48;border-radius:6px;white-space:nowrap;
       transition:color .15s,border-color .15s" onmouseover="this.style.color='#e2e4ee';this.style.borderColor='#4a5070'"
@@ -2232,7 +2253,7 @@ def write_html(data):
       <th></th>
     </tr>
   </thead>
-  <tbody>{rows_html}</tbody>
+  {rows_html}
 </table>
 
 <div style="padding:10px 20px;font-size:10px;color:#b8bdd4;border-top:1px solid #161a28">
@@ -2254,6 +2275,20 @@ function tog(i){{
   if(d.style.display==="none"||d.style.display===""){{
     d.style.display="table-row";a.innerHTML="▲";
   }}else{{d.style.display="none";a.innerHTML="▼";}}
+}}
+function togSec(key){{
+  var tb=document.getElementById("sec-"+key); if(!tb) return;
+  tb.classList.toggle("collapsed");
+  var car=document.getElementById("car-"+key);
+  if(car) car.innerHTML = tb.classList.contains("collapsed") ? "&#9656;" : "&#9662;";
+}}
+function togSignals(){{
+  var u=document.getElementById("sec-UNTIERED");
+  var btn=document.getElementById("signals-toggle");
+  if(!u){{ if(btn) btn.innerHTML="Signals only: ON"; return; }}
+  var hidden=(u.style.display==="none");
+  u.style.display = hidden ? "" : "none";
+  if(btn) btn.innerHTML = hidden ? "Signals only: OFF" : "Signals only: ON";
 }}
 
 // ── Next-scan countdown ───────────────────────────────────────────────────────
