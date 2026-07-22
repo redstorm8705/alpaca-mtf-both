@@ -229,6 +229,79 @@ This rule exists because a concept-level Gro/GAI approval (Step 4 — on audit f
 - No "it's just docs," "it's small," "obvious," or "the concept was already approved" exceptions.
 - **Self-application:** this rule and the runbook docs that contain it (this file; the `session-start` skill deploy handler) are themselves execution-governing. A change to any of them undergoes this SAME final Gro + GAI pass on its own diff before it is committed or pushed — exactly as this rule was itself audited before it first shipped (2026-07-03). There is no highest-level document that is exempt from its own gate.
 
+### DOCUMENTATION IS NOT ENFORCEMENT — BUILD THE GATE (Rafael mandate 2026-07-22)
+
+**A rule written in a markdown file is a REQUEST. Only a mechanism that can REJECT the work is a
+control. When a rule has been violated more than once, STOP REWRITING THE RULE AND BUILD THE GATE.**
+
+This rule exists because on 2026-07-22 Rafael asked, for the fourth time, what he had to say to get
+the P&L source-of-truth rule enforced. The honest answer was: nothing. The rule was in CLAUDE.md, in
+project memory, and had been stated verbally — and it was violated again within an hour of being
+read, by computing a win rate and payoff ratio from `trade_log.json` and presenting them as fact. It
+held the FIRST time a review gate rejected the code that violated it. **Documentation: 0 for 4.
+Mechanism: 1 for 1.**
+
+Worse, in the same session Claude described two specific failure modes to Rafael — unwrapped calls on
+the `run_cycle` thread starving `check_exits()`, and a render exception aborting `write_html` before
+the atomic write and freezing the operator's page while it still looks live — and then **committed
+both of them.** Knowing a failure mode provides zero protection against committing it.
+
+**Therefore, when a rule is violated a second time:**
+1. Do NOT propose better wording, a stronger heading, or another memory entry as the fix.
+2. Name the mechanism that would have REJECTED the violation: a lint rule, a pre-commit hook, a
+   required marker bound to a content hash, a renamed field, a deleted code path.
+3. Build it, and take it through this file's own FINAL PRE-SHIP gate.
+4. Prefer making the wrong thing **impossible** over making it **forbidden**.
+5. Treat a repeated violation as evidence about the CONTROL, not about the violator.
+
+### COLD SECOND-AGENT REVIEW — MECHANICALLY ENFORCED (Rafael mandate 2026-07-22)
+
+**Step 5b was previously invoked voluntarily; nothing checked it. It is now enforced by
+`.claude/preship/preship_gate.py`, which blocks `git commit`/`git push` on any gated file lacking a
+fresh cold-2nd `PASS` bound to the sha256 of the exact staged content.**
+
+Record a verdict with:
+```bash
+python3 .claude/preship/record_cold2.py <file> PASS
+```
+
+**Why it is enforced.** On a ~200-line **DISPLAY-ONLY** diff to `scan_to_html.py` (2026-07-21/22) the
+cold second agent returned **FAIL twice** and caught four ship-blocking defects that
+`ruff --select E,W,F,B`, `mypy --warn-unreachable` and `py_compile` **all passed clean at every round**:
+- a per-symbol quote fallback (2 endpoints × a 3-attempt 429 retry ladder) that could block **~600s
+  on the `run_cycle` thread**, starving `check_exits()` and leaving live stops unevaluated;
+- a `None * qty` TypeError aborting `write_html` before the atomic write — the page-freeze mode;
+- every unfilled overnight limit order rendering as a broker reconciliation break, all night;
+- `{}` conflating "fetch failed" with "empty book", flagging the entire position book.
+
+**Binding rules:**
+- A **FAIL blocks the ship.** It is not cleared by self-certification.
+- **Every revision requires a FRESH review.** Rounds 2 and 3 each found defects introduced by the
+  previous round's fix — which is why the marker is bound to a content hash, not just a verdict.
+- **Diff size is not a risk proxy.** "It's display-only" and "it's small" are the conditions under
+  which this class of defect ships.
+- **State the runtime context in the prompt** — threading, what runs synchronously behind it, what
+  cannot run while it does. The single highest-yield sentence in the round-1 prompt was "this runs
+  on the trading thread and `check_exits()` cannot run while it does."
+
+### VERIFY AGENT CLAIMS AT SOURCE BEFORE RELAYING (Rafael mandate 2026-07-22)
+
+**Board seats, Gro and GAI produce confident, correctly-line-cited claims that are FALSE. Verify any
+load-bearing claim at source before repeating it to Rafael — unconditionally for any claim about
+live money, risk, or a safety control.** Caught this way in one session: a board seat reporting "GEX
+is directly scaling position size" (true call site, but `GEX_ENABLED = False` since 2026-07-19), and
+GAI declaring a **CRITICAL missing `import datetime`** in the FINAL pre-ship audit — refuted by the
+import at line 17, by `ruff --select F821` passing clean, and decisively by the function having
+already EXECUTED on the production VM.
+
+Verification strength, in order: **execute it** > a targeted static rule > read the surrounding state
+(flags, callers, config) > read the cited line. A cited line number proves the agent looked at
+something, not that its conclusion follows.
+
+Pair this with the DISAGREEMENT PROTOCOL: a false claim is answered with a **counter-prompt carrying
+the specific refuting evidence — never a blind re-roll.** All four false premises in that session
+reversed in ONE round each when shown the evidence.
+
 ### DEPLOY MECHANISM — git single channel (Rafael mandate 2026-07-03, board 4/4 + Gro + GAI)
 
 Git is the SOLE deploy channel. The Mac commits + pushes to GitHub; OCI deploys by `git pull origin main --ff-only` + restart (the exact path `auto_deploy.sh` already runs). **Rsync of tracked files is PROHIBITED** — it writes bytes without a commit, dirtying OCI's git tree so the next `git pull --ff-only` aborts (this caused OCI HEAD to drift 5 commits behind GitHub, 6/29–7/3). Rollback reverts the CAPTURED patch SHA (`DEPLOY_SHA` from the commit step), never `HEAD`, because `autonomous_review.py` or a later commit may have advanced HEAD. Deploy success requires a literal `DEPLOY_OK` marker from the OCI ssh command; its absence means the pull failed and the restart was correctly skipped — do not report success.

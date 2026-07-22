@@ -7,9 +7,51 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-21 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-22 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### 🔧 PRESHIP SHIP-GATE — five defects fixed + hardened; COMMITTED, awaiting Rafael's push + 2 GitHub settings
+
+A prior session shipped the preship gate in a state that was **worse than none**: it allowed both
+bypasses AND had locked itself out of repair. All fixed this session and verified against the
+**STAGED blob** (not the working tree — that mismeasurement was the root of the false "19/19"):
+1. `.lstrip("./")` → prefix-only strip in BOTH marker writers (`record_cold2.py`, `preship_audit.py`)
+   — dot-leading self-gated paths (`.claude/preship/…`) can now be audited. **This was the bootstrap
+   lockout blocking all night.** Verified: markers now write for `.claude/preship/preship_gate.py`.
+2. `_commit_worktree_mode` added — `git commit -a`/`--all`/pathspec/`git add && git commit` now audit
+   WORKING-TREE bytes vs HEAD (the `commit -am` full bypass is closed).
+3. T1 `is_push` bypass confirmed absent in the SHIPPING blob (was only in the working tree before).
+4. `.github/` staged — the server-side wall (workflow + CODEOWNERS + ci_audit) is now IN the repo.
+5. `test_gate.py` rewritten to `exec` the **staged blob** (`git cat-file blob :<path>`) + hard-FAIL on
+   drift — it can never again pass on bytes that aren't shipping. **27/27 on the staged blob.**
+Cold-2nd (2 rounds: FAIL→fixes→PASS, executed the code) also caught + fixed: **verdict fail-open** in
+`preship_audit._verdict` (a REJECT reason containing "approve" wrote a valid marker — now REJECT-biased
++ `startswith`), **CI mirror drift** (settings.json/`.gitignore`/T7 dirs added), **push-event audit skip**
+(external audit now runs on push too), **rsync `command`/`exec` prefixes**. Static clean (ruff/mypy/
+py_compile), 12/12 verdict unit tests. Also corrected a FALSE claim in CODEOWNERS
+(`require_code_owner_reviews` is **false** live, not "true" as the comment asserted).
+
+Preship on the exact staged diff (11 gated files): **GAI APPROVE on all 11** (5 needed one
+evidence-based counter-prompt each — never blind re-rolls; all reversed in one round). **Gro=WAIVED on
+7** — Groq hit its hard 100k **TPD daily cap** mid-run (standing 2026-07-07 rule: Gro-unavailable →
+board/cold-2nd + GAI suffices). **Local gate now ALLOWS the commit (exit 0) and still BLOCKS both
+bypasses** — end-to-end proof.
+
+**⏩ EXACT NEXT STEP — Rafael's two actions (main is protected: enforce_admins=true, PR required, so
+Claude cannot push to main directly):**
+  1. **Push the commit as a PR** and merge it (Claude will run `git push` of a feature branch + open the
+     PR on Rafael's go).
+  2. **GitHub → Settings → Branches → `main`:** (a) after the workflow's first run, add required status
+     check **`preship`**; (b) tick **"Require review from Code Owners"** (currently OFF — verified live).
+     Also add repo **Actions secret `GEMINI_API_KEY`** (and `GROQ_API_KEY`) so the server-side audit runs.
+Residual (documented, NOT ship-blocking — inherent local-hook limits, backstopped by the server-side
+CI wall): interpreter-fed `bash <<EOF`/`python3 -c` exec, `bash -c` rsync. `man git commit` over-blocks
+when gated files are staged (the SAFE direction — never lets bad code through).
+
+---
+
+## PREVIOUS (2026-07-21 interactive, Rafael present)
 
 ### ✅ P0 RESOLVED — bot is BACK UP and at current main.
 
@@ -195,10 +237,173 @@ four has evidence, at what staged magnitude, with a measurement that resolves in
 Thorp PAUSE-AND-REBUILD | Simons PAUSE-AND-REBUILD | LdP STOP | Taleb STOP | Asness CONTINUE-WITH-CHANGES
 Gro STOP | GAI STOP — **but both ran on the contaminated -$2.64/1.09 figures and neither read the repo;
 the board seat that DID read it found the phantoms.** 5 of 5 agree the numbers cannot support ANY
-conclusion, including "quit". Operative verdict: **PAUSE AND REBUILD.** Proposed kill criterion:
+conclusion, including "quit". Operative verdict: **PAUSE AND REBUILD.** Board-PROPOSED kill criterion (NOT adopted — Rafael has made no decision on this; do NOT present it as agreed):
 150 decided trades or 6 months, expectancy >= +0.10R on Alpaca-reconciled fills, **config FROZEN**
-(any change resets the counter), 15% drawdown = immediate stop, **3 hrs/week time budget** —
-exceeded 3 consecutive weeks = stop.
+(any change resets the counter), 15% drawdown = immediate stop.
+
+### 🔴 exit_logic.py — P0 REVIEW COMPLETE. SHIP FIX 1 ONLY. FIX 2 IS A RAFAEL DECISION.
+Full read 2,303 lines + 10-pt + RC-1..8 all PASS. Patch is 7 hunks, +202/-21, one file.
+Static verified on a scratchpad copy: py_compile / ruff E,W,F,B / mypy --warn-unreachable ALL CLEAN
+(baseline clean too, so no RULE C-4 carve-out).
+
+**FIX 1 — SHIP. Pure risk reduction, fail-safe, closes the unbounded-loss path.**
+Replaces the single monotonic `stop_breach_count` (which ANY recovery scan zeroed) with a ROLLING
+OBSERVED-BAR WINDOW: "_STOP_CONFIRM breach bars within the last _STOP_WINDOW observed bars", where
+_STOP_WINDOW = 2 x _STOP_CONFIRM. **No new tunable** — derived from the existing constant.
+Simulated proof: alternating breach/recover over 24 bars NEVER closed under the old code, closes at
+bar 4 under the new one; 3-consecutive-breach and VIX-35 cases are byte-identical to today; an
+isolated breach every 3 hours still never confirms (stale breaches age out after ~90 min).
+Every deviation fires the exit SOONER or the same, never later. Same-bar guard preserved verbatim.
+Stale-history proof included: a breach bar stays valid for any FAVOURABLE stop move (breakeven
+promotion, trail ratchet — all one-directional); the only widening path (orphan_manager direction
+repair) is detected and clears the window. Also incidentally fixes a latent TypeError at old L1612.
+
+**FIX 2 — DO NOT SHIP WITHOUT RAFAEL. Changes the profit path with UNMEASURED EV.**
+Converts the final tranche to a trail-managed RUNNER instead of hard-closing 100% at target
+(requires 2 companion gates: C-3 target close suppressed, and extended-hours routed to the
+post-partial branch). Trail protection VERIFIED present at conversion (~1.46R locked on the paper
+profile) and the conversion is gated on `trail_stop and atr_value > 0` — if either is missing it
+closes at target exactly as today. BUT the reviewer refuted the audit's supporting statistic:
+**"only 4 of 82 trades exceeded +2.0R" is STRUCTURALLY UNOBSERVABLE — the bot force-closes AT the
+target, so the sample is right-censored at exactly the level being tested.** FIX 2 is a sound
+STRUCTURAL correction with NO EV estimate, and it puts the largest tranche (70%, or the WHOLE
+position at qty<=3) on a trail sitting ~0.625R below target — roughly -0.6R downside per event
+against unquantified upside. That is a strategy/risk decision, same class as the orphan stop
+widening. Reviewer recommends reviewing ~20 `runner_activated` events in trade_events.jsonl before
+pushing ladder weight further.
+
+**FIX 3 — correct but a NO-OP at current size.** Reweight TRANCHE_SHARE 0.33 -> per-tranche list
+[0.15,0.15,0.70] (the allocator used ONE scalar for all three tranches and could not express a
+non-uniform split — confirmed). Ceiling 1.34R -> 1.70R nominal. **Correction to the ATR audit: the
+LIVE paper profile is 2.083R not 2.0R, so the real numbers are 1.396R -> 1.771R.** BUT
+`max(1, round(qty*share))` makes 0.15 and 0.33 produce IDENTICAL integer allocations for every
+qty <= 4, and 63 of 89 historical trades were qty <= 3 (both current open positions are qty 1).
+Only bites at qty >= 5. Ship with FIX 2 or not at all — Replacement 2A couples them.
+
+**OTHER PREMISES THE REVIEWER CORRECTED:** (a) ">3xATR detector only logs" is half wrong — it sits
+INSIDE gtc_manager's cover-on-breach block which DOES close at market; it is a severity annotation,
+not a standalone detector. (b) "No broker-side stop at entry" is true ONLY for INTRADAY entries —
+entries after 15:30 ET are tagged overnight and DO get a GTC stop at entry. The real gap is narrower
+but real: an intraday-entered position has no exchange stop between fill and its first tranche or
+0.5R breakeven promotion. **That is the single largest residual risk in the file and this patch does
+NOT close it.**
+
+**PRE-EXISTING BUGS FOUND, NOT FIXED (out of scope):** (1) two systems write `trail_stop` with
+DIFFERENT multipliers — the top-of-loop block uses TRAIL_PHASE_MULTS[phase] (0.75) while the
+post-tranche T2/T3 block uses TRAIL_STOP_ATR_MULT (0.50), so a T2 partial writes a 0.50xATR trail
+that the next cycle re-ratchets at 0.75x. (2) `partial_exit_time` is written in ET at L765 but EVERY
+consumer compares its date slice against a PT today (portfolio_tracker 512/534, reconcile_eod
+321/537, reporting/metrics 110) — dormant, but a genuine cross-file inconsistency.
+
+### 🛑 COLD-2ND RETURNED **FAIL** ON BOTH — DO NOT SHIP AS WRITTEN. Markers revoked, both unstaged.
+Gro+GAI had APPROVED both. The cold-2nd caught what they missed. FOUR one-line fixes required.
+
+**premarket.py T1 — CRITICAL. My patch would have CREATED an unbounded-loss path worse than the bug
+it fixes.** Wilder's RECURSION propagates NaN permanently; the old flat `mean()` skipped NaN via
+pandas. Executed: one NaN high at index 17 of 20 -> new returns `nan`, old returned 2.0. Consumer
+trace: `orphan_manager.py:1064` -> `_orph_atr = nan` -> `_stop_dist = nan` -> `_orph_stop = nan`.
+The fallback is `if _orph_stop is None:` and **nan is not None**, so the ±5% emergency floor is
+BYPASSED and `nan` is written to `open_trades[sym]["stop"]`. Every `price <= stop` test against NaN
+is False, so **that position's stop can never fire.** Same at :1503/:1519.
+FIX: reject non-finite before the return (`if not math.isfinite(atr_value): return 0.0`) or
+`tr = df["tr"].iloc[1:].dropna()`.
+
+**premarket.py T2 — HIGH.** The new post-trim `return 0.0` (frame of exactly period+1 whose last bar
+is today) defeats two guards that test for None, not falsy: `entry_logic.py:855` S49 guard is
+`if atr_value is None:` so 0.0 slips through to the fixed-% branch its own comment calls "worse than
+no entry"; orphan sites give `stop == target == entry price`. Reachable via
+`build_dynamic_universe()` admitting thin/newly-listed FMP tickers with <19 daily bars.
+FIX (RULE C-4, same ship): `entry_logic` -> `if not atr_value or atr_value <= 0:`; both
+orphan_manager sites -> gate on the ATR, not on `stop is None`.
+
+**premarket.py T3 — MEDIUM-HIGH, judgement call.** 19-bar frames make this a short-window hybrid,
+not canonical Wilder: seed weight (13/14)^4 = 0.74 after only 4 recursion steps. ATR is now
+FRAME-LENGTH DEPENDENT (15->7.957, 19->8.065, 30->8.393, 400->8.235), so `horizon_state._atr_abs`
+(365 bars, converged) and `entry_logic` (19 bars, 74% seed) now disagree on the SAME symbol in the
+SAME cycle — one sizes the position, the other normalizes tiering. They agreed under the old code.
+FIX: raise num_bars to >= ATR_PERIOD*5 at all four call sites, or stop calling it "the actual
+definition of ATR". T4: the `hour < 16` rule false-drops a completed bar on half-days (~3/yr).
+
+**weekly_review.py T1 — CRITICAL. The write-once guard is only half closed.** `:1736` is
+`if w < monday:` where `monday` is whatever `--week` supplied. `--week` is the documented and now
+ONLY sanctioned way to rebuild a past archive, and using it re-runs the destructive loop on every
+week AFTER the target. Simulated on the real logs/: `--week 2026-06-01` -> 21 preserved,
+**7 REGENERATED with analysis=None** (06-08 through 07-20), permanently losing their AI content.
+Default path (no --week) is correct: 28 preserved, 0 regenerated.
+FIX: anchor the preserve branch on the REAL current Monday, not the requested one.
+
+**weekly_review.py T2 — MEDIUM.** The AI verdict now renders TWICE — `headline_html:1513` still
+interpolates `{_verdict}` and the new `exec_card_html:1506` emits the identical string below it
+(executed: count == 2). I added the card and did not remove the bare sentence. FIX: drop `_verdict`
+from headline_html.
+
+VERIFIED CORRECT and NOT to be re-litigated: Wilder slicing has no off-by-one; `last_price` captured
+pre-trim is right; the double-drop vs horizon_state._drop_partial is a confirmed NO-OP in all three
+sessions; RC-7 zero-share guards intact; no exception paths; every `wp` use is None-guarded and all
+four new names are always bound; `w` is always a date; `trade_log` in scope; `pc`/`sess` strings
+never used in arithmetic or the sort key; `_collapsible` call sites all compatible; monthly_review
+import intact.
+
+### ⏸ STAGED, FULLY AUDITED, AWAITING ONLY THE COLD-2ND MARKER (2026-07-22)
+
+`data/premarket.py` and `weekly_review.py` are staged with **gro=APPROVE gai=APPROVE, marker sha
+matched to the staged blob**, ruff clean, mypy "Success", and functional proof on the production VM.
+They are blocked ONLY by the new cold-2nd gate (`.claude/preship/record_cold2.py`) — the review agent
+was still running at session end. **To ship: run an adversarial cold-2nd on each diff, then
+`python3 .claude/preship/record_cold2.py <file> PASS`, then commit+push, then OCI
+`git pull --rebase origin main` + restart.**
+
+- **data/premarket.py** — ATR is now WILDER'S (was a flat 14-bar mean) and the in-progress bar is
+  excluded (fetch_bars sends no `end`, so the last row was today's partial). This lands on BOTH the
+  stop (atr x mult) and the size (shares = dollar_cap / stop_distance). Live measured:
+  SPY 0.975%->1.121% (+14.97%, shares x0.870), MSTR +7.21%, MARA +4.56%, PANW -1.54%, XOM -6.94%.
+  **NOTE: the "SPY ATR = 0.97%" figure the whole Fork-2 ATR-floor debate rested on was computed with
+  the WRONG formula. The real Wilder value is 1.121% — still under the 1.5% floor, so the decision
+  stands, but its input was off by 15%.** Verified at source: Alpaca daily bars are stamped 00:00 ET
+  (04:00 UTC), so the bar's UTC date == its trading date. GAI rejected 3x on false premises (all
+  refuted by execution and withdrawn) + once on a style nit (redundant float() cast — applied).
+
+- **weekly_review.py** — (A) historical archives are now WRITE-ONCE. Proven: 3 archive md5s
+  BYTE-IDENTICAL before/after a full run, log reads "29 historical archive(s) PRESERVED". Previously
+  every run rebuilt all 29 with analysis=None, permanently destroying each week's AI content, faking
+  a "Trade records incomplete" banner, stamping today's lifetime stats onto old pages and firing ~28
+  blocking Alpaca calls. **The 26 already-corrupted archives CANNOT be recovered — no source exists.**
+  (B) the AI exec summary now renders in a LABELLED card — .exec-card/.exec-label/.exec-text were
+  defined-but-never-emitted since the 2026-07-05 redesign, which is why it looked like it "wasn't
+  generating"; it was generating all along as a bare unlabelled sentence. (C) no more fabricated
+  "+$0.00" — renders NO DATA when no EOD file loaded; hotspot sessions/patch_count render "—" not 0.
+
+### 🚩 BLOCKED ON RAFAEL — orphan_manager.py WIDENS STOPS ON LIVE POSITIONS
+Routing adoption through `risk_manager.get_stop_and_target()` is correct and fixes a real defect
+(37 of 89 closed trades = 42% bypassed it; SQQQ adopted at 1.249xATR vs 5.625xATR on a normal entry
+the next day, 4.5x apart). BUT **every case produces a WIDER stop**: equity +4% (paper) / +25%
+(live); 2X ETF +160%; 3X ETF +212%. A 10-share TQQQ orphan goes from $42 max loss to $131.
+**And it MOVES A LIVE BROKER STOP** — the direction-mismatch path cancels the existing GTC and
+resubmits at the wider price, with a brief unprotected window. "Never wider than today" and "apply
+the fix" are mutually exclusive; the fix's whole purpose is to restore the designed wider leveraged
+stops. RAFAEL MUST DECIDE. Not shipped.
+Two independent finds from that audit: (1) **a zero-width-stop bug is LIVE today** — when
+calculate_atr() returns 0.0 the orphan stop is set to exactly the entry price and the +/-5% floor
+never fires because the value is not None; (2) **SOXL/SOXS are in WATCHLIST but in NEITHER leveraged
+ticker set**, so they get equity-grade stops even after this fix.
+
+### ✅ SHIPPED EARLIER (2026-07-22) — scanner render fixes `6e24cb6` -> OCI `37f25eb`
+XOM P&L visible for the first time (+$12.88 on ~16% of equity). All open-position figures now read
+from Alpaca /v2/positions; zero tracker arithmetic remains in build_context_strip.
+
+### 🔒 SHIP GATE — hardened, and it caught two REAL bypasses
+`.claude/preship/preship_gate.py` now: gates every root-level .py/.sh (**scan_to_html.py was never
+gated at all**); gates ITSELF (.claude/preship/, .claude/settings.json, .gitignore, .github/);
+requires a **cold-2nd PASS bound to the staged sha**; and fixes two VERIFIED bypasses —
+`git add -A && git commit && git push` and `git commit -m push` both previously sailed through
+because `is_push` tested raw token membership and then diffed an empty pre-commit range.
+19/19 regression suite (`.claude/preship/test_gate.py`). `.claude/` is no longer gitignored for the
+gate machinery, and REPO/hook paths derive from `__file__`/`$CLAUDE_PROJECT_DIR` — it was hardcoded
+to one Mac, so the gate did not exist on the second Claude account or on OCI.
+**`.github/workflows/preship-verify.yml` written** — re-runs the audit server-side with keys the
+agent cannot read. **RAFAEL MUST ENABLE: Settings > Branches > protect `main`, require the status
+check named `preship`, require Code Owner review; and add GEMINI_API_KEY to Actions secrets.**
+That is the only part that turns the speed bump into a wall.
 
 **⏩ NEXT EXACT STEP — ONE gated diff in `scan_to_html.py` covering the 3 P0 render defects below
 (XOM price fallback + collapse fix + CRWD STRUCTURE/ACTION lines), THEN the strip redesign, THEN
