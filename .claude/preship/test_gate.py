@@ -118,6 +118,26 @@ WT_CASES = [
     ("git " + "commit -m x", False, "plain commit ships the index — --cached ok"),
     ("git " + "commit -m push", False, "message consumed by -m, not a pathspec"),
     ("git " + "commit --amend --no-edit", False, "amend without -a reuses the index"),
+    # Redirect/pipe over-block regression (2026-07-22): `2>&1` was read as a pathspec.
+    ("git " + "commit -m x 2>&1", False,
+     "VERIFIED FALSE POSITIVE: 2>&1 redirect is not a pathspec"),
+    ("git " + "commit -m x 2>&1 | tail -4", False,
+     "VERIFIED FALSE POSITIVE: commit piped to tail for logging"),
+    ("git " + "commit -m x > out.log", False, "stdout redirect is not a pathspec"),
+    ("git " + "commit -am x 2>&1", True, "-a still wins before the redirect"),
+    ("git " + "commit -m x file.py 2>&1", True,
+     "a real pathspec precedes the redirect → still worktree mode"),
+    ("git " + "commit -m x 2> err.log", False,
+     "bare stderr redirect + spaced target — both skipped, no pathspec"),
+    # Redirect BEFORE the working-tree indicator — must be SKIPPED, not break the scan
+    # (cold-2nd 2026-07-22: `break` missed these = a working-tree ship slipping to index
+    # mode, the dangerous direction).
+    ("git " + "commit 2>&1 -am x", True,
+     "redirect before -a must NOT hide it (skip, don't break)"),
+    ("git " + "commit >log --all", True,
+     "redirect before --all must NOT hide it"),
+    ("git " + "commit 'weird>name.py'", True,
+     "a pathspec containing '>' is NOT a redirect operator → still worktree mode"),
 ]
 
 

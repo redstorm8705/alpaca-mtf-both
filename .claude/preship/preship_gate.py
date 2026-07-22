@@ -356,6 +356,36 @@ _COMMIT_ARG_TAKING = ("-m", "--message", "-F", "--file", "-t", "--template",
                       "--author", "--date", "-c", "-C", "--fixup", "--squash")
 
 
+# A redirect token: operator at the START (optionally fd-prefixed / target-suffixed).
+_REDIRECT_RE = re.compile(r"^(?:\d*>>?|\d*>&[\d-]*|&>>?|<<?)")
+# A BARE redirect operator (no target attached) — its target is the NEXT token.
+_REDIRECT_BARE_RE = re.compile(r"^(?:\d*>>?|&>>?|<<?)$")
+
+
+def _is_redirect_token(t: str) -> bool:
+    """True for a shell REDIRECTION token (>, >>, 2>, 2>&1, 2>/dev/null, &>, <, ...) as
+    produced by shlex's whitespace tokenisation. Matched by the redirect OPERATOR at the
+    START of the token, NOT a bare `">" in t`. Cold-2nd, 2026-07-22:
+      1. A redirect is NOT a command-segment terminator — it can precede `-a`/a pathspec
+         (`git commit 2>&1 -am x`, `git commit >log --all`). So the caller SKIPS it and
+         keeps scanning; treating it as a terminator (`break`) made those return False
+         (index mode) for a working-tree ship — a MISSED SHIP, the one direction this
+         gate must never take.
+      2. A real pathspec such as `weird>name.py` contains '>' but does not START with a
+         redirect operator, so it is correctly NOT matched and still routes to worktree
+         mode. The old `">" in t` would have mis-skipped it.
+    True separators (`&&` `||` `;` `|` `_SHELL_SEPS`) still break in the caller."""
+    return bool(_REDIRECT_RE.match(t))
+
+
+def _redirect_is_bare(t: str) -> bool:
+    """True when a redirect operator carries no attached target (`>`, `2>`, `<`), so its
+    target is the following token and BOTH must be skipped — otherwise a spaced
+    `git commit -m x > out.log` reads `out.log` as a pathspec (a false positive).
+    Self-contained forms (`2>&1`, `>out.log`) carry their own target: skip only one."""
+    return bool(_REDIRECT_BARE_RE.match(t))
+
+
 def _commit_worktree_mode(argv, subcmds):
     """True when the commit will ship WORKING-TREE bytes that a `--cached` inspection
     cannot see. Three verified forms:
@@ -399,6 +429,11 @@ def _commit_worktree_mode(argv, subcmds):
             t = argv[k]
             if t in _SHELL_SEPS or t in ("&&", "||", ";", "|"):
                 break
+            if _is_redirect_token(t):
+                # A redirect does NOT end the command — skip it and keep scanning. A
+                # bare operator (`>`, `2>`) also consumes its target token → skip two.
+                k += 2 if _redirect_is_bare(t) else 1
+                continue
             if t in _COMMIT_ARG_TAKING:
                 k += 2
                 continue
