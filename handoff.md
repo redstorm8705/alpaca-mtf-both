@@ -7,9 +7,43 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-22 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-23 nightly autonomous) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### ⏩ EXACT NEXT STEP (interactive session, Rafael approval needed)
+
+**1. SHIP Item 1 — `weekly_review.py` archive write-once fix (full package in `logs/pending_claude_session_2026-07-23.md`):**
+   - All gates PASS: py_compile ✓ · mypy ✓ · ruff ✓ · cold-2nd PASS (board agent)
+   - Gro/GAI NOT required (display-only, zero RTH impact)
+   - Say "approved" → apply the 5-line diff below → commit → push → OCI git pull + no restart needed (display-only)
+   - **EXACT DIFF** (weekly_review.py lines 1683-1704):
+     ```diff
+     -stubs_written = 0
+     +_real_monday = _default_monday()  # real current Monday regardless of --week
+     +preserved = 0
+     +stubs_written = 0
+      for w in all_nav_weeks:
+          w_path = _os.path.join(LOGS_DIR, f"weekly_{w.isoformat()}.html")
+          if w == monday:
+              continue  # current week's archive already written above
+     +    if w < _real_monday and _os.path.exists(w_path):
+     +        preserved += 1
+     +        continue  # preserve existing archive — do not overwrite with analysis=None
+          # Load whatever EOD data exists for that week (may be empty)
+          w_eods = {}
+          ...
+     -print(f"  Refreshed {stubs_written} archive(s) with current navigation")
+     +print(f"  {preserved} historical archive(s) PRESERVED · {stubs_written} archive(s) refreshed")
+     ```
+
+**2. RTH-chain items — need Gro/GAI from interactive session:**
+   - `data/premarket.py`: full read DONE, audit DONE. 7 pre-existing mypy errors must fix alongside Wilder's ATR. Needs board vote + Gro/GAI Phase 1 and Phase 2. Details in pending session doc.
+   - `execution/exit_logic.py`: P0 rolling breach window (board 5-0 from 2026-07-22). Full read spawned as Explore subagent in autonomous session — check agent result if available. Needs Gro/GAI Phase 2 (diff-level).
+
+**3. scan_to_html.py — still PARKED** (working tree on OCI, needs Rafael "approved")
+
+---
 
 ### ✅ CURRENT STATE (end of 2026-07-22 session) — read this first
 

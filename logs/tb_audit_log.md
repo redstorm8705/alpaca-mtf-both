@@ -8958,3 +8958,80 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
 - CODEOWNERS false claim corrected (require_code_owner_reviews live=false, not "true").
 - Static: ruff/mypy/py_compile clean. 12/12 verdict unit tests. Preship: GAI APPROVE all 11 (5 via 1-round evidence counter-prompt); Gro WAIVED on 7 (Groq TPD daily cap).
 - Live gate: ALLOWS legit commit (exit 0), BLOCKS both bypasses. Committed local; awaiting Rafael push(PR)+GitHub settings (require check "preship", tick Code-Owner review, add GEMINI/GROQ Actions secrets).
+
+---
+## 2026-07-23 — Nightly Autonomous Session (claude/youthful-wozniak-mnbpr7)
+
+### weekly_review.py — Full Read + Audit + Cold-2nd PASS
+
+**Full Read:** 1717 lines, 6 chunks complete.
+
+**10-Point Audit:**
+- Point 1 (static): py_compile PASS · mypy PASS · ruff PASS
+- Point 2 (trade path): display-only script — NO RTH impact. Not in trading path.
+- Point 3 (adversarial): analysis=None guard throughout (L1472, L1486, L1530). Empty week_eods handled.
+- Point 4 (full read): COMPLETE
+- Point 5 (cross-refs): LOGS_DIR = os.path.join(ROOT, "logs") with ROOT = os.path.dirname(os.path.abspath(__file__)) — anchored
+- Point 6 (conflicts): None. Display-only.
+- Point 7 (redundancy): .exec-card CSS defined (L810) but unused in current repo HTML (OCI-only)
+- Point 8 (state persistence): tmp→replace pattern present (archive write L1698-1700) — PASS
+- Point 9 (data source): Alpaca T1 for lifetime stats, Gemini for AI analysis — PASS
+- Point 10 (timezone): datetime.now(PDT) at L1171 — PASS
+
+**RC Results:**
+- RC-1: datetime.now(PDT) at L1171 — PASS
+- RC-2: LOGS_DIR anchored to __file__ — PASS
+- RC-3: all except blocks log before return — PASS
+- RC-4: N/A (display-only)
+- RC-5: tmp→replace at L1698-1700 — PASS
+- RC-6: N/A (no trading API)
+- RC-7: N/A
+- RC-8: N/A
+
+**Confirmed Bug:** Archive rebuild loop (L1683-1704) passes analysis=None to ALL past archives on every run, permanently destroying stored Gemini AI analysis.
+
+**Cold-2nd:** Board Agent 1 (Explore subagent) — PASS. All 5 threat scenarios verified including Sunday 3PM PDT edge case and --week <past> behavior.
+
+**Proposed Fix:** Write-once guard using _real_monday = _default_monday() as anchor. Skip existing past archives. Full diff in logs/pending_claude_session_2026-07-23.md Item 1.
+
+**Status:** READY TO SHIP — awaiting Rafael "approved" in interactive session.
+
+---
+
+### data/premarket.py — Full Read + Audit Complete (RTH-chain, Gro/GAI needed)
+
+**Full Read:** 449 lines, 2 chunks complete.
+
+**Static Analysis (current git version):**
+- py_compile: PASS
+- ruff: PASS
+- mypy --warn-unreachable: 7 ERRORS (pre-existing, must fix per Rule C-4)
+  - L204-205: Optional type hints missing (base_universe, threshold_pct)
+  - L228: unreachable statement (consequence of non-Optional type hint)
+  - L369, L429: set.add() used for side-effect deduplication (func-returns-value errors)
+
+**RC Results:**
+- RC-1: datetime.now(ET) at L59, L308 — PASS (internal scheduling use)
+- RC-2: os.path.dirname(os.path.abspath(__file__)) at L52, L333 — PASS
+- RC-3: all except blocks log — PASS
+- RC-5: tmp→replace + flush+fsync at L55-61 — PASS
+- RC-4, RC-6, RC-7, RC-8: N/A
+
+**Confirmed Issues:**
+1. calculate_atr() at L90 uses flat 14-bar mean (NOT Wilder's ATR as documented)
+2. 7 pre-existing mypy errors must be fixed alongside ATR change
+3. NaN guard (math.isfinite) needed on atr_value before return
+4. Frame length check (period+1 → ATR_PERIOD*5) for Wilder's stable initialization
+
+**Status:** Audit complete. Full board vote + Gro/GAI Phase 1/2 required in interactive session.
+
+---
+
+### execution/exit_logic.py — Full Read In Progress (RTH-chain P0, board 5-0)
+
+**Status:** Explore subagent spawned for full verbatim read (2303 lines). Running in background.
+Board 5-0 APPROVE (from 2026-07-22 interactive session per handoff).
+Gro/GAI Phase 2 (diff-level) required — unavailable from remote environment.
+P0 bug: stop_breach_count resets on ANY recovery tick → unbounded loss path.
+Fix: rolling breach window (_STOP_WINDOW = 2 × _STOP_CONFIRM).
+Next step: interactive session — review Explore subagent result, run Gro/GAI Phase 2, apply.
