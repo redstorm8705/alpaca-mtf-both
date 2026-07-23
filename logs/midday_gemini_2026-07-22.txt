@@ -1,0 +1,71 @@
+Midday Gemini Audit — 2026-07-22
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+1.  **P&L Reporting Discrepancy:**
+    *   **Variable/Metric Involved:** `SESSION P&L SUMMARY` section fields, specifically `Total P&L`, `Entries`, `Exits`, `Partials`, `Closed trades`, `Wins`, `Losses`, `Win rate`, `Avg win`, `Avg loss`.
+    *   **Value vs. What it Should Be:**
+        *   The `SESSION P&L SUMMARY` states `Total P&L: $0.00`, `Entries: 0`, `Exits: 1`, `Partials: 2`, `Closed trades: 0`, `Wins: 0`, `Losses: 0`.
+        *   However, the authoritative bot log explicitly states: `Alpaca FIFO EOD: pnl_today=$7.06 | cumulative=$172.00 | tracker=$7.06 | fills=4 lots_closed=4` (at `2026-07-22 17:27:52,923`) and `pnl_today from pnl_ledger (authoritative): $7.06 intraday ($0.00 qhm / $7.06 total) invariant ok drift=$0.77` (at `2026-07-22 17:27:56,866`).
+    *   **Why it Constitutes a Failure:** The primary performance summary presented at the beginning of the report is entirely inaccurate and contradicts the actual, authoritative P&L and trade count figures recorded by the bot. This renders the `SESSION P&L SUMMARY` section misleading and unreliable for assessing daily performance. An operator relying on this summary would be misinformed about the bot's activity and financial outcome.
+    *   **Exact Condition:** This discrepancy occurs during the generation of the audit report, where the `SESSION P&L SUMMARY` data source is not synchronized with or correctly reflecting the `pnl_ledger`'s authoritative P&L and trade metrics.
+
+2.  **Stop-Hit Rate Ambiguity:**
+    *   **Variable/Metric Involved:** `Stop-hit rate` in `SESSION P&L SUMMARY`.
+    *   **Value vs. What it Should Be:** The summary states `Stop-hit rate: 0% (1 stops)`. This phrasing is ambiguous. If "(1 stops)" refers to a stop order that was actually hit, and considering "Exits: 1 | Partials: 2" implies 3 exit events, then the stop-hit rate should be 1/3 (33.3%). If it refers to one stop order *placed* but not hit, then the "0%" is correct but the "(1 stops)" is confusing without further context.
+    *   **Why it Constitutes a Failure:** The ambiguity in reporting a key risk metric makes it difficult to assess the actual performance and risk management. Without clear definitions or specific trade details, it's impossible to verify the accuracy of this metric.
+    *   **Exact Condition:** Observed in the `SESSION P&L SUMMARY` section of the report.
+
+### ENTRY QUALITY
+
+*   **Entry Filtering Efficacy:** No new positions were entered during this cycle. The bot successfully applied various filters, including ORB gate blocks (e.g., `[TSLL] ORB gate BLOCK (short): SPY 749.61 ≥ ORB_L 746.37`), correlation gate blocks (e.g., `[SPY] CORRELATION GATE BLOCK: rho(daily,20d)=0.90 > 0.70 with TQQQ`), and position sizing constraints (`[MU] Size→0: dollar_cap=$239.72 < 1sh@$981.02`). This demonstrates robust filtering and prevents entries under unsuitable conditions.
+*   **No issues.**
+
+### EXIT QUALITY
+
+*   No closed trade details or flagged entries are provided in the report, making it impossible to audit the quality of exits (e.g., whether exit prices were consistent with TP/SL levels or if holding times were optimal). The `BOT LOG` indicates `fills=4 lots_closed=4` by Alpaca FIFO EOD, but no specifics on these closures are available.
+
+### MRI ALIGNMENT
+
+*   **Appropriate MRI Response:**
+    *   **Variable/Metric Involved:** `MRI Session Distribution` level and `strategy.run_cycle` log entries for MRI-based adjustments.
+    *   **Value vs. What it Should Be:** The MRI level was `ELEVATED` (23/100). The bot correctly detected this and applied risk adjustments: `MRI ELEVATED (score=23) — size floor 0.85x applied` and `Dynamic MIN_SCORE: raised to 9/12`.
+    *   **Why it Constitutes a Success:** The bot appropriately recognized the elevated market risk and adjusted its entry criteria and position sizing downwards, aligning with prudent risk management.
+    *   **Exact Condition:** Occurred consistently throughout the session whenever `strategy.run_cycle` processed signals under `ELEVATED` MRI conditions, specifically logged at `2026-07-22 17:24:16,841` and `2026-07-22 17:25:15,336`.
+*   **No issues.**
+
+### LOG ANOMALIES
+
+*   **ANOMALY-2 Trigger (Noise):**
+    *   The `[ANOMALY-2]` warning (e.g., for `[MU]` and `[AAPL]` at `2026-07-22 17:24:34,179`) indicates a signal had a `confirm_gate` count but no entry. For `MU`, a later log entry (`2026-07-22 17:25:22,234`) clearly explains the entry was skipped due to position size being less than 1 share after scaling. For `AAPL`, its `score_without_vol` was 3 (long) and 4 (short), both below the dynamic `MIN_SCORE` of 9, making it an unlikely entry candidate anyway. The warning appears to be triggered too broadly, creating noise in the logs when a valid reason for non-entry exists and is (sometimes) explicitly logged later. While not a bug impacting execution, it's a minor clarity and log verbosity issue.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Discrepancy in Session P&L Summary Data**
+    *   **Description:** The aggregated `SESSION P&L SUMMARY` provided at the top of the report presents completely incorrect and outdated information regarding the bot's daily performance, including P&L, trade counts, and closed positions. This directly contradicts the authoritative P&L reported by the `pnl_ledger` and `Alpaca FIFO EOD` in the log.
+    *   **Exact variable involved:** All numeric fields within the `SESSION P&L SUMMARY` block.
+    *   **Value vs. Should Be:** E.g., `Total P&L` is $0.00, but `pnl_today` is $7.06. `Closed trades` is 0, but `lots_closed` is 4.
+    *   **Why it produces wrong output:** The summary provides a fundamentally flawed overview of the bot's daily performance, which is a critical failure in operational reporting. This could lead to incorrect decisions by a human monitoring the bot, or trigger incorrect automated responses based on the summary.
+    *   **Exact condition:** Occurs during the generation of the daily audit report; the `SESSION P&L SUMMARY` is populated from an incorrect, stale, or miscalculated source, rather than the true, confirmed end-of-day P&L and trade metrics.
+
+2.  **ALPHA ISSUE | HIGH | Unexplained Dynamic ATR Multiplier for Stop/Target**
+    *   **Description:** For symbol MU, the `execution.risk_manager` calculated and applied an ATR-based stop multiplier of `1.875x` and a target multiplier of `3.9062500000000004x`. This significantly deviates from the configured `INTRADAY_STOP_ATR_MULT = 1.2` and `INTRADAY_TARGET_ATR_MULT = 2.5`. This occurs despite the `Volatility regime` being reported as `NORMAL (VIX: 16.7)`, which would typically imply the standard or `VOL_TIER_STD_STOP_INTRADAY = 1.25`. There is no log evidence of VIX widening thresholds being met or other volatility tier changes to justify these larger multipliers.
+    *   **Exact variable involved:** `stop 1.875x = $143.14` and `target 3.9062500000000004x = $298.21` for MU.
+    *   **Value vs. Should Be:** Applied stop multiplier `1.875x` vs. `INTRADAY_STOP_ATR_MULT = 1.2` (or `VOL_TIER_STD_STOP_INTRADAY = 1.25`). Applied target multiplier `~3.9x` vs. `INTRADAY_TARGET_ATR_MULT = 2.5`.
+    *   **Why it produces wrong output:** This discrepancy suggests either a calculation error in the risk manager or an undocumented dynamic adjustment to the risk parameters. If it's an error, it could lead to incorrect risk-reward ratios and inappropriate position sizing. If it's an intentional dynamic adjustment, its criteria and application are not clearly logged or derived from provided configuration, leading to a lack of transparency and auditability in strategy logic.
+    *   **Exact condition:** Occurred during the `execution.risk_manager` calculation for MU at `2026-07-22 17:25:19,286`, while the `Volatility regime: NORMAL (VIX: 16.7)` was logged at `2026-07-22 17:23:59,515`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION | CRITICAL | Immediately investigate and rectify the data source and logic populating the `SESSION P&L SUMMARY`.** Ensure this critical reporting block accurately reflects the authoritative `pnl_ledger` and Alpaca `fifo_pnl` data for P&L, trade counts, and other performance metrics.
+2.  **ALPHA | HIGH | Conduct a thorough review of the `execution.risk_manager` code responsible for calculating ATR-based stop and target multipliers.** Identify why significantly higher multipliers (1.875x stop, 3.9x target) were applied to MU under a "NORMAL" volatility regime, contradicting `INTRADAY_STOP_ATR_MULT` and `INTRADAY_TARGET_ATR_MULT`. Document any intentional dynamic scaling logic or correct any calculation errors. Enhance logging to explicitly state the factors or conditions causing such deviations.
+3.  **INFRA | LOW | Refine the triggering conditions for the `ANOMALY-2` warning.** Adjust the logic so that `ANOMALY-2` is only logged when a strong signal fails to convert into an entry *without* an explicit, immediately logged reason (e.g., ORB gate, correlation block, 1-share size cap). This will reduce log noise and improve the signal-to-noise ratio for true anomalies.
