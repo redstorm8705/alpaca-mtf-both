@@ -1,0 +1,88 @@
+Nightly Gemini Audit — 2026-07-23
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['.claude/preship/record_cold2.py', '.claude/preship/fork_reminder.py', '.claude/preship/preship_gate.py', '.claude/preship/preship_audit.py', '.claude/preship/test_gate.py', '.github/scripts/ci_audit.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **P&L DRIFT**: Recurring `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-37.98 tracker=$-22.98 drift=$-15.00` is observed three times (2026-07-23 19:37:16,267, 19:43:25,607, 19:51:09,896). While `A-4 paper fills gap` is a known benign pattern for *missing* fills, this log entry explicitly states a drift due to *different* P&L values reported by Alpaca versus the tracker, rather than just Alpaca returning 0 fills. Specifically, the `alpaca_per_trade` entries show different entry prices for `PANW` (Alpaca: 355.1 vs. Tracker: 340.84) and `NET` (Alpaca: 274.36 vs. Tracker: 273.61) compared to the `trades` list, leading to P&L discrepancies. This indicates a discrepancy in fill price recording, not merely missing data, and suggests `P5-H2` (Fill price crosstalk) is triggered.
+
+*   **PREMARKET RED LOCKOUT**: The `CRITICAL | execution.entry_logic | 🔴 RULE 1 — PREMARKET RED LOCKOUT` events (2026-07-23 19:36:01,012, 19:43:20,151, 19:49:45,183) are not anomalies but intended risk management actions, correctly blocking long entries (`[AMD] Rule 1 BLOCKED`). This functionality is operating as designed.
+
+*   **MRI STRESSED Level**: The `INFO | macro_risk_index | MRI refreshed: score=57 level=STRESSED` and subsequent `MRI STRESSED (score=57) — size floor 0.70x applied` logs are normal operational behavior in response to market conditions.
+
+*   **News Alerts**: `WARNING | news_monitor | ⚡ CURRENTS ALERT` and `⚡ MARKETAUX` alerts (e.g., 2026-07-23 19:48:27,625, 20:03:52,108) are expected and indicate the news monitor is active, applying `base penalty: 100%` as a gating condition for trade entry. No indication of incorrect blocking from these specific alerts.
+
+### PERFORMANCE AUDIT
+
+*   **P&L Sign Correctness**: All P&L signs (profit/loss) for closed trades are consistent with the direction (long/short) and the relationship between entry and exit prices.
+*   **`pnl_pct` Calculation**: `pnl_pct` appears to be correctly calculated from the total P&L divided by the original full position value for the reported trades.
+*   **Partial `pnl` Accumulation**: For `XOM`, partial P&L (`5.46`, `6.64`) and the final `pnl_remaining` (`10.5433`) correctly sum to the total `pnl` (`22.6433`).
+*   **`pnl=0.0` Anomalies**: No trades with `pnl=0.0` where entry did not equal exit price were observed.
+*   **Plausible Entry/Exit Prices**: All entry and exit prices are plausible for the respective symbols and market conditions.
+*   **Score→Outcome Correlation**:
+    *   Today's win rate (25.0%) for 4 trades is low, with 1 win (score 11 for XOM) and 3 losses (score 10 for PANW, NET, TQQQ). The `score_buckets` for `10-11` reflect this (1 win, 3 losses, P&L -22.98).
+    *   **All-time Performance**: The `all_time_stats` show an `avg_r_multiple` of **-0.01** and a `profit_factor` of **1.06**. This indicates severe underperformance. Despite an `INTRADAY_TARGET_ATR_MULT = 2.5`, the bot is not capturing its edge and is, on average, losing money per unit of risk. This is a critical alpha issue.
+*   **Stop-hit Rate vs. Win Rate**: Today, 3 out of 4 trades were stop-hits (75%), consistent with the 25% win rate. This is particularly high, possibly exacerbated by the `STRESSED` MRI level and `PREMARKET RED LOCKOUT` indicating bearish market conditions.
+*   **Exit Reason Consistency**: Stop-hit exits occurred at prices consistent with `overnight_atr_buffer_exit` logic (between calculated `entry` and `thresh` values in the reason string). The `XOM` target exit was exactly at its target price.
+*   **Profit Factor and R:R vs. Target**: The `profit_factor` of 1.06 and `avg_r_multiple` of -0.01 demonstrate a significant failure to achieve the implied 2.5x R:R target.
+
+### TRADE INTEGRITY
+
+*   **Entry Price Discrepancy**: As noted in Log Anomalies, the Alpaca-reported entry prices in `alpaca_per_trade` diverge from the internal tracker's `entry_price` for `PANW` (Alpaca: 355.1, Tracker: 340.84) and `NET` (Alpaca: 274.36, Tracker: 273.61). This directly impacts P&L calculation accuracy and indicates that P5-H2 (Fill price crosstalk) is active.
+*   No other recording bugs or `pnl=0.0` anomalies were observed beyond this.
+
+### MODIFIED FILE FINDINGS
+
+The modified files (`record_cold2.py`, `fork_reminder.py`, `preship_gate.py`, `preship_audit.py`, `test_gate.py`) are all part of the `.claude/preship/` infrastructure for enforcing code audit and deployment gating. These files show meticulous attention to detail and robust design, explicitly addressing various bypasses and false positives from prior iterations. Key strengths include:
+
+*   **`preship_gate.py`**:
+    *   Comprehensive `_is_gated` logic covering various file types, directories, and root-level scripts.
+    *   Robust parsing of shell commands (e.g., `_strip_heredocs`, `_shell_strip`, `_git_subcommands`) to accurately identify `git commit`/`push` invocations, even with complex shell syntax (subshells, `sudo`, redirects).
+    *   Careful detection of "working tree mode" in `_commit_worktree_mode` to ensure `git commit -a` or pathspec commits are audited against working tree bytes, preventing bypasses where unstaged changes could ship without audit.
+    *   Rigorous validation of Gro/GAI (`_marker_ok`) and Cold-2nd (`_cold2_ok`) markers, including SHA256 content verification and marker freshness checks.
+*   **`preship_audit.py`**:
+    *   Correctly diffs staged content against `origin/main` (or `HEAD`) to provide a focused audit diff (`git diff --cached base -U30`).
+    *   Prioritizes "REJECT" verdict over "APPROVE" when both are present, and requires `startswith("APPROVE")` for an approval, making the verdict parsing robust against misleading prose.
+*   **`record_cold2.py`**: Ensures cold-2nd verdicts are bound to the exact staged SHA256 of the file content, preventing stale passes from validating new changes.
+*   **`test_gate.py`**: The test suite itself loads `preship_gate.py` from its *staged git blob* and checks for working-tree drift, ensuring that the tests validate the exact code that would ship. This is a highly robust testing approach.
+
+**No new bugs were found in the provided modified source files.** They appear to be operating as intended and are designed to be resilient against tampering and bypasses within the agent's environment.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: **UNTOUCHED**. No relevant files (`strategy/signal_generator.py`, `main.py`) were modified. No logs indicate this crash was triggered.
+*   **P5-C2 | run_movers.py ImportError**: **UNTOUCHED**. `run_movers.py` was not modified. No logs indicate this was triggered.
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: **OBSOLETE**. As per the `ARCHITECTURE INVARIANT`.
+*   **P5-H2 | Fill price crosstalk**: **TRIGGERED**. The `EOD P&L DRIFT` with differing `entry_price` values between Alpaca and the internal tracker for `PANW` and `NET` directly demonstrates a fill price discrepancy, which falls under the scope of this bug.
+*   **P5-H3 | Orphan GTC 404 path**: **UNTOUCHED**. No logs indicating `order-not-found` or 404 errors.
+*   **P5-H4 | Rule 2 dead code**: **UNTOUCHED**. `TOD_MARKET_OPEN_BUFFER_MINS` is set in config, and no logs indicate issues related to "Rule 2" or this buffer.
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED**. Status updated.
+*   **P5-M1 | Cycle watchdog restart loop**: **UNTOUCHED**. No logs indicating watchdog restarts or lockfile issues.
+*   **P5-M2 | MRI score cached stale across sessions**: **UNTOUCHED**. While MRI is refreshing, no logs specifically confirm or deny stale data on *load* validation.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. Cannot verify pruning behavior from the provided `EOD SNAPSHOT` structure alone.
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED**. No relevant reporting logs are provided.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED**. The `EOD SNAPSHOT` shows `open_trades: 4` and `overnight_holds` list several positions, confirming that the EOD snapshot is generated while positions are still open, leading to understated final day P&L.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. No logs indicate `live_data_writer.py` failure or network drops.
+
+### NEW BUGS FOUND
+
+*   **CATEGORY**: ALPHA ISSUE | **SEVERITY**: CRITICAL | **file**: `strategy.run_cycle` (or overall strategy) | **description**: Systemic underperformance with negative average R-multiple.
+    *   **exact failure condition**: The `all_time_stats` report an `avg_r_multiple = -0.01` and `profit_factor = 1.06`. This directly contradicts the bot's objective of capturing an edge (e.g., 2.5x ATR target) and indicates the strategy is not profitable on a risk-adjusted basis. This implies a fundamental flaw in the strategy's design or its parameters in current market conditions.
+
+### FIX VALIDATION
+
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Address Critical Alpha Issue**: Immediately investigate the `avg_r_multiple` of -0.01. This indicates a fundamental flaw in the strategy's profitability. Review signal generation (`strategy.run_cycle`), entry/exit logic, and risk sizing to align performance with the intended edge and R:R target.
+2.  **Investigate Fill Price Discrepancy (P5-H2 TRIGGERED)**: Prioritize resolving the `EOD P&L DRIFT` caused by differing Alpaca vs. internal tracker entry prices. Ensure consistent and accurate fill price recording.
+3.  **Fix EOD Snapshot Timing (P5-L2 TRIGGERED)**: Modify the `eod_YYYY-MM-DD.json` generation logic to ensure it accurately reflects closed positions for the day, or clearly separate daily closed P&L from overall portfolio P&L including open positions.
+4.  **Resolve Critical Untouched P5 Bugs**: Address `P5-C1 | FVG MultiIndex silent crash` and `P5-C2 | run_movers.py ImportError` with high urgency, as they can lead to silent failures or crashes.
+5.  **Review Score-to-Outcome Correlation**: Analyze why higher-score trades (10-11) are resulting in losses more often than wins, especially in 'STRESSED' market conditions. This may indicate a need to adjust scoring weights or filtering based on market regimes.
