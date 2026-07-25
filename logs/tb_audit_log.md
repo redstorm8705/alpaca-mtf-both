@@ -9002,3 +9002,18 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
   = rich premium, NOT free EV (move already priced) — but block removal is correct for a long book.
 - 0DTE SPY signal accuracy this week (audit): 1h 2/3, close 2/3; 07-23 was BLOCKED (now unblocked);
   07-20 pre-logging gap.
+
+## 2026-07-25 — A1: de-flake preship verdict parser (SHIPPED e9a62bd, PR #13, OCI LIVE) [LOOP-ENG]
+- FINDING (Rafael + loop-eng article): the review-gate's _verdict free-text-parsed the reviewer
+  reply → mis-classified verbose APPROVALs as REJECTs (false-reject token waste). Root cause: any
+  single-line SELECTION heuristic breaks with multiple 'VERDICT:' mentions — FIRST-line catches a
+  hypothetical, LAST-line catches a trailing restatement (a FAIL-OPEN — marker for a REJECTED diff).
+- FIX: _verdict anchors to lines that BEGIN with 'VERDICT:' (excludes prose/mid-sentence), requires
+  EXACTLY ONE (0/2+ → INDETERMINATE 3rd state), re-requests once then fails CLOSED, reject-biased
+  within the one line. Prompt: self-check + REJECT-only-on-concrete-failure + begin-one-line rule.
+- GATE: Gro+GAI APPROVE self-gate first-pass (tightened prompt), cold-2nd PASS after 3 ADVERSARIAL
+  rounds (rounds 1-2 each caught a distinct FAIL-OPEN; round 3 proved fail-closed), unit 9/9 + probe,
+  ruff/mypy clean, server-side preship PASS. This is the loop-eng thesis proven on our own gate:
+  hard verification-in-the-loop caught catastrophic fail-opens at "step 3, not step 20".
+- FOLLOW-ONS (task #12): same anchored fix to .github/scripts/ci_audit.py; permanent _verdict
+  regression test in .claude/preship/test_gate.py.
