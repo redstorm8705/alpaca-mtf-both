@@ -845,6 +845,7 @@ def _run_analysis(week_eods: dict, stats: dict, backtest: dict) -> "dict | None"
     Uses GEMINI_API_KEY — same key as nightly_audit.py, no separate billing needed.
     """
     from google import genai as _genai
+    from google.genai import types as _gtypes
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         print("  GEMINI_API_KEY not set — skipping AI analysis")
@@ -909,7 +910,16 @@ Respond ONLY with valid JSON, no markdown, no extra text:
   }}
 }}"""  # noqa: E501
 
-    _models = ["gemini-2.5-flash", "gemini-2.0-flash-lite"]
+    # gemini-2.5-flash needs max_output_tokens + thinking_budget=0, or "thinking" eats the
+    # output budget and response.text comes back empty/truncated (project-documented Gemini
+    # gotcha) — the silent root cause of the AI/board section vanishing from the weekly page.
+    # gemini-2.0-flash-lite (the prior fallback) is now 404/retired; gemini-3.1-flash-lite is
+    # the working replacement (both verified live 2026-07-24).
+    _models = ["gemini-2.5-flash", "gemini-3.1-flash-lite"]
+    _cfg = _gtypes.GenerateContentConfig(
+        max_output_tokens=8192,
+        thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),
+    )
     try:
         client = _genai.Client(api_key=api_key)
         last_err = None
@@ -918,8 +928,14 @@ Respond ONLY with valid JSON, no markdown, no extra text:
                 response = client.models.generate_content(
                     model=_model,
                     contents=prompt,
+                    config=_cfg,
                 )
                 raw = (response.text or "").strip()
+                if not raw:
+                    # Empty text (thinking consumed the budget, or a truncated/blocked
+                    # response) — treat as a failure so we fall through to the next model
+                    # instead of crashing json.loads("") with a misleading error.
+                    raise ValueError("empty response.text (no content returned)")
                 # Strip accidental markdown fences
                 if raw.startswith("```"):
                     raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -1164,6 +1180,7 @@ def build_html(  # noqa: E501
     archive_weeks: "list | None" = None,
     is_archive: bool = False,
     trade_log: "dict | None" = None,
+    analysis_attempted: bool = False,
 ) -> str:
     day_trades = day_trades or []
     stats   = _week_stats(week_eods)
@@ -1532,6 +1549,19 @@ def build_html(  # noqa: E501
             f'{worked_html}{didnt_html}{recs_html}{board_html}'
             f'</div></div>'
         )
+    elif analysis_attempted:
+        # AI analysis was ATTEMPTED this run but failed / returned nothing — make the failure
+        # VISIBLE instead of silently dropping the section (the exact bug this fix targets).
+        # Gated on analysis_attempted so historical archive stubs (which never run analysis)
+        # stay clean rather than all sprouting this notice.
+        ai_html = (
+            '<div class="card"><div class="card-body">'
+            '<div class="ai-section"><div class="ai-hdr">AI Review &amp; Board POV</div>'
+            '<div class="ai-body" style="color:#e0a030">⚠️ AI analysis was unavailable for this '
+            'run — Gemini returned no parseable result. It retries on the next weekly cycle; '
+            'regenerate with <code>--analyze</code> to refresh.</div></div>'
+            '</div></div>'
+        )
 
     # ── No-data notice ────────────────────────────────────────────────────────
     has_data = any(v is not None for v in week_eods.values())
@@ -1545,10 +1575,11 @@ def build_html(  # noqa: E501
     patch_html = _build_patch_health_section(monday)
 
     # ── Collapsible detail sections — preserve every field, collapsed default ──
-    def _collapsible(label: str, inner: str) -> str:
+    def _collapsible(label: str, inner: str, open_default: bool = False) -> str:
         if not inner:
             return ""
-        return ('<details style="margin-top:10px;background:#13162a;'
+        _open = " open" if open_default else ""
+        return (f'<details{_open} style="margin-top:10px;background:#13162a;'
                 'border:1px solid #252847;border-radius:8px">'
                 '<summary style="padding:12px 16px;font-size:14px;font-weight:600;'
                 'color:#c8cce4;cursor:pointer">'
@@ -1556,10 +1587,10 @@ def build_html(  # noqa: E501
                 f'<div style="padding:0 16px 12px">{inner}</div></details>')
     collapsibles_html = (
         '<div style="font-size:12px;color:#8a94ae;margin-top:18px">'
-        'Everything below is preserved — collapsed by default, one click to expand:'
+        'Everything below is preserved — the AI review is expanded; click the others to expand:'
         '</div>'
+        + _collapsible("AI review &amp; board POV", ai_html, open_default=True)
         + _collapsible("Detail stats &amp; exit breakdown", _det_stats + exits_html)
-        + _collapsible("AI review &amp; board POV", ai_html)
         + _collapsible("Patch health", patch_html)
     )
 
@@ -1642,15 +1673,20 @@ def main():
     day_trades = _load_day_trades()
 
     analysis = None
+    _ai_attempted = False
     if args.analyze:
         if loaded == 0:
             print("  No session data — skipping AI analysis")
         else:
             print("  Running AI analysis...")
+            _ai_attempted = True
             stats    = _week_stats(week_eods)
             analysis = _run_analysis(week_eods, stats, backtest)
             if analysis:
                 print("  AI analysis complete")
+            else:
+                print("  AI analysis returned NO result — the weekly page will show a "
+                      "visible 'unavailable' notice (not a silent drop)")
 
     # Full 12-week navigation list (always populated, no files required)
     import os as _os
@@ -1662,7 +1698,8 @@ def main():
 
     # Write root weekly_review.html (current/requested week, paths relative to root)
     html = build_html(monday, week_eods, backtest, analysis, day_trades,
-                      archive_weeks=all_nav_weeks, is_archive=False, trade_log=trade_log)  # noqa: E501
+                      archive_weeks=all_nav_weeks, is_archive=False, trade_log=trade_log,
+                      analysis_attempted=_ai_attempted)  # noqa: E501
 
     tmp = OUT_HTML + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1673,7 +1710,8 @@ def main():
     # Write/update archive for the current week
     arch_path = _os.path.join(LOGS_DIR, f"weekly_{monday.isoformat()}.html")
     html_arch = build_html(monday, week_eods, backtest, analysis, day_trades,
-                           archive_weeks=all_nav_weeks, is_archive=True, trade_log=trade_log)  # noqa: E501
+                           archive_weeks=all_nav_weeks, is_archive=True, trade_log=trade_log,
+                           analysis_attempted=_ai_attempted)  # noqa: E501
     tmp_arch  = arch_path + ".tmp"
     with open(tmp_arch, "w", encoding="utf-8") as f:
         f.write(html_arch)
