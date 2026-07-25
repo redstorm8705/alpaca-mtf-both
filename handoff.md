@@ -36,10 +36,34 @@ also plain-appends), cold-2nd PASS, board APPROVE, ruff/mypy/py_compile clean, s
   ≥MIN_SCORE=10 hold the entire loss; winners sit below the gate. Sizing floors to 1 share on
   expensive names (~19% multiplicative stack). Highest-leverage fork = EXIT logic (full board
   vote required). NOTE: repo `trade_log.json`/`eod` copies are STALE (~07-17); OCI is current.
-- **OCI-DRIFT (Task #5):** branch protection (07-22) blocks `sync_reports.py`'s nightly direct
-  push to main → OCI accumulates log-only commits, breaking `git pull --ff-only`. Until it is
-  redirected to a branch/PR (or logs are un-tracked), DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE
-  MERGE (`git stash` dirty log caches → `git merge origin/main` → `stash pop` → restart), not `--ff-only`.
+- **OCI-DRIFT (Task #5 — IN PROGRESS, Rafael chose AUTO-PR+MERGE, being gated):** branch protection
+  (07-22) blocks `sync_reports.py`'s nightly direct push to main (`_push_with_rebase_retry` at
+  scripts/sync_reports.py:82). Root cause CONFIRMED: the 07-18 design (board 3-1 + Gro) chose
+  push-report-logs-to-main; branch protection added 4 days later invalidated it. Failures are
+  SILENT (`[ALERT no-op]` — SLACK_WEBHOOK_URL not in that cron's env), not noisy. OCI accumulates
+  log-only commits → `git pull --ff-only` aborts. **Rafael-approved fix = AUTO-PR + AUTO-MERGE.**
+  DESIGN: replace `_push_with_rebase_retry()` with a PR flow — commit report globs (as now) → push
+  HEAD to a temp branch (`git push origin HEAD:refs/heads/reports/auto-sync-<ts>`) → create PR via
+  GitHub REST API (gh NOT installed on OCI; use the stored `credential.helper=store` PAT via curl)
+  → poll until the required `preship` check is green (report-only PR passes it — verified via docs
+  PR #5, 12s) → merge via REST API (PUT …/merge) → OCI `git merge --ff-only origin/main` (clean:
+  merge commit M descends from OCI's commit C) → DELETE the temp branch ref. FAIL LOUD at each step
+  (preserve never-silently-strand invariant). Deploy-critical (pushes to the deploy channel) → FULL
+  gate.
+  **⏳ STATUS at 2026-07-24 pause:** DRAFT COMPLETE + statics CLEAN (py_compile/ruff/mypy); saved as
+  the tracked patch `logs/pending_patch_2026-07-24_sync_reports.patch` (`git apply` it). Round-1 gate
+  done: Gro+GAI both REJECTED the FIRST draft — GAI's valid catches (ff-sync returned True while
+  leaving OCI diverged → re-drift; poll network-error debuggability) are ALREADY FIXED in this patch;
+  Gro's "merges while check pending" was a MISREAD (code merges only on mergeable_state=='clean').
+  **REMAINING for the 9:20 cron:** (1) `git apply` the patch; (2) FRESH Gro+GAI + cold-2nd on the
+  REVISED diff; (3) FEASIBILITY TEST — verify OCI's stored PAT can create+merge a PR (it pushed to
+  main pre-protection so likely classic `repo` scope, but a fine-grained token could 403 on PR-create
+  → if so, Rafael must grant pull_requests scope); (4) full-read gate on sync_reports.py; (5) ship via
+  branch→PR→merge + OCI non-destructive-merge deploy; (6) the first successful run's ff-sync clears the
+  3 stranded OCI report commits. INTERIM (until this ships):
+  DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE MERGE (`git stash` the 2 dirty log caches
+  meta_audit_latest.json+score16_report.json → `git merge origin/main --no-edit` → `stash pop` →
+  restart), NOT `--ff-only`.
 
 ### ✅ PRIOR STATE (end of 2026-07-22 session) — history below
 

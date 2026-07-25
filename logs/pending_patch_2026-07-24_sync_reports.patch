@@ -1,0 +1,214 @@
+diff --git a/a/scripts/sync_reports.py bb/scripts/sync_reports.py
+index 92fe743..c79e545 100644
+--- a/a/scripts/sync_reports.py
++++ bb/a/scripts/sync_reports.py
+@@ -17,8 +17,13 @@ sync failure — a silently-missing report is exactly what this exists to preven
+ The report globs here MUST stay in lockstep with the .gitignore negations; a mismatch means a
+ report is written but never un-ignored (invisible) — the reconciliation catches the symptom.
+ """
++import json
++import os
+ import subprocess
+ import sys
++import time as _time_mod
++import urllib.error
++import urllib.request
+ from datetime import datetime
+ from pathlib import Path
+ from zoneinfo import ZoneInfo
+@@ -27,6 +32,12 @@ _ROOT = Path(__file__).resolve().parent.parent
+ _LOGS = _ROOT / "logs"
+ ET = ZoneInfo("America/New_York")
+ 
++# Ship channel (2026-07-24): branch protection blocks direct pushes to main, so report commits
++# ship via an auto-merged PR. gh is NOT installed on OCI → GitHub REST API via the stored PAT.
++_REPO_SLUG = "redstorm8705/alpaca-mtf-both"
++_PR_POLL_TIMEOUT = 360   # max seconds to wait for the required `preship` check to go green
++_PR_POLL_INTERVAL = 15   # seconds between mergeable-state polls
++
+ # Un-ignored audit-report globs — MUST match the .gitignore negations exactly.
+ _REPORT_GLOBS = [
+     "logs/gemini_audit_*.txt",
+@@ -40,9 +51,6 @@ _REPORT_GLOBS = [
+     "logs/score16_report.json",
+ ]
+ 
+-_PUSH_RETRIES = 3
+-
+-
+ def _slack(msg: str) -> None:
+     """Best-effort Slack; never raises."""
+     try:
+@@ -79,34 +87,136 @@ def _stage_reports() -> list[str]:
+     return [ln for ln in out.splitlines() if ln.strip()]
+ 
+ 
+-def _push_with_rebase_retry() -> bool:
+-    """Push local commit(s) to main. On non-fast-forward, `pull --rebase` then retry (bounded).
+-    A rebase failure (e.g. a dirty OCI tree) is NEVER force-resolved — it Slack-alerts and aborts
+-    so the deploy channel is never corrupted. Returns True on a confirmed push."""
+-    for attempt in range(_PUSH_RETRIES):
+-        prc, pout = _git("push", "origin", "main")
+-        if prc == 0:
+-            return True
+-        rrc, rout = _git("pull", "--rebase", "origin", "main")
+-        if rrc != 0:
+-            # Restore a clean pre-rebase state so the NEXT run isn't wedged mid-rebase.
+-            # --abort keeps our local commit (returns to pre-pull HEAD); it is a harmless
+-            # no-op if no rebase is actually in progress (e.g. a network error before rebase
+-            # started). NEVER force-resolves — the deploy channel is never corrupted.
+-            _git("rebase", "--abort")
+-            _slack(
+-                f":rotating_light: sync_reports PULL-REBASE failed (attempt {attempt + 1}/"
+-                f"{_PUSH_RETRIES}) — conflict or dirty OCI tree; rebase aborted to clean state, "
+-                f"NOT force-pushing (deploy channel protected). Reports committed locally on OCI "
+-                f"only; investigate. {rout[:220]}"
+-            )
++def _github_token():
++    """PAT for the GitHub REST API. Prefers env (GITHUB_TOKEN/GH_TOKEN); falls back to the git
++    credential store (credential.helper=store → ~/.git-credentials — the same secret git already
++    uses to push). Returns the token string or None."""
++    tok = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
++    if tok:
++        return tok.strip()
++    try:
++        cred = Path.home() / ".git-credentials"
++        if cred.exists():
++            for line in cred.read_text().splitlines():
++                line = line.strip()
++                if "github.com" not in line or "@" not in line or "//" not in line:
++                    continue
++                # forms: "<token>", "<user>:<token>", "x-access-token:<token>"
++                userinfo = line.split("//", 1)[1].rsplit("@", 1)[0]
++                return userinfo.split(":")[-1] if ":" in userinfo else userinfo
++    except Exception as e:
++        print(f"[sync_reports] token read failed: {e}", file=sys.stderr)
++    return None
++
++
++def _api(method: str, path: str, token: str, body=None):
++    """GitHub REST call. Returns (status_int, parsed_json_or_dict). Never raises — an HTTPError is
++    captured WITH its status so callers can branch and fail LOUD (never silently)."""
++    url = f"https://api.github.com{path}"
++    data = json.dumps(body).encode() if body is not None else None
++    req = urllib.request.Request(url, data=data, method=method, headers={
++        "Authorization": f"Bearer {token}",
++        "Accept": "application/vnd.github+json",
++        "X-GitHub-Api-Version": "2022-11-28",
++        "User-Agent": "mtf-report-sync",
++    })
++    try:
++        with urllib.request.urlopen(req, timeout=30) as r:
++            return r.status, json.loads(r.read().decode() or "{}")
++    except urllib.error.HTTPError as e:
++        try:
++            return e.code, json.loads(e.read().decode() or "{}")
++        except Exception:
++            return e.code, {}
++    except Exception as e:
++        return 0, {"_error": str(e)}
++
++
++def _ship_via_pr() -> bool:
++    """Ship local report commit(s) to main via an AUTO-MERGED PR (2026-07-24). Direct pushes to
++    main are blocked by branch protection (2026-07-22); report commits are non-code, so the
++    required `preship` check passes trivially. Fails LOUD at every step (never silently strands a
++    committed report). Returns True only on a CONFIRMED merge to origin/main.
++
++    Flow: push HEAD to a temp branch → REST create PR → poll until mergeable_state=='clean'
++    (required check green) → REST merge → OCI fast-forward to the merged main → delete temp branch."""
++    token = _github_token()
++    if not token:
++        _slack(":rotating_light: sync_reports: no GitHub token (env or credential store) — cannot "
++               "open a PR. Reports committed on OCI only; another account's git pull will miss them.")
++        return False
++
++    ts = datetime.now(ET).strftime("%Y%m%d-%H%M%S")
++    branch = f"reports/auto-sync-{ts}"
++    prc, pout = _git("push", "origin", f"HEAD:refs/heads/{branch}")
++    if prc != 0:
++        _slack(f":rotating_light: sync_reports: push to temp branch {branch} failed — {pout[:200]}. "
++               "Reports on OCI only.")
++        return False
++
++    num = None
++    try:
++        st, pr = _api("POST", f"/repos/{_REPO_SLUG}/pulls", token, {
++            "title": f"reports: routine audit sync ({datetime.now(ET).strftime('%Y-%m-%d %H:%M ET')})",
++            "head": branch, "base": "main",
++            "body": "Automated routine-report sync (logs only, no code). Auto-merged by sync_reports.py.",
++        })
++        num = pr.get("number")
++        if not num:
++            _slack(f":rotating_light: sync_reports: PR create failed (HTTP {st}) — {str(pr)[:200]}. "
++                   f"Branch {branch} pushed but not merged; reports not on main.")
++            return False
++
++        mstate = "unknown"
++        last_status = None
++        waited = 0
++        while waited < _PR_POLL_TIMEOUT:
++            _time_mod.sleep(_PR_POLL_INTERVAL)
++            waited += _PR_POLL_INTERVAL
++            last_status, prv = _api("GET", f"/repos/{_REPO_SLUG}/pulls/{num}", token)
++            mstate = prv.get("mergeable_state", "unknown")
++            # Merge ONLY on 'clean' (no conflicts AND all required checks passed). 'blocked' /
++            # 'unstable' / 'behind' / 'unknown' keep polling to the timeout — never merged early.
++            if mstate == "clean":
++                break
++            if mstate == "dirty":  # a real merge conflict — it will not become mergeable
++                _slack(f":rotating_light: sync_reports: PR #{num} CONFLICTED (mergeable_state=dirty) "
++                       f"— not merging. Branch {branch}; investigate.")
++                return False
++        if mstate != "clean":
++            _hint = " (last GitHub HTTP=0 → network error while polling)" if last_status == 0 else ""
++            _slack(f":rotating_light: sync_reports: PR #{num} not mergeable within {_PR_POLL_TIMEOUT}s "
++                   f"(mergeable_state={mstate}, last HTTP={last_status}){_hint} — required `preship` "
++                   f"check pending/failed. Branch {branch}; reports on OCI + branch, NOT on main.")
++            return False
++
++        mst, mr = _api("PUT", f"/repos/{_REPO_SLUG}/pulls/{num}/merge", token,
++                       {"merge_method": "merge"})
++        if not mr.get("merged"):
++            _slack(f":rotating_light: sync_reports: PR #{num} merge call failed (HTTP {mst}) — "
++                   f"{str(mr)[:200]}. Branch {branch}; reports not on main.")
++            return False
++
++        # Reports are now on GitHub main (SHIP SUCCEEDED). Re-sync OCI local main so the NEXT run
++        # starts clean and drift never re-accumulates. OCI is at commit C; origin/main is the merge
++        # commit M, which descends from C, so this fast-forwards cleanly in the normal case.
++        _git("fetch", "origin", "main")
++        frc, fout = _git("merge", "--ff-only", "origin/main")
++        if frc != 0:
++            # The SHIP is done (reports ARE on main), but OCI local main did NOT fast-forward — it
++            # is now diverged and will RE-ACCUMULATE the exact drift this fix removes until synced.
++            # Do NOT auto-`reset --hard` production (could discard an unrelated local change); fail
++            # LOUD and return False so the run exits non-zero and the operator re-syncs OCI
++            # (`git fetch && git reset --hard origin/main` once verified clean). GAI pre-ship 2026-07-24.
++            _slack(f":rotating_light: sync_reports: PR #{num} MERGED to main (reports ARE on GitHub), "
++                   f"but OCI local main FAILED to fast-forward — {fout[:160]}. OCI is out of sync and "
++                   f"will re-drift until a manual `git reset --hard origin/main`. Returning non-zero.")
+             return False
+-    _slack(
+-        f":rotating_light: sync_reports PUSH failed after {_PUSH_RETRIES} retries — reports are "
+-        f"committed on OCI but NOT on GitHub. Another account's `git pull` will miss them until "
+-        f"a manual push. Investigate the OCI→GitHub push path."
+-    )
+-    return False
++        return True
++    finally:
++        if num is not None:
++            # best-effort branch cleanup (harmless no-op if the repo auto-deleted the merged branch)
++            _api("DELETE", f"/repos/{_REPO_SLUG}/git/refs/heads/{branch}", token)
+ 
+ 
+ def _reconcile_and_alert() -> None:
+@@ -171,7 +281,7 @@ def main() -> int:
+         )
+         return 1
+     have_ahead = ahead.strip().isdigit() and int(ahead) > 0
+-    if have_ahead and not _push_with_rebase_retry():
++    if have_ahead and not _ship_via_pr():
+         return 1
+ 
+     _reconcile_and_alert()
