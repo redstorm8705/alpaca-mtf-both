@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  (long audit-rationale comments + the Gemini API URL exceed 88; E501 is
+# cosmetic — F/B/E-real correctness checks still run. Matches scripts/sync_reports.py.)
 """
 preship_audit.py <file> [<file>...]  [--waive-gro]
 
@@ -36,10 +38,17 @@ PROMPT_HEAD = (
     "satisfied. In the diff, lines starting with '+' or '-' are the change "
     "under audit; lines starting with a space are UNCHANGED CONTEXT shown only "
     "for reference — NEVER base a REJECT on a space-prefixed context line. "
-    "REJECT only for a concrete, specific defect in the changed "
-    "lines. Do not restate the diff. Your FIRST line must be exactly "
-    "`VERDICT: APPROVE` or `VERDICT: REJECT — <specific defect in the changed "
-    "lines>`; put any explanation AFTER that first line.\n\nDIFF:\n"
+    "PROCESS (do this before deciding): for any concern, QUOTE the exact changed "
+    "line and SELF-CHECK it — re-read the changed lines and any visible guard/"
+    "import/caller; if the concern is already handled or is merely theoretical, "
+    "do NOT raise it. REJECT ONLY for a CONCRETE failing input (input -> wrong "
+    "output/crash) in the CHANGED lines; a theoretical 'could' is a NIT, not a "
+    "defect, and must not drive a REJECT. Do not restate the diff. "
+    "END your reply with its own line BEGINNING exactly `VERDICT: APPROVE` or "
+    "`VERDICT: REJECT — <specific defect + the quoted changed line>` — your FINAL "
+    "decision. Exactly ONE line may BEGIN with `VERDICT:` (you may mention the word "
+    "mid-sentence, but never START another line with it, and do not restate the "
+    "format).\n\nDIFF:\n"
 )
 
 def _git(args, want_bytes=False):
@@ -104,34 +113,32 @@ def _gai(prompt, key):
     return r["candidates"][0]["content"]["parts"][0]["text"]
 
 def _verdict(text):
-    up = text.upper()
-    # FIRST VERDICT: line wins — models are told to put it on line 1, so it is
-    # emitted before any max-token truncation of verbose trailing reasoning
-    # (2026-07-06: a 2000-token cap truncated GAI's approval before its trailing
-    # VERDICT line, and the reversed search then fail-closed to REJECT).
-    for ln in text.splitlines():
-        lu = ln.upper()
-        if "VERDICT:" in lu:
-            # REJECT-BIASED (2026-07-22, cold-2nd F1). The prior test
-            # `"APPROVE" if "APPROVE" in ln` was a FAIL-OPEN: a reject whose
-            # reason names an approval concept — "VERDICT: REJECT — I cannot
-            # APPROVE this unguarded None" — contains the substring "APPROVE"
-            # and was recorded as APPROVE, writing a valid marker the ship gate
-            # then trusts. A rejection wins its own verdict line. Mirrors the
-            # guard in .github/scripts/ci_audit.py. Read only the text AFTER the
-            # label so a stray earlier token cannot flip it.
-            after = lu.split("VERDICT:", 1)[1].strip()
-            if "REJECT" in after:
-                return "REJECT"
-            # startswith, NOT substring (2026-07-22, cold-2nd round-2 Finding 1):
-            # a substring test made "NOT APPROVED" and "DISAPPROVE" — genuine
-            # rejections that omit the token REJECT — return APPROVE and write a
-            # trusted marker. Only an APPROVE that OPENS the post-label text counts.
-            # Matches .github/scripts/ci_audit.py's verdict.startswith("APPROVE").
-            if after.startswith("APPROVE"):
-                return "APPROVE"
-            return "REJECT"
-    return "APPROVE" if ("APPROVE" in up and "REJECT" not in up) else "REJECT"
+    # Require EXACTLY ONE 'VERDICT:' line, then parse THAT line reject-biased. Rationale
+    # (2026-07-25, two cold-2nd fail-opens): any single-line-SELECTION heuristic is fragile when
+    # the reviewer emits multiple 'VERDICT:' mentions — FIRST-line catches an INTERMEDIATE/
+    # hypothetical verdict ("I thought VERDICT: REJECT ... VERDICT: APPROVE" → false REJECT);
+    # LAST-line catches a trailing FORMAT-RESTATEMENT ("...end with VERDICT: APPROVE for an
+    # approval" → FAIL-OPEN: a marker written for a genuinely REJECTED diff). Both are unsafe.
+    # So we do NOT guess which mention is the real decision: 0 or 2+ VERDICT lines → INDETERMINATE,
+    # and the caller RE-REQUESTS exactly one. Fail-CLOSED against both classes; the prompt already
+    # instructs "emit VERDICT exactly once", so a clean reviewer hits the single-line path directly.
+    # Anchor to lines that START with 'VERDICT:' (stripped). This excludes prose/code mentions
+    # ("the VERDICT: parser", "if 'VERDICT:' in line") and mid-sentence hypotheticals ("I thought
+    # VERDICT: REJECT ...") — so a diff that is itself ABOUT verdict parsing does not drown the real
+    # decision in incidental mentions, and the intermediate-hypothetical-reject flake is excluded
+    # outright. A standalone restatement line ("VERDICT: APPROVE for an approval.") still counts, so
+    # 2+ anchored lines → INDETERMINATE (fail-CLOSED), never a guessed pick.
+    lines = [ln for ln in text.splitlines() if ln.strip().upper().startswith("VERDICT:")]
+    if len(lines) != 1:
+        return "INDETERMINATE"
+    after = lines[0].strip().upper().split("VERDICT:", 1)[1].strip()
+    # REJECT-biased within the one line (fail-CLOSED): a reject token anywhere wins over a
+    # leading APPROVE; only a clean APPROVE-open with no reject token approves; else INDETERMINATE.
+    if any(t in after for t in ("REJECT", "NOT APPROV", "DISAPPROV", "DENY", "DENIED")):
+        return "REJECT"
+    if after.startswith("APPROVE"):
+        return "APPROVE"
+    return "INDETERMINATE"
 
 def audit_file(relpath, waive_gro, keys, evidence=""):
     ok_sha, blob, err = _git(["cat-file", "blob", f":{relpath}"], want_bytes=True)
@@ -162,12 +169,24 @@ def audit_file(relpath, waive_gro, keys, evidence=""):
                    "resolves your stated concern, APPROVE) ---\n"
                    + evidence.strip())
 
+    _reminder = ("\n\nREMINDER: exactly ONE line may BEGIN with `VERDICT:` — your single final "
+                 "decision `VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`. Do NOT start any "
+                 "other line with `VERDICT:` and do NOT restate the format.")
+
     # GAI (required)
     try:
         gai_txt = _gai(prompt, keys.get("GEMINI_API_KEY", ""))
         gai_v = _verdict(gai_txt)
+        if gai_v == "INDETERMINATE":
+            # A parse failure is NOT a content reject (Rafael 2026-07-25) — re-request ONCE
+            # with a format reminder before deciding anything.
+            gai_txt = _gai(prompt + _reminder, keys.get("GEMINI_API_KEY", ""))
+            gai_v = _verdict(gai_txt)
     except Exception as e:
         return False, f"{relpath}: GAI audit failed ({e}) — fail-closed, no marker"
+    if gai_v == "INDETERMINATE":
+        return False, (f"{relpath}: GAI INDETERMINATE — no parseable VERDICT line after a retry "
+                       f"(NOT a content reject; re-run the audit). Last 300 chars:\n{gai_txt[-300:]}")
     if gai_v != "APPROVE":
         return False, f"{relpath}: GAI REJECT — no marker.\n{gai_txt[-600:]}"
 
@@ -178,9 +197,15 @@ def audit_file(relpath, waive_gro, keys, evidence=""):
         try:
             gro_txt = _gro(prompt, keys.get("GROQ_API_KEY", ""))
             gro_v = _verdict(gro_txt)
+            if gro_v == "INDETERMINATE":
+                gro_txt = _gro(prompt + _reminder, keys.get("GROQ_API_KEY", ""))
+                gro_v = _verdict(gro_txt)
         except Exception as e:
             return False, (f"{relpath}: Gro audit failed ({e}). Re-run with "
                            "--waive-gro only if Rafael authorizes.")
+        if gro_v == "INDETERMINATE":
+            return False, (f"{relpath}: Gro INDETERMINATE — no parseable VERDICT line after a "
+                           f"retry (NOT a content reject; re-run). Last 300 chars:\n{gro_txt[-300:]}")
         if gro_v != "APPROVE":
             return False, f"{relpath}: Gro REJECT — no marker.\n{gro_txt[-600:]}"
 
