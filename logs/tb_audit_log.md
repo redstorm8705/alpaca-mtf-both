@@ -8958,3 +8958,17 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
 - CODEOWNERS false claim corrected (require_code_owner_reviews live=false, not "true").
 - Static: ruff/mypy/py_compile clean. 12/12 verdict unit tests. Preship: GAI APPROVE all 11 (5 via 1-round evidence counter-prompt); Gro WAIVED on 7 (Groq TPD daily cap).
 - Live gate: ALLOWS legit commit (exit 0), BLOCKS both bypasses. Committed local; awaiting Rafael push(PR)+GitHub settings (require check "preship", tick Code-Owner review, add GEMINI/GROQ Actions secrets).
+
+## 2026-07-24 — fifo_pnl.py false-CRITICAL on deliberate short opens (SHIPPED d4ccf68, PR #4)
+- FINDING: `_fifo_reconstruct` unified sell/sell_short branch fired logger.critical + Slack "state
+  corruption — review FIFO immediately" on every `sell_short` open (net_qty<=0, no prior long).
+  2026-07-24: SMCI/RBLX/MSTR each false-fired. Not corruption — a deliberate short starts flat.
+- FIX: split net_qty<=0 branch — sell_short → short lot + INFO breadcrumb (no alarm); plain sell
+  with no long lot → CRITICAL+Slack (genuine). No P&L/lot-math change (both append identical short lot).
+- GATE: Gro APPROVE + GAI APPROVE (preship --evidence after source-verified counter-prompt of a
+  false-premise "buy-path-consolidates" reject; buy path L244-245 also plain-appends → no asymmetry),
+  cold-2nd PASS (fresh, on patched blob), board reliability+execution APPROVE (broker-truth gate
+  deferred to write_eod_summary reconciliation layer as follow-up), ruff/mypy/py_compile clean,
+  server-side preship check PASS. Markers sha-bound (0a3b7ad7).
+- DEPLOY: OCI non-destructive merge (branch protection blocks sync_reports.py push → OCI log-drift);
+  restart clean, all services active, startup reconcile self-healed GTC stops.

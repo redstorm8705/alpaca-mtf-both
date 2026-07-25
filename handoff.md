@@ -7,11 +7,41 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-22 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-24 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-### ✅ CURRENT STATE (end of 2026-07-22 session) — read this first
+### ✅ SHIPPED (2026-07-24) — fifo_pnl false-CRITICAL fix (`d4ccf68`, PR #4, OCI LIVE)
+
+`_fifo_reconstruct` fired a false `logger.critical`+Slack "state corruption — review FIFO
+immediately" on every deliberate `sell_short` open (net_qty<=0, no prior long). 2026-07-24:
+SMCI/RBLX/MSTR each false-fired. Fix splits the net_qty<=0 branch: `sell_short` records the
+short lot + INFO breadcrumb (no alarm); a plain `sell` with no long lot still fires CRITICAL
+(genuine corruption). No P&L/lot-math change. Gate: Gro+GAI APPROVE (preship `--evidence`
+after a source-verified counter-prompt of a false-premise "asymmetry" reject — the buy path
+also plain-appends), cold-2nd PASS, board APPROVE, ruff/mypy/py_compile clean, server-side
+`preship` check PASS. Deployed to OCI via non-destructive merge (see OCI-DRIFT) + restart; healthy.
+
+### 🔎 DIAGNOSED THIS SESSION (not yet fixed — tracked as open tasks)
+- **P&L reporting (Task #2):** the daily report publishes `pnl_ledger` (−$29.41 on 07-24,
+  account-reconciled, lifetime invariant drift $0.84) while raw FIFO shows −$74.09 (SUSPECT —
+  likely inflated by stale prior-day lots). `reconcile_eod.py:570` sets `alpaca_pnl = tracker`.
+  Needs a clean-room multi-day FIFO to decide the true daily number before wiring the report.
+  AUTHORITATIVE NOW (account-level, immune to attribution bugs): equity **$2,570.80**, lifetime
+  **+$71.78** (≈breakeven), week **≈ −$220**. Slack is a post-only webhook → old bad messages
+  cannot be deleted programmatically (manual delete in Slack only).
+- **Strategy review (Task #3):** bleed = no-edge/low-win-rate + broken exit discipline. Reversal-
+  scan/breakeven market-exits cut winners at fractional R (avg loss ≈2× avg win, PF 0.42); the
+  profitable target/trail exits fire on only ~12% of trades. Score→return INVERSION: buckets
+  ≥MIN_SCORE=10 hold the entire loss; winners sit below the gate. Sizing floors to 1 share on
+  expensive names (~19% multiplicative stack). Highest-leverage fork = EXIT logic (full board
+  vote required). NOTE: repo `trade_log.json`/`eod` copies are STALE (~07-17); OCI is current.
+- **OCI-DRIFT (Task #5):** branch protection (07-22) blocks `sync_reports.py`'s nightly direct
+  push to main → OCI accumulates log-only commits, breaking `git pull --ff-only`. Until it is
+  redirected to a branch/PR (or logs are un-tracked), DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE
+  MERGE (`git stash` dirty log caches → `git merge origin/main` → `stash pop` → restart), not `--ff-only`.
+
+### ✅ PRIOR STATE (end of 2026-07-22 session) — history below
 
 **Preship ship-gate: SHIPPED + hardened, and the wall is LIVE.**
 - PR #1 (`5d0cf4d` → merged `43360ec`): 5 bypass/lockout fixes + 5 cold-2nd hardenings, gate versioned.
