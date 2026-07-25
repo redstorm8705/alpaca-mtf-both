@@ -8984,3 +8984,21 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
   ruff/mypy/py_compile clean, LIVE end-to-end regen verified (section + details open). Markers sha f83fe9d3.
 - DEPLOY SOP FIX (found live): non-destructive OCI merge MUST `git fetch origin main` FIRST or it
   silently no-ops on a stale origin/main ref. Handoff SOP + 9:20 cron prompt both corrected.
+
+## 2026-07-25 — remove High-VIX 0DTE block (SHIPPED ca038d7, PR #11, OCI LIVE)
+- FINDING (Rafael audit): the High-VIX 0DTE gate suppressed ALL 0DTE recs (calls+puts) across the
+  9-symbol universe when VIX hit its post-2022 top tertile (~>19). Killed 234 signals this week, all
+  07-23. Rationale ("undefined tail risk at 0DTE expiry") is a premium-SELLING concept, obsolete
+  under the 2026-07-13 long-only directional reframe (active path _build_0dte_directional is
+  side="long", 1 contract, <=$75/leg → max loss = premium = defined).
+- FIX: removed the active gate in _build_0dte_directional; removed the dead mirror in _build_recs
+  (only called "weekly"); removed the UI "BLOCKED — High VIX" header; updated 3 docstrings.
+- GATE: Gro+GAI APPROVE first-pass (TIGHTENED prompts — pre-loaded facts + self-check + last-line
+  verdict → ZERO false rejects, no counter-prompt), cold-2nd PASS, board options/risk APPROVE (safe
+  on ruin grounds), ruff/mypy/py_compile clean, functional-verified (vix=High → 0 block rejections),
+  server-side preship check PASS. Markers sha b2e92b21.
+- BOARD FOLLOW-UPS (tasks #10/#11): daily aggregate premium-at-risk cap (18 recs/day, correlated);
+  revisit +100% truncation (caps the fat-tail payoff); high-IV "rich premium" flag. Caveat: high VIX
+  = rich premium, NOT free EV (move already priced) — but block removal is correct for a long book.
+- 0DTE SPY signal accuracy this week (audit): 1h 2/3, close 2/3; 07-23 was BLOCKED (now unblocked);
+  07-20 pre-logging gap.
