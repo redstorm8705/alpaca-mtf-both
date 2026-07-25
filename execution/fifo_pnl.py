@@ -267,7 +267,34 @@ def _fifo_reconstruct(
                         current.pop(0)
                 if to_sell > 0:
                     current.append({"qty": to_sell, "price": price, "side": "short"})
+            elif side == "sell_short":
+                # Legitimate short OPEN (or add to an existing short): having no
+                # open long lot to match is EXPECTED for a deliberate short, not
+                # state corruption. Opening a position realizes no P&L, so record
+                # the short lot. Gating this apart from a plain `sell` (below) is
+                # the whole point — an intentional sell_short must NOT fire the
+                # state-corruption CRITICAL / Slack alert. (Fix 2026-07-24:
+                # SMCI/RBLX/MSTR short entries each fired a false CRITICAL.)
+                #
+                # SAFETY NOTE: this silence trusts Alpaca's `sell_short` label to
+                # discriminate a short-open from a long-close. Alpaca labels a
+                # long-reducing fill `sell` (-> CRITICAL below), never `sell_short`,
+                # so a genuine long-lot-loss still alarms. Should a mislabeled fill
+                # ever fabricate a phantom short here, the divergence is caught at
+                # the write_eod_summary reconciliation layer (reconstructed-vs-
+                # Alpaca net position + ledger-P&L-to-equity check), not by this
+                # pure leaf. The INFO breadcrumb below keeps every short-open
+                # auditable (mirrors the buy_to_cover path, which logs while
+                # suppressing its phantom lot).
+                logger.info(
+                    "[FIFO] %s: recording deliberate short open "
+                    "(net_qty=%d, qty=%d, price=%.2f).",
+                    sym, net_qty, qty, price,
+                )
+                current.append({"qty": qty, "price": price, "side": "short"})
             else:
+                # Plain `sell` with no open long lot = genuine state corruption: a
+                # long-close whose long lots are missing (bot restart / corruption).
                 logger.critical(
                     "[FIFO] %s: closing sell with no open long lots "
                     "(net_qty=%d, qty=%d, price=%.2f). "
