@@ -1,0 +1,111 @@
+Nightly Gemini Audit — 2026-07-24
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1.  execution.fifo_pnl | RBLX: closing sell with no open long lots, prior lots missing (bot restart / state corruption) | impacted symbol: RBLX
+2.  execution.fifo_pnl | MSTR: closing sell with no open long lots, prior lots missing (bot restart / state corruption) | impacted symbol: MSTR
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **Recurring CRITICAL Errors:**
+    *   `2026-07-24 19:39:08,332 | CRITICAL | execution.fifo_pnl | [FIFO] RBLX: closing sell with no open long lots (net_qty=-1, qty=1, price=47.61). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.`
+    *   `2026-07-24 19:46:13,300 | CRITICAL | execution.fifo_pnl | [FIFO] MSTR: closing sell with no open long lots (net_qty=-1, qty=1, price=92.29). Prior lots likely missing (bot restart / state corruption). Recording as synthetic short — review FIFO state immediately.`
+    These indicate severe internal state corruption or synchronization issues with open positions, leading to potentially inaccurate P&L tracking and risk calculations for RBLX and MSTR. The bot attempts to mitigate by recording "synthetic short", but the underlying issue of missing lots is critical.
+
+*   **Recurring WARNINGs:**
+    *   `2026-07-24 19:38:20,500 | WARNING | trade_logger | trade_events.jsonl write failed: Object of type bool is not JSON serializable` (and another at 19:45:23,373). This indicates a persistent logging failure which can lead to incomplete or corrupted `trade_events` records.
+    *   `2026-07-24 19:39:12,509 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-74.09 tracker=$-29.32 drift=$-44.77` (and multiple subsequent occurrences). This recurring drift indicates a significant discrepancy between Alpaca's reported P&L and the bot's internal tracker, potentially affecting reconciliation and accurate performance reporting.
+    *   `2026-07-24 19:44:33,436 | WARNING | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=16 scans but no entry — risk.open_positions=4 vs tracker=4 | MAX_OPEN_POSITIONS=20. If risk>4, CYCLE-SYNC should resolve next cycle.` (and similar for AAPL, SOXS, COIN, MSTR). This recurring anomaly suggests that potential entry signals are being blocked despite seemingly valid conditions (open positions far below MAX_OPEN_POSITIONS), indicating a possible logic error in the `confirm_gate` mechanism or other unlogged gating conditions.
+    *   `2026-07-24 19:44:33,436 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 — review exit discipline and stop placement.` This is a self-reported performance degradation, indicating poor trade outcomes that require immediate review of exit strategies.
+    *   `2026-07-24 19:45:26,745 | WARNING | execution.entry_logic | [COIN] Sector correlation BLOCKED: already holding MSTR in sector 'crypto' — skipping to avoid concentrated exposure.` (and similar for PLTR). While this is a valid gating condition, its repeated occurrence, especially for stocks identified as high score candidates (e.g. `COIN` at 10/12, `PLTR` at 12/12), in conjunction with ANOMALY-2, suggests the bot is frequently identifying good trades that are then blocked by secondary filters, potentially leading to missed opportunities or sub-optimal diversification.
+
+### PERFORMANCE AUDIT
+
+The audit focuses on the three closed trades from 2026-07-24 as per the EOD snapshot: RIVN, HOOD, MARA.
+
+*   **P&L sign correctness:**
+    *   RIVN (long): entry 17.16, exit 16.05. PNL -11.1 (loss). Correct.
+    *   HOOD (long): entry 103.00, exit 94.16. PNL -17.68 (loss). Correct.
+    *   MARA (long): entry 12.32, exit 12.270909. PNL -0.54 (loss). Correct.
+    All P&L signs are correct *based on the EOD snapshot's recorded entry and exit prices*.
+
+*   **pnl_pct computed from original full position value:**
+    *   RIVN: `pnl_pct` -6.47%. Calculation: (-11.1 / (10 * 17.16)) * 100 = -6.468%. Correct.
+    *   HOOD: `pnl_pct` -8.58%. Calculation: (-17.68 / (2 * 103.00)) * 100 = -8.582%. Correct.
+    *   MARA: `pnl_pct` -0.4%. Calculation: (-0.54 / (11 * 12.32)) * 100 = -0.398%. Correct.
+    Calculations for `pnl_pct` are correct based on the EOD snapshot values.
+
+*   **Partial P&L accumulation:** No partial exits occurred for these trades.
+
+*   **Score→outcome correlation:**
+    *   RIVN: Score 12/12, PNL Loss.
+    *   HOOD: Score 10/12, PNL Loss.
+    *   MARA: Score 10/12, PNL Loss.
+    For 2026-07-24, all recorded trades resulted in losses regardless of score (0% win rate for the day). The all-time `avg_r_multiple` is -0.022, indicating that the bot is not capturing its edge (target 2.5x). The `TQI degradation` warning (avg=25.4/100 < 30) further confirms that the bot's recent performance is poor.
+
+*   **Stop-hit rate vs. win rate:** All three trades today (RIVN, HOOD, MARA) exited due to `overnight_atr_buffer_exit` or `hard_stop`, resulting in a 100% stop-hit rate for the day and 0% win rate. This indicates a significant regime mismatch or issue with entry/exit logic.
+
+*   **Exit reason consistency:** Exit prices are consistent with the stop thresholds or hard stops defined in the EOD snapshot, indicating that stops are functioning as intended when triggered, even if the resulting P&L is negative.
+
+### TRADE INTEGRITY
+
+*   **P&L Recording Discrepancies:**
+    *   For RIVN, the `trade_events` log (`ts: 2026-07-24T07:53:40.206137-07:00`) states `price: 17.16`, `pnl: 0.0`. However, the authoritative EOD snapshot (`ts: 2026-07-24`) for RIVN shows `exit_price: 16.05` and `pnl: -11.1`.
+    *   For MARA, the `trade_events` log (`ts: 2026-07-24T12:07:09.338371-07:00`) states `price: 12.32`, `pnl: 0.0`. However, the authoritative EOD snapshot for MARA shows `exit_price: 12.270909` and `pnl: -0.54`.
+    These discrepancies confirm that the `trade_events` log (which includes `stop_hit` events) is not always accurate regarding the final exit price and P&L. The EOD snapshot (which includes `_patch_applied_ts` and `_patch_fill_source: fill_reconciler`) appears to correct these, but the inconsistency in real-time logging is a critical integrity issue. This directly triggers P5-H2 (Fill price crosstalk).
+
+*   **Alpaca per-trade discrepancies:** The `alpaca_per_trade` data shows multiple entry prices for what appears to be a single "entry" event in the bot's internal `trades` list (e.g., HOOD has entries at 116.5 and 116.53, while the `trades` entry_price is 103.0). This indicates a fundamental mismatch in how the bot aggregates/records its own entry prices versus Alpaca's individual fill reports, contributing significantly to `P&L DRIFT` and confirming P5-H2.
+
+### MODIFIED FILE FINDINGS
+
+No source files were modified in the last 24h, so no specific findings for modified files.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement:** OBSOLETE (as per instructions)
+*   **P5-H2 | Fill price crosstalk:** TRIGGERED (Evidenced by P&L drift, inconsistent `trade_events` vs. EOD snapshot P&L, and differing entry prices for the same trade in `alpaca_per_trade` vs. EOD snapshot `entry_price`.)
+*   **P5-H3 | Orphan GTC 404 path:** UNTOUCHED (While FIFO errors are present, no explicit 404 log)
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3:** OBSOLETE (as per instructions)
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** UNTOUCHED
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | execution.fifo_pnl** | **FIFO state corruption and synthetic short recording**
+    *   **Description:** The bot's internal FIFO (First-In, First-Out) accounting for open positions is becoming corrupted, evidenced by "closing sell with no open long lots" for RBLX and MSTR. This suggests that the bot's tracker does not accurately reflect actual open positions or that previous `long` positions were lost from internal state. The subsequent action to record a "synthetic short" means the bot attempts to compensate, but the fundamental tracking of owned shares is broken. This could lead to incorrect P&L calculation, margin issues, and erroneous risk management decisions.
+    *   **Exact failure condition:** `execution.fifo_pnl` logs `CRITICAL` when attempting to close a position (e.g., a short covering a long) but finds no corresponding open long lots, indicating an inconsistent internal state. Example: `[FIFO] RBLX: closing sell with no open long lots (net_qty=-1, qty=1, price=47.61). Prior lots likely missing (bot restart / state corruption).`
+
+*   **INFRASTRUCTURE | MEDIUM | trade_logger** | **`trade_events.jsonl` JSON serialization failure**
+    *   **Description:** The `trade_events.jsonl` file, which records detailed trade actions, is failing to write due to an object of type `bool` not being JSON serializable. This results in incomplete or corrupted trade logs, hindering auditability and potentially masking other issues if critical trade data cannot be reliably stored.
+    *   **Exact failure condition:** `trade_logger` logs `WARNING | trade_events.jsonl write failed: Object of type bool is not JSON serializable`.
+
+*   **ALPHA ISSUE | HIGH | strategy.run_cycle** | **Persistent `ANOMALY-2` entry blocking**
+    *   **Description:** The bot repeatedly logs `ANOMALY-2` for multiple symbols (PANW, AAPL, SOXS, COIN, MSTR), indicating that signals with high scores (`score=12/12` for MSTR, MSFT, SMCI) are not resulting in entries despite `risk.open_positions` being well below `MAX_OPEN_POSITIONS` (e.g., 4 or 5 out of 20). This suggests a flaw in the `confirm_gate` logic or another unlogged/unintended gating condition is preventing qualified trades from being executed.
+    *   **Exact failure condition:** `strategy.run_cycle` logs `WARNING | [ANOMALY-2] [SYMBOL] confirm_gate=[N] scans but no entry — risk.open_positions=[X] vs tracker=[X] | MAX_OPEN_POSITIONS=20`.
+
+*   **RISK MANAGEMENT | HIGH | strategy.run_cycle** | **`ANOMALY-3` TQI degradation and poor exit discipline**
+    *   **Description:** The bot is self-reporting "TQI degradation" with a `last-5-trade avg=25.4/100 < 30`. This is a critical warning from the bot's own internal performance metrics, directly recommending a review of "exit discipline and stop placement." This indicates a systemic issue where trades are consistently leading to sub-optimal or negative outcomes, likely due to poor risk control or inefficient exits.
+    *   **Exact failure condition:** `strategy.run_cycle` logs `WARNING | [ANOMALY-3] TQI degradation: last-5-trade avg=[X]/100 < 30 — review exit discipline and stop placement.`
+
+### FIX VALIDATION
+
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE: Investigate and resolve `FIFO state corruption` (`P5-H2` related).** The `CRITICAL` FIFO logs for RBLX and MSTR are catastrophic. This requires a deep dive into the bot's position tracking, especially around restarts, order reconciliation, and how Alpaca fills are processed and correlated with internal state. This might involve auditing `execution.fifo_pnl` and `execution.broker` modules.
+2.  **HIGH PRIORITY: Address `P&L DRIFT` and `Fill price crosstalk` (`P5-H2`).** The recurring drift between Alpaca and tracker P&L, along with discrepancies in `trade_events` vs. EOD snapshot and Alpaca's individual fill entries, indicates a fundamental issue in trade accounting. The `fill_reconciler` is patching, but the root cause of inconsistent fill data must be fixed.
+3.  **HIGH PRIORITY: Debug `ANOMALY-2` entry blocking.** Identify why qualified signals are consistently failing the `confirm_gate` despite ample open position capacity. This involves auditing the `strategy.run_cycle` and `execution.entry_logic` components to understand all gating conditions and their evaluation logic.
+4.  **HIGH PRIORITY: Review `ANOMALY-3` TQI degradation.** Acknowledge and act on the bot's self-diagnosis. Immediately review `exit discipline and stop placement` parameters, potentially starting with `INTRADAY_STOP_ATR_MULT` and `INTRADAY_TARGET_ATR_MULT` in `config.py` and the logic within `strategy.run_cycle` that determines exit conditions.
+5.  **MEDIUM PRIORITY: Fix `trade_events.jsonl` JSON serialization.** Locate the `bool` object being written to `trade_events.jsonl` that causes the `Object of type bool is not JSON serializable` error and ensure it is converted to a serializable type (e.g., string representation or integer 0/1) before writing. This improves logging fidelity for future audits and troubleshooting.

@@ -1,0 +1,68 @@
+Midday Gemini Audit — 2026-07-24
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+  P&L Corruption: `Total P&L = $0.00` and `Closed trades: 0` in SESSION P&L SUMMARY, despite multiple log entries showing `Alpaca FIFO EOD: pnl_today=$-74.09` and `fills=12 lots_closed=11`. This prevents accurate live risk decisions. | N/A (system-wide P&L reporting)
+  Position Reconciliation Break: `tracker lists a FILLED position (status=open, qty=11) that Alpaca /v2/positions does not hold`. This constitutes a "ghost" position for symbol MARA, leading to miscalculated risk and inability to manage/exit through the broker. | MARA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **P&L Inconsistency**: The `Total P&L: $0.00` and `Closed trades: 0` in the "SESSION P&L SUMMARY" directly contradict the "BOT LOG" entries:
+    *   `2026-07-24 17:20:14,774 | INFO | execution.portfolio_tracker | Alpaca FIFO EOD: pnl_today=$-74.09 | cumulative=$59.93 | tracker=$-28.78 | fills=12 lots_closed=11`
+    *   `2026-07-24 17:20:18,715 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-74.09 tracker=$-28.78 drift=$-45.31`
+    *   A similar set of logs appears at `17:26:33,075` and `17:26:37,022`.
+    *   The `update_daily_pnl_from_alpaca` log also shows an interesting state: `alpaca=$0.00 (prev=$-17.68, kept=$-17.68 GUARDED)`. This could indicate that Alpaca's API occasionally returns $0.00 P&L for intraday periods on paper accounts, but the bot's internal mechanisms should reconcile this to the `tracker` P&L or the more consistent `Alpaca FIFO EOD` value. The summary being $0.00 suggests a critical failure in displaying the authoritative P&L.
+*   **Stop-hit Rate Contradiction**: The "Session P&L Summary" reports "Stop-hit rate: 0% (2 stops)". This is contradictory. If two stops were hit, and there were only two exits, the stop-hit rate should be 100%. This is a reporting bug and prevents accurate performance assessment.
+*   **Missing Closed Trade Details**: No closed trades are listed, yet the "Session P&L Summary" indicates "Exits: 2", and logs show `lots_closed=11`. This suggests a failure to record or display trade details after exit, which is crucial for performance audit.
+*   **Win Rate and Profit Factor**: Cannot be assessed due to the P&L corruption and lack of closed trade data.
+*   **Score→Outcome Correlation**: Cannot be assessed as there are no recorded entries or exits with scores to correlate.
+
+### ENTRY QUALITY
+No entries were taken during this period. The bot's decision to not enter was influenced by several factors, which generally indicate a conservative approach during stressed conditions:
+*   **Low Volatility/Volume Filtering**: Many `VOLSHADOW` logs show `"would_pass": false` and `vol_ratio` values below 1, indicating current volume did not meet criteria (e.g., `[MARA] vol_ratio=0.589`, `[SOXL] vol_ratio=0.711`).
+*   **Dynamic MIN_SCORE**: The `MIN_SCORE` was dynamically raised to `10/12` (`MIN_LONG_SCORE=8` from config), filtering out 8 signals. This is an appropriate risk-off mechanism given the `MRI=STRESSED`.
+*   **Aggressive Sizing Reductions**: Multiple sizing multipliers were applied: `MRI STRESSED (score=41) — size floor 0.70x`, `Session P&L mult: 0.90x`, `Overnight exposure → intraday size mult 0.92x`.
+    *   Combined with `TSMOM vol-scale` and `VOTE-3 vol cap` reductions (e.g., `[SNOW] VOTE-3 vol cap 0.15x (vol_ratio=0.22x avg) | dollar_cap → $213.34`), this resulted in `Position size < 1 share` for all considered signals (`SNOW`, `NET`, `PANW`, `DDOG`), preventing any entries.
+*   **Alpha Filters**: Valid alpha filters like `weekly bias` (e.g., `[META] SHORT signal filtered by weekly bias (BULLISH)`) and `ORB gate BLOCK` (e.g., `[PLTR] ORB gate BLOCK (short)`) were active and functioning as intended to prevent entries in non-confluent conditions.
+
+Overall, the entry quality logic appears to be functioning, albeit in a highly restrictive manner, resulting in no trades. This conservative stance aligns with the prevailing stressed market conditions.
+
+### EXIT QUALITY
+Cannot be fully audited due to the lack of detailed closed trade information. The "Session P&L Summary" indicates "Exits: 2" with "(2 stops)", but no specific trades or exit prices are provided to compare against stated TP/SL levels.
+
+### MRI ALIGNMENT
+*   **MRI Level**: The session operated under `MRI STRESSED (41/100)`.
+*   **Bot Response**: The bot exhibited appropriate risk aversion:
+    *   Applied a `size floor 0.70x`.
+    *   Applied further sizing multipliers due to P&L and overnight exposure.
+    *   Dynamically raised `MIN_SCORE` to `10/12`.
+    *   Resulted in no new entries, which is a sensible outcome during `STRESSED` conditions when combined with other negative factors.
+This demonstrates good alignment with the MRI regime.
+
+### LOG ANOMALIES
+*   `2026-07-24 17:19:49,076 | WARNING | scan_to_html | [MARA] context strip: tracker lists a FILLED position (status=open, qty=11) that Alpaca /v2/positions does not hold — genuine reconciliation break.` - This is a critical infrastructure issue indicating a desynchronization between the bot's internal state and the broker.
+*   `2026-07-24 17:25:42,111 | WARNING | strategy.run_cycle | [ANOMALY-2] [SNOW] confirm_gate=19 scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20. If risk>3, CYCLE-SYNC should resolve next cycle.` (repeated for NET, PANW, DDOG, AAPL) - This warning indicates inefficiency. The bot repeatedly attempts to confirm an entry that is eventually skipped (in this case, due to `Position size < 1 share`). The `risk.open_positions` vs `tracker` counts here are confusing, as they don't seem to reflect the full set of positions shown in `ledger_sync` (e.g., GEV, GOOGL, NVDA).
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL**: **P&L Reporting Discrepancy**.
+    *   **Variable Involved**: `Total P&L` and `Closed trades` in "SESSION P&L SUMMARY".
+    *   **Value vs. Should Be**: `Total P&L` is `$0.00` and `Closed trades` is `0`. It should reflect the actual P&L and closed trades reported in the log: `Alpaca FIFO EOD: pnl_today=$-74.09` and `lots_closed=11`. The `Stop-hit rate: 0% (2 stops)` is also an internal contradiction.
+    *   **Condition**: Occurs at the time the "Session P&L Summary" is generated. The exact mechanism causing the summary to override or ignore valid P&L data from other logs is unknown but results in a false $0.00 P&L.
+*   **EXECUTION BUG | CRITICAL**: **Position Reconciliation Failure (MARA)**.
+    *   **Variable Involved**: `tracker`'s representation of `MARA` position vs. Alpaca `/v2/positions`.
+    *   **Value vs. Should Be**: `tracker lists a FILLED position (status=open, qty=11)` for `MARA`, but Alpaca API reports no such position. The internal tracker and external broker state are desynchronized. It should be consistent.
+    *   **Condition**: Logged at `2026-07-24 17:19:49,076` for `MARA`. The prior entry leading to this state is not visible in the provided logs.
+*   **ALPHA ISSUE | MEDIUM**: **Inefficient Entry Screening (ANOMALY-2)**.
+    *   **Variable Involved**: `confirm_gate` count for potential entries like `SNOW`, `NET`, `PANW`, `DDOG`, `AAPL`.
+    *   **Value vs. Should Be**: `confirm_gate=19 scans but no entry`. The bot repeatedly attempts to confirm an entry for symbols that are eventually skipped because `Position size < 1 share`. Sizing checks should ideally occur earlier in the signal processing pipeline to prevent wasted cycles.
+    *   **Condition**: Occurs at `2026-07-24 17:25:42,111` for listed symbols. This happens when initial signal generation passes, but subsequent detailed sizing calculations result in a position size less than 1 share.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: Immediately investigate and resolve the P&L reporting inconsistency (CATASTROPHIC ALERT #1) and the MARA position reconciliation break (CATASTROPHIC ALERT #2). The internal `pnl_ledger` or `Alpaca FIFO EOD` values should be considered authoritative for the "Session P&L Summary," and the source of the Alpaca/tracker desynchronization for MARA must be identified and corrected.
+2.  **EXECUTION**: Review the logic for `ANOMALY-2` (`confirm_gate` scans but no entry). Optimize the signal processing pipeline to perform position sizing viability checks (e.g., `dollar_cap < 1sh`) earlier, before initiating repeated `confirm_gate` scans, to improve efficiency and reduce unnecessary processing.
+3.  **ALPHA**: Assess the combined impact of the various sizing multipliers (`MRI STRESSED`, `Session P&L mult`, `Overnight exposure mult`, `TSMOM vol-scale`, `VOTE-3 vol cap`). While conservative sizing is appropriate for stressed regimes, ensure the cumulative effect doesn't prevent all entries excessively, leading to inactivity even when a high-quality, appropriately sized signal might exist. This involves validating the thresholds and interactions of these multipliers.

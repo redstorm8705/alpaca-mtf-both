@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-07-24",
+  "run_ts": "2026-07-24T10:30:01.362834-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "STRESSED": 16,
+      "ELEVATED": 13
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 67,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-24 16:18:50,833 | WARNING  | scan_to_html | [MARA] context strip: tracker lists a FILLED position (status=open, qty=11) that Alpaca /v2/positi",
+      "2026-07-24 16:19:21,431 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-74.09 tracker=$-28.78 drift=$-45.31",
+      "2026-07-24 16:24:41,031 | WARNING  | strategy.run_cycle | [ANOMALY-2] [SNOW] confirm_gate=10 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 |",
+      "2026-07-24 16:24:41,031 | WARNING  | strategy.run_cycle | [ANOMALY-2] [NET] confirm_gate=9 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | M",
+      "2026-07-24 16:24:41,031 | WARNING  | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=3 scans but no entry \u2014 risk.open_positions=3 vs tracker=3 | "
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}
