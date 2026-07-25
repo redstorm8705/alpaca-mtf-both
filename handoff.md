@@ -11,6 +11,18 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+### ✅ SHIPPED (2026-07-24) — weekly_review AI/Board section no longer vanishes (`55a20f6`, PR #8, OCI LIVE)
+
+The weekly HTML "AI review & board POV" section silently dropped whenever the Gemini call
+returned None. Root causes: (1) `gemini-2.5-flash` called with no config → thinking ate the
+output budget → empty/truncated `response.text` → parse fail; (2) fallback `gemini-2.0-flash-lite`
+is now 404/retired (no working fallback). Fix (`weekly_review.py:_run_analysis` + `build_html`):
+add `max_output_tokens=8192` + `thinking_budget=0`, swap dead fallback → `gemini-3.1-flash-lite`,
+raise on empty `response.text` (route to next model, not crash `json.loads("")`); render a VISIBLE
+"unavailable this run" notice on an attempted-but-failed run (gated on `analysis_attempted` so
+archive stubs stay clean); AI review now renders OPEN + first. Gate: Gro+GAI APPROVE (clean raw-diff
+preship), cold-2nd PASS, ruff/mypy/py_compile clean, live end-to-end regen verified (section + `details open`).
+
 ### ✅ SHIPPED (2026-07-24) — fifo_pnl false-CRITICAL fix (`d4ccf68`, PR #4, OCI LIVE)
 
 `_fifo_reconstruct` fired a false `logger.critical`+Slack "state corruption — review FIFO
@@ -74,9 +86,12 @@ also plain-appends), cold-2nd PASS, board APPROVE, ruff/mypy/py_compile clean, s
   **THEN for the cron:** apply patch → apply fixes A/B/C → FRESH Gro+GAI preship on the revised diff →
   record cold-2nd + preship markers → ship via branch→PR→merge → OCI non-destructive-merge deploy →
   first successful run's ff-sync clears the 3 stranded OCI report commits. INTERIM (until this ships):
-  DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE MERGE (`git stash` the 2 dirty log caches
-  meta_audit_latest.json+score16_report.json → `git merge origin/main --no-edit` → `stash pop` →
-  restart), NOT `--ff-only`.
+  DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE MERGE, and it MUST `git fetch origin main` FIRST or the
+  merge uses OCI's STALE `origin/main` ref and silently no-ops ("Already up to date" with the code NOT
+  pulled — hit live 2026-07-24). Full SOP: `git fetch origin main` → `git stash push -m deploy
+  logs/meta_audit_latest.json logs/score16_report.json` → `git merge origin/main --no-edit` → `git
+  stash pop` → (restart services only if a running service's code changed). NOT `--ff-only` (aborts on
+  the drift). ALWAYS verify the change landed (`grep` the file) — do not trust "Already up to date".
 
 ### ✅ PRIOR STATE (end of 2026-07-22 session) — history below
 

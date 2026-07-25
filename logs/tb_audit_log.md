@@ -8972,3 +8972,15 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
   server-side preship check PASS. Markers sha-bound (0a3b7ad7).
 - DEPLOY: OCI non-destructive merge (branch protection blocks sync_reports.py push → OCI log-drift);
   restart clean, all services active, startup reconcile self-healed GTC stops.
+
+## 2026-07-24 — weekly_review.py AI/Board section silent-vanish (SHIPPED 55a20f6, PR #8, OCI LIVE)
+- FINDING: weekly HTML "AI review & board POV" dropped silently when _run_analysis returned None
+  ("AI analysis complete" logged even on None). Root causes: gemini-2.5-flash called w/ no config
+  (thinking eats output budget → empty response.text → parse fail) + dead fallback gemini-2.0-flash-lite (404).
+- FIX: max_output_tokens=8192 + thinking_budget=0; fallback → gemini-3.1-flash-lite; raise on empty
+  response.text (route to next model, not crash json.loads("")); visible "unavailable this run" notice
+  gated on analysis_attempted (stubs stay clean); AI review renders open+first.
+- GATE: Gro+GAI APPROVE (clean raw-diff preship, no counter-prompt), cold-2nd PASS (no threats),
+  ruff/mypy/py_compile clean, LIVE end-to-end regen verified (section + details open). Markers sha f83fe9d3.
+- DEPLOY SOP FIX (found live): non-destructive OCI merge MUST `git fetch origin main` FIRST or it
+  silently no-ops on a stale origin/main ref. Handoff SOP + 9:20 cron prompt both corrected.
