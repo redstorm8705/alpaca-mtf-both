@@ -55,12 +55,25 @@ also plain-appends), cold-2nd PASS, board APPROVE, ruff/mypy/py_compile clean, s
   done: Gro+GAI both REJECTED the FIRST draft — GAI's valid catches (ff-sync returned True while
   leaving OCI diverged → re-drift; poll network-error debuggability) are ALREADY FIXED in this patch;
   Gro's "merges while check pending" was a MISREAD (code merges only on mergeable_state=='clean').
-  **REMAINING for the 9:20 cron:** (1) `git apply` the patch; (2) FRESH Gro+GAI + cold-2nd on the
-  REVISED diff; (3) FEASIBILITY TEST — verify OCI's stored PAT can create+merge a PR (it pushed to
-  main pre-protection so likely classic `repo` scope, but a fine-grained token could 403 on PR-create
-  → if so, Rafael must grant pull_requests scope); (4) full-read gate on sync_reports.py; (5) ship via
-  branch→PR→merge + OCI non-destructive-merge deploy; (6) the first successful run's ff-sync clears the
-  3 stranded OCI report commits. INTERIM (until this ships):
+  Round-2 gate DONE: **cold-2nd PASS** (all safety invariants hold, both round-1 fixes correct, no
+  early-merge / no-false-green / no-token-leak) and **deploy-infra board APPROVE-WITH-CHANGES** with
+  3 REQUIRED fixes NOT yet in the patch. **FEASIBILITY ✅ CONFIRMED:** OCI token is a `gho_` OAuth
+  token with scopes `gist, read:org, repo, workflow` → `repo` scope grants PR create+merge; no new
+  token needed.
+  **REQUIRED FIXES to apply before ship (board round-2 + cold-2nd):**
+  (A) IMPORTANT — logs-only isolation is by CONVENTION not verified: `main()` gates on `rev-list
+  --count origin/main..HEAD` (ALL commits ahead) and `push HEAD:branch` would sweep ANY stray
+  non-report commit on OCI's main into a "logs only" auto-merged PR. FIX: assert `git diff
+  --name-only origin/main..HEAD` ⊆ `_REPORT_GLOBS`; abort LOUD on any non-report path before ship.
+  (B) temp-branch leak: `finally` cleanup guarded by `if num is not None` — a PR-create failure
+  (num=None) orphans the already-pushed branch. FIX: track `branch_pushed`, delete in `finally`
+  whenever pushed. (C) fail-loud is HALF-FALSE: `send_slack` no-ops when SLACK_WEBHOOK_URL unset
+  (this cron historically runs `[ALERT no-op]`) → every fail-loud branch degrades to an untailed log
+  line; only the exit code survives. FIX: fail-fast at startup if SLACK_WEBHOOK_URL absent (or route
+  to a monitored channel) + ensure the cron's non-zero exit is surfaced (MAILTO / systemd OnFailure).
+  **THEN for the cron:** apply patch → apply fixes A/B/C → FRESH Gro+GAI preship on the revised diff →
+  record cold-2nd + preship markers → ship via branch→PR→merge → OCI non-destructive-merge deploy →
+  first successful run's ff-sync clears the 3 stranded OCI report commits. INTERIM (until this ships):
   DEPLOY TO OCI REQUIRES A NON-DESTRUCTIVE MERGE (`git stash` the 2 dirty log caches
   meta_audit_latest.json+score16_report.json → `git merge origin/main --no-edit` → `stash pop` →
   restart), NOT `--ff-only`.
