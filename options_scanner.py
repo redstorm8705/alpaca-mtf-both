@@ -25,7 +25,7 @@ TWO RECOMMENDATION SETS:
   0DTE:   DIRECTIONAL intraday-swing capture (reframed 2026-07-13 — NOT premium selling).
           Long OTM ~0.35Δ CALL (upside) + PUT (downside) per name so the operator plays the
           day either way. Same-day expiry, 10:05–10:20 ET entry, 3:45 ET hard close.
-          Max $75/trade, 1 contract, +100% target. Blocked entirely in High VIX tertile.
+          Max $75/trade, 1 contract, +100% target. Runs in all VIX regimes (block removed 2026-07-25).
           Universe: SPY, QQQ + Mag 7 (AAPL/MSFT/GOOGL/AMZN/NVDA/META/TSLA).
 
 Weekly universe: SPY, QQQ, AAPL, MSFT, AMZN (core) + META, GOOGL, AMD (conditional, ≤ $3)
@@ -885,7 +885,7 @@ def _build_recs(
 
     ISK tilt: if |put_25d_IV − call_25d_IV| > 2 vol pts, nudge delta target ±0.05.
     BAS gate: skip if (ask−bid)/mid exceeds threshold for the mode/side.
-    0DTE: blocked entirely in High VIX (undefined tail risk at 0DTE expiry).
+    0DTE: runs in all VIX regimes (High-VIX block removed 2026-07-25; long-only defined risk).
     0DTE direction lock: once set at 10:05 ET, side+opt_type never re-derived mid-day.
     """
     recommendations = []
@@ -930,11 +930,9 @@ def _build_recs(
             elif _db in ("strong_bear", "bear"):
                 mtf_bullish = False
 
-        # 0DTE: block in High VIX regime — undefined tail risk at same-day expiry
-        if mode == "0dte" and vix_tertile == "High":
-            watchlist.append({**sig, "watch_reason": "0DTE blocked: High VIX regime — tail risk (Vilkov 2026)"})
-            rejections.append({"symbol": sym, "reason": "0DTE blocked: High VIX regime — undefined tail risk (Vilkov 2026)", "score": score})  # P2-OPTIONS-REJECT
-            continue
+        # (High-VIX 0DTE block removed here 2026-07-25.) This _build_recs path is called for
+        # "weekly" only — the active 0DTE path is _build_0dte_directional, where the block is also
+        # removed. Kept mode=="0dte" out of this dead branch to avoid a misleading vestige.
 
         # Fetch both chain sides in one API call
         both       = _fetch_both_chains(sym, expiry, price)
@@ -1111,7 +1109,8 @@ def _build_0dte_directional(
     move EITHER WAY. For each SPY/QQQ/Mag-7 name: a long OTM ~0.35Δ CALL (upside) AND a long
     OTM ~0.35Δ PUT (downside), so the operator plays whichever direction the day develops.
     Replaces the prior VRP premium-selling 0DTE path (Rafael 2026-07-13). 1 contract, ≤$75,
-    hard-close 3:45 ET, blocked entirely in High-VIX (undefined 0DTE tail risk)."""
+    hard-close 3:45 ET. Runs in ALL VIX regimes (High-VIX block removed 2026-07-25 — long-only,
+    max loss = premium paid, so no undefined tail risk)."""
     recs: list = []
     watch: list = []
     rej: list = []
@@ -1126,10 +1125,10 @@ def _build_0dte_directional(
         if err or not price:
             rej.append({"symbol": sym, "reason": err or "no price data", "score": 0, "mode": "0DTE"})
             continue
-        if vix_tertile == "High":
-            rej.append({"symbol": sym, "reason": "0DTE blocked: High VIX regime — undefined tail risk (Vilkov 2026)",
-                        "score": score, "mode": "0DTE"})
-            continue
+        # High-VIX 0DTE block REMOVED 2026-07-25 (Rafael): the "undefined tail risk" rationale was a
+        # premium-SELLING concern. This path is LONG-only directional (max loss = premium paid,
+        # defined + ≤$75/leg), and high VIX is exactly when directional puts pay and QHM/forever-6
+        # adds are cheapest. High VIX no longer blocks 0DTE for ANY universe symbol.
 
         both = _fetch_both_chains(sym, expiry_today, price)
 
@@ -1892,7 +1891,7 @@ def generate_html(data: dict) -> str:
   <div class="col zd">
     <div class="colhead">
       <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional · {len(dte_recs)}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium. SPY/QQQ + Mag 7.</span></details></span>
-      <span class="ch-s"><b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET{'· <b style="color:#ff3b30">BLOCKED — High VIX</b>' if vix_tertile == "High" else ''}</span>
+      <span class="ch-s"><b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET</span>
     </div>
     {index_anchor}
     {dte_table}
