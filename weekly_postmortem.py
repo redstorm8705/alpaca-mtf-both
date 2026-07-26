@@ -354,13 +354,20 @@ def _aggregate_by_position(trades: list[dict]) -> list[dict]:
         groups.setdefault((t["symbol"], t["direction"], t["exit_date"]), []).append(t)
     out: list[dict] = []
     for (sym, direction, ed), rows in groups.items():
-        qty       = sum(r["size"] for r in rows)
-        any_unm   = any(r.get("_unmatched") for r in rows)
-        matched   = [r for r in rows if r["entry_price"] is not None]
-        mq        = sum(r["size"] for r in matched)
-        w_entry   = round(sum(r["entry_price"] * r["size"] for r in matched) / mq, 4) if mq else None
-        w_exit    = round(sum(r["exit_price"] * r["size"] for r in rows) / qty, 4) if qty else 0.0
-        pnl       = None if any_unm else round(sum(r["pnl"] for r in rows), 4)
+        qty      = sum(r["size"] for r in rows)
+        any_unm  = any(r.get("_unmatched") for r in rows)
+        matched  = [r for r in rows if r["entry_price"] is not None]
+        mq       = sum(r["size"] for r in matched)
+        # Explicit guards (not a ternary) so the div-by-zero IMPOSSIBILITY is unmistakable: the
+        # division runs ONLY inside `if mq > 0:` / `if qty > 0:`, never otherwise. mq==0 only when
+        # every row is unmatched → w_entry stays None; qty is always >=1 (every row has size>=1).
+        w_entry = None
+        if mq > 0:
+            w_entry = round(sum(r["entry_price"] * r["size"] for r in matched) / mq, 4)
+        w_exit = 0.0
+        if qty > 0:
+            w_exit = round(sum(r["exit_price"] * r["size"] for r in rows) / qty, 4)
+        pnl = None if any_unm else round(sum(r["pnl"] for r in rows), 4)
         ent_times = [r["entry_time"] for r in rows if r["entry_time"]]
         agg = _mk_trade(sym, direction, w_entry, w_exit, qty,
                         (min(ent_times) if ent_times else ""),
