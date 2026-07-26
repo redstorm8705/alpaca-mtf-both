@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501, E701  (long report/prompt strings; intentional one-line dispatch in _shorten_reason)
 """
 weekly_postmortem.py
 Weekly Trade Post-Mortem (WTP) — reads trade_events.jsonl, fetches
@@ -462,22 +463,43 @@ If a field shows '?' note it and continue."""
 
 
 def _call_gemini(prompt: str) -> str:
+    # gemini-2.5-flash needs max_output_tokens + thinking_budget=0, or "thinking" eats the
+    # output budget and response.text comes back empty/truncated (project-documented Gemini
+    # gotcha) — the silent cause of a blank/half "adversarial analysis" section here. The prior
+    # fallback gemini-2.0-flash-lite is now 404/retired; gemini-3.1-flash-lite is the working
+    # replacement (both verified live 2026-07-24 in weekly_review.py, the sibling fix #6/PR #8).
     try:
         from google import genai
+        from google.genai import types as _gtypes
         client   = genai.Client(api_key=GEMINI_API_KEY)
+        cfg      = _gtypes.GenerateContentConfig(
+            max_output_tokens=8192,
+            thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),
+        )
         last_err = None
-        for model in [GEMINI_MODEL, "gemini-2.0-flash-lite"]:
+        for model in [GEMINI_MODEL, "gemini-3.1-flash-lite"]:
             try:
                 logger.info(f"  Trying model: {model}")
-                r = client.models.generate_content(model=model, contents=prompt)
+                r   = client.models.generate_content(model=model, contents=prompt, config=cfg)
+                txt = (r.text or "").strip()
+                if not txt:
+                    # Empty text (thinking consumed the budget, or a truncated/blocked response)
+                    # → treat as a failure so we fall through to the next model instead of
+                    # writing an empty/"None" analysis section into the report.
+                    raise ValueError("empty response.text (no content returned)")
                 logger.info(f"  Success: {model}")
-                return r.text
+                return txt
             except Exception as e:
                 last_err = e
                 logger.warning(f"  {model} failed: {e}")
-        return f"(Gemini error — all models failed. Last: {last_err})"
+        return f"_(Gemini adversarial analysis unavailable this run — all models failed. Last error: {last_err})_"
     except ImportError:
-        return "(google-genai not installed)"
+        return "_(google-genai not installed — adversarial analysis skipped)_"
+    except Exception as e:
+        # Broad catch (mirrors weekly_review.py): a Client()/config-construction error (e.g. an SDK
+        # build lacking ThinkingConfig, or an auth error) must degrade to a visible notice — NEVER
+        # propagate out of _call_gemini and abort the whole report + Slack post in main().
+        return f"_(Gemini adversarial analysis unavailable this run — client/setup error: {e})_"
 
 # ── Slack ──────────────────────────────────────────────────────────────────────
 
