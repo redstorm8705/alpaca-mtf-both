@@ -19,10 +19,16 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 5. **PR #18 (`8851453`)** — **WTP Part A**: `weekly_postmortem.py::_call_gemini` config fix (max_output_tokens=8192 + thinking_budget=0, live `gemini-3.1-flash-lite` fallback, empty-text guard, broad outer except) — same defect as #6, analysis stops blanking.
 6. **PR #20 (`ba1c222`)** — **WTP Part B (fills-authoritative P&L)**: `weekly_postmortem.py` now reconstructs `Entry$/Exit$/P&L` from the Alpaca FILL activities API (FIFO, read-only, no execution imports — approach (a)). `page_token` pagination (verified `after_id` doesn't advance), `(fills, complete)` completeness flag (partial read → loud fallback, never a silent no-trade week), net-aware FIFO w/ shorts, position aggregation, same-ET-day metadata enrich, 90-day lookback (pre-window opens → `?` unmatched). **Proven live:** the week of 2026-07-20 the OLD event-log path reported **+$22.42 / 2 trades**; authoritative FIFO shows **11 positions / −$47.76** (event log missed 9 trades + flipped the sign). Gate: FIFO board PASS, data-integrity board PASS (3 rounds), cold-2nd PASS (2 rounds), GAI APPROVE, Gro WAIVED (Groq TPM). NOTE: the *existing* `logs/wtp_2026-07-24.md` still shows the old wrong +$22.42 — regenerate on request (delete the file + re-run the cron; it re-posts to Slack).
 
-### ⏭️ EXACT NEXT STEPS (Rafael's open asks, in priority order)
-- **`.md` sprawl audit** — Rafael: "audit all .md files… a ton floating around." Inventory + flag stale/duplicate/floating docs. Not started.
-- **0DTE SPY rec (task #15)** — in `options_scanner.py`: REMOVE recommended # of contracts; show conviction score % (out of 100) + size tiers full / 3/4 / half / 1/4. Applies to scanner text + any HTML/Slack surface. Gate (RTH-adjacent display + sizing semantics).
-- **Stochastic false-reject residue (open)** — gemini-2.5-flash `thinkingBudget=0` is nondeterministic; context-fix reduces but can't eliminate flaky single-shot rejects. Proposed: re-audit-on-reject requiring a REPEATED reject to fail (consensus, not blind re-roll). Rafael to weigh sensitivity vs false-reject-rate.
+### ✅ ALSO SHIPPED (2026-07-26, later)
+- **PR #22 (`f6580c1`)** — `.md` sprawl cleanup (BGG-endorsed three-bucket, NOT a monthly doc): new `docs/decisions_log.md` (durable, provenance-stamped), 24 May `.md` deleted (local-only dev logs tarball'd first; event-log P&L quarantined), yfinance-news T4 finding verified RESOLVED. Kept `weekly_perf_audit_design_v1.md` for a taxonomy extraction.
+- **PR #23 (`bcd258f`)** — **0DTE #15**: `options_scanner.py` 0DTE rec now shows a conviction % + Full/3-4/Half/1-4 size ladder ($ of the $75 0DTE cap) instead of a contract count. BGG-decided formula (3-1 quartile band-center map: 12→95%→Full, 11→82%→3/4, 10→67%→Half, 9→45%→1/4). Weekly path unchanged. `conviction_pct` logged for the accuracy evaluator.
+
+### ⏭️ EXACT NEXT STEPS (Rafael's remaining open asks)
+- **GEX signal-accuracy audit (task #8)** — the GEX half of the earlier audit ask (0DTE-SPY half was done; GEX not). Uses `options_recs_history.jsonl` (now carries `conviction_pct`).
+- **weekly_perf_audit_design taxonomy extraction** — rescue the 8-category failure taxonomy into the shipped `weekly_perf_audit.py` docstring, then delete the 672-line spec (BGG follow-up).
+- **`scan_to_html.py` yfinance straddle/options price** — candidate T4 review (separate from the resolved news finding); unverified whether it's a violation.
+- **Regenerate `wtp_2026-07-24.md`** — existing file still shows the old wrong +$22.42; delete + re-run to get the authoritative −$47.76 (re-posts to Slack).
+- **Stochastic false-reject residue (open)** — gemini-2.5-flash `thinkingBudget=0` is nondeterministic; the context-fix reduces but can't eliminate flaky single-shot rejects (hit again on the WTP Part B ternary + the 0DTE run passed clean). Proposed: re-audit-on-reject requiring a REPEATED reject to fail (consensus, not blind re-roll). Rafael to weigh sensitivity vs false-reject-rate.
 
 ---
 
