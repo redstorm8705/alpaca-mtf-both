@@ -17,10 +17,13 @@ Read-only — no execution imports, no order calls, no shared state.
 import json
 import logging
 import os
+import re
 import ssl
 import sys
+import time as _time_mod
+import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -130,6 +133,312 @@ def _load_trades_for_week(monday: date, friday: date) -> list[dict]:
                     "exit_date":   ev_date,
                 })
     return trades
+
+# ── Alpaca fills FIFO reconstruction (authoritative Entry$/Exit$/P&L — Part B) ──
+# WHY: _load_trades_for_week (above) reads Entry$/Exit$/P&L from trade_events.jsonl, the bot's
+# own event log. When an `entry` event is missing (e.g. DDOG/XOM week of 2026-07-20 had NONE),
+# Entry$/Hold/R-Mult/TQI all blank and the report's whole quantitative core is empty. The column
+# header even claimed "Alpaca fills API (authoritative)" while the code never called it. These
+# functions make that true: reconstruct closed round-trips from the Alpaca FILL activities API
+# (FIFO), so entry price AND entry timestamp are authoritative and complete regardless of any
+# event-log gap. Read-only; NO execution imports (this script's contract) — the FIFO logic mirrors
+# execution/fifo_pnl.py but is kept local. score/MRI/exit_reason (not in fills) are enriched
+# best-effort from trade_events.jsonl afterward.
+
+_FILLS_LOOKBACK_DAYS = 90   # generous: captures the opening fill for intraday+swing+most-of-quarter
+                            # holds so a within-week EXIT matches its real entry (not a pre-window gap)
+
+
+def _parse_alpaca_ts(ts_str: str) -> datetime:
+    """Tolerant ISO-8601 parser: Z→+00:00, fractional seconds padded/truncated to 6 digits
+    (Alpaca emits variable precision; Py3.10 fromisoformat needs exactly 3 or 6). Read-only
+    mirror of execution/fifo_pnl.py::_parse_alpaca_ts, kept local to honor the no-execution-import
+    contract. Raises ValueError on genuinely malformed input — caller decides the fallback."""
+    s = str(ts_str).strip().replace("Z", "+00:00")
+    m = re.match(r"^(.*?[T ]\d{2}:\d{2}:\d{2})\.(\d+)(.*)$", s)
+    if m:
+        head, frac, tail = m.groups()
+        s = f"{head}.{frac[:6].ljust(6, '0')}{tail}"
+    dt = datetime.fromisoformat(s)
+    # Alpaca transaction_time is always UTC (Z). Defensive: if a value ever arrives offset-less,
+    # assume UTC so a later `.astimezone(ET).date()` can't silently mis-date it via the host's
+    # local tz (data-integrity board note, 2026-07-26).
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _fetch_fills_range(start_d: date, end_d: date) -> "tuple[list[dict], bool]":
+    """All Alpaca FILL activities in [start_d 00:00 ET, end_d 23:59 ET], paginated with
+    `page_token` = the last activity's id. (Empirically verified 2026-07-26 against the live paper
+    endpoint: `page_token` advances the window; `after_id` does NOT — it repeats page 1, which
+    would loop on the oldest fills and never reach the target week. A `seen`-id guard stops a
+    non-advancing token from spinning to the page cap.)
+
+    Returns (fills, complete). `complete` is True ONLY when pagination reached a natural end
+    (a <100 page, or a fully-seen page, or a genuine empty result). It is False on ANY partial
+    read — keys unset, a page's 3 retries exhausted, a missing next-page token, or the 500-page
+    cap. This flag is LOAD-BEARING: fills are fetched oldest-first (asc), so the TARGET WEEK is on
+    the LAST pages — a mid-pagination failure returns only OLD fills with zero in-week trades. The
+    caller MUST NOT treat a partial read (complete=False) as an authoritative 'no-trade week'
+    (data-integrity board T1, 2026-07-26); it falls back / flags instead."""
+    if not ALPACA_KEY or not ALPACA_SECRET:
+        logger.warning("Alpaca keys unset — cannot fetch fills; falling back to event log.")
+        return [], False
+    et_start = datetime(start_d.year, start_d.month, start_d.day, 0, 0, 0, tzinfo=ET)
+    et_end   = datetime(end_d.year, end_d.month, end_d.day, 23, 59, 59, tzinfo=ET)
+    headers  = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+    base     = "https://paper-api.alpaca.markets/v2/account/activities/FILL"
+    all_fills: list[dict] = []
+    seen_ids: set = set()
+    page_token: "str | None" = None
+    complete = False
+    for _page in range(500):   # backstop cap; real pagination stops on the first <100 page
+        params = {"direction": "asc", "page_size": "100",
+                  "after": et_start.isoformat(), "until": et_end.isoformat()}
+        if page_token:
+            params["page_token"] = page_token
+        url  = f"{base}?{urllib.parse.urlencode(params)}"
+        page: "list | dict | None" = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, context=_SSL_CTX, timeout=15) as r:
+                    page = json.loads(r.read().decode())
+                # The FILL endpoint returns a JSON ARRAY. ANY dict body is an error/anomaly (an
+                # error object like {"code":...} or {"message":...}, or an unexpected shape) — treat
+                # it as a failed page, not data. Gating only on `.get("code")` let a code-less dict
+                # slip to `[f for f in page ...]` which iterates dict KEYS → str.get → AttributeError,
+                # crashing the whole read-only report (cold-2nd T1, 2026-07-26). Fail CLOSED instead.
+                if isinstance(page, dict):
+                    raise RuntimeError(f"Alpaca FILL API returned a non-array body: {str(page)[:200]}")
+                break
+            except Exception as e:
+                logger.warning(f"fills fetch attempt {attempt + 1}/3 failed: {e}")
+                page = None
+                _time_mod.sleep(2 ** attempt)
+        if page is None:
+            complete = False           # hard failure after retries → PARTIAL read
+            break
+        if not page:                   # genuine empty list → complete (nothing more to fetch)
+            complete = True
+            break
+        # Non-advancing token: a full page whose ids are ALL already seen means `page_token`
+        # stopped advancing (an API clamp/regression) — we are STUCK on the oldest pages with
+        # PARTIAL data, not at a natural end (the natural end is the empty-page or <100-page path
+        # above/below). Fail CLOSED here: complete=False → the caller falls back + warns, never
+        # presents oldest-only fills as an authoritative no-trade week (data-integrity board T1
+        # round-2 residual, 2026-07-26). A false 'incomplete' only triggers a loud fallback; a
+        # false 'complete' would lock in a wrong week — so this direction is the safe one.
+        new = [f for f in page if f.get("id") not in seen_ids]
+        if not new:
+            complete = False
+            break
+        seen_ids.update(f.get("id") for f in new)
+        all_fills.extend(new)
+        if len(page) < 100:            # last page → natural end
+            complete = True
+            break
+        page_token = page[-1].get("id")
+        if not page_token:             # cannot paginate further but there may be more → PARTIAL
+            complete = False
+            break
+    # for-else: loop ran the full 500 pages without breaking → cap hit → PARTIAL (complete stays False)
+    return all_fills, complete
+
+
+def _mk_trade(sym, direction, entry, exit_, qty, entry_time, exit_time, pnl) -> dict:
+    """Build a WTP trade dict from a matched round-trip. entry/pnl may be None (a close whose
+    opening fill is older than the lookback window — shown as '?' and excluded from totals)."""
+    return {
+        "symbol": sym, "direction": direction,
+        "entry_price": (round(float(entry), 4) if entry is not None else None),
+        "exit_price":  round(float(exit_), 4),
+        "entry_time":  entry_time or "", "exit_time": exit_time or "",
+        "pnl":         (round(float(pnl), 4) if pnl is not None else None),
+        "size":        int(qty),
+        "score": "?", "mri_level": "?", "exit_reason": "",
+        "_unmatched": entry is None,
+    }
+
+
+def _reconstruct_closed_trades(fills: list[dict], monday: date, friday: date) -> list[dict]:
+    """FIFO-reconstruct round-trips from Alpaca fills; return those whose EXIT ET date ∈
+    [monday, friday]. Net-position-aware: a buy/buy_to_cover covers open shorts FIFO; a
+    sell/sell_short closes open longs FIFO. Entry price AND timestamp come from the matched
+    opening lot (authoritative). A close with no open lot (opening fill older than the lookback
+    window) is emitted UNMATCHED (entry/pnl = None → '?'), never fabricated. No QHM special-case
+    (excluding QHM would need an execution import this script forbids; a QHM close in-week is a
+    legitimate row). Mirrors execution/fifo_pnl.py::_fifo_reconstruct, read-only, single pass."""
+    def _key(f):
+        try:
+            return _parse_alpaca_ts(f.get("transaction_time", ""))
+        except Exception:
+            return datetime.max.replace(tzinfo=ET)
+    ordered = sorted(fills, key=_key)
+    lots: dict[str, list[dict]] = {}
+    closed: list[dict] = []
+    for f in ordered:
+        sym  = f.get("symbol", "")
+        side = f.get("side", "")
+        try:
+            qty   = int(float(f.get("qty", 0)))
+            price = float(f.get("price", 0))
+        except (TypeError, ValueError):
+            continue
+        filled_at = f.get("transaction_time", "")
+        if not sym or qty <= 0:
+            continue
+        cur = lots.setdefault(sym, [])
+        net = sum(lot["qty"] * (1 if lot["side"] == "long" else -1) for lot in cur)
+
+        if side in ("buy", "buy_to_cover"):
+            if net < 0:                       # cover open shorts FIFO
+                rem = qty
+                while rem > 0 and cur and cur[0]["side"] == "short":
+                    lot = cur[0]
+                    mch = min(lot["qty"], rem)
+                    closed.append(_mk_trade(sym, "short", lot["price"], price, mch,
+                                            lot["filled_at"], filled_at, (lot["price"] - price) * mch))
+                    lot["qty"] -= mch
+                    rem        -= mch
+                    if lot["qty"] == 0:
+                        cur.pop(0)
+                if rem > 0:                   # over-covered → flips to long
+                    cur.append({"qty": rem, "price": price, "side": "long", "filled_at": filled_at})
+            elif side == "buy_to_cover":      # cover with no open short = opening fill pre-window
+                closed.append(_mk_trade(sym, "short", None, price, qty, "", filled_at, None))
+            else:                             # plain buy → open/extend long
+                cur.append({"qty": qty, "price": price, "side": "long", "filled_at": filled_at})
+
+        elif side in ("sell", "sell_short"):
+            if net > 0:                       # close open longs FIFO
+                rem = qty
+                while rem > 0 and cur and cur[0]["side"] == "long":
+                    lot = cur[0]
+                    mch = min(lot["qty"], rem)
+                    closed.append(_mk_trade(sym, "long", lot["price"], price, mch,
+                                            lot["filled_at"], filled_at, (price - lot["price"]) * mch))
+                    lot["qty"] -= mch
+                    rem        -= mch
+                    if lot["qty"] == 0:
+                        cur.pop(0)
+                if rem > 0:                   # over-sold → flips to short
+                    cur.append({"qty": rem, "price": price, "side": "short", "filled_at": filled_at})
+            elif side == "sell_short":        # deliberate short OPEN
+                cur.append({"qty": qty, "price": price, "side": "short", "filled_at": filled_at})
+            else:                             # plain `sell` with no open long = opening fill pre-window
+                closed.append(_mk_trade(sym, "long", None, price, qty, "", filled_at, None))
+
+    out: list[dict] = []
+    for t in closed:
+        try:
+            ed = _parse_alpaca_ts(t["exit_time"]).astimezone(ET).date()
+        except Exception:
+            continue
+        if monday <= ed <= friday:
+            t["exit_date"] = ed
+            out.append(t)
+    return out
+
+
+def _aggregate_by_position(trades: list[dict]) -> list[dict]:
+    """Collapse fill-level round-trips into position-level rows: group by (symbol, direction, exit
+    ET date). qty-weighted-avg entry/exit, summed qty, summed P&L, earliest real entry_time /
+    latest exit_time. The numbers are identical (a sum of the same FIFO round-trips) — just fewer,
+    readable rows: a position exited in N partial fills becomes 1 row, not N. If ANY row in a group
+    is unmatched (opening fill pre-window), the whole position is marked unmatched with P&L '?'
+    (an honest — never a partial-summed — position P&L)."""
+    groups: dict = {}
+    for t in trades:
+        groups.setdefault((t["symbol"], t["direction"], t["exit_date"]), []).append(t)
+    out: list[dict] = []
+    for (sym, direction, ed), rows in groups.items():
+        qty      = sum(r["size"] for r in rows)
+        any_unm  = any(r.get("_unmatched") for r in rows)
+        matched  = [r for r in rows if r["entry_price"] is not None]
+        mq       = sum(r["size"] for r in matched)
+        # Explicit guards (not a ternary) so the div-by-zero IMPOSSIBILITY is unmistakable: the
+        # division runs ONLY inside `if mq > 0:` / `if qty > 0:`, never otherwise. mq==0 only when
+        # every row is unmatched → w_entry stays None; qty is always >=1 (every row has size>=1).
+        w_entry = None
+        if mq > 0:
+            w_entry = round(sum(r["entry_price"] * r["size"] for r in matched) / mq, 4)
+        w_exit = 0.0
+        if qty > 0:
+            w_exit = round(sum(r["exit_price"] * r["size"] for r in rows) / qty, 4)
+        pnl = None if any_unm else round(sum(r["pnl"] for r in rows), 4)
+        ent_times = [r["entry_time"] for r in rows if r["entry_time"]]
+        agg = _mk_trade(sym, direction, w_entry, w_exit, qty,
+                        (min(ent_times) if ent_times else ""),
+                        max(r["exit_time"] for r in rows), pnl)
+        agg["exit_date"]  = ed
+        agg["_unmatched"] = any_unm or (w_entry is None)
+        out.append(agg)
+    out.sort(key=lambda t: t["exit_time"])
+    return out
+
+
+def _enrich_metadata_from_events(trades: list[dict], monday: date, friday: date) -> None:
+    """Best-effort: fills carry no score/MRI/exit_reason, so pull those from trade_events.jsonl by
+    matching each reconstructed trade to the nearest exit event for that symbol (same ET day). Pure
+    metadata — never touches the authoritative entry/exit/pnl from fills. Silent no-op if the log is
+    missing/unreadable (the report still renders with authoritative prices, just '?' metadata)."""
+    if not TRADE_EVENTS.exists():
+        return
+    by_symbol: dict[str, list[dict]] = {}
+    try:
+        with open(TRADE_EVENTS, encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("event") not in ("exit", "partial_exit", "stop_hit"):
+                    continue
+                sym = ev.get("symbol", "")
+                if sym:
+                    by_symbol.setdefault(sym, []).append(ev)
+    except Exception as e:
+        logger.warning(f"metadata enrich: could not read trade_events: {e}")
+        return
+    for t in trades:
+        cands = by_symbol.get(t["symbol"], [])
+        if not cands:
+            continue
+        try:
+            exit_dt = _parse_alpaca_ts(t["exit_time"])
+        except Exception:
+            continue
+        # exit_dt (from the Alpaca fill) is tz-AWARE (UTC). trade_events ts is ISO-8601 in PT and
+        # often tz-NAIVE — subtracting aware from naive raises TypeError, which previously silently
+        # dropped EVERY match (score/MRI/reason all '?'). Localize a naive event ts to PT first.
+        # Match by SAME ET CALENDAR DAY as the fill exit, NOT a 24h window: a 24h window would paste
+        # an ADJACENT day's metadata onto a trade whose own exit event is missing — precisely the
+        # event-log gap this feature exists to cover (data-integrity board T2, 2026-07-26). Among the
+        # same-day candidates, the nearest-in-time one wins.
+        exit_et_date = exit_dt.astimezone(ET).date()
+        best, best_gap = None, None
+        for ev in cands:
+            try:
+                ev_ts = datetime.fromisoformat(ev.get("ts", ""))
+                if ev_ts.tzinfo is None:
+                    ev_ts = ev_ts.replace(tzinfo=PT)
+                if ev_ts.astimezone(ET).date() != exit_et_date:
+                    continue
+                gap = abs((ev_ts - exit_dt).total_seconds())
+            except Exception:
+                continue
+            if best_gap is None or gap < best_gap:
+                best, best_gap = ev, gap
+        if best is not None:
+            t["score"]       = best.get("score", "?")
+            t["mri_level"]   = best.get("mri_level", "?")
+            t["exit_reason"] = best.get("reason", "") or t["exit_reason"]
+
 
 # ── Postmortem ─────────────────────────────────────────────────────────────────
 
@@ -286,10 +595,10 @@ def _hold_hours(entry_time: str, exit_time: str) -> str:
         return "?"
 
 
-def _r_multiple(entry: float | None, pnl: float, size: int, pm: dict) -> str:
+def _r_multiple(entry: float | None, pnl: "float | None", size: int, pm: dict) -> str:
     try:
         stop = pm.get("stop") or pm.get("original_stop")
-        if not stop or not entry:
+        if not stop or not entry or pnl is None:
             return "?"
         risk = abs(float(entry) - float(stop))
         if risk < 0.01:
@@ -331,7 +640,7 @@ def _build_wtp_table(
         dir_   = t["direction"]
         entry  = t.get("entry_price")
         exit_  = t.get("exit_price")
-        pnl    = t.get("pnl", 0.0) or 0.0
+        pnl    = t.get("pnl")   # may be None for an UNMATCHED close (opening fill pre-window)
         score  = t.get("score", "?")
         mri    = t.get("mri_level", "?")
         size   = t.get("size", 1)
@@ -353,14 +662,15 @@ def _build_wtp_table(
         stage  = _compute_weinstein_stage(weekly_closes.get(sym, []))
         entry_s = f"${entry:.2f}"  if isinstance(entry, (int, float)) else "?"
         exit_s  = f"${exit_:.2f}" if isinstance(exit_, (int, float)) else "?"
-        pnl_s   = f"+${pnl:.2f}"  if pnl >= 0 else f"-${abs(pnl):.2f}"
+        pnl_s   = ("?" if pnl is None else (f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"))
         dir_s   = "▲" if dir_ == "long" else "▼"
         earn_s  = "⚠️" if earn else "—"
         hold_s  = _hold_hours(t["entry_time"], t["exit_time"])
         r_s     = _r_multiple(entry, pnl, size, pm)
         rsn_s   = _shorten_reason(t.get("exit_reason", ""))
 
-        total_pnl += pnl
+        if pnl is not None:
+            total_pnl += pnl
         t.update({
             "_stage": stage, "_wkly": wkly, "_delta_s": delta_s,
             "_earn": earn, "_tqi": tqi, "_hold": hold_s, "_r": r_s,
@@ -384,6 +694,9 @@ def _build_wtp_table(
         "losers":       sum(1 for t in trades if (t.get("pnl") or 0) < 0),
         "earnings_cnt": sum(1 for t in trades if t.get("_earn")),
         "agg_missed":   round(agg_missed, 2),
+        # rows whose OPENING fill predates the 90-day lookback → entry/P&L unknown ('?'),
+        # excluded from total_pnl. Surfaced so the total is never silently understated.
+        "unmatched":    sum(1 for t in trades if t.get("_unmatched")),
     }
     full_table  = full_header  + "\n".join(full_rows)
     slack_table = slack_header + "\n".join(slack_rows)
@@ -503,30 +816,45 @@ def _call_gemini(prompt: str) -> str:
 
 # ── Slack ──────────────────────────────────────────────────────────────────────
 
-def _post_slack(slack_table: str, stats: dict, report_path: Path, week_str: str) -> None:
+def _slack_raw(text: str) -> None:
+    """POST a raw text message to Slack. Best-effort; logs on failure, never raises."""
     if not SLACK_WEBHOOK:
         logger.warning("SLACK_WEBHOOK_URL not set — skipping Slack.")
         return
-    pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
-    msg = (
-        f":bar_chart: *Weekly Trade Post-Mortem — {week_str}*\n"
-        f"P&L: `{pnl_sign}${stats['total_pnl']}` | "
-        f"W/L: `{stats['winners']}/{stats['losers']}` | "
-        f"Earnings-adjacent: `{stats['earnings_cnt']}` | "
-        f"Agg. missed move: `${stats['agg_missed']}`\n"
-        f"```\n{slack_table}\n```\n"
-        f"_Full report (15-col table + Gemini analysis): `logs/{report_path.name}`_"
-    )
-    data = json.dumps({"text": msg}).encode()
-    req  = urllib.request.Request(
-        SLACK_WEBHOOK, data=data,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
     try:
+        data = json.dumps({"text": text}).encode()
+        req  = urllib.request.Request(
+            SLACK_WEBHOOK, data=data,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
         with urllib.request.urlopen(req, context=_SSL_CTX, timeout=10) as r:
             logger.info(f"Slack: HTTP {r.status}")
     except Exception as e:
         logger.warning(f"Slack post failed: {e}")
+
+
+def _post_slack(slack_table: str, stats: dict, report_path: Path, week_str: str,
+                fallback_note: str = "") -> None:
+    if not SLACK_WEBHOOK:
+        logger.warning("SLACK_WEBHOOK_URL not set — skipping Slack.")
+        return
+    pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
+    _unm = f" | Unmatched (pre-window): `{stats['unmatched']}`" if stats.get("unmatched") else ""
+    # A non-authoritative (fills-fetch-failed) run leads with a loud warning so the operator never
+    # reads the fallback tracker estimate as Alpaca-FIFO truth (data-integrity board T1).
+    _warn = (":warning: *fills fetch INCOMPLETE — figures are the trade_events estimate, NOT "
+             "authoritative Alpaca-FIFO P&L; investigate.*\n") if fallback_note else ""
+    msg = (
+        _warn
+        + f":bar_chart: *Weekly Trade Post-Mortem — {week_str}*\n"
+        f"P&L (Alpaca-FIFO): `{pnl_sign}${stats['total_pnl']}` | "
+        f"W/L: `{stats['winners']}/{stats['losers']}` | "
+        f"Earnings-adjacent: `{stats['earnings_cnt']}` | "
+        f"Agg. missed move: `${stats['agg_missed']}`{_unm}\n"
+        f"```\n{slack_table}\n```\n"
+        f"_Full report (15-col table + Gemini analysis): `logs/{report_path.name}`_"
+    )
+    _slack_raw(msg)
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -542,10 +870,42 @@ def main() -> None:
 
     logger.info(f"=== Weekly Trade Post-Mortem: {week_str} ===")
 
-    trades = _load_trades_for_week(monday, friday)
+    # Authoritative source (Part B): reconstruct closed round-trips from Alpaca fills (FIFO), so
+    # Entry$/Exit$/P&L are real and complete even when trade_events.jsonl lacks an `entry` event.
+    # Fall back to the event log ONLY when the fills FETCH itself returns nothing (keys unset / API
+    # down) — a successful fetch with zero in-week closes is a genuine no-trade week, not a failure.
+    logger.info("Reconstructing week's closed trades from Alpaca fills (FIFO)...")
+    fills, fills_complete = _fetch_fills_range(monday - timedelta(days=_FILLS_LOOKBACK_DAYS), friday)
+    fallback_note = ""   # "" when authoritative; a loud warning string when we degraded
+    if fills_complete:
+        raw    = _reconstruct_closed_trades(fills, monday, friday)
+        trades = _aggregate_by_position(raw)
+        _enrich_metadata_from_events(trades, monday, friday)
+        logger.info(f"Fills reconstruction (authoritative): {len(raw)} fill-level round-trip(s) → "
+                    f"{len(trades)} position-level row(s) in-week.")
+    else:
+        # A PARTIAL fills read (keys unset / API failure / page cap) must NEVER be presented as an
+        # authoritative 'no-trade week' — fills are fetched oldest-first, so a mid-pagination failure
+        # returns only OLD fills with zero in-week trades (data-integrity board T1, 2026-07-26). Fall
+        # back to the event log and SAY SO: these are the less-reliable tracker estimate, not Alpaca
+        # -FIFO truth. (Also covers keys-unset / genuine API-down.)
+        fallback_note = ("⚠️ **Alpaca fills fetch was INCOMPLETE** (keys unset / API or pagination "
+                         "failure) — figures below are the `trade_events.jsonl` estimate, NOT "
+                         "authoritative Alpaca-FIFO P&L. Investigate before trusting this week's totals.")
+        logger.warning("Fills fetch incomplete — falling back to trade_events.jsonl (non-authoritative).")
+        trades = _load_trades_for_week(monday, friday)
+
     if not trades:
         logger.warning(f"No closed trades found for {week_str}.")
-        report_path.write_text(f"# WTP {week_str}\n\nNo trades closed this week.\n")
+        _warn_body = (f"> {fallback_note}\n\n" if fallback_note else "")
+        report_path.write_text(f"# WTP {week_str}\n\n{_warn_body}No trades closed this week.\n")
+        # If this "no trades" is the result of an INCOMPLETE fills fetch (not a genuine quiet week),
+        # the operator must hear it on Slack — otherwise the alarm lives only in the report file and
+        # a partial read is indistinguishable from a real no-trade week (cold-2nd T2, 2026-07-26).
+        if fallback_note:
+            _slack_raw(f":warning: *Weekly Trade Post-Mortem — {week_str}*\n{fallback_note}\n"
+                       "The fallback source also resolved 0 trades — this week's data is UNVERIFIED; "
+                       "do NOT read it as a genuine no-trade week. Investigate the fills fetch.")
         return
 
     symbols = sorted({t["symbol"] for t in trades})
@@ -576,12 +936,23 @@ def main() -> None:
     pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
     ts_pt    = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
 
+    _pnl_label  = "trade_events estimate — NOT authoritative" if fallback_note else "Alpaca-FIFO authoritative"
+    _sources_ln = (
+        "_Sources: **Alpaca fills API (FIFO — authoritative Entry$/Exit$/P&L)** · Alpaca T1 bars · "
+        "FMP earnings cache · trade\\_events.jsonl (score/MRI/reason metadata only)_"
+        if not fallback_note else
+        "_Sources: **trade\\_events.jsonl (tracker ESTIMATE — fills fetch failed, NOT authoritative)** · "
+        "Alpaca T1 bars · FMP earnings cache_"
+    )
     report = "\n".join([
         f"# Weekly Trade Post-Mortem — {week_str}",
         f"_Generated {ts_pt} | {GEMINI_MODEL}_",
+        (f"\n> {fallback_note}\n" if fallback_note else ""),
         "",
         "## Summary",
-        f"- **Week P&L:** `{pnl_sign}${stats['total_pnl']}`",
+        f"- **Week P&L ({_pnl_label}):** `{pnl_sign}${stats['total_pnl']}`"
+        + (f"  _(excludes {stats['unmatched']} row(s) opened before the 90-day lookback — entry unknown)_"
+           if stats.get("unmatched") else ""),
         f"- **Trades:** {stats['count']} ({stats['winners']}W / {stats['losers']}L)",
         f"- **Earnings-adjacent entries:** {stats['earnings_cnt']}",
         f"- **Aggregate missed directional move (Δ Exit→Wkly):** `${stats['agg_missed']}`",
@@ -594,13 +965,13 @@ def main() -> None:
         gemini_report,
         "",
         "---",
-        "_Sources: trade\\_events.jsonl · Alpaca T1 bars · FMP earnings cache_",
+        _sources_ln,
     ])
 
     report_path.write_text(report, encoding="utf-8")
     logger.info(f"WTP written → {report_path}")
 
-    _post_slack(slack_table, stats, report_path, week_str)
+    _post_slack(slack_table, stats, report_path, week_str, fallback_note)
     logger.info("Done.")
 
 
