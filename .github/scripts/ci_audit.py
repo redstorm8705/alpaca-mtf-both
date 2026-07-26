@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  (long audit-prompt strings + the Gemini API URL exceed 88; E501 is cosmetic).
 """
 Server-side external audit of a PR diff. Called by .github/workflows/preship-verify.yml.
 
@@ -57,10 +58,13 @@ Check specifically:
    False and the stop can never fire — that class of bug has shipped here before.)
 6. Any credential, absolute machine path, or secret introduced?
 
-Answer in at most 200 words, then end with exactly one line:
+For any concern, self-check it against the diff first; a concern is a DEFECT only with a
+concrete failing input in the changed lines (a theoretical "could" is not a defect). Answer
+in at most 200 words. Exactly ONE line may BEGIN with `VERDICT:` — your final decision:
 VERDICT: APPROVE
 or
 VERDICT: REJECT - <one sentence naming the specific defect and the line>
+Do not BEGIN any other line with `VERDICT:`, and do not restate this format.
 
 === DIFF ===
 """
@@ -69,6 +73,31 @@ VERDICT: REJECT - <one sentence naming the specific defect and the line>
 def _fail(msg: str) -> "None":
     print(f"::error::{msg}")
     sys.exit(1)
+
+
+def _verdict(text: str) -> str:
+    """APPROVE / REJECT / INDETERMINATE from a reviewer's text output.
+
+    BYTE-FOR-BYTE IDENTICAL logic to .claude/preship/preship_audit.py::_verdict — the local
+    pre-commit gate and this server-side CI gate MUST agree on the same reviewer output.
+    .claude/preship/test_verdict.py imports BOTH and asserts they never diverge. Anchor to lines
+    that BEGIN with 'VERDICT:' after stripping EVERY leading markdown list/bold/heading/blockquote
+    char (`.lstrip("*#-+>• ")` — a "- VERDICT: REJECT" bullet the strip misses would un-anchor and
+    leave a lone APPROVE → FAIL-OPEN), require EXACTLY ONE (0 or 2+ → INDETERMINATE, fail-closed),
+    then be reject-biased within that one line: any reject token anywhere beats a leading APPROVE.
+    A LAST-line heuristic here was a FAIL-OPEN (2026-07-25, cold-2nd): a genuine reject whose
+    trailing line restated "VERDICT: APPROVE for an approval" read as APPROVE — an APPROVE for a
+    REJECTED diff. main() maps REJECT/INDETERMINATE → exit 1 (CI cannot re-request → fail closed).
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip().lstrip("*#-+>• ").strip().upper().startswith("VERDICT:")]
+    if len(lines) != 1:
+        return "INDETERMINATE"
+    after = lines[0].strip().upper().split("VERDICT:", 1)[1].strip()
+    if any(t in after for t in ("REJECT", "NOT APPROV", "DISAPPROV", "DENY", "DENIED")):
+        return "REJECT"
+    if after.startswith("APPROVE"):
+        return "APPROVE"
+    return "INDETERMINATE"
 
 
 def main() -> None:
@@ -130,20 +159,17 @@ def main() -> None:
     if truncated:
         print("::warning::diff exceeded the size cap and was truncated for the audit.")
 
-    # Require the explicit VERDICT line. Do NOT accept a bare 'APPROVE' appearing
-    # anywhere in the prose — a permissive substring match is how a rejection gets
-    # read as an approval.
-    verdict = ""
-    for line in text.splitlines():
-        s = line.strip().lstrip("*# ").strip()
-        if s.upper().startswith("VERDICT:"):
-            verdict = s.split(":", 1)[1].strip().upper()
-    if not verdict:
-        _fail("audit returned no explicit 'VERDICT:' line — failing closed.")
-    if verdict.startswith("APPROVE"):
+    # Parse via the shared _verdict() (identical to preship_audit._verdict). Server-side CI cannot
+    # re-request, so REJECT and INDETERMINATE both fail CLOSED (exit 1) — the full reviewer text is
+    # already printed above, so a reject's reason is visible in the run log.
+    v = _verdict(text)
+    if v == "REJECT":
+        _fail("external audit REJECTED — see the audit response above; failing closed.")
+    if v == "APPROVE":
         print("preship: external audit APPROVED")
         sys.exit(0)
-    _fail(f"external audit did not approve: {verdict[:300]}")
+    _fail("external audit did not emit exactly one clean 'VERDICT:' line (INDETERMINATE) "
+          "— failing closed.")
 
 
 if __name__ == "__main__":

@@ -122,13 +122,18 @@ def _verdict(text):
     # So we do NOT guess which mention is the real decision: 0 or 2+ VERDICT lines → INDETERMINATE,
     # and the caller RE-REQUESTS exactly one. Fail-CLOSED against both classes; the prompt already
     # instructs "emit VERDICT exactly once", so a clean reviewer hits the single-line path directly.
-    # Anchor to lines that START with 'VERDICT:' (stripped). This excludes prose/code mentions
-    # ("the VERDICT: parser", "if 'VERDICT:' in line") and mid-sentence hypotheticals ("I thought
-    # VERDICT: REJECT ...") — so a diff that is itself ABOUT verdict parsing does not drown the real
-    # decision in incidental mentions, and the intermediate-hypothetical-reject flake is excluded
-    # outright. A standalone restatement line ("VERDICT: APPROVE for an approval.") still counts, so
-    # 2+ anchored lines → INDETERMINATE (fail-CLOSED), never a guessed pick.
-    lines = [ln for ln in text.splitlines() if ln.strip().upper().startswith("VERDICT:")]
+    # Anchor to lines that START with 'VERDICT:' after stripping leading markdown list/bold/heading/
+    # blockquote chars (`.lstrip("*#-+>• ")`). This excludes prose/code mentions ("the VERDICT:
+    # parser", "if 'VERDICT:' in line") and mid-sentence hypotheticals ("I thought VERDICT: REJECT
+    # ...") — so a diff that is itself ABOUT verdict parsing does not drown the real decision in
+    # incidental mentions, and the intermediate-hypothetical-reject flake is excluded outright. A
+    # standalone restatement line ("VERDICT: APPROVE for an approval.") still counts, so 2+ anchored
+    # lines → INDETERMINATE (fail-CLOSED), never a guessed pick. The strip must cover EVERY leading
+    # decoration a reviewer might emit: a "- VERDICT: REJECT" (bullet the strip missed) would silently
+    # un-anchor, leaving a lone APPROVE line → FAIL-OPEN (2026-07-25 test probe caught exactly this).
+    # Over-stripping is fail-CLOSED-safe (more anchored lines → more likely 2+ → INDETERMINATE); only
+    # UNDER-stripping is dangerous. Kept BYTE-FOR-BYTE in lockstep with ci_audit.py::_verdict.
+    lines = [ln for ln in text.splitlines() if ln.strip().lstrip("*#-+>• ").strip().upper().startswith("VERDICT:")]
     if len(lines) != 1:
         return "INDETERMINATE"
     after = lines[0].strip().upper().split("VERDICT:", 1)[1].strip()
