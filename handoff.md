@@ -7,9 +7,26 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-24 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-26 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### ✅ SHIPPED THIS SESSION (2026-07-26) — 5 PRs, all gated (Gro+GAI+cold-2nd), OCI clean & deployed
+1. **PR #15 (`8a94c15`)** — A1b: `ci_audit.py`/`preship_audit.py` `_verdict` parsers made byte-identical + lockstep; new `.claude/preship/test_verdict.py` (15 cases + 6 fail-open probes, tests BOTH). Anchored-exactly-one + reject-biased + markdown bullet-strip `*#-+>• `.
+2. **PR #16 (`910ec9e`)** — reconciled 26 stranded OCI audit reports (Jul 21–24) that `sync_reports.py` committed locally but branch protection blocked from pushing.
+3. **PR #17 (`7ee26f8`)** — **CI gate-fix**: `ci_audit.py` now receives FULL post-change file content (2nd arg), not just diff hunks, so a helper/default outside the hunk is visible. Kills the **context-starvation false-reject class** (rejected `_git("fetch")` for "no timeout" when `_git` defaults `timeout=120`). Workflow builds context via `git show HEAD:<file>`.
+4. **PR #10 (`4b36e33`)** — **#5**: `sync_reports.py` now ships reports to protected main via an **auto-merged PR** (REST API), with a three-dot report-only scope guard (fail-CLOSED, never ships code). Drift fixed permanently. OCI deployed, tree 0/0/clean.
+5. **PR #18 (`8851453`)** — **WTP Part A**: `weekly_postmortem.py::_call_gemini` config fix (max_output_tokens=8192 + thinking_budget=0, live `gemini-3.1-flash-lite` fallback, empty-text guard, broad outer except) — same defect as #6, analysis stops blanking.
+
+### ⏭️ EXACT NEXT STEPS (Rafael's open asks this session, in priority order)
+- **WTP Part B (fills-authoritative P&L)** — Rafael chose this. WTP reads `Entry$/Exit$/P&L` from `trade_events.jsonl` despite claiming "Alpaca fills API (authoritative)"; when an `entry` event is missing (DDOG/XOM this week had NONE) → `Entry$/Hold/R-Mult/TQI` all blank, Gemini graded 2/10 on missing data. FIX = reconstruct from Alpaca fills (FIFO). **DESIGN FORK (needs decision + board):** importing `execution/fifo_pnl.py` violates the "no execution imports in analysis scripts" guardrail (it also pulls `quarterly_hold_manager`+`state_io`, and excludes QHM syms, and returns entry *price* but not entry *timestamp*). Options: (a) WTP-local read-only FIFO reconstruction over the week's fills via the activities API (respects guardrail, ~80 LOC dup) — RECOMMENDED; (b) extract fills+FIFO into a non-execution shared module (bigger, board vote). Approach: fetch fills for [Friday-45d, Friday], FIFO reconstruct, filter round-trips whose EXIT date ∈ [Mon,Fri].
+- **`.md` sprawl audit** — Rafael: "audit all .md files… a ton floating around." Inventory + flag stale/duplicate/floating docs. Not started.
+- **0DTE SPY rec (task #15)** — in `options_scanner.py`: REMOVE recommended # of contracts; show conviction score % (out of 100) + size tiers full / 3/4 / half / 1/4. Applies to scanner text + any HTML/Slack surface. Gate (RTH-adjacent display + sizing semantics).
+- **Stochastic false-reject residue (open)** — gemini-2.5-flash `thinkingBudget=0` is nondeterministic; context-fix reduces but can't eliminate flaky single-shot rejects. Proposed: re-audit-on-reject requiring a REPEATED reject to fail (consensus, not blind re-roll). Rafael to weigh sensitivity vs false-reject-rate.
+
+---
+
+## ARCHIVE — 2026-07-24 (prior session)
 
 ### ✅ SHIPPED (2026-07-24) — weekly_review AI/Board section no longer vanishes (`55a20f6`, PR #8, OCI LIVE)
 
