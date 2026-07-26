@@ -1173,6 +1173,7 @@ def _build_0dte_directional(
                 "total_cost": total_cost, "credit_received": None, "est_margin": None,
                 "log_cmd": log_cmd, "event_flags": event_flags, "in_window": in_win,
                 "conviction": "HIGH" if score >= MIN_SCORE_HIGH else "MOD",
+                "conviction_pct": _conviction_pct_0dte(score),
                 "vrp": None, "isk": None, "vix_tertile": vix_tertile, "cost_pct": cost_pct, "mode": "0dte",
             })
 
@@ -1317,6 +1318,76 @@ def _conviction_badge(conviction: str) -> str:
     return f'<span class="badge {cls}">{conviction}</span>'
 
 
+# ── 0DTE conviction % + size-tier ladder ──────────────────────────────────────
+# BGG-decided 2026-07-26 (3-1: Gro + both board seats for the clean quartile map;
+# GAI the lone dissent for a dynamic blend — rejected because its momentum nudge
+# double-counts the MTF score and its delta term is a construction artifact, i.e.
+# arbitrary knobs the "no static regimes" rule forbids). Rafael's spec: show a
+# conviction % (0-100) and a Full/3-4/Half/1-4 size ladder instead of a contract count.
+# The % is a band-CENTER map of the integer score (only 9-12 ever display), so each
+# score lands mid-band under the ladder thresholds and never flirts with a boundary.
+# Tiers are fractions of the ACTUAL 0DTE budget (MAX_TRADE_DOLLARS_0DTE), not the weekly cap.
+_ZDTE_TIERS = [  # (threshold_conviction%, label, budget_fraction) — high → low
+    (90, "Full", 1.00),
+    (75, "3/4",  0.75),
+    (60, "Half", 0.50),
+    (0,  "1/4",  0.25),
+]
+_ZDTE_SCORE_PCT = {12: 95, 11: 82, 10: 67, 9: 45}   # band centers under the ≥90/75/60 ladder
+
+
+def _conviction_pct_0dte(score: int) -> int:
+    """Integer MTF score → 0DTE conviction %, band-center aligned to the tier ladder.
+    score>=12 clamps to Full band; score<=9 (the lowest that ever displays) floors to 1/4."""
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return 45
+    if s >= 12:
+        return 95
+    if s <= 9:
+        return 45
+    return _ZDTE_SCORE_PCT.get(s, 45)
+
+
+def _zdte_size_ladder(conviction_pct: int, budget: float) -> tuple:
+    """Return (recommended_label, recommended_dollars, ladder). `ladder` is the full 4-tier
+    list [(label, dollars, is_recommended), ...] high→low. Recommended = the highest tier whose
+    threshold the conviction % clears (Kelly-lite: more edge → larger stake). Never divides."""
+    rec_label = _ZDTE_TIERS[-1][1]   # "1/4" floor
+    for thr, label, _frac in _ZDTE_TIERS:
+        if conviction_pct >= thr:
+            rec_label = label
+            break
+    ladder = [(label, round(budget * frac, 2), label == rec_label)
+              for _thr, label, frac in _ZDTE_TIERS]
+    rec_dollars = next(d for (_l, d, is_rec) in ladder if is_rec)
+    return rec_label, rec_dollars, ladder
+
+
+def _zdte_conviction_cells(rec: dict, cell: str, lbl: str) -> str:
+    """The two 0DTE detail cells that REPLACE weekly's Total-Cost/Contracts: a conviction %
+    (→ recommended tier + $) and the full size-tier ladder with the recommended tier highlighted."""
+    pct = int(rec.get("conviction_pct") or _conviction_pct_0dte(rec.get("score", 9)))
+    tier, dollars, ladder = _zdte_size_ladder(pct, MAX_TRADE_DOLLARS_0DTE)
+    conv_col = "#30d158" if pct >= 75 else "#ffd60a" if pct >= 60 else "#ff9f0a"
+    chips = "".join(
+        '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;'
+        'margin:0 3px 3px 0;display:inline-block;'
+        + (f'background:{conv_col};color:#04120a">{label} ${d:.2f} ◄'
+           if is_rec else
+           f'background:#161a28;color:#8a90a8">{label} ${d:.2f}')
+        + '</span>'
+        for (label, d, is_rec) in ladder
+    )
+    return f"""
+        <div {cell}><div {lbl}>Conviction</div>
+          <div style="font-size:16px;font-weight:800;color:{conv_col}">{pct}%
+            <span style="font-size:10px;color:#b8bdd4;font-weight:600">→ {tier} (${dollars:.2f})</span></div></div>
+        <div {cell}><div {lbl}>Size ladder (of ${int(MAX_TRADE_DOLLARS_0DTE)} 0DTE cap)</div>
+          <div style="margin-top:5px;line-height:1.6">{chips}</div></div>"""
+
+
 def _score_bar(score: int, max_score: int = 12) -> str:
     pct   = int(score / max_score * 100)
     color = "#30d158" if score >= 10 else "#ffd60a" if score >= 8 else "#ff9f0a"
@@ -1431,11 +1502,16 @@ def _rec_detail(rec: dict, idx: int) -> str:
         entry    = rec["premium_mid"]
         sell_at  = rec["limit_sell"]
         stop_at  = round(entry * 0.50, 2)
-        trade_col1 = f"""
+        _trade_base = f"""
         <div {cell}><div {lbl}>Entry (mid)</div><div {val}>${entry:.2f}</div></div>
         <div {cell}><div {lbl}>Limit Sell (+100%)</div><div style="font-size:13px;font-weight:600;color:#30d158">${sell_at:.2f}</div></div>
         <div {cell}><div {lbl}>Mental Stop (−50%)</div><div style="font-size:13px;font-weight:600;color:#ff3b5c">${stop_at:.2f}</div></div>
-        <div {cell}><div {lbl}>Breakeven</div><div {val}>${rec['breakeven']:.2f}</div></div>
+        <div {cell}><div {lbl}>Breakeven</div><div {val}>${rec['breakeven']:.2f}</div></div>"""
+        if rec.get("mode") == "0dte":
+            # 0DTE (Rafael 2026-07-26): show conviction % + size-tier ladder, NOT a contract count.
+            trade_col1 = _trade_base + _zdte_conviction_cells(rec, cell, lbl)
+        else:
+            trade_col1 = _trade_base + f"""
         <div {cell}><div {lbl}>Total Cost</div><div {val}>${rec['total_cost']:.0f}</div></div>
         <div {cell}><div {lbl}>Contracts</div><div {val}>{rec['contracts']}</div></div>"""
     else:
