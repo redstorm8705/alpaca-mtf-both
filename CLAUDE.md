@@ -91,6 +91,62 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 ---
 
+## PROFITABLE > PERFECT — NORTH-STAR GUIDING PRINCIPLE (Rafael mandate 2026-07-26)
+
+This is a paper-money account in an aggressive growth phase ($2.5K → $25K). The governing bias
+is **PROFITABLE > PERFECT**: a validated, tradeable edge that is imperfect is worth more live than
+a "perfect" edge that stays benched. Do NOT keep a working signal disabled over multiplier-tuning
+or calibration perfectionism — ship it live, measure it, and refine it in flight. The reins get
+re-tightened at $25K equity, before any real capital.
+
+**SCOPE — what this does NOT relax (read this before invoking it):** code correctness, the
+MANDATORY PATCH SEQUENCE, the board+Gro+GAI gate, the cold-2nd, and the safety controls (7% kill
+switch, never-mask-a-loss, `paper=True`, data-source tiers) all remain fully in force. "Profitable
+> Perfect" governs the **decision to ENABLE a validated signal**, never the **quality bar of the
+code** that enables it. It applies to an edge held back ONLY by perfectionism — an unverified or
+demonstrably-broken signal is still gated and still fails safe. **"Perfectionism" means calibration/
+optimization polish ONLY — it NEVER covers a miscalibration that WIDENS DOWNSIDE RISK** (a larger-
+than-optimal size, a looser stop, a weakened kill switch, a masked loss): that is a safety defect,
+not perfectionism, and stays fully gated — including the mandatory cold board + masked-loss seat on
+any risk-path diff. Profitable > Perfect can make you MORE aggressive within the safety envelope;
+it can never widen the envelope.
+
+**The case that coined it (2026-07-26):** GEX was benched (shadow) partly because its position-size
+multiplier wasn't perfectly calibrated. But the difference between an imperfect ×1.30 multiplier and
+a perfect one does NOT outweigh the value of GEX being live and tradeable — so GEX ships live (with
+UNKNOWN→neutral fail-safes intact). Perfect calibration is a refinement, not a gate.
+
+---
+
+## ANTI-SILO MANDATE — INTERCONNECT EVERY SIGNAL (Rafael mandate 2026-07-26)
+
+**No scan, reading, or indicator may live in a silo.** Every signal the bot computes must be
+evaluated for how it can fine-tune, confirm, or filter OTHER areas — the goal is a full
+interconnected web of gates and indicators reaching the best-informed decision, not isolated
+readings. This exists because GEX was computed for weeks but never wired into the options scanner
+(surfaced 2026-07-26) — an accurate signal producing zero cross-value while sitting in a silo.
+
+**THE GATE (runs whenever a signal/indicator/reading is ADDED or AUDITED):** before it is
+considered "done", ask and DOCUMENT — which other paths (scoring, sizing, entry gate, exits,
+scanner recs, risk) could this signal fine-tune, confirm, or filter? Interconnect it into each such
+path, but ONLY where all three hold:
+1. **ADDS SIGNAL** — the cross-use demonstrably improves a prediction, a confirmation, or a trade
+   mechanic (never coupling for its own sake).
+2. **FAILS SAFE** — the integration carries an explicit fallback (UNKNOWN / neutral / default) so a
+   stale, broken, or noisy read can never contaminate or crash the downstream path.
+3. **STAYS TESTABLE** — the coupling remains modular and independently testable; **never couple
+   without an isolation/fallback boundary** (over-coupling that lets one bad signal cascade is
+   itself a violation).
+
+A signal with no safe cross-use must be documented as such (with the reason) — silence is not
+allowed; "I didn't consider interconnection" is the failure this rule exists to stop.
+
+**ONE-TIME SILO AUDIT (owed):** sweep existing signals for un-wired cross-use. Known first targets:
+GEX↔options-scanner, GEX↔0DTE-direction-lock, delta-strike↔flip/walls, confluence↔support/resistance,
+and VIX / VIX3M-term-structure / realized-vol ↔ GEX-regime-confirmation.
+
+---
+
 ## 5-HOUR AUTONOMOUS WORK CHAIN — SESSION START DUTY (Rafael mandate 2026-06-11)
 
 Rafael's usage limit is a ROLLING 5-hour window — a static daily cron schedule drifts out of
