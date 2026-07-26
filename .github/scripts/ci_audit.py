@@ -26,6 +26,8 @@ MODEL = "gemini-2.5-flash"
 ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
             f"{MODEL}:generateContent")
 MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input budget
+MAX_CONTEXT_CHARS = 300_000     # full-file bodies (helpers referenced but not in the diff);
+                                #   gemini-2.5-flash has a very large input window, so this is safe
 TIMEOUT_SEC = 120
 
 PERSONA = (
@@ -35,35 +37,49 @@ PERSONA = (
     "running system that holds real positions. Be concrete and technical. No hedging."
 )
 
-PROMPT = """Audit the diff below. It targets a live Alpaca trading bot. Some of
+PROMPT = """Audit the change below. It targets a live Alpaca trading bot. Some of
 the files run DURING regular trading hours, synchronously on the same thread that
 evaluates live
 stop losses — a blocking call or an unhandled exception there can leave positions
 unmanaged.
 
-Judge ONLY the diff. Do not require context you were not given, and do not reject for
-style, naming, comment wording, or a redundant-but-harmless operation. Reject only for a
-DEFECT: something that produces wrong behaviour, an unhandled failure, a blocking
-call on a latency-sensitive path, a silent data-integrity loss, or a security
-problem.
+You are given TWO sections: first the unified DIFF (what changed), then the FULL CURRENT
+CONTENT of each changed file (the post-change file in its entirety). The full content
+exists so you are NOT judging through a keyhole: whenever the diff references an
+identifier — a helper, wrapper, constant, or default — that it does not itself define,
+you MUST look it up in the full file content before drawing any conclusion about it.
+
+Judge the change for DEFECTS only. Do not reject for style, naming, comment wording, or a
+redundant-but-harmless operation. A DEFECT is something that produces wrong behaviour, an
+unhandled failure, a blocking call on a latency-sensitive path, a silent data-integrity
+loss, or a security problem.
 
 Check specifically:
 1. Can any line affect order submission, position sizing, stop placement, or exit logic
-   in a way the diff does not intend?
-2. Any new unbounded/retrying network call, or any call without a timeout?
-3. Any new exception path that could abort a render or a cycle?
-4. Any logic inversion, off-by-one, or boundary error?
+   in a way the change does not intend?
+2. Any genuinely unbounded/retrying network call. BEFORE flagging one: find the call's
+   wrapper/helper in the FULL FILE CONTENT. If the wrapper supplies a timeout, retry
+   bound, or try/except (e.g. a `_git(...)`/`_api(...)` helper with a `timeout=` default,
+   or `urlopen(timeout=...)`), the call IS bounded — that is NOT a defect. Never claim a
+   call "lacks a timeout" or "can block indefinitely" without first confirming, in the
+   full content, that no wrapper or default provides one.
+3. Any new exception path that could abort a render or a cycle unhandled.
+4. Any logic inversion, off-by-one, or boundary error.
 5. Any value that can be None/NaN/0 reaching arithmetic or a comparison that assumes
    otherwise? (A NaN written into a stop price makes every `price <= stop` test
    False and the stop can never fire — that class of bug has shipped here before.)
 6. Any credential, absolute machine path, or secret introduced?
 
-For any concern, self-check it against the diff first; a concern is a DEFECT only with a
-concrete failing input in the changed lines (a theoretical "could" is not a defect). Answer
-in at most 200 words. Exactly ONE line may BEGIN with `VERDICT:` — your final decision:
+MANDATORY SELF-CHECK before any REJECT: quote the exact offending line, then trace it
+using the FULL FILE CONTENT (not just the diff) — name the wrapper/default/caller you
+checked and why it does NOT resolve the concern. A concern is a DEFECT only with a
+concrete failing input in the changed lines; a theoretical "could", or a concern that the
+full content already resolves, is NOT a defect. If your only evidence is the diff hunk in
+isolation, look at the full content before deciding. Answer in at most 220 words. Exactly
+ONE line may BEGIN with `VERDICT:` — your final decision:
 VERDICT: APPROVE
 or
-VERDICT: REJECT - <one sentence naming the specific defect and the line>
+VERDICT: REJECT - <the specific defect, the line, and the wrapper/default you confirmed does not guard it>
 Do not BEGIN any other line with `VERDICT:`, and do not restate this format.
 
 === DIFF ===
@@ -101,12 +117,26 @@ def _verdict(text: str) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        _fail("usage: ci_audit.py <diff-file>")
+    # <diff-file> is required; <context-file> (full post-change content of the changed files)
+    # is optional and backward-compatible — older callers that pass only the diff still work,
+    # they just audit through the narrower keyhole. The workflow passes both so the reviewer
+    # can resolve a helper/default referenced by the diff but defined outside the hunks (the
+    # 2026-07-25 false-reject class: "_git(...) lacks a timeout" when _git defaults timeout=120).
+    if len(sys.argv) not in (2, 3):
+        _fail("usage: ci_audit.py <diff-file> [<context-file>]")
     try:
         diff = open(sys.argv[1], encoding="utf-8", errors="replace").read()
     except OSError as e:
         _fail(f"cannot read diff file: {e}")
+    context = ""
+    if len(sys.argv) == 3:
+        try:
+            context = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+        except OSError as e:
+            # Context is an ENHANCEMENT, never a gate requirement: if it cannot be read, audit
+            # the diff alone rather than fail — a missing context file must not block a ship.
+            print(f"::warning::could not read context file ({e}) — auditing diff only.")
+            context = ""
 
     # Order matters: decide "is there anything to audit" BEFORE requiring the key, so a
     # PR that touches no gated file passes trivially instead of failing on a secret it
@@ -127,8 +157,19 @@ def main() -> None:
     if truncated:
         diff = diff[:MAX_DIFF_CHARS]
 
+    # Full post-change file bodies go AFTER the diff so the reviewer can resolve helpers/
+    # defaults the diff references but does not define. The diff is primary and never yielded
+    # to context; the context is bounded separately and truncation is announced (a truncated
+    # helper section must not silently hide the very definition that refutes a false concern).
+    ctx_truncated = len(context) > MAX_CONTEXT_CHARS
+    if ctx_truncated:
+        context = context[:MAX_CONTEXT_CHARS]
+    prompt_text = PERSONA + "\n\n" + PROMPT + diff
+    if context.strip():
+        prompt_text += "\n\n=== FULL CURRENT CONTENT OF CHANGED FILES ===\n" + context
+
     body = json.dumps({
-        "contents": [{"parts": [{"text": PERSONA + "\n\n" + PROMPT + diff}]}],
+        "contents": [{"parts": [{"text": prompt_text}]}],
         "generationConfig": {"maxOutputTokens": 2048,
                              "thinkingConfig": {"thinkingBudget": 0}},
     }).encode()
@@ -158,6 +199,9 @@ def main() -> None:
     print("--------------------------")
     if truncated:
         print("::warning::diff exceeded the size cap and was truncated for the audit.")
+    if ctx_truncated:
+        print("::warning::full-file context exceeded the size cap and was truncated — a helper "
+              "definition may be missing from the reviewer's view.")
 
     # Parse via the shared _verdict() (identical to preship_audit._verdict). Server-side CI cannot
     # re-request, so REJECT and INDETERMINATE both fail CLOSED (exit 1) — the full reviewer text is
