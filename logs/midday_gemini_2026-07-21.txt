@@ -1,0 +1,53 @@
+Midday Gemini Audit — 2026-07-21
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  [CYCLE-SYNC] STATE DESYNC: Tracker (8) < RiskManager (9) | not applicable (system-wide state desync)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+1.  **Contradictory Exit/Closed Trade Counts:** The "SESSION P&L SUMMARY" reports "Exits: 2 | Partials: 0 | Closed trades: 0". This is contradictory. If there were 2 exits and no partials, it logically implies that 2 full trades should have been closed. However, "Closed trades: 0" directly refutes this. The log entry `2026-07-21 17:30:00,436 | INFO | execution.portfolio_tracker | Alpaca FIFO EOD: ... lots_closed=2` further confirms that two closing actions (lots) occurred. This indicates a fundamental inconsistency in how trade closure statistics are aggregated or reported in the summary.
+2.  **Illogical Stop-Hit Rate:** The "SESSION P&L SUMMARY" states "Stop-hit rate: 0% (1 stops)". If 1 stop hit occurred out of 2 reported exits, the stop-hit rate cannot be 0%. It should be 50%. This is a logical error in the calculation or presentation of the summary statistics.
+3.  **No Closed Trade Details:** Despite 2 exits being reported, there are "No closed trades" listed in the "CLOSED TRADE DETAILS" section, preventing an audit of entry/exit prices, P&L signs, and consistency with TP/SL levels for specific trades.
+
+### ENTRY QUALITY
+No issues detected. The bot actively filtered potential entries based on low volume (`VOLSHADOW would_pass: false`), applied a dynamic `MIN_SCORE` increase due to `MRI=ELEVATED`, and correctly blocked several high-score signals due to `ORB gate BLOCK` (e.g., UBER, NFLX, MSFT, ADBE failed `SPY ≥ ORB_L` condition). Mid-day sizing adjustments (75%) and weekly bias filtering (e.g., NVDA, PLTR) were also correctly applied. Quarterly earnings (GOOGL) were also noted.
+
+### EXIT QUALITY
+No issues detected in the available log data. The bot showed active monitoring for reversal signals (`Overnight reversal signal`, `RTH reversal signal` for RIVN, TQQQ, NFLX, MARA), awaiting multiple confirmations (`scan 2/10`, `scan 2/6`). A `Reversal signal neutral` for NET also indicates proper decay of a prior signal. Without specific trade details (entry price, stop/target levels, actual exit price), it is not possible to audit whether winners were held too long or losers cut too slowly.
+
+### MRI ALIGNMENT
+No issues detected. The bot correctly identified the MRI level as ELEVATED (score=24) based on session distribution and news injection. It responded appropriately by applying a `size floor 0.85x` multiplier and raising the `Dynamic MIN_SCORE` to 9/12, indicating adherence to risk management protocols under elevated market risk.
+
+### LOG ANOMALIES
+*   `2026-07-21 17:23:28,599 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$3.10 tracker=$-2.44 drift=$+5.54` — A significant drift between Alpaca's reported P&L and the bot's internal tracker. While the bot claims `invariant ok` and `GUARDED` its internal P&L, the persistent discrepancy is a concern for data integrity.
+*   `2026-07-21 17:29:16,415 | WARNING | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=3 scans but no entry — risk.open_positions=9 vs tracker=8 | MAX_OPEN_POSITIONS=20. If risk>8, CYCLE-SYNC should resolve next cycle.` — This warning highlights a specific signal (PANW) meeting confirmation criteria but not entering, coupled with an explicit `risk.open_positions` vs `tracker` desync which directly precedes the `CRITICAL` `CYCLE-SYNC` state desync for the entire system. This suggests a persistent or unresolving issue with position count integrity.
+
+### NEW BUGS / CONCERNS
+1.  **EXECUTION BUG | CRITICAL | Position Count Desync:**
+    *   **Exact variable/metric involved:** `Tracker` open position count (8) and `RiskManager` open position count (9).
+    *   **Value vs. should be and why that constitutes a failure:** At 17:29:58,411, the log states `Tracker (8) < RiskManager (9)`. This represents a critical internal state desynchronization. The `RiskManager` count is used for enforcing `MAX_OPEN_POSITIONS` and sizing decisions, making it authoritative for live risk. If it incorrectly believes there is one more position open than the `Tracker` (which holds detailed position data) knows about, it can lead to incorrect decisions such as prematurely blocking valid entries or applying overly conservative sizing. The explicit `Manual reconciliation required` indicates a failure in automated state management and demands immediate operator intervention.
+    *   **Exact condition under which this occurs:** The desync occurred during the `execution.entry_logic` phase, specifically indicated by the `[CYCLE-SYNC]` log entry just before attempting to evaluate new entry signals. It was hinted at earlier by the `[ANOMALY-2]` warning for PANW.
+2.  **ALPHA ISSUE | HIGH | Contradictory Session P&L Summary Statistics:**
+    *   **Exact variable/metric involved:** "Exits", "Partials", "Closed trades", and "Stop-hit rate" in the "SESSION P&L SUMMARY".
+    *   **Value vs. should be and why that constitutes a failure:**
+        *   The summary states "Exits: 2 | Partials: 0 | Closed trades: 0". This is logically inconsistent. If 2 exits occurred and none were partial, then 2 full trades should have been marked as closed. The value of "Closed trades: 0" is incorrect given the other reported values.
+        *   The summary states "Stop-hit rate: 0% (1 stops)". If 1 stop occurred out of 2 reported exits, the stop-hit rate should be 50%, not 0%. This is a calculation or reporting error.
+    *   **Exact condition under which this occurs:** These discrepancies are present in the "SESSION P&L SUMMARY" section of the report, indicating a flaw in the data aggregation or presentation logic that generates these summary metrics.
+3.  **INFRASTRUCTURE | MEDIUM | Persistent P&L Drift with Ambiguous Resolution:**
+    *   **Exact variable/metric involved:** Alpaca P&L values (`$3.10`, then `$0.00`, with `prev=$-2.22`) versus the bot's `tracker` P&L (`$-2.44`, then `kept=$-2.22 GUARDED`).
+    *   **Value vs. should be and why that constitutes a failure:** The log shows `EOD P&L DRIFT: Alpaca=$3.10 tracker=$-2.44 drift=$+5.54` followed by `alpaca=$0.00 (prev=$-2.22, kept=$-2.22 GUARDED)` a few minutes later. This indicates significant and rapidly changing P&L data reported by Alpaca, and the bot's internal `GUARDED` mechanism is a workaround. While the bot prioritizes its internal authoritative ledger (`invariant ok`), the frequent and large discrepancies, combined with the opaque reasoning for Alpaca's P&L fluctuations, pose an infrastructure risk. It indicates the external P&L source is unstable, and the current logging doesn't provide enough detail to fully understand *why* Alpaca's values are so inconsistent or how the bot truly reconciles them without potentially missing valid information.
+    *   **Exact condition under which this occurs:** This occurs during periodic EOD summary generation and P&L updates from Alpaca, as indicated by `execution.portfolio_tracker` and `execution.fifo_pnl` logs.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION | Immediately investigate and fix `CYCLE-SYNC` position count desync:**
+    *   **Action:** Prioritize debugging the root cause of the `Tracker` vs `RiskManager` open position count discrepancy. Ensure all position opening and closing events (`register_open()`, `register_close()`, including partial closes) atomically update both internal state variables. Implement robust logging for these updates and consider adding an automated reconciliation check at the start of each cycle that can fix minor desyncs or trigger a hard stop for critical ones.
+2.  **ALPHA | Correct P&L Summary Reporting Logic:**
+    *   **Action:** Review and rectify the logic responsible for calculating and displaying "Exits", "Partials", "Closed trades", and "Stop-hit rate" in the "SESSION P&L SUMMARY". Ensure these metrics are consistent and accurately reflect the session's trading activity. Also, ensure all closed trades appear in "CLOSED TRADE DETAILS".
+3.  **INFRASTRUCTURE | Enhance P&L Drift Monitoring and Transparency:**
+    *   **Action:** Improve the logging for Alpaca P&L reconciliation. Detail why Alpaca's reported P&L fluctuates significantly (e.g., specific fills, settlement delays, etc.). Provide clear traceability for how the bot's "authoritative" internal P&L is derived and how the "GUARDED" value is maintained. Consider more specific warnings or alerts if the drift exceeds configurable thresholds for an extended period, suggesting a deeper issue than typical paper-account delays.

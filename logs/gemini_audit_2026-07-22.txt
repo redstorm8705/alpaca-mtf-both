@@ -1,0 +1,82 @@
+Nightly Gemini Audit — 2026-07-22
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['scan_to_html.py', 'weekly_review.py', 'config.py', 'data/fetcher.py', 'data/premarket.py', 'strategy/horizon_state.py', 'execution/entry_logic.py', 'execution/orphan_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution/entry_logic.py`, `execution/broker.py` | Market hours enforcement bypass leading to new trades outside RTH | [MU], [NVDA]
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Market Hours Enforcement Bypass**: The bot log shows new positions being entered for MU (`2026-07-22 19:56:34`) and NVDA (`2026-07-22 19:48:54`) at 7:56 PM ET and 7:48 PM ET respectively. These times are several hours after the regular market trading hours (RTH) close at 4:00 PM ET. This indicates a critical failure in the bot's market hours check, allowing trades to be placed when the market is closed.
+*   **Misleading `[ANOMALY-2]` Log Message**: The log repeatedly shows `[ANOMALY-2] [MU] confirm_gate=XX scans but no entry — risk.open_positions=8 vs tracker=8 | MAX_OPEN_POSITIONS=20.` at timestamps like `19:55:42 ET`. This message implies a problem with position limits or tracking preventing entry. However, just moments later, MU *does* enter a position at `19:56:34 ET`. More importantly, at 7 PM ET, the market should be closed, which would be the actual reason for "no entry" if the market hours gate were working correctly. This log message is misleading about the root cause of entry suppression and for prematurely flagging an "anomaly" that resolves.
+*   **Correlation Gate Block**: `[AMD] CORRELATION GATE BLOCK: rho(daily,20d)=0.89 > 0.70 with TQQQ — skipping entry.` (19:34:19, 19:48:56). This is an intentional risk management gate, not an anomaly.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**:
+    *   **NFLX (short)**: Entry $67.64, exit $70.16. P&L = 2 * ($67.64 - $70.16) = -$5.04. Correctly recorded as a loss.
+    *   **XOM (long, partial exits)**: Entry $147.77. First exit $153.23 (P&L $5.46). Second exit $154.41 (P&L $6.64). Both correctly recorded as profits.
+*   **`pnl_pct` Computation**: For NFLX, `pnl_pct: -3.73`. Total P&L of -$5.04 on a $135.28 ($67.64 * 2) position is approximately -3.73%. This seems correct based on the total position value.
+*   **Partial P&L Accumulation**: Individual P&L for XOM partial exits ($5.46, $6.64) are correctly calculated per tranche and sum up to $12.10 total for XOM.
+*   **`pnl=0.0` Anomalies**: None observed for the trades with explicit entry/exit prices.
+*   **Entry/Exit Prices Plausibility**: All recorded prices appear plausible for the respective symbols and times.
+*   **Score→Outcome Correlation**:
+    *   NFLX (score 11): -$5.04 (Loss)
+    *   XOM (score 11): +$12.10 (Profit)
+    *   SMCI (score 11): -$2.22 (Loss) (from 2026-07-21)
+    *   DDOG (score 12): -$0.22 (Loss) (from 2026-07-21)
+    There is a mix of outcomes for high-score trades. Insufficient data from these few trades to draw conclusive correlations.
+*   **Stop-hit Rate vs. Win Rate**: `EOD SNAPSHOT` `win_rate_today: 0.0`. This is incorrect, as XOM had two profitable partial exits today. The `trades_today: 1` is also incorrect as multiple closing events (NFLX exit, XOM partial exits) occurred today. The `win_rate_today` and `trades_today` metrics are not accurately reflecting all daily closing activity.
+*   **Exit Reason Consistency**: NFLX exited at $70.16 (short) due to an "overnight_atr_buffer_exit" with a threshold of $69.06. This is consistent with a stop-loss mechanism triggering slightly above the calculated threshold for a short position, even if different from the original GTC stop price ($71.19).
+
+### TRADE INTEGRITY
+*   **EOD Snapshot `trades_today` and `win_rate_today` Inaccuracy**: The `EOD SNAPSHOT` states `trades_today: 1` and `win_rate_today: 0.0`, but the `alpaca_per_trade` records clearly show a closed NFLX trade and two partial exits for XOM, all occurring on 2026-07-22. This indicates a discrepancy in how `PortfolioTracker` aggregates and reports daily closing events, particularly partial exits, into these summary statistics. While `pnl_today_total` is correctly reconciled, the trade count and win rate are understated.
+
+### MODIFIED FILE FINDINGS
+*   **`scan_to_html.py`**: No issues found. The `_market_open_by_time` function correctly identifies market hours, `_scan_ticker_with_timeout` uses `threading.Thread` as intended, and horizon-state tiering is explicitly display-only. `fetch_vix` uses `yfinance` to resolve a prior P5-M2.
+*   **`weekly_review.py`**: No new issues found. The `_fmt_reason` (C-3) logic is correct. `_strategy_validation_html` correctly flags the dependency on `fifo_edge.json` for accurate stats, although the underlying `PortfolioTracker` issue with `trades_today` persists.
+*   **`config.py`**: No issues found. The `paper` profile overrides for `MIN_LONG_SCORE`, `MIN_SHORT_SCORE`, `MAX_OPEN_POSITIONS`, `MAX_DAILY_LOSS_PCT`, `INTRADAY_STOP_ATR_MULT`, `INTRADAY_TARGET_ATR_MULT`, `KELLY_FRACTION`, `RC4_RECONCILE_WINDOW_MINUTES`, and `ATH_MIN_SCORE_RAISE_PCT` are applied as intended by the active profile.
+*   **`data/fetcher.py`**: No issues found. The global rate limiter, shared TTL cache with eviction logic, and retry mechanisms are correctly implemented, significantly improving robustness and resource management. The `DataFetcher` class now exists, addressing the root cause of P5-C2.
+*   **`data/premarket.py`**: No issues found. The pre-market mover detection and ATR filtering logic appear sound.
+*   **`strategy/horizon_state.py`**: No issues found. This module correctly adheres to its "DISPLAY-ONLY" invariant and rigorously implements the "completed bars only" discipline, explicitly detailing why it reimplements weekly bias logic instead of reusing existing (partial-bar-vulnerable) functions. The various state computation functions are logically consistent with their stated rules.
+*   **`execution/entry_logic.py`**:
+    *   **CRITICAL BUG**: **Market Hours Enforcement Bypass**
+        *   **Function**: `execute_entries` (lines 397-401)
+        *   **Code Path**: `execute_entries` calls `is_market_open()` (from `execution.broker`, which is not provided). Log evidence shows the bot entering positions at `19:56:34 ET`, indicating that `is_market_open()` is returning `True` outside RTH. The `if not _clock_open:` gate is thus bypassed.
+        *   **Failure Condition**: The variable `_clock_open` incorrectly holds `True` when the market should be closed, allowing order submission.
+*   **`execution/orphan_manager.py`**: No issues found within this file. The `get_tod_phase()` function correctly identifies 7 PM ET as "closed". `cancel_and_reconcile_gtc_stops` handles various GTC stop states robustly, including an `SF-01 GUARD` for `entry_price=None` and a `FAIL-CLOSED` mechanism for missing QHM state files.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: **FIXED**. `execution/entry_logic.py`'s `_find_recent_fvgs` explicitly states "MultiIndex guard removed — Alpaca Data never returns MultiIndex", resolving the issue.
+*   **P5-C2 | run_movers.py ImportError**: **FIXED**. The `DataFetcher` class now exists in `data/fetcher.py`, resolving the import error.
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted from codebase**: **OBSOLETE**. Acknowledged.
+*   **P5-H2 | Fill price crosstalk**: **UNTOUCHED**. No new evidence in logs or modified files to assess its status.
+*   **P5-H3 | Orphan GTC 404 path**: **FIXED**. `execution/orphan_manager.py`'s `cancel_and_reconcile_gtc_stops` explicitly calls `tracker.clear_gtc_stop_order_id(symbol)` when an order is not found at Alpaca.
+*   **P5-H4 | Rule 2 dead code**: **FIXED**. `config.TOD_MARKET_OPEN_BUFFER_MINS` is used by `execution/orphan_manager.py`'s `get_tod_phase` and is not overridden to a no-op.
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: **FIXED**. Acknowledged as previously resolved.
+*   **P5-M1 | Cycle watchdog restart loop**: **UNTOUCHED**. Not addressed in the provided source or logs.
+*   **P5-M2 | MRI score cached stale across sessions**: **UNTOUCHED**. `scan_to_html.py` has a 30-min TTL cache for composite regime display (different mechanism); no evidence about `mri_state.json` loading or validation.
+*   **P5-M3 | score_comparison JSON unbounded growth**: **UNTOUCHED**. Not addressed in the provided source or logs.
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: **UNTOUCHED**. Not addressed in the provided source or logs.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: **TRIGGERED**. `trades_today` and `win_rate_today` in the `EOD SNAPSHOT` are inaccurate due to not fully accounting for all daily closing events (specifically XOM partial exits). While `pnl_today` is correct, the associated statistics are understated.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: **UNTOUCHED**. Not addressed in the provided source or logs.
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | `execution/entry_logic.py` (and `execution/broker.py`) | Market Hours Enforcement Bypass**
+    *   **Description**: The bot is successfully submitting new orders and entering positions outside of regular market trading hours (RTH). Log entries show `Linear sizing` for MU at `19:56:34 ET` (7:56 PM ET) and NVDA at `19:48:54 ET` (7:48 PM ET), which is several hours after RTH close (4:00 PM ET).
+    *   **Exact Failure Condition**: In `execution/entry_logic.py` function `execute_entries`, the conditional `if not _clock_open:` (line 400) which calls `is_market_open()` is intended to block all entries after market close. However, this condition evaluates to `True` for `_clock_open` at 7 PM ET, allowing trades to proceed. This indicates that the `is_market_open()` function within `execution/broker.py` (which is not provided) is returning an incorrect `True` value outside RTH.
+
+*   **INFRASTRUCTURE | MEDIUM | `strategy.run_cycle` (log source, code not provided)** | **Misleading `[ANOMALY-2]` Log Message**
+    *   **Description**: The `[ANOMALY-2]` warning message implies a problem with position limits (`risk.open_positions=8 vs tracker=8 | MAX_OPEN_POSITIONS=20`) preventing entries for MU and AAPL, while the actual blocking condition at the logged time (7 PM ET) is the market being closed. Furthermore, one of the "anomalous" tickers (MU) *does* successfully enter a position shortly after the warning.
+    *   **Exact Failure Condition**: The log message `WARNING | strategy.run_cycle | [ANOMALY-2] [MU] confirm_gate=XX scans but no entry — risk.open_positions=8 vs tracker=8 | MAX_OPEN_POSITIONS=20.` provides an incorrect reason for "no entry" when the market is actually closed. This misdirection wastes audit time by pointing to the wrong root cause for trade blocks.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Address Critical Market Hours Enforcement Bypass**: Immediately investigate and fix `execution/broker.py`'s `is_market_open()` implementation to correctly return `False` outside RTH. This is a severe risk management failure allowing unintended after-hours trading.
+2.  **Correct EOD Snapshot Trade Statistics**: Audit `PortfolioTracker`'s `trades_today` and `win_rate_today` calculation to correctly account for all closing events, including partial exits, ensuring `EOD SNAPSHOT` accurately reflects daily activity (remediation for P5-L2).
+3.  **Refine `[ANOMALY-2]` Log Message**: Modify the `strategy.run_cycle` logging for `[ANOMALY-2]` to provide clearer reasons for entry blocks (e.g., "Market closed, entry suppressed" or "Correlation gate block, entry suppressed") instead of misleadingly pointing to position limits.
+4.  **Audit P5-H2 (Fill price crosstalk)**: Investigate `P5-H2` to ensure fill price accuracy, especially with concurrent orders or partial fills, as this can affect P&L calculations and risk assessment.
+5.  **Review P5-M2 (MRI score cached stale)**: Verify `mri_state.json` validation on load to ensure the Macro Risk Index operates with the freshest data, preventing potentially stale risk assessments.

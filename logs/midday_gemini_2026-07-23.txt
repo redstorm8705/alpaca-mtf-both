@@ -1,0 +1,50 @@
+Midday Gemini Audit — 2026-07-23
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Inconsistent Trade Closure Reporting:** The `SESSION P&L SUMMARY` reports "Exits: 4" and "Partials: 0", which logically implies that 4 full positions were closed. However, it also reports "Closed trades: 0". This is directly contradicted by the `Alpaca FIFO EOD` log entries at `2026-07-23 17:20:38,147` and `2026-07-23 17:27:14,118`, which both state `lots_closed=4`. If 4 lots were closed, there should be 4 closed trades. This constitutes a failure in accurate session P&L summary reporting.
+*   **Missing Exit Details in Logs:** While "Exits: 4" and "lots_closed=4" are reported, the provided bot log does not contain any specific `execution.broker` or `execution.lifecycle` entries detailing the execution of these 4 exit orders (e.g., symbol, exit price, quantity, reason). This lack of granular logging prevents a proper audit of exit prices and reasons against stated TP/SL levels or other exit logic.
+*   **Ambiguous Stop-Hit Rate:** The "Stop-hit rate: 0% (3 stops)" is ambiguous. Given "Exits: 4" and "Closed trades: 0", and no explicit stop-hit logs, it is unclear if "3 stops" refers to the number of stop orders active during the session (none of which were hit), or if it's an unrelated metric. For auditability, this phrasing needs clarification.
+*   **P&L Drift (Benign for Paper):** The `EOD P&L DRIFT` warning (`Alpaca=$-37.98 tracker=$-22.98 drift=$-15.00`) is recurring. As per `KNOWN BENIGN PATTERNS`, this is expected behavior for Alpaca paper accounts due to delayed fills, and the bot correctly falls back to its authoritative tracker P&L. Therefore, this is not flagged as a bug.
+
+### ENTRY QUALITY
+*   **Score Filtering and Lockouts Applied:** The bot correctly applied dynamic `MIN_SCORE` adjustments (raised to 10/12 due to MRI=STRESSED, GEX=NEGATIVE, etc.). The `RULE 1 — PREMARKET RED LOCKOUT` successfully blocked all potential long entries from `NET` and `SOXS` despite them having scores of 10/12, indicating appropriate risk-off behavior.
+*   **Sizing Adjustments:** Multiple sizing multipliers were applied correctly in response to market conditions: "Mid-day doldrums — sizing at 75%", "MRI STRESSED (score=56) — size floor 0.70x applied", and "Overnight exposure: $581 notional → intraday size mult 0.78x". This indicates proper risk management.
+*   No other issues.
+
+### EXIT QUALITY
+*   **Protective Stop Adjustment:** The bot performed a protective `[MARA] MRI BE push: stop → breakeven $12.32 (MRI=STRESSED score=56)` by cancelling the old stop and submitting a new one. This demonstrates adaptive risk management in response to the stressed market conditions.
+*   No specific exit fills were logged (as noted above), so detailed exit quality beyond the MARA stop adjustment cannot be assessed.
+
+### MRI ALIGNMENT
+*   The MRI was correctly refreshed and identified as `STRESSED` (score=56, event=GEO_ENERGY).
+*   Appropriate risk mitigation actions were taken: dynamic `MIN_SCORE` adjustment (to 10/12), position sizing reductions (75%, 0.70x, 0.78x multipliers), and the `MRI BE push` for the MARA position's stop. This demonstrates proper MRI alignment and response.
+
+### LOG ANOMALIES
+*   `2026-07-23 17:20:42,087 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-37.98 tracker=$-22.98 drift=$-15.00`
+*   `2026-07-23 17:27:18,042 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-37.98 tracker=$-22.98 drift=$-15.00`
+    *   *Note*: As per `KNOWN BENIGN PATTERNS` ("A-4 paper fills gap..."), this P&L drift is expected for Alpaca paper accounts and the bot falls back to its tracker P&L. It is a warning but benign in this context.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | HIGH | Inconsistent Trade Closure Counts in Session Summary:**
+    *   **Variable/Metric involved:** `SESSION P&L SUMMARY.Exits` (value: 4), `SESSION P&L SUMMARY.Partials` (value: 0), and `SESSION P&L SUMMARY.Closed trades` (value: 0).
+    *   **Value vs. Should Be:** The summary states "Exits: 4" and "Partials: 0". This indicates that four full positions were exited. By definition, an exit of a full position constitutes a closed trade. Therefore, the value for "Closed trades" should be 4, not 0. This is further supported by the `Alpaca FIFO EOD` log entries (`2026-07-23 17:20:38,147` and `2026-07-23 17:27:14,118`) which report `lots_closed=4`. The current reporting of 0 closed trades for a session with 4 full exits is contradictory and misleading.
+    *   **Condition:** Occurs at the generation of the `SESSION P&L SUMMARY` when exits occur for positions, especially if those positions were opened in a prior session and are closed in the current one, leading to `Exits > 0` and `Partials = 0` but `Closed trades = 0`.
+*   **INFRASTRUCTURE | MEDIUM | Insufficient Logging of Exit Details:**
+    *   **Variable/Metric involved:** The overall logging output for trade lifecycle events.
+    *   **Value vs. Should Be:** The bot log indicates 4 exits occurred (`SESSION P&L SUMMARY.Exits: 4`, `Alpaca FIFO EOD.lots_closed=4`). However, there are no detailed log entries (e.g., from `execution.broker` or `execution.lifecycle`) showing the symbol, fill price, quantity, or specific exit reason (e.g., stop hit, target hit, manual close) for each of these 4 exits. This lack of detail makes comprehensive auditing of exit quality and P&L calculations impossible.
+    *   **Condition:** Occurs when positions are exited, and the corresponding detailed execution logs are not generated or included in the report.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / ALPHA:** Correct the `SESSION P&L SUMMARY` logic to accurately count "Closed trades". If "Closed trades" is intended to only count trades *opened and closed within the current session*, then (a) "Exits" should also adopt this same scope (i.e., "Exits from trades opened this session"), or (b) "Closed trades" should reflect all positions fully closed during the session, regardless of their opening time. This is critical for clear performance auditing.
+2.  **INFRASTRUCTURE:** Enhance logging granularity for trade exits. Ensure that for every reported exit, detailed information including symbol, fill price, quantity, timestamp, and specific exit reason (e.g., stop hit, target hit, manual close, MRI BE push) is recorded in the logs. This is crucial for verifying trade execution and strategy performance.
+3.  **ALPHA:** Clarify the "Stop-hit rate: 0% (3 stops)" metric in the `SESSION P&L SUMMARY`. Specify what "3 stops" refers to (e.g., active stop orders, stop-hit attempts) to avoid ambiguity.

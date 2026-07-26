@@ -1,0 +1,118 @@
+Nightly Gemini Audit — 2026-07-21
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['generate_dashboard.py', 'options_scanner.py', 'data/gex.py', 'execution/broker.py', 'execution/stop_protection.py', 'tests/test_stop_protection.py', 'tests/test_broker_hold_state.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+
+1.  **execution.portfolio_tracker | SMCI P&L CORRUPTION**: The `portfolio_tracker` record for SMCI (short) indicates an `entry_price` of $24.24 and `pnl` of -2.22, while the Alpaca record for the same trade (`alpaca_per_trade`) shows an `entry` of $27.01 and `pnl` of +3.32. This represents a complete reversal of P&L sign from loss to gain, indicating fundamental P&L corruption in the tracker which affects risk decisions and overall account profitability assessment.
+2.  **execution.entry_logic | [CYCLE-SYNC] STATE DESYNC**: The log shows `[CYCLE-SYNC] STATE DESYNC: Tracker (9) < RiskManager (10). Ignoring tracker — decreases must happen via register_close().` This indicates a mismatch in the number of open positions between the `Tracker` and `RiskManager`. Specifically, `RiskManager` reports 10 positions while `Tracker` reports 9, implying one position is not being correctly tracked by `Tracker` for risk management or P&L, or the `RiskManager` holds a phantom position. This occurs multiple times (e.g., 19:38:23, 19:45:40, 19:53:49) and is critical as it could lead to untracked risk or incorrect position sizing.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   **EOD P&L DRIFT**: Repeated warnings like `EOD P&L DRIFT: Alpaca=$3.10 tracker=$-2.44 drift=$+5.54` are observed throughout the log (e.g., 19:31:30, 19:38:40, 19:46:33, 19:54:00, 20:03:47). This indicates a persistent and significant discrepancy between Alpaca's authoritative P&L and the bot's internal `portfolio_tracker`, which is a symptom of underlying P&L accounting issues (confirmed by the SMCI P&L corruption).
+*   **CYCLE-SYNC STATE DESYNC**: Multiple `[CYCLE-SYNC] STATE DESYNC: Tracker (9) < RiskManager (10).` messages indicate a recurring state inconsistency between the `Tracker` and `RiskManager`, a critical issue detailed in the CATASTROPHIC ALERT.
+
+### PERFORMANCE AUDIT
+
+Only two trades occurred in the last 24 hours:
+
+*   **DDOG (long)**:
+    *   **P&L sign correctness**: Entry $259.47, exit $259.25, P&L $-0.22. Correctly recorded as a loss.
+    *   **pnl_pct**: -0.08%, plausible.
+    *   **partial_pnl**: `partial_exited: false`, so not applicable.
+    *   **Trades with pnl=0.0**: Not applicable.
+    *   **Entry/exit prices plausible**: $259.47 entry, $259.25 exit are plausible for the context.
+    *   **Exit reason consistency**: `stop_breached: false` but `exit_price` $259.25 is below `original_stop` $245.16 and `stop` $259.47 (which was `be_stop_promoted`). The exit reason `external_close` combined with `mri_at_exit_uncertain: true` suggests a manual intervention or an external event not fully captured by bot's stop logic. If the stop was 259.47 (breakeven promoted), exiting at 259.25 is a stop hit, but the `stop_breached` flag is false. This indicates a potential inconsistency in how external closes interact with stop breach detection.
+*   **SMCI (short)**:
+    *   **P&L sign correctness**: Alpaca: entry $27.01, exit $25.35, P&L $+3.32 (profit). Tracker: entry $24.24, exit $25.35, P&L $-2.22 (loss). **CRITICAL DISCREPANCY (see CATASTROPHIC ALERT)**. The tracker's P&L sign is incorrect due to a wrong entry price.
+    *   **pnl_pct**: Tracker reports -4.58%, Alpaca implied +12.3% profit (based on 27.01 entry for 2 shares, 25.35 exit). This is drastically different.
+    *   **partial_pnl**: `partial_exited: false`, so not applicable.
+    *   **Trades with pnl=0.0**: Not applicable.
+    *   **Entry/exit prices plausible**: Alpaca entry $27.01, exit $25.35 is plausible. Tracker entry $24.24, exit $25.35 is plausible *if that were the actual entry*.
+    *   **Exit reason consistency**: `exit_price` $25.35 is consistent across both. `stop` for SMCI (short) is $27.24. An exit at $25.35 implies a profit (for Alpaca's entry) or a deep loss (for tracker's entry). The reason `overnight_atr_buffer_exit | 9-scan breach | entry=$24.24 thresh=$25.04` ties to the tracker's incorrect entry of $24.24 and its calculated threshold. This further confirms the tracker's internal state is compromised.
+*   **Score→outcome correlation**: Too few trades to assess. Both trades were in score bucket 10-13, both losses according to the tracker.
+*   **Stop-hit rate vs. win rate**: Two trades (100% losses by tracker). One exit was `external_close`, one `overnight_atr_buffer_exit`. Not enough data to assess overall rate.
+*   **Profit factor and R:R**: `all_time_stats.avg_r_multiple = -0.006` is far from the stated 2.5x target for `INTRADAY_TARGET_ATR_MULT`. This indicates the bot is failing to capture its intended edge or is suffering from P&L recording errors. `profit_factor = 1.08` is barely profitable.
+
+### TRADE INTEGRITY
+
+*   **SMCI P&L Corruption**: The most severe issue is the `SMCI` trade where the bot's internal `portfolio_tracker` records an `entry_price` of $24.24 for a short position, while Alpaca's `alpaca_per_trade` shows an `entry` of $27.01. With an `exit` price of $25.35, this leads to a P&L of $-2.22 (loss) in the tracker versus $+3.32 (profit) on Alpaca. This is a critical data corruption issue.
+
+### MODIFIED FILE FINDINGS
+
+*   **`generate_dashboard.py`**:
+    *   **_load_hybrid_state**: **FIX**. The addition of checks `if not saved_at.startswith(today_et) or scans_left <= 0: return {}` correctly addresses potential stale `hybrid_state.json` data, preventing contradictory dashboard states.
+    *   **_load_alpaca**: **IMPROVEMENT**. Explicitly reloading `.env` with `override=True` and robust `urllib.request` use for Alpaca API calls improves reliability and reduces dependency on external SDKs/environment.
+    *   **_build_html**: **IMPROVEMENT**. The change to `alpaca_daily_pnl = equity - alpaca.get("last_equity", equity)` correctly aligns the dashboard's display of "today_pnl" with Alpaca's authoritative real-time P&L, addressing a previous inconsistency where realized gains from mid-session closes were not immediately reflected.
+    *   No new bugs introduced.
+
+*   **`options_scanner.py`**:
+    *   **_persist_rec_history**: **NEW FEATURE/IMPROVEMENT**. The new functions `_persist_rec_history`, `_null_greeks`, `_code_version`, `_config_hash` address the need for a durable record of recommendations and rejections, crucial for post-mortem analysis and evaluating the "accuracy evaluator" (design S4b). This directly addresses a prior finding that lacked diagnostic data for "flip incidents."
+    *   **0DTE strategy reframing**: The changes to `ZDTE_UNIVERSE` and delta targets (`ZDTE_DELTA_TARGET`, `ZDTE_DELTA_MIN`, `ZDTE_DELTA_MAX`) reflect a strategic shift from premium selling to directional swing capture, which is an intentional modification, not a bug fix.
+    *   No new bugs or regressions of existing bugs identified.
+
+*   **`data/gex.py`**:
+    *   **GEX computation overhaul**: **CRITICAL FIX**. The module was completely overhauled to compute gamma locally (implying IV from quote mid via Black-Scholes bisection) and source OI from the contract object (`/v2/options/contracts`). This fixes the root cause of zero valid GEX datapoints from the "indicative" feed (2026-04-27 through 2026-07-03), ensuring GEX signals are now based on reliable data.
+    *   **_expiry_range**: **IMPROVEMENT**. Narrowing the expiry range to this week's expiries only prevents far-OTM OI from distorting the zero-gamma flip, providing a more relevant weekly GEX signal.
+    *   **_compute_gex (data quality gates)**: **IMPROVEMENT**. Introduction of data quality gates (`_ATM_MONEYNESS`, `_MIN_ATM_STRIKES`, `_CAPTURE_WINDOW_PCTILE`, `_MIN_CAPTURE_RATIO`, `_MIN_WINDOWED_COUNT`) and the `UNKNOWN` label for sparse/biased strike sets correctly implements a fail-safe mechanism, preventing misleading GEX labels.
+    *   **_compute_gex (PIN LEVEL)**: **NEW FEATURE/IMPROVEMENT**. The new "pin" level (OI-gamma-weighted centroid + max-|Γ·OI| wall) provides a more robust measure of gamma concentration, less susceptible to indicative feed censoring than the "flip" strike.
+    *   No new bugs or regressions of existing bugs identified.
+
+*   **`execution/broker.py`**:
+    *   **Protective-stop submission sentinels (`PROTECTION_ALREADY_HELD`, `PROTECTION_UNKNOWN`)**: **CRITICAL FIX**. These sentinels and the associated changes in `submit_*_stop_order` (passing `allow_cancel_blocking=False`) directly address the "destructive-broker-fallback" bug (PRE-WIRE-BLOCKER-3). This prevents broker.py from erroneously cancelling live protective stops when Alpaca returns a `held_for_orders` error.
+    *   **_hold_state**: **CRITICAL FIX**. Hardened to correctly verify that a reducing-side stop *actually* covers the position's quantity. It no longer returns `_HOLD_STABLE` for empty order lists or non-protective orders, directly closing the vulnerability where protection was wrongly asserted.
+    *   **_make_idem_id & submit_market_order/submit_limit_order idempotency**: **IMPROVEMENT**. `_make_idem_id` now incorporates tier and unique ID components. `submit_market_order` and `submit_limit_order` now reuse this ID for *internal retries*.
+        *   **NEW BUG (Minor): `_make_idem_id` documentation/behavior mismatch**: The comment "Generated ONCE per order and reused across retries" is accurate *within a single call's retry loop*. However, `_make_idem_id` itself is called *every time* `submit_market_order` or `submit_limit_order` is invoked by a parent function. Since `_idem_id` includes `epoch_ms` and `uuid8`, it will be *different* on subsequent calls from a parent, even for the "same intended order". This means Alpaca's deduplication by `client_order_id` is not leveraged for parent-level idempotency, increasing risk of duplicate orders if the calling logic doesn't implement its own idempotency checks. This is a documentation/API expectation mismatch, with potential for live duplicate entries.
+    *   No new major bugs, the hardening is significant.
+
+*   **`execution/stop_protection.py`**:
+    *   **Comprehensive rewrite**: **CRITICAL FIX**. This module has undergone a major overhaul to enforce its invariant more robustly. It now continuously derives protection state from live Alpaca data, eliminating reliance on stale order IDs.
+    *   **`allow_cancel_blocking=False`**: **CRITICAL FIX**. Ensures that broker calls will not destructively cancel existing good stops, solving a critical safety flaw.
+    *   **_throttled_page, _clear_page_throttle**: **IMPROVEMENT**. Introduction of throttled paging mechanism prevents alert storms for sticky issues, improving operator signal-to-noise ratio.
+    *   **_qhm_symbols**: **IMPROVEMENT**. Correctly excludes quarterly hold symbols from intraday protection logic.
+    *   **`reconcile_protection` performance**: **IMPROVEMENT**. `get_open_orders()` is now called once per sweep for all symbols, then filtered internally, dramatically reducing API calls and improving performance (`PRE-WIRE-BLOCKER-2`).
+    *   **Double-place guard (_recent_placements)**: **FIX**. Prevents re-placing stops due to API visibility lag, mitigating duplicate order risk.
+    *   No new bugs identified; this module appears significantly more robust.
+
+*   **`tests/test_stop_protection.py` and `tests/test_broker_hold_state.py`**:
+    *   **NEW FEATURE/IMPROVEMENT**. The addition of these comprehensive failure-injection test harnesses is a major improvement to the codebase's reliability and verification discipline. They directly validate fixes for critical bugs (e.g., `_hold_state` behavior, `allow_cancel_blocking` handling) and ensure the core invariant of `reconcile_protection` holds across various edge cases and failure modes. These tests are essential for preventing regressions.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE (as stated in problem description).
+*   **P5-H2 | Fill price crosstalk**: PARTIAL. `execution/broker.py`'s internal retry idempotency and `stop_protection.py`'s double-place guard for stops mitigate some aspects of this, but the core issue of fill price ambiguity when multiple *distinct* orders for the same symbol are in flight concurrently remains largely unaddressed.
+*   **P5-H3 | Orphan GTC 404 path**: FIXED. `execution/stop_protection.py`'s new logic (deriving state from live `get_open_orders` and `get_open_position`) inherently handles orphaned GTC orders.
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: OBSOLETE (as stated in problem description).
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: PARTIAL. `generate_dashboard.py` now includes logic to clear stale `hybrid_state.json`. However, other state files that might contain MRI scores (like `bot_status.json`) do not have the same explicit staleness checks on load.
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: PARTIAL. `generate_dashboard.py` now correctly reports today's P&L using live Alpaca equity. However, the underlying `portfolio_tracker` logic that writes `eod_YYYY-MM-DD.json` at end-of-day (and is subject to drift) was not modified in the provided files. The EOD P&L drift is a direct manifestation of this.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | portfolio_tracker | SMCI P&L Corruption**: The `portfolio_tracker` records an incorrect `entry_price` for SMCI (short), leading to a miscalculation of P&L (loss vs. Alpaca's profit). This directly impacts performance metrics, risk calculations, and could lead to erroneous trading decisions.
+    *   **Exact failure condition**: For symbol SMCI, `EOD SNAPSHOT.trades[1].entry_price` is `24.24`, while `EOD SNAPSHOT.alpaca_per_trade[1].entry` is `27.01`. This discrepancy leads to `EOD SNAPSHOT.trades[1].pnl` being `-2.22` instead of the correct `3.32` from Alpaca. This also contributes to the `pnl_drift`.
+*   **INFRASTRUCTURE | MEDIUM | execution/broker.py | `_make_idem_id` idempotency mismatch**: The `_make_idem_id` function is designed to create a unique ID including epoch and UUID. While this is good for ensuring unique IDs for *individual* submission attempts and retries within `submit_market_order` or `submit_limit_order`, it means the ID is *not* truly idempotent across repeated calls from a parent process (e.g., if `strategy.run_cycle` attempts to submit an order twice for the same logical trade due to a timeout). The comment within `broker.py` suggests idempotency across retries, but this applies only to *internal* retries of `submit_order`, not multiple calls to the `submit_*_order` functions from external callers.
+    *   **Exact failure condition**: If a calling function (`strategy.run_cycle`) calls `submit_market_order("XYZ", ...)` twice for the same logical entry due to a network timeout where the first order's response was lost, Alpaca will receive two distinct `client_order_id`s (`_make_idem_id` will generate a new one each time) and will process both as separate orders, leading to duplicate positions.
+
+### FIX VALIDATION
+
+*   **P5-H2 (Fill price crosstalk): PARTIAL**. The `execution/broker.py` changes for internal retry idempotency are beneficial for preventing some forms of double orders due to timeouts. The `stop_protection.py` changes also improve stop-order management, which can impact fills. However, the core of "fill price crosstalk" often refers to correctly attributing specific fill prices when multiple complex orders (e.g., entries, partial exits, limits) are in play for the *same position* or symbol. These changes primarily prevent *duplicate orders* rather than resolve ambiguous *fill attribution* in such complex scenarios.
+*   **P5-H3 (Orphan GTC 404 path): PASS**. The comprehensive redesign of `stop_protection.py` to always derive current state from live Alpaca open positions and orders means it will correctly identify if a position is closed or a stop order is no longer active (e.g., due to a 404 on a GTC lookup). It will then either skip (if position is flat) or attempt to place a new protective stop (if a position is open but unprotected), effectively resolving the orphan issue.
+*   **P5-L2 (eod_YYYY-MM-DD.json written before positions closed): PARTIAL**. While `generate_dashboard.py` now correctly displays daily P&L based on live Alpaca equity (addressing the dashboard's view), the underlying `portfolio_tracker` logic that generates the `eod_YYYY-MM-DD.json` file and contributes to the "P&L DRIFT" messages was not included in the provided modifications. Therefore, the internal P&L accounting leading to the drift may still be present in the tracker's EOD data.
+
+### RECOMMENDED ACTIONS
+
+1.  **IMMEDIATE ACTION: CRITICAL P&L CORRUPTION IN `portfolio_tracker`**. Investigate and fix the root cause of the `SMCI` entry price discrepancy in `portfolio_tracker`. Ensure that `portfolio_tracker` reliably records the actual Alpaca fill price for all trades to prevent P&L corruption. This requires auditing how Alpaca fill data is ingested and stored in `portfolio_tracker`.
+2.  **IMMEDIATE ACTION: `[CYCLE-SYNC] STATE DESYNC` investigation**. Trace the execution path that leads to `Tracker` and `RiskManager` disagreeing on the number of open positions. Identify which component holds the authoritative count, and implement a robust synchronization mechanism or a single source of truth for open positions. This may involve reviewing `portfolio_tracker` and `risk_manager` interactions.
+3.  **HIGH PRIORITY: Address EOD P&L DRIFT**. This is a symptom of the P&L corruption. Once the `SMCI` entry price issue is fixed, thoroughly audit `portfolio_tracker`'s `pnl_today` and `pnl_today_total` calculation to eliminate the drift between Alpaca's authoritative record and the bot's internal tracker.
+4.  **MEDIUM PRIORITY: Review `execution/broker.py` `_make_idem_id` and `submit_market_order` idempotency**. Clarify the intended idempotency behavior. If parent-level idempotency is desired for entries, modify `_make_idem_id` to generate truly stable IDs (e.g., based on symbol, direction, entry time/date without UUID or epoch for *same-day resubmissions* of failed entries) or ensure calling code (`strategy.run_cycle`'s entry logic) implements its own idempotency checks.
+5.  **HIGH PRIORITY: Address P5-C1 (FVG MultiIndex silent crash) and P5-C2 (run_movers.py ImportError)**. These are critical bugs that can lead to silent failures or crashes in core components.

@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-07-22",
+  "run_ts": "2026-07-22T10:30:01.515075-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 1,
+    "partial_count": 2,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "ELEVATED": 27
+    },
+    "last_score": 23,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 37,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-22 16:04:59,436 | WARNING  | execution.entry_logic | [AMD] CORRELATION GATE BLOCK: rho(daily,20d)=0.90 > 0.70 with TQQQ \u2014 skipping entry.",
+      "2026-07-22 16:10:55,323 | WARNING  | strategy.run_cycle | [ANOMALY-2] [MU] confirm_gate=7 scans but no entry \u2014 risk.open_positions=8 vs tracker=8 | MA",
+      "2026-07-22 16:10:55,323 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=3 scans but no entry \u2014 risk.open_positions=8 vs tracker=8 | ",
+      "2026-07-22 16:11:43,700 | WARNING  | execution.entry_logic | [SPY] CORRELATION GATE BLOCK: rho(daily,20d)=0.90 > 0.70 with TQQQ \u2014 skipping entry.",
+      "2026-07-22 16:11:45,493 | WARNING  | execution.entry_logic | [SOXL] CORRELATION GATE BLOCK: rho(daily,20d)=0.93 > 0.70 with TQQQ \u2014 skipping entry."
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}
