@@ -123,7 +123,13 @@ def _github_token():
 
 def _api(method: str, path: str, token: str, body=None):
     """GitHub REST call. Returns (status_int, parsed_json_or_dict). Never raises — an HTTPError is
-    captured WITH its status so callers can branch and fail LOUD (never silently)."""
+    captured WITH its status so callers can branch and fail LOUD (never silently).
+
+    urllib.urlopen(timeout=30) bounds BOTH connect and each socket read (no unbounded read).
+    Callers already guard the token upstream (`if not token: return False`); this belt-and-
+    suspenders check makes _api itself defensive so a None/empty token can never reach the wire."""
+    if not token:
+        return 0, {"_error": "no github token provided to _api"}
     url = f"https://api.github.com{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
@@ -215,10 +221,12 @@ def _ship_via_pr() -> bool:
 
         mstate = "unknown"
         last_status = None
-        waited = 0
-        while waited < _PR_POLL_TIMEOUT:
+        # Wall-clock deadline bounds the TOTAL poll time — including every network call, not just
+        # the sleeps — so the loop can never run unbounded even if some GETs are slow. monotonic()
+        # is immune to clock adjustments. (Hardening 2026-07-25.)
+        _deadline = _time_mod.monotonic() + _PR_POLL_TIMEOUT
+        while _time_mod.monotonic() < _deadline:
             _time_mod.sleep(_PR_POLL_INTERVAL)
-            waited += _PR_POLL_INTERVAL
             last_status, prv = _api("GET", f"/repos/{_REPO_SLUG}/pulls/{num}", token)
             mstate = prv.get("mergeable_state", "unknown")
             # Merge ONLY on 'clean' (no conflicts AND all required checks passed). 'blocked' /
