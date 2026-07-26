@@ -160,7 +160,22 @@ jobs:
             echo "Settings > Secrets and variables > Actions, or this gate cannot run."
             exit 1
           fi
-          git diff "${{ steps.changed.outputs.base }}" "${{ steps.changed.outputs.head }}" \
+          HEAD="${{ steps.changed.outputs.head }}"
+          git diff "${{ steps.changed.outputs.base }}" "$HEAD" \
             -- $(tr '\n' ' ' < /tmp/gated.txt) > /tmp/gated.diff
           wc -c /tmp/gated.diff
-          python3 .github/scripts/ci_audit.py /tmp/gated.diff
+          # Full post-change content of each changed file, appended after the diff, so the
+          # reviewer can resolve a helper/default the diff references but defines outside the
+          # shown hunks. This kills the context-starvation false-reject class (2026-07-25:
+          # ci_audit rejected `_git("fetch"...)` for "no timeout" when _git defaults timeout=120,
+          # a definition the keyhole diff never showed). A deleted file has no HEAD blob → skipped.
+          : > /tmp/gated_context.txt
+          while read -r f; do
+            [ -n "$f" ] || continue
+            if git cat-file -e "$HEAD:$f" 2>/dev/null; then
+              printf '\n===== FILE: %s =====\n' "$f" >> /tmp/gated_context.txt
+              git show "$HEAD:$f" >> /tmp/gated_context.txt
+            fi
+          done < /tmp/gated.txt
+          wc -c /tmp/gated_context.txt
+          python3 .github/scripts/ci_audit.py /tmp/gated.diff /tmp/gated_context.txt
