@@ -9166,3 +9166,9 @@ on the first OCI run; fail-safe worked — no false hits). Fix: `load_dotenv(<re
 (evaluable OR bad_occ/no_premium_or_target) are written+marked-done; transient fetch failures are
 skipped and retried next run (no permanent poison, no dup rows). Gate: cold-2nd PASS + static clean +
 proven no-source-.env auth works. Bogus 291 auth-failure rows cleared from OCI.
+
+[2026-07-27] Item 4b COMPLETE — PR #31 (`ffbf676`) merged + OCI deployed. 4:35pm ET cron INSTALLED
+(DST-safe `cron_tz_wrapper.py 16:35`, logs to `logs/accuracy_evaluator_cron.log`). Clean authenticated
+re-run VERIFIED: 744 rows, 100% evaluable, zero unevaluable — the load_dotenv fix fully resolved the
+401. summarize() clean, all slices correctly actionable:false (3 sessions < 20-session gate). Early
+signal (not actionable): NEG-regime low-conviction 0DTE hit +100% target 70% (median MFE +122%, n=30).

@@ -44,7 +44,13 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
    −50% mental-stop, all volume-corroborated + 3-state-evaluable (dead feed = unevaluable NOT a miss) +
    ET/UTC no-lookahead + lineage(config_hash). Gate: cold-2nd full read (a-j) + 2 focused + static +
    24/24+6/6 + LIVE end-to-end vs REAL Alpaca (SPY 740P: mfe+358% but mae−62% → nostop +1.0/stop50 −0.5)
-   + preship Gro+GAI APPROVE. **NEXT after 4b ships: add the 4:35pm ET cron on OCI** to run the evaluator.
+   + preship Gro+GAI APPROVE. Item 4b is SHIPPED (PR #30 `ffbf676`, OCI LIVE) + HARDENED (PR #31:
+   `load_dotenv` at import so a standalone/cron run authenticates — the first OCI run 401'd every fetch →
+   291 bogus `no_option_bars` rows, now cleared; + pending-retry so transient failures retry, only
+   terminal outcomes get marked-done). ✅ **4:35pm ET cron INSTALLED on OCI** (DST-safe `cron_tz_wrapper.py
+   16:35` → `logs/accuracy_evaluator_cron.log`). ✅ **Clean re-run VERIFIED: 744 rows, 100% evaluable, zero
+   auth failures.** Early not-yet-actionable signal: NEG-regime low-conviction 0DTE hit +100% target 70%
+   (median MFE +122%, n=30). All slices correctly `actionable:false` (3 sessions < 20-session gate).
    **REMAINING Item 4c+:** the recalibration engine (behind default-off ZDTE_RECAL_ENABLED, config_hash-
    partitioned, ≥30 evaluable + ≥20 sessions Wilson-LB gate) that turns Item-3 δ + GEX/conviction
    weights DYNAMIC; the fused conviction score (confluence+GEX regime+S/R, orthogonal); TICK display-only
