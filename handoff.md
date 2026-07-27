@@ -11,6 +11,35 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+### 🔴🔴 ACTIVE PLAN (2026-07-26 eve, interactive) — Rafael's approved 5-item GEX/0DTE sequence
+**Do these IN ORDER.** Full design in `logs/gex_rearm_2026-07-26.md`; two new mandates in CLAUDE.md.
+1. ✅ **Profitable>Perfect + Anti-Silo mandates** → CLAUDE.md (PR #25, `c8d37dc`, merged).
+2. 🚢 **GEX live — Diff A** (SHIPPING via `feat/gex-rearm-diffA-2026-07-26`): config re-arm
+   (GEX_ENABLED=True, ×1.30/×1.15, GEX_MIN_SCORE_NEG_BUMP=1 keeps Layer-8) + **dynamic
+   spot-consistency guard** in `data/gex.py` (trade-vs-quote-mid, spread-scaled band, suspect→carry
+   last-good preserving confirmed_ts / cold-start→UNKNOWN, get_gex_regime ages off confirmed_ts,
+   NEGATIVE demotes faster @20min). Gate: full board 5 seats ×2 rounds + Gro+GAI + cold-2nd PASS +
+   FINAL preship Gro+GAI APPROVE (GAI reversed 1 counter-prompt). **NEXT: confirm PR merged + OCI
+   `git pull --ff-only` + restart (DEPLOY_OK+HEALTH_OK).**
+3. ⏭️ **GEX → options_scanner interconnect** — compute call/put walls; wire regime+flip+walls into recs.
+4. ⏭️ **0DTE fusion redesign + forward-accuracy tracker** (see TICK note below).
+5. ⏭️ **Silo audit + blind-spot filters.**
+
+**Diff B (queued, dynamic fast-follows for the GEX guard):** self-calibrate band from rolling p95 of
+|trade−mid|/spread; in-cycle re-poll; cadence persistence counter; 1-min-bar 3rd reference (2-of-3);
+`_prior_good_entry` reject-if-already-stale (GAI non-blocking note).
+
+**TICK (Rafael ask, BGG researched 2026-07-26):** add NYSE $TICK to 0DTE SPY + scanner? Verdict
+**DISPLAY-ONLY-FIRST** — real NYSE TICK is a **data-source BLOCKER** (Alpaca NO, FMP no intraday,
+yfinance daily-only = useless for an intraday oscillator; SPX-class gap). Only orthogonal edge = a
+rolling-percentile + cumulative-TICK/price-**divergence** exhaustion overlay, **SPY-only**, fail-safe
+UNKNOWN→neutral, low-weight modifier never a veto; **invalid on single names** (half the 0DTE universe
+is Nasdaq-listed). Fallback if pursued: a T1 synthetic breadth proxy, shadow-first.
+
+**New standing rule:** on the FIRST prompt after a usage limit (or resuming limit-interrupted work),
+FIRST action = arm a +5h05m `mtf-bot-autonomous-resume` cron (scheduled-tasks). Now STEP 0 in the
+session-start skill + memory. (Armed 2026-07-27 04:02 AM PT this session.)
+
 ### ✅ SHIPPED THIS SESSION (2026-07-26) — 5 PRs, all gated (Gro+GAI+cold-2nd), OCI clean & deployed
 1. **PR #15 (`8a94c15`)** — A1b: `ci_audit.py`/`preship_audit.py` `_verdict` parsers made byte-identical + lockstep; new `.claude/preship/test_verdict.py` (15 cases + 6 fail-open probes, tests BOTH). Anchored-exactly-one + reject-biased + markdown bullet-strip `*#-+>• `.
 2. **PR #16 (`910ec9e`)** — reconciled 26 stranded OCI audit reports (Jul 21–24) that `sync_reports.py` committed locally but branch protection blocked from pushing.

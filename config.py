@@ -490,9 +490,17 @@ VOLUME_MIN_VALID_BARS        = 15      # min non-NaN bars in iloc[-21:-1] requir
 VOLUME_REQUIRE_TWO_BAR       = False   # Levitt C2: 2 consecutive above-threshold days (deferred)
 # VOLUME_GRADED_ENABLED = False        # reserved S25 — do not implement until 60-session shadow
 
-# ─── GEX (GAMMA EXPOSURE) — DEMOTED TO DISPLAY-ONLY / SHADOW (S0, 2026-07-19) ──
-# STATUS: SHADOW — NOT IN SIZING. GEX has ZERO effect on entry gating or position
-# sizing. It still computes, logs, and accrues history; it does not touch capital.
+# ─── GEX (GAMMA EXPOSURE) — RE-ARMED LIVE (2026-07-26, board+Gro+GAI, Rafael-approved) ──
+# STATUS: LIVE — full strength. NEGATIVE regime -> Kelly x1.30 (momentum) + Layer-8 +1
+# MIN_SCORE; POSITIVE -> x1.15 (mean-reversion). Re-armed from the 2026-07-19 SHADOW
+# demotion after a board+Gro+GAI review (2 rounds, 5 voices) established: (a) the consumed
+# signal is the scale-INVARIANT regime LABEL, not raw_gex_m or the tautological flip; (b)
+# re-arm stays INSIDE the risk envelope (the mult is UPSTREAM of the 4.5%/trade Kelly clamp;
+# 7% kill switch intact) — aggressiveness within caps, NOT envelope-widening; (c) the one
+# uncaught label-corruption path (a plausible-but-wrong SPY spot) is closed by the
+# SPOT-CONSISTENCY GUARD below (data/gex.py). Design: logs/gex_rearm_2026-07-26.md.
+# The 2026-07-19 shadow rationale (flip tautology, unmeasurable accuracy, book-wide blast
+# radius) is retained below as history — label-only consumption + the guard address it.
 #
 # WHY (BGG aligned 2026-07-19 — Board 4/4 + Gro APPROVE + GAI APPROVE; full design
 # in logs/gex_0dte_evaluator_design_2026-07-19.md):
@@ -528,24 +536,44 @@ VOLUME_REQUIRE_TWO_BAR       = False   # Levitt C2: 2 consecutive above-threshol
 # regression showing the flip carries information independent of spot (slope~1 and
 # R^2~1 proves it does not), and (c) a fresh board vote. Changing any threshold in
 # this block resets the evidence clock to zero.
-GEX_ENABLED             = False   # SHADOW — demoted from True (S0, 2026-07-19). Neutralizes BOTH
-                                  # consumers: kelly.py:331 edge multiplier (stays 1.0) AND
-                                  # run_cycle.py:1585 Layer-8 MIN_SCORE bump (stays _base_min — the
-                                  # same neutral value the other seven layers contribute when
-                                  # quiescent, so the max() at run_cycle.py:1591 is provably
-                                  # unchanged). Both fail-neutral when False; a MISSING attr also
-                                  # fails neutral, since both call sites use getattr(..., False).
-GEX_STALE_MINUTES       = 30      # 45→30 at activation (Kyle + GAI condition: 45 min = 3 stale
-                                  # bars on the 15-min cadence before STALE triggers; 30 = 2)
-# Multipliers neutralized to 1.00 as defense-in-depth (belt-and-suspenders): even if
-# GEX_ENABLED were flipped True by accident or by a stale branch, sizing would be
-# unchanged. Prior staged values were 1.10 / 1.05 (S50b full values 1.30 / 1.15);
-# both are recorded here so a future board re-arm has the history, but neither is
-# live. Restoring a non-1.00 value requires the re-arm conditions above.
-GEX_EDGE_MULT_MOMENTUM  = 1.00    # neutralized (was 1.10 staged; S50b full 1.30)
-GEX_EDGE_MULT_MR        = 1.00    # neutralized (was 1.05 staged; S50b full 1.15)
-GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN
-GEX_MIN_SCORE_NEG_BUMP  = 0       # neutralized (was 1) — no MIN_SCORE raise on GEX=NEGATIVE
+GEX_ENABLED             = True    # LIVE (re-armed 2026-07-26). Arms BOTH consumers: kelly.py edge
+                                  # multiplier (NEGATIVE->x1.30 / POSITIVE->x1.15) AND run_cycle.py
+                                  # Layer-8 MIN_SCORE +1 on NEGATIVE. Both fail-NEUTRAL on
+                                  # NEAR-FLIP/STALE/UNKNOWN and on a missing attr (getattr(...,False)).
+GEX_STALE_MINUTES       = 30      # base stale window: 30 min = 2 missed 15-min refreshes -> STALE
+# Full-strength values (Rafael-locked 2026-07-26). NEGATIVE = high-vol / momentum-amplified
+# -> size UP x1.30; POSITIVE = mean-reversion backdrop -> x1.15. NEUTRAL stays 1.00 (the
+# fail-safe value on NEAR-FLIP/STALE/UNKNOWN). All applied UPSTREAM of KELLY_MAX_RISK_PCT.
+GEX_EDGE_MULT_MOMENTUM  = 1.30    # NEGATIVE regime — full (was 1.00 shadow; 1.10 staged)
+GEX_EDGE_MULT_MR        = 1.15    # POSITIVE regime — full (was 1.00 shadow; 1.05 staged)
+GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN (fail-safe)
+GEX_MIN_SCORE_NEG_BUMP  = 1       # Layer-8: +1 MIN_SCORE on GEX=NEGATIVE (pickier on high-vol days)
+
+# ─── GEX SPOT-CONSISTENCY GUARD (Diff A — 2026-07-26, board 5 seats + Gro + GAI) ──────────
+# The consumed GEX signal is SPY's regime LABEL, which depends on the underlying SPOT price
+# (BS gamma + the ATM/capture/flip moneyness windows). A plausible-but-wrong spot (a bad
+# last-trade tick / a Monday gap) can FLIP the label and drive book-wide x1.30 on a false
+# signal — the one path the STALE + strike-quality gates do NOT catch. Guard (data/gex.py):
+#   1. Cross-check the latest-TRADE spot against an INDEPENDENT same-instant latest-QUOTE mid.
+#   2. DYNAMIC band = max(SPREAD_MULT x live_spread, FLOOR_PCT x mid) — spread-scaled, not a
+#      fixed %; a broken/crossed quote (spread > SPREAD_SANITY_PCT of mid) is not a usable
+#      reference and is treated as suspect.
+#   3. A SUSPECT spot NEVER computes a fresh label. The last CONFIRMED-GOOD label is carried
+#      forward PRESERVING its confirmed-good timestamp, so the STALE clock keeps aging (never
+#      reset) — neutralization is REACHED dynamically via STALE, never on a single read.
+#   4. COLD-START (no prior good label) + suspect spot -> UNKNOWN -> neutral x1.0 (fail-safe).
+# ROADMAP (Diff B, dynamic fast-follows): self-calibrate the band from rolling p95 of
+# |trade-mid|/spread; add in-cycle re-poll + a cadence-derived persistence counter + a 1-min
+# bar third reference (2-of-3). Starting constants below — recalibrate from gex_history.
+GEX_SPOT_GUARD_ENABLED     = True
+GEX_SPOT_BAND_SPREAD_MULT  = 5.0    # trade may sit within this many live bid-ask spreads of mid
+GEX_SPOT_BAND_FLOOR_PCT    = 0.005  # ...but never a tighter tolerance than 0.5% of mid (liquid SPY
+                                    # spread ~1c would else over-flag every normal timing skew)
+GEX_SPOT_SPREAD_SANITY_PCT = 0.02   # a quote whose spread exceeds 2% of mid is broken/crossed and
+                                    # cannot validate the trade -> suspect (fail-safe)
+GEX_STALE_MINUTES_NEG      = 20     # direction-asymmetric demote: the risk-INCREASING NEGATIVE
+                                    # (x1.30) leg ages to neutral faster than the 30-min base
+                                    # (never hold "bigger" on stale data as long as "normal")
 
 # ─── TSMOM VOL-SCALING (board vote 2026-04-22, 17-0) ─────────────────────────
 # Vol-scaled sizing multiplier: target_vol / ewma_vol_60d, capped to [FLOOR, CAP].
