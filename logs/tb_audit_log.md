@@ -9129,3 +9129,32 @@ reject — MAX_TRADE_DOLLARS=150 not $2500, _build_recs weekly-only — in ONE c
 (Groq TPM capacity limit, Rafael-authorized). **Ship:** feat/zdte-premium-cap-item4a-2026-07-27 → PR → OCI.
 **RC:** RC-1 N/A · RC-2 N/A · RC-3 new excepts log (debug) · RC-6 N/A · RC-7 contracts floored at 1 (no
 zero-size) · all PASS.
+
+---
+
+## 2026-07-27 — ITEM 4b: FORWARD-ACCURACY TRACKER (data/option_bars.py + scripts/options_accuracy_evaluator.py)
+
+**Intent:** the measurement substrate that later makes the Item-3 δ + GEX/conviction weights DYNAMIC
+(via a separate, board-gated Item-4c that consumes this). READ-ONLY: imports data/ only (NEVER
+execution/), writes ONLY logs/options_recs_accuracy.jsonl — cannot touch a trade. Post-close cron
+(~4:35pm ET), off the trading thread, idempotent (rec_id-keyed), never raises.
+**Design:** board (0DTE + data-pipeline seats + Gro + GAI). Rafael D1-D4: measurement VECTOR (signal
+hit_strike / tradeable hit_target=resting+100% limit fill / opportunity mfe / heat mae / path
+target_before_ruin + continuous minutes_to_target / runway / BOTH realized policies no-stop + −50%
+mental-stop); dynamic cap already shipped 4a; N gated per-slice ≥30 evaluable + ≥20 sessions on
+Wilson LB; ship tracker now, recalibration engine = 4c behind default-off flag.
+**data source:** Alpaca 0DTE option 5-min bars CONFIRMED live (v1beta1/options/bars, default feed).
+**Correctness (board):** volume-corroborated bars only; 3-state evaluable (dead feed=unevaluable NOT a
+miss; hit_strike independently evaluable); ET/UTC windowing no-lookahead (t>=scan_time, last bar
+15:55 ET); lineage config_hash+code_version carried; occ=int(round(strike*1000)).
+**Path-exit modeling (preship GAI, adopted):** ambiguous single bar (high>=target AND low<=stop)
+resolves to the TARGET WIN — the +100% is a RESTING LIMIT (auto-fill on the high), −50% is a MENTAL
+stop (manual), so the limit has execution priority; realized_stop50 differs from no-stop only via a
+chronologically-earlier stop-only bar. (Reversed the 0DTE seat's conservative default on GAI's
+mechanics argument — verified: page shows "Limit Sell +100%" resting + "Mental Stop −50%" mental.)
+**Gate:** cold-2nd FULL read both files (a-j PASS) + 2 focused cold-2nds (premium self-guard, path
+limit-priority) + static ruff/mypy/py_compile clean + 24/24 + 6/6 + LIVE end-to-end vs REAL Alpaca
+bars (SPY 740P 7/24: mfe +358% but mae −62% → realized_nostop +1.0 / realized_stop50 −0.5 — path
+matters) + preship Gro+GAI APPROVE. **Ship:** feat/options-accuracy-tracker-item4b-2026-07-27 → PR →
+OCI + 4:35pm ET cron. **Fast-follows (cold-2nd non-blocking):** pending-retry state for transient
+dead feeds; underlying upper-bound filter symmetry; true even-n median.

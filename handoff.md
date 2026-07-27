@@ -34,11 +34,24 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
    (clamp $1–$5, flat $2 fail-safe); conviction→contract-count ladder (4/3/2/1); puts fully equal; NO
    equity-tied aggregate sleeve (board's aggregate finding was $2.5K-relative → moot; standalone 0DTE
    cap = a future config knob if Rafael names one). Gate: cold-2nd full read (2291L) + GAI APPROVE
-   (false-premise reject reversed 1 counter-prompt) + Gro WAIVED (TPM) + 18/18. **REMAINING Item 4b+:**
-   fuse confluence+GEX regime+S/R into
-   ONE conviction score (orthogonal, no double-count); regime-aligned targets; forward-accuracy
-   tracker (time/strike/spot/target → did-it-hit + time-bucket 30m/1h/2h/3h/EOD + max option return%)
-   — the tracker is ALSO what turns the Item-3 δ + GEX conviction weights DYNAMIC. Blind-spot filters:
+   (false-premise reject reversed 1 counter-prompt) + Gro WAIVED (TPM) + 18/18. Item 4a is SHIPPED
+   (PR #29, `f1b31e2`, OCI LIVE). **Item 4b ✅ SHIPPING** (`feat/options-accuracy-tracker-item4b-2026-07-27`
+   → PR): the forward-accuracy tracker — new `data/option_bars.py` (Alpaca 0DTE option 5-min bars,
+   shares fetcher._rate_gate) + `scripts/options_accuracy_evaluator.py` (READ-ONLY post-close cron,
+   idempotent, never raises, imports data/ only). Per rec it records a measurement VECTOR: hit_strike
+   (signal) / hit_target (resting +100% limit fill = tradeable) / mfe (opportunity) / mae (heat) /
+   target_before_ruin + continuous minutes_to_target (path) / runway / realized under BOTH no-stop AND
+   −50% mental-stop, all volume-corroborated + 3-state-evaluable (dead feed = unevaluable NOT a miss) +
+   ET/UTC no-lookahead + lineage(config_hash). Gate: cold-2nd full read (a-j) + 2 focused + static +
+   24/24+6/6 + LIVE end-to-end vs REAL Alpaca (SPY 740P: mfe+358% but mae−62% → nostop +1.0/stop50 −0.5)
+   + preship Gro+GAI APPROVE. **NEXT after 4b ships: add the 4:35pm ET cron on OCI** to run the evaluator.
+   **REMAINING Item 4c+:** the recalibration engine (behind default-off ZDTE_RECAL_ENABLED, config_hash-
+   partitioned, ≥30 evaluable + ≥20 sessions Wilson-LB gate) that turns Item-3 δ + GEX/conviction
+   weights DYNAMIC; the fused conviction score (confluence+GEX regime+S/R, orthogonal); TICK display-only
+   SPY breadth-divergence flag; blind-spot filters. Also Rafael-flagged (pending his input): the "hard
+   close 3:45 ET / entry 10:05-10:20 ET" options-page text is inaccurate for an advisory stream (fix
+   which of time/framing/window once he says); no Slack push for SPY/QQQ triple-confluence (badge only).
+   [orig scope for reference:] fuse confluence+GEX regime+S/R into
    bid-ask (BAS_MAX_0DTE already 0.25), TOD decay (derate late-day), dynamic premium cap (scale $2 by
    ATR/IV), QQQ/put-at-resistance. **TICK: Rafael approved adding here as a DISPLAY-ONLY SPY
    breadth-divergence flag first** (rolling-percentile + cumulative-TICK/price divergence, UNKNOWN→
