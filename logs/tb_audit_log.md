@@ -9107,3 +9107,25 @@ unchanged. Weekly + non-0DTE untouched (overlay called ONLY in _build_0dte_direc
 cold-2nd PASS on the _gex_cell wrap · static ruff/mypy/py_compile clean · 24/24 functional + 3/3 wrap.
 Delta-vs-base (base_conviction_pct/base_limit_sell) logged to options_recs_history.jsonl → Item-4
 dynamic-δ. **Ship:** feat/gex-scanner-overlay-item3b-2026-07-27 → PR → OCI.
+
+---
+
+## 2026-07-27 — ITEM 4a: 0DTE PREMIUM-CAP REDESIGN (options_scanner.py)
+
+**Intent (Rafael-directed correction):** the 0DTE scanner is a SEPARATE advisory stream, NOT sized
+against the bot's $2.5K account. Replace the $75 TOTAL cap with a DYNAMIC per-contract PREMIUM cap
+anchored $2.00/share ($200/contract) that breathes with the leg's IV; replace the $75-fraction size
+ladder with a conviction→contract-count ladder. Puts fully equal.
+**Changes:** removed MAX_TRADE_DOLLARS_0DTE (+ __all__/surface + dead _build_recs 0dte ternary →
+weekly-only); added ZDTE_PREM_CAP_ANCHOR/REF_IV/FLOOR/CEIL + ZDTE_CONTRACT_LADDER; new _zdte_prem_cap
+(cap=clamp(2·iv/15, 1, 5); flat 2 on bad IV) + _zdte_contracts (conviction→4/3/2/1, floor 1); removed
+_zdte_size_ladder + _ZDTE_TIERS; cap gate = `mid > _zdte_prem_cap(iv)`; contracts/total_cost/log_cmd
+set AFTER the GEX overlay (nudge flows into count); _zdte_conviction_cells shows contracts + per-
+contract cap, no $75. NO aggregate/equity sleeve (0DTE decoupled from $2.5K; board's aggregate finding
+was $2.5K-relative → moot; standalone 0DTE cap = future config knob if Rafael names one).
+**Gate:** cold-2nd FULL read (2291L, checks a-h all PASS, no dangling refs repo-wide) · static
+ruff/mypy/py_compile clean · 18/18 functional · FINAL preship GAI APPROVE (reversed a false-premise
+reject — MAX_TRADE_DOLLARS=150 not $2500, _build_recs weekly-only — in ONE counter-prompt), Gro=WAIVED
+(Groq TPM capacity limit, Rafael-authorized). **Ship:** feat/zdte-premium-cap-item4a-2026-07-27 → PR → OCI.
+**RC:** RC-1 N/A · RC-2 N/A · RC-3 new excepts log (debug) · RC-6 N/A · RC-7 contracts floored at 1 (no
+zero-size) · all PASS.

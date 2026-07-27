@@ -27,7 +27,15 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
    δ is a flagged placeholder (GEX_OVERLAY_CONV_DELTA=12); base_conviction_pct/base_limit_sell logged
    to `options_recs_history.jsonl` → feeds Item-4's dynamic-δ recalibration. Gate: cold-2nd full read
    (2085L) + wrap cold-2nd + preship Gro+GAI APPROVE + 24/24 functional.
-4. ⏭️ **0DTE fusion redesign + forward-accuracy tracker** (NEXT). Fuse confluence+GEX regime+S/R into
+4. 🚧 **0DTE fusion redesign + forward-accuracy tracker** (IN PROGRESS). **Item 4a ✅ SHIPPING**
+   (`feat/zdte-premium-cap-item4a-2026-07-27` → PR): 0DTE cap redesign — the 0DTE stream is a SEPARATE
+   advisory stream NOT sized against the $2.5K account (Rafael 2026-07-27). Removed the $75 total cap;
+   DYNAMIC per-contract premium cap anchored $2.00/sh ($200/contract), breathes with the leg's IV
+   (clamp $1–$5, flat $2 fail-safe); conviction→contract-count ladder (4/3/2/1); puts fully equal; NO
+   equity-tied aggregate sleeve (board's aggregate finding was $2.5K-relative → moot; standalone 0DTE
+   cap = a future config knob if Rafael names one). Gate: cold-2nd full read (2291L) + GAI APPROVE
+   (false-premise reject reversed 1 counter-prompt) + Gro WAIVED (TPM) + 18/18. **REMAINING Item 4b+:**
+   fuse confluence+GEX regime+S/R into
    ONE conviction score (orthogonal, no double-count); regime-aligned targets; forward-accuracy
    tracker (time/strike/spot/target → did-it-hit + time-bucket 30m/1h/2h/3h/EOD + max option return%)
    — the tracker is ALSO what turns the Item-3 δ + GEX conviction weights DYNAMIC. Blind-spot filters:
