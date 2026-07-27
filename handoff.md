@@ -17,20 +17,24 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 2. ✅ **GEX live — Diff A** (SHIPPED `74c8781`, PR #26, OCI LIVE): config re-arm (GEX_ENABLED=True,
    ×1.30/×1.15, NEG_BUMP=1 keeps Layer-8) + dynamic spot-consistency guard in `data/gex.py`. Diff B
    (dynamic fast-follows: p95 band, in-cycle re-poll, cadence counter, 1-min 3rd ref) queued.
-3. 🚧 **GEX → options_scanner interconnect** (IN PROGRESS). Board-locked design (0DTE + data/anti-silo
-   + Gro + GAI). Rafael locked 5: (1) SOFT wall on 0DTE (OI T+1-stale), (2) flagged-placeholder δ
-   → DYNAMIC via Item-4 tracker, (3) ship LIVE (overlay fail-safe never widens), (4) FULLER display
-   cell, (5) flip REMOVED from rec math. **Part A ✅ SHIPPING** (`feat/gex-walls-item3a-2026-07-27`):
-   call_wall/put_wall in `data/gex.py` via pure `compute_call_put_walls` (reused writer+scanner) —
-   additive, sizing untouched, cold-2nd PASS + preship APPROVE. **Part B ⏭️ NEXT** (`options_scanner.py`,
-   2083L — FULL READ before patching): additive GEX OVERLAY running LAST, defaults to IDENTITY —
-   regime→conviction nudge + PIN/TREND-day flag; wall→target anchor that only pulls target IN
-   (`min(+100%, wall-move)`); UNKNOWN/STALE/low-conf/spot-mismatch → rec byte-for-byte unchanged;
-   per-symbol walls computed SCANNER-SIDE from its OWN Public.com full chain (ZERO new API — do NOT
-   expand the Alpaca writer: ~40-190 ungoverned reqs breaches ALPACA_MAX_REQ_PER_MIN=175); SPY-0DTE
-   first; log delta-vs-base to `options_recs_history.jsonl` for the dynamic-δ recalibration. Nit: pin
-   none/error branches omit `*_frac` → consumer uses `.get()`.
-4. ⏭️ **0DTE fusion redesign + forward-accuracy tracker** (see TICK note below).
+3. ✅ **GEX → options_scanner interconnect** (COMPLETE — both parts shipped). Part A (`a043380`,
+   PR #27, OCI LIVE): call_wall/put_wall in `data/gex.py` via pure `compute_call_put_walls`. Part B
+   (`feat/gex-scanner-overlay-item3b-2026-07-27` → PR): additive GEX OVERLAY on the 0DTE recs in
+   `options_scanner.py` — runs LAST, defaults to IDENTITY. regime→conviction nudge (NEG+aligned +δ /
+   POS −δ, bounded); wall→target cap that only pulls IN (never widens); `_gex_cell` fuller display
+   (try/except page-freeze guarded); per-symbol walls computed SCANNER-SIDE from the Public.com chain
+   (ZERO new API); UNKNOWN/STALE/missing/error → rec byte-for-byte unchanged; weekly path untouched.
+   δ is a flagged placeholder (GEX_OVERLAY_CONV_DELTA=12); base_conviction_pct/base_limit_sell logged
+   to `options_recs_history.jsonl` → feeds Item-4's dynamic-δ recalibration. Gate: cold-2nd full read
+   (2085L) + wrap cold-2nd + preship Gro+GAI APPROVE + 24/24 functional.
+4. ⏭️ **0DTE fusion redesign + forward-accuracy tracker** (NEXT). Fuse confluence+GEX regime+S/R into
+   ONE conviction score (orthogonal, no double-count); regime-aligned targets; forward-accuracy
+   tracker (time/strike/spot/target → did-it-hit + time-bucket 30m/1h/2h/3h/EOD + max option return%)
+   — the tracker is ALSO what turns the Item-3 δ + GEX conviction weights DYNAMIC. Blind-spot filters:
+   bid-ask (BAS_MAX_0DTE already 0.25), TOD decay (derate late-day), dynamic premium cap (scale $2 by
+   ATR/IV), QQQ/put-at-resistance. **TICK: Rafael approved adding here as a DISPLAY-ONLY SPY
+   breadth-divergence flag first** (rolling-percentile + cumulative-TICK/price divergence, UNKNOWN→
+   neutral, never single-name; data-source is a blocker → T1 synthetic breadth proxy or T4 yfinance).
 5. ⏭️ **Silo audit + blind-spot filters.**
 
 **Diff B (queued, dynamic fast-follows for the GEX guard):** self-calibrate band from rolling p95 of

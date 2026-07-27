@@ -198,6 +198,23 @@ RISK_FREE_RATE    = 0.045
 # ── Sizing — 0DTE ─────────────────────────────────────────────────────────────
 MAX_TRADE_DOLLARS_0DTE = 75   # halved vs weekly — binary outcome risk
 
+# ── GEX overlay (Item 3 Part B — 2026-07-27, board-locked; Rafael's 5 decisions) ────────────
+# An ADDITIVE overlay over an already-built 0DTE rec, run LAST, defaulting to IDENTITY. GEX
+# regime nudges conviction_pct (which cascades to the size-tier ladder); the relevant wall CAPS
+# the +100% target (pulls it IN toward the gamma level, NEVER out). On any UNKNOWN/STALE/
+# low-confidence/missing/exception the rec is byte-for-byte unchanged. The overlay can only
+# nudge conviction ±delta, TIGHTEN a target, or annotate — never flip, suppress, blank, or widen.
+GEX_OVERLAY_ENABLED        = True
+# delta — conviction-% nudge magnitude. FLAGGED PLACEHOLDER (Rafael 2026-07-27): no
+# GEX->0DTE-outcome edge data exists yet, so this is the no-static-rule 1-in-10 cold-start
+# exception; Item 4's forward-accuracy tracker (base_* vs realized, logged below) makes it
+# DYNAMIC once options_recs_history.jsonl accrues regime->outcome samples. ~12 ≈ one size-tier.
+GEX_OVERLAY_CONV_DELTA     = 12
+# Act on a wall (cap a target) only when that wall's gamma-share (frac of its side's total
+# gamma·OI) clears this floor — a diffuse chain has no real wall. Starting value; roadmap:
+# derive from the rolling wall-frac distribution in the rec history (dynamic).
+GEX_OVERLAY_WALL_CONF_MIN  = 0.15
+
 # ── Delta targets — weekly ────────────────────────────────────────────────────
 DELTA_TARGET_HIGH  = 0.40   # long, HIGH conviction
 DELTA_TARGET_MOD   = 0.30   # long, MOD conviction
@@ -1102,6 +1119,111 @@ def _select_directional_otm(rows: list, spot: float, opt_type: str,
     return min(pool, key=lambda r: abs(r["delta"] - target))
 
 
+def _gex_context(sym: str, both: dict, spot: float) -> dict:
+    """GEX overlay context for a symbol: regime (from the live GEX snapshot) + call/put walls
+    computed SCANNER-SIDE from the SAME Public.com chain the rec is built on (zero new API,
+    same-instant consistency — no 15-min async gap). Walls weight = |gamma * open_interest|;
+    each wall's gamma-share (frac) is its confidence. NEVER raises — returns a neutral, unusable
+    context on any error so the overlay is a pure no-op (identity)."""
+    ctx = {"usable": False, "regime": "UNKNOWN", "call_wall": None, "put_wall": None,
+           "call_wall_conf": None, "put_wall_conf": None, "day_type": None}
+    if not GEX_OVERLAY_ENABLED:
+        return ctx
+    try:
+        from data.gex import get_gex_regime, compute_call_put_walls
+        regime = get_gex_regime(sym).get("label", "UNKNOWN")
+        _recs = [(r["strike"], abs(float(r.get("gamma", 0) or 0) * int(r.get("oi", 0) or 0)), True)
+                 for r in both.get("call", [])]
+        _recs += [(r["strike"], abs(float(r.get("gamma", 0) or 0) * int(r.get("oi", 0) or 0)), False)
+                  for r in both.get("put", [])]
+        walls = compute_call_put_walls(_recs)
+        ctx["regime"]         = regime
+        ctx["call_wall"]      = walls.get("call_wall")
+        ctx["put_wall"]       = walls.get("put_wall")
+        ctx["call_wall_conf"] = walls.get("call_wall_frac")
+        ctx["put_wall_conf"]  = walls.get("put_wall_frac")
+        ctx["day_type"]       = "TREND" if regime == "NEGATIVE" else ("PIN" if regime == "POSITIVE" else None)
+        # "usable" gates the CONVICTION nudge — only a real directional regime read. Walls are
+        # gated separately (by their own frac confidence) inside the overlay.
+        ctx["usable"]         = regime in ("NEGATIVE", "POSITIVE")
+    except Exception as _e:
+        logger.debug("GEX context [%s] failed (non-fatal): %s", sym, _e)
+        return {"usable": False, "regime": "UNKNOWN", "call_wall": None, "put_wall": None,
+                "call_wall_conf": None, "put_wall_conf": None, "day_type": None}
+    return ctx
+
+
+def _gex_overlay(rec: dict, ctx: dict) -> dict:
+    """Additive GEX overlay on an already-built 0DTE rec. Runs LAST; defaults to IDENTITY.
+    (1) regime nudges conviction_pct (bounded ±GEX_OVERLAY_CONV_DELTA) — a NEGATIVE/trend day
+    BOOSTS the MTF-aligned leg, a POSITIVE/pin day CUTS both long-premium legs; (2) the relevant
+    wall CAPS limit_sell (pulls the target IN toward the gamma level, NEVER out); (3) records
+    base_* (pre-overlay) + gex_* display fields for the forward-accuracy tracker. NEVER flips
+    direction, suppresses a rec, zeroes conviction, blanks a field, or WIDENS a target/conviction.
+    NEVER raises — on any error the rec is returned unchanged."""
+    if not GEX_OVERLAY_ENABLED:
+        return rec
+    try:
+        direction = rec.get("direction")            # "call" | "put"
+        spot      = rec.get("price")
+        base_conv = rec.get("conviction_pct")
+        base_sell = rec.get("limit_sell")
+        # base (pre-overlay) snapshot for the delta-vs-base forward-accuracy tracker + display
+        rec["base_conviction_pct"] = base_conv
+        rec["base_limit_sell"]     = base_sell
+        rec["gex_regime"]    = ctx.get("regime", "UNKNOWN")
+        rec["gex_day_type"]  = ctx.get("day_type")
+        rec["gex_call_wall"] = ctx.get("call_wall")
+        rec["gex_put_wall"]  = ctx.get("put_wall")
+        rec["gex_applied"]   = False
+
+        # (1) regime conviction nudge — bounded, aligned-leg only on a trend day
+        if ctx.get("usable") and isinstance(base_conv, (int, float)):
+            regime = ctx["regime"]
+            ls = int(rec.get("long_score", 0) or 0)
+            ss = int(rec.get("short_score", 0) or 0)
+            aligned = (direction == "call" and ls >= ss) or (direction == "put" and ss >= ls)
+            d = int(GEX_OVERLAY_CONV_DELTA)
+            new_conv = base_conv
+            if regime == "NEGATIVE" and aligned:
+                new_conv = min(99, base_conv + d)    # trend day → boost the MTF-aligned leg
+            elif regime == "POSITIVE":
+                new_conv = max(1, base_conv - d)      # pin day → cut long premium (both legs)
+            if new_conv != base_conv:
+                rec["conviction_pct"] = int(new_conv)
+                rec["gex_applied"]    = True
+
+        # (2) wall target cap — pull the target IN toward the gamma wall, never push it out
+        wall      = ctx.get("call_wall") if direction == "call" else ctx.get("put_wall")
+        wall_conf = ctx.get("call_wall_conf") if direction == "call" else ctx.get("put_wall_conf")
+        delta = rec.get("delta")
+        mid   = rec.get("premium_mid")
+        if (wall is not None and isinstance(wall_conf, (int, float))
+                and wall_conf >= GEX_OVERLAY_WALL_CONF_MIN
+                and isinstance(spot, (int, float)) and spot > 0
+                and isinstance(delta, (int, float))
+                and isinstance(mid, (int, float)) and mid > 0
+                and isinstance(base_sell, (int, float))):
+            # room to the wall: a CALL gains as spot->call_wall (wall above), a PUT as spot->put_wall
+            # (wall below). Negative room = spot already at/through the wall (no room left).
+            room = (wall - spot) if direction == "call" else (spot - wall)
+            rec["gex_room_pct"] = round(room / spot * 100, 2)
+            # wall-implied premium target (first-order): mid + |delta| * favorable move to the wall.
+            wall_target = mid + abs(delta) * max(0.0, room)
+            if wall_target < base_sell:                     # CAP only — tighten, never widen
+                rec["limit_sell"]        = round(max(mid, wall_target), 2)
+                rec["gex_target_capped"] = True
+                rec["gex_applied"]       = True
+            else:
+                rec["gex_target_capped"] = False
+            if room <= 0:
+                rec["gex_capped_flag"] = "CAPPED"           # spot already at/through the wall
+        return rec
+    except Exception as _e:
+        logger.debug("GEX overlay [%s] failed (non-fatal) — rec unchanged: %s", rec.get("symbol"), _e)
+        return rec
+
+
 def _build_0dte_directional(
     scored: list, expiry_today: str, in_win: bool, vix_tertile: str, events: list,
 ) -> tuple[list, list, list]:
@@ -1131,6 +1253,7 @@ def _build_0dte_directional(
         # adds are cheapest. High VIX no longer blocks 0DTE for ANY universe symbol.
 
         both = _fetch_both_chains(sym, expiry_today, price)
+        _gctx = _gex_context(sym, both, price)   # regime + scanner-side call/put walls (zero new API)
 
         for opt_type in ("call", "put"):
             chain = both["call"] if opt_type == "call" else both["put"]
@@ -1159,7 +1282,7 @@ def _build_0dte_directional(
             log_cmd = (f"python3.10 log_fill.py {sym} long_{opt_type} "
                        f"{int(best['strike'])} {expiry_today} {best['mid']} {contracts}")
 
-            recs.append({
+            _rec = {
                 "symbol": sym, "direction": opt_type, "side": "long", "score": score,
                 "long_score": int(sig.get("long_score", 0) or 0),
                 "short_score": int(sig.get("short_score", 0) or 0),
@@ -1175,7 +1298,9 @@ def _build_0dte_directional(
                 "conviction": "HIGH" if score >= MIN_SCORE_HIGH else "MOD",
                 "conviction_pct": _conviction_pct_0dte(score),
                 "vrp": None, "isk": None, "vix_tertile": vix_tertile, "cost_pct": cost_pct, "mode": "0dte",
-            })
+            }
+            # GEX overlay — additive, runs LAST, defaults to identity (see _gex_overlay).
+            recs.append(_gex_overlay(_rec, _gctx))
 
     # Rank: HIGH-conviction first, then by score, then call (upside) before put per name
     recs.sort(key=lambda r: (-int(r["conviction"] == "HIGH"), -r["score"], r["symbol"], r["direction"]))
@@ -1365,9 +1490,57 @@ def _zdte_size_ladder(conviction_pct: int, budget: float) -> tuple:
     return rec_label, rec_dollars, ladder
 
 
+def _gex_cell(rec: dict, cell: str, lbl: str) -> str:
+    """Fuller GEX display cell (Item 3 Part B) — the dealer-gamma context behind the
+    (possibly overlay-adjusted) conviction + target: regime/day-type, the relevant wall +
+    room-to-wall, any target cap, and any conviction adjustment the overlay applied. Returns
+    '' when there is no usable GEX (fail-safe — never clutters a rec GEX did not touch).
+    Whole body wrapped: a render exception here must NEVER abort write_html (the documented
+    page-freeze mode) — on any error the cell is simply omitted."""
+    try:
+        regime    = rec.get("gex_regime", "UNKNOWN")
+        direction = rec.get("direction")
+        wall      = rec.get("gex_call_wall") if direction == "call" else rec.get("gex_put_wall")
+        if regime in (None, "UNKNOWN", "STALE") and wall is None:
+            return ""
+        day = rec.get("gex_day_type")
+        if regime == "NEGATIVE":
+            r_col, r_txt = "#30d158", f"NEGATIVE γ · {day or 'TREND'} DAY"
+        elif regime == "POSITIVE":
+            r_col, r_txt = "#ff9f0a", f"POSITIVE γ · {day or 'PIN'} DAY"
+        elif regime == "NEAR-FLIP":
+            r_col, r_txt = "#ffd60a", "NEAR-FLIP γ"
+        else:
+            r_col, r_txt = "#8a90a8", str(regime)
+        parts = ['<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;'
+                 f'background:{r_col};color:#04120a">{r_txt}</span>']
+        wlabel = "Call wall" if direction == "call" else "Put wall"
+        if wall is not None:
+            room   = rec.get("gex_room_pct")
+            room_s = f" · {room:+.1f}% room" if isinstance(room, (int, float)) else ""
+            parts.append(f'<span style="font-size:11px;color:#b8bdd4;margin-left:6px">{wlabel} '
+                         f'<b style="color:#e8ecf8">{wall:g}</b>{room_s}</span>')
+        if rec.get("gex_capped_flag") == "CAPPED":
+            parts.append('<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;'
+                         'margin-left:6px;background:#ff3b30;color:#fff">AT WALL</span>')
+        elif rec.get("gex_target_capped"):
+            parts.append('<span style="font-size:10px;color:#ff9f0a;margin-left:6px">target→wall</span>')
+        bc, nc = rec.get("base_conviction_pct"), rec.get("conviction_pct")
+        if rec.get("gex_applied") and isinstance(bc, (int, float)) and isinstance(nc, (int, float)) and bc != nc:
+            arrow = "▲" if nc > bc else "▼"
+            a_col = "#30d158" if nc > bc else "#ff9f0a"
+            parts.append(f'<span style="font-size:10px;color:{a_col};margin-left:6px">conv {bc}→{nc}% {arrow}</span>')
+        return (f'<div {cell}><div {lbl}>GEX (dealer gamma)</div>'
+                f'<div style="margin-top:4px;line-height:1.7">{"".join(parts)}</div></div>')
+    except Exception as _e:
+        logger.debug("GEX cell render failed (non-fatal) — omitted: %s", _e)
+        return ""
+
+
 def _zdte_conviction_cells(rec: dict, cell: str, lbl: str) -> str:
     """The two 0DTE detail cells that REPLACE weekly's Total-Cost/Contracts: a conviction %
-    (→ recommended tier + $) and the full size-tier ladder with the recommended tier highlighted."""
+    (→ recommended tier + $) and the full size-tier ladder with the recommended tier highlighted.
+    Item 3 Part B appends a GEX cell (regime + wall + any overlay adjustment) when GEX is usable."""
     pct = int(rec.get("conviction_pct") or _conviction_pct_0dte(rec.get("score", 9)))
     tier, dollars, ladder = _zdte_size_ladder(pct, MAX_TRADE_DOLLARS_0DTE)
     conv_col = "#30d158" if pct >= 75 else "#ffd60a" if pct >= 60 else "#ff9f0a"
@@ -1385,7 +1558,8 @@ def _zdte_conviction_cells(rec: dict, cell: str, lbl: str) -> str:
           <div style="font-size:16px;font-weight:800;color:{conv_col}">{pct}%
             <span style="font-size:10px;color:#b8bdd4;font-weight:600">→ {tier} (${dollars:.2f})</span></div></div>
         <div {cell}><div {lbl}>Size ladder (of ${int(MAX_TRADE_DOLLARS_0DTE)} 0DTE cap)</div>
-          <div style="margin-top:5px;line-height:1.6">{chips}</div></div>"""
+          <div style="margin-top:5px;line-height:1.6">{chips}</div></div>
+        {_gex_cell(rec, cell, lbl)}"""
 
 
 def _score_bar(score: int, max_score: int = 12) -> str:
