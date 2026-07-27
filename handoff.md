@@ -14,14 +14,22 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 ### 🔴🔴 ACTIVE PLAN (2026-07-26 eve, interactive) — Rafael's approved 5-item GEX/0DTE sequence
 **Do these IN ORDER.** Full design in `logs/gex_rearm_2026-07-26.md`; two new mandates in CLAUDE.md.
 1. ✅ **Profitable>Perfect + Anti-Silo mandates** → CLAUDE.md (PR #25, `c8d37dc`, merged).
-2. 🚢 **GEX live — Diff A** (SHIPPING via `feat/gex-rearm-diffA-2026-07-26`): config re-arm
-   (GEX_ENABLED=True, ×1.30/×1.15, GEX_MIN_SCORE_NEG_BUMP=1 keeps Layer-8) + **dynamic
-   spot-consistency guard** in `data/gex.py` (trade-vs-quote-mid, spread-scaled band, suspect→carry
-   last-good preserving confirmed_ts / cold-start→UNKNOWN, get_gex_regime ages off confirmed_ts,
-   NEGATIVE demotes faster @20min). Gate: full board 5 seats ×2 rounds + Gro+GAI + cold-2nd PASS +
-   FINAL preship Gro+GAI APPROVE (GAI reversed 1 counter-prompt). **NEXT: confirm PR merged + OCI
-   `git pull --ff-only` + restart (DEPLOY_OK+HEALTH_OK).**
-3. ⏭️ **GEX → options_scanner interconnect** — compute call/put walls; wire regime+flip+walls into recs.
+2. ✅ **GEX live — Diff A** (SHIPPED `74c8781`, PR #26, OCI LIVE): config re-arm (GEX_ENABLED=True,
+   ×1.30/×1.15, NEG_BUMP=1 keeps Layer-8) + dynamic spot-consistency guard in `data/gex.py`. Diff B
+   (dynamic fast-follows: p95 band, in-cycle re-poll, cadence counter, 1-min 3rd ref) queued.
+3. 🚧 **GEX → options_scanner interconnect** (IN PROGRESS). Board-locked design (0DTE + data/anti-silo
+   + Gro + GAI). Rafael locked 5: (1) SOFT wall on 0DTE (OI T+1-stale), (2) flagged-placeholder δ
+   → DYNAMIC via Item-4 tracker, (3) ship LIVE (overlay fail-safe never widens), (4) FULLER display
+   cell, (5) flip REMOVED from rec math. **Part A ✅ SHIPPING** (`feat/gex-walls-item3a-2026-07-27`):
+   call_wall/put_wall in `data/gex.py` via pure `compute_call_put_walls` (reused writer+scanner) —
+   additive, sizing untouched, cold-2nd PASS + preship APPROVE. **Part B ⏭️ NEXT** (`options_scanner.py`,
+   2083L — FULL READ before patching): additive GEX OVERLAY running LAST, defaults to IDENTITY —
+   regime→conviction nudge + PIN/TREND-day flag; wall→target anchor that only pulls target IN
+   (`min(+100%, wall-move)`); UNKNOWN/STALE/low-conf/spot-mismatch → rec byte-for-byte unchanged;
+   per-symbol walls computed SCANNER-SIDE from its OWN Public.com full chain (ZERO new API — do NOT
+   expand the Alpaca writer: ~40-190 ungoverned reqs breaches ALPACA_MAX_REQ_PER_MIN=175); SPY-0DTE
+   first; log delta-vs-base to `options_recs_history.jsonl` for the dynamic-δ recalibration. Nit: pin
+   none/error branches omit `*_frac` → consumer uses `.get()`.
 4. ⏭️ **0DTE fusion redesign + forward-accuracy tracker** (see TICK note below).
 5. ⏭️ **Silo audit + blind-spot filters.**
 
