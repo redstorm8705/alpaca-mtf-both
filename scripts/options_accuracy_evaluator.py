@@ -38,6 +38,13 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dotenv import load_dotenv  # noqa: E402
+# Load Alpaca creds from the repo .env so the tracker AUTHENTICATES when run standalone (cron/manual).
+# get_client() (data.fetcher) and option_bars._headers() read os.getenv at call time, so this must
+# run before any fetch — at import is fine. Without it, every fetch 401s and every rec is
+# (correctly, but uselessly) marked unevaluable=no_option_bars. cwd-independent path to the repo .env.
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
 import config  # noqa: E402
 import data.fetcher as fetcher  # noqa: E402  (shared client + global _rate_gate)
 from data.option_bars import fetch_option_bars  # noqa: E402
@@ -64,6 +71,12 @@ _BUCKET_EDGES = [(30, "30m"), (60, "1h"), (120, "2h"), (180, "3h")]  # else "EOD
 # the path, so raw count overstates independence). 30 matches KELLY_MIN_SAMPLE_SIZE.
 _MIN_EVALUABLE_PER_SLICE = 30
 _MIN_SESSIONS_PER_SLICE  = 20
+
+# Pending-retry (0DTE seat): only a TERMINAL outcome is written + marks a rec "done". Structural
+# reasons below can never change on retry; a fetch/transient failure (no_option_bars, no_spot,
+# eval_exception) is NOT written and is re-tried on a later run — so a transiently-dead feed (e.g.
+# a run without creds, or a momentary Alpaca 401/timeout) never permanently poisons a rec.
+_TERMINAL_UNEVAL = {"bad_occ", "no_premium_or_target"}
 
 
 # ── OCC symbol construction ───────────────────────────────────────────────────
@@ -414,6 +427,12 @@ def main() -> int:
                 continue                          # not expired yet — pick up on a later run
             row = evaluate_rec(rec)
             if row is None:
+                continue
+            # Only write + mark-done TERMINAL outcomes; a transient fetch failure is skipped and
+            # re-tried on a later run (never permanently poisons the rec, never accumulates dup rows).
+            if not (row.get("evaluable") or row.get("unevaluable_reason") in _TERMINAL_UNEVAL):
+                logger.debug("rec %s transient-unevaluable (%s) — will retry next run",
+                             rid, row.get("unevaluable_reason"))
                 continue
             _append(row)
             done.add(rid)
