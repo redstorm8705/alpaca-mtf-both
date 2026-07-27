@@ -116,6 +116,103 @@ def _get_spot(symbol: str) -> float | None:
     return None
 
 
+# ── Spot-consistency guard (2026-07-26, board 5 seats + Gro + GAI) ─────────────
+# The consumed GEX signal is the regime LABEL, which depends on spot (BS gamma + the
+# ATM/capture/flip moneyness windows). A plausible-but-wrong spot (a bad last-trade tick /
+# a gap) can FLIP the label and drive book-wide sizing on a false signal — the one path the
+# STALE + strike-quality gates do not catch. Cross-check the latest-trade spot against an
+# INDEPENDENT same-instant quote; a suspect spot NEVER computes a fresh label (see refresh_gex).
+
+def _get_spot_quote(symbol: str) -> dict | None:
+    """Fetch the latest NBBO quote (bid/ask) for the underlying. T1 — Alpaca Data REST.
+    Independent same-instant reference used to sanity-check `_get_spot`'s last-trade print.
+    Returns {"bid","ask","mid","spread"} or None on failure / unusable quote.
+    Raw field names verified live 2026-07-26: quote.bp (bid), quote.ap (ask) (RC-6)."""
+    try:
+        resp = requests.get(
+            f"{_BASE_DATA}/v2/stocks/{symbol}/quotes/latest",
+            headers=_headers(),
+            timeout=4.0,
+        )
+        if resp.status_code == 200:
+            q = resp.json().get("quote", {})
+            if not isinstance(q, dict):
+                return None
+            _bp = q.get("bp")
+            _ap = q.get("ap")
+            if _bp is None or _ap is None:
+                return None
+            # Robust parse: an empty-string or non-numeric bid/ask fails safe to None (-> suspect
+            # -> carry-forward / cold-start UNKNOWN), never a crash. float("")/float("x") -> ValueError.
+            try:
+                bid = float(_bp)
+                ask = float(_ap)
+            except (TypeError, ValueError):
+                return None
+            if bid <= 0 or ask < bid:
+                return None
+            mid = 0.5 * (bid + ask)
+            return {"bid": bid, "ask": ask, "mid": mid, "spread": ask - bid}
+        logger.warning("GEX quote [%s]: HTTP %s", symbol, resp.status_code)
+    except Exception as e:
+        logger.warning("GEX quote [%s] failed: %s", symbol, e)
+    return None
+
+
+def _spot_is_suspect(spot: float, quote: dict | None) -> tuple[bool, dict]:
+    """Cross-check a latest-trade `spot` against an independent same-instant `quote`.
+
+    SUSPECT (returns True) when either:
+      - the quote cannot validate the trade (missing, or a broken/crossed quote whose
+        spread exceeds GEX_SPOT_SPREAD_SANITY_PCT of mid), OR
+      - the trade diverges from mid by more than a spread-scaled, floored band:
+        band = max(GEX_SPOT_BAND_SPREAD_MULT x spread, GEX_SPOT_BAND_FLOOR_PCT x mid).
+    A suspect spot is never used to compute a fresh regime label (fail-safe: carry-forward
+    or cold-start UNKNOWN, handled by the caller). Returns (suspect, diag)."""
+    import config as _cfg
+    if not getattr(_cfg, "GEX_SPOT_GUARD_ENABLED", True):
+        return False, {"guard": "disabled"}
+    if quote is None:
+        return True, {"reason": "no_quote_reference"}
+    mid = quote["mid"]
+    spread = quote["spread"]
+    sanity = getattr(_cfg, "GEX_SPOT_SPREAD_SANITY_PCT", 0.02)
+    if mid <= 0 or spread > sanity * mid:
+        return True, {"reason": "quote_unusable", "mid": round(mid, 4), "spread": round(spread, 4)}
+    band = max(
+        getattr(_cfg, "GEX_SPOT_BAND_SPREAD_MULT", 5.0) * spread,
+        getattr(_cfg, "GEX_SPOT_BAND_FLOOR_PCT", 0.005) * mid,
+    )
+    dev = abs(spot - mid)
+    if dev > band:
+        return True, {"reason": "trade_quote_divergence", "spot": round(spot, 4),
+                      "mid": round(mid, 4), "dev": round(dev, 4), "band": round(band, 4)}
+    return False, {"dev": round(dev, 4), "band": round(band, 4)}
+
+
+def _prior_good_entry(symbol: str) -> dict | None:
+    """Return the previous snapshot's entry for `symbol` IFF it carries a real (non-error,
+    non-UNKNOWN) label with a confirmed-good timestamp. Used to carry the last confirmed-good
+    label forward when the current spot is suspect — PRESERVING its `confirmed_ts` so the
+    STALE clock keeps aging (never reset to now, which would defeat the time backstop and
+    hold a label indefinitely). Never raises."""
+    try:
+        if not _SNAP_PATH.exists():
+            return None
+        snap = json.loads(_SNAP_PATH.read_text())
+        entry = snap.get("symbols", {}).get(symbol)
+        if not isinstance(entry, dict) or "error" in entry:
+            return None
+        if entry.get("label") in (None, "UNKNOWN"):
+            return None
+        if not entry.get("confirmed_ts"):
+            return None
+        return entry
+    except Exception as e:
+        logger.debug("GEX [%s]: prior-good read failed: %s", symbol, e)
+        return None
+
+
 # ── Contract list (with open interest) ────────────────────────────────────────
 
 def _expiry_range() -> tuple[str, str]:
@@ -554,6 +651,39 @@ def refresh_gex() -> None:
             results[symbol] = {"error": "no_spot"}
             continue
 
+        # ── Spot-consistency guard (2026-07-26) — a SUSPECT spot never computes a fresh
+        # label. Carry the last confirmed-good label forward (preserving its confirmed_ts so
+        # STALE keeps aging), or UNKNOWN at cold-start (no prior good). Fail-safe: any doubt
+        # about the spot degrades toward neutral, never up-sizes the book on a bad tick.
+        _quote = _get_spot_quote(symbol)
+        _suspect, _sdiag = _spot_is_suspect(spot, _quote)
+        if _suspect:
+            _prior = _prior_good_entry(symbol)
+            if _prior is not None:
+                _carried = dict(_prior)
+                _carried["spot_suspect"] = True
+                _carried["suspect_diag"] = _sdiag
+                _carried["suspect_spot"] = round(spot, 2)
+                # confirmed_ts is INHERITED from _prior (NOT reset) — the STALE clock ages
+                # from when the label was last computed on a clean spot.
+                results[symbol] = _carried
+                logger.warning(
+                    "GEX [%s]: SUSPECT spot (%s) — carrying last-good label=%s confirmed_ts=%s",
+                    symbol, _sdiag.get("reason", "?"),
+                    _carried.get("label"), _carried.get("confirmed_ts"),
+                )
+            else:
+                results[symbol] = {
+                    "error": "spot_suspect_no_prior",
+                    "suspect_diag": _sdiag,
+                    "suspect_spot": round(spot, 2),
+                }
+                logger.warning(
+                    "GEX [%s]: SUSPECT spot (%s) and NO prior good label — UNKNOWN (cold-start fail-safe)",
+                    symbol, _sdiag.get("reason", "?"),
+                )
+            continue
+
         oi_map = _fetch_contracts(symbol, date_gte, date_lte)
         if not oi_map:
             logger.warning("GEX [%s]: no contracts with open interest in window — skipping", symbol)
@@ -572,6 +702,11 @@ def refresh_gex() -> None:
         gex["expiry"]            = date_lte     # this week's Friday (weekly expiry)
         gex["dte"]               = _dte         # calendar days to that Friday
         gex["window"]            = "weekly"
+        # confirmed_ts marks this label as computed from a spot that PASSED the consistency
+        # guard at ts_str. get_gex_regime ages off this (not the snapshot write time) so a
+        # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
+        gex["confirmed_ts"]      = ts_str
+        gex["quote_mid"]         = round(_quote["mid"], 2) if _quote else None
         results[symbol]          = gex
         # INFO (was debug): this line IS the shadow-review record — must be visible
         # at production log level or the 30-session clock never accumulates evidence.
@@ -607,28 +742,37 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
     Called by run_cycle.py (Layer 8) and kelly.py (edge multiplier) during RTH.
     """
     import config as _cfg
-    stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 45)
+    stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 30)
+    stale_neg     = getattr(_cfg, "GEX_STALE_MINUTES_NEG", stale_minutes)
     try:
         if not _SNAP_PATH.exists():
             return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
         snap = json.loads(_SNAP_PATH.read_text())
-        ts_str = snap.get("ts", "")
+        ts_str   = snap.get("ts", "")
+        sym_data = snap.get("symbols", {}).get(symbol, {})
+        if not isinstance(sym_data, dict) or not sym_data or "error" in sym_data:
+            return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
+        # Age off the per-symbol confirmed_ts (the last CLEAN spot-verified compute) if present,
+        # so a carried-forward label ages from its last-clean time — NOT the snapshot write time
+        # (else carry-forward would reset the STALE clock each cycle and hold a label forever).
+        _age_ts = sym_data.get("confirmed_ts") or ts_str
         try:
-            ts_dt       = datetime.strptime(ts_str, "%Y-%m-%d %I:%M %p PT").replace(tzinfo=PT)
+            ts_dt       = datetime.strptime(_age_ts, "%Y-%m-%d %I:%M %p PT").replace(tzinfo=PT)
             age_minutes = (datetime.now(PT) - ts_dt).total_seconds() / 60
         except Exception:
             age_minutes = 9999.0
-        if age_minutes > stale_minutes:
+        label = sym_data.get("label", "UNKNOWN")
+        # Direction-asymmetric stale window: the risk-INCREASING NEGATIVE (x1.30) leg ages to
+        # neutral faster than the base (never hold "bigger" on stale data as long as "normal").
+        _eff_stale = min(stale_minutes, stale_neg) if label == "NEGATIVE" else stale_minutes
+        if age_minutes > _eff_stale:
             logger.debug(
-                "GEX [%s]: snapshot %.0f min old (> %d min stale threshold)",
-                symbol, age_minutes, stale_minutes,
+                "GEX [%s]: label=%s %.0f min old (> %d min stale threshold) — STALE",
+                symbol, label, age_minutes, _eff_stale,
             )
             return {"label": "STALE", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": age_minutes}
-        sym_data = snap.get("symbols", {}).get(symbol, {})
-        if not sym_data or "error" in sym_data:
-            return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": age_minutes}
         return {
-            "label":       sym_data.get("label", "UNKNOWN"),
+            "label":       label,
             "raw_gex_m":   sym_data.get("raw_gex_m", 0.0),
             "flip_strike": sym_data.get("flip_strike"),
             "age_minutes": age_minutes,

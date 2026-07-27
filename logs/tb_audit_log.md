@@ -9017,3 +9017,56 @@ Files: .claude/preship/{preship_gate,preship_audit,record_cold2,test_gate}.py, .
   hard verification-in-the-loop caught catastrophic fail-opens at "step 3, not step 20".
 - FOLLOW-ONS (task #12): same anchored fix to .github/scripts/ci_audit.py; permanent _verdict
   regression test in .claude/preship/test_gate.py.
+
+---
+
+## 2026-07-26 — GEX RE-ARM + SPOT-CONSISTENCY GUARD (Diff A) — config.py + data/gex.py
+
+**Intent:** re-arm GEX live at full ×1.30/×1.15 + keep Layer-8, + a dynamic spot-consistency guard
+so a plausible-but-wrong SPY spot cannot flip the label and up-size the book. Design:
+logs/gex_rearm_2026-07-26.md. Risk-path diff → mandatory cold board + masked-loss seat (done, 2 rounds).
+
+**Full Read Gate:** config.py 709 · data/gex.py 638 · kelly.py 467 (consumer) · run_cycle Layer-8
+L1565-1595 verified. ✓
+
+**10-POINT AUDIT (config.py, data/gex.py):**
+1. Static — py_compile OK, ruff E,W,F,B clean, mypy --warn-unreachable Success (both files). PASS.
+2. Trade-path trace — get_gex_regime feeds kelly.py:337 (edge mult) + run_cycle:1572 (Layer-8);
+   return contract (label/raw_gex_m/flip_strike/age_minutes) UNCHANGED. refresh_gex on writer thread.
+3. Adversarial — None spot (no_spot), None quote (suspect), broken/crossed quote (quote_unusable),
+   cold-start (spot_suspect_no_prior → UNKNOWN), old-format entry w/o confirmed_ts (falls back to
+   snap ts). 15/15 functional test PASS incl. carried@25min→STALE.
+4. Full read — both files, every line. ✓
+5. Cross-ref — _headers/_SNAP_PATH/PT/logger/requests all pre-existing; consumers verified (kelly,
+   run_cycle, live_data_writer). ✓
+6. Conflicting directions — none; guard only ADDS a degrade-to-neutral path; re-arm flips values.
+7. Redundancy — none introduced; guard helpers single-purpose.
+8. State persistence — snapshot still atomic (tmp→replace); new fields (confirmed_ts/quote_mid/
+   spot_suspect) additive. ✓
+9. Data tier — _get_spot_quote is T1 Alpaca Data REST (quotes/latest), same tier as _get_spot. ✓
+10. TZ/logging — all datetimes tz-aware (PT); confirmed_ts in PT string; WARNING on suspect. ✓
+
+**RC-1..8:**
+- RC-1 naive datetime: PASS — datetime.now(PT) everywhere; confirmed_ts parsed with tzinfo=PT.
+- RC-2 CWD path: PASS — no new paths; uses anchored _SNAP_PATH.
+- RC-3 silent except: PASS — every new except logs (warning/debug).
+- RC-4 estimated exit: N/A.
+- RC-5 non-atomic write: PASS — snapshot write unchanged (atomic tmp→replace).
+- RC-6 API field name: PASS — quote.bp/ap verified LIVE 2026-07-26 (not assumed).
+- RC-7 zero-share sizing: N/A.
+- RC-8 scan buffer: N/A.
+
+**Board:** 5 seats × 2 rounds + Gro + GAI. R1: A rejected 5-0; B vs C → board majority B. R2 (dynamic):
+all SHIP-WITH-IMPROVEMENT/one-diff-minimal; hard blockers H1 (suspect never computes), H2 (preserve
+confirmed_ts — 2 seats independent), H3 (cold-start→UNKNOWN — reliability) all built in. Direction-
+asymmetric demote (masked-loss) included. Re-arm inside envelope 5-0.
+
+**Static:** py_compile OK · ruff clean · mypy Success. **Cold-2nd:** PASS (all 5 safety clauses; bad
+spot can never mint a fresh label; carry-forward can never reset STALE). **FINAL preship (exact staged
+diff):** Gro APPROVE · GAI APPROVE (GAI first REJECTed on a stale-NEGATIVE carry-forward being
+propagated in the snapshot; reversed to APPROVE in ONE evidence-based counter-prompt — it conceded
+get_gex_regime returns STALE→neutral so there is no wrong-size/crash; finding logged NON-BLOCKING).
+**Ship:** feat/gex-rearm-diffA-2026-07-26 → PR → OCI.
+**Diff-B fast-follow (from GAI's non-blocking note):** _prior_good_entry could reject an already-stale
+prior (emit UNKNOWN instead of carrying a stale-labelled entry) for snapshot/audit clarity — zero
+sizing impact today (get_gex_regime already neutralizes it).
