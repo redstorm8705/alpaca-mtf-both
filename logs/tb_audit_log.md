@@ -9158,3 +9158,11 @@ bars (SPY 740P 7/24: mfe +358% but mae −62% → realized_nostop +1.0 / realize
 matters) + preship Gro+GAI APPROVE. **Ship:** feat/options-accuracy-tracker-item4b-2026-07-27 → PR →
 OCI + 4:35pm ET cron. **Fast-follows (cold-2nd non-blocking):** pending-retry state for transient
 dead feeds; underlying upper-bound filter symmetry; true even-n median.
+
+**Item 4b hardening (2026-07-27, same day):** the evaluator lacked `load_dotenv()` so a standalone/cron
+run 401'd on every Alpaca fetch → all recs (correctly, but uselessly) unevaluable=no_option_bars (found
+on the first OCI run; fail-safe worked — no false hits). Fix: `load_dotenv(<repo>/.env)` at import
+(override=False, respects systemd creds). Also added pending-retry: only TERMINAL outcomes
+(evaluable OR bad_occ/no_premium_or_target) are written+marked-done; transient fetch failures are
+skipped and retried next run (no permanent poison, no dup rows). Gate: cold-2nd PASS + static clean +
+proven no-source-.env auth works. Bogus 291 auth-failure rows cleared from OCI.
