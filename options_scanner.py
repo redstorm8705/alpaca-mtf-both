@@ -85,7 +85,8 @@ REJECTIONS_HISTORY_JSONL = LOGS_DIR / "options_rejections_history.jsonl"  # the 
 # population and must not be pooled. Referenced by name via globals() so a missing/renamed knob
 # degrades to None rather than raising.
 _CONFIG_SURFACE_KEYS = (
-    "MIN_SCORE_ANY", "MIN_SCORE_HIGH", "MAX_TRADE_DOLLARS", "MAX_TRADE_DOLLARS_0DTE",
+    "MIN_SCORE_ANY", "MIN_SCORE_HIGH", "MAX_TRADE_DOLLARS",
+    "ZDTE_PREM_CAP_ANCHOR", "ZDTE_PREM_CAP_REF_IV", "ZDTE_PREM_CAP_FLOOR", "ZDTE_PREM_CAP_CEIL",
     "LIMIT_SELL_MULT", "BAS_MAX_0DTE", "PREMIUM_LIMIT_CONDITIONAL",
     "ZDTE_DELTA_TARGET", "ZDTE_DELTA_MIN", "ZDTE_DELTA_MAX",
     "DELTA_TARGET_HIGH", "DELTA_TARGET_MOD", "DELTA_TARGET_SHORT",
@@ -196,7 +197,22 @@ SHORT_BUY_BACK    = 0.25  # buy back short at 25% of credit received (75% profit
 RISK_FREE_RATE    = 0.045
 
 # ── Sizing — 0DTE ─────────────────────────────────────────────────────────────
-MAX_TRADE_DOLLARS_0DTE = 75   # halved vs weekly — binary outcome risk
+# ── 0DTE cheap-premium model (Item 4 — 2026-07-27, board + Rafael) ──────────────────────────
+# The 0DTE scanner is a SEPARATE ADVISORY stream — NOT sized against the bot's $2.5K equity
+# account (Rafael 2026-07-27). The vehicle is cheap OTM (room for 100%+ intraday swings), gated by
+# a PER-CONTRACT PREMIUM cap that is DYNAMIC: anchored to $2.00/share ($200/contract) at a normal
+# SPY-ish IV and BREATHING with the leg's own IV, so "$2" means the same relative cheapness on a
+# 3-pt vs a 10-pt day and per-name (a richer NVDA/TSLA leg gets a proportionally higher cap; put
+# skew is respected because the cap reads the leg's OWN IV). Conviction -> a contract-count ladder;
+# there is NO account-tied budget or aggregate sleeve — book-level sizing is the operator's at
+# execution. (Roadmap: an optional standalone 0DTE capital cap if Rafael names one.)
+ZDTE_PREM_CAP_ANCHOR = 2.00   # $/share premium cap at reference IV ($200/contract on a normal day)
+ZDTE_PREM_CAP_REF_IV = 15.0   # reference IV% the $2.00 anchor is calibrated to; cap scales IV/REF
+ZDTE_PREM_CAP_FLOOR  = 1.00   # dynamic cap never below $1.00/share ($100) ...
+ZDTE_PREM_CAP_CEIL   = 5.00   # ... nor above $5.00/share ($500) — quote-glitch / vol-spike guard
+# Conviction% -> number of contracts (each <= the dynamic premium cap). Advisory sizes; the highest
+# tier whose threshold the conviction clears wins. Floored at 1 so a rec is never zero-sized.
+ZDTE_CONTRACT_LADDER = [(90, 4), (75, 3), (60, 2), (0, 1)]   # (min_conviction%, contracts)
 
 # ── GEX overlay (Item 3 Part B — 2026-07-27, board-locked; Rafael's 5 decisions) ────────────
 # An ADDITIVE overlay over an already-built 0DTE rec, run LAST, defaulting to IDENTITY. GEX
@@ -908,7 +924,8 @@ def _build_recs(
     recommendations = []
     watchlist       = []
     rejections      = []  # P2-OPTIONS-REJECT: per-symbol rejection reasons for HTML display
-    max_dollars = MAX_TRADE_DOLLARS_0DTE if mode == "0dte" else MAX_TRADE_DOLLARS
+    max_dollars = MAX_TRADE_DOLLARS   # _build_recs is the WEEKLY path; 0DTE uses _build_0dte_directional
+                                      # with its own dynamic per-contract premium cap (no $ budget)
     event_flags = [e["note"] for e in events]
 
     for sig in scored:
@@ -1270,17 +1287,17 @@ def _build_0dte_directional(
                             "score": score, "mode": "0DTE"})
                 continue
 
-            contracts = 1
-            cost_per_cont = round(best["mid"] * 100, 2)
-            total_cost = round(contracts * cost_per_cont, 2)
-            if total_cost > MAX_TRADE_DOLLARS_0DTE:
-                rej.append({"symbol": sym, "reason": f"{opt_type.upper()} 0DTE ${total_cost:.0f} > ${MAX_TRADE_DOLLARS_0DTE} cap",
+            # Dynamic per-contract PREMIUM cap — anchored $2.00/share, breathes with the leg's OWN IV
+            # (put skew respected). Fail-safe to the flat $2.00 anchor on missing/zero IV. A too-rich
+            # leg is rejected (not the cheap-OTM vehicle); the OTHER leg still emits. NO $ budget.
+            cap_share = _zdte_prem_cap(best.get("iv"))
+            if best["mid"] > cap_share:
+                rej.append({"symbol": sym,
+                            "reason": f"{opt_type.upper()} 0DTE premium ${best['mid']:.2f} > ${cap_share:.2f}/sh cap (IV-scaled)",
                             "score": score, "mode": "0DTE"})
                 continue
-
-            limit_sell = round(best["mid"] * LIMIT_SELL_MULT, 2)   # +100% target on long premium
-            log_cmd = (f"python3.10 log_fill.py {sym} long_{opt_type} "
-                       f"{int(best['strike'])} {expiry_today} {best['mid']} {contracts}")
+            cost_per_cont = round(best["mid"] * 100, 2)
+            limit_sell    = round(best["mid"] * LIMIT_SELL_MULT, 2)   # +100% target on long premium
 
             _rec = {
                 "symbol": sym, "direction": opt_type, "side": "long", "score": score,
@@ -1292,15 +1309,21 @@ def _build_0dte_directional(
                 "theta": best["theta"], "gamma": best.get("gamma", "—"), "vega": best.get("vega", "—"),
                 "source": best.get("source", "yfinance"), "exp_move": best["exp_move"],
                 "breakeven": best["breakeven"], "DTE": best["DTE"], "oi": best["oi"], "volume": best["volume"],
-                "limit_sell": limit_sell, "contracts": contracts, "cost_per_cont": cost_per_cont,
-                "total_cost": total_cost, "credit_received": None, "est_margin": None,
-                "log_cmd": log_cmd, "event_flags": event_flags, "in_window": in_win,
+                "limit_sell": limit_sell, "cost_per_cont": cost_per_cont, "cap_share": cap_share,
+                "credit_received": None, "est_margin": None,
+                "event_flags": event_flags, "in_window": in_win,
                 "conviction": "HIGH" if score >= MIN_SCORE_HIGH else "MOD",
                 "conviction_pct": _conviction_pct_0dte(score),
                 "vrp": None, "isk": None, "vix_tertile": vix_tertile, "cost_pct": cost_pct, "mode": "0dte",
             }
             # GEX overlay — additive, runs LAST, defaults to identity (see _gex_overlay).
-            recs.append(_gex_overlay(_rec, _gctx))
+            _final = _gex_overlay(_rec, _gctx)
+            # Size AFTER the overlay so the GEX conviction nudge flows into the contract count.
+            _final["contracts"]  = _zdte_contracts(_final.get("conviction_pct"))
+            _final["total_cost"] = round(_final["contracts"] * cost_per_cont, 2)
+            _final["log_cmd"]    = (f"python3.10 log_fill.py {sym} long_{opt_type} "
+                                    f"{int(best['strike'])} {expiry_today} {best['mid']} {_final['contracts']}")
+            recs.append(_final)
 
     # Rank: HIGH-conviction first, then by score, then call (upside) before put per name
     recs.sort(key=lambda r: (-int(r["conviction"] == "HIGH"), -r["score"], r["symbol"], r["direction"]))
@@ -1443,21 +1466,13 @@ def _conviction_badge(conviction: str) -> str:
     return f'<span class="badge {cls}">{conviction}</span>'
 
 
-# ── 0DTE conviction % + size-tier ladder ──────────────────────────────────────
-# BGG-decided 2026-07-26 (3-1: Gro + both board seats for the clean quartile map;
-# GAI the lone dissent for a dynamic blend — rejected because its momentum nudge
-# double-counts the MTF score and its delta term is a construction artifact, i.e.
-# arbitrary knobs the "no static regimes" rule forbids). Rafael's spec: show a
-# conviction % (0-100) and a Full/3-4/Half/1-4 size ladder instead of a contract count.
-# The % is a band-CENTER map of the integer score (only 9-12 ever display), so each
-# score lands mid-band under the ladder thresholds and never flirts with a boundary.
-# Tiers are fractions of the ACTUAL 0DTE budget (MAX_TRADE_DOLLARS_0DTE), not the weekly cap.
-_ZDTE_TIERS = [  # (threshold_conviction%, label, budget_fraction) — high → low
-    (90, "Full", 1.00),
-    (75, "3/4",  0.75),
-    (60, "Half", 0.50),
-    (0,  "1/4",  0.25),
-]
+# ── 0DTE conviction % → contract-count ladder ──────────────────────────────────
+# The conviction % is a band-CENTER map of the integer MTF score (only 9-12 ever display) so each
+# score lands mid-band under the ladder thresholds and never flirts with a boundary. Conviction%
+# → number of contracts via ZDTE_CONTRACT_LADDER (Item 4, 2026-07-27). The prior Full/3-4/Half/1-4
+# ladder of FRACTIONS-OF-$75 is REMOVED — the 0DTE stream is a separate advisory stream, NOT sized
+# against the bot's $2.5K account (Rafael 2026-07-27); each contract is bounded by the dynamic
+# per-contract premium cap (_zdte_prem_cap), not a $ budget.
 _ZDTE_SCORE_PCT = {12: 95, 11: 82, 10: 67, 9: 45}   # band centers under the ≥90/75/60 ladder
 
 
@@ -1475,19 +1490,33 @@ def _conviction_pct_0dte(score: int) -> int:
     return _ZDTE_SCORE_PCT.get(s, 45)
 
 
-def _zdte_size_ladder(conviction_pct: int, budget: float) -> tuple:
-    """Return (recommended_label, recommended_dollars, ladder). `ladder` is the full 4-tier
-    list [(label, dollars, is_recommended), ...] high→low. Recommended = the highest tier whose
-    threshold the conviction % clears (Kelly-lite: more edge → larger stake). Never divides."""
-    rec_label = _ZDTE_TIERS[-1][1]   # "1/4" floor
-    for thr, label, _frac in _ZDTE_TIERS:
-        if conviction_pct >= thr:
-            rec_label = label
-            break
-    ladder = [(label, round(budget * frac, 2), label == rec_label)
-              for _thr, label, frac in _ZDTE_TIERS]
-    rec_dollars = next(d for (_l, d, is_rec) in ladder if is_rec)
-    return rec_label, rec_dollars, ladder
+def _zdte_prem_cap(iv) -> float:
+    """Dynamic per-contract PREMIUM cap ($/share): anchored to ZDTE_PREM_CAP_ANCHOR at reference
+    IV (ZDTE_PREM_CAP_REF_IV), scaling with the leg's OWN IV so a richer/cheaper name — or a
+    put-skewed leg — gets a proportional cap, clamped to [FLOOR, CEIL]. Fail-safe to the flat
+    anchor on missing/zero/bad IV. Never raises. iv is in PERCENT units (e.g. 15.0), matching REF_IV."""
+    try:
+        _iv = float(iv)
+        if _iv > 0:
+            cap = ZDTE_PREM_CAP_ANCHOR * (_iv / ZDTE_PREM_CAP_REF_IV)
+            return round(min(max(cap, ZDTE_PREM_CAP_FLOOR), ZDTE_PREM_CAP_CEIL), 2)
+    except (TypeError, ValueError):
+        pass
+    return ZDTE_PREM_CAP_ANCHOR
+
+
+def _zdte_contracts(conviction_pct) -> int:
+    """Conviction % → recommended contract count via ZDTE_CONTRACT_LADDER (the highest tier whose
+    threshold the conviction clears — Kelly-lite: more edge → more lottery tickets). Each contract
+    is separately bounded by _zdte_prem_cap. Floored at 1 (a rec is never zero-sized). Never raises."""
+    try:
+        p = int(conviction_pct)
+    except (TypeError, ValueError):
+        return 1
+    for thr, n in ZDTE_CONTRACT_LADDER:
+        if p >= thr:
+            return int(n)
+    return 1
 
 
 def _gex_cell(rec: dict, cell: str, lbl: str) -> str:
@@ -1538,26 +1567,32 @@ def _gex_cell(rec: dict, cell: str, lbl: str) -> str:
 
 
 def _zdte_conviction_cells(rec: dict, cell: str, lbl: str) -> str:
-    """The two 0DTE detail cells that REPLACE weekly's Total-Cost/Contracts: a conviction %
-    (→ recommended tier + $) and the full size-tier ladder with the recommended tier highlighted.
+    """The two 0DTE detail cells that REPLACE weekly's Total-Cost/Contracts: a conviction % (→ a
+    recommended CONTRACT COUNT) and the contract ladder with the recommended tier highlighted, plus
+    the dynamic per-contract premium cap. No account budget — advisory sizing (Item 4, 2026-07-27).
     Item 3 Part B appends a GEX cell (regime + wall + any overlay adjustment) when GEX is usable."""
     pct = int(rec.get("conviction_pct") or _conviction_pct_0dte(rec.get("score", 9)))
-    tier, dollars, ladder = _zdte_size_ladder(pct, MAX_TRADE_DOLLARS_0DTE)
-    conv_col = "#30d158" if pct >= 75 else "#ffd60a" if pct >= 60 else "#ff9f0a"
+    n   = _zdte_contracts(pct)
+    conv_col  = "#30d158" if pct >= 75 else "#ffd60a" if pct >= 60 else "#ff9f0a"
+    # cap_share is always a float on a 0DTE rec (_zdte_prem_cap never returns None). Coerce any
+    # legacy/absent value to the anchor so the f-string arithmetic below is provably float-only.
+    _cs = rec.get("cap_share")
+    cap_val = float(_cs) if isinstance(_cs, (int, float)) else float(ZDTE_PREM_CAP_ANCHOR)
+    cap_s = f"≤ ${cap_val:.2f}/sh (${cap_val * 100:.0f}/contract)"
     chips = "".join(
         '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;'
         'margin:0 3px 3px 0;display:inline-block;'
-        + (f'background:{conv_col};color:#04120a">{label} ${d:.2f} ◄'
-           if is_rec else
-           f'background:#161a28;color:#8a90a8">{label} ${d:.2f}')
+        + (f'background:{conv_col};color:#04120a">{cnt}c ◄'
+           if cnt == n else
+           f'background:#161a28;color:#8a90a8">{cnt}c')
         + '</span>'
-        for (label, d, is_rec) in ladder
+        for (_thr, cnt) in ZDTE_CONTRACT_LADDER
     )
     return f"""
         <div {cell}><div {lbl}>Conviction</div>
           <div style="font-size:16px;font-weight:800;color:{conv_col}">{pct}%
-            <span style="font-size:10px;color:#b8bdd4;font-weight:600">→ {tier} (${dollars:.2f})</span></div></div>
-        <div {cell}><div {lbl}>Size ladder (of ${int(MAX_TRADE_DOLLARS_0DTE)} 0DTE cap)</div>
+            <span style="font-size:10px;color:#b8bdd4;font-weight:600">→ {n} contract{'s' if n != 1 else ''}</span></div></div>
+        <div {cell}><div {lbl}>Size ladder (contracts · premium {cap_s})</div>
           <div style="margin-top:5px;line-height:1.6">{chips}</div></div>
         {_gex_cell(rec, cell, lbl)}"""
 
@@ -1682,7 +1717,8 @@ def _rec_detail(rec: dict, idx: int) -> str:
         <div {cell}><div {lbl}>Mental Stop (−50%)</div><div style="font-size:13px;font-weight:600;color:#ff3b5c">${stop_at:.2f}</div></div>
         <div {cell}><div {lbl}>Breakeven</div><div {val}>${rec['breakeven']:.2f}</div></div>"""
         if rec.get("mode") == "0dte":
-            # 0DTE (Rafael 2026-07-26): show conviction % + size-tier ladder, NOT a contract count.
+            # 0DTE (Item 4, 2026-07-27): conviction % → a CONTRACT-COUNT ladder + the dynamic
+            # per-contract premium cap (advisory; the 0DTE stream is not sized against the $2.5K account).
             trade_col1 = _trade_base + _zdte_conviction_cells(rec, cell, lbl)
         else:
             trade_col1 = _trade_base + f"""
