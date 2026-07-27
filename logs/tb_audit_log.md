@@ -9070,3 +9070,19 @@ get_gex_regime returns STALE→neutral so there is no wrong-size/crash; finding 
 **Diff-B fast-follow (from GAI's non-blocking note):** _prior_good_entry could reject an already-stale
 prior (emit UNKNOWN instead of carrying a stale-labelled entry) for snapshot/audit clarity — zero
 sizing impact today (get_gex_regime already neutralizes it).
+
+---
+
+## 2026-07-27 — ITEM 3 PART A: call_wall / put_wall in GEX (data/gex.py)
+
+**Intent:** add call_wall/put_wall (largest call-gamma & put-gamma concentration strikes) to the GEX
+output for the options scanner (Part B) to consume. PURELY ADDITIVE — sizing (kelly/Layer-8, which
+read label only) untouched by construction. Design: Item 3 board (0DTE + data/anti-silo + Gro + GAI).
+**Changes:** (1) `_pin_recs` 3-tuple→4-tuple (adds is_call); (2) new pure `compute_call_put_walls(records)`
+(source-agnostic, reused by writer AND scanner; never raises); (3) `_compute_pin` emits call_wall/put_wall/
+frac in the pin dict (none/error branches carry call_wall/put_wall=None).
+**Gate:** full read · static py_compile/ruff/mypy clean · 12/12 functional (walls correct, pin exposes
+them, centroid/wall math byte-identical, fail-safe on empty/degenerate) · cold-2nd PASS (additive-only
+verified, no _pin_recs reader assumes len==3, no label/sizing change) · preship Gro+GAI APPROVE (clean
+first pass). **NON-BLOCKING nit (cold-2nd):** none/error pin branches omit *_frac keys → Part B consumer
+uses .get(). **Ship:** feat/gex-walls-item3a-2026-07-27 → PR → OCI.

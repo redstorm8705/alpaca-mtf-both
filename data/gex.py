@@ -432,9 +432,10 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
         total_abs += abs(contrib)
         count     += 1
         strike_gex[strike] = strike_gex.get(strike, 0.0) + contrib
-        # Retain the per-contract gamma-dollar magnitude + its expiry for the pin (centroid/wall).
-        # Weight is |Γ·OI·100·S²| = |contrib| (sign-independent — concentration, not direction).
-        _pin_recs.append((expiry, strike, abs(contrib)))
+        # Retain the per-contract gamma-dollar magnitude + expiry + call/put flag for the pin
+        # (centroid/wall + call_wall/put_wall). Weight is |Γ·OI·100·S²| = |contrib|
+        # (sign-independent — concentration, not direction); is_call splits the call/put walls.
+        _pin_recs.append((expiry, strike, abs(contrib), is_call))
         if abs(strike - spot) <= spot * _ATM_MONEYNESS:
             atm_count += 1
         if abs(strike - spot) <= spot * _CAPTURE_WINDOW_PCTILE:
@@ -529,6 +530,34 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     }
 
 
+def compute_call_put_walls(records: list) -> dict:
+    """Pure, source-agnostic call/put gamma-wall computation — reusable by the GEX writer
+    (Alpaca BS gamma) AND options_scanner.py (Public.com greeks). The caller supplies
+    per-contract tuples (strike, weight, is_call) where weight = |gamma * open_interest|
+    concentration (sign-independent). Returns the strike carrying the largest CALL gamma
+    concentration (call_wall — resistance / magnet cap) and the largest PUT gamma
+    concentration (put_wall — support), each with its share of that side's total weight so a
+    dominant wall can be weighted above a weak one. Never raises; None walls on empty input.
+    NOTE: OI is T+1-stale (esp. 0DTE) — a wall INFORMS/caps a level, it is not a hard trigger."""
+    out = {"call_wall": None, "put_wall": None, "call_wall_frac": None, "put_wall_frac": None}
+    try:
+        calls = [(s, w) for (s, w, c) in records if c and w > 0]
+        puts  = [(s, w) for (s, w, c) in records if (not c) and w > 0]
+        if calls:
+            _tot = sum(w for _, w in calls)
+            _s, _w = max(calls, key=lambda t: t[1])
+            out["call_wall"]      = round(_s, 2)
+            out["call_wall_frac"] = round(_w / _tot, 3) if _tot > 0 else None
+        if puts:
+            _tot = sum(w for _, w in puts)
+            _s, _w = max(puts, key=lambda t: t[1])
+            out["put_wall"]      = round(_s, 2)
+            out["put_wall_frac"] = round(_w / _tot, 3) if _tot > 0 else None
+    except Exception as _we:
+        logger.debug("compute_call_put_walls failed (non-fatal): %s", _we)
+    return out
+
+
 def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
     """OI-gamma-weighted gamma-CONCENTRATION pin over the FRONT (nearest) expiry.
 
@@ -544,7 +573,7 @@ def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
     Never raises. Returns kind="none" when there is no front-expiry data to weight."""
     try:
         if not pin_recs or spot <= 0:
-            return {"kind": "none", "centroid": None, "wall": None, "dispersion": None,
+            return {"kind": "none", "centroid": None, "wall": None, "call_wall": None, "put_wall": None, "dispersion": None,
                     "confidence": 0.0, "atm_capture": 0.0, "expiry": None,
                     "note": "no valid front-expiry gamma to weight — pin unavailable"}
         # Front expiry = the nearest expiration present in the surviving set.
@@ -552,7 +581,7 @@ def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
         _front_recs = [r for r in pin_recs if r[0] == _front]
         _wsum = sum(r[2] for r in _front_recs)
         if _wsum <= 0:
-            return {"kind": "none", "centroid": None, "wall": None, "dispersion": None,
+            return {"kind": "none", "centroid": None, "wall": None, "call_wall": None, "put_wall": None, "dispersion": None,
                     "confidence": 0.0, "atm_capture": 0.0,
                     "expiry": _front.strftime("%Y-%m-%d"),
                     "note": "front-expiry gamma weights sum to zero — pin unavailable"}
@@ -560,6 +589,10 @@ def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
         _var = sum(r[2] * (r[1] - _centroid) ** 2 for r in _front_recs) / _wsum
         _dispersion = _var ** 0.5
         _wall = max(_front_recs, key=lambda r: r[2])[1]
+        # Call/put walls over the SAME front-expiry set (asymmetric concentration): call_wall =
+        # max call-gamma strike (resistance / magnet cap), put_wall = max put-gamma strike
+        # (support). Reuses the pure source-agnostic helper so the scanner computes them identically.
+        _cp_walls = compute_call_put_walls([(r[1], r[2], r[3]) for r in _front_recs])
         # Confidence — FRONT-EXPIRY-CONSISTENT (GAI preship fix 2026-07-20): both captures are
         # measured over the SAME front-expiry contracts the centroid/wall use, so the confidence
         # reflects the data quality behind THIS pin, not a blended all-expiry chain.
@@ -593,13 +626,17 @@ def _compute_pin(pin_recs: list, spot: float, oi_map: dict) -> dict:
             "dispersion":  round(_dispersion, 2),
             "confidence":  _confidence,
             "atm_capture": round(_atm_capture, 2),
+            "call_wall":      _cp_walls["call_wall"],
+            "put_wall":       _cp_walls["put_wall"],
+            "call_wall_frac": _cp_walls["call_wall_frac"],
+            "put_wall_frac":  _cp_walls["put_wall_frac"],
             "expiry":      _front.strftime("%Y-%m-%d"),
             "note":        ("gamma-concentration PIN (front-expiry) — NOT a zero-gamma flip, NOT a "
                             "trigger. OI is T+1-stale (esp. 0DTE). Confidence is ATM-weighted."),
         }
     except Exception as _pe:
         logger.warning("GEX pin computation failed (non-fatal): %s", _pe)
-        return {"kind": "error", "centroid": None, "wall": None, "dispersion": None,
+        return {"kind": "error", "centroid": None, "wall": None, "call_wall": None, "put_wall": None, "dispersion": None,
                 "confidence": 0.0, "atm_capture": 0.0, "expiry": None,
                 "note": f"pin computation error: {_pe!r}"}
 
