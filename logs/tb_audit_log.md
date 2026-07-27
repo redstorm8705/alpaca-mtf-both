@@ -9086,3 +9086,24 @@ them, centroid/wall math byte-identical, fail-safe on empty/degenerate) · cold-
 verified, no _pin_recs reader assumes len==3, no label/sizing change) · preship Gro+GAI APPROVE (clean
 first pass). **NON-BLOCKING nit (cold-2nd):** none/error pin branches omit *_frac keys → Part B consumer
 uses .get(). **Ship:** feat/gex-walls-item3a-2026-07-27 → PR → OCI.
+
+---
+
+## 2026-07-27 — ITEM 3 PART B: GEX → options-scanner OVERLAY (options_scanner.py)
+
+**Intent:** the GEX→scanner interconnect. An ADDITIVE overlay on the 0DTE directional recs — runs
+LAST, defaults to IDENTITY. Board-locked (0DTE + data/anti-silo + Gro + GAI); Rafael's 5: (1) SOFT
+wall on 0DTE, (2) flagged-placeholder δ (dynamic via Item-4 tracker), (3) ship LIVE, (4) fuller
+display cell, (5) flip removed from rec math.
+**Changes (options_scanner.py):** config GEX_OVERLAY_ENABLED/CONV_DELTA(12)/WALL_CONF_MIN(0.15);
+`_gex_context` (regime from get_gex_regime + call/put walls SCANNER-SIDE from the Public.com chain
+the rec is built on — ZERO new API); `_gex_overlay` (regime→conviction nudge NEG+aligned +δ / POS −δ
+both, bounded [1,99]; wall CAPS limit_sell — tighten toward wall, never widen; CAPPED flag; base_* +
+gex_* fields); wired into `_build_0dte_directional`; `_gex_cell` fuller display (try/except wrapped —
+page-freeze guard) in `_zdte_conviction_cells`.
+**Fail-safe:** ENABLED=False / UNKNOWN / STALE / missing-wall / any exception → rec byte-for-byte
+unchanged. Weekly + non-0DTE untouched (overlay called ONLY in _build_0dte_directional).
+**Gate:** cold-2nd FULL read of all 2085 lines (a-g all pass, additive identity-default) + focused
+cold-2nd PASS on the _gex_cell wrap · static ruff/mypy/py_compile clean · 24/24 functional + 3/3 wrap.
+Delta-vs-base (base_conviction_pct/base_limit_sell) logged to options_recs_history.jsonl → Item-4
+dynamic-δ. **Ship:** feat/gex-scanner-overlay-item3b-2026-07-27 → PR → OCI.
