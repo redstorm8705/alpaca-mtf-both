@@ -9204,3 +9204,15 @@ Full read 849L/3 chunks. RC-1..8: RC-6 field names verified vs real eod json; re
 post-guard). Cold-2nd PASS + masked-loss lens SAFE. FINAL Gro+GAI APPROVE (sha e1b0f4fd). Reporting-only.
 DEFERRED: CYCLE-SYNC suppression (needs real scan_to_html phrasing → Phase 3 R2); P5-queue refresh (own task).
 NEXT: Phase 1 #3 = midday_audit.py.
+
+[2026-07-27] Phase 1 #3 of 4 — `midday_audit.py` FULL REWORK SHIPPED (commit `14ca2f5`, branch
+`fix/audit-slack-provenance-gate-2026-07-27`). Rafael chose full-rework over minimal-label. Real noise =
+D1-degraded `analyse_pnl` matched-pair engine ("0 trades/$0" while exits exist → phantom accounting-FAIL).
+Rework (read-only urllib, no execution import): new `check_naked_stops` (live position vs stop-order
+cross-check, long→sell-stop/short→buy-stop, qty-coverage aware; FAIL-SAFE fetch fail → UNVERIFIED not
+all-clear; naked → CATASTROPHIC + ACTION REQUIRED) + `summarise_fills` (Alpaca FILL ground truth) + scoped
+D1 note + stop_coverage/alpaca_fills in report JSON. Gate: full read 1009L/4 chunks + RC-1..8 (RC-6 fields
+verified LIVE) + statics + LIVE smoke test (6 pos protected, None→verified=False, naked→CATASTROPHIC) +
+cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). CARRY-FORWARD (pre-existing,
+Phase-2 resolves): session_loss reads degraded matched-pair total_pnl; D1 note retires when emitter fixed.
+NEXT: Phase 1 #4 = reporting/pnl_ledger.py.

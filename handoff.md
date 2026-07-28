@@ -41,9 +41,18 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
      FINAL Gro+GAI APPROVE (sha e1b0f4fd). **DEFERRED:** CYCLE-SYNC suppression (needs its real scan_to_html
      phrasing — folds into Phase 3 R2) + full P5-queue refresh (needs current bug-state audit — own task).
      **← DONE THIS SESSION.**
-  3. ⏭️ **NEXT: midday_audit.py** — scrub/label pre-heal drift in the LLM prompt (L945-952) as intraday-expected;
-     cut the dead realized-P&L engine; ADD live naked-stop check; count entries from Alpaca fills.
-  4. ⏭️ **reporting/pnl_ledger.py** — stamp `_telemetry_stale_after_heal=True` in heal_history (R3);
+  3. ✅ **midday_audit.py full rework** (commit `14ca2f5`, Rafael chose full-rework over minimal-label):
+     NOTE the handoff's old "L945-952 drift" pointer was imprecise — the midday Gemini prompt has NO
+     pnl_drift; the real noise was the D1-degraded matched-pair engine (`analyse_pnl`) reporting "0 trades/$0"
+     while exits exist → phantom accounting-FAIL. Fix: new `check_naked_stops()` (live position↔stop-order
+     cross-check, long→sell-stop/short→buy-stop, qty-coverage-aware, FAIL-SAFE: fetch fail → UNVERIFIED not
+     all-clear; naked → CATASTROPHIC card finding + ACTION REQUIRED) + `summarise_fills()` (Alpaca FILL activity
+     as ground truth) + scoped D1 note in the prompt + stop_coverage/alpaca_fills in report JSON. Gate: full read
+     1009L + RC-1..8 (RC-6 fields verified LIVE) + statics + LIVE smoke test (6 pos protected, None→verified=False,
+     naked→CATASTROPHIC) + cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). **DEFERRED
+     (pre-existing, Phase-2 root-resolves):** `session_loss` severity still reads degraded matched-pair total_pnl;
+     retire the D1 note once the entry emitter is fixed. **← DONE THIS SESSION.**
+  4. ⏭️ **NEXT: reporting/pnl_ledger.py** — stamp `_telemetry_stale_after_heal=True` in heal_history (R3);
      (rename/nest `pnl_drift`→`validation.selfcheck_drift` deferred to Phase 3).
   - R2 (scan_to_html "NOT AT BROKER") → **persistence-gate 2+ consecutive renders** (masked-loss REJECTED
     auto-purge); Phase 3.
