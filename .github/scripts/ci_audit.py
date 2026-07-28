@@ -29,6 +29,9 @@ MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input
 MAX_CONTEXT_CHARS = 300_000     # full-file bodies (helpers referenced but not in the diff);
                                 #   gemini-2.5-flash has a very large input window, so this is safe
 TIMEOUT_SEC = 120
+N_SAMPLES = 3           # majority-vote the stochastic reviewer: ship only if >=2 of 3 samples
+                        # APPROVE (2026-07-28). A lone stochastic false-reject must not block a
+                        # correct ship; INDETERMINATE (error/unclean) never counts toward a pass.
 
 PERSONA = (
     "You are Head of Quant Engineering at a systematic hedge fund, reviewing a "
@@ -131,6 +134,42 @@ def _verdict(text: str) -> str:
     return "INDETERMINATE"
 
 
+def _one_audit(prompt_text: str, key: str) -> "tuple[str, str]":
+    """Run ONE audit sample against Gemini. Returns (verdict, raw_text).
+
+    NEVER sys.exit — a transient API/parse failure is a NON-approve INDETERMINATE for THIS
+    sample only, so the majority vote in main() can still decide from the other samples rather
+    than aborting the whole gate on the first blip. Fail-closed is preserved at the aggregate:
+    an INDETERMINATE never counts toward the APPROVE majority a ship requires. Temperature is
+    left at the model default (non-zero) ON PURPOSE — the samples must vary for a vote to mean
+    anything (the run-to-run APPROVE/REJECT split on an identical diff is that variance).
+    """
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt_text}]}],
+        "generationConfig": {"maxOutputTokens": 2048,
+                             "thinkingConfig": {"thinkingBudget": 0}},
+    }).encode()
+    req = urllib.request.Request(
+        f"{ENDPOINT}?key={key}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
+            payload = json.load(r)
+    except urllib.error.HTTPError as e:
+        # Never interpolate the request object — it carries the key in the URL.
+        return "INDETERMINATE", f"audit API returned HTTP {e.code}"
+    except Exception as e:
+        return "INDETERMINATE", f"audit API call failed ({type(e).__name__})"
+    try:
+        text = payload["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        return "INDETERMINATE", "could not parse a verdict from the audit response"
+    return _verdict(text), text
+
+
 def main() -> None:
     # <diff-file> is required; <context-file> (full post-change content of the changed files)
     # is optional and backward-compatible — older callers that pass only the diff still work,
@@ -183,52 +222,42 @@ def main() -> None:
     if context.strip():
         prompt_text += "\n\n=== FULL CURRENT CONTENT OF CHANGED FILES ===\n" + context
 
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"maxOutputTokens": 2048,
-                             "thinkingConfig": {"thinkingBudget": 0}},
-    }).encode()
+    # Majority-vote the stochastic reviewer. The SAME full diff has drawn both APPROVE and
+    # REJECT on different samples (2026-07-28: run 30330994285 REJECT vs 30331270279 APPROVE on
+    # an identical gated diff — the reject wandered into pre-existing full-file CONTEXT). A lone
+    # stochastic false-reject must not block a correct ship, so require a MAJORITY: ship only if
+    # >= (N//2 + 1) samples APPROVE; otherwise fail CLOSED. INDETERMINATE (API/parse failure or an
+    # unclean verdict) is NON-approve and never counts toward a pass — "an audit that did not run
+    # is not an audit that passed" still holds at the aggregate. _verdict() is UNCHANGED (parity
+    # with preship_audit._verdict preserved; the vote wraps it, it does not alter the parser).
+    approvals = rejects = indets = 0
+    for i in range(N_SAMPLES):
+        v, text = _one_audit(prompt_text, key)
+        print(f"----- audit sample {i + 1}/{N_SAMPLES}: {v} -----")
+        print(text)
+        print("--------------------------")
+        if v == "APPROVE":
+            approvals += 1
+        elif v == "REJECT":
+            rejects += 1
+        else:
+            indets += 1
 
-    req = urllib.request.Request(
-        f"{ENDPOINT}?key={key}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
-            payload = json.load(r)
-    except urllib.error.HTTPError as e:
-        # Never interpolate the request object — it carries the key in the URL.
-        _fail(f"audit API returned HTTP {e.code} — failing closed.")
-    except Exception as e:
-        _fail(f"audit API call failed ({type(e).__name__}) — failing closed.")
-
-    try:
-        text = payload["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        _fail("could not parse a verdict from the audit response — failing closed.")
-
-    print("----- audit response -----")
-    print(text)
-    print("--------------------------")
     if truncated:
         print("::warning::diff exceeded the size cap and was truncated for the audit.")
     if ctx_truncated:
         print("::warning::full-file context exceeded the size cap and was truncated — a helper "
               "definition may be missing from the reviewer's view.")
 
-    # Parse via the shared _verdict() (identical to preship_audit._verdict). Server-side CI cannot
-    # re-request, so REJECT and INDETERMINATE both fail CLOSED (exit 1) — the full reviewer text is
-    # already printed above, so a reject's reason is visible in the run log.
-    v = _verdict(text)
-    if v == "REJECT":
-        _fail("external audit REJECTED — see the audit response above; failing closed.")
-    if v == "APPROVE":
-        print("preship: external audit APPROVED")
+    need = N_SAMPLES // 2 + 1        # simple majority: 2 of 3
+    print(f"preship vote: APPROVE={approvals} REJECT={rejects} INDETERMINATE={indets} "
+          f"(need >= {need} APPROVE to ship; else fail closed)")
+    if approvals >= need:
+        print(f"preship: external audit APPROVED by majority ({approvals}/{N_SAMPLES})")
         sys.exit(0)
-    _fail("external audit did not emit exactly one clean 'VERDICT:' line (INDETERMINATE) "
-          "— failing closed.")
+    _fail(f"external audit did NOT reach a {need}/{N_SAMPLES} APPROVE majority "
+          f"(APPROVE={approvals} REJECT={rejects} INDETERMINATE={indets}) — failing closed. "
+          "See the per-sample responses above for any reject reason.")
 
 
 if __name__ == "__main__":

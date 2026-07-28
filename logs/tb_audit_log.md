@@ -9243,3 +9243,32 @@ L239 after both breaks; (3) _max_pages=400 hard cap; (4) _get_json timeout+tries
 Out of scope (unchanged code). Gemini counter-prompt REVERSED to APPROVE in 1 round. ESCALATED TO RAFAEL:
 clear PR #33 (3× false-reject, no counter-prompt path) — REC admin-merge now + build mechanical diff-scope
 filter (reject must quote a changed line) as the real DOCUMENTATION-IS-NOT-ENFORCEMENT gate.
+
+=== 2026-07-28 (resume) PHASE 1 DEPLOYED TO PRODUCTION ===
+Rafael chose (A) admin-merge now + fix CI after. enforce_admins=true blocked --admin CLI bypass; strict=true +
+auto-sync PR#34 moving main kept preship "expected". Cleared cleanly (no branch-protection edits): merged
+origin/main into branch (clean, 7 non-gated logs) -> incremental preship diff = docs-only -> PASS on up-to-date
+head -> normal merge (review_count=0). PR #33 -> main (20b19fa). OCI git pull --ff-only = DEPLOY_OK (no restart;
+all cron/reporting scripts). GAP FOUND: preship audits the incremental PUSH diff, not PR-vs-base -> a gated
+commit + a docs-only push turns the check green without re-auditing (push-washable). NEXT = mechanical CI gate:
+(1) ci_audit reject valid only if its verbatim-quoted line is in the DIFF's changed lines; (2) preship-verify.yml
+diff PR-vs-base not incremental. THEN Phase 2 (D1 entry-emitter, trading path, full BGG).
+
+=== 2026-07-28 (resume) CORRECTION to the entry above (VERIFY-AT-SOURCE, self-caught) ===
+The "GAP FOUND: preship audits the incremental PUSH diff / push-washable" claim above is WRONG. preship-verify.yml
+L59-61 diffs pull_request.base.sha..head.sha = FULL PR-vs-base every run. CONFIRMED at source in run 30331270279's
+log: gated files = all 5 Phase 1 .py (NOT docs-only), external audit RAN, VERDICT APPROVE. So the merge's green
+check was the STOCHASTIC reviewer approving the full diff (runs 2&3 approved what run 1 rejected), not a scope
+narrowing. NO push-wash gap; NO workflow change needed. "fix CI after" is narrower: ci_audit.py reject-scope filter
+ONLY — a REJECT valid only if its verbatim-quoted line is in the diff's CHANGED lines; fail-CLOSED (keep reject if
+the match is ambiguous). Corrects the record per DOCUMENTATION-IS-NOT-ENFORCEMENT / don't-propagate-unverified.
+
+=== 2026-07-28 (resume) ci_audit.py MAJORITY-VOTE (commit a93c69f) — "fix CI after" ===
+Root cause of the CI friction = the Gemini reviewer is STOCHASTIC (REJECT run 30330994285 vs APPROVE run
+30331270279 on the identical gated diff). Rafael chose majority-vote over a reject-scope filter (no fragile
+prose-parsing, no fail-open path). Change: extract _one_audit() (returns (verdict,text); API/parse error ->
+INDETERMINATE, never sys.exit); main() runs N_SAMPLES=3 and ships iff approvals>=need (need=3//2+1=2), else
+_fail. INDETERMINATE never counts toward APPROVE. _verdict() UNCHANGED (parity test PASS). Gates: py_compile+
+mypy+ruff clean; verdict-parity PASS; functional 8/8 (2A1R->ship [the goal]; 1A2R/3xINDET/1A1R1I/1A2I->fail
+closed); cold-2nd PASS (no fail-open, need=2 boundary correct, no key leak); FINAL Gro+GAI APPROVE (775ae323).
+NEXT: open PR (self-validates on 3-sample logic) -> merge -> then Phase 2 (D1 entry-emitter, trading path, BGG).

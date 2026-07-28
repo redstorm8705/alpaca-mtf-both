@@ -87,17 +87,31 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
     AFTER both break guards; (3) `_max_pages=400` hard cap = no infinite loop; (4) `_get_json` is `timeout=_TIMEOUT`
     + `tries=8` bounded, non-429 raises immediately. Also OUT OF SCOPE (CI prompt says "judge the CHANGE only").
     Independent Gemini counter-prompt REVERSED to APPROVE in 1 round (confirmed all 4 + agreed out-of-scope).
-  - **⏭️ ESCALATED TO RAFAEL — decision fork (his authority; merge is a production-deploy hard-stop + `.github/`
-    CODEOWNERS needs his PR approval; I can't admin-bypass a protected check):** how to clear PR #33 given the
-    'preship' check has false-rejected **3×** (all verified-false + Gemini-reversed, no counter-prompt path)?
-    **REC = (A) admin-merge PR #33 now** — deploy is verified-correct + already GO'd — **AND build the REAL gate as a
-    follow-up:** a MECHANICAL diff-scope filter in ci_audit.py (a REJECT must quote a line that appears in the DIFF's
-    changed lines; wandering into full-file-context pre-existing code is auto-dropped). This is the DOCUMENTATION-IS-
-    NOT-ENFORCEMENT case: more prompt prose won't stop a stochastic reviewer from wandering out of scope — build the
-    filter. Alt (B) build the filter FIRST (purer, no bypass; delays a verified-correct deploy another gated cycle).
-  - After clear: (5) merge PR #33 → `main`. (6) OCI deploy: `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250
-    "cd /home/ubuntu/mtf-bot && git pull origin main --ff-only && echo DEPLOY_OK"` — **NO service restart** (all 4 are
-    cron/reporting scripts, not run by the live services). Health-check the audit crons on next fire.
+  - ✅✅ **RESOLVED — Rafael chose (A) admin-merge now + fix CI after. PHASE 1 DEPLOYED TO PRODUCTION.**
+    `enforce_admins=true` blocks even an `--admin` CLI bypass, and `strict=true` (branches must be up-to-date) +
+    a routine auto-sync PR (#34) moving `main` kept the check "expected." Cleared WITHOUT touching branch-protection
+    settings: merged `origin/main` into the branch (clean — main had only 7 non-gated log files) to satisfy `strict`;
+    preship then re-ran on the **full PR-vs-base diff** (all 5 gated files) and the **stochastic reviewer APPROVED**
+    (runs 2 & 3 both approved the exact full diff run 1 had rejected — VERIFIED in run 30331270279's log: gated=all 5,
+    external audit ran, VERDICT APPROVE) → **normal merge** on the green check (review_count=0, code-owner reviews off).
+    **PR #33 merged → `main` (20b19fa)**; OCI `git pull --ff-only` returned **DEPLOY_OK** (no restart — all cron/
+    reporting scripts). Audit crons pick up the new code on next fire (midday 1:30 / nightly 4:05 / meta 4:35 / heal 8:30pm ET).
+  - ⚠️ **CORRECTION (VERIFY-AT-SOURCE, self-caught):** an earlier note here claimed a "push-wash gap" (preship
+    audits the incremental push diff, so a docs-only push greens the check). **THAT WAS WRONG** — the workflow diffs
+    `pull_request.base.sha`..`head.sha` = **full PR-vs-base every time** (preship-verify.yml L59-61), CONFIRMED by run
+    30331270279's log (gated files = all 5 Phase 1 .py, not docs-only). No push-wash gap exists; **no workflow change
+    needed.** The only real issue is the reviewer being STOCHASTIC (approves/rejects the same full diff run-to-run).
+  - ✅ **"fix CI after" — DONE (Rafael chose MAJORITY-VOTE, not the reject-scope filter). Committed `a93c69f`.**
+    `ci_audit.py` now runs the external audit **N=3×** and ships ONLY on a **≥2/3 APPROVE majority**; else fails
+    closed. A per-sample API/parse failure → NON-approve INDETERMINATE (never aborts the gate, never counts toward a
+    pass). `_verdict()` parser UNCHANGED (byte-parity preserved; the vote wraps it). Beats the stochastic reviewer at
+    the root — no fragile prose-parsing. Gates: full read + py_compile/mypy/ruff clean + verdict-parity PASS + 8/8
+    vote scenarios (2A1R ships; 1A2R / 3×INDET(API-down) / 1A1R1I fail closed) + cold-2nd PASS (no fail-open) +
+    FINAL Gro+GAI APPROVE (sha 775ae323). **⏭️ pick-up: open a new PR from this branch (PR #33 is merged/closed) →
+    preship self-validates with the new 3-sample logic → merge → OCI `git pull --ff-only` (no restart; CI-only file
+    doesn't even run on OCI, but keep main↔OCI in sync).**
+  - **THEN Phase 2** — the `entry`-event emitter root fix (D1), the true root of ~50-60% of report noise.
+    Trading-path → OWN gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped 7+ days).
   - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
     gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped writing 7+ days).
   - Follow-up (non-blocking): local `.claude/preship/preship_audit.py` prompt likely needs the SAME hardening as
