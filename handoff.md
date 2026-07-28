@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-19 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-07-28 (resume — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
