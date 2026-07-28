@@ -107,9 +107,8 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
     pass). `_verdict()` parser UNCHANGED (byte-parity preserved; the vote wraps it). Beats the stochastic reviewer at
     the root — no fragile prose-parsing. Gates: full read + py_compile/mypy/ruff clean + verdict-parity PASS + 8/8
     vote scenarios (2A1R ships; 1A2R / 3×INDET(API-down) / 1A1R1I fail closed) + cold-2nd PASS (no fail-open) +
-    FINAL Gro+GAI APPROVE (sha 775ae323). **⏭️ pick-up: open a new PR from this branch (PR #33 is merged/closed) →
-    preship self-validates with the new 3-sample logic → merge → OCI `git pull --ff-only` (no restart; CI-only file
-    doesn't even run on OCI, but keep main↔OCI in sync).**
+    FINAL Gro+GAI APPROVE (sha 775ae323). **✅ SHIPPED: PR #35 merged → main (bcafa1e); OCI `git pull --ff-only`
+    = DEPLOY_OK (no restart). Self-validated in prod — its own preship ran the new 3-sample logic: APPROVE=3/3.**
   - **THEN Phase 2** — the `entry`-event emitter root fix (D1), the true root of ~50-60% of report noise.
     Trading-path → OWN gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped 7+ days).
   - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
