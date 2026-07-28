@@ -9172,3 +9172,18 @@ proven no-source-.env auth works. Bogus 291 auth-failure rows cleared from OCI.
 re-run VERIFIED: 744 rows, 100% evaluable, zero unevaluable — the load_dotenv fix fully resolved the
 401. summarize() clean, all slices correctly actionable:false (3 sessions < 20-session gate). Early
 signal (not actionable): NEG-regime low-conviction 0DTE hit +100% target 70% (median MFE +122%, n=30).
+
+[2026-07-27] Phase 1 #1 of 4 — `audit_slack.py` provenance-gate SHIPPED (commit `a25c002`,
+branch `fix/audit-slack-provenance-gate-2026-07-27`). Gemini-reports value/noise audit: nightly Slack
+P&L card was flagging "reconciliation mismatch" off raw `pnl_drift` magnitude, which is sampled PRE-heal
+(audit 4:05pm ET; ledger heal 8:30pm ET) → daily false CATASTROPHIC that self-heals to ~$0. Fix:
+`build_pnl_fields` nightly branch keys off `_healed_by`/`pnl_unreconciled` provenance stamp, not raw
+drift; unhealed file renders PROVISIONAL (never silently "clean" — preserves a genuine invariant-fail
+alarm per masked-loss seat). Full read complete: 381 lines. RC-1..8 N/A (no datetime/path/except/
+exit-price/write/sizing on change surface). Impact: `build_pnl_fields` has 2 callers (nightly:809,
+midday:952), no caller consumes the mismatch return → display-only change. Gate: statics
+(py_compile+ruff+mypy) clean + cold-2nd PASS (docstring staleness fixed) + preship Gro APPROVE / GAI
+APPROVE (GAI false-premise reject on `validate_no_pnl_rewrite` reversed in 1 counter-prompt round —
+rogue=found−allowed only flags rendered figures; alarm string suppresses the number). BGG: 5 voices
+(masked-loss, reliability, data-integrity cold seats + Gro + GAI) aligned. Reporting-only, no trading
+path touched. NEXT: Phase 1 #2 = `nightly_audit.py` (stop feeding stale pnl_drift to LLM as CATASTROPHIC).

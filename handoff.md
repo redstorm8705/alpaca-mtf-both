@@ -7,7 +7,52 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-26 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-27 interactive, Rafael present) — pick up here
+
+**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### 🔴 ACTIVE — Gemini-reports value/noise audit + P&L reconciliation-noise fix (BGG COMPLETE)
+Rafael: the midday/nightly/meta Gemini reports keep flagging "pricing mismatch / P&L reconciliation"
+despite being told it was "permanently addressed." Full BGG (3 cold seats: masked-loss, reliability,
+data-integrity + Gro + GAI) + a per-report value/noise audit COMPLETE. **VERDICT: P1 noise, not P0
+capital** — masked-loss seat grep-PROVED `tracker_pnl`/`pnl_drift` have NO reader in any kill-switch/
+sizing/exposure path (kill switch was severed from the tracker after the 7/07 −73.86% phantom). Two
+upstream defects refract 3×: **(D1)** the bot stopped writing `entry` events 7+ days ago (real bug — all
+3 reports re-derive a phantom "0-entry / trade-accounting" failure daily); **(D2)** all 3 audits sample
+P&L PRE-heal (audits 1:30/4:05/4:35pm ET; ledger heal 8:30pm ET) → false CATASTROPHIC drift that self-
+heals to ~$0. Meta's Groq half is DEAD 6/6 days (400/prompt-too-big); its directive pipeline emits 0
+actionable (models cite a nonexistent file). Full design + per-report cut/sharpen/add: see this session.
+
+**Rafael GREEN-LIT the phased plan:**
+- **Phase 1 (reporting-only, shipping now):**
+  1. ✅ **audit_slack.py provenance-gate** (`fix/audit-slack-provenance-gate-2026-07-27`, commit `a25c002`
+     → PR): nightly Slack card keys off `_healed_by`/`pnl_unreconciled`, not raw `pnl_drift`; unhealed →
+     PROVISIONAL (never silently clean); genuine unreconciled → still alarms. Gate: statics + cold-2nd
+     PASS + Gro+GAI APPROVE (GAI false-premise reject on validate_no_pnl_rewrite reversed in 1 counter-
+     prompt). **← DONE THIS SESSION.**
+  2. ⏭️ **NEXT: nightly_audit.py** — stop feeding stale `pnl_drift` to the LLM as CATASTROPHIC
+     (nightly_audit.py:399 defines "P&L corruption=CATASTROPHIC"; `_collect_eod` L165-178 dumps raw eod);
+     gate drift finding on `_healed_by`; add pre-heal-drift + CYCLE-SYNC to `audit_suppressions.jsonl`;
+     refresh stale P5 queue; exclude `.claude/`/`tests/` from modified-file review.
+  3. ⏭️ **midday_audit.py** — scrub/label pre-heal drift in the LLM prompt (L945-952) as intraday-expected;
+     cut the dead realized-P&L engine; ADD live naked-stop check; count entries from Alpaca fills.
+  4. ⏭️ **reporting/pnl_ledger.py** — stamp `_telemetry_stale_after_heal=True` in heal_history (R3);
+     (rename/nest `pnl_drift`→`validation.selfcheck_drift` deferred to Phase 3).
+  - R2 (scan_to_html "NOT AT BROKER") → **persistence-gate 2+ consecutive renders** (masked-loss REJECTED
+    auto-purge); Phase 3.
+- **Phase 2 (own gated diff, full BGG — trading path):** fix the broken `entry`-event emitter (D1) —
+  removes ~50-60% of cross-report noise at source.
+- **Phase 3:** midday/nightly/meta per-report tune-ups + meta Groq-prompt fix + repo-manifest + dead-voice
+  alert + trim 11k-row `delta_shadow` bloat.
+
+**PARKED (Rafael to un-park):** Q1 options-page close-time fix on `options_scanner.py` — BGG-approved design
+(per-symbol dynamic close via new `zdte_close_times()` helper: SPY/QQQ 4:15 / MAG7 4:00 ET, 15-min advisory
+exit buffer, advisory wording, ET-only). The helper is ALREADY ADDED to options_scanner.py (additive, unused,
+not wired, NOT shipped) — the 5 literal sites still need wiring. Interrupted by the reports audit.
+
+---
+
+## ⏩ PRIOR (2026-07-26 interactive, Rafael present)
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
