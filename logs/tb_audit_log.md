@@ -9262,3 +9262,13 @@ check was the STOCHASTIC reviewer approving the full diff (runs 2&3 approved wha
 narrowing. NO push-wash gap; NO workflow change needed. "fix CI after" is narrower: ci_audit.py reject-scope filter
 ONLY — a REJECT valid only if its verbatim-quoted line is in the diff's CHANGED lines; fail-CLOSED (keep reject if
 the match is ambiguous). Corrects the record per DOCUMENTATION-IS-NOT-ENFORCEMENT / don't-propagate-unverified.
+
+=== 2026-07-28 (resume) ci_audit.py MAJORITY-VOTE (commit a93c69f) — "fix CI after" ===
+Root cause of the CI friction = the Gemini reviewer is STOCHASTIC (REJECT run 30330994285 vs APPROVE run
+30331270279 on the identical gated diff). Rafael chose majority-vote over a reject-scope filter (no fragile
+prose-parsing, no fail-open path). Change: extract _one_audit() (returns (verdict,text); API/parse error ->
+INDETERMINATE, never sys.exit); main() runs N_SAMPLES=3 and ships iff approvals>=need (need=3//2+1=2), else
+_fail. INDETERMINATE never counts toward APPROVE. _verdict() UNCHANGED (parity test PASS). Gates: py_compile+
+mypy+ruff clean; verdict-parity PASS; functional 8/8 (2A1R->ship [the goal]; 1A2R/3xINDET/1A1R1I/1A2I->fail
+closed); cold-2nd PASS (no fail-open, need=2 boundary correct, no key leak); FINAL Gro+GAI APPROVE (775ae323).
+NEXT: open PR (self-validates on 3-sample logic) -> merge -> then Phase 2 (D1 entry-emitter, trading path, BGG).

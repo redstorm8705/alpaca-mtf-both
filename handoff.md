@@ -101,12 +101,17 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
     `pull_request.base.sha`..`head.sha` = **full PR-vs-base every time** (preship-verify.yml L59-61), CONFIRMED by run
     30331270279's log (gated files = all 5 Phase 1 .py, not docs-only). No push-wash gap exists; **no workflow change
     needed.** The only real issue is the reviewer being STOCHASTIC (approves/rejects the same full diff run-to-run).
-  - **⏭️ NEXT (Rafael's "fix CI after"): the mechanical CI reject-scope filter — `ci_audit.py` ONLY** (no YAML change):
-    a REJECT is valid only if its verbatim-quoted offending line appears in the DIFF's added/changed lines; a reject
-    that quotes ONLY pre-existing full-file-CONTEXT code (the run-1 `fetch_all_orders` class) is auto-downgraded.
-    FAIL-CLOSED bias: downgrade ONLY on a POSITIVE confirmation the quoted text is absent from the diff's changed
-    lines; if the match is ambiguous, KEEP the reject. Execution-governing → full gate + FINAL Gro+GAI + self-
-    application preship. THEN **Phase 2** — the `entry`-event emitter root fix (D1), trading-path, full BGG.
+  - ✅ **"fix CI after" — DONE (Rafael chose MAJORITY-VOTE, not the reject-scope filter). Committed `a93c69f`.**
+    `ci_audit.py` now runs the external audit **N=3×** and ships ONLY on a **≥2/3 APPROVE majority**; else fails
+    closed. A per-sample API/parse failure → NON-approve INDETERMINATE (never aborts the gate, never counts toward a
+    pass). `_verdict()` parser UNCHANGED (byte-parity preserved; the vote wraps it). Beats the stochastic reviewer at
+    the root — no fragile prose-parsing. Gates: full read + py_compile/mypy/ruff clean + verdict-parity PASS + 8/8
+    vote scenarios (2A1R ships; 1A2R / 3×INDET(API-down) / 1A1R1I fail closed) + cold-2nd PASS (no fail-open) +
+    FINAL Gro+GAI APPROVE (sha 775ae323). **⏭️ pick-up: open a new PR from this branch (PR #33 is merged/closed) →
+    preship self-validates with the new 3-sample logic → merge → OCI `git pull --ff-only` (no restart; CI-only file
+    doesn't even run on OCI, but keep main↔OCI in sync).**
+  - **THEN Phase 2** — the `entry`-event emitter root fix (D1), the true root of ~50-60% of report noise.
+    Trading-path → OWN gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped 7+ days).
   - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
     gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped writing 7+ days).
   - Follow-up (non-blocking): local `.claude/preship/preship_audit.py` prompt likely needs the SAME hardening as
