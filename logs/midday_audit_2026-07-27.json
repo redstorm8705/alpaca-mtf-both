@@ -1,0 +1,49 @@
+{
+  "audit_date": "2026-07-27",
+  "run_ts": "2026-07-27T10:30:01.951009-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 3,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 32,
+    "levels": {
+      "STRESSED": 32
+    },
+    "last_score": 44,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 32,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-27 16:11:46,623 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.89 tracker=$-5.94 drift=$+14.83",
+      "2026-07-27 16:17:07,538 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-27 16:18:52,971 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.89 tracker=$-5.94 drift=$+14.83",
+      "2026-07-27 16:24:09,750 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-27 16:24:52,790 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.89 tracker=$-5.94 drift=$+14.83"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  }
+}
