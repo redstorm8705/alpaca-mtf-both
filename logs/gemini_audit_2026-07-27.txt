@@ -1,0 +1,88 @@
+Nightly Gemini Audit — 2026-07-27
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'options_scanner.py', 'data/gex.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1.  execution.portfolio_tracker (inferred from `scan_to_html` WARNING) | Tracker lists a FILLED position (SMCI) as open in `overnight_holds` that Alpaca `/v2/positions` does not hold, leading to a genuine reconciliation break. The bot's internal state for open positions is corrupted and out of sync with the broker. This directly impacts the accuracy of `tracker_pnl` and `pnl_drift`, which are used in risk decisions (`MAX_GROSS_EXPOSURE_RATIO`). | SMCI
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **P&L Drift**: `EOD P&L DRIFT: Alpaca=$X tracker=$Y drift=$Z` appears multiple times (e.g., `Alpaca=$8.89 tracker=$-5.94 drift=$+14.83` and `Alpaca=$3.33 tracker=$-5.94 drift=$+9.27`). This indicates a persistent discrepancy between Alpaca's calculated P&L and the bot's internal tracker P&L. This is likely a symptom of underlying reconciliation issues like the SMCI case identified in the catastrophic alert.
+*   **TQI Degradation**: `[ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.` This warning appears multiple times, indicating consistent poor performance of the Trade Quality Index. While not a bug, it signals a need to review strategy parameters.
+*   **News Alerts with Penalty**: `⚡ CURRENTS ALERT: 1 article(s) detected ... base penalty: 100% (price-confirmation applies before trade)`. These alerts indicate that significant news events are triggering a full penalty, likely blocking trades. While functioning as designed, it highlights a frequent gating condition for new entries.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: All trades reviewed in the `TRADE EVENTS` and `EOD SNAPSHOT` for `SOFI`, `MSTR`, and `RBLX` (as per `EOD snapshot`) show correct P&L signs relative to entry/exit prices and direction.
+*   **P&L Inconsistency (RBLX)**: For RBLX (ts: 2026-07-27T08:51:05.028784-07:00), the `trade_events` log shows `price: 47.61` and `pnl: 0.0`. However, the `EOD SNAPSHOT` for RBLX shows `entry_price: 47.61`, `exit_price: 47.65`, and `pnl: -0.04`. This discrepancy for the same trade indicates that the `trade_events` log is not always the authoritative or final record of P&L, especially when a `fill_reconciler` (as indicated by `_patch_fill_source`) later updates the trade details. This can lead to misleading historical performance analysis if `trade_events` are used in isolation.
+*   **P&L 0.0 with Stop Hits (RIVN, MARA)**:
+    *   **RIVN** (ts: 2026-07-24T07:53:40.206137-07:00): For a `long` trade with `entry=$17.16` and a `thresh=$16.42`, a `stop_hit` should result in a loss if the exit price is below the entry. The log shows `price: 17.16` (exact entry price) and `pnl: 0.0`, despite the `reason` being an `overnight_atr_buffer_exit | 9-scan breach`. This is contradictory, as hitting a stop below entry price should result in a loss, not breakeven. This suggests a potential logic error in how the exit price or P&L is determined for certain stop-hit scenarios.
+    *   **MARA** (ts: 2026-07-24T12:07:09.338371-07:00): For a `long` trade, `pnl: 0.0` with `reason: "hard_stop"` is suspicious. Unless the hard stop was set exactly at the entry price and executed without slippage, there should typically be a small gain or loss. This could indicate a rounding issue or an unrecorded minor P&L.
+*   **Win Rate / Stop-Hit Rate**: Today's win rate is 0.0% (`trades_today: 3`, `win_rate_today: 0.0`). The `EOD SNAPSHOT` shows all 3 closed trades for the day (`SOFI`, `MSTR`, `RBLX`) resulted in losses. This, coupled with the `TQI degradation` warnings, suggests an ongoing mismatch in entry/exit discipline or current market regime.
+*   **R:R vs. Target**: The `EOD SNAPSHOT` `all_time_stats` reports `avg_r_multiple: -0.029`. The `paper` profile states `INTRADAY_TARGET_ATR_MULT: 2.5` and `INTRADAY_STOP_ATR_MULT: 1.2`, implying a target R:R of `2.5/1.2 = 2.08:1`. The `avg_r_multiple` of -0.029 is significantly below the target, indicating the bot is not capturing its intended edge on average.
+
+### TRADE INTEGRITY
+*   **P&L Drift**: The `pnl_drift` values in `EOD P&L DRIFT` (e.g., +14.83, +9.27) and the `EOD SNAPSHOT` (`pnl_drift: 9.27`) indicate a consistent difference between Alpaca's P&L and the tracker's P&L. This suggests an ongoing reconciliation problem or calculation discrepancy.
+*   **Reconciliation Break (SMCI)**: As detailed in the Catastrophic Alert, the `[SMCI] context strip` warning directly points to an issue where the tracker's `overnight_holds` state is inconsistent with Alpaca's actual positions. This is a severe trade recording bug.
+
+### MODIFIED FILE FINDINGS
+*   **config.py**:
+    *   No new bugs found. All constants referenced from the `config.py` in the logs (`MIN_LONG_SCORE`, `MIN_SHORT_SCORE`, `KELLY_FRACTION`, `MAX_OPEN_POSITIONS`, `INTRADAY_STOP_ATR_MULT`, `MAX_DAILY_LOSS_PCT`) are consistent with the `paper` profile values. The updated `RC4_RECONCILE_WINDOW_MINUTES` is set to 90, which addresses a previous audit concern about the retry budget for fill reconciliation.
+*   **options_scanner.py**:
+    *   No new bugs found. The `_persist_rec_history` function with its `code_version` and `config_hash` for provenance is a robust addition for auditability. `_null_greeks` correctly handles string sentinels, improving data quality. The new 0DTE logic, including `ZDTE_PREM_CAP_ANCHOR` and `ZDTE_CONTRACT_LADDER`, implements the board's new advisory stream.
+*   **data/gex.py**:
+    *   No new bugs found. The addition of `_get_spot_quote` and `_spot_is_suspect` provides a crucial spot-consistency guard, preventing the GEX regime label from being computed based on faulty price data. The refinement of `_expiry_range` and the GEX computation logic to use OI-gamma-weighted centroid and max-|Γ·OI| wall instead of a zero-gamma flip addresses known issues with indicative options data and improves the reliability of the GEX signal.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted: FIXED
+*   P5-H2 | Fill price crosstalk: UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED
+*   P5-H4 | Rule 2 dead code: FIXED (constant `TOD_MARKET_OPEN_BUFFER_MINS` is present and used in `config.py`)
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed: FIXED (confirmed by explicit statement in P5 queue)
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: FIXED (logs show regular MRI refreshes)
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED (no evidence in provided logs/snapshot)
+*   P5-L1 | _classify_loss_driver() returns empty label: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: TRIGGERED (The SMCI reconciliation break implies a position that the tracker views as open may have been closed on Alpaca, thus affecting EOD P&L reconciliation. This is a direct manifestation of a position being mis-tracked near EOD).
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+*   A-4 | Alpaca paper fills API returns empty: CONFIRMED BENIGN (per `KNOWN BENIGN PATTERNS`)
+
+### NEW BUGS FOUND
+*   **CATEGORY**: EXECUTION BUG
+    **SEVERITY**: CRITICAL
+    **file**: execution.portfolio_tracker (inferred from `scan_to_html` WARNING)
+    **description**: Tracker's `overnight_holds` state for SMCI is inconsistent with Alpaca's actual positions. The tracker lists SMCI as an open overnight position, but `alpaca_per_trade` confirms it was closed with a recorded P&L.
+    **exact failure condition**: The internal `overnight_holds` list (or underlying state) incorrectly contains `{"symbol": "SMCI", ... "direction": "short"}` at EOD on 2026-07-27, while Alpaca reported a fill for SMCI at `2026-07-27T19:56:29.776444Z` (closing the position). This causes a "genuine reconciliation break" where the bot's understanding of its open positions diverges from the broker, leading to inaccurate available capital and aggregate exposure reporting.
+
+*   **CATEGORY**: EXECUTION BUG
+    **SEVERITY**: HIGH
+    **file**: execution.entry_logic / portfolio_tracker (inferred from `trade_events` vs `EOD SNAPSHOT`)
+    **description**: P&L and Exit Price Inconsistency between `trade_events` log and `EOD SNAPSHOT` `trades` list for the same trade. The `trade_events` log records an initial P&L and exit price that is later updated by the `fill_reconciler` but the original log entry remains.
+    **exact failure condition**: For RBLX (symbol="RBLX", ts="2026-07-27T08:51:05.028784-07:00"), `trade_events` shows `price: 47.61, pnl: 0.0` while the `EOD SNAPSHOT` `trades` entry (which includes `_patch_fill_source: fill_reconciler`) records `exit_price: 47.65, pnl: -0.04`. This creates an inconsistent audit trail where the initial log is not updated to reflect the reconciled, authoritative trade data.
+
+*   **CATEGORY**: ALPHA ISSUE
+    **SEVERITY**: HIGH
+    **file**: execution.exit_logic (inferred from `trade_events`)
+    **description**: P&L calculation discrepancy for stop-hit exits for long positions, resulting in P&L=0.0 when a loss should be recorded.
+    **exact failure condition**: For RIVN (symbol="RIVN", ts="2026-07-24T07:53:40.206137-07:00", direction="long"), `entry=$17.16` and `thresh=$16.42`. The `trade_events` log shows `price: 17.16` (exit price) and `pnl: 0.0` for a `stop_hit` event. This is incorrect; a stop hit at `thresh=$16.42` for a long position entered at `$17.16` should result in a loss, not breakeven. This implies an error in P&L calculation or exit price recording for this specific stop condition.
+
+*   **CATEGORY**: ALPHA ISSUE
+    **SEVERITY**: MEDIUM
+    **file**: execution.exit_logic (inferred from `trade_events`)
+    **description**: Hard stop exit for long position records 0.0 P&L suspiciously often.
+    **exact failure condition**: For MARA (symbol="MARA", ts="2026-07-24T12:07:09.338371-07:00", direction="long"), the `trade_events` log shows `pnl: 0.0` for a `hard_stop` event. Without slippage, a hard stop at entry price would yield 0.0 P&L, but this occurs multiple times and may indicate an unrecorded small gain/loss or rounding issue, potentially misrepresenting actual trading outcomes.
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PASS** for `RC4_RECONCILE_WINDOW_MINUTES` in `config.py`. The constant is now set to 90, directly addressing the previously identified issue of the window being too short.
+*   **FIX VALIDATION: PASS** for P5-H1 (PDT enforcement). The architecture invariant confirms PDT logic has been permanently deleted, validating the fix.
+*   **FIX VALIDATION: PASS** for P5-H4 (Rule 2 dead code). `TOD_MARKET_OPEN_BUFFER_MINS` is present and correctly configured in `config.py`, so it is not dead code.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT**: Investigate and fix the SMCI reconciliation break. The bot's `overnight_holds` must be correctly synchronized with Alpaca's actual open positions to prevent P&L corruption and misinformed risk management decisions. This is the root cause of the P&L drift.
+2.  Investigate the P&L calculation logic for stop-hit exits (e.g., RIVN case) to ensure accurate P&L recording and prevent false breakeven reports when a loss has occurred.
+3.  Implement a mechanism to update `trade_events.jsonl` with reconciled P&L and exit prices (e.g., from `fill_reconciler`) to ensure consistency between real-time and authoritative trade records for auditing and analysis.
+4.  Review exit discipline and stop placement, especially in light of the repeated `TQI degradation` warnings and 0.0% win rate today.
+5.  Refine the P&L recording for `hard_stop` exits to capture any minor gains or losses, even if small, for accurate accounting.
