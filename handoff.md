@@ -52,8 +52,21 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
      naked→CATASTROPHIC) + cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). **DEFERRED
      (pre-existing, Phase-2 root-resolves):** `session_loss` severity still reads degraded matched-pair total_pnl;
      retire the D1 note once the entry emitter is fixed. **← DONE THIS SESSION.**
-  4. ⏭️ **NEXT: reporting/pnl_ledger.py** — stamp `_telemetry_stale_after_heal=True` in heal_history (R3);
-     (rename/nest `pnl_drift`→`validation.selfcheck_drift` deferred to Phase 3).
+  4. ✅ **reporting/pnl_ledger.py R3 stale-marker** (commit `8ee1962`): additive one-line
+     `eod["_telemetry_stale_after_heal"]=True` in `heal_history` per-day write (alongside `_healed_by`);
+     purely additive, does NOT mutate pnl_drift (never-mask; rename/nest = Phase 3). Gate: full read 737L +
+     RC-1..8 + statics + LIVE dry-run (invariant ok, 38 days, pnl_drift unmutated) + cold-2nd PASS + impact
+     clean + FINAL Gro+GAI APPROVE (sha 6481c45b; Gro false-premise 'overwrite' reject reversed in 1 counter-
+     prompt). Follow-up: teach a reader to honor the flag (or land Phase-3 rename/nest) so it isn't inert.
+     **← DONE THIS SESSION.**
+
+  ✅✅ **PHASE 1 COMPLETE (all 4 files gated & pushed to branch `fix/audit-slack-provenance-gate-2026-07-27`).**
+  Branch = 8 commits ahead of `main` (4 code fixes + 4 doc syncs). **⏭️ AWAITING RAFAEL'S GO:** merge branch →
+  `main` + OCI `git pull --ff-only` (reporting scripts — no service restart needed; the audit crons pick up
+  fresh on next run). This is the production deploy that actually stops the daily false CATASTROPHIC alarms.
+  **THEN NEXT: Phase 2** — fix the broken `entry`-event emitter (defect D1), the true root of ~50-60% of the
+  cross-report noise. Trading-path → own gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry
+  events actually stopped writing 7+ days ago) before designing the emitter fix.
   - R2 (scan_to_html "NOT AT BROKER") → **persistence-gate 2+ consecutive renders** (masked-loss REJECTED
     auto-purge); Phase 3.
 - **Phase 2 (own gated diff, full BGG — trading path):** fix the broken `entry`-event emitter (D1) —

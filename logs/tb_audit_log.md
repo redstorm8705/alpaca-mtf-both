@@ -9216,3 +9216,15 @@ verified LIVE) + statics + LIVE smoke test (6 pos protected, None→verified=Fal
 cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). CARRY-FORWARD (pre-existing,
 Phase-2 resolves): session_loss reads degraded matched-pair total_pnl; D1 note retires when emitter fixed.
 NEXT: Phase 1 #4 = reporting/pnl_ledger.py.
+
+[2026-07-27] Phase 1 #4 of 4 — `reporting/pnl_ledger.py` R3 stale-marker SHIPPED (commit `8ee1962`).
+The 8:30pm ET heal supersedes pnl_today but leaves pre-heal self-check telemetry (pnl_drift/tracker_pnl/
+alpaca_pnl) in each eod file with now-stale values. Additive one-liner `eod["_telemetry_stale_after_heal"]=True`
+in heal_history per-day write (alongside _healed_by/_healed_at) stamps staleness as fact-in-data. Purely
+additive; does NOT mutate telemetry (never-mask; rename/nest = Phase 3). Full read 737L/3 chunks. RC-1..8:
+RC-5 rides existing tmp->replace atomic write; RC-6 new key follows _healed_by naming; rest N/A. Statics clean.
+LIVE dry-run: invariant ok (drift $0.86<$5), 38 days would heal, pnl_drift UNMUTATED. Cold-2nd PASS. Impact
+clean (3 heal_history refs are comments; no existing reader of new key). FINAL Gro+GAI APPROVE (sha 6481c45b);
+Gro false-premise "overwrite existing data" reject REVERSED in 1 counter-prompt round (disagreement protocol).
+=== PHASE 1 COMPLETE — all 4 Gemini-report noise fixes gated & pushed to branch. Awaiting Rafael GO for
+merge-to-main + OCI deploy. NEXT: Phase 2 = entry-emitter root fix (D1), trading-path, full BGG. ===
