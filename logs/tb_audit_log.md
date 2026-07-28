@@ -9228,3 +9228,18 @@ clean (3 heal_history refs are comments; no existing reader of new key). FINAL G
 Gro false-premise "overwrite existing data" reject REVERSED in 1 counter-prompt round (disagreement protocol).
 === PHASE 1 COMPLETE — all 4 Gemini-report noise fixes gated & pushed to branch. Awaiting Rafael GO for
 merge-to-main + OCI deploy. NEXT: Phase 2 = entry-emitter root fix (D1), trading-path, full BGG. ===
+
+=== 2026-07-27/28 (resume) ci_audit.py CI-PROMPT HARDENING (commit 76a2021) ===
+Full read 236L. Prompt-string ONLY (check #3 + SELF-CHECK: verbatim-quote not line-num, quote enclosing
+try/except or prove absence, None-safe-consumer clause). _verdict parser + main() UNTOUCHED. Statics:
+py_compile+mypy clean (ruff n/a this shell — string-only edit); _verdict PARITY test PASS (15 cases + 6
+fail-open probes, both parsers lockstep). Cold-2nd PASS — probed for a fail-OPEN hole: none; under-flagging
+yields a WEAKER audit (main() fails closed on REJECT/INDETERMINATE), never a forced APPROVE. FINAL Gro+GAI
+APPROVE (sha 929f2dd1). Pushed to PR #33 branch → preship CI re-ran on the hardened prompt.
+3rd CI FALSE-REJECT (run 30330994285): flagged fetch_all_orders (reporting/pnl_ledger.py) — PRE-EXISTING,
+UNCHANGED code (this PR = 7-line marker in heal_history) — for a &until=None loop. VERIFIED FALSE 4 grounds:
+(1) `if not _next: break` L229-232 two lines below the quoted line → until never None; (2) until=_next only
+L239 after both breaks; (3) _max_pages=400 hard cap; (4) _get_json timeout+tries=8 bounded, non-429 raises.
+Out of scope (unchanged code). Gemini counter-prompt REVERSED to APPROVE in 1 round. ESCALATED TO RAFAEL:
+clear PR #33 (3× false-reject, no counter-prompt path) — REC admin-merge now + build mechanical diff-scope
+filter (reject must quote a changed line) as the real DOCUMENTATION-IS-NOT-ENFORCEMENT gate.

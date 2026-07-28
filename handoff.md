@@ -60,13 +60,48 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
      prompt). Follow-up: teach a reader to honor the flag (or land Phase-3 rename/nest) so it isn't inert.
      **← DONE THIS SESSION.**
 
-  ✅✅ **PHASE 1 COMPLETE (all 4 files gated & pushed to branch `fix/audit-slack-provenance-gate-2026-07-27`).**
-  Branch = 8 commits ahead of `main` (4 code fixes + 4 doc syncs). **⏭️ AWAITING RAFAEL'S GO:** merge branch →
-  `main` + OCI `git pull --ff-only` (reporting scripts — no service restart needed; the audit crons pick up
-  fresh on next run). This is the production deploy that actually stops the daily false CATASTROPHIC alarms.
-  **THEN NEXT: Phase 2** — fix the broken `entry`-event emitter (defect D1), the true root of ~50-60% of the
-  cross-report noise. Trading-path → own gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry
-  events actually stopped writing 7+ days ago) before designing the emitter fix.
+  ✅✅ **PHASE 1 COMPLETE (all 4 files gated & pushed).** Branch `fix/audit-slack-provenance-gate-2026-07-27`,
+  **PR #33 OPEN** (https://github.com/redstorm8705/alpaca-mtf-both/pull/33). Rafael GAVE GO to deploy.
+
+  🔴🔴 **BLOCKER — deploy stuck on a FALSE-REJECTING CI gate. Interrupted by a usage limit mid-fix
+  (resets 12:30am PT 2026-07-28). Resume EXACTLY here:**
+  - `main` is protected: required status check **"preship"** (`.github/workflows/preship-verify.yml` →
+    `.github/scripts/ci_audit.py`, a server-side Gemini audit with NO counter-prompt path).
+  - It FALSE-REJECTED PR #33 **twice** (both VERIFIED false at source + Gemini reversed on counter-prompt):
+    R1 "post_to_slack unhandled" (it's inside try/except L1159 + text fallback L1162; cited wrong line 1056 =
+    json.dump); R2 "`if positions is None: raise` unhandled + new fetches introduce error" (same try/except;
+    `check_naked_stops(None,..)`/`summarise_fills(None)` fail-safe to verified=False/available=False — verified LIVE).
+  - **Rafael chose: HARDEN THE CI PROMPT FIRST, then merge.** ✅ **ci_audit.py hardening GATED + SHIPPED**
+    (commit `76a2021`, pushed to branch): check #3 now requires confirming a raise is NOT enclosed by try/except
+    (incl. an `except:` many lines below in the same `try:`) before calling it "unhandled"; SELF-CHECK now requires
+    quoting the VERBATIM offending line (not a line number) + quoting the enclosing try/except (or proving absence);
+    None-safe-consumer clause. Prompt-string ONLY (`_verdict` parser + `main()` untouched). Gate: full read 236L +
+    statics (py_compile+mypy; ruff n/a this shell — string-only) + `_verdict` PARITY test PASS (both parsers lockstep)
+    + cold-2nd PASS (probed for a fail-OPEN hole — none; under-flagging = weaker audit, never a forced APPROVE) +
+    FINAL Gro+GAI APPROVE (sha `929f2dd1`). **← DONE THIS SESSION (STEP 0 resume-cron re-armed first, fires 3:12am PT).**
+  - 🔴 **3rd CI FALSE-REJECT (run 30330994285) — a NEW mode the hardening can't catch, VERIFIED FALSE + Gemini-
+    reversed.** With the hardened prompt live, CI flagged **`fetch_all_orders` in `reporting/pnl_ledger.py`** —
+    **PRE-EXISTING code this PR NEVER touches** (my pnl_ledger diff = a 7-line additive marker in `heal_history`) —
+    claiming a `&until=None` infinite loop. FALSE on 4 grounds at source: (1) `if not _next: break` at L229-232, two
+    lines below the quoted `_next=_bump_iso_ms(...)` line → `until` is never None; (2) `until=_next` only at L239,
+    AFTER both break guards; (3) `_max_pages=400` hard cap = no infinite loop; (4) `_get_json` is `timeout=_TIMEOUT`
+    + `tries=8` bounded, non-429 raises immediately. Also OUT OF SCOPE (CI prompt says "judge the CHANGE only").
+    Independent Gemini counter-prompt REVERSED to APPROVE in 1 round (confirmed all 4 + agreed out-of-scope).
+  - **⏭️ ESCALATED TO RAFAEL — decision fork (his authority; merge is a production-deploy hard-stop + `.github/`
+    CODEOWNERS needs his PR approval; I can't admin-bypass a protected check):** how to clear PR #33 given the
+    'preship' check has false-rejected **3×** (all verified-false + Gemini-reversed, no counter-prompt path)?
+    **REC = (A) admin-merge PR #33 now** — deploy is verified-correct + already GO'd — **AND build the REAL gate as a
+    follow-up:** a MECHANICAL diff-scope filter in ci_audit.py (a REJECT must quote a line that appears in the DIFF's
+    changed lines; wandering into full-file-context pre-existing code is auto-dropped). This is the DOCUMENTATION-IS-
+    NOT-ENFORCEMENT case: more prompt prose won't stop a stochastic reviewer from wandering out of scope — build the
+    filter. Alt (B) build the filter FIRST (purer, no bypass; delays a verified-correct deploy another gated cycle).
+  - After clear: (5) merge PR #33 → `main`. (6) OCI deploy: `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250
+    "cd /home/ubuntu/mtf-bot && git pull origin main --ff-only && echo DEPLOY_OK"` — **NO service restart** (all 4 are
+    cron/reporting scripts, not run by the live services). Health-check the audit crons on next fire.
+  - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
+    gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped writing 7+ days).
+  - Follow-up (non-blocking): local `.claude/preship/preship_audit.py` prompt likely needs the SAME hardening as
+    ci_audit.py for consistency (both share `_verdict`; only ci_audit was hardened this session).
   - R2 (scan_to_html "NOT AT BROKER") → **persistence-gate 2+ consecutive renders** (masked-loss REJECTED
     auto-purge); Phase 3.
 - **Phase 2 (own gated diff, full BGG — trading path):** fix the broken `entry`-event emitter (D1) —
