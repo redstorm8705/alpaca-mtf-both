@@ -63,19 +63,34 @@ Check specifically:
    or `urlopen(timeout=...)`), the call IS bounded — that is NOT a defect. Never claim a
    call "lacks a timeout" or "can block indefinitely" without first confirming, in the
    full content, that no wrapper or default provides one.
-3. Any new exception path that could abort a render or a cycle unhandled.
+3. Any new exception path that could abort a render or a cycle unhandled. BEFORE flagging a
+   `raise` or an exception as "unhandled" or "aborts the cycle": locate that raise in the FULL
+   FILE CONTENT and confirm it is NOT enclosed by a `try/except` that would catch it — a bare
+   `except Exception`, or a matching type — INCLUDING an `except:` and its fallback that appear
+   many lines BELOW the raise inside the same `try:` block. A `raise RuntimeError(...)` sitting
+   inside a `try:` whose `except Exception:` logs a warning and falls through to a fallback path
+   is the INTENDED graceful-degradation pattern, NOT an unhandled abort — do not flag it. A call
+   that returns None on failure (a fail-safe fetch) reaching a downstream consumer that itself
+   handles None is likewise handled, not a new error.
 4. Any logic inversion, off-by-one, or boundary error.
 5. Any value that can be None/NaN/0 reaching arithmetic or a comparison that assumes
    otherwise? (A NaN written into a stop price makes every `price <= stop` test
    False and the stop can never fire — that class of bug has shipped here before.)
 6. Any credential, absolute machine path, or secret introduced?
 
-MANDATORY SELF-CHECK before any REJECT: quote the exact offending line, then trace it
-using the FULL FILE CONTENT (not just the diff) — name the wrapper/default/caller you
-checked and why it does NOT resolve the concern. A concern is a DEFECT only with a
-concrete failing input in the changed lines; a theoretical "could", or a concern that the
-full content already resolves, is NOT a defect. If your only evidence is the diff hunk in
-isolation, look at the full content before deciding. Answer in at most 220 words. Exactly
+MANDATORY SELF-CHECK before any REJECT: quote the offending line's VERBATIM TEXT (copy it
+character-for-character from the diff or full content), NOT a line number — line numbers in
+the diff and context may not correspond, and citing a line whose quoted text does not match
+the concern is itself disqualifying. Then trace it using the FULL FILE CONTENT (not just the
+diff) — name the wrapper/default/caller you checked and why it does NOT resolve the concern.
+For any "unhandled exception / aborts a render or cycle" concern specifically, you must ALSO
+quote the nearest enclosing `try:` and its `except ...:` line from the full content — or, to
+claim it is truly unhandled, quote the surrounding lines that PROVE no `try/except` encloses
+the raise. If you can neither quote an enclosing `except` nor quote the surrounding lines
+showing its absence, you may NOT flag it. A concern is a DEFECT only with a concrete failing
+input in the changed lines; a theoretical "could", or a concern that the full content already
+resolves (including an enclosing try/except or a None-safe consumer), is NOT a defect. If your
+only evidence is the diff hunk in isolation, look at the full content before deciding. Answer in at most 220 words. Exactly
 ONE line may BEGIN with `VERDICT:` — your final decision:
 VERDICT: APPROVE
 or

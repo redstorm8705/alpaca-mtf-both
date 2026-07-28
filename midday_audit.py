@@ -582,7 +582,38 @@ def _build_config_constants_block() -> str:
 
 
 def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
-                         pnl_anal: dict, log_lines: list[str]) -> str:
+                         pnl_anal: dict, log_lines: list[str],
+                         stop_cov: dict, fills_sum: dict) -> str:
+    # Live stop coverage (fail-safe: UNVERIFIED must never read as all-clear).
+    if not stop_cov.get("verified", False):
+        stop_str = ("⚠️ STOP COVERAGE UNVERIFIED — could not fetch live positions and/or open "
+                    "orders. Do NOT assume positions are protected; treat as WARN needing manual "
+                    "verification, never as clean.")
+    else:
+        _naked = stop_cov.get("naked", [])
+        _under = stop_cov.get("undercovered", [])
+        _prot  = stop_cov.get("protected", [])
+        if _naked:
+            _n = ", ".join(f"{x['symbol']}({x['side']}, {x['qty']:g}sh)" for x in _naked)
+            stop_str = (f"🔴 NAKED POSITION(S) — {len(_naked)}: {_n}. A live position with NO "
+                        "protective stop order is a CATASTROPHIC condition (position left naked). "
+                        "This MUST appear in the CATASTROPHIC ALERT section.")
+        elif _under:
+            _u = ", ".join(f"{x['symbol']}(pos {x['pos_qty']:g}sh > stop {x['stop_qty']:g}sh)" for x in _under)
+            stop_str = (f"🟡 UNDER-COVERED — {len(_under)}: {_u}. Stop order qty is below the "
+                        "position qty (partial naked exposure) — HIGH.")
+        else:
+            stop_str = f"✅ All {len(_prot)} open position(s) have a matching protective stop."
+
+    # Alpaca fills — ground truth (entry-EVENT log is degraded, D1).
+    if not fills_sum.get("available", False):
+        fills_str = "(Alpaca fills unavailable — could not fetch; do not infer trade activity from event counts.)"
+    else:
+        _bysym = ", ".join(f"{s}: {d['buy']}B/{d['sell']}S"
+                           for s, d in sorted(fills_sum.get("by_symbol", {}).items()))
+        fills_str = (f"{fills_sum.get('n_fills', 0)} fills across "
+                     f"{len(fills_sum.get('symbols', []))} symbol(s) — {_bysym or 'none'}")
+
     flagged_str = ""
     for fe in entry_anal.get("flagged_entries", []):
         flagged_str += (
@@ -662,6 +693,24 @@ Stop-hit rate: {entry_anal['stop_hit_rate']:.0%} ({entry_anal['stop_hit_count']}
 Closed trades: {pnl_anal.get('count', 0)} | Wins: {pnl_anal.get('wins', 0)} | Losses: {pnl_anal.get('losses', 0)}
 Total P&L: ${pnl_anal.get('total_pnl', 0):.2f} | Win rate: {pnl_anal.get('win_rate', 0):.0%}
 Avg win: ${pnl_anal.get('avg_win', 0):.2f} | Avg loss: ${pnl_anal.get('avg_loss', 0):.2f}
+
+---
+
+## LIVE STOP COVERAGE (deterministic — fetched live from Alpaca at report-build time)
+{stop_str}
+
+## ALPACA FILLS TODAY — GROUND TRUTH (use INSTEAD of entry-event counts)
+{fills_str}
+
+CONTEXT — READ BEFORE JUDGING TRADE COUNTS: The bot's `entry`-EVENT log (trade_events.jsonl) is
+currently DEGRADED — it may be missing `entry` records (known issue D1, fix in flight). The
+SESSION P&L SUMMARY and CLOSED TRADE DETAILS above are computed by matching entry↔exit EVENTS, so
+when entry events are missing they UNDER-count closed trades and can show $0 matched P&L even though
+the bot DID trade. This is the KNOWN D1 symptom — do NOT flag "0 entries / $0 P&L while exits exist"
+(or exits without matching entries) as a trade-accounting failure or P&L corruption. Use ALPACA
+FILLS above as the ground truth for what the bot actually traded; the authoritative same-day P&L is
+the ledger / live mark-to-market, NOT this matched-pair engine. (The genuinely CATASTROPHIC P&L
+condition is a NAKED POSITION — see LIVE STOP COVERAGE — not a matched-pair under-count.)
 
 ---
 
@@ -855,6 +904,111 @@ def _fetch_live_positions() -> "list | None":
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Live stop-coverage & fill-activity — the one thing only the post-close midday
+# run can do: verify live positions are actually protected NOW, and read real
+# trade activity from Alpaca fills instead of the DEGRADED entry-event log (D1).
+# All read-only raw urllib (no execution import). Field names verified live
+# 2026-07-27 (orders: side/order_type/stop_price; fills: symbol/side/qty/price).
+# ─────────────────────────────────────────────────────────────────────────────
+_STOP_ORDER_TYPES = {"stop", "stop_limit", "trailing_stop"}
+
+
+def _alpaca_get(path: str) -> "list | None":
+    """GET an Alpaca paper REST endpoint, return a list or None on any failure.
+    None → caller fails SAFE (never a false all-clear)."""
+    key = os.getenv("ALPACA_API_KEY", "").strip()
+    sec = os.getenv("ALPACA_SECRET_KEY", "").strip()
+    if not key or not sec:
+        return None
+    req = urllib.request.Request(
+        f"https://paper-api.alpaca.markets{path}",
+        headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+            return data if isinstance(data, list) else None
+    except Exception as e:
+        logger.warning(f"Alpaca GET {path} failed: {e}")
+        return None
+
+
+def _fetch_open_orders() -> "list | None":
+    """Open orders (status=open). None on failure → stop-coverage UNVERIFIED."""
+    return _alpaca_get("/v2/orders?status=open&limit=500")
+
+
+def _fetch_today_fills() -> "list | None":
+    """Today's FILL activities (ET date) — ground-truth trade activity, used
+    instead of the degraded entry-EVENT log. None on failure."""
+    return _alpaca_get(f"/v2/account/activities/FILL?date={AUDIT_DATE_ET}")
+
+
+def check_naked_stops(positions: "list | None", orders: "list | None") -> dict:
+    """Cross-check every open position against open protective stop orders.
+
+    A long position needs a SELL stop; a short needs a BUY stop (verified live
+    2026-07-27: UBER short → buy-stop). order_type ∈ _STOP_ORDER_TYPES. Also
+    checks qty coverage: a stop whose qty is below the position qty is partial
+    (under-covered). Returns
+    {"verified": bool, "naked": [...], "undercovered": [...], "protected": [...]}.
+
+    FAIL-SAFE — NEVER mask a naked position: if positions OR orders could not be
+    fetched, verified=False and the caller renders "stop coverage UNVERIFIED",
+    never a false all-clear. A naked position is the CATASTROPHIC bar itself."""
+    if positions is None or orders is None:
+        return {"verified": False, "naked": [], "undercovered": [], "protected": []}
+    naked: list[dict] = []
+    undercovered: list[dict] = []
+    protected: list[str] = []
+    for p in positions:
+        sym = p.get("symbol", "?")
+        pside = p.get("side", "long")
+        try:
+            pos_qty = abs(float(p.get("qty") or 0))
+        except (TypeError, ValueError):
+            pos_qty = 0.0
+        need = "sell" if pside == "long" else "buy"
+        stops = [o for o in orders
+                 if o.get("symbol") == sym
+                 and o.get("order_type") in _STOP_ORDER_TYPES
+                 and o.get("side") == need]
+        if not stops:
+            naked.append({"symbol": sym, "side": pside, "qty": pos_qty})
+            continue
+        covered = 0.0
+        for o in stops:
+            try:
+                covered += abs(float(o.get("qty") or 0))
+            except (TypeError, ValueError):
+                continue
+        if pos_qty > 0 and covered + 1e-9 < pos_qty:
+            undercovered.append({"symbol": sym, "side": pside,
+                                 "pos_qty": pos_qty, "stop_qty": covered})
+        else:
+            protected.append(sym)
+    return {"verified": True, "naked": naked,
+            "undercovered": undercovered, "protected": protected}
+
+
+def summarise_fills(fills: "list | None") -> dict:
+    """Ground-truth trade activity from Alpaca fills (the entry-EVENT log is
+    degraded — D1). Returns total fill count, distinct symbols, per-symbol
+    buy/sell counts. None → available=False (caller notes it, never fabricates)."""
+    if fills is None:
+        return {"available": False, "n_fills": 0, "symbols": [], "by_symbol": {}}
+    by_symbol: dict[str, dict] = {}
+    for a in fills:
+        sym = a.get("symbol", "?")
+        side = a.get("side", "?")
+        d = by_symbol.setdefault(sym, {"buy": 0, "sell": 0})
+        if side in ("buy", "sell"):
+            d[side] += 1
+    return {"available": True, "n_fills": len(fills),
+            "symbols": sorted(by_symbol), "by_symbol": by_symbol}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -869,11 +1023,20 @@ def main() -> None:
     pnl_anal      = analyse_pnl(events)
     postmortem    = run_signal_postmortem(events)
 
+    # ── Live state (fetched once, reused for prompt + card) ──────────────────
+    positions     = _fetch_live_positions()
+    open_orders   = _fetch_open_orders()
+    today_fills   = _fetch_today_fills()
+    stop_cov      = check_naked_stops(positions, open_orders)
+    fills_sum     = summarise_fills(today_fills)
+
     logger.info(
         f"Parsed {len(events)} events | "
         f"{entry_anal['entry_count']} entries | "
         f"{entry_anal['stop_hit_count']} stops | "
-        f"{len(entry_anal['flagged_entries'])} flagged"
+        f"{len(entry_anal['flagged_entries'])} flagged | "
+        f"stops verified={stop_cov['verified']} naked={len(stop_cov['naked'])} | "
+        f"alpaca fills={fills_sum['n_fills']}"
     )
 
     # ── Write JSON report to logs/ ────────────────────────────────────────────
@@ -885,6 +1048,8 @@ def main() -> None:
         "log_analysis":   log_anal,
         "postmortem":     postmortem,
         "pnl_analysis":   pnl_anal,
+        "stop_coverage":  stop_cov,
+        "alpaca_fills":   fills_sum,
     }
     _tmp = REPORT_PATH.with_suffix(".json.tmp")
     with open(_tmp, "w") as f:
@@ -898,11 +1063,13 @@ def main() -> None:
     high_stops   = entry_anal["stop_hit_rate"] >= STOP_HIT_WARN and entry_anal["entry_count"] > 0
     has_errors   = log_anal["error_count"] > 0
     session_loss = pnl_anal["total_pnl"] < -50   # flag sessions with significant realized loss
+    has_naked    = bool(stop_cov["naked"])                       # live position with no stop → top severity
+    stop_concern = (not stop_cov["verified"]) or bool(stop_cov["undercovered"])  # unverified/partial → review
 
-    if has_watchdog or (has_flagged and high_stops) or session_loss:
+    if has_naked or has_watchdog or (has_flagged and high_stops) or session_loss:
         emoji = ":rotating_light:"
         severity = "ACTION REQUIRED"
-    elif has_flagged or has_errors:
+    elif has_flagged or has_errors or stop_concern:
         emoji = ":warning:"
         severity = "REVIEW"
     else:
@@ -915,7 +1082,7 @@ def main() -> None:
     if GEMINI_API_KEY:
         logger.info("Running Gemini decision quality review...")
         gemini_prompt  = _build_gemini_prompt(entry_anal, mri_anal, log_anal,
-                                              pnl_anal, log_lines)
+                                              pnl_anal, log_lines, stop_cov, fills_sum)
         gemini_report  = _call_gemini(gemini_prompt)
         gemini_verdict = _extract_verdict(gemini_report)
 
@@ -939,8 +1106,7 @@ def main() -> None:
         from scripts.audit_slack import (build_pnl_fields, render_card,
                                          validate_no_pnl_rewrite, post_to_slack,
                                          findings_from_report)
-        positions = _fetch_live_positions()
-        if positions is None:
+        if positions is None:  # reuse the fetch from above; None → cannot build MTM card
             raise RuntimeError("live positions unavailable — cannot build MTM card")
         eod_dict = {}
         _eod_path = LOGS_DIR / f"eod_{AUDIT_DATE}.json"
@@ -955,6 +1121,22 @@ def main() -> None:
         for wl in log_anal["watchdog_lines"]:
             findings.insert(0, {"severity": "high", "title": "Watchdog restart",
                                 "detail": wl[:200]})
+        # Live stop-coverage findings (deterministic, code-computed). Naked = the
+        # CATASTROPHIC bar → critical, pinned to the top. Fail-safe: unverified
+        # renders as a HIGH "could not verify", never a silent all-clear.
+        if not stop_cov["verified"]:
+            findings.insert(0, {"severity": "high", "title": "Stop coverage UNVERIFIED",
+                                "detail": "Could not fetch live positions and/or open orders — "
+                                          "position protection NOT confirmed this run."})
+        else:
+            for u in stop_cov["undercovered"]:
+                findings.insert(0, {"severity": "high", "title": f"Under-covered stop — {u['symbol']}",
+                                    "detail": f"{u['side']} {u['pos_qty']:g}sh but stop covers only "
+                                              f"{u['stop_qty']:g}sh (partial naked exposure)."})
+            for n in stop_cov["naked"]:
+                findings.insert(0, {"severity": "critical", "title": f"NAKED POSITION — {n['symbol']}",
+                                    "detail": f"{n['side']} {n['qty']:g}sh with NO protective stop "
+                                              "order live at broker. Position left naked."})
         card_verdict = gemini_verdict if gemini_verdict != "UNKNOWN" else {
             "CLEAN": "PASS", "REVIEW": "WARN", "ACTION REQUIRED": "FAIL"}[severity]
         mri_close = mri_anal.get("last_level", "?")

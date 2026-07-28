@@ -7,7 +7,116 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-26 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-07-27 interactive, Rafael present) — pick up here
+
+**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### 🔴 ACTIVE — Gemini-reports value/noise audit + P&L reconciliation-noise fix (BGG COMPLETE)
+Rafael: the midday/nightly/meta Gemini reports keep flagging "pricing mismatch / P&L reconciliation"
+despite being told it was "permanently addressed." Full BGG (3 cold seats: masked-loss, reliability,
+data-integrity + Gro + GAI) + a per-report value/noise audit COMPLETE. **VERDICT: P1 noise, not P0
+capital** — masked-loss seat grep-PROVED `tracker_pnl`/`pnl_drift` have NO reader in any kill-switch/
+sizing/exposure path (kill switch was severed from the tracker after the 7/07 −73.86% phantom). Two
+upstream defects refract 3×: **(D1)** the bot stopped writing `entry` events 7+ days ago (real bug — all
+3 reports re-derive a phantom "0-entry / trade-accounting" failure daily); **(D2)** all 3 audits sample
+P&L PRE-heal (audits 1:30/4:05/4:35pm ET; ledger heal 8:30pm ET) → false CATASTROPHIC drift that self-
+heals to ~$0. Meta's Groq half is DEAD 6/6 days (400/prompt-too-big); its directive pipeline emits 0
+actionable (models cite a nonexistent file). Full design + per-report cut/sharpen/add: see this session.
+
+**Rafael GREEN-LIT the phased plan:**
+- **Phase 1 (reporting-only, shipping now):**
+  1. ✅ **audit_slack.py provenance-gate** (`fix/audit-slack-provenance-gate-2026-07-27`, commit `a25c002`
+     → PR): nightly Slack card keys off `_healed_by`/`pnl_unreconciled`, not raw `pnl_drift`; unhealed →
+     PROVISIONAL (never silently clean); genuine unreconciled → still alarms. Gate: statics + cold-2nd
+     PASS + Gro+GAI APPROVE (GAI false-premise reject on validate_no_pnl_rewrite reversed in 1 counter-
+     prompt). **← DONE THIS SESSION.**
+  2. ✅ **nightly_audit.py provenance-gate** (commit `dc37292`): `_collect_eod` now annotates the EOD
+     snapshot via new `_eod_pnl_provenance()` — keys off `_healed_by`/`pnl_unreconciled` (never drift
+     magnitude), relabels `pnl_drift`/`alpaca_pnl`/`tracker_pnl` into nested `_pnl_selfcheck_telemetry_NOT_A_LOSS`
+     while keeping `pnl_today`+`pnl_unreconciled` top-level; prompt benign-pattern bullet + scoped CATASTROPHIC
+     def; `_collect_modified_files` skips `.claude`/`tests`; + `audit_suppressions.jsonl` PNL_PREHEAL_DRIFT
+     backstop. **Masked-loss hardening (cold seat catch):** `_NEVER_SUPPRESS_TOKENS=("pnl_unreconciled",)`
+     guard makes it structurally impossible for the Slack post-filter to drop a genuine unreconciled finding
+     that co-mentions drift. Gate: full read 849L + RC-1..8 + statics + cold-2nd PASS + masked-loss SAFE +
+     FINAL Gro+GAI APPROVE (sha e1b0f4fd). **DEFERRED:** CYCLE-SYNC suppression (needs its real scan_to_html
+     phrasing — folds into Phase 3 R2) + full P5-queue refresh (needs current bug-state audit — own task).
+     **← DONE THIS SESSION.**
+  3. ✅ **midday_audit.py full rework** (commit `14ca2f5`, Rafael chose full-rework over minimal-label):
+     NOTE the handoff's old "L945-952 drift" pointer was imprecise — the midday Gemini prompt has NO
+     pnl_drift; the real noise was the D1-degraded matched-pair engine (`analyse_pnl`) reporting "0 trades/$0"
+     while exits exist → phantom accounting-FAIL. Fix: new `check_naked_stops()` (live position↔stop-order
+     cross-check, long→sell-stop/short→buy-stop, qty-coverage-aware, FAIL-SAFE: fetch fail → UNVERIFIED not
+     all-clear; naked → CATASTROPHIC card finding + ACTION REQUIRED) + `summarise_fills()` (Alpaca FILL activity
+     as ground truth) + scoped D1 note in the prompt + stop_coverage/alpaca_fills in report JSON. Gate: full read
+     1009L + RC-1..8 (RC-6 fields verified LIVE) + statics + LIVE smoke test (6 pos protected, None→verified=False,
+     naked→CATASTROPHIC) + cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). **DEFERRED
+     (pre-existing, Phase-2 root-resolves):** `session_loss` severity still reads degraded matched-pair total_pnl;
+     retire the D1 note once the entry emitter is fixed. **← DONE THIS SESSION.**
+  4. ✅ **reporting/pnl_ledger.py R3 stale-marker** (commit `8ee1962`): additive one-line
+     `eod["_telemetry_stale_after_heal"]=True` in `heal_history` per-day write (alongside `_healed_by`);
+     purely additive, does NOT mutate pnl_drift (never-mask; rename/nest = Phase 3). Gate: full read 737L +
+     RC-1..8 + statics + LIVE dry-run (invariant ok, 38 days, pnl_drift unmutated) + cold-2nd PASS + impact
+     clean + FINAL Gro+GAI APPROVE (sha 6481c45b; Gro false-premise 'overwrite' reject reversed in 1 counter-
+     prompt). Follow-up: teach a reader to honor the flag (or land Phase-3 rename/nest) so it isn't inert.
+     **← DONE THIS SESSION.**
+
+  ✅✅ **PHASE 1 COMPLETE (all 4 files gated & pushed).** Branch `fix/audit-slack-provenance-gate-2026-07-27`,
+  **PR #33 OPEN** (https://github.com/redstorm8705/alpaca-mtf-both/pull/33). Rafael GAVE GO to deploy.
+
+  🔴🔴 **BLOCKER — deploy stuck on a FALSE-REJECTING CI gate. Interrupted by a usage limit mid-fix
+  (resets 12:30am PT 2026-07-28). Resume EXACTLY here:**
+  - `main` is protected: required status check **"preship"** (`.github/workflows/preship-verify.yml` →
+    `.github/scripts/ci_audit.py`, a server-side Gemini audit with NO counter-prompt path).
+  - It FALSE-REJECTED PR #33 **twice** (both VERIFIED false at source + Gemini reversed on counter-prompt):
+    R1 "post_to_slack unhandled" (it's inside try/except L1159 + text fallback L1162; cited wrong line 1056 =
+    json.dump); R2 "`if positions is None: raise` unhandled + new fetches introduce error" (same try/except;
+    `check_naked_stops(None,..)`/`summarise_fills(None)` fail-safe to verified=False/available=False — verified LIVE).
+  - **Rafael chose: HARDEN THE CI PROMPT FIRST, then merge.** ✅ **ci_audit.py hardening GATED + SHIPPED**
+    (commit `76a2021`, pushed to branch): check #3 now requires confirming a raise is NOT enclosed by try/except
+    (incl. an `except:` many lines below in the same `try:`) before calling it "unhandled"; SELF-CHECK now requires
+    quoting the VERBATIM offending line (not a line number) + quoting the enclosing try/except (or proving absence);
+    None-safe-consumer clause. Prompt-string ONLY (`_verdict` parser + `main()` untouched). Gate: full read 236L +
+    statics (py_compile+mypy; ruff n/a this shell — string-only) + `_verdict` PARITY test PASS (both parsers lockstep)
+    + cold-2nd PASS (probed for a fail-OPEN hole — none; under-flagging = weaker audit, never a forced APPROVE) +
+    FINAL Gro+GAI APPROVE (sha `929f2dd1`). **← DONE THIS SESSION (STEP 0 resume-cron re-armed first, fires 3:12am PT).**
+  - 🔴 **3rd CI FALSE-REJECT (run 30330994285) — a NEW mode the hardening can't catch, VERIFIED FALSE + Gemini-
+    reversed.** With the hardened prompt live, CI flagged **`fetch_all_orders` in `reporting/pnl_ledger.py`** —
+    **PRE-EXISTING code this PR NEVER touches** (my pnl_ledger diff = a 7-line additive marker in `heal_history`) —
+    claiming a `&until=None` infinite loop. FALSE on 4 grounds at source: (1) `if not _next: break` at L229-232, two
+    lines below the quoted `_next=_bump_iso_ms(...)` line → `until` is never None; (2) `until=_next` only at L239,
+    AFTER both break guards; (3) `_max_pages=400` hard cap = no infinite loop; (4) `_get_json` is `timeout=_TIMEOUT`
+    + `tries=8` bounded, non-429 raises immediately. Also OUT OF SCOPE (CI prompt says "judge the CHANGE only").
+    Independent Gemini counter-prompt REVERSED to APPROVE in 1 round (confirmed all 4 + agreed out-of-scope).
+  - **⏭️ ESCALATED TO RAFAEL — decision fork (his authority; merge is a production-deploy hard-stop + `.github/`
+    CODEOWNERS needs his PR approval; I can't admin-bypass a protected check):** how to clear PR #33 given the
+    'preship' check has false-rejected **3×** (all verified-false + Gemini-reversed, no counter-prompt path)?
+    **REC = (A) admin-merge PR #33 now** — deploy is verified-correct + already GO'd — **AND build the REAL gate as a
+    follow-up:** a MECHANICAL diff-scope filter in ci_audit.py (a REJECT must quote a line that appears in the DIFF's
+    changed lines; wandering into full-file-context pre-existing code is auto-dropped). This is the DOCUMENTATION-IS-
+    NOT-ENFORCEMENT case: more prompt prose won't stop a stochastic reviewer from wandering out of scope — build the
+    filter. Alt (B) build the filter FIRST (purer, no bypass; delays a verified-correct deploy another gated cycle).
+  - After clear: (5) merge PR #33 → `main`. (6) OCI deploy: `ssh -i ~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250
+    "cd /home/ubuntu/mtf-bot && git pull origin main --ff-only && echo DEPLOY_OK"` — **NO service restart** (all 4 are
+    cron/reporting scripts, not run by the live services). Health-check the audit crons on next fire.
+  - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
+    gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped writing 7+ days).
+  - Follow-up (non-blocking): local `.claude/preship/preship_audit.py` prompt likely needs the SAME hardening as
+    ci_audit.py for consistency (both share `_verdict`; only ci_audit was hardened this session).
+  - R2 (scan_to_html "NOT AT BROKER") → **persistence-gate 2+ consecutive renders** (masked-loss REJECTED
+    auto-purge); Phase 3.
+- **Phase 2 (own gated diff, full BGG — trading path):** fix the broken `entry`-event emitter (D1) —
+  removes ~50-60% of cross-report noise at source.
+- **Phase 3:** midday/nightly/meta per-report tune-ups + meta Groq-prompt fix + repo-manifest + dead-voice
+  alert + trim 11k-row `delta_shadow` bloat.
+
+**PARKED (Rafael to un-park):** Q1 options-page close-time fix on `options_scanner.py` — BGG-approved design
+(per-symbol dynamic close via new `zdte_close_times()` helper: SPY/QQQ 4:15 / MAG7 4:00 ET, 15-min advisory
+exit buffer, advisory wording, ET-only). The helper is ALREADY ADDED to options_scanner.py (additive, unused,
+not wired, NOT shipped) — the 5 literal sites still need wiring. Interrupted by the reports audit.
+
+---
+
+## ⏩ PRIOR (2026-07-26 interactive, Rafael present)
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 

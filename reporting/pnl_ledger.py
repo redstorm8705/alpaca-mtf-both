@@ -608,6 +608,13 @@ def heal_history(dry_run: bool = True) -> dict:
         eod["pnl_unreconciled_reason"] = None
         eod["_healed_by"] = "pnl_ledger.heal_history"
         eod["_healed_at"] = now_iso
+        # R3 (BGG 2026-07-27, data-integrity seat): the heal supersedes pnl_today but
+        # does NOT touch the pre-heal self-check telemetry (pnl_drift/tracker_pnl/
+        # alpaca_pnl) — those keys remain in the file with their now-STALE pre-heal
+        # values. Stamp it as a fact in the data so any reader keys off _healed_by /
+        # this flag and can never mistake a stale self-check residual for a real loss.
+        # (Do NOT mutate/zero the telemetry — never-mask; rename/nest is Phase 3.)
+        eod["_telemetry_stale_after_heal"] = True
         result["eod_updated"].append({"date": day, "old": old, "new": new_intraday})
         if not dry_run:
             tmp = eod_path.with_suffix(".tmp")

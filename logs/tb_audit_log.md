@@ -9172,3 +9172,74 @@ proven no-source-.env auth works. Bogus 291 auth-failure rows cleared from OCI.
 re-run VERIFIED: 744 rows, 100% evaluable, zero unevaluable — the load_dotenv fix fully resolved the
 401. summarize() clean, all slices correctly actionable:false (3 sessions < 20-session gate). Early
 signal (not actionable): NEG-regime low-conviction 0DTE hit +100% target 70% (median MFE +122%, n=30).
+
+[2026-07-27] Phase 1 #1 of 4 — `audit_slack.py` provenance-gate SHIPPED (commit `a25c002`,
+branch `fix/audit-slack-provenance-gate-2026-07-27`). Gemini-reports value/noise audit: nightly Slack
+P&L card was flagging "reconciliation mismatch" off raw `pnl_drift` magnitude, which is sampled PRE-heal
+(audit 4:05pm ET; ledger heal 8:30pm ET) → daily false CATASTROPHIC that self-heals to ~$0. Fix:
+`build_pnl_fields` nightly branch keys off `_healed_by`/`pnl_unreconciled` provenance stamp, not raw
+drift; unhealed file renders PROVISIONAL (never silently "clean" — preserves a genuine invariant-fail
+alarm per masked-loss seat). Full read complete: 381 lines. RC-1..8 N/A (no datetime/path/except/
+exit-price/write/sizing on change surface). Impact: `build_pnl_fields` has 2 callers (nightly:809,
+midday:952), no caller consumes the mismatch return → display-only change. Gate: statics
+(py_compile+ruff+mypy) clean + cold-2nd PASS (docstring staleness fixed) + preship Gro APPROVE / GAI
+APPROVE (GAI false-premise reject on `validate_no_pnl_rewrite` reversed in 1 counter-prompt round —
+rogue=found−allowed only flags rendered figures; alarm string suppresses the number). BGG: 5 voices
+(masked-loss, reliability, data-integrity cold seats + Gro + GAI) aligned. Reporting-only, no trading
+path touched. NEXT: Phase 1 #2 = `nightly_audit.py` (stop feeding stale pnl_drift to LLM as CATASTROPHIC).
+
+[2026-07-27] Phase 1 #2 of 4 — `nightly_audit.py` provenance-gate SHIPPED (commit `dc37292`,
+branch `fix/audit-slack-provenance-gate-2026-07-27`). Root: `_collect_eod` dumped the raw EOD json
+(incl. pre-heal `pnl_drift`) into the Gemini prompt, and the prompt defined "P&L corruption=CATASTROPHIC"
+→ the stateless LLM cried CATASTROPHIC/FAIL daily on a self-check residual that self-heals at 8:30pm ET.
+Fix: new `_eod_pnl_provenance()` keys off `_healed_by`/`pnl_unreconciled` (never drift magnitude, mirrors
+audit_slack a25c002 build_pnl_fields), relabels drift telemetry into nested `_pnl_selfcheck_telemetry_NOT_A_LOSS`,
+keeps `pnl_today`+`pnl_unreconciled` top-level (never masks a real loss); 3-way header healed/unreconciled/
+pre-heal. Prompt: KNOWN-BENIGN bullet + scoped CATASTROPHIC def. `_collect_modified_files` skip_dirs +=
+`.claude`,`tests`. + `audit_suppressions.jsonl` PNL_PREHEAL_DRIFT (false_alarm, drift-specific keywords).
+MASKED-LOSS HARDENING (cold masked-loss seat catch): the keyword post-filter could silently drop a genuine
+`pnl_unreconciled=true` finding that co-mentions a drift number → added `_NEVER_SUPPRESS_TOKENS=("pnl_unreconciled",)`
+guard in `_match_directive` → a protected line matches NO directive, stays real/visible (fails toward visibility).
+Full read 849L/3 chunks. RC-1..8: RC-6 field names verified vs real eod json; rest N/A. Statics clean (x2,
+post-guard). Cold-2nd PASS + masked-loss lens SAFE. FINAL Gro+GAI APPROVE (sha e1b0f4fd). Reporting-only.
+DEFERRED: CYCLE-SYNC suppression (needs real scan_to_html phrasing → Phase 3 R2); P5-queue refresh (own task).
+NEXT: Phase 1 #3 = midday_audit.py.
+
+[2026-07-27] Phase 1 #3 of 4 — `midday_audit.py` FULL REWORK SHIPPED (commit `14ca2f5`, branch
+`fix/audit-slack-provenance-gate-2026-07-27`). Rafael chose full-rework over minimal-label. Real noise =
+D1-degraded `analyse_pnl` matched-pair engine ("0 trades/$0" while exits exist → phantom accounting-FAIL).
+Rework (read-only urllib, no execution import): new `check_naked_stops` (live position vs stop-order
+cross-check, long→sell-stop/short→buy-stop, qty-coverage aware; FAIL-SAFE fetch fail → UNVERIFIED not
+all-clear; naked → CATASTROPHIC + ACTION REQUIRED) + `summarise_fills` (Alpaca FILL ground truth) + scoped
+D1 note + stop_coverage/alpaca_fills in report JSON. Gate: full read 1009L/4 chunks + RC-1..8 (RC-6 fields
+verified LIVE) + statics + LIVE smoke test (6 pos protected, None→verified=False, naked→CATASTROPHIC) +
+cold-2nd PASS + masked-loss SAFE + FINAL Gro+GAI APPROVE (sha 06f4e11d). CARRY-FORWARD (pre-existing,
+Phase-2 resolves): session_loss reads degraded matched-pair total_pnl; D1 note retires when emitter fixed.
+NEXT: Phase 1 #4 = reporting/pnl_ledger.py.
+
+[2026-07-27] Phase 1 #4 of 4 — `reporting/pnl_ledger.py` R3 stale-marker SHIPPED (commit `8ee1962`).
+The 8:30pm ET heal supersedes pnl_today but leaves pre-heal self-check telemetry (pnl_drift/tracker_pnl/
+alpaca_pnl) in each eod file with now-stale values. Additive one-liner `eod["_telemetry_stale_after_heal"]=True`
+in heal_history per-day write (alongside _healed_by/_healed_at) stamps staleness as fact-in-data. Purely
+additive; does NOT mutate telemetry (never-mask; rename/nest = Phase 3). Full read 737L/3 chunks. RC-1..8:
+RC-5 rides existing tmp->replace atomic write; RC-6 new key follows _healed_by naming; rest N/A. Statics clean.
+LIVE dry-run: invariant ok (drift $0.86<$5), 38 days would heal, pnl_drift UNMUTATED. Cold-2nd PASS. Impact
+clean (3 heal_history refs are comments; no existing reader of new key). FINAL Gro+GAI APPROVE (sha 6481c45b);
+Gro false-premise "overwrite existing data" reject REVERSED in 1 counter-prompt round (disagreement protocol).
+=== PHASE 1 COMPLETE — all 4 Gemini-report noise fixes gated & pushed to branch. Awaiting Rafael GO for
+merge-to-main + OCI deploy. NEXT: Phase 2 = entry-emitter root fix (D1), trading-path, full BGG. ===
+
+=== 2026-07-27/28 (resume) ci_audit.py CI-PROMPT HARDENING (commit 76a2021) ===
+Full read 236L. Prompt-string ONLY (check #3 + SELF-CHECK: verbatim-quote not line-num, quote enclosing
+try/except or prove absence, None-safe-consumer clause). _verdict parser + main() UNTOUCHED. Statics:
+py_compile+mypy clean (ruff n/a this shell — string-only edit); _verdict PARITY test PASS (15 cases + 6
+fail-open probes, both parsers lockstep). Cold-2nd PASS — probed for a fail-OPEN hole: none; under-flagging
+yields a WEAKER audit (main() fails closed on REJECT/INDETERMINATE), never a forced APPROVE. FINAL Gro+GAI
+APPROVE (sha 929f2dd1). Pushed to PR #33 branch → preship CI re-ran on the hardened prompt.
+3rd CI FALSE-REJECT (run 30330994285): flagged fetch_all_orders (reporting/pnl_ledger.py) — PRE-EXISTING,
+UNCHANGED code (this PR = 7-line marker in heal_history) — for a &until=None loop. VERIFIED FALSE 4 grounds:
+(1) `if not _next: break` L229-232 two lines below the quoted line → until never None; (2) until=_next only
+L239 after both breaks; (3) _max_pages=400 hard cap; (4) _get_json timeout+tries=8 bounded, non-429 raises.
+Out of scope (unchanged code). Gemini counter-prompt REVERSED to APPROVE in 1 round. ESCALATED TO RAFAEL:
+clear PR #33 (3× false-reject, no counter-prompt path) — REC admin-merge now + build mechanical diff-scope
+filter (reject must quote a changed line) as the real DOCUMENTATION-IS-NOT-ENFORCEMENT gate.
