@@ -90,20 +90,23 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
   - ✅✅ **RESOLVED — Rafael chose (A) admin-merge now + fix CI after. PHASE 1 DEPLOYED TO PRODUCTION.**
     `enforce_admins=true` blocks even an `--admin` CLI bypass, and `strict=true` (branches must be up-to-date) +
     a routine auto-sync PR (#34) moving `main` kept the check "expected." Cleared WITHOUT touching branch-protection
-    settings: merged `origin/main` into the branch (clean — main had only 7 non-gated log files) → the incremental
-    push diff preship audits was docs-only → **preship PASS** on an up-to-date head → **normal merge** (no bypass
-    needed; review_count=0, code-owner reviews off — the only gate was a green preship). **PR #33 merged → `main`
-    (20b19fa)**; OCI `git pull --ff-only` returned **DEPLOY_OK** (no restart — all cron/reporting scripts). Audit
-    crons pick up the new code on next fire (midday 1:30pm / nightly 4:05pm / meta 4:35pm / ledger heal 8:30pm ET).
-  - 🔶 **GAP FOUND (feeds the CI-filter follow-up):** the preship workflow audits the **incremental push diff**, not
-    PR-vs-base — so a gated commit followed by a docs-only push turns the required check GREEN without re-auditing the
-    code (this is literally how the merge cleared). The mechanical filter MUST also switch the workflow to diff
-    **PR-head vs merge-base(main)** so the full change is always audited, else the whole gate is push-washable.
-  - **⏭️ NEXT (Rafael's "fix CI after"): build the mechanical CI gate** — (1) `ci_audit.py`: a REJECT is only valid
-    if its verbatim-quoted offending line appears in the DIFF's added/changed lines (auto-drop rejects that quote
-    pre-existing full-file-context code — the 3rd false-reject class); (2) `preship-verify.yml`: audit PR-vs-base,
-    not the incremental push (close the push-wash gap above). Execution-governing → full gate + FINAL Gro+GAI +
-    self-application preship. THEN **Phase 2** — the `entry`-event emitter root fix (D1), trading-path, full BGG.
+    settings: merged `origin/main` into the branch (clean — main had only 7 non-gated log files) to satisfy `strict`;
+    preship then re-ran on the **full PR-vs-base diff** (all 5 gated files) and the **stochastic reviewer APPROVED**
+    (runs 2 & 3 both approved the exact full diff run 1 had rejected — VERIFIED in run 30331270279's log: gated=all 5,
+    external audit ran, VERDICT APPROVE) → **normal merge** on the green check (review_count=0, code-owner reviews off).
+    **PR #33 merged → `main` (20b19fa)**; OCI `git pull --ff-only` returned **DEPLOY_OK** (no restart — all cron/
+    reporting scripts). Audit crons pick up the new code on next fire (midday 1:30 / nightly 4:05 / meta 4:35 / heal 8:30pm ET).
+  - ⚠️ **CORRECTION (VERIFY-AT-SOURCE, self-caught):** an earlier note here claimed a "push-wash gap" (preship
+    audits the incremental push diff, so a docs-only push greens the check). **THAT WAS WRONG** — the workflow diffs
+    `pull_request.base.sha`..`head.sha` = **full PR-vs-base every time** (preship-verify.yml L59-61), CONFIRMED by run
+    30331270279's log (gated files = all 5 Phase 1 .py, not docs-only). No push-wash gap exists; **no workflow change
+    needed.** The only real issue is the reviewer being STOCHASTIC (approves/rejects the same full diff run-to-run).
+  - **⏭️ NEXT (Rafael's "fix CI after"): the mechanical CI reject-scope filter — `ci_audit.py` ONLY** (no YAML change):
+    a REJECT is valid only if its verbatim-quoted offending line appears in the DIFF's added/changed lines; a reject
+    that quotes ONLY pre-existing full-file-CONTEXT code (the run-1 `fetch_all_orders` class) is auto-downgraded.
+    FAIL-CLOSED bias: downgrade ONLY on a POSITIVE confirmation the quoted text is absent from the diff's changed
+    lines; if the match is ambiguous, KEEP the reject. Execution-governing → full gate + FINAL Gro+GAI + self-
+    application preship. THEN **Phase 2** — the `entry`-event emitter root fix (D1), trading-path, full BGG.
   - **THEN Phase 2** — fix the `entry`-event emitter (D1), the true root (~50-60% of noise). Trading-path → own
     gated diff + FULL BGG. First step: VERIFY D1 at source (confirm entry events stopped writing 7+ days).
   - Follow-up (non-blocking): local `.claude/preship/preship_audit.py` prompt likely needs the SAME hardening as

@@ -9253,3 +9253,12 @@ all cron/reporting scripts). GAP FOUND: preship audits the incremental PUSH diff
 commit + a docs-only push turns the check green without re-auditing (push-washable). NEXT = mechanical CI gate:
 (1) ci_audit reject valid only if its verbatim-quoted line is in the DIFF's changed lines; (2) preship-verify.yml
 diff PR-vs-base not incremental. THEN Phase 2 (D1 entry-emitter, trading path, full BGG).
+
+=== 2026-07-28 (resume) CORRECTION to the entry above (VERIFY-AT-SOURCE, self-caught) ===
+The "GAP FOUND: preship audits the incremental PUSH diff / push-washable" claim above is WRONG. preship-verify.yml
+L59-61 diffs pull_request.base.sha..head.sha = FULL PR-vs-base every run. CONFIRMED at source in run 30331270279's
+log: gated files = all 5 Phase 1 .py (NOT docs-only), external audit RAN, VERDICT APPROVE. So the merge's green
+check was the STOCHASTIC reviewer approving the full diff (runs 2&3 approved what run 1 rejected), not a scope
+narrowing. NO push-wash gap; NO workflow change needed. "fix CI after" is narrower: ci_audit.py reject-scope filter
+ONLY — a REJECT valid only if its verbatim-quoted line is in the diff's CHANGED lines; fail-CLOSED (keep reject if
+the match is ambiguous). Corrects the record per DOCUMENTATION-IS-NOT-ENFORCEMENT / don't-propagate-unverified.
