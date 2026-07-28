@@ -162,8 +162,68 @@ def _collect_trade_events() -> str:
         return f"(Error reading trade_events.jsonl: {e})"
 
 
+def _eod_pnl_provenance(eod: dict) -> tuple[dict, str]:
+    """Return (llm_safe_copy, provenance_header) for an EOD dict so the STATELESS
+    LLM auditor can never read a PRE-HEAL self-check `pnl_drift` as P&L corruption.
+
+    Keys off the `_healed_by` provenance stamp + `pnl_unreconciled` — NEVER off
+    `pnl_drift` magnitude (BGG 2026-07-27: masked-loss + reliability + data-integrity
+    cold seats + Gro + GAI; mirrors scripts/audit_slack.build_pnl_fields). Rationale:
+    `pnl_drift`/`alpaca_pnl`/`tracker_pnl` are a PRE-HEAL dual-compute self-check —
+    the authoritative ledger heal runs 8:30pm ET, AFTER this 4:05pm ET audit, so a
+    nonzero drift is EXPECTED and self-heals overnight. That telemetry has NO reader
+    in any kill-switch/sizing/exposure path (grep-proven; severed after the 2026-07-07
+    incident), so it can never be "P&L corruption affecting live risk decisions." The
+    authoritative same-day realized P&L is `pnl_today`; the ONLY genuine reconciliation
+    signal is `pnl_unreconciled` (+ reason).
+
+    Relabels the self-check telemetry into a nested, self-documenting key so the LLM
+    cannot latch onto a raw top-level `pnl_drift` as a loss, while keeping the
+    authoritative + genuine-alarm fields (`pnl_today`, `pnl_unreconciled`, `_healed_by`)
+    fully visible — this never masks a real loss (the real loss signal stays surfaced).
+    Fails safe: on any malformed input it returns the dict unchanged with an empty
+    header (the raw dump + the prompt-level rule still apply)."""
+    try:
+        safe = dict(eod)
+        healed = bool(safe.get("_healed_by"))
+        unreconciled = bool(safe.get("pnl_unreconciled"))
+        pnl_today = safe.get("pnl_today", safe.get("alpaca_pnl"))
+        selfcheck = {}
+        for k in ("pnl_drift", "alpaca_pnl", "tracker_pnl", "alpaca_per_trade"):
+            if k in safe:
+                selfcheck[k] = safe.pop(k)
+        if selfcheck:
+            selfcheck["_note"] = ("PRE-HEAL self-check telemetry (Alpaca-fills vs internal "
+                                  "tracker), sampled before the 8:30pm ET ledger heal. NOT a "
+                                  "loss, NOT P&L corruption, NO reader in any risk/sizing/kill "
+                                  "path. Authoritative same-day P&L is `pnl_today`.")
+            safe["_pnl_selfcheck_telemetry_NOT_A_LOSS"] = selfcheck
+        if unreconciled:
+            header = ("EOD P&L PROVENANCE: pnl_unreconciled=TRUE — GENUINE ledger-flagged "
+                      f"reconciliation state (reason: {safe.get('pnl_unreconciled_reason', 'n/a')}). "
+                      "Flag as WARN (heal-pending) and cite `pnl_unreconciled_reason`; do NOT "
+                      "escalate to CATASTROPHIC on drift magnitude. Authoritative same-day "
+                      f"P&L = pnl_today={pnl_today}.")
+        elif healed:
+            header = (f"EOD P&L PROVENANCE: RECONCILED (healed via {safe.get('_healed_by')}). "
+                      f"Same-day realized P&L = pnl_today={pnl_today} is authoritative. Any "
+                      "self-check drift is a healed residual — NOT a loss, NOT corruption.")
+        else:
+            header = ("EOD P&L PROVENANCE: PRE-HEAL / PROVISIONAL — snapshot taken before "
+                      "tonight's 8:30pm ET ledger heal (this audit runs 4:05pm ET). Any drift is "
+                      f"EXPECTED and self-heals. Authoritative same-day P&L = pnl_today={pnl_today}. "
+                      "Do NOT treat drift as corruption/CATASTROPHIC.")
+        return safe, header
+    except Exception as e:
+        logger.warning("EOD P&L provenance annotation failed (%s) — dumping raw EOD "
+                       "(prompt-level drift rule still applies)", e)
+        return eod, ""
+
+
 def _collect_eod() -> str:
-    """Today's EOD snapshot."""
+    """Today's EOD snapshot, with a deterministic P&L-provenance annotation so the
+    stateless LLM auditor can never read a PRE-HEAL self-check `pnl_drift` as P&L
+    corruption (BGG 2026-07-27). Keys off `_healed_by`/`pnl_unreconciled`, never drift."""
     eod_path = LOGS_DIR / f"eod_{AUDIT_DATE}.json"
     if not eod_path.exists():
         # try yesterday
@@ -173,7 +233,12 @@ def _collect_eod() -> str:
         return "(No EOD snapshot found)"
     try:
         with open(eod_path) as f:
-            return json.dumps(json.load(f), indent=2)
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            safe, header = _eod_pnl_provenance(raw)
+            body = json.dumps(safe, indent=2)
+            return f"{header}\n\n{body}" if header else body
+        return json.dumps(raw, indent=2)
     except Exception as e:
         return f"(Error reading EOD: {e})"
 
@@ -182,7 +247,10 @@ def _collect_modified_files() -> dict[str, str]:
     """Source .py files modified in the last 24h."""
     cutoff = datetime.now(UTC).timestamp() - 86_400
     modified = {}
-    skip_dirs = {"__pycache__", "backtest", ".git", "logs", "venv", ".venv"}
+    # `.claude`/`tests` excluded (BGG 2026-07-27): nightly's job is post-close review of
+    # the day's EXECUTION commits — tooling/harness and test files are not the trading
+    # path and only add review noise (per-report value/noise audit, GAI concurrence).
+    skip_dirs = {"__pycache__", "backtest", ".git", "logs", "venv", ".venv", ".claude", "tests"}
     for py_file in BASE_DIR.rglob("*.py"):
         if any(part in skip_dirs for part in py_file.parts):
             continue
@@ -328,6 +396,7 @@ Remember: cite all fields for one trade from ONE record (same "ts"), never mix r
 ## KNOWN BENIGN PATTERNS (do NOT flag these as bugs)
 - "EOD summary written" or "Alpaca FIFO EOD" lines every ~5 min: periodic crash-safety flushes — intentional. Flag ONLY if spacing > 20 min (missed flush) or < 1 min (runaway loop).
 - "A-4 paper fills gap: Alpaca returned 0 fills": Alpaca paper accounts do not expose same-day fills until next-day settlement. Bot falls back to tracker P&L correctly. NOT a trade accounting failure.
+- EOD `pnl_drift` / any "reconciliation mismatch" / "P&L drift" between alpaca_pnl and tracker_pnl: PRE-HEAL dual-compute self-check TELEMETRY sampled at 4:05pm ET, BEFORE the authoritative 8:30pm ET ledger heal. A nonzero drift is EXPECTED and self-heals overnight; it has NO reader in any kill-switch/sizing/exposure path (severed after 2026-07-07). It is NEVER P&L corruption and NEVER CATASTROPHIC. The authoritative same-day P&L is `pnl_today`. The ONLY genuine reconciliation signal is `pnl_unreconciled=true` (+ `pnl_unreconciled_reason`) — flag THAT as WARN (heal-pending), never CATASTROPHIC on drift magnitude. See the EOD P&L PROVENANCE header in the EOD SNAPSHOT section.
 - 5 simultaneous open positions: BUCKET_B_MAX_POSITIONS_POWER=5 — intentional power-hour expansion during 9:35–10:00 AM ET. NOT a max-positions violation.
 - Error 42210000 from GTC stop submission during extended hours (pre-RTH / after RTH close): known open bug OM-BUG-1 in orphan_manager.py, tracked. Do NOT flag pre-RTH occurrences. DO flag if 42210000 occurs during RTH (9:30–16:00 ET) as that indicates a halt/circuit-break anomaly.
 - MRI refresh events every 2 minutes: normal macro regime sampling, not a loop.
@@ -397,7 +466,11 @@ List ONLY items meeting the CATASTROPHIC bar below, or write "None — no
 catastrophic conditions detected." One line each: file/function | exact
 failure condition | impacted symbol/trade if applicable.
   CATASTROPHIC = position left naked (no stop), silent trading halt, P&L
-  corruption affecting live risk decisions, kill switch triggered but not
+  corruption affecting live risk decisions (NOTE: a pre-heal `pnl_drift` /
+  "reconciliation mismatch" is NOT this — it has no reader in any live-risk/
+  sizing/kill path; only `pnl_unreconciled=true` is a genuine reconciliation
+  signal, and that is WARN, not CATASTROPHIC, unless independently confirmed to
+  affect a live risk decision), kill switch triggered but not
   respected, any order lifecycle break (submitted but never tracked).
 
 ### VERDICT: [PASS | WARN | FAIL]
@@ -547,10 +620,23 @@ def _load_suppressions() -> list[dict]:
     return out
 
 
+# Hard masked-loss guard (2026-07-27, masked-loss cold seat): a finding LINE that
+# mentions a genuine-alarm token can NEVER be keyword-suppressed — even if it also
+# co-mentions a suppressed keyword (e.g. a real `pnl_unreconciled=true` finding whose
+# visible symptom is a `pnl_drift` number). Keyword-on-line suppression is a blunt
+# instrument; this makes silently dropping a genuine reconciliation alarm structurally
+# impossible. Fails toward visibility (a protected line stays real/unfiltered).
+_NEVER_SUPPRESS_TOKENS = ("pnl_unreconciled",)
+
+
 def _match_directive(line: str, sup: list[dict]) -> dict | None:
     """Return the first directive with a match_keyword that is a case-insensitive
-    substring of `line`, else None. Conservative: only curated keywords match."""
+    substring of `line`, else None. Conservative: only curated keywords match.
+    A line carrying any _NEVER_SUPPRESS_TOKENS is protected — it matches NO directive,
+    so a genuine alarm can never be dropped or downgraded (masked-loss invariant)."""
     low = line.lower()
+    if any(tok in low for tok in _NEVER_SUPPRESS_TOKENS):
+        return None
     for d in sup:
         # match_keywords are guaranteed non-empty strings by _load_suppressions.
         for kw in d.get("match_keywords", []):
