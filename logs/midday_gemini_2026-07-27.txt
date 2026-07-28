@@ -1,0 +1,79 @@
+Midday Gemini Audit — 2026-07-27
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+The `Session P&L Summary` is severely inconsistent and renders an accurate performance audit impossible for this session.
+1.  **Entries/Exits/Closed Trades Discrepancy**: The `Session P&L Summary` reports `Entries: 0`, `Exits: 3`, `Closed trades: 0`, and `Total P&L: $0.00`.
+    *   This contradicts the `ledger_sync` entries at `2026-07-27 17:20:09,386` which show `[NET] net=1.0 intraday=1.0`, `[SMCI] net=-1.0 intraday=-1.0`, and `[UBER] net=-1.0 intraday=-1.0`. These non-zero `intraday` net positions imply that intraday entries *did* occur, directly contradicting `Entries: 0`.
+    *   The `Alpaca FIFO EOD` log at `2026-07-27 17:20:04,145` (and again at `17:26:09,033`) states `fills=6 lots_closed=5`, indicating 5 lots were closed. This directly contradicts `Closed trades: 0`.
+2.  **P&L Inconsistency**: `Total P&L: $0.00` is reported in the summary, yet the `execution.portfolio_tracker` logs `pnl_today from pnl_ledger (authoritative): $-5.94 intraday`. This means actual P&L for intraday activity was tracked as negative, but the summary reports zero.
+3.  **Stop-hit Rate Contradiction**: The `Stop-hit rate` is reported as `0% (2 stops)`. It is logically impossible for the stop-hit rate to be `0%` if `2 stops` were hit. If 2 stops were hit out of 3 exits, the rate should be approximately `66.6%`.
+4.  **Score-to-Outcome Correlation**: Cannot be assessed due to `Entries: 0` in the summary masking actual intraday entries, and no closed trade details provided.
+
+### ENTRY QUALITY
+Adaptive mechanisms for entry quality are actively engaged:
+*   `Mid-day doldrums — sizing at 75%` and `MRI STRESSED (score=44) — size floor 0.70x applied` demonstrate active risk-off sizing.
+*   `Dynamic MIN_SCORE: raised to 10/12` due to market conditions (MRI, GEX) successfully filtered out 11 signals, correctly raising the bar for entries under stressed conditions.
+*   Specific entry blockers functioned as expected for signals evaluated during the `17:25:08 ET` cycle:
+    *   `[TSLA] BoD-5R MINIMUM-LOT: dollar_cap $45.38 < $50 ... skipping entry`.
+    *   `[NET] ORB gate BLOCK (long): SPY 736.65 ≤ ORB_H 745.53`.
+    *   `[DDOG] ORB gate BLOCK (long): SPY 736.65 ≤ ORB_H 745.53`.
+    *   `[TSLL] Leveraged ETF long-only — skipping short signal`.
+    *   `[XOM] ORB gate BLOCK (long): SPY 736.65 ≤ ORB_H 745.53`.
+However, the contradiction between `Session P&L Summary (Entries: 0)` and `ledger_sync` indicating prior intraday entries (`[NET] net=1.0 intraday=1.0`, `[SMCI] net=-1.0 intraday=-1.0`, `[UBER] net=-1.0 intraday=-1.0`) prevents a complete assessment of *all* entry quality for the session.
+
+### EXIT QUALITY
+Cannot assess exit quality (e.g., hold winners too long, cut losers too slowly) due to the absence of `CLOSED TRADE DETAILS`. The `Session P&L Summary` reports `Exits: 3` and `Stop-hit rate: 0% (2 stops)`, but lacks specific trade data to verify these claims or analyze their quality. The contradictory stop-hit rate itself indicates a reporting issue. The `[ANOMALY-3] TQI degradation` warning suggests a systematic problem with `exit discipline and stop placement`.
+
+### MRI ALIGNMENT
+MRI alignment is functioning as expected:
+*   The system detected a `STRESSED` MRI level (44/100).
+*   In response, `size floor 0.70x` was applied.
+*   The `Dynamic MIN_SCORE` was raised to `10/12`, indicating a stricter filter for new entries under adverse conditions.
+*   The `vol_regime` was `NEUTRAL` earlier, but the `MRI news injection` and subsequent `MRI STRESSED` correctly triggered defensive sizing.
+
+### LOG ANOMALIES
+*   `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.89 tracker=$-5.94 drift=$+14.83` (repeated twice at `17:20:08,135` and `17:26:13,020`). This indicates a persistent and significant discrepancy between Alpaca's P&L reporting and the bot's authoritative internal tracker.
+*   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.` (`17:25:27,458`). This is a self-diagnostic warning indicating a problem with the strategy's recent performance.
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | P&L Summary & Trade Accounting Discrepancy**
+    The variables `Entries`, `Exits`, `Closed trades`, and `Total P&L` in the `Session P&L Summary` are inconsistent with other internal logs and accounting information.
+    *   **Exact variable/metric involved**: `Entries`, `Exits`, `Closed trades`, `Total P&L` in `Session P&L Summary`.
+    *   **Value vs. what it should be and why it constitutes a failure**:
+        *   `Entries: 0` vs. `ledger_sync` showing `[NET] net=1.0 intraday=1.0`, `[SMCI] net=-1.0 intraday=-1.0`, `[UBER] net=-1.0 intraday=-1.0`. These `intraday` positions imply entries occurred, making `Entries: 0` incorrect. This failure masks actual trading activity.
+        *   `Closed trades: 0` vs. `Alpaca FIFO EOD: ... lots_closed=5`. If 5 lots were closed, then `Closed trades` should be at least 1 (potentially multiple trades). This misrepresents trade closure.
+        *   `Total P&L: $0.00` vs. `pnl_today from pnl_ledger (authoritative): $-5.94 intraday`. The summary reports zero P&L despite the authoritative ledger indicating a loss. This renders the P&L summary unreliable.
+    *   **Exact condition under which this occurs**: These inconsistencies occur in the session summary for `2026-07-27` based on comparisons with the `ledger_sync` and `Alpaca FIFO EOD` logs within the same report.
+
+2.  **INFRASTRUCTURE | HIGH | EOD P&L Drift**
+    There is a significant and repeated discrepancy between the Alpaca-reported P&L and the bot's authoritative tracker P&L at the end of a cycle.
+    *   **Exact variable/metric involved**: `Alpaca=$8.89`, `tracker=$-5.94`, `drift=$+14.83` as logged by `execution.portfolio_tracker`.
+    *   **Value vs. what it should be and why it constitutes a failure**: The `drift` value of `$+14.83` is a substantial difference between the two P&L figures. While Alpaca paper account fills can be delayed (a benign pattern), a P&L drift of this magnitude suggests a core accounting discrepancy that undermines confidence in real-time P&L accuracy and potential impact on risk calculations or performance evaluation.
+    *   **Exact condition under which this occurs**: Logged by `execution.portfolio_tracker` with the message `EOD P&L DRIFT: Alpaca=$8.89 tracker=$-5.94 drift=$+14.83` at `2026-07-27 17:20:08,135` and `2026-07-27 17:26:13,020`.
+
+3.  **EXECUTION BUG | HIGH | Stop-Hit Rate Calculation/Reporting Error**
+    The calculated and reported `Stop-hit rate` is logically impossible given the number of stops hit.
+    *   **Exact variable/metric involved**: `Stop-hit rate` in `Session P&L Summary`.
+    *   **Value vs. what it should be and why it constitutes a failure**: The value `0%` is reported for `Stop-hit rate` while simultaneously stating `(2 stops)` were hit. If 2 stops were hit out of 3 exits, the rate should be `(2/3)*100 = 66.6%`. Reporting 0% is a fundamental mathematical error that provides misleading performance metrics.
+    *   **Exact condition under which this occurs**: In the `Session P&L Summary` for `2026-07-27`.
+
+4.  **ALPHA ISSUE | MEDIUM | ATR Multiplier Discrepancy**
+    The ATR multipliers used for stop and target calculation for TSLA diverge significantly from the `CONFIG CONSTANTS`.
+    *   **Exact variable/metric involved**: `stop 1.875x` and `target 3.9062500000000004x` for TSLA as reported by `execution.risk_manager`.
+    *   **Value vs. what it should be and why it constitutes a failure**: The resolved `CONFIG CONSTANTS` are `INTRADAY_STOP_ATR_MULT = 1.2` and `INTRADAY_TARGET_ATR_MULT = 2.5`. The reported multipliers (1.875x for stop, 3.90625x for target) are significantly higher. Without explicit logging of dynamic multiplier adjustments, this indicates either an un-documented or incorrectly applied modification to risk parameters, potentially leading to wider stops/targets than configured.
+    *   **Exact condition under which this occurs**: When `execution.risk_manager` calculates `ATR-based stop` for `[TSLA]` at `2026-07-27 17:26:05,790`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: Immediately investigate and fix the `Session P&L Summary` reporting logic. Ensure `Entries`, `Exits`, `Closed trades`, `Total P&L`, and `Stop-hit rate` accurately reflect all trade activities and synchronize with the authoritative `pnl_ledger` and `Alpaca FIFO EOD` counts. This is critical for transparent performance monitoring.
+2.  **INFRASTRUCTURE**: Prioritize debugging the `EOD P&L DRIFT`. Identify the root cause of the `$+14.83` discrepancy between Alpaca's P&L and the `tracker`'s P&L. Confirm that the authoritative tracker correctly incorporates all fills and positions.
+3.  **ALPHA**: Address the `[ANOMALY-3] TQI degradation` by performing a detailed review of `exit discipline and stop placement` for recent trades. Analyze the specific characteristics of the last 5 trades that contributed to the low `29.8/100` TQI score to identify systematic issues.
