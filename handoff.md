@@ -11,6 +11,22 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+### ✅ STATUS (2026-07-28 resume, Rafael present) — Phase 1 + CI-hardening + Phase 2(D1) ALL SHIPPED & DEPLOYED
+- **Phase 1** (4 reporting files) — merged PR #33 → main, OCI DEPLOY_OK (no restart). ✅
+- **CI majority-vote** (`ci_audit.py`, PR #35, bcafa1e) — the preship reviewer is stochastic; now runs 3× and
+  ships iff ≥2/3 APPROVE. Self-validated 3/3 in prod. ✅ (Earlier "push-wash gap" claim was WRONG/corrected —
+  preship already diffs PR-vs-base; the real issue was reviewer stochasticity.)
+- **Phase 2 (D1 ROOT FIX)** — `trade_logger.py` (PR #36, main 38fcb36). Entry events were silently dropped 7
+  days: a `numpy.bool_` in the entry `conditions` payload made `json.dumps` raise, and the broad except
+  swallowed it. Fixed at the serialization boundary (`default=_json_default`). **OCI git pull + RESTART +
+  DEPLOY_OK; health OK; verified loaded on the live venv** (`_json_default` coerces numpy.bool_→true). Board
+  (McKinney+Majors) APPROVE + Gro+GAI APPROVE + cold-2nd PASS. ✅ The next entry writes correctly.
+- **⏭️ NEXT:** (a) **Observability follow-up (board-required, non-blocking, NOT yet done):** escalate
+  `trade_logger.py` outer `except` (L~117) to ERROR + Slack on repeated write failures — the silent swallow is
+  WHY D1 went unnoticed 7 days; own small gated diff. (b) **D2 / Phase 3** — per-report tune-ups, meta Groq
+  prompt fix (dead 6/6 days), 11k-row `delta_shadow` bloat trim, repo-manifest + dead-voice alert.
+  (c) **PARKED:** options_scanner.py `zdte_close_times()` wiring (still un-shipped in working tree).
+
 ### 🔴 ACTIVE — Gemini-reports value/noise audit + P&L reconciliation-noise fix (BGG COMPLETE)
 Rafael: the midday/nightly/meta Gemini reports keep flagging "pricing mismatch / P&L reconciliation"
 despite being told it was "permanently addressed." Full BGG (3 cold seats: masked-loss, reliability,

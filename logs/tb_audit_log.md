@@ -9272,3 +9272,18 @@ _fail. INDETERMINATE never counts toward APPROVE. _verdict() UNCHANGED (parity t
 mypy+ruff clean; verdict-parity PASS; functional 8/8 (2A1R->ship [the goal]; 1A2R/3xINDET/1A1R1I/1A2I->fail
 closed); cold-2nd PASS (no fail-open, need=2 boundary correct, no key leak); FINAL Gro+GAI APPROVE (775ae323).
 NEXT: open PR (self-validates on 3-sample logic) -> merge -> then Phase 2 (D1 entry-emitter, trading path, BGG).
+
+=== 2026-07-28 (resume) PHASE 2 (D1) SHIPPED — trade_logger.py numpy-serialization fix (PR #36, main 38fcb36) ===
+Root (proven at source): entry `conditions` payload carried numpy.bool_ (added 0c2db0d); json.dumps raised
+"Object of type bool is not JSON serializable"; log_event's broad except swallowed it as WARNING -> EVERY entry
+event dropped 7 days (07-20..27) while exits wrote -> all 3 audits re-derived phantom "0 trades". Fix: module
+_json_default(o) coerces numpy scalars via .item() (JSON-native guard) else str(); wired as json.dumps(record,
+default=_json_default). Event LOG only, never P&L/kill-switch -> cannot mask a loss. Gates: full read 91L +
+RC-1..8 + py_compile/mypy/ruff clean + functional repro (baseline numpy.bool_ RAISES; fixed writes+parses;
+numpy.int64/float64 faithful) + cold-2nd PASS (re-raise-safe: isinstance guard admits only JSON-native, str()
+fallback always serializable; no masking; no regression) + BOARD APPROVE (McKinney data-integrity: correct
+serialization boundary, faithful; Majors observability: restores signal, never crashes caller) + FINAL Gro+GAI
+APPROVE (sha 3e5c3ebc). Deployed: OCI git pull + RESTART (live trading-path) + DEPLOY_OK; health OK; _json_default
+verified loaded on live venv. CI preship self-validated via new 3-sample vote (3/3 APPROVE).
+FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->WARNING, L~117) is WHY this went
+7 days unnoticed -> escalate repeated log_event write failures to ERROR + Slack (own small gated diff, Majors).
