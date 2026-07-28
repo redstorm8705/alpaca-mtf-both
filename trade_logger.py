@@ -27,6 +27,7 @@ Usage:
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -43,6 +44,17 @@ _STOP_REASONS = frozenset({
     "hard_stop", "trail_stop", "gtc_stop_triggered",
     "overnight_atr_buffer_exit", "breakeven_stop",
 })
+
+# ── Write-failure operator alert throttle (observability follow-up to D1) ──────
+# A persistent write failure fires on ~every event, so escalate LOUDLY (ERROR +
+# Slack) but at most once per window — this bounds BOTH operator spam AND blocking
+# of the run_cycle trading thread on the synchronous (urllib, ~4s) Slack send.
+# In-memory (NOT a state file) on purpose: this runs inside the disk-write failure
+# handler, so a throttle-state file write could itself fail. 3600s is an operator-
+# cadence choice — no historical data to derive it from (flagged per no-static rule);
+# it surfaces a persistent outage within the first trading hour without spamming.
+_WRITE_FAIL_ALERT_THROTTLE_S = 3600.0
+_last_write_fail_alert = 0.0
 
 
 def _json_default(o):
@@ -115,4 +127,35 @@ def log_event(
         with open(_JSONL, "a") as f:
             f.write(json.dumps(record, default=_json_default) + "\n")
     except Exception as e:
-        logger.warning(f"trade_events.jsonl write failed: {e}")
+        # Observability follow-up to D1 (2026-07-28): escalate the previously-silent
+        # WARNING to ERROR + a throttled operator Slack. A silent WARNING let a 7-day
+        # entry-write outage hide. ERROR is free/non-blocking. The Slack send is
+        # synchronous (urllib ~4s) and log_event runs on the run_cycle trading thread,
+        # so it is BOTH throttled (≤1 send/window bounds trading-thread blocking) AND
+        # fully guarded (a failed/blocked alert must never crash or stall the caller).
+        # Event LOG path only — never P&L or a trade decision — so alerting cannot mask
+        # a loss. `event`/`symbol` are function parameters, always in scope here.
+        logger.error(f"trade_events.jsonl write FAILED ({event} {symbol}): {e}")
+        global _last_write_fail_alert
+        _now = time.monotonic()
+        if _now - _last_write_fail_alert >= _WRITE_FAIL_ALERT_THROTTLE_S:
+            # stamp BEFORE send: caps trading-thread blocking at ≤1×4s per window,
+            # even if Slack is down (a failed send does not reset the throttle).
+            _last_write_fail_alert = _now
+            try:
+                # Lazy import (only on this rare, throttled path) ON PURPOSE: a
+                # top-level alerts import would put alerts.py in trade_logger's import
+                # chain; any alerts import failure would trip portfolio_tracker's
+                # `_log_event(*a,**kw): pass` fallback — silently disabling ALL trade
+                # logging (the exact D1 silent-drop class this change exists to end).
+                from alerts import send_slack
+                send_slack(
+                    "⚠️ WARNING — trade_events.jsonl WRITE FAILING\n"
+                    f"Last error ({event} {symbol}): {e}\n"
+                    "Structured trade log is not recording; daily audits will "
+                    "under-report until fixed. Position stops are UNAFFECTED."
+                )
+            except Exception as _alert_e:
+                logger.error(
+                    f"trade_logger: write-fail alert itself failed: {_alert_e}"
+                )
