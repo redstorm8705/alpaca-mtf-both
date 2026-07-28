@@ -9187,3 +9187,20 @@ APPROVE (GAI false-premise reject on `validate_no_pnl_rewrite` reversed in 1 cou
 rogue=found−allowed only flags rendered figures; alarm string suppresses the number). BGG: 5 voices
 (masked-loss, reliability, data-integrity cold seats + Gro + GAI) aligned. Reporting-only, no trading
 path touched. NEXT: Phase 1 #2 = `nightly_audit.py` (stop feeding stale pnl_drift to LLM as CATASTROPHIC).
+
+[2026-07-27] Phase 1 #2 of 4 — `nightly_audit.py` provenance-gate SHIPPED (commit `dc37292`,
+branch `fix/audit-slack-provenance-gate-2026-07-27`). Root: `_collect_eod` dumped the raw EOD json
+(incl. pre-heal `pnl_drift`) into the Gemini prompt, and the prompt defined "P&L corruption=CATASTROPHIC"
+→ the stateless LLM cried CATASTROPHIC/FAIL daily on a self-check residual that self-heals at 8:30pm ET.
+Fix: new `_eod_pnl_provenance()` keys off `_healed_by`/`pnl_unreconciled` (never drift magnitude, mirrors
+audit_slack a25c002 build_pnl_fields), relabels drift telemetry into nested `_pnl_selfcheck_telemetry_NOT_A_LOSS`,
+keeps `pnl_today`+`pnl_unreconciled` top-level (never masks a real loss); 3-way header healed/unreconciled/
+pre-heal. Prompt: KNOWN-BENIGN bullet + scoped CATASTROPHIC def. `_collect_modified_files` skip_dirs +=
+`.claude`,`tests`. + `audit_suppressions.jsonl` PNL_PREHEAL_DRIFT (false_alarm, drift-specific keywords).
+MASKED-LOSS HARDENING (cold masked-loss seat catch): the keyword post-filter could silently drop a genuine
+`pnl_unreconciled=true` finding that co-mentions a drift number → added `_NEVER_SUPPRESS_TOKENS=("pnl_unreconciled",)`
+guard in `_match_directive` → a protected line matches NO directive, stays real/visible (fails toward visibility).
+Full read 849L/3 chunks. RC-1..8: RC-6 field names verified vs real eod json; rest N/A. Statics clean (x2,
+post-guard). Cold-2nd PASS + masked-loss lens SAFE. FINAL Gro+GAI APPROVE (sha e1b0f4fd). Reporting-only.
+DEFERRED: CYCLE-SYNC suppression (needs real scan_to_html phrasing → Phase 3 R2); P5-queue refresh (own task).
+NEXT: Phase 1 #3 = midday_audit.py.

@@ -30,11 +30,18 @@ actionable (models cite a nonexistent file). Full design + per-report cut/sharpe
      PROVISIONAL (never silently clean); genuine unreconciled → still alarms. Gate: statics + cold-2nd
      PASS + Gro+GAI APPROVE (GAI false-premise reject on validate_no_pnl_rewrite reversed in 1 counter-
      prompt). **← DONE THIS SESSION.**
-  2. ⏭️ **NEXT: nightly_audit.py** — stop feeding stale `pnl_drift` to the LLM as CATASTROPHIC
-     (nightly_audit.py:399 defines "P&L corruption=CATASTROPHIC"; `_collect_eod` L165-178 dumps raw eod);
-     gate drift finding on `_healed_by`; add pre-heal-drift + CYCLE-SYNC to `audit_suppressions.jsonl`;
-     refresh stale P5 queue; exclude `.claude/`/`tests/` from modified-file review.
-  3. ⏭️ **midday_audit.py** — scrub/label pre-heal drift in the LLM prompt (L945-952) as intraday-expected;
+  2. ✅ **nightly_audit.py provenance-gate** (commit `dc37292`): `_collect_eod` now annotates the EOD
+     snapshot via new `_eod_pnl_provenance()` — keys off `_healed_by`/`pnl_unreconciled` (never drift
+     magnitude), relabels `pnl_drift`/`alpaca_pnl`/`tracker_pnl` into nested `_pnl_selfcheck_telemetry_NOT_A_LOSS`
+     while keeping `pnl_today`+`pnl_unreconciled` top-level; prompt benign-pattern bullet + scoped CATASTROPHIC
+     def; `_collect_modified_files` skips `.claude`/`tests`; + `audit_suppressions.jsonl` PNL_PREHEAL_DRIFT
+     backstop. **Masked-loss hardening (cold seat catch):** `_NEVER_SUPPRESS_TOKENS=("pnl_unreconciled",)`
+     guard makes it structurally impossible for the Slack post-filter to drop a genuine unreconciled finding
+     that co-mentions drift. Gate: full read 849L + RC-1..8 + statics + cold-2nd PASS + masked-loss SAFE +
+     FINAL Gro+GAI APPROVE (sha e1b0f4fd). **DEFERRED:** CYCLE-SYNC suppression (needs its real scan_to_html
+     phrasing — folds into Phase 3 R2) + full P5-queue refresh (needs current bug-state audit — own task).
+     **← DONE THIS SESSION.**
+  3. ⏭️ **NEXT: midday_audit.py** — scrub/label pre-heal drift in the LLM prompt (L945-952) as intraday-expected;
      cut the dead realized-P&L engine; ADD live naked-stop check; count entries from Alpaca fills.
   4. ⏭️ **reporting/pnl_ledger.py** — stamp `_telemetry_stale_after_heal=True` in heal_history (R3);
      (rename/nest `pnl_drift`→`validation.selfcheck_drift` deferred to Phase 3).
