@@ -16,10 +16,14 @@ Design locked 2026-07-01 (board + Rafael approval):
     [McKinney single-source-of-truth; Derman provenance; Thorp reconciliation]
   - Midday card shows UNREALIZED (mark-to-market) P&L labeled "settles tonight";
     nightly card shows REALIZED FIFO P&L. Paper-account settlement lag forces this.
-  - Reconciliation: nightly uses the EOD snapshot's pnl_drift (Alpaca FIFO vs
-    tracker). Non-zero beyond tolerance → "⚠️ reconciliation mismatch" instead of a
-    number we can't stand behind. (equity−last_equity cross-check dropped per Thorp:
-    the paper balance lags same-day fills too, so it is not an independent source.)
+  - Reconciliation (BGG 2026-07-27): the nightly card runs 4:05pm ET but the
+    authoritative ledger heal runs 8:30pm ET, so pnl_drift/alpaca_pnl/tracker_pnl are
+    PRE-HEAL dual-compute TELEMETRY — a raw drift here is EXPECTED, not a failure. The
+    card keys off the `_healed_by` provenance stamp and `pnl_unreconciled`, NEVER off
+    drift magnitude. Pre-heal → the number is labeled PROVISIONAL (never silently
+    "clean"); a genuine ledger-flagged pnl_unreconciled → "reconciliation unresolved".
+    (masked-loss + reliability seats: a self-check delta must never read as a real loss,
+    and an unhealed file must never render as reconciled.)
   - Footer: per-destination distribution confirmation (git / directives / Master
     Brain), ✅ on success, ❌ on failure. [Majors confirm-delivery; Kim system-of-
     record; Schneier durable audit trail]
@@ -42,7 +46,6 @@ try:
 except Exception:
     _SSL_CTX = ssl.create_default_context()
 
-_PNL_DRIFT_TOLERANCE = 0.01   # dollars; above this, show reconciliation mismatch
 _LOW_INLINE_MAX = 2           # show Low items inline only if <= this many (board N=2)
 
 _SEV = {"critical": "🔴", "high": "🟡", "low": "✓"}
@@ -55,8 +58,8 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
     Return {"today": [...fields...], "lifetime": [...fields...], "source_note": str,
             "injected_numbers": [str,...], "mismatch": bool}.
 
-    mode="nightly": realized P&L from EOD snapshot alpaca_pnl (FIFO, authoritative);
-                    reconciliation via pnl_drift.
+    mode="nightly": realized P&L from EOD snapshot `pnl_today` (ledger-authoritative);
+                    reconciliation status from `_healed_by`/`pnl_unreconciled`, not drift.
     mode="midday" : unrealized mark-to-market from live positions; labeled provisional.
     Numbers here are the ONLY source of truth for the card — the LLM never restates them.
     """
@@ -69,20 +72,32 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
         return f"−{s}" if v < 0 else s
 
     if mode == "nightly":
-        realized = float(eod.get("alpaca_pnl", eod.get("pnl_today", 0.0)) or 0.0)
-        drift = float(eod.get("pnl_drift", 0.0) or 0.0)
-        mismatch = abs(drift) > _PNL_DRIFT_TOLERANCE
-        realized_str = "⚠️ reconciliation mismatch — verify" if mismatch else _dollar(realized)
-        if not mismatch:
+        # Authoritative day P&L is the ledger-healed `pnl_today`. `alpaca_pnl`/`pnl_drift`/
+        # `tracker_pnl` are PRE-HEAL dual-compute telemetry: the heal runs 8:30pm ET, AFTER
+        # this 4:05pm audit, so a raw drift here is EXPECTED and is NOT a reconciliation
+        # failure. Key off the `_healed_by` provenance stamp + `pnl_unreconciled`, never off
+        # drift magnitude (BGG 2026-07-27, masked-loss + reliability seats).
+        realized = float(eod.get("pnl_today", eod.get("alpaca_pnl", 0.0)) or 0.0)
+        healed = bool(eod.get("_healed_by"))
+        unreconciled = bool(eod.get("pnl_unreconciled"))
+        # The ONLY thing that shows an alarm instead of a number is a genuine ledger-flagged
+        # unreconciled state — never a raw pre-heal drift.
+        mismatch = unreconciled
+        if mismatch:
+            realized_str = "⚠️ reconciliation unresolved — verify"
+        else:
+            realized_str = _dollar(realized)
             injected.append(_dollar(realized))
-        injected.append(_dollar(drift))  # drift appears in source_note — allowlist it
         closed = int(eod.get("trades_today", 0) or 0)
         today_fields = [
             {"type": "mrkdwn", "text": f"*Realized P&L*\n{realized_str}"},
             {"type": "mrkdwn", "text": f"*Closed today*\n{closed}"},
         ]
-        source = ("Source: *Alpaca FIFO* (settled) · reconciled vs tracker "
-                  f"(drift {_dollar(drift)})")
+        if healed:
+            source = "Source: *Alpaca FIFO* (settled) · reconciled (healed)"
+        else:
+            source = ("Source: *Alpaca intraday* · _provisional — authoritative realized "
+                      "P&L finalizes in tonight's 8:30pm ET reconciliation heal_")
     else:  # midday — unrealized mark-to-market
         upl = 0.0
         n_open = 0
