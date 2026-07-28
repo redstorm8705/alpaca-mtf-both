@@ -21,11 +21,19 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   swallowed it. Fixed at the serialization boundary (`default=_json_default`). **OCI git pull + RESTART +
   DEPLOY_OK; health OK; verified loaded on the live venv** (`_json_default` coerces numpy.bool_→true). Board
   (McKinney+Majors) APPROVE + Gro+GAI APPROVE + cold-2nd PASS. ✅ The next entry writes correctly.
-- **⏭️ NEXT:** (a) **Observability follow-up (board-required, non-blocking, NOT yet done):** escalate
-  `trade_logger.py` outer `except` (L~117) to ERROR + Slack on repeated write failures — the silent swallow is
-  WHY D1 went unnoticed 7 days; own small gated diff. (b) **D2 / Phase 3** — per-report tune-ups, meta Groq
-  prompt fix (dead 6/6 days), 11k-row `delta_shadow` bloat trim, repo-manifest + dead-voice alert.
-  (c) **PARKED:** options_scanner.py `zdte_close_times()` wiring (still un-shipped in working tree).
+- **Observability follow-up (D1 hardening) — ✅ SHIPPED & DEPLOYED (2026-07-28, Rafael present, PR #37,
+  main 9eec0c2, patch c01e852).** `trade_logger.py` write-failure `except` escalated from silent
+  `logger.warning` → `logger.error` + ONE throttled operator Slack (≤1/hour). Throttle stamped BEFORE the
+  synchronous ~4s send → bounds run_cycle-thread blocking to ≤4s/hour (under the ~8s/entry the existing alert
+  path already incurs); `alerts` imported LAZILY inside the failure path (a top-level import could trip
+  portfolio_tracker's `_log_event: pass` fallback and silently disable ALL logging — the exact D1 class);
+  in-memory throttle (we're inside the disk-write handler); `_last_write_fail_alert=0.0` so the FIRST failure
+  alerts immediately. Board 2/2 (reliability+async/obs) PASS + Gro+GAI APPROVE (design + FINAL preship) +
+  cold-2nd PASS + statics clean + **failure path runtime-verified** (ERROR+1 Slack, throttled 2nd, no raise,
+  re-fires after window). **OCI RESTART + DEPLOY_OK; verified loaded on live venv (throttle_s=3600.0, last=0.0).**
+- **⏭️ NEXT:** (a) **D2 / Phase 3** — per-report tune-ups, meta Groq prompt fix (dead 6/6 days), 11k-row
+  `delta_shadow` bloat trim, repo-manifest + dead-voice alert. (b) **PARKED:** options_scanner.py
+  `zdte_close_times()` wiring (still un-shipped in working tree).
 
 ### 🔴 ACTIVE — Gemini-reports value/noise audit + P&L reconciliation-noise fix (BGG COMPLETE)
 Rafael: the midday/nightly/meta Gemini reports keep flagging "pricing mismatch / P&L reconciliation"
