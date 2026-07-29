@@ -1,8 +1,8 @@
 # alpaca-mtf-bot — Project State (current, overwritten each session)
-**As of 2026-07-28 (resume session, Rafael present) — canonical state for Master Brain.**
+**As of 2026-07-28 (resume — Rafael present) — canonical state for Master Brain.**
 
 ## Bot
-- OCI (137.131.51.250): mtf-bot, mtf-writer, mtf-http, nginx all **active** (verified via health check). HTTP dashboard OK. main = OCI in sync (`9eec0c2`).
+- OCI (137.131.51.250): mtf-bot, mtf-writer, mtf-http, nginx all **active** (verified via health check). HTTP dashboard OK. main = OCI in sync (`9852b66`).
 - Paper account, aggressive growth ($2.5K → $25K). Safety invariants intact (paper=True hardcoded, 7% kill switch, P&L from Alpaca fills only).
 
 ## Shipped & deployed this session (3 gated ships)
@@ -27,3 +27,13 @@
 ## Infra
 - Resume cron `mtf-bot-autonomous-resume` re-armed → fires 3:12 AM PT 2026-07-28.
 - `main` protection: enforce_admins=true, strict=true, only gate = green `preship` (now majority-vote). Merge a strict-blocked PR by merging origin/main into the branch first, then normal `gh pr merge`.
+
+## Late-session ships (2026-07-28, Rafael present)
+- **trade_logger observability** (PR#37) — write-failure now ERROR + throttled Slack (D1 hid 7 days silently).
+- **Meta-audit D2** (PR#38/#40/#41) — Groq leg revived: telemetry filter (1M→small prompt), Groq 12k-TPM fix
+  (last-15 bot-log lines + max_tokens=3000; live 200), RC-6 null-guard on Alpaca `{"bars":null}` crash.
+- **Options scanner WEEKLY → directional LONG only** (PR#42, fb7040a) — straight long call/put, BUY TO OPEN,
+  max loss = premium paid; ALL premium-selling deleted + `assert side=="long"`; slightly-ITM δ0.55–0.65;
+  0DTE untouched. Live smoke: 11 recs, 0 sell-side artifacts. Recommend-only, no restart.
+- **NEXT (Rafael-raised):** exit-data "no output" on weekly_review (not root-caused); GEX-overnight usage
+  (GEX wired into 0DTE already — verify overnight intent); port TPM fix to preship_audit.py Groq leg.
