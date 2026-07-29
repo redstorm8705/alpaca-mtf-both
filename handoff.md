@@ -31,9 +31,28 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   alerts immediately. Board 2/2 (reliability+async/obs) PASS + Gro+GAI APPROVE (design + FINAL preship) +
   cold-2nd PASS + statics clean + **failure path runtime-verified** (ERROR+1 Slack, throttled 2nd, no raise,
   re-fires after window). **OCI RESTART + DEPLOY_OK; verified loaded on live venv (throttle_s=3600.0, last=0.0).**
-- **⏭️ NEXT:** (a) **D2 / Phase 3** — per-report tune-ups, meta Groq prompt fix (dead 6/6 days), 11k-row
-  `delta_shadow` bloat trim, repo-manifest + dead-voice alert. (b) **PARKED:** options_scanner.py
-  `zdte_close_times()` wiring (still un-shipped in working tree).
+- **Meta-audit D2 — ✅ SHIPPED & DEPLOYED (2026-07-28):** `auto_ai_audit.py` Groq leg was dead 6 days.
+  Three chained fixes: (1) **telemetry filter** (PR #38, main 9f7eac5) — meta-audit rendered ALL
+  trade_events rows (94% delta_shadow/mri_refresh/halt_eval/breadth_refresh telemetry) → ~1M-char prompt;
+  denylist-filter them + most-recent-500 cap + Groq char-clamp. (2) **Groq TPM fix** (PR #40, main 8045cce) —
+  the real limit is Groq free-tier **12,000 TPM** (not 131k ctx window); Groq gets last-15 bot-log lines +
+  max_tokens=3000, budget 20k chars. LIVE: Groq 200 (was 413). (3) **RC-6 null-guard** (PR #41, main 9f...) —
+  `_fetch_chart_proxies` crashed the whole meta-audit on Alpaca `{"bars": null}` (`.get("bars") or []`).
+- **Options scanner WEEKLY → directional LONG only — ✅ SHIPPED & DEPLOYED (2026-07-28, Rafael present, PR #42,
+  main 9852b66, commit fb7040a).** Weekly recommends ONLY straight long call (bullish) / long put (bearish) —
+  BUY TO OPEN, max loss = premium paid. ALL premium-selling deleted + `assert side=="long"`. Strikes slightly
+  ITM (δ 0.55–0.65). Cards "BUY TO OPEN — LONG CALL/PUT" + Max Risk. 0DTE untouched (already long). Gate incl.
+  FINAL preship gro=WAIVED (12k-TPM vs 18k diff, Rafael-authorized; real Gro APPROVE held). LIVE smoke: 11 recs,
+  0 sell-side artifacts. Also cleared the parked `zdte_close_times()` helper. **Recommend-only — no restart.**
+- **⏭️ NEXT (Rafael-raised, pending):** (a) **"exit data not updating"** — Rafael: weekly_review EXIT BREAKDOWN
+  shows "literally no data being output even though we're tracking exit strat." Diagnosed so far: eod_*.json IS
+  fresh but the html only regenerates on cron/RTH (frozen after-hours), AND external_close/overnight_atr_buffer
+  land in "Other". Rafael's phrasing suggests a deeper "no output" — NOT fully root-caused yet. Investigate
+  weekly_review.py exit aggregation from eod_*.json. (b) **GEX overnight** — Rafael: "why are we not adding to
+  GEX in the overnight session?" Confirmed GEX context IS wired into 0DTE (`_gex_context`/`_gex_overlay` in
+  `_build_0dte_directional`); the "adding overnight" intent not yet fully answered — verify GEX-overnight usage
+  at source. (c) **Preship tooling gap:** `preship_audit.py` Groq leg has NO TPM handling (413s on >12k-token
+  diffs) — port the auto_ai_audit.py TPM fix (bot-log/context trim + max_tokens) to it. (d) D2/Phase-3 leftovers.
 
 ### 🔴 ACTIVE — Gemini-reports value/noise audit + P&L reconciliation-noise fix (BGG COMPLETE)
 Rafael: the midday/nightly/meta Gemini reports keep flagging "pricing mismatch / P&L reconciliation"

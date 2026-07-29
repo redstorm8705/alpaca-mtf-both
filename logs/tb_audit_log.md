@@ -9299,3 +9299,29 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 - RC-5 non-atomic write: PASS — trade_events.jsonl is append-only event LOG (non-critical), tmp→replace not required per CLAUDE.md RC-5 carve-out.
 **10-pt highlights:** off the capital/P&L path (observability only); no new file I/O added (in-memory throttle by design — avoids a state-write inside the write-failure handler); send_slack adds own PT footer; alerts.py is a stdlib-only leaf (no circular import); nothing parses the reworded string.
 **Design fork → board+Gro+GAI:** (A) synchronous throttled send_slack on trading thread (bounded ≤1×4s/window) vs (B) fire-and-forget daemon thread. Recommending A (consistent with existing alert_entry/_send synchronous pattern already on the trading thread).
+
+---
+## 2026-07-28 — auto_ai_audit.py meta-audit Groq 400 fix (D2, dead-voice restore) — 10-pt + RC audit
+**File:** auto_ai_audit.py (1491 lines, full read via Explore verbatim). **Root cause:** _format_meta_audit_body TRADE EVENTS loop (L791-820) renders EVERY trade_events.jsonl row unbounded; 94% (12,939/13,708) are delta_shadow telemetry → ~1M-char prompt (~254k tok) → Groq llama-3.3-70b (131k window) 400s; Gemini (1M window) OK. Groq meta-review leg dead 6 days.
+**Fix (Option C, board+Gro+GAI aligned):** telemetry denylist filter (delta_shadow/mri_refresh/halt_eval/breadth_refresh) in TRADE EVENTS render for BOTH prompts + most-recent-500 cap + Groq-only 400k-char clamp (head70%+tail30%, preserves output-format footer). Render-only filter; _compute_trade_stats already type-filters so stats/score/MRI dist unaffected (verified L435-458).
+**RC scan:** RC-1 datetime PASS (tz-aware throughout). RC-2 path PASS (_LOGS_DIR anchored). RC-3 PASS (no new silent swallow; clamp logs to stderr). RC-4/6/7/8 N/A (audit tool, no exit-price/API-field/sizing/scan-buffer). RC-5 PASS (atomic_write_json unchanged). 
+**Board:** data-integrity seat PASS (required change — empty-after-filter reports "0 lifecycle/M total/T telemetry excluded" not bare "None" — IMPLEMENTED; denylist>allowlist confirmed: dropping a real trade = correctness fail, unknown telemetry = perf fail backstopped by cap+clamp). Gro+GAI both Option C, "no trade-verdict signal lost."
+**Statics:** py_compile/ruff/mypy clean. **Runtime-verified:** synthetic 13,708-event ctx → Groq prompt 1,017,646→6,571 chars (99.4%↓, <400k budget); 0 DELTA_SHADOW lines rendered, all real trade lines kept, footer + json-block instruction survive; clamp at budget 5000 preserves footer.
+
+**➕ FOLLOW-UP 2026-07-28** — auto_ai_audit.py Groq TPM fix (the telemetry filter alone was insufficient).
+LIVE run revealed Groq on_demand tier is capped at 12,000 tokens/MINUTE (413 rate_limit), not the 131k
+context window; the telemetry-filtered prompt was still ~17k tok — 73% (32,004 ch) the 100-line bot-log tail.
+Fix: Groq gets last-15 bot-log lines (Gemini keeps 100), max_tokens=3000 on the Groq request (bounds
+input+output under 12k TPM), _GRO_PROMPT_CHAR_BUDGET 400k→20k. LIVE-VERIFIED: Groq now 200 OK
+(prompt 1,701 tok / completion 719 / total 2,420). py_compile/ruff/mypy clean.
+
+**✅ SHIPPED 2026-07-28 — options_scanner.py WEEKLY → directional LONG only (PR #42, main 9852b66, commit fb7040a).**
+Rafael mandate: weekly scanner recommends ONLY straight long call (bullish) / long put (bearish) — BUY TO OPEN,
+max loss = premium paid. ALL premium-selling deleted (not gated) + `assert side=="long"` invariant. Strikes
+slightly ITM (DELTA_TARGET_HIGH 0.40→0.65, MOD 0.30→0.55). Cards: "BUY TO OPEN — LONG CALL/PUT" + "Max Risk
+(premium paid)"; "naked" never emitted. Deleted dead short code/constants (net −68 lines). VRP info-only,
+orange stripped. Nearest-Friday expiry unchanged. 0DTE untouched (already long-only), no regression. Also
+carried parked zdte_close_times() helper. Gate: full read + options board + cold-2nd PASS + Gro+GAI APPROVE
+(manual) + FINAL preship gai=APPROVE/gro=WAIVED (Groq 12k-TPM cap vs 18k-token diff; Rafael-authorized) +
+statics clean + LIVE smoke on OCI (11 recs, 0 sell-side artifacts, all "BUY TO OPEN — LONG"). Risk-REDUCING
+(deletes the only unlimited-risk vehicle). Recommend-only — no restart.
