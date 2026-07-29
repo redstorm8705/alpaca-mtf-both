@@ -69,6 +69,59 @@ full read (Explore for >1000-line files) → 10-pt + RC → board (options + rel
 diff → statics → cold-2nd → propose → Rafael approve → FINAL preship → ship. Recommend-only scanners
 (never trade) — no restart, but root .py = gated (markers required).
 
+## IMPLEMENTATION PLAN (drafted 2026-07-29 — turnkey; still requires the full gate before ship)
+
+### Architecture — ONE source of truth
+Extract the 0DTE SPY direction decision into a SINGLE shared helper both consumers import, so two
+scripts can never disagree or clobber state again:
+
+- **NEW `strategy/zdte_direction.py`** (or a function in an existing shared module) exposing:
+  `decide_spy_0dte(spy_result, chain_data, vwap_state, gex_ctx, regime, prev_state) -> dict`
+  returning the canonical rec: `{status: "REC"|"NO_REC", direction: "CALL"|"PUT"|None, strike, delta,
+  mid, iv, oi, conviction_n_of_3, conviction_components:{momentum,gamma,regime}, mtf_score,
+  mtf_veto: bool, size, reasons:[...], ts}`. UPPERCASE direction, delta ALWAYS matches direction.
+- **State file:** this helper (called from scan_to_html, the 5-min RTH engine) owns `logs/dte_prev.json`
+  with ONE schema. `options_scanner.py` STOPS writing it (delete the L1421–1433 writer) and instead
+  READS the canonical state for the SPY INDEX row. (Fixes the dual-writer race root cause.)
+
+### Position C direction algorithm (in the shared helper)
+1. **Intraday momentum (PRIMARY):** price vs 1-min VWAP (>0.10% separation) + opening-range read.
+   Up→CALL lean, down→PUT lean, hugging VWAP→neutral. (Gao et al. 2018; Berkowitz 1988; Crabel 1990.)
+2. **Dealer-gamma / GEX regime (PRIMARY):** NEGATIVE gamma → trends amplify → FAVOR directional long;
+   POSITIVE gamma → pin/mean-revert → DISFAVOR (bias toward NO_REC). UNKNOWN/near-flip → neutral
+   (fail-safe). GEX already computed (data/gex.py; live SPY = NEGATIVE all day 7/28). Source it the
+   same way run_cycle Layer-8 does; never crash on stale/missing (UNKNOWN→neutral).
+3. **Cross-asset regime (CONFIRM):** BULL/BEAR/NEUTRAL from `cr`/composite_regime.
+4. **MTF swing score = VETO/context ONLY:** a STRONG opposing multi-day lean (e.g. strong_bull vs a
+   PUT setup) → NO_REC; otherwise MTF does NOT gate. Never greenlights on its own.
+5. **Greenlight rule:** REC only if the two PRIMARY signals (momentum + gamma-regime) agree on a
+   direction AND cross-asset regime does not oppose AND MTF does not veto. ANY disagreement → NO_REC.
+6. **Theta / time-of-day cutoff:** no fresh 0DTE REC into terminal decay (keep the existing opening-30-min
+   block; add a late-day "no new entries after ~2:00 PM ET / flat by 3:45 ET" advisory per the board).
+7. **Conviction = N/3** = how many of {momentum, gamma-regime, cross-asset regime} agree with the chosen
+   direction. Display "Conviction N/3 · MTF x/12 · VWAP✓ · GEX(neg/pos) · Regime✓". Honest, legible,
+   no black-box weight.
+
+### Per-file changes
+- **scan_to_html.py `_compute_0dte_rec`:** refactor to call the shared helper; drop the multi-day
+  score as a *gate* (keep as veto input D); keep stickiness (flip needs confluence, not just score) +
+  VWAP; ADD the GEX gamma-regime input; return the canonical rec (conviction_n_of_3 etc.). Tile render:
+  show conviction N/3 + MTF; direction/delta now always consistent (single engine). NO_REC → clean
+  "no clean directional read — skip" (not a stale Frankenstein).
+- **options_scanner.py:** DELETE the `logs/dte_prev.json` writer (L1421–1433). `_build_0dte_directional`:
+  for SPY, consume the canonical state (read dte_prev.json / call the helper) → ONE leg. For QQQ/Mag-7,
+  apply the same single-direction Position C logic (one leg per name, NO_REC on no-confluence) instead of
+  emitting both call+put. `_build_index_anchor`: render the single direction + conviction, or "NO 0DTE —
+  no clean read" — never both legs.
+- **Conviction/NO-REC display:** both pages show the N/3 conviction and a clean NO-REC state.
+
+### Verification (when API back)
+Unit-test the helper: (a) momentum+gamma agree → REC with correct direction+delta+N/3; (b) momentum vs
+gamma disagree → NO_REC; (c) strong opposing MTF → NO_REC (veto); (d) positive-gamma pin → disfavor;
+(e) stale/UNKNOWN GEX → neutral, no crash; (f) delta sign ALWAYS matches direction (regression on the
+desync). Then live smoke on OCI: confirm scan_results tile + options INDEX show the SAME single
+direction + conviction, zero dual-leg, no dte_prev clobber.
+
 ## Sequencing
 1. Scanner-tile desync + conviction score + GEX gate (scan_to_html.py). FIRST.
 2. Options-page single-direction rebuild consuming the shared decision (options_scanner.py). SECOND.
