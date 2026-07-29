@@ -50,6 +50,20 @@ their prior strict-9/12 stance). Rafael approved 2026-07-29.
    when no clean read. Ideally a SINGLE SOURCE OF TRUTH shared with the scanner tile so they can
    never disagree. SHIP SECOND.
 
+## ROOT CAUSE of the scanner-tile desync (confirmed 2026-07-29 via direct read)
+The "$734 call / Δ−0.380 (put) / PUT ALERT" contradiction is a **dual-writer race on
+`logs/dte_prev.json`**. TWO scripts read+write the SAME file with INCOMPATIBLE schemas:
+- `options_scanner.py:1425` (run_scan) writes `{direction: LOWERCASE "call"/"put", side, strike,
+  symbol, score}` — its own `_select_directional_otm` strike.
+- `scan_to_html.py:_save_dte_prev` (L1778) writes `{direction: UPPERCASE "CALL"/"PUT", strike,
+  size, ts, confirm_count}` — its own delta-selected strike; `_compute_0dte_rec` returns UPPERCASE
+  direction with a MATCHING delta (internally consistent — NOT the bug).
+They clobber each other → the tile renders a Frankenstein rec (direction from one writer, strike/
+delta from the other). This is the concrete manifestation of the two-engines problem and validates
+the SINGLE-SOURCE-OF-TRUTH fix. IMPLEMENTATION MUST: make ONE engine own the 0DTE SPY direction +
+its state file (one schema, one direction-case), and have BOTH pages consume it. Do NOT let two
+scripts write `dte_prev.json`. (Deployed scan_to_html.py == local HEAD, 0 diff — so this is a live bug.)
+
 ## Gate (each ship, full sequence)
 full read (Explore for >1000-line files) → 10-pt + RC → board (options + reliability) → Gro+GAI on
 diff → statics → cold-2nd → propose → Rafael approve → FINAL preship → ship. Recommend-only scanners
