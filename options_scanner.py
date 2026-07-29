@@ -7,21 +7,16 @@ Reads MTF confluence signals, fetches live options chains via Public.com (real-t
 with yfinance fallback, selects optimal strikes using Black-Scholes delta, and generates
 options.html with two recommendation sets: Weekly and 0DTE.
 
-STRUCTURES SUPPORTED:
-  Long call  — bullish, low VRP: pay for premium, need the underlying to move up
-  Long put   — bearish, low VRP: pay for premium, need the underlying to move down
-  Short call — bearish, high VRP: collect premium; stock stays flat/down
-  Short put  — bullish, high VRP: collect premium; stock holds or rises
-
-VRP REGIME (Vilkov 2026, POST-2022-ERA):
-  VRP = ATM IV − 20-day realized vol (both annualized %). Positive = options expensive.
-  VRP > 5 vol pts → sell opposite direction (short put if bullish, short call if bearish)
-  VRP < 5 vol pts → buy direction (long call if bullish, long put if bearish)
-  Tertile cutoffs use post-2022 data only — pre-2022 0DTE dynamics are a different regime.
+STRUCTURES SUPPORTED — DIRECTIONAL LONG ONLY (Rafael mandate 2026-07-28):
+  Long call  — bullish: BUY TO OPEN, max loss = premium paid, need the underlying up
+  Long put   — bearish: BUY TO OPEN, max loss = premium paid, need the underlying down
+  NO premium-selling / short vehicle. The scanner never recommends a short/undefined-risk
+  position. VRP (ATM IV − 20-day realized vol) is shown as context only — it does NOT
+  select the vehicle; every rec is a straight long call or long put.
 
 TWO RECOMMENDATION SETS:
   Weekly: next-Friday expiry. Entry windows 10:00–11:30 / 14:00–15:00 ET.
-          Max $150/trade, 2 contracts. Target +100% (long) / 75% profit (short).
+          Max $150/trade, 2 contracts. Slightly-ITM (~0.55–0.65Δ). Target +100%.
   0DTE:   DIRECTIONAL intraday-swing capture (reframed 2026-07-13 — NOT premium selling).
           Long OTM ~0.35Δ CALL (upside) + PUT (downside) per name so the operator plays the
           day either way. Same-day expiry, 10:05–10:20 ET entry, 3:45 ET hard close.
@@ -89,7 +84,7 @@ _CONFIG_SURFACE_KEYS = (
     "ZDTE_PREM_CAP_ANCHOR", "ZDTE_PREM_CAP_REF_IV", "ZDTE_PREM_CAP_FLOOR", "ZDTE_PREM_CAP_CEIL",
     "LIMIT_SELL_MULT", "BAS_MAX_0DTE", "PREMIUM_LIMIT_CONDITIONAL",
     "ZDTE_DELTA_TARGET", "ZDTE_DELTA_MIN", "ZDTE_DELTA_MAX",
-    "DELTA_TARGET_HIGH", "DELTA_TARGET_MOD", "DELTA_TARGET_SHORT",
+    "DELTA_TARGET_HIGH", "DELTA_TARGET_MOD",
     "CORE_UNIVERSE", "CONDITIONAL_UNIVERSE", "ZDTE_UNIVERSE",
 )
 
@@ -193,7 +188,6 @@ MIN_SCORE_HIGH = 10   # high-conviction
 ACCOUNT_SIZE      = 500
 MAX_TRADE_DOLLARS = 150   # 30% of account
 LIMIT_SELL_MULT   = 2.0   # target +100% on long premium
-SHORT_BUY_BACK    = 0.25  # buy back short at 25% of credit received (75% profit)
 RISK_FREE_RATE    = 0.045
 
 # ── Sizing — 0DTE ─────────────────────────────────────────────────────────────
@@ -231,30 +225,57 @@ GEX_OVERLAY_CONV_DELTA     = 12
 # derive from the rolling wall-frac distribution in the rec history (dynamic).
 GEX_OVERLAY_WALL_CONF_MIN  = 0.15
 
-# ── Delta targets — weekly ────────────────────────────────────────────────────
-DELTA_TARGET_HIGH  = 0.40   # long, HIGH conviction
-DELTA_TARGET_MOD   = 0.30   # long, MOD conviction
-DELTA_TARGET_SHORT = 0.20   # short (OTM — want to expire worthless)
+# ── Delta targets — weekly (directional LONG only; Rafael mandate 2026-07-28) ──
+# Slightly ITM: a forced long buyer's enemy is theta, and ITM front-loads intrinsic
+# value so less of the premium is theta-exposed (Sinclair). Higher conviction → deeper ITM.
+DELTA_TARGET_HIGH  = 0.65   # long, HIGH conviction — deeper ITM
+DELTA_TARGET_MOD   = 0.55   # long, MOD conviction — slightly ITM
 
 # ── Delta targets — 0DTE ──────────────────────────────────────────────────────
 DELTA_TARGET_HIGH_0DTE  = 0.30   # long 0DTE HIGH (slightly OTM — 0DTE gamma is severe)
 DELTA_TARGET_MOD_0DTE   = 0.25   # long 0DTE MOD
-DELTA_TARGET_SHORT_0DTE = 0.12   # short 0DTE (very OTM — pin risk)
 
 # ── Entry windows (ET) ────────────────────────────────────────────────────────
 ENTRY_WINDOWS      = [(10, 0, 11, 30), (14, 0, 15, 0)]  # weekly
 ENTRY_WINDOWS_0DTE = [(10, 5, 10, 20)]                   # 0DTE: opening vol premium window only
 
-# ── VRP / Vol regime thresholds (Vilkov 2026 / POST-2022-ERA) ─────────────────
+# ── 0DTE close / advisory-exit times (ET) — SINGLE SOURCE OF TRUTH ────────────
+# SPY & QQQ 0DTE trade to 16:15 ET (broad index-tracking ETFs get +15 min);
+# single-name equity options (the Mag-7 names) close 16:00 ET. The advisory
+# exit-by sits ZDTE_EXIT_BUFFER_MIN ahead of EACH symbol's real close — single
+# names because MM liquidity leaves at 16:00, SPY/QQQ because 0DTE gamma/pin
+# risk spikes into the close. This is a RECOMMEND-ONLY scanner: it prints an
+# advisory, it never places or closes an order. All 5 former "3:45" literals now
+# read from zdte_close_times() so the value can never drift per-site again.
+ZDTE_CLOSE_ETF        = (16, 15)          # SPY/QQQ last-trade (hour, minute) ET
+ZDTE_CLOSE_SINGLENAME = (16, 0)           # Mag-7 single-name last-trade (hour, minute) ET
+ZDTE_ETF_SYMBOLS      = ("SPY", "QQQ")    # the two broad-ETF names with a 16:15 close
+ZDTE_EXIT_BUFFER_MIN  = 15                # advisory exit-by = real close − this (per symbol)
+
+
+def zdte_close_times(symbol: str) -> tuple[str, str]:
+    """Return (advisory_exit_by_et, real_close_et) as short display strings for a
+    0DTE symbol, in ET. SPY/QQQ → ("4:00", "4:15"); any Mag-7 single name →
+    ("3:45", "4:00"). The exit-by is computed ZDTE_EXIT_BUFFER_MIN minutes before
+    the real close via tz-aware datetime subtraction (DST-safe — no naive clock
+    arithmetic). Recommend-only: nothing is executed here."""
+    h, m = ZDTE_CLOSE_ETF if symbol in ZDTE_ETF_SYMBOLS else ZDTE_CLOSE_SINGLENAME
+    close_dt = datetime.now(ET).replace(hour=h, minute=m, second=0, microsecond=0)
+    exit_dt  = close_dt - timedelta(minutes=ZDTE_EXIT_BUFFER_MIN)
+
+    def _hm(dt: datetime) -> str:            # 12-hour, no leading zero, no am/pm (all ET, afternoon)
+        hr = dt.hour - 12 if dt.hour > 12 else dt.hour
+        return f"{hr}:{dt.minute:02d}"
+
+    return _hm(exit_dt), _hm(close_dt)
+
+# ── VRP (informational only — Rafael 2026-07-28: "not a premium-sell indicator") ──
 # VRP = ATM_IV − RV_20d (both annualized %). Positive = options priced above realized vol.
-# HIGH VRP (IV >> RV) → options expensive → sell premium (collect the overpricing).
-# LOW VRP (IV ≤ RV)   → options cheap or fair → buy direction.
-VRP_HIGH_THRESHOLD = 5.0   # IV > RV + 5 vol pts → flip to sell-premium vehicle
-VRP_LOW_THRESHOLD  = 2.0   # IV < RV + 2 vol pts → insufficient edge; default long
+# It is DISPLAYED on cards as context (is IV rich vs realized?) but NEVER selects the
+# vehicle — the scanner ALWAYS recommends a directional LONG call/put. No sell-premium path.
 
 # ── Bid-ask spread gates ──────────────────────────────────────────────────────
 BAS_MAX_LONG  = 0.40   # (ask−bid)/mid > 40% → skip long entry
-BAS_MAX_SHORT = 0.40   # (ask−bid)/mid > 40% → skip short entry
 BAS_MAX_0DTE  = 0.25   # tighter for 0DTE (spreads widen sharply intraday)
 
 
@@ -774,23 +795,16 @@ def _get_vix_tertile() -> str:
 
 # ── Strike selection ──────────────────────────────────────────────────────────
 
-def select_strike(rows: list, score: int, side: str = "long", mode: str = "weekly", isk_adj: float = 0.0) -> dict | None:
+def select_strike(rows: list, score: int, isk_adj: float = 0.0) -> dict | None:
     """
-    Pick the strike with delta closest to target.
-    side: "long" (buy) → closer to ATM for larger directional payoff
-          "short" (sell) → further OTM to maximize probability of expiring worthless
-    mode: "weekly" | "0dte" — 0DTE uses tighter delta targets (gamma risk)
-    isk_adj: ±0.05 ISK tilt — nudges target delta when put/call skew exceeds 2 vol pts
-    Returns None if no viable (mid > 0) row found.
+    Pick the strike with delta closest to the directional-LONG target (weekly).
+    Slightly ITM: higher conviction → deeper ITM (DELTA_TARGET_HIGH), else DELTA_TARGET_MOD.
+    isk_adj: ±0.05 ISK tilt — nudges target delta when put/call skew exceeds 2 vol pts.
+    Returns None if no viable (mid > 0) row found. (0DTE uses _select_directional_otm.)
     """
     if not rows:
         return None
-    if side == "short":
-        target = DELTA_TARGET_SHORT_0DTE if mode == "0dte" else DELTA_TARGET_SHORT
-    elif score >= MIN_SCORE_HIGH:
-        target = DELTA_TARGET_HIGH_0DTE if mode == "0dte" else DELTA_TARGET_HIGH
-    else:
-        target = DELTA_TARGET_MOD_0DTE if mode == "0dte" else DELTA_TARGET_MOD
+    target = DELTA_TARGET_HIGH if score >= MIN_SCORE_HIGH else DELTA_TARGET_MOD
     # Clamp after ISK adjustment — delta must stay in (0.05, 0.95)
     target = max(0.05, min(0.95, target + isk_adj))
     viable = [r for r in rows if r["mid"] > 0]
@@ -897,29 +911,21 @@ def _build_recs(
     in_win: bool,
     vix_tertile: str,
     events: list,
-    locked_directions: dict | None = None,
 ) -> tuple[list, list, list]:   # P2-OPTIONS-REJECT: now returns (recs, watchlist, rejections)
     """
-    Build recommendation and watchlist lists from pre-scored symbols.
+    Build the WEEKLY recommendation and watchlist lists from pre-scored symbols.
 
-    mode:             "weekly" | "0dte"
+    DIRECTIONAL LONG ONLY (Rafael mandate 2026-07-28): every rec is a straight
+    long call (bullish MTF) or long put (bearish MTF) — BUY TO OPEN, max loss =
+    premium paid. There is NO premium-selling / short vehicle. VRP is displayed as
+    context (is IV rich vs realized?) but NEVER selects the vehicle.
+
+    mode:             "weekly" (the 0DTE stream uses _build_0dte_directional)
     vix_tertile:      "Low" | "Mid" | "High" — from _get_vix_tertile()
     events:           week event list for event_flags field
-    locked_directions: {sym: {"side": "short"|"long", "opt_type": "put"|"call"}}
-                      When provided (0DTE mode), direction is frozen — no intraday flip.
-                      None means direction is derived fresh from VRP + MTF (weekly, or
-                      first 0DTE scan of the day).
-
-    VRP logic (POST-2022-ERA, Vilkov 2026):
-      Bullish MTF + High VRP → short put  (collect premium; stock just needs to hold)
-      Bullish MTF + Low VRP  → long call  (pay for premium; need the move up)
-      Bearish MTF + High VRP → short call (collect premium; stock stays flat/down)
-      Bearish MTF + Low VRP  → long put   (pay for premium; need the move down)
 
     ISK tilt: if |put_25d_IV − call_25d_IV| > 2 vol pts, nudge delta target ±0.05.
-    BAS gate: skip if (ask−bid)/mid exceeds threshold for the mode/side.
-    0DTE: runs in all VIX regimes (High-VIX block removed 2026-07-25; long-only defined risk).
-    0DTE direction lock: once set at 10:05 ET, side+opt_type never re-derived mid-day.
+    BAS gate: skip if (ask−bid)/mid exceeds BAS_MAX_LONG.
     """
     recommendations = []
     watchlist       = []
@@ -979,27 +985,16 @@ def _build_recs(
         # ISK approximation (POST-2022-ERA: Vilkov 2026)
         isk = _compute_isk(call_rows, put_rows)
 
-        # ── Direction determination ─────────────────────────────────────────────
-        # 0DTE: if a day-lock exists for this symbol, use it — never re-derive mid-day.
-        # This prevents whipsawing between SHORT PUT and SHORT CALL every 15 minutes.
-        if mode == "0dte" and locked_directions and sym in locked_directions:
-            _lk      = locked_directions[sym]
-            side     = _lk["side"]
-            opt_type = _lk["opt_type"]
-            logger.debug(f"[{sym}] 0DTE direction LOCKED ({side} {opt_type}) — skipping re-derive")
-        else:
-            # Fresh derivation: VRP regime + MTF bias
-            if vrp is not None and vrp > VRP_HIGH_THRESHOLD:
-                # Options expensive: sell premium on the opposite side
-                side = "short"
-                if mtf_bullish:
-                    opt_type = "put"   # bullish → short put
-                else:
-                    opt_type = "call"  # bearish → short call
-            else:
-                # Options fair or cheap: buy direction
-                side = "long"
-                opt_type = "call" if mtf_bullish else "put"
+        # ── Direction — ALWAYS a directional LONG (Rafael mandate 2026-07-28) ────
+        # Straight long call (bullish) / long put (bearish). No premium-selling, ever.
+        # VRP is shown as context but NEVER selects the vehicle. Max loss = premium paid.
+        side     = "long"
+        opt_type = "call" if mtf_bullish else "put"
+        # Invariant: a short / undefined-risk vehicle must be IMPOSSIBLE to construct here.
+        assert side == "long" and opt_type in ("call", "put"), (
+            f"options_scanner invariant violated: non-long vehicle "
+            f"{side}/{opt_type} for {sym}"
+        )
 
         # ISK tilt: soft ±0.05 delta nudge when skew signal is strong
         # Positive ISK (put skew elevated) → nudge toward slightly further OTM on calls
@@ -1009,15 +1004,15 @@ def _build_recs(
 
         # Select strike (isk_delta_adj applies ±0.05 tilt when |ISK| > 2 vol pts)
         chain = call_rows if opt_type == "call" else put_rows
-        best  = select_strike(chain, score, side=side, mode=mode, isk_adj=isk_delta_adj)
+        best  = select_strike(chain, score, isk_adj=isk_delta_adj)
 
         if best is None:
             watchlist.append({**sig, "watch_reason": f"No liquid {opt_type} strike ({expiry})"})
             rejections.append({"symbol": sym, "reason": f"No liquid {opt_type} strike for {expiry}", "score": score})  # P2-OPTIONS-REJECT
             continue
 
-        # BAS gate
-        bas_threshold = BAS_MAX_0DTE if mode == "0dte" else (BAS_MAX_SHORT if side == "short" else BAS_MAX_LONG)
+        # BAS gate (weekly directional long — single threshold)
+        bas_threshold = BAS_MAX_LONG
         mid_px = best["mid"]
         cost_pct = round((best["ask"] - best["bid"]) / mid_px, 3) if mid_px > 0 else 1.0
         if cost_pct > bas_threshold:
@@ -1029,41 +1024,33 @@ def _build_recs(
             logger.info(f"[{sym}] BAS gate: {cost_pct:.0%} > {bas_threshold:.0%} — skipping")
             continue
 
-        # Premium filter for conditional names (long only)
-        if sym in CONDITIONAL_UNIVERSE and side == "long" and best["mid"] > PREMIUM_LIMIT_CONDITIONAL:
+        # Premium filter for conditional names
+        if sym in CONDITIONAL_UNIVERSE and best["mid"] > PREMIUM_LIMIT_CONDITIONAL:
             watchlist.append({**sig, "watch_reason": f"Premium ${best['mid']:.2f} > ${PREMIUM_LIMIT_CONDITIONAL:.2f} limit"})
             rejections.append({"symbol": sym, "reason": f"Premium ${best['mid']:.2f} > ${PREMIUM_LIMIT_CONDITIONAL:.2f} limit (conditional universe)", "score": score})  # P2-OPTIONS-REJECT
             logger.info(f"[{sym}] {opt_type.upper()} excluded: premium ${best['mid']:.2f} too high")
             continue
 
-        # Sizing
-        if side == "long":
-            max_contracts = max(1, int(max_dollars / (best["mid"] * 100)))
-            contracts     = min(max_contracts, 1 if mode == "0dte" else 2)
-            cost_per_cont = round(best["mid"] * 100, 2)
-            total_cost    = round(contracts * cost_per_cont, 2)
-            credit_received = None
-            est_margin      = None
-            limit_sell      = round(best["mid"] * LIMIT_SELL_MULT, 2)
-        else:
-            # Short: receive premium; cap at 1 contract (margin discipline)
-            contracts       = 1
-            credit_received = round(best["mid"] * 100, 2)
-            cost_per_cont   = None
-            total_cost      = None
-            est_margin      = round(best["strike"] * 100 * 0.20, 2)  # Reg T rough estimate
-            limit_sell      = round(best["mid"] * SHORT_BUY_BACK, 2)  # buy back at 25% remaining
+        # Sizing — directional LONG debit; max loss = premium paid (defined risk)
+        max_contracts   = max(1, int(max_dollars / (best["mid"] * 100)))
+        contracts       = min(max_contracts, 2)
+        cost_per_cont   = round(best["mid"] * 100, 2)
+        total_cost      = round(contracts * cost_per_cont, 2)
+        max_loss        = total_cost                    # defined risk = debit paid
+        credit_received = None
+        est_margin      = None
+        limit_sell      = round(best["mid"] * LIMIT_SELL_MULT, 2)
 
-        # Log command — includes side for log_fill.py routing
+        # Log command — always a long buy-to-open (log_fill.py routing)
         log_cmd = (
-            f"python3.10 log_fill.py {sym} {side}_{opt_type} "
+            f"python3.10 log_fill.py {sym} long_{opt_type} "
             f"{int(best['strike'])} {expiry} {best['mid']} {contracts}"
         )
 
         rec = {
             "symbol":          sym,
             "direction":       opt_type,   # "call" | "put" — the option type traded
-            "side":            side,        # "long" | "short"
+            "side":            side,        # always "long" (directional buy-to-open)
             "score":           score,
             "long_score":      long_score,
             "short_score":     short_score,
@@ -1089,6 +1076,7 @@ def _build_recs(
             "contracts":       contracts,
             "cost_per_cont":   cost_per_cont,
             "total_cost":      total_cost,
+            "max_loss":        max_loss,     # defined risk = premium paid
             "credit_received": credit_received,
             "est_margin":      est_margin,
             "log_cmd":         log_cmd,
@@ -1449,16 +1437,11 @@ def run_scan() -> dict:
 
 # ── HTML generation ───────────────────────────────────────────────────────────
 
-def _direction_badge(direction: str, side: str = "long") -> str:
-    """Return colored badge for the 4 option structures."""
-    if side == "long":
-        if direction == "call":
-            return '<span class="badge badge-long-call">LONG CALL ↑</span>'
-        return '<span class="badge badge-long-put">LONG PUT ↓</span>'
-    else:
-        if direction == "call":
-            return '<span class="badge badge-short-call">SHORT CALL ↓</span>'
-        return '<span class="badge badge-short-put">SHORT PUT ↑</span>'
+def _direction_badge(direction: str) -> str:
+    """Return colored badge — directional LONG only (BUY TO OPEN)."""
+    if direction == "call":
+        return '<span class="badge badge-long-call">LONG CALL ↑</span>'
+    return '<span class="badge badge-long-put">LONG PUT ↓</span>'
 
 
 def _conviction_badge(conviction: str) -> str:
@@ -1617,12 +1600,11 @@ def _event_banner(events: list) -> str:
 # ── Expandable rec table rows ─────────────────────────────────────────────────
 
 def _bias_info(rec: dict) -> tuple:
-    """Return (label, color) reflecting market view (accounts for long/short)."""
-    d    = rec["direction"]   # "call" | "put"
-    s    = rec["score"]
-    side = rec.get("side", "long")
-    # short put = bullish (profit if stock holds); short call = bearish
-    bullish = (d == "call" and side == "long") or (d == "put" and side == "short")
+    """Return (label, color) reflecting market view. Directional LONG only:
+    long call = bullish, long put = bearish."""
+    d = rec["direction"]   # "call" | "put"
+    s = rec["score"]
+    bullish = (d == "call")
     if bullish:
         return ("STRONG BULL", "#30d158") if s >= 10 else ("BULL", "#7fff4f")
     return ("STRONG BEAR", "#ff3b30") if s >= 10 else ("BEAR", "#ff6b6b")
@@ -1638,7 +1620,6 @@ def _rec_row(rec: dict, idx: int) -> str:
     """
     sym        = rec["symbol"]
     direction  = rec["direction"]
-    side       = rec.get("side", "long")
     conviction = rec["conviction"]
     score      = rec["score"]
     price      = rec["price"]
@@ -1649,19 +1630,14 @@ def _rec_row(rec: dict, idx: int) -> str:
     conv_col   = "#7fff4f" if conviction == "HIGH" else "#ffd60a"
     high_bg    = "background:#0a1308;" if conviction == "HIGH" else ""
 
-    # Signal label and color (4 variants)
-    if side == "long":
-        sig_lbl = "Long call ↑" if direction == "call" else "Long put ↓"
-        sig_col = "#30d158" if direction == "call" else "#ff3b5c"
-    else:
-        sig_lbl = "Short call ↓" if direction == "call" else "Short put ↑"
-        sig_col = "#ff9f0a"   # orange for short premium
+    # Signal label and color — directional LONG only (buy call = bullish, buy put = bearish)
+    sig_lbl = "Long call ↑" if direction == "call" else "Long put ↓"
+    sig_col = "#30d158" if direction == "call" else "#ff3b5c"
 
+    # VRP shown as context only (no premium-sell semantics — orange stripped)
     vrp       = rec.get("vrp")
     vrp_str   = f"{vrp:+.1f}" if vrp is not None else "—"
-    vrp_col   = ("#ff9f0a" if vrp and vrp > VRP_HIGH_THRESHOLD
-                 else "#30d158" if vrp and vrp < 0
-                 else "#636680")
+    vrp_col   = "#636680"
 
     return (f'<tr class="rec-row" onclick="tog({idx})" style="cursor:pointer;{high_bg}">'
             f'<td style="font-size:13px;font-weight:700;color:#e2e4ee;white-space:nowrap">'
@@ -1680,10 +1656,9 @@ def _rec_row(rec: dict, idx: int) -> str:
 
 
 def _rec_detail(rec: dict, idx: int) -> str:
-    """Hidden detail row, shown on click. Buy-side and sell-side layouts differ."""
+    """Hidden detail row, shown on click. Directional LONG (buy-to-open) layout."""
     sym       = rec["symbol"]
     direction = rec["direction"]
-    side      = rec.get("side", "long")
     score     = rec["score"]
     score_pct = int(score / 12 * 100)
     score_col = "#30d158" if score >= 10 else "#ffd60a" if score >= 8 else "#ff9f0a"
@@ -1695,45 +1670,33 @@ def _rec_detail(rec: dict, idx: int) -> str:
     isk       = rec.get("isk")
     vrp_str   = f"{vrp:+.1f} vol pts" if vrp is not None else "—"
     isk_str   = f"{isk:+.1f} vol pts" if isk is not None else "—"
-    vrp_col   = ("#ff9f0a" if vrp and vrp > VRP_HIGH_THRESHOLD
-                 else "#30d158" if vrp and vrp < 0
-                 else "#e2e4ee")
+    vrp_col   = "#e2e4ee"   # VRP shown as context only (orange sell-semantics stripped)
     isk_col   = "#ff3b5c" if isk and isk > 2 else "#30d158" if isk and isk < -2 else "#e2e4ee"
     opt_label = ("CALL" if direction == "call" else "PUT")
-    side_label = "SHORT " if side == "short" else ""
 
     cell = 'style="background:#0f1220;border-radius:6px;padding:10px 12px;border:1px solid #161a28"'
     lbl  = 'style="font-size:9px;color:#b8bdd4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px"'
     val  = 'style="font-size:13px;font-weight:600;color:#e2e4ee"'
 
-    # ── Trade details column (buy-side vs sell-side) ─────────────────────────
-    if side == "long":
-        entry    = rec["premium_mid"]
-        sell_at  = rec["limit_sell"]
-        stop_at  = round(entry * 0.50, 2)
-        _trade_base = f"""
+    # ── Trade details column — directional LONG (buy-to-open, defined risk) ──────
+    entry    = rec["premium_mid"]
+    sell_at  = rec["limit_sell"]
+    stop_at  = round(entry * 0.50, 2)
+    _max_loss = rec.get("max_loss", rec.get("total_cost"))
+    _max_loss_str = f"${_max_loss:.0f}" if _max_loss is not None else "premium paid"
+    _trade_base = f"""
         <div {cell}><div {lbl}>Entry (mid)</div><div {val}>${entry:.2f}</div></div>
         <div {cell}><div {lbl}>Limit Sell (+100%)</div><div style="font-size:13px;font-weight:600;color:#30d158">${sell_at:.2f}</div></div>
         <div {cell}><div {lbl}>Mental Stop (−50%)</div><div style="font-size:13px;font-weight:600;color:#ff3b5c">${stop_at:.2f}</div></div>
+        <div {cell}><div {lbl}>Max Risk (premium paid)</div><div style="font-size:13px;font-weight:600;color:#ff9f0a">{_max_loss_str}</div></div>
         <div {cell}><div {lbl}>Breakeven</div><div {val}>${rec['breakeven']:.2f}</div></div>"""
-        if rec.get("mode") == "0dte":
-            # 0DTE (Item 4, 2026-07-27): conviction % → a CONTRACT-COUNT ladder + the dynamic
-            # per-contract premium cap (advisory; the 0DTE stream is not sized against the $2.5K account).
-            trade_col1 = _trade_base + _zdte_conviction_cells(rec, cell, lbl)
-        else:
-            trade_col1 = _trade_base + f"""
-        <div {cell}><div {lbl}>Total Cost</div><div {val}>${rec['total_cost']:.0f}</div></div>
-        <div {cell}><div {lbl}>Contracts</div><div {val}>{rec['contracts']}</div></div>"""
+    if rec.get("mode") == "0dte":
+        # 0DTE (Item 4, 2026-07-27): conviction % → a CONTRACT-COUNT ladder + the dynamic
+        # per-contract premium cap (advisory; the 0DTE stream is not sized against the $2.5K account).
+        trade_col1 = _trade_base + _zdte_conviction_cells(rec, cell, lbl)
     else:
-        credit   = rec.get("credit_received", 0) or 0
-        buy_back = rec["limit_sell"]   # 25% of credit = 75% profit close
-        margin   = rec.get("est_margin", 0) or 0
-        trade_col1 = f"""
-        <div {cell}><div {lbl}>Credit Received</div><div style="font-size:13px;font-weight:600;color:#30d158">${credit:.0f}</div></div>
-        <div {cell}><div {lbl}>Buy Back at 75% profit</div><div style="font-size:13px;font-weight:600;color:#ffd60a">${buy_back:.2f}</div></div>
-        <div {cell}><div {lbl}>Max Loss (uncapped)</div><div style="font-size:13px;font-weight:600;color:#ff3b5c">Unlimited</div></div>
-        <div {cell}><div {lbl}>Breakeven at Expiry</div><div {val}>${rec['breakeven']:.2f}</div></div>
-        <div {cell}><div {lbl}>Est. Margin (Reg T ~20%)</div><div style="font-size:13px;font-weight:600;color:#ff9f0a">${margin:,.0f}</div></div>
+        trade_col1 = _trade_base + f"""
+        <div {cell}><div {lbl}>Total Cost</div><div {val}>${rec['total_cost']:.0f}</div></div>
         <div {cell}><div {lbl}>Contracts</div><div {val}>{rec['contracts']}</div></div>"""
 
     # 0DTE hard close warning
@@ -1752,7 +1715,7 @@ def _rec_detail(rec: dict, idx: int) -> str:
 
         <div>
           <div style="font-size:10px;color:#636680;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px">
-            {sym} {expiry_display(rec['expiry'])} ${rec['strike']:.0f} {side_label}{opt_label}
+            BUY TO OPEN — LONG {opt_label} · {sym} {expiry_display(rec['expiry'])} ${rec['strike']:.0f}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             {trade_col1}
@@ -2119,8 +2082,6 @@ def generate_html(data: dict) -> str:
     .badge{{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em}}
     .badge-long-call{{background:rgba(48,209,88,.15);color:#30d158;border:1px solid rgba(48,209,88,.3)}}
     .badge-long-put{{background:rgba(255,59,92,.15);color:#ff3b5c;border:1px solid rgba(255,59,92,.3)}}
-    .badge-short-call{{background:rgba(255,159,10,.15);color:#ff9f0a;border:1px solid rgba(255,159,10,.3)}}
-    .badge-short-put{{background:rgba(255,159,10,.15);color:#ff9f0a;border:1px solid rgba(255,159,10,.3)}}
     .badge-high{{background:rgba(127,255,79,.12);color:#7fff4f;border:1px solid rgba(127,255,79,.25)}}
     .badge-mod{{background:rgba(255,214,10,.10);color:#ffd60a;border:1px solid rgba(255,214,10,.2)}}
     .score-bar-wrap{{flex:1;height:4px;background:#161a28;border-radius:2px;display:inline-block;width:60px;vertical-align:middle;margin-right:4px}}
