@@ -9287,3 +9287,15 @@ APPROVE (sha 3e5c3ebc). Deployed: OCI git pull + RESTART (live trading-path) + D
 verified loaded on live venv. CI preship self-validated via new 3-sample vote (3/3 APPROVE).
 FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->WARNING, L~117) is WHY this went
 7 days unnoticed -> escalate repeated log_event write failures to ERROR + Slack (own small gated diff, Majors).
+
+---
+## 2026-07-28 — trade_logger.py observability follow-up (D1 hardening) — 10-pt + RC audit
+**File:** trade_logger.py (118 lines, full read complete). **Change target:** except block L117-118 (silent WARNING → ERROR + throttled Slack).
+**RC scan:**
+- RC-1 naive datetime: PASS (L101 datetime.now(PT), tz-aware)
+- RC-2 CWD-relative path: PASS (L37 Path(__file__).resolve().parent)
+- RC-3 silent exception: TARGET — L117-118 logs WARNING (not bare pass) but under-escalated; fix = ERROR+Slack. _json_default L71-72 except:pass is documented fallback→str(), not data-loss. PASS-with-fix.
+- RC-4/6/7/8: N/A (no exit-price / API field / sizing / scan-buffer logic in this file). PASS.
+- RC-5 non-atomic write: PASS — trade_events.jsonl is append-only event LOG (non-critical), tmp→replace not required per CLAUDE.md RC-5 carve-out.
+**10-pt highlights:** off the capital/P&L path (observability only); no new file I/O added (in-memory throttle by design — avoids a state-write inside the write-failure handler); send_slack adds own PT footer; alerts.py is a stdlib-only leaf (no circular import); nothing parses the reworded string.
+**Design fork → board+Gro+GAI:** (A) synchronous throttled send_slack on trading thread (bounded ≤1×4s/window) vs (B) fire-and-forget daemon thread. Recommending A (consistent with existing alert_entry/_send synchronous pattern already on the trading thread).
