@@ -56,7 +56,12 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   consuming the shared decision; SHIP SECOND. **ROOT CAUSE CONFIRMED:** the scanner-tile desync is a `dte_prev.json` DUAL-WRITER RACE —
   `options_scanner.py:1425` (lowercase direction + its strike) and `scan_to_html.py:_save_dte_prev`
   (uppercase direction + its delta/strike) clobber the same file → Frankenstein rec. **NEXT EXACT STEP:
-  implement the TURNKEY PLAN in `logs/zdte_position_c_design_2026-07-29.md` — the shared helper is
+  implement the TURNKEY PLAN in `logs/zdte_position_c_design_2026-07-29.md` — **DESYNC FIX = COMPLETE TWO-SIDED KILL, validated + turnkey (apply+gate when API back):**
+  (1) `logs/zdte_desync_fix_2026-07-29.patch` — delete options_scanner's dte_prev writer (removes the
+  lowercase corrupting input); (2) `logs/zdte_prevdir_normalize_2026-07-29.patch` — scan_to_html
+  `prev_dir.upper()` before the case-sensitive strike-select (makes the mismatch impossible). Both
+  statics-clean. Together they end the "$734 call / -0.380 put delta" Frankenstein from both sides.
+  **FULL Position C integration still remaining** — the shared helper is
   ALREADY BUILT + VALIDATED (11/11 unit tests, statics clean) at `logs/zdte_direction_DRAFT.py` (commit
   4187bb3) — lift it to `strategy/zdte_direction.py` (Position C: intraday momentum + GEX gamma-regime
   PRIMARY, MTF veto-only, N/3 conviction, NO-REC on no-confluence, theta/TOD cutoff); then refactor
