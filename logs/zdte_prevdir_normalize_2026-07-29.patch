@@ -1,0 +1,17 @@
+--- a/scan_to_html.py	2026-07-24 18:04:39
++++ b/scan_to_html.py	2026-07-29 15:03:56
+@@ -1845,7 +1845,13 @@
+ 
+     # ── Stickiness: require FULL conviction (≥11/12) to flip direction ───────
+     prev       = _load_dte_prev()
+-    prev_dir   = prev.get("direction")
++    # Normalize prev_dir to UPPERCASE (2026-07-29): the strike-select below is
++    # case-sensitive (`if direction == "CALL"`), so a lowercase "call"/"put" in
++    # dte_prev.json would slip through stickiness, mismatch the CALL branch, and
++    # fall to PUT — the "$734 call / -0.380 PUT delta" Frankenstein. Belt-and-
++    # suspenders alongside removing the second (lowercase) writer in options_scanner.py.
++    _pd_raw    = prev.get("direction")
++    prev_dir   = _pd_raw.upper() if isinstance(_pd_raw, str) and _pd_raw.strip() else None
+     direction  = raw_direction
+     _stickiness_locked = False
+     if prev_dir and prev_dir != raw_direction:
