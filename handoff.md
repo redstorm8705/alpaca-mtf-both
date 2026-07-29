@@ -53,8 +53,15 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   TWO recs (do NOT conflate): (1) scanner tile `scan_to_html.py:_compute_0dte_rec` — fix direction/delta
   DESYNC ("$734 call" shown w/ Δ−0.380 put delta) + add conviction score + wire GEX; SHIP FIRST. (2)
   options.html `_build_0dte_directional` — emits BOTH legs (hidden straddle); rebuild to single-direction
-  consuming the shared decision; SHIP SECOND. **NEXT EXACT STEP: full read of scan_to_html.py `_compute_0dte_rec`
-  + tile render → design the desync+conviction+GEX diff → gate → ship.**
+  consuming the shared decision; SHIP SECOND. **ROOT CAUSE CONFIRMED:** the scanner-tile desync is a `dte_prev.json` DUAL-WRITER RACE —
+  `options_scanner.py:1425` (lowercase direction + its strike) and `scan_to_html.py:_save_dte_prev`
+  (uppercase direction + its delta/strike) clobber the same file → Frankenstein rec. **NEXT EXACT STEP:
+  implement the TURNKEY PLAN in `logs/zdte_position_c_design_2026-07-29.md` — build shared
+  `strategy/zdte_direction.py` (Position C: intraday momentum + GEX gamma-regime PRIMARY, MTF veto-only,
+  N/3 conviction, NO-REC on no-confluence, theta/TOD cutoff); refactor `scan_to_html._compute_0dte_rec`
+  to call it; DELETE the `options_scanner.py` dte_prev writer (L1421-1433) + consume canonical state,
+  single leg. Then full gate → ship scanner tile first, options INDEX second.** (API was 529-overloaded
+  2026-07-29 pm — the ship-gate reasoning calls were failing; diagnosis+plan done via local reads.)
 - **⏭️ ALSO PENDING (Rafael-raised):** (a) **"exit data not updating"** — Rafael: weekly_review EXIT BREAKDOWN
   shows "literally no data being output even though we're tracking exit strat." Diagnosed so far: eod_*.json IS
   fresh but the html only regenerates on cron/RTH (frozen after-hours), AND external_close/overnight_atr_buffer
