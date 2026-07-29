@@ -88,6 +88,20 @@ _CHART_PROXY_BARS = 30             # daily bars for chart proxy calc per symbol
 _DIRECTIVES_HISTORY_WEEKS = 4      # prior audit entries to include for compliance check
 _MIN_FILLS_FOR_DIRECTIVES = 20     # N < this → observe only, NO parameter directives
 
+# ── Meta-audit event filtering (2026-07-28) ──────────────────────────────────
+# trade_events.jsonl is ~94% high-volume telemetry (delta_shadow/mri_refresh/
+# halt_eval/breadth_refresh) — noise for a trade-by-trade audit, and the sole
+# unbounded contributor that grew the meta-audit body to ~1M chars (~254k tokens).
+# Gemini's 1M-token window swallowed it; Groq's llama-3.3-70b 131k-token window
+# hard-rejected it (400) — the Groq cross-review leg was dead 6 days. Excluding
+# telemetry keeps only trade-lifecycle events (~38/wk); the cap + Groq-only char
+# clamp are backstops so a future volume spike can never re-break the Groq leg.
+_META_TELEMETRY_EVENT_TYPES = frozenset({
+    "delta_shadow", "mri_refresh", "halt_eval", "breadth_refresh",
+})
+_META_MAX_EVENTS = 500             # backstop cap (most-recent) after telemetry filter
+_GRO_PROMPT_CHAR_BUDGET = 400_000  # Groq-only hard clamp (~<131k tokens); last resort
+
 # ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
 _GRO_ROLE_PREAMBLE = (
     "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\n"
@@ -732,8 +746,21 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
     }, sources
 
 
-def _format_meta_audit_body(ctx: dict) -> str:
-    """Format shared data sections used by both DS and Gemini prompts."""
+def _format_meta_audit_body(
+    ctx: dict,
+    exclude_telemetry: bool = True,
+    max_events: int | None = _META_MAX_EVENTS,
+) -> str:
+    """Format shared data sections used by both DS and Gemini prompts.
+
+    exclude_telemetry: drop high-volume telemetry event types (delta_shadow/
+        mri_refresh/halt_eval/breadth_refresh) from the TRADE EVENTS render — they
+        are ~94% of trade_events.jsonl volume and carry no trade-by-trade signal.
+    max_events: after the telemetry filter, render only the most-recent N
+        trade-lifecycle events (None = no cap). Stats/score/MRI distributions are
+        computed upstream in _compute_trade_stats by event TYPE, so they are already
+        telemetry-free and are NOT affected by this render-only filter.
+    """
     stats = ctx["stats"]
     n_fills = stats["n_fills"]
     n_entries = stats["n_entries"]
@@ -788,9 +815,25 @@ def _format_meta_audit_body(ctx: dict) -> str:
     # ── Trade events with inline chart proxies ────────────────────────────
     events = ctx["events"]
     chart_proxies = ctx["chart_proxies"]
-    if events:
-        parts += [f"=== TRADE EVENTS — PAST {_TRADE_EVENTS_DAYS_BACK} DAYS ({len(events)} events) ==="]
-        for ev in events:
+    # Filter high-volume telemetry (delta_shadow/mri_refresh/halt_eval/breadth_refresh)
+    # so the body stays inside Groq's 131k-token window; keep trade-lifecycle events.
+    if exclude_telemetry:
+        _life_events = [e for e in events if e.get("event") not in _META_TELEMETRY_EVENT_TYPES]
+    else:
+        _life_events = list(events)
+    _n_telemetry = len(events) - len(_life_events)
+    _n_life_total = len(_life_events)
+    # Backstop cap: keep the most-recent max_events (file/append order is chronological).
+    if max_events is not None and len(_life_events) > max_events:
+        _life_events = _life_events[-max_events:]
+    if _life_events:
+        parts += [
+            f"=== TRADE EVENTS — PAST {_TRADE_EVENTS_DAYS_BACK} DAYS "
+            f"(showing {len(_life_events)} of {_n_life_total} trade-lifecycle events; "
+            f"{_n_telemetry} telemetry rows excluded: "
+            f"delta_shadow/mri_refresh/halt_eval/breadth_refresh) ==="
+        ]
+        for ev in _life_events:
             sym = ev.get("symbol", "?")
             evt = ev.get("event", "?")
             ts = ev.get("ts", "?")
@@ -819,7 +862,12 @@ def _format_meta_audit_body(ctx: dict) -> str:
                     )
         parts.append("")
     else:
-        parts += [f"=== TRADE EVENTS: None in past {_TRADE_EVENTS_DAYS_BACK} days ===", ""]
+        parts += [
+            f"=== TRADE EVENTS: 0 trade-lifecycle events in past {_TRADE_EVENTS_DAYS_BACK} days "
+            f"({_n_telemetry} telemetry rows excluded of {len(events)} total) — telemetry-active "
+            f"but NO trades this window (distinct from a dead/no-data bot) ===",
+            "",
+        ]
 
     # ── Fills summary (Alpaca-authoritative) ─────────────────────────────
     fills = ctx["fills"]
@@ -943,13 +991,51 @@ def _format_meta_audit_body(ctx: dict) -> str:
     return "\n".join(parts)
 
 
+def _clamp_prompt_chars(text: str, budget: int) -> str:
+    """Last-resort char clamp for the Groq prompt: keep HEAD (70%) + TAIL (30%) so
+    the REQUESTED-OUTPUT-FORMAT footer at the END of the body always survives (a
+    plain tail-cut would decapitate the instructions and the required ```json block).
+    Should be unreachable once telemetry is filtered (post-filter body is <50k chars);
+    this only guards against a future firehose event type not yet in the denylist.
+    Mutates the INPUT prompt only — never the model response — so it cannot corrupt
+    the downstream JSON-findings parser.
+    """
+    if len(text) <= budget:
+        return text
+    head_n = int(budget * 0.7)
+    tail_n = budget - head_n
+    cut = len(text) - head_n - tail_n
+    return (
+        text[:head_n]
+        + f"\n\n[... {cut:,} chars truncated to fit Groq's 131k-token context window ...]\n\n"
+        + text[-tail_n:]
+    )
+
+
 def _build_gro_prompt(ctx: dict) -> str:
-    """Build Groq prompt: skeptical risk auditor role + shared data context."""
-    return _GRO_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
+    """Build Groq prompt: skeptical risk auditor role + shared data context.
+
+    Groq's llama-3.3-70b context is 131k tokens (vs Gemini's 1M), so a hard char
+    clamp is applied AFTER telemetry filtering as a defense-in-depth backstop.
+    """
+    prompt = _GRO_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
+    if len(prompt) > _GRO_PROMPT_CHAR_BUDGET:
+        print(
+            f"[auto_ai_audit] ⚠️  Groq prompt {len(prompt):,} chars > budget "
+            f"{_GRO_PROMPT_CHAR_BUDGET:,} — clamping (telemetry filter should have "
+            f"prevented this; check for a new high-volume event type).",
+            file=sys.stderr,
+        )
+        prompt = _clamp_prompt_chars(prompt, _GRO_PROMPT_CHAR_BUDGET)
+    return prompt
 
 
 def _build_gai_prompt(ctx: dict) -> str:
-    """Build Gemini prompt: alpha optimizer role + shared data context."""
+    """Build Gemini prompt: alpha optimizer role + shared data context.
+
+    No char clamp — Gemini's 1M-token window comfortably fits the (now telemetry-
+    filtered) body.
+    """
     return _GAI_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
 
 
