@@ -349,14 +349,24 @@ def _fetch_chart_proxies(symbols: list[str]) -> dict:
     bars_data: dict = {}
     for sym in all_syms:
         try:
+            _bars_params: dict[str, str | int] = {
+                "timeframe": "1Day",
+                "limit": _CHART_PROXY_BARS,
+                "adjustment": "raw",
+            }
             resp = requests.get(
                 f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
                 headers=headers,
-                params={"timeframe": "1Day", "limit": _CHART_PROXY_BARS, "adjustment": "raw"},
+                params=_bars_params,
                 timeout=15,
             )
             if resp.status_code == 200:
-                bars_data[sym] = resp.json().get("bars", [])
+                # RC-6: Alpaca returns {"bars": null} (not []) for a symbol with no
+                # data in the window, so `.get("bars", [])` yields None — and a later
+                # len(None) crashed the ENTIRE meta-audit (incl. SPY, the benchmark).
+                # `or []` coerces null/missing/empty → [] so the symbol degrades to
+                # NO_DATA instead of aborting the run.
+                bars_data[sym] = resp.json().get("bars") or []
         except Exception as exc:  # noqa: BLE001
             print(f"[auto_ai_audit] ⚠️  Chart proxy {sym} failed: {exc}", file=sys.stderr)
     spy_bars = bars_data.get("SPY", [])
