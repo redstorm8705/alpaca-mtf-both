@@ -1,0 +1,31 @@
+--- a/options_scanner.py	2026-07-29 09:23:59
++++ b/options_scanner.py	2026-07-29 14:36:59
+@@ -1418,19 +1418,15 @@
+         f"{len(combined_rejections)} rejected"  # P2-OPTIONS-REJECT
+     )
+ 
+-    # Update dte_prev.json for scan_results.html stat tile
+-    if dte_recs:
+-        try:
+-            _best_dte = dte_recs[0]
+-            (LOGS_DIR / "dte_prev.json").write_text(json.dumps({
+-                "direction": _best_dte["direction"],
+-                "side":      _best_dte["side"],
+-                "strike":    _best_dte["strike"],
+-                "symbol":    _best_dte["symbol"],
+-                "score":     _best_dte["score"],
+-            }, indent=2))
+-        except Exception:
+-            pass
++    # NOTE (2026-07-29): this scanner NO LONGER writes logs/dte_prev.json. That file is
++    # OWNED by scan_to_html.py (_save_dte_prev / _load_dte_prev) as its 0DTE stickiness +
++    # fallback state. This function used to ALSO write it with a lowercase "call"/"put"
++    # direction and its own strike — a dual-writer race: scan_to_html read that lowercase
++    # value as prev_dir, its stickiness adopted it, then its case-sensitive
++    # `if direction == "CALL"` strike-select failed the match and fell to the PUT branch —
++    # producing a Frankenstein tile ("$734 call" rendered with a -0.380 PUT delta). Removing
++    # this writer makes scan_to_html the SOLE writer/reader of dte_prev.json (single source of
++    # truth), fixing the desync at the source. See logs/zdte_position_c_design_2026-07-29.md.
+ 
+     return result
+ 
