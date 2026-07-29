@@ -100,7 +100,14 @@ _META_TELEMETRY_EVENT_TYPES = frozenset({
     "delta_shadow", "mri_refresh", "halt_eval", "breadth_refresh",
 })
 _META_MAX_EVENTS = 500             # backstop cap (most-recent) after telemetry filter
-_GRO_PROMPT_CHAR_BUDGET = 400_000  # Groq-only hard clamp (~<131k tokens); last resort
+# Groq free tier ("on_demand") is hard-capped at 12,000 tokens/MINUTE (TPM), counting
+# input + completion together — NOT the 131k context window. Even after telemetry
+# filtering the body is ~17k tokens (73% of it the 100-line bot-log tail), so Groq
+# 413s. Groq therefore gets a trimmed bot-log tail + a bounded completion so
+# input+output clears 12k TPM. Gemini (1M window, no TPM issue) keeps the full tail.
+_GRO_BOT_LOG_LINES = 15            # Groq-only bot-log tail (vs 100 for Gemini)
+_GRO_MAX_COMPLETION_TOKENS = 3000  # bound Groq output so input+output ≤ 12k TPM
+_GRO_PROMPT_CHAR_BUDGET = 20_000   # Groq-only clamp (~7.7k tok at 2.59 ch/tok); backstop
 
 # ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
 _GRO_ROLE_PREAMBLE = (
@@ -750,6 +757,7 @@ def _format_meta_audit_body(
     ctx: dict,
     exclude_telemetry: bool = True,
     max_events: int | None = _META_MAX_EVENTS,
+    bot_log_lines: int | None = None,
 ) -> str:
     """Format shared data sections used by both DS and Gemini prompts.
 
@@ -760,6 +768,9 @@ def _format_meta_audit_body(
         trade-lifecycle events (None = no cap). Stats/score/MRI distributions are
         computed upstream in _compute_trade_stats by event TYPE, so they are already
         telemetry-free and are NOT affected by this render-only filter.
+    bot_log_lines: cap the BOT LOG TAIL to the most-recent N lines (None = full).
+        The 100-line tail is ~73% of the body; Groq passes a small N to clear its
+        12k-TPM free-tier cap, Gemini passes None (its 1M window has no TPM issue).
     """
     stats = ctx["stats"]
     n_fills = stats["n_fills"]
@@ -942,8 +953,13 @@ def _format_meta_audit_body(
     # ── Bot log tail (system health only) ────────────────────────────────
     bot_tail = ctx.get("bot_log_tail", "")
     if bot_tail:
+        _tail_lines = bot_tail.splitlines()
+        # Cap to most-recent N lines when requested (Groq TPM budget); None = full.
+        if bot_log_lines is not None and len(_tail_lines) > bot_log_lines:
+            _tail_lines = _tail_lines[-bot_log_lines:]
+        bot_tail = "\n".join(_tail_lines)
         parts += [
-            f"=== BOT LOG TAIL (last {_BOT_LOG_TAIL_LINES} lines — system health context) ===",
+            f"=== BOT LOG TAIL (last {len(_tail_lines)} lines — system health context) ===",
             bot_tail,
             "",
         ]
@@ -1018,7 +1034,9 @@ def _build_gro_prompt(ctx: dict) -> str:
     Groq's llama-3.3-70b context is 131k tokens (vs Gemini's 1M), so a hard char
     clamp is applied AFTER telemetry filtering as a defense-in-depth backstop.
     """
-    prompt = _GRO_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
+    prompt = _GRO_ROLE_PREAMBLE + _format_meta_audit_body(
+        ctx, bot_log_lines=_GRO_BOT_LOG_LINES
+    )
     if len(prompt) > _GRO_PROMPT_CHAR_BUDGET:
         print(
             f"[auto_ai_audit] ⚠️  Groq prompt {len(prompt):,} chars > budget "
@@ -1123,6 +1141,10 @@ def _call_groq(prompt: str) -> dict:
                 "model": _GRO_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
+                # Bound completion so input+output clears Groq's 12k-TPM free-tier
+                # cap (the meta-audit's 413 was a TPM rate limit, not the context
+                # window). 3000 is ample for the audit verdict + JSON findings block.
+                "max_tokens": _GRO_MAX_COMPLETION_TOKENS,
             },
             timeout=_API_TIMEOUT_S,
         )
