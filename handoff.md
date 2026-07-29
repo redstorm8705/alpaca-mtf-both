@@ -44,7 +44,18 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   ITM (δ 0.55–0.65). Cards "BUY TO OPEN — LONG CALL/PUT" + Max Risk. 0DTE untouched (already long). Gate incl.
   FINAL preship gro=WAIVED (12k-TPM vs 18k diff, Rafael-authorized; real Gro APPROVE held). LIVE smoke: 11 recs,
   0 sell-side artifacts. Also cleared the parked `zdte_close_times()` helper. **Recommend-only — no restart.**
-- **⏭️ NEXT (Rafael-raised, pending):** (a) **"exit data not updating"** — Rafael: weekly_review EXIT BREAKDOWN
+- **⏭️ ACTIVE — 0DTE DIRECTION ENGINE → Position C (BGG-aligned + Rafael APPROVED 2026-07-29):** gate
+  0DTE SPY direction on the INTRADAY tape (VWAP/opening-range momentum + dealer-gamma/GEX regime +
+  cross-asset regime), NOT the multi-day MTF swing score (that's a timeframe category error — BGG
+  unanimous, Gro+GAI conceded prior strict-9/12). MTF = veto/context only; any intraday disagreement →
+  NO-REC; hard theta/TOD cutoff; conviction shown as intraday confluence; wire GEX as a first-class gate
+  (also closes the "why not GEX for 0DTE" gap). Full cited design + plan → `logs/zdte_position_c_design_2026-07-29.md`.
+  TWO recs (do NOT conflate): (1) scanner tile `scan_to_html.py:_compute_0dte_rec` — fix direction/delta
+  DESYNC ("$734 call" shown w/ Δ−0.380 put delta) + add conviction score + wire GEX; SHIP FIRST. (2)
+  options.html `_build_0dte_directional` — emits BOTH legs (hidden straddle); rebuild to single-direction
+  consuming the shared decision; SHIP SECOND. **NEXT EXACT STEP: full read of scan_to_html.py `_compute_0dte_rec`
+  + tile render → design the desync+conviction+GEX diff → gate → ship.**
+- **⏭️ ALSO PENDING (Rafael-raised):** (a) **"exit data not updating"** — Rafael: weekly_review EXIT BREAKDOWN
   shows "literally no data being output even though we're tracking exit strat." Diagnosed so far: eod_*.json IS
   fresh but the html only regenerates on cron/RTH (frozen after-hours), AND external_close/overnight_atr_buffer
   land in "Other". Rafael's phrasing suggests a deeper "no output" — NOT fully root-caused yet. Investigate
