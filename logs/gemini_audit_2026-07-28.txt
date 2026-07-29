@@ -1,0 +1,76 @@
+Nightly Gemini Audit — 2026-07-28
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['trade_logger.py', 'nightly_audit.py', 'midday_audit.py', 'scripts/audit_slack.py', 'scripts/options_accuracy_evaluator.py', 'data/option_bars.py', 'reporting/pnl_ledger.py', '.github/scripts/ci_audit.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution.portfolio_tracker` (implied) / `scan_to_html` | Position tracking desync leading to an untracked (real) closed position and a phantom (imaginary) open position. | Symbol: NET
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Recurring `STATE DESYNC` Warnings**:
+    *   `execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (1) < RiskManager (2). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.`
+    *   This critical message appears repeatedly (`19:33:15`, `19:41:32`, `19:47:57`, `19:56:45`), indicating a persistent disagreement between the `Tracker` and `RiskManager` regarding the number of open positions. While "Ignoring tracker" might be a safety measure, it points to a deeper state management issue requiring "Manual reconciliation".
+*   **Genuine Reconciliation Break for `NET`**:
+    *   `scan_to_html | [NET] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold — genuine reconciliation break.`
+    *   This warning (logged at `19:33:31` and `19:48:28`) directly contradicts the `overnight_holds` entry for `NET` in the EOD snapshot (which shows it as open) and `_pnl_selfcheck_telemetry_NOT_A_LOSS` (which shows Alpaca closed it for -22.92). The bot's internal position state is corrupt relative to the broker for NET.
+*   **TQI Degradation Warning**:
+    *   `strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`
+    *   Logged at `19:40:45`, `19:47:12`, `19:55:54`. This recurring warning indicates a degradation in trade quality, suggesting issues with exit discipline or stop placement.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness & `pnl=0.0` anomalies**:
+    *   Several `stop_hit` events are recorded with `pnl: 0.0`, which is incorrect for stop losses that should result in negative P&L.
+        *   RIVN: `ts: 2026-07-24T07:53:40.206137-07:00`, `price: 17.16`, `pnl: 0.0`. The reason `overnight_atr_buffer_exit | 9-scan breach | entry=$17.16 thresh=$16.42` clearly indicates a stop hit below entry, which should be a loss.
+        *   MARA: `ts: 2026-07-24T12:07:09.338371-07:00`, `price: 12.32`, `pnl: 0.0`, `reason: hard_stop`. A hard stop should result in a loss.
+        *   RBLX: `ts: 2026-07-27T08:51:05.028784-07:00`, `price: 47.61`, `pnl: 0.0`, `reason: hard_stop`. A hard stop should result in a loss.
+    *   This consistently misrepresents losses as break-even, corrupting performance metrics.
+*   **Stop-hit rate vs. win rate**:
+    *   Of the 17 recent trade events, 10 are `stop_hit` events, resulting in a stop-hit rate of 58.8%. This exceeds the `midday_audit.py` `STOP_HIT_WARN` threshold of 50%.
+    *   The `EOD SNAPSHOT` `all_time_stats.profit_factor` is `1.01` and `avg_r_multiple` is `-0.038`. These metrics confirm the bot is barely profitable and far from capturing its edge, consistent with the high stop-hit rate and `TQI degradation` warnings.
+*   **Score→outcome correlation**: Higher-score entries (e.g., UBER score 12, RIVN score 12, MSTR score 12) resulted in losses or `pnl=0.0` (bugged losses), indicating a lack of positive correlation between signal score and trade outcome in recent performance.
+
+### TRADE INTEGRITY
+*   **`pnl=0.0` on stop-hit events**: As noted above, the P&L recording for several `stop_hit` events incorrectly shows `0.0`. This corrupts the historical trade data, making it impossible to accurately assess the impact of stop losses and overall performance.
+
+### MODIFIED FILE FINDINGS
+1.  **`midday_audit.py` | `analyse_pnl` | Incorrect P&L calculation for partially-exited positions**
+    *   **Description**: In the `analyse_pnl` function, the `qty` variable used for P&L calculation for a full `exit` or `stop_hit` event incorrectly uses the `entry` event's size (`en.get("size")`). This is problematic if previous `partial_exit` events have reduced the position size. The P&L should be calculated based on the `size` specified in the *current exit event* (`ex.get("size")`), which represents the actual quantity being closed.
+    *   **Exact failure condition**: `midday_audit.py` line `qty = float((ex.get("size") if ex.get("event") == "partial_exit" else en.get("size")) or 0)` is flawed. For full exits (event is "exit" or "stop_hit"), `en.get("size")` (original entry size) is used instead of `ex.get("size")` (quantity of the current exit). This will lead to an over- or under-statement of P&L for that specific exit tranche in the audit report if the position had prior partial exits.
+
+2.  **`scripts/options_accuracy_evaluator.py` | `evaluate_rec` | Inaccurate MAE calculation**
+    *   **Description**: The `mae_pct` (Maximum Adverse Excursion percentage) is calculated using `min(x[3] for x in bars[:peak_idx + 1])`. This approach finds the minimum low price up to the bar where the option hit its maximum high (`peak_idx`). True MAE should track the maximum unrealized loss from the *entry point* throughout the trade duration, not just relative to the peak of the rally. This method may understate the actual adverse excursion experienced by a trade.
+    *   **Exact failure condition**: `scripts/options_accuracy_evaluator.py` line `out["mae_pct"] = round(min(x[3] for x in bars[:peak_idx + 1]) / premium - 1.0, 4)`. This calculation provides an inaccurate representation of Maximum Adverse Excursion as it's not consistently measured from the entry point or across the entire risk horizon.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: UNTOUCHED
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+*   **A-1 | overnight_breakeven exit fires at entry-0.25×ATR, not at entry price**: UNTOUCHED
+*   **A-2 | trail_stop not floor-bounded by promoted stop after partial exit**: UNTOUCHED
+*   **A-3 | nightly_audit trade_log.json reference was stale (file never existed)**: FIXED
+*   **A-4 | Alpaca paper fills API returns empty for same-day closures until overnight settlement**: UNTOUCHED
+
+### NEW BUGS FOUND
+None (all findings categorized above).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Address `NET` Position State Desync Immediately (CRITICAL)**: Investigate why the `portfolio_tracker`'s `overnight_holds` still lists `NET` as open while Alpaca's `alpaca_per_trade` (telemetry) shows it as closed. This discrepancy is a "genuine reconciliation break" and needs immediate resolution to ensure the bot accurately tracks and manages its live positions, preventing phantom positions and unrecorded P&L.
+2.  **Correct P&L Calculation in `midday_audit.py:analyse_pnl` (HIGH)**: Modify the `analyse_pnl` function to calculate P&L for `exit` and `stop_hit` events using `ex.get("size")` (the quantity of shares actually closed by that event) instead of `en.get("size")` (the original entry quantity). This will ensure accurate P&L reporting in audit summaries for positions that have undergone partial exits.
+3.  **Investigate `pnl=0.0` on Stop-Hits (HIGH)**: Debug the root cause of `stop_hit` events being recorded with `pnl: 0.0` in `trade_events.jsonl` (e.g., RIVN, MARA, RBLX). Ensure the `portfolio_tracker` or the component responsible for logging these events correctly calculates and records the actual loss incurred.
+4.  **Review Strategy Performance and Risk Management (ALPHA)**: Address the recurring `[ANOMALY-3] TQI degradation` and the consistently high `stop_hit_rate` (58.8%). These indicate a misalignment between the strategy's thesis and current market conditions. Review `MIN_LONG_SCORE`/`MIN_SHORT_SCORE`, `INTRADAY_STOP_ATR_MULT`, and `INTRADAY_TARGET_ATR_MULT` to improve trade quality and stop placement.
+5.  **Refine MAE Calculation in `scripts/options_accuracy_evaluator.py` (MEDIUM)**: Adjust the `mae_pct` calculation in `evaluate_rec` to reflect the maximum adverse excursion more accurately, typically measured from the entry price throughout the trade's duration, rather than relative to the option's peak high.

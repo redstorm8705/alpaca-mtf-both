@@ -1,0 +1,78 @@
+{
+  "audit_date": "2026-07-28",
+  "run_ts": "2026-07-28T10:30:01.246285-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 31
+    },
+    "last_score": 46,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 31,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-28 16:02:54,527 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-26.43 tracker=$-3.51 drift=$-22.92",
+      "2026-07-28 16:08:25,062 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-28 16:09:32,825 | WARNING  | scan_to_html | [NET] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/position",
+      "2026-07-28 16:10:02,566 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-26.43 tracker=$-3.51 drift=$-22.92",
+      "2026-07-28 16:15:50,487 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "NET",
+      "UBER"
+    ],
+    "by_symbol": {
+      "UBER": {
+        "buy": 1,
+        "sell": 0
+      },
+      "NET": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

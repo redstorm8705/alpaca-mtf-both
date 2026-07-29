@@ -1,0 +1,67 @@
+Midday Gemini Audit — 2026-07-28
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   **Position Reconciliation Break:** Bot's tracker indicates an open `NET` position, but Alpaca's `/v2/positions` confirms no such position. This is a critical state desync for live risk management. | `NET` symbol
+*   **Internal State Desync:** The internal `Tracker` shows 1 open position while the `RiskManager` shows 2, explicitly stating `Manual reconciliation required.` This indicates a fundamental inconsistency in position counts across critical modules. | Systemic
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Entry/Exit/P&L:** No closed trades were recorded in `CLOSED TRADE DETAILS` or `SESSION P&L SUMMARY`. This is attributed to the `KNOWN D1 symptom` (degraded entry-event log) and `A-4 paper fills gap` as per the CONTEXT section. Therefore, direct auditing of entry/exit prices, P&L signs, win rate, profit factor, and score-outcome correlation is not possible for this session.
+*   **Stop-hit rate:** The stop-hit rate is reported as 0% (0 stops), consistent with no closed trades.
+
+### ENTRY QUALITY
+*   **Dynamic MIN_SCORE Adjustment:** The bot correctly raised `MIN_SCORE` to 10/12 due to `MRI=STRESSED/10` and `GEX=NEGATIVE/9`. This indicates appropriate tightening of entry criteria under unfavorable market conditions.
+*   **Premarket Red Lockout:** `ALL LONGS BLOCKED` due to `PREMARKET RED LOCKOUT` (11/14 tracked movers red). This is a correct application of a risk-off filter.
+*   **ORB Gate Blocks:** `PLTR`, `SMCI`, and `META` short signals were blocked by the `ORB gate` due to SPY not breaking below its range (`SPY 741.53 >= ORB_L 736.56`). This indicates correct adherence to the Opening Range Breakout (ORB) entry filter.
+*   **Weekly Bias Filters:** Several potential LONG signals (e.g., NVDA, AMD, SPY, QQQ) were correctly filtered by a `weekly bias (BEARISH)`.
+*   Overall, entry conditions indicate strong adherence to risk filters and dynamic adjustments, preventing entries under systematically reduced edge.
+
+### EXIT QUALITY
+*   No trades were closed, making direct exit quality assessment impossible.
+*   The log shows `[NET] Exit indicator(s) on 15Min: MACD bearish cross` and `[NET] Overnight reversal signal: scan 2/10 — waiting for confirmation.`. This suggests exit logic is active and evaluating, employing a multi-step confirmation process, which is not an issue in itself.
+
+### MRI ALIGNMENT
+*   **MRI Level:** The session operated under `MRI: STRESSED (46/100)`.
+*   **Sizing Adjustment:** The bot applied a `size floor 0.70x` due to the `STRESSED` MRI level, correctly reducing exposure.
+*   **Minimum Score Adjustment:** The `MIN_SCORE` was dynamically raised to 10/12, in part due to `MRI=STRESSED/10`, further aligning entry criteria with risk levels.
+*   Overall, the bot demonstrates good alignment with MRI levels, adjusting risk parameters accordingly.
+
+### LOG ANOMALIES
+*   `2026-07-28 17:17:59,941 | WARNING | scan_to_html | [NET] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold — genuine reconciliation break.`
+*   `2026-07-28 17:18:37,719 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-26.43 tracker=$-3.51 drift=$-22.92` (and again at 17:24:50,465).
+*   `2026-07-28 17:24:44,929 | CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (1) < RiskManager (2). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.`
+*   `2026-07-28 17:24:01,935 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`
+*   News alerts (`⚡ CURRENTS ALERT`, `⚡ MARKETAUX`) are noted, but the bot applies `base penalty: 100%`, indicating it handles these by blocking entries (if price-confirmation fails), which is appropriate risk management.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Position Reconciliation Break for NET**
+    *   **Description:** The bot's internal tracker believes it holds an open position (qty=1) for symbol `NET`, but Alpaca's live position data explicitly indicates no such position. This is a `genuine reconciliation break`. This contradicts `LIVE STOP COVERAGE` if `NET` was meant to be one of the 4 positions, or shows a phantom position.
+    *   **Exact variable/metric:** Bot's internal position tracker for `NET` (variable name not provided in source) vs. Alpaca `/v2/positions` for `NET`.
+    *   **Value vs. Should be:** Bot's tracker: `status=open, qty=1` for NET. Alpaca: No open position for NET. These values should be consistent for accurate portfolio management.
+    *   **Condition:** `2026-07-28 17:17:59,941 | WARNING | scan_to_html | [NET] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold — genuine reconciliation break.`
+*   **EXECUTION BUG | CRITICAL | Internal State Desync between Tracker and RiskManager**
+    *   **Description:** The internal position count maintained by the bot's `Tracker` module (1) is less than that seen by the `RiskManager` module (2). This is a critical desync in the bot's internal representation of its portfolio, requiring `Manual reconciliation`.
+    *   **Exact variable/metric:** The position counts reported by `Tracker` and `RiskManager` (variable names not provided in source).
+    *   **Value vs. Should be:** `Tracker` reports 1, `RiskManager` reports 2. These should be equal.
+    *   **Condition:** `2026-07-28 17:24:44,929 | CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (1) < RiskManager (2). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.`
+*   **INFRASTRUCTURE / EXECUTION BUG | HIGH | EOD P&L Drift**
+    *   **Description:** A substantial discrepancy exists between the P&L reported by Alpaca ($-26.43) and the bot's internal tracker ($-3.51) at End-of-Day (EOD), with a drift of $-22.92. While the ledger is stated as authoritative, this persistent drift in the bot's internal P&L tracker indicates an underlying issue in how the bot accounts for or reconciles fills and P&L. This can affect internal performance metrics and potentially Kelly sizing calculations.
+    *   **Exact variable/metric:** `pnl_today` from Alpaca vs. `pnl_today` from the bot's `tracker`.
+    *   **Value vs. Should be:** Alpaca: `$-26.43`. Tracker: `$-3.51`. These values should be closely aligned, ideally identical for same-day P&L, especially if the bot relies on the tracker for internal calculations.
+    *   **Condition:** `2026-07-28 17:18:37,719 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-26.43 tracker=$-3.51 drift=$-22.92`
+*   **ALPHA ISSUE | MEDIUM | TQI Degradation Warning**
+    *   **Description:** The bot self-reports `TQI degradation`, with the `last-5-trade avg` falling below the threshold (29.8/100 < 30). This indicates a potential systematic degradation in the quality of recent trades, specifically related to `exit discipline and stop placement`.
+    *   **Exact variable/metric:** `TQI degradation: last-5-trade avg`.
+    *   **Value vs. Should be:** `last-5-trade avg=29.8/100`. This is below the implied threshold of 30. It should ideally be above 30, or at least not consistently degrade below it.
+    *   **Condition:** `2026-07-28 17:24:01,935 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Prioritize investigation and resolution of the `[NET] context strip` position reconciliation break. This is a critical data integrity issue where the bot's internal state directly contradicts the broker's ground truth, risking erroneous trade actions or missed risk management.
+2.  **EXECUTION:** Immediately address the `[CYCLE-SYNC] STATE DESYNC` between the `Tracker` and `RiskManager`. Ensure all internal modules maintain a consistent and accurate count of open positions to prevent misinformed risk decisions.
+3.  **INFRASTRUCTURE:** Investigate the root cause of the `EOD P&L DRIFT`. While an authoritative ledger is available, a significant and recurring drift in the bot's internal P&L tracker compromises the integrity of internal performance metrics and potentially Kelly sizing, requiring a robust reconciliation mechanism.
