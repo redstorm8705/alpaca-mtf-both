@@ -56,9 +56,11 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
   consuming the shared decision; SHIP SECOND. **ROOT CAUSE CONFIRMED:** the scanner-tile desync is a `dte_prev.json` DUAL-WRITER RACE —
   `options_scanner.py:1425` (lowercase direction + its strike) and `scan_to_html.py:_save_dte_prev`
   (uppercase direction + its delta/strike) clobber the same file → Frankenstein rec. **NEXT EXACT STEP:
-  implement the TURNKEY PLAN in `logs/zdte_position_c_design_2026-07-29.md` — build shared
-  `strategy/zdte_direction.py` (Position C: intraday momentum + GEX gamma-regime PRIMARY, MTF veto-only,
-  N/3 conviction, NO-REC on no-confluence, theta/TOD cutoff); refactor `scan_to_html._compute_0dte_rec`
+  implement the TURNKEY PLAN in `logs/zdte_position_c_design_2026-07-29.md` — the shared helper is
+  ALREADY BUILT + VALIDATED (11/11 unit tests, statics clean) at `logs/zdte_direction_DRAFT.py` (commit
+  4187bb3) — lift it to `strategy/zdte_direction.py` (Position C: intraday momentum + GEX gamma-regime
+  PRIMARY, MTF veto-only, N/3 conviction, NO-REC on no-confluence, theta/TOD cutoff); then refactor
+  `scan_to_html._compute_0dte_rec`
   to call it; DELETE the `options_scanner.py` dte_prev writer (L1421-1433) + consume canonical state,
   single leg. Then full gate → ship scanner tile first, options INDEX second.** (API was 529-overloaded
   2026-07-29 pm — the ship-gate reasoning calls were failing; diagnosis+plan done via local reads.)
