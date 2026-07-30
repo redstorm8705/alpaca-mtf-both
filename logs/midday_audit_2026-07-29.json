@@ -1,0 +1,73 @@
+{
+  "audit_date": "2026-07-29",
+  "run_ts": "2026-07-29T10:30:01.978479-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 31
+    },
+    "last_score": 52,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 12,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-29 16:13:13,531 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-29 16:19:28,086 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-29 16:27:08,090 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-29 16:33:40,851 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-29 16:41:39,828 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 1,
+    "symbols": [
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
