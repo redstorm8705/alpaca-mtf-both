@@ -1,0 +1,71 @@
+Nightly Gemini Audit — 2026-07-29
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['trade_logger.py', 'auto_ai_audit.py', 'options_scanner.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   **execution.broker** | [SMCI] GTC stop FAILED after 63s poll — position UNPROTECTED overnight. The Alpaca API rejected the GTC stop order with `reject_reason: "opposite side market/stop order exists"`, leaving the live short position on SMCI unprotected for overnight exposure. | impacted symbol/trade: SMCI short position entered at 25.85 (2026-07-29T12:54:32.615304-07:00).
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.` - This warning recurs three times (`19:40:03,262`, `19:46:52,403`, `19:53:48,062`), indicating a persistent issue with the Trade Quality Index. This is a critical signal that the bot's current exit strategy or stop placement is underperforming consistently.
+*   `CRITICAL | execution.entry_logic | 🔴 RULE 1 — PREMARKET RED LOCKOUT: 8/10 tracked movers red ≥2% (80%) — ALL LONGS BLOCKED this session. Shorts + inverse ETFs only. (April 2: 23/24 were red.)` - This critical log entry, occurring multiple times (`19:41:02,328`, `19:47:35,255`, `19:54:29,167`), highlights a consistent market condition where long entries are frequently blocked. While an intended behavior, its frequent triggering may indicate a bias in market conditions or signal generation that heavily favors short/inverse ETF strategies, potentially limiting overall trading opportunities.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness**: For the last 10 trades, P&L signs for `stop_hit` and `exit` events are consistently correct relative to the trade direction and listed exit price. For instance, `NFLX` (short, entry $67.64, exit $70.16) correctly shows a negative P&L (-$5.04), and `PANW` (long, entry $340.84, exit $322.29) shows a negative P&L (-$18.55).
+*   **Trades with pnl=0.0 where entry ≠ exit price**: `RIVN` (entry $17.16, exit $17.16, pnl $0.0) and `MARA` (exit $12.32, pnl $0.0, assumed entry $12.32) show zero P&L. For RIVN, the `price` and `entry` are identical, making `pnl=0.0` correct (breakeven stop). The data does not contain `entry` for MARA, so it cannot be fully verified, but it is plausible.
+*   **Partial P&L accumulation**: The XOM trade (`2026-07-22` events) involved multiple `partial_exit` events with accumulating P&L figures before a final `exit`. The individual P&L figures for each tranche (`$5.46`, `$6.64`, `$22.6433`) appear correctly recorded.
+*   **Score→outcome correlation**: The `all_time_stats` show an `avg_r_multiple` of -0.048 and a `win_rate` of 36.6%. This is a weak performance despite the reported `avg_12pt` scores of 7.92-8.28 and `avg_16pt` scores of 9.61-10.03 for tickers in the `EOD score_comparison`. This indicates a significant problem with converting high-scoring signals into profitable trades, suggesting that the scoring system's predictive power is not being realized through the current entry/exit mechanics. This aligns with the persistent `[ANOMALY-3] TQI degradation` warnings.
+*   **Stop-hit rate vs. win rate**: With a win rate of 36.6%, the majority of trades are likely hitting their stops or being exited at a loss. Several `stop_hit` events (NFLX, PANW, NET, HOOD, MSTR) reveal that the exit `price` is consistently *beyond* the calculated stop `thresh` (e.g., `NFLX` short: `entry=$67.64`, `thresh=$69.06`, `price=70.16`). This "slippage" increases realized losses, undermining the intended risk-reward profile and contributing to the low `avg_r_multiple` and `TQI degradation`.
+
+### TRADE INTEGRITY
+*   **Recurring Stop Slippage/Late Execution**: For "overnight_atr_buffer_exit | 9-scan breach" reasons, the executed `price` for `stop_hit` events frequently deviates unfavorably from the theoretical stop `thresh`.
+    *   **NFLX (short)**: `entry=$67.64`, `thresh=$69.06`, `price=70.16`. Exit occurred $1.10 (1.6%) above threshold.
+    *   **PANW (long)**: `entry=$340.84`, `thresh=$331.37`, `price=322.29`. Exit occurred $9.08 (2.7%) below threshold.
+    *   **NET (long)**: `entry=$273.61`, `thresh=$266.68`, `price=262.6`. Exit occurred $4.08 (1.5%) below threshold.
+    *   **HOOD (long)**: `entry=$103.00`, `thresh=$99.55`, `price=94.16`. Exit occurred $5.39 (5.4%) below threshold.
+    *   **MSTR (short)**: `entry=$92.29`, `thresh=$95.06`, `price=97.19`. Exit occurred $2.13 (2.2%) above threshold.
+    This consistent pattern indicates a systematic problem with stop order execution, where losses are being exacerbated beyond calculated risk, directly impacting P&L.
+
+### MODIFIED FILE FINDINGS
+*   **trade_logger.py**:
+    *   **FIXED**: The `_json_default` function (lines 53-62) correctly implements a robust serialization fallback, especially for `numpy` types, preventing silent dropping of trade log events, which was the root cause of D1.
+    *   **FIXED**: The `log_event` function's `except Exception as e` block (lines 92-111) now includes explicit `logger.error` and a throttled Slack alert, addressing the silent failure aspect of D1 by ensuring log write failures are immediately observable.
+*   **auto_ai_audit.py**:
+    *   **FIXED**: In `_fetch_chart_proxies`, the line `bars_data[sym] = resp.json().get("bars") or []` (line 344) correctly handles cases where Alpaca's API might return `null` for `bars`, preventing a `TypeError` and subsequent meta-audit crash (RC-6 fix).
+*   **options_scanner.py**:
+    *   **FIXED**: The `_bs_d1` function (lines 201-203) now includes explicit checks (`if T <= 0 or sigma <= 0 or S <= 0 or K <= 0: return 0.0`) to prevent division by zero or log of non-positive numbers, enhancing the stability of Black-Scholes calculations.
+    *   No other issues found in the visible modified sections; changes primarily reflect configuration updates, new telemetry for rec/rejection history, and GEX overlay logic, all of which align with stated design intents.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk**: UNTOUCHED
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED (The observed GTC stop failure for SMCI was due to a conflicting existing order, not a 404 "order not found" error.)
+*   **P5-H4 | Rule 2 dead code**: UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED (The EOD snapshot still shows `score_comparison` data for 36 tickers without clear pruning, suggesting this issue remains.)
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: TRIGGERED (The EOD snapshot's provenance explicitly states it was taken before the ledger heal and `open_trades: 1`, confirming that the snapshot is provisional and not final for the day, which can lead to understated P&L.)
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **ALPHA ISSUE** | CRITICAL | options_scanner.py | `ZDTE_CONTRACT_LADDER` sizing logic misinterprets conviction. The `ZDTE_CONTRACT_LADDER` (e.g., `[(90, 4), (75, 3), (60, 2), (0, 1)]`) implies thresholds for `min_conviction%`, as stated in its comment ("Conviction% -> number of contracts"). However, the input to this logic is likely a raw 12-point or 16-point score. If the score (max 12 or 16) is directly compared against these percentage thresholds (90, 75, 60), the higher contract tiers (3 or 4 contracts) will be unreachable, effectively hard-capping 0DTE trade size to 1 contract (`(0, 1)`) regardless of actual signal strength.
+    *   Exact failure condition: `ZDTE_CONTRACT_LADDER` is intended to use `Conviction%` for contract sizing, but the `score` from the MTF confluence system (12-point scale) or `score_16pt` (16-point scale) is not scaled to a percentage (0-100) before being evaluated against the ladder thresholds (90, 75, 60). This results in only the lowest tier (1 contract) ever being selected, despite strong signals (e.g., `score=10`).
+*   **INFRASTRUCTURE** | LOW | auto_ai_audit.py (lines 318, 357, 370) | Inconsistent logging mechanism. The functions `_fetch_week_fills` and `_fetch_macro_events_week` use direct `print()` calls for warnings/errors instead of leveraging the configured `logging` module (`logger.warning`/`logger.error`).
+    *   Exact failure condition: `print` statements bypass the standard logging configuration, making centralized log capture, filtering, and severity-based routing less effective for these specific events.
+
+### FIX VALIDATION
+*   FIX VALIDATION: PASS for `trade_logger.py` D1 (silent log drop) fix. The new `_json_default` function and enhanced `log_event` error handling correctly address the issue.
+*   FIX VALIDATION: PASS for `auto_ai_audit.py` RC-6 (Alpaca null bars crash) fix. The `or []` fallback in `_fetch_chart_proxies` successfully prevents crashes from missing data.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT**: Address the **CATASTROPHIC ALERT** regarding the unprotected SMCI position. Investigate `execution.broker` for the "opposite side market/stop order exists" rejection reason. This likely requires either explicit cancellation of pending/conflicting orders before stop placement, or implementing more complex Alpaca order types that allow for stop-loss with other open orders.
+2.  Investigate and resolve the **recurring stop loss slippage** (`overnight_atr_buffer_exit`) in `execution.portfolio_tracker`. Analyze whether the stop order type (e.g., market vs. limit) is appropriate, if there's sufficient liquidity for the affected symbols at the time of exit, or if the stop `thresh` calculation itself needs to be more conservative to account for execution realities.
+3.  Correct the **`ZDTE_CONTRACT_LADDER` sizing logic** in `options_scanner.py`. Scale the 12-point or 16-point confluence score to a 0-100 percentage before comparing it against the `min_conviction%` thresholds in the `ZDTE_CONTRACT_LADDER`. This will enable the bot to appropriately size 0DTE options trades based on high-conviction signals.
+4.  Conduct a thorough review of the **Trade Quality Index (TQI)** and `exit discipline` as indicated by the persistent `[ANOMALY-3] TQI degradation` warnings. Analyze historical trades (especially stop-hit events) to identify patterns in unfavorable slippage and suboptimal R:R, and revise stop/target placement or trade management rules accordingly.
+5.  Standardize logging in `auto_ai_audit.py` by replacing `print()` statements with `logger.warning()` or `logger.error()` calls, ensuring all diagnostic output adheres to the configured logging framework.

@@ -1,0 +1,57 @@
+Midday Gemini Audit — 2026-07-29
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Closed Trades and P&L**: The "SESSION P&L SUMMARY" and "CLOSED TRADE DETAILS" show 0 entries/exits and $0.00 P&L. However, "ALPACA FILLS TODAY" indicates "1 fills across 1 symbol(s) — NVDA: 1B/0S". This is explicitly noted as a "KNOWN D1 symptom" (missing `entry` records leading to under-counted matched trades and $0 P&L) and should NOT be flagged as a bug. Therefore, a full performance audit cannot be conducted for this session due to data limitations (missing `entry` events), but the bot's reporting of this is consistent with the known issue.
+*   **Win Rate and Profit Factor**: 0% win rate and $0.00 average win/loss are direct consequences of the D1 symptom and cannot be used to assess performance for this session. The `Kelly Stats` show `short_intraday` with 21.4% WR and `long_intraday` with 34.9% WR, but these are based on past performance (105/128 closed trades), not this session's activities.
+*   **Stop-hit rate**: 0% (0 stops) is also due to no closed trades.
+*   **Score→outcome correlation**: Cannot be assessed without closed trade data.
+
+### ENTRY QUALITY
+*   **Dynamic MIN_SCORE**: The `Dynamic MIN_SCORE` was correctly raised to `10/12` (from the base `8` in config) due to various factors including `MRI=STRESSED/10` and `GEX=NEGATIVE/9`. This demonstrates appropriate risk-off behavior.
+*   **Premarket Red Lockout (Rule 1)**: The bot correctly applied `RULE 1 — PREMARKET RED LOCKOUT` blocking all long entries due to 80% of tracked movers being red. This is an appropriate risk management decision in adverse premarket conditions. (e.g., `2026-07-29 17:28:42,511 | CRITICAL | execution.entry_logic | 🔴 RULE 1 — PREMARKET RED LOCKOUT: 8/10 tracked movers red ≥2% (80%) — ALL LONGS BLOCKED this session. Shorts + inverse ETFs only.`)
+*   **Minimum Lot Size Filter (BoD-5R)**: An entry for SMCI was correctly skipped because the `dollar_cap $28.16 < $50 after all multipliers`, preventing trades with high commission drag. (e.g., `2026-07-29 17:22:31,310 | INFO | execution.entry_logic | [SMCI] BoD-5R MINIMUM-LOT: dollar_cap $28.16 < $50 after all multipliers — skipping entry (commission drag > edge).`)
+*   **Leveraged ETF Directional Filter**: A short signal for NVDL (a leveraged ETF long-only) was correctly skipped. (e.g., `2026-07-29 17:22:31,315 | INFO | execution.entry_logic | [NVDL] Leveraged ETF long-only — skipping short signal`).
+*   **Volume Shadow Filter (VOLSHADOW)**: The bot extensively logs `VOLSHADOW` checks, showing `would_pass: false` for many symbols due to `vol_ratio` often being below 1.0. This indicates the bot is actively filtering out entries in potentially thin or insufficient volume conditions.
+*   **TQI Demotion**: Kelly sizing was adjusted downwards (`Kelly adj 0.71x`) due to `rolling 10-trade avg 31.1/100 < 50`, indicating an adaptive response to recent strategy underperformance. (e.g., `2026-07-29 17:22:30,856 | INFO | execution.entry_logic | [SMCI] AB-3 TQI demotion: rolling 10-trade avg 31.1/100 < 50 → Kelly adj 0.71x | dollar_cap → $139.70`)
+
+### EXIT QUALITY
+*   No closed trades in this session, so direct exit quality cannot be assessed.
+*   The `[ANOMALY-3] TQI degradation` warning suggests that past exit discipline or stop placement may be suboptimal, impacting the "last-5-trade avg".
+
+### MRI ALIGNMENT
+*   **MRI Level**: The MRI was refreshed to `STRESSED` with a score of `52`.
+*   **Risk Adjustment**: The bot correctly responded to `MRI STRESSED (score=52)` by applying a `size floor 0.70x` and contributing to raising the `Dynamic MIN_SCORE` to `10/12`. This demonstrates proper alignment between detected macro risk and trading behavior adjustments.
+*   **News Risk**: A high-risk news event for SMCI led to a `stop tightened 20%`. This is an appropriate risk management response to specific news events. (e.g., `2026-07-29 17:22:30,793 | INFO | execution.risk_manager | News HIGH_RISK: stop tightened 20% from $30.68 → $29.91`)
+
+### LOG ANOMALIES
+*   `2026-07-29 17:28:00,592 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.` This is an explicit warning from the bot about degraded strategy performance.
+
+### NEW BUGS / CONCERNS
+
+*   **ALPHA ISSUE | HIGH** | **TQI Degradation Warning**:
+    *   **Description**: The bot is explicitly reporting `TQI degradation: last-5-trade avg=29.8/100 < 30`, indicating that the recent average quality of trades (potentially measured by R-multiples or win rate, inferred from "review exit discipline and stop placement") has fallen below a critical threshold. This suggests a systematic degradation in strategy effectiveness or risk management for recent past trades.
+    *   **Variable involved**: `last-5-trade avg` (part of the TQI metric).
+    *   **Value vs. should be**: The value is `29.8/100`, which is below the `30` threshold. This indicates underperformance in the strategy's recent execution, warranting immediate attention to whether entries are being taken in suboptimal conditions or exits are mistimed.
+    *   **Condition**: Occurs when `last-5-trade avg` falls below `30`. (e.g., `2026-07-29 17:28:00,592 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`)
+
+*   **EXECUTION BUG | MEDIUM** | **Inconsistent `rsi_would_score` in `VOLSHADOW` logs**:
+    *   **Description**: For certain symbols, the `VOLSHADOW` log shows `rsi_would_score: true` for *both* `long` and `short` directions. RSI is a directional momentum indicator, typically suggesting either overbought (potential short) or oversold (potential long). It should not provide a positive scoring contribution for both long and short simultaneously unless the scoring logic for RSI is non-directional or its evaluation for `rsi_would_score` is flawed. This might indicate a misinterpretation of RSI's signal within the logging or scoring component, even if the overall `would_pass` is false due to other factors.
+    *   **Variable involved**: `rsi_would_score` within the `VOLSHADOW` JSON log.
+    *   **Value vs. should be**: For symbols like SOFI and CRWD, `rsi_would_score` is `true` for both `direction: "long"` and `direction: "short"`. A directional indicator's "would score" flag should typically be `true` for only one direction, or `false` for both, depending on its value relative to thresholds. Having it `true` for both `long` and `short` for the same bar suggests a logic error in how this specific flag is determined or logged.
+    *   **Condition**: Occurs for SOFI at `2026-07-29 17:28:11,495` (long) and `17:28:11,511` (short), and again at `17:28:46,730` (long) and `17:28:46,734` (short). Also for CRWD at `2026-07-29 17:28:13,636` (long) and `17:28:13,640` (short), and again at `17:28:47,438` (long) and `17:28:47,442` (short).
+    *   **Source not provided** for `VOLSHADOW` or `confluence.py`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA**: Immediately investigate the `[ANOMALY-3] TQI degradation`. Review recent trade history (beyond this session, if possible) to determine if this is due to poor entry selection, sub-optimal stop placement, or issues with target management. This is the most critical alpha concern.
+2.  **EXECUTION**: Investigate the `rsi_would_score` logic within the `VOLSHADOW` component (likely in `confluence.py`). Verify how `rsi_would_score` is calculated and logged to ensure it correctly reflects directional support for long/short signals, and if it's possible for RSI to concurrently "score" positively for both directions.
+3.  **INFRASTRUCTURE**: Monitor the `D1 symptom` for resolution. While benign, it impacts the accuracy of the P&L summary and audit capabilities.
