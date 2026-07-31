@@ -1,0 +1,68 @@
+Midday Gemini Audit — 2026-07-30
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+A live position with NO protective stop order is a CATASTROPIC condition.
+  🔴 NAKED POSITION(S) — QQQ(long, 1sh), SNOW(long, 1sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+*   **P&L Calculation Error for Closed Trade (SMCI):**
+    *   The `CLOSED TRADE DETAILS` for SMCI shows `entry $25.85 → exit $27.71 ($-3.72)`.
+    *   The `ALPACA FILLS TODAY` confirms a long position: `SMCI: 1B/0S` (1 share Buy, 0 Sell).
+    *   For a long position of 1 share with entry $25.85 and exit $27.71, the P&L should be `($27.71 - $25.85) = $1.86` profit.
+    *   The recorded P&L of `$-3.72` is incorrect and represents a loss, which is inconsistent with the positive price movement for a long trade. This value is also exactly twice the expected loss for a short trade, or twice the negation of the expected profit for a long trade, suggesting a logic error in P&L calculation, sign assignment, or share quantity interpretation during trade closure.
+    *   This error directly impacts `SESSION P&L SUMMARY`, which reports `Total P&L: $-3.72` and `Avg loss: $-3.72`, making the summary inaccurate.
+
+*   **Inconsistent P&L Reporting Across Systems:**
+    *   `SESSION P&L SUMMARY.Total P&L` reports `$-3.72`.
+    *   The bot log states `pnl_today from pnl_ledger (authoritative): $-1.86 intraday`. This is the P&L the bot considers authoritative.
+    *   The bot log also notes `EOD P&L DRIFT: Alpaca=$-3.47`.
+    *   The existence of three different P&L values ($-3.72, $-1.86, $-3.47) for the same trading day indicates a severe discrepancy in financial accounting and reporting, making it difficult to ascertain the true performance. While the `SESSION P&L SUMMARY` is noted as `DEGRADED (known issue D1)`, the discrepancy between the "authoritative" ledger P&L and the Alpaca reported P&L still points to an underlying issue.
+
+*   **Score→Outcome Correlation:** With only one closed trade (SMCI, score 10/12, loss), it is not possible to establish a meaningful correlation between entry score and outcome.
+
+*   **Stop-hit rate:** The stop-hit rate is 33% based on 1 closed trade (SMCI was a stop-hit). This indicates that the initial stop placement or the prevailing market conditions led to a stop-loss for the only trade that closed.
+
+### ENTRY QUALITY
+
+*   **MRI=STRESSED at Entry:** All three flagged entries (SNOW, QQQ, SMCI) were taken with `MRI=STRESSED`. The `MRI SESSION DISTRIBUTION` confirms that all samples were taken under STRESSED conditions.
+*   The bot's `Dynamic MIN_SCORE` was correctly raised to 10/12 due to `MRI=STRESSED/10`. All entries met or exceeded this adjusted minimum score (SMCI 10/12, SNOW 12/12, QQQ 12/12). While the bot's logic respected the adjusted score, consistently entering trades during `STRESSED` market regimes, especially for all trades, raises questions about the overall strategy's robustness during such periods if the P&L outcomes are negative.
+
+### EXIT QUALITY
+
+*   **SMCI Stop-Hit:** For SMCI, the `stop_hit` reason with `stop=$28.94` and `exit $27.71` indicates that the price fell below the set stop for the long position, leading to an execution at a worse price. This is plausible for a stop-loss order in a declining market. The core issue for this trade remains the P&L calculation discrepancy rather than the exit trigger mechanism itself.
+
+### MRI ALIGNMENT
+
+*   The bot correctly identified the `MRI=STRESSED` condition (Close level: STRESSED (56/100) and Level distribution: {'STRESSED': 30}).
+*   It adjusted the `MIN_LONG_SCORE` dynamically to 10/12 based on the `MRI=STRESSED/10` factor. All entries were taken with scores meeting or exceeding this heightened threshold (SMCI 10/12, SNOW 12/12, QQQ 12/12). This shows the bot's risk-management logic is engaged and adapting to the market regime by requiring higher confluence scores.
+
+### LOG ANOMALIES
+
+*   `2026-07-30 17:26:33,900 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-3.47 tracker=$-1.86 drift=$-1.61`
+    *   This warning explicitly states a P&L drift between Alpaca's reported value and the bot's internal tracker, which aligns with the performance audit findings regarding P&L inconsistencies. While a drift mechanism `[BV-2 Option B]` is mentioned, a drift of `$-1.61` against a total P&L in the range of `$-1.86` to `$-3.72` is a significant percentage discrepancy, indicating a potential issue in how Alpaca's reported P&L is reconciled or how internal P&L is calculated.
+
+### NEW BUGS / CONCERNS
+
+*   **EXECUTION BUG | CRITICAL | Naked Positions:**
+    *   **Description:** The bot holds two live positions (QQQ, SNOW) without protective stop orders, as reported by `LIVE STOP COVERAGE`. This is a catastrophic failure of risk management, leaving capital fully exposed to unbounded losses.
+    *   **Exact condition:** `LIVE STOP COVERAGE` reports `NAKED POSITION(S) — 2: QQQ(long, 1sh), SNOW(long, 1sh)`.
+*   **EXECUTION BUG | CRITICAL | SMCI Closed Trade P&L Calculation Error:**
+    *   **Description:** The P&L recorded for the closed SMCI trade is `$-3.72`, despite it being a 1-share long trade with an entry of `$25.85` and an exit of `$27.71`. The correct P&L for this trade should be `$1.86` profit. This indicates a fundamental error in how P&L is calculated, stored, or sign-adjusted for closed trades, leading to incorrect performance metrics.
+    *   **Exact condition:** `CLOSED TRADE DETAILS` for SMCI shows `entry $25.85 → exit $27.71 ($-3.72)` while `ALPACA FILLS TODAY` shows `SMCI: 1B/0S`.
+*   **INFRASTRUCTURE | CRITICAL | P&L Reporting Inconsistency:**
+    *   **Description:** There are three conflicting values for the daily P&L: `SESSION P&L SUMMARY` reports `$-3.72`, the `authoritative` ledger P&L is `$-1.86`, and Alpaca's reported P&L is `$-3.47`. This severe inconsistency across internal records and external sources undermines confidence in the bot's financial accounting and makes accurate risk assessment impossible.
+    *   **Exact condition:** `SESSION P&L SUMMARY.Total P&L = $-3.72` conflicts with `BOT LOG: pnl_today from pnl_ledger (authoritative): $-1.86` and `BOT LOG: EOD P&L DRIFT: Alpaca=$-3.47`.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION:** Immediately investigate and resolve the `NAKED POSITION(S)` issue. Ensure all open positions have active, verifiable protective stop orders. This is a critical risk-management failure.
+2.  **EXECUTION:** Diagnose and fix the `SMCI P&L Calculation Error` and the broader `P&L Reporting Inconsistency`. The `authoritative` ledger P&L should be consistent with Alpaca's ground truth, and the session summary P&L should accurately reflect closed trades. Trace the P&L calculation path from fill events to closed trade details and daily summaries.
+3.  **ALPHA:** Review the strategy's performance and risk appetite under `MRI=STRESSED` conditions. While the bot correctly adjusts `MIN_SCORE`, the consistent losses or poor performance during `STRESSED` regimes may indicate a fundamental misalignment between the strategy's alpha thesis and market conditions.
