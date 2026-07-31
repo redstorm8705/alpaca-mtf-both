@@ -1,0 +1,75 @@
+Nightly Gemini Audit — 2026-07-30
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+`execution.portfolio_tracker` (implied) | Tracker's recorded entry price for `SMCI` ($25.85) differs from Alpaca's ($24.24) for the same trade. This directly leads to P&L calculation discrepancies, corrupting `pnl_today` and other P&L metrics which rely on the tracker's potentially incorrect entry price. | SMCI trade (entry 2026-07-29T12:54:32, exit 2026-07-30T07:58:14)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   `ANOMALY-2` Warning for `PANW` (`strategy.run_cycle` at `2026-07-30 19:39:02,493` and recurring): Consistently indicates `confirm_gate=13 scans but no entry`, despite `risk.open_positions=2` being far below `MAX_OPEN_POSITIONS=20`. This suggests an unexplained entry blocking condition.
+*   `ANOMALY-3` Warning for `TQI degradation: last-5-trade avg=27.8/100 < 30` (`strategy.run_cycle` at `2026-07-30 19:39:02,493` and recurring): This is a persistent performance warning, indicating an issue with the strategy's recent execution/profitability.
+*   All `EOD P&L DRIFT` warnings are noted as `KNOWN BENIGN PATTERNS` (pre-heal telemetry) and are not flagged as anomalies themselves, but the underlying `SMCI` entry price discrepancy is flagged as CATASTROPHIC.
+*   All `CORRELATION GATE BLOCK` and `Sector correlation BLOCKED` warnings are considered intentional risk management actions and are not anomalies.
+*   The `market closed (after-hours gate)` warning is expected behavior.
+
+### PERFORMANCE AUDIT
+
+*   **P&L sign correctness**: For verifiable trades (e.g., MSTR, SMCI latest), P&L signs are consistent with entry/exit prices. However, several trades (e.g., RBLX, MARA) have `pnl=0.0` with `hard_stop` or `overnight_atr_buffer_exit` reasons, making full verification difficult without explicit entry prices in the exit log.
+*   **`pnl_pct` computed from original full position value, not remaining qty**: For the `SMCI` trade (entry size 2, final exit size 1), the `pnl_pct` in the EOD snapshot is calculated based on the original 2-share position value, which is correct in *this specific calculation*. However, the `pnl` field itself is only for the *last* exited share.
+*   **`partial_pnl` accumulated correctly**: The `EOD SNAPSHOT` for `SMCI` shows `partial_pnl: 0.0` even though `partial_exited: true`. While in this specific case the partial exit price was the entry price (P&L=0), this field doesn't appear to accumulate P&L from multiple partial exits. This is addressed in the "New Bugs" section.
+*   **Score→outcome correlation**: Recent closed trades (last 7 days, 14 trades analyzed) show a high number of losses across various scores (10, 11, 12). Only one clear win (XOM, score 11). This suggests poor correlation between higher scores and positive trade outcomes in the recent history, consistent with the recurring `ANOMALY-3` TQI degradation warning.
+*   **Stop-hit rate vs. win rate**: The stop-hit rate for closed trades in the `trade_events` section is approximately 64% (9 out of 14 trades explicitly listed as `stop_hit`). This high stop-hit rate is consistent with the `all_time_stats.win_rate` of 36.3% and today's 0% win rate, confirming the concerns raised by the `ANOMALY-3` TQI degradation.
+*   **Profit factor and R:R vs. stated 2.5× target**: The `all_time_stats.profit_factor` is 0.98 (below 1.0, indicating overall losses), and `all_time_stats.avg_r_multiple` is -0.05. Both are significantly below the target R:R of ~2.08 (derived from `INTRADAY_TARGET_ATR_MULT=2.5` / `INTRADAY_STOP_ATR_MULT=1.2`), further validating the `ANOMALY-3` warning about performance degradation.
+
+### TRADE INTEGRITY
+
+*   The P&L for partially exited trades in the `EOD SNAPSHOT`'s `trades` list (e.g., `SMCI`) is semantically misleading as it only reports the P&L of the *final* exited quantity, not the aggregate P&L for the full initial position. This is detailed as a new bug below.
+*   The fundamental entry price discrepancy for `SMCI` between the tracker and Alpaca is a catastrophic P&L recording error, detailed in the CATASTROPHIC ALERT section.
+
+### MODIFIED FILE FINDINGS
+
+No source files modified in the last 24h.
+
+### P5 STATUS
+
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED.
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED.
+*   **P5-H1 | OBSOLETE — PDT enforcement:** OBSOLETE.
+*   **P5-H2 | Fill price crosstalk:** TRIGGERED. The inconsistent entry price for SMCI between the tracker and Alpaca suggests a potential fill price crosstalk issue.
+*   **P5-H3 | Orphan GTC 404 path:** UNTOUCHED.
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED. The `market closed (after-hours gate)` warning implies the rule is active.
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3:** FIXED.
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED.
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED.
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED.
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths:** UNTOUCHED.
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** UNTOUCHED (acknowledged as benign / provisional in EOD snapshot).
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED.
+
+### NEW BUGS FOUND
+
+*   **EXECUTION BUG | CRITICAL | execution.portfolio_tracker (implied) | Inconsistent Entry Price Recording:** The `execution.portfolio_tracker` records an `entry_price` ($25.85 for SMCI) that differs from the `entry` price provided in Alpaca's self-check telemetry ($24.24 for SMCI). This indicates a fundamental disagreement on the trade's cost basis, leading to incorrect P&L calculations (`pnl_today`).
+    *   **Exact failure condition:** The `entry_price` field in `EOD SNAPSHOT` `trades` for SMCI (25.85) does not match the `entry` price reported by `alpaca_per_trade` (24.24) within `_pnl_selfcheck_telemetry_NOT_A_LOSS`.
+*   **ALPHA ISSUE | HIGH | strategy.run_cycle | Persistent Entry Block Anomaly:** The `ANOMALY-2` warning for `PANW` repeatedly indicates that `confirm_gate=13 scans but no entry`, despite `risk.open_positions=2` being far below `MAX_OPEN_POSITIONS=20`. This suggests an unrecognized or untraceable entry blocking condition that prevents qualifying trades from being entered.
+    *   **Exact failure condition:** `strategy.run_cycle` logs `[ANOMALY-2]` for `PANW` with `confirm_gate=13 scans but no entry` and `risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=20`, implying a block that isn't justified by current open positions.
+*   **INFRASTRUCTURE | MEDIUM | execution.portfolio_tracker (implied) | Incomplete Total P&L for Partial Exits:** For partially exited trades, the `pnl` field in the `EOD SNAPSHOT` `trades` list only reflects the P&L of the *final* exited quantity, and `partial_pnl` is not used to accumulate all partial P&L, leading to a misleading total P&L for the entire trade in the main `pnl` field.
+    *   **Exact failure condition:** For the SMCI trade (`entry_price: 25.85`, `qty: 2`, one partial exit at 25.85 for `pnl=0.0`, final exit at 27.71 for `pnl=-1.86`), the `EOD SNAPSHOT` `trades` entry shows `pnl: -1.86` and `partial_pnl: 0.0`. The `pnl` field should represent the sum of all P&L from the original position, not just the last segment.
+*   **INFRASTRUCTURE | LOW | trade_events logging | Missing Entry Price for Exit Events:** Several `trade_events` of type `exit` or `stop_hit` lack the original `entry_price` for the symbol, making it difficult to fully verify P&L correctness or the `pnl=0.0` cases (e.g., RBLX, MARA).
+    *   **Exact failure condition:** `trade_events` records for symbols like `RBLX` (`ts: 2026-07-27T08:51:05.028784-07:00`) and `MARA` (`ts: 2026-07-24T12:07:09.338371-07:00`) with `event: "stop_hit"` or `event: "exit"` do not explicitly include the `entry_price` in their JSON object, making P&L verification difficult.
+
+### FIX VALIDATION
+
+*   FIX VALIDATION: PASS
+    *   **P5-H5 | GTC stop suppressed at PDT=3/3:** No evidence in the logs of GTC stop suppression during regular trading hours. The "market closed (after-hours gate)" is expected.
+
+### RECOMMENDED ACTIONS
+
+1.  **URGENT: Investigate and resolve the `SMCI` entry price discrepancy.** Determine whether Alpaca's reported entry ($24.24) or the tracker's recorded entry ($25.85) is correct, and debug the source of this fundamental inconsistency. This is critical as it directly impacts P&L calculations, `pnl_today`, and potentially sizing decisions if derived from P&L. (New Bug: EXECUTION BUG | CRITICAL)
+2.  **Address the `ANOMALY-2` persistent entry block for `PANW`.** Debug `strategy.run_cycle` to identify the unlogged or misunderstood condition preventing entry for qualifying trades, ensuring the system transparently logs all gating conditions. (New Bug: ALPHA ISSUE | HIGH)
+3.  **Refactor P&L aggregation for partial exits.** Ensure the `pnl` field for closed trades in the `EOD SNAPSHOT` correctly reflects the total P&L accumulated across all partial exits for the original position. The `partial_pnl` field should also accumulate and reflect this. (New Bug: INFRASTRUCTURE | MEDIUM)
+4.  **Improve `trade_events` exit logging for auditability.** Include the `entry_price` directly in all `exit` and `stop_hit` `trade_events` records to facilitate easier P&L verification, especially for `pnl=0.0` cases. (New Bug: INFRASTRUCTURE | LOW)
+5.  **Review strategy for TQI degradation.** Analyze exit discipline and stop placement, potentially in relation to correlation/sector blocking, given the recurring `ANOMALY-3` warning, high stop-hit rate, and poor `avg_r_multiple`. (Log Anomaly: `ANOMALY-3`)
