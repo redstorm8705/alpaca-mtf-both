@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-28 (resume — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-07-31 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -10,6 +10,29 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 ## ⏩ LATEST (2026-07-27 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### ✅ SHIPPED (2026-07-31 interactive, Rafael present) — 0DTE TILE DESYNC KILLED (two-sided)
+**PR #45 → main `333b39f` (merge `dfdcd44`); OCI `git pull --ff-only` = DEPLOY_OK; NO restart (recommend-only);
+verified live at source (scan_to_html L1854 `.strip().upper()`; options_scanner writer removed).** The
+`scan_results.html` 0DTE SPY tile could render a "call" label with a PUT's strike/delta (the "$734 call /
+−0.380 put delta" Frankenstein). ROOT = dual-writer race on `logs/dte_prev.json`: `options_scanner.run_scan`
+wrote it LOWERCASE (`"call"/"put"`, own schema); `scan_to_html` is the SOLE reader and writes/expects
+UPPERCASE; a stale lowercase slipped through stickiness → mismatched the case-sensitive `if direction=="CALL"`
+strike-select → fell to the PUT branch. FIX: (A) delete the options_scanner writer (no reader; also drops a
+bare-except non-atomic write) → scan_to_html is sole writer/reader; (B) `_pd_raw.strip().upper()` normalize in
+`_compute_0dte_rec` before the strike-select (belt-and-suspenders, also fixes the whitespace-only case).
+Gate: full read both files (2918+2254L) + RC-1..8 + statics clean + cold-2nd PASS (2 rounds) + board 2/2
+APPROVE + Gro+GAI APPROVE (design + FINAL preship on exact diff). Impact proven self-contained (repo-wide
+grep: scan_to_html is the only dte_prev.json reader/writer). **← DONE THIS SESSION.**
+
+**⏭️ NEXT EXACT STEP — full Position C integration (the desync-kill was scope 1 of 2).** The shared helper is
+ALREADY BUILT + VALIDATED (11/11 unit tests, statics clean) at `logs/zdte_direction_DRAFT.py` (commit 4187bb3).
+Lift it → `strategy/zdte_direction.py` (Position C: intraday momentum + GEX gamma-regime PRIMARY, MTF veto-only,
+N/3 conviction, NO-REC on no-confluence, theta/TOD cutoff); refactor `scan_to_html._compute_0dte_rec` to call it
++ add conviction/GEX display (SHIP FIRST); then rebuild `options_scanner._build_0dte_directional` to a single
+leg consuming the shared decision (SHIP SECOND). Full cited design + turnkey plan:
+`logs/zdte_position_c_design_2026-07-29.md`. ALSO still open (Rafael-raised): (a) weekly_review EXIT BREAKDOWN
+"no data"; (b) GEX-overnight usage; (c) preship_audit.py Groq-TPM handling gap.
 
 ### ✅ STATUS (2026-07-28 resume, Rafael present) — Phase 1 + CI-hardening + Phase 2(D1) ALL SHIPPED & DEPLOYED
 - **Phase 1** (4 reporting files) — merged PR #33 → main, OCI DEPLOY_OK (no restart). ✅
