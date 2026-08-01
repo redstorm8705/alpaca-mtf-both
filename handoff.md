@@ -11,6 +11,30 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — RISK-COUNTER ALPACA RECONCILE (entry-gate desync heal)
+**PR #50 → main `49f1c4d`; OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK; new method live (6 refs
+risk_manager, 1 wire-in entry_logic); startup verified Alpaca=3==tracker=3.** ROOT: `risk.open_positions` (the
+±1 int that blocks entries at MAX_OPEN_POSITIONS) is hand-kept + decoupled from the tracker; an external/stop
+close that removes the tracker entry WITHOUT `register_close()` leaves it OVER-counted, and the mid-cycle
+CYCLE-SYNC guard deliberately refused to decrement on a tracker-only signal → silently blocked a real entry
+slot until restart (recurring; Gemini CATASTROPHIC 7/31; blocked COIN/SOXL/SOXS). Entry side is balanced
+(register_open only after record_entry; failure→sys.exit→restart resync), so drift is exit-side only. FIX
+(broker-is-truth, both directions): NEW `RiskManager.reconcile_open_positions_from_alpaca(qhm_syms)` — on a
+clean /v2/positions read set open_positions = live NON-QHM count; return False (no mutation) on any failure;
+never raises. entry_logic CYCLE-SYNC wire-in calls it FIRST, falls back to the exact prior tracker-sync-UP-only
+guard on read failure. Over-exposure bounded independently (gross-exposure sums in-process tracker notional +
+fail-closed BP pre-flight; MAX_OPEN_POSITIONS is a backstop). Gate: full read both files (935L+1735L) + RC-1..8
++ statics clean + cold-2nd PASS + board 3/3 APPROVE (masked-loss/reliability/execution) + Gro+GAI APPROVE
+(design + FINAL preship). **← DONE THIS SESSION.** Takes effect next RTH entry cycle (Mon). FOLLOW-UP (logged,
+out of scope, cold-2nd caught): `orphan_manager.py:1721-1728` STARTUP reconcile still keys off the tracker +
+doesn't exclude QHM — separate pre-existing path, own look.
+
+**⏭️ NEXT — Rafael's queue (his pick):** (a) **SMCI re-entry "spam"** — the bot re-shorts the SAME name right
+after a stop-out (no post-stop-out cooldown / loss-memory), bleeding real P&L into a rising stock; a concrete
+bug-shaped fix (per-symbol cooldown gate) OR the deeper score→outcome inversion (7/24 exit-logic, full-board).
+(b) **tier-aware too-few stop clamp** (broker up-clamp via ownership ledger — the dropped half of the SMCI
+naked-stop fix). (c) orphan_manager startup-reconcile QHM/tracker follow-up (above).
+
 ### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — BROKER NAKED-STOP SELF-HEAL (down-clamp / too-many)
 **PR #48 → main `7fe666a` (merge `4ae0601`); OCI `git pull --ff-only` + RESTART (mtf-bot/writer/http) = DEPLOY_OK;
 health OK; startup reconcile clean (Alpaca=3==tracker=3); fix verified live at source.** SMCI short was left
