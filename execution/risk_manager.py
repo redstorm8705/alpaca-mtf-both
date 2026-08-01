@@ -876,6 +876,77 @@ class RiskManager:
             f"(from tracker.open_trades)"
         )
 
+    def reconcile_open_positions_from_alpaca(self, qhm_syms=None) -> bool:
+        """ROBUST mid-cycle counter reconcile (2026-08-01, Rafael) — set open_positions to
+        Alpaca's AUTHORITATIVE live count of NON-QHM positions, healing BOTH directions:
+          - OVER-count: a close that removed the tracker entry WITHOUT calling register_close()
+            (e.g. an external/stop close force-cleaning the tracker) leaves this counter high;
+            the entry-logic CYCLE-SYNC guard REFUSES to decrement on a tracker-only signal, so
+            the over-count silently blocks a real entry slot until the next restart's resync.
+          - UNDER-count: symmetric drift the other way.
+        Alpaca /v2/positions is ground truth (one net position per symbol, no per-strategy tag),
+        so QHM symbols are EXCLUDED to match this intraday-only counter — the same exclusion the
+        CYCLE-SYNC comparison and sync_from_tracker already use.
+
+        Returns True and updates the counter ONLY on a CLEAN read (keys present, HTTP 200, a list
+        payload, count within the sanity cap). Returns False WITHOUT modifying the counter on ANY
+        failure so the caller falls back to its conservative tracker-based sync-UP-only guard — a
+        read failure must NEVER blindly move the entry gate. Mirrors the /v2/positions fetch
+        pattern already used by _qhm_unrealized_pl(). NEVER RAISES."""
+        try:
+            qhm = set(qhm_syms or [])
+            api_key = os.getenv("ALPACA_API_KEY", "")
+            secret  = os.getenv("ALPACA_SECRET_KEY", "")
+            if not api_key or not secret:
+                logger.warning(
+                    "reconcile_open_positions_from_alpaca: API keys absent — no reconcile "
+                    "(caller falls back to tracker sync-up-only)."
+                )
+                return False
+            resp = requests.get(
+                f"{_ALPACA_BASE_URL}/v2/positions",
+                headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "reconcile_open_positions_from_alpaca: positions HTTP %d — no reconcile "
+                    "(caller falls back).", resp.status_code,
+                )
+                return False
+            positions = resp.json()
+            if not isinstance(positions, list):
+                logger.warning(
+                    "reconcile_open_positions_from_alpaca: positions payload not a list — no "
+                    "reconcile (caller falls back)."
+                )
+                return False
+            count = sum(
+                1 for p in positions
+                if isinstance(p, dict) and p.get("symbol") and p.get("symbol") not in qhm
+            )
+            _max_sane = getattr(config, "MAX_OPEN_POSITIONS", 10) * 2
+            if count > _max_sane:
+                logger.error(
+                    "reconcile_open_positions_from_alpaca: Alpaca ex-QHM count %d exceeds sanity "
+                    "cap %d — no reconcile (caller falls back).", count, _max_sane,
+                )
+                return False
+            prev = self.open_positions
+            if count != prev:
+                logger.info(
+                    "RiskManager reconciled from Alpaca (authoritative): open_positions %d→%d "
+                    "(ex-QHM live positions).", prev, count,
+                )
+            self.open_positions = count
+            return True
+        except Exception as e:  # RC-3
+            logger.warning(
+                "reconcile_open_positions_from_alpaca error (%s) — no reconcile "
+                "(caller falls back).", e,
+            )
+            return False
+
     def get_news_adjusted_stop(
         self,
         stop_price: float,

@@ -399,29 +399,34 @@ def execute_entries(
         """Shim — delegates to strategy.scoring.rc8_clear_buffers (Phase 2)."""
         _rc8_clear_buffers_fn(sym, reason, gate_state)
 
-    # P0-CYCLE-SYNC-GUARD: Tracker can only INCREASE risk.open_positions.
-    # Decreases happen exclusively via risk.register_close(), not via cycle-sync.
-    # This prevents a stale tracker (0 entries) from wiping a correct high risk count.
-    # Status filter matches sync_from_tracker() — excludes zombie closed entries.
+    # P0-CYCLE-SYNC-GUARD → ROBUST ALPACA-AUTHORITATIVE RECONCILE (2026-08-01, Rafael).
+    # PRIMARY: reconcile risk.open_positions to Alpaca's authoritative live count of NON-QHM
+    # positions — heals BOTH an over-count (a close that removed the tracker entry WITHOUT
+    # register_close(); the old tracker-only guard REFUSED to decrement, silently blocking a
+    # real entry slot until restart) and an under-count. Alpaca /v2/positions is ground truth.
+    # FALLBACK (Alpaca read failed): the prior tracker-based sync-UP-only guard — never blindly
+    # decrement on a tracker-only signal (a stale tracker at 0 must not wipe a correct high count).
     if risk is not None:
         _qhm_syms = get_quarterly_hold_symbols()
-        _tracker_open_count = sum(
-            1 for sym, t in (tracker.open_trades or {}).items()
-            if t.get("status") != "closed" and sym not in _qhm_syms
-        )
-        if _tracker_open_count > risk.open_positions:
-            logger.warning(
-                f"[CYCLE-SYNC] Tracker ({_tracker_open_count}) > RiskManager ({risk.open_positions}) "
-                f"— syncing UP to tracker count."
+        if not risk.reconcile_open_positions_from_alpaca(_qhm_syms):
+            _tracker_open_count = sum(
+                1 for sym, t in (tracker.open_trades or {}).items()
+                if t.get("status") != "closed" and sym not in _qhm_syms
             )
-            risk.open_positions = _tracker_open_count
-        elif _tracker_open_count < risk.open_positions:
-            logger.critical(
-                f"[CYCLE-SYNC] STATE DESYNC: Tracker ({_tracker_open_count}) < "
-                f"RiskManager ({risk.open_positions}). Ignoring tracker — "
-                f"decreases must happen via register_close(). Manual reconciliation required."
-            )
-            # DO NOT update risk.open_positions downward
+            if _tracker_open_count > risk.open_positions:
+                logger.warning(
+                    f"[CYCLE-SYNC] Alpaca reconcile unavailable; Tracker ({_tracker_open_count}) "
+                    f"> RiskManager ({risk.open_positions}) — syncing UP to tracker count."
+                )
+                risk.open_positions = _tracker_open_count
+            elif _tracker_open_count < risk.open_positions:
+                logger.critical(
+                    f"[CYCLE-SYNC] Alpaca reconcile unavailable; STATE DESYNC: Tracker "
+                    f"({_tracker_open_count}) < RiskManager ({risk.open_positions}). Ignoring "
+                    f"tracker — decreases must happen via register_close() or an Alpaca reconcile. "
+                    f"Manual reconciliation required."
+                )
+                # DO NOT update risk.open_positions downward on a tracker-only signal
 
     # Pre-compute power-hour expansion gate once per cycle — prevents inconsistent application
     # across symbols in scans that straddle the 3:30 PM ET boundary (Data Integrity board fix)
