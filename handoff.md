@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-07-31 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-08-01 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -10,6 +10,35 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 ## ⏩ LATEST (2026-07-27 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — BROKER NAKED-STOP SELF-HEAL (down-clamp / too-many)
+**PR #48 → main `7fe666a` (merge `4ae0601`); OCI `git pull --ff-only` + RESTART (mtf-bot/writer/http) = DEPLOY_OK;
+health OK; startup reconcile clean (Alpaca=3==tracker=3); fix verified live at source.** SMCI short was left
+NAKED overnight 2026-07-29: GTC buy-stop for qty=2 but the position was genuinely 1 share (tracker over-count);
+Alpaca 40310000 `insufficient qty available (requested:2, available:1, held_for_orders:0)`; the handler treated
+it as a transient held_for_orders reservation and polled 63s resubmitting qty=2 (a phantom share) → naked.
+(Gemini nightly MIS-attributed this to "opposite side order exists" — real cause = qty mismatch, verified at
+source.) FIX: new `_parse_insufficient_qty(err)`→(held_for_orders, available, existing_qty); in the 40310000
+handler of BOTH `submit_gtc_stop_order` and `submit_day_stop_order` (allow_cancel_blocking=True path), when
+held_for_orders==0 and 1<=available<qty and (existing_qty absent or ==available) → place a stop for `available`
+(the shares that exist) instead of polling for a phantom; else fall through to the existing recovery.
+existing_qty cross-check + `if order:` guard. Gate: full read broker.py 1440L + RC-1..8 (RC-6 vs live body) +
+statics clean + cold-2nd PASS + board 3/3 APPROVE + Gro+GAI APPROVE (2 GAI false-premise rejects — arithmetic-
+impossible + fabricated OrderType arg — refuted at source, reversed 1 round each). **← DONE THIS SESSION.**
+**SCOPE = down-clamp (too-many) ONLY.** Rafael dropped the up-clamp (too-few): the board (execution-risk +
+masked-loss) proved a naive UP-clamp to full broker qty is UNSAFE when intraday/qhm/forever6 share a symbol
+(would stop another tier's shares; overrides exit_logic.py:508 deliberate "Alpaca higher — not clamping").
+**FOLLOW-UP (logged, not scheduled): tier-aware too-few stop clamp** — clamp UP only to THIS tier's shares via
+the ownership ledger (needs OWNERSHIP_GUARD_ENFORCE). Separate design + gate.
+
+**⏭️ NEXT (Rafael 2026-08-01: "next most critical bug"): RiskManager↔Tracker COUNTER DESYNC.** Recurring
+`CRITICAL [CYCLE-SYNC] STATE DESYNC: Tracker (N) < RiskManager (M). Ignoring tracker` (entry_logic) — seen 7/28
++ 7/31, Gemini nightly flagged CATASTROPHIC 7/31; ACTIVELY BLOCKED valid entries (COIN/SOXL/SOXS 7/31) because
+risk.open_positions over-counts vs tracker → hits MAX_OPEN_POSITIONS gate. Fails safe (blocks, not over-exposes)
+but costs real fills. Related to the startup "POSITION COUNT DRIFT: risk=0 vs tracker=N" benign correction and
+to the qty-desync that necessitated today's SMCI stop safety-net. Phase-1 diagnosis STARTED this session (full
+read of the CYCLE-SYNC path: entry_logic counter logic + risk_manager position counter + orphan_manager
+POSITION COUNT DRIFT). Diagnose ROOT at source → gated fix.
 
 ### ✅ SHIPPED (2026-07-31 interactive, Rafael present) — 0DTE TILE DESYNC KILLED (two-sided)
 **PR #45 → main `333b39f` (merge `dfdcd44`); OCI `git pull --ff-only` = DEPLOY_OK; NO restart (recommend-only);
