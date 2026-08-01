@@ -339,6 +339,48 @@ def _is_retryable(error_str: str) -> bool:
     return False
 
 
+def _parse_insufficient_qty(err: str) -> "tuple[int | None, int | None, int | None]":
+    """Parse (held_for_orders, available, existing_qty) from an Alpaca 40310000
+    'insufficient qty available' rejection body. Alpaca returns this error for TWO
+    distinct causes and the body's fields tell them apart. By Alpaca's own accounting
+    `available == existing_qty - held_for_orders`, so:
+      - a TRANSIENT held_for_orders reservation (a stale reducing order still holds the
+        qty; a cancel releases it): held_for_orders > 0 (=> available < existing_qty);
+      - a PERMANENT qty mismatch (the caller asked to protect more shares than the
+        position actually holds — tracker qty > broker qty): held_for_orders == 0, which
+        FORCES available == existing_qty (nothing is reserved), and available < requested.
+    Real body (SMCI 2026-07-29):
+        {"available":"1","code":40310000,"existing_qty":"1","held_for_orders":"0",
+         "message":"insufficient qty available for order (requested: 2, available: 1)"}.
+    existing_qty is returned so the caller can CROSS-CHECK available == existing_qty
+    before clamping (belt-and-suspenders: only clamp to `available` when the broker
+    confirms the position is exactly that many shares, fully unreserved). Reads the
+    JSON-style fields first, falling back to the message text for `available`. Returns
+    None for any field that cannot be parsed so callers keep pre-existing behavior when
+    the shape is unrecognized. RC-6: field names verified against the live rejection
+    body. Never raises."""
+    import re as _re2
+    _hfo = _avail = _exist = None
+    try:
+        _m = _re2.search(r'"held_for_orders"\s*:\s*"?(\d+)"?', err)
+        if _m:
+            _hfo = int(_m.group(1))
+        _m = _re2.search(r'"existing_qty"\s*:\s*"?(\d+)"?', err)
+        if _m:
+            _exist = int(_m.group(1))
+        _m = _re2.search(r'"available"\s*:\s*"?(\d+)"?', err)
+        if _m:
+            _avail = int(_m.group(1))
+        if _avail is None:   # fall back to the human-readable message text
+            _m = _re2.search(r'available:\s*(\d+)', err)
+            if _m:
+                _avail = int(_m.group(1))
+    except Exception as _pe:
+        logger.debug("_parse_insufficient_qty: parse failed (%s) — returning (None, None, None)", _pe)
+        return None, None, None
+    return _hfo, _avail, _exist
+
+
 # ── Order submission ──────────────────────────────────────────────────────────
 
 def submit_market_order(
@@ -764,6 +806,59 @@ def submit_gtc_stop_order(
                 )
                 return None
 
+            # QTY-MISMATCH SELF-HEAL (2026-08-01, SMCI naked-stop 2026-07-29): the same
+            # 40310000/"insufficient qty available" is returned for a PERMANENT qty mismatch —
+            # the caller asked to protect MORE shares than the position actually holds
+            # (held_for_orders==0, available<qty). The cancel+63s poll below CANNOT fix that:
+            # the missing share does not exist, so every retry re-fails identically and the
+            # REAL shares sit naked overnight (SMCI: requested 2, available 1 → 63s poll → naked).
+            # Detect it and immediately place a stop for the shares that DO exist. Strictly safer:
+            # the available shares get a floor NOW instead of after a guaranteed-fail poll, and we
+            # never over-protect a phantom share. held_for_orders>0 is the transient case and
+            # correctly falls through to the existing cancel+poll (which polls for the full qty).
+            # Cross-check existing_qty: clamp ONLY when the broker confirms the position is
+            # exactly `available` shares AND nothing is reserved (held_for_orders==0 =>
+            # available==existing_qty by Alpaca's accounting). If existing_qty is present and
+            # does NOT equal available, the held_for_orders==0 read is not a clean permanent
+            # mismatch (an inconsistent/transient snapshot) — do NOT clamp; fall through to the
+            # existing cancel+poll, which resubmits the full qty. If existing_qty is absent,
+            # held_for_orders==0 alone already implies available==existing_qty.
+            _hfo, _avail, _exist = _parse_insufficient_qty(err)
+            if (_hfo == 0 and _avail is not None and 1 <= _avail < qty
+                    and (_exist is None or _exist == _avail)):
+                logger.warning(
+                    f"[{symbol}] GTC stop qty mismatch (held_for_orders=0, existing_qty={_exist}, "
+                    f"requested {qty}, available {_avail}) — tracker qty exceeds broker position. "
+                    f"Placing a stop for the {_avail} share(s) that exist rather than polling 63s "
+                    f"for a phantom {qty - _avail}."
+                )
+                try:
+                    _corrected = StopOrderRequest(
+                        symbol=symbol,
+                        qty=_avail,
+                        side=order_side,
+                        stop_price=round(stop_price, 2),
+                        time_in_force=TimeInForce.GTC,
+                        client_order_id=_make_idem_id(tier, symbol, side),
+                    )
+                    order = client.submit_order(_corrected)
+                    if order:   # submit_order raises on failure; guard mirrors submit_market_order
+                        logger.info(
+                            f"[{symbol}] GTC STOP submitted (qty-corrected {qty}->{_avail}): "
+                            f"{side.upper()} {_avail} @ ${stop_price:.2f} | Order ID: {order.id}"  # type: ignore[union-attr]
+                        )
+                        return order
+                    logger.error(
+                        f"[{symbol}] GTC qty-corrected resubmit ({_avail} share(s)) returned no "
+                        f"order — falling through to the cancel+poll recovery."
+                    )
+                except Exception as _qce:
+                    logger.error(
+                        f"[{symbol}] GTC qty-corrected resubmit ({_avail} share(s)) FAILED: "
+                        f"{_qce} — falling through to the cancel+poll recovery."
+                    )
+                    # fall through to the existing recovery below
+
             cancel_open_orders_for_symbol(symbol)
             _related = _re.findall(r'"related_orders"\s*:\s*\[([^\]]*)\]', err)
             if _related:
@@ -924,6 +1019,49 @@ def submit_day_stop_order(
                     f"unprotected. Original: {e}"
                 )
                 return None
+            # QTY-MISMATCH SELF-HEAL (2026-08-01) — mirror of submit_gtc_stop_order. A DAY stop
+            # can hit the same PERMANENT qty mismatch (tracker qty > broker qty). The single
+            # cancel+retry below re-fails identically (cancelling frees nothing when
+            # held_for_orders==0), leaving the RTH position naked. Place a stop for the shares
+            # that exist. A buying-power "insufficient" (no `available` qty field) parses to
+            # _avail=None and correctly skips this, falling through to the cancel+retry.
+            # Cross-check existing_qty (see submit_gtc_stop_order for the full rationale):
+            # clamp only when held_for_orders==0 AND (existing_qty absent OR == available).
+            _hfo, _avail, _exist = _parse_insufficient_qty(err)
+            if (_hfo == 0 and _avail is not None and 1 <= _avail < qty
+                    and (_exist is None or _exist == _avail)):
+                logger.warning(
+                    f"[{symbol}] DAY stop qty mismatch (held_for_orders=0, existing_qty={_exist}, "
+                    f"requested {qty}, available {_avail}) — placing a stop for the {_avail} "
+                    f"share(s) that exist rather than retrying for a phantom {qty - _avail}."
+                )
+                try:
+                    _corrected = StopOrderRequest(
+                        symbol=symbol,
+                        qty=_avail,
+                        side=order_side,
+                        stop_price=round(stop_price, 2),
+                        time_in_force=TimeInForce.DAY,
+                        client_order_id=_make_idem_id(tier, symbol, side),
+                    )
+                    order = client.submit_order(_corrected)
+                    if order:   # submit_order raises on failure; guard mirrors submit_market_order
+                        logger.info(
+                            f"[{symbol}] DAY STOP submitted (qty-corrected {qty}->{_avail}): "
+                            f"{side.upper()} {_avail} @ ${stop_price:.2f} | Order ID: {order.id}"  # type: ignore[union-attr]
+                        )
+                        return order
+                    logger.error(
+                        f"[{symbol}] DAY qty-corrected resubmit ({_avail} share(s)) returned no "
+                        f"order — falling through to the cancel+retry recovery."
+                    )
+                except Exception as _qce:
+                    logger.error(
+                        f"[{symbol}] DAY qty-corrected resubmit ({_avail} share(s)) FAILED: "
+                        f"{_qce} — falling through to the cancel+retry recovery."
+                    )
+                    # fall through to the existing recovery below
+
             logger.warning(
                 f"[{symbol}] DAY stop blocked (40310000 / insufficient buying_power) — "
                 f"cancelling blocking orders and retrying once."
