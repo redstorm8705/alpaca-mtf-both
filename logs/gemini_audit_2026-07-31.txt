@@ -1,0 +1,70 @@
+Nightly Gemini Audit — 2026-07-31
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   execution.entry_logic | `[CYCLE-SYNC] STATE DESYNC` indicates `RiskManager` holds an incorrect number of open positions compared to the `Tracker`, leading to misinformed risk management decisions (e.g., blocking valid entries due to perceived position limits) and requires manual reconciliation. | Impacted symbols `SOXL`, `SOXS`, and general risk management.
+*   P5-H2 Fill price crosstalk | The bot's internally tracked entry price for a closed trade (`SNOW` long) directly contradicts Alpaca's reported entry price for the same trade, corrupting the authoritative `pnl_today` and internal performance metrics. | Symbol `SNOW`.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **Recurring CRITICAL State Desync**: The log `CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (<N>) < RiskManager (<M>). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.` occurs three times (19:38:53, 19:47:32, 19:54:12), indicating an persistent and evolving discrepancy between the internal position tracker and the risk manager. This is explicitly stated as requiring manual reconciliation, signifying a breakdown in automated state management and directly affecting how the bot perceives its total open positions.
+*   **Recurring ANOMALY-2 (Entry Blocked by Desync)**: Related to the state desync, the `WARNING | strategy.run_cycle | [ANOMALY-2]` log appears multiple times for `SOXL` and `SOXS` (19:38:00, 19:46:38, 19:53:29), explicitly stating "confirm_gate=X scans but no entry — risk.open_positions=Y vs tracker=Z". This confirms that the state desync is actively preventing potential trade entries by misrepresenting the number of open positions to the entry logic.
+*   **EOD P&L Drift with Fundamental Discrepancy**: While `EOD P&L DRIFT` is benign telemetry, the specific breakdown in `_pnl_selfcheck_telemetry_NOT_A_LOSS` shows a fundamental disagreement on the *entry price* for a closed `SNOW` trade between Alpaca's record (`entry=262.28`) and the bot's internal `trade_events` (`entry=294.92`) and `EOD SNAPSHOT` (`entry_price=294.92`). This is more than just P&L drift; it's a conflict over the trade's cost basis, which impacts the accuracy of the bot's internal P&L and performance metrics.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness & Partial P&L**:
+    *   `QQQ`: Entry 682.29, Exit 682.22, P&L -0.07. Correct (long, exit < entry = loss). `pnl_pct` is -0.01%, consistent.
+    *   `SNOW`: **Recording Bug / Discrepancy (see Trade Integrity and New Bugs)**.
+        *   `trade_events` records entry=294.92, exit=294.92, pnl=0.0 (hard_stop).
+        *   `EOD SNAPSHOT` `trades` records entry_price=294.92, exit_price=294.6, pnl=-0.32 (hard_stop). This suggests a small loss.
+        *   `_pnl_selfcheck_telemetry_NOT_A_LOSS` (Alpaca's view) records entry=262.28, exit=294.6, pnl=32.32. This is a significant profit.
+        *   The bot's internal records for SNOW are inconsistent and conflict with Alpaca. This makes it impossible to verify P&L sign correctness or partial P&L.
+*   **Entry/Exit Prices Plausible**: Prices appear plausible within typical ranges for these symbols.
+*   **Score→Outcome Correlation**:
+    *   `QQQ` (score=12, 16pt=13) resulted in a -0.07 P&L (loss).
+    *   `SNOW` (score=12, 16pt=11) resulted in a -0.32 P&L (loss) according to tracker, but +32.32 (profit) according to Alpaca.
+    *   With only two closed trades and one having severe data integrity issues, it's not possible to reliably assess score-to-outcome correlation for today.
+*   **Stop-hit rate vs. Win Rate**: `all_time_stats` show `win_rate = 35.6%` and `profit_factor = 0.98`, with `avg_r_multiple = -0.049`. This indicates the bot is not consistently profitable and is not capturing its theoretical edge (profit factor < 1.0, negative R:R). This suggests a regime mismatch or a strategy edge that isn't realized in practice.
+*   **Exit Reason Consistency**:
+    *   `QQQ` `exit_reason="external_close"`. The P&L of -0.07 is very close to zero, suggesting it might have been a close-at-entry or close-to-breakeven scenario. `be_stop_promoted: true` and `stop: 682.29` (matching entry price) confirm this was a breakeven stop that was hit.
+    *   `SNOW` `exit_reason="hard_stop"`. Tracker P&L -0.32. The `EOD SNAPSHOT` indicates `stop: 294.92` (matching entry price) and `be_stop_promoted: true`, so this was also a breakeven stop that was hit, leading to a small loss of $0.32.
+
+### TRADE INTEGRITY
+*   **`SNOW` P&L and Entry Price Discrepancy**: As detailed in Log Anomalies and CATASTROPHIC ALERT, the `SNOW` trade (entry on 2026-07-30, exit on 2026-07-31) has conflicting entry prices and P&L figures across internal records and Alpaca's `_pnl_selfcheck_telemetry_NOT_A_LOSS`. The `trade_events` records an entry price of 294.92. The `EOD SNAPSHOT` `trades` also reports 294.92. However, the `_pnl_selfcheck_telemetry_NOT_A_LOSS` section states Alpaca's record for `SNOW` entry as 262.28, leading to a P&L of +32.32, while the bot's internal tracker calculates -0.32. This is a severe data inconsistency that needs immediate attention.
+*   **`pnl=0.0` anomalies**: The `SNOW` trade in `trade_events` shows `pnl=0.0` but `entry=294.92` and `price=294.92` for the stop-hit, which means it closed exactly at entry based on `trade_events`. However, the `EOD SNAPSHOT` shows `exit_price=294.6`, resulting in `pnl=-0.32`. This is a clear discrepancy within the bot's own records (`trade_events` vs `EOD SNAPSHOT`) and between the bot and Alpaca.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24h.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash: UNTOUCHED
+*   P5-C2 | run_movers.py ImportError: UNTOUCHED
+*   P5-H1 | OBSOLETE — PDT enforcement: OBSOLETE
+*   P5-H2 | Fill price crosstalk: **TRIGGERED** (as detailed for `SNOW` trade entry price discrepancy)
+*   P5-H3 | Orphan GTC 404 path: UNTOUCHED
+*   P5-H4 | Rule 2 dead code: UNTOUCHED
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today: OBSOLETE
+*   P5-M1 | Cycle watchdog restart loop: UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions: UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth: UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths: UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed: UNTOUCHED (snapshot is provisional, not a confirmed trigger today)
+*   P5-L3 | live_data_writer.py no reconnect logic: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution.entry_logic** | Recurring `[CYCLE-SYNC] STATE DESYNC` where `RiskManager`'s open position count (`risk.open_positions`) is consistently higher than the `Tracker`'s count (`tracker`). This leads to incorrect risk assessment and actively blocks new trade entries (`ANOMALY-2` warnings). The "Manual reconciliation required" suggests a severe, unhandled state inconsistency.
+    *   **Exact failure condition**: The variable `risk.open_positions` (or equivalent internal state in `RiskManager`) does not reflect the actual number of positions known to the `tracker`, leading to an inflated count being used for decision-making (e.g., against `MAX_OPEN_POSITIONS`). This causes valid trade opportunities to be skipped or bot over-exposure if the `RiskManager`'s count were instead *lower* than actual. This failure is triggered and logged at `2026-07-31 19:38:53,813`, `2026-07-31 19:47:32,203`, and `2026-07-31 19:54:12,522`.
+*   **INFRASTRUCTURE | MEDIUM | EOD SNAPSHOT / execution.portfolio_tracker** | The `EOD SNAPSHOT` `all_time_stats.open_trades` reports 3 open positions, but the `overnight_holds` list only explicitly details 2 symbols (`AMZN`, `DDOG`).
+    *   **Exact failure condition**: The aggregated `open_trades` count does not reconcile with the explicitly listed `overnight_holds` symbols, indicating a potential tracking gap for certain types of open positions or an incomplete `overnight_holds` listing. This prevents a clear understanding of all open positions at EOD.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate and resolve `[CYCLE-SYNC] STATE DESYNC`**: Trace the code paths for `register_close()` and any other functions that modify the `RiskManager`'s internal open position count (`risk.open_positions`) and the `Tracker`'s count. Ensure these are consistently updated and synchronized, especially during position closing or failure events. Prioritize this as it directly impacts risk management and trade entry decisions.
+2.  **URGENT: Address P5-H2 (Fill price crosstalk) for `SNOW`**: Determine why Alpaca reported a different entry price for `SNOW` (262.28) than what the bot recorded (294.92) and why the internal `trade_events` and `EOD SNAPSHOT` P&L figures for `SNOW` are inconsistent. This is critical for accurate P&L tracking and performance measurement.
+3.  **Audit `all_time_stats.open_trades` vs. `overnight_holds` consistency**: Identify the third open position reflected in `all_time_stats.open_trades` but missing from `overnight_holds`. Ensure all open positions are accurately tracked and reported in `overnight_holds` for complete visibility.
+4.  **Review overall strategy performance**: Given the `profit_factor = 0.98` and `avg_r_multiple = -0.049`, the strategy is not performing as intended. Analyze historical trades (especially high-score trades) to identify if the edge is truly present or if exit logic (stops/targets) needs adjustment.

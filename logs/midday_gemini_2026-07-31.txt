@@ -1,0 +1,60 @@
+Midday Gemini Audit — 2026-07-31
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 3
+  Naked position | SMCI(short, 1sh)
+  Genuine reconciliation break: tracker lists a FILLED position (status=open, qty=1) not held by Alpaca | SNOW
+  State desync: Tracker (2) < RiskManager (3) and manual reconciliation required | All positions managed by Tracker/RiskManager
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+1.  **P&L Sign Error for Short Trade:** The closed trade for QQQ shows an entry of $682.29 and an exit of $682.22 for a short position, but the reported P&L is `$-0.07`. For a short position, `entry_price > exit_price` should result in a positive P&L. Here, $682.29 - $682.22 = $0.07 profit. The P&L sign is inverted, indicating a recording bug or calculation error for short positions.
+2.  **Score-to-Outcome Correlation:** The QQQ trade had a high score (12/12) but resulted in a reported loss (actual tiny profit). With only one closed trade, it's difficult to assess systematic correlation, but this initial data point is not favorable.
+3.  **Win Rate and Profit Factor:** The session shows 0% win rate and 1 loss. Given the P&L sign error on the QQQ trade, these metrics are currently inaccurate and cannot be reliably used to assess the bot's edge.
+4.  **Stop-Hit Rate:** 0% stop-hit rate is reported, which implies stops are not being triggered or are placed very wide. For the QQQ trade, the exit was not a stop hit (exit $682.22 vs stop $664.92).
+
+### ENTRY QUALITY
+1.  **MRI=STRESSED at Entry:** The QQQ entry at 2026-07-30 09:17:21 PT was flagged with `MRI=STRESSED`. While the entry score was high (12/12, well above MIN_SHORT_SCORE=8), entering during STRESSED market conditions inherently carries higher risk, which is potentially reflected in the trade outcome.
+2.  **TQI Degradation:** The bot reports `[ANOMALY-3] TQI degradation: last-5-trade avg=27.8/100 < 30`. This is a self-reported issue indicating a systematic reduction in recent trade quality, which implies entries (and exits) might be taken under systematically reduced edge.
+
+### EXIT QUALITY
+1.  **QQQ P&L calculation:** As noted in the Performance Audit, the P&L for the QQQ short trade was recorded incorrectly as a loss instead of a profit. This means the system's internal understanding of trade outcomes is flawed, potentially leading to incorrect learning or risk adjustments based on P&L.
+2.  **Stop Coverage:** The presence of a naked SMCI position indicates a critical failure in exit logic or stop submission.
+
+### MRI ALIGNMENT
+1.  **Stressed Entry (QQQ):** An entry occurred during `MRI=STRESSED`. While the bot's dynamic `MIN_SCORE` was raised to 9/12 due to `MRI=ELEVATED` (actual close level for the session), it allowed a high-scoring trade during `STRESSED` conditions. The system does factor MRI into `MIN_SCORE` adjustments and sizing (`0.85x` size floor applied for `MRI ELEVATED`), indicating an attempt at alignment, but the `STRESSED` entry shows this is not a hard block.
+2.  **Dynamic MIN_SCORE Applied:** The `strategy.run_cycle` log `Dynamic MIN_SCORE: raised to 9/12 [MRI=ELEVATED/9 ... → effective=9/12]` shows the system is actively adjusting entry requirements based on MRI, filtering out 9 signals. This is working as intended.
+
+### LOG ANOMALIES
+*   `2026-07-31 17:19:43,714 | WARNING | scan_to_html | [SNOW] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold — genuine reconciliation break.`
+*   `2026-07-31 17:20:40,344 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$32.25 tracker=$-0.07 drift=$+32.32` (Repeated at 17:27:15,050)
+*   `2026-07-31 17:26:24,268 | WARNING | strategy.run_cycle | [ANOMALY-2] [SOXL] confirm_gate=4 scans but no entry — risk.open_positions=3 vs tracker=2 | MAX_OPEN_POSITIONS=20. If risk>2, CYCLE-SYNC should resolve next cycle.`
+*   `2026-07-31 17:26:24,269 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=27.8/100 < 30 — review exit discipline and stop placement.`
+*   `2026-07-31 17:27:09,492 | CRITICAL | execution.entry_logic | [CYCLE-SYNC] STATE DESYNC: Tracker (2) < RiskManager (3). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.`
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | SMCI Naked Position:** A live short position (1 share) for SMCI has no protective stop order, as indicated by `LIVE STOP COVERAGE`. This leaves the position exposed to unlimited loss, which is a catastrophic risk management failure.
+    *   **Exact variable/metric:** Position `SMCI(short, 1sh)` should have an associated stop order. Current value: No stop order found on Alpaca. Expected value: A protective stop order (e.g., a GTC stop) should be attached immediately upon position entry to limit potential losses according to the strategy's risk parameters (e.g., `INTRADAY_STOP_ATR_MULT`).
+    *   **Exact condition:** Occurs for `SMCI` position. Source not provided for initial entry or stop placement logic.
+*   **EXECUTION BUG | CRITICAL | P&L Sign Inversion for Short Trades:** The P&L for the QQQ short trade (entry $682.29, exit $682.22) is reported as `$-0.07`, when it should be `$0.07` profit. This fundamental error in profit/loss calculation for short positions directly impacts performance reporting, Kelly sizing calculations, and potentially stop/target adjustments based on P&L.
+    *   **Exact variable/metric:** `Total P&L` for QQQ in `CLOSED TRADE DETAILS`. Current value: `$-0.07`. Expected value: `$0.07`. Constitutes a failure because the basic financial outcome of a trade is misrepresented.
+    *   **Exact condition:** Occurs for `QQQ` short trade when `entry_price` > `exit_price`. Source not provided for P&L calculation logic.
+*   **INFRASTRUCTURE | CRITICAL | SNOW Ghost Position (Tracker Desync):** The log `[SNOW] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold — genuine reconciliation break` indicates the bot's internal state for SNOW is corrupted. The tracker believes it holds an open long position, while Alpaca confirms no such position (Alpaca Fills: `SNOW: 0B/1S` and `ledger_sync` `net=0.0`). This ghost position can lead to incorrect portfolio sizing, risk calculations, or attempts to manage a non-existent trade.
+    *   **Exact variable/metric:** `tracker` internal state for `SNOW` vs. Alpaca `/v2/positions` or `ledger_sync`. Current value (tracker): `open, qty=1` (implies long). Expected value (Alpaca): `no open position`. Constitutes a failure because the bot is operating with a fundamentally incorrect understanding of its portfolio.
+    *   **Exact condition:** Occurs for `SNOW` due to a "context strip" reconciliation break. Source not provided for the `context strip` logic.
+*   **EXECUTION BUG | CRITICAL | Persistent Tracker/RiskManager State Desync:** The `[CYCLE-SYNC] STATE DESYNC: Tracker (2) < RiskManager (3). Ignoring tracker — decreases must happen via register_close(). Manual reconciliation required.` message indicates a severe and unresolvable internal state inconsistency regarding the number of open positions. The `RiskManager` (likely reflecting Alpaca's actual count of 3 open positions based on fills for QQQ, SMCI, SNOW) disagrees with the `Tracker`'s count of 2. The explicit "Manual reconciliation required" means the bot cannot correct this itself, requiring operator intervention. This undermines the bot's ability to accurately manage overall portfolio risk and position limits.
+    *   **Exact variable/metric:** `risk.open_positions` (internal `RiskManager` count) vs. `tracker` (internal `Tracker` count). Current value: `risk.open_positions=3`, `tracker=2`. Expected value: `risk.open_positions == tracker`. Constitutes a failure as the bot is actively running with contradictory internal state, and its automated reconciliation failed.
+    *   **Exact condition:** Occurs during `strategy.run_cycle` and `execution.entry_logic` phase, explicitly triggered by a `CYCLE-SYNC` failure.
+*   **INFRASTRUCTURE | HIGH | Significant EOD P&L Drift:** The `EOD P&L DRIFT: Alpaca=$32.25 tracker=$-0.07 drift=$+32.32` indicates a large discrepancy between Alpaca's end-of-day P&L and the bot's internal tracker P&L. While the context mentions `tracker` P&L is authoritative, such a large drift (over 1% of the $2.5K account) suggests potential issues in how the bot observes or computes its P&L, even if not directly used for live risk decisions. This can affect external reporting and confidence in bot's self-assessment.
+    *   **Exact variable/metric:** `Alpaca` reported `pnl_today` vs. `tracker` reported `pnl_today`. Current value: `$32.25` vs `$-0.07`. Expected value: Drift should be minimal (ideally `$0.00`). Constitutes a failure because a $32.32 discrepancy in a $2.5K account is very large, suggesting significant accounting differences.
+    *   **Exact condition:** Occurs during `execution.portfolio_tracker`'s EOD summary write.
+
+### FIX VALIDATION
+No prior fixes to validate
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION / INFRASTRUCTURE: IMMEDIATELY halt the bot and manually resolve the SMCI naked position (add a stop order) and perform a full manual reconciliation of open positions with Alpaca's ground truth.** This addresses the catastrophic naked position and the critical state desyncs (SMCI, SNOW, and `RiskManager`/`Tracker` counts).
+2.  **EXECUTION: Investigate and fix the P&L sign inversion for short trades.** This is critical for accurate performance tracking and Kelly sizing.
+3.  **ALPHA: Review the `[ANOMALY-3] TQI degradation` and entries during STRESSED MRI conditions.** While MRI logic adjusts scores, the repeated `TQI degradation` suggests the strategy's edge might be compromised under current market regimes or specific conditions. Consider tightening entry criteria or sizing further for `STRESSED` MRI.

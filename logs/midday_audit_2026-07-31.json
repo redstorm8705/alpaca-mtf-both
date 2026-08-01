@@ -1,0 +1,140 @@
+{
+  "audit_date": "2026-07-31",
+  "run_ts": "2026-07-31T10:30:01.220115-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "QQQ",
+        "ts": "2026-07-30 09:17:21",
+        "score": 12,
+        "mri": "STRESSED",
+        "price": 682.29,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "SMCI",
+      "QQQ"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "STRESSED": 6,
+      "ELEVATED": 24
+    },
+    "last_score": 38,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 44,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-07-31 16:09:54,496 | WARNING  | strategy.run_cycle | [ANOMALY-2] [COIN] confirm_gate=8 scans but no entry \u2014 risk.open_positions=3 vs tracker=2 | ",
+      "2026-07-31 16:09:54,496 | WARNING  | strategy.run_cycle | [ANOMALY-2] [SOXL] confirm_gate=3 scans but no entry \u2014 risk.open_positions=3 vs tracker=2 | ",
+      "2026-07-31 16:09:54,496 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=27.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-07-31 16:10:59,794 | WARNING  | scan_to_html | [SNOW] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positio",
+      "2026-07-31 16:11:40,792 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$32.25 tracker=$-0.07 drift=$+32.32"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -0.06999999999993634,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -0.06999999999993634,
+    "best": {
+      "symbol": "QQQ",
+      "pnl": -0.06999999999993634,
+      "entry_price": 682.29,
+      "exit_price": 682.22,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 664.92,
+      "target": 727.7
+    },
+    "worst": {
+      "symbol": "QQQ",
+      "pnl": -0.06999999999993634,
+      "entry_price": 682.29,
+      "exit_price": 682.22,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 664.92,
+      "target": 727.7
+    },
+    "trades": [
+      {
+        "symbol": "QQQ",
+        "pnl": -0.06999999999993634,
+        "entry_price": 682.29,
+        "exit_price": 682.22,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 664.92,
+        "target": 727.7
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "SMCI",
+        "side": "short",
+        "qty": 1.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "QQQ",
+      "SMCI",
+      "SNOW"
+    ],
+    "by_symbol": {
+      "SMCI": {
+        "buy": 0,
+        "sell": 0
+      },
+      "SNOW": {
+        "buy": 0,
+        "sell": 1
+      },
+      "QQQ": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}
