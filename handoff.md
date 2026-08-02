@@ -11,20 +11,29 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**⏭️⏭️ ACTIVE THREAD (2026-08-02, Rafael present) — TWO FOUNDATIONAL DOCTRINE RULES being gated for CLAUDE.md.**
-Rafael's two standing frustrations, now being codified as HARD RULES: (1) BUILD-not-fix — every bug/audit must
-ALSO run a mandatory forward-improvement (MODE 2) pass and BUILD the dynamic capability, not band-aid; the
-PROCESS (not Rafael's instincts) must generate dynamic leaps. (2) Front-loaded-rigor → ship LIVE → iterate —
-move validation to strict pre-build simulation, then ship live (paper) + flip ALL pending shadows same-day; NO
-post-ship shadow waits; PLUS a KEYSTONE decision-explainability mandate (every decision reverse-engineerable
-from logs) + an untouched safety envelope. Draft at `scratchpad/build_doctrine_draft.md`. Gro+GAI returned
-APPROVE-WITH-CHANGES (central: Rule B same-day-flip vs Rule E — some shadows indirectly widen risk; define
-"risk-path change"; make Rule D a real gate w/ a decision-trace artifact). Board seats running.
-**NEXT EXACT STEP:** fold the load-bearing Gro/GAI/board changes into the draft → FINAL PRE-SHIP gate on the
-CLAUDE.md diff (execution-governing) → present to Rafael → ship. THEN EXECUTE: flip all pending shadows live
-(DELTA_SCORING/VOLUME_CONFIRMATION/16pt/GEX/TSMOM) + build the dynamic mean-reversion/regime-aware direction
-layer LIVE (variance-ratio/Hurst regime detector + separate mean_reversion_confluence score + exhaustion
-features so SMCI-type crashed names can be LONGs) with strict up-front simulation.
+**✅ SHIPPED (2026-08-02) — TWO FOUNDATIONAL CLAUDE.md DOCTRINE RULES (PR #57 → main `895000a`; OCI pull done,
+doc-only no restart).** New §BUILD, DON'T JUST FIX — SHIP-LIVE VELOCITY + DECISION-EXPLAINABILITY DOCTRINE
+(after §ANTI-SILO). Rafael's two standing frustrations codified: (A) BUILD-not-fix — every bug/audit runs a
+MANDATORY MODE-2 forward pass + BUILDs the dynamic capability (separate Tidy-First diff from the fix); the
+PROCESS, not Rafael's instincts, generates dynamic leaps. (B) Front-loaded-rigor → ship LIVE → iterate — no
+post-ship shadow; shadows flip same-day EXCEPT via a size/freq/concurrency screen (NOT self-certified,
+default-to-risk-path) that routes amplifiers to the existing risk board. (C) Front-loaded sim is the quality
+bar. (D) KEYSTONE decision-explainability — every decision logs its ordered multiplier/gate stack; an assert
+fails any trade lacking its record; HONEST limit — collinear same-day flips need per-feature kill flags for
+attribution. (E) Safety envelope untouched + a concrete risk-path-diff DEFINITION (incl. indirect upstream
+multipliers). Gate: board 2 cold seats + Gro + GAI (all APPROVE-w/-changes, folded) + FINAL preship (Gro
+APPROVE / GAI APPROVE r2 after closing the declared-delta loophole; cold-2nd FAIL→PASS after removing a
+flip-guard enumeration that by elimination put GEX's ×1.30 book-wide size multiplier in the unguarded
+same-day bucket — caught a real self-contradiction). **← DONE THIS SESSION.**
+
+**⏭️⏭️ NEXT EXACT STEP — EXECUTE THE DOCTRINE (Rafael's live directive):** (1) BUILD the Rule-D decision-stack
+logging + assert FIRST (KEYSTONE — makes every subsequent flip reverse-engineerable; it is itself a BUILD
+item). (2) Flip pending shadows live, EACH through the Rule B screen: DELTA_SCORING / VOLUME_CONFIRMATION /
+16pt / GEX / TSMOM — amplifier legs (regime UP-mult, any new score→conviction wire, GEX ×1.15/×1.30) guarded
+OFF/board-routed per Rule E; pure-selectivity legs flip same-day. (3) BUILD the dynamic mean-reversion /
+regime-aware DIRECTION layer LIVE (variance-ratio/Hurst regime detector + separate mean_reversion_confluence
+score + exhaustion features so SMCI-type crashed names can be LONGs) with strict FRONT-LOADED simulation per
+Rule C. Each is a separate gated diff.
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
