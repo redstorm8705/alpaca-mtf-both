@@ -11,6 +11,32 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — RE-ENTRY COOLDOWN (stop reloading a stopped-out name)
+**PR #53 → main `1337ab4` (merge `21de538`); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK; new module
+imports clean on live venv (_STOP_REASONS all 5); startup verified Alpaca=3==tracker=3.** After a STOP-BASED LOSS
+exit on a (symbol, direction) earlier in TODAY's PT session, block re-entry into that SAME losing side for the
+rest of the session (SMCI re-shorted a rising stock every scan: 24.24→stopped, 25.85→stopped, 27.70; short score
+stuck 10-12). Opposite-direction reversal still allowed; other symbols unaffected; target/opposite_signal/EOD/
+external_close never trigger. NEW self-contained module `execution/reentry_cooldown.py` (pure, never-raises,
+fail-open) + entry_logic gate. **Implementation IMPROVED on the board's "record-on-exit" design: INFERS the
+cooldown from the already-persisted tracker.closed_trades → NO new state file, NO portfolio_tracker patch,
+restart-survival for FREE.** Board CAUGHT + FIXED a real defect (gate first sat before the #12c opposite-signal
+defensive exit → would have swallowed a short signal meant to exit a held long; moved AFTER is_in_trade/#12c +
+Alpaca-position check → gates NEW entries only; re-verified). Duration "rest of PT session" = the 1-in-10
+no-static exception (zero fitted params; data-derived roadmap flagged). Gate: full read entry_logic 1740L +
+new module + RC-1..8 + statics clean + 10/10 functional + cold-2nd PASS (2 rounds) + board APPROVE (exit-
+discipline + quant/risk) + Gro+GAI APPROVE (design + FINAL preship). **← DONE THIS SESSION.** Takes effect next
+RTH cycle (Mon). FOLLOW-UP (logged, out of scope): position-limit `break` runs before #12c on a full book.
+
+**⏭️ NEXT (Rafael 2026-08-01, sequenced AFTER the cooldown): SMCI SHORTING-STRATEGY AUDIT.** Is a score-10-12
+SHORT on a RISING stock even a valid edge, or is the confluence-score SHORT signal generating stale/inverted
+signals (score stuck 10-12 into an uptrend)? This is the ROOT the cooldown band-aids — the score→outcome
+INVERSION (7/24 Task #3). Analysis task (not a code change yet): pull SMCI's short-signal history + outcomes
+from trade_events.jsonl / closed_trades; evaluate the SHORT scoring logic (strategy/confluence.score_short_signal)
+against realized SMCI price action; determine if the short signal has any edge or should be gated/reweighted.
+Full-board strategy vote if a scoring change results. ALSO still queued: tier-aware too-few stop clamp;
+orphan_manager startup-reconcile QHM/tracker follow-up.
+
 ### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — RISK-COUNTER ALPACA RECONCILE (entry-gate desync heal)
 **PR #50 → main `49f1c4d`; OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK; new method live (6 refs
 risk_manager, 1 wire-in entry_logic); startup verified Alpaca=3==tracker=3.** ROOT: `risk.open_positions` (the
