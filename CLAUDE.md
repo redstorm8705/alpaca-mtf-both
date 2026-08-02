@@ -147,6 +147,118 @@ and VIX / VIX3M-term-structure / realized-vol ↔ GEX-regime-confirmation.
 
 ---
 
+## BUILD, DON'T JUST FIX — SHIP-LIVE VELOCITY + DECISION-EXPLAINABILITY DOCTRINE (Rafael mandate 2026-08-02)
+
+**Why this exists:** For 3 months the bot's improvement loop was REACTIVE and CONSERVATIVE — it fixed
+the one bug in front of it (usually a Gemini-report item), gated it, shipped it, and stopped. The only
+source of DYNAMIC, forward-looking improvement was Rafael's own instincts. The process never forced the
+leap from "fix" to "build," and the shadow-first doctrine benched validated-enough improvements for weeks.
+Result: no progress toward $25K. This doctrine closes that loop. It is execution-governing and binds every
+session. It was itself gated (board 2 cold seats + Gro + GAI, all four APPROVE-WITH-CHANGES converging on
+one hole — a size/frequency/concurrency amplifier flipping live under a "signal edge" label — closed by the
+risk-path DEFINITION in Rule E + the binary self-screen in Rule B).
+
+### A. BUILD, DON'T JUST FIX — the mandatory MODE-2 forward pass (NON-OPTIONAL)
+Every bug fix, audit, or Gemini-report item MUST produce THREE things, not one:
+1. **The fix**, 2. **the ROOT cause**, and 3. a **FORWARD-IMPROVEMENT PASS** — the North Star MODE 2
+(whitespace / architecture / dynamic-improvement) persona, now **MANDATORY on every fix, not situational**.
+The forward pass asks: *"What STATIC assumption did this expose, and what DYNAMIC / adaptive / regime-aware
+capability should we BUILD to advance the bot toward $25K?"* — then **BUILD it through the gate**, or log an
+explicit, board-reviewed reason not to. Shipping a band-aid WITHOUT the forward pass is a process VIOLATION.
+The PROCESS — not Rafael's instincts — must generate the dynamic leaps from now on.
+**TIDY-FIRST SEPARATION (Beck):** the BUILD pass ships as a **SEPARATE diff/commit from the bug fix.** The
+fix is never blocked or delayed by the build, and mixing a structural change into a behavioral fix (which
+muddies P&L attribution) is prohibited. Fix ships when ready; the forward-build follows as its own gated diff.
+
+### B. FRONT-LOADED RIGOR → SHIP LIVE → ITERATE (no post-ship shadow waits)
+The validation burden moves to the **FRONT**. Before building, run a **rigorous SIMULATION + written
+HYPOTHESIS** across historical cases and regimes (Rule C). Once a change clears that front-loaded sim AND
+the standard build gate (board + Gro + GAI + cold-2nd + statics), it ships **LIVE** (paper) — NOT to a
+shadow window. **Post-ship shadow-benching of a gate-cleared improvement is PROHIBITED.** All currently-
+shadowed features (delta-scoring, volume-confirmation, 16-pt scoring, GEX shadows, the mean-reversion /
+regime layer, etc.) **flip LIVE — same-day flips are explicitly authorized** (Rafael 2026-08-02), SUBJECT TO
+the one routing screen below. This SUPERSEDES the "≥N shadow samples before live" gates in the SHADOW
+STRATEGY TRACKER and in delta_shadow / VOLUME_CONFIRMATION_ENABLED — those thresholds no longer bench a
+gate-cleared change.
+
+**THE ONE ROUTING SCREEN (binary, automated inside the Rule C sim — NOT a committee):** each feature's
+pre-flip sim states its **size / frequency / concurrency delta** (see the Rule E definition).
+- **All-zero (pure selectivity / signal / quality-bar change, trade size still bounded by the existing
+  Kelly + gross + overnight caps): flip SAME-DAY, no extra board.** This is ~most features.
+- **Any axis non-zero: it IS a risk-path diff → the ALREADY-EXISTING mandatory board-on-risk-path gate (Rule
+  E) fires before it flips.** No new stage is created — the nonzero feature is simply routed to the gate that
+  already exists. A size/frequency/concurrency amplifier may NOT flip same-day under a "signal edge" label.
+
+**THE SCREEN IS NOT SELF-CERTIFIED (closes the declared-delta loophole):** the "all-zero → same-day" path is
+NOT satisfied by the author's declaration. The standard build gate (cold-2nd + the relevant board seat) MUST
+INDEPENDENTLY VERIFY, against the Rule E risk-path definition, that the feature touches NONE of size /
+frequency / concurrency — tracing every multiplier it introduces or feeds UPSTREAM of the Kelly / gross caps
+(the reviewer applies the definition; the author's "zero" is an input, not the verdict). **DEFAULT-TO-RISK-
+PATH on any ambiguity:** if a reviewer cannot AFFIRMATIVELY confirm all three axes are zero, the feature is
+treated as risk-path and routed to the board — the same-day path requires a positive all-clear, never the
+absence of a flag. This is the "verify at source, documentation-is-not-enforcement" rule applied to the
+screen itself: the enforcement is the reviewer's independent trace, not the declaration.
+
+### C. FRONT-LOADED SIMULATION IS THE NEW QUALITY BAR (not hand-waved)
+Because there is no post-ship shadow safety net, the PRE-build simulation carries the rigor. It must be REAL:
+(1) enumerate the historical cases / regimes it is tested against, (2) state the EXPECTED effect (directional
++ rough magnitude), (3) state the REVERSAL CRITERION (what live behavior would prove it wrong), and (4) state
+the feature's **size / frequency / concurrency delta** (the Rule B routing input). A hand-waved "I simulated
+it" is a GATE FAILURE. This is where the discipline now lives.
+
+### D. DECISION EXPLAINABILITY — every decision must be reverse-engineerable (KEYSTONE, enforced not wished)
+Because changes ship live and attribution happens AFTER the fact, **every bot decision — entry, skip/block,
+exit, size, direction — MUST be fully reviewable and reverse-engineerable from the logs.** Per this project's
+own "documentation is not enforcement" rule, this is a CONCRETE, enforced artifact, not a wish:
+1. **Every live entry/exit/skip decision EMITS its ordered decision-stack to `trade_events.jsonl`:** the score
+   + each contributing condition, every gate outcome (counter-trend, re-entry-cooldown, sector, MRI, exposure,
+   etc.), the regime label, and every sizing multiplier in the order applied (conviction, GEX, vol-scalar,
+   regime, Kelly fraction). Enough to re-derive WHY that decision happened.
+2. **An assert / test FAILS the decision path if an action is emitted without its explanation record** — a
+   trade can never fire without its decision-stack logged. This is the gate, built on infra already present
+   (`trade_events.jsonl`, the Layer-8 shadow record, the VOLSHADOW pattern). "Replay" = deterministic
+   re-derivation of ONE logged decision from its inputs, spot-checkable — NOT a blocking backtest harness.
+3. **HONEST LIMIT (surfaced by the risk board seat, Rafael acknowledged):** reverse-engineerability recovers
+   WHAT the bot decided and WHY at decision time — it does NOT statistically recover WHICH of several
+   simultaneously-flipped features caused a P&L change (flipped-together features are collinear; the marginal
+   per-feature edge is unrecoverable no matter how complete the logs). The mechanism that DOES recover crude
+   per-feature attribution under a same-day multi-flip is the **per-feature kill flag** (Rule E) — toggle one
+   off, watch the delta. Clean per-feature (p,b) measurement (the input to the eventual LIVE Kelly fraction)
+   still requires isolating a feature; that isolation is deferred, by Rafael's choice, to when it matters (at
+   the live-capital transition), not benched now.
+
+### E. THE SAFETY ENVELOPE IS NOT SUBJECT TO THIS VELOCITY (hard carve-out + risk-path DEFINITION)
+This doctrine accelerates SIGNAL / STRATEGY improvement (make more, aggressively, WITHIN the envelope). It
+does NOT touch the safety envelope. STILL FULLY IN FORCE, ZERO relaxation: the 7% kill switch, `paper=True`,
+never-mask-a-loss, the data-source tiers, code-correctness (statics / full-read / cold-2nd), and the
+**MANDATORY cold board + full gate on any RISK-PATH diff.**
+
+**RISK-PATH DIFF — DEFINITION (the keystone that makes this rule enforceable):** a diff is risk-path iff it
+can increase (a) per-trade or aggregate position **SIZE**, (b) trade **FREQUENCY / entry rate** (e.g.
+lowering `MIN_LONG_SCORE` / `MIN_SHORT_SCORE`, or raising conviction so more trades clear the size floor), or
+(c) **CONCURRENCY / gross or overnight EXPOSURE** — **INCLUDING indirectly, via any multiplier applied
+UPSTREAM of the Kelly / gross-exposure caps** (e.g. a regime layer's up-size multiplier, or the GEX ×1.15/
+×1.30 book-wide edge multiplier — a real in-repo instance of a "signal edge" that is actually a leverage
+change). A change that ONLY alters WHICH trades fire — a pure selectivity / quality-bar change whose trades
+remain bounded by the existing per-trade and gross caps — is **NOT** risk-path and flips same-day.
+
+**FLIP GUARDS for the current all-shadow flip — EACH leg runs through the Rule B screen individually; NO leg
+is pre-declared "pure-signal / unguarded".** The screen (not-self-certified, independent trace, default-to-
+risk-path) is the arbiter per feature. Three legs are ALREADY-KNOWN risk-path amplifiers by the definition
+above and therefore do NOT flip their amplifier same-day: (1) the mean-reversion / regime layer's UP-
+multiplier (`REGIME_LOW_VOL_SIZE_MULT`) — the layer flips live for SIGNAL and for its DOWN-sizing (protective),
+but its UP-multiplier is pinned to 1.0 until staged; (2) any NEW scoring system that feeds the conviction→size
+map (16-pt included) — flips to LOGGING-ONLY while the EXISTING score keeps driving conviction→size, until
+staged; (3) the GEX ×1.15/×1.30 book-wide edge multiplier — its size multiplier stays OFF (routed to the
+board, staged separately) even if the GEX signal itself is surfaced. A remaining leg flips same-day ONLY when
+the Rule B trace affirmatively clears it as all-zero on size/frequency/concurrency (e.g. a pure selectivity
+change) — decided by the per-feature trace, never by a standing enumeration in this rule.
+
+Velocity NEVER widens the risk envelope, relaxes the code-correctness gate, or skips the board on a risk-path
+change. Same scope line as PROFITABLE > PERFECT: more aggressive within the envelope, never a wider envelope.
+
+---
+
 ## 5-HOUR AUTONOMOUS WORK CHAIN — SESSION START DUTY (Rafael mandate 2026-06-11)
 
 Rafael's usage limit is a ROLLING 5-hour window — a static daily cron schedule drifts out of
