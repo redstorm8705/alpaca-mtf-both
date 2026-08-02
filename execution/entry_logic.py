@@ -64,6 +64,7 @@ from strategy.signal_generator import run_scan
 from execution.exit_logic import _cancel_open_gtc_orders  # noqa: F401
 from execution.quarterly_hold_manager import get_quarterly_hold_symbols
 from execution import reentry_cooldown as _reentry_cooldown
+from execution import counter_trend as _counter_trend
 
 if TYPE_CHECKING:
     from events.calendar import EventCalendar
@@ -880,7 +881,14 @@ def execute_entries(
             )
         else:
             try:
-                daily_df = fetch_bars(symbol, config.TF_DAILY, num_bars=config.ATR_PERIOD + 5)
+                # num_bars covers BOTH the ATR window (ATR uses the last ATR_PERIOD bars) AND the
+                # counter-trend gate's 1-month (MOMENTUM_SHORT_LOOKBACK=21) return, which needs
+                # ≥ N+2 bars. Extra bars never change the ATR (it reads the tail) — 2026-08-02.
+                daily_df = fetch_bars(
+                    symbol, config.TF_DAILY,
+                    num_bars=max(config.ATR_PERIOD + 5,
+                                 getattr(config, "MOMENTUM_SHORT_LOOKBACK", 21) + 3),
+                )
                 if not daily_df.empty:
                     _atr_pct  = calculate_atr(daily_df, config.ATR_PERIOD) / 100
                     atr_value = _atr_pct * entry_price
@@ -918,6 +926,37 @@ def execute_entries(
                 )
                 _rc8_clear_buffers(symbol, "c3-deviation")
                 continue
+
+        # ── Counter-trend bounce / falling-knife gate (2026-08-02, BGG) ──────────
+        # The 12-pt confluence gives ~5/12 points from LONG-TERM structure (below/above 150/200
+        # SMA + 12-1 momentum), so a crashed name scores 10-12 SHORT permanently and the bot
+        # shorts the RIP (SMCI +15% one-month bounce, stopped 3x). Block a SHORT that is
+        # structurally bearish AND up over the last month (bouncing), and the mirror LONG (a
+        # structurally-bullish name down over the last month = falling knife). Parameter-free
+        # (reuses MOMENTUM_SHORT_LOOKBACK — the reversal window 12-1 momentum skips); scoped to
+        # an elevated structural score so a FRESH breakdown is not gated; FAIL-OPEN. Runs AFTER
+        # the is_in_trade/#12c + Alpaca-position checks (new entries only — never blocks a
+        # defensive exit). LIVE with daily decision-impact logging (grep COUNTER-TREND GATE).
+        # See execution/counter_trend.py. Kill switch: config.COUNTER_TREND_GATE_ENABLED
+        # (default True) — flip to False + restart to disable instantly, matching the codebase's
+        # GEX_ENABLED / ORB_ENABLED / DELTA_SCORING_ENABLED feature-gate convention.
+        _ct_blocked, _ct_ctx = (
+            _counter_trend.counter_trend_block(direction, sig, daily_df)
+            if getattr(config, "COUNTER_TREND_GATE_ENABLED", True)
+            else (False, {})
+        )
+        if _ct_blocked:
+            logger.warning(
+                "[%s] COUNTER-TREND GATE [%s]: 1-month return %+.2f%% opposes the trade on a "
+                "structurally-%s name (score=%s) — skipping (%s). ctx=%s",
+                symbol, direction, _ct_ctx.get("mom_1m_pct", 0.0),
+                "bearish" if direction == "short" else "bullish",
+                _ct_ctx.get("score"),
+                "don't short a bounce" if direction == "short" else "don't long a falling knife",
+                _ct_ctx,
+            )
+            _rc8_clear_buffers(symbol, "counter-trend-bounce")
+            continue
 
         # Calculate ATR-based stop and target
         _h2_scalar = _param_engine.h2_stop_atr_mult(symbol, vix)  # None when VIX unavailable

@@ -541,6 +541,15 @@ GEX_ENABLED             = True    # LIVE (re-armed 2026-07-26). Arms BOTH consum
                                   # Layer-8 MIN_SCORE +1 on NEGATIVE. Both fail-NEUTRAL on
                                   # NEAR-FLIP/STALE/UNKNOWN and on a missing attr (getattr(...,False)).
 GEX_STALE_MINUTES       = 30      # base stale window: 30 min = 2 missed 15-min refreshes -> STALE
+
+# ── Counter-trend bounce / falling-knife gate (2026-08-02, Rafael + BGG) ──────────────────────
+# LIVE (Rafael chose staged-live + daily decision-impact audits over shadow). Blocks SHORTING a
+# structurally-bearish name that is UP over the last month (bouncing — the SMCI re-short-the-rip
+# failure) AND the mirror LONG (structurally-bullish, DOWN over the month = falling knife).
+# Parameter-free (reuses MOMENTUM_SHORT_LOOKBACK); fail-open. INSTANT KILL = flip to False +
+# restart (no deploy needed). Grep "COUNTER-TREND GATE" for the daily block audit.
+# See execution/counter_trend.py.
+COUNTER_TREND_GATE_ENABLED = True
 # Full-strength values (Rafael-locked 2026-07-26). NEGATIVE = high-vol / momentum-amplified
 # -> size UP x1.30; POSITIVE = mean-reversion backdrop -> x1.15. NEUTRAL stays 1.00 (the
 # fail-safe value on NEAR-FLIP/STALE/UNKNOWN). All applied UPSTREAM of KELLY_MAX_RISK_PCT.
