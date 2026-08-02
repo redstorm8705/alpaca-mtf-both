@@ -7,9 +7,44 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-07-27 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-08-02 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**⏭️⏭️ ACTIVE THREAD (2026-08-02, Rafael present) — TWO FOUNDATIONAL DOCTRINE RULES being gated for CLAUDE.md.**
+Rafael's two standing frustrations, now being codified as HARD RULES: (1) BUILD-not-fix — every bug/audit must
+ALSO run a mandatory forward-improvement (MODE 2) pass and BUILD the dynamic capability, not band-aid; the
+PROCESS (not Rafael's instincts) must generate dynamic leaps. (2) Front-loaded-rigor → ship LIVE → iterate —
+move validation to strict pre-build simulation, then ship live (paper) + flip ALL pending shadows same-day; NO
+post-ship shadow waits; PLUS a KEYSTONE decision-explainability mandate (every decision reverse-engineerable
+from logs) + an untouched safety envelope. Draft at `scratchpad/build_doctrine_draft.md`. Gro+GAI returned
+APPROVE-WITH-CHANGES (central: Rule B same-day-flip vs Rule E — some shadows indirectly widen risk; define
+"risk-path change"; make Rule D a real gate w/ a decision-trace artifact). Board seats running.
+**NEXT EXACT STEP:** fold the load-bearing Gro/GAI/board changes into the draft → FINAL PRE-SHIP gate on the
+CLAUDE.md diff (execution-governing) → present to Rafael → ship. THEN EXECUTE: flip all pending shadows live
+(DELTA_SCORING/VOLUME_CONFIRMATION/16pt/GEX/TSMOM) + build the dynamic mean-reversion/regime-aware direction
+layer LIVE (variance-ratio/Hurst regime detector + separate mean_reversion_confluence score + exhaustion
+features so SMCI-type crashed names can be LONGs) with strict up-front simulation.
+
+### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
+**PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
+`COUNTER_TREND_GATE_ENABLED=True` verified on the box; fail-open smoke test passed.** ROOT of the SMCI short
+spam (deeper than the cooldown band-aid): the 12-pt SHORT confluence score awards ~5/12 purely from LONG-TERM
+downtrend STRUCTURE (daily_above_150sma +2 when BELOW, daily_above_200sma +1 when BELOW, momentum_12_1 +2 on
+negative 12-mo) — so a crashed former high-flyer (SMCI ~$1000→$24) is PERMANENTLY below both SMAs with hugely
+negative 12-mo momentum and scores 10-12 SHORT every scan even while ripping +15% off the bottom. The score
+measures "is this structurally broken?" (yes, permanently), NOT "is this a good tactical short NOW?".
+score_long has the exact mirror (falling knife). NEW self-contained `execution/counter_trend.py` (pure,
+never-raises, fail-open): blocks a SHORT on a structurally-bearish name whose 1-month return is POSITIVE
+(bouncing), and a LONG on a structurally-bullish name whose 1-month return is NEGATIVE (declining). Signal =
+daily 1-month return sign vs direction; PARAMETER-FREE (reuses config.MOMENTUM_SHORT_LOOKBACK=21, the reversal
+window J-T 12-1 momentum skips) = the 1-in-10 no-static exception. Gate fires ONLY when the structural point
+scored (crashed-and-scoring-high pattern), placed AFTER is_in_trade/#12c/get_open_position (new entries only).
+`COUNTER_TREND_GATE_ENABLED` config kill switch. Gate: full read entry_logic 1740L + new module + config +
+RC-1..8 + statics clean + cold-2nd PASS + board APPROVE + Gro+GAI APPROVE (design + FINAL preship) + CI preship
+green (hardened getattr(config,"MOMENTUM_SHORT_LOOKBACK",21) to kill a stochastic CI false-flag). **← DONE.**
+Takes effect next RTH cycle. FOLLOW-UPS (logged, out of scope): structural double-count reweight; committed
+unit tests for counter_trend.py + reentry_cooldown.py.
 
 ### ✅ SHIPPED (2026-08-01 interactive, Rafael present) — RE-ENTRY COOLDOWN (stop reloading a stopped-out name)
 **PR #53 → main `1337ab4` (merge `21de538`); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK; new module
