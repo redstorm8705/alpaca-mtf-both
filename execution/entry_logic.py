@@ -63,6 +63,7 @@ from strategy.scoring import (
 from strategy.signal_generator import run_scan
 from execution.exit_logic import _cancel_open_gtc_orders  # noqa: F401
 from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+from execution import reentry_cooldown as _reentry_cooldown
 
 if TYPE_CHECKING:
     from events.calendar import EventCalendar
@@ -759,6 +760,30 @@ def execute_entries(
         # Verify no existing Alpaca position
         if get_open_position(symbol):
             logger.info(f"[{symbol}] Already has Alpaca position — skipping.")
+            continue
+
+        # ── Re-entry cooldown (2026-08-01, BGG) ──────────────────────────────
+        # NEW ENTRIES ONLY. Placed AFTER the is_in_trade/#12c block AND the Alpaca-position
+        # check, so it can NEVER block a #12c defensive exit of an existing OPPOSITE position
+        # (board catch 2026-08-01: the earlier placement would have swallowed a short signal
+        # meant to defensively exit a held long). At this point the symbol is confirmed NOT
+        # held (tracker + Alpaca), so this purely gates a genuine RE-ENTRY. If this
+        # (symbol, direction) was STOPPED OUT earlier in TODAY's session, do not reload the
+        # same losing side (SMCI: re-shorted a rising stock on every scan). Opposite-direction
+        # reversal still allowed; other symbols unaffected. State inferred from the
+        # already-persisted tracker.closed_trades (survives restart for free); FAIL-OPEN.
+        # See execution/reentry_cooldown.py.
+        _cd_blocked, _cd_trade = _reentry_cooldown.is_in_cooldown(
+            symbol, direction, tracker.closed_trades
+        )
+        if _cd_blocked:
+            _cd_reason = (_cd_trade or {}).get("exit_reason", "stop")
+            logger.info(
+                f"[{symbol}] RE-ENTRY COOLDOWN: {direction} was stopped out today "
+                f"({_cd_reason}) — not reloading the same losing side this session "
+                f"(opposite direction still allowed)."
+            )
+            _rc8_clear_buffers(symbol, "reentry-cooldown")
             continue
 
         # Get current price + daily ATR for stop sizing
