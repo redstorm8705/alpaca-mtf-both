@@ -9370,3 +9370,10 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **Fix:** default→0.045 (conservative fallback); live explicit 0.02 (≤ paper, < live 3% daily kill, == live 2% baseline). Invariant live ≤ paper ≤ (default) restored. ZERO impact on running paper bot.
 **Gate:** statics clean (py_compile/ruff/mypy) + board (Thorp spec + 4-voice policy) + cold-2nd PASS 4/4 + Gro+GAI preship APPROVE (GAI first REJECTed on a FALSE aggregate-ceiling premise — MAX_PORTFOLIO_RISK_PCT is the per-trade baseline/Kelly denominator at entry_logic.py:1188, NOT an aggregate cap — refuted via counter-prompt, GAI reversed in 1 round). OCI synced, no restart (inert for paper).
 **NEXT:** item 2 build (mean-reversion LONG detector `execution/mr_regime.py` first).
+
+---
+
+## 2026-08-02 (interactive, Rafael present) — item 2 diff 1/4 (mr_regime detector) + REVIEWER-CONTEXT/SHIP-READY protocols — SHIPPED (PR #63, #64)
+**PR #63** — NEW `execution/mr_regime.py`: pure/fail-safe detector. `regime_state` (VR<1/Hurst<0.5) + `confirmed_reversal` (RSI-oversold-within-3 EXCLUDING today + first up-close). Front-loaded sim validated confirmation-based entry (+1.78% fwd10) vs naive knife-catch (−0.39% fwd5). Unwired (no RTH path yet). Gate: statics + smoke + cold-2nd 4/4 + Gro+GAI APPROVE.
+**PR #64** — `.claude/preship/preship_audit.py` +`--context <file|inline>` (proactive ground-truth facts → first-pass prompt; additive/backward-compat; dogfooded first-pass APPROVE on both files). CLAUDE.md +§REVIEWER-CONTEXT (mandatory pre-load facts; mechanism = gate per documentation-is-not-enforcement) +§SHIP-READY-FIRST. Root: GAI false-REJECTed a correct config diff assuming MAX_PORTFOLIO_RISK_PCT was an aggregate ceiling (it's the per-trade baseline). Gate: statics + parse test + cold-2nd 5/5 + Gro+GAI APPROVE.
+**NEXT:** item 2 diff 2/4 (mean_reversion_confluence score) → diff 3 (gated long-entry wiring, RISK-PATH) → diff 4 (Rule-D logging).
