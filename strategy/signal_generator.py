@@ -26,6 +26,7 @@ from strategy.confluence import prepare_df, score_long_signal, score_short_signa
 from indicators.macd import macd_bearish_cross, macd_bullish_cross
 from indicators.moving_averages import ema_bearish_cross, ema_bullish_cross
 from indicators.momentum import get_momentum_summary
+from execution.mr_regime import mean_reversion_confluence
 import config
 
 # Absolute path anchor — prevents CWD-relative write failures (same pattern as kelly.py TB-2 fix)
@@ -679,6 +680,9 @@ def run_scan(
     _now_et        = datetime.now(ET)          # single clock reading for entire Phase 3
     _today_p3      = _now_et.strftime("%Y-%m-%d")
     all_signals    = []
+    mr_signals     = []   # mean-reversion signals — a SEPARATE list, NEVER score-sorted with the
+                          # 0-12 trend signals (the 0-3 MR score has no honest image on that axis);
+                          # merged into `deduped` post-dedup via the Option-B resolution (item 2 diff 3c).
     score_comparison = []
 
     for fr in full_results:
@@ -736,6 +740,44 @@ def run_scan(
             _sig_r["ewma_vol_60d"]    = _ms.get("ewma_vol_60d")
             _sig_r["tsmom_vol_mult"]  = _ms.get("tsmom_vol_mult")
             _sig_r["tsmom_direction"] = _ms.get("tsmom_direction")
+
+        # ── MEAN-REVERSION emission (item 2 diff 3c — INERT while MR_ENABLED=False) ──────────
+        # Detect ONCE here on the live 200-bar daily_df (entry_logic's ~24-bar window can't
+        # compute a 150-SMA — a data landmine). Emit MR signals into the SEPARATE mr_signals
+        # list (never the score-sorted trend dedup). Runs AFTER the ADDV liquidity filter
+        # (so MR respects liquidity) and BEFORE daily_df is freed below. LONG-first rollout:
+        # shorts only when MR_LONG_ONLY is False. The MR signal's "score" is set to the 0-3 MR
+        # score so that if it ever leaked into the trend path it would be SKIPPED by the
+        # conviction gate (score<8) — fail-safe. entry_logic (diff 3d) routes on strategy.
+        if getattr(config, "MR_ENABLED", False) and daily_df is not None:
+            _mr_dirs = ["long"] if getattr(config, "MR_LONG_ONLY", True) else ["long", "short"]
+            _mr_min  = int(getattr(config, "MR_MIN_SCORE", 1))
+            for _mr_dir in _mr_dirs:
+                try:
+                    _mrc = mean_reversion_confluence(daily_df, _mr_dir)
+                    if _mrc.get("eligible") and int(_mrc.get("score", 0) or 0) >= _mr_min:
+                        _base = long_r if _mr_dir == "long" else short_r
+                        mr_signals.append({
+                            "symbol":       sym,
+                            "direction":    _mr_dir,
+                            "strategy":     "mean_reversion",
+                            "trade_mode":   trade_mode,
+                            "signal":       True,
+                            "score":        int(_mrc.get("score", 0) or 0),   # 0-3, fail-safe vs trend gate
+                            "max_score":    int(_mrc.get("max_score", 3) or 3),
+                            "mr_score":     int(_mrc.get("score", 0) or 0),
+                            "mr_max_score": int(_mrc.get("max_score", 3) or 3),
+                            "conditions":   _mrc.get("conditions", {}) or {},
+                            "vol_ratio":    _vol_ratio,
+                            "sigma_20d":    _sigma_20d,
+                            "tsmom_vol_mult": _ms.get("tsmom_vol_mult"),
+                            "weekly_bias":  weekly_biases.get(sym),
+                            "weekly_bias_filtered": False,
+                        })
+                        logger.info("[%s] MR-%s eligible (score %s/3) — emitted to mr_signals.",
+                                    sym, _mr_dir, _mrc.get("score"))
+                except Exception as _mre:
+                    logger.debug("[%s] MR emit error (%s) — skipped.", sym, _mre)
 
         # Compute 16pt for both directions using pre-ranked momentum + residual + PEAD + macro
         _pead_days_16, _pead_dir_16 = _get_pead_days(sym, _today_p3)
@@ -892,6 +934,38 @@ def run_scan(
             f"Deduped {len(all_signals) - len(deduped)} conflicting signals "
             f"(kept highest score per symbol)"
         )
+
+    # ── MEAN-REVERSION resolution (Option B — item 2 diff 3c; INERT while mr_signals empty) ──
+    # Merge MR signals into the deduped trend list at the LIST level (deterministic, gate-state-
+    # INDEPENDENT — never coupled to the fail-open runtime counter_trend gate), guaranteeing at
+    # most ONE directional opinion per symbol. Rules (Rafael chose Option B, 2026-08-02):
+    #   • no trend signal on the symbol → MR fills the gap.
+    #   • OPPOSITE-direction trend signal → MR REPLACES it (SMCI: the confirmed-reversal LONG
+    #     replaces the perma-structural SHORT — this is the whole point).
+    #   • SAME-direction trend signal → keep the trend (don't let MR override a same-side trend).
+    if mr_signals:
+        _by_sym = {s["symbol"]: s for s in deduped}
+        _mr_added = _mr_replaced = 0
+        for _mr in mr_signals:
+            _sym = _mr["symbol"]
+            _existing = _by_sym.get(_sym)
+            if _existing is None:
+                deduped.append(_mr)
+                _by_sym[_sym] = _mr
+                _mr_added += 1
+            elif _existing.get("strategy") == "mean_reversion":
+                continue  # symbol already resolved to an MR signal this cycle
+            elif _existing.get("direction") != _mr["direction"]:
+                deduped.remove(_existing)
+                deduped.append(_mr)
+                _by_sym[_sym] = _mr
+                _mr_replaced += 1
+                logger.info("[%s] MR %s REPLACES opposite trend %s (Option B).",
+                            _sym, _mr["direction"], _existing.get("direction"))
+            # same-direction trend signal present → keep trend, drop MR (no-op)
+        if _mr_added or _mr_replaced:
+            logger.info("MR resolution: %d MR signals filled empty symbols, %d replaced an opposite "
+                        "trend signal (%d MR emitted).", _mr_added, _mr_replaced, len(mr_signals))
 
     logger.info(f"Scan complete. {len(deduped)} signals after dedup (from {len(all_signals)} raw).")
     return deduped
