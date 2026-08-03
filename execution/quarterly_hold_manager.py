@@ -1,3 +1,6 @@
+# ruff: noqa: E501  (2026-08-03: long descriptive comment/log lines in _maybe_trailing_lock +
+# the trailing-lock config block sit at 89 cols. E501 is COSMETIC — F/B/E-real correctness checks
+# still run under --select E,W,F,B. Matches the codebase pattern in mr_regime.py / counter_trend.py.)
 """
 execution/quarterly_hold_manager.py
 Multi-week long hold manager for quarterly anchor positions.
@@ -92,6 +95,19 @@ _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
 # quarterly max-shares cap (board OVERRODE Gro/GAI "no cap": the -5% trigger
 # is off a FALLING cost avg, so a grind could stack adds to ~34% of equity
 # before the price floor fires); a -15% first-entry stop-adding floor.
+
+# ── TRAILING PROFIT-LOCK (2026-08-03, Rafael + BGG) ──────────────────────────
+# Ratchet an ACTIVE quarterly hold's GTC stop UP to lock a fraction of its unrealized gain — NEVER a
+# new sell, only raising the resting stop (kept below market, above entry), MONOTONIC (only ever
+# rises). Captures green days that the "never-sell + hard-stop-only" tier used to round-trip. Reuses
+# the board-approved dip-add Option-C cancel->resubmit + _restore_or_pending naked-window backstop,
+# minus the buy. DORMANT until _TRAIL_LOCK_ENABLED (ships dark; enable after a live verification cycle).
+_TRAIL_LOCK_ENABLED        = False  # dark kill-flag — the method is inert until this is True
+_TRAIL_LOCK_FRACTION       = 0.5    # lock this fraction of (live - entry): new_stop = entry + 0.5*gain
+_TRAIL_LOCK_MIN_GAIN_PCT   = 0.05   # only start locking once a hold is >= +5% (keeps the lock stop
+                                    # safely below market; avoids churning stops on normal vol)
+_TRAIL_LOCK_MIN_BUFFER_PCT = 0.02   # the raised stop must stay >= 2% below live (never instant-fire)
+
 _DIP_ADD_ENABLED           = True   # LIVE (Rafael 2026-07-13): adds on dips below avg
 _DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
 _DIP_ADD_RUNG_B_PCT        = 0.05   # <= cost_avg*(1-0.05): aggressive add to ceiling
@@ -269,6 +285,7 @@ class HoldPosition:
     dip_adds_quarter: int = 0                  # dip-adds done in dip_add_quarter_tag
     last_dip_add_date: Optional[str] = None    # YYYY-MM-DD of last dip-add (spacing)
     dip_add_quarter_tag: Optional[str] = None  # "YYYY-Qn" the counter resets on
+    last_lock_date: Optional[str] = None       # YYYY-MM-DD of last trailing-lock stop-raise (idempotency)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -744,6 +761,7 @@ class QuarterlyHoldManager:
                 # force-exit self-guards on state != ACTIVE and gets no dip-add). ACTIVE
                 # ACTIVE holds only; DORMANT unless _DIP_ADD_ENABLED; never raises.
                 self._maybe_dip_add(pos, self._now_et().strftime("%Y-%m-%d"))
+                self._maybe_trailing_lock(pos, self._now_et().strftime("%Y-%m-%d"))
 
             except Exception as e:  # RC-3
                 logger.warning(
@@ -1808,6 +1826,142 @@ class QuarterlyHoldManager:
                     _DIP_ADD_MAX_PER_QUARTER)
         except Exception as e:  # RC-3
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
+
+    def _maybe_trailing_lock(self, pos: HoldPosition, today_str: str) -> None:
+        """TRAILING PROFIT-LOCK: ratchet an ACTIVE hold's GTC stop UP to lock a fraction of
+        its unrealized gain. NEVER a new sell — only cancels the resting stop and resubmits a
+        HIGHER one (kept below market, above entry). MONOTONIC (only ever raises). DORMANT
+        unless _TRAIL_LOCK_ENABLED. Reuses the board-approved Option-C cancel->resubmit +
+        _restore_or_pending naked-window backstop from _maybe_dip_add (minus the buy). Never
+        raises into the caller.
+        """
+        if not _TRAIL_LOCK_ENABLED or self.dry_run:
+            return
+        try:
+            if (pos.state != HoldState.ACTIVE or pos.qty_filled <= 0
+                    or pos.avg_entry_price <= 0 or pos.stop_price <= 0
+                    or not pos.stop_order_id or pos.direction != "long"):
+                return
+            # idempotency: lock at most once per PT day per symbol
+            if pos.last_lock_date == today_str:
+                return
+            live_price = self._get_live_price(pos.symbol)
+            if not live_price or live_price <= 0:
+                return
+            gain = live_price - pos.avg_entry_price
+            if gain <= 0 or (gain / pos.avg_entry_price) < _TRAIL_LOCK_MIN_GAIN_PCT:
+                return  # not enough profit to start locking
+            new_stop = round(pos.avg_entry_price + _TRAIL_LOCK_FRACTION * gain, 2)
+            # MONOTONIC RATCHET: only ever RAISE (epsilon guards rounding churn). Also avoids
+            # any conflict with the post-earnings re-anchor.
+            if new_stop <= pos.stop_price + 0.01:
+                return
+            # SAFETY: the raised stop must stay strictly BELOW market with a buffer so it
+            # cannot instant-fire. With MIN_GAIN 5% + FRACTION 0.5 this holds; guard it anyway.
+            if new_stop >= live_price * (1 - _TRAIL_LOCK_MIN_BUFFER_PCT):
+                return
+
+            from execution.broker import (
+                cancel_order as _cancel_order,
+                is_market_open as _is_market_open,
+            )
+            try:
+                if not _is_market_open():
+                    return  # RTH only — don't cancel into a closed market
+            except Exception:
+                return
+
+            _stop_side = "sell" if pos.direction == "long" else "buy"
+            _orig_qty = pos.qty_filled
+            _orig_stop = pos.stop_price
+            _stop_id = pos.stop_order_id
+
+            def _restore_or_pending(_qty: int, _stop_px: float, _reason: str) -> None:
+                # Resting stop for _qty at _stop_px, else PENDING_STOP_REPLACE + alert. Never naked.
+                _r = None
+                try:
+                    if _qty >= 1 and _stop_px > 0:
+                        _r = self._dispatcher.submit_gtc_stop(
+                            self.broker, pos.symbol, _qty, _stop_side, _stop_px)
+                except Exception as _rse:
+                    logger.critical(
+                        "QHM trail-lock: %s stop resubmit threw: %s", pos.symbol, _rse)
+                if _r is not None and hasattr(_r, "id"):
+                    pos.stop_order_id = _r.id
+                    pos.stop_price = _stop_px
+                    pos.state = HoldState.ACTIVE
+                    pos.updated_at = self._now_et().isoformat()
+                    self._save_state()
+                    return
+                try:
+                    self._resync_from_alpaca(pos)
+                except Exception:
+                    pass
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                logger.critical(
+                    "QHM trail-lock: %s %s — PENDING_STOP_REPLACE", pos.symbol, _reason)
+                try:
+                    self._alert(":rotating_light: QHM %s trail-lock %s — stop pending resubmit"
+                                % (pos.symbol, _reason))
+                except Exception:
+                    pass
+
+            # Cancel the resting stop. Cancel failure => abort, OLD stop intact.
+            if not _cancel_order(str(_stop_id)):
+                logger.warning(
+                    "QHM trail-lock: %s stop cancel failed — abort (stop intact)", pos.symbol)
+                return
+            pos.stop_order_id = None
+            # Cancel-fill race: cancel_order maps "already filled" -> ok, so the stop may have
+            # FIRED during the cancel. Re-check Alpaca truth; if reduced/flat, do NOT raise —
+            # protect only what is actually held (mirrors _maybe_dip_add's guard).
+            try:
+                _pn = self.broker.get_position(pos.symbol)
+                _held = int(float(getattr(_pn, "qty", 0) or 0)) if _pn else 0
+            except Exception:
+                _held = _orig_qty  # unknown -> assume unchanged
+            if _held < _orig_qty:
+                logger.warning(
+                    "QHM trail-lock: %s reduced %d->%d during cancel (stop likely fired) "
+                    "— no raise", pos.symbol, _orig_qty, _held)
+                if _held >= 1:
+                    try:
+                        self._resync_from_alpaca(pos)
+                    except Exception:
+                        pass
+                    _restore_or_pending(pos.qty_filled, _orig_stop, "stop-fired-during-cancel")
+                # _held == 0: flat — external-close cleans up.
+                return
+            # Submit the RAISED stop for the held qty.
+            try:
+                _r = self._dispatcher.submit_gtc_stop(
+                    self.broker, pos.symbol, _orig_qty, _stop_side, new_stop)
+            except Exception as _se:
+                logger.warning(
+                    "QHM trail-lock: %s raised-stop submit threw (%s)", pos.symbol, _se)
+                _r = None
+            if _r is not None and hasattr(_r, "id"):
+                pos.stop_order_id = _r.id
+                pos.stop_price = new_stop
+                pos.last_lock_date = today_str
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                logger.warning(
+                    "QHM TRAIL-LOCK: %s stop raised $%.2f -> $%.2f (locks %.0f%% of "
+                    "+$%.2f gain @ $%.2f)", pos.symbol, _orig_stop, new_stop,
+                    _TRAIL_LOCK_FRACTION * 100, gain, live_price)
+                try:
+                    self._alert(":lock: QHM %s stop raised to $%.2f (locking %.0f%% of gain)"
+                                % (pos.symbol, new_stop, _TRAIL_LOCK_FRACTION * 100))
+                except Exception:
+                    pass
+            else:
+                # Raised-stop submit failed after cancel => restore the ORIGINAL stop (not naked).
+                _restore_or_pending(_orig_qty, _orig_stop, "raised-stop-submit-failed")
+        except Exception as e:  # RC-3
+            logger.warning("QHM trail-lock error for %s: %s", pos.symbol, e)
 
     def _submit_tranche(self, pos: HoldPosition, today_str: str) -> bool:
         """Submit DAY limit order for current tranche. RC-7: max(int(), 1) guard."""
