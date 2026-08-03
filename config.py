@@ -559,6 +559,43 @@ GEX_STALE_MINUTES       = 30      # base stale window: 30 min = 2 missed 15-min 
 # restart (no deploy needed). Grep "COUNTER-TREND GATE" for the daily block audit.
 # See execution/counter_trend.py.
 COUNTER_TREND_GATE_ENABLED = True
+
+# ─── MEAN-REVERSION / REGIME LAYER (item 2 — Rafael + BGG 2026-08-02) ─────────
+# A SEPARATE entry path that LONGs a crashed name's CONFIRMED bounce and SHORTs an
+# overextended name's CONFIRMED rollover — the complement to the counter-trend gate
+# (which BLOCKS the bad trend-trade; this GENERATES the good reversal-trade). Detector
+# + score live in execution/mr_regime.py (pure, unwired until diff 3). Front-loaded sim
+# validated: LONG +1.78% fwd10 / 52% win; SHORT +0.85% / 57% (short REQUIRES a
+# mean-reverting regime). All thresholds below are sim-validated FIRST-GUESSES; a
+# data-derivation pass is roadmapped (per the no-static-regimes rule).
+MR_ENABLED            = False   # master kill flag — DIFF-3 wiring is inert until this is True
+MR_LONG_ONLY          = True    # ROLLOUT: long-first (short leg has the fatter squeeze/gap tail);
+                                # flip to False to enable MR shorts (own Kelly key, intraday-only)
+                                # only AFTER >=30 MR-long trades measure the long edge (board)
+MR_SIZE_MULT          = 0.5     # reduced staged sizing: 0.5x the resolved per-trade fraction. Costs
+                                # ZERO measurement fidelity (edge = size-invariant R-multiples)
+MR_MIN_SCORE          = 1       # min mean_reversion_confluence score (0-3) to fire (eligibility
+                                # already requires the confirmed trigger; this is a headroom knob)
+MR_AGG_RISK_CAP_PCT   = 0.035   # MANDATORY correlation sub-cap: total OPEN MR per-trade risk <= 3.5%
+                                # of equity (= half the 7% daily kill). In a broad selloff many
+                                # crashed names bounce together -> correlated MR-long basket; the
+                                # gross cap is correlation-BLIND (4 x 0.5x4.5% = 9% > 7% kill). This
+                                # is the account-ender guard the existing envelope lacks.
+MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND = True  # market-regime gate: don't catch the index knife
+# Detector thresholds — made explicit here for auditability/tuning (mr_regime.py reads them via
+# getattr with these same defaults). RSI(14): oversold/overbought = the confirmed-reversal trigger
+# band; extreme = the +1 score bonus. STRETCH = |price/SMA-1| for the +1 stretch point.
+MR_SMA_PERIOD         = 150
+MR_RSI_OVERSOLD       = 35.0
+MR_RSI_OVERBOUGHT     = 65.0
+MR_RSI_EXTREME_LOW    = 25.0
+MR_RSI_EXTREME_HIGH   = 75.0
+MR_REVERSAL_LOOKBACK  = 3       # bars (excl. today) the oversold/overbought must occur within
+MR_STRETCH_PCT        = 0.10    # >=10% from the 150-SMA = the +1 "stretched" score point
+MR_VR_WINDOW          = 60      # variance-ratio / Hurst trailing window (bars)
+MR_VR_Q               = 5       # Lo-MacKinlay variance-ratio horizon q
+MR_HURST_MAXLAG       = 20
+
 # Full-strength values (Rafael-locked 2026-07-26). NEGATIVE = high-vol / momentum-amplified
 # -> size UP x1.30; POSITIVE = mean-reversion backdrop -> x1.15. NEUTRAL stays 1.00 (the
 # fail-safe value on NEAR-FLIP/STALE/UNKNOWN). All applied UPSTREAM of KELLY_MAX_RISK_PCT.

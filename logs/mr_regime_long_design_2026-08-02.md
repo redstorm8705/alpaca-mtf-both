@@ -60,3 +60,29 @@ Each cross-use fail-safe (UNKNOWN→neutral).
 trade_events.jsonl; detector is pure (no I/O). 3. Integration: new long-entry path, after the structural-short
 scoring, gated. 4. Failure mode: detector fail-safe (regime UNKNOWN / insufficient bars → no MR-long, fall back
 to trend-only). 5. Board vote: YES — new entry direction + scoring → full board + risk seat.
+
+---
+
+## DIFF 3 — ENTRY WIRING: FINALIZED DESIGN (board + Gro + GAI aligned 2026-08-02; Rafael chose Option B)
+
+**Architecture: Option B — separate SIGNAL path, but SIZING flows through the SAME clamp/gross/kill (NOT a duplicated sizing routine — "a parallel sizing path is how the invariants get silently bypassed" — masked-loss seat).**
+
+### Resolved (board consensus)
+1. **Emit ONCE in `signal_generator.run_scan`** on the 200-bar `_daily_df` (per-symbol Phase-3 loop ~684-844). Attach the MR verdict {eligible, direction, score 0-3, conditions, `strategy="mean_reversion"`} to an MR signal dict matching the base signal shape. **NEVER re-detect in entry_logic** (its ~24-bar window can't compute a 150-SMA — a data landmine). entry_logic only CONSUMES.
+2. **Collision = OPTION B (Rafael):** resolve at the signal-LIST level, deterministically (gate-state-independent — NOT coupled to the fail-open runtime counter_trend gate). When MR is eligible on a symbol AND an OPPOSITE tradeable trend signal exists, MR REPLACES the trend signal (one signal per symbol). MR long requires the mean-revert regime (not a coin-flip override). SMCI example: replaces the perma-structural-SHORT with the confirmed-reversal LONG on the bounce.
+3. **Sizing:** reduced FIXED 0.5× of the resolved per-trade fraction (`MR_SIZE_MULT=0.5`), staged. NOT MR-score-scaled as primary (the Kelly warmup `(min(12,score)/12)^2` expects the 12-pt score → MR 0-3 collapses to the 0.75% floor). The 0-3 MR score may ride as a secondary nudge only. Reduced size costs ZERO measurement fidelity (edge = size-invariant R-multiples).
+4. **DEDICATED Kelly key (MANDATORY):** MR trades book to `long_mr_intraday`/`short_mr_intraday` (add an optional `strategy` dim to kelly `_key`/`record_trade`/`get_risk_pct`, backward-compatible). Without it MR is UNMEASURABLE (pools into trend) AND CORRUPTS the trend Kelly with its right-tailed distribution.
+5. **Same NON-NEGOTIABLE envelope as trend:** per-trade Kelly share-clamp, gross-exposure cap, 7% kill, BP pre-flight, min-lot, VOTE-5. MR routes through the SAME `_size` path for these — no bypass.
+6. **BYPASS trend-only gates:** counter_trend_block, SPY-direction gate, ORB gate, the 12-pt conviction MIN gate, the 0-12 linear size map.
+7. **MANDATORY NEW GUARD — aggregate MR correlation sub-cap (the account-ender the envelope lacks):** total OPEN MR-risk ≤ `MR_AGG_RISK_CAP_PCT` (~0.035 = half the 7% daily kill). In a broad selloff `confirmed_reversal` fires across many correlated crashed names; the gross cap is correlation-blind. Math: 4×(0.5×4.5%)=9% > 7% kill. PLUS a **market-regime gate**: suppress MR LONGS when SPY is in a confirmed downtrend / breadth washout.
+8. **Sequential-whipsaw guard:** require mean_reverting on the LONG too (currently a bonus) OR a per-name MR-attempt/day cap — don't perpetually re-catch the same knife.
+9. **Stale-bar / edge-consumed guard:** MR detects on a daily close but fires later; skip if the confirmation bar isn't the current session OR price already traveled a set fraction of ATR toward the mean (edge consumed). Tighten the loose >20% price-sanity for the MR subset.
+10. **Idempotency:** MR runs as its own pass — check OPEN/PENDING orders (not just filled positions) before submit to avoid a double-fill.
+11. **ROLLOUT — LONG-FIRST (decisive):** long-only until ≥30 MR-long trades measure the edge on its own key; THEN short on its own key, INTRADAY-ONLY (short leg has the fatter squeeze/gap tail). `MR_ENABLED` + (for staging) a long-only flag.
+12. **Rule-D decision trace (diff 4):** each MR decision logs its full stack (regime, RSI, confirmation, MR score, size mult, which trend signal it replaced) to trade_events.jsonl.
+
+### Build stages (each a separately-gated diff, inert until MR_ENABLED=True)
+- **3a** config foundation: MR_ENABLED=False, MR_SIZE_MULT=0.5, MR_MIN_SCORE, MR_AGG_RISK_CAP_PCT=0.035, MR_LONG_ONLY=True, explicit MR_* detector thresholds + kelly dedicated-key support (optional `strategy` dim, backward-compat).
+- **3b** signal_generator MR emission + Option-B list-level collision replacement.
+- **3c** entry_logic MR consumption pass: reduced sizing through the SAME clamp/gross/kill, bypass trend gates, aggregate MR sub-cap + SPY-regime gate + stale-bar + idempotency guards.
+- **3d** Rule-D decision logging for MR entries.
