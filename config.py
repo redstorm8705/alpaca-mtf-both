@@ -602,6 +602,11 @@ MR_STRETCH_PCT        = 0.10    # >=10% from the 150-SMA = the +1 "stretched" sc
 MR_VR_WINDOW          = 60      # variance-ratio / Hurst trailing window (bars)
 MR_VR_Q               = 5       # Lo-MacKinlay variance-ratio horizon q
 MR_HURST_MAXLAG       = 20
+MR_SPY_DOWNTREND_SMA  = 50      # SPY < this SMA (days) = intermediate downtrend → suppress MR LONGS when
+                                # MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND (masked-loss seat: the 5-min SPY gate is a
+                                # micro-gate, not a slow-bleed regime brake, and MR bypasses counter_trend, so
+                                # MR longs otherwise catch the index knife). 50d = standard intermediate trend
+                                # filter (non-fitted); FAIL-CLOSED (suppress on downtrend OR unknown SPY state).
 
 # Full-strength values (Rafael-locked 2026-07-26). NEGATIVE = high-vol / momentum-amplified
 # -> size UP x1.30; POSITIVE = mean-reversion backdrop -> x1.15. NEUTRAL stays 1.00 (the

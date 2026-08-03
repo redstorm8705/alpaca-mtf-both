@@ -26,7 +26,7 @@ from strategy.confluence import prepare_df, score_long_signal, score_short_signa
 from indicators.macd import macd_bearish_cross, macd_bullish_cross
 from indicators.moving_averages import ema_bearish_cross, ema_bullish_cross
 from indicators.momentum import get_momentum_summary
-from execution.mr_regime import mean_reversion_confluence
+from execution.mr_regime import mean_reversion_confluence, spy_downtrend_suppress_longs
 import config
 
 # Absolute path anchor — prevents CWD-relative write failures (same pattern as kelly.py TB-2 fix)
@@ -685,6 +685,21 @@ def run_scan(
                           # merged into `deduped` post-dedup via the Option-B resolution (item 2 diff 3c).
     score_comparison = []
 
+    # ── MR SPY-downtrend regime brake (item 2 pre-flip gate 2) — computed ONCE per scan ──────────
+    # Suppress MR LONGS when SPY is in an intermediate downtrend (masked-loss seat: MR longs otherwise
+    # catch the broad-market knife in a selloff — a correlated basket). REUSES SPY's already-fetched
+    # daily_df from full_results (SPY is in the WATCHLIST, fetched in Phase 1's timeout-bounded
+    # executor) — NO new blocking fetch on the run_cycle thread (CI review 2026-08-03: a synchronous
+    # fetch_bars here could stall check_exits). FAIL-CLOSED: no SPY data → suppress. MR shorts +
+    # trend signals unaffected.
+    _spy_suppress_mr_longs = False
+    if getattr(config, "MR_ENABLED", False) and getattr(config, "MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND", True):
+        _spy_fr = next((fr for fr in full_results if fr.get("symbol") == "SPY"), None)
+        _spy_daily = _spy_fr.get("_daily_df") if _spy_fr else None
+        _spy_suppress_mr_longs = spy_downtrend_suppress_longs(_spy_daily)  # fail-closed: None → True
+        if _spy_suppress_mr_longs:
+            logger.info("MR: SPY in intermediate downtrend (or SPY data unavailable this scan) — MR LONGS suppressed (fail-closed).")
+
     for fr in full_results:
         sym      = fr["symbol"]
         long_r   = fr["long"]
@@ -753,6 +768,9 @@ def run_scan(
             _mr_dirs = ["long"] if getattr(config, "MR_LONG_ONLY", True) else ["long", "short"]
             _mr_min  = int(getattr(config, "MR_MIN_SCORE", 1))
             for _mr_dir in _mr_dirs:
+                # SPY-downtrend regime brake: suppress MR LONGS in a broad-market downtrend (gate 2).
+                if _mr_dir == "long" and _spy_suppress_mr_longs:
+                    continue
                 try:
                     _mrc = mean_reversion_confluence(daily_df, _mr_dir)
                     if _mrc.get("eligible") and int(_mrc.get("score", 0) or 0) >= _mr_min:

@@ -175,6 +175,30 @@ def _sma(close, n):
         return None
 
 
+def spy_downtrend_suppress_longs(spy_daily_df):
+    """Return True when MR LONGS should be SUPPRESSED because SPY is in an intermediate downtrend
+    (SPY close < its MR_SPY_DOWNTREND_SMA=50-day SMA). The masked-loss board seat's regime brake: the
+    5-min SPY-direction gate is a micro-gate (single-bar >1%), NOT a slow-bleed brake, and MR bypasses
+    counter_trend — so without this MR longs catch the broad-market knife in a selloff (correlated basket).
+
+    FAIL-CLOSED: returns True (suppress) on insufficient data or ANY error — a missed MR long is cheap,
+    a caught index-knife basket is the account-ender. Returns False (allow) ONLY when SPY is confirmed
+    at/above its SMA. NEVER RAISES."""
+    try:
+        n = int(_p("MR_SPY_DOWNTREND_SMA", 50))
+        if spy_daily_df is None or "close" not in spy_daily_df or len(spy_daily_df) < n + 1:
+            return True  # unknown SPY regime → fail-closed (suppress)
+        close = spy_daily_df["close"].astype(float)
+        sma = _sma(close, n)
+        px = float(close.iloc[-1])
+        if sma is None or sma <= 0:
+            return True  # can't compute → fail-closed
+        return bool(px < sma)
+    except Exception as _e:  # RC-3: logged, never silent; fail-CLOSED
+        logger.warning("mr_regime.spy_downtrend_suppress_longs error (%s) — suppressing MR longs (fail-closed).", _e)
+        return True
+
+
 def mean_reversion_confluence(daily_df, direction):
     """Bidirectional MEAN-REVERSION confluence score (item 2, diff 2). direction: "long"|"short".
 
