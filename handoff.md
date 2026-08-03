@@ -70,14 +70,28 @@ CLAUDE.md §REVIEWER-CONTEXT (pre-load facts before the first verdict — MANDAT
 the gate) + §SHIP-READY-FIRST (a gated staged diff ships before new work — ready > newly-raised). Gate:
 statics + parse test + cold-2nd 5/5 + Gro+GAI APPROVE.
 
-**⏭️⏭️ NEXT EXACT STEP — item 2, diff 2/4: MR confluence score** (a SEPARATE `mean_reversion_confluence`
-score selected by the regime detector, scoring MR-eligible names by exhaustion/reversal features not the
-trend 12-pt). Then diff 3 (new gated long-entry path wiring `mr_regime` + MR_LONG_ENABLED kill flag — RISK-PATH,
-full board + masked-loss seat; must not double-fire with counter_trend), diff 4 (Rule-D decision-stack
-logging). THEN item 3: stage delta/16pt/volume shadow builds (each risk-path per the Rule-B screen). Design:
-`logs/mr_regime_long_design_2026-08-02.md`. FOLLOW-UPS open: stale `[0.5×,1.5×]` TSMOM comment at
-entry_logic.py:1222; committed unit tests for counter_trend/reentry_cooldown/mr_regime/the Kelly clamp; and
-USE `--context` on every future gated audit (now mandatory).
+**✅ SHIPPED (2026-08-02) — item 2 diffs: detector SHORT-side `confirmed_rollover` (PR #66) + bidirectional
+`mean_reversion_confluence` score (PR #67).** Rafael 2026-08-02: the detector must find UPSIDE exhaustion for
+SHORTS too, not just downside reversals for longs. Bidirectional front-loaded sim (20 names ~9mo) VALIDATED
+the short side: confirmed-rollover (overbought→first down-close on a structurally-BULLISH name) pnl10 +0.75%
+win 55%, +0.85%/57% WITH mean-revert regime (the regime filter matters MORE on the short side — guard against
+shorting a rollover in a still-trending-up market). `mean_reversion_confluence(daily_df, direction)`: pure,
+fail-safe, UNWIRED. Eligibility — LONG: below-150-SMA + confirmed_reversal; SHORT: above-150-SMA +
+confirmed_rollover + mean_reverting (STRICTER). Score 0-3 (mean-revert + RSI-extremity + stretch). All gated:
+statics + smoke + cold-2nd (5/5, 6/6) + Gro+GAI APPROVE (all via the new mandatory `--context`, first-pass, zero
+false rejects). Detector `execution/mr_regime.py` now: regime_state + confirmed_reversal + confirmed_rollover +
+mean_reversion_confluence.
+
+**⏭️⏭️ NEXT EXACT STEP — item 2, diff 3/4: WIRE the gated MR long+short ENTRY path (RISK-PATH — FULL BOARD +
+masked-loss seat).** New entry generation in signal_generator/entry_logic: when a name is MR-eligible (per
+`mean_reversion_confluence`), generate a LONG (crashed reversal) or SHORT (overbought rollover) entry, gated by
+`MR_ENABLED` config kill flag. MUST NOT double-fire with counter_trend (which BLOCKS the opposite trend-trade)
+— they're complementary (counter_trend stops the bad trend-short; MR generates the good reversal-trade). Map
+the MR score→conviction→size. RISK-PATH per Rule-E (new entries = frequency+size) → full board + masked-loss
+seat + cold-2nd + Gro/GAI + `--context`. Then diff 4 (Rule-D decision-stack logging for MR entries). THEN item
+3: stage delta/16pt/volume shadow builds. Design: `logs/mr_regime_long_design_2026-08-02.md`. FOLLOW-UPS open:
+add_rsi recompute optimization in mr_confluence; stale `[0.5×,1.5×]` TSMOM comment at entry_logic.py:1222;
+committed unit tests for counter_trend/reentry_cooldown/mr_regime/Kelly-clamp.
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
