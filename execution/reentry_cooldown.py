@@ -10,9 +10,12 @@ stopped $25.35, re-shorted $25.85 → stopped $27.71, re-shorted $27.70 — the 
 sat at 10-12 on nearly every 5-min scan, so the bot kept reloading the same losing short).
 
 BGG-APPROVED design forks (board + Gro + GAI):
-  1. TRIGGER  — stop-based LOSS exits only (the exact reasons trade_logger labels "stop_hit":
-     hard_stop / trail_stop / gtc_stop_triggered / overnight_atr_buffer_exit / breakeven_stop).
-     A target / opposite_signal(#12c) / EOD / external_close exit NEVER triggers a cooldown.
+  1. TRIGGER  — stop-based LOSS exits (the exact reasons trade_logger labels "stop_hit":
+     hard_stop / trail_stop / gtc_stop_triggered / overnight_atr_buffer_exit / breakeven_stop),
+     AND (2026-08-03, Rafael; gated by config.EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED) an
+     external/manual close (reason="external_close" — a manual Alpaca sell or broker close), so
+     the bot does not re-buy a name the operator just manually closed (the AMZN gap). A target /
+     opposite_signal(#12c) / EOD exit still NEVER triggers a cooldown.
   2. SCOPE    — same symbol + SAME direction only. A genuine OPPOSITE-direction reversal is
      still allowed; every other symbol is unaffected.
   3. DURATION — rest of the trading session (resets next PT day). This is the defensible
@@ -57,6 +60,33 @@ def _is_stop_reason(reason) -> bool:
     return any(s in _r for s in _STOP_REASONS)
 
 
+# External / manual closes (exit_logic records reason="external_close" for a position that left
+# the book outside the bot — a manual Alpaca sell, a broker liquidation, a concurrent-process
+# close). Gated by config.EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED (2026-08-03, Rafael): when on,
+# these ALSO arm the cooldown so the bot does not re-enter a name the operator just manually closed.
+_EXTERNAL_CLOSE_REASONS = frozenset({"external_close"})
+
+
+def _external_close_cooldown_enabled() -> bool:
+    """Read the kill flag lazily; default True; never raises (fail toward the guard being ON)."""
+    try:
+        import config
+        return bool(getattr(config, "EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED", True))
+    except Exception:  # pragma: no cover - defensive
+        return True
+
+
+def _triggers_cooldown(reason) -> bool:
+    """True when an exit reason should arm the re-entry cooldown: a stop-based loss ALWAYS, and
+    (when the flag is on) an external/manual close. Substring match, same as _is_stop_reason."""
+    if _is_stop_reason(reason):
+        return True
+    if _external_close_cooldown_enabled():
+        _r = str(reason or "")
+        return any(s in _r for s in _EXTERNAL_CLOSE_REASONS)
+    return False
+
+
 def is_in_cooldown(symbol, direction, closed_trades, now_pt=None):
     """Return (blocked: bool, blocking_trade: dict | None).
 
@@ -77,7 +107,7 @@ def is_in_cooldown(symbol, direction, closed_trades, now_pt=None):
                     continue
                 if _t.get("direction") != direction:
                     continue
-                if not _is_stop_reason(_t.get("exit_reason")):
+                if not _triggers_cooldown(_t.get("exit_reason")):
                     continue
                 # exit_time is a PT ISO timestamp (record_exit writes datetime.now(_PT).isoformat()),
                 # so the leading 10 chars are the PT date — compare directly to today's PT date.
