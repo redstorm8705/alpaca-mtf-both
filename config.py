@@ -21,7 +21,9 @@ WATCHLIST = [
     # Bucket B — original core
     "NVDA", "AAPL", "TSLA", "AMD",  "PLTR",
     "COIN", "SMCI", "TOST", "SOFI", "MSTR",
-    "CRWD", "CRM",  "PANW", "UBER", "AMZN",
+    "CRWD", "CRM",  "PANW", "UBER",  # AMZN TEMPORARILY REMOVED 2026-08-03: bot re-entered it minutes
+    # after Rafael manually took profit (no external-close cooldown yet). Re-add once the
+    # external/manual-close re-entry-cooldown ships. Tracking: manual-close-cooldown fix.
     "META", "NFLX", "SPY",  "QQQ",
     # Bucket B — expansion (2026-06-30): high-vol momentum / vol arb names
     "MSFT", "GOOGL", "NET",  "SNOW", "DDOG",
