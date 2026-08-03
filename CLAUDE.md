@@ -470,6 +470,45 @@ Pair this with the DISAGREEMENT PROTOCOL: a false claim is answered with a **cou
 the specific refuting evidence — never a blind re-roll.** All four false premises in that session
 reversed in ONE round each when shown the evidence.
 
+### REVIEWER-CONTEXT — PRE-LOAD FACTS, DON'T PAY FOR FALSE REJECTS (Rafael mandate 2026-08-02)
+
+**A false-premise REJECT costs a full counter-prompt round (~thousands of tokens); the facts that
+prevent it cost a few hundred up front. Pre-load them. This is now MECHANICALLY supported and
+MANDATORY — not advisory.**
+
+This rule exists because reviewer prompts kept eliciting plausible-but-false REJECTs whenever the
+reviewer had to GUESS the semantics of code outside the diff — e.g. GAI (2026-08-02) assumed
+`MAX_PORTFOLIO_RISK_PCT` was an aggregate ceiling and false-REJECTed a correct config diff; the same
+class recurred across sessions (missing-`requests`, x-access-token, None-token, blocks-trading-thread).
+Per DOCUMENTATION-IS-NOT-ENFORCEMENT, the answer is the mechanism, not another wish: `preship_audit.py`
+now takes **`--context <file|inline-facts>`** which prepends an author-supplied GROUND-TRUTH block to
+the FIRST-pass Gro/GAI prompt.
+
+**THE HARD RULE:** for ANY gated review (Gro/GAI preship, cold-2nd, board) whose correctness depends on
+code the diff does NOT show — what a referenced constant MEANS, the threading model, a cross-file
+helper/caller/guard, the runtime profile — you MUST pre-load those facts + a refutation of the likely
+false premise BEFORE the first verdict. For `preship_audit.py` that means passing `--context`. For a
+manual Gro/GAI/board prompt, that means the same facts inline. A review prompted WITHOUT the needed
+context block is not validly prompted. Also bake in the memory-level standard: **no claim without a
+verbatim quote; a mandatory self-check before the verdict; REJECT only on a concrete failing input
+(input → wrong output/crash), theoretical "could"s go in a non-failing NITS section.**
+
+The `--evidence` flag remains the REACTIVE counter-prompt path (facts AFTER a reject). `--context` is
+the PROACTIVE path (facts BEFORE the first pass) — prefer proactive; it is strictly cheaper.
+
+### SHIP READY ITEMS FIRST — FINISH THE FINISH LINE (Rafael mandate 2026-08-02)
+
+**When a fix has cleared its full gate and is staged-ready, SHIP IT before starting new work or a
+process tangent. Do not leave a gated, passed diff hanging while pivoting to something else.**
+
+This is common-sense prioritization made protocol: a diff that has passed statics + cold-2nd + Gro/GAI
+preship is at the finish line — carrying it across (commit → push → CI → merge → OCI deploy → verify) is
+a handful of cheap steps and banks the value immediately. Interrupting a ready ship to open a new
+build, answer a tangential question, or start a governance change strands completed work, risks the
+marker binding going stale, and muddies the session. Rule: **ready-to-ship > newly-raised.** Finish the
+ship (or the tight batch of ready ships), THEN take the next item. A new priority from Rafael is
+acknowledged immediately, but a diff already at its gate is shipped first unless he says otherwise.
+
 ### DEPLOY MECHANISM — git single channel (Rafael mandate 2026-07-03, board 4/4 + Gro + GAI)
 
 Git is the SOLE deploy channel. The Mac commits + pushes to GitHub; OCI deploys by `git pull origin main --ff-only` + restart (the exact path `auto_deploy.sh` already runs). **Rsync of tracked files is PROHIBITED** — it writes bytes without a commit, dirtying OCI's git tree so the next `git pull --ff-only` aborts (this caused OCI HEAD to drift 5 commits behind GitHub, 6/29–7/3). Rollback reverts the CAPTURED patch SHA (`DEPLOY_SHA` from the commit step), never `HEAD`, because `autonomous_review.py` or a later commit may have advanced HEAD. Deploy success requires a literal `DEPLOY_OK` marker from the OCI ssh command; its absence means the pull failed and the restart was correctly skipped — do not report success.

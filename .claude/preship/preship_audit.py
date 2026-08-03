@@ -2,7 +2,7 @@
 # ruff: noqa: E501  (long audit-rationale comments + the Gemini API URL exceed 88; E501 is
 # cosmetic — F/B/E-real correctness checks still run. Matches scripts/sync_reports.py.)
 """
-preship_audit.py <file> [<file>...]  [--waive-gro]
+preship_audit.py <file> [<file>...]  [--waive-gro] [--context <file|facts>] [--evidence <file>]
 
 Runs the FINAL PRE-SHIP Gro+GAI audit on the STAGED content of each file
 (audit-what-you-commit) and, only if both APPROVE, writes the marker the
@@ -11,6 +11,13 @@ marker => gate stays closed.
 
 --waive-gro : record gro=WAIVED (Rafael-authorized only, e.g. Groq TPD limit).
               GAI must still APPROVE.
+--context   : PROACTIVE ground-truth facts (a file path OR inline string) about code
+              OUTSIDE the diff — what a referenced constant means, threading model, a
+              cross-file helper/guard, the runtime profile — plus refutations of the
+              likely false premises. Prepended on the FIRST pass so the reviewer never
+              forms the cross-file false premise (Rafael mandate 2026-08-02). MANDATORY
+              per CLAUDE.md for any diff whose safety depends on code the diff doesn't show.
+--evidence  : REACTIVE — refuting evidence AFTER a false-premise reject (counter-prompt).
 """
 import sys
 import os
@@ -145,7 +152,7 @@ def _verdict(text):
         return "APPROVE"
     return "INDETERMINATE"
 
-def audit_file(relpath, waive_gro, keys, evidence=""):
+def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     ok_sha, blob, err = _git(["cat-file", "blob", f":{relpath}"], want_bytes=True)
     if not ok_sha:
         return False, f"{relpath}: not staged (git add it first)"
@@ -164,6 +171,19 @@ def audit_file(relpath, waive_gro, keys, evidence=""):
     ok_d, diff, _ = _git(["diff", "--cached", base, "-U30", "--", relpath])
     prompt = PROMPT_HEAD + (diff if diff.strip()
                             else f"(no change vs {base} for {relpath})")
+    # REVIEWER-CONTEXT block (Rafael mandate 2026-08-02): PROACTIVELY pre-load the
+    # diff-specific facts a diff-only view CANNOT show — what a referenced constant
+    # MEANS, the threading model, a cross-file helper/caller/guard, the runtime
+    # profile — plus refutations of the likely false premises. The tool builds its
+    # prompt from the diff alone and so keeps guessing cross-file semantics wrong
+    # (e.g. GAI 2026-08-02 assumed MAX_PORTFOLIO_RISK_PCT was an aggregate ceiling and
+    # false-REJECTed a correct config diff). A few hundred tokens of facts up front is
+    # far cheaper than a counter-prompt round after. Injected as GROUND TRUTH so the
+    # reviewer cannot REJECT on an assumption these facts contradict.
+    if context.strip():
+        prompt += ("\n\n--- REVIEWER CONTEXT (author-supplied FACTS about code OUTSIDE "
+                   "this diff — treat as GROUND TRUTH; do NOT REJECT on an assumption "
+                   "that contradicts a fact stated here) ---\n" + context.strip())
     # DISAGREEMENT PROTOCOL counter-prompt path (Rafael mandate 2026-07-19): a reject
     # on a false premise (e.g. a defect claim about a helper the -U30 diff can't
     # show) is resolved by SHOWING the reviewer the refuting evidence, never by a
@@ -235,10 +255,25 @@ def main():
                 evidence = open(ev_path).read()
             except OSError as _e:
                 print(f"--evidence file unreadable ({_e}) — proceeding without it")
-    args = [a for a in argv if not a.startswith("--") and a != ev_path]
+    # --context: PROACTIVE facts (a file path OR an inline string) pre-loaded into the
+    # first-pass prompt so the reviewer never forms a cross-file false premise.
+    context = ""
+    ctx_val = None
+    if "--context" in argv:
+        _j = argv.index("--context")
+        if _j + 1 < len(argv):
+            ctx_val = argv[_j + 1]
+            if os.path.isfile(ctx_val):
+                try:
+                    context = open(ctx_val).read()
+                except OSError as _e:
+                    print(f"--context file unreadable ({_e}) — proceeding without it")
+            else:
+                context = ctx_val  # treat as an inline facts string
+    args = [a for a in argv if not a.startswith("--") and a != ev_path and a != ctx_val]
     if not args:
         print("usage: preship_audit.py <file> [<file>...] [--waive-gro] "
-              "[--evidence <file>]")
+              "[--evidence <file>] [--context <file|inline-facts>]")
         sys.exit(1)
     keys = _load_env()
     allok = True
@@ -248,7 +283,7 @@ def main():
         # Prefix-strip only.
         while f.startswith("./"):
             f = f[2:]
-        ok, msg = audit_file(f, waive, keys, evidence)
+        ok, msg = audit_file(f, waive, keys, evidence, context)
         print(("PASS " if ok else "FAIL ") + msg)
         allok = allok and ok
     sys.exit(0 if allok else 1)
