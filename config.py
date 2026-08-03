@@ -567,6 +567,14 @@ GEX_STALE_MINUTES       = 30      # base stale window: 30 min = 2 missed 15-min 
 # See execution/counter_trend.py.
 COUNTER_TREND_GATE_ENABLED = True
 
+# ─── EXTERNAL / MANUAL CLOSE RE-ENTRY COOLDOWN (2026-08-03, Rafael) ───────────
+# When a position is closed OUTSIDE the bot (a manual sell in Alpaca, or any external/broker
+# close — recorded by exit_logic as reason="external_close"), arm the SAME session re-entry
+# cooldown a stop-out arms: do NOT re-enter that (symbol, direction) for the rest of the PT day.
+# Closes the gap where the bot re-bought a name minutes after Rafael manually took profit (AMZN
+# 2026-08-03). Same scope/duration/fail-open as the stop-out cooldown. Kill switch = flip to False.
+EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED = True
+
 # ─── MEAN-REVERSION / REGIME LAYER (item 2 — Rafael + BGG 2026-08-02) ─────────
 # A SEPARATE entry path that LONGs a crashed name's CONFIRMED bounce and SHORTs an
 # overextended name's CONFIRMED rollover — the complement to the counter-trend gate
