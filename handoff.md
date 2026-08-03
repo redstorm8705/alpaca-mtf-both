@@ -26,14 +26,28 @@ APPROVE / GAI APPROVE r2 after closing the declared-delta loophole; cold-2nd FAI
 flip-guard enumeration that by elimination put GEX's ×1.30 book-wide size multiplier in the unguarded
 same-day bucket — caught a real self-contradiction). **← DONE THIS SESSION.**
 
-**⏭️⏭️ NEXT EXACT STEP — EXECUTE THE DOCTRINE (Rafael's live directive):** (1) BUILD the Rule-D decision-stack
-logging + assert FIRST (KEYSTONE — makes every subsequent flip reverse-engineerable; it is itself a BUILD
-item). (2) Flip pending shadows live, EACH through the Rule B screen: DELTA_SCORING / VOLUME_CONFIRMATION /
-16pt / GEX / TSMOM — amplifier legs (regime UP-mult, any new score→conviction wire, GEX ×1.15/×1.30) guarded
-OFF/board-routed per Rule E; pure-selectivity legs flip same-day. (3) BUILD the dynamic mean-reversion /
-regime-aware DIRECTION layer LIVE (variance-ratio/Hurst regime detector + separate mean_reversion_confluence
-score + exhaustion features so SMCI-type crashed names can be LONGs) with strict FRONT-LOADED simulation per
-Rule C. Each is a separate gated diff.
+**✅ SHIPPED (2026-08-02) — PER-TRADE KELLY RISK RE-CLAMP (PR #59 → main `8251e46`; OCI DEPLOY_OK + RESTART;
+HEALTH OK).** The doctrine's FIRST catch. Rule-B screening of the 5 shadows (code trace + Gro + GAI) found
+TSMOM (`entry_logic.py:1225`, ×up-to-1.25) + FVG (`:1260`) multiply `dollar_cap` AFTER the Kelly cap (`:1189`,
+clamped to KELLY_MAX_RISK_PCT in kelly.py) with NO re-clamp → a low-vol name at the 4.5% cap breaches to
+~5.6% per-trade risk (the SCHEDULED `[0.75,1.25]→[0.50,1.50]` TSMOM revert would make it 50%). VOTE-5 only
+binds in HIGH vol; aggregate gross/BP/kill caps don't bound per-trade risk. TSMOM's 17-0 vote was cast when
+the mult was a permanent no-op (live-up-sizing only since 2026-07-03 — never ratified). FIX: clamp the FINAL
+share count so `shares × stop_distance ≤ KELLY_MAX_RISK_PCT × equity` (`entry_logic.py` after the VOTE-5 cap).
+Clamp SHARES not dollar_cap (overloaded risk/notional). min() only; preserves down-leg + sub-cap up-sizing;
+universal vs any future up-mult; logs each clamp (Rule D). Gate: full read + statics clean + board 4/4
+(Gro/GAI/correctness/masked-loss — Option A share-clamp, C rejected 4/0) + cold-2nd PASS 5/5 + FINAL preship
+Gro+GAI APPROVE. **← DONE.** FOLLOW-UPS: verify live KELLY_MAX_RISK_PCT (paper 4.5% vs module-level 6% — profile
+resolution: config.py:323 default "live", paper profile overrides to 0.045); stale `[0.5×,1.5×]` comment at
+`entry_logic.py:1222`; committed unit test for the clamp.
+
+**⏭️⏭️ NEXT EXACT STEP — ITEM 2 of Rafael's 1-3 sequence: BUILD the dynamic mean-reversion / regime-aware
+DIRECTION layer LIVE** (the real SMCI fix — so crashed former high-flyers can be LONGs on a bounce, not
+perma-shorts). Per the doctrine's Rule C this starts with FRONT-LOADED SIMULATION + written hypothesis BEFORE
+code: variance-ratio/Hurst regime detector selecting a separate mean_reversion_confluence score + exhaustion
+features + name-relative normalization. Feature Design Protocol "ask-first" gate first. THEN item 3: stage the
+remaining shadow builds (delta/16pt/volume into the score) — each a risk-path board-gated diff per the Rule-B
+screen (all 4 behavior-changing shadows are risk-path; delta-flag is inert until wired).
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;

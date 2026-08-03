@@ -9347,3 +9347,14 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **Gate:** cold-2nd PASS + board APPROVE + Gro+GAI APPROVE (design + FINAL preship) + CI preship green (hardened getattr default to kill a stochastic MOMENTUM_SHORT_LOOKBACK AttributeError false-flag). OCI DEPLOY_OK; COUNTER_TREND_GATE_ENABLED=True verified on box; fail-open smoke test passed.
 **FOLLOW-UPS (logged, out of scope):** structural double-count reweight; committed unit tests for counter_trend.py + reentry_cooldown.py.
 **NEXT (active thread):** two foundational CLAUDE.md doctrine rules (BUILD-not-fix + front-loaded-rigor→ship-live→iterate + decision-explainability) being gated; then flip all pending shadows live + build the dynamic mean-reversion/regime direction layer.
+
+---
+
+## 2026-08-02 (interactive, Rafael present) — PER-TRADE KELLY RISK RE-CLAMP — SHIPPED (PR #59)
+**File:** `execution/entry_logic.py` (+21 lines; clamp inserted after the VOTE-5 vol-target cap, before the `if shares < 1` skip).
+**Root (doctrine's first catch, via Rule-B shadow screening):** TSMOM (`:1225`, ×up-to-1.25) + FVG (`:1260`) multiply `dollar_cap` AFTER the Kelly cap (`:1189`, kelly_risk_pct clamped to KELLY_MAX_RISK_PCT in kelly.py) with NO re-clamp. Low-vol name at 4.5% cap → ~5.6% per-trade risk (25% breach); scheduled `[0.75,1.25]→[0.50,1.50]` TSMOM revert would make it 50%. VOTE-5 binds only in HIGH vol (loose where TSMOM up-sizes); aggregate gross/BP/kill caps don't bound per-trade risk. TSMOM's 17-0 vote was on a permanent no-op — live up-sizing only since 2026-07-03, never ratified.
+**Fix:** `if risk.portfolio_value>0 and stop_distance>0: _max_sh_kelly = int(KELLY_MAX_RISK_PCT * portfolio_value / stop_distance); if _max_sh_kelly < shares: shares = _max_sh_kelly`. Clamps SHARES (not overloaded dollar_cap), min() only, preserves down-leg + sub-cap up-sizing, universal vs any future up-mult, logs each clamp (Rule D). Reads same KELLY_MAX_RISK_PCT as kelly.py (consistent).
+**Full read:** entry_logic.py (this session, sizing block L1155-1433 read at source). RC-1..8 clean. Statics: py_compile/ruff(E,W,F,B)/mypy(--warn-unreachable) all clean.
+**Gate:** board 4/4 (Gro=A, GAI=A, correctness-seat=A corrected share-clamp form, masked-loss-seat=A; Option C rejected 4/0) + cold-2nd PASS 5/5 (verified pure min(), div-zero guarded, no downstream re-raise of shares to order submit) + FINAL preship Gro+GAI APPROVE (sha d7231363ba5f). OCI DEPLOY_OK + restart; HEALTH OK.
+**FOLLOW-UPS:** verify live KELLY_MAX_RISK_PCT (paper 4.5% vs module 6%); stale `[0.5×,1.5×]` comment at `:1222`; committed unit test.
+**NEXT (item 2/3):** BUILD dynamic mean-reversion/regime direction layer (front-loaded sim first, Rule C) → then stage delta/16pt/volume shadow builds (each risk-path per Rule-B screen).
