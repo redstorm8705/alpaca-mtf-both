@@ -57,14 +57,27 @@ false aggregate-ceiling premise via counter-prompt). **← DONE.**
 POSITIVE (+0.71% fwd5, +1.78% fwd10, ~53% win). **The entry MUST be confirmation-based.** Full validated spec +
 build plan in `logs/mr_regime_long_design_2026-08-02.md`.
 
-**⏭️⏭️ NEXT EXACT STEP — BUILD item 2, diff 1 of 4: the DETECTOR module `execution/mr_regime.py`** (pure,
-never-raises, fail-safe, independently testable — the counter_trend.py pattern): `regime_state(daily_df)` +
-`confirmed_reversal(daily_df)`. No entry wiring yet (that's diff 3, RISK-PATH, full board). Then diff 2 (MR
-confluence score), diff 3 (new gated long-entry path, MR_LONG_ENABLED kill flag), diff 4 (Rule-D decision
-logging). THEN item 3: stage delta/16pt/volume shadow builds (each risk-path per the Rule-B screen — all 4
-behavior-changing shadows touch score→size; delta-flag is inert until wired). FOLLOW-UPS still open: stale
-`[0.5×,1.5×]` TSMOM comment at entry_logic.py:1222; committed unit tests for counter_trend/reentry_cooldown/
-the Kelly clamp.
+**✅ SHIPPED (2026-08-02) — item 2 diff 1/4: DETECTOR module `execution/mr_regime.py` (PR #63; OCI synced,
+imports clean on live venv, no restart — unwired).** Pure/fail-safe: `regime_state` (VR<1/Hurst<0.5 →
+mean_reverting) + `confirmed_reversal` (RSI-oversold-within-3 + first up-close — the sim-validated trigger).
+Gate: statics + smoke test + cold-2nd 4/4 + Gro+GAI APPROVE.
+
+**✅ SHIPPED (2026-08-02) — REVIEWER-CONTEXT mechanism + 2 hard rules (PR #64; OCI synced).** `preship_audit.py`
+gains `--context <file|inline>` = PROACTIVE ground-truth facts prepended to the first-pass Gro/GAI prompt so
+reviewers can't form a cross-file false premise (root: GAI false-REJECTed a correct config diff assuming
+MAX_PORTFOLIO_RISK_PCT was aggregate). Additive/backward-compat; dogfooded (both files APPROVED first-pass).
+CLAUDE.md §REVIEWER-CONTEXT (pre-load facts before the first verdict — MANDATORY; the --context mechanism IS
+the gate) + §SHIP-READY-FIRST (a gated staged diff ships before new work — ready > newly-raised). Gate:
+statics + parse test + cold-2nd 5/5 + Gro+GAI APPROVE.
+
+**⏭️⏭️ NEXT EXACT STEP — item 2, diff 2/4: MR confluence score** (a SEPARATE `mean_reversion_confluence`
+score selected by the regime detector, scoring MR-eligible names by exhaustion/reversal features not the
+trend 12-pt). Then diff 3 (new gated long-entry path wiring `mr_regime` + MR_LONG_ENABLED kill flag — RISK-PATH,
+full board + masked-loss seat; must not double-fire with counter_trend), diff 4 (Rule-D decision-stack
+logging). THEN item 3: stage delta/16pt/volume shadow builds (each risk-path per the Rule-B screen). Design:
+`logs/mr_regime_long_design_2026-08-02.md`. FOLLOW-UPS open: stale `[0.5×,1.5×]` TSMOM comment at
+entry_logic.py:1222; committed unit tests for counter_trend/reentry_cooldown/mr_regime/the Kelly clamp; and
+USE `--context` on every future gated audit (now mandatory).
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
