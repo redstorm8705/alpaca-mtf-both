@@ -163,3 +163,82 @@ def confirmed_rollover(daily_df):
     except Exception as _e:  # RC-3: logged, never silent; fail-safe
         logger.warning("mr_regime.confirmed_rollover error (%s) — returning False (no signal).", _e)
         return False
+
+
+def _sma(close, n):
+    """Trailing simple moving average of the last n closes; None if too few bars. Never raises."""
+    try:
+        if close is None or len(close) < n:
+            return None
+        return float(close.iloc[-n:].mean())
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def mean_reversion_confluence(daily_df, direction):
+    """Bidirectional MEAN-REVERSION confluence score (item 2, diff 2). direction: "long"|"short".
+
+    SEPARATE from the trend-following 12-pt confluence: it scores a STRETCHED-and-REVERSING name on
+    exhaustion/reversal features, so a crashed name setting up to bounce (long) or an overextended
+    rally rolling over (short) is scored on its OWN merits instead of being perma-scored by the
+    trend structure. Returns {"eligible": bool, "direction": str, "score": int, "max_score": int,
+    "conditions": {...}}. FAIL-SAFE: eligible=False / score=0 on any error or ineligible state.
+    NEVER RAISES. PURE (reads bars only; no I/O, no order calls).
+
+    ELIGIBILITY GATE (all required, else eligible=False, score=0):
+      - LONG : price BELOW the 150d SMA (structurally bearish) AND confirmed_reversal.
+      - SHORT: price ABOVE the 150d SMA (structurally bullish) AND confirmed_rollover AND
+               mean_reverting regime — STRICTER than long, because the front-loaded sim showed the
+               regime filter is the key guard against shorting a rollover in a still-trending market.
+    SCORE (each +1; the confirmed trigger is the eligibility gate, so it is implicit):
+      +1 mean_reverting regime  (long: a bonus; short: always present since it is required)
+      +1 RSI extremity          (deeply oversold < MR_RSI_EXTREME_LOW / overbought > MR_RSI_EXTREME_HIGH)
+      +1 stretched from the SMA (|price/SMA - 1| >= MR_STRETCH_PCT)
+    max_score = 3. Thresholds are sim-informed first-guesses via config (data-derivation roadmapped).
+    """
+    _null = {"eligible": False, "direction": direction, "score": 0, "max_score": 3, "conditions": {}}
+    try:
+        if direction not in ("long", "short"):
+            return _null
+        sma_n = int(_p("MR_SMA_PERIOD", 150))
+        if daily_df is None or "close" not in daily_df or len(daily_df) < sma_n + 2:
+            return _null
+        df = add_rsi(daily_df.copy())
+        if "rsi" not in df:
+            return _null
+        close = df["close"].astype(float)
+        px = float(close.iloc[-1])
+        sma = _sma(close, sma_n)
+        if sma is None or sma <= 0:
+            return _null
+        mean_reverting = bool(regime_state(daily_df).get("mean_reverting"))
+        _rsi_val = df["rsi"].iloc[-1]
+        rsi_now = float(_rsi_val) if _rsi_val == _rsi_val else None  # NaN-safe
+        stretch = abs(px / sma - 1.0)
+
+        if direction == "long":
+            structural = px < sma
+            trigger = confirmed_reversal(daily_df)
+            eligible = bool(structural and trigger)
+            rsi_extreme = bool(rsi_now is not None and rsi_now < float(_p("MR_RSI_EXTREME_LOW", 25.0)))
+        else:  # short
+            structural = px > sma
+            trigger = confirmed_rollover(daily_df)
+            eligible = bool(structural and trigger and mean_reverting)
+            rsi_extreme = bool(rsi_now is not None and rsi_now > float(_p("MR_RSI_EXTREME_HIGH", 75.0)))
+
+        if not eligible:
+            return {**_null, "conditions": {"structural": bool(structural), "trigger": bool(trigger),
+                                            "mean_reverting": mean_reverting}}
+
+        stretched = bool(stretch >= float(_p("MR_STRETCH_PCT", 0.10)))
+        score = int(mean_reverting) + int(rsi_extreme) + int(stretched)
+        conds = {"structural": True, "trigger": True, "mean_reverting": mean_reverting,
+                 "rsi_extreme": rsi_extreme, "stretched": stretched,
+                 "rsi": round(rsi_now, 1) if rsi_now is not None else None,
+                 "stretch_pct": round(stretch * 100.0, 1)}
+        return {"eligible": True, "direction": direction, "score": int(score), "max_score": 3,
+                "conditions": conds}
+    except Exception as _e:  # RC-3: logged, never silent; fail-safe
+        logger.warning("mr_regime.mean_reversion_confluence(%s) error (%s) — ineligible.", direction, _e)
+        return _null
