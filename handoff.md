@@ -102,18 +102,33 @@ no trend-Kelly corruption); backward-compat + inert. 3c (PR #72): signal_generat
 gap→MR fills; same-dir→keep trend; ONE signal/symbol, gate-independent). INERT (MR_ENABLED=False). Both:
 full-read + statics + cold-2nd (5/5, 6/6) + Gro+GAI APPROVE (--context). Import clean on venv.
 
-**⏭️⏭️ NEXT EXACT STEP — item 2, diff 3d/4: entry_logic MR CONSUMPTION pass (RISK-PATH, the heart).** Full read
-entry_logic.py (1825L via Explore). Add: branch on `sig.get("strategy")=="mean_reversion"` FIRST → route to a
-MR path that (a) BYPASSES the trend gates (counter_trend, SPY-dir, ORB, 12-pt conviction MIN, linear size map),
-(b) RESPECTS the same clamp/gross/kill/BP/min-lot/VOTE-5 (route through the SAME `_size` enforcement — NOT a
-duplicated sizing routine), (c) sizes at MR_SIZE_MULT(0.5)× of the Kelly-cap fraction on the dedicated MR key
-(pass strategy="mean_reversion" + a 0-12-scale score to get_risk_pct, NOT the 0-3 MR score), (d) NEW guards:
-aggregate MR correlation sub-cap `MR_AGG_RISK_CAP_PCT`(3.5%), SPY-downtrend suppression of MR longs, stale-bar/
-edge-consumed skip, open/pending-order idempotency, and TAG the trade with strategy="mean_reversion" so exits/
-record_trade/rebuild book to the MR key. Then diff 3e (Rule-D decision logging), THEN flip MR_ENABLED=True to
-go live (long-first). THEN item 3: delta/16pt/volume shadow builds. FOLLOW-UPS: remove dead `_base` +
-'from N raw' log count in signal_generator; add_rsi recompute optimization; stale `[0.5×,1.5×]` TSMOM comment
-at entry_logic.py:1222; committed unit tests.
+**✅ SHIPPED (2026-08-03) — item 2 diff 3d: entry_logic MR CONSUMPTION (PR #75; INERT, MR_ENABLED=False).**
+The FULL MR layer is now built end-to-end (detector→bidirectional score→config→Kelly key→signal emission→entry
+consumption), all inert. MR branch in execute_entries: bypasses ONLY trend gates (ORB, 12-pt conviction/
+confirm, counter_trend, linear size map), routes MR through the SAME shared safety tail (min-lot/shares/VOTE-5/
+per-trade Kelly SHARE clamp/BP/gross — NO duplicated sizing routine). MR sizing = base×MR-Kelly(key
+'mean_reversion', score=12)×MR_SIZE_MULT(0.5). NEW guards: pending-order idempotency (get_open_orders,
+FAIL-CLOSED) + aggregate MR sub-cap (Σ qty×|entry-ORIGINAL_stop| ≤ MR_AGG_RISK_CAP_PCT×equity, FAIL-CLOSED).
+Strategy tag on the trade dict after record_entry (Kelly-key booking). MR RESPECTS SPY-dir/kill/position-limit/
+get_open_position/re-entry/price/ATR/stale/BP/gross. Gate: full read 1825L + statics + cold-2nd (7/7 then 5/5)
++ Gro+GAI APPROVE + masked-loss seat APPROVE-w/-changes (3 folded) + execution seat.
+
+**⏭️⏭️ NEXT — TWO HARD PRE-LIVE-FLIP GATES (masked-loss seat; MUST land before MR_ENABLED=True), then 3e, then
+flip:**
+  1. **Profile-aware `MR_AGG_RISK_CAP_PCT`** (config.py): 3.5% is coherent for PAPER (<7% kill, <4.5% clamp) but
+     INCOHERENT for the LIVE profile (3.5% > 3% live daily kill, 1.75× the 2% clamp). Set ~1.5% live / 3.5%
+     paper (keep it < the profile's daily kill and ≤ ~1× per-trade clamp). Small config diff.
+  2. **Wire `MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND`** (currently DEAD config, enforced nowhere): the SPY-direction
+     gate is a 5-min MICRO-gate, NOT a slow-bleed regime brake, and MR bypasses counter_trend — so MR longs
+     currently have NO regime-level knife protection. Add a SPY slow-bleed-downtrend read (e.g. SPY daily close
+     < SPY 150-SMA, or reuse mr_regime on SPY) and suppress MR longs when true. RISK-PATH diff (board).
+  3. **diff 3e — Rule-D decision-stack logging** for MR entries (regime/RSI/confirmation/MR-score/size-mult/
+     which trend signal replaced → trade_events.jsonl) — the doctrine keystone.
+  4. **FLIP MR_ENABLED=True** (long-first; MR_LONG_ONLY stays True). Then measure ≥30 MR-long trades on the
+     dedicated key before enabling shorts. THEN item 3: delta/16pt/volume shadow builds.
+FOLLOW-UPS (non-blocking): dead `_base` + 'from N raw' log in signal_generator; MR edge-consumed guard
+refinement; exit-path record_trade strategy (nightly rebuild self-corrects); add_rsi recompute optimization;
+stale `[0.5×,1.5×]` TSMOM comment at entry_logic.py:1222; committed unit tests.
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
