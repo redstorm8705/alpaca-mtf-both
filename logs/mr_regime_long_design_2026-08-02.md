@@ -86,3 +86,47 @@ to trend-only). 5. Board vote: YES — new entry direction + scoring → full bo
 - **3b** signal_generator MR emission + Option-B list-level collision replacement.
 - **3c** entry_logic MR consumption pass: reduced sizing through the SAME clamp/gross/kill, bypass trend gates, aggregate MR sub-cap + SPY-regime gate + stale-bar + idempotency guards.
 - **3d** Rule-D decision logging for MR entries.
+
+---
+
+## DIFF 3d — ENTRY CONSUMPTION: IMPLEMENTATION SPEC (full read entry_logic.py 1825L done, 2026-08-03)
+
+**Approach: INLINE GUARDS (not a duplicated helper) — the purest realization of the masked-loss seat's
+"route MR through the SAME sizing path, don't duplicate."** MR skips the trend-only gates and flows through
+the identical shared tail (min-lot → shares → VOTE-5 → per-trade Kelly clamp → BP → gross).
+
+**BLOCKER FOUND:** `PortfolioTracker.record_entry()` does NOT persist a `strategy` field onto the trade dict
+(extras go only to the JSONL event, not `open_trades[symbol]`). Kelly rebuild (kelly.py:435 `t.get("strategy")`)
+would mis-book MR → trend key. FIX: after record_entry, set `tracker.open_trades[symbol]["strategy"]=
+"mean_reversion"` + save (mirror the overnight-tag pattern ~1491) — contained to entry_logic, no tracker patch.
+
+**BYPASS for MR (add `if sig.get("strategy") != "mean_reversion":` guard):**
+- ORB gate (entry_logic.py:548)
+- BoD-1 confirm-buffer increment (604-611) + conviction gate (627-632) + BoD-1 confirm gate (634-642)
+- counter_trend gate (943-959)
+- the 0-12 linear size map (1161-1182) → MR takes its own sizing branch
+
+**RESPECT for MR (keep — safety/market gates, NOT trend-structure):** QHM (461), catalyst (472), Rule1/2 pm-red
+longs (483/499 — market-wide risk, correlated-basket guard), SPY-direction gate (529 — the "suppress MR longs
+in SPY-down" guard comes FREE here; keep for MR both dirs), BoD-2 3x-ETF (587), leveraged-short-skip (613),
+shorting-preflight (619), position-limit+kill (654), get_open_position (762), re-entry-cooldown (777),
+price-sanity/stale-bar/ATR (819/852/909), min-lot (1286), VOTE-5 (1333), Kelly-share-clamp (1360), BP (1406),
+gross (1409), register_open (1519).
+
+**MR SIZING branch (at 1161):** `dollar_cap = risk.portfolio_value * INTRA_ALLOCATION_PCT`;
+`kelly_risk_pct = kelly.get_risk_pct(direction, trade_mode, pv, score=12, strategy="mean_reversion")`;
+`dollar_cap *= kelly_risk_pct / max(MAX_PORTFOLIO_RISK_PCT,0.001)`; `dollar_cap *= config.MR_SIZE_MULT (0.5)`.
+Then the SAME tail (TSMOM/FVG/min-lot/shares/VOTE-5/Kelly-clamp/BP/gross) applies unchanged → the Kelly SHARE
+clamp bounds MR per-trade risk at KELLY_MAX_RISK_PCT.
+
+**NEW MR guards:**
+- AGGREGATE MR correlation sub-cap: before submit, sum open-MR risk (Σ over open_trades where
+  strategy=="mean_reversion" of qty×|entry-stop|) + this trade's risk; block if > MR_AGG_RISK_CAP_PCT(3.5%)×equity.
+- IDEMPOTENCY: import + check `get_open_orders(symbol)` for MR (pending-order dedup; the trend path lacks it).
+
+**DEFER to v1 follow-ups (not blockers; nightly rebuild + existing guards cover):** edge-consumed refinement
+(price moved toward mean since signal bar — needs signal-bar price carried); exit-path record_trade strategy
+(the nightly rebuild_from_trades re-books MR correctly from the tagged trade dict, so intraday live stats
+self-correct each night).
+
+**THEN:** diff 3e (Rule-D decision-stack logging for MR entries) → flip MR_ENABLED=True (long-first go-live).
