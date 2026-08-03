@@ -41,13 +41,30 @@ Gro+GAI APPROVE. **← DONE.** FOLLOW-UPS: verify live KELLY_MAX_RISK_PCT (paper
 resolution: config.py:323 default "live", paper profile overrides to 0.045); stale `[0.5×,1.5×]` comment at
 `entry_logic.py:1222`; committed unit test for the clamp.
 
-**⏭️⏭️ NEXT EXACT STEP — ITEM 2 of Rafael's 1-3 sequence: BUILD the dynamic mean-reversion / regime-aware
-DIRECTION layer LIVE** (the real SMCI fix — so crashed former high-flyers can be LONGs on a bounce, not
-perma-shorts). Per the doctrine's Rule C this starts with FRONT-LOADED SIMULATION + written hypothesis BEFORE
-code: variance-ratio/Hurst regime detector selecting a separate mean_reversion_confluence score + exhaustion
-features + name-relative normalization. Feature Design Protocol "ask-first" gate first. THEN item 3: stage the
-remaining shadow builds (delta/16pt/volume into the score) — each a risk-path board-gated diff per the Rule-B
-screen (all 4 behavior-changing shadows are risk-path; delta-flag is inert until wired).
+**✅ SHIPPED (2026-08-02) — KELLY_MAX_RISK_PCT LIVE-PROFILE INVERSION FIX (PR #61 → main; OCI synced, NO restart
+— inert for the running paper bot).** Surfaced by Rafael's question "is 4.5% still the recommendation?" → board
+audit (Thorp/Taleb/Gro/GAI) re-affirmed 4.5% paper cap 3-1 (the 7% daily kill binds first above ~3.5%, so
+raising buys ~0 growth), AND found a real INVERSION: module default was 0.06 (6%) > paper's explicit 0.045, and
+the LIVE profile inherited the 6% (conservative real-money profile LESS conservative than aggressive paper, and
+6% > live's own 3% daily kill). FIX: module default 0.06→0.045; explicit live KELLY_MAX_RISK_PCT=0.02 (≤ paper,
+< live 3% daily kill, == live 2% baseline). Invariant live ≤ paper restored. ZERO live impact (bot runs
+--profile paper, cap unchanged 0.045). Gate: statics + board + cold-2nd 4/4 + Gro+GAI preship (GAI reversed a
+false aggregate-ceiling premise via counter-prompt). **← DONE.**
+
+**✅ FRONT-LOADED SIM COMPLETE (2026-08-02) — item 2 mean-reversion LONG edge VALIDATED (Rule C).**
+`logs/mr_regime_frontload_sim.py` (10 crashed names, ~9mo, Alpaca T1). KEY: catching the falling knife
+(oversold in-state) has NEGATIVE fwd5 (−0.39%); waiting for CONFIRMATION (first up-close after RSI<35) FLIPS it
+POSITIVE (+0.71% fwd5, +1.78% fwd10, ~53% win). **The entry MUST be confirmation-based.** Full validated spec +
+build plan in `logs/mr_regime_long_design_2026-08-02.md`.
+
+**⏭️⏭️ NEXT EXACT STEP — BUILD item 2, diff 1 of 4: the DETECTOR module `execution/mr_regime.py`** (pure,
+never-raises, fail-safe, independently testable — the counter_trend.py pattern): `regime_state(daily_df)` +
+`confirmed_reversal(daily_df)`. No entry wiring yet (that's diff 3, RISK-PATH, full board). Then diff 2 (MR
+confluence score), diff 3 (new gated long-entry path, MR_LONG_ENABLED kill flag), diff 4 (Rule-D decision
+logging). THEN item 3: stage delta/16pt/volume shadow builds (each risk-path per the Rule-B screen — all 4
+behavior-changing shadows touch score→size; delta-flag is inert until wired). FOLLOW-UPS still open: stale
+`[0.5×,1.5×]` TSMOM comment at entry_logic.py:1222; committed unit tests for counter_trend/reentry_cooldown/
+the Kelly clamp.
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
