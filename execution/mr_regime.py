@@ -134,3 +134,32 @@ def confirmed_reversal(daily_df):
     except Exception as _e:  # RC-3: logged, never silent; fail-safe
         logger.warning("mr_regime.confirmed_reversal error (%s) — returning False (no signal).", _e)
         return False
+
+
+def confirmed_rollover(daily_df):
+    """SHORT-side mirror of confirmed_reversal. Return True iff the top is CONFIRMED: RSI(14) was
+    OVERBOUGHT (> MR_RSI_OVERBOUGHT, default 65) within the last MR_REVERSAL_LOOKBACK bars (default 3,
+    EXCLUDING today) AND today closed DOWN vs the prior bar (first down-close after overbought). The
+    front-loaded sim (logs/mr_regime_long_design_2026-08-02.md) showed this confirmed short-side
+    trigger on a structurally-BULLISH (overextended) name has a positive short edge (pnl10 +0.75%,
+    win 55%; +0.85%/57% when a MEAN-REVERTING regime is also required — the regime filter matters MORE
+    on the short side, as the guard against shorting a rollover in a still-trending-up market). CALLERS
+    MUST additionally require regime_state()['mean_reverting'] for the short (stricter than the long).
+    FAIL-SAFE: returns False on insufficient data or any error. NEVER RAISES."""
+    try:
+        overbought_th = float(_p("MR_RSI_OVERBOUGHT", 65.0))
+        lookback = int(_p("MR_REVERSAL_LOOKBACK", 3))
+        if daily_df is None or "close" not in daily_df or len(daily_df) < max(lookback + 2, 20):
+            return False
+        df = add_rsi(daily_df.copy())
+        if "rsi" not in df:
+            return False
+        rsi = df["rsi"]
+        close = df["close"].astype(float)
+        down_close = float(close.iloc[-1]) < float(close.iloc[-2])
+        recent = rsi.iloc[-(lookback + 1):-1]
+        recent_overbought = bool((recent > overbought_th).any())
+        return bool(down_close and recent_overbought)
+    except Exception as _e:  # RC-3: logged, never silent; fail-safe
+        logger.warning("mr_regime.confirmed_rollover error (%s) — returning False (no signal).", _e)
+        return False
