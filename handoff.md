@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-01 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
+**Updated:** 2026-08-03 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
 DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,9 +7,42 @@ DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at se
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-02 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-08-03 interactive, Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ SHIPPED (2026-08-03) — QHM TRAILING PROFIT-LOCK (PR #81 → main `467e18b`; OCI DEPLOY_OK + restart; 4/4
+services active; ships DARK).** Quarterly "never-sell" holds (NVDA/GOOGL/GEV/GE) had only a fixed hard-stop far
+below entry → green days round-tripped. New `_maybe_trailing_lock` in `execution/quarterly_hold_manager.py`
+ratchets an ACTIVE long hold's GTC stop UP to lock 50% of unrealized gain once ≥+5% (cancel resting stop +
+resubmit HIGHER; MONOTONIC — only ever raises; kept ≥2% below live so it can't instant-fire). Reuses the live,
+board-approved `_maybe_dip_add` Option-C cancel→resubmit + `_restore_or_pending` naked-window backstop, minus
+the buy. Idempotent once/PT-day (`last_lock_date`). **INERT: `_TRAIL_LOCK_ENABLED=False`** — zero behavior
+change until flipped. Gate: Gro+GAI preship APPROVE (sha 06a366cc), cold-2nd PASS, masked-loss seat APPROVE.
+**⏳ PRE-FLIP CHECKLIST before setting the flag True:** (1) confirm `pos.stop_price` stays authoritative vs the
+true Alpaca resting stop (shared assumption w/ live dip-add; note the GOOGL stop_order_id desync lesson —
+re-verify actual resting stop from Alpaca at enable); (2) oversized-stop-on-resync-failure degrades safe.
+
+**✅ SHIPPED (2026-08-03) — EXTERNAL/MANUAL-CLOSE RE-ENTRY COOLDOWN (PR #80 → main; OCI live) + AMZN removed
+from WATCHLIST (PR #79).** THE AMZN GAP: Rafael manually sold AMZN to take profit (18:43 ET), bot re-entered it
+~7 min later (18:50), he re-closed (18:51). Root: the re-entry cooldown only fired on stop-based losses, not on
+a manual/external close, so the bot re-bought a name the operator just closed. FIX: extended
+`execution/reentry_cooldown.py` — `_triggers_cooldown()` now ALSO arms on `reason="external_close"`, gated by
+`config.EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED=True` (default True, lazy-read, fail-toward-guard-ON). Same
+scope (same symbol+direction, rest of PT session), same FAIL-OPEN. AMZN also pulled from WATCHLIST as
+belt-and-suspenders + the restart cleaned the phantom AMZN from the tracker. **FOLLOW-UP: re-add AMZN to
+WATCHLIST once the cooldown is confirmed firing live.**
+
+**⏩ EXACT NEXT STEP:** durable-sync sweep is finishing (this block + tb_audit_log + Master Brain). THEN the
+outstanding operator ask: **review each Gemini audit report for the past week (M–F)** — pull via
+`ssh … scripts/session_audit_digest.py` + the raw `logs/gemini_audit_YYYY-MM-DD.txt` / `midday_audit_*.json`
+on OCI, summarize findings + open directives by severity. AFTER that, MR go-live remains queued: diff 3e
+(Rule-D decision-stack logging for MR entries) → flip `MR_ENABLED=True` LONG-first → ≥30 MR-long trades before
+enabling shorts. (History for prior 2026-08-02 ships below.)
+
+---
+
+### (2026-08-02 interactive — history) 
 
 **✅ SHIPPED (2026-08-02) — TWO FOUNDATIONAL CLAUDE.md DOCTRINE RULES (PR #57 → main `895000a`; OCI pull done,
 doc-only no restart).** New §BUILD, DON'T JUST FIX — SHIP-LIVE VELOCITY + DECISION-EXPLAINABILITY DOCTRINE
