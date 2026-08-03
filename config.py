@@ -295,6 +295,11 @@ PROFILES = {
         "MIN_LONG_SCORE":          4,
         "MIN_SHORT_SCORE":         4,
         "KELLY_FRACTION":          0.25,   # quarter-Kelly — conservative
+        "KELLY_MAX_RISK_PCT":      0.02,   # 2% per-trade cap — closes the 6%-inversion (2026-08-02, BGG):
+                                           # live MUST be <= paper (0.045) and < its own 3% daily kill so one
+                                           # trade can't blow the day. Coherent with live's 2% baseline +
+                                           # quarter-Kelly. Live posture is re-ratified by the board at the
+                                           # $25K real-capital launch; this only removes the inverted 6% ghost.
         "PARTIAL_EXIT_ENABLED":    True,
         "PARTIAL_EXIT_RATIO":      0.5,    # close 50% at first target
         "PARTIAL_EXIT_ATR_MULT":   1.0,    # take first half at 1x ATR
@@ -436,7 +441,11 @@ REGIME_HIGH_VOL_STOP_MULT    = 1.5    # multiply stop distance by this in panic
 
 KELLY_FRACTION               = 0.25   # default: quarter-Kelly (overridden by profile at runtime)
 KELLY_MIN_SAMPLE_SIZE        = 30     # per-type warmup threshold (board vote Apr 2026: LdP + Simons)
-KELLY_MAX_RISK_PCT           = 0.06   # hard cap: Kelly can never risk > 6% (paper); board vote S23 2026-05-16
+KELLY_MAX_RISK_PCT           = 0.045  # conservative fallback default (2026-08-02, BGG): was 0.06 (S23) — an
+                                      # inversion, since the paper profile (S52) tightened to 0.045 while the
+                                      # live profile inherited this higher 6% default. Both profiles now set
+                                      # KELLY_MAX_RISK_PCT explicitly (paper 0.045, live 0.02); this default is
+                                      # the fail-safe floor for any un-profiled run — never above paper again.
 KELLY_MIN_RISK_PCT           = 0.0075 # floor: always risk at least 0.75% (board vote Apr 2026: Thorp)
 
 # ─── A2: ATH DRAWDOWN ADAPTATION ─────────────────────────────────────────────
