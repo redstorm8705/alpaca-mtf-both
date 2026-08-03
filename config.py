@@ -300,6 +300,8 @@ PROFILES = {
                                            # trade can't blow the day. Coherent with live's 2% baseline +
                                            # quarter-Kelly. Live posture is re-ratified by the board at the
                                            # $25K real-capital launch; this only removes the inverted 6% ghost.
+        "MR_AGG_RISK_CAP_PCT":     0.015,  # MR correlated-basket sub-cap: < the 3% live daily kill, ~1x the
+                                           # 2% live clamp (masked-loss seat 2026-08-03) — a real sub-cap.
         "PARTIAL_EXIT_ENABLED":    True,
         "PARTIAL_EXIT_RATIO":      0.5,    # close 50% at first target
         "PARTIAL_EXIT_ATR_MULT":   1.0,    # take first half at 1x ATR
@@ -318,6 +320,9 @@ PROFILES = {
         "MIN_SHORT_SCORE":         8,      # mirrors long — board 5-0 2026-06-30
         "KELLY_FRACTION":          0.50,   # raised 0.35→0.50 half-Kelly — board 5-0 + Gro + GAI 2026-06-30
         "KELLY_MAX_RISK_PCT":      0.045,  # 4.5% hard cap — board vote S52 (unchanged)
+        "MR_AGG_RISK_CAP_PCT":     0.035,  # MR correlated-basket sub-cap: = half the 7% paper daily kill,
+                                           # < the 4.5% clamp (masked-loss seat 2026-08-03). This is the value
+                                           # the RUNNING paper bot uses — UNCHANGED from the prior module default.
         "PARTIAL_EXIT_ENABLED":    True,
         "PARTIAL_EXIT_RATIO":      0.5,
         "PARTIAL_EXIT_ATR_MULT":   0.8,
@@ -576,11 +581,13 @@ MR_SIZE_MULT          = 0.5     # reduced staged sizing: 0.5x the resolved per-t
                                 # ZERO measurement fidelity (edge = size-invariant R-multiples)
 MR_MIN_SCORE          = 1       # min mean_reversion_confluence score (0-3) to fire (eligibility
                                 # already requires the confirmed trigger; this is a headroom knob)
-MR_AGG_RISK_CAP_PCT   = 0.035   # MANDATORY correlation sub-cap: total OPEN MR per-trade risk <= 3.5%
-                                # of equity (= half the 7% daily kill). In a broad selloff many
-                                # crashed names bounce together -> correlated MR-long basket; the
-                                # gross cap is correlation-BLIND (4 x 0.5x4.5% = 9% > 7% kill). This
-                                # is the account-ender guard the existing envelope lacks.
+MR_AGG_RISK_CAP_PCT   = 0.015   # MANDATORY correlation sub-cap: total OPEN MR per-trade risk of equity.
+                                # PROFILE-AWARE (masked-loss seat 2026-08-03): paper=0.035 (= half the 7%
+                                # kill, < the 4.5% clamp), live=0.015 (< the 3% live daily kill, ~1x the
+                                # 2% live clamp). This MODULE default is the CONSERVATIVE fallback (0.015)
+                                # for any un-profiled run — never above a profile's daily kill. In a broad
+                                # selloff many crashed names bounce together -> correlated MR-long basket;
+                                # the gross cap is correlation-BLIND. This is the account-ender guard.
 MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND = True  # market-regime gate: don't catch the index knife
 # Detector thresholds — made explicit here for auditability/tuning (mr_regime.py reads them via
 # getattr with these same defaults). RSI(14): oversold/overbought = the confirmed-reversal trigger
