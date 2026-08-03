@@ -9358,3 +9358,15 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **Gate:** board 4/4 (Gro=A, GAI=A, correctness-seat=A corrected share-clamp form, masked-loss-seat=A; Option C rejected 4/0) + cold-2nd PASS 5/5 (verified pure min(), div-zero guarded, no downstream re-raise of shares to order submit) + FINAL preship Gro+GAI APPROVE (sha d7231363ba5f). OCI DEPLOY_OK + restart; HEALTH OK.
 **FOLLOW-UPS:** verify live KELLY_MAX_RISK_PCT (paper 4.5% vs module 6%); stale `[0.5×,1.5×]` comment at `:1222`; committed unit test.
 **NEXT (item 2/3):** BUILD dynamic mean-reversion/regime direction layer (front-loaded sim first, Rule C) → then stage delta/16pt/volume shadow builds (each risk-path per Rule-B screen).
+
+---
+
+## 2026-08-02 (interactive, Rafael present) — KELLY_MAX_RISK_PCT LIVE-PROFILE INVERSION — SHIPPED (PR #61)
+**File:** `config.py` (module default 0.06→0.045; explicit live-profile KELLY_MAX_RISK_PCT=0.02 added).
+**Trigger:** Rafael asked "who made the 4.5% rule + is it still the recommendation under the new doctrine?" → board audit.
+**Provenance:** 4.5% = board vote S52 (2026-06-30, tightened the earlier 6% from S23 2026-05-16). Live cap = 4.5% (paper profile, running bot).
+**Policy verdict (board 3-1 HOLD 4.5%):** Thorp HOLD, Taleb HOLD (or lower), GAI lower to 3.0%, Gro raise to 5.5% (minority). Unifying insight: the 7% daily kill switch binds first above ~3.5%/trade, so raising the per-trade cap adds ~0 growth while fattening the per-trade tail. 4.5% sits at the top of the useful band; raising it would WIDEN the envelope (doctrine forbids without full risk vote).
+**Bug found (Thorp + correctness seat):** module default 0.06 > paper 0.045, and the LIVE profile (no explicit cap) INHERITED 6% — the conservative real-money profile was LESS conservative than aggressive paper, and 6% > live's own 3% daily kill (one max-risk trade blows the day). ACTIVE_PROFILE defaults to 'live'.
+**Fix:** default→0.045 (conservative fallback); live explicit 0.02 (≤ paper, < live 3% daily kill, == live 2% baseline). Invariant live ≤ paper ≤ (default) restored. ZERO impact on running paper bot.
+**Gate:** statics clean (py_compile/ruff/mypy) + board (Thorp spec + 4-voice policy) + cold-2nd PASS 4/4 + Gro+GAI preship APPROVE (GAI first REJECTed on a FALSE aggregate-ceiling premise — MAX_PORTFOLIO_RISK_PCT is the per-trade baseline/Kelly denominator at entry_logic.py:1188, NOT an aggregate cap — refuted via counter-prompt, GAI reversed in 1 round). OCI synced, no restart (inert for paper).
+**NEXT:** item 2 build (mean-reversion LONG detector `execution/mr_regime.py` first).
