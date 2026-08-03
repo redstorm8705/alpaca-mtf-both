@@ -39,6 +39,7 @@ from data.sectors import SECTOR_MAP as _SECTOR_MAP
 from events.handlers import get_halt_entries as _get_halt_entries
 from execution.broker import (
     get_account,
+    get_open_orders,
     get_open_position,
     get_order,
     get_portfolio_value,
@@ -456,6 +457,11 @@ def execute_entries(
         direction = sig["direction"]
         trade_mode = sig["trade_mode"]
         score      = sig["score"]
+        # Mean-reversion dispatch flag (item 2 diff 3d). MR RESPECTS the market/safety gates that
+        # run before this is read (QHM, catalyst, Rule1/2, SPY-direction — the SPY-down gate IS the
+        # "suppress MR longs in a selloff" guard) and BYPASSES the trend-structure gates below
+        # (ORB, 12-pt conviction/confirm, counter_trend, the 0-12 linear size map).
+        _is_mr = sig.get("strategy") == "mean_reversion"
 
         # QHM exclusion: skip intraday entries for buy-and-hold held symbols
         if symbol in get_quarterly_hold_symbols():
@@ -545,7 +551,8 @@ def execute_entries(
         # ── ORB Gate: SPY must have confirmed a breakout above/below opening range ──
         # Board vote 2026-05-17, 26/26 unanimous. Fail-closed per config.ORB_BLOCK_ON_FEED_FAILURE.
         # DS/GAI P0: single datetime.now(ET) call to prevent TOCTOU minute-boundary straddle.
-        if config.ORB_ENABLED:
+        # MR bypass: ORB is a trend-BREAKOUT confirmation, antithetical to a mean-reversion entry.
+        if config.ORB_ENABLED and not _is_mr:
             _now_orb_et   = datetime.now(ET)
             _now_mins_orb = _now_orb_et.hour * 60 + _now_orb_et.minute
             _past_compute = _now_mins_orb >= config.ORB_COMPUTE_AFTER_MIN
@@ -601,14 +608,17 @@ def execute_entries(
         # Simons: single qualifying scans can be noise; require 2 consecutive
         # qualifying scans (≥CONVICTION_SKIP_BELOW) before committing a day
         # trade.  Counter resets on any sub-threshold scan — streak unbroken.
-        if score >= config.CONVICTION_SKIP_BELOW:
-            gate_state.entry_confirm_buffer[symbol] = gate_state.entry_confirm_buffer.get(symbol, 0) + 1
-        else:
-            gate_state.entry_confirm_buffer[symbol] = 0
-        logger.debug(
-            f"[{symbol}] entry_confirm={gate_state.entry_confirm_buffer[symbol]}/2 "
-            f"(score={score}/{config.CONVICTION_SKIP_BELOW})"
-        )
+        # MR bypass: the entry-confirm buffer is keyed to the 0-12 conviction score; MR carries a
+        # 0-3 score and has its own confirmed-reversal trigger, so it neither feeds nor reads this.
+        if not _is_mr:
+            if score >= config.CONVICTION_SKIP_BELOW:
+                gate_state.entry_confirm_buffer[symbol] = gate_state.entry_confirm_buffer.get(symbol, 0) + 1
+            else:
+                gate_state.entry_confirm_buffer[symbol] = 0
+            logger.debug(
+                f"[{symbol}] entry_confirm={gate_state.entry_confirm_buffer[symbol]}/2 "
+                f"(score={score}/{config.CONVICTION_SKIP_BELOW})"
+            )
         # Leveraged ETFs are LONG ONLY — not shortable on Alpaca (inverse ETF = the "short")
         if is_leveraged and direction == "short":
             logger.info(f"[{symbol}] Leveraged ETF long-only — skipping short signal")
@@ -624,16 +634,19 @@ def execute_entries(
             continue
 
         # ── Conviction gate ──────────────────────────────────────────────
-        if score < config.CONVICTION_SKIP_BELOW:
+        # MR bypass: the 0-12 conviction MIN would always skip an MR signal (0-3 score); MR
+        # eligibility IS its own conviction (confirmed reversal + regime + score >= MR_MIN_SCORE).
+        if not _is_mr and score < config.CONVICTION_SKIP_BELOW:
             logger.info(
                 f"[{symbol}] Score {score}/12 below minimum "
                 f"(need ≥{config.CONVICTION_SKIP_BELOW}) — skipping"
             )
             continue
-        # BoD-1: 2-scan confirmation gate — ALL buckets (unchanged)
+        # BoD-1: 2-scan confirmation gate — ALL buckets (unchanged). MR bypass: keyed to the
+        # 12-pt confirm buffer above, which MR does not populate.
         _confirm = gate_state.entry_confirm_buffer.get(symbol, 0)
         _min_confirm = _param_engine.h4_entry_confirm_scans(vix, is_leveraged)
-        if _confirm < _min_confirm:
+        if not _is_mr and _confirm < _min_confirm:
             logger.info(
                 f"[{symbol}] BoD-1 CONFIRM GATE: scan {_confirm}/{_min_confirm} qualifying "
                 f"(score={score}/12 ≥{config.CONVICTION_SKIP_BELOW}) — "
@@ -940,9 +953,11 @@ def execute_entries(
         # See execution/counter_trend.py. Kill switch: config.COUNTER_TREND_GATE_ENABLED
         # (default True) — flip to False + restart to disable instantly, matching the codebase's
         # GEX_ENABLED / ORB_ENABLED / DELTA_SCORING_ENABLED feature-gate convention.
+        # MR bypass: counter_trend BLOCKS long-into-falling-knife / short-into-bounce — which is
+        # exactly the MR setup. The MR path is the complement that GENERATES that reversal trade.
         _ct_blocked, _ct_ctx = (
             _counter_trend.counter_trend_block(direction, sig, daily_df)
-            if getattr(config, "COUNTER_TREND_GATE_ENABLED", True)
+            if (getattr(config, "COUNTER_TREND_GATE_ENABLED", True) and not _is_mr)
             else (False, {})
         )
         if _ct_blocked:
@@ -1158,7 +1173,32 @@ def execute_entries(
         # the ring-fence replacing the deleted Bucket-A 15%/leverage cap (board FORK-5). The
         # `if True:` keeps the body in place (no risky mass de-indent) while running it for
         # every symbol; the old `if is_bucket_a: … else:` routing is removed.
-        if True:
+        # ── MR sizing (item 2 diff 3d) — base allocation × MR-Kelly-scale × MR_SIZE_MULT(0.5) ──
+        # Routes through the SAME downstream tail (TSMOM/FVG/min-lot/share-conv/VOTE-5/Kelly-share-
+        # clamp/BP/gross) as trend — NO duplicated sizing routine (masked-loss seat). The per-trade
+        # Kelly SHARE clamp bounds MR risk at KELLY_MAX_RISK_PCT. get_risk_pct gets score=12 (a
+        # 0-12-scale value) NOT the 0-3 MR score, and strategy="mean_reversion" for the dedicated key.
+        # NOTE (masked-loss seat): MR_SIZE_MULT is a NOTIONAL 0.5x. For MR's characteristic WIDE stops
+        # (crashed names, 5-10%+ ATR), the shared Kelly SHARE clamp binds and per-trade RISK sits at
+        # the FULL KELLY_MAX_RISK_PCT cap — do not assume 0.5×cap per trade in aggregate reasoning.
+        if _is_mr:
+            dollar_cap = risk.portfolio_value * config.INTRA_ALLOCATION_PCT
+            _portfolio_val = get_portfolio_value()
+            try:
+                _mrk = kelly.get_risk_pct(direction, trade_mode, _portfolio_val, score=12, strategy="mean_reversion")
+                dollar_cap *= (_mrk / max(config.MAX_PORTFOLIO_RISK_PCT, 0.001)) * float(getattr(config, "MR_SIZE_MULT", 0.5))
+                logger.info(
+                    f"[{symbol}] MR sizing: base {config.INTRA_ALLOCATION_PCT:.0%} × MR-Kelly({_mrk:.2%}) "
+                    f"× {getattr(config, 'MR_SIZE_MULT', 0.5)}x = ${dollar_cap:,.2f} (mr_score={sig.get('mr_score')}/3)"
+                )
+            except Exception as _mke:
+                dollar_cap *= float(getattr(config, "MR_SIZE_MULT", 0.5))
+                logger.warning(f"[{symbol}] MR Kelly sizing failed — base × MR_mult: {_mke}")
+            if dollar_cap <= 0:
+                logger.info(f"[{symbol}] MR: no allocation (dollar_cap<=0). Skipping.")
+                continue
+
+        if not _is_mr:
             # Rank 2: conviction sizing — linear
             #   score 10  → ½ size  (42.5%)
             #   score 11+ → full    (85%)
@@ -1413,6 +1453,51 @@ def execute_entries(
             _rc8_clear_buffers(symbol, "gross-exposure-cap")
             continue
 
+        # ── MR-only guards (item 2 diff 3d) — idempotency + aggregate correlation sub-cap ──────
+        if _is_mr:
+            # (a) Pending-order idempotency: the trend path only checks FILLED positions
+            # (get_open_position); an MR signal can regenerate next cycle before a fill. FAIL-CLOSED:
+            # get_open_orders returns None on API error (broker.py: "None = unknown state; callers
+            # must not treat as empty"), so None OR a non-empty list → skip (never risk a double-submit).
+            try:
+                _oo = get_open_orders(symbol)
+                if _oo is None or _oo:
+                    logger.info(f"[{symbol}] MR: open/pending order present or unknown — skipping (idempotency, fail-closed).")
+                    continue
+            except Exception as _oe:
+                logger.warning(f"[{symbol}] MR open-orders check error ({_oe}) — skipping MR entry (fail-closed).")
+                continue
+            # (b) Aggregate MR correlation sub-cap — the account-ender guard the gross cap (which is
+            # correlation-BLIND) misses: in a broad selloff many crashed names bounce together, so the
+            # summed open-MR per-trade risk can trip the 7% daily kill (4 × 0.5×4.5% = 9%). Bound the
+            # TOTAL open MR risk (Σ qty×|entry-stop|) + this trade to MR_AGG_RISK_CAP_PCT (3.5%) × equity.
+            # FAIL-CLOSED: any compute error BLOCKS the MR entry (a risk cap never over-exposes on error).
+            try:
+                _mr_open_risk = 0.0
+                for _t in (getattr(tracker, "open_trades", {}) or {}).values():
+                    if (_t or {}).get("strategy") == "mean_reversion":
+                        _q = abs(float(_t.get("qty") or 0))
+                        _e = float(_t.get("entry_price") or 0)
+                        # original (immutable) stop preferred — a TRAILED stop would shrink |entry-stop|
+                        # and loosen the basket budget as winners age (masked-loss seat). NOTE the cap
+                        # bounds ORDERLY stop-out basket loss, not gap-THROUGH-stop (the true correlated tail).
+                        _s = float(_t.get("original_stop") or _t.get("stop") or 0)
+                        if _q > 0 and _e > 0 and _s > 0:
+                            _mr_open_risk += _q * abs(_e - _s)
+                _this_risk = shares * stop_distance
+                _mr_cap = float(getattr(config, "MR_AGG_RISK_CAP_PCT", 0.035)) * risk.portfolio_value
+                if _mr_open_risk + _this_risk > _mr_cap:
+                    logger.warning(
+                        f"[{symbol}] MR AGG SUB-CAP: open MR risk ${_mr_open_risk:,.2f} + this ${_this_risk:,.2f} "
+                        f"> {getattr(config, 'MR_AGG_RISK_CAP_PCT', 0.035):.1%} × ${risk.portfolio_value:,.2f} "
+                        f"= ${_mr_cap:,.2f} — blocking (correlated-basket guard)."
+                    )
+                    _rc8_clear_buffers(symbol, "mr-agg-risk-cap")
+                    continue
+            except Exception as _ae:
+                logger.warning(f"[{symbol}] MR agg sub-cap error ({_ae}) — BLOCKING MR entry (fail-closed).")
+                continue
+
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
         side = "buy" if direction == "long" else "sell"
@@ -1484,6 +1569,14 @@ def execute_entries(
                     # carries "conditions"; this was the only missing link (per-factor never logged).
                     conditions=sig.get("conditions"),
                 )
+                # Tag MR strategy on the persisted trade dict (item 2 diff 3d) — record_entry does
+                # NOT persist strategy (it only forwards it to the JSONL event), so without this the
+                # Kelly rebuild (kelly.py reads t.get("strategy")) would mis-book the MR trade to the
+                # trend key. Mirrors the overnight-tag pattern below.
+                if _is_mr and symbol in tracker.open_trades:
+                    tracker.open_trades[symbol]["strategy"] = "mean_reversion"
+                    tracker._save_log()
+                    logger.info(f"[{symbol}] Tagged strategy=mean_reversion (MR entry).")
                 # Tag overnight: AH entries (after 3:30 PM ET) are overnight holds
                 entry_time = datetime.now(ET)
                 entry_mins = entry_time.hour * 60 + entry_time.minute
