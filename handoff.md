@@ -82,16 +82,28 @@ statics + smoke + cold-2nd (5/5, 6/6) + Gro+GAI APPROVE (all via the new mandato
 false rejects). Detector `execution/mr_regime.py` now: regime_state + confirmed_reversal + confirmed_rollover +
 mean_reversion_confluence.
 
-**⏭️⏭️ NEXT EXACT STEP — item 2, diff 3/4: WIRE the gated MR long+short ENTRY path (RISK-PATH — FULL BOARD +
-masked-loss seat).** New entry generation in signal_generator/entry_logic: when a name is MR-eligible (per
-`mean_reversion_confluence`), generate a LONG (crashed reversal) or SHORT (overbought rollover) entry, gated by
-`MR_ENABLED` config kill flag. MUST NOT double-fire with counter_trend (which BLOCKS the opposite trend-trade)
-— they're complementary (counter_trend stops the bad trend-short; MR generates the good reversal-trade). Map
-the MR score→conviction→size. RISK-PATH per Rule-E (new entries = frequency+size) → full board + masked-loss
-seat + cold-2nd + Gro/GAI + `--context`. Then diff 4 (Rule-D decision-stack logging for MR entries). THEN item
-3: stage delta/16pt/volume shadow builds. Design: `logs/mr_regime_long_design_2026-08-02.md`. FOLLOW-UPS open:
-add_rsi recompute optimization in mr_confluence; stale `[0.5×,1.5×]` TSMOM comment at entry_logic.py:1222;
-committed unit tests for counter_trend/reentry_cooldown/mr_regime/Kelly-clamp.
+**✅ DESIGN FINALIZED + diff 3a SHIPPED (2026-08-03) — MR entry wiring.** Full board (2 cold seats) + Gro + GAI
+aligned; Rafael chose **Option B** collision resolution. Design in `logs/mr_regime_long_design_2026-08-02.md`
+(DIFF 3 FINALIZED DESIGN section). Key decisions: separate SIGNAL path but sizing through the SAME
+clamp/gross/kill (no duplicated sizing routine); detect ONCE in signal_generator (200-bar), never re-detect in
+entry_logic (24-bar landmine); **Option B** = MR REPLACES an opposite tradeable trend signal at the signal-LIST
+level (deterministic, gate-independent) — SMCI: the confirmed-reversal LONG replaces the perma-structural SHORT;
+reduced 0.5× sizing; **DEDICATED Kelly key** `long_mr_intraday` (mandatory — else MR is unmeasurable + corrupts
+trend Kelly); **mandatory aggregate MR correlation sub-cap 3.5%** (= half the 7% kill — the account-ender guard
+the gross cap misses: correlated MR-long basket in a broad selloff) + SPY-downtrend regime gate; LONG-FIRST
+rollout (short later, own key, intraday-only, after ≥30 MR-long trades); stale-bar/edge-consumed + open/pending
+idempotency guards. **PR #69 (diff 3a)** shipped the config foundation (MR_ENABLED=False + all flags + explicit
+detector thresholds = getattr defaults; INERT, cold-2nd verified parity).
+
+**⏭️⏭️ NEXT EXACT STEP — item 2, diff 3b/4: KELLY DEDICATED KEY.** Add an optional `strategy` dim to
+`execution/kelly.py` `_key()` / `record_trade()` / `get_risk_pct()` (backward-compatible default = non-MR) so
+MR trades book to `long_mr_intraday`/`short_mr_intraday` — mandatory per the masked-loss seat (measurability +
+don't corrupt trend Kelly). Full read kelly.py (466L). Then diff 3c (signal_generator MR emission + Option-B
+list-level replacement, full read 990L), diff 3d (entry_logic MR consumption pass: reduced sizing through the
+SAME clamp/gross/kill, bypass trend gates, aggregate MR sub-cap + SPY-regime + stale-bar + idempotency guards,
+full read 1825L via Explore), diff 3e (Rule-D decision logging). THEN item 3: stage delta/16pt/volume shadow
+builds. FOLLOW-UPS: add_rsi recompute optimization in mr_confluence; stale `[0.5×,1.5×]` TSMOM comment at
+entry_logic.py:1222; committed unit tests.
 
 ### ✅ SHIPPED (2026-08-02 interactive, Rafael present) — COUNTER-TREND / FALLING-KNIFE GATE (don't short a bounce, don't long a knife)
 **PR #55 → main (merged, CI preship green); OCI `git pull --ff-only` + RESTART = DEPLOY_OK; health OK;
