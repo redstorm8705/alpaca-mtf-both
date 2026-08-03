@@ -173,7 +173,14 @@ class KellySizer:
     # ── Signal type key ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _key(direction: str, trade_mode: str) -> str:
+    def _key(direction: str, trade_mode: str, strategy: str = "") -> str:
+        # Mean-reversion trades book to a DEDICATED key (e.g. long_mr_intraday) so their
+        # right-tailed R-multiples are measured on their OWN and can never (a) be
+        # unmeasurable by pooling into the trend key, nor (b) corrupt the trend Kelly's
+        # mean with a different return shape (masked-loss board seat, 2026-08-02).
+        # strategy defaults to "" = trend → key UNCHANGED. Fully backward-compatible.
+        if strategy == "mean_reversion":
+            return f"{direction}_mr_{trade_mode}"
         return f"{direction}_{trade_mode}"
 
     # ── Record trade outcome ──────────────────────────────────────────────────
@@ -186,12 +193,14 @@ class KellySizer:
         exit_price: float,
         stop_price: float,
         qty: int,
+        strategy: str = "",
     ):
         """
         Record a completed trade for Kelly tracking.
         Calculates R-multiple: how many times the risk did we win/lose?
+        strategy="mean_reversion" books to the dedicated MR key; "" (default) = trend.
         """
-        key = self._key(direction, trade_mode)
+        key = self._key(direction, trade_mode, strategy)
         if key not in self._stats:
             self._stats[key] = {"wins": [], "losses": []}
 
@@ -223,14 +232,19 @@ class KellySizer:
         trade_mode: str,
         portfolio_value: float,
         score: int = 12,
+        strategy: str = "",
     ) -> float:
         """
         Returns the recommended risk % of portfolio for this signal type.
 
         Returns config.MAX_PORTFOLIO_RISK_PCT as fallback until KELLY_MIN_SAMPLE_SIZE
         trades have been recorded for this signal type.
+        strategy="mean_reversion" reads/warms the dedicated MR key; "" (default) = trend.
+        NOTE (masked-loss seat): the MR caller must pass a 0-12-scale `score` (e.g. 12) for
+        the warmup weight — never the 0-3 MR confluence score, which the (score/12)^2 warmup
+        would collapse to the floor. MR conviction is applied by the caller's MR_SIZE_MULT.
         """
-        key = self._key(direction, trade_mode)
+        key = self._key(direction, trade_mode, strategy)
         stats = self._stats.get(key, {"wins": [], "losses": []})
 
         wins   = stats["wins"]
@@ -418,6 +432,7 @@ class KellySizer:
                 continue
             direction  = t.get("direction", "")
             trade_mode = t.get("trade_mode", "intraday")
+            strategy   = t.get("strategy") or ""   # MR trades tagged "mean_reversion"; "" = trend
             entry      = float(t.get("entry_price") or 0)
             exit_p     = float(t.get("exit_price") or 0)
             stop       = float(t.get("original_stop") or t.get("stop") or 0)
@@ -426,7 +441,7 @@ class KellySizer:
             if not direction or entry <= 0 or stop <= 0 or qty <= 0:
                 continue
 
-            key = self._key(direction, trade_mode)
+            key = self._key(direction, trade_mode, strategy)
             if key not in self._stats:
                 self._stats[key] = {"wins": [], "losses": []}
 
