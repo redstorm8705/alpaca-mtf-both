@@ -1357,6 +1357,27 @@ def execute_entries(
             except Exception as _ve5:
                 logger.debug(f"[{symbol}] VOTE-5 vol-target cap error: {_ve5}")
 
+        # ── Per-trade Kelly risk re-clamp (2026-08-02, BGG) ──────────────────
+        # TSMOM (L1225) and FVG (L1260) multiply dollar_cap AFTER the Kelly cap
+        # (L1189 — kelly_risk_pct is clamped to KELLY_MAX_RISK_PCT inside kelly.py)
+        # with NO re-clamp, so a low-vol name at the cap can breach per-trade risk
+        # by the up-multiplier (25% at [.,1.25]; 50% at [.,1.50]). Bound the FINAL
+        # share count to the true risk-of-ruin quantity: shares × stop_distance ≤
+        # KELLY_MAX_RISK_PCT × equity. Clamp SHARES, not dollar_cap (overloaded
+        # risk/notional — rescaling it over-constrains via the notional leg).
+        # min() only: never RAISES size; preserves TSMOM's down-leg + legitimate
+        # sub-cap up-sizing. Universal — bounds ANY future up-multiplier, not just
+        # TSMOM. Reads the same KELLY_MAX_RISK_PCT kelly.py enforces (consistent).
+        if risk.portfolio_value > 0 and stop_distance > 0:
+            _max_sh_kelly = int(config.KELLY_MAX_RISK_PCT * risk.portfolio_value / stop_distance)
+            if _max_sh_kelly < shares:
+                logger.info(
+                    f"[{symbol}] Kelly per-trade risk clamp: {shares}sh → {_max_sh_kelly}sh "
+                    f"(risk ${shares * stop_distance:,.2f} → cap {config.KELLY_MAX_RISK_PCT:.1%} × "
+                    f"${risk.portfolio_value:,.2f} = ${config.KELLY_MAX_RISK_PCT * risk.portfolio_value:,.2f})"
+                )
+                shares = _max_sh_kelly
+
         if shares < 1:
             logger.info(f"[{symbol}] Position size < 1 share at ${entry_price:.2f}. Skipping.")
             continue
