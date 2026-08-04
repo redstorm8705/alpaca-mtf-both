@@ -791,6 +791,12 @@ def run_scan(
                             "tsmom_vol_mult": _ms.get("tsmom_vol_mult"),
                             "weekly_bias":  weekly_biases.get(sym),
                             "weekly_bias_filtered": False,
+                            # Rule D (decision-explainability doctrine): which opposite trend signal,
+                            # if any, this MR signal replaces at the Option-B resolution step below.
+                            # None here; set only in the "REPLACES" branch. Read at entry time
+                            # (entry_logic.py) and forwarded to trade_events.jsonl so a symbol flip
+                            # is reverse-engineerable from the log alone.
+                            "mr_replaced_trend": None,
                         })
                         logger.info("[%s] MR-%s eligible (score %s/3) — emitted to mr_signals.",
                                     sym, _mr_dir, _mrc.get("score"))
@@ -974,6 +980,13 @@ def run_scan(
             elif _existing.get("strategy") == "mean_reversion":
                 continue  # symbol already resolved to an MR signal this cycle
             elif _existing.get("direction") != _mr["direction"]:
+                # Rule D: capture the discarded trend signal's direction/score before it's dropped —
+                # otherwise this is only ever visible in this transient log line, never per-trade.
+                _mr["mr_replaced_trend"] = {
+                    "direction":  _existing.get("direction"),
+                    "score":      _existing.get("score"),
+                    "max_score":  _existing.get("max_score"),
+                }
                 deduped.remove(_existing)
                 deduped.append(_mr)
                 _by_sym[_sym] = _mr
