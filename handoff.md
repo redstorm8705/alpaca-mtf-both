@@ -1,13 +1,69 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-01 (interactive — Rafael present) | **CROSS-ACCOUNT HANDOFF** — always current per the
-DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
+**Updated:** 2026-08-04 (autonomous resume, Rafael live mid-session) | **CROSS-ACCOUNT HANDOFF** — always
+current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
 > point), (2) `CLAUDE.md` (binding rules — note new §DURABLE SYNC RULE), (3) `logs/tb_audit_log.md`
 > (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
 > (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-02 interactive, Rafael present) — pick up here
+## ⏩ LATEST (2026-08-04, autonomous resume — Rafael dropped in mid-session) — pick up here
+
+**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ SHIPPED (2026-08-04) — item 2 diff 3e: MR Rule-D decision-stack logging (PR #84 → main `c5b4d74`).**
+Closes the last MR pre-flip item. Full gate (full read + statics + cold-2nd ×2 + board 2/2 + FINAL
+Gro+GAI APPROVE via `.claude/preship/preship_audit.py --context`) — see `logs/tb_audit_log.md`
+2026-08-04 entry for the complete writeup, including a board reliability-seat catch (an unguarded
+`float(config.MR_SIZE_MULT)` could have aborted the rest of a cycle's entries loop on a hypothetical
+config corruption — folded before ship) and a GAI context-starvation false-REJECT reversed via one
+counter-prompt with verbatim evidence. **INERT** (`MR_ENABLED=False`) — zero live behavior change.
+**Both hard pre-live-flip gates (profile-aware `MR_AGG_RISK_CAP_PCT`, `MR_SUPPRESS_LONGS_IN_SPY_DOWNTREND`
+wiring) were ALSO found already shipped tonight** (PRs #77/#78, `ddcffdf`/`b11c7f3`, 2026-08-03 —
+this file hadn't been updated to reflect them; git log was the ground truth, confirming the
+"trust git over stale docs" rule). **item 2's entire MR entry layer is now fully built, gated, and
+logged end-to-end — the only remaining step is the live flip.**
+
+**⏭️ NEXT EXACT STEP: flip `MR_ENABLED=True`** (long-first; `MR_LONG_ONLY` stays `True`). Then measure
+≥30 MR-long trades on the dedicated `long_mr_intraday` Kelly key before enabling shorts. This is a
+RISK-PATH-adjacent flip (changes what CAN trade, even though every downstream cap is already gated) —
+full board + Gro/GAI per the existing doctrine before flipping.
+
+**🔴 OPEN — OCI deploy target is UNCLEAR, needs Rafael.** Diff 3e (and possibly more) is NOT yet
+confirmed live on OCI. SSH access works (`ssh mtf-bot`, user `ubuntu`, key `~/.ssh/mtf_bot_oracle` —
+the earlier CLAUDE.md/memory note referencing `opc@` as the SSH user was WRONG for this box; `ubuntu`
+is correct). But on `129.153.208.32` under `ubuntu`, **four** candidate bot directories exist and NONE
+look live: `/home/ubuntu/mtf-bot` (has `auto_deploy.sh`, matching what CLAUDE.md describes, but HEAD is
+`1df57f5` — a commit not present in this repo's recent history — and `logs/mtf_bot.log` has been 0
+bytes since **Jul 20**); `/home/ubuntu/alpaca-mtf-bot_FINAL` (not even a git repo; logs stopped **May
+11**); `/home/ubuntu/alpaca-mtf-bot` and `/home/ubuntu/mtf-bot-build-f` (unexamined, likely stale by
+naming). `crontab -l` for `ubuntu` is genuinely empty (no jobs at all) — no matching systemd
+services/timers, no docker. Yet the audit/reporting pipeline IS demonstrably alive elsewhere: GitHub
+shows a routine report-sync commit at 23:45 ET tonight, and Rafael forwarded a live `ledger_sync` Slack
+alert from 14:40 PT today (see the ledger_sync item below) — and `.github/workflows/` has no scheduled
+job that could produce either. Most likely explanation: the live automation runs under the `opc` system
+user on this same box (present in `/etc/passwd`, no key available this session), or on a second
+host/instance not documented in `~/.ssh/config`. **DO NOT** guess-deploy into one of the four stale
+directories or restart anything blindly — confirmed with Rafael this needs his input (either the `opc`
+credentials, or he deploys this one manually, or he points to the real target). Zero urgency: diff 3e
+is provably inert either way.
+
+**🔴 OPEN — `ledger_sync FAILING` alert (Gemini-forwarded by Rafael live, not yet root-fixed).**
+Traced to source this session (not shipped, diagnostic only): `execution/ownership_guard.py::sync_ledger`'s
+never-shrink-a-protected-floor guard is refusing a full-replay heal, 9+ consecutive runs. Most likely
+cause: a QHM-tier symbol's founding buy fill aged out of Alpaca's fill-history replay window, combined
+with the QHM overlay's deliberate "skip drifted symbols" rule (so the overlay can't rescue it). **Zero
+live capital risk right now** — confirmed at source that `config.OWNERSHIP_GUARD_ENFORCE=False`, and all
+3 consumers in `execution/broker.py` (`close_position`, `partial_close_position`, `_floor_bound_stop_qty`)
+early-return to raw pre-guard behavior before the ledger is ever read; this ledger is write-only
+telemetry today. No fix designed yet — needs the live `.ledger_sync_streak.json` (on whichever host
+actually runs it — see the OCI-target confusion above) to identify the exact symbol, then a proper
+design session (extending the QHM overlay to safely cover this case without weakening the never-shrink
+guard is NOT a freehand fix — masked-loss doctrine).
+
+---
+
+## ⏩ PRIOR (2026-08-02 interactive, Rafael present)
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
