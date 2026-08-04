@@ -29,27 +29,32 @@ logged end-to-end — the only remaining step is the live flip.**
 RISK-PATH-adjacent flip (changes what CAN trade, even though every downstream cap is already gated) —
 full board + Gro/GAI per the existing doctrine before flipping.
 
-**🔴 OPEN — OCI deploy target is UNCLEAR, needs Rafael.** Diff 3e (and possibly more) is NOT yet
-confirmed live on OCI. SSH access works (`ssh mtf-bot`, user `ubuntu`, key `~/.ssh/mtf_bot_oracle` —
-the earlier CLAUDE.md/memory note referencing `opc@` as the SSH user was WRONG for this box; `ubuntu`
-is correct). But on `129.153.208.32` under `ubuntu`, **four** candidate bot directories exist and NONE
-look live: `/home/ubuntu/mtf-bot` (has `auto_deploy.sh`, matching what CLAUDE.md describes, but HEAD is
-`1df57f5` — a commit not present in this repo's recent history — and `logs/mtf_bot.log` has been 0
-bytes since **Jul 20**); `/home/ubuntu/alpaca-mtf-bot_FINAL` (not even a git repo; logs stopped **May
-11**); `/home/ubuntu/alpaca-mtf-bot` and `/home/ubuntu/mtf-bot-build-f` (unexamined, likely stale by
-naming). `crontab -l` for `ubuntu` is genuinely empty (no jobs at all) — no matching systemd
-services/timers, no docker. Yet the audit/reporting pipeline IS demonstrably alive elsewhere: GitHub
-shows a routine report-sync commit at 23:45 ET tonight, and Rafael forwarded a live `ledger_sync` Slack
-alert from 14:40 PT today (see the ledger_sync item below) — and `.github/workflows/` has no scheduled
-job that could produce either. Most likely explanation: the live automation runs under the `opc` system
-user on this same box (present in `/etc/passwd`, no key available this session), or on a second
-host/instance not documented in `~/.ssh/config`. **DO NOT** guess-deploy into one of the four stale
-directories or restart anything blindly — confirmed with Rafael this needs his input (either the `opc`
-credentials, or he deploys this one manually, or he points to the real target). Zero urgency: diff 3e
-is provably inert either way.
+**✅ CORRECTED (2026-08-04, board-verified after Rafael flagged distrust) — `129.153.208.32`
+("mtf-bot" SSH alias) is a DECOMMISSIONED ROLLBACK BOX, not production. An earlier version of this
+entry claimed the live bot had been down since 2026-07-19 — that was WRONG, and the wrong conclusion
+came from auditing the wrong host without checking git history first. The repo's own commits
+(`7401a17`/`9487b0c`/`8116649`, 2026-07-19) record a completed migration to a new Oracle ARM A1.Flex
+instance at **`137.131.51.250`**, with `129.153.208.32` deliberately stopped and kept only as a 7-day
+rollback. Board-independent verification (3 cold seats, re-run from scratch after Rafael refused to
+trust the first pass): `137.131.51.250` has `mtf-bot`/`mtf-writer`/`mtf-http` all `active (running)` +
+`enabled`, a populated live crontab, git HEAD current (`6e2f358`, 2026-08-03) with a working
+`auto_deploy.sh` on its own nightly cron — diff 3e should land there on its normal schedule with no
+manual action needed. **`~/.ssh/config`'s `mtf-bot` alias should be corrected or a second alias added
+for `137.131.51.250`** — the stale alias is what caused the misdirected audit; leaving it as-is risks
+the same mistake recurring. **Do not touch `129.153.208.32` — it is a legitimate rollback target,
+not a bug to fix.** Board also caught, independent of the host question: DDOG/SMCI/TOST currently
+carry DAY (not GTC) stops with fresh order activity from today/yesterday — consistent with the real,
+live bot managing intraday stops normally during market hours (GTC is reserved for overnight per
+Architecture Invariant #3), not a gap, but not independently re-confirmed against live code this
+session — worth a glance next time `execution/exit_logic.py`'s day-stop handling is open for any
+other reason.
 
 **🔴 OPEN — `ledger_sync FAILING` alert (Gemini-forwarded by Rafael live, not yet root-fixed).**
-Traced to source this session (not shipped, diagnostic only): `execution/ownership_guard.py::sync_ledger`'s
+The CODE-LEVEL trace below is still valid (it's a property of what's on `main`, independent of which
+host runs it) — only the "where does this run" framing above was wrong; `run_ledger_sync.py`'s cron
+line lives in the SAME populated crontab on `137.131.51.250` confirmed above, not on an unknown host
+under an inaccessible user as previously guessed. Traced to source this session (not shipped,
+diagnostic only): `execution/ownership_guard.py::sync_ledger`'s
 never-shrink-a-protected-floor guard is refusing a full-replay heal, 9+ consecutive runs. Most likely
 cause: a QHM-tier symbol's founding buy fill aged out of Alpaca's fill-history replay window, combined
 with the QHM overlay's deliberate "skip drifted symbols" rule (so the overlay can't rescue it). **Zero
