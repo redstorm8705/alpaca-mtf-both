@@ -9,6 +9,11 @@ Runs the FINAL PRE-SHIP Gro+GAI audit on the STAGED content of each file
 ship gate checks. Fail-closed: any REJECT / API error / unstaged file => no
 marker => gate stays closed.
 
+For files in preship_gate.GATED_CLAIM_FILES (currently: handoff.md), a DIFFERENT
+prompt (CLAIM_PROMPT_HEAD) is used — an evidentiary-rigor audit for factual claims,
+not a code-defect audit. Added 2026-08-04 after an unverified diagnostic claim shipped
+straight into handoff.md with zero review.
+
 --waive-gro : record gro=WAIVED (Rafael-authorized only, e.g. Groq TPD limit).
               GAI must still APPROVE.
 --context   : PROACTIVE ground-truth facts (a file path OR inline string) about code
@@ -25,6 +30,9 @@ import json
 import hashlib
 import subprocess
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from preship_gate import GATED_CLAIM_FILES  # noqa: E402 — single source of truth, avoids drift
 
 # Derived from __file__, NOT hardcoded (2026-07-22). A hardcoded absolute path made the
 # gate silently inert on any machine but its author's — which is exactly the failure the
@@ -57,6 +65,69 @@ PROMPT_HEAD = (
     "mid-sentence, but never START another line with it, and do not restate the "
     "format).\n\nDIFF:\n"
 )
+
+# CLAIM_PROMPT_HEAD (added 2026-08-04): used ONLY for GATED_CLAIM_FILES (handoff.md).
+# WHY THIS EXISTS: a session asserted "the live trading bot has been down for two
+# weeks" as settled fact in handoff.md, based on checking systemd/crontab on ONE host,
+# without checking git history for an obvious alternative (a completed migration). The
+# claim was false — the investigated host was a deliberately decommissioned rollback
+# box; real production was fine the whole time. It shipped with ZERO independent
+# review and was only caught because the user personally distrusted it and demanded a
+# board re-check. PROMPT_HEAD's checklist (logic inversion, off-by-one, missing
+# guards) is a CODE-defect lens and does not transfer to prose — this is a distinct,
+# evidentiary-rigor lens for factual claims.
+CLAIM_PROMPT_HEAD = (
+    "FINAL PRE-COMMIT AUDIT of a change to this project's CROSS-ACCOUNT TRUST LOG "
+    "(handoff.md) — the durable record other sessions/accounts read as settled fact "
+    "with zero further verification. Your job is NOT to check code correctness; it is "
+    "to catch an ASSERTED FINDING that is not actually earned by the evidence behind "
+    "it. This exists because a session asserted 'the live trading bot has been down "
+    "for two weeks' as settled fact, based only on checking systemd/crontab on one "
+    "host, without checking git history for an obvious alternative explanation (a "
+    "planned migration) — the claim was false and was only caught because the user "
+    "personally distrusted it and demanded an independent re-check. That must never "
+    "again depend on the user's suspicion; this audit is the mechanical replacement.\n\n"
+    "SCOPE: in the diff, lines starting with '+' are NEW claims — audit these. Lines "
+    "starting with '-' are being REMOVED — ignore them (a removed claim is not a new "
+    "risk). Lines starting with a space are UNCHANGED CONTEXT shown only so you can "
+    "read the surrounding paragraph for sense — NEVER base a REJECT on a space-"
+    "prefixed line; that claim already shipped in an earlier, separately-audited "
+    "commit and re-litigating it here is out of scope and will make this gate "
+    "impossible to pass on unrelated small edits (which teaches people to bypass it "
+    "— a worse outcome than the risk it closes). If a diff has no '+' lines with a "
+    "new claim, APPROVE.\n\n"
+    "For each NEW ('+') factual claim, finding, or diagnosis in the diff below "
+    "(a state description, a root-cause claim, a 'confirmed'/'verified'/'zero risk' "
+    "assertion, a description of what is or isn't running somewhere), ask:\n"
+    "  1. Is this claim's evidentiary basis actually shown or clearly implied by "
+    "surrounding text — a specific command, a specific file, a specific quoted "
+    "output? A claim with no visible evidence trail is a RED FLAG, not something to "
+    "wave through because it 'sounds plausible' or is asserted confidently.\n"
+    "  2. Does the claim jump to ONE explanation for an observation when an obvious "
+    "alternative was not visibly ruled out (e.g. 'stopped' -> 'broken', when 'stopped "
+    "on purpose' / 'migrated' / 'superseded' are just as plausible and cheap to "
+    "check)? Confident language is not evidence of rigor — treat hedged, sourced "
+    "uncertainty as MORE trustworthy than an unqualified assertion with no shown "
+    "verification.\n"
+    "  3. Would a reasonable reader trust this claim as settled fact, or does it read "
+    "as inference/assumption dressed up as a conclusion?\n"
+    "  4. Is the claim internally consistent with other facts shown in the same "
+    "diff/file (timestamps, other confirmed state)?\n"
+    "PROCESS: for each claim you are unsure about, QUOTE it exactly, then state what "
+    "verification it is missing. REJECT if ANY claim lacks a visible evidentiary "
+    "basis or fails to rule out an obvious alternative explanation. Do NOT reject "
+    "over wording or formatting, and do NOT reject a claim that DOES show its "
+    "evidence (e.g. 'confirmed via `gh pr view 84 --json mergeable`', or a quoted "
+    "command's literal output) — those are fine and are the standard to hold every "
+    "other claim to. This is a real gate, not a rubber stamp: if in doubt, REJECT "
+    "and name exactly which claim and what check is missing.\n"
+    "END your reply with its own line BEGINNING exactly `VERDICT: APPROVE` or "
+    "`VERDICT: REJECT — <specific claim + what verification is missing>` — your "
+    "FINAL decision. Exactly ONE line may BEGIN with `VERDICT:` (you may mention the "
+    "word mid-sentence, but never START another line with it, and do not restate "
+    "the format).\n\nDIFF:\n"
+)
+
 
 def _git(args, want_bytes=False):
     r = subprocess.run(["git", "-C", REPO] + args, capture_output=True, timeout=20)
@@ -169,8 +240,9 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     base_ok, _b, _ = _git(["rev-parse", "--verify", "--quiet", "origin/main"])
     base = "origin/main" if base_ok else "HEAD"
     ok_d, diff, _ = _git(["diff", "--cached", base, "-U30", "--", relpath])
-    prompt = PROMPT_HEAD + (diff if diff.strip()
-                            else f"(no change vs {base} for {relpath})")
+    _head = CLAIM_PROMPT_HEAD if relpath in GATED_CLAIM_FILES else PROMPT_HEAD
+    prompt = _head + (diff if diff.strip()
+                      else f"(no change vs {base} for {relpath})")
     # REVIEWER-CONTEXT block (Rafael mandate 2026-08-02): PROACTIVELY pre-load the
     # diff-specific facts a diff-only view CANNOT show — what a referenced constant
     # MEANS, the threading model, a cross-file helper/caller/guard, the runtime

@@ -36,6 +36,22 @@ GATED_DIRS = ("execution/", "strategy/", "events/", "data/", "indicators/", "scr
 GATED_EXTS = (".py", ".sh", ".json", ".yaml", ".yml", ".ini", ".env", ".toml", ".cfg")
 GATED_SPECIFIC = ("main.py", "config.py", "requirements.txt", "Dockerfile",
                   "Pipfile", "CLAUDE.md", ".gitignore")
+# CLAIM FILES (added 2026-08-04, Rafael mandate after a wrong investigative finding
+# shipped with ZERO gate): every code diff tonight went through full-read -> 10-pt audit
+# -> cold-2nd -> board -> Gro+GAI design pass -> Gro+GAI FINAL pre-ship. A diagnostic
+# claim ("the live bot has been down since 2026-07-19") went through none of that — a
+# few SSH commands, a confident conclusion, straight into handoff.md, committed and
+# merged. It was WRONG (the investigated host was a decommissioned rollback box; real
+# production was fine) and was only caught because Rafael personally distrusted it and
+# demanded an independent board re-check. That must never again depend on the user's
+# suspicion. handoff.md is the project's CROSS-ACCOUNT TRUST LOG — other sessions/
+# accounts read it as settled fact with zero further verification, which makes an
+# unverified claim landing there MORE dangerous than one in chat, not less. Gated the
+# same way code is: a fresh Gro+GAI marker required before it can ship (see
+# preship_audit.py's CLAIM_PROMPT_HEAD — a claims-evidentiary audit, not a code-defect
+# one; cold-2nd's logic-inversion/off-by-one checklist doesn't apply to prose, so it is
+# intentionally NOT required for these paths — see _changed_gated below).
+GATED_CLAIM_FILES = frozenset({"handoff.md"})
 # T6 FIX: the enforcer was the ONE artifact nothing gated. An agent could weaken
 # _is_gated, delete the PreToolUse block from settings.json, or re-ignore .claude/,
 # and commit any of it with no marker — silently undoing every control here. Given the
@@ -46,6 +62,8 @@ GATED_SELF = (".claude/preship/", ".claude/settings.json", ".github/")
 
 def _is_gated(path: str) -> bool:
     path = path[2:] if path.startswith("./") else path
+    if path in GATED_CLAIM_FILES:
+        return True
     if path in GATED_SPECIFIC:
         return True
     if path.startswith("run_") and path.endswith(".py"):
@@ -346,9 +364,13 @@ def _changed_gated(range_args, ref_tmpl):
         good, why = _marker_ok(f, ref_tmpl.format(f))
         if not good:
             fails.append(f"  - {f}: [Gro/GAI] {why}")
-        c_good, c_why = _cold2_ok(f, ref_tmpl.format(f))
-        if not c_good:
-            fails.append(f"  - {f}: [COLD-2ND] {c_why}")
+        # Cold-2nd's checklist (logic inversion, off-by-one, branch completeness) is a
+        # CODE-defect check — it does not apply to prose. Claim files get the Gro/GAI
+        # evidentiary-claims audit above instead (see GATED_CLAIM_FILES comment).
+        if f not in GATED_CLAIM_FILES:
+            c_good, c_why = _cold2_ok(f, ref_tmpl.format(f))
+            if not c_good:
+                fails.append(f"  - {f}: [COLD-2ND] {c_why}")
     return (fails, gated)
 
 
