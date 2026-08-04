@@ -49,14 +49,19 @@ Architecture Invariant #3), not a gap, but not independently re-confirmed agains
 session — worth a glance next time `execution/exit_logic.py`'s day-stop handling is open for any
 other reason.
 
-**🔴 OPEN — `ledger_sync FAILING` alert (Gemini-forwarded by Rafael live, not yet root-fixed).**
+**🔴 OPEN — `ledger_sync FAILING` alert — EXACT symbol now confirmed: GOOGL/qhm.**
 The CODE-LEVEL trace below is still valid (it's a property of what's on `main`, independent of which
 host runs it) — only the "where does this run" framing above was wrong; `run_ledger_sync.py`'s cron
-line lives in the SAME populated crontab on `137.131.51.250` confirmed above, not on an unknown host
-under an inaccessible user as previously guessed. Traced to source this session (not shipped,
-diagnostic only): `execution/ownership_guard.py::sync_ledger`'s
-never-shrink-a-protected-floor guard is refusing a full-replay heal, 9+ consecutive runs. Most likely
-cause: a QHM-tier symbol's founding buy fill aged out of Alpaca's fill-history replay window, combined
+line lives in the SAME populated crontab on `137.131.51.250` confirmed above. Pulled the live
+`.ledger_sync_streak.json` + `logs/ledger_sync_cron.log` directly from that box: **streak=14 (not 9 —
+it's grown since Rafael's alert), first refusal 2026-08-03 19:00 UTC, every single one for the same
+reason: `{'GOOGL/qhm': {'was': 4.0, 'would_be': 2.0}}`.** The persisted ledger says GOOGL's quarterly-
+hold tier holds 4 shares; a full Alpaca fill-history replay can only reconstruct 2 (2 of the founding
+QHM buy fills have aged out of the replay window) — exactly the code-level hypothesis from the trace
+below, now symbol-confirmed. The guard is doing its job correctly (refusing to silently drop 2
+protected GOOGL shares) — still zero live capital risk (`OWNERSHIP_GUARD_ENFORCE=False`, confirmed
+below). Traced to source this session (not shipped, diagnostic only): `execution/ownership_guard.py::sync_ledger`'s
+never-shrink-a-protected-floor guard is refusing a full-replay heal. Root cause: a QHM-tier symbol's founding buy fill aged out of Alpaca's fill-history replay window, combined
 with the QHM overlay's deliberate "skip drifted symbols" rule (so the overlay can't rescue it). **Zero
 live capital risk right now** — confirmed at source that `config.OWNERSHIP_GUARD_ENFORCE=False`, and all
 3 consumers in `execution/broker.py` (`close_position`, `partial_close_position`, `_floor_bound_stop_qty`)
