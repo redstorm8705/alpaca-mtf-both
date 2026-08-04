@@ -1,6 +1,29 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-08-04 — Nightly autonomous audit: counter_trend.py + reentry_cooldown.py — TESTS WRITTEN, SHIP PENDING
+
+**Audited:** `execution/counter_trend.py` (100 lines) + `execution/reentry_cooldown.py` (127 lines)
+**Draft:** `tests/test_counter_trend_reentry.py` — 47 tests, 422 lines. Ready to ship.
+**Gate status:** board 3/3 PASS (A+B FAILs overturned by counter-prompts), cold-2nd PASS (ae72f346fd862cdda), statics PASS (py_compile+ruff+mypy), 120/120 pytest. Blocked only by Gro/GAI API unavailability in nightly container.
+**Next step:** interactive session runs `python3 .claude/preship/preship_audit.py tests/test_counter_trend_reentry.py` → git add + commit + push. File is at `tests/test_counter_trend_reentry.py` in working tree; cold-2nd marker at `.claude/preship/markers/tests__test_counter_trend_reentry.py.cold2.json`. See `logs/pending_claude_session_2026-08-04.md` for full ship instructions.
+
+**RC checks (both files):**
+- RC-1 (naive datetime): PASS — `datetime.now(_PT)` uses PT tz everywhere; `_PT` is ZoneInfo("America/Los_Angeles")
+- RC-2 (CWD-relative path): PASS — no file I/O in either module
+- RC-3 (silent exception): PASS — all except blocks log warning or continue with explicit comment
+- RC-4 (estimated exit price): N/A — no price/fill operations
+- RC-5 (non-atomic write): N/A — no file writes
+- RC-6 (wrong API field): N/A — no Alpaca API calls
+- RC-7 (zero-share sizing): N/A — no position sizing
+- RC-8 (unbounded scan buffer): N/A — no scan buffers
+
+**Cold second-agent advisory gaps (non-blocking):**
+- Gap A: `_r == 0.0` exact boundary not tested (flat stock — `>` vs `>=`)
+- Gap B: `[stop_older, target_newer]` inverted ordering not tested
+- Gap C: `test_exactly_min_bars_returns_none` name slightly misleading (22→None is correct; the minimum for a result is 23 bars)
+
+---
 ## 2026-07-13 — QHM dip-add: OPTION-C stop-safe add (wash-trade fix) — SHIPPED
 
 The activated dip-add couldn't place a buy: each QHM position holds a GTC sell-stop and Alpaca blocks
