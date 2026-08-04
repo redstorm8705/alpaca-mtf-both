@@ -1541,6 +1541,39 @@ def execute_entries(
             except Exception as _fe:
                 logger.warning(f"[{symbol}] Fill price fetch failed — using estimate: {_fe}")
 
+            # ── MR decision-stack logging (item 2 diff 3e, Rule D keystone) ──────────────
+            # record_entry(**extra_log) forwards straight to the trade_events.jsonl entry event
+            # (verified at source: portfolio_tracker.py record_entry — extra_log is splatted into
+            # _log_event unfiltered). Additive only: _mr_log_extra is {} for a trend entry, so a
+            # non-MR entry's logged event is byte-identical to today. Closes the gap where an MR
+            # entry's "strategy" was never written to the JSONL event (only tagged post-hoc onto the
+            # in-memory trade dict below, which record_entry does not read back) — without it, an MR
+            # entry's 0-3 score is indistinguishable from a low trend score at query time. regime/RSI/
+            # confirmation are already covered by the existing conditions=... kwarg below (sig
+            # ["conditions"] IS mean_reversion_confluence's own conditions dict for an MR signal —
+            # structural/trigger/mean_reverting/rsi_extreme/stretched/rsi/stretch_pct). mr_size_mult
+            # and mr_replaced_trend (which opposite trend signal, if any, Option B discarded for this
+            # symbol — see signal_generator.py) were not logged anywhere before this diff.
+            _mr_log_extra = {}
+            if _is_mr:
+                try:
+                    _mr_log_extra = {
+                        "strategy":          "mean_reversion",
+                        "mr_score":          sig.get("mr_score"),
+                        "mr_max_score":      sig.get("mr_max_score"),
+                        "mr_size_mult":      float(getattr(config, "MR_SIZE_MULT", 0.5)),
+                        "mr_replaced_trend": sig.get("mr_replaced_trend"),
+                    }
+                except Exception as _mrlog_e:
+                    # Reliability seat catch (2026-08-04 board): kept narrow and OUTSIDE the
+                    # PHANTOM ENTRY try below — a logging-field failure must never be conflated
+                    # with (or suppress) that handler's post-fill reconciliation duty, and must
+                    # never abort the rest of this cycle's signals loop. Falls back to the one
+                    # field that cannot fail (a string literal) rather than losing the MR tag
+                    # entirely — mirrors the D1 numpy.bool_ postmortem (trade_logger.py).
+                    logger.warning(f"[{symbol}] MR log-extra build failed ({_mrlog_e}) — "
+                                   f"logging strategy tag only.")
+                    _mr_log_extra = {"strategy": "mean_reversion"}
             try:
                 tracker.record_entry(
                     symbol=symbol,
@@ -1568,6 +1601,7 @@ def execute_entries(
                     # IC/ICIR individually (not just the total score). sig IS long_r/short_r, which
                     # carries "conditions"; this was the only missing link (per-factor never logged).
                     conditions=sig.get("conditions"),
+                    **_mr_log_extra,
                 )
                 # Tag MR strategy on the persisted trade dict (item 2 diff 3d) — record_entry does
                 # NOT persist strategy (it only forwards it to the JSONL event), so without this the
