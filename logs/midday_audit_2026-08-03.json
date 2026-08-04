@@ -1,0 +1,85 @@
+{
+  "audit_date": "2026-08-03",
+  "run_ts": "2026-08-03T10:30:01.632869-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TOST"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 12,
+      "ELEVATED": 19
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 14,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-03 16:11:47,271 | WARNING  | execution.entry_logic | [NET] Sector correlation BLOCKED: already holding DDOG in sector 'software' \u2014 skipping to",
+      "2026-08-03 16:24:50,031 | WARNING  | execution.entry_logic | [NET] Sector correlation BLOCKED: already holding DDOG in sector 'software' \u2014 skipping to",
+      "2026-08-03 16:38:17,602 | WARNING  | execution.entry_logic | [NET] Sector correlation BLOCKED: already holding DDOG in sector 'software' \u2014 skipping to",
+      "2026-08-03 16:38:18,574 | WARNING  | execution.entry_logic | [PANW] COUNTER-TREND GATE [long]: 1-month return -3.79% opposes the trade on a structural",
+      "2026-08-03 16:45:37,823 | WARNING  | execution.entry_logic | [SNOW] Sector correlation BLOCKED: already holding DDOG in sector 'software' \u2014 skipping t"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "TOST",
+        "side": "long",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "AMZN",
+      "DDOG",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA",
+      "SMCI"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "TOST"
+    ],
+    "by_symbol": {
+      "TOST": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}
