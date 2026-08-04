@@ -1,0 +1,70 @@
+Nightly Gemini Audit — 2026-08-03
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'strategy/signal_generator.py', 'execution/kelly.py', 'execution/mr_regime.py', 'execution/entry_logic.py', 'execution/reentry_cooldown.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1.  `execution.ownership_guard` | `sync_ledger REFUSED` — replay would shrink protected floor(s) for `GOOGL/qhm` | `GOOGL`
+2.  `strategy.run_cycle` | Repeated entries for `AMZN` blocked by an unlogged condition (`confirm_gate=23 scans but no entry`) despite `MAX_OPEN_POSITIONS=20` not being breached | `AMZN`
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `2026-08-03 19:40:09,331 CRITICAL execution.ownership_guard sync_ledger REFUSED`: This critical log message repeatedly appears for `GOOGL/qhm` (`streak=3`, `streak=4`). It indicates a persistent failure to reconcile the ledger with Alpaca's ground truth because the replay would "shrink protected floor(s)" and fills are "likely aged out of Alpaca window." This prevents the accurate healing of position state, potentially leading to stale and incorrect internal account information.
+*   `2026-08-03 19:40:29,083 WARNING strategy.run_cycle | [ANOMALY-2] [AMZN] confirm_gate=23 scans but no entry`: This warning for `AMZN` is repeatedly logged (`19:40:29`, `19:46:55`, `19:53:48`, `19:59:57`). Despite `confirm_gate=23` scans, no entry occurs. The accompanying information, `risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20`, indicates that the block is not due to the `MAX_OPEN_POSITIONS` limit, suggesting an unidentified and unlogged gating condition.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness**: All verified closed trades in `trade_events` show correct P&L signs (positive for winning longs/short covers, negative for losing longs/short covers) relative to their entry and exit prices.
+*   **pnl_pct computation**: For the `AMZN` trades listed in the `EOD SNAPSHOT`, `pnl_pct` values (`4.25%`, `-0.01%`) are correctly calculated based on the reported P&L and entry notional.
+*   **Partial PnL**: No partial exits (`T1`/`T2`/`T3` tranches) were recorded in the provided `trade_events` log.
+*   **Trades with pnl=0.0 anomalies**: The `SNOW` trade at `2026-07-31T12:20:28` shows `pnl=0.0` due to a `hard_stop` at the entry price (`294.92`), which is consistent with a breakeven stop, thus not a recording bug.
+*   **Entry/exit prices plausible**: All recorded entry and exit prices appear plausible for the respective symbols and times of day.
+*   **Score→outcome correlation**: Across the few recent closed trades, there isn't a clear, consistent correlation between higher scores (e.g., 11 or 12) and positive outcomes. Outcomes include wins, breakeven, and losses for similar scores. The single score 10 trade resulted in a loss. More data would be needed for a robust analysis.
+*   **Stop-hit rate vs. win rate**: The `all_time_stats` (`win_rate=35.8%`, `avg_r_multiple=-0.042`) indicate that the bot is not consistently achieving its target R:R of 1:2.5 (implied by `INTRADAY_STOP_ATR_MULT=1.2` and `INTRADAY_TARGET_ATR_MULT=2.5`) and has a low overall win rate. This signals a performance concern but not a bug in logic.
+*   **Exit reason consistency**: `external_close` exits for `AMZN` and `QQQ` occur at prices not directly tied to initial stop/target levels, which is expected for manual or external closures. `stop_hit` and `overnight_atr_buffer_exit` were consistent with expected stop logic.
+
+### TRADE INTEGRITY
+No issues.
+
+### MODIFIED FILE FINDINGS
+*   **`config.py`**: No direct bugs found. The comment at `config.py:30` regarding `AMZN` re-entry (`no external-close cooldown yet`) is outdated, as `execution/reentry_cooldown.py` (also modified today) now explicitly includes logic for `external_close` cooldowns.
+*   **`strategy/signal_generator.py`**:
+    *   **Bug**: `calculate_score_16pt` | `_l = float(_row["low"]) if "low" in daily_df.column` (line 331).
+    *   **Failure condition**: There is a typo where `daily_df.column` should be `daily_df.columns`. This will cause an `AttributeError` when attempting to access the DataFrame's columns. This error is silently caught, resulting in the Internal Bar Strength (IBS) score (`c10_score`) for the 16-point scoring system always being `0`, preventing it from contributing correctly to the score.
+*   **`execution/kelly.py`**: No issues found. The `rebuild_from_trades` function correctly excludes trades with `_fill_unverified` or missing/zero `exit_price`, preventing corruption of Kelly statistics.
+*   **`execution/mr_regime.py`**: No issues found. All functions are designed to be robust, fail-safe, and never raise exceptions.
+*   **`execution/entry_logic.py`**: No specific bugs found in the visible code paths. However, it is the module where the `[ANOMALY-2]` for `AMZN` would be triggered, indicating a failure to log the actual blocking condition.
+*   **`execution/reentry_cooldown.py`**:
+    *   **Bug**: `is_in_cooldown` and `_triggers_cooldown` | The re-entry cooldown mechanism for `external_close` reasons is not functioning as intended.
+    *   **Failure condition**: An `AMZN` long trade was exited via `external_close` at `2026-08-03T11:44:05`. Despite `config.EXTERNAL_CLOSE_REENTRY_COOLDOWN_ENABLED` defaulting to `True` (or being explicitly enabled), the bot re-entered `AMZN` long minutes later at `2026-08-03T11:50:30`. This indicates that the `is_in_cooldown` check failed to identify the prior `external_close` as a cooldown trigger for the subsequent re-entry, bypassing a critical trading discipline rule.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | **FIXED**
+*   P5-C2 | run_movers.py ImportError | **UNTOUCHED**
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted | **FIXED**
+*   P5-H2 | Fill price crosstalk | **UNTOUCHED**
+*   P5-H3 | Orphan GTC 404 path | **UNTOUCHED**
+*   P5-H4 | Rule 2 dead code | **UNTOUCHED**
+*   P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today | **FIXED**
+*   P5-M1 | Cycle watchdog restart loop | **UNTOUCHED**
+*   P5-M2 | MRI score cached stale across sessions | **UNTOUCHED**
+*   P5-M3 | score_comparison JSON unbounded growth | **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | **UNTOUCHED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **UNTOUCHED**
+*   P5-L3 | live_data_writer.py no reconnect logic | **UNTOUCHED**
+
+### NEW BUGS FOUND
+1.  **EXECUTION BUG | CRITICAL | `execution/ownership_guard` (log entry)** | Ledger Sync Refusal | Repeated `CRITICAL` logs `execution.ownership_guard sync_ledger REFUSED` and `ledger_sync NOT healed` for `GOOGL/qhm` (streak=4) due to replay attempting to shrink "protected floors" and fills aging out. This signifies a breakdown in ledger reconciliation, preventing the bot from correctly updating its position state, which can lead to stale or incorrect internal accounting.
+2.  **EXECUTION BUG | HIGH | `execution/entry_logic.py` (runtime behavior)** | Unlogged Entry Blocking | The `[ANOMALY-2]` warning for `AMZN` (`confirm_gate=23 scans but no entry`) indicates that entries are being silently blocked without a clear, logged reason. The reported open position count (`risk.open_positions=3` vs `MAX_OPEN_POSITIONS=20`) does not explain the block, pointing to an opaque gating condition that prevents intended trades without providing diagnostic information.
+3.  **ALPHA ISSUE | HIGH | `execution/reentry_cooldown.py`** | External Close Cooldown Not Applied | The `reentry_cooldown` mechanism failed to block an `AMZN` long re-entry at `2026-08-03T11:50:30`, despite a prior `AMZN` long being closed via `external_close` just minutes before at `2026-08-03T11:44:05`. This directly contradicts the intended behavior to prevent re-entering manually closed positions within the same trading session.
+4.  **EXECUTION BUG | MEDIUM | `strategy/signal_generator.py`** | Typo in IBS Score Calculation | In `strategy/signal_generator.py:calculate_score_16pt` (line 331), `daily_df.column` should be `daily_df.columns`. This typo results in an `AttributeError` that is silently caught, causing the IBS component of the 16-point score to always evaluate to 0, despite valid data, thereby miscalculating the secondary signal.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate investigation and resolution of `execution.ownership_guard` ledger sync refusal**: Address the root cause of `GOOGL/qhm` ledger sync failures to ensure accurate position tracking and state management, potentially by improving fill reconciliation for aged-out fills or adjusting protected floor logic.
+2.  **Debug and log the blocking condition for `AMZN`'s `[ANOMALY-2]`**: Identify the exact gate within `execution/entry_logic.py` that is preventing `AMZN` entries and ensure that the blocking condition is explicitly logged to provide clear diagnostic information for why trades are being skipped.
+3.  **Correct `execution/reentry_cooldown.py` for `external_close` handling**: Fix the `is_in_cooldown` logic to correctly identify and block re-entries for symbols that were previously closed due to an `external_close` within the same trading session, as per the intended discipline rule.
+4.  **Rectify the typo in `strategy/signal_generator.py` for IBS calculation**: Change `daily_df.column` to `daily_df.columns` in `calculate_score_16pt` to correctly enable the IBS score calculation and ensure the 16-point system is evaluated as intended.
+5.  **Audit and prioritize outstanding P5 issues**: Review the status of P5-C2 (`run_movers.py ImportError`), P5-H2 (`Fill price crosstalk`), P5-H3 (`Orphan GTC 404 path`), and P5-M3 (`score_comparison JSON unbounded growth`) for potential impact and develop a plan for their resolution.

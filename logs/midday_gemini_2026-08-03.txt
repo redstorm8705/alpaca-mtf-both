@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-08-03
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+Position left naked (no stop) | TOST(long, 2sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   No closed trades are present in the `CLOSED TRADE DETAILS` section, making it impossible to audit entry/exit prices, P&L signs, win rate, or profit factor for closed positions.
+*   The `SESSION P&L SUMMARY` shows 0 entries and $0.00 P&L, which is inconsistent with `ALPACA FILLS TODAY` showing 2 fills across 1 symbol (`TOST: 2B/0S`). This discrepancy is explicitly attributed to known issue D1 (degraded `entry`-EVENT log) and is considered a benign pattern for this report's context.
+*   The stop-hit rate is 0% (0 stops), which is consistent with the absence of closed trades.
+*   There are no closed trades to audit for P&L recording bugs (P&L = 0.0 but entry ≠ exit price) or partial exit issues.
+
+### ENTRY QUALITY
+*   The bot generated a LONG signal for `TOST` with a confluence score of 10/12, which met the `MIN_LONG_SCORE` of 8 and the dynamically raised `MIN_SCORE` of 10/12 (as seen in `2026-08-03 17:25:28,934`). This indicates the entry adhered to the strategy's minimum score thresholds.
+*   Sizing was adjusted due to market conditions: "Mid-day doldrums — sizing at 75%" and "MRI ELEVATED (score=36) — size floor 0.85x applied" (log entries at 17:24:22,497 and 17:24:40,841). This demonstrates appropriate adaptive sizing.
+*   The bot correctly blocked an entry for `SNOW` due to sector correlation (`[SNOW] Sector correlation BLOCKED: already holding DDOG in sector 'software'`) at 17:25:30,377, indicating adherence to diversification rules.
+
+### EXIT QUALITY
+No issues found. No trades were closed during this audit period.
+
+### MRI ALIGNMENT
+The Macro Risk Index (MRI) was `ELEVATED` with a score of 36 (as reported at 17:24:29,525 and 17:24:40,841). In response, the bot applied a `size floor 0.85x` (17:24:40,841), which is an appropriate risk-reduction measure for an elevated risk environment. The composite regime was BULL, with VIX/VIX3M NORMAL, not indicating a regime mismatch for long entries.
+
+### LOG ANOMALIES
+None detected, beyond the "KNOWN BENIGN PATTERNS" listed in the report context (e.g., crash-safety flushes, Alpaca paper account fill reporting quirks, D1 entry-event log degradation).
+
+### NEW BUGS / CONCERNS
+**EXECUTION BUG** | CRITICAL | Position left naked without a protective stop order.
+*   **Variable involved**: The presence or absence of a live protective stop order for the open `TOST` position on Alpaca.
+*   **Value vs. what it should be and why it constitutes a failure**: The current value is `no protective stop order` for `TOST(long, 2sh)`, as explicitly stated in the `LIVE STOP COVERAGE` section. The expected value for any live position is `a live protective stop order` to cap potential losses. This constitutes a catastrophic failure because it exposes the paper trading account to unlimited downside risk, fundamentally violating the bot's risk management mandate.
+*   **Exact condition**: A long position of 2 shares in `TOST` was opened and is currently live according to `ALPACA FILLS TODAY` (`TOST: 2B/0S`) and the `ledger_sync` (`[TOST] net=2.0 intraday=2.0` at 17:20:10,053), but no corresponding stop order is active on the Alpaca brokerage, as confirmed by `LIVE STOP COVERAGE`. The provided logs do not show any attempt to place a stop order for `TOST` or any error messages related to stop order submission for this symbol, which is itself an anomaly for a critical risk management function.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION**: Immediately investigate and resolve the root cause of the `TOST` position being left naked without a protective stop order. This is a critical risk exposure that must be addressed with the highest urgency. Verify the stop order placement logic, the interaction with the Alpaca API for stop orders, and ensure reliable execution.
+2.  **INFRASTRUCTURE**: Implement comprehensive logging for all stop order lifecycle events (submission, confirmation, modification, cancellation, failure) to provide full visibility. This will be crucial for diagnosing similar issues in the future.
+3.  **ALPHA**: Prioritize the resolution of known issue D1 (`entry`-EVENT log degradation). Without accurate entry events, a full and reliable performance audit of the bot's alpha quality (e.g., true P&L, win rate, profit factor, score-outcome correlation) is not possible, hindering systematic improvement.
