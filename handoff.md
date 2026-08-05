@@ -12,6 +12,23 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**✅ SHIPPED (2026-08-05) — QHM trailing profit-lock ENABLED live (`_TRAIL_LOCK_ENABLED=True`).**
+Resolved QHM's open take-profit question via BGG research: board + Groq + Gemini all converged on
+enabling the already-built, already-dark trailing-stop ratchet (`quarterly_hold_manager.py::
+_maybe_trailing_lock`) rather than a new fixed-% take-profit — this exact activation was already
+unanimously board+Gro+GAI-approved 2026-06-24 (Architecture Invariant #13). One-line diff
+(`_TRAIL_LOCK_ENABLED = False` → `True`); the function itself is unchanged and was re-read in full
+this session to reconfirm it: never sells (only raises the GTC stop), monotonic, RTH-only, once/day/
+symbol, ≥5% gain floor, ≥2% live-price buffer, explicit cancel-fill-race handling, never leaves a
+naked position. Takes effect immediately on real current holdings (GE, GEV, NVDA, GOOGL) — paper
+account. FINAL PRE-SHIP Gro+GAI APPROVE on first pass. Full detail: `logs/tb_audit_log.md` 2026-08-05.
+Noted follow-on (not resolved by this change): López de Prado's dissent that this only protects gains,
+never realizes cash — an actual profit-*taking* mechanism (ATR-scaled partial exit) is a separate,
+still-open question if Rafael wants to bank real profit mid-hold.
+**Also decided, in progress:** weekly/monthly % visibility — Rafael explicitly overrode the board's
+Modified-Dietz recommendation (paper account, no real deposits/withdrawals possible, revisit at live
+capital) — building the SIMPLE period-P&L ÷ start-of-period-equity % instead, no deposit-tracking.
+
 **✅ RESOLVED (2026-08-05) — `ledger_sync FAILING` (GOOGL/qhm) — root cause was a manual trade, confirmed by Rafael, fixed with a one-time data correction, alert cleared.**
 The earlier hypothesis (a founding fill aging out of Alpaca's replay window) was superseded. Order-level
 forensics on the live production log + Alpaca order records showed the bot's own tagged 4-share GTC stop
