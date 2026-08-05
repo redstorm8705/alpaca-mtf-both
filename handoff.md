@@ -1,15 +1,61 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-04 (autonomous resume, Rafael live mid-session) | **CROSS-ACCOUNT HANDOFF** — always
-current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
+**Updated:** 2026-08-05 (interactive, Rafael present, post-trust-break rigor) | **CROSS-ACCOUNT HANDOFF** —
+always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
-> point), (2) `CLAUDE.md` (binding rules — note new §DURABLE SYNC RULE), (3) `logs/tb_audit_log.md`
-> (bug/patch log), (4) `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md`
-> (active design). Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+> point), (2) `CLAUDE.md` (binding rules — note new §DURABLE SYNC RULE and the new handoff.md
+> claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
+> `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
+> Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-04, autonomous resume — Rafael dropped in mid-session) — pick up here
+## ⏩ LATEST (2026-08-05, interactive — Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ SHIPPED (2026-08-05) — fixed a hallucinated-patch gap in the autonomous review pipeline.**
+Investigating a live `ledger_sync` alert led to finding `autonomous_review.py` had queued a REJECTED
+`strategy/run_cycle.py` patch proposal that was fully fabricated — it referenced a loop and variables
+that don't exist anywhere in the real 2,064-line file, a third of it targeting a gate (PDT limit)
+deleted months ago (board vote S50). Root cause: `autonomous_patch_generator.py` silently truncated
+file content to 6-8K chars before asking an LLM to draft a patch — under 7% of that file — so the
+model fabricated the rest. Nothing anywhere in either pipeline script ever verified a generated diff
+actually applies. Fixed: no more silent truncation (loud fail above 300K chars instead); a real
+`git apply --check` gate before any diff reaches paid review. Both fixes functionally verified against
+the real fabricated patch (correctly rejected) and a real valid patch (correctly accepted). Two
+independent board seats then found and fixed three more issues in that first pass: a temp-file leak,
+a Groq-context/budget risk from the newly-unlocked full file content bypassing the pipeline's
+Gemini-primary router, and a pre-existing path-containment gap this fix would have widened (a
+malformed finding naming `.env` or an absolute path could leak it in full). All three fixed and
+functionally re-verified. Full writeup: `logs/tb_audit_log.md` 2026-08-05 entry. **Not yet done**
+(logged as follow-ups, not blocking): building the actual rejected-signal-logging capability fresh
+(the real finding behind the fabricated patch is legitimate and worth building, just not as a revision
+of fictional code); `autonomous_review.py`'s own push-retry has the same ineffective-retry pattern
+found elsewhere this session (see the git-divergence item below) — not touched in this diff.
+
+**✅ SHIPPED (2026-08-05) — recovered 2 commits stranded on the production box + built a claims-gate.**
+The live production box (`137.131.51.250` — see the corrected host note a few entries down; the
+`mtf-bot` SSH alias was pointed at a decommissioned rollback box for most of this session and has now
+been fixed in `~/.ssh/config`) had 2 commits that existed ONLY locally, never reached GitHub, because
+its `git pull` had been silently failing every weekday since **2026-07-20** — a deterministic scheduling
+collision (several report-generating cron jobs modify tracked files in the afternoon without
+committing; the autonomous-review job runs after them every evening, guaranteed dirty tree). Harmless
+for weeks until 2026-08-04, when a real item needed committing and then failed to push (non-fast-forward).
+Recovered via cherry-pick onto a clean base (branch protection now requires a PR for everything, incl.
+what used to be a direct push — that historical precedent is stale) — PR #88 + PR #89, both merged, box
+now 0 commits ahead/behind origin/main. **Underlying scheduling collision NOT yet fixed** — logged as a
+follow-up "build," deliberately separate from this recovery per the project's own fix/build separation rule.
+Separately: after a wrong investigative claim shipped into this file earlier with zero review (see the
+correction below), built `.claude/preship/`'s existing code-gate out to also cover `handoff.md` — any
+commit to this file now needs an independent, evidence-focused Gro+GAI pass (a NEW `CLAIM_PROMPT_HEAD` in
+`preship_audit.py`, distinct from the code-defect prompt) before it can ship, same tier as code. Tested
+against a reconstruction of the actual wrong claim (correctly rejected) and a well-evidenced control claim
+(correctly approved), including a false-reject the test itself caught and got fixed before shipping.
+
+**✅ CORRECTED (2026-08-04/05, board-verified after Rafael flagged distrust) — see full detail further down
+this file.** An earlier entry wrongly claimed the live bot had been down since 2026-07-19; the investigated
+host was actually a deliberately decommissioned rollback box from a completed migration. Corrected in place,
+`~/.ssh/config` fixed at the root cause. `ledger_sync`'s exact culprit (`GOOGL/qhm`, 4 vs 2 shares) is
+pinned down further below too.
 
 **✅ SHIPPED (2026-08-04) — item 2 diff 3e: MR Rule-D decision-stack logging (PR #84 → main `c5b4d74`).**
 Closes the last MR pre-flip item. Full gate (full read + statics + cold-2nd ×2 + board 2/2 + FINAL
