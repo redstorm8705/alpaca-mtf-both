@@ -9417,3 +9417,83 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **Gate:** full read entry_logic.py 1918L (direct, 6 chunks) + mr_regime.py 268L + signal_generator.py ~750L (targeted, pre-existing MR sections) + statics clean (py_compile/ruff/mypy, 2 rounds) + cold-2nd PASS (2 rounds — round 1 clean; round 2 verified the reliability-seat hardening) + board 2/2 (reliability/Majors-Kim seat: PASS-WITH-CHANGES — flagged `float(config.MR_SIZE_MULT)` sat outside any exception boundary, a hypothetical corrupted config value could abort the rest of the cycle's entries loop; FOLDED — wrapped in its own narrow try/except, falls back to `{"strategy":"mean_reversion"}`, logs WARNING, verified NOT to overlap the pre-existing PHANTOM ENTRY handler / masked-loss seat: independently traced the diff executes strictly downstream of order submission and all sizing/gating — ALL-ZERO on size/frequency/concurrency, same-day-safe) + Gro+GAI design-pass APPROVE + FINAL PRE-SHIP Gro+GAI APPROVE on the exact hardened diff (GAI's first design-pass REJECT was a false premise — it hadn't seen `mr_score`/`mr_max_score` already populated at signal_generator.py:786-787, outside its 3-line diff-context window; reversed to APPROVE in one counter-prompt round with verbatim evidence — textbook context-starvation false-reject, same class PR #17 fixed for ci_audit.py).
 **Also resolved (status only, not shipped):** live `ledger_sync FAILING` Slack alert (Gemini midday/nightly audit) traced to source — `execution/ownership_guard.py::sync_ledger`'s never-shrink-a-protected-floor guard refusing a full-replay heal, most likely a QHM symbol's founding fill aging out of Alpaca's replay window plus the drift-skip on the QHM overlay. Confirmed `OWNERSHIP_GUARD_ENFORCE=False` at all 3 broker.py call sites (`close_position`, `partial_close_position`, `_floor_bound_stop_qty`) — the ledger is write-only telemetry right now, zero live capital risk. No fix proposed (needs OCI log access to identify the exact symbol + a design session) — logged here as a follow-up, not gated/shipped.
 **NEXT:** flip MR_ENABLED=True (long-first, MR_LONG_ONLY stays True) — both hard pre-flip gates (profile-aware agg cap, SPY-downtrend brake) and now diff 3e are all shipped. Then measure ≥30 MR-long trades on the dedicated Kelly key before enabling shorts.
+
+---
+
+## 2026-08-05 (nightly autonomous session) — UNIT TESTS queued; signal_generator.py draft
+
+### QUEUED (not applied) — unit tests: execution/counter_trend.py + execution/reentry_cooldown.py
+**Files targeted (new):** tests/test_counter_trend.py + tests/test_reentry_cooldown.py
+**Classification:** NON-RTH (new pure-stdlib test files only)
+**Why queued:** CLAUDE.md "5-HOUR AUTONOMOUS WORK CHAIN" Rule 4: "Scheduled sessions NEVER apply
+patches — everything stops at a fully-prepped approval-queue package." Overrides the nightly agent's
+STEP 4 "NON-RTH APPLY LIMIT: 1 file per run" instruction.
+**Board vote:** A=FAIL (CLAUDE.md rule), B=FAIL (attack), C=PASS → 2 FAILs → STEP 6.
+
+**Board Agent B finding (Malicious Red Teamer) — REAL ATTACK FOUND:**
+`sys.modules` injection of a fake `trade_logger` with a TRUNCATED `_STOP_REASONS` frozenset
+(e.g. only `{"hard_stop"}`, dropping `trail_stop`, `gtc_stop_triggered`, `overnight_atr_buffer_exit`,
+`breakeven_stop`) combined with assertions that those 4 types do NOT trigger the cooldown. Tests pass
+(the truncated mock makes them pass), CI goes green, patch merges — but in production the cooldown
+fails to block re-entries after the dominant SMCI stop types (exactly the case reentry_cooldown.py
+was built to prevent). The fallback frozenset at L50-53 does NOT rescue this: the import SUCCEEDS
+with a truncated set (no exception, no fallback invocation).
+
+**Resolution in draft:**
+- Complete frozenset (all 5 reasons, never truncated) in the fake trade_logger mock
+- Individual test per stop reason type (test_trail_stop_blocks, etc.)
+- `test_stop_reasons_frozenset_complete()` regression guard: asserts live `_STOP_REASONS` ==
+  hardcoded expected set — catches future frozenset drift at the source.
+
+**Draft location:** `logs/pending_claude_session_2026-08-05.md` (Item 1 — complete test code ready)
+**Queue log:** `logs/queued_for_review_2026-08-05.md`
+
+**RC-1..8 check (new test files — zero behavior, pure assertions):** All PASS. No RTH execution code,
+no datetime ops, no file I/O, no data fetches, no API calls, no sizing code.
+
+---
+
+### RTH-CHAIN DRAFT COMPLETE — strategy/signal_generator.py dead `_base` variable (L777)
+**File:** strategy/signal_generator.py (1096 lines — full read COMPLETE via Explore subagent + direct Read verification)
+**Change:** Remove 1 dead assignment: `_base = long_r if _mr_dir == "long" else short_r` (L777).
+The variable is never referenced in the `mr_signals.append({...})` dict that follows it — confirmed
+as a cold-2nd nit when diff 3c was shipped (tb_audit_log.md 2026-08-03 entry: "dead _base assignment").
+Zero behavior change.
+
+**10-Point Audit (signal_generator.py) — 2026-08-05 nightly:**
+| Pt | Check | Result |
+|----|-------|--------|
+| 1 | Static analysis (py_compile/ruff/mypy) | PASS — will verify after apply |
+| 2 | Trade path trace: `_base` never feeds `mr_signals.append({...})` | CONFIRMED — L777 assigned, L778-799 append block reads `long_r`/`short_r`/`_mr_dir`/`_mrc` directly, not `_base`. Zero behavior change. |
+| 3 | Adversarial scenarios: None inputs, zero values | N/A — dead code removal, no logic changed |
+| 4 | Full read: all 1096 lines | COMPLETE |
+| 5 | Cross-references: `_base` usage grep | CONFIRMED dead — only assigned at L777, never read |
+| 6 | Conflicting directions: MR_ENABLED=False | INERT — entire `_emit_mr_signals` skipped in production today |
+| 7 | Redundancy scan | L777 IS the redundancy being removed |
+| 8 | State persistence | No file I/O involved in this diff |
+| 9 | Data source tier | No data fetches |
+| 10 | Timezone/logging | No display output |
+
+**Weekly bias block check (L885-903) — verified via direct Read at offset 877:**
+`if wb == "BEARISH":` at L886 and `if wb == "BULLISH":` at L895 are SIBLINGS (both 12-space indent,
+both children of `if wb is not None:` at 8-space indent). NOT a logic bug. Explore agent's
+HTML-entity rendering (`&lt;`, `&gt;`) caused apparent indentation confusion — direct Read confirmed
+correct structure.
+
+**RC-1..8 check (1-line dead variable removal):** All PASS. No datetime ops (RC-1), no new file I/O
+(RC-2), no except blocks (RC-3), no record_exit calls (RC-4), no atomic writes (RC-5), no API field
+reads (RC-6), no sizing code (RC-7), no scan buffer state (RC-8).
+
+**Proposed diff (ready for Rafael's interactive session + Gro/GAI preship):**
+```diff
+--- a/strategy/signal_generator.py
++++ b/strategy/signal_generator.py
+@@ -775,7 +775,6 @@
+                 try:
+                     _mrc = mean_reversion_confluence(daily_df, _mr_dir)
+                     if _mrc.get("eligible") and int(_mrc.get("score", 0) or 0) >= _mr_min:
+-                        _base = long_r if _mr_dir == "long" else short_r
+                         mr_signals.append({
+```
+
+**Status:** RTH-CHAIN — Gro+GAI preship required before apply. Full draft in `logs/pending_claude_session_2026-08-05.md` (Item 2).
