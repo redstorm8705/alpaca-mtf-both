@@ -1,0 +1,63 @@
+Midday Gemini Audit — 2026-08-04
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  P&L corruption affecting live risk decisions | SMCI trade
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+
+1.  **SMCI Trade P&L Sign and Fill Reconciliation Error:**
+    *   **Finding:** The P&L sign and implied trade direction in `CLOSED TRADE DETAILS` for SMCI directly contradict the `ALPACA FILLS TODAY` (ground truth) for the same symbol.
+    *   **Exact Variable/Metric:** `SMCI` trade P&L (`$-2.38`), `entry` price (`$27.70`), `exit` price (`$30.08`) from `CLOSED TRADE DETAILS`, compared to `SMCI: 1B/0S` from `ALPACA FILLS TODAY`.
+    *   **Value vs. Should Be:**
+        *   `CLOSED TRADE DETAILS` reports `entry $27.70 → exit $30.08 ($-2.38)`. For a P&L of `$-2.38` with these entry/exit prices, the trade must have been a SHORT (Sold at $27.70, Bought to cover at $30.08).
+        *   `ALPACA FILLS TODAY` (ground truth) reports `1B/0S` for SMCI, meaning only a BUY fill and no SELL fills occurred.
+        *   **Contradiction:**
+            *   If SMCI was a SHORT trade (implied by P&L): A SELL entry fill at $27.70 is missing from `ALPACA FILLS TODAY` (0S reported). This contradicts Alpaca Fills being "ground truth" for what actually traded.
+            *   If SMCI was a LONG trade (implied by the `1B` Alpaca fill as an entry): An entry BUY at $27.70 and exit SELL at $30.08 would result in a PROFIT of `+$2.38`. The reported P&L of `$-2.38` is incorrect. Furthermore, the SELL exit fill is missing from `ALPACA FILLS TODAY` (0S reported).
+    *   **Failure Condition:** The bot's internal representation of a closed trade (direction, P&L, and complete entry/exit fills) cannot be reconciled with the provided ground truth Alpaca fills for SMCI, indicating a fundamental P&L corruption or trade accounting error.
+
+2.  **SMCI Stop-Hit Exit Price Discrepancy:**
+    *   **Finding:** The reported exit price for SMCI following a `stop_hit` is better than the stated stop price, which is unusual for a stop-loss execution.
+    *   **Exact Variable/Metric:** `SMCI` trade `exit $30.08`, `stop=$30.68`, `stop_hit` reason from `CLOSED TRADE DETAILS`.
+    *   **Value vs. Should Be:** Assuming the trade was a SHORT (as implied by P&L `$-2.38`), a stop-loss at $30.68 would be triggered if the price rose to that level. For a short position, a `stop_hit` typically results in a fill at or worse than the stop price (i.e., >= $30.68 due to slippage). An exit fill at $30.08 is *better* than the stated stop price for a short trade, which is unexpected behavior for a stop-loss.
+    *   **Failure Condition:** The `stop_hit` reason and the recorded `stop` price do not logically align with the actual `exit` price for the SMCI trade, suggesting either incorrect logging of the stop price, an inaccurate exit reason, or highly favorable and unexplained slippage.
+
+3.  **Score to Outcome Correlation:** Only one trade (`SMCI`) with a `score 12/12` (max score) resulted in a loss. With only one closed trade, it is impossible to assess score-to-outcome correlation or consistency of win rate/profit factor.
+
+4.  **Stop-Hit Rate:** `Stop-hit rate: 100% (1 stops)`. With only one trade, this rate is not indicative of systemic degradation.
+
+### ENTRY QUALITY
+No specific issues regarding entry quality can be definitively flagged, beyond the overall trade accounting problems for SMCI. The SMCI entry score was `12/12`, indicating high confidence at entry based on the bot's scoring criteria. The log states `MRI ELEVATED` and that a `size floor 0.85x applied`, indicating appropriate risk adjustment.
+
+### EXIT QUALITY
+As noted in the Performance Audit, the discrepancy between the stop price ($30.68) and the actual exit price ($30.08) for a "stop_hit" on what is implied to be a short position is suspicious. If the P&L sign error suggests the trade was actually a LONG, then a stop at $30.68 above entry $27.70 would be a profit stop, and exiting at $30.08 would be a partial realization of that profit, but still results in a P&L mismatch. Further investigation into the exact stop type and market mechanics at the time of exit is required.
+
+### MRI ALIGNMENT
+MRI was `ELEVATED (score=38)`, not `STRESSED/CRISIS`. The log confirms `size floor 0.85x applied`, indicating appropriate position sizing adjustment based on the elevated MRI. No entries were taken in inappropriate MRI conditions.
+
+### LOG ANOMALIES
+
+*   `CRITICAL execution.ownership_guard sync_ledger REFUSED`: The ledger synchronization for `GOOGL/qhm` has failed for a streak of 23 times because a replay would "shrink protected floor(s)". This indicates a persistent problem with the `sync_ledger` functionality, likely due to fills aging out of the Alpaca window, preventing a full and accurate reconciliation of the bot's internal ledger for this specific position. While it's `NOT written` (to prevent corruption), the continuous failure to sync poses a risk to the integrity of historical position data and `protected floor` management.
+*   `WARNING execution.portfolio_tracker EOD P&L DRIFT`: A drift of `$+2.05` is reported between Alpaca's P&L (`$-0.33`) and the bot's tracker P&L (`$-2.38`). While the `pnl_today from pnl_ledger (authoritative)` matches the tracker P&L, the consistent drift between Alpaca's data and the bot's indicates potential issues with Alpaca's real-time reporting or how the bot reconciles it. The `BV-2 Option B` context suggests this is a known pattern, but ongoing large drifts warrant monitoring.
+
+### NEW BUGS / CONCERNS
+
+*   **EXECUTION BUG | CRITICAL | SMCI Trade P&L/Fill Reconciliation Error:** (Detailed description provided in PERFORMANCE AUDIT above). This is a fundamental inconsistency between the bot's reported trade details (direction, P&L) and the Alpaca fills (ground truth), indicating P&L corruption affecting internal risk decisions.
+*   **ALPHA ISSUE | HIGH | SMCI Stop-Hit Exit Price Discrepancy:** (Detailed description provided in PERFORMANCE AUDIT above). The exit price ($30.08) being significantly better than the stop price ($30.68) for a `stop_hit` on a short trade is anomalous. This could indicate an issue with how stop orders are placed/triggered, how fills are recorded against stops, or a misreporting of the stop_hit event, affecting Alpha performance metrics and exit logic.
+*   **INFRASTRUCTURE | CRITICAL | Persistent Ledger Sync Refusal for GOOGL/qhm:** The `execution.ownership_guard sync_ledger REFUSED` error for 'GOOGL/qhm' (streak=23) points to a systematic failure in maintaining a fully reconciled and accurate ledger for this specific symbol. This could impact the bot's ability to accurately reconstruct its historical portfolio state and manage `protected floor(s)` for affected positions, critical for robust risk management.
+    *   **Exact Variable/Metric:** `execution.ownership_guard sync_ledger` process, specifically the `would shrink protected floor(s)` condition for `GOOGL/qhm`.
+    *   **Value vs. Should Be:** The ledger sync process is failing for 23 consecutive attempts for `GOOGL/qhm`. It should be able to consistently synchronize its ledger with Alpaca's data to ensure data integrity and reliable state recovery.
+    *   **Condition:** Recurring `CRITICAL` log entries for `sync_ledger REFUSED` related to `GOOGL/qhm` due to `fills likely aged out of Alpaca window`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION / ALPHA | Investigate SMCI Trade Reconciliation (Critical):** Immediately investigate the SMCI trade (entry $27.70 → exit $30.08, P&L $-2.38, stop $30.68) against Alpaca's raw order history and actual fills for the day to identify the root cause of the P&L sign discrepancy, fill count mismatch, and stop-hit/exit price anomaly. This is critical for accurate P&L tracking and reliable trade execution.
+2.  **INFRASTRUCTURE | Address Persistent Ledger Sync Refusal (Critical):** Prioritize fixing the `execution.ownership_guard sync_ledger REFUSED` issue for `GOOGL/qhm`. Determine why fills are aging out or why the replay logic is attempting to shrink protected floors and implement a robust solution to ensure full ledger reconciliation and accurate `protected floor` management.
+3.  **INFRASTRUCTURE | Monitor EOD P&L Drift (Medium):** Continue to monitor the `EOD P&L DRIFT` between Alpaca's reported P&L and the bot's tracker. While acknowledged, a consistent `$+2.05` drift (or any significant drift) between the external platform's view and the bot's internal `authoritative` P&L should be understood to ensure confidence in real-time P&L reporting.

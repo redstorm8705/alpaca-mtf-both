@@ -1,0 +1,112 @@
+{
+  "audit_date": "2026-08-04",
+  "run_ts": "2026-08-04T10:30:01.720254-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 28
+    },
+    "last_score": 38,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 45,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-04 15:55:40,666 | WARNING  | execution.entry_logic | [MU] COUNTER-TREND GATE [long]: 1-month return -10.45% opposes the trade on a structurall",
+      "2026-08-04 15:55:41,425 | WARNING  | execution.entry_logic | [SNOW] Sector correlation BLOCKED: already holding DDOG in sector 'software' \u2014 skipping t",
+      "2026-08-04 15:55:47,061 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-0.33 tracker=$-2.38 drift=$+2.05",
+      "2026-08-04 16:01:44,342 | WARNING  | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=4 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | ",
+      "2026-08-04 16:03:52,151 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-0.33 tracker=$-2.38 drift=$+2.05"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -2.379999999999999,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -2.379999999999999,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": -2.379999999999999,
+      "entry_price": 27.7,
+      "exit_price": 30.08,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 30.68,
+      "target": 21.5
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": -2.379999999999999,
+      "entry_price": 27.7,
+      "exit_price": 30.08,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 30.68,
+      "target": 21.5
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": -2.379999999999999,
+        "entry_price": 27.7,
+        "exit_price": 30.08,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 30.68,
+        "target": 21.5
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "DDOG",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 1,
+    "symbols": [
+      "SMCI"
+    ],
+    "by_symbol": {
+      "SMCI": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
