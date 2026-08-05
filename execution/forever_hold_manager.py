@@ -592,6 +592,23 @@ class ForeverHoldManager:
                 if fired:
                     results[sym] = {"gain_mult": round(gain_mult, 2), "fired": fired}
                     _slack_safe(f":moneybag: F6 TRIM {sym}: gain {gain_mult:.1f}x — {fired}")
+            except _TrimStateUnreadable as e:
+                # Explicit, specific handler (not just relying on the broader except
+                # Exception below catching it via inheritance) — corruption DETECTED
+                # mid-loop must abort the WHOLE pass with the same loud alert as the
+                # upfront check, not degrade into a separate per-symbol warning for
+                # every remaining symbol (cold-2nd fresh-review + CI audit catch,
+                # 2026-08-05).
+                logger.critical(
+                    "[F6] evaluate_and_execute_trims: trim state file became "
+                    "corrupt/unreadable mid-cycle (detected while evaluating %s) — "
+                    "refusing further trim evaluation this cycle (fail closed) until "
+                    "it's manually repaired: %s", sym, e)
+                _slack_safe(
+                    f":rotating_light: F6 forever6_trims.json became corrupt/unreadable "
+                    f"mid-cycle — remaining trims this cycle BLOCKED until manually "
+                    f"repaired: {e}")
+                return results
             except Exception as e:
                 logger.warning("[F6] evaluate_and_execute_trims: %s failed, skipping: %s",
                                sym, e)
