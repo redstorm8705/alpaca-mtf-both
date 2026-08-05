@@ -1,0 +1,46 @@
+--- /home/ubuntu/mtf-bot/strategy/run_cycle.py
++++ /home/ubuntu/mtf-bot/strategy/run_cycle.py
+@@ -1,5 +1,6 @@
+ # ruff: noqa: E501, E701, E702  — pre-existing long lines / inline semicolons from main.py body
+ """
+ strategy/run_cycle.py — Phase 2 Extraction 9
++
++import json
+ """
+ Owns the full scan cycle: SPY gate check, pre-market refresh, breadth/regime
+ load, signal generation, and orchestration of entries/exits.
+@@ -246,6 +247,13 @@
+     _log_trade_event("cycle_start", now)
+ 
++    # Initialize rejected signals log
++    _rejected_signals_log = _PROJECT_ROOT / "data" / "rejected_signals.jsonl"
++    _rejected_signals_log.parent.mkdir(parents=True, exist_ok=True)
++
+     # ... (rest of the function remains the same)
++
++    # Log rejected signals
++    def _log_rejected_signal(signal, reason):
++        with open(_rejected_signals_log, "a") as f:
++            json.dump({"signal": signal, "reason": reason}, f)
++            f.write("\n")
+ 
+     # ... (rest of the function remains the same)
+@@ -305,6 +313,9 @@
+         # ... (rest of the signal generation and filtering logic remains the same)
+ 
++        # Log rejected signals
++        if not signal_met_min_score:
++            _log_rejected_signal(signal, "MIN_SCORE not met")
+         # ... (rest of the function remains the same)
++
++    # Log rejected signals due to SPY gate failure
++    if not _main._spy_gate_passed:
++        _log_rejected_signal(signal, "SPY gate failed")
++
++    # Log rejected signals due to MAX_RISK exceeded
++    if risk_exceeded:
++        _log_rejected_signal(signal, "MAX_RISK exceeded")
++
++    # Log rejected signals due to PDT limit
++    if pdt_limit_exceeded:
++        _log_rejected_signal(signal, "PDT limit exceeded")
