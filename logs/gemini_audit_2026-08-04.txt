@@ -1,0 +1,91 @@
+Nightly Gemini Audit — 2026-08-04
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['config.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  execution.ownership_guard | Internal QHM quantity for GOOGL is out of sync with Alpaca (4 vs 2 shares), preventing ledger healing | GOOGL
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+
+*   `2026-08-04 19:40:09,063 CRITICAL execution.ownership_guard sync_ledger REFUSED — replay would shrink protected floor(s) {'GOOGL/qhm': {'was': 4.0, 'would_be': 2.0}} (fills likely aged out of Alpaca window). NOT written.`
+    *   This indicates a severe and recurring discrepancy (streak=30, then streak=31) between the bot's internal tracker and Alpaca's reported fills for GOOGL. The `ownership_guard` correctly prevents the protected floor from shrinking to avoid a "silent sell" scenario, but the underlying data inconsistency for GOOGL remains unhealed. This means the bot's internal view of the QHM GOOGL position is incorrect, impacting any decisions or P&L calculations related to this specific holding.
+*   `2026-08-04 19:42:15,832 WARNING strategy.run_cycle | [ANOMALY-2] [AMZN] confirm_gate=10 scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20. If risk>3, CYCLE-SYNC should resolve next cycle.`
+    *   This `ANOMALY-2` warning is triggered repeatedly (e.g., at 19:42:15, 19:48:52) for AMZN. It suggests an inconsistency between `risk.open_positions` and `tracker` data. While `MAX_OPEN_POSITIONS=20` is not violated, a discrepancy between internal position counts (`risk.open_positions=3` vs `tracker=3`) when trying to enter a new trade (implied by `confirm_gate=10 scans but no entry`) indicates a logic or state synchronization issue that is preventing entries. The log states "If risk>3, CYCLE-SYNC should resolve next cycle" but it persists across cycles.
+*   `2026-08-04 19:43:13,203 WARNING execution.entry_logic | [SNOW] Sector correlation BLOCKED: already holding DDOG in sector 'software' — skipping to avoid concentrated exposure.`
+    *   This is a benign entry block, indicating the sector correlation guard is functioning as intended.
+*   `2026-08-04 19:43:14,133 WARNING execution.entry_logic | [MU] COUNTER-TREND GATE [long]: 1-month return -9.16% opposes the trade on a structurally-bullish name (score=10) — skipping (don't long a falling knife).`
+    *   This is a benign entry block, indicating the counter-trend gate is functioning as intended.
+
+### PERFORMANCE AUDIT
+(Based on the last 10 trade events including entries and exits)
+
+*   **P&L sign correctness**: All P&L signs for closed trades (`SMCI`, `QQQ`, `AMZN`) were correctly calculated based on entry/exit prices and direction.
+*   **pnl_pct computed from original full position value**: The EOD snapshot for `SMCI`'s closed trade on 2026-08-04 (`pnl_pct: -8.59`) correctly reflects `(-2.38 / 27.70) * 100`.
+*   **partial_pnl accumulated correctly**: No partial exits occurred in the provided trade events, so this could not be validated. The `SMCI` trade in the EOD snapshot shows `partial_exited: false`.
+*   **Trades with pnl=0.0 where entry ≠ exit price**: No such recording bugs were found. The `SNOW` trade with `pnl=0.0` had identical entry and exit prices (294.92), so it is correctly recorded.
+*   **Entry/exit prices plausible**: All recorded prices (entry and exit) for the symbols and times of day in the trade events appear plausible.
+*   **Score→outcome correlation**: Out of 5 closed trades where scores were available, 1 was profitable (AMZN, score 12), and 4 were losses or breakeven (SMCI score 10 & 12, SNOW score 12, QQQ score 12). This short sample shows a low win rate, consistent with the `win_rate_today: 0.0` for Aug 04 and `all_time_stats` `win_rate: 35.5`. It suggests the bot is operating in a challenging regime.
+*   **Stop-hit rate vs. win rate**: Of the 5 closed trades: 3 were explicit stop-hits, 1 was a small loss (QQQ), 1 was a breakeven hard stop (SNOW), and 1 was a profit (AMZN). This indicates a high stop-hit frequency relative to winning trades in this sample.
+*   **Exit reason consistency**: Stop-hit exit prices were consistently beyond the stated entry or threshold prices in the direction of the loss, indicating the stop logic is being correctly applied upon breach.
+*   **Profit factor and R:R vs. stated 2.5× target**: The `all_time_stats` show a `profit_factor: 1.01` and `avg_r_multiple: -0.049`. Given `INTRADAY_TARGET_ATR_MULT = 2.5` and `INTRADAY_STOP_ATR_MULT = 1.2` (paper profile, implying a theoretical R:R of ~2.08:1), the actual `avg_r_multiple` is significantly below target, indicating the bot is not capturing its expected edge. This is a performance issue that warrants investigation into the strategy's overall efficacy in the current market conditions.
+
+### TRADE INTEGRITY
+
+*   **Quarterly Hold Manager (QHM) Data Discrepancy**: The `CRITICAL` log entries regarding `GOOGL/qhm` highlight a persistent and unhealed discrepancy in the quantity of shares held (internal 4 vs. Alpaca 2). While the `ownership_guard` correctly prevents shrinking the "protected floor," the root cause—the internal state for GOOGL/qhm differing from Alpaca—persists across cycles. This compromises the authoritative nature of the internal QHM state for GOOGL and could lead to incorrect P&L attribution or risk calculations if not resolved.
+
+### MODIFIED FILE FINDINGS
+
+*   **config.py**:
+    *   **INTRA_ALLOCATION_PCT**: The comment `(Cosmetic follow-up: rename these off the "BUCKET_B" prefix.)` for `BUCKET_B_MAX_POSITIONS` and `BUCKET_B_MAX_POSITIONS_POWER` indicates a minor code hygiene issue. This is a LOW severity issue.
+    *   **MIN_LONG_SCORE/MIN_SHORT_SCORE, CONVICTION_FULL_MIN, KELLY_FRACTION (paper profile)**: Values have been changed as per board mandates for aggressiveness (`MIN_LONG_SCORE/SHORT=8`, `KELLY_FRACTION=0.50`, `CONVICTION_FULL_MIN=9`). These are intentional configuration changes.
+    *   **INTRADAY_STOP_ATR_MULT (paper profile)**: Value tightened `1.25->1.20`. This is an intentional config change per S52.
+    *   **MR_AGG_RISK_CAP_PCT (paper profile)**: The value `0.035` is consistent with the stated intent (half the daily kill, less than Kelly max cap).
+    *   **Truncation**: The `config.py` content is truncated at `VOLAT... [truncated at 20000 chars]`. This means parts of the `VOLATILITY REGIME` configuration could not be fully audited. Based on the provided content, there are no immediate issues.
+*   **execution/quarterly_hold_manager.py**:
+    *   **Recurring Critical Error**: The `get_quarterly_hold_quantities()` function is called by the `ownership_guard` to establish the protected floor. The repeated `CRITICAL` logs for `GOOGL/qhm` indicate that while the `ownership_guard` prevents an incorrect state change (shrinking the floor), the source of truth (`quarterly_holds.json`) and Alpaca's current view are consistently out of sync. The function `get_quarterly_hold_quantities` relies on `_QHM_STATE_FILE` being accurate. The continuous `REFUSED` error implies `quarterly_holds.json` itself is stale or incorrect for GOOGL, or there's a permanent gap in Alpaca's fill history for that symbol. This is a **HIGH** severity data integrity issue for QHM positions.
+    *   **_DIP_ADD_ENABLED**: This is set to `True`, meaning the dip-add rule is live. The associated `_DIP_ADD_RUNG_A_PCT`, `_DIP_ADD_RUNG_B_PCT`, `_DIP_ADD_CEILING_MULT`, `_DIP_ADD_STOP_FLOOR_PCT`, `_DIP_ADD_MAX_PER_QUARTER`, `_DIP_ADD_MIN_DAYS_BETWEEN`, `_DIP_ADD_NO_ADD_DAYS_PRE_EARNINGS` are all defined. This is an intentional feature.
+    *   **_TRAIL_LOCK_ENABLED**: This is set to `False`, indicating trailing profit-lock functionality is still dark-shipped.
+    *   **get_quarterly_hold_symbols() fallback logic**: The addition of `_last_good_qhm_symbols` and `_configured_qhm_symbols()` for fail-closed behavior in `get_quarterly_hold_symbols()` correctly addresses the `2026-07-02 flaw` and is a robust fix. (This is a fix to a *prior* audit finding, not a new bug).
+    *   **`_QHM_ACTIVE_STATES` now includes `PENDING_EARNINGS`**: This is a beneficial update for robust state tracking.
+
+### P5 STATUS
+
+*   P5-C1 | FVG MultiIndex silent crash | UNTOUCHED
+*   P5-C2 | run_movers.py ImportError | UNTOUCHED
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted from codebase | OBSOLETE
+*   P5-H2 | Fill price crosstalk | UNTOUCHED
+*   P5-H3 | Orphan GTC 404 path | UNTOUCHED
+*   P5-H4 | Rule 2 dead code | FIXED (Confirmed `TOD_MARKET_OPEN_BUFFER_MINS` is active in `config.py`)
+*   P5-H5 | FIXED 2026-04-21 | OBSOLETE (due to P5-H1)
+*   P5-M1 | Cycle watchdog restart loop | UNTOUCHED
+*   P5-M2 | MRI score cached stale across sessions | UNTOUCHED
+*   P5-M3 | score_comparison JSON unbounded growth | UNTOUCHED
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | UNTOUCHED
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | UNTOUCHED
+*   P5-L3 | live_data_writer.py no reconnect logic | UNTOUCHED
+
+### NEW BUGS FOUND
+
+*   **CATEGORY**: EXECUTION BUG | **SEVERITY**: HIGH | **file**: execution/quarterly_hold_manager.py
+    *   **Description**: Persistent internal quantity discrepancy for QHM position. The internal `quarterly_holds.json` state for GOOGL (`was: 4.0`) is consistently higher than what the bot can verify from Alpaca fills (`would_be: 2.0`). This prevents the `ownership_guard` from reconciling the ledger for GOOGL due to a "protected-floor shrink" refusal.
+    *   **Exact failure condition**: `execution.ownership_guard.sync_ledger` refuses to write (heal) the ledger due to a detected shrinking of a protected floor for GOOGL, caused by a mismatch between the bot's internal QHM quantity and Alpaca's verifiable fills. This has recurred a "streak=31" times. The internal `HoldPosition` for `GOOGL` in `quarterly_holds.json` is stale/incorrect.
+*   **CATEGORY**: ALPHA ISSUE | **SEVERITY**: MEDIUM | **file**: strategy/run_cycle.py
+    *   **Description**: Repeated `ANOMALY-2` warning for AMZN suggests an issue with position count synchronization or entry logic preventing trade execution despite `confirm_gate=10 scans`. This warning message appears to indicate a temporary state, but its recurrence suggests it's not self-resolving as intended ("If risk>3, CYCLE-SYNC should resolve next cycle").
+    *   **Exact failure condition**: `strategy.run_cycle` logs `[ANOMALY-2] [AMZN] confirm_gate=10 scans but no entry — risk.open_positions=3 vs tracker=3` for AMZN. This prevents a high-score AMZN trade from entering. The discrepancy `risk.open_positions` vs `tracker` persists across multiple cycles.
+*   **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: LOW | **file**: config.py
+    *   **Description**: Cosmetic code hygiene issue. Comments indicate `BUCKET_B` prefixes should be renamed but have not been.
+    *   **Exact failure condition**: `config.py` contains comments `(Cosmetic follow-up: rename these off the "BUCKET_B" prefix.)` for `BUCKET_B_MAX_POSITIONS` and `BUCKET_B_MAX_POSITIONS_POWER`. This is a minor naming inconsistency.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **Investigate GOOGL QHM Quantity Discrepancy (CRITICAL)**: Immediately investigate the `GOOGL/qhm` position in `data/state/quarterly_holds.json`. Compare its `qty_filled` with Alpaca's current position data for GOOGL. If Alpaca's quantity is lower, a manual reconciliation of `quarterly_holds.json` to match Alpaca is required *after careful review of Alpaca's fill history for GOOGL*. This is the only path to healing the ledger for GOOGL.
+2.  **Diagnose AMZN ANOMALY-2 (MEDIUM)**: Analyze the `strategy.run_cycle` module to understand why `risk.open_positions` and `tracker` counts are diverging for AMZN, preventing entries. Focus on the `CYCLE-SYNC` mechanism mentioned in the log and ensure it can correctly resolve this anomaly or identify the root cause of the initial mismatch.
+3.  **Review Strategy Performance (MEDIUM)**: The consistently low win rate and negative average R-multiple indicate that the strategy, particularly in the current market regime, is underperforming its stated targets. Conduct a backtest or forward test of the current configuration (including recent aggressiveness changes) to evaluate profitability and risk metrics over a larger sample.
+4.  **Refactor `BUCKET_B` Config Names (LOW)**: Rename `BUCKET_B_MAX_POSITIONS` and `BUCKET_B_MAX_POSITIONS_POWER` in `config.py` to reflect their role as general position count placeholders and power-hour slot expansion, respectively, as suggested in the comments. This is a cosmetic change but improves code clarity.
+5.  **Verify Truncated Config (LOW)**: Due to truncation, ensure the full `VOLATILITY REGIME` configuration in `config.py` is correctly defined and aligns with intended behavior. (This cannot be done with the provided truncated text but is a recommendation for the team.)
