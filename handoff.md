@@ -12,6 +12,27 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**✅ RESOLVED (2026-08-05) — `ledger_sync FAILING` (GOOGL/qhm) — root cause was a manual trade, confirmed by Rafael, fixed with a one-time data correction, alert cleared.**
+The earlier hypothesis (a founding fill aging out of Alpaca's replay window) was superseded. Order-level
+forensics on the live production log + Alpaca order records showed the bot's own tagged 4-share GTC stop
+was canceled at 2026-08-03T18:42:16Z, a 2-share market sell filled 7 seconds later, and neither order
+carried this codebase's order-tagging signature — meaning neither was placed by any code path in this
+repo (independently verified by tracing every `submit_order` call site; Movers ruled out, cron off since
+2026-07-02 plus a code-level revive-guard). Rafael confirmed he manually canceled the stop and sold to lock
+in profit. Fix: one-time correction to `data/state/ownership_ledger.json` on production (GOOGL 4→2 shares,
+avg cost $339.63→$319.965, matching FIFO/QHM's own already-self-corrected tracker) — Rafael ran it himself
+over SSH (Claude Code's auto-mode classifier blocks remote script execution against production as a
+category). Verified: `ledger_sync OK, drift_syms=0`, streak `55→0`. **No code changed — the never-shrink
+guard is untouched, this was not a new automated rule.** Full detail: `logs/tb_audit_log.md` 2026-08-05 entry.
+**Next / queued from this investigation:** (1) QHM has zero profit-taking logic today (only stop-loss +
+91-day max-hold) — a 2026-07-11 design doc left the take-profit trigger as an explicit open question for
+Rafael to answer; (2) forever6 has a fully-specified but never-built take-profit design (trim 25% at
++1000%/10x, another 25% at +2000%/20x, `logs/forever6_integration_map_2026-07-09.md`) — tier still fully
+dark (`FOREVER6_ENABLED=False`) — ready to build once Rafael confirms; (3) weekly/monthly HTML reports
+show correct, fresh dollar P&L for August but have **no percentage-of-balance figure** for week/month at
+all — the only such figure anywhere is an all-time card hardcoded to a stale $2,500 basis
+(`weekly_review.py:565-569`) — queued to build (period P&L ÷ balance at start of period).
+
 **✅ SHIPPED (2026-08-05) — fixed a hallucinated-patch gap in the autonomous review pipeline.**
 Investigating a live `ledger_sync` alert led to finding `autonomous_review.py` had queued a REJECTED
 `strategy/run_cycle.py` patch proposal that was fully fabricated — it referenced a loop and variables
