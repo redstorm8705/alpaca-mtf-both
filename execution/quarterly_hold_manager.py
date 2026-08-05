@@ -102,7 +102,7 @@ _LIMIT_PRICE_TOLERANCE = 0.001  # 0.1% above current price
 # rises). Captures green days that the "never-sell + hard-stop-only" tier used to round-trip. Reuses
 # the board-approved dip-add Option-C cancel->resubmit + _restore_or_pending naked-window backstop,
 # minus the buy. DORMANT until _TRAIL_LOCK_ENABLED (ships dark; enable after a live verification cycle).
-_TRAIL_LOCK_ENABLED        = False  # dark kill-flag — the method is inert until this is True
+_TRAIL_LOCK_ENABLED        = True   # LIVE 2026-08-05 (Rafael approved; board+Gro+GAI unanimous 2026-06-24)
 _TRAIL_LOCK_FRACTION       = 0.5    # lock this fraction of (live - entry): new_stop = entry + 0.5*gain
 _TRAIL_LOCK_MIN_GAIN_PCT   = 0.05   # only start locking once a hold is >= +5% (keeps the lock stop
                                     # safely below market; avoids churning stops on normal vol)
