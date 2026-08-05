@@ -47,6 +47,20 @@ _LOGS_DIR     = _REPO_DIR / "logs"
 _LOCKFILE     = "/tmp/mtf_autonomous_patch_generator.lock"
 _MAX_RETRIES  = 3
 _API_TIMEOUT  = 180
+# 2026-08-05 hardening (Rafael-directed audit): _board_vote / _generate_diff /
+# _build_ds_gai_prompt used to silently slice file_content to [:6000]/[:8000]
+# chars before ever asking an LLM to validate a finding or write a diff. On
+# strategy/run_cycle.py (116,586 chars / 2,064 lines) that is under 7% of the
+# file — the model never saw the real control flow and fabricated a plausible-
+# sounding but nonexistent `for signal in signals:` loop and variable names,
+# one third of which targeted a gate (PDT limit) the project deliberately
+# deleted months earlier. This violates the same Full-Read-Gate principle the
+# project already enforces for human/AI-assisted patches, just automated.
+# _MAX_FILE_CHARS_FOR_LLM covers every file in this repo as of 2026-08-05 (the
+# largest, scan_to_html.py, is ~148K chars) with headroom; a file that ever
+# exceeds it is a hard, LOUD skip (never a silent partial read) — see
+# _process_directive's use of this constant.
+_MAX_FILE_CHARS_FOR_LLM = 300_000
 # AWP audit fix (2026-06-30): migrated DeepSeek -> Gro (Groq). See module
 # docstring for why. Matches CLAUDE.md's Gro/GAI DIRECT API PROTOCOL.
 _GRO_BASE_URL = "https://api.groq.com/openai/v1"
@@ -208,12 +222,17 @@ def _board_vote(
 ) -> dict:
     """Run 3 independent board agents. Returns dict with verdicts + notes."""
 
+    # 2026-08-05: full file content, never a silent slice — see
+    # _MAX_FILE_CHARS_FOR_LLM. A board vote formed on a partial view of the
+    # file cannot actually check "does this cover all edge cases" or "does
+    # this match real code" — the exact gap that let a fabricated finding
+    # about strategy/run_cycle.py reach REJECT-worthy review at all.
     base_context = (
         f"RC class: {rc_class}\n"
         f"Finding: {finding}\n"
         f"Recommended fix: {recommended_fix}\n\n"
-        f"File content (truncated to first 6000 chars):\n"
-        f"{file_content[:6000]}"
+        f"Full file content ({len(file_content)} chars):\n"
+        f"{file_content}"
     )
 
     intro_a = (
@@ -268,13 +287,20 @@ def _board_vote(
         "C_notes": results.get("C_quant_risk_notes", ""),
     }
 
-# ── Diff generation via Gro API ────────────────────────────────────────────────
+# ── Diff generation via LLM (Gemini-primary, Groq fallback) ──────────────────
 def _generate_diff(
     file_path: Path,
     file_content: str,
     finding: str,
     recommended_fix: str,
 ) -> str | None:
+    # 2026-08-05: full file content — see _MAX_FILE_CHARS_FOR_LLM. This is the
+    # single most consequential of the three sites: a diff generated from a
+    # truncated view can only ever reference what it can see, so anything
+    # past the old 8000-char cutoff was invisible and got filled in with
+    # invented-but-plausible-sounding names. The "must apply cleanly" line
+    # below is now backed by an actual git apply --check in _process_directive
+    # (2026-08-05) instead of being an unverified instruction to the model.
     prompt = (
         "You are a senior engineer generating a minimal unified diff patch.\n"
         "Return ONLY the unified diff — no explanation, no markdown fences.\n"
@@ -282,10 +308,17 @@ def _generate_diff(
         f"File: {file_path}\n"
         f"Finding: {finding}\n"
         f"Recommended fix: {recommended_fix}\n\n"
-        f"File content:\n{file_content[:8000]}"
+        f"Full file content ({len(file_content)} chars):\n{file_content}"
     )
-    _log("Generating diff via Gro...")
-    response = _call_gro(prompt)
+    # 2026-08-05 board catch: this is the highest-token-volume call in the whole
+    # pipeline (up to _MAX_FILE_CHARS_FOR_LLM=300_000 chars, ~75-100K tokens) —
+    # it MUST route through _call_llm (Gemini-primary, ~1M-token context) rather
+    # than call Groq directly. Groq's llama-3.3-70b-versatile has a 128K-token
+    # window and — per this file's own 2026-07-01 fix note above — a 100K-
+    # token/DAY free-tier budget that a single large-file call could now exhaust
+    # outright, reintroducing that exact "0 processed" failure for a new reason.
+    _log("Generating diff via LLM (Gemini-primary)...")
+    response = _call_llm(prompt)
     if response is None:
         return None
     # Strip any accidental markdown fences
@@ -299,6 +332,48 @@ def _generate_diff(
         if not in_fence:
             clean.append(line)
     return "\n".join(clean)
+
+# ── Mechanical apply-check (2026-08-05) ───────────────────────────────────────
+# WHY THIS EXISTS: nothing in this pipeline ever verified a generated diff
+# actually applies to the real file — the prompt just TELLS the model "the
+# diff must apply cleanly" and hopes. A fabricated diff (referencing code
+# that doesn't exist) is definitionally invalid and this is a free, instant,
+# zero-LLM-cost way to catch that BEFORE spending two API calls reviewing it
+# and writing it to the approval queue. This is the same "mechanism beats
+# documentation" principle the project already applies everywhere else.
+def _diff_applies_cleanly(diff: str) -> tuple[bool, str]:
+    """Return (applies, error_detail). Runs `git apply --check` against the
+    real repo state — never mutates anything (--check only validates).
+    NEVER RAISES: any unexpected error is treated as "does not apply"
+    (fail-closed — a diff we can't verify is not a diff we should ship)."""
+    import tempfile
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".patch", dir=_LOGS_DIR, delete=False, encoding="utf-8",
+        ) as f:
+            # 2026-08-05 board catch: tmp_path MUST be captured before the write,
+            # not after — `diff` is raw, unsanitized LLM output that could contain
+            # malformed Unicode; if f.write() itself raises (e.g. a lone surrogate
+            # under this utf-8 writer), the file already exists on disk via
+            # delete=False, but the OLD assignment order left tmp_path as None,
+            # so the finally block's cleanup never ran. Reproduced empirically.
+            tmp_path = f.name
+            f.write(diff)
+        result = subprocess.run(
+            ["git", "apply", "--check", tmp_path],
+            cwd=_REPO_DIR, capture_output=True, text=True, timeout=30,
+        )
+        return (result.returncode == 0, result.stderr.strip())
+    except Exception as exc:  # RC-3: logged by caller, never silent
+        return (False, f"apply-check errored: {exc}")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
 
 # ── Static analysis on target file ───────────────────────────────────────────
 def _run_static_analysis(file_path: Path) -> dict:
@@ -345,8 +420,11 @@ def _second_agent_review(diff: str, finding: str, recommended_fix: str) -> str:
         "4. Branch completeness — both TRUE and FALSE paths verified?\n\n"
         "Return PASS or FAIL as the first word, then a brief threat list."
     )
-    _log("Running cold second-agent review...")
-    response = _call_gro(prompt)
+    # 2026-08-05: route through _call_llm for the same reason as _generate_diff —
+    # consistency with the rest of the pipeline's Gemini-primary routing, even
+    # though this payload (diff + finding only) is smaller and lower-risk.
+    _log("Running cold second-agent review (Gemini-primary)...")
+    response = _call_llm(prompt)
     if response is None:
         return "UNCLEAR: API call failed"
     return response[:200]
@@ -360,12 +438,18 @@ def _build_ds_gai_prompt(
     rc_class: str,
     diff: str,
 ) -> str:
+    # 2026-08-05: full file content — see _MAX_FILE_CHARS_FOR_LLM. Gro/GAI are
+    # this pipeline's LAST gate before a diff reaches Rafael's approval queue;
+    # a truncated view here means the final reviewers are exactly as blind as
+    # the drafting step, which is how a diff referencing nonexistent variables
+    # and a deleted PDT gate got all the way to a rejected-but-still-queued
+    # finding instead of being caught as fabricated at the source.
     return (
         f"AUDIT REQUEST — {file_path.name} | {rc_class}\n\n"
         f"FINDING: {finding}\n"
         f"RECOMMENDED FIX: {recommended_fix}\n\n"
         f"PROPOSED DIFF:\n{diff}\n\n"
-        f"FILE CONTENT (first 6000 chars):\n{file_content[:6000]}\n\n"
+        f"FULL FILE CONTENT ({len(file_content)} chars):\n{file_content}\n\n"
         "AUDIT SCOPE — check all 8 RC classes:\n"
         "RC-1: Naive datetime (tz-unaware)\n"
         "RC-2: CWD-relative path (not anchored to __file__)\n"
@@ -396,7 +480,24 @@ def _process_directive(directive: dict) -> str:
         _log(f"SKIP (permanent): directive missing file or finding: {directive}")
         return "failed_permanent"
 
-    file_path = _REPO_DIR / file_rel
+    # 2026-08-05 board catch (masked-loss seat): file_rel comes from an upstream
+    # finding (ultimately an LLM audit output) with NO containment check before
+    # this diff — a hallucinated or malformed directive naming ".env" or an
+    # absolute path (Path envelopes an absolute RHS, discarding _REPO_DIR
+    # entirely — confirmed: Path("/x") / "/etc/passwd" == Path("/etc/passwd"))
+    # would have its full content read and sent to Groq/Gemini. Pre-existing in
+    # both the old and new version, but THIS diff removes the [:6000]/[:8000]
+    # caps that used to bound how much of such a file could leak per call —
+    # closing it here rather than shipping a widened version of a known gap.
+    file_path = (_REPO_DIR / file_rel).resolve()
+    if not file_path.is_relative_to(_REPO_DIR.resolve()):
+        _log(f"SKIP (permanent): {file_rel!r} resolves outside the "
+             "repo — refusing (path containment).")
+        return "failed_permanent"
+    if any(part.startswith(".") for part in Path(file_rel).parts):
+        _log(f"SKIP (permanent): {file_rel!r} is a dotfile/dotdir "
+             "path — refusing (secrets-exposure guard).")
+        return "failed_permanent"
     if not file_path.exists():
         _log(f"SKIP (permanent): target file not found: {file_path}")
         return "failed_permanent"
@@ -404,6 +505,19 @@ def _process_directive(directive: dict) -> str:
     _log(f"Processing: {file_rel} | {rc_class} | {finding[:60]}...")
 
     file_content = file_path.read_text(encoding="utf-8")
+
+    # 2026-08-05: fail LOUD and PERMANENT rather than silently truncate. A file
+    # this large getting a partial view is exactly the prior failure mode —
+    # better to skip it visibly (and let a human decide) than feed the LLM a
+    # fragment and let it fill the gap with fabricated code.
+    if len(file_content) > _MAX_FILE_CHARS_FOR_LLM:
+        _log(
+            f"SKIP (permanent): {file_rel} is {len(file_content)} chars, exceeds "
+            f"_MAX_FILE_CHARS_FOR_LLM={_MAX_FILE_CHARS_FOR_LLM} — full-context "
+            "review not possible, refusing rather than truncate. Human review "
+            "required if this file needs a patch."
+        )
+        return "failed_permanent"
 
     # ── Board vote ────────────────────────────────────────────────────────────
     _log("Running board vote...")
@@ -434,6 +548,20 @@ def _process_directive(directive: dict) -> str:
         # the directive permanently. Groq's llama-3.3 frequently returned prose;
         # Gemini produces cleaner diffs, so this path should now rarely fire.
         _log(f"{file_rel}: model returned non-diff output — retry")
+        return "retry"
+
+    # ── Mechanical apply-check (2026-08-05) ───────────────────────────────────
+    # A diff that looks like a diff (starts with "---") but doesn't actually
+    # apply is exactly what a fabricated patch produces — the format-only check
+    # above would have waved this straight through to two paid LLM review calls
+    # and the approval queue. This is free and instant; run it first.
+    applies, apply_err = _diff_applies_cleanly(diff)
+    if not applies:
+        _log(
+            f"{file_rel}: generated diff does NOT apply cleanly to the real "
+            f"file — {apply_err[:300]} — retry (now that the full file is "
+            "sent, a fresh attempt should be properly grounded)"
+        )
         return "retry"
 
     # ── Static analysis on target file ───────────────────────────────────────
