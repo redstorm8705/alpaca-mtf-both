@@ -1296,6 +1296,56 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
         return False
 
 
+def submit_f6_trim(symbol: str, qty: int) -> bool:
+    """THE sole authorized bypass for forever6's never-sell floor (F6 exit increment,
+    2026-08-05). This is the ONLY function in this codebase permitted to pass
+    is_authorized_f6_trim=True to ownership_guard.check_never_sell_floor — grep the repo
+    for that flag to confirm there is exactly one call site.
+
+    The CALLER (ForeverHoldManager.evaluate_and_execute_trims) is responsible for deciding
+    WHEN to trim and computing the requested qty (25% of current forever6 holdings at the
+    10x/20x gain thresholds). This function's own job is only to verify + bound that qty
+    against the live guard immediately before submitting a REAL sell — never to decide the
+    qty itself. Runs the guard check UNCONDITIONALLY, independent of
+    config.OWNERSHIP_GUARD_ENFORCE — forever6 has no stop-loss and no other floor
+    protection, so for this tier the guard IS the only safety mechanism, not an optional
+    layer on top of one. Fails CLOSED on any read/guard error: a forever6 position is
+    reduced ONLY through this single, explicitly-authorized path.
+    """
+    if qty < 1:
+        logger.warning(f"[{symbol}] submit_f6_trim called with qty={qty} < 1 — skipping.")
+        return False
+    try:
+        from execution import ownership_guard as _og
+    except Exception as e:
+        logger.error(f"[{symbol}] submit_f6_trim: ownership_guard import failed — "
+                    f"refusing (fail closed): {e}")
+        return False
+    try:
+        _pos = get_open_position(symbol)
+    except Exception as e:
+        logger.error(f"[{symbol}] submit_f6_trim: Alpaca position read failed — "
+                    f"refusing (fail closed): {e}")
+        return False
+    if _pos is None:
+        logger.warning(f"[{symbol}] submit_f6_trim: no open Alpaca position — nothing to trim.")
+        return False
+    _net = abs(float(_pos.qty))
+    _res = _og.check_never_sell_floor(symbol, "forever6", int(qty), "sell",
+                                       alpaca_net_qty=_net, is_authorized_f6_trim=True)
+    if _res.action == "REJECT":
+        logger.error(f"[{symbol}] submit_f6_trim BLOCKED by never-sell floor: {_res.reason}")
+        return False
+    _bq = int(_res.qty)
+    if _bq < 1:
+        logger.error(f"[{symbol}] submit_f6_trim: guard bounded qty to {_bq} — nothing to sell.")
+        return False
+    if _bq < int(qty):
+        logger.warning(f"[{symbol}] submit_f6_trim: guard bounded trim qty "
+                       f"{int(qty)}→{_bq} ({_res.reason}).")
+    return partial_close_position(symbol, _bq, tier="forever6", _bypass_floor=True)
+
+
 def _raw_close_position(symbol: str) -> bool:
     """
     Raw full close of the ENTIRE Alpaca position — NO tier / never-sell-floor

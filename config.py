@@ -411,6 +411,16 @@ FOREVER6_STARTER_MAX_EVENTS_PER_MONTH = 4      # per-month event cap (anti-overt
 FOREVER6_STARTER_CASH_FRAC_PER_EVENT = 0.20
 FOREVER6_STARTER_CASH_FLOOR = 200.0
 
+# Forever-6 EXIT — trims only, never a full sell (logs/forever6_integration_map_2026-07-09.md
+# §6 + logs/forever6_scenario_board_2026-07-09.md, board-locked constants carried over unbuilt
+# until 2026-08-05). Trim 25% of current forever6 holdings at +1000% (10x) unrealized gain,
+# another 25% of what remains at +2000% (20x) — the house-money core shrinks, never disappears.
+# No stops, no max-hold, no other exit path exists for this tier.
+FOREVER6_TRIM_1_MULT = 10.0                    # first trim trigger: 10x unrealized gain (+1000%)
+FOREVER6_TRIM_1_FRAC = 0.25                    # trim this fraction of CURRENT forever6 qty
+FOREVER6_TRIM_2_MULT = 20.0                    # second trim trigger: 20x unrealized gain (+2000%)
+FOREVER6_TRIM_2_FRAC = 0.25                    # trim this fraction of the POST-trim-1 remaining qty
+
 # Overnight hold — reversal confirmation scan count
 # Bot requires this many consecutive reversal scans before closing overnight position
 # At 5-min intervals: 10 scans = 50 min, 15 scans = 75 min

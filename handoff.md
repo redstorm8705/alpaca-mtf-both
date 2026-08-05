@@ -12,6 +12,25 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**✅ SHIPPED (2026-08-05) — forever6 EXIT increment: 10x/20x trims, ships INERT.**
+Built the exit side of the July-locked forever6 design (trim 25% at 10x gain, another 25% of what's
+left at 20x — never sold otherwise); the buy side already existed. New `broker.submit_f6_trim()` (the
+sole authorized bypass for forever6's never-sell floor) + `ForeverHoldManager.evaluate_and_execute_trims()`.
+Two independent review rounds each caught a real defect before ship: round 1 (Gemini + a separate cold
+board review, same root cause) found that persisting "trim done" AFTER the sell meant a write failure
+could let the same rung silently re-fire — fixed with a reserve-BEFORE-sell state machine (write
+"reserved" durably first; a stuck "reserved" state permanently blocks auto-retry, no exceptions).
+Round 2 (fresh review, mandatory since the fix changed the code) confirmed the fix closes it and found
+3 more narrow gaps, 2 fixed same diff (a state-file corruption could otherwise wipe other symbols'
+records; an unrecognized state string could fall through to the unprotected path) and 1 documented as
+a pre-live-flip gate (a same-pass double-trim could spuriously block on ledger-sync timing — fails
+safe, not blocking this ship). Verified functionally, not just designed — 13 assertions across 2 test
+scripts. 100% dark throughout (`FOREVER6_ENABLED=False`, zero F6 positions exist) — cannot execute
+until that flag flips separately. Full detail: `logs/tb_audit_log.md` 2026-08-05 entry.
+**Still needed before `FOREVER6_ENABLED` can ever flip:** the documented ledger-drift-timing gate above,
+plus the original, unrelated shared-lot/ring-fence question from the July design doc — Rafael + a board
+pass, not yet scheduled.
+
 **✅ SHIPPED (2026-08-05) — QHM trailing profit-lock ENABLED live (`_TRAIL_LOCK_ENABLED=True`).**
 Resolved QHM's open take-profit question via BGG research: board + Groq + Gemini all converged on
 enabling the already-built, already-dark trailing-stop ratchet (`quarterly_hold_manager.py::
