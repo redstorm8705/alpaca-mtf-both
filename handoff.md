@@ -12,17 +12,6 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**✅ SHIPPED (2026-08-05) — weekly/monthly performance % visibility.**
-Closes the reporting gap found earlier this session (pages showed dollar P&L but no %-of-balance
-figure). Rafael explicitly overrode the board's Modified-Dietz recommendation — paper account, no
-real deposits/withdrawals possible, don't build tracking for a scenario that can't occur; revisit at
-live capital. Shipped the simple version: `reporting/metrics.py::compute_period_stats()` gained an
-optional `current_equity` param → returns `pnl_pct` (period P&L ÷ balance at start of period, derived
-from live equity minus the period's own P&L). Appended to the existing Weekly/Monthly P&L stat boxes
-and weekly's headline — no new boxes, no layout change. Guards against the division-by-zero/negative-
-implied-balance edge case (returns `None`, never crashes or shows a nonsense number). Functionally
-verified end-to-end, not just designed. Full detail: `logs/tb_audit_log.md` 2026-08-05 entry.
-
 **✅ SHIPPED (2026-08-05) — forever6 EXIT increment: 10x/20x trims, ships INERT.**
 Built the exit side of the July-locked forever6 design (trim 25% at 10x gain, another 25% of what's
 left at 20x — never sold otherwise); the buy side already existed. New `broker.submit_f6_trim()` (the

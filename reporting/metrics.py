@@ -119,23 +119,11 @@ def _day_pnl(t: dict) -> float:
     return float(t.get("pnl") or 0.0)
 
 
-def compute_period_stats(
-    start_date: date, end_date: date, current_equity: float | None = None,
-) -> dict[str, Any]:
+def compute_period_stats(start_date: date, end_date: date) -> dict[str, Any]:
     """
     Trade statistics for a date range. Only status=='closed' trades are counted.
     P&L uses _day_pnl to avoid double-counting cross-day partial exits.
     total_pnl is summed from pnl_today (Alpaca-reconciled) in each eod file.
-
-    current_equity: pass the live Alpaca account equity to also compute pnl_pct
-    (period return, simple: total_pnl / (current_equity - total_pnl) * 100 — i.e.
-    period P&L over the account's balance at the START of the period, derived by
-    backing the period's own P&L out of today's live balance). This is a visibility
-    figure for a paper account with no external deposits/withdrawals to account for
-    (Rafael 2026-08-05) — intentionally NOT the deposit/withdrawal-aware Modified
-    Dietz method; revisit if the account ever takes real external cash flows.
-    Omit current_equity (or pass None) to get pnl_pct=None — the field is always
-    present in the return dict either way.
     """
     closed_trades: list[dict] = []
     total_pnl = 0.0
@@ -167,15 +155,8 @@ def compute_period_stats(
     gross_l = sum(abs(_day_pnl(t)) for t in closed_trades if _day_pnl(t) < 0)
     pf = (gross_p / gross_l) if gross_l > 0 else None
 
-    pnl_pct: float | None = None
-    if current_equity is not None:
-        start_equity = current_equity - total_pnl
-        if start_equity > 0:
-            pnl_pct = round(total_pnl / start_equity * 100, 2)
-
     return {
         "total_pnl":       round(total_pnl, 2),
-        "pnl_pct":         pnl_pct,
         "total_trades":    total,
         "wins":            wins,
         "win_rate":        win_rate,

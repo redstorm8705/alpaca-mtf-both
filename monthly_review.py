@@ -23,9 +23,7 @@ import sys
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from reporting.metrics import (
-    _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
-)
+from reporting.metrics import _day_pnl, compute_lifetime_stats, compute_period_stats
 # Strategy Edge Report (All-Time) lives on monthly now (Rafael 2026-07-05) —
 # imported from weekly_review, not duplicated.
 from weekly_review import _load_trade_log, _strategy_validation_html
@@ -152,11 +150,7 @@ def _archive_href(y2: int, m2: int, from_archive: bool) -> str:
 
 def _compute_metrics(year: int, month: int) -> dict:
     days = _month_days(year, month)
-    # Simple visibility % (no deposit/withdrawal tracking — paper account, Rafael
-    # 2026-08-05): a failed equity fetch just omits the % (pnl_pct stays None),
-    # never breaks the page.
-    equity = _fetch_alpaca_equity()
-    stats = compute_period_stats(days[0], days[-1], current_equity=equity)
+    stats = compute_period_stats(days[0], days[-1])
     stats["wr"] = stats["win_rate"]   # backward compat with _stats_html
     return stats
 
@@ -298,13 +292,9 @@ def _stats_html(m: dict) -> str:
             f'</div>'
         )
 
-    _pnl_str = _fmt_pnl(m["total_pnl"])
-    if m.get("pnl_pct") is not None:
-        _pnl_str += f" ({'+' if m['pnl_pct'] >= 0 else ''}{m['pnl_pct']:.2f}%)"
-
     return (
         '<div class="stats-row">'
-        + box("Monthly P&amp;L",  _pnl_str, pnl_c)
+        + box("Monthly P&amp;L",  _fmt_pnl(m["total_pnl"]), pnl_c)
         + box("Trades",           str(m["total_trades"]))
         + box("Win Rate",         f"{m['wr']:.1f}%", wr_c)
         + box("Profit Factor",    pf_str, pf_c)

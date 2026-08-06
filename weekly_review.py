@@ -22,9 +22,7 @@ import config as _cfg
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
-from reporting.metrics import (
-    _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
-)
+from reporting.metrics import _day_pnl, compute_lifetime_stats, compute_period_stats
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)  # noqa: E501
 
 # Exception handlers use logger (logging module).
@@ -744,17 +742,10 @@ def _week_stats(week_eods: dict) -> dict:
         return {}
     all_trades = [t for d in days for t in (d.get("trades") or []) if t.get("status") == "closed"]  # noqa: E501
     _wk_dates = sorted(week_eods.keys())
-    # Simple visibility % (no deposit/withdrawal tracking — paper account, Rafael
-    # 2026-08-05): a failed equity fetch just omits the % (week_pnl_pct stays None),
-    # never breaks the page.
-    _equity       = _fetch_alpaca_equity()
-    _period_stats = compute_period_stats(
+    week_pnl  = compute_period_stats(
         date.fromisoformat(_wk_dates[0]),
         date.fromisoformat(_wk_dates[-1]),
-        current_equity=_equity,
-    )
-    week_pnl     = _period_stats.get("total_pnl", 0.0)
-    week_pnl_pct = _period_stats.get("pnl_pct")
+    ).get("total_pnl", 0.0)
     total      = len(all_trades)
     wins       = sum(1 for t in all_trades if _day_pnl(t) > 0)
     wr         = round(wins / total * 100) if total else 0
@@ -776,7 +767,7 @@ def _week_stats(week_eods: dict) -> dict:
         if t.get("spy_event_type")
     ))
     return dict(
-        week_pnl=week_pnl, week_pnl_pct=week_pnl_pct, total=total, wins=wins, wr=wr,
+        week_pnl=week_pnl, total=total, wins=wins, wr=wr,
         avg_score=avg_score, avg_tqi=avg_tqi, overnight=overnight,
         stops=stops, targets=targets, exit_reasons=exit_reasons, spy_events=spy_events,
     )
@@ -1316,10 +1307,6 @@ def build_html(  # noqa: E501
 
     wp  = stats.get("week_pnl", 0)
     wpc = "pos" if wp > 0 else ("neg" if wp < 0 else "zero")
-    _wp_pct = stats.get("week_pnl_pct")
-    _wp_pct_str = (
-        f"{'+' if _wp_pct >= 0 else ''}{_wp_pct:.2f}%" if _wp_pct is not None else "—"
-    )
     _tqi = stats.get("avg_tqi")
     _tqi_col = "#30d158" if (_tqi or 0) >= 65 else ("#ffd60a" if (_tqi or 0) >= 40 else "#ff3b30")  # noqa: E501
     _tqi_val = f'{_tqi}' if _tqi is not None else "—"
@@ -1368,7 +1355,7 @@ def build_html(  # noqa: E501
 <div class="stats-row" style="grid-template-columns:repeat(8,1fr)">
   <div class="stat"><div class="stat-lbl">Weekly P&amp;L</div>
     <div class="stat-val {wpc}">{"+" if wp>=0 else "-"}${abs(wp):.2f}</div>
-    <div style="font-size:9px;color:#4a5070;margin-top:2px">closed only · {_wp_pct_str}</div></div>
+    <div style="font-size:9px;color:#4a5070;margin-top:2px">closed only</div></div>
   <div class="stat"><div class="stat-lbl">Weekly Trades</div>
     <div class="stat-val">{stats.get("total","—")}</div></div>
   <div class="stat"><div class="stat-lbl">Weekly Win Rate</div>
@@ -1507,8 +1494,7 @@ def build_html(  # noqa: E501
     headline_html = (
         '<div style="display:flex;gap:16px;align-items:center;margin:14px 0">'
         '<div><div style="font-size:11px;color:#8a94ae">Week P&amp;L</div>'
-        f'<div style="font-size:28px;font-weight:700;color:{_wp_col}">{_wp_str}'
-        f' <span style="font-size:14px;font-weight:600">({_wp_pct_str})</span></div>'
+        f'<div style="font-size:28px;font-weight:700;color:{_wp_col}">{_wp_str}</div>'
         '</div>'
         '<div style="flex:1;font-size:14px;color:#c8cce4;'
         f'border-left:1px solid #252847;padding-left:16px">{_verdict}</div></div>'
