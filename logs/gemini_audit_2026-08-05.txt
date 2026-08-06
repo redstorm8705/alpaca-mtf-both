@@ -1,0 +1,76 @@
+Nightly Gemini Audit — 2026-08-05
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['autonomous_patch_generator.py', 'strategy/signal_generator.py', 'execution/entry_logic.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   execution/entry_logic.py | After a partial exit, the `trail_stop` is `null` for the remaining open position (e.g., TOST), leaving it without active dynamic stop protection. | TOST
+*   strategy.run_cycle (entry_logic.py underlying issue) | A symbol (COIN) accumulated the required 5 confirmation scans for entry, but no entry order was placed, indicating a silent block or failure in the order lifecycle. | COIN
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `[ANOMALY-2] [COIN] confirm_gate=5 scans but no entry — risk.open_positions=3 vs tracker=3 | MAX_OPEN_POSITIONS=20`: This warning is repeated multiple times (e.g., 19:37:12, 19:43:46, 19:52:15, 19:58:51). It indicates a signal met the `confirm_gate` threshold but was not entered, despite available position slots and no other explicit blocking conditions for COIN in the logs. This is a critical missed entry.
+*   `[ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`: Repeated multiple times (e.g., 19:37:12, 19:43:46, 19:52:15, 19:58:51). This ongoing warning indicates poor trade quality and is consistent with the `avg_r_multiple` performance audit finding.
+*   `MRI ELEVATED (score=36) — size floor 0.85x applied.` and `MRI STRESSED (score=41) — size floor 0.70x applied.`: These are normal operational logs indicating the system is correctly applying risk adjustments based on the Macro Risk Index.
+*   `news_monitor | ⚡ MARKETAUX: 1 article(s) | CAUTION | ... | base penalty: 100%`: Normal operation; news alerts correctly applying penalties that factor into MRI.
+*   `[CRWD] COUNTER-TREND GATE [short]: 1-month return +X% opposes the trade... skipping (don't short a bounce).`: Intentional risk management, correctly blocking trades based on momentum.
+*   `[UBER] Sector correlation BLOCKED: already holding TOST in sector 'fintech' — skipping to avoid concentrated exposure.`: Intentional risk management, correctly blocking trades based on diversification rules.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: Verified for the logged `stop_hit` and `partial_exit` events (SMCI, QQQ, AMZN, TOST). P&L signs (positive for profit, negative for loss) are correct relative to entry/exit prices.
+*   **pnl_pct computation**: For the AMZN closed trade: `pnl_pct: -2.2`. Entry price `278.72`. P&L `-6.12`. Calculation: `-6.12 / 278.72 ≈ -0.0219` or `-2.19%`. The recorded `-2.2%` is consistent.
+*   **Partial P&L Accumulation**: For TOST partial exit: `pnl: 2.47`. Entry `32.89`, exit `35.36`. `35.36 - 32.89 = 2.47`. Correct.
+*   **Trades with pnl=0.0**: SNOW entry `294.92`, stop_hit `294.92`, pnl `0.0`. Correct.
+*   **Entry/Exit Prices Plausibility**: Prices appear plausible for the symbols and general market context.
+*   **Score→Outcome Correlation**: Insufficient data from today's trades (1 loss, 1 partial win) to draw new conclusions. However, `all_time_stats` show a `win_rate: 35.2%`, `avg_win: 20.98`, `avg_loss: -11.36`, and `profit_factor: 1.0`, but an `avg_r_multiple: -0.051`. These metrics are inconsistent with each other, suggesting an underlying reporting or calculation bug (see New Bugs Found). The negative `avg_r_multiple` is particularly concerning, indicating trades are not capturing their theoretical edge.
+*   **Stop-hit rate vs. win rate**: All-time win rate is 35.2%. The `ANOMALY-3` about TQI degradation and the negative `avg_r_multiple` strongly suggest that stop-hits contribute disproportionately to losses compared to the gains from winning trades, indicating a potential regime mismatch or issue with stop placement/exit discipline.
+*   **Exit Reason Consistency**: AMZN `stop_hit` at `272.6` with `reason: overnight_atr_buffer_exit | 9-scan breach | entry=$278.72 thresh=$273.73`. The exit price `272.6` is below the calculated threshold `273.73` for a long position, consistent with an ATR-buffered trailing stop.
+
+### TRADE INTEGRITY
+*   **Partial Exit Errors**: For TOST, despite a `partial_exit` at `2026-08-05T06:38:28.844006-07:00`, the `EOD SNAPSHOT` for `overnight_holds` still lists TOST with `trail_stop: null`. This indicates the trailing stop was not activated or updated for the remaining position, leaving it vulnerable to larger losses (directly relates to Known Architectural Issue A-2).
+
+### MODIFIED FILE FINDINGS
+*   **`autonomous_patch_generator.py`**:
+    *   **FIXED**: The issues related to LLM API routing (DeepSeek/Groq TPD exhaustion) appear to be addressed by migrating to Gemini as the primary drafting model and adding Groq as a fallback, as described in the module docstring and AWP audit fixes (2026-06-30, 2026-07-01).
+    *   **FIXED**: The `_MAX_FILE_CHARS_FOR_LLM` constant was significantly increased to `300_000` (2026-08-05 hardening). This directly addresses the critical issue of LLMs silently processing partial file content, leading to fabricated findings. The introduction of `_diff_applies_cleanly` also adds a crucial mechanical check for patch validity.
+*   **`strategy/signal_generator.py`**:
+    *   **FIXED**: `_get_weekly_bias` function: The logic to correctly handle SQQQ's inverted bias and use two consecutive weekly bars for bias confirmation (P2-WEEKLY-BIAS-CONFIRM) appears sound.
+    *   **FIXED**: `_intraday_override` function: The implementation of Fix B, using a 3.0% intraday move to bypass the weekly bias filter, is logically correct and robust in its data fetching and caching.
+    *   **No issues found**: The `calculate_score_16pt` and `_get_pead_days` functions, including new conditions C6-C13, appear correctly implemented for logging purposes as intended. The neutral fallbacks for missing data in C6 and C7 are good fail-safes.
+*   **`execution/entry_logic.py`**:
+    *   **FIXED**: P5-C1 FVG MultiIndex silent crash: The `_find_recent_fvgs` function now explicitly normalizes column names to lowercase and removes MultiIndex guards, correctly handling data from Alpaca API.
+    *   **FIXED**: P0-CYCLE-SYNC-GUARD: The implementation of `risk.reconcile_open_positions_from_alpaca` is a critical improvement, making the bot's open position count authoritative against Alpaca and preventing desync issues.
+    *   **No issues found**: The `_check_portfolio_correlation` function, FVG related functions, and `execute_entries` (excluding the `ANOMALY-2` issue which is a new bug condition rather than a code logic error) appear robust and correctly implement their respective risk gates.
+
+### P5 STATUS
+*   P5-C1 | FVG MultiIndex silent crash | **FIXED**
+*   P5-C2 | run_movers.py ImportError | **UNTOUCHED**
+*   P5-H1 | OBSOLETE — PDT enforcement permanently deleted from codebase | **OBSOLETE**
+*   P5-H2 | Fill price crosstalk | **UNTOUCHED**
+*   P5-H3 | Orphan GTC 404 path | **UNTOUCHED**
+*   P5-H4 | Rule 2 dead code | **UNTOUCHED**
+*   P5-H5 | FIXED 2026-04-21 | **FIXED (already)**
+*   P5-M1 | Cycle watchdog restart loop | **UNTOUCHED**
+*   P5-M2 | MRI score cached stale across sessions | **UNTOUCHED**
+*   P5-M3 | score_comparison JSON unbounded growth | **UNTOUCHED**
+*   P5-L1 | _classify_loss_driver() returns empty label in some edge paths | **UNTOUCHED**
+*   P5-L2 | eod_YYYY-MM-DD.json written before positions closed | **TRIGGERED** (EOD Snapshot is provisional and shows open positions)
+*   P5-L3 | live_data_writer.py no reconnect logic | **UNTOUCHED**
+
+### NEW BUGS FOUND
+*   CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | execution/entry_logic.py (implied) | `ANOMALY-2` - Signal confirmed but no entry: The system repeatedly logs `[ANOMALY-2] [COIN] confirm_gate=5 scans but no entry`, indicating that COIN passed the entry confirmation gate but a trade was not executed. This is not attributed to position limits or other explicit blocking gates in the logs, implying a silent failure in the trade execution pathway for a qualifying signal. | Exact failure condition: A signal's `confirm_gate` counter reaches the threshold (`5 scans` for COIN), yet no corresponding entry order is submitted or the submission silently fails without explicit logging.
+*   CATEGORY: RISK MANAGEMENT | SEVERITY: HIGH | execution/entry_logic.py | Trailing stop not active after partial exit: After a `partial_exit` event (e.g., TOST at 2026-08-05T06:38:28), the `trail_stop` for the remaining open position is recorded as `null` in the EOD Snapshot's `overnight_holds`, which means the position is not being actively protected by a trailing stop. | Exact failure condition: `trade.trail_stop` is `None` for a position that has undergone a `partial_exit`, leaving the remaining quantity vulnerable to unprotected adverse price movements.
+*   CATEGORY: ALPHA ISSUE | SEVERITY: HIGH | EOD Snapshot (`all_time_stats`) | Inconsistent performance metrics: The `all_time_stats` within the EOD Snapshot (e.g., `total_pnl: 84.69`, `win_rate: 35.2`, `avg_win: 20.98`, `avg_loss: -11.36`, `profit_factor: 1.0`, `avg_r_multiple: -0.051`) are mathematically inconsistent with each other, making the bot's overall performance difficult to accurately assess. | Exact failure condition: The derived `total_pnl` from `win_rate`, `avg_win`, and `avg_loss` does not match the stated `total_pnl`, and `profit_factor` and `avg_r_multiple` also lack internal consistency, indicating erroneous calculation or aggregation.
+
+### FIX VALIDATION
+*   FIX VALIDATION: PASS
+    *   `autonomous_patch_generator.py`: The 2026-08-05 hardening (increasing `_MAX_FILE_CHARS_FOR_LLM` and adding `_diff_applies_cleanly`) directly addresses the critical issue of LLMs operating on partial context and fabricating code. This significantly improves the robustness and reliability of autonomous patch generation.
+    *   `execution/entry_logic.py`: The `P0-CYCLE-SYNC-GUARD` mechanism (using `risk.reconcile_open_positions_from_alpaca`) is a robust fix for open position count discrepancies, making Alpaca the authoritative source for live risk management.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate `ANOMALY-2` for COIN**: Immediately trace the execution path for COIN from `strategy.run_cycle` through `execution.entry_logic.execute_entries` to identify the silent block that prevents entry despite meeting `confirm_gate` criteria.
+2.  **URGENT: Implement trailing stop activation post-partial exit**: Fix the bug where `trail_stop` is `null` after a partial exit. Ensure that a trailing stop (or at minimum, the promoted stop to breakeven + buffer) is active for all remaining open tranches.
+3.  **Audit and correct `all_time_stats` calculation**: Rectify the mathematical inconsistencies in the `all_time_stats` section of the EOD snapshot to ensure accurate performance reporting.
+4.  **Review TQI degradation and exit strategy**: Conduct a comprehensive review of the `ANOMALY-3` warnings, focusing on exit discipline and stop placement, particularly given the very low `avg_r_multiple` to improve profitability.
+5.  **Address P5-C2 (run_movers.py ImportError)**: Prioritize resolving the `ImportError` in `run_movers.py` as it's a critical, untouched bug that could cause crashes during premarket scans.

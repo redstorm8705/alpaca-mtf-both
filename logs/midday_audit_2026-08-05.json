@@ -1,0 +1,132 @@
+{
+  "audit_date": "2026-08-05",
+  "run_ts": "2026-08-05T10:30:01.600906-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN",
+      "TOST"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 26,
+    "levels": {
+      "ELEVATED": 20,
+      "STRESSED": 6
+    },
+    "last_score": 37,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 18,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-05 15:56:02,531 | WARNING  | execution.entry_logic | [CRWD] COUNTER-TREND GATE [short]: 1-month return +8.95% opposes the trade on a structura",
+      "2026-08-05 15:56:03,996 | WARNING  | execution.entry_logic | [META] Sector correlation BLOCKED: already holding AMZN in sector 'bigtech' \u2014 skipping to",
+      "2026-08-05 16:03:40,271 | WARNING  | execution.entry_logic | [NFLX] Sector correlation BLOCKED: already holding AMZN in sector 'bigtech' \u2014 skipping to",
+      "2026-08-05 16:19:48,765 | WARNING  | execution.entry_logic | [NFLX] Sector correlation BLOCKED: already holding AMZN in sector 'bigtech' \u2014 skipping to",
+      "2026-08-05 16:26:32,903 | WARNING  | execution.entry_logic | [CRWD] COUNTER-TREND GATE [short]: 1-month return +8.95% opposes the trade on a structura"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": -3.6500000000000057,
+    "win_rate": 0.5,
+    "profit_factor": 0.4035947712418296,
+    "avg_win": 2.469999999999999,
+    "avg_loss": -6.1200000000000045,
+    "best": {
+      "symbol": "TOST",
+      "pnl": 2.469999999999999,
+      "entry_price": 32.89,
+      "exit_price": 35.36,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 30.66,
+      "target": 37.54
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": -6.1200000000000045,
+      "entry_price": 278.72,
+      "exit_price": 272.6,
+      "size": 1.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 251.76,
+      "target": 334.85
+    },
+    "trades": [
+      {
+        "symbol": "TOST",
+        "pnl": 2.469999999999999,
+        "entry_price": 32.89,
+        "exit_price": 35.36,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 30.66,
+        "target": 37.54
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -6.1200000000000045,
+        "entry_price": 278.72,
+        "exit_price": 272.6,
+        "size": 1.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 251.76,
+        "target": 334.85
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "DDOG",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "NVDA",
+      "PANW",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "AMZN",
+      "TOST"
+    ],
+    "by_symbol": {
+      "AMZN": {
+        "buy": 0,
+        "sell": 1
+      },
+      "TOST": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}
