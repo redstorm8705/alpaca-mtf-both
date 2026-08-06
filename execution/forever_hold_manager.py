@@ -567,13 +567,29 @@ class ForeverHoldManager:
 
                 if gain_mult >= config.FOREVER6_TRIM_1_MULT:
                     qty1 = int(current_qty * config.FOREVER6_TRIM_1_FRAC)
-                    ok1, sold1 = self._try_rung(sym, "trim1", qty1, "10x", gain_mult)
+                    try:
+                        ok1, sold1 = self._try_rung(sym, "trim1", qty1, "10x", gain_mult)
+                    except _TrimStateUnreadable as e:
+                        # Handled immediately, right at this call site (not via an
+                        # outer except clause several lines away) — corruption
+                        # DETECTED mid-loop must abort the WHOLE pass with the same
+                        # loud alert as the upfront check, never degrade into a
+                        # per-symbol warning + continue (cold-2nd + CI audit catch,
+                        # 2026-08-05).
+                        self._alert_corrupt_trim_state(sym, e)
+                        return results
                     if ok1:
                         current_qty -= sold1
                         fired.append(("10x", sold1))
 
                 if gain_mult >= config.FOREVER6_TRIM_2_MULT:
-                    _trim1_status = self._load_trim_state().get(sym, {}).get("trim1", "none")
+                    try:
+                        _trim1_status = (
+                            self._load_trim_state().get(sym, {}).get("trim1", "none")
+                        )
+                    except _TrimStateUnreadable as e:
+                        self._alert_corrupt_trim_state(sym, e)
+                        return results
                     if _trim1_status != "done":
                         # 20x must never fire ahead of (or instead of) 10x — "another 25%
                         # of what remains" presupposes the first trim already happened.
@@ -585,36 +601,38 @@ class ForeverHoldManager:
                             sym, gain_mult, _trim1_status)
                     else:
                         qty2 = int(current_qty * config.FOREVER6_TRIM_2_FRAC)
-                        ok2, sold2 = self._try_rung(sym, "trim2", qty2, "20x", gain_mult)
+                        try:
+                            ok2, sold2 = self._try_rung(sym, "trim2", qty2, "20x", gain_mult)
+                        except _TrimStateUnreadable as e:
+                            self._alert_corrupt_trim_state(sym, e)
+                            return results
                         if ok2:
                             fired.append(("20x", sold2))
 
                 if fired:
                     results[sym] = {"gain_mult": round(gain_mult, 2), "fired": fired}
                     _slack_safe(f":moneybag: F6 TRIM {sym}: gain {gain_mult:.1f}x — {fired}")
-            except _TrimStateUnreadable as e:
-                # Explicit, specific handler (not just relying on the broader except
-                # Exception below catching it via inheritance) — corruption DETECTED
-                # mid-loop must abort the WHOLE pass with the same loud alert as the
-                # upfront check, not degrade into a separate per-symbol warning for
-                # every remaining symbol (cold-2nd fresh-review + CI audit catch,
-                # 2026-08-05).
-                logger.critical(
-                    "[F6] evaluate_and_execute_trims: trim state file became "
-                    "corrupt/unreadable mid-cycle (detected while evaluating %s) — "
-                    "refusing further trim evaluation this cycle (fail closed) until "
-                    "it's manually repaired: %s", sym, e)
-                _slack_safe(
-                    f":rotating_light: F6 forever6_trims.json became corrupt/unreadable "
-                    f"mid-cycle — remaining trims this cycle BLOCKED until manually "
-                    f"repaired: {e}")
-                return results
             except Exception as e:
                 logger.warning("[F6] evaluate_and_execute_trims: %s failed, skipping: %s",
                                sym, e)
                 continue
 
         return results
+
+    def _alert_corrupt_trim_state(self, sym: str, e: Exception) -> None:
+        """CRITICAL log + Slack alert for a _TrimStateUnreadable detected mid-cycle.
+        Void helper — every call site is responsible for its own `return results`
+        immediately after calling this, so the abort is visible right where it
+        happens rather than hidden behind a shared return path."""
+        logger.critical(
+            "[F6] evaluate_and_execute_trims: trim state file became corrupt/unreadable "
+            "mid-cycle (detected while evaluating %s) — refusing further trim "
+            "evaluation this cycle (fail closed) until it's manually repaired: %s",
+            sym, e)
+        _slack_safe(
+            f":rotating_light: F6 forever6_trims.json became corrupt/unreadable "
+            f"mid-cycle — remaining trims this cycle BLOCKED until manually repaired: "
+            f"{e}")
 
     def _try_rung(self, symbol: str, rung: str, qty: int, label: str,
                   gain_mult: float) -> tuple[bool, int]:
