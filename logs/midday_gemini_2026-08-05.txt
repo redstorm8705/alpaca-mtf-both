@@ -1,0 +1,70 @@
+Midday Gemini Audit — 2026-08-05
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+P&L calculation inverted for short trades | TOST, AMZN
+Protective stop placement logic inverted for short trades | TOST, AMZN
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+1.  **P&L Sign Inversion for Short Trades (Critical Execution Bug):**
+    *   **Description:** The P&L calculations for short positions are inverted. For a short trade, `entry > exit` should result in profit, and `entry < exit` should result in loss. The bot reports the opposite.
+    *   **Evidence:**
+        *   **TOST:** Entry $32.89, Exit $35.36. As per `ALPACA FILLS TODAY`, this was a short sale (1S). Actual P&L for a short: $32.89 - $35.36 = -$2.47. Reported P&L: (+$2.47).
+        *   **AMZN:** Entry $278.72, Exit $272.60. As per `ALPACA FILLS TODAY`, this was a short sale (1S). Actual P&L for a short: $278.72 - $272.60 = +$6.12. Reported P&L: ($-6.12).
+    *   **Impact:** This issue leads to inaccurate `Total P&L` (reported $-3.65 vs. actual +$3.65), misrepresents individual trade outcomes, corrupts win rate metrics, and can lead to incorrect risk management decisions (e.g., miscalculating daily loss limits or capital allocation).
+2.  **Incorrect Stop Placement for Short Trades (Critical Execution Bug):**
+    *   **Description:** For short positions, the protective stop price is placed *below* the entry price, which is characteristic of a stop for a *long* position. A protective stop for a short position should be placed *above* the entry price to limit upside risk.
+    *   **Evidence:**
+        *   **TOST:** Entry $32.89, Stop $30.66. The stop is $2.23 below the entry.
+        *   **AMZN:** Entry $278.72, Stop $251.76. The stop is $26.96 below the entry.
+    *   **Impact:** These short positions are either left effectively unprotected from upward price movements or are protected by a stop that would be triggered by further *profit-taking* movement, not loss, which defeats the purpose of a protective stop. The `INTRADAY_STOP_ATR_MULT = 1.2` suggests a stop *magnitude* is calculated correctly, but its *direction* relative to the entry price is inverted for short trades.
+3.  **Incorrect Target Placement for Short Trades (Alpha Issue):**
+    *   **Description:** For short positions, the profit target prices (T1, T2, T3) are set *above* the entry price. Profit targets for short positions should be *below* the entry price.
+    *   **Evidence:**
+        *   **TOST:** Entry $32.89. Targets: T1=$33.82, T2=$34.75, T3=$37.54. All targets are above the entry price.
+        *   **AMZN:** Entry $278.72. Targets: T1=$289.95, T2=$301.17, T3=$334.85. All targets are above the entry price.
+    *   **Impact:** This indicates a fundamental misunderstanding or misconfiguration of short-side profit-taking logic. The bot will never "hit" these profit targets on a profitable short move, leading to potentially missed profit-taking opportunities or suboptimal exit logic.
+4.  **Exit Reason Misclassification for Short Trades (Execution Bug):**
+    *   **Description:** The reported `exit_reason` for short trades is incorrect relative to the actual price action and the inverted stop/target logic.
+    *   **Evidence:**
+        *   **TOST:** Reported `partial_exit`. Exit $35.36 (loss for short). This exit is neither at a stop nor a profit target (given targets are misconfigured).
+        *   **AMZN:** Reported `stop_hit`. Exit $272.60. For a short entry of $278.72, an exit at $272.60 is a profit. The actual stop for AMZN was $251.76 (which itself is misplaced). The exit price is far from the stop price, and represents a profit, not a stop hit.
+    *   **Impact:** Distorts the `Stop-hit rate` (reported 50% vs actual 0% for these trades) and other performance metrics, making it difficult to analyze and improve the strategy's exit discipline.
+
+### ENTRY QUALITY
+*   Entries for TOST and AMZN had a score of 10/12, which meets the `Dynamic MIN_SCORE` of 10/12.
+*   The bot correctly applied sizing adjustments for `Mid-day doldrums` (75% sizing) and `MRI ELEVATED` (0.85x size floor).
+*   `[ANOMALY-3] TQI degradation` warning indicates broader strategy issues, but the bot reacted by applying `Kelly adj 0.50x` and `dollar_cap` adjustments, correctly skipping trades where `Position size < 1 share`. This shows the risk management layers are active and preventing entries with insufficient sizing.
+*   Other entry filters like `weekly bias`, `ORB gate BLOCK`, and `COUNTER-TREND GATE` are working as intended, preventing various signals from becoming trades.
+*   **No issues** with the application of entry filters or risk-based sizing *adjustments* themselves, though the `TQI degradation` is a concern for overall alpha.
+
+### EXIT QUALITY
+*   **Serious issues detected:** As detailed in the Performance Audit, the core logic for stop and target placement, as well as exit reason classification, is flawed for short trades.
+*   The `[ANOMALY-3] TQI degradation` warning explicitly recommends to "review exit discipline and stop placement", which is strongly correlated with the identified issues of inverted stop/target logic and misclassified exit reasons. This indicates the bot's self-assessment is picking up on the symptoms of these underlying bugs.
+
+### MRI ALIGNMENT
+*   The MRI level was `ELEVATED` (score=37/100).
+*   The bot logged `MRI ELEVATED (score=37) — size floor 0.85x applied.`, indicating that position sizing was adjusted appropriately for the elevated risk level.
+*   Volatility regime was `NORMAL` (VIX: 16.0), which is consistent with the `VIX_BE_WIDEN_THRESHOLD_1 = 20.0` constant.
+*   **No issues** with MRI alignment or responsive sizing.
+
+### LOG ANOMALIES
+*   `2026-08-05 17:26:26,316 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.` This is a persistent warning that, while correctly triggering risk adjustments, indicates systematic underperformance or flawed strategy components that require review.
+
+### NEW BUGS / CONCERNS
+*   **ALPHA ISSUE** | HIGH | **Target placement logic inverted for short trades.**
+    *   **Description:** The profit targets (T1, T2, T3) for short positions are set at prices *above* the entry price. For a short position to be profitable, the price must move *below* the entry.
+    *   **Exact condition:** Occurs for all `short` trades. Example: TOST, entry $32.89, targets T1=$33.82, T2=$34.75, T3=$37.54. AMZN, entry $278.72, targets T1=$289.95, T2=$301.17, T3=$334.85.
+    *   **Variable involved:** T1, T2, T3 target prices.
+    *   **Why failure:** This prevents the bot from correctly identifying or acting on profit-taking opportunities for short trades based on its defined targets, leading to suboptimal trade management.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION** | **IMMEDIATE FIX**: Address the P&L sign inversion and the inverted stop/target placement logic for short trades. This is fundamental to correct risk management and accurate performance reporting. Review the `execution.risk_manager` and `execution.entry_logic` modules to ensure directionality for short positions (stops above entry, targets below entry) is correctly implemented and P&L is calculated as `entry - exit` for short sales.
+2.  **ALPHA** | **HIGH PRIORITY**: Investigate the root causes of `[ANOMALY-3] TQI degradation`. Given the exit discipline and stop placement are specifically mentioned in the warning and correspond to the bugs found, addressing the execution bugs from point 1 might significantly improve TQI. Further analysis into trade win rates and R-multiples for short trades (once P&L is accurate) is needed.
+3.  **INFRA** | **MEDIUM PRIORITY**: Enhance logging for trade entries and exits, especially for short trades, to explicitly log the calculated stop and target prices immediately *after* they are set and the *intended* direction of the trade (Long/Short), rather than inferring from P&L signs. This will aid in future audits.
