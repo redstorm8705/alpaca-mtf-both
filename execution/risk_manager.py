@@ -187,26 +187,58 @@ class RiskManager:
         """Unrealized equity delta: current equity minus SOD baseline."""
         return self.portfolio_value - self.daily_start_value
 
-    def _qhm_intraday_pl(self) -> float:
-        """QHM positions' TODAY-ONLY unrealized P&L (Alpaca `unrealized_intraday_pl`,
-        measured from prior close — the SAME start-of-day datum as equity_pnl/last_equity)
-        from Alpaca POSITION OBJECTS (authoritative, no fill-matching). Subtracted from
-        equity_pnl in the kill switch so a quarterly-hold drawdown does not trip the
-        INTRADAY kill. MUST be the intraday field, NOT all-time `unrealized_pl`: equity_pnl
-        is a today-delta, so subtracting an all-time figure is a dimensional error that
-        false-trips on QHM lifetime gains (fixed 2026-08-06 after a live false 7% trip).
-        Fail-safe: returns 0.0 on ANY error/absence → kill switch degrades to account-level
-        equity_pnl (the conservative direction — never masks a real loss)."""
+    def _forever6_held_symbols(self) -> set:
+        """Forever-6-tier HELD symbols from the ownership ledger (forever6 qty > 0).
+        FAIL-SAFE to EMPTY on ANY error/absence → the intraday kill then excludes NO F6
+        symbol, staying MORE sensitive (never masks a real loss). Today F6 is dark
+        (FOREVER6_ENABLED=False → all forever6 qty = 0) → empty set → ZERO behavior change;
+        the exclusion auto-activates only once OWNERSHIP_GUARD_ENFORCE is True AND F6 holds shares
+        (the ledger must be ENFORCED before it can drive this safety control). FOREVER6_UNIVERSE
+        is deliberately NOT used (it is the candidate list and includes names held in OTHER
+        tiers, e.g. GOOGL/NVDA as QHM); only ledger-recorded F6 qty counts as an F6 hold."""
+        try:
+            # DOCUMENTATION-IS-NOT-ENFORCEMENT (GAI 2026-08-06): the ownership ledger is
+            # drift-prone TELEMETRY while OWNERSHIP_GUARD_ENFORCE is False, so it must NOT
+            # drive a safety control. Refuse to derive F6 exclusions from an UNENFORCED
+            # ledger — return empty so the kill excludes no F6 and stays maximally sensitive
+            # (a drifted ledger tagging an actively-traded symbol forever6>0 would otherwise
+            # mask that symbol's intraday loss). The F6 exclusion AUTO-ACTIVATES only once the
+            # ledger is enforced/reconciled — the gate is built, not merely documented.
+            if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+                return set()
+            from execution.ownership_guard import load_ledger, tier_qty
+            ledger = load_ledger()
+            return {
+                s for s in ledger.get("positions", {})
+                if tier_qty(ledger, s, "forever6") > 0.0
+            }
+        except Exception as e:  # RC-3
+            logger.warning("kill-switch F6 held-symbols read failed (%s) — excluding no F6", e)
+            return set()
+
+    def _buy_and_hold_intraday_pl(self) -> float:
+        """QHM UNION Forever-6 buy-and-hold positions' TODAY-ONLY unrealized P&L (Alpaca
+        `unrealized_intraday_pl`, measured from prior close — the SAME start-of-day datum as
+        equity_pnl/last_equity) from Alpaca POSITION OBJECTS (authoritative, no fill-matching).
+        Subtracted from equity_pnl in the kill switch so NEITHER a quarterly-hold NOR a
+        Forever-6 move — daily OR lifetime — trips the INTRADAY kill: both are buy-and-holds,
+        not intraday trades (Rafael 2026-08-06). MUST be the intraday field, NOT all-time
+        `unrealized_pl`: equity_pnl is a today-delta, so subtracting an all-time figure is a
+        dimensional error that false-trips on buy-and-hold lifetime gains (the 2026-08-06 live
+        false 7% trip). QHM symbols from get_quarterly_hold_symbols(); F6 symbols from the
+        ownership ledger — each fail-safe. Fail-safe: returns 0.0 on ANY error/absence → kill
+        degrades to account-level equity_pnl (the conservative direction — never masks a loss)."""
         try:
             from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-            qhm = set(get_quarterly_hold_symbols() or [])
-            if not qhm:
+            excluded = set(get_quarterly_hold_symbols() or [])
+            excluded |= self._forever6_held_symbols()   # F6 held (fail-safe empty; dark today → no-op)
+            if not excluded:
                 return 0.0
             api_key = os.getenv("ALPACA_API_KEY", "")
             secret = os.getenv("ALPACA_SECRET_KEY", "")
             if not api_key or not secret:
                 logger.warning(
-                    "kill-switch QHM intraday: API keys not set — using 0 "
+                    "kill-switch buy&hold intraday: API keys not set — using 0 "
                     "(kill degrades to account-level equity, conservative)"
                 )
                 return 0.0
@@ -217,7 +249,7 @@ class RiskManager:
             )
             if resp.status_code != 200:
                 logger.warning(
-                    "kill-switch QHM intraday: positions HTTP %d — using 0 "
+                    "kill-switch buy&hold intraday: positions HTTP %d — using 0 "
                     "(kill degrades to account-level equity, conservative)",
                     resp.status_code,
                 )
@@ -226,15 +258,25 @@ class RiskManager:
             if not isinstance(positions, list):
                 return 0.0
             total = 0.0
+            n_excl = 0
             for p in positions:
-                if p.get("symbol") in qhm:
+                if p.get("symbol") in excluded:
+                    n_excl += 1
                     try:
                         total += float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
                     except (TypeError, ValueError):
                         pass
+            if n_excl:
+                # Success-path observability (reliability board seat 2026-08-06): when the
+                # exclusion actually removes held buy-and-hold symbols, record how many and
+                # the today P&L excluded, so a kill (or a non-kill) is reverse-engineerable.
+                logger.debug(
+                    "kill-switch buy&hold exclusion: %d held sym(s), $%.2f today P&L excluded "
+                    "from intraday kill measure", n_excl, round(total, 2),
+                )
             return round(total, 2)
         except Exception as e:  # RC-3
-            logger.warning("kill-switch QHM intraday P&L fetch failed (%s) — using 0", e)
+            logger.warning("kill-switch buy&hold intraday P&L fetch failed (%s) — using 0", e)
             return 0.0
 
     def check_kill_switch(self) -> bool:
@@ -262,19 +304,19 @@ class RiskManager:
         # them. daily_pnl is NO LONGER consulted in the kill DECISION.
         #
         # The measure is Alpaca EQUITY delta (equity = real cash + real market value;
-        # structurally immune to any fill-matching bug) minus QHM's TODAY-ONLY (intraday) unrealized P&L
+        # structurally immune to any fill-matching bug) minus QHM's + Forever-6's TODAY-ONLY (intraday) unrealized P&L
         # (from Alpaca position objects — authoritative, no fill-matching), so a
-        # quarterly-hold drawdown does not trip the INTRADAY kill (board 2026-07-01).
+        # quarterly-hold OR Forever-6 drawdown does not trip the INTRADAY kill (QHM board 2026-07-01; F6 added Rafael 2026-08-06).
         #
         # intraday_equity_pnl = equity_pnl - qhm_unrealized IS the true intraday P&L:
         #  - QHM up  → equity_pnl is inflated by the QHM gain; subtracting it EXPOSES the
         #    full intraday loss (more negative) so a masked intraday loss still trips.
         #  - QHM down→ subtracting a negative ADDS it back, so a QHM loss does NOT trip
         #    the intraday kill — exactly the exclusion the board wanted.
-        # Fail-safe: on any QHM-fetch failure _qhm_intraday_pl()=0.0 → measure reverts
+        # Fail-safe: on any fetch failure _buy_and_hold_intraday_pl()=0.0 → measure reverts
         # to account-level equity_pnl (MORE sensitive / conservative — never masks a loss).
         # A real 7% intraday loss always trips. daily_pnl remains for display only.
-        intraday_equity_pnl = self.equity_pnl - self._qhm_intraday_pl()
+        intraday_equity_pnl = self.equity_pnl - self._buy_and_hold_intraday_pl()
         loss_pct = intraday_equity_pnl / self.daily_start_value
         if loss_pct <= -config.MAX_DAILY_LOSS_PCT:
             logger.critical(
@@ -896,7 +938,7 @@ class RiskManager:
         payload, count within the sanity cap). Returns False WITHOUT modifying the counter on ANY
         failure so the caller falls back to its conservative tracker-based sync-UP-only guard — a
         read failure must NEVER blindly move the entry gate. Mirrors the /v2/positions fetch
-        pattern already used by _qhm_intraday_pl(). NEVER RAISES."""
+        pattern already used by _buy_and_hold_intraday_pl(). NEVER RAISES."""
         try:
             qhm = set(qhm_syms or [])
             api_key = os.getenv("ALPACA_API_KEY", "")
