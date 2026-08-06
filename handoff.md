@@ -12,6 +12,43 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🟡 DESIGN ALIGNED, NOT YET BUILT (2026-08-05) — QHM earnings-into-profit-take (new mechanism).**
+Rafael request: QHM (quarterly holds) currently has zero profit-realization logic — only a stop-loss and
+the just-enabled trailing-lock (which can never sell, only protect gains). He wants QHM to bank profit
+ahead of an earnings print when a hold has run up significantly, using a WIDER target than the bot's
+normal intraday target (this is a weeks-to-months holding tier, not intraday). Board+Gro+GAI research
+(full verbatim re-read of `quarterly_hold_manager.py`, 2443L) converged on: **dynamic target** = ATM-
+straddle option-implied-move for the expiration spanning the earnings date (reuses `data/gex.py`'s
+existing live Alpaca option-chain + Black-Scholes/IV code — additive, not new infra), falling back to the
+same 14-week ATR the stop already uses, scaled ~5-7.5x (derived from the bot's own 2-3:1 target:stop
+convention, not a made-up number) when option data is thin/illiquid. **Tier 1 (CONFIRMED — Rafael
+2026-08-05): partial trim, 50%** of the position when the dynamic gain threshold is hit inside the
+earnings-proximity window — citing PEAD research (Ball & Brown 1968; Bernard & Thomas 1989) that prices
+tend to keep drifting with an earnings surprise afterward, so a full pre-earnings liquidation risks
+missing a continuation on a good print. **Tier 2 (CONFIRMED — Rafael 2026-08-05): 100% exit** of
+whatever remains, for an extreme run-up beyond Tier 1's threshold — Rafael's exact words: "I think that's
+the right trim size [50%]. I think 100% should be the next tier." **NOT YET DECIDED:** the numeric/dynamic
+TRIGGER for Tier 2 (e.g. some multiple of Tier 1's own dynamic threshold, mirroring forever6's own
+already-shipped 10x→20x doubling convention) — this is the next open question to bring to Rafael, board-
+grounded, per the standing "bring board rec with every question" rule. **ALSO UNRESOLVED from the research
+pass (verified against saved verbatim API responses, not memory):** (a) detection window — the prior
+research pass's own fixed-10-calendar-day proposal is NOT held by either outside reviewer on independent
+re-check: Gro AND GAI both verdict "Improve" on this point and both recommend a dynamic trigger instead
+(GAI: implied-volatility expansion on the earnings-spanning option chain; Groq: a volatility-scaled
+window) — 2/2 convergence toward dynamic, not a split; the fixed-10-day figure needs replacing, not
+defending. (b) interaction with the live trailing-lock — a genuine Gro/GAI split: GAI verdict "Confirm" on
+mutual exclusion (inside the earnings window the new trim mechanism takes over stop-handling for that
+cycle instead of the trailing-lock, since the two would otherwise fight over the same resting stop); Groq
+verdict "Dissent and improve," proposing an integrated/adjusted-trailing-lock-continues approach instead.
+**NO CODE WRITTEN YET.** Per RULE C-1/C-2, the next session
+re-starts this file's patch sequence at Step 1 (full read) regardless of this session's prior research —
+the research above is context, not a completed gate. Planned shape once design is final: new
+`HoldPosition` fields for idempotent per-earnings-cycle state (reserve-before-sell pattern, same lesson
+forever6's build just proved — persist "reserved" durably BEFORE selling, never after); the sell itself
+needs no new broker function (unlike forever6) — `broker.partial_close_position(symbol, qty, tier="qhm")`
+already exists and QHM is not subject to forever6's hard never-sell floor restriction; wire into
+`run_weekly_check` before `_maybe_enter_earnings_hold`'s existing 5-day stop-cancel fires.
+
 **✅ SHIPPED (2026-08-05) — weekly/monthly performance % visibility.**
 Closes the reporting gap found earlier this session (pages showed dollar P&L but no %-of-balance
 figure). Rafael explicitly overrode the board's Modified-Dietz recommendation — paper account, no
