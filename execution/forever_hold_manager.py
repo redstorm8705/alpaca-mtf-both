@@ -40,7 +40,20 @@ _STATE = _ROOT / "data" / "state" / "forever6_holds.json"
 # sell/exit path. Fail-CLOSED on read error (treat as degraded → block), the safe
 # direction for a never-sell book.
 _SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
+# Per-symbol trim-rung state (F6 exit increment, 2026-08-05): {SYM: {"trim1": "none"|
+# "reserved"|"done", "trim2": ...}}. Durable across restarts so a 10x/20x trim, once
+# reserved or executed, can never re-fire on the same rung. Separate from _STATE (the
+# starter-event log) — different shape, different write cadence (once per
+# reserve/confirm transition vs. once per starter event).
+_TRIM_STATE = _ROOT / "data" / "state" / "forever6_trims.json"
 _EPS = 1e-6
+
+
+class _TrimStateUnreadable(Exception):
+    """Raised by _load_trim_state when forever6_trims.json EXISTS but can't be parsed —
+    distinct from a legitimately-absent file (which means 'no trim ever recorded' and is
+    safe to treat as {}). Must propagate to skip trim evaluation, never be swallowed and
+    treated as empty state."""
 
 
 def _slack_safe(msg: str) -> None:
@@ -458,3 +471,305 @@ class ForeverHoldManager:
             except Exception as e:
                 logger.debug("forever6: price fetch %s failed: %s", sym, e)
         return out
+
+    # ── EXIT: trims only (F6 exit increment, 2026-08-05) ───────────────────────
+    def evaluate_and_execute_trims(self) -> dict:
+        """FOREVER-6 EXIT: trim FOREVER6_TRIM_1_FRAC (25%) of current forever6 holdings at
+        FOREVER6_TRIM_1_MULT (10x) unrealized gain, another FOREVER6_TRIM_2_FRAC (25%) of
+        what remains at FOREVER6_TRIM_2_MULT (20x). NEVER a full sell — the house-money core
+        keeps shrinking, never disappears. No stop, no max-hold, no other exit exists for
+        this tier (logs/forever6_integration_map_2026-07-09.md §6).
+
+        Sequential within one pass: the 10x trim (if newly triggered) executes and its
+        result feeds the 20x check in the SAME call, so a single overnight gap past both
+        thresholds still fires both rungs in order, each against the correctly-shrunk qty —
+        never a double-sized trim from evaluating both against the pre-trim qty.
+
+        RESERVE-THEN-CONFIRM per rung (GAI preship catch, 2026-08-05): each rung's state is
+        "none" → "reserved" → "done". The "reserved" write is durable-confirmed BEFORE the
+        sell is even attempted — so a crash/restart between reservation and sell always
+        finds "reserved" and refuses to re-fire (fail closed), never "none" again. A sell
+        that fails after reservation ALSO stays "reserved" forever (never reverts to
+        "none") — this makes a lost/failed _save_trim_state or a failed sell both degrade
+        to "block and alert," never to "silently retry and over-trim." Clearing a stuck
+        "reserved" back to firing requires a human to edit forever6_trims.json after
+        verifying against Alpaca's own order history — there is no auto-retry path.
+
+        A trim that rounds to 0 shares (25% of a 1-2 share position) is SKIPPED, not
+        forced up to a full-position sell — trimming a fraction must never become
+        liquidating the whole position; the position is re-evaluated next cycle in case a
+        deeper crash-ladder rung later adds enough shares to make a fractional trim
+        possible. Per-symbol failure is isolated — one symbol's read/compute error never
+        blocks evaluation of the others. Returns {symbol: {"gain_mult": float, "fired":
+        [(label, qty), ...]}} for symbols where a trim executed this pass.
+
+        KNOWN PRE-LIVE-FLIP GATE (cold-2nd fresh-review, 2026-08-05, fails safe — not
+        blocking this ship since FOREVER6_ENABLED stays False): a same-pass 10x-then-20x
+        double trim calls the guard twice in quick succession, and the guard's drift-freeze
+        check (ownership_guard.check_never_sell_floor) compares the ownership ledger's
+        tier-sum (refreshed only by the standalone run_ledger_sync cron, not resynced
+        mid-pass here) against Alpaca's live net qty. If trim1's fill reaches Alpaca before
+        the ledger resyncs, trim2's guard call can see a transient mismatch and REJECT —
+        which this code correctly treats as a sell failure (rung stuck 'reserved',
+        alerting, blocking) rather than an over-trim, but means a same-pass double trim may
+        not reliably fire both rungs in practice. Fix before flipping FOREVER6_ENABLED:
+        force a ledger resync between the two rungs, mirroring the buy-side's
+        _verify_ledger_reflects pattern.
+        """
+        results: dict[str, dict] = {}
+        try:
+            from execution import ownership_guard as _og
+        except Exception as e:
+            logger.error("[F6] evaluate_and_execute_trims: ownership_guard import failed "
+                        "— skipping this cycle: %s", e)
+            return results
+        try:
+            ledger = _og.load_ledger()
+        except Exception as e:
+            logger.warning("[F6] evaluate_and_execute_trims: ledger unreadable — "
+                           "skipping this cycle: %s", e)
+            return results
+
+        # Fail the WHOLE pass closed on a corrupt (not merely absent) trim-state file —
+        # checked once, up front, so a corruption doesn't silently read as "no trim has
+        # ever happened" for every symbol (see _TrimStateUnreadable's docstring).
+        try:
+            self._load_trim_state()
+        except _TrimStateUnreadable as e:
+            logger.critical("[F6] evaluate_and_execute_trims: trim state file is "
+                            "corrupt/unreadable — refusing ALL trim evaluation this "
+                            "cycle (fail closed) until it's manually repaired: %s", e)
+            _slack_safe(f":rotating_light: F6 forever6_trims.json is corrupt/unreadable "
+                        f"— ALL trims blocked until manually repaired: {e}")
+            return results
+
+        prices = self._fetch_prices()
+
+        for sym in self.universe:
+            try:
+                own = _og.tier_qty(ledger, sym, "forever6")
+                if own <= _EPS:
+                    continue
+                entry = ledger.get("positions", {}).get(sym, {})
+                avg_cost = float(
+                    entry.get("tiers", {}).get("forever6", {}).get("avg_cost", 0.0) or 0.0
+                )
+                if avg_cost <= 0:
+                    logger.debug("[F6] %s: forever6 qty=%s but avg_cost<=0 — skipping trim "
+                                "eval this cycle.", sym, own)
+                    continue
+                px = prices.get(sym)
+                if not px or px <= 0:
+                    continue
+                gain_mult = px / avg_cost
+                current_qty = own
+                fired: list[tuple[str, int]] = []
+
+                if gain_mult >= config.FOREVER6_TRIM_1_MULT:
+                    qty1 = int(current_qty * config.FOREVER6_TRIM_1_FRAC)
+                    try:
+                        ok1, sold1 = self._try_rung(sym, "trim1", qty1, "10x", gain_mult)
+                    except _TrimStateUnreadable as e:
+                        # Handled immediately, right at this call site (not via an
+                        # outer except clause several lines away) — corruption
+                        # DETECTED mid-loop must abort the WHOLE pass with the same
+                        # loud alert as the upfront check, never degrade into a
+                        # per-symbol warning + continue (cold-2nd + CI audit catch,
+                        # 2026-08-05).
+                        self._alert_corrupt_trim_state(sym, e)
+                        return results
+                    if ok1:
+                        current_qty -= sold1
+                        fired.append(("10x", sold1))
+
+                if gain_mult >= config.FOREVER6_TRIM_2_MULT:
+                    try:
+                        _trim1_status = (
+                            self._load_trim_state().get(sym, {}).get("trim1", "none")
+                        )
+                    except _TrimStateUnreadable as e:
+                        self._alert_corrupt_trim_state(sym, e)
+                        return results
+                    if _trim1_status != "done":
+                        # 20x must never fire ahead of (or instead of) 10x — "another 25%
+                        # of what remains" presupposes the first trim already happened.
+                        # Covers: trim1 not yet attempted, trim1's qty rounded to 0 (too
+                        # small to trim), and trim1 stuck "reserved" after a failed sell.
+                        logger.debug(
+                            "[F6] %s: 20x trim trigger met (gain %.1fx) but trim1 status "
+                            "is %r, not 'done' — skipping 20x until trim1 completes.",
+                            sym, gain_mult, _trim1_status)
+                    else:
+                        qty2 = int(current_qty * config.FOREVER6_TRIM_2_FRAC)
+                        try:
+                            ok2, sold2 = self._try_rung(sym, "trim2", qty2, "20x", gain_mult)
+                        except _TrimStateUnreadable as e:
+                            self._alert_corrupt_trim_state(sym, e)
+                            return results
+                        if ok2:
+                            fired.append(("20x", sold2))
+
+                if fired:
+                    results[sym] = {"gain_mult": round(gain_mult, 2), "fired": fired}
+                    _slack_safe(f":moneybag: F6 TRIM {sym}: gain {gain_mult:.1f}x — {fired}")
+            except Exception as e:
+                logger.warning("[F6] evaluate_and_execute_trims: %s failed, skipping: %s",
+                               sym, e)
+                continue
+
+        return results
+
+    def _alert_corrupt_trim_state(self, sym: str, e: Exception) -> None:
+        """CRITICAL log + Slack alert for a _TrimStateUnreadable detected mid-cycle.
+        Void helper — every call site is responsible for its own `return results`
+        immediately after calling this, so the abort is visible right where it
+        happens rather than hidden behind a shared return path."""
+        logger.critical(
+            "[F6] evaluate_and_execute_trims: trim state file became corrupt/unreadable "
+            "mid-cycle (detected while evaluating %s) — refusing further trim "
+            "evaluation this cycle (fail closed) until it's manually repaired: %s",
+            sym, e)
+        _slack_safe(
+            f":rotating_light: F6 forever6_trims.json became corrupt/unreadable "
+            f"mid-cycle — remaining trims this cycle BLOCKED until manually repaired: "
+            f"{e}")
+
+    def _try_rung(self, symbol: str, rung: str, qty: int, label: str,
+                  gain_mult: float) -> tuple[bool, int]:
+        """Attempt ONE trim rung ("trim1" or "trim2") with reserve-then-confirm state.
+        Returns (fired: bool, qty_sold: int). Never re-fires a rung whose state is
+        anything other than "none" — "reserved" (whether from a persist race or an actual
+        sell failure) and "done" both permanently block further auto-attempts for this
+        rung on this symbol until a human clears the state file."""
+        state = self._load_trim_state()
+        sym_state = dict(state.get(symbol, {}))
+        status = sym_state.get(rung, "none")
+
+        if status not in ("none", "reserved", "done"):
+            # Fail CLOSED on an unrecognized value (corruption, or a typo during the
+            # documented manual-clear procedure) — never fall through and treat an
+            # unknown status the same as "none" (cold-2nd fresh-review catch, 2026-08-05).
+            logger.critical(
+                "[F6] %s %s rung has an UNRECOGNIZED state %r — treating as blocked, "
+                "NOT as 'none'. Manually correct forever6_trims.json to one of "
+                "none/reserved/done.", symbol, label, status)
+            _slack_safe(f":rotating_light: F6 {symbol} {label} trim state is "
+                        f"unrecognized ({status!r}) — blocked until manually corrected.")
+            return False, 0
+        if status == "done":
+            return False, 0
+        if status == "reserved":
+            logger.critical(
+                "[F6] %s %s rung is STUCK at 'reserved' (gain %.1fx) — a prior attempt "
+                "either failed to persist or the sell itself failed. NOT auto-retrying. "
+                "Verify against Alpaca's order history, then manually clear "
+                "forever6_trims.json before this rung can fire.", symbol, label, gain_mult)
+            _slack_safe(f":rotating_light: F6 {symbol} {label} trim STUCK at 'reserved' "
+                        f"— manual verification required before it can fire.")
+            return False, 0
+        if qty < 1:
+            logger.info(
+                "[F6] %s: %s trim trigger met (gain %.1fx) but the computed qty rounds "
+                "to 0 — skipping (position too small to fractionally trim).",
+                symbol, label, gain_mult)
+            return False, 0
+
+        # Reserve FIRST, durably, before any sell is attempted. A write failure here
+        # means we never sell this cycle — fail closed, never sell without a prior
+        # confirmed reservation.
+        sym_state[rung] = "reserved"
+        state[symbol] = sym_state
+        if not self._save_trim_state(state):
+            logger.error(
+                "[F6] %s: %s trim reservation FAILED to persist — refusing to sell this "
+                "cycle (fail closed). Will retry reservation next cycle.", symbol, label)
+            return False, 0
+
+        ok = self._submit_trim(symbol, qty, label)
+
+        # Whether the sell succeeded or failed, the rung stays "reserved" — success will
+        # be upgraded to "done" below; failure deliberately does NOT revert to "none"
+        # (never assume a failed-looking order didn't partially execute).
+        if ok:
+            # Re-load fresh rather than reuse the pre-sell snapshot (cold-2nd fresh-review
+            # catch, 2026-08-05): _submit_trim is a blocking network call, and writing back
+            # a stale in-memory `state` here could silently clobber a concurrent manual
+            # edit to a DIFFERENT symbol/rung made during that window — exactly the kind of
+            # edit this design's own alerts tell an operator to make.
+            state = self._load_trim_state()
+            sym_state = dict(state.get(symbol, {}))
+            sym_state[rung] = "done"
+            state[symbol] = sym_state
+            if not self._save_trim_state(state):
+                logger.critical(
+                    "[F6] %s: %s trim EXECUTED (sold %s share(s)) but the 'done' state "
+                    "write FAILED — rung stays 'reserved', so it will correctly block "
+                    "(not re-fire) next cycle, but needs manual confirmation it "
+                    "actually completed: %s", symbol, label, qty, symbol)
+                _slack_safe(f":rotating_light: F6 {symbol} {label} trim executed but "
+                            f"state write failed — verify and clear manually.")
+            return True, qty
+
+        logger.error(
+            "[F6] %s: %s trim sell FAILED after reservation — rung stays 'reserved' "
+            "(blocks future auto-attempts; verify against Alpaca before manual clear).",
+            symbol, label)
+        _slack_safe(f":rotating_light: F6 {symbol} {label} trim sell FAILED after "
+                    f"reservation — verify against Alpaca's order history, then "
+                    f"manually clear forever6_trims.json before retrying.")
+        return False, 0
+
+    def _submit_trim(self, symbol: str, qty: int, label: str) -> bool:
+        """Execute one trim leg via the sole authorized broker path. Never raises."""
+        try:
+            from execution import broker as _bk
+            ok = _bk.submit_f6_trim(symbol, qty)
+        except Exception as e:
+            logger.error("[F6] TRIM EXCEPTION %s (%s trigger): %s", symbol, label, e)
+            return False
+        if ok:
+            logger.warning("[F6] TRIM EXECUTED %s: sold %s share(s) (%s trigger)",
+                           symbol, qty, label)
+        else:
+            logger.error("[F6] TRIM FAILED %s: broker rejected/failed the %s trim "
+                        "sell of %s share(s)", symbol, label, qty)
+        return ok
+
+    def _load_trim_state(self) -> dict:
+        """Returns {} ONLY when the file is genuinely absent (a legitimate fresh state —
+        no trim has ever been recorded). A PRESENT-but-unreadable/corrupt file raises
+        _TrimStateUnreadable instead of silently returning {} (GAI preship catch,
+        2026-08-05): treating corruption the same as "fresh" would let a successful
+        reserve-write for ONE symbol overwrite every OTHER symbol's already-recorded
+        "reserved"/"done" state with a blank slate, reopening the exact re-fire risk this
+        whole mechanism exists to close. Callers must let this propagate and skip
+        evaluation entirely rather than catch-and-treat-as-empty."""
+        if not _TRIM_STATE.exists():
+            return {}
+        try:
+            d = json.loads(_TRIM_STATE.read_text())
+        except Exception as e:
+            raise _TrimStateUnreadable(f"forever6_trims.json unreadable: {e}") from e
+        if not isinstance(d, dict):
+            raise _TrimStateUnreadable(f"forever6_trims.json is not a dict: {type(d).__name__}")
+        return d
+
+    def _save_trim_state(self, state: dict) -> bool:
+        """Atomic tmp→fsync→replace (RC-5). Returns True on confirmed success, False on
+        failure — callers MUST check this return value: the reserve-then-confirm design
+        depends on the caller refusing to proceed (to a sell, or to marking "done") when
+        this returns False, not on this function raising."""
+        try:
+            _TRIM_STATE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _TRIM_STATE.with_suffix(f".json.{os.getpid()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp), str(_TRIM_STATE))
+            return True
+        except Exception as e:
+            logger.critical("[F6] trim state persist FAILED: %s", e)
+            _slack_safe(f":rotating_light: F6 trim state persist FAILED ({e}) — verify "
+                        f"forever6_trims.json manually before the next after-close cycle.")
+            return False

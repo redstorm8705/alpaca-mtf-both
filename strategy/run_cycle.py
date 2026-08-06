@@ -881,6 +881,11 @@ def run_cycle(
                             [p.get("symbol") for p in _f6_res.get("placed", [])],
                             _f6_res.get("spent", 0.0),
                         )
+                    # F6 EXIT — trims only (10x/20x). Independent of the starter trigger
+                    # above (runs every after-close cycle regardless of whether a starter
+                    # fired today), since a held name's gain multiple is unrelated to
+                    # today's SPY move.
+                    _f6_mgr.evaluate_and_execute_trims()
             except Exception as _f6e:
                 logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")
         _touch_cycle_ts()
