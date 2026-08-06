@@ -1,0 +1,39 @@
+diff --git a/autonomous_review.py b/autonomous_review.py
+index 825851a..8d07367 100644
+--- a/autonomous_review.py
++++ b/autonomous_review.py
+@@ -223,7 +223,23 @@ def _git_push_with_retry() -> bool:
+             f"Push attempt {attempt+1}/{_MAX_RETRIES} failed:"
+             f" {result.stderr.strip()}"
+         )
+-        _git("pull", "--rebase", "origin", "main", check=False)
++        # Detect dirty tracked files before attempting pull — a dirty tree blocks
++        # git pull --rebase and was the silent root of the 2026-07-20 push failure
++        # loop (cron jobs write tracked report files without committing them).
++        dirty = _git("status", "--porcelain", check=False)
++        if dirty.stdout.strip():
++            _log(
++                f"CRITICAL: Dirty working tree blocks git pull --rebase. "
++                f"Uncommitted tracked files: {dirty.stdout.strip()[:300]}. "
++                "The scheduling collision (cron jobs modifying tracked files "
++                "without committing) must be fixed separately — see handoff.md."
++            )
++        pull_result = _git("pull", "--rebase", "origin", "main", check=False)
++        if pull_result.returncode != 0:
++            _log(
++                f"git pull --rebase failed (attempt {attempt+1}): "
++                f"{pull_result.stderr.strip()}"
++            )
+         time.sleep(3)
+     return False
+ 
+@@ -512,7 +528,8 @@ def main() -> None:
+     for p in processed:
+         try:
+             st = json.loads((_LOGS_DIR / p).read_text()).get("status", "")
+-        except Exception:
++        except Exception as exc:
++            _log(f"DEBUG: status read failed for {p}: {exc}")
+             st = ""
+         if st == "ready_for_approval":
+             ready.append(p)
