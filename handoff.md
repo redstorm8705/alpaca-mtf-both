@@ -49,7 +49,37 @@ needs no new broker function (unlike forever6) — `broker.partial_close_positio
 already exists and QHM is not subject to forever6's hard never-sell floor restriction; wire into
 `run_weekly_check` before `_maybe_enter_earnings_hold`'s existing 5-day stop-cancel fires.
 
-**✅ SHIPPED (2026-08-05) — weekly/monthly performance % visibility.**
+**Round 2 research (2026-08-05, same session) — RESOLVED 2 of the 3 open items, 1 real split remains.**
+GAI + 2 cold board seats (Thorp — Kelly/sizing lens; the options/IV seat — tastytrade expected-move
+research lens) independently reviewed all 3 open questions; Groq was rate-limited (Groq's 100K/day TPD
+budget exhausted mid-session) so this round is GAI + board only, per the standing "Gro-skip-if-unavailable
+→ board majority + GAI APPROVE suffices" policy.
+**RESOLVED — detection window (3/3 consensus):** reject the fixed 10-day window outright; use an
+IV-expansion/acceleration signal on the earnings-spanning ATM straddle (Z-score or rate-of-change vs. its
+own moving average) as the PRIMARY trigger, with a day-count acting only as an outer bound (never activate
+more than ~3 weeks out even if IV drifts). Board (options/IV seat) grounds this in tastytrade's published
+IV-behavior research: IV-expansion timing into earnings is regime/name-dependent, not linear or
+fixed-lead-time, so a fixed day-count systematically mistimes both fast- and slow-IV-expanding names.
+Implementation-detail formula (vol-scaled window vs. IV-Z-score-primary) still to be finalized at build
+time — not a Rafael-level fork, all 3 reviewers agree on the direction.
+**RESOLVED — trailing-lock interaction (3-1, decisively closes Round 1's Groq-vs-GAI split):** mutual
+exclusion confirmed. Both cold board seats, independently and from different domain lenses (Thorp: Kelly's
+single-decision-per-bet requirement; options/IV seat: how professional vol desks handle overlapping
+risk-management triggers), sided with GAI's original concurrency-control argument over Groq's
+integration proposal. Per the Gro/GAI Tie-Breaker Protocol (board reviews both sides' full reasoning,
+decides by simple majority) — 3-1 is a clear majority, not a deadlock, so this does not escalate to Rafael.
+**STILL OPEN — Tier 2's exact trigger multiple, genuine 2-1 split, needs Rafael's call:** GAI recommends
+3x Tier 1's dynamic threshold (reasoning: post-earnings IV crush + fading momentum justify a faster
+full-exit). Both cold board seats independently recommend 2x instead (mirroring forever6's already-shipped
+10x→20x doubling precedent) and both, independently, flagged the SAME flaw in GAI's 3x reasoning: IV crush
+happens the morning AFTER the print, so citing it to justify a tighter PRE-earnings trigger reasons from
+the wrong side of the event — Tier 2 fires on the pre-earnings run-up, before any crush has occurred.
+Board's own case for 2x: Thorp seat — once the market's own priced-in move (Tier 1) is cleared, a further
+run to 2x/3x isn't "more measurable edge," it's tail risk, and Kelly discipline says de-risk faster, not
+slower, once the edge is no longer quantifiable; options/IV seat — tastytrade's own expected-move research
+treats the implied move as a ~68%-confidence band, and 2x already sits where realized moves become
+statistically unusual, while 3x sets the bar so high the tier would rarely ever fire, defeating its
+purpose. **Board recommendation: 2x, not 3x.** Rafael has final say — not yet asked.
 Closes the reporting gap found earlier this session (pages showed dollar P&L but no %-of-balance
 figure). Rafael explicitly overrode the board's Modified-Dietz recommendation — paper account, no
 real deposits/withdrawals possible, don't build tracking for a scenario that can't occur; revisit at
