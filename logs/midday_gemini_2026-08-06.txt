@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-08-06
+Model: gemini-2.5-flash | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+No entries, exits, or closed trades were recorded in the `SESSION P&L SUMMARY` or `CLOSED TRADE DETAILS`. The `CONTEXT` section explicitly states that the `entry`-EVENT log is `DEGRADED` (known issue D1), leading to under-counted closed trades and $0 P&L even when trades occur. Therefore, no performance audit findings can be derived from these sections.
+
+The `ALPACA FILLS TODAY` reports 2 fills (DDOG: 0B/1S, TOST: 0B/1S), indicating trading activity. However, given the explicit context about D1, these fills cannot be correlated with P&L or entry/exit quality using the provided summary data without flagging a known benign pattern.
+
+### ENTRY QUALITY
+No entries recorded in `SESSION P&L SUMMARY` or `FLAGGED ENTRIES`. The bot's log shows `Kill switch active — no new entries this session.` for the entire duration of the provided log, meaning no new entries were attempted. Therefore, no entry quality assessment can be made.
+
+### EXIT QUALITY
+No exits recorded in `SESSION P&L SUMMARY` or `CLOSED TRADE DETAILS`. No assessment of exit quality can be made.
+
+### MRI ALIGNMENT
+The `MRI SESSION DISTRIBUTION` reports "Samples: 0 | Close level: ? (?/100) | Level distribution: {}". With no MRI data collected, no assessment of MRI alignment or position sizing adjustments can be made.
+
+### LOG ANOMALIES
+*   Repeated `CRITICAL` log level for an active kill switch:
+    *   The log shows `CRITICAL | strategy.run_cycle | Kill switch active — no new entries this session.` occurring every ~5 minutes during the audit period. While the kill switch is explicitly respecting its purpose (preventing new entries), marking this as `CRITICAL` implies a severe, unexpected error condition. If the kill switch activation is an intended, albeit infrequent, operational state (e.g., triggered by MAX_DAILY_LOSS_PCT or other systematic reasons), then an `INFO` or `WARNING` log level would be more appropriate. Using `CRITICAL` for expected operational behavior can desensitize operators to genuine critical runtime failures.
+
+### NEW BUGS / CONCERNS
+*   **INFRASTRUCTURE | MEDIUM | Inconsistent Kill Switch Logging Severity**
+    *   **Description:** The log uses the `CRITICAL` severity level for messages indicating the kill switch is active and correctly preventing new entries.
+    *   **Exact condition:** `CRITICAL | strategy.run_cycle | Kill switch active — no new entries this session.` appears repeatedly whenever the strategy's `run_cycle` is executed and the kill switch is active.
+    *   **Failure explanation:** The value is `CRITICAL` for `strategy.run_cycle` logging the kill switch status. What it should be, assuming the kill switch activation is an intended, self-regulating mechanism (e.g., due to reaching a daily loss limit or other pre-defined conditions), is an `INFO` or `WARNING` level. The `CRITICAL` level should be reserved for unrecoverable errors, system crashes, or conditions where a designed safety mechanism has *failed* (e.g., "Kill switch active but new entry detected"). In this case, the kill switch is working as intended ("no new entries"), so marking it as `CRITICAL` unnecessarily raises alert fatigue and obscures genuinely critical system failures.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE | Review Kill Switch Log Level:** Evaluate the conditions under which the kill switch is activated. If its activation is an expected, programmatic response (e.g., MAX_DAILY_LOSS_PCT triggered), downgrade the log level from `CRITICAL` to `INFO` or `WARNING` for `Kill switch active — no new entries this session.` This will reduce log noise and reserve `CRITICAL` for actual system malfunctions or failures.

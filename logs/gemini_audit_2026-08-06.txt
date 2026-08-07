@@ -1,0 +1,88 @@
+Nightly Gemini Audit — 2026-08-06
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: ['weekly_review.py', 'config.py', 'monthly_review.py', 'strategy/run_cycle.py', 'reporting/metrics.py', 'execution/risk_manager.py', 'execution/broker.py', 'execution/forever_hold_manager.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   **execution/broker.py / execution/portfolio_tracker.py**: MARA order lifecycle break and P&L corruption. Bot recorded a `short` entry (price 10.89, size 5) while Alpaca recorded the `exit` of two `long` positions (total 5 shares, exit price 10.89) at the exact same timestamp. The P&L from these long exits (-12.92) is not reflected in `pnl_today`, and the new short position is not tracked as open.
+*   **execution/broker.py / execution/portfolio_tracker.py**: DDOG entry price corruption. The bot's internal `entry_price` (272.42) for DDOG differs significantly from Alpaca's reported `entry` price (259.47). This leads to a substantial internal P&L mismatch (-42.40 vs Alpaca's -29.45) which impacts risk calculations.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `[ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30`: This warning appeared repeatedly (19:41:42, 19:49:06, 19:56:11), indicating a persistent issue with trade quality, exit discipline, or stop placement. The average TQI is below the threshold of 30, suggesting consistent poor performance in recent trades.
+*   `Pre-market mover scan failed or timed out`: Logged at 2026-08-06 19:41:33. This indicates a failure or delay in scanning pre-market movers, which could lead to missed opportunities or operating with incomplete data for the session.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: For trades where Alpaca's actual fills were reconciled (TOST, AMZN, SMCI, QQQ, SNOW), the P&L signs are correct relative to recorded entry/exit prices and direction. However, the DDOG and MARA trades exhibit severe P&L recording issues as detailed in the CATASTROPHIC ALERT.
+*   **Partial P&L Accumulation**: For TOST (long, entry 32.89), a partial exit yielded +2.47 PNL. The subsequent final exit showed +1.59 PNL. The EOD snapshot `pnl_remaining` and `partial_pnl` fields correctly reflect these individual components, summing up to a total realized PNL for the trade.
+*   **Trades with pnl=0.0**: SNOW (long, entry 294.92, exit 294.92, pnl 0.0) is correctly recorded.
+*   **Score→Outcome Correlation**: Reviewing the 9 closed trades from the `TRADE EVENTS` (excluding the problematic MARA entry), only 1 was a win (TOST, score 10), 1 was flat (SNOW, score 12), and 7 were losses (DDOG, AMZN (08/05), SMCI (08/04), AMZN (08/03), QQQ, SMCI (07/30)). Higher-score trades (score 12) primarily resulted in losses or flat outcomes. There is no positive correlation visible between higher scores and better performance in this dataset.
+*   **Stop-Hit Rate vs. Win Rate**: Out of 9 closed trades, there was 1 win and 5 stop hits, resulting in a win rate of 11.1% and a stop-hit rate of 55.5%. A stop-hit rate exceeding 50% of entries, coupled with a low win rate, indicates a significant mismatch between the strategy and current market conditions, or sub-optimal stop placement.
+*   **Exit Reason Consistency**:
+    *   **DDOG**: `gtc_stop_triggered` exit price 230.02. The EOD snapshot reports `stop: 272.42` (breakeven promoted) and `original_stop: 255.83`. The exit price is substantially below the (promoted) stop price, suggesting significant slippage or a further dynamic stop adjustment/gap down.
+    *   **SMCI (2026-08-04)**: `overnight_atr_buffer_exit` at 30.08 for a short position with an entry of 27.70 and `thresh=$28.89`. The exit at 30.08 is beyond the `thresh` for a short position, leading to a loss, consistent with the `overnight_atr_buffer_exit` mechanism.
+*   **Profit Factor and R:R**: The `all_time_stats` report a `profit_factor` of 0.96. The `INTRADAY_TARGET_ATR_MULT` is configured at 2.5x, suggesting a target R:R of at least 1:2.5. The actual realized P&L across recent trades shows a pattern of numerous small losses and infrequent, small wins, which is inconsistent with achieving the stated 1:2.5 R:R target.
+
+### TRADE INTEGRITY
+*   **DDOG Entry Price Discrepancy**: As flagged in CATASTROPHIC ALERT, the entry price for DDOG recorded by the bot's tracker (272.42) does not match Alpaca's reported fill price (259.47). This indicates a critical discrepancy in fill reconciliation or price recording.
+*   **MARA Order Lifecycle Discrepancy**: As flagged in CATASTROPHIC ALERT, the bot's recorded short entry for MARA at 10.89 (ts 2026-08-06T12:00:49) directly conflicts with Alpaca's record of exiting existing long positions at the same price and time. This is a severe order lifecycle and P&L tracking failure.
+*   **EOD Snapshot Incomplete Open Position Tracking**: The `EOD SNAPSHOT` `open_trades: 2` count is given, but the `trades` list only shows `closed` positions, and `overnight_holds` only lists `PANW`. The newly entered `MARA` short position is not present in either, indicating an issue with correctly reflecting all open positions at the end of day. This contributes to `P5-L2`.
+
+### MODIFIED FILE FINDINGS
+*   **weekly_review.py**: The logic around `_strategy_validation_html` and fetching P&L from `fifo_edge.json` for authoritative data (`_fifo`) is a robust improvement. No new issues found.
+*   **config.py**: The `RC4_RECONCILE_WINDOW_MINUTES = 90` change is a positive fix for fill reconciliation retries. The updated `KELLY_FRACTION` and `MIN_SCORE` for the paper profile reflect an intentional, more aggressive stance. The explicit re-addition of AMZN with a note about a systemic fix for churn is good observability. No new issues found regarding this file's logic.
+*   **monthly_review.py**: The changes to prioritize `alpaca_pnl` for daily P&L in `_day_cell` and `compute_period_stats` are critical for P&L consistency and alignment with the Alpaca-authoritative figure. The robust loading of `lifetime_pnl_cache.json` and `_strategy_validation_html` integration are good. No new issues found.
+*   **strategy/run_cycle.py**:
+    *   The implementation of `_SPY_52W_HIGH_CACHE` for persistence and robust fallback on fetch failure is a significant improvement to avoid fail-open scenarios for the SPY ATH gate.
+    *   The `Startup R-GUARD` for triggering `reconcile_eod.py` is a good crash-recovery mechanism.
+    *   The fix for `_sym_52w_high_cache` (Bug 3) addresses a previous flaw. However, the decision to set `_main._sym_52w_high_cache[_ath_sym] = float("inf")` on per-symbol fetch failure (lines 319-321) results in a "fail-open" for that specific symbol's ATH proximity gate. This means if the bot cannot fetch a symbol's 52w high, it *disables* the ATH protection for that symbol, which is a risk management gap.
+    *   No other new issues found.
+*   **reporting/metrics.py**: Significant hardening and use of authoritative data sources for `_net_deposits`, `_auth_trade_stats`, and P&L computations across `compute_period_stats` and `compute_lifetime_stats`. This addresses past P&L corruption issues. No new issues found.
+*   **execution/risk_manager.py**:
+    *   The `_load_kill_state` and `_save_kill_state` persistence logic is robust and correctly implements a "fail-closed" mechanism on state corruption.
+    *   The `_buy_and_hold_intraday_pl` function and its integration into `check_kill_switch` to properly exclude QHM and Forever-6 unrealized intraday P&L from the kill switch calculation is a critical improvement. It directly addresses the "2026-08-06 live false 7% trip" and ensures the kill switch correctly measures *intraday* losses.
+    *   `_forever6_held_symbols` correctly defers F6 exclusion until `OWNERSHIP_GUARD_ENFORCE` is `True`, ensuring proper risk attribution.
+    *   The `check_buying_power_for_order` (fail-closed) and `check_gross_exposure_for_order` (fail-open) functions enhance pre-trade risk management.
+    *   No other new issues found.
+*   **execution/broker.py**:
+    *   The introduction of `_ProtectionSentinel` (`PROTECTION_ALREADY_HELD`, `PROTECTION_UNKNOWN`) and the hardened `_hold_state` logic are major improvements to reliably assess if a position is genuinely protected by a live stop. This directly addresses the "unverified claim of protection" problem.
+    *   No other new issues found.
+*   **execution/forever_hold_manager.py**:
+    *   This file demonstrates a highly hardened approach for the new Forever-6 tier. The `_read_sync_degraded` and `_write_sync_degraded` mechanisms, along with explicit fail-closed logic in `execute_starter` (including slippage buffering and stopping on first broker/unconfirmed order failure), are excellent safety measures.
+    *   The `_verify_ledger_reflects_inner` function ensures robust post-buy verification and ledger synchronization, alerting and blocking further seeding on failure.
+    *   No new issues found.
+*   **execution/quarterly_hold_manager.py**:
+    *   The `get_quarterly_hold_symbols` and `get_quarterly_hold_quantities` functions are highly robust, providing fail-closed mechanisms to prevent unintended liquidation or loss of protection for QHM positions.
+    *   The Beck's tests in `_run_beck_tests` confirm the core reconciliation behavior.
+    *   The `_TRAIL_LOCK_ENABLED = True` and `_DIP_ADD_ENABLED = True` flags in the source code indicate these features are active, which is consistent with config.py.
+    *   No new issues found.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash**: UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError**: TRIGGERED (pre-market mover scan failed/timed out)
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted from codebase**: OBSOLETE
+*   **P5-H2 | Fill price crosstalk**: TRIGGERED (DDOG entry price discrepancy confirmed)
+*   **P5-H3 | Orphan GTC 404 path**: UNTOUCHED
+*   **P5-H4 | Rule 2 dead code**: FIXED (config and code show active usage)
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3 + opened_today**: FIXED
+*   **P5-M1 | Cycle watchdog restart loop**: UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions**: UNTOUCHED
+*   **P5-M3 | score_comparison JSON unbounded growth**: UNTOUCHED
+*   **P5-L1 | _classify_loss_driver() returns empty label in some edge paths**: UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed**: TRIGGERED (EOD snapshot shows `open_trades: 2`, indicating file written with open positions). UNTOUCHED.
+*   **P5-L3 | live_data_writer.py no reconnect logic**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **RISK MANAGEMENT GAP** | MEDIUM | `strategy/run_cycle.py` | Per-symbol 52w high cache fails open on data fetch error.
+    *   Exact failure condition: `strategy/run_cycle.py` lines 317-321 (`_main._sym_52w_high_cache[_ath_sym] = float("inf")` on `Exception`). If fetching a symbol's 52w high fails, its ATH gate is disabled by setting its 52w high to infinity, allowing trades near current ATH, which is a fail-open posture for a protective mechanism.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **URGENT: Investigate MARA Order Lifecycle and P&L Discrepancy**: Prioritize the full root cause analysis for MARA. The conflict between recorded short entry and Alpaca's long exit, coupled with P&L omission, is a critical data integrity and risk management failure.
+2.  **URGENT: Address DDOG Entry Price Corruption**: Investigate why Alpaca's reported fill price (259.47) is not being correctly recorded by the bot's tracker (272.42). This indicates a critical issue in the fill reconciliation or order attribution logic (`P5-H2`).
+3.  **Review `_sym_52w_high_cache` Fail-Open Logic**: Change the `strategy/run_cycle.py` behavior to fail-closed (e.g., block trading for that symbol, or assume it's at ATH) when per-symbol 52w high data cannot be fetched, rather than disabling the ATH gate.
+4.  **Investigate TQI Degradation and High Stop-Hit Rate**: Analyze the persistent `[ANOMALY-3] TQI degradation` and the high stop-hit rate (55.5%) to determine if the strategy parameters (e.g., `INTRADAY_STOP_ATR_MULT`, `MIN_LONG_SCORE`, `MIN_SHORT_SCORE`) are appropriate for the current market regime in paper trading.
+5.  **Address P5-C2 (`run_movers.py` ImportError)**: Investigate the `Pre-market mover scan failed or timed out` warning as it might be masking a critical import error, leading to incomplete market scanning.
