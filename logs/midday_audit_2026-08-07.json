@@ -1,0 +1,91 @@
+{
+  "audit_date": "2026-08-07",
+  "run_ts": "2026-08-07T10:30:02.065777-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "STRESSED": 24,
+      "NORMAL": 4
+    },
+    "last_score": 45,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 64,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-07 16:01:36,053 | WARNING  | strategy.signal_generator | run_scan: phase-1 global timeout \u2014 abandoned symbols: ['NVDL', 'SQQQ', 'MU', 'INTC']",
+      "2026-08-07 16:02:08,601 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$20.42 tracker=$0.00 drift=$+20.42",
+      "2026-08-07 16:07:43,584 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AVGO] confirm_gate=4 scans but no entry \u2014 risk.open_positions=1 vs tracker=2 | ",
+      "2026-08-07 16:07:43,584 | WARNING  | strategy.run_cycle | [ANOMALY-2] [SPY] confirm_gate=6 scans but no entry \u2014 risk.open_positions=1 vs tracker=2 | M",
+      "2026-08-07 16:07:43,584 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "NVDA",
+        "side": "long",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "LLY",
+      "NVDA",
+      "PANW"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 0,
+        "sell": 1
+      },
+      "PANW": {
+        "buy": 0,
+        "sell": 1
+      },
+      "LLY": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
