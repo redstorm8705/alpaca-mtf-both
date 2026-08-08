@@ -1,0 +1,69 @@
+Midday Gemini Audit — 2026-08-07
+Model: gemini-2.5-flash | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+🔴 NAKED POSITION(S) — 1: NVDA(long, 2sh). A live position with NO protective stop order is a CATASTROPHIC condition (position left naked).
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+The `SESSION P&L SUMMARY` and `CLOSED TRADE DETAILS` report 0 entries/exits and $0.00 P&L. However, `ALPACA FILLS TODAY` indicates 3 fills (LLY: 1B/0S, NVDA: 0B/1S, PANW: 0B/1S). As per the `CONTEXT` section, this is a "KNOWN D1 symptom" due to degraded entry-event logging, and the Alpaca fills are the ground truth. Therefore, specific performance metrics (entry/exit prices, P&L signs, win rate, score-outcome correlation) cannot be audited from the provided `CLOSED TRADE DETAILS` or `SESSION P&L SUMMARY`. The `Stop-hit rate: 0% (0 stops)` is consistent with zero recorded closed trades.
+
+### ENTRY QUALITY
+No issues. The bot demonstrated proper filtering by applying ORB gate blocks for multiple symbols (MARA, SOXL, AVGO, COIN, META) and dynamically raising the `MIN_SCORE` to 10/12 due to `MRI=STRESSED`. This indicates appropriate adaptive entry logic given market conditions. No entries were executed in the provided log window for further quality assessment.
+
+### EXIT QUALITY
+No issues. No closed trades were recorded in the provided log, so exit quality cannot be audited.
+
+### MRI ALIGNMENT
+No issues. The bot correctly identified the `MRI SESSION DISTRIBUTION` as `STRESSED (45/100)`. It responded appropriately by applying a `size floor 0.70x` and raising the `Dynamic MIN_SCORE` to `10/12` (with MRI contributing 10 to the effective score). This indicates proper adjustment of risk and entry criteria based on market stress.
+
+### LOG ANOMALIES
+*   `2026-08-07 17:20:10,112 CRITICAL execution.ownership_guard sync_ledger REFUSED — replay would shrink protected floor(s) {'NVDA/qhm': {'was': 3.0, 'would_be': 2.0}} (fills likely aged out of Alpaca window). NOT written.`
+*   `2026-08-07 17:20:10,112 CRITICAL ledger_sync ledger_sync NOT healed (reason=protected-floor shrink — truncated replay, streak=4): {'NVDA/qhm': {'was': 3.0, 'would_be': 2.0}}`
+*   `2026-08-07 17:20:46,546 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$20.42 tracker=$0.00 drift=$+20.42` (also at 17:27:24,975)
+*   `2026-08-07 17:20:42,508 | INFO | execution.portfolio_tracker | Alpaca FIFO EOD: pnl_today=$20.42 | cumulative=$64.33 | tracker=$0.00 | fills=3 lots_closed=1` (also at 17:27:20,946)
+*   `2026-08-07 17:20:46,546 | INFO | execution.portfolio_tracker | pnl_today from pnl_ledger (authoritative): $-0.18 intraday ($24.38 qhm / $24.20 total) invariant ok drift=$1.60` (P&L reported by ledger differs from Alpaca FIFO EOD)
+*   `2026-08-07 17:26:18,206 | INFO | strategy.run_cycle | GEX Layer8: label=UNKNOWN raw_gex_m=2011.7 flip=None age=9min` (GEX label is UNKNOWN)
+*   `2026-08-07 17:26:23,570 | WARNING | strategy.run_cycle | [ANOMALY-2] [SPY] confirm_gate=11 scans but no entry — risk.open_positions=1 vs tracker=2 | MAX_OPEN_POSITIONS=20. If risk>2, CYCLE-SYNC should resolve next cycle.`
+*   `2026-08-07 17:26:23,570 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 — review exit discipline and stop placement.`
+
+### NEW BUGS / CONCERNS
+
+1.  **EXECUTION BUG | CRITICAL | Naked Position**
+    *   **Description**: A live position for `NVDA` is open with no protective stop order, creating a catastrophic risk of unlimited loss.
+    *   **Variable or Metric**: `LIVE STOP COVERAGE` status for `NVDA`.
+    *   **Value is vs. Should Be**: The current value is "NO protective stop order", while a protective stop order should be present for any live position as a fundamental risk management safeguard.
+    *   **Condition**: A `long, 2sh` position for `NVDA` exists as reported in `LIVE STOP COVERAGE`, but no stop order is active for it.
+
+2.  **INFRASTRUCTURE | CRITICAL | Ledger Inconsistency & Failed Reconciliation**
+    *   **Description**: The bot's internal ledger and portfolio tracker are consistently out of sync with Alpaca's ground truth regarding open positions and P&L, and critical reconciliation attempts are failing.
+    *   **Variable or Metric**: `execution.ownership_guard`'s `sync_ledger`, `ledger_sync` healing process, `scan_to_html`'s context strip, `execution.portfolio_tracker`'s `EOD P&L DRIFT`.
+    *   **Value is vs. Should Be**:
+        *   `sync_ledger REFUSED` (NVDA was 3.0, would be 2.0): The ledger is refusing an update that would reflect a reduced position, indicating a protective mechanism is preventing necessary reconciliation. The ledger should correctly reflect Alpaca's position count.
+        *   `ledger_sync NOT healed`: The ledger remains unhealed for NVDA, implying persistent divergence. The ledger should successfully synchronize its state with Alpaca.
+        *   `[PANW] context strip`: The bot's tracker lists an `open, qty=1` position for `PANW` that Alpaca `/v2/positions` does not hold. The bot's internal tracker should accurately reflect Alpaca's ground truth for open positions.
+        *   `EOD P&L DRIFT`: Alpaca reports `pnl_today=$20.42`, while the bot's tracker reports `$0.00`, resulting in a `$+20.42` drift. The tracker's P&L should closely match Alpaca's for accurate risk and performance.
+    *   **Condition**: Multiple log entries show the bot's internal state (ledger, tracker) diverging from Alpaca's actual account state, with reconciliation mechanisms either failing or being refused. This occurs during `sync_ledger` calls and at EOD P&L summary generation.
+
+3.  **INFRASTRUCTURE | HIGH | Tracker/Risk Position Mismatch**
+    *   **Description**: The bot's internal count of open positions (`tracker`) is inconsistent with the number of open positions reported by Alpaca (`risk.open_positions`).
+    *   **Variable or Metric**: `risk.open_positions` vs `tracker` in `ANOMALY-2`.
+    *   **Value is vs. Should Be**: `risk.open_positions=1` (Alpaca) vs `tracker=2` (bot's internal state). These two counts should match to ensure the bot has an accurate view of its live exposure.
+    *   **Condition**: The `[ANOMALY-2]` warning is logged, specifically stating `risk.open_positions=1 vs tracker=2`.
+
+4.  **ALPHA ISSUE | MEDIUM | TQI Degradation**
+    *   **Description**: The bot's self-reported Trade Quality Index (TQI) for recent trades is below the performance threshold.
+    *   **Variable or Metric**: `ANOMALY-3` TQI degradation.
+    *   **Value is vs. Should Be**: `last-5-trade avg=29.8/100`, which is `< 30`. The average TQI should ideally be at or above the threshold of 30 to indicate healthy trade execution.
+    *   **Condition**: The `[ANOMALY-3]` warning is logged, stating `last-5-trade avg=29.8/100 < 30`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+
+1.  **EXECUTION**: **Immediately investigate and apply a protective stop order to the naked NVDA position (NVDA long, 2sh).** This is a critical security breach and must be resolved before any other tasks. (P1)
+2.  **INFRASTRUCTURE**: **Prioritize debugging and fixing the ledger synchronization and portfolio tracker reconciliation logic.** Address the "protected-floor shrink" refusal (`NVDA`), the `PANW` context strip, and the consistent `EOD P&L DRIFT` to ensure the bot's internal state accurately reflects Alpaca's positions and P&L. This includes investigating `ANOMALY-2` (`risk.open_positions` vs `tracker`). (P1)
+3.  **ALPHA**: **Conduct a detailed review of exit discipline and stop placement, especially for recent trades.** The `ANOMALY-3` TQI degradation suggests a systematic issue with strategy performance that requires analysis and potential tuning. (P2)

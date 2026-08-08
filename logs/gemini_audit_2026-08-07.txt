@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-08-07
+Model: gemini-2.5-flash | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 3
+1.  execution.ownership_guard sync_ledger | Internal ledger for NVDA/qhm has incorrect quantity (3.0 vs intended 2.0) and refuses to heal, affecting live risk decisions. | NVDA/qhm
+2.  scan_to_html context strip | Tracker lists an open PANW position (qty=1) that Alpaca does not hold, leading to a genuine reconciliation break and potential miscalculation of exposure. | PANW
+3.  strategy.run_cycle ANOMALY-2 | Discrepancy between `risk.open_positions` (2) and `tracker` (3) for SPY/AVGO, indicating an internal position count mismatch affecting live risk management decisions. | SPY, AVGO
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   `2026-08-07 19:40:09,705` and `2026-08-07 20:00:09,232 | CRITICAL | execution.ownership_guard`: The `sync_ledger REFUSED` for `NVDA/qhm` indicates a persistent internal state inconsistency where the bot's tracker believes it holds 3 units but should hold 2, and the safeguard preventing "protected-floor shrink" is blocking reconciliation. This is a critical failure in maintaining an accurate internal ledger.
+*   `2026-08-07 19:20:37,937` and `2026-08-07 19:44:30,607 | WARNING | scan_to_html`: The `[PANW] context strip` warning reports that the internal tracker lists a FILLED/open position that Alpaca's `/v2/positions` API does not. This is a "genuine reconciliation break" for PANW, indicating the bot's internal state is out of sync with the broker, leading to inaccurate position awareness for risk management.
+*   `2026-08-07 19:53:51,645` and `2026-08-07 20:00:29,703 | WARNING | strategy.run_cycle | [ANOMALY-2]`: Repeated warnings for SPY and AVGO, indicating that `confirm_gate` passed but no entry occurred, and there's a discrepancy between `risk.open_positions` and `tracker` (`2` vs `3`). This is a critical risk management gap where the bot's internal view of open positions is inconsistent, potentially leading to incorrect sizing or exposure management.
+*   `2026-08-07 19:27:29,414` (and other timestamps) `| WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation`: Recurring warning about Trade Quality Index (TQI) degradation. While not a bug in execution logic, it's a significant performance anomaly suggesting a need to review exit discipline and stop placement.
+
+### PERFORMANCE AUDIT
+*   **P&L sign correctness:** All P&L signs (profit/loss) observed in the last 10 explicit trade events appear correct based on entry/exit prices and direction (e.g., AMZN long profit, SMCI short loss, DDOG long loss).
+*   **pnl_pct computed from original full position value:** For TOST, the combined P&L for two tranches (partial exit + final exit) correctly sums to the total `pnl: 4.06`, indicating correct accumulation.
+*   **partial_pnl accumulated correctly:** Confirmed for TOST, partial P&L `2.47` for `size: 1` and final P&L implied for `size: 1` correctly sum up.
+*   **Entry/exit prices plausible:** All recorded entry and exit prices appear plausible for the respective symbols and general market activity.
+*   **Score→outcome correlation:** The limited sample (10 closed trades, 2 open, 1 questionable) shows mixed results for high-scoring trades (scores 10-12), with both wins and losses. No strong correlation of higher score entries outperforming is evident from this sample, but it's too small to draw firm conclusions.
+*   **Stop-hit rate vs. win rate:** Out of 10 closed trades, there were 4 stop hits and 3 clear wins (1 P&L=0.0 issue). This suggests a stop-hit rate of 40% and a win rate of 30%, which is consistent with the `[ANOMALY-3] TQI degradation` warnings and indicates a regime mismatch or a need to refine exit strategy/stop placement.
+*   **Profit factor and R:R vs. stated 2.5× target:**
+    *   Older entries (DDOG, AMZN 08-04, AMZN 08-03, PANW) show R:R ratios around 2.07x - 2.08x, consistently below the target 2.5x.
+    *   More recent entries (SNOW 08-07, MARA 08-06) show R:R ratios of 2.60x and 2.61x respectively, meeting or exceeding the target. This indicates a positive adjustment may have been made in stop/target placement logic.
+
+### TRADE INTEGRITY
+*   **Recording bug: `pnl=0.0` for `stop_hit` on SNOW:** The trade event `2026-07-31T12:20:28.460739-07:00` for SNOW shows a `stop_hit` at `price: 294.92` with `pnl: 0.0`. A `stop_hit` typically implies a realized loss (or sometimes breakeven, but rarely exactly zero for a price change). Since the entry for this particular SNOW trade is not visible in the 7-day log, we cannot verify `entry ≠ exit price`. However, a stop hit generating `0.0` P&L is highly suspicious and indicates a potential P&L calculation or recording bug, especially for older positions or those outside the immediate tracking window, which can corrupt `all_time_stats`.
+
+### MODIFIED FILE FINDINGS
+No source files modified in the last 24 hours.
+
+### P5 STATUS
+*   **P5-C1 | FVG MultiIndex silent crash:** UNTOUCHED
+*   **P5-C2 | run_movers.py ImportError:** UNTOUCHED
+*   **P5-H1 | OBSOLETE — PDT enforcement permanently deleted:** UNTOUCHED (as expected)
+*   **P5-H2 | Fill price crosstalk:** UNTOUCHED (no new evidence)
+*   **P5-H3 | Orphan GTC 404 path:** TRIGGERED - The `[PANW] context strip` warning directly shows an orphan position scenario (tracker holds, Alpaca doesn't), which could lead to stranded stops if the GTC stop was initially submitted but then lost by Alpaca and not cleared by the tracker.
+*   **P5-H4 | Rule 2 dead code:** UNTOUCHED
+*   **P5-H5 | FIXED 2026-04-21 | GTC stop suppressed at PDT=3/3:** UNTOUCHED (as expected)
+*   **P5-M1 | Cycle watchdog restart loop:** UNTOUCHED
+*   **P5-M2 | MRI score cached stale across sessions:** UNTOUCHED (MRI refreshes are logged, no evidence of staleness)
+*   **P5-M3 | score_comparison JSON unbounded growth:** UNTOUCHED (no new evidence beyond summary stats)
+*   **P5-L1 | _classify_loss_driver() returns empty label:** UNTOUCHED
+*   **P5-L2 | eod_YYYY-MM-DD.json written before positions closed:** UNTOUCHED
+*   **P5-L3 | live_data_writer.py no reconnect logic:** UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | (P&L calculation/recording for historical trades)** | `pnl=0.0` recorded for `stop_hit` event.
+    *   **Description:** The trade event for SNOW on `2026-07-31T12:20:28.460739-07:00` indicates a `stop_hit` at a `price: 294.92` but reports `pnl: 0.0`. A stop hit implies a defensive exit due to adverse price movement, which should result in a realized loss (or sometimes a very small P&L if breakeven stop). Recording an exact `0.0` for a non-breakeven stop is a P&L calculation or recording error, especially for positions whose entry data is not within the recent log window.
+    *   **Exact failure condition:** The `pnl` field in the `trade_events` JSON record for a `stop_hit` is `0.0` when the trade's entry price (even if not explicitly logged for this session) would logically not equal the stop hit price, thus misrepresenting actual trade performance.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate and resolve the `execution.ownership_guard` refusal for NVDA/qhm immediately.** The inability to reconcile position quantity (`was=3.0`, `would_be=2.0`) is a fundamental data integrity issue impacting live risk calculations for NVDA.
+2.  **Prioritize investigation and resolution of all `context strip` reconciliation breaks**, especially for PANW. The tracker reporting an open position that Alpaca does not hold creates phantom risk exposure and leads to inaccurate position accounting. This should be treated as a critical data discrepancy.
+3.  **Address the `ANOMALY-2` `risk.open_positions` vs `tracker` discrepancies** for SPY and AVGO. This mismatch in open position counts is a serious risk management gap that could lead to unintended over-exposure.
+4.  **Debug the `pnl=0.0` recording bug for `stop_hit` events**, starting with the SNOW entry from `2026-07-31`. While not immediately impacting live risk decisions, this issue corrupts historical performance metrics and `all_time_stats`.
+5.  **Review the strategy's exit discipline and stop placement based on the recurring `ANOMALY-3 TQI degradation` warnings and the observed stop-hit rate.** Although recent R:R ratios look improved, overall TQI is low.
