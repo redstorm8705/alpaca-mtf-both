@@ -44,12 +44,37 @@ cold-2nd PASS (safe-to-enable verified) + full-read audit PASS. Also fixed 7 RC-
 **✅ SHIPPED (2026-08-09) — BEHAVIORAL GATE (PR #105 `917e971`): Stop-hook enforces recommendations-
 not-questions (already fired correctly this session, catching an over-step on the QHM activation).**
 
-**⏩ NEXT STEP (pick up here):** (1) QHM target/stop DISPLAY — show each QHM hold's stop + the
-earnings-trim target on the dashboard/scan pages (the DISPLAY half of Rafael item #3; the trim
-MECHANISM is now live — this is the presentation piece, still owed). (2) Dynamic tracker↔broker-truth
-reconcile — kills the #4-#7 phantom/desync/$0-pnl-on-stop_hit/stale-daily_pnl class (Rafael: "logs
-must be visible regardless of when logged; dynamic not static"). (3) FOLLOW-ON: broad margin-value-cap
-(full Kelly-risk sizing on margin) — separate RISK-PATH board build.
+**⏩ NEXT STEP (pick up here) — BUILDING NOW: Dynamic tracker↔broker DRIFT DETECTOR (Option A,
+Rafael APPROVED 2026-08-09).** Kills the visibility half of the #4-#7 class (phantom positions,
+$0-P&L-on-stop_hit from corrupted entry/qty, counter desync, stale daily_pnl). ROOT (verified by full
+scoping): the tracker's POSITION SET is reconciled vs Alpaca /v2/positions ONLY at startup
+(orphan_manager.reconcile_positions, main.py:749; never in run_cycle) — gap is CADENCE, truth already
+exists (/v2/positions + reporting/pnl_ledger.py). Board-scoping + Gro + GAI UNANIMOUS on A.
+  • **A = per-cycle READ-ONLY detector** (never mutates a position → NOT risk-path). Compares tracker
+    open_trades vs the /v2/positions ALREADY fetched each cycle (reuse — no new API call), cross-checks
+    /v2/orders (pending) to suppress inflight-fill false alarms, emits structured DriftRecords to
+    trade_events.jsonl (event=drift_detected) + Slack.
+  • **DYNAMIC IN EVERY ASPECT (Rafael directive):** persistence-based confidence — a 1-cycle mismatch
+    = likely settle/inflight race (low conf, DEBUG); confidence RISES with consecutive-cycle
+    persistence; escalation bar DERIVED from observed settle latency, NOT a static N. Each DriftRecord
+    carries drift_type + tracker_view + broker_view + persistence + confidence + proposed_correction
+    (what auto-correct WOULD do — logged, never executed). A IS the evidence brain the future
+    auto-corrector consumes.
+  • **FORWARD (Option C, separate later gated build — Rafael: "think ahead, dynamic not static"):**
+    auto-correction consumes DriftRecords; fires only above a DERIVED confidence; qty-down = auto-safe;
+    drops/flips/adoptions GATED. **OPEN Gro/GAI FORK to resolve at the C build:** GAI = human-confirm
+    gate only (B un-gated "permanently banned" for set mismatches); Gro = re-tune the one-shot guards
+    idempotent for per-cycle. A supports either.
+  • HAZARD the design avoids: every existing force-correction guard assumes ONE invocation/process
+    (HOOD false-drop, RIVN inverted-short) — that's why A is detect-only and C is deferred.
+  • Local design doc (gitignored, Mac-only): logs/reconcile_drift_detector_design_2026-08-09.md.
+  • BUILD/GATE: full-read run_cycle.py + risk_manager.py (reconcile_open_positions_from_alpaca L925 is
+    the per-cycle /v2/positions fetch to reuse) + portfolio_tracker.py; statics + cold-2nd (MUST confirm
+    it can't block check_exits on the trading thread) + masked-loss board + Gro/GAI preship.
+
+**THEN:** (2) QHM target/stop DISPLAY (presentation half of item #3; mechanism already live).
+(3) FOLLOW-ON: broad margin-value-cap (full Kelly-risk sizing on margin) — separate RISK-PATH build.
+(4) Option C (dynamic auto-correct) once A has gathered DriftRecord evidence.
 
 **✅ SHIPPED & LIVE (2026-08-08) — HUMAN-CONFIRMED LEDGER-HEAL (PR #102 → main `6dcd6e9`; OCI
 `git pull` synced, NO restart — sync_ledger is the RTH cron tool, live sell-gate unchanged).**
