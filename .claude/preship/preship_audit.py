@@ -178,16 +178,32 @@ def _gro(prompt, key):
         raise RuntimeError(str(r).replace(key, "***")[:200])
     return r["choices"][0]["message"]["content"]
 
-def _gai(prompt, key):
-    r = _curl(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={key}",
-        ["Content-Type: application/json"],
-        {"contents": [{"parts": [{"text": prompt}]}],
-         "generationConfig": {"maxOutputTokens": 8192}},
-        key)
-    if "candidates" not in r:
-        raise RuntimeError(str(r).replace(key, "***")[:200])
-    return r["candidates"][0]["content"]["parts"][0]["text"]
+def _gai(prompt, key, paid_key=""):
+    # Free key is used BY DEFAULT (the free tier is a DAILY quota that RESETS — do not permanently
+    # switch to paid after one 429). paid_key is a SEAMLESS AUTO-FAILOVER used ONLY on a real quota/
+    # rate error (429 / RESOURCE_EXHAUSTED), so the paid quota is spent only when free is genuinely
+    # exhausted — never out of inertia. (2026-08-09: this replaces a manual .env free→paid swap that
+    # was wasting paid quota for calls the free tier would have served.)
+    def _one(k):
+        r = _curl(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={k}",
+            ["Content-Type: application/json"],
+            {"contents": [{"parts": [{"text": prompt}]}],
+             "generationConfig": {"maxOutputTokens": 8192}},
+            k)
+        if "candidates" not in r:
+            raise RuntimeError(str(r).replace(k, "***")[:200])
+        return r["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        return _one(key)
+    except Exception as e:
+        msg = str(e).lower()
+        is_quota = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
+                    or "rate limit" in msg or "rate-limit" in msg)
+        if paid_key and paid_key != key and is_quota:
+            sys.stderr.write("[preship] GAI free-tier quota hit — auto-failing over to paid key.\n")
+            return _one(paid_key)
+        raise
 
 def _verdict(text):
     # Require EXACTLY ONE 'VERDICT:' line, then parse THAT line reject-biased. Rationale
@@ -271,12 +287,12 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
 
     # GAI (required)
     try:
-        gai_txt = _gai(prompt, keys.get("GEMINI_API_KEY", ""))
+        gai_txt = _gai(prompt, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
         gai_v = _verdict(gai_txt)
         if gai_v == "INDETERMINATE":
             # A parse failure is NOT a content reject (Rafael 2026-07-25) — re-request ONCE
             # with a format reminder before deciding anything.
-            gai_txt = _gai(prompt + _reminder, keys.get("GEMINI_API_KEY", ""))
+            gai_txt = _gai(prompt + _reminder, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
             gai_v = _verdict(gai_txt)
     except Exception as e:
         return False, f"{relpath}: GAI audit failed ({e}) — fail-closed, no marker"
