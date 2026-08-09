@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-08 PM (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-08-09 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -18,21 +18,38 @@ recommendation being executed (DOCUMENTATION-IS-NOT-ENFORCEMENT: built the contr
 rule). Registered in `.claude/settings.json` Stop hook — arms at next session start, binds
 cross-account. Preship caught 2 real crash bugs in its own parser (fixed). statics/cold-2nd/Gro+GAI/CI all green.**
 
-**🟢 SHIPPING (2026-08-08 PM) — MIN-2-SHARES (Rafael APPROVED "build both, ship together").
+**✅ SHIPPED & LIVE (2026-08-09) — MIN-2-SHARES (PR #106 → main `983d5dc`; OCI deployed+restarted).
 execution/entry_logic.py, 2 legs:** Leg 1 = intraday+overnight final gate `if shares < 1`→`< 2`
 (min-2-or-skip; purely restrictive, NOT risk-path). Leg 2 (intraday-live only, RISK-PATH) = when the
 EQUITY value cap throttled a pricey name to 0-1sh but the per-trade Kelly RISK clamp permits ≥2,
 rescue to EXACTLY 2sh on margin — guarded by size_multiplier>0 (not blockaded), not is_leveraged,
 Kelly-risk permits ≥2, VOTE-5 vol permits ≥2, BP affords 2. Per-trade RISK provably unchanged
 (`_risk_cap_sh>=2` ⟺ 2×stop ≤ KELLY_MAX_RISK_PCT×equity); only NOTIONAL uses margin. GATE: statics
-clean + Gro+GAI APPROVE (preship 01f4e67c) + cold-2nd PASS + masked-loss/Taleb seat PASS. Masked-loss
-directional note surfaced to Rafael: a SOFT dampening (mult 0.05-0.5) can be nudged back to the 2sh
-floor (envelope intact; consistent with mandate). **FOLLOW-ON (separate gated build): the broad
-margin-value-cap (full Kelly-risk sizing on margin) was scoped OUT — this ships only the 2sh floor.**
+clean + Gro+GAI APPROVE + cold-2nd PASS + masked-loss/Taleb seat PASS. Masked-loss directional note:
+a SOFT dampening (mult 0.05-0.5) can be nudged back to the 2sh floor (envelope intact). **FOLLOW-ON
+(separate gated build, NOT shipped): the broad margin-value-cap (full Kelly-risk sizing on margin)
+was scoped OUT — this shipped only the 2sh floor.**
 
-**⏩ NEXT STEP:** QHM earnings-trim build (Rafael item #3 — Tier-1 50% trim / Tier-2 100% at 2×;
-+ display target/stop for QHM holds) — uncommitted WIP in tree (data/gex.py, quarterly_hold_manager.py).
-Then: dynamic tracker↔broker-truth reconcile (kills the #4-#7 phantom/desync class).
+**✅ SHIPPED & LIVE (2026-08-09) — QHM EARNINGS PROFIT-TAKE (PR #107 inert `9a4b680` → PR #108 ENABLE
+`1617d3f`; OCI deployed+restarted; `_EARNINGS_TRIM_ENABLED=True` verified on box).** Rafael item #3
+("QHM into earnings needs targets in place") + Rafael explicitly authorized "Enable". A LONG quarterly
+hold UP into an earnings print auto-trims 50% at the ATM-straddle implied-move threshold (Tier 1, via
+data/gex.py get_earnings_implied_move_pct, ATR fallback) and exits 100% of the remainder at 2× the
+FROZEN Tier-1 threshold (Tier 2; board 2-1 over GAI's 3×). Mutually exclusive with trailing-lock in the
+21-day window. Protective only (never opens/increases; never fires on a loss — both tiers gate on
+gain≥strictly-positive threshold). Standard QHM broker exit (partial_close/close, tier="qhm"), atomic
+state qhm_earnings_trim.json. GATE: statics + gex.py Gro+GAI + QHM GAI(full)+Gro(core, TPM-waived) +
+cold-2nd PASS (safe-to-enable verified) + full-read audit PASS. Also fixed 7 RC-3 swallows in new code.
+
+**✅ SHIPPED (2026-08-09) — BEHAVIORAL GATE (PR #105 `917e971`): Stop-hook enforces recommendations-
+not-questions (already fired correctly this session, catching an over-step on the QHM activation).**
+
+**⏩ NEXT STEP (pick up here):** (1) QHM target/stop DISPLAY — show each QHM hold's stop + the
+earnings-trim target on the dashboard/scan pages (the DISPLAY half of Rafael item #3; the trim
+MECHANISM is now live — this is the presentation piece, still owed). (2) Dynamic tracker↔broker-truth
+reconcile — kills the #4-#7 phantom/desync/$0-pnl-on-stop_hit/stale-daily_pnl class (Rafael: "logs
+must be visible regardless of when logged; dynamic not static"). (3) FOLLOW-ON: broad margin-value-cap
+(full Kelly-risk sizing on margin) — separate RISK-PATH board build.
 
 **✅ SHIPPED & LIVE (2026-08-08) — HUMAN-CONFIRMED LEDGER-HEAL (PR #102 → main `6dcd6e9`; OCI
 `git pull` synced, NO restart — sync_ledger is the RTH cron tool, live sell-gate unchanged).**
