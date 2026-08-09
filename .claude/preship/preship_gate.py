@@ -335,6 +335,50 @@ def _cold2_ok(relpath: str, ref: str):
     return True, "ok"
 
 
+def _is_bot_code(relpath: str) -> bool:
+    """A gated file that is BOT CODE — subject to the log-evidence teeth. Gated, but
+    NOT a prose claim file (GATED_CLAIM_FILES) and NOT the preship/CI tooling or CI
+    config (GATED_SELF). Only bot-code changes can 'fix a logged issue' on a false
+    premise (#104); tooling/docs cannot, so they are exempt from this check by scope."""
+    return (_is_gated(relpath) and relpath not in GATED_CLAIM_FILES
+            and not relpath.startswith(GATED_SELF))
+
+
+def _logevidence_ok(relpath: str, ref: str):
+    """Self-QA check #3 teeth (Rafael 2026-08-09; BGG Option A, Gro+GAI unanimous). A
+    gated BOT-CODE change must carry EITHER a VERIFIED log-evidence marker
+    (record_logevidence.py greps the real log; match_count >= its own min) OR an audited
+    exemption (record_exemption.py names why it is not a logged-issue fix). Both bind to
+    the exact shipped content sha — any edit invalidates them. With neither present the
+    ship is blocked, so a silent 'fix for a non-problem' cannot slip through; opting out
+    is an explicit, git-recorded attestation, not a silent skip."""
+    cur = _content_sha(ref)
+    if not cur:
+        return False, "FAIL-CLOSED: cannot read content for log-evidence check"
+    slug = relpath.replace("/", "__")
+    ev = os.path.join(MARKER_DIR, slug + ".logevidence.json")
+    if os.path.exists(ev):
+        try:
+            m = json.load(open(ev))
+            if (m.get("sha256") == cur
+                    and int(m.get("match_count", 0)) >= int(m.get("min_required", 1))):
+                return True, "ok (log-evidence verified)"
+        except Exception:
+            pass
+    ex = os.path.join(MARKER_DIR, slug + ".logexempt.json")
+    if os.path.exists(ex):
+        try:
+            m = json.load(open(ex))
+            if m.get("sha256") == cur and str(m.get("reason", "")).strip():
+                return True, "ok (audited exemption)"
+        except Exception:
+            pass
+    return False, (
+        "no log-evidence and no exemption. If this fixes a LOGGED issue, cite it: "
+        f"record_logevidence.py {relpath} --log <path> --pattern <re> [--ssh mtf-bot]. "
+        f"If it does NOT: record_exemption.py {relpath} --reason \"<why>\".")
+
+
 def _changed_gated(range_args, ref_tmpl):
     """(fails, gated_files) for one diff range. Deletions are EXCLUDED — see T3."""
     ok, out = _git(["diff", "--name-status"] + range_args)
@@ -371,6 +415,11 @@ def _changed_gated(range_args, ref_tmpl):
             c_good, c_why = _cold2_ok(f, ref_tmpl.format(f))
             if not c_good:
                 fails.append(f"  - {f}: [COLD-2ND] {c_why}")
+        # Self-QA #3 teeth: bot-code needs log-evidence OR an audited exemption.
+        if _is_bot_code(f):
+            le_good, le_why = _logevidence_ok(f, ref_tmpl.format(f))
+            if not le_good:
+                fails.append(f"  - {f}: [LOG-EVIDENCE] {le_why}")
     return (fails, gated)
 
 
