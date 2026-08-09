@@ -125,7 +125,7 @@ _TRAIL_LOCK_MIN_BUFFER_PCT = 0.02   # the raised stop must stay >= 2% below live
 # until _EARNINGS_TRIM_ENABLED (ships dark; enable after a live verification cycle, matching every
 # other QHM mechanism's ship pattern). Full design history + board/Gro/GAI record:
 # logs/tb_audit_log.md 2026-08-05/06 QHM earnings-trim entries; handoff.md same dates.
-_EARNINGS_TRIM_ENABLED              = False  # ships INERT
+_EARNINGS_TRIM_ENABLED              = True   # LIVE 2026-08-09 (Rafael explicitly authorized "Enable"; gate-cleared inert as PR #107)
 _EARNINGS_TRIM_TIER1_FRAC           = 0.5    # Tier 1 trims this fraction of qty_filled (Rafael confirmed 2026-08-05)
 _EARNINGS_TRIM_TIER2_MULT           = 2.0    # Tier 2 fires at this multiple of Tier 1's dynamic threshold (Rafael confirmed 2026-08-06; board 2-1 over GAI's 3x)
 _EARNINGS_TRIM_ATR_FALLBACK_MULT    = 6.25   # fallback target = this x the 14-week ATR (as % of price), when option data is unavailable. Derived: the intraday target:stop ratio's upper end (2.5x, since this is explicitly WIDER than intraday) applied to QHM's own 2.5x-ATR stop basis = 2.5 * 2.5 = 6.25x ATR — not an invented number.
