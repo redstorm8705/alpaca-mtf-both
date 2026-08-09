@@ -42,7 +42,7 @@ logger = logging.getLogger("midday_audit")
 # ── Config ───────────────────────────────────────────────────────────────────
 SLACK_WEBHOOK  = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL   = "gemini-2.5-flash"
+GEMINI_MODEL   = "gemini-3.1-flash-lite"
 BASE_DIR       = Path(__file__).parent
 LOGS_DIR       = BASE_DIR / "logs"
 TRADE_EVENTS   = LOGS_DIR / "trade_events.jsonl"
