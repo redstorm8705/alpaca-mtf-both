@@ -12,6 +12,33 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**🛡️ SELF-QA GATE (Rafael mandate 2026-08-09 — "the QA must run itself every session/account, not
+depend on Rafael catching me"). Shipped this session; see CLAUDE.md §SELF-QA GATE:**
+- **#4 biased-BGG-prompt detector — ENFORCED (PR #114):** `preship_audit._check_prompt_bias` refuses
+  any `--context`/`--evidence` with verdict-leading language before any Gro/GAI call. Write FACTS to
+  BGG, never "already approved / should approve / no risk / trivial".
+- **#3 log-evidence — ENFORCED WITH TEETH (PR #116 tool + #117 gate):** every gated **bot-code**
+  commit now needs EITHER `record_logevidence.py <file> --log <p> --pattern <re> [--ssh mtf-bot]`
+  (greps the REAL log, refuses if absent) OR `record_exemption.py <file> --reason "<why not a logged
+  fix>"`. Blocks the #104 class (fix-for-a-non-problem). GATED_SELF tooling + prose are exempt.
+- **Doctrine + HONESTY CLAUSE (PR #115):** never label code LIVE/proven/verified/dynamic until it has
+  ACTUALLY EXECUTED in prod ("deployed, unexercised" otherwise).
+- **STILL MANDATORY-MANUAL (gates not built — NEXT QA builds):** #2 adversarial self-review (verify
+  commit/PR CLAIMS vs source — the pass that caught this session's overclaims); #1 BGG design pass.
+
+**⏸️ HTML — PAUSED by Rafael (QA prioritized first). Full enumeration banked in
+logs-scratchpad html_issues_enumeration_2026-08-09.md (fold into handoff when resumed). Top 2 that
+mislead the operator: D1 — QHM/F6 holds render Stop/Target "—" though real values exist (NVDA stop
+$211.01; generate_dashboard.py:564-581 reads only trade_log["open"], not quarterly_holds.json); S1 —
+scan_results.html shows "Scanning now…" forever when the bot is dead (no stale banner). 18 issues total.**
+
+**⚠️ SESSION-AUDIT FINDING (2026-08-09, adversarial board-verified): the 9 feature/doc PRs #104-112
+were BGG-gated (markers hold) and log-numbers were real, but NONE of the 6 functional PRs had
+EXECUTED (all shipped after Fri's last trade, market closed since) — treat as "deployed, unexercised"
+until Monday. #104 (gemini model swap) premise was OVERSTATED (2.5-flash 404s only on the FREE key;
+200 on paid — prod scripts weren't broken; kept gemini-3.1-flash-lite, works both tiers). Gemini
+FREE tier is a DAILY-RESET quota (not a wall) — preship_audit now free-first, paid only on 429 (#113).**
+
 **✅ SHIPPED (2026-08-08 PM) — BEHAVIORAL GATE (PR #105 → main `917e971`): Stop-hook
 `execute_dont_ask_gate.py` that BLOCKS a turn ending on a menu/"which do you want" without a
 recommendation being executed (DOCUMENTATION-IS-NOT-ENFORCEMENT: built the control, not another
