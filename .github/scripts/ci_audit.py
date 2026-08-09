@@ -146,7 +146,7 @@ def _one_audit(prompt_text: str, key: str) -> "tuple[str, str]":
     """
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"maxOutputTokens": 2048},
+        "generationConfig": {"maxOutputTokens": 8192},
     }).encode()
     req = urllib.request.Request(
         f"{ENDPOINT}?key={key}",
