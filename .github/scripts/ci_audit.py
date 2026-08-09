@@ -22,7 +22,7 @@ import sys
 import urllib.error
 import urllib.request
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-flash-latest"
 ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
             f"{MODEL}:generateContent")
 MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input budget
@@ -146,8 +146,7 @@ def _one_audit(prompt_text: str, key: str) -> "tuple[str, str]":
     """
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"maxOutputTokens": 2048,
-                             "thinkingConfig": {"thinkingBudget": 0}},
+        "generationConfig": {"maxOutputTokens": 2048},
     }).encode()
     req = urllib.request.Request(
         f"{ENDPOINT}?key={key}",

@@ -180,11 +180,10 @@ def _gro(prompt, key):
 
 def _gai(prompt, key):
     r = _curl(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={key}",
         ["Content-Type: application/json"],
         {"contents": [{"parts": [{"text": prompt}]}],
-         "generationConfig": {"maxOutputTokens": 8192,
-                              "thinkingConfig": {"thinkingBudget": 0}}},
+         "generationConfig": {"maxOutputTokens": 8192}},
         key)
     if "candidates" not in r:
         raise RuntimeError(str(r).replace(key, "***")[:200])

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """
 run_ledger_sync.py — per-tier ownership-ledger MAINTAINER (standalone, cron-driven).
 
@@ -49,6 +50,11 @@ logger = logging.getLogger("ledger_sync")
 _WALLTIME_WARN_S = 10.0
 _WALLTIME_CRIT_S = 30.0
 _HEALED_FALSE_STREAK_ALERT = 3
+_NET_STABILITY_SAMPLE_GAP_S = 3.0   # gap between the two /v2/positions samples (a settling leg moves)
+_UNSETTLED_ORDER_STATUSES = frozenset({
+    "partially_filled", "pending_new", "pending_cancel", "pending_replace",
+    "pending_review", "calculated",
+})
 
 
 def _load_env() -> None:
@@ -116,6 +122,31 @@ def sync_once() -> dict:
         orders = fetch_all_orders()
         positions = fetch_positions()
 
+        # SETTLED/STABLE/COMPLETE net contract — an OPERATOR-CONFIRMED protected-floor down-heal
+        # is applied by sync_ledger ONLY when positions_settled=True. That needs more than HTTP 200:
+        # (a) STABLE — a second fetch_positions() a few seconds later matches the first EXACTLY per
+        # symbol (a settling leg moves between samples); (b) quiescent — no in-flux orders
+        # (partially_filled/pending_*/calculated; a resting GTC stop is 'new'/'held' → fine). Any
+        # doubt → False → sync_ledger refuses the shrink (stale-but-safe).
+        positions_settled = False
+        try:
+            time.sleep(_NET_STABILITY_SAMPLE_GAP_S)
+            _positions_2 = fetch_positions()
+
+            def _net_map(_ps):
+                return {p.get("symbol"): round(float(p.get("qty", 0.0) or 0.0), 6)
+                        for p in (_ps or []) if p.get("symbol")}
+            _stable = _net_map(positions) == _net_map(_positions_2)
+            _in_flux = any(str(o.get("status", "")).lower() in _UNSETTLED_ORDER_STATUSES
+                           for o in (orders or []))
+            positions_settled = bool(_stable and not _in_flux)
+            if not positions_settled:
+                logger.info("ledger_sync: net NOT settled (stable=%s in_flux=%s) — confirmed "
+                            "down-heal disabled this pass.", _stable, _in_flux)
+        except Exception as _se:  # RC-3
+            logger.warning("ledger_sync: settled-net check failed (%s) — down-heal disabled.", _se)
+            positions_settled = False
+
         stage = "attribute"
         coid_map = build_coid_map(orders)
         # Authoritative qhm-tier share counts. Legacy QHM buys are untagged → they land
@@ -128,7 +159,7 @@ def sync_once() -> dict:
 
         stage = "sync"
         led = sync_ledger(fills, positions, coid_by_order_id=coid_map,
-                          qhm_holdings=qhm_holdings)
+                          qhm_holdings=qhm_holdings, positions_settled=positions_settled)
 
         stage = "instrument"
         elapsed = round(time.monotonic() - t0, 2)
@@ -154,6 +185,15 @@ def sync_once() -> dict:
             streak["last_utc"] = datetime.now(timezone.utc).isoformat()
             logger.critical("ledger_sync NOT healed (reason=%s, streak=%d): %s",
                             reason, streak["count"], led.get("shrink"))
+            _pending = led.get("pending_heal") or {}
+            if _pending and streak["count"] == 1:
+                _cmds = " ; ".join(v.get("confirm_cmd", "") for v in _pending.values())
+                _detail = {k: {"was": v.get("was"), "now": v.get("would_be"), "net": v.get("net")}
+                           for k, v in _pending.items()}
+                _slack(":warning: ledger_sync: protected-floor reduction needs OPERATOR CONFIRMATION "
+                       f"{_detail} — if YOU manually closed it, run (in /home/ubuntu/mtf-bot): "
+                       f"{_cmds} . Otherwise INVESTIGATE A BREACH (a non-owner tier may have sold "
+                       "protected shares). Sells stay frozen until resolved.")
             if streak["count"] >= _HEALED_FALSE_STREAK_ALERT:
                 _rs = set(streak["reasons"])
                 _slack(f":rotating_light: ledger_sync FAILING: {streak['count']} "

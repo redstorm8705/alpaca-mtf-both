@@ -59,6 +59,13 @@ _LEDGER_BAK_PATH = _ROOT / "data" / "state" / "ownership_ledger.bak.json"
 # _ledger_write_lock — without it, two concurrent full-replays can lost-update
 # each other (each compares its rebuild to a baseline read BEFORE the other's write).
 _LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
+# Operator confirmations authorizing a protected-floor DOWN-heal (human-in-the-loop; board
+# 2026-08-08 — automated manual-close-vs-breach distinction is impossible, so the irreversible
+# heal-down direction needs an EXPLICIT, one-shot, expiring operator confirmation written by
+# confirm_ledger_heal.py). The confirmation DIRECTLY sets the protected tier to its target
+# (clamped to net) so it works even when a truncated/aged-out replay cannot reconstruct the floor.
+_HEAL_CONFIRM_PATH = _ROOT / "data" / "state" / "ledger_heal_confirmations.json"
+_HEAL_CONFIRM_TTL_S = 7200  # a confirmation is valid 2h; a stale one can never authorize a later reduction
 
 Tier = Literal["intraday", "qhm", "forever6"]
 _TIERS: tuple[str, ...] = ("intraday", "qhm", "forever6")
@@ -515,6 +522,66 @@ def reconcile_drift(alpaca_positions: list) -> dict:
     return drifted
 
 
+# ── Operator heal-confirmations (human-in-the-loop protected-floor DOWN-heal) ───
+def _load_heal_confirmations() -> dict:
+    """Read operator confirmations authorizing a protected-floor DOWN-heal. Never raises;
+    returns {} on absent/corrupt/unreadable (fail-safe: no confirmation -> no heal -> refuse)."""
+    try:
+        if not _HEAL_CONFIRM_PATH.exists():
+            return {}
+        d = json.loads(_HEAL_CONFIRM_PATH.read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception as e:  # RC-3
+        logger.warning("heal-confirmations read failed (%s) - treating as none.", e)
+        return {}
+
+
+def _matching_heal_confirmation(confs: dict, symbol: str, tier: str,
+                                net: float, now_ts: float) -> Optional[dict]:
+    """The operator confirmation authorizing a heal of symbol/tier DOWN to its recorded target,
+    or None. SAFETY - ALL must hold (else None -> refuse): (a) live broker net UNCHANGED since the
+    confirm was written (net == net_at_confirm) - a moved position invalidates it; (b) target
+    achievable (0 <= target <= net); (c) unexpired. One-shot: the caller CONSUMES it after applying.
+    Matching is on the LIVE SNAPSHOT (net + expiry), NOT on the fill-replay result, so an aged-out
+    replay can still be healed to the operator-confirmed truth. Never raises."""
+    try:
+        c = (confs or {}).get(f"{symbol}/{tier}")
+        if not isinstance(c, dict):
+            return None
+        target = float(c.get("target_qty", -1.0))
+        if target < 0.0:
+            return None
+        if abs(float(c.get("net_at_confirm", -1.0)) - float(net)) > _QTY_EPS:
+            return None
+        if float(net) < target - _QTY_EPS:
+            return None
+        _ts = float(c.get("confirmed_ts", 0.0) or 0.0)
+        if _ts <= 0.0 or (now_ts - _ts) > _HEAL_CONFIRM_TTL_S:
+            return None
+        return c
+    except (TypeError, ValueError):
+        return None
+
+
+def _consume_heal_confirmations(keys: set) -> None:
+    """Remove applied one-shot confirmations (atomic RC-5). Never raises."""
+    if not keys:
+        return
+    try:
+        confs = _load_heal_confirmations()
+        for k in keys:
+            confs.pop(k, None)
+        _HEAL_CONFIRM_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _tmp = _HEAL_CONFIRM_PATH.with_suffix(f".json.{os.getpid()}.tmp")
+        with open(_tmp, "w") as f:
+            json.dump(confs, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        _tmp.replace(_HEAL_CONFIRM_PATH)
+    except Exception as e:  # RC-3
+        logger.warning("heal-confirmation consume failed (%s) - will re-page next run.", e)
+
+
 # ── Heal / audit tool — full replay, refuse to shrink a protected floor ────────
 def _fill_time_key(f: dict) -> str:
     """Sort key for a fill — Alpaca activities carry `transaction_time` (ISO-8601,
@@ -528,7 +595,8 @@ def _fill_time_key(f: dict) -> str:
 
 def sync_ledger(fills: list, positions: list,
                 coid_by_order_id: dict | None = None,
-                qhm_holdings: dict | None = None) -> dict:
+                qhm_holdings: dict | None = None,
+                positions_settled: bool = False) -> dict:
     """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
     authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
     replaying the FULL Alpaca fill history, attributing each fill to its tier, then
@@ -689,28 +757,101 @@ def sync_ledger(fills: list, positions: list,
             _base = _empty_ledger()
         _new_positions = ledger["positions"]
         _base_positions = _base.get("positions", {})
-        # Iterate the UNION of new + baseline symbols: a symbol that had a protected
-        # floor in the baseline but VANISHES from the rebuild (all its fills aged out
-        # AND it is absent from current Alpaca positions) must still be caught as a
-        # shrink-to-0 — otherwise a disappeared floor evades the guard entirely.
+        #
+        # HUMAN-CONFIRMED DOWN-HEAL (board 2026-08-08, after two fully-automatic designs were rejected
+        # for laundering a breach / erasing a floor). A protected-tier shrink vs the persisted baseline
+        # is REFUSED (stale-but-safe — the bounded, reversible error) UNLESS the operator EXPLICITLY
+        # confirmed this exact reduction (confirm_ledger_heal.py). On a valid confirmation we OVERRIDE
+        # the protected tier to the confirmed target (clamped to net) — directly, not via the replay —
+        # so an aged-out/truncated rebuild still heals to the operator-confirmed broker truth. All else
+        # (unconfirmed shrink, unsettled read, breach) REFUSES + records a PENDING HEAL for paging. A
+        # reduction the operator did not confirm can NEVER be laundered down.
+        _now_ts = time.time()
+        _confs = _load_heal_confirmations()
+        _healed_down: dict = {}
+        _consumed: set = set()
+        if positions_settled:
+            # Iterate the UNION of rebuilt + baseline symbols (GAI 2026-08-08): a FULLY-CLOSED
+            # symbol (net 0) is absent from the fill-based rebuild, so its confirmed heal-to-0
+            # would otherwise never apply and the baseline floor would refuse forever. An absent
+            # symbol is net 0; we materialise a zeroed rebuild entry so the confirmed target (0)
+            # is written and the never-shrink check below sees it as a confirmed reduction.
+            for _sym in set(_new_positions) | set(_base_positions):
+                _ent = _new_positions.get(_sym)
+                _net = float(_ent.get("alpaca_net_qty", 0.0) or 0.0) if _ent else 0.0
+                for pt in _PROTECTED_TIERS:
+                    _conf = _matching_heal_confirmation(_confs, _sym, pt, _net, _now_ts)
+                    if _conf is None:
+                        continue
+                    _target = round(float(_conf["target_qty"]), 6)
+                    _base_pt = float(_base_positions.get(_sym, {}).get("tiers", {})
+                                     .get(pt, {}).get("qty", 0.0) or 0.0)
+                    if _target >= _base_pt - _QTY_EPS:
+                        continue   # not a reduction vs baseline — nothing to authorize here
+                    if _ent is None:
+                        # fully-closed symbol → materialise a zeroed entry (net 0) so the
+                        # confirmed heal-to-0 is written and skipped by the never-shrink check.
+                        _ent = {"alpaca_net_qty": _net,
+                                "tiers": {t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None}
+                                          for t in _TIERS},
+                                "drift": 0.0}
+                        _new_positions[_sym] = _ent
+                    # JOINT PROTECTED-SUM GUARD (masked-loss + cold-2nd 2026-08-08): a symbol
+                    # holding BOTH protected tiers could, on confirming one, push the OTHER tier's
+                    # rebuilt qty + this target above net → floor>net / negative intraday. Refuse the
+                    # override in that case (fail-safe: let the never-shrink check freeze it) — never
+                    # write a protected floor exceeding live net.
+                    _other_prot = sum(float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
+                                      for t in _PROTECTED_TIERS if t != pt)
+                    if _target + _other_prot > _net + _QTY_EPS:
+                        logger.warning(
+                            "sync_ledger: confirmed heal %s/%s target=%s + other protected %s "
+                            "would exceed net %s — refusing override (fail-safe freeze).",
+                            _sym, pt, _target, _other_prot, _net)
+                        continue
+                    # OVERRIDE: set this protected tier to the confirmed target (verified target<=net
+                    # AND target+other_protected<=net), absorb the remainder into intraday, clear drift.
+                    _ent["tiers"].setdefault(pt, {})["qty"] = _target
+                    _ent["tiers"].setdefault("intraday", {})["qty"] = round(_net - _target - _other_prot, 6)
+                    _ent["drift"] = round(_net - sum(float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
+                                                     for t in _TIERS), 6)
+                    _healed_down[f"{_sym}/{pt}"] = {"was": _base_pt, "now": _target, "net": _net}
+                    _consumed.add(f"{_sym}/{pt}")
+        # Never-shrink check on the (confirmation-adjusted) rebuild. Confirmed keys are skipped;
+        # any REMAINING protected-tier shrink is unconfirmed -> refuse + page.
         _shrink: dict = {}
+        _pending_heal: dict = {}
         for sym in set(_new_positions) | set(_base_positions):
             _new_tiers = _new_positions.get(sym, {}).get("tiers", {})
             _base_tiers = _base_positions.get(sym, {}).get("tiers", {})
+            _sym_net = float(_new_positions.get(sym, {}).get("alpaca_net_qty", 0.0) or 0.0)  # absent symbol = fully closed = net 0
             for pt in _PROTECTED_TIERS:
+                _key = f"{sym}/{pt}"
+                if _key in _consumed:
+                    continue   # operator-confirmed reduction, already applied
                 new_q = float(_new_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
                 old_q = float(_base_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
                 if new_q < old_q - _QTY_EPS:
-                    _shrink[f"{sym}/{pt}"] = {"was": old_q, "would_be": new_q}
+                    _shrink_entry = {"was": old_q, "would_be": new_q, "net": _sym_net,
+                                     "confirm_cmd": f"confirm_ledger_heal.py {sym} {pt} {_sym_net:g}"}
+                    _shrink[_key] = _shrink_entry
+                    _pending_heal[_key] = _shrink_entry
         if _shrink:
             logger.critical(
-                "sync_ledger REFUSED — replay would shrink protected floor(s) %s "
-                "(fills likely aged out of Alpaca window). NOT written.", _shrink)
+                "sync_ledger REFUSED — protected floor shrink(s) %s need OPERATOR CONFIRMATION "
+                "(a real manual close and a breach are automation-indistinguishable). NOT written; "
+                "sells stay frozen. Confirm a legitimate reduction with confirm_ledger_heal.py, or "
+                "investigate a breach.", _shrink)
             return {"healed": False,
-                    "reason": "protected-floor shrink — truncated replay",
-                    "shrink": _shrink}
+                    "reason": "protected-floor shrink — awaiting operator confirmation",
+                    "shrink": _shrink, "pending_heal": _pending_heal}
+        if _healed_down:
+            logger.critical(
+                "sync_ledger OPERATOR-CONFIRMED heal-down applied: %s — protected floor(s) "
+                "reconciled to broker truth per explicit confirmation.", _healed_down)
 
         save_ledger(ledger)
+        _consume_heal_confirmations(_consumed)
         _drifted = {s: e["drift"] for s, e in ledger["positions"].items()
                    if abs(e["drift"]) > _QTY_EPS}
         if _drifted:
