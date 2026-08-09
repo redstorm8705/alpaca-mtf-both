@@ -62,15 +62,31 @@ def _grep(log, pattern, host):
     return n, (sample.stdout or "").strip()[:300]
 
 
+def _argval(argv, flag):
+    """Value after `flag`, or None if absent OR the last token — never IndexErrors."""
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    return argv[i + 1] if i + 1 < len(argv) else None
+
+
 def main(argv):
-    if len(argv) < 1 or "--log" not in argv or "--pattern" not in argv:
+    if not argv or argv[0].startswith("-"):
         sys.stderr.write(__doc__)
         return 2
     gated = argv[0]
-    log = argv[argv.index("--log") + 1]
-    pattern = argv[argv.index("--pattern") + 1]
-    host = argv[argv.index("--ssh") + 1] if "--ssh" in argv else ""
-    min_n = int(argv[argv.index("--min") + 1]) if "--min" in argv else 1
+    log = _argval(argv, "--log")
+    pattern = _argval(argv, "--pattern")
+    if log is None or pattern is None:
+        sys.stderr.write("logevidence: --log <path> and --pattern <regex> are both required\n")
+        return 2
+    host = _argval(argv, "--ssh") or ""
+    _min_raw = _argval(argv, "--min")
+    try:
+        min_n = int(_min_raw) if _min_raw is not None else 1
+    except ValueError:
+        sys.stderr.write("logevidence: --min must be an integer\n")
+        return 2
 
     if host and not os.path.isabs(log):
         # Over ssh the remote working dir is the login home, NOT the repo — a relative path
