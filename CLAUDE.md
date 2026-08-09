@@ -422,6 +422,46 @@ both of them.** Knowing a failure mode provides zero protection against committi
 4. Prefer making the wrong thing **impossible** over making it **forbidden**.
 5. Treat a repeated violation as evidence about the CONTROL, not about the violator.
 
+### SELF-QA GATE — THE 4 PRE-SHIP SELF-CHECKS, MECHANICALLY ENFORCED (Rafael mandate 2026-08-09)
+
+**Rafael must not have to be the QA on his own bot.** The QA has to run itself — every session, every
+Claude Code account — or the compounding edge never materializes because every session is spent
+fighting laziness. Per DOCUMENTATION-IS-NOT-ENFORCEMENT, each check below names its MECHANISM, not a
+wish. Before ANY ship, the author passes all four:
+
+1. **"Am I giving BGG lazy/biased prompts?"** → **ENFORCED (git gate).** `preship_audit._check_prompt_bias`
+   refuses any `--context`/`--evidence` containing verdict-leading language (prior-approval assertions,
+   "should approve", "obviously safe", "no risk", "trivial change", "board converged") BEFORE any
+   Gro/GAI call — no neutral prompt, no marker, no ship. State FACTS; let BGG reach its own verdict.
+   (Shipped PR #114; it caught this very session's own prompts priming BGG with "Gro+GAI approve".)
+
+2. **"Is this a lazy take? / Am I overclaiming?"** → **REQUIRED adversarial self-review.** Before a
+   feature ships, an INDEPENDENT cold agent verifies the author's CLAIMS (commit/PR text — "fixes X",
+   "dynamic", "live") against SOURCE (the live logs, the code, runtime state), motivated to REFUTE.
+   This is the exact pass that caught 2026-08-09's failures (a fix for a non-problem; six features
+   called "LIVE" that had never run). [ENFORCEMENT: adversarial-review marker — BUILDING NEXT; until
+   built it is MANDATORY-MANUAL and its absence blocks nothing automatically, so it must not be skipped.]
+
+3. **"Am I fully reviewing the logs?"** → **REQUIRED log-evidence.** A fix/feature claiming to address a
+   logged problem MUST cite a REAL, verifiable log line (file + timestamp/pattern) proving the issue is
+   real and CURRENT — never a fix for a non-problem. (The #104 failure: 7 working prod scripts swapped
+   on a "gemini-2.5-flash 404" premise the production logs refuted — 114/114 successes, 0 404s.)
+   [ENFORCEMENT: log-evidence citation gate that greps the cited log to confirm the line exists —
+   BUILDING; mandatory-manual until then.]
+
+4. **"Am I thinking ahead? What does BGG say?"** → **REQUIRED BGG design pass** on any new feature/fork
+   BEFORE code (Open Question Protocol) + the MODE-2 forward pass. [ENFORCEMENT: BGG design-record —
+   BUILDING; mandatory-manual until then.]
+
+**HONESTY CLAUSE (binds every ship, enforced by the adversarial pass in #2):** never label code
+**LIVE / proven / verified / working / dynamic** until it has ACTUALLY EXECUTED in production. Deployed-
+but-un-run code is **"deployed, unexercised"** — nothing more. (2026-08-09: a whole session's features
+were reported "shipped & LIVE" when the market had been closed since before any of them deployed.)
+
+This is a standing pre-ship step, not optional. Check 1 is enforced by the gate NOW; checks 2–4 are
+mandatory-manual until their gates ship — and BUILDING those gates is itself a tracked QA priority
+(they are the anti-laziness compounding edge, not busywork).
+
 ### COLD SECOND-AGENT REVIEW — MECHANICALLY ENFORCED (Rafael mandate 2026-07-22)
 
 **Step 5b was previously invoked voluntarily; nothing checked it. It is now enforced by
