@@ -26,6 +26,7 @@ straight into handoff.md with zero review.
 """
 import sys
 import os
+import re
 import json
 import hashlib
 import subprocess
@@ -238,7 +239,43 @@ def _verdict(text):
         return "APPROVE"
     return "INDETERMINATE"
 
+# SELF-QA gate (Rafael mandate 2026-08-09): "am I giving BGG lazy/biased prompts?" — made
+# MECHANICAL. The author-supplied --context/--evidence must carry FACTS, never a pre-baked
+# VERDICT that leads the reviewer toward APPROVE. A prompt containing verdict-leading language
+# is REFUSED (fail-closed) — the author must restate it as a neutral fact and let the reviewer
+# reach its own conclusion. This enforces the No-Leading-Prompts rule instead of merely asking.
+_BIAS_PATTERNS = [
+    r"already approved", r"\bboard (has |already )?(approved|converged|agreed|signed[- ]off)",
+    r"\b(gro|gai|board)s?\b[^.]{0,40}\bapprove", r"should (approve|pass|be approved)",
+    r"please approve", r"safe to (approve|ship|merge)", r"obviously (safe|correct|fine|right)",
+    r"\b(no|zero) risk\b", r"\bharmless\b", r"nothing (to worry|dangerous|risky)",
+    r"trivial (change|diff|fix|patch|edit)",
+    r"just a (small|minor|tiny|one[- ]?line|1[- ]?line) (change|diff|fix|edit|patch)",
+    r"confirmed (safe|correct|dormant|fine|benign)", r"this (change|diff|patch|code) is (safe|correct|fine|benign)",
+]
+
+
+def _check_prompt_bias(*texts):
+    """Return a list of verdict-leading phrases found in author-supplied reviewer text.
+    Non-empty => the prompt biases the reviewer toward APPROVE and must be neutralized."""
+    hits = []
+    blob = " ".join(t for t in texts if t)
+    low = blob.lower()
+    for pat in _BIAS_PATTERNS:
+        m = re.search(pat, low)
+        if m:
+            hits.append(m.group(0).strip())
+    return hits
+
+
 def audit_file(relpath, waive_gro, keys, evidence="", context=""):
+    _bias = _check_prompt_bias(context, evidence)
+    if _bias:
+        return False, (
+            f"{relpath}: SELF-QA REFUSE — reviewer context/evidence contains VERDICT-LEADING "
+            f"language that biases BGG toward APPROVE: {_bias}. Restate as a neutral FACT (what the "
+            f"code does), not a conclusion (that it's safe/approved). See No-Leading-Prompts rule."
+        )
     ok_sha, blob, err = _git(["cat-file", "blob", f":{relpath}"], want_bytes=True)
     if not ok_sha:
         return False, f"{relpath}: not staged (git add it first)"
