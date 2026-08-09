@@ -64,6 +64,11 @@ def _fresh_state() -> dict:
         "active": {},
         # bounded history of lifetimes (in cycles) of drifts that self-cleared quickly (races)
         "race_lifetimes": deque(maxlen=_RACE_LIFETIME_MAXLEN),
+        # (symbol, drift_type) already Slack-alerted this EPISODE — so a persistent drift alerts
+        # ONCE, not every cycle (anti-spam; Rafael 2026-08-09). Cleared when the drift resolves,
+        # so a drift that clears then re-appears alerts afresh. trade_events.jsonl still records
+        # every cycle (full visibility) — only the Slack fires once.
+        "alerted": set(),
     }
 
 
@@ -253,6 +258,13 @@ def detect_drift(open_trades, alpaca_positions, open_orders, exclude_syms, state
         raw_conf = min(1.0, count / bar) if bar > 0 else 1.0
         confidence = min(raw_conf, 0.25) if has_inflight else raw_conf
         escalate = (count >= bar) and not has_inflight
+        # ANTI-SPAM (Rafael 2026-08-09): Slack fires ONCE per drift episode, not every cycle a
+        # persistent drift stays escalated. trade_events still records every cycle. Re-alerts only
+        # if the drift clears (key removed from `alerted` below) and later re-appears.
+        alerted = state["alerted"]
+        slack = escalate and key not in alerted
+        if slack:
+            alerted.add(key)
 
         records.append({
             "event": "drift_detected",
@@ -267,6 +279,7 @@ def detect_drift(open_trades, alpaca_positions, open_orders, exclude_syms, state
             "bar_dynamic": bar_dynamic,
             "confidence": round(confidence, 3),
             "escalate": escalate,
+            "slack": slack,
             "proposed_correction": d["proposed_correction"],
         })
 
@@ -277,6 +290,7 @@ def detect_drift(open_trades, alpaca_positions, open_orders, exclude_syms, state
             if lifetime <= _RACE_PERSISTENCE_CAP:
                 state["race_lifetimes"].append(lifetime)
             del active[key]
+            state["alerted"].discard(key)  # resolved → a future recurrence alerts afresh
 
     return records, state
 
@@ -341,7 +355,7 @@ def detect_and_emit_drift(
             r["confidence"], r["inflight_order"], r["tracker_view"], r["broker_view"],
             r["proposed_correction"],
         )
-        if r["escalate"]:
+        if r.get("slack"):  # fire ONCE per drift episode (anti-spam), not every escalated cycle
             try:
                 send_slack(
                     f":warning: TRACKER↔BROKER DRIFT — {r['symbol']} {r['drift_type']} "
