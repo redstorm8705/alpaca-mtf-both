@@ -44,7 +44,7 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -108,6 +108,30 @@ _TRAIL_LOCK_MIN_GAIN_PCT   = 0.05   # only start locking once a hold is >= +5% (
                                     # safely below market; avoids churning stops on normal vol)
 _TRAIL_LOCK_MIN_BUFFER_PCT = 0.02   # the raised stop must stay >= 2% below live (never instant-fire)
 
+# ── EARNINGS PROFIT-TAKE (2026-08-06, Rafael + BGG rounds 1+2) ───────────────
+# Realize profit ahead of an earnings print on a hold that has run up significantly, using a
+# DYNAMIC target wider than the bot's normal intraday target (this is a weeks-to-months tier).
+# Tier 1 trims _TIER1_FRAC of the position at a dynamic gain threshold (primary: the option
+# market's ATM-straddle implied move for the earnings-spanning expiry, via data/gex.py; fallback:
+# the same 14-week ATR the stop-loss already uses, scaled by _ATR_FALLBACK_MULT, when option data
+# is thin/unavailable). Tier 2 exits 100% of the remainder at _TIER2_MULT x Tier 1's own threshold
+# — an extreme run-up beyond Tier 1. Citing PEAD research (Ball & Brown 1968; Bernard & Thomas
+# 1989) for why a PARTIAL trim beats a full pre-earnings liquidation. Mutually exclusive with the
+# trailing-lock during the earnings-proximity window (board 3-1, 2026-08-05 — the two mechanisms
+# would otherwise fight over the same resting stop order); the trailing-lock stands down while this
+# window is open and resumes once it closes. Uses its OWN dedicated state file (mirrors forever6's
+# proven reserve-before-sell design, NOT new HoldPosition fields) so a save can return a real
+# True/False confirm signal, which HoldPosition's shared _save_state() does not provide. DORMANT
+# until _EARNINGS_TRIM_ENABLED (ships dark; enable after a live verification cycle, matching every
+# other QHM mechanism's ship pattern). Full design history + board/Gro/GAI record:
+# logs/tb_audit_log.md 2026-08-05/06 QHM earnings-trim entries; handoff.md same dates.
+_EARNINGS_TRIM_ENABLED              = False  # ships INERT
+_EARNINGS_TRIM_TIER1_FRAC           = 0.5    # Tier 1 trims this fraction of qty_filled (Rafael confirmed 2026-08-05)
+_EARNINGS_TRIM_TIER2_MULT           = 2.0    # Tier 2 fires at this multiple of Tier 1's dynamic threshold (Rafael confirmed 2026-08-06; board 2-1 over GAI's 3x)
+_EARNINGS_TRIM_ATR_FALLBACK_MULT    = 6.25   # fallback target = this x the 14-week ATR (as % of price), when option data is unavailable. Derived: the intraday target:stop ratio's upper end (2.5x, since this is explicitly WIDER than intraday) applied to QHM's own 2.5x-ATR stop basis = 2.5 * 2.5 = 6.25x ATR — not an invented number.
+_EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS = 21  # never evaluate the trim further out than this even if a run-up is underway (board+GAI dynamic-window outer bound, 2026-08-05); the existing 5-day stop-cancel gate (_maybe_enter_earnings_hold) naturally takes over from this mechanism once a position leaves ACTIVE state
+_EARNINGS_TRIM_STATE_PATH           = _ROOT / "data" / "state" / "qhm_earnings_trim.json"
+
 _DIP_ADD_ENABLED           = True   # LIVE (Rafael 2026-07-13): adds on dips below avg
 _DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
 _DIP_ADD_RUNG_B_PCT        = 0.05   # <= cost_avg*(1-0.05): aggressive add to ceiling
@@ -116,6 +140,16 @@ _DIP_ADD_STOP_FLOOR_PCT    = 0.15   # STOP adding below first-entry*(1-0.15); es
 _DIP_ADD_MAX_PER_QUARTER   = 3      # anti-osc: max dip-adds per position per quarter
 _DIP_ADD_MIN_DAYS_BETWEEN  = 2      # anti-osc: >= this many days between adds
 _DIP_ADD_NO_ADD_DAYS_PRE_EARNINGS = 7  # no adds within this many days of earnings
+
+
+class _EarningsTrimStateUnreadable(Exception):
+    """Raised by _load_earnings_trim_state when qhm_earnings_trim.json EXISTS but can't be
+    parsed. Mirrors forever_hold_manager.py's _TrimStateUnreadable (board+Gro+GAI-hardened
+    2026-08-05): a present-but-corrupt file must NOT be silently treated as "no trim has ever
+    happened" — that would let one bad read wipe every other symbol's already-recorded
+    reserved/done state, reopening the exact re-fire risk this state file exists to prevent.
+    Callers must let this propagate and skip evaluation for the cycle rather than catch-and-
+    treat-as-empty."""
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +768,16 @@ class QuarterlyHoldManager:
 
                 self._resync_from_alpaca(pos)
 
+                # EARNINGS PROFIT-TAKE: evaluated BEFORE the day-5 stop-cancel below so it has
+                # a resting stop to cancel/resubmit around; DORMANT unless _EARNINGS_TRIM_ENABLED
+                # (returns False immediately when off). Returns whether the earnings-proximity
+                # window is open THIS cycle — trailing-lock stands down while it is (board 3-1,
+                # 2026-08-05: the two mechanisms would otherwise fight over the same resting stop).
+                _earnings_trim_window_active = self._maybe_earnings_trim(
+                    pos, self._now_et().strftime("%Y-%m-%d"))
+                if pos.state != HoldState.ACTIVE:
+                    continue  # type: ignore[unreachable]  # tier2 exit sets state by side-effect
+
                 self._maybe_enter_earnings_hold(pos)
                 if pos.state == HoldState.PENDING_EARNINGS:
                     continue  # type: ignore[unreachable]  # state set by side-effect
@@ -761,7 +805,11 @@ class QuarterlyHoldManager:
                 # force-exit self-guards on state != ACTIVE and gets no dip-add). ACTIVE
                 # ACTIVE holds only; DORMANT unless _DIP_ADD_ENABLED; never raises.
                 self._maybe_dip_add(pos, self._now_et().strftime("%Y-%m-%d"))
-                self._maybe_trailing_lock(pos, self._now_et().strftime("%Y-%m-%d"))
+                # MUTUAL EXCLUSION (board 3-1, 2026-08-05): the trailing-lock stands down while
+                # the earnings-trim window is open — both mechanisms would otherwise race to
+                # cancel/resubmit the SAME resting GTC stop order in the same cycle.
+                if not _earnings_trim_window_active:
+                    self._maybe_trailing_lock(pos, self._now_et().strftime("%Y-%m-%d"))
 
             except Exception as e:  # RC-3
                 logger.warning(
@@ -1826,6 +1874,666 @@ class QuarterlyHoldManager:
                     _DIP_ADD_MAX_PER_QUARTER)
         except Exception as e:  # RC-3
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
+
+    # -----------------------------------------------------------------------
+    # EARNINGS PROFIT-TAKE — dedicated state file (mirrors forever_hold_manager.py's
+    # proven reserve-before-sell design; see _EARNINGS_TRIM_ENABLED docstring above)
+    # -----------------------------------------------------------------------
+
+    def _load_earnings_trim_state(self) -> dict:
+        """Returns {} ONLY when the file is genuinely absent (a legitimate fresh state — no
+        trim has ever been recorded for any symbol). A PRESENT-but-unreadable/corrupt file
+        raises _EarningsTrimStateUnreadable instead of silently returning {}. Callers must let
+        this propagate and skip evaluation for the cycle rather than catch-and-treat-as-empty.
+        """
+        if not _EARNINGS_TRIM_STATE_PATH.exists():
+            return {}
+        try:
+            d = json.loads(_EARNINGS_TRIM_STATE_PATH.read_text())
+        except Exception as e:
+            raise _EarningsTrimStateUnreadable(
+                f"qhm_earnings_trim.json unreadable: {e}") from e
+        if not isinstance(d, dict):
+            raise _EarningsTrimStateUnreadable(
+                f"qhm_earnings_trim.json is not a dict: {type(d).__name__}")
+        return d
+
+    def _save_earnings_trim_state(self, state: dict) -> bool:
+        """Atomic tmp->fsync->replace (RC-5). Returns True on confirmed success, False on
+        failure — callers MUST check this: the reserve-then-confirm design depends on the
+        caller refusing to proceed (to a sell, or to marking "done") when this returns False.
+        """
+        try:
+            _EARNINGS_TRIM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _EARNINGS_TRIM_STATE_PATH.with_suffix(f".json.{os.getpid()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp), str(_EARNINGS_TRIM_STATE_PATH))
+            return True
+        except Exception as e:  # RC-3
+            logger.error("QHM earnings-trim: state save failed: %s", e)
+            return False
+
+    def _compute_earnings_target_pct(
+        self, symbol: str, gate_date_str: str
+    ) -> Optional[float]:
+        """Tier-1 dynamic gain target, as a fraction of entry price. Primary: ATM-straddle
+        implied move for the expiry spanning the earnings date (data/gex.py). Fallback (option
+        data thin/unavailable): _EARNINGS_TRIM_ATR_FALLBACK_MULT x the 14-week ATR, as a % of
+        current price — the SAME ATR basis the position's own stop-loss already uses. Never
+        raises; None on failure (caller must treat None as "cannot evaluate this cycle").
+        """
+        try:
+            from data.gex import get_earnings_implied_move_pct
+            implied = get_earnings_implied_move_pct(symbol, gate_date_str)
+            if implied is not None and implied > 0:
+                return implied
+        except Exception as e:
+            logger.debug(
+                "QHM earnings-trim: %s implied-move fetch failed, trying ATR fallback: %s",
+                symbol, e)
+
+        try:
+            from data.fetcher import fetch_bars
+            import config as _cfg
+            tf = getattr(_cfg, "TF_WEEKLY", "1Week")
+            bars = fetch_bars(symbol, tf, num_bars=_ATR_BARS + 5)
+            if bars.empty or len(bars) < _ATR_PERIOD_WEEKS + 1:
+                return None
+            trs = []
+            for i in range(1, len(bars)):
+                h = float(bars.iloc[i]["high"])
+                lo = float(bars.iloc[i]["low"])
+                pc = float(bars.iloc[i - 1]["close"])
+                trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+            atr = sum(trs[-_ATR_PERIOD_WEEKS:]) / _ATR_PERIOD_WEEKS
+            current_price = self._get_live_price(symbol)
+            if not current_price or current_price <= 0:
+                return None
+            atr_pct = atr / current_price
+            return atr_pct * _EARNINGS_TRIM_ATR_FALLBACK_MULT
+        except Exception as e:
+            logger.warning("QHM earnings-trim: %s ATR fallback failed: %s", symbol, e)
+            return None
+
+    def _maybe_earnings_trim(self, pos: HoldPosition, today_str: str) -> bool:
+        """EARNINGS PROFIT-TAKE: realize profit ahead of an earnings print via a dynamic,
+        wider-than-intraday target. Tier 1 trims _EARNINGS_TRIM_TIER1_FRAC of the position at a
+        dynamic gain threshold. Tier 2 exits 100% of the remainder at _EARNINGS_TRIM_TIER2_MULT
+        x Tier 1's threshold. DORMANT unless _EARNINGS_TRIM_ENABLED. Never raises into the
+        caller — on any internal error, returns False (fail toward letting the trailing-lock
+        resume rather than silently leaving a position with neither mechanism active).
+
+        Returns True iff the earnings-proximity window is open for this position this cycle —
+        the caller uses this as the mutual-exclusion signal against _maybe_trailing_lock.
+        """
+        if not _EARNINGS_TRIM_ENABLED or self.dry_run:
+            return False
+        try:
+            if (pos.state != HoldState.ACTIVE or pos.qty_filled <= 0
+                    or pos.avg_entry_price <= 0 or pos.direction != "long"):
+                return False
+
+            from data.fmp_client import get_cached_earnings_dates
+            today = self._now_et().date()
+            earnings_dates = get_cached_earnings_dates(pos.symbol)
+            upcoming = sorted([d for d in earnings_dates if d >= today])
+            if not upcoming:
+                return False
+            gate_date = upcoming[0]
+            days_to_earnings = (gate_date - today).days
+            if days_to_earnings > _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS:
+                return False  # outside the outer bound — mechanism not active this cycle
+            gate_date_str = gate_date.isoformat()
+
+            # RTH-only, matching both sibling mechanisms (_maybe_dip_add / _maybe_trailing_lock):
+            # never cancel a protective stop into a closed market. run_cycle already gates on
+            # market hours, but its clock-API fallback treats any weekday 09:30-16:00 as open,
+            # so a market holiday + a clock-API failure could otherwise run a trim into a closed
+            # market and leave an overnight naked window (cold-2nd round 2, non-blocking note).
+            try:
+                from execution.broker import is_market_open as _is_market_open
+                if not _is_market_open():
+                    return False
+            except Exception as _mkt_e:  # RC-3: fail-closed (skip trim), but log the swallow
+                logger.warning(
+                    "QHM earnings-trim: market-open check failed for %s (%s) — "
+                    "skipping trim this cycle (fail-closed).", pos.symbol, _mkt_e
+                )
+                return False
+
+            try:
+                trim_state = self._load_earnings_trim_state()
+            except _EarningsTrimStateUnreadable as e:
+                logger.critical(
+                    "QHM earnings-trim: state file unreadable — skipping evaluation this "
+                    "cycle for %s (fail closed, letting trailing-lock resume): %s",
+                    pos.symbol, e)
+                self._alert(
+                    ":rotating_light: QHM earnings-trim state file is CORRUPT — trim "
+                    "evaluation skipped until manually fixed. See %s"
+                    % _EARNINGS_TRIM_STATE_PATH)
+                return False
+
+            sym_state = dict(trim_state.get(pos.symbol, {}))
+            # NEW-EARNINGS-CYCLE RESET (cold-2nd FAIL #3, 2026-08-06). The reset must fire
+            # ONLY when the recorded earnings event has genuinely PASSED — never merely
+            # because FMP revised the date. FMP routinely revises estimated->confirmed dates
+            # by a day or two, and an un-guarded "gate_date changed -> reset" would (a) re-arm
+            # an already-fired tier1 for the SAME event, letting it trim repeatedly on every
+            # revision, and (b) silently clear a "reserved" rung, erasing the manual-review
+            # block that the whole reserve-before-sell discipline depends on.
+            _prior_gate = sym_state.get("gate_date")
+            if _prior_gate != gate_date_str:
+                _prior_passed = False
+                if _prior_gate:
+                    try:
+                        _prior_passed = today > date.fromisoformat(str(_prior_gate))
+                    except (ValueError, TypeError):
+                        _prior_passed = False  # unparseable -> treat as NOT passed (fail closed)
+                _has_reserved = "reserved" in (
+                    sym_state.get("tier1"), sym_state.get("tier2"))
+                if (not _prior_gate) or (_prior_passed and not _has_reserved):
+                    # Genuinely a new earnings event (or a first-ever record) -> fresh start.
+                    sym_state = {"gate_date": gate_date_str, "tier1": "none", "tier2": "none"}
+                else:
+                    # Same event, revised date (or a stuck 'reserved' that must survive):
+                    # re-point gate_date but PRESERVE every rung status and the frozen T1.
+                    if _has_reserved and _prior_passed:
+                        logger.warning(
+                            "QHM earnings-trim: %s earnings date moved %s->%s but a rung is "
+                            "'reserved' — preserving it; manual review still required.",
+                            pos.symbol, _prior_gate, gate_date_str)
+                    else:
+                        logger.info(
+                            "QHM earnings-trim: %s earnings date revised %s->%s for the same "
+                            "upcoming event — preserving rung state (no re-arm).",
+                            pos.symbol, _prior_gate, gate_date_str)
+                    sym_state["gate_date"] = gate_date_str
+                    # PERSIST the re-point, and CHECK the write. Leaving it in memory only would
+                    # keep a stale date on disk, and the "has the prior event passed?" test above
+                    # runs against that stored date — so a DELAYED earnings (recorded 8/20,
+                    # revised to 8/25) would look "passed" the moment today crossed the stale
+                    # 8/20 and wrongly re-arm tier1 for the very same event, trimming twice.
+                    # The write is therefore NOT best-effort (cold-2nd round 2, defect 4): if it
+                    # fails we refuse to evaluate this cycle rather than proceed on a state whose
+                    # on-disk form would license that re-arm.
+                    trim_state[pos.symbol] = sym_state
+                    if not self._save_earnings_trim_state(trim_state):
+                        logger.error(
+                            "QHM earnings-trim: %s earnings-date re-point (%s->%s) FAILED to "
+                            "persist — skipping trim evaluation this cycle (fail closed; a "
+                            "stale on-disk date could otherwise re-arm an already-fired rung).",
+                            pos.symbol, _prior_gate, gate_date_str)
+                        return True  # inside the window — mutual exclusion still applies
+
+            tier1_status = sym_state.get("tier1", "none")
+            tier2_status = sym_state.get("tier2", "none")
+            if tier1_status not in ("none", "reserved", "done") or tier2_status not in (
+                "none", "reserved", "done",
+            ):
+                logger.critical(
+                    "QHM earnings-trim: %s has an UNRECOGNIZED trim state (tier1=%r "
+                    "tier2=%r) — blocked, NOT treated as 'none'. Manually correct %s.",
+                    pos.symbol, tier1_status, tier2_status, _EARNINGS_TRIM_STATE_PATH)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim state unrecognized — blocked "
+                    "until manually corrected." % pos.symbol)
+                return True  # inside the window; mutual exclusion still applies
+
+            if tier1_status == "reserved" or tier2_status == "reserved":
+                logger.critical(
+                    "QHM earnings-trim: %s stuck at tier1=%s tier2=%s — a prior attempt "
+                    "either failed to persist or the sell itself failed. NOT auto-retrying. "
+                    "Verify against Alpaca's order history, then manually clear %s.",
+                    pos.symbol, tier1_status, tier2_status, _EARNINGS_TRIM_STATE_PATH)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim STUCK (tier1=%s tier2=%s) — "
+                    "manual verification required." % (pos.symbol, tier1_status, tier2_status))
+                return True
+
+            if tier2_status == "done":
+                return True  # fully exited; state transition to PENDING_EXIT handled below
+
+            live_price = self._get_live_price(pos.symbol)
+            if not live_price or live_price <= 0:
+                return True  # inside window, can't evaluate this cycle — still mutually exclusive
+
+            gain_pct = (live_price - pos.avg_entry_price) / pos.avg_entry_price
+
+            if tier1_status == "none":
+                # DAILY TARGET CACHE (cold-2nd FAIL #5, 2026-08-06). _compute_earnings_target_pct
+                # makes up to 3 sequential 8s-timeout HTTP calls plus a weekly-bars fetch on the
+                # fallback path. This runs on the SINGLE-THREADED run_cycle thread immediately
+                # before check_exits(), so an uncached per-5-min-cycle recompute across several
+                # in-window holds could starve live stop evaluation on every other position for
+                # minutes. The straddle-implied move does not move enough intraday to justify
+                # that cost: compute at most ONCE PER DAY per symbol and reuse it.
+                _cached_pct = sym_state.get("t1_target_pct")
+                _cached_on = sym_state.get("t1_target_date")
+                if _cached_on == today_str and isinstance(_cached_pct, (int, float)) \
+                        and _cached_pct > 0:
+                    t1_target_pct = float(_cached_pct)
+                elif _cached_on == today_str and _cached_pct is None:
+                    # NEGATIVE cache hit: the expensive computation already FAILED today for
+                    # this symbol. Without this, the failure path would repeat the full
+                    # ~28s+ option-chain probe plus the weekly-bars fallback on EVERY 5-minute
+                    # cycle — i.e. the blocking would be worst in exactly the data-outage case
+                    # the cache exists to bound (cold-2nd round 2, defect 5).
+                    return True
+                else:
+                    t1_target_pct = self._compute_earnings_target_pct(
+                        pos.symbol, gate_date_str)  # type: ignore[assignment]
+                    # Cache the OUTCOME either way — success (a float) or failure (None) —
+                    # keyed on today's date, so at most one computation per symbol per day.
+                    sym_state["t1_target_pct"] = t1_target_pct \
+                        if (t1_target_pct is not None and t1_target_pct > 0) else None
+                    sym_state["t1_target_date"] = today_str
+                    trim_state[pos.symbol] = sym_state
+                    # Best-effort cache persist: a failure here only costs a recompute next
+                    # cycle, so it must NOT block the trim evaluation below.
+                    self._save_earnings_trim_state(trim_state)
+                    if t1_target_pct is None or t1_target_pct <= 0:
+                        return True
+
+                if gain_pct >= t1_target_pct:
+                    self._execute_earnings_trim_tier1(
+                        pos, sym_state, gate_date_str, trim_state, t1_target_pct)
+                return True
+
+            if tier1_status == "done" and tier2_status == "none":
+                # Tier 2 measures against the FROZEN T1 that actually fired tier 1 — never a
+                # per-cycle recomputation (cold-2nd FAIL #4). Straddle theta decay or an
+                # implied-move->ATR-fallback switch would otherwise shrink the reference and
+                # let a 100% exit fire with no additional run-up. No stored value (e.g. a
+                # hand-edited state file) => refuse rather than guess.
+                _frozen_t1 = sym_state.get("t1_fired_pct")
+                if not isinstance(_frozen_t1, (int, float)) or _frozen_t1 <= 0:
+                    logger.warning(
+                        "QHM earnings-trim: %s tier1 is 'done' but no frozen t1_fired_pct is "
+                        "recorded — refusing to evaluate tier2 (cannot reconstruct the "
+                        "threshold that fired tier1). Manually add t1_fired_pct to %s if a "
+                        "tier2 exit is intended.", pos.symbol, _EARNINGS_TRIM_STATE_PATH)
+                    return True
+                if gain_pct >= float(_frozen_t1) * _EARNINGS_TRIM_TIER2_MULT:
+                    self._execute_earnings_trim_tier2(pos, sym_state, gate_date_str, trim_state)
+                return True
+
+            return True
+        except Exception as e:  # RC-3
+            logger.warning("QHM earnings-trim error for %s: %s", pos.symbol, e)
+            return False
+
+    def _earnings_trim_restore_stop(
+        self, pos: HoldPosition, qty: int, stop_px: float, reason: str
+    ) -> None:
+        """Leave a resting protective stop for `qty` at `stop_px`, else transition to
+        PENDING_STOP_REPLACE + alert so the existing per-cycle recovery loop
+        (run_weekly_check -> resubmit_stop_if_needed) heals it WITHOUT waiting for a process
+        restart. Shared by BOTH tiers — cold-2nd round 2 found the round-1 fix had been applied
+        only to tier1, leaving tier2's failed-close path with an unbounded naked window (its
+        rung is 'reserved' and therefore never auto-retried, unlike _initiate_exit which retries
+        every cycle). Never raises.
+
+        CALLER CONTRACT: `qty` MUST come from a fresh broker read, never from pos.qty_filled —
+        _resync_from_alpaca early-returns when the position is gone, so pos.qty_filled can be
+        stale-nonzero on a flat position, and submitting a SELL stop with no position open can
+        OPEN AN UNINTENDED SHORT in this long-only tier (cold-2nd round 2, defect 3).
+        """
+        _r = None
+        try:
+            if qty >= 1 and stop_px > 0:
+                _r = self._dispatcher.submit_gtc_stop(
+                    self.broker, pos.symbol, qty, "sell", stop_px)
+        except Exception as _rse:
+            logger.critical(
+                "QHM earnings-trim: %s stop resubmit threw: %s", pos.symbol, _rse)
+        if _r is not None and hasattr(_r, "id"):
+            pos.stop_order_id = _r.id
+            pos.stop_price = stop_px
+            pos.state = HoldState.ACTIVE
+            pos.updated_at = self._now_et().isoformat()
+            self._save_state()
+            return
+        try:
+            self._resync_from_alpaca(pos)
+        except Exception as _rs_e:  # RC-3: best-effort resync; PENDING_STOP_REPLACE set regardless
+            logger.warning(
+                "QHM earnings-trim: %s resync before PENDING_STOP_REPLACE failed: %s "
+                "(non-blocking — state still set).", pos.symbol, _rs_e)
+        pos.state = HoldState.PENDING_STOP_REPLACE
+        pos.updated_at = self._now_et().isoformat()
+        self._save_state()
+        logger.critical(
+            "QHM earnings-trim: %s %s — PENDING_STOP_REPLACE", pos.symbol, reason)
+        try:
+            self._alert(
+                ":rotating_light: QHM %s earnings-trim %s — stop pending resubmit"
+                % (pos.symbol, reason))
+        except Exception as _al_e:  # RC-3: alert is best-effort; log the swallow
+            logger.warning(
+                "QHM earnings-trim: %s restore-stop alert failed: %s", pos.symbol, _al_e)
+
+    def _earnings_trim_broker_qty(self, pos: HoldPosition) -> Optional[int]:
+        """Fresh broker-truth share count. None means the read FAILED (unknown) — which callers
+        must treat differently from a confirmed 0 (flat). Never raises."""
+        try:
+            _p = self.broker.get_position(pos.symbol)
+        except Exception as e:
+            logger.warning(
+                "QHM earnings-trim: %s broker position read failed: %s", pos.symbol, e)
+            return None
+        if _p is None:
+            return 0
+        try:
+            return int(float(getattr(_p, "qty", 0) or 0))
+        except (TypeError, ValueError):
+            return None
+
+    def _execute_earnings_trim_tier1(
+        self, pos: HoldPosition, sym_state: dict, gate_date_str: str, trim_state: dict,
+        t1_target_pct: float,
+    ) -> None:
+        """TIER 1: trim _EARNINGS_TRIM_TIER1_FRAC of the position, then restore the protective
+        stop for whatever the BROKER says is actually left. Never raises into the caller.
+
+        RESERVE-BEFORE-SELL: "reserved" is durably persisted and its write CONFIRMED (via
+        _save_earnings_trim_state's True/False return) BEFORE any sell is attempted — a write
+        failure means no sell happens this cycle, fail closed. A sell that fails after a
+        confirmed reservation leaves the rung PERMANENTLY at "reserved" (never reverts to
+        "none"), blocking all auto-retry until a human verifies against Alpaca and clears it.
+
+        NAKED-STOP INVARIANT: once the resting stop is cancelled, EVERY exit path must leave a
+        resting stop OR PENDING_STOP_REPLACE + alert (via _earnings_trim_restore_stop).
+
+        FILL CONFIRMATION: partial_close_position returns True on SUBMISSION, not fill, and
+        gives back no order id. Submitting the replacement stop while that market sell is still
+        resting makes Alpaca reject it with 40310000, whose recovery calls
+        cancel_open_orders_for_symbol() — cancelling THIS function's own trim sell and blocking
+        ~63s on the trading thread. So: poll for the fill, and if it has NOT filled by the
+        deadline, explicitly cancel the lingering sell BEFORE touching the stop, and do NOT
+        record the rung as done (cold-2nd round 2, defect 2 — the round-1 poll fell through to
+        the stop submit on timeout and re-opened this exact trap while logging a phantom sale).
+        """
+        try:
+            trim_qty = max(int(pos.qty_filled * _EARNINGS_TRIM_TIER1_FRAC), 1)  # RC-7
+            if trim_qty >= pos.qty_filled:
+                trim_qty = pos.qty_filled - 1  # must always leave a remainder for tier2/the stop
+            if trim_qty < 1:
+                logger.info(
+                    "QHM earnings-trim: %s tier1 trigger met but computed qty rounds to "
+                    "<1 — skipping (position too small to trim).", pos.symbol)
+                return
+
+            sym_state["tier1"] = "reserved"
+            trim_state[pos.symbol] = sym_state
+            if not self._save_earnings_trim_state(trim_state):
+                logger.error(
+                    "QHM earnings-trim: %s tier1 reservation FAILED to persist — refusing "
+                    "to sell this cycle (fail closed). Will retry reservation next cycle.",
+                    pos.symbol)
+                return
+
+            from execution.broker import (
+                cancel_order as _cancel_order,
+                get_open_orders as _get_open_orders,
+                partial_close_position,
+            )
+            import time as _time
+
+            _orig_qty = pos.qty_filled
+            _orig_stop = pos.stop_price
+            floor_stop = pos.avg_entry_price * (1 - _HARD_FLOOR_PCT)
+            _restore_px = round(max(_orig_stop, floor_stop), 2) if _orig_stop > 0 \
+                else round(floor_stop, 2)
+
+            if pos.stop_order_id:
+                if not _cancel_order(str(pos.stop_order_id)):
+                    logger.warning(
+                        "QHM earnings-trim: %s tier1 stop cancel failed — abort, stop "
+                        "intact, stays reserved for manual review.", pos.symbol)
+                    self._alert(
+                        ":rotating_light: QHM %s earnings-trim tier1 stop cancel failed — "
+                        "stuck reserved, manual review required." % pos.symbol)
+                    return
+                pos.stop_order_id = None
+                # Cancel-fill race: cancel_order maps "already filled" -> ok, so the stop may
+                # have FIRED during the cancel. Never trim a position the stop just exited.
+                _held = self._earnings_trim_broker_qty(pos)
+                if _held is None:
+                    # Read FAILED — cannot distinguish "unchanged" from "flat". Restore the
+                    # original stop for the qty we last knew and stop here; a stop for shares
+                    # that no longer exist is rejected by Alpaca, which is the safe direction
+                    # versus trimming blind.
+                    logger.warning(
+                        "QHM earnings-trim: %s post-cancel position read failed — restoring "
+                        "the original stop and aborting the trim this cycle.", pos.symbol)
+                    self._earnings_trim_restore_stop(
+                        pos, _orig_qty, _restore_px, "tier1 position-read-failed")
+                    return
+                if _held < _orig_qty:
+                    logger.warning(
+                        "QHM earnings-trim: %s reduced %d->%d during stop cancel (stop "
+                        "likely fired) — abort trim", pos.symbol, _orig_qty, _held)
+                    if _held >= 1:
+                        try:
+                            self._resync_from_alpaca(pos)
+                        except Exception as _rs_e:  # RC-3: best-effort; restore_stop runs regardless
+                            logger.warning(
+                                "QHM earnings-trim: %s resync during stop-cancel abort "
+                                "failed: %s (non-blocking).", pos.symbol, _rs_e)
+                        self._earnings_trim_restore_stop(
+                            pos, _held, _restore_px, "tier1 stop-fired-during-cancel")
+                    else:
+                        # Confirmed FLAT — no stop to place (a sell stop with no position can
+                        # open an unintended short). External-close reconciles on the next cycle.
+                        logger.warning(
+                            "QHM earnings-trim: %s flat after stop fired during cancel — no "
+                            "stop submitted; external-close will reconcile.", pos.symbol)
+                    return
+
+            ok = partial_close_position(pos.symbol, trim_qty, tier="qhm")
+            if not ok:
+                logger.critical(
+                    "QHM earnings-trim: %s tier1 sell FAILED after stop cancel — stuck "
+                    "reserved, manual review required (verify against Alpaca before "
+                    "clearing %s). Restoring the protective stop so the position is "
+                    "never left naked.", pos.symbol, _EARNINGS_TRIM_STATE_PATH)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim tier1 sell FAILED after stop "
+                    "cancel — manual review required." % pos.symbol)
+                _q = self._earnings_trim_broker_qty(pos)
+                if _q is None or _q >= 1:
+                    self._earnings_trim_restore_stop(
+                        pos, _q if _q else _orig_qty, _restore_px, "tier1 sell-failed")
+                return
+
+            # Poll for the fill. Bounded: 2s initial + 1s polls to a 15s monotonic deadline —
+            # the same bound _maybe_dip_add uses.
+            _target_qty = _orig_qty - trim_qty
+            _deadline = _time.monotonic() + 15.0
+            _time.sleep(2)
+            _now_qty = self._earnings_trim_broker_qty(pos)
+            while _time.monotonic() < _deadline:
+                if _now_qty is not None and _now_qty <= _target_qty:
+                    break
+                _time.sleep(1)
+                _now_qty = self._earnings_trim_broker_qty(pos)
+
+            _confirmed_qty = _now_qty if (
+                _now_qty is not None and _now_qty <= _target_qty) else None
+            if _confirmed_qty is None:
+                # NOT filled by the deadline (halt, API lag, partial). Cancel the lingering
+                # sell FIRST so the replacement stop cannot trip 40310000 -> cancel-our-own-
+                # sell -> ~63s block, then restore the stop for ACTUAL broker qty. The rung
+                # stays "reserved" — we cannot claim a trim that did not demonstrably happen.
+                logger.critical(
+                    "QHM earnings-trim: %s tier1 sell did NOT confirm within the poll window "
+                    "(broker qty %s, expected <= %d) — cancelling the pending sell and "
+                    "restoring the stop. Rung stays 'reserved' for manual review.",
+                    pos.symbol, _now_qty, _target_qty)
+                try:
+                    _open = _get_open_orders(pos.symbol) or []
+                    for _o in _open:
+                        if str(getattr(_o, "side", "")).lower().endswith("sell"):
+                            _cancel_order(str(getattr(_o, "id", "")))
+                except Exception as _ce:
+                    logger.warning(
+                        "QHM earnings-trim: %s could not cancel the pending trim sell: %s",
+                        pos.symbol, _ce)
+                _q2 = self._earnings_trim_broker_qty(pos)
+                if _q2 is None or _q2 >= 1:
+                    self._earnings_trim_restore_stop(
+                        pos, _q2 if _q2 else _orig_qty, _restore_px, "tier1 sell-unconfirmed")
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim tier1 sell UNCONFIRMED — pending "
+                    "order cancelled, stop restored, rung stuck 'reserved'." % pos.symbol)
+                return
+
+            # Confirmed filled. Restore the stop for BROKER-truth remaining qty.
+            try:
+                self._resync_from_alpaca(pos)
+            except Exception as _rs_e:  # RC-3: best-effort; stop restore proceeds regardless
+                logger.warning(
+                    "QHM earnings-trim: %s post-trim resync failed: %s (non-blocking).",
+                    pos.symbol, _rs_e)
+            if _confirmed_qty >= 1:
+                self._earnings_trim_restore_stop(
+                    pos, _confirmed_qty, _restore_px, "tier1 post-sell stop")
+            else:
+                # Confirmed flat (stop and trim both executed). No stop — a sell stop with no
+                # position can open an unintended short. External-close reconciles state.
+                logger.warning(
+                    "QHM earnings-trim: %s flat after tier1 — no stop submitted; external-"
+                    "close will reconcile.", pos.symbol)
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+
+            # Re-load fresh rather than reuse the pre-sell snapshot: the calls above are
+            # blocking network calls, and writing back a stale in-memory copy here could
+            # clobber a concurrent manual edit to a DIFFERENT symbol made during that window.
+            fresh_state = self._load_earnings_trim_state()
+            fresh_sym_state = dict(fresh_state.get(pos.symbol, {}))
+            fresh_sym_state["tier1"] = "done"
+            fresh_sym_state["gate_date"] = gate_date_str
+            fresh_sym_state.setdefault("tier2", "none")
+            # Persist the T1 that ACTUALLY fired: tier 2 must be measured against this frozen
+            # value, never a per-cycle recomputation. The straddle-implied move decays toward
+            # expiry and can switch to the ATR fallback, either of which would otherwise let
+            # tier 2 fire with no additional run-up.
+            fresh_sym_state["t1_fired_pct"] = t1_target_pct
+            fresh_state[pos.symbol] = fresh_sym_state
+            if not self._save_earnings_trim_state(fresh_state):
+                logger.critical(
+                    "QHM earnings-trim: %s tier1 EXECUTED (sold %d shares) but the 'done' "
+                    "state write FAILED — rung stays 'reserved', so it will correctly block "
+                    "(not re-fire) next cycle, but needs manual confirmation it actually "
+                    "completed.", pos.symbol, trim_qty)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim tier1 executed but state write "
+                    "failed — verify and clear manually." % pos.symbol)
+                return
+
+            logger.warning(
+                "QHM EARNINGS-TRIM TIER1: %s sold %d shares ahead of %s earnings "
+                "(T1 threshold %.2f%%, frozen for tier2)",
+                pos.symbol, trim_qty, gate_date_str, t1_target_pct * 100)
+            try:
+                self._alert(
+                    ":moneybag: QHM %s earnings-trim TIER1: sold %d shares ahead of %s "
+                    "earnings" % (pos.symbol, trim_qty, gate_date_str))
+            except Exception as _al_e:  # RC-3: alert is best-effort; log the swallow
+                logger.warning(
+                    "QHM earnings-trim: %s Tier-1 alert failed: %s", pos.symbol, _al_e)
+        except Exception as e:  # RC-3
+            logger.warning("QHM earnings-trim tier1 execution error for %s: %s", pos.symbol, e)
+
+    def _execute_earnings_trim_tier2(
+        self, pos: HoldPosition, sym_state: dict, gate_date_str: str, trim_state: dict
+    ) -> None:
+        """TIER 2: exit 100% of the remaining position (an extreme run-up beyond Tier 1).
+        Same reserve-before-sell discipline as Tier 1. Never raises into the caller.
+
+        NAKED-STOP INVARIANT (cold-2nd round 2, defect 1): broker.close_position() cancels
+        blocking orders — including this hold's protective stop — as part of its own 40310000
+        recovery, and can still fail afterwards. Unlike _initiate_exit (which retries every
+        cycle), this rung is left 'reserved' and is NEVER auto-retried, so a failed close
+        without a stop restore would leave the position naked until the next process restart.
+        Every failure path therefore restores the stop via _earnings_trim_restore_stop.
+        """
+        try:
+            sym_state["tier2"] = "reserved"
+            trim_state[pos.symbol] = sym_state
+            if not self._save_earnings_trim_state(trim_state):
+                logger.error(
+                    "QHM earnings-trim: %s tier2 reservation FAILED to persist — refusing "
+                    "to sell this cycle (fail closed). Will retry reservation next cycle.",
+                    pos.symbol)
+                return
+
+            _orig_qty = pos.qty_filled
+            _orig_stop = pos.stop_price
+            floor_stop = pos.avg_entry_price * (1 - _HARD_FLOOR_PCT)
+            _restore_px = round(max(_orig_stop, floor_stop), 2) if _orig_stop > 0 \
+                else round(floor_stop, 2)
+
+            success = self._dispatcher.close(self.broker, pos.symbol)
+            if not success:
+                # close_position() already treats "position not found" as success=True — a
+                # False here means a REAL failure (rejected order, API error) and the position
+                # is still actually open, but its protective stop may ALREADY have been
+                # cancelled by close_position's own 40310000 recovery. Restore it.
+                logger.critical(
+                    "QHM earnings-trim: %s tier2 exit FAILED — stuck reserved, manual "
+                    "review required (verify against Alpaca before clearing %s). Restoring "
+                    "the protective stop so the position is never left naked.",
+                    pos.symbol, _EARNINGS_TRIM_STATE_PATH)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim tier2 exit FAILED — manual "
+                    "review required." % pos.symbol)
+                _q = self._earnings_trim_broker_qty(pos)
+                if _q is None or _q >= 1:
+                    self._earnings_trim_restore_stop(
+                        pos, _q if _q else _orig_qty, _restore_px, "tier2 exit-failed")
+                return
+
+            pos.state = HoldState.PENDING_EXIT
+            pos.updated_at = self._now_et().isoformat()
+            _deregister_symbol(pos.symbol)
+            self._save_state()
+
+            fresh_state = self._load_earnings_trim_state()
+            fresh_sym_state = dict(fresh_state.get(pos.symbol, {}))
+            fresh_sym_state["tier2"] = "done"
+            fresh_sym_state["gate_date"] = gate_date_str
+            fresh_sym_state.setdefault("tier1", "done")
+            fresh_state[pos.symbol] = fresh_sym_state
+            if not self._save_earnings_trim_state(fresh_state):
+                logger.critical(
+                    "QHM earnings-trim: %s tier2 EXECUTED (full exit) but the 'done' state "
+                    "write FAILED — rung stays 'reserved'; position state is correctly "
+                    "PENDING_EXIT regardless. Needs manual confirmation it completed.",
+                    pos.symbol)
+                self._alert(
+                    ":rotating_light: QHM %s earnings-trim tier2 executed but state write "
+                    "failed — verify and clear manually." % pos.symbol)
+                return
+
+            logger.warning(
+                "QHM EARNINGS-TRIM TIER2: %s FULL EXIT ahead of %s earnings (extreme "
+                "run-up beyond Tier 1)", pos.symbol, gate_date_str)
+            try:
+                self._alert(
+                    ":moneybag: QHM %s earnings-trim TIER2: FULL EXIT ahead of %s earnings "
+                    "(extreme run-up)" % (pos.symbol, gate_date_str))
+            except Exception as _al_e:  # RC-3: alert is best-effort; log the swallow
+                logger.warning(
+                    "QHM earnings-trim: %s Tier-2 alert failed: %s", pos.symbol, _al_e)
+        except Exception as e:  # RC-3
+            logger.warning("QHM earnings-trim tier2 execution error for %s: %s", pos.symbol, e)
+
 
     def _maybe_trailing_lock(self, pos: HoldPosition, today_str: str) -> None:
         """TRAILING PROFIT-LOCK: ratchet an ACTIVE hold's GTC stop UP to lock a fraction of

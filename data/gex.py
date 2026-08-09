@@ -364,6 +364,92 @@ def _parse_occ(occ_symbol: str) -> tuple[datetime, bool, float] | None:
         return None
 
 
+# ── Earnings implied-move (2026-08-06, QHM earnings-trim feature) ─────────────
+
+def get_earnings_implied_move_pct(symbol: str, target_date: str) -> float | None:
+    """ATM-straddle implied move for the nearest listed expiry on/after target_date, as a
+    fraction of spot (e.g. 0.08 = 8%). Returns None on ANY failure (thin/no options, fetch
+    error, unpaired strike, stale/wide quotes) — fail-safe; callers must have a non-option
+    fallback, matching this module's existing convention throughout (T1 — Alpaca Options
+    Data REST, reuses this module's own contract-fetch/snapshot helpers).
+
+    Straddle-to-move conversion uses the standard ~1.25x factor. Derivation: under
+    Black-Scholes an ATM straddle is worth approximately 0.798 * S * sigma * sqrt(T)
+    (= 2/sqrt(2*pi)), so the 1-sigma expected move is straddle / 0.798 ~= 1.25 * straddle.
+    The straddle premium UNDERSTATES the 1-sigma move, hence a factor > 1. See Hull,
+    "Options, Futures, and Other Derivatives," on the ATM approximation. (Note: this is the
+    common desk shorthand, NOT tastytrade's published expected-move formula, which is a
+    weighted straddle/strangle blend — do not attribute it to them.)
+    """
+    try:
+        spot = _get_spot(symbol)
+        if not spot or spot <= 0:
+            return None
+        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+        # Search up to 10 calendar days past target for the nearest actual listed expiry —
+        # weekly/monthly chains don't always have an expiry on the exact earnings date.
+        date_lo = target.isoformat()
+        date_hi = (target + timedelta(days=10)).isoformat()
+        oi_map = _fetch_contracts(symbol, date_lo, date_hi)
+        if not oi_map:
+            return None
+
+        # Group parseable contracts by (expiry_date, strike) -> {"C": occ_sym, "P": occ_sym}
+        by_expiry: dict = {}
+        for occ_sym in oi_map:
+            parsed = _parse_occ(occ_sym)
+            if parsed is None:
+                continue
+            expiry_dt, is_call, strike = parsed
+            expiry_date = expiry_dt.date()
+            if expiry_date < target:
+                continue
+            by_expiry.setdefault(expiry_date, {}).setdefault(strike, {})[
+                "C" if is_call else "P"
+            ] = occ_sym
+        if not by_expiry:
+            return None
+        nearest_expiry = min(by_expiry.keys())
+        strikes = by_expiry[nearest_expiry]
+
+        # Nearest strike to spot that has BOTH a call and a put listed (a real straddle pair).
+        # MONEYNESS BOUND: a "nearest pair" far from spot carries intrinsic value, which would
+        # inflate the straddle mid and produce a nonsense implied move. Require the chosen
+        # strike to sit within 10% of spot; otherwise the chain is too sparse to trust here.
+        paired_strikes = [k for k, v in strikes.items() if "C" in v and "P" in v]
+        if not paired_strikes:
+            return None
+        atm_strike = min(paired_strikes, key=lambda k: abs(k - spot))
+        if abs(atm_strike - spot) / spot > 0.10:
+            return None
+        call_sym = strikes[atm_strike]["C"]
+        put_sym = strikes[atm_strike]["P"]
+
+        snapshots = _fetch_snapshots([call_sym, put_sym])
+        call_quote = (snapshots.get(call_sym) or {}).get("latestQuote") or {}
+        put_quote = (snapshots.get(put_sym) or {}).get("latestQuote") or {}
+        c_bid, c_ask = call_quote.get("bp"), call_quote.get("ap")
+        p_bid, p_ask = put_quote.get("bp"), put_quote.get("ap")
+        if c_bid is None or c_ask is None or p_bid is None or p_ask is None:
+            return None
+        c_bid, c_ask, p_bid, p_ask = float(c_bid), float(c_ask), float(p_bid), float(p_ask)
+        if c_bid <= 0 or c_ask < c_bid or p_bid <= 0 or p_ask < p_bid:
+            return None
+
+        straddle_mid = 0.5 * (c_bid + c_ask) + 0.5 * (p_bid + p_ask)
+        if straddle_mid <= 0:
+            return None
+        implied_move_pct = (straddle_mid / spot) * 1.25
+        # Sanity bound: an implied move outside (0%, 100%] of spot is not a credible
+        # earnings-driven move — treat as bad data rather than pass it to a caller.
+        if implied_move_pct <= 0 or implied_move_pct > 1.0:
+            return None
+        return implied_move_pct
+    except Exception as e:
+        logger.warning("get_earnings_implied_move_pct[%s]: %s", symbol, e)
+        return None
+
+
 # ── GEX computation ───────────────────────────────────────────────────────────
 
 def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
