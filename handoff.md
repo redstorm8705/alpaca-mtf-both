@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-05 (interactive, Rafael present, post-trust-break rigor) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-08-08 PM (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,9 +8,114 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-05, interactive — Rafael present) — pick up here
+## ⏩ LATEST (2026-08-08, interactive → AWP) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ SHIPPED (2026-08-08 PM) — BEHAVIORAL GATE (PR #105 → main `917e971`): Stop-hook
+`execute_dont_ask_gate.py` that BLOCKS a turn ending on a menu/"which do you want" without a
+recommendation being executed (DOCUMENTATION-IS-NOT-ENFORCEMENT: built the control, not another
+rule). Registered in `.claude/settings.json` Stop hook — arms at next session start, binds
+cross-account. Preship caught 2 real crash bugs in its own parser (fixed). statics/cold-2nd/Gro+GAI/CI all green.**
+
+**🟢 SHIPPING (2026-08-08 PM) — MIN-2-SHARES (Rafael APPROVED "build both, ship together").
+execution/entry_logic.py, 2 legs:** Leg 1 = intraday+overnight final gate `if shares < 1`→`< 2`
+(min-2-or-skip; purely restrictive, NOT risk-path). Leg 2 (intraday-live only, RISK-PATH) = when the
+EQUITY value cap throttled a pricey name to 0-1sh but the per-trade Kelly RISK clamp permits ≥2,
+rescue to EXACTLY 2sh on margin — guarded by size_multiplier>0 (not blockaded), not is_leveraged,
+Kelly-risk permits ≥2, VOTE-5 vol permits ≥2, BP affords 2. Per-trade RISK provably unchanged
+(`_risk_cap_sh>=2` ⟺ 2×stop ≤ KELLY_MAX_RISK_PCT×equity); only NOTIONAL uses margin. GATE: statics
+clean + Gro+GAI APPROVE (preship 01f4e67c) + cold-2nd PASS + masked-loss/Taleb seat PASS. Masked-loss
+directional note surfaced to Rafael: a SOFT dampening (mult 0.05-0.5) can be nudged back to the 2sh
+floor (envelope intact; consistent with mandate). **FOLLOW-ON (separate gated build): the broad
+margin-value-cap (full Kelly-risk sizing on margin) was scoped OUT — this ships only the 2sh floor.**
+
+**⏩ NEXT STEP:** QHM earnings-trim build (Rafael item #3 — Tier-1 50% trim / Tier-2 100% at 2×;
++ display target/stop for QHM holds) — uncommitted WIP in tree (data/gex.py, quarterly_hold_manager.py).
+Then: dynamic tracker↔broker-truth reconcile (kills the #4-#7 phantom/desync class).
+
+**✅ SHIPPED & LIVE (2026-08-08) — HUMAN-CONFIRMED LEDGER-HEAL (PR #102 → main `6dcd6e9`; OCI
+`git pull` synced, NO restart — sync_ledger is the RTH cron tool, live sell-gate unchanged).**
+Fixes the never-sell ledger freezing stale after a manual close (items #1/#4). Two fully-automatic
+designs were board-REJECTED first (v1 laundered a breach; v2 owner-claim was net-derived). FINAL
+design (execution/ownership_guard.py + run_ledger_sync.py + NEW confirm_ledger_heal.py): default
+REFUSE every protected-tier shrink (stale-but-safe) + page a PENDING HEAL, UNLESS the operator
+explicitly confirmed THIS reduction via `confirm_ledger_heal.py SYMBOL TIER TARGET` — one-shot,
+2h-expiring, matched on the LIVE snapshot (net_at_confirm==net, 0<=target<=net) AND positions_settled
+(two /v2/positions 3s apart identical + no in-flux orders). On a valid confirmation the tier is
+OVERRIDDEN to the confirmed target (clamped to net; joint prot_sum<=net guard; handles aged-out
+replays + full closes). A breach the operator didn't confirm stays frozen+paged — never laundered.
+GATE: statics + functional 10/10 + Gro + GAI + cold-2nd PASS + masked-loss/Taleb APPROVE ('v2
+net-derived laundering genuinely CLOSED') + FINAL preship Gro+GAI + CI green. **OPERATOR USE:** on a
+manual QHM/F6 trim, run the paged confirm command on the box; next ledger_sync heals it. Full design:
+logs/ledger_heal_v2_design_2026-08-08.md.
+**Bundled in PR #102 (prerequisite): unbroke the Gemini review layer** — Google deprecated
+`gemini-2.5-flash` (404); switched preship_audit.py + ci_audit.py to `gemini-flash-latest` (ci_audit
+also needed maxOutputTokens 2048→8192 — the model thinks + truncated before the verdict). **FOLLOW-UP
+(P0-ish, they run TONIGHT): 7 more scripts still carry the dead model id** — nightly_audit.py,
+midday_audit.py, weekly_postmortem.py, weekly_review.py, auto_ai_audit.py, autonomous_patch_generator.py,
+autonomous_review.py — same 1-line fix each; separate ship; until fixed their Gemini calls 404.
+**FORWARD-BUILD (logged):** QHM stop-rearm ↔ cancel_stray_sell_orders naked-window audit (the NVDA
+stop_order_id clear was a band-aid; ledger heal removes the drift trigger, guard interaction still owed).
+
+**✅ HANDLED (2026-08-08) — NVDA/GOOGL ledger corrected to broker truth (2=2=2); NVDA stop_order_id
+cleared (Monday RTH reconcile re-arms a fresh tagged stop).** These are BAND-AIDS; the human-confirmed
+heal above is the structural fix. Forward-build logged: QHM stop-rearm ↔ cancel_stray_sell_orders
+naked-window audit (design doc).
+
+**✅ SHIPPED EARLIER THIS SESSION:** PR #98 kill-switch QHM-intraday fix (LIVE), PR #99 F6 kill-switch
+exclusion (inert on main). Branch protection restored. GAI switched to gemini-flash-latest on the FREE
+key `GEMINI_API_KEY` (paid = `GEMINI_PAID_API_KEY`, fallback only). notebooklm still needs a sticky reauth.
+
+**QUEUED (prep-only in AWP; ship needs Rafael):** HTML/P&L reporting audit (tier tags on dashboard;
+QHM target+stop price display; weekly/monthly reconcile vs Alpaca balance / realized-vs-unrealized;
+manual-close aggregation) · ask #3 QHM earnings-trim build (uncommitted in working tree) · durable-sync
+push (handoff+docs to main + Master Brain).
+
+**✅ SHIPPED & LIVE (2026-08-06) — KILL-SWITCH FALSE-TRIP FIX (PR #98 → main `9c5a1e6`; OCI DEPLOY_OK + kill-state cleared + restart; live-verified no re-trip; branch protection restored).**
+The intraday kill switch subtracted each quarterly-hold's ALL-TIME `unrealized_pl` from `equity_pnl` (a
+today-delta) — dimensional mismatch. On 2026-08-06 the +$146 lifetime QHM gain turned a real −$74
+(−2.58%) day into a fake −$246 (−8.63%), false-tripping the 7% paper kill at 07:16 ET and halting ALL
+intraday entries the whole session. FIX: sum Alpaca today-only `unrealized_intraday_pl` (prior-close
+datum, matches `last_equity`); method `_qhm_unrealized_pl`→`_qhm_intraday_pl`. Matches what
+`generate_dashboard.py` already does; kill switch was the lone outlier. 7% threshold + fail-safe-to-0.0
+unchanged; strictly removes a false trip, never masks a loss. Gate: full read 1006L + RC scan + board
+3/3 + Gro + GAI + cold-2nd PASS + statics clean + FINAL preship Gro+GAI APPROVE on exact diff. Corrected
+live measure ≈ −2.1%, bot trading again same session. **DEPLOY NOTE:** merge was blocked by a GitHub
+Actions incident (17:40 UTC 2026-08-06, "workflow runs failing/queued"); Rafael relaxed branch protection,
+Claude lifted the stuck required check + merged + deployed, then RESTORED protection to exact prior state
+(preship required, strict, enforce_admins, reviews=0) — verified.
+
+**✅ SHIPPED INERT (2026-08-06) — F6 kill-switch exclusion (PR #99 → main `be7724e`; OCI `git pull --ff-only`
+synced, NO restart — fully inert, loads at next natural restart).** Rafael directive: QHM AND F6
+buy-and-holds (daily AND lifetime P&L) must be excluded from the intraday kill. #98 covers QHM (= 100% of
+actual holds today; F6 is DARK, zero positions). This diff: rename `_qhm_intraday_pl`→
+`_buy_and_hold_intraday_pl`; excluded = `get_quarterly_hold_symbols()` ∪ `_forever6_held_symbols()` (new;
+F6-held syms from ownership ledger `forever6 qty>0`, FAIL-SAFE to EMPTY). **KEY HARDENING
+(DOCUMENTATION-IS-NOT-ENFORCEMENT):** `_forever6_held_symbols()` returns EMPTY while
+`config.OWNERSHIP_GUARD_ENFORCE=False` — the drift-prone unenforced ledger can NEVER drive the kill switch;
+the "reconcile-before-F6-enable" pre-condition is now a CODE GATE, not a doc. ZERO-IMPACT TODAY
+(enforce=False + F6 dark → empty → byte-identical to #98). Gate: statics clean; Gro APPROVE; GAI APPROVE
+(counter-prompt reversed a false-premise masked-loss reject + confirmed the enforce-gate closes the drift
+tail); board masked-loss (Taleb) APPROVE; board reliability (Majors/McKinney) APPROVE-w/-changes (success-
+path log line folded); cold-2nd PASS ×2 (incl. fresh on enforce-gated); FINAL preship Gro+GAI APPROVE on
+exact diff. Merged via CI-bypass (Actions incident) + protection restored. **F6 exclusion now AUTO-GATED:
+it activates only when `OWNERSHIP_GUARD_ENFORCE` is deliberately flipped True — which itself must be gated
+on ledger reconciliation (joins the existing F6 pre-flip gates).**
+
+**📋 GOOGL WEEK AUDIT (2026-08-06, Alpaca-sourced) — bot behaved correctly, nothing to fix.** GOOGL is a
+QHM hold (2 sh @ $319.96 after Rafael's manual trim). Week: 8-03 Rafael manually sold 2 of 4 sh @ $375.02
+near the day's high (locked ~$110); 8-05 GOOGL dropped −5.5% intraday ($384→$362); bot HELD correctly — no
+dip-add (price still +12% above cost, dip-add only fires below cost basis $313.56), no stop trigger (GTC
+stop $282.20, ~21% below price), intraday entries blocked (QHM). ledger_sync healthy (drift=0). The
+unrealized-gain round-trip is exactly what ask-#3 (QHM earnings-trim) addresses.
+
+**⏭️ STILL OPEN THIS SESSION:** (a) ask #3 — QHM earnings-trim BUILD (interrupted mid-cold-2nd-round-3 by
+usage limit; uncommitted edits in working tree `data/gex.py` + `execution/quarterly_hold_manager.py` —
+per RULE C-1/C-2 restart its patch sequence from Step 1); (b) push handoff.md + tb_audit_log to main +
+Master Brain when CI recovers (durable sync degraded by the Actions outage + notebooklm auth-expired);
+(c) F6 blockers above. RETRY the #98-class CI merge path (and F6 merge) every few hours until GitHub
+Actions recovers — see `logs/QUEUED_killswitch_deploy_2026-08-06.md`.
 
 **🟡 DESIGN ALIGNED, NOT YET BUILT (2026-08-05) — QHM earnings-into-profit-take (new mechanism).**
 Rafael request: QHM (quarterly holds) currently has zero profit-realization logic — only a stop-loss and
@@ -79,7 +184,12 @@ run to 2x/3x isn't "more measurable edge," it's tail risk, and Kelly discipline 
 slower, once the edge is no longer quantifiable; options/IV seat — tastytrade's own expected-move research
 treats the implied move as a ~68%-confidence band, and 2x already sits where realized moves become
 statistically unusual, while 3x sets the bar so high the tier would rarely ever fire, defeating its
-purpose. **Board recommendation: 2x, not 3x.** Rafael has final say — not yet asked.
+purpose. **Board recommendation: 2x, not 3x.** **CONFIRMED BY RAFAEL (2026-08-06): 2x.** Design is now
+FULLY FINALIZED — Tier 1 = 50% trim at dynamic threshold T1; Tier 2 = 100% exit at 2x T1; detection window
+= dynamic IV-expansion-based (not fixed day-count); trailing-lock interaction = mutual exclusion. Next
+step: full mandatory patch sequence (Step 1 full read → 10-pt audit → board vote → Gro+GAI → statics →
+cold-2nd → propose → approval → FINAL preship → ship) to actually build this into
+`execution/quarterly_hold_manager.py`. No code written yet as of this entry.
 Closes the reporting gap found earlier this session (pages showed dollar P&L but no %-of-balance
 figure). Rafael explicitly overrode the board's Modified-Dietz recommendation — paper account, no
 real deposits/withdrawals possible, don't build tracking for a scenario that can't occur; revisit at

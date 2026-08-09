@@ -1418,8 +1418,47 @@ def execute_entries(
                 )
                 shares = _max_sh_kelly
 
-        if shares < 1:
-            logger.info(f"[{symbol}] Position size < 1 share at ${entry_price:.2f}. Skipping.")
+        # ── Leg 2: margin-funded 2-share minimum (Rafael mandate 2026-08-08; board+Gro+GAI) ──
+        # The EQUITY-based value cap (max_shares_by_value above) throttles high-priced names to
+        # 0-1 shares even when the per-trade Kelly RISK clamp permits >=2. On margin (BP ~4x
+        # equity) 2 shares of a pricey name is affordable. Rescue to EXACTLY 2 (never more) iff,
+        # independent of the equity value cap: (a) not a blockade (size_multiplier>0), (b) not a
+        # leveraged ETF (own notional ring-fence upstream), (c) the Kelly per-trade RISK clamp
+        # permits >=2 -> per-trade risk stays <= KELLY_MAX_RISK_PCT x equity (envelope UNCHANGED),
+        # (d) VOTE-5 vol-target permits >=2, (e) live buying power affords 2 (+cushion). Only
+        # NOTIONAL uses margin; per-trade RISK is untouched. Downstream BP-preflight + gross-
+        # exposure gate still run and can skip. Never fires for names already >=2 shares.
+        if (
+            0 <= shares < 2
+            and size_multiplier > 0.0
+            and not is_leveraged
+            and entry_price > 0
+            and stop_distance > 0
+            and risk.portfolio_value > 0
+        ):
+            _risk_cap_sh = int(config.KELLY_MAX_RISK_PCT * risk.portfolio_value / stop_distance)
+            _vol_ok = True
+            if _sigma_20d and _sigma_20d > 0.001:
+                _vol_ok = int((0.15 / _sigma_20d) * risk.portfolio_value / entry_price) >= 2
+            if _risk_cap_sh >= 2 and _vol_ok and risk.check_buying_power_for_order(2, entry_price):
+                logger.info(
+                    f"[{symbol}] Leg2 margin min-2 rescue: {shares}sh → 2sh "
+                    f"(Kelly risk permits {_risk_cap_sh}sh @ 2×${stop_distance:.2f}="
+                    f"${2 * stop_distance:.2f} ≤ {config.KELLY_MAX_RISK_PCT:.1%}×"
+                    f"${risk.portfolio_value:,.2f}; vol_ok={_vol_ok}; BP affords 2) "
+                    f"— equity value cap was the throttle."
+                )
+                shares = 2
+
+        # ── Leg 1: 2-share minimum-or-skip (Rafael mandate 2026-08-08) ───────────
+        # Never submit a 1-share order. Purely restrictive (skips, never upsizes) —
+        # NOT risk-path (Gro+GAI confirmed). A name whose risk-safe size is <2 (after
+        # the Leg-2 margin rescue above had its chance) is skipped as a noise trade.
+        if shares < 2:
+            logger.info(
+                f"[{symbol}] Position size {shares}sh < 2-share minimum at "
+                f"${entry_price:.2f} — skipping (min-2 floor)."
+            )
             continue
 
         # Per-symbol short block gate — skip symbols Alpaca has already rejected
@@ -1922,8 +1961,12 @@ def _overnight_entry_check(
         return
     shares = max(1, int(overnight_dollar_cap / stop_distance))
     shares = min(shares, int(overnight_dollar_cap / limit_price) if limit_price > 0 else 0)
-    if shares < 1:
-        logger.info(f"{_log} {symbol}: size < 1 share at ${limit_price:.2f} — skip")
+    # Leg 1: 2-share minimum-or-skip (Rafael mandate 2026-08-08) — consistency with the
+    # intraday path. This overnight/swing path is dry-run (OVERNIGHT_ENTRIES_ENABLED gate
+    # below), so the floor is inert today but binds when overnight entries go live. The
+    # Leg-2 margin rescue is intraday-live-only and intentionally NOT applied here.
+    if shares < 2:
+        logger.info(f"{_log} {symbol}: size {shares}sh < 2-share minimum at ${limit_price:.2f} — skip")
         return
 
     logger.info(
