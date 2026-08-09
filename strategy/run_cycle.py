@@ -1689,6 +1689,28 @@ def run_cycle(
     # poll_secs=0.1 + no_retry=True — fills are 5–15 min old (settled); no blocking risk.
     _run_fill_recon(tracker, kelly=kelly, risk=risk)
 
+    # ── Dynamic tracker↔broker DRIFT DETECTOR (2026-08-09, Rafael mandate; board+Gro+GAI) ──
+    # READ-ONLY: surfaces tracker↔Alpaca position drift (the #4-#7 visibility half — phantom
+    # positions, direction/qty mismatch, $0-P&L-risk entry) IMMEDIATELY, every cycle, with
+    # persistence-based DYNAMIC confidence (a 1-cycle blip is a settle/inflight race → not
+    # escalated; confidence rises with consecutive-cycle persistence; the escalation bar self-
+    # calibrates from observed race lifetimes). NEVER mutates a position — pure detect + emit
+    # (evidence stream for the future auto-corrector). Placed AFTER check_exits + fill-recon so it
+    # can never delay an exit on the trading thread. Fully fail-safe (module-internal + this wrap).
+    try:
+        from execution.drift_detector import detect_and_emit_drift
+        from execution.broker import get_open_positions, get_open_orders
+        from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+        from execution.orphan_manager import _get_forever6_syms
+        _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms()
+        detect_and_emit_drift(
+            tracker, _drift_exclude,
+            log_event=_log_trade_event, send_slack=send_slack,
+            fetch_positions=get_open_positions, fetch_orders=get_open_orders,
+        )
+    except Exception as _dd_e:
+        logger.warning("drift detector call failed (non-blocking): %s", _dd_e)
+
     # ── ANOMALY-LOGGING: 5 proactive checks (Point 9 of 10-point plan) ────────
     # Gene Kim / Charity Majors: surface failure patterns before they compound.
     # Runs every cycle during RTH — all checks are fast (dict reads, no I/O).
