@@ -444,6 +444,18 @@ def run_cycle(
         )
     if not _rcy_market_open:
         logger.info("Market closed — updating scan prices, no entries.")
+        # Rearm any QHM hold stuck in PENDING_STOP_REPLACE while the market is CLOSED. GTC stops
+        # submit fine while closed; without this the QHM rearm (run_weekly_check → resubmit_stop_
+        # if_needed) is unreachable below this closed-market return, leaving a hold NAKED all
+        # weekend (verified 2026-08-09: NVDA PENDING_STOP_REPLACE, no live stop at the broker).
+        # Rearm-only (no entries/trims); fully fail-safe.
+        try:
+            if _main.qhm is not None:
+                _n_rearm = _main.qhm.resubmit_pending_stops()  # type: ignore[attr-defined]
+                if _n_rearm:
+                    logger.info("Market closed: rearmed %d QHM GTC stop(s) in PENDING_STOP_REPLACE.", _n_rearm)
+        except Exception as _e_rearm:
+            logger.warning("Closed-market QHM stop rearm failed: %s", _e_rearm)
         try:
             from scan_to_html import write_scan_html
             write_scan_html(

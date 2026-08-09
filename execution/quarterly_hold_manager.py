@@ -1146,6 +1146,28 @@ class QuarterlyHoldManager:
                 f"state→PENDING_STOP_REPLACE. AH loop will resubmit after 4 PM ET."
             )
 
+    def resubmit_pending_stops(self) -> int:
+        """Rearm the GTC stop for EVERY hold stuck in PENDING_STOP_REPLACE. Safe to call while
+        the market is CLOSED — broker.submit_gtc_stop_order has no market-hours guard and GTC
+        stops rest fine while closed. This closes the naked-window bug (verified 2026-08-09: NVDA
+        held PENDING_STOP_REPLACE with NO live stop at the broker over a weekend): the only other
+        caller of resubmit_stop_if_needed is run_weekly_check, which sits BELOW run_cycle's
+        closed-market early return, so a QHM hold that drops to PENDING_STOP_REPLACE cannot rearm
+        until the next RTH session. Rearm-only — does NOT run entries/trims/trail-lock. Returns the
+        count rearmed. Never raises into the caller."""
+        n = 0
+        try:
+            for _sym, _pos in list(self._positions.items()):
+                if _pos is not None and _pos.state == HoldState.PENDING_STOP_REPLACE:
+                    try:
+                        if self.resubmit_stop_if_needed(_sym):
+                            n += 1
+                    except Exception as _re:
+                        logger.warning("QHM resubmit_pending_stops: %s failed: %s", _sym, _re)
+        except Exception as _e:
+            logger.warning("QHM resubmit_pending_stops error: %s", _e)
+        return n
+
     def resubmit_stop_if_needed(self, symbol: str) -> bool:
         """Called by AH GTC loop (run_cycle.py AH section) to resubmit missing stops.
         Peterffy: only AH loop initiates resubmit — not startup reconcile.
