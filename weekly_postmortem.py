@@ -46,7 +46,7 @@ SLACK_WEBHOOK   = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 ALPACA_KEY      = os.getenv("ALPACA_API_KEY", "").strip()
 ALPACA_SECRET   = os.getenv("ALPACA_SECRET_KEY", "").strip()
 ALPACA_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
-GEMINI_MODEL    = "gemini-2.5-flash"
+GEMINI_MODEL    = "gemini-3.1-flash-lite"
 
 BASE_DIR        = Path(__file__).resolve().parent
 LOGS_DIR        = BASE_DIR / "logs"
@@ -776,7 +776,7 @@ If a field shows '?' note it and continue."""
 
 
 def _call_gemini(prompt: str) -> str:
-    # gemini-2.5-flash needs max_output_tokens + thinking_budget=0, or "thinking" eats the
+    # gemini-3.1-flash-lite needs max_output_tokens + thinking_budget=0, or "thinking" eats the
     # output budget and response.text comes back empty/truncated (project-documented Gemini
     # gotcha) — the silent cause of a blank/half "adversarial analysis" section here. The prior
     # fallback gemini-2.0-flash-lite is now 404/retired; gemini-3.1-flash-lite is the working
@@ -790,7 +790,7 @@ def _call_gemini(prompt: str) -> str:
             thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),
         )
         last_err = None
-        for model in [GEMINI_MODEL, "gemini-3.1-flash-lite"]:
+        for model in [GEMINI_MODEL, "gemini-flash-latest"]:
             try:
                 logger.info(f"  Trying model: {model}")
                 r   = client.models.generate_content(model=model, contents=prompt, config=cfg)

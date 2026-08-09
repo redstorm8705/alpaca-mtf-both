@@ -75,7 +75,7 @@ _PT = ZoneInfo("America/Los_Angeles")
 # ── API constants ─────────────────────────────────────────────────────────────
 _GRO_BASE_URL = "https://api.groq.com/openai/v1"
 _GRO_MODEL = "llama-3.3-70b-versatile"
-_GEMINI_MODEL = "gemini-2.5-flash"  # cost fix 2026-07-11 (Rafael): pro-preview was the
+_GEMINI_MODEL = "gemini-3.1-flash-lite"  # cost fix 2026-07-11 (Rafael): pro-preview was the
 # single premium caller in the whole pipeline and depleted credits in a week — flash is
 # what nightly/midday audits already use and is adequate for the meta-audit cross-review.
 _API_TIMEOUT_S = 180  # 3-minute wall-clock limit per API call
@@ -1183,7 +1183,7 @@ def _call_groq(prompt: str) -> dict:
 def _call_gemini(prompt: str) -> dict:
     """Submit prompt to Google Gemini API via google.genai SDK.
 
-    Uses _GEMINI_MODEL (gemini-2.5-flash as of 2026-07-11 — cost fix; see the
+    Uses _GEMINI_MODEL (gemini-3.1-flash-lite as of 2026-07-11 — cost fix; see the
     constant). google.generativeai is deprecated; google.genai is the current SDK.
     Falls back to REST if the SDK is unavailable.
 

@@ -919,12 +919,12 @@ Respond ONLY with valid JSON, no markdown, no extra text:
   }}
 }}"""  # noqa: E501
 
-    # gemini-2.5-flash needs max_output_tokens + thinking_budget=0, or "thinking" eats the
+    # gemini-3.1-flash-lite needs max_output_tokens + thinking_budget=0, or "thinking" eats the
     # output budget and response.text comes back empty/truncated (project-documented Gemini
     # gotcha) — the silent root cause of the AI/board section vanishing from the weekly page.
     # gemini-2.0-flash-lite (the prior fallback) is now 404/retired; gemini-3.1-flash-lite is
     # the working replacement (both verified live 2026-07-24).
-    _models = ["gemini-2.5-flash", "gemini-3.1-flash-lite"]
+    _models = ["gemini-3.1-flash-lite", "gemini-flash-latest"]
     _cfg = _gtypes.GenerateContentConfig(
         max_output_tokens=8192,
         thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),

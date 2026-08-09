@@ -70,9 +70,9 @@ _GRO_MODEL    = "llama-3.3-70b-versatile"
 # Route drafting through Gemini (no TPD wall in our usage); keep Groq as fallback.
 # The independent DS/GAI cross-check remains a separate stage (autonomous_review.py),
 # so model-diversity is preserved where it matters. Rafael approved 2026-07-01.
-_GAI_MODEL    = "gemini-2.5-flash"
+_GAI_MODEL    = "gemini-3.1-flash-lite"
 _GAI_URL      = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                 "gemini-2.5-flash:generateContent")
+                 "gemini-3.1-flash-lite:generateContent")
 _SLACK_URL    = None  # loaded from .env
 
 ET = ZoneInfo("America/New_York")
