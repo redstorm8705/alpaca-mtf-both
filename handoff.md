@@ -44,8 +44,18 @@ cold-2nd PASS (safe-to-enable verified) + full-read audit PASS. Also fixed 7 RC-
 **✅ SHIPPED (2026-08-09) — BEHAVIORAL GATE (PR #105 `917e971`): Stop-hook enforces recommendations-
 not-questions (already fired correctly this session, catching an over-step on the QHM activation).**
 
-**⏩ NEXT STEP (pick up here) — BUILDING NOW: Dynamic tracker↔broker DRIFT DETECTOR (Option A,
-Rafael APPROVED 2026-08-09).** Kills the visibility half of the #4-#7 class (phantom positions,
+**✅ SHIPPED & LIVE (2026-08-09) — Dynamic tracker↔broker DRIFT DETECTOR, Option A (PR #111 → main
+`2715706`; OCI deployed+restarted; import smoke-test passed on box; runs per-RTH-cycle).** New
+self-contained module execution/drift_detector.py + one fail-safe call site in run_cycle.py after
+check_exits (line ~1691). READ-ONLY (never mutates a position/counter/stop/P&L → NOT risk-path).
+GATE: statics + 6/6 unit tests + cold-2nd PASS (thread-blocking/read-only/exception-escape all
+verified) + Gro+GAI APPROVE. **⏩ NEXT (Option C — dynamic AUTO-CORRECT) once A has gathered
+DriftRecord evidence in trade_events.jsonl (event=drift_detected): consume the records; qty-down =
+auto-safe; drops/flips/adoptions GATED. OPEN Gro/GAI fork: GAI=human-confirm gate only; Gro=re-tune
+one-shot guards idempotent. A emits proposed_correction+confidence to support either.**
+
+**⏩ PRIOR NEXT-STEP CONTEXT — DRIFT DETECTOR (now SHIPPED above):** Killed the visibility half of the
+#4-#7 class (phantom positions,
 $0-P&L-on-stop_hit from corrupted entry/qty, counter desync, stale daily_pnl). ROOT (verified by full
 scoping): the tracker's POSITION SET is reconciled vs Alpaca /v2/positions ONLY at startup
 (orphan_manager.reconcile_positions, main.py:749; never in run_cycle) — gap is CADENCE, truth already
