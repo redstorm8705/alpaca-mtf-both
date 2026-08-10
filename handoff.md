@@ -12,6 +12,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**✅ 2026-08-10 SHIPPED (interactive, Rafael present) — autonomy + QA-gate correction:**
+- **Autonomous phantom_tracker self-heal (PR #125, `c6de34a`) — SUPERSEDES C1.** C1's operator
+  terminal-command step is DELETED. The bot now heals a phantom_tracker drift ITSELF, but ONLY on
+  positive proof: it drops the phantom only when the REAL closing fill is recovered from Alpaca
+  (`fetch_actual_fill_price_or_none` — real price or None, NEVER a fabricated $0.00). Stale-flat blip
+  or symbol rename → no close fill → does nothing; genuine close → honest exit recorded. C1's
+  masked-loss fallback deleted. Guards: escalated+persistence≥3, skip in-flight/shorts, exclude
+  QHM/F6, $300 notional cap. Board APPROVE-WITH-CHANGES + Gro/GAI + cold-2nd PASS + 10/10 tests.
+  DEPLOYED-UNEXERCISED. Follow-ons: other drift types (phantom_broker/direction/qty).
+- **Unbypassable first-mile BGG bias gate (PR #124, `70eca91`) — `.claude/preship/bgg_prompt_bias_
+  gate.py`.** PreToolUse hook (Bash + Agent): blocks any Groq/Gemini call OR board Agent prompt that
+  pre-states a conclusion / solicits endorsement of a pre-chosen design. Closes the DESIGN-stage hole
+  that let the C1 leading prompt through (the old check only scanned preship `--context`). Fires on
+  the tool call itself — a hand-rolled curl can't route around it. Proven live (blocked my own cold-2nd
+  prompt). Pattern-based, necessary-not-sufficient; residuals documented in-file.
+
 **✅ 2026-08-09 SHIPPED (interactive, Rafael present) — 5-item directive complete:**
 - **#1 naked NVDA stop — FIXED & VERIFIED LIVE (PR #119):** `qhm.resubmit_pending_stops()` rearms every PENDING_STOP_REPLACE hold on the closed-market branch; NVDA GTC stop confirmed live @ $211.01. Residual: SNOW stuck `pending_cancel` (intraday AH-GTC path) — expected to self-heal Monday; still a flagged watch item.
 - **#2 Slack anti-spam — SHIPPED (PR #120):** drift detector fires once per episode (`alerted` set + `slack` fire-once); no Monday spam.
