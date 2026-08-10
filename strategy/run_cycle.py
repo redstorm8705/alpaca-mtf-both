@@ -1723,6 +1723,37 @@ def run_cycle(
     except Exception as _dd_e:
         logger.warning("drift detector call failed (non-blocking): %s", _dd_e)
 
+    # ── Option C1: apply an OPERATOR-CONFIRMED drift correction (Rafael 2026-08-09; BGG unanimous
+    # — human-confirmed ONLY, NO unattended set-mutation). Nothing is corrected unless the operator
+    # ran confirm_drift_correction.py AND the live snapshot STILL exactly matches what they
+    # confirmed (fail-closed otherwise). v1 handles phantom_tracker (the SNOW/PANW mid-RTH phantom):
+    # drops the stale tracker entry via the SAME hardened external-close path the startup reconcile
+    # uses (real fill price + record_exit(alpaca_confirmed_absent=True)). Excludes QHM+F6 anchors.
+    # Fully fail-safe. This is the only place in the loop that mutates the tracker on a drift.
+    try:
+        from execution.drift_corrector import apply_confirmed_corrections
+        from execution.fill_helpers import fetch_actual_fill_price as _fafp_c1
+        from execution.broker import get_open_positions as _gop_c1
+        from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_c1
+        from execution.orphan_manager import _get_forever6_syms as _f6_c1
+        _c1_exclude = set(_qhs_c1()) | _f6_c1()
+
+        def _drop_phantom(_sym, _trade):
+            _px = _fafp_c1(_sym, _trade, poll_secs=0)
+            # external_close-prefixed reason keeps record_exit's Guard-D (a second broker-flat
+            # re-verify at the exit level) LIVE and writes the manual_audit ledger (masked-loss seat).
+            return tracker.record_exit(_sym, _px, reason="external_close_operator_confirmed_drift",
+                                       mri_level="UNKNOWN", alpaca_confirmed_absent=True)
+
+        _n_c1 = apply_confirmed_corrections(
+            tracker, risk, _c1_exclude,
+            fetch_positions=_gop_c1, record_exit_drop=_drop_phantom, alert=send_slack,
+        )
+        if _n_c1:
+            logger.critical("Option C1: applied %d operator-confirmed drift correction(s).", _n_c1)
+    except Exception as _dc_e:
+        logger.warning("drift corrector call failed (non-blocking): %s", _dc_e)
+
     # ── ANOMALY-LOGGING: 5 proactive checks (Point 9 of 10-point plan) ────────
     # Gene Kim / Charity Majors: surface failure patterns before they compound.
     # Runs every cycle during RTH — all checks are fast (dict reads, no I/O).
