@@ -12,6 +12,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**⏭️ 2026-08-10 NEXT BUILD (design aligned, no code yet) — QHM profit-target + earnings de-risk.**
+Full design + BGG alignment + Rafael's decision in `logs/qhm_earnings_trim_design_2026-08-10.md`.
+QHM holds have a stop but NO profit target; earnings-runup gap risk unhandled. BGG SETTLED: kill the
+fake "tighten stop into earnings" (a gap jumps it), always keep a CORE, scale the trim by IMPLIED
+MOVE not just runup%, ATR trail not break-even, options-hedge is a FUTURE capability (QHM equity-only
+today). Rafael's decision: **balanced trim, keep core** (trim scaled by implied-move+runup ~3 days
+pre-print, keep a core, ATR trail, PEAD re-add). Build needs: FMP earnings dates + ATM-straddle
+implied move + partial-trim logic in `execution/quarterly_hold_manager.py`; Feature Design Protocol +
+full **BoD+AB** vote on thresholds. SEPARABLE quick fix: dashboard D1 (QHM stop shows "—" though
+`quarterly_holds.json` has a real `stop_price`) — `generate_dashboard.py` L564-581.
+
 **✅ 2026-08-10 SHIPPED (interactive, Rafael present) — autonomy + QA-gate correction:**
 - **Autonomous phantom_tracker self-heal (PR #125, `c6de34a`) — SUPERSEDES C1.** C1's operator
   terminal-command step is DELETED. The bot now heals a phantom_tracker drift ITSELF, but ONLY on
