@@ -107,8 +107,8 @@ def _compute_spy_levels() -> dict:
     the last completed SPY daily bar (Alpaca Data API, T1). Standalone + fail-soft:
     every field defaults to None so the dashboard card always renders. GEX may be
     degraded (weekly expired) — pivots are always computable from the prior day."""
-    out = {"spot": None, "regime": None, "flip": None, "pin": None,
-           "P": None, "R1": None, "R2": None, "S1": None, "S2": None}
+    out: dict = {"spot": None, "regime": None, "flip": None, "pin": None,
+                 "P": None, "R1": None, "R2": None, "S1": None, "S2": None}
     try:
         gx = _load_gex_snapshot().get("symbols", {}).get("SPY", {})
         out["regime"] = gx.get("label")
@@ -544,11 +544,16 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     # at ~entry−0.5×ATR (the "overnight breakeven buffer" in exit_logic) once it breaches for
     # 9 scans. Surface that real level + live breach count so the stop is never a surprise.
     _qhm_syms: set = set()
+    _qh: dict = {}   # full quarterly_holds record — kept in scope so the position rows can read
+                     # each QHM hold's real stop_price (below), not just the symbol set.
     try:
         _qh = _load_json(ROOT / "data" / "state" / "quarterly_holds.json", {})
-        _qhm_syms = set(_qh.keys()) if isinstance(_qh, dict) else set()
+        if not isinstance(_qh, dict):
+            _qh = {}
+        _qhm_syms = set(_qh.keys())
     except Exception:
         _qhm_syms = set()
+        _qh = {}
 
     if open_pos:
         for p in open_pos:
@@ -563,7 +568,20 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             entry_price = p["avg_entry_price"]
             tl_open = {t["symbol"]: t for t in trade_log.get("open",[])} if isinstance(trade_log.get("open"), list) else {}
             td = tl_open.get(sym, {})
-            stop_str   = f"${td['stop']:.2f}" if td.get("stop") else "—"
+            _is_qhm = sym in _qhm_syms
+            # QHM/Forever-6 holds keep their protective stop in quarterly_holds.json (stop_price),
+            # NOT in trade_log["open"] — so read it there, else a real live stop renders as "—".
+            _stop_val = td.get("stop")
+            if not _stop_val and _is_qhm:
+                # isinstance guard: a corrupt quarterly_holds.json mapping a symbol to a non-dict
+                # must not .get()-crash the whole render (cold-2nd hardening — the page must never
+                # freeze on a malformed state file).
+                _rec = _qh.get(sym)
+                _stop_val = _rec.get("stop_price") if isinstance(_rec, dict) else None
+            try:
+                stop_str = f"${float(_stop_val):.2f}" if _stop_val else "—"
+            except (TypeError, ValueError):
+                stop_str = "—"
             # Overnight-held soft-exit (~entry−0.5×ATR) + live breach count, non-QHM only.
             # be_mult is dynamic [0.25,0.65] in exit_logic; 0.5 is the representative midpoint
             # (RIVN's actual), labelled "~". Exact per-scan threshold persist = queued follow-up.
@@ -577,8 +595,15 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
                 _soft_html = (f'<br><span style="font-size:10px;color:{_brc_col}" '
                               f'title="Overnight breakeven buffer: exits ~entry−0.5×ATR after a 9-scan breach. '
                               f'The $ stop above is only the catastrophe backstop.">soft ~${_soft:.2f} · {_brc}/9</span>')
-            target_str = f"${td['target']:.2f}" if td.get("target") else "—"
-            score_str  = f"{td['score']}/12" if td.get("score") else "—"
+            # QHM holds have a real stop but NO price target and NO 12-pt confluence score (they
+            # use an equity-allocation target + a pre-earnings trim, and are conviction picks).
+            # Show "n/a" (with a tooltip) rather than "—" so it reads as not-applicable, not missing.
+            _qhm_na = ('<span title="Quarterly holds use an equity-allocation target + a '
+                       'pre-earnings trim, not a fixed price target/score.">n/a</span>')
+            target_str = (f"${td['target']:.2f}" if td.get("target")
+                          else (_qhm_na if _is_qhm else "—"))
+            score_str  = (f"{td['score']}/12" if td.get("score")
+                          else (_qhm_na if _is_qhm else "—"))
             overnight  = "🌙" if td.get("overnight") else ""
             pos_rows += f"""
             <tr>
