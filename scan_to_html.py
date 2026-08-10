@@ -2771,7 +2771,17 @@ function togSignals(){{
     var secsLeft = Math.round((nextScan - now) / 1000);
     var label = sessionLabel(lastScan);
     var refreshedStr = lastScan.toLocaleTimeString("en-US",{{timeZone:"America/Los_Angeles",hour:"numeric",minute:"2-digit",hour12:true,timeZoneName:"short"}}).replace(":00 "," ");
-    if(secsLeft > 0) {{
+    // S1 STALENESS CAP: if a scan is overdue by more than a full extra cycle, or the timestamp
+    // is unparseable, the bot is not writing new scans — show OFFLINE (red) instead of a
+    // perpetual "Scanning now…" that makes a dead page look live (the page hard-reloads every
+    // 60s with the SAME frozen timestamp, so secsLeft only grows more negative).
+    // The threshold uses the MORE LENIENT of the last-scan session and the CURRENT session
+    // (RTH 5m / pre-mkt 10m / overnight 30m) so the RTH→overnight cadence change at 16:00 ET
+    // (last RTH scan, then a legit 30m gap) does not flash a false OFFLINE every day at the close.
+    var staleSecs = Math.max(interval, sessionInterval(now));
+    if(isNaN(secsLeft) || secsLeft < -staleSecs) {{
+      el.innerHTML = "<b style='color:#ff453a'>&#9888; SCANNER OFFLINE</b> <span style='color:#b8bdd4'>(last scan <b style='color:#e2e4ee'>" + refreshedStr + "</b> — no update in 2+ cycles; bot may be down)</span>";
+    }} else if(secsLeft > 0) {{
       el.innerHTML = "Next scan in <b style='color:#e2e4ee'>" + fmtCountdown(secsLeft) + "</b> <span style='color:#b8bdd4'>(" + label + " · last <b style='color:#e2e4ee'>" + refreshedStr + "</b>)</span>";
     }} else {{
       el.innerHTML = "<b style='color:#ffd60a'>Scanning now…</b> <span style='color:#b8bdd4'>(last <b style='color:#e2e4ee'>" + refreshedStr + "</b>)</span>";
