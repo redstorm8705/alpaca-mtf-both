@@ -357,11 +357,20 @@ def detect_and_emit_drift(
         )
         if r.get("slack"):  # fire ONCE per drift episode (anti-spam), not every escalated cycle
             try:
+                _tq = (r.get("tracker_view") or {}).get("qty", 0)
+                _bq = (r.get("broker_view") or {}).get("abs_qty", 0)
+                # Human-confirmed correction (Option C1): only phantom_tracker is wired to auto-apply
+                # on confirmation; others stay detect-only until their own gated build.
+                if r["drift_type"] == "phantom_tracker":
+                    _fix = (f"To correct (verify first): python3 confirm_drift_correction.py "
+                            f"{r['symbol']} phantom_tracker {_tq} {_bq}")
+                else:
+                    _fix = "Auto-correct not yet enabled for this drift type (detect-only)."
                 send_slack(
                     f":warning: TRACKER↔BROKER DRIFT — {r['symbol']} {r['drift_type']} "
                     f"(persisted {r['persistence_cycles']} cycles, conf {r['confidence']:.2f}). "
                     f"tracker={r['tracker_view']} broker={r['broker_view']}. "
-                    f"Would: {r['proposed_correction']} (DETECT-ONLY — no auto-correction)."
+                    f"Would: {r['proposed_correction']}. {_fix}"
                 )
             except Exception as e:
                 logger.warning("drift_detector: slack failed for %s (%s).", r.get("symbol"), e)
