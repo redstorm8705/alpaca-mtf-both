@@ -6,7 +6,20 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/preship/bgg_prompt_bias_gate.py"
+          },
+          {
+            "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/preship/preship_gate.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/preship/bgg_prompt_bias_gate.py"
           }
         ]
       }
