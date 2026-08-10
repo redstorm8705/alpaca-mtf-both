@@ -1,0 +1,31 @@
+{
+  "file": "autonomous_review.py",
+  "finding": "Two correctness issues found during 10-point audit (RC-3 + retry defect). (1) RC-3: status-bucketing exception handler at line 513 swallows exceptions silently with no log output — 'except Exception: st = \"\"' gives zero visibility when a JSON re-read fails at commit time. (2) _git_push_with_retry() calls 'git pull --rebase' but never checks the return code — if the rebase fails mid-conflict, the working tree is left in a mid-rebase state for the next push attempt. The abort path for a rebase failure was also missing entirely. Fix: check rebase return code, call 'git rebase --abort' (no-op if fetch failed before rebase started), log the failure, and continue to the next retry — all 3 push attempts preserved.",
+  "rc_class": "RC-3 + retry-defect",
+  "intent": "Fix two correctness issues in autonomous_review.py: (1) RC-3 — add _log() call to the status-bucketing exception handler so silent JSON-read failures become visible; (2) check git pull --rebase return code in _git_push_with_retry() and call git rebase --abort on failure to restore clean working tree state before the next push attempt, while preserving all 3 retry attempts.",
+  "patch": "226,227c226,235\n<         _git(\"pull\", \"--rebase\", \"origin\", \"main\", check=False)\n<         time.sleep(3)\n---\n>         if attempt < _MAX_RETRIES - 1:\n>             pull = _git(\"pull\", \"--rebase\", \"origin\", \"main\", check=False)\n>             if pull.returncode != 0:\n>                 _log(\n>                     f\"Pull/rebase attempt {attempt+1} failed\"\n>                     f\" (rc={pull.returncode}): {pull.stderr.strip()}\"\n>                     f\" -- aborting any in-progress rebase, will retry push\"\n>                 )\n>                 _git(\"rebase\", \"--abort\", check=False)  # no-op if fetch failed\n>             time.sleep(3)\n515c523,524\n<         except Exception:\n---\n>         except Exception as e:\n>             _log(f\"WARN: Could not read status for {p}: {e}\")",
+  "status": "pending",
+  "board": {
+    "A_strict_parser": "PASS",
+    "A_notes": "No forbidden categories touched. No RTH execution path. No RC violations introduced. No logic inversions or off-by-one errors. git rebase --abort with check=False is safe in both fetch-failure (no-op) and conflict (cleanup) scenarios.",
+    "B_red_teamer": "PASS (after counter-prompt on revised patch)",
+    "B_notes": "Initial FAIL on Scenario 1/4 (early-exit regression) and Scenario 5 (BrokenPipeError in except handler). REVISED PATCH: early-exit removed — on pull failure, logs + aborts rebase (no-op if fetch failed) and falls through to time.sleep(3), continuing to the next push attempt. All 3 retry attempts preserved. Scenario 5 argument accepted: BrokenPipeError on _log() inside the except block requires a pipe that survives ~25 prior _log() calls and breaks specifically on this one — script would have already crashed at an earlier call.",
+    "C_quant_risk": "PASS",
+    "C_notes": "Full call graph traced. _git_push_with_retry() is called from main() only, not reachable from any trading path file. File writes: only logs/*.md and logs/*.json, never read by trading path. return False path terminates in sys.exit(1) with no downstream trading effect. File is NOT in RTH import chain."
+  },
+  "static_analysis": {
+    "py_compile": "PASS",
+    "mypy": "PASS (Success: no issues found in 1 source file)",
+    "ruff": "PASS (All checks passed)"
+  },
+  "second_agent": "PASS",
+  "second_agent_notes": "All 5 checks PASS: (1) attempt < _MAX_RETRIES-1 correctly identifies non-final attempts (0 and 1); (2) push fires unconditionally on all 3 iterations — count unchanged; (3) time.sleep(3) is outside the pull.returncode!=0 block, runs on both pull-success and pull-failure paths on non-final attempts; (4) all 3 branches (pull success, pull fail, final attempt) correctly handled; (5) old code's pull+sleep on final attempt was wasteful dead code — removing it does not reduce push attempt count.",
+  "impact_radius": "autonomous_review.py is referenced only in autonomous_patch_generator.py (comments/strings, not an import). No RTH-chain file imports it. Impact radius = standalone OCI cron script only.",
+  "sha256_at_draft": "c4e7d17f3079ec059c745d1fa0a36c8cd4388075f709609e679bdffd02e821d7",
+  "base_commit_sha": "8e0313c9a90962cc9ac16b7fc9dc6057cfa46c64",
+  "created_at": "2026-08-10 22:00 PT",
+  "created_by": "nightly_autonomous_session",
+  "gro_audit_needed": true,
+  "gai_audit_needed": true,
+  "note": "All pre-ship gates cleared EXCEPT Gro+GAI preship audit — API keys unavailable in cloud execution environment. This JSON is pre-loaded with the complete gate history (board 3/3 PASS, statics PASS, cold-2nd PASS) for OCI autonomous_review.py or a human session to complete. The exact patched file is in scratchpad; apply the diff above to autonomous_review.py, then run preship_audit.py to clear the final gate."
+}

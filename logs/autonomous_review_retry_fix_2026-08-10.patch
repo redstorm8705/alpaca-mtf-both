@@ -1,0 +1,31 @@
+--- /home/user/alpaca-mtf-both/autonomous_review.py	2026-08-10 22:03:21.872332875 +0000
++++ /tmp/claude-0/-home-user-alpaca-mtf-both/f0f6f8f5-a9e8-56be-89d5-4303ca96980d/scratchpad/autonomous_review_patched.py	2026-08-10 22:19:26.520390216 +0000
+@@ -223,8 +223,16 @@
+             f"Push attempt {attempt+1}/{_MAX_RETRIES} failed:"
+             f" {result.stderr.strip()}"
+         )
+-        _git("pull", "--rebase", "origin", "main", check=False)
+-        time.sleep(3)
++        if attempt < _MAX_RETRIES - 1:
++            pull = _git("pull", "--rebase", "origin", "main", check=False)
++            if pull.returncode != 0:
++                _log(
++                    f"Pull/rebase attempt {attempt+1} failed"
++                    f" (rc={pull.returncode}): {pull.stderr.strip()}"
++                    f" — aborting any in-progress rebase, will retry push"
++                )
++                _git("rebase", "--abort", check=False)  # no-op if fetch failed
++            time.sleep(3)
+     return False
+ 
+ # ── Atomic write (RC-5 compliance) ────────────────────────────────────────────
+@@ -512,7 +520,8 @@
+     for p in processed:
+         try:
+             st = json.loads((_LOGS_DIR / p).read_text()).get("status", "")
+-        except Exception:
++        except Exception as e:
++            _log(f"WARN: Could not read status for {p}: {e}")
+             st = ""
+         if st == "ready_for_approval":
+             ready.append(p)

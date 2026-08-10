@@ -9491,3 +9491,49 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **RESOLVED — trailing-lock interaction, 3-1 majority, closes Round 1's Groq-vs-GAI split:** mutual exclusion confirmed. Both cold board seats independently sided with GAI's concurrency-control argument over Groq's integration proposal, from two different domain lenses (Thorp: Kelly's single-decision-per-bet requirement; options/IV seat: how professional vol desks handle overlapping risk triggers in practice). Per the Gro/GAI Tie-Breaker Protocol, a 3-1 majority resolves without escalating to Rafael.
 **STILL OPEN — Tier 2's trigger multiple, genuine 2-1 split:** GAI recommends 3x Tier 1's dynamic threshold. Both cold board seats independently recommend 2x (mirroring forever6's shipped 10x→20x precedent) and both independently caught the same flaw in GAI's 3x reasoning: GAI cited post-earnings IV crush to justify a tighter PRE-earnings trigger — a timing mismatch, since Tier 2 fires on the pre-earnings run-up, before any crush occurs. Board case for 2x: Thorp seat — once Tier 1's threshold (the market's own priced-in move) is cleared, a further run to 3x isn't more measurable edge, it's tail risk, and Kelly discipline says de-risk faster once edge is unquantifiable; options/IV seat — tastytrade's expected-move framework treats the implied move as a ~68%-confidence band, 2x already sits where realized moves become statistically unusual, and 3x sets the bar so high the tier would rarely fire at all. **Board recommendation: 2x.** Being brought to Rafael this session, board-grounded, per the standing "bring board rec with every question" rule — not yet decided.
 **Gate note:** this is design research, not a shipped patch — no statics/cold-2nd/preship apply; the handoff.md entry summarizing this round went through the handoff.md claims-gate (`preship_audit.py --context`) same as the round-1 entry.
+
+---
+
+## 2026-08-10 (nightly autonomous — cloud env, no API keys) — autonomous_review.py RC-3 + retry-defect
+
+**File:** `autonomous_review.py` (579 lines, full read complete)
+**Classification:** NON-RTH (standalone cron script, not in any trading-path import chain)
+**Triggered by:** handoff.md 2026-08-10 follow-up item — "_git_push_with_retry has the identical ineffective-retry pattern found and fixed elsewhere"
+
+**10-Point Audit:**
+1. Static: py_compile PASS, mypy PASS, ruff PASS
+2. Trade path: None — standalone cron (reads pending JSON → calls Groq/Gemini → writes logs → commits/pushes)
+3. Adversarial: Two defects found (below)
+4. Full read: 579 lines in 3 chunks ✅
+5. Cross-refs: All imports resolve, all called functions defined
+6. Conflicting directions: N/A (standalone)
+7. Redundancy: None
+8. State persistence: _write_atomic() uses tmp→replace (RC-5 PASS)
+9. Data source: N/A
+10. Timezone: datetime.now(PT) throughout (PASS)
+
+**RC Results:**
+- RC-1: PASS (all datetime.now() calls use PT tz)
+- RC-2: PASS (_REPO_DIR and _LOGS_DIR absolute; /tmp locks absolute)
+- RC-3: **FAIL** — line 513: `except Exception: st = ""` silent swallow, no _log() call
+- RC-4 through RC-8: N/A (non-trading file)
+
+**Retry defect (lines 217-228):** `_git_push_with_retry()` calls `git pull --rebase` but discards the return code. If rebase fails mid-conflict, working tree left in broken state before next push attempt. No `git rebase --abort` call to restore clean state.
+
+**Board Vote (3 cold parallel agents):**
+- Board A (Strict Protocol Parser): PASS — no forbidden categories, no RTH path, no RC violations introduced, rebase --abort with check=False confirmed safe in both scenarios (fetch-fail=no-op; conflict=cleanup)
+- Board B (Red Teamer): PASS after counter-prompt — initial FAIL on early-exit regression (resolved by removing return False; continuing to next push attempt instead); Scenario 5 (BrokenPipeError in _log inside except) argued and accepted as non-regression (earlier _log calls would crash first)
+- Board C (Quant Risk Manager): PASS — zero trading path impact confirmed by full call graph trace
+
+**Statics on patched file:** py_compile PASS, mypy PASS, ruff PASS
+
+**Cold second-agent logic review:** PASS — all 5 checks clear:
+- attempt < _MAX_RETRIES-1 correctly identifies non-final attempts (0 and 1)
+- push fires on all 3 iterations unconditionally
+- time.sleep(3) is outside the pull.returncode!=0 block — runs on both paths
+- All 3 branches (pull-ok, pull-fail, final-attempt) correctly handled
+- Removing useless post-final pull+sleep does not reduce push attempt count
+
+**GATE CLEARED EXCEPT:** Gro+GAI preship audit — API keys unavailable in cloud execution environment (no .env, no GROQ_API_KEY/GEMINI_API_KEY in env). Cannot run preship_audit.py.
+
+**ACTION:** Queued to pending pipeline — `logs/pending_gro_gai_2026-08-10_autonomous_review_retry_fix.json` (board 3/3 PASS + statics + cold-2nd all pre-loaded). Next session: run `preship_audit.py autonomous_review.py`, then apply the unified diff at `logs/autonomous_review_retry_fix_2026-08-10.patch`.
