@@ -1,205 +1,152 @@
 # ruff: noqa: E501  — dense guard/log strings run long (project convention)
 """
-drift_corrector.py — Option C1: apply an OPERATOR-CONFIRMED tracker↔broker drift correction
-mid-session (Rafael 2026-08-09; BGG unanimous — human-confirmed ONLY, no unattended set-mutation).
+drift_corrector.py — Option C (autonomous): SELF-HEAL an escalated tracker↔broker phantom_tracker
+drift mid-session, with NO operator step (Rafael 2026-08-10: "I'm not typing anything to the
+terminal ... one blip shouldn't destroy the bot's accounting"). Supersedes the C1 human-confirm
+flow (a Slack command the operator had to run) — that offloaded the fix to Rafael; this fixes it
+itself, safely.
 
-The drift detector SURFACES drift; it NEVER corrects. This module applies a correction ONLY when the
-operator has explicitly authorized THAT specific drift via confirm_drift_correction.py, AND the live
-tracker+broker snapshot STILL exactly matches what was confirmed. Every unattended set-mutation has
-caused an incident (HOOD false-drop on a stale read; RIVN inverted-short adoption), so this fails
-CLOSED on any mismatch: a confirmation whose snapshot has moved is consumed and re-paged, never
-applied to a changed situation.
+THE SAFETY KEYSTONE (board APPROVE-WITH-CHANGES + Gro + GAI autonomous-with-guards, 2026-08-10):
+the bot drops a phantom ONLY when it can POSITIVELY RECOVER THE REAL CLOSING FILL from Alpaca's
+CLOSED-orders/activity feed (execution.fill_helpers.fetch_actual_fill_price_or_none). That single
+rule makes every dangerous case safe BY CONSTRUCTION:
+  * stale "broker flat" blip on a still-live position -> there is NO close fill -> DO NOTHING.
+  * corporate action (symbol rename/split, e.g. FB->META) -> no close fill -> DO NOTHING.
+  * position genuinely closed externally -> the real fill exists -> record the HONEST exit price
+    and drop the phantom. No operator, no terminal.
+The C1 fallback ("broker flat AND no fill found -> drop anyway at entry_price, $0.00 P&L") is
+DELETED: it was the HOOD false-drop / masked-loss failure the board flagged. No fill == no action.
 
-SCOPE (v1): only `phantom_tracker` (tracker holds a position the broker does not) is auto-applied on
-confirmation — the SNOW/PANW mid-RTH phantom case. It drops the stale tracker entry by recording the
-real external-close exit via the SAME hardened path the startup reconcile uses (fetch_actual_fill_
-price + tracker.record_exit(alpaca_confirmed_absent=True) + risk.register_close). Other drift types
-(phantom_broker adopt / direction flip / qty resize) are NOT applied here yet — they stay
-detect-and-page until their own gated build. A confirmation for an unsupported type is left intact
-(not consumed) so nothing is silently dropped.
+GUARDS (all must hold before an autonomous drop):
+  G1  Escalated phantom_tracker record only — the detector's DYNAMIC persistence bar has been met
+      across cycles (no in-cycle sleeps; reuses drift_detector's cross-cycle persistence map), and
+      persistence >= AUTO_HEAL_MIN_PERSISTENCE (a hard floor of 3 cycles, board reliability seat).
+  G2  No live/pending order on the symbol (an in-flight fill is the benign explanation — skip).
+  G3  POSITIVE close-fill proof: fetch_actual_fill_price_or_none returns a REAL price (side-filtered,
+      entry-time-bounded, ±50% sanity band) — else None -> no drop, no fabrication.
+  G4  NOT a QHM / Forever-6 anchor (already excluded upstream; re-excluded here belt-and-suspenders).
+  G5  Direction != short (RIVN inverted-short scar — shorts stay detect-only / reconcile).
+  G6  Notional (tracker qty x entry) <= AUTO_HEAL_MAX_NOTIONAL — a blast-radius cap (board masked-
+      loss seat, REQUIRED). Above the cap the phantom is left for the nightly startup reconcile
+      (which carries the 120-min settling window + Guard A/B/D) — still zero operator action.
 
-INVARIANTS: never mutates a position without (a) a matching unexpired one-shot confirmation AND (b) a
-live snapshot that still matches the confirmation exactly. Excludes QHM+Forever-6 anchors. Fully
-fail-safe — never raises into the caller.
+Anything not auto-healed is simply LEFT (the detector already paged it once, informationally); the
+existing startup reconcile cleans the rare no-fill / oversized / short cases on the next restart.
+Because a phantom means the broker holds NOTHING for the symbol, waiting carries no market risk.
+
+INVARIANTS: never mutates a position without (a) an escalated phantom_tracker record AND (b) a
+positively-recovered real close fill. Excludes anchors + shorts. Records HONEST P&L (real fill, not
+a fabricated $0.00). Fully fail-safe — never raises into the caller. NOT blocking beyond the bounded
+fill query the exit path already uses (poll_secs=0.1, no_retry=True).
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_ROOT = Path(__file__).resolve().parent.parent
-_CONF = _ROOT / "data" / "state" / "drift_correction_confirmations.json"
-_TTL_SEC = 2 * 3600   # confirmations expire after 2h (mirror the ledger-heal window)
+# --- v1 safety caps (flagged STATIC; No-Static-Regimes roadmap: derive the notional cap from
+# account equity + observed phantom sizes, and drop the persistence floor to the detector's fully-
+# dynamic bar, once the auto-heal has a live track record). Both are conservative belt-and-suspenders
+# ON TOP of the load-bearing real-fill-proof guard (G3), not the primary safety. ---
+AUTO_HEAL_MAX_NOTIONAL = 300.0   # board masked-loss seat: cap a single autonomous drop's blast radius
+AUTO_HEAL_MIN_PERSISTENCE = 3    # board reliability seat: >= 3 cross-cycle confirmations before healing
+
+PHANTOM_TRACKER = "phantom_tracker"
 
 
-def _load_confs() -> dict:
+def _inflight_symbols(fetch_orders) -> set:
+    """Symbols with a live/pending broker order — an in-flight fill is the benign explanation for a
+    phantom, so we skip healing them. None/failure -> empty set (fail-open: G3's fill-proof still
+    gates the drop, so a missing orders read cannot by itself cause a bad drop)."""
+    out: set = set()
+    if fetch_orders is None:
+        return out
     try:
-        if _CONF.exists():
-            d = json.loads(_CONF.read_text())
-            return d if isinstance(d, dict) else {}
+        for o in (fetch_orders() or []):
+            s = o.get("symbol") if isinstance(o, dict) else getattr(o, "symbol", None)
+            if s:
+                out.add(s)
     except Exception as e:
-        logger.warning("drift_corrector: confirmations unreadable (%s) — none applied.", e)
-    return {}
+        logger.warning("auto-heal: open-orders fetch failed (%s) — no in-flight suppression this cycle.", e)
+    return out
 
 
-def _save_confs(confs: dict) -> None:
-    try:
-        _CONF.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _CONF.with_suffix(f".json.{os.getpid()}.tmp")
-        with open(tmp, "w") as f:
-            json.dump(confs, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        tmp.replace(_CONF)
-    except Exception as e:
-        logger.error("drift_corrector: failed to persist confirmations (%s).", e)
-
-
-def _tracker_abs_qty(tracker, sym: str) -> int:
-    t = (getattr(tracker, "open_trades", {}) or {}).get(sym)
-    if not isinstance(t, dict) or t.get("status") == "closed":
+def auto_heal_phantom_drift(records, tracker, risk, exclude_syms, heal,
+                            fetch_orders=None, alert=None,
+                            max_notional: float = AUTO_HEAL_MAX_NOTIONAL,
+                            min_persistence: int = AUTO_HEAL_MIN_PERSISTENCE) -> int:
+    """Autonomously heal ESCALATED phantom_tracker drifts that have a POSITIVELY-RECOVERED real close
+    fill. Returns the number healed. NEVER raises. Args injected for testability:
+      records        : the list detect_and_emit_drift() returned this cycle (may be None/empty).
+      heal(sym,trade)-> pnl|None : recovers the REAL close fill (fetch_actual_fill_price_or_none) and,
+                       ONLY if a real price is found, calls tracker.record_exit(alpaca_confirmed_absent
+                       =True) and returns the honest pnl; returns None when no real fill exists (the
+                       caller then drops NOTHING — the anti-fabrication rule).
+      fetch_orders() -> list|None : live broker orders (G2 in-flight suppression).
+      alert(msg)     : optional Slack notifier."""
+    if not records:
         return 0
-    q = t.get("qty_remaining")
-    if q is None:
-        q = t.get("qty")
-    try:
-        return int(abs(float(q or 0)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _broker_abs_qty(positions, sym: str) -> int:
-    for p in (positions or []):
-        psym = p.get("symbol") if isinstance(p, dict) else getattr(p, "symbol", None)
-        if psym == sym:
-            raw = p.get("qty") if isinstance(p, dict) else getattr(p, "qty", None)
-            try:
-                return int(abs(float(raw or 0)))
-            except (TypeError, ValueError):
-                return 0
-    return 0
-
-
-def apply_confirmed_corrections(tracker, risk, exclude_syms, fetch_positions,
-                                record_exit_drop, alert=None) -> int:
-    """Apply operator-confirmed drift corrections whose live snapshot STILL matches. Returns the
-    number applied. NEVER raises. Args injected for testability:
-      fetch_positions() -> list of live broker positions (or None on failure -> apply nothing).
-      record_exit_drop(sym, trade) -> pnl : drops the tracker's phantom entry via the hardened
-        external-close path (fetch real fill -> record_exit(alpaca_confirmed_absent=True)).
-      alert(msg) : optional Slack notifier."""
-    confs = _load_confs()
-    if not confs:
-        return 0
-    try:
-        positions = fetch_positions()
-    except Exception as e:
-        logger.warning("drift_corrector: broker fetch failed (%s) — applying nothing this cycle.", e)
-        return 0
-    if positions is None:
-        logger.warning("drift_corrector: broker positions unknown (None) — applying nothing (fail-closed).")
-        return 0
-
     exclude = set(exclude_syms or [])
-    now = time.time()
-    applied = 0
-    changed = False
-    for key in list(confs.keys()):
-        c = confs.get(key) or {}
-        sym = c.get("symbol")
-        dtype = c.get("drift_type")
-        if not sym or not dtype:
-            del confs[key]
-            changed = True
-            continue
-        if sym in exclude:
-            # a QHM/F6 anchor must never be corrected by this path — drop the confirmation.
-            logger.warning("drift_corrector: %s is a protected anchor — refusing correction, consuming token.", sym)
-            del confs[key]
-            changed = True
-            continue
-        if now - float(c.get("confirmed_ts", 0) or 0) > _TTL_SEC:
-            logger.info("drift_corrector: %s/%s confirmation expired (>2h) — consumed, not applied.", sym, dtype)
-            del confs[key]
-            changed = True
-            continue
-
-        live_tracker = _tracker_abs_qty(tracker, sym)
-        live_broker = _broker_abs_qty(positions, sym)
+    inflight = _inflight_symbols(fetch_orders)
+    healed = 0
+    for r in records:
         try:
-            # NOTE: dict.get's default only applies to a MISSING key, not a JSON null value — so
-            # int(c.get(...)) would TypeError on a null. Convert defensively and consume a malformed
-            # confirmation rather than crash the whole apply pass.
-            exp_tracker = int(c.get("tracker_at_confirm"))
-            exp_broker = int(c.get("broker_at_confirm"))
-        except (TypeError, ValueError):
-            logger.warning("drift_corrector: %s/%s malformed confirmation (bad qty) — consumed.", sym, dtype)
-            del confs[key]
-            changed = True
-            continue
-        # FAIL-CLOSED snapshot re-verify: if the live situation moved since the operator confirmed,
-        # DO NOT apply — consume the token and page (a moved snapshot means the situation changed).
-        if live_tracker != exp_tracker or live_broker != exp_broker:
-            msg = (f":warning: DRIFT CORRECTION SKIPPED — {sym}/{dtype}: live tracker={live_tracker} "
-                   f"broker={live_broker} moved since you confirmed (tracker={exp_tracker} broker={exp_broker}). "
-                   "Token consumed; re-confirm from the current alert if still needed.")
-            logger.warning(msg)
-            if alert:
-                try:
-                    alert(msg)
-                except Exception as _ae:
-                    logger.warning("drift_corrector: alert failed: %s", _ae)
-            del confs[key]
-            changed = True
-            continue
-
-        if dtype != "phantom_tracker":
-            # only phantom_tracker is applied in v1; leave others intact (do NOT consume) so they
-            # are not silently dropped — they await their own gated build.
-            logger.info("drift_corrector: %s/%s not yet supported for auto-apply — left pending.", sym, dtype)
-            continue
-
-        # phantom_tracker: tracker holds it, broker does not -> drop the stale tracker entry by
-        # recording the real external-close exit (the same hardened path the startup reconcile uses).
-        trade = (getattr(tracker, "open_trades", {}) or {}).get(sym)
-        if not isinstance(trade, dict):
-            logger.info("drift_corrector: %s no live tracker entry — nothing to drop, consuming token.", sym)
-            del confs[key]
-            changed = True
-            continue
-        try:
-            pnl = record_exit_drop(sym, trade)
-            if pnl is None:
-                # record_exit early-returned WITHOUT dropping (entry already gone / qty<=0). Do NOT
-                # consume the token — the next cycle's snapshot re-verify (live_tracker now != the
-                # confirmed value) will clean it up. Prevents consuming a token on a no-op.
-                logger.warning("drift_corrector: %s record_exit returned None (no drop) — token kept for retry.", sym)
+            if not isinstance(r, dict) or r.get("drift_type") != PHANTOM_TRACKER:
                 continue
+            if not r.get("escalate"):
+                continue  # G1: dynamic persistence bar not yet met (settle/inflight race)
+            sym = r.get("symbol")
+            if not sym or sym in exclude:
+                continue  # G4: anchor / bad record
+            try:
+                persist = int(r.get("persistence_cycles", 0))
+            except (TypeError, ValueError):
+                persist = 0
+            if persist < min_persistence:
+                continue  # G1: below the >=3-cycle floor
+            if sym in inflight:
+                logger.info("auto-heal: %s has a live order — in-flight fill likely, skipping.", sym)
+                continue  # G2
+            tv = r.get("tracker_view") or {}
+            if str(tv.get("direction") or "").lower() == "short":
+                logger.info("auto-heal: %s is a SHORT phantom — left to reconcile (RIVN scar), not auto-healed.", sym)
+                continue  # G5
+            try:
+                qty = int(tv.get("qty") or 0)
+                entry = float(tv.get("entry_price") or 0.0)
+            except (TypeError, ValueError):
+                logger.warning("auto-heal: %s malformed tracker_view (%r) — skipping.", sym, tv)
+                continue
+            notional = qty * entry
+            if notional > max_notional:
+                logger.info("auto-heal: %s notional $%.0f > cap $%.0f — left for startup reconcile (no market risk; broker flat).", sym, notional, max_notional)
+                continue  # G6
+            trade = (getattr(tracker, "open_trades", {}) or {}).get(sym)
+            if not isinstance(trade, dict) or trade.get("status") == "closed":
+                continue  # already gone / resolved
+
+            # G3 — the keystone: heal() drops ONLY if it positively recovered the REAL close fill.
+            pnl = heal(sym, trade)
+            if pnl is None:
+                logger.info("auto-heal: %s — no real close fill recovered (broker flat but unproven) -> NOT dropping (anti-fabrication).", sym)
+                continue
+
             if risk is not None:
                 try:
                     risk.register_close(pnl or 0.0)
                 except Exception as _re:
-                    logger.warning("drift_corrector: %s register_close failed: %s", sym, _re)
-            applied += 1
-            del confs[key]
-            changed = True
-            msg = (f":white_check_mark: DRIFT CORRECTED (operator-confirmed) — {sym} phantom_tracker "
-                   f"dropped (broker flat); exit recorded, P&L {pnl if pnl is not None else 'unverified'}.")
+                    logger.warning("auto-heal: %s register_close failed: %s", sym, _re)
+            healed += 1
+            msg = (f":white_check_mark: DRIFT AUTO-HEALED — {sym} phantom_tracker dropped "
+                   f"(broker flat + real close fill recovered); honest P&L {pnl:+.2f}. No action needed.")
             logger.critical(msg)
             if alert:
                 try:
                     alert(msg)
                 except Exception as _ae:
-                    logger.warning("drift_corrector: alert failed: %s", _ae)
+                    logger.warning("auto-heal: %s alert failed: %s", sym, _ae)
         except Exception as e:
-            # a drop failure must NOT consume the token — leave it so a later cycle can retry.
-            logger.error("drift_corrector: %s phantom_tracker drop FAILED (%s) — token kept for retry.", sym, e)
-
-    if changed:
-        _save_confs(confs)
-    return applied
+            # a failure on one symbol must never abort the pass or the cycle — retry next cycle.
+            logger.error("auto-heal: %s failed (%s) — skipped, will retry next cycle.", (r.get("symbol") if isinstance(r, dict) else "?"), e)
+    return healed

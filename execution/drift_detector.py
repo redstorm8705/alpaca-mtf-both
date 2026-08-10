@@ -357,13 +357,12 @@ def detect_and_emit_drift(
         )
         if r.get("slack"):  # fire ONCE per drift episode (anti-spam), not every escalated cycle
             try:
-                _tq = (r.get("tracker_view") or {}).get("qty", 0)
-                _bq = (r.get("broker_view") or {}).get("abs_qty", 0)
-                # Human-confirmed correction (Option C1): only phantom_tracker is wired to auto-apply
-                # on confirmation; others stay detect-only until their own gated build.
+                # Autonomous self-heal (Option C, 2026-08-10): phantom_tracker heals ITSELF when the
+                # real closing fill is recovered from Alpaca — NO operator action. Others stay detect-
+                # only until their own gated build. Informational only: never asks Rafael to do anything.
                 if r["drift_type"] == "phantom_tracker":
-                    _fix = (f"To correct (verify first): python3 confirm_drift_correction.py "
-                            f"{r['symbol']} phantom_tracker {_tq} {_bq}")
+                    _fix = ("The bot will AUTO-HEAL this itself once it recovers the real closing fill "
+                            "from Alpaca (or leaves it for the nightly reconcile). No action needed.")
                 else:
                     _fix = "Auto-correct not yet enabled for this drift type (detect-only)."
                 send_slack(

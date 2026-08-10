@@ -1709,48 +1709,54 @@ def run_cycle(
     # calibrates from observed race lifetimes). NEVER mutates a position — pure detect + emit
     # (evidence stream for the future auto-corrector). Placed AFTER check_exits + fill-recon so it
     # can never delay an exit on the trading thread. Fully fail-safe (module-internal + this wrap).
+    _drift_records = []
     try:
         from execution.drift_detector import detect_and_emit_drift
         from execution.broker import get_open_positions, get_open_orders
         from execution.quarterly_hold_manager import get_quarterly_hold_symbols
         from execution.orphan_manager import _get_forever6_syms
         _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms()
-        detect_and_emit_drift(
+        _drift_records = detect_and_emit_drift(
             tracker, _drift_exclude,
             log_event=_log_trade_event, send_slack=send_slack,
             fetch_positions=get_open_positions, fetch_orders=get_open_orders,
-        )
+        ) or []
     except Exception as _dd_e:
         logger.warning("drift detector call failed (non-blocking): %s", _dd_e)
 
-    # ── Option C1: apply an OPERATOR-CONFIRMED drift correction (Rafael 2026-08-09; BGG unanimous
-    # — human-confirmed ONLY, NO unattended set-mutation). Nothing is corrected unless the operator
-    # ran confirm_drift_correction.py AND the live snapshot STILL exactly matches what they
-    # confirmed (fail-closed otherwise). v1 handles phantom_tracker (the SNOW/PANW mid-RTH phantom):
-    # drops the stale tracker entry via the SAME hardened external-close path the startup reconcile
-    # uses (real fill price + record_exit(alpaca_confirmed_absent=True)). Excludes QHM+F6 anchors.
-    # Fully fail-safe. This is the only place in the loop that mutates the tracker on a drift.
+    # ── Option C (autonomous, Rafael 2026-08-10; board APPROVE-WITH-CHANGES + Gro + GAI): SELF-HEAL
+    # an escalated phantom_tracker drift with NO operator step. The KEYSTONE guard: drop the phantom
+    # ONLY when the REAL closing fill is positively recovered from Alpaca (fetch_actual_fill_price_
+    # OR_NONE — None on no-fill, NEVER the entry-price fabrication). A stale broker-flat blip or a
+    # symbol rename has no close fill -> nothing is dropped; a genuine external close has the real
+    # fill -> the honest exit is recorded and the phantom cleared, by the bot itself. Excludes QHM/F6
+    # anchors + shorts, notional-capped, in-flight-order suppressed. Fail-safe. This is the only place
+    # in the loop that mutates the tracker on a drift, and it can only do so on positive proof-of-close.
     try:
-        from execution.drift_corrector import apply_confirmed_corrections
-        from execution.fill_helpers import fetch_actual_fill_price as _fafp_c1
-        from execution.broker import get_open_positions as _gop_c1
-        from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_c1
-        from execution.orphan_manager import _get_forever6_syms as _f6_c1
-        _c1_exclude = set(_qhs_c1()) | _f6_c1()
+        from execution.drift_corrector import auto_heal_phantom_drift
+        from execution.fill_helpers import fetch_actual_fill_price_or_none as _fafp_none
+        from execution.broker import get_open_orders as _goo_dc
+        from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_dc
+        from execution.orphan_manager import _get_forever6_syms as _f6_dc
+        _dc_exclude = set(_qhs_dc()) | _f6_dc()
 
-        def _drop_phantom(_sym, _trade):
-            _px = _fafp_c1(_sym, _trade, poll_secs=0)
-            # external_close-prefixed reason keeps record_exit's Guard-D (a second broker-flat
-            # re-verify at the exit level) LIVE and writes the manual_audit ledger (masked-loss seat).
-            return tracker.record_exit(_sym, _px, reason="external_close_operator_confirmed_drift",
+        def _heal_phantom(_sym, _trade):
+            # REAL fill or None — the anti-fabrication guard. None => the corrector drops NOTHING.
+            _px = _fafp_none(_sym, _trade, poll_secs=0.1, no_retry=True)
+            if _px is None:
+                return None
+            # external_close-prefixed reason + alpaca_confirmed_absent keeps record_exit's Guard-D
+            # contract satisfied and writes the manual_audit ledger; the caller-side proof is the
+            # detector's broker-flat classification + this positively-recovered close fill.
+            return tracker.record_exit(_sym, _px, reason="external_close_drift_autoheal",
                                        mri_level="UNKNOWN", alpaca_confirmed_absent=True)
 
-        _n_c1 = apply_confirmed_corrections(
-            tracker, risk, _c1_exclude,
-            fetch_positions=_gop_c1, record_exit_drop=_drop_phantom, alert=send_slack,
+        _n_healed = auto_heal_phantom_drift(
+            _drift_records, tracker, risk, _dc_exclude,
+            heal=_heal_phantom, fetch_orders=_goo_dc, alert=send_slack,
         )
-        if _n_c1:
-            logger.critical("Option C1: applied %d operator-confirmed drift correction(s).", _n_c1)
+        if _n_healed:
+            logger.critical("Option C: auto-healed %d phantom_tracker drift(s) on real-fill proof.", _n_healed)
     except Exception as _dc_e:
         logger.warning("drift corrector call failed (non-blocking): %s", _dc_e)
 
