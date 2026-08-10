@@ -12,6 +12,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**✅ 2026-08-09 SHIPPED (interactive, Rafael present) — 5-item directive complete:**
+- **#1 naked NVDA stop — FIXED & VERIFIED LIVE (PR #119):** `qhm.resubmit_pending_stops()` rearms every PENDING_STOP_REPLACE hold on the closed-market branch; NVDA GTC stop confirmed live @ $211.01. Residual: SNOW stuck `pending_cancel` (intraday AH-GTC path) — expected to self-heal Monday; still a flagged watch item.
+- **#2 Slack anti-spam — SHIPPED (PR #120):** drift detector fires once per episode (`alerted` set + `slack` fire-once); no Monday spam.
+- **#3 reports-sourcing — VERIFIED:** postmortem = Alpaca fills FIFO (authoritative); weekly = fixed (below); midday/nightly still same-day lesser sources — follow-on to repoint to FIFO ledger.
+- **#4 weekly P/L — FIXED (PR #121):** `compute_period_stats` repointed to FIFO ledger (`per_day` sum + entry-level `round_trips`), try/except degrade to EOD sum. Verified +$31.87 (was reading −$1.28 / "0 trades").
+- **#5 Option C1 — SHIPPED (PR #122, `5a56af5`), DEPLOYED-UNEXERCISED:** human-confirmed mid-session drift correction. Detector Slacks the exact `confirm_drift_correction.py` cmd; on a snapshot-matching confirmation the next cycle drops the phantom_tracker entry via the hardened external-close path. One-shot, 2h TTL, fail-closed on any move, excludes QHM+F6, phantom_tracker-only. BGG unanimous; cold-2nd + masked-loss seat PASS; GAI APPROVE, Gro waived (TPD). Not yet fired on a real drift. Follow-ons: other drift types (phantom_broker/direction/qty) for C1; C2/C3 auto-correct.
+
 **🛡️ SELF-QA GATE (Rafael mandate 2026-08-09 — "the QA must run itself every session/account, not
 depend on Rafael catching me"). Shipped this session; see CLAUDE.md §SELF-QA GATE:**
 - **#4 biased-BGG-prompt detector — ENFORCED (PR #114):** `preship_audit._check_prompt_bias` refuses
