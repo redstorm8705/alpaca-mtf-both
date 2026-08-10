@@ -123,9 +123,10 @@ def compute_period_stats(
     start_date: date, end_date: date, current_equity: float | None = None,
 ) -> dict[str, Any]:
     """
-    Trade statistics for a date range. Only status=='closed' trades are counted.
-    P&L uses _day_pnl to avoid double-counting cross-day partial exits.
-    total_pnl is summed from pnl_today (Alpaca-reconciled) in each eod file.
+    Trade statistics for a date range. total_pnl + trade counts come from the FIFO
+    ledger (per_day + entry-level round_trips); on a ledger-fetch failure they degrade
+    to the EOD alpaca_pnl sum + local closed-trade stats so the report always renders.
+    score/tqi/pdt/overnight come from the EOD files.
 
     current_equity: pass the live Alpaca account equity to also compute pnl_pct
     (period return, simple: total_pnl / (current_equity - total_pnl) * 100 — i.e.
@@ -138,7 +139,7 @@ def compute_period_stats(
     present in the return dict either way.
     """
     closed_trades: list[dict] = []
-    total_pnl = 0.0
+    _eod_pnl = 0.0   # EOD alpaca_pnl sum — degraded fallback if the ledger fetch fails
     pdt_count = 0
     overnight_count = 0
 
@@ -151,21 +152,46 @@ def compute_period_stats(
                 if t.get("status") == "closed"
             )
             _ap = eod.get("alpaca_pnl")
-            total_pnl       += float(_ap if _ap is not None else (eod.get("pnl_today") or 0.0))  # noqa: E501
-            pdt_count       += len(eod.get("pdt_slots_used") or [])
+            _eod_pnl += float(_ap if _ap is not None else eod.get("pnl_today") or 0.0)
+            pdt_count += len(eod.get("pdt_slots_used") or [])
             overnight_count += len(eod.get("overnight_holds") or [])
         d += timedelta(days=1)
 
-    total = len(closed_trades)
-    wins  = sum(1 for t in closed_trades if _day_pnl(t) > 0)
+    # AUTHORITATIVE P&L + trade stats from the FIFO ledger (Rafael 2026-08-09). The old
+    # code summed EOD alpaca_pnl and disagreed with the ledger (weekly read -1.28 vs
+    # +31.87, "0 trades / 2 wins"). per_day + round_trips are the Alpaca-FIFO source the
+    # dashboard lifetime trusts. build_ledger() does a LIVE fetch and can raise, so on
+    # ANY failure we DEGRADE to the EOD sum + local trade stats so the report always
+    # renders (the weekly/monthly contract). score/tqi always come from EOD.
+    try:
+        from reporting.pnl_ledger import build_ledger
+        _led = build_ledger()
+        _s, _e = start_date.isoformat(), end_date.isoformat()
+        total_pnl = round(
+            sum(v for _d, v in _led.get("per_day", {}).items() if _s <= _d <= _e), 2)
+        _entry: dict = {}   # entry-level trades; exit in-period (ledger method)
+        for _r in _led.get("round_trips", []):
+            if _s <= _r.get("exit_date", "") <= _e:
+                _k = (_r.get("symbol"), _r.get("entry_time"))
+                _entry[_k] = _entry.get(_k, 0.0) + float(_r.get("pnl", 0.0))
+        total   = len(_entry)
+        wins    = sum(1 for _v in _entry.values() if _v > 0)
+        gross_p = sum(_v for _v in _entry.values() if _v > 0)
+        gross_l = sum(-_v for _v in _entry.values() if _v < 0)
+    except Exception as _le:
+        logger.warning(
+            "compute_period_stats: ledger unavailable (%s) — degrading to EOD sum "
+            "so the report still renders.", _le)
+        total_pnl = round(_eod_pnl, 2)
+        total   = len(closed_trades)
+        wins    = sum(1 for t in closed_trades if _day_pnl(t) > 0)
+        gross_p = sum(_day_pnl(t) for t in closed_trades if _day_pnl(t) > 0)
+        gross_l = sum(abs(_day_pnl(t)) for t in closed_trades if _day_pnl(t) < 0)
     win_rate = (wins / total * 100) if total else 0.0
+    pf = (gross_p / gross_l) if gross_l > 0 else None
 
     scores = [t["score"] for t in closed_trades if t.get("score") is not None]
     tqis   = [t["tqi_score"] for t in closed_trades if t.get("tqi_score") is not None]
-
-    gross_p = sum(_day_pnl(t) for t in closed_trades if _day_pnl(t) > 0)
-    gross_l = sum(abs(_day_pnl(t)) for t in closed_trades if _day_pnl(t) < 0)
-    pf = (gross_p / gross_l) if gross_l > 0 else None
 
     pnl_pct: float | None = None
     if current_equity is not None:
