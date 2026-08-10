@@ -439,8 +439,12 @@ wish. Before ANY ship, the author passes all four:
    feature ships, an INDEPENDENT cold agent verifies the author's CLAIMS (commit/PR text — "fixes X",
    "dynamic", "live") against SOURCE (the live logs, the code, runtime state), motivated to REFUTE.
    This is the exact pass that caught 2026-08-09's failures (a fix for a non-problem; six features
-   called "LIVE" that had never run). [ENFORCEMENT: adversarial-review marker — BUILDING NEXT; until
-   built it is MANDATORY-MANUAL and its absence blocks nothing automatically, so it must not be skipped.]
+   called "LIVE" that had never run). [ENFORCEMENT: adversarial-review marker — ENFORCED (git gate,
+   Rafael 2026-08-10, BGG: separate marker + every bot-code ship). `preship_gate._adversarial_ok`
+   blocks any bot-code commit/push lacking a fresh `record_adversarial.py <file> PASS --claims "..."`
+   marker bound to the shipped content sha. Scope is universal (every bot-code ship, not risk-path
+   only) because both failure modes it catches — overclaiming, and a fix for a non-problem — occurred
+   OFF the risk path (C1, #104). GATED_SELF tooling is exempt (no infinite regress).]
 
 3. **"Am I fully reviewing the logs?"** → **REQUIRED log-evidence.** A fix/feature claiming to address a
    logged problem MUST cite a REAL, verifiable log line (file + timestamp/pattern) proving the issue is
