@@ -335,6 +335,45 @@ def _cold2_ok(relpath: str, ref: str):
     return True, "ok"
 
 
+def _adversarial_ok(relpath: str, ref: str):
+    """Self-QA check #2 teeth (Rafael 2026-08-10; BGG: separate marker, every bot-code
+    ship). A gated BOT-CODE change must carry a fresh ADVERSARIAL-self-review PASS bound
+    to the shipped content sha: an independent agent, motivated to refute, verified the
+    ship's CLAIMS (commit/PR wording — 'fixes X', 'dynamic', 'live', 'verified') against
+    SOURCE (logs/code/runtime). A DIFFERENT axis than the cold-2nd (which reviews diff
+    logic): it catches overclaiming code as live/proven before it has run, and a fix for
+    a problem the logs do not show (#104). Distinct marker so the two reviews cannot be
+    conflated (BGG rationale).
+
+    Marker: .claude/preship/markers/<slug>.adversarial.json
+    Write: python3 .claude/preship/record_adversarial.py <file> PASS --claims "<claims>"
+    """
+    slug = relpath.replace("/", "__")
+    mpath = os.path.join(MARKER_DIR, slug + ".adversarial.json")
+    if not os.path.exists(mpath):
+        return False, ("no ADVERSARIAL marker — have an independent agent verify this "
+                       "ship's CLAIMS (commit/PR wording) against the real logs/code/"
+                       "runtime, motivated to refute, then: "
+                       "python3 .claude/preship/record_adversarial.py "
+                       f"{relpath} PASS --claims \"<what was verified>\"")
+    try:
+        m = json.load(open(mpath))
+    except Exception as e:
+        return False, f"adversarial marker unreadable: {e}"
+    if time.time() - m.get("ts", 0) > MARKER_MAX_AGE_SEC:
+        return False, "adversarial marker stale (>24h) — re-verify claims"
+    if str(m.get("verdict", "")).upper() != "PASS":
+        return False, (f"adversarial verdict is {m.get('verdict')!r}, not PASS — a "
+                       "refuted claim blocks the ship (correct the claim or the code)")
+    cur = _content_sha(ref)
+    if not cur:
+        return False, "FAIL-CLOSED: cannot read content for adversarial check"
+    if cur != m.get("sha256"):
+        return False, ("content changed since the adversarial PASS (sha mismatch) — "
+                       "RE-VERIFY the claims against the exact bytes shipping.")
+    return True, "ok"
+
+
 def _is_bot_code(relpath: str) -> bool:
     """A gated file that is BOT CODE — subject to the log-evidence teeth. Gated, but
     NOT a prose claim file (GATED_CLAIM_FILES) and NOT the preship/CI tooling or CI
@@ -420,6 +459,12 @@ def _changed_gated(range_args, ref_tmpl):
             le_good, le_why = _logevidence_ok(f, ref_tmpl.format(f))
             if not le_good:
                 fails.append(f"  - {f}: [LOG-EVIDENCE] {le_why}")
+            # Self-QA #2 teeth: bot-code needs an adversarial claims-review PASS (every
+            # bot-code ship — Rafael 2026-08-10; the two failure modes it catches both
+            # occurred off the risk path, so scope is universal, not risk-path-only).
+            av_good, av_why = _adversarial_ok(f, ref_tmpl.format(f))
+            if not av_good:
+                fails.append(f"  - {f}: [ADVERSARIAL] {av_why}")
     return (fails, gated)
 
 
