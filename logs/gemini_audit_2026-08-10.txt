@@ -1,0 +1,50 @@
+Nightly Gemini Audit — 2026-08-10
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['strategy/run_cycle.py', 'reporting/metrics.py', 'execution/drift_corrector.py', 'execution/quarterly_hold_manager.py', 'execution/drift_detector.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected. (Note: The `pnl_drift` of `$-11.82` is confirmed as a `pre-heal` telemetry event per architecture invariants and carries no impact to live risk or execution paths.)
+
+### VERDICT: WARN
+Issues identified regarding potential stale data logic and minor P&L recording drift. The bot is fully operational.
+
+### LOG ANOMALIES
+* **[ANOMALY-3] TQI degradation**: Reported consistently (`29.8/100`) throughout the session. This is an information/strategy alert, not an execution error, but indicates that recent trade performance is drifting below the threshold of optimal stop placement/exit discipline.
+* **`ledger_sync` wall-time**: 13.0s/13.1s observed. This approaches the limit for synchronous ledger operations; monitor for potential timeout risks if the `fills` count continues to scale.
+* **MRI STRESSED**: The bot correctly applied the `0.70x` size floor as per protocol during a `STRESSED` regime (score=49).
+
+### PERFORMANCE AUDIT
+* **Exit Logic Consistency**: The partial exit for `MARA` (`2 @ $10.08` at `20:04:45`) appears to be an `extended_hours` execution. Review confirms this follows the `execution.exit_logic` path correctly.
+* **Stop/Target Integrity**: The `AMZN` entry (`277.82` @ `09:39`) is currently within expected ranges. Previous `SMCI` and `AMZN` exits (e.g., `AMZN` stop at `272.6` on `08-05`) demonstrate the `overnight_atr_buffer_exit` logic correctly triggering against the threshold.
+* **Correlation**: Score-to-outcome correlation remains within the bounds of the 35.1% lifetime win rate. No sudden degradation in high-score (10-12) outcomes noted.
+
+### TRADE INTEGRITY
+* **Recording Bug Check**: No trades identified with `pnl=0.0` where `entry != exit`. 
+* **Partial Exit Attribution**: `TOST` partial exit on `08-05` recorded `pnl: 2.47`. Cross-referencing `entry: 32.89` and `partial_exit: 35.36` confirms the P&L sign is positive and the math is correct for the position size.
+
+### MODIFIED FILE FINDINGS
+* **`strategy/run_cycle.py`**: The `_load_earnings_trim_state` check is robust. However, in the `_load_spy_52w_high` function, the check `_saved_date = date.fromisoformat(_raw["date"])` assumes a correctly formatted string. If a partial write occurred during a crash, this may raise an unhandled `ValueError`. 
+  * *Severity: LOW*. Recommendation: Wrap in a try-except.
+* **`execution/drift_detector.py`**: The logic for `_tracker_view` includes an exclusion set. The implementation is clean and adheres to the read-only requirement.
+* **`reporting/metrics.py`**: The logic in `_net_deposits` correctly switches to `INITIAL_PAPER_EQUITY` as a fallback, fulfilling the 2026-07-10 board mandate.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED.
+* **P5-C2**: UNTOUCHED.
+* **P5-H1**: FIXED (via removal/rule change).
+* **P5-H2-H5**: UNTOUCHED.
+* **P5-M1-M3**: UNTOUCHED.
+* **P5-L1-L3**: UNTOUCHED.
+
+### NEW BUGS FOUND
+1. **ALPHA ISSUE | LOW | `strategy/run_cycle.py`** | `_load_spy_52w_high` is vulnerable to `ValueError` if the JSON file contains a corrupted or malformed date string.
+2. **INFRASTRUCTURE | MEDIUM | `execution/drift_corrector.py`** | The function `auto_heal_phantom_drift` iterates over `records` without checking if `tracker` or `risk` are `None`. While they are currently injected, a dependency injection failure would crash the cycle loop despite the "NEVER raise" clause.
+
+### FIX VALIDATION
+* **Fix for `pnl_drift` (Telemetry)**: **PASS**. The `pnl_drift` telemetry is functioning exactly as defined in the architectural invariants; it does not block execution.
+
+### RECOMMENDED ACTIONS
+1. **Monitor `ledger_sync` latency**: If wall-time continues to trend toward 15s+, initiate a move to asynchronous ledger commits.
+2. **Review TQI logic**: Investigate the `ANOMALY-3` degradation as it suggests the current strategy cycle is consistently failing to meet the `30/100` TQI performance bar.
+3. **Robustness hardening**: Apply try-except blocks to date parsing in `strategy/run_cycle.py` for config/state file loading.

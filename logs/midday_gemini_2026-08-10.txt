@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-08-10
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 3
+- Position left naked (no stop): AMZN (long, 2sh)
+- Position left naked (no stop): SMCI (long, 3sh)
+- Position left naked (no stop): SPY (long, 2sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+Session data is currently non-actionable due to the lack of closed trades and the identified NAKED POSITION condition. The ledger sync confirms these positions are active, but the bot has failed to verify or attach protective stops, violating core risk management protocols.
+
+### ENTRY QUALITY
+No new entries were triggered in the provided logs. The signal generator correctly filtered 13/16 signals based on the dynamic `MIN_SCORE` and ORB gates, demonstrating that the logic for entry filtering remains functional.
+
+### EXIT QUALITY
+No exit activity occurred. The inability of the bot to close these positions or manage their stops represents a failure in the maintenance cycle of the execution engine.
+
+### MRI ALIGNMENT
+The MRI score of 29 is classified as ELEVATED. The bot correctly responded by applying a size floor of 0.85x, indicating that the risk-weighting logic is currently responsive to the index.
+
+### LOG ANOMALIES
+- **WARNING**: `EOD P&L DRIFT: Alpaca=$-11.82 tracker=$0.00 drift=$-11.82`. This indicates a discrepancy between the Alpaca fill ledger and the internal tracker.
+- **WARNING**: `[ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30`. This suggests a drift in performance quality that requires a review of the underlying alpha.
+- **WARNING**: `ledger_sync ledger_sync wall-time 13.0s (fills=479 orders=2304)`. This indicates that the ledger synchronization process is nearing high-latency thresholds, likely due to the size of the order/fill history.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | Missing stop-order submission | The bot has active positions (AMZN, SMCI, SPY) but shows no evidence of active GTC or day-stop orders associated with these holdings in the provided logs.**
+- **INFRASTRUCTURE | MEDIUM | Persistent EOD P&L Drift | The $11.82 drift between Alpaca fills and the portfolio tracker suggests that the FIFO accounting module is failing to reconcile partial fills or overnight rollovers correctly.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediate manual intervention required to place protective stops on AMZN, SMCI, and SPY positions; identify why `execution.stop_manager` failed to attach to these entries.
+2. **INFRASTRUCTURE**: Investigate the $11.82 EOD P&L drift; verify if the FIFO logic is ignoring commissions or fractional fills that might be causing the accounting mismatch.
+3. **ALPHA**: Review the "TQI degradation" (avg 29.8) to determine if the strategy is failing to adapt to current volatility or if the exit-trigger logic has become too restrictive/loose.
