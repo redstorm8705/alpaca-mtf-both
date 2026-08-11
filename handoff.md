@@ -8,9 +8,36 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-08, interactive → AWP) — pick up here
+## ⏩ LATEST (2026-08-11, autonomous AWP) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**🚨 2026-08-11 AWP — two LIVE findings, diagnosed not patched, full package in
+`logs/pending_claude_session_2026-08-11.md` (also `logs/tb_audit_log.md` same-date entries for the
+verbatim code trace):**
+1. **SMCI phantom_broker — root cause LOCATED.** `portfolio_tracker.py::write_eod_summary()`'s
+   Phase 2a.5 (~L1051-1126) infers "closed externally" from a symbol's absence in the LOCAL FIFO
+   lot dict (which can legitimately go empty per the S49 fail-safe) instead of an independent live
+   `/v2/positions` query — unlike `orphan_manager.py`'s much safer double-guard version of the same
+   decision. Falsely closed a real, still-open 3-share SMCI long (bought 2026-08-10, confirmed via
+   Alpaca fills) TWICE with fabricated ~$0 exit prices; the broker has held it, untracked by the
+   bot's own exit logic, for 2+ trading days. The drift detector (PR #111) correctly flagged this
+   every cycle both days — it worked as designed; this is a pre-existing bug it surfaced, not a new
+   one. **⏩ NEXT: full patch sequence on `portfolio_tracker.py` Phase 2a.5 — bring it up to
+   orphan_manager's live-verification standard. RTH-impacting, board + Gro/GAI required.**
+2. **PR #130 (QHM dashboard stop) — correct in code, NOT reflecting on the live process.**
+   `quarterly_holds.json` has real stop_price data; manually invoking `generate_dashboard.generate()`
+   with live data renders it correctly (verified twice); the commit's own adversarial-gate marker
+   independently confirms the same at ship time. The LIVE running service has nonetheless written
+   "—" every cycle all day (service restarted well after the fix merged — ruled out staleness/
+   bytecode caching). Cheap next step: `systemctl restart mtf-bot`, re-check; if it persists, this
+   needs deeper live-process investigation, a new class of finding (correct+tested code silently not
+   taking effect in production).
+3. **Self-QA gate #4 (BGG design-record) — DESIGN PROPOSAL ready for Rafael's go/no-go**, in the
+   pending-session package. Board+GAI majority over Gro on the hard part (temporal proof needs a
+   PreToolUse write-blocking hook + GitHub branch-protection status check, not git-ancestry alone —
+   2 independent voices found the same ancestry-gaming vector Gro missed). Not built.
+**Rolling AWP chain re-armed for 19:25 PDT 2026-08-11 (+5h05m) at session start.**
 
 **⏭️ 2026-08-10 NEXT BUILD (design aligned, no code yet) — QHM profit-target + earnings de-risk.**
 Full design + BGG alignment + Rafael's decision in `logs/qhm_earnings_trim_design_2026-08-10.md`.

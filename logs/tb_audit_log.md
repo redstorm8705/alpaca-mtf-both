@@ -9491,3 +9491,139 @@ FOLLOW-UP (BOARD-REQUIRED, non-blocking, NOT done): the silent swallow (except->
 **RESOLVED — trailing-lock interaction, 3-1 majority, closes Round 1's Groq-vs-GAI split:** mutual exclusion confirmed. Both cold board seats independently sided with GAI's concurrency-control argument over Groq's integration proposal, from two different domain lenses (Thorp: Kelly's single-decision-per-bet requirement; options/IV seat: how professional vol desks handle overlapping risk triggers in practice). Per the Gro/GAI Tie-Breaker Protocol, a 3-1 majority resolves without escalating to Rafael.
 **STILL OPEN — Tier 2's trigger multiple, genuine 2-1 split:** GAI recommends 3x Tier 1's dynamic threshold. Both cold board seats independently recommend 2x (mirroring forever6's shipped 10x→20x precedent) and both independently caught the same flaw in GAI's 3x reasoning: GAI cited post-earnings IV crush to justify a tighter PRE-earnings trigger — a timing mismatch, since Tier 2 fires on the pre-earnings run-up, before any crush occurs. Board case for 2x: Thorp seat — once Tier 1's threshold (the market's own priced-in move) is cleared, a further run to 3x isn't more measurable edge, it's tail risk, and Kelly discipline says de-risk faster once edge is unquantifiable; options/IV seat — tastytrade's expected-move framework treats the implied move as a ~68%-confidence band, 2x already sits where realized moves become statistically unusual, and 3x sets the bar so high the tier would rarely fire at all. **Board recommendation: 2x.** Being brought to Rafael this session, board-grounded, per the standing "bring board rec with every question" rule — not yet decided.
 **Gate note:** this is design research, not a shipped patch — no statics/cold-2nd/preship apply; the handoff.md entry summarizing this round went through the handoff.md claims-gate (`preship_audit.py --context`) same as the round-1 entry.
+
+---
+
+## 2026-08-11 (autonomous AWP session) — LIVE FINDING: SMCI phantom_broker drift, tracker
+falsely closed a real 3-share position twice via "external_close" — DIAGNOSTIC ONLY, no patch
+**Context:** scheduled AWP task asked me to verify the 2026-08-10 drift-detector/self-heal ships
+behaved correctly during Monday RTH. While checking, found the drift detector (PR #111, working
+exactly as designed) has logged a `drift_type: phantom_broker` event for SMCI on every RTH cycle
+for 2 full trading days (44+ occurrences, Monday 8/10 through today 8/11) — broker holds 3 sh
+long @ avg $32.683333, tracker has no open record.
+**Verified at source (not relayed):** Alpaca FILL activity API confirms the 3-sh buy (order
+`3b754ee8…`, 2026-08-10 14:45:27-28 UTC) and confirms ZERO SMCI sell fills exist anywhere after.
+`mtf_bot.log:222863` shows the entry WAS correctly recorded to portfolio_tracker at the time.
+`mtf_bot.log:222976` shows a `CRITICAL | execution.fifo_pnl` "buy_to_cover with no open short
+lots" 3 minutes later — read `execution/fifo_pnl.py` in full (442L): this is a correct,
+board-approved (S49) fail-safe that explicitly does NOT write to `trade_log.json`, so it is a
+symptom (SMCI's carried-forward FIFO lot state was corrupted, likely from an unrelated SMCI
+short that closed 8/4) not the bug itself. Live `trade_log.json` on OCI has TWO separate
+`"status": "closed"` records for this same entry (same entry_time/price), both via
+`"exit_reason": "external_close"`, `"exit_price": 32.685` (no matching real Alpaca fill —
+fabricated), `"pnl": 0.005`. The second carries `"_adopted_orphan": true` with a DIFFERENT
+(wrong) stop/target ($29.51/$39.30 vs the real $24.07/$50.58), consistent with the orphan-
+adoption path re-discovering the broker's still-open position (because the tracker had wrongly
+closed its own record) and re-adopting it with fresh defaults, then also fake-closing that copy.
+**RC classification:** this is a new, undocumented instance of the RC-4 class (estimated/
+fabricated exit price recorded via a path that bypasses `_fetch_actual_fill_price()`) — the
+`external_close` exit_reason writes a price that does not correspond to any real fill.
+**NOT YET LOCATED:** the exact write site in `portfolio_tracker.py` (1,948L) or
+`orphan_manager.py` (1,733L) that sets `exit_reason: "external_close"`. A background Explore
+agent was dispatched mid-session to trace this verbatim; per AWP rules no patch is proposed
+this session regardless — full read + 10-pt audit + board + Gro/GAI required on both files next.
+**Full writeup + operator recommendation:** `logs/pending_claude_session_2026-08-11.md` Finding A.
+
+---
+
+## 2026-08-11 (autonomous AWP session) — LIVE FINDING: PR #130 (QHM dashboard stop) correct in
+code, NOT reflected by the live running process — DIAGNOSTIC ONLY, no patch
+**Context:** same AWP verification pass. `data/state/quarterly_holds.json` has real stop_price
+values for all 5 live QHM holds (NVDA $211.06, GE $307.33, GEV $863.06, GOOGL $338.62, LLY
+$1011.60). Live `dashboard.html` on OCI (regenerated by the running `mtf-bot` service every
+cycle) shows "—" for all 5 — the exact D1 bug PR #130 (`c16acc6`) claimed to fix.
+**Verified NOT a code bug:** manually invoked the live box's own `generate_dashboard.generate()`
+with real data (sourced `.env` for API keys) — it correctly wrote "$307.33" for GE. Re-ran twice,
+same correct result both times. The commit's own adversarial-gate marker
+(`.claude/preship/markers/generate_dashboard.py.adversarial.json`, sha256-bound to the exact
+shipped content, verified the sha matches `git show c16acc6:generate_dashboard.py`) independently
+recorded the same correct render test at ship time. Ruled out stale bytecode (`.pyc` timestamp
+postdates the source fix by 2 min, consistent with a normal recompile) and import-time caching
+(`generate()` calls `_load_json` fresh from disk every invocation, no module-level cache). Yet
+`mtf_bot.log` shows the LIVE service (restarted 06:00 UTC today, 9+ hours after the fix merged)
+has written dashboard.html consistently ~1,000-1,300 bytes smaller than a correct render across
+dozens of consecutive cycles today — a byte-count signature matching exactly the missing
+stop/target markup for the 5 QHM rows.
+**Conclusion:** a genuine live-process runtime anomaly — correct code, correct data, correct
+adversarial-gate verification at ship time, but the long-running service is not producing the
+same output my standalone invocation does. Root mechanism not identified this session (would
+need live-process introspection, out of scope for a no-patch AWP session). Cheap diagnostic next
+step recommended to Rafael: one `systemctl restart mtf-bot`, re-check.
+**PR #131 (scanner-offline banner) verified clean** — client-side JS, correct branching logic,
+present in the live `scan_results.html`, doesn't depend on the long-running process's internal
+state the way #130 does.
+**Full writeup:** `logs/pending_claude_session_2026-08-11.md` Finding B.
+
+---
+
+## 2026-08-11 (autonomous AWP session) — self-QA gate #4 ("BGG design-record") — DESIGN ONLY
+**Context:** AWP task item 2 — design (not build) the last un-built self-QA gate: a marker
+proving a new feature/fork had its Open Question Protocol design pass BEFORE code was written.
+Ran the Feature Design Protocol + Open Question Protocol with neutral, non-leading prompts (the
+bias gate from PR #124 would have blocked anything else) across Gro, GAI, and 2 cold board seats
+(Beck/Kim QA-process lens; Peterffy infra lens).
+**Q1 (what triggers the gate) — 4/4 consensus:** independent reviewer/cold-agent classification
+of "new capability vs. fix," default-to-gated on ambiguity (mirrors the existing risk-path
+routing screen's non-self-certification rule). Self-declaration alone rejected by all 4 voices.
+**Q2 (temporal proof) — 3-1, Gro is the minority:** Gro recommended git-ancestry alone
+(`merge-base --is-ancestor`). GAI and the Peterffy-seat board agent INDEPENDENTLY discovered the
+same gaming vector from different angles (GAI: stash-then-backdate; Peterffy-seat: `rebase -i`)
+— ancestry alone is real but forgeable. Board+GAI majority recommends a two-layer design: a
+`PreToolUse` write-blocking hook (GAI's proposal — blocks implementation edits until a matching
+design-record file exists) PLUS a GitHub branch-protection required status check on the design-
+record commit's server-received timestamp (Peterffy-seat's proposal, reusing this project's own
+admitted two-layer architecture for `preship_gate.py` — "hook = speed bump, branch protection =
+the real wall"). Per the Gro/GAI Tie-Breaker Protocol this is a clean majority, not escalated to
+Rafael as an unresolved split.
+**Q3 (marker content) — 3/4 majority:** hash/reference to a separate
+`logs/design_records/<feature>.md`, not verbatim-inline (GAI dissented, preferring verbatim —
+minority). Peterffy-seat's board agent added a genuinely new idea nobody else raised: an explicit
+`record_scope_waiver.py` requiring Rafael's own sign-off (not any Claude session) as the escape
+valve when the classifier misjudges a small change — consistent with the Authority Rule, folded
+into the recommendation.
+**NO CODE WRITTEN.** Design proposal only, brought to Rafael in
+`logs/pending_claude_session_2026-08-11.md` Item 3 for a build/defer/more-design decision.
+
+---
+
+## 2026-08-11 (autonomous AWP session) — SMCI phantom_broker: ROOT CAUSE located (addendum to
+the earlier same-day entry) — NOT patched, diagnostic only
+**A background Explore agent (anti-summary, full verbatim read per CLAUDE.md) traced the exact
+write site.** Full verbatim source of all 6 relevant functions (record_exit, write_eod_summary,
+_fifo_reconstruct, reconcile_positions, the check_exits force-clean branch, and the
+fetch_actual_fill_price fallback chain — ~2,639 lines across 6 files) captured in this session's
+transcript; summarized here for the permanent record.
+**Root cause:** `portfolio_tracker.py::write_eod_summary()`'s "Phase 2a.5" block (~L1051-1126)
+infers "position closed externally" solely from a symbol's absence in `_fifo_reconstruct()`'s
+locally-reconstructed lot dict (`fifo_pnl.py`) — it never independently queries live
+`/v2/positions`. That lot dict can legitimately go empty for a symbol via the S49 board-approved
+fail-safe (fifo_pnl.py L231-243: a `buy_to_cover` against no open short lots is intentionally
+NOT recorded as a synthetic lot, to prevent phantom-lot accumulation — exactly the CRITICAL
+logged for SMCI at 14:48:02 UTC 8/10). Phase 2a.5 then computes a VWAP "exit price" from the same
+corrupted FIFO match and calls `record_exit(symbol, exit_price, reason="external_close",
+alpaca_confirmed_absent=True)` — **hardcoding `alpaca_confirmed_absent=True` without ever
+verifying anything against the broker.** `record_exit()`'s own Guard D (L1569-1584) exists
+specifically to block an unverified external_close, but Phase 2a.5 satisfies its letter (passes
+`True`) while defeating its purpose (the `True` isn't earned).
+**Contrast — the SAFE version of this same decision already exists in the codebase:**
+`orphan_manager.py::reconcile_positions()`'s own external-close branch (L1332-1433) does TWO
+independent live broker queries before calling `record_exit` for the same reason — Guard A (a
+fresh full-account snapshot must be non-empty) and Guard B (a fresh per-symbol
+`get_open_position()` re-check) — and fails CLOSED (retains + alerts) on any ambiguity. Phase
+2a.5 has neither guard. Two code paths make the identical class of decision; only one of them is
+safe.
+**The duplicate `_adopted_orphan: true` closed record explained:** once SMCI's still-live
+position reappears in `orphan_manager.reconcile_positions` as a genuine orphan (broker has it,
+tracker's own record was just wrongly deleted by Phase 2a.5), it is correctly re-adopted with a
+fresh ATR-based stop/target — but is unconditionally flagged `overnight: True` (orphan_manager.py
+L1130), making it eligible for the *same* Phase 2a.5 sweep on the very next EOD flush, which
+closes it identically a second time.
+**RC classification: new instance of RC-4** (estimated/unverified exit price — though technically
+sourced from a real Alpaca fill price via `_fifo_reconstruct`, it is the WRONG fill/lot, attached
+to the wrong logical trade — RC-4's intent, "no exit recorded without independent broker
+verification of absence," is violated even though the literal `_fetch_actual_fill_price()` call
+convention is nominally satisfied elsewhere in the codebase).
+**NOT PATCHED — AWP hard rule (scheduled sessions never apply patches).** Fix scope for next
+session: bring Phase 2a.5's "is this symbol really gone" check up to orphan_manager's standard
+(an independent live `/v2/positions` query, not trust in the FIFO reconstruction's absence) —
+full patch sequence, both hotspot files, board + Gro/GAI required (RTH execution impact).
