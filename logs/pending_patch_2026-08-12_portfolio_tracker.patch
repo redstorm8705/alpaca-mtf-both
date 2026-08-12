@@ -1,0 +1,123 @@
+# ─── AWP PENDING PATCH — 2026-08-12 — portfolio_tracker.py Phase 2a.5 Guard ───
+# DO NOT APPLY WITHOUT:
+#   1. Gro+GAI Step 4 audit (use pending_gro_gai_2026-08-12_portfolio_tracker.json)
+#   2. Rafael's explicit APPROVE
+#   3. FINAL PRE-SHIP Gro+GAI audit of this exact diff (Step 8, same JSON)
+#   4. record_adversarial.py + record_cold2.py markers
+#   5. git commit + push + OCI git pull --ff-only + restart
+#
+# PROBLEM: Phase 2a.5 in write_eod_summary() decided an overnight position was
+# "externally closed" solely from FIFO lot absence — but the S49 fail-safe in
+# fifo_pnl.py deliberately drops symbols whose lot-matching fails without raising,
+# making FIFO absence NOT proof of closure. Result: SMCI (3 shares live) was
+# fake-closed twice (both original + orphan_manager re-adoption), poisoning
+# Kelly stats and P&L history. Drift detector correctly caught it 44+ cycles.
+#
+# FIX: Hoist a broker re-verify guard (Mirror of orphan_manager.py Guard B)
+# BEFORE the if-_fifo_matches branch, so ALL THREE paths that can remove a
+# position from open_trades (VWAP+record_exit, zero-price marker, no-match
+# marker) require a live get_open_position() confirmation. Fail-closed on
+# ImportError and API error. CRITICAL+Slack if position still open at broker.
+# Also replaces misleading pre-assertion "fully closed on Alpaca" logger.warning
+# (fired BEFORE broker check) with post-verification "broker-confirmed closed".
+#
+# BOARD: 3/3 PASS (Seat1 R3 PASS/RC3-fixed, Seat2 R2 PASS, Seat3 R1 PASS)
+# COLD-2ND: PASS (all 6 checks: no logic inversion, no boundary error,
+#   no missing conditions, all branches complete, no unbound refs, loop intact)
+# STATIC: py_compile PASS, mypy PASS (0 errors), ruff PASS (0 violations)
+# SOURCE SHA256: 49081cf8b8c98b7045fb298951beb52bfb862cb9f4c41c3e5ebf04b7d584b845
+# PROPOSED SHA256: 6bd6c342c43353e091138545ede05d9152df8522034f4f3ff67083d3d0ed2626
+# GIT HEAD AT DRAFT: 1d85ace40426ef05011a7399e8d4275ee2e4f88f
+# ─────────────────────────────────────────────────────────────────────────────
+--- a/execution/portfolio_tracker.py
++++ b/execution/portfolio_tracker.py
+@@ -1054,6 +1054,76 @@
+                         continue
+                     if _sym_r in _alpaca_lots:
+                         continue  # Legitimately still open — FIFO lots remain
++                    # ─── Phase 2a.5 Guard: broker re-verify before any reconciliation ─────
++                    # FIFO lot absence (caused by S49 fail-safe silently dropping a symbol
++                    # whose lot-matching fails) is NOT proof of closure. Mirror
++                    # orphan_manager.py Guard B: require a live broker confirmation before
++                    # any path (immediate record_exit OR deferred _fifo_reconciled_closed
++                    # flag) removes a position from open_trades. Covers all three sub-paths:
++                    # (1) VWAP + record_exit, (2) zero-price marker, (3) no-match marker.
++                    logger.info(
++                        "write_eod_summary Phase 2a.5: %s (dir=%s) absent from"
++                        " FIFO lots — querying broker before any reconciliation.",
++                        _sym_r, _tr_r.get("direction", "?"),
++                    )
++                    try:
++                        from execution.broker import (
++                            get_open_position as _gop_phase2a5,
++                        )
++                        _phase2a5_pos = _gop_phase2a5(_sym_r)
++                    except ImportError as _p2a5_imp_err:
++                        logger.critical(
++                            "write_eod_summary Phase 2a.5: cannot import"
++                            " get_open_position for %s (%s) — NOT reconciling"
++                            " (fail-closed).",
++                            _sym_r, _p2a5_imp_err,
++                        )
++                        continue
++                    except Exception as _p2a5_api_err:
++                        logger.critical(
++                            "write_eod_summary Phase 2a.5: broker re-verify for"
++                            " %s raised %s — NOT reconciling (fail-closed)."
++                            " Manual reconciliation required.",
++                            _sym_r, _p2a5_api_err,
++                        )
++                        try:
++                            from alerts import send_slack as _p2a5_slack_err
++                            _p2a5_slack_err(
++                                f"🚨 CRITICAL: Phase 2a.5 broker verify FAILED"
++                                f" for {_sym_r} ({_p2a5_api_err}). Position"
++                                f" NOT closed in tracker — manual"
++                                f" reconciliation required."
++                            )
++                        except Exception as _p2a5_slack_exc:
++                            logger.warning(
++                                "Phase 2a.5: Slack alert suppressed for %s: %s",
++                                _sym_r, _p2a5_slack_exc,
++                            )
++                        continue
++                    if _phase2a5_pos is not None:
++                        logger.critical(
++                            "write_eod_summary Phase 2a.5: %s absent from FIFO"
++                            " lots but broker reports STILL OPEN (qty=%s) —"
++                            " NOT reconciling. S49 fail-safe likely triggered."
++                            " Drift detector will flag this mismatch.",
++                            _sym_r, getattr(_phase2a5_pos, "qty", "?"),
++                        )
++                        try:
++                            from alerts import send_slack as _p2a5_slack_open
++                            _p2a5_slack_open(
++                                f"🚨 CRITICAL: {_sym_r} Phase 2a.5: FIFO says"
++                                f" closed but broker reports OPEN. NOT"
++                                f" reconciling tracker. Check OCI logs —"
++                                f" FIFO reconstruction corrupted."
++                            )
++                        except Exception as _p2a5_slack_exc:
++                            logger.warning(
++                                "Phase 2a.5: Slack alert suppressed for %s: %s",
++                                _sym_r, _p2a5_slack_exc,
++                            )
++                        continue
++                    # Broker confirmed absence (None) — safe to proceed on all paths.
++                    # ─── End Phase 2a.5 Guard ────────────────────────────────────────────
+                     _fifo_matches = [
+                         _pt for _pt in _alpaca_per_trade
+                         if _pt.get("symbol") == _sym_r
+@@ -1105,9 +1175,9 @@
+                             / sum(_fifo_qtys)
+                         )
+                         logger.warning(
+-                            "write_eod_summary: %s (dir=%s, overnight_since=%s)"
+-                            " fully closed on Alpaca — no remaining FIFO lots."
+-                            " Reconciling via record_exit(reason=external_close,"
++                            "write_eod_summary Phase 2a.5: %s (dir=%s,"
++                            " overnight_since=%s) broker-confirmed closed —"
++                            " reconciling via record_exit(reason=external_close,"
+                             " exit=%.4f).",
+                             _sym_r,
+                             _tr_r.get("direction", "?"),
