@@ -1054,6 +1054,83 @@ class PortfolioTracker:
                         continue
                     if _sym_r in _alpaca_lots:
                         continue  # Legitimately still open — FIFO lots remain
+                    # ── Phantom-close guard (2026-08-12, board 3/3 + Gro + GAI) ──────
+                    # FIFO-lot absence is BOOKKEEPING, not broker truth. A still-open
+                    # overnight position can drop out of _alpaca_lots on a repeat
+                    # same-day run (its opening fills are already in processed_fill_ids
+                    # and get skipped, and the open_lots carry-forward did not retain it
+                    # — fifo_pnl.py:197-198,316). Before recording ANY external_close,
+                    # independently re-verify the position at Alpaca — mirrors
+                    # orphan_manager.reconcile_positions Guard B. FAIL-CLOSED: on a query
+                    # error OR a "still open" answer, RETAIN the position and skip the
+                    # close (never book a close on unverified data). Placed before
+                    # _fifo_matches so it protects BOTH the record_exit branch and the
+                    # marker-only branch below. Root case: SMCI 3sh long recorded
+                    # external_close 3x at exit≈entry (pnl≈$0) while the broker still
+                    # held it — the fabricated flat trade also poisoned the Kelly edge.
+                    # Lazy import (portfolio_tracker does not import broker at module
+                    # level; avoids any circular import — mirrors the alerts import).
+                    # record_exit makes no network call — this is the caller-side
+                    # verification Guard D requires. Partial external close (broker holds
+                    # FEWER shares than the tracker) stays the deferred Q4 item — this
+                    # guard retains (fail-closed), never makes partial handling worse.
+                    try:
+                        from execution.broker import get_open_position as _pt_get_pos
+                        _live_pos = _pt_get_pos(_sym_r)
+                    except Exception as _verify_err:
+                        logger.critical(
+                            "write_eod_summary: %s — Phase 2a.5 live re-verify FAILED "
+                            "(%s). NOT recording external_close (fail-closed); position "
+                            "RETAINED. FIFO shows no lots but broker state unconfirmed "
+                            "— retry next cycle.",
+                            _sym_r, _verify_err,
+                        )
+                        try:
+                            from alerts import send_slack as _pc_slack
+                            _pc_slack(
+                                f"🚨 {_sym_r}: EOD phantom-close guard — Alpaca "
+                                f"re-verify FAILED, position retained (fail-closed). "
+                                f"Check Alpaca API."
+                            )
+                        except Exception as _pc_slack_err:
+                            logger.warning(
+                                "[%s] phantom-close guard Slack alert failed: %s",
+                                _sym_r, _pc_slack_err,
+                            )
+                        continue
+                    if _live_pos is not None:
+                        # Proven FIFO/lot desync: FIFO said no lots, broker says OPEN.
+                        # The day's FIFO reconstruction is therefore built on a corrupted
+                        # lot dict for >=1 symbol — flag the whole day's P&L unreconciled
+                        # (mirror the _a4_gap posture, L775-796) so reconcile_eod
+                        # finalizes it instead of writing a silently-wrong authoritative
+                        # number. (Data-integrity board seat — condition of approval.)
+                        logger.critical(
+                            "write_eod_summary: %s — FIFO shows no remaining lots but the "
+                            "position is STILL OPEN at Alpaca. FIFO/lot-state out of sync "
+                            "— NOT a real close. RETAINING position, skipping "
+                            "external_close, flagging day P&L unreconciled. Review "
+                            "open_lots_prior_day.json.",
+                            _sym_r,
+                        )
+                        summary["pnl_unreconciled"] = True
+                        if not summary.get("pnl_unreconciled_reason"):
+                            summary["pnl_unreconciled_reason"] = "fifo_lot_desync"
+                        try:
+                            from alerts import send_slack as _pc_slack2
+                            _pc_slack2(
+                                f"🚨 {_sym_r}: EOD phantom-close PREVENTED — FIFO said "
+                                f"closed but Alpaca still holds it. Position retained; "
+                                f"day P&L flagged unreconciled (FIFO/lot-state desync)."
+                            )
+                        except Exception as _pc_slack2_err:
+                            logger.warning(
+                                "[%s] phantom-close guard Slack alert failed: %s",
+                                _sym_r, _pc_slack2_err,
+                            )
+                        continue
+                    # _live_pos is None → double-confirmed genuinely absent; the existing
+                    # branch (a)/(b) close logic below runs unchanged.
                     _fifo_matches = [
                         _pt for _pt in _alpaca_per_trade
                         if _pt.get("symbol") == _sym_r
