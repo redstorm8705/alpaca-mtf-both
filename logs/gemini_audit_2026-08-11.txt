@@ -1,0 +1,56 @@
+Nightly Gemini Audit — 2026-08-11
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['scan_to_html.py', 'generate_dashboard.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. `execution.broker` | Position [RBLX] remains overnight without an exchange-level stop due to failed GTC order placement | RBLX
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+- **[CRITICAL-PATH]**: `[RBLX]` GTC stop order failed with error code `40310000` (wash trade rejection). The broker returned a message: "opposite side market/stop order exists." This caused the bot to abandon the protection of the position, leaving it unhedged overnight.
+- **[ANOMALY-3]**: Repeated `TQI degradation` warnings (avg=27.4/100). This indicates the strategy is currently failing to maintain its required performance floor, consistent with recent losses in `SPY` and `AMZN`.
+
+### PERFORMANCE AUDIT
+- **P&L Integrity**:
+    - `SPY` (Entry: 774.77, Exit: 771.75): P&L -6.04. Correct direction (long).
+    - `AMZN` (Entry: 277.82, Exit: 271.70): P&L -12.24. Correct direction (long).
+- **Correlation**: The current performance is negative, and the `TQI` degradation suggests a period of drawdown where the 12-point confluence score is failing to filter "noise" from the `ELEVATED` MRI regime.
+- **Stop Rate**: The bot is currently underperforming in stop-hit frequency; the recent trades in `SPY` and `AMZN` were stopped out due to `overnight_atr_buffer_exit` conditions, indicating the buffer logic is failing to protect capital in the current regime.
+
+### TRADE INTEGRITY
+- No recording bugs detected in `trade_events` JSON. P&L signs and math are consistent with the provided prices.
+
+### MODIFIED FILE FINDINGS
+- **`scan_to_html.py`**:
+    - The implementation of `_scan_ticker_with_timeout` using `threading.Thread` correctly addresses the previously identified `signal.SIGALRM` issue. However, the `_HORIZON_BAR_TTL_SECS = 3600` cache duration, combined with `scan_to_html` being triggered by `main.py` cycle, may lead to redundant data fetching if the bot cycles faster than the cache expiry. This is acceptable per the design, but the logic is robust.
+- **`generate_dashboard.py`**:
+    - The `_load_alpaca` function correctly implements `dotenv` reloading. The logic for `today_pnl` (equity - last_equity) is sound and resolves the previously reported discrepancy where realized gains were hidden by the AH-only EOD file refresh.
+
+### P5 STATUS
+- P5-C1: UNTOUCHED
+- P5-C2: UNTOUCHED
+- P5-H1: OBSOLETE (PERMANENTLY DELETED)
+- P5-H2: UNTOUCHED
+- P5-H3: UNTOUCHED
+- P5-H4: UNTOUCHED
+- P5-H5: FIXED
+- P5-M1: UNTOUCHED
+- P5-M2: UNTOUCHED
+- P5-M3: UNTOUCHED
+- P5-L1: UNTOUCHED
+- P5-L2: UNTOUCHED
+- P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+1. **EXECUTION BUG | CRITICAL | execution.broker | Position left unprotected on GTC fail |** When an order fails with a 40310000/wash trade error, the `broker.py` logs the failure but does not attempt a secondary corrective strategy (e.g., market order cancellation/re-submission or alert-based exit) to ensure the position is protected.
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **URGENT:** Manually verify and/or set a stop-loss for the `RBLX` position in the Alpaca console immediately, as the bot has reported an unprotected overnight position.
+2. **DEBUG:** Investigate why the `RBLX` short triggered a "wash trade" rejection; check if an orphan stop order exists from a previous aborted entry.
+3. **POLICY:** Implement a "Panic Close" or "Manual Intervention" alert loop when the GTC stop fails to attach, ensuring the bot notifies the operator via a high-priority channel until a stop is confirmed on the exchange.
+4. **REVIEW:** Evaluate why the `TQI` (Trade Quality Index) is trending downward; consider temporarily tightening entry requirements for "B" bucket setups while MRI is `ELEVATED`.
