@@ -7,6 +7,75 @@ not relayed from any prior session's claims.
 
 ---
 
+## 🆕 ADDENDUM (2026-08-11 ~20:00 PDT, same rolling-chain, continued after-hours) — Finding A's
+open question CLOSED with a live number; Finding B's "anomaly" is now a fully-located root cause
+
+**FINDING A — the stop IS live, exact number confirmed (was previously "could not independently
+confirm").** Queried Alpaca's own `/v2/orders?status=open&symbols=SMCI` directly (read-only,
+same call `generate_dashboard.py` already makes): **SELL 3 sh STOP @ $24.05, status `new`, id
+`a24f87cc-967e-4e51-9be7-8e7cc63e8ff6`, created 2026-08-10T20:36:39Z** — the original protective
+stop from Monday's entry, still resting, untouched. SMCI trades ~$34.05 right now (dashboard),
+so there's ~$10/share of cushion. **Money is not open-ended at risk — bounded by a real resting
+stop, confirmed, not inferred.** Important nuance for the record: this is the *static* catastrophe
+stop only. Because the position is absent from the tracker's `open_trades`, none of the bot's
+*adaptive* exit logic (trailing, breakeven push, target-based partial exits) is running for it —
+only this one flat GTC order protects it. Doesn't change the root cause or the recommended fix
+(still needs the dedicated interactive session on `portfolio_tracker.py` Phase 2a.5) — it answers
+the "is money at risk" question with a number instead of a shrug.
+
+**FINDING B — root cause LOCATED (was "a live-process anomaly, cause unclear").** The dashboard
+fix (PR #130) is correct on disk and in any fresh process — that part of the prior write-up
+holds. What was missing: **a second, separate, long-running process is clobbering it.**
+`mtf-writer.service` (`live_data_writer.py`) has been running continuously since
+**2026-08-06 18:44:02 UTC** (`systemctl show mtf-writer --property=ExecMainStartTimestamp`) —
+**four days before** `generate_dashboard.py`'s fix was committed (file mtime on disk:
+**2026-08-10 21:23:51 UTC**). That process does `from generate_dashboard import generate`
+*inside its refresh loop*, with a comment claiming this makes it hot-reload
+(`live_data_writer.py:74`: `# Import inside loop so any hot-reload of generate_dashboard
+works`). **That belief is false.** CPython caches modules by name in `sys.modules`; a repeated
+`import` statement after the first one is a no-op — it does not re-read the file from disk. Only
+`importlib.reload()` does that. So this process has been silently running the **stale, pre-fix**
+`generate()` in memory the whole time, overwriting `dashboard.html` every ~30s — roughly 10x more
+often than `main.py`'s own correct 5-minute write (main.py's process *was* restarted 2026-08-11
+06:00:06 UTC, after the fix, so its writes are genuinely correct — they just keep losing the race).
+
+Evidence chain (verify-at-source):
+- `systemctl show mtf-writer --property=ExecMainStartTimestamp` → `Thu 2026-08-06 18:44:02 UTC`
+- `generate_dashboard.py` disk mtime → `2026-08-10 21:23:51 UTC` (4 days after the writer started)
+- `logs/live_writer.log` tail: continuous successful writes every ~31s at 24,905–24,919 bytes,
+  zero errors — matches the prior session's own byte-deficit measurement (~1,000–1,300 bytes
+  short of a correct render) exactly, now with a mechanism instead of a mystery.
+- Read `generate_dashboard.py:558-620` in full: the QHM stop-fallback logic itself is correct and
+  unchanged since the fix; not the site of the bug.
+
+**Residual open question, honestly flagged, not guessed at:** `auto_deploy.sh` restarts
+`mtf-bot`, `mtf-writer`, and `mtf-http` together in one `systemctl restart` command, so a normal
+automated deploy should have cycled both in lockstep. Why `mtf-bot` shows a fresh Aug-11 restart
+while `mtf-writer` still shows Aug-6 isn't fully explained by what's on the box —
+`logs/auto_deploy.log` is only 28 lines total (thin for this week's commit volume) and its tail
+shows 12 repeated `auto_deploy.sh: not found` errors before a handful of daily heartbeat lines,
+which smells like a separate reliability gap in the deploy mechanism itself. Not chased further
+this session — flagged as adjacent, not this finding's cause.
+
+**Recommended action — now much more precisely scoped and lower-risk than the prior "restart
+mtf-bot" suggestion:** `sudo systemctl restart mtf-writer` **only.** This process has zero
+execution/trading-path involvement (it only calls `generate_dashboard.generate()` and a
+read-only GEX refresh) — restarting it doesn't touch the trading engine at all. Next 30-second
+write should show the real QHM stops immediately.
+
+**Forward-improvement note (BUILD, DON'T JUST FIX pass — logged, not built, no code changed):**
+the same staleness risk applies to every module `live_data_writer.py` imports inside its loop
+(`generate_dashboard`, `data.gex`, `alerts`) — any future fix to any of those three will silently
+fail to reach the live dashboard until this companion process is separately restarted, exactly as
+happened here. Two structural fixes worth a future gated pass: (a) cheap — a post-deploy smoke
+test in `auto_deploy.sh` that renders dashboard.html in a fresh subprocess and diffs it against
+the live service's last write, Slack-alerting on mismatch, catching this whole class immediately;
+(b) more thorough — swap the in-loop `import` for `importlib.reload(generate_dashboard)` so the
+comment's stated intent becomes true. Worth investigating together with the open question above
+(why the two services didn't restart in lockstep) since if that's systemic it recurs every deploy.
+
+---
+
 ## 🚨 FINDING A (URGENT, action needed) — a real 3-share SMCI position has been invisible to
 the bot's own protection/exit logic for 2 full trading days
 
@@ -199,9 +268,11 @@ right call given Finding A's urgency.
   untouched; not mine to clean up without knowing their origin/intent.
 
 **YOUR DECISION:**
-- Finding A: informational + one cheap manual check recommended (confirm the SMCI GTC stop is
-  live). Actual code fix needs a dedicated interactive session — full patch sequence on two large
-  files.
-- Finding B: informational + one cheap manual check recommended (restart `mtf-bot`, re-check).
+- Finding A: **CLOSED-OUT informational** — stop confirmed live at $24.05, no action needed unless
+  you want the tracker fix now. Actual code fix needs a dedicated interactive session — full patch
+  sequence on two large files (`portfolio_tracker.py`, `orphan_manager.py`).
+- Finding B: **root cause found, one cheap targeted action recommended** — `sudo systemctl
+  restart mtf-writer` (not `mtf-bot` — see addendum above for why this is now the safer, precise
+  ask).
 - Gate #4 design: APPROVE the two-layer Q2 design (PreToolUse hook + GitHub branch-protection
   check) to move to build / DEFER / send back for more design work.
