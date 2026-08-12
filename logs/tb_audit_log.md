@@ -9698,3 +9698,28 @@ Forward-improvement pass (logged, not built): post-deploy smoke-test diffing a f
 against the live write; or swap the in-loop `import` for `importlib.reload()` so the existing
 comment's intent becomes true. Full addendum + operator decision options in
 `logs/pending_claude_session_2026-08-11.md`.
+
+---
+
+### 2026-08-12 — RC-4 phantom external_close (portfolio_tracker.py write_eod_summary Phase 2a.5) — FIXED & SHIPPED (PR #136, main `9166df7`)
+
+**Bug (RC-4 class — fabricated exit / phantom close):** Phase 2a.5 inferred "closed externally" from
+FIFO-lot absence (`_sym_r not in _alpaca_lots`) and passed `alpaca_confirmed_absent=True` to
+`record_exit` with NO live broker query, bypassing Guard D. SMCI 3sh long recorded external_close 3x
+while the broker still held it (2 fabricated ~$0 exits @≈entry $32.685, 1 real $36.92/+$8.42). The
+valid-entry fakes were NOT `_fill_unverified` → flowed into `get_stats()` + `kelly.rebuild_from_trades()`
+(Kelly-edge poisoning). Verified live: OCI mtf_bot.log 2026-08-10/11/12 "SMCI ... fully closed on
+Alpaca ... Reconciling via record_exit(reason=external_close)".
+
+**Fix:** live `get_open_position` re-verify before external_close (mirrors orphan_manager Guard B);
+fail-closed (retain) on error or still-open; flags day P&L unreconciled on a proven FIFO/lot desync.
+Purely restrictive (can only prevent a false close). GATE: full read (1948 lines) + 10-pt audit +
+board 3/3 APPROVE-WITH-CHANGES (Reliability / Execution-risk+masked-loss / Data-integrity) + Gro+GAI
+APPROVE (after a counter-prompt round on a false-premise reject) + cold-2nd PASS + adversarial
+claims-review PASS (caught + corrected a "deployed" overclaim) + statics clean. Deployed OCI `9166df7`,
+restarted; DEPLOYED-UNEXERCISED. Deploy restart's orphan adoption auto-cleaned the existing SMCI
+phantom_broker drift (re-adopted 1sh @ $32.68, stop $30.11, tgt $38.04).
+
+**RC-4 count: stays 0** — new instance found+fixed same session (per the CLAUDE.md convention for the
+2026-07-03 same-session RC-4 finds). **Follow-ups (NOT this diff):** fifo_pnl lot-carry-forward ROOT
+cause; partial-external-close qty reconcile (Q4); alert-dedup + shutdown-path query timeout wrapper.
