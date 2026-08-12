@@ -8,9 +8,38 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-11 ~20:00 PDT, autonomous AWP continuation) — pick up here
+## ⏩ LATEST (2026-08-12 ~09:20 PDT, interactive Rafael present) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+
+**✅ 2026-08-12 — PR #130 NOW LIVE + writer-stale ROOT identified (operational, no code shipped):**
+- **mtf-writer restarted 2026-08-12 16:21 UTC** → PR #130 CONFIRMED LIVE at source: dashboard QHM rows
+  render real stops (NVDA $211.58, GOOGL $338.62, GE $307.33, GEV $863.06, LLY $1011.60 — each matches
+  the live Alpaca GTC stop), target/score correctly "n/a". #131 scanner-offline path also active. The
+  prior "shipped-but-inactive" state is closed. Restart was the AWP's own recommended action (Finding B).
+- **ROOT of the "shipped-but-not-live" class (owed FORWARD fix, NOT risk-path):** `live_data_writer.py`
+  re-imports `generate_dashboard` in its loop believing it hot-reloads — Python caches modules by name,
+  so EVERY future deploy re-staleifies the dashboard until mtf-writer is manually restarted. Durable fix:
+  `auto_deploy.sh` restarts mtf-writer on HTML-generator changes, OR `importlib.reload()` in the loop.
+- **SNOW:** bot re-armed a day stop @ $328.93 at the 2026-08-12 open — acute gap closed for today; the
+  durable auto-rearm reliability fix is still owed (risk-path).
+- **✅ SMCI phantom-close — SHIPPED & DEPLOYED (PR #136 → main `9166df7`; OCI `git pull`+restart;
+  guard on box; DEPLOYED-UNEXERCISED).** `portfolio_tracker.py` write_eod_summary Phase 2a.5 inferred
+  external_close from FIFO-lot absence and passed `alpaca_confirmed_absent=True` with no live query —
+  falsely closed SMCI 3x while the broker held it (2 fabricated ~$0 exits @≈entry $32.685, 1 real
+  $36.92/+$8.42; the valid-entry fakes flowed into get_stats+Kelly, poisoning the edge). Fix: live
+  `get_open_position` re-verify before external_close, mirroring orphan_manager Guard B — fail-closed
+  (retain) on error or still-open; flags day P&L unreconciled on a proven desync. Purely restrictive.
+  GATE: full read + board 3/3 + Gro+GAI APPROVE (after counter-prompt) + cold-2nd PASS + adversarial
+  claims-review PASS (caught an "already deployed" overclaim, corrected) + statics clean. **BONUS: the
+  deploy restart's orphan_manager adoption auto-cleaned the existing SMCI phantom_broker drift —
+  re-adopted the live 1sh @ $32.68 (stop $30.11, tgt $38.04).** FOLLOW-UPS (NOT shipped): fifo_pnl
+  lot-carry-forward ROOT cause; partial-external-close qty reconcile (Q4); alert-dedup + shutdown-path
+  query timeout wrapper.
+- **⏩ NEXT owed builds (priority order, each = full gate):** (1) SNOW stop auto-rearm (risk-path —
+  its broker stop keeps getting dropped; bot re-armed a day stop 8/12 but the re-arm path is
+  unreliable); (2) fifo_pnl lot-carry-forward ROOT (the deeper fix behind the SMCI class); (3) writer
+  hot-reload root (`live_data_writer.py` re-staleifies the dashboard on every deploy — display only).
 
 **🆕 Same-day continuation closed out both open questions from the entries below — see the
 ADDENDUM at the top of `logs/pending_claude_session_2026-08-11.md` for full evidence:**
