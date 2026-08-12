@@ -8,11 +8,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-11, autonomous AWP) — pick up here
+## ⏩ LATEST (2026-08-11 ~20:00 PDT, autonomous AWP continuation) — pick up here
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
-**🚨 2026-08-11 AWP — two LIVE findings, diagnosed not patched, full package in
+**🆕 Same-day continuation closed out both open questions from the entries below — see the
+ADDENDUM at the top of `logs/pending_claude_session_2026-08-11.md` for full evidence:**
+- **Finding A's "is money at risk" question is answered with a number, not a shrug:** queried
+  Alpaca directly — SMCI has a live resting SELL 3sh STOP @ **$24.05** (status `new`, id
+  `a24f87cc…`), created Monday at entry time. SMCI trades ~$34.05 now. Bounded, confirmed, not
+  naked. The tracker-blindness bug (bot's own adaptive exit logic doesn't see this position) is
+  unchanged and still needs the dedicated session.
+- **Finding B ("dashboard fix not showing live") — root cause LOCATED, not just observed.** A
+  separate long-running companion process, `mtf-writer.service` (`live_data_writer.py`), has been
+  running since **2026-08-06** — 4 days before the fix (`generate_dashboard.py` mtime
+  2026-08-10 21:23:51 UTC) — and re-imports `generate_dashboard` *inside its loop* believing
+  (per its own comment) that this hot-reloads the module. **It doesn't** — Python caches modules
+  by name; only `importlib.reload()` re-reads source. So it's been running the stale pre-fix
+  `generate()` every ~30s, clobbering `main.py`'s own correct (post-restart) 5-min writes roughly
+  10-to-1. **New, much safer recommended action: `sudo systemctl restart mtf-writer` only** — zero
+  execution/trading-path involvement, unlike the previous "restart mtf-bot" suggestion. Residual
+  open question (flagged, not solved): `auto_deploy.sh` restarts both services together, so why
+  they drifted apart isn't fully explained by `logs/auto_deploy.log` (thin — 28 lines, 12 stray
+  "script not found" errors this week) — worth a look, separate from this finding's cause.
+
+**🚨 2026-08-11 AWP (original findings, still the full diagnostic record) — full package in
 `logs/pending_claude_session_2026-08-11.md` (also `logs/tb_audit_log.md` same-date entries for the
 verbatim code trace):**
 1. **SMCI phantom_broker — root cause LOCATED.** `portfolio_tracker.py::write_eod_summary()`'s
@@ -37,7 +57,7 @@ verbatim code trace):**
    pending-session package. Board+GAI majority over Gro on the hard part (temporal proof needs a
    PreToolUse write-blocking hook + GitHub branch-protection status check, not git-ancestry alone —
    2 independent voices found the same ancestry-gaming vector Gro missed). Not built.
-**Rolling AWP chain re-armed for 19:25 PDT 2026-08-11 (+5h05m) at session start.**
+**Rolling AWP chain re-armed for 00:31 PDT 2026-08-12 (+5h05m) at this continuation's start.**
 
 **⏭️ 2026-08-10 NEXT BUILD (design aligned, no code yet) — QHM profit-target + earnings de-risk.**
 Full design + BGG alignment + Rafael's decision in `logs/qhm_earnings_trim_design_2026-08-10.md`.

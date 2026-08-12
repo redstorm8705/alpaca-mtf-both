@@ -9627,3 +9627,74 @@ convention is nominally satisfied elsewhere in the codebase).
 session: bring Phase 2a.5's "is this symbol really gone" check up to orphan_manager's standard
 (an independent live `/v2/positions` query, not trust in the FIFO reconstruction's absence) —
 full patch sequence, both hotspot files, board + Gro/GAI required (RTH execution impact).
+
+---
+
+## 2026-08-11 ~20:00 PDT — AWP rolling-chain continuation: Finding A confirmed at source (SMCI
+stop price), Finding B root cause LOCATED (stale companion process, not a "live-process anomaly")
+
+**Scheduled/autonomous session. Diagnosis only — nothing patched, per AWP hard rule.**
+
+### Finding A follow-up — SMCI protective stop, exact terms confirmed
+Queried Alpaca directly (read-only `/v2/orders?status=open&symbols=SMCI`, same call pattern
+`generate_dashboard.py::_load_alpaca()` already uses in production):
+```
+SMCI sell 3 stop new stop_price= 24.05 created= 2026-08-10T20:36:39.351857Z
+id= a24f87cc-967e-4e51-9be7-8e7cc63e8ff6
+```
+Live, resting, untouched since Monday's entry. SMCI last ~$34.05 (dashboard, same check). Answers
+the prior session's open "is money at risk" question with a verified number: bounded, not naked.
+Does NOT change the root cause already logged above (Phase 2a.5 tracker corruption) — the bot's
+own adaptive exit management still can't see this position; only this static GTC order protects
+it. No code touched.
+
+### Finding B — root cause located: `mtf-writer.service` running stale pre-fix module since before PR #130
+Prior entry (same date, above) established PR #130's `generate_dashboard.py` fix is correct on
+disk and in a fresh process, but the live dashboard kept rendering the old "—" output — logged
+then as an unresolved "live-process runtime anomaly." Root cause, verified at source this pass:
+
+**Evidence (verbatim, each independently checked over SSH on the live box):**
+1. `systemctl show mtf-writer --property=ExecMainStartTimestamp` → `ExecMainStartTimestamp=Thu
+   2026-08-06 18:44:02 UTC`
+2. `generate_dashboard.py` disk mtime → `2026-08-10 21:23:51 UTC` (the PR #130 fix — 4 days
+   *after* mtf-writer's process started)
+3. `live_data_writer.py:74-76` (read in full, 144 lines): the refresh loop does
+   `from generate_dashboard import generate` **inside** `while True:`, with the comment `# Import
+   inside loop so any hot-reload of generate_dashboard works` — this is a documented but FALSE
+   belief about CPython's import semantics. `sys.modules` caches by module name; a repeated
+   `import` statement after the first successful one is a no-op reference fetch, not a re-read of
+   the source file. Only `importlib.reload(module)` re-executes a module's source. This process
+   has therefore been running the **pre-fix** `generate()` function object in memory continuously
+   since Aug 6, regardless of what changed on disk since.
+4. `logs/live_writer.log` tail: continuous successful writes every ~31s, e.g.
+   `2026-08-12 02:52:06,483 | INFO | live_writer | dashboard.html written (24,905 bytes)` — zero
+   exceptions logged. Byte count matches the prior session's own measurement of a
+   ~1,000-1,300-byte deficit vs. a correct render (the missing QHM stop/target markup for 5 rows).
+5. `mtf-bot.service` (the trading engine, separate systemd unit) — by contrast — shows
+   `Active: active (running) since Tue 2026-08-11 06:00:06 UTC; 20h ago` — restarted *after* the
+   fix, so `main.py`'s own per-5-min-cycle `_gen_dash()` call IS running the corrected code; it
+   simply loses the overwrite race to the 30-second stale writer roughly 10-to-1.
+6. Re-read `generate_dashboard.py:540-620` (QHM stop-fallback block) and confirmed `open_pos`
+   (the loop driver) is sourced from `alpaca.get("positions",[])`, itself from a fresh
+   `/v2/positions` call inside `_load_alpaca()` on every single `generate()` invocation — so the
+   underlying data was never the problem; only the cached CODE VERSION was.
+
+**RC classification:** not a listed RC-1..RC-8 class — this is a new failure mode (stale in-memory
+module in a long-running companion process, mistaken for hot-reload) worth naming if it recurs:
+tentatively "RC-9: stale companion-process module cache." Watching for a second instance before
+formally adding it to the tracked table.
+
+**Residual, explicitly unresolved:** `auto_deploy.sh` (read in relevant part) restarts `mtf-bot`,
+`mtf-writer`, `mtf-http` together in ONE `systemctl restart <a> <b> <c>` command — so under normal
+automated deploy both processes should cycle together. Why `mtf-bot` shows a fresh Aug-11 restart
+while `mtf-writer` still shows Aug-6 is NOT explained by `logs/auto_deploy.log` (only 28 lines
+total; tail shows 12 repeated `/bin/sh: 1: /home/ubuntu/mtf-bot/auto_deploy.sh: not found` errors
+before a handful of daily "no-change" heartbeat lines — smells like a separate deploy-mechanism
+reliability gap this week). Flagged, not chased further this session — do not present as solved.
+
+**NOT PATCHED — AWP hard rule.** Recommended action for the operator: `sudo systemctl restart
+mtf-writer` only (not `mtf-bot` — zero execution-path involvement in this specific process).
+Forward-improvement pass (logged, not built): post-deploy smoke-test diffing a fresh render
+against the live write; or swap the in-loop `import` for `importlib.reload()` so the existing
+comment's intent becomes true. Full addendum + operator decision options in
+`logs/pending_claude_session_2026-08-11.md`.
