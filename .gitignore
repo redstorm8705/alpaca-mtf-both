@@ -1,7 +1,7 @@
 # Added by code-review-graph
 .code-review-graph/
 
-# ── Secrets & credentials ─────────────────────────────────────────────────────
+# ── Secrets & credentials ──────────────────────────────────────────────
 .env
 .env.*
 !.env.example
@@ -26,7 +26,7 @@ secrets/
 .mcp.json
 .token-savior-cache.json
 
-# ── Python runtime ─────────────────────────────────────────────────────────────
+# ── Python runtime ───────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -37,13 +37,13 @@ __pycache__/
 dist/
 build/
 
-# ── Runtime state (position data, session state) ───────────────────────────────
+# ── Runtime state (position data, session state) ───────────────────────
 data/state/
 data/cache/
 # Config is stable quarterly configuration, not volatile runtime state — track it
 !data/state/quarterly_holds_config.json
 
-# ── Trade data (P&L history, open positions) ───────────────────────────────────
+# ── Trade data (P&L history, open positions) ──────────────────────────
 trade_log.json
 trade_log.json.bak
 trade_events.jsonl
@@ -65,8 +65,10 @@ logs/*
 !logs/queued_for_review_*.md
 # Whitelisted for autonomous pipeline (CCR drafts → OCI DS/GAI → session approval):
 !logs/pending_ds_gai_*.json
+!logs/pending_gro_gai_*.json
 !logs/pending_patch_*.patch
 !logs/pending_approvals_*.md
+!logs/pending_claude_session_*.md
 # Whitelisted for research memos (quarterly holds, session analysis):
 !logs/quarterly_holds_research_*.md
 # Whitelisted for failure log (approach history across sessions):
@@ -76,7 +78,6 @@ logs/*
 !logs/mtf_full_bot_audit/*
 # Whitelisted for interactive→API build-package scope docs and session decision queues:
 !logs/api_build_packages_*.md
-!logs/pending_claude_session_*.md
 !logs/f6_activation_BLOCKED_*.md
 !logs/f6_prereq*_design_*.md
 !logs/reports_durability_design_*.md
@@ -96,48 +97,48 @@ logs/*
 !logs/weekly_audit_rollup_*.md
 !logs/score16_report.json
 
-# ── Generated HTML dashboards ──────────────────────────────────────────────────
+# ── Generated HTML dashboards ────────────────────────────────────────────
 *.html
 
-# ── Backtest outputs ───────────────────────────────────────────────────────────
+# ── Backtest outputs ─────────────────────────────────────────────────────
 backtest/results/
 backtest/output/
 backtest/*.csv
 backtest/*.json
 *.csv
 
-# ── macOS ──────────────────────────────────────────────────────────────────────
+# ── macOS ────────────────────────────────────────────────────────────────
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
 
-# ── IDE / editors ──────────────────────────────────────────────────────────────
+# ── IDE / editors ──────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *~
 
-# ── Virtual environments ───────────────────────────────────────────────────────
+# ── Virtual environments ───────────────────────────────────────────────
 venv/
 .venv/
 env/
 
-# ── External / vendor code (third-party, not yours) ───────────────────────────
+# ── External / vendor code (third-party, not yours) ───────────────────────
 _external/
 
 # ── OCI deployment scripts (contain Slack webhook URL — never commit) ──────────
 auto_deploy.sh
 
-# ── Tool caches (re-created every lint/type-check run) ─────────────────────────
+# ── Tool caches (re-created every lint/type-check run) ─────────────────────
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 
-# ── Archive & doc dumps (bloated the tree to 235MB — 2026-07-03 cleanup) ───────
+# ── Archive & doc dumps (bloated the tree to 235MB — 2026-07-03 cleanup) ─────────
 *.zip
 *.pdf
 
-# ── trade_log backups (retained on disk, never tracked) ────────────────────────
+# ── trade_log backups (retained on disk, never tracked) ────────────────────
 trade_log.json.bak*
 trade_log.json.pre*
