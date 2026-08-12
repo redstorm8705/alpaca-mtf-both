@@ -1,0 +1,138 @@
+{
+  "audit_date": "2026-08-11",
+  "run_ts": "2026-08-11T10:30:01.282942-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN",
+      "SPY"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 26,
+    "levels": {
+      "ELEVATED": 24,
+      "NORMAL": 2
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 28,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-11 15:56:36,608 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-11 15:57:19,125 | WARNING  | execution.entry_logic | [MSTR] COUNTER-TREND GATE [short]: 1-month return +3.84% opposes the trade on a structura",
+      "2026-08-11 16:00:12,531 WARNING ledger_sync ledger_sync wall-time 11.0s (fills=481 orders=2318)",
+      "2026-08-11 16:03:20,358 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.8/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-11 16:04:09,099 | WARNING  | execution.entry_logic | [CRWD] COUNTER-TREND GATE [short]: 1-month return +18.44% opposes the trade on a structur"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -18.279999999999973,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -9.139999999999986,
+    "best": {
+      "symbol": "SPY",
+      "pnl": -6.039999999999964,
+      "entry_price": 774.77,
+      "exit_price": 771.75,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 767.84,
+      "target": 789.13
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": -12.240000000000009,
+      "entry_price": 277.82,
+      "exit_price": 271.7,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 250.6,
+      "target": 334.31
+    },
+    "trades": [
+      {
+        "symbol": "SPY",
+        "pnl": -6.039999999999964,
+        "entry_price": 774.77,
+        "exit_price": 771.75,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 767.84,
+        "target": 789.13
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -12.240000000000009,
+        "entry_price": 277.82,
+        "exit_price": 271.7,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 250.6,
+        "target": 334.31
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "SNOW",
+        "side": "long",
+        "qty": 1.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "SMCI"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "AMZN",
+      "SPY"
+    ],
+    "by_symbol": {
+      "AMZN": {
+        "buy": 0,
+        "sell": 2
+      },
+      "SPY": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

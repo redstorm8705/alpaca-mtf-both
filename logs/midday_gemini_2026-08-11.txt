@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-08-11
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+  Naked position (no protective stop order) | SNOW (long, 1sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** Both closed trades (SPY, AMZN) were stop-hits. The P&L calculation is mathematically consistent with the entry/exit prices provided.
+*   **Correlation:** Both trades had a score of 10/12 (High confidence), yet both resulted in stop-hits, indicating a severe regime mismatch or strategy degradation in the current MRI distribution.
+*   **Stop Analysis:** 100% stop-hit rate for the session. The `AMZN` stop was set at $250.60 against an entry of $277.82, which is significantly wider than the 1.2x ATR expectation for a paper strategy, suggesting a potential failure in dynamic stop calculation or risk-manager override.
+
+### ENTRY QUALITY
+*   Entries were taken under `ELEVATED` MRI (36/100). While the bot applied a size floor adjustment (0.85x), the strategy continues to enter positions during high-volatility, low-TQI conditions (avg 27.4/100), which directly contradicts the goal of avoiding regime-mismatch trades.
+
+### EXIT QUALITY
+*   Stated reasons (stop_hit) match the realized prices. However, the `AMZN` trade exit ($271.70) was reached well before the stop price ($250.60), yet the log indicates "stop_hit". This suggests an internal stop-price update (likely a trailing or breakeven logic) was triggered but not accurately logged in the `CLOSED TRADE DETAILS`.
+
+### MRI ALIGNMENT
+*   The strategy is persistently attempting to execute in an `ELEVATED` MRI environment. The `ledger_sync` confirms 479 intraday positions active, and despite `ELEVATED` scores, the strategy is not effectively pausing or widening criteria enough to prevent the current 100% stop-hit rate.
+
+### LOG ANOMALIES
+*   `[ANOMALY-3] TQI degradation`: The bot explicitly identified that the last-5-trade average (27.4/100) is below the threshold (30/100), confirming systematic performance decay.
+*   `ledger_sync` wall-time 11.4s: Excessive duration for a ledger sync, indicating potential latency in state reconciliation.
+
+### NEW BUGS / CONCERNS
+*   EXECUTION BUG | CRITICAL | Naked Position | The `SNOW` position appears in the `LIVE STOP COVERAGE` as having no stop, while the bot is active. This confirms the failure of the `risk_manager` to maintain active protections.
+*   EXECUTION BUG | HIGH | Inconsistent Stop Recording | The `AMZN` trade lists a stop of $250.60 but exited at $271.70 under "stop_hit". The internal stop-tracker is likely desynchronized from the actual exit execution order.
+*   ALPHA ISSUE | MEDIUM | Excessive Stop-Hit Rate | The high-confidence scores (10/12) are not filtering for the current adverse regime, resulting in a 0% win rate despite high signal scores.
+
+### FIX VALIDATION
+*   FIX VALIDATION: N/A (No prior fixes to validate)
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediately force-close the `SNOW` position or manually inject a stop order to clear the `CATASTROPHIC ALERT` status.
+2.  **ALPHA:** Increase `MIN_LONG_SCORE` and `MIN_SHORT_SCORE` to 11/12 or higher while `MRI` remains `ELEVATED` to force a wider "no-trade" zone.
+3.  **EXECUTION:** Audit `execution.risk_manager` to determine why the `SNOW` position was allowed to open or persist without an accompanying GTC or child stop order.
