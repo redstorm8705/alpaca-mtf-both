@@ -9792,3 +9792,42 @@ carry-forward/phantom/corruption bug.** LOW-PRIORITY follow-ups: (a) fill-by-fil
 realized recon to pinpoint the ~$7; (b) model reg fees (and confirm the residual) in the invariant so
 it stops spuriously flipping ledger_auth=False. Tier-1.1 = low-severity; Tier-1.2 (QHM-trim
 auto-confirm, scoped) is the real Tier-1 build.
+
+## 2026-08-13 Autonomous Nightly — live_data_writer.py (hot-reload fix)
+
+**File:** `live_data_writer.py` | **Lines:** 144 | **Full read:** COMPLETE
+
+**Finding:** L74 comment claims `from generate_dashboard import generate` inside a loop enables hot-reload. This is INCORRECT — Python caches modules in `sys.modules`; repeated `from X import Y` in a loop returns the SAME cached object. Source is never re-read after first import. Root-cause verified: every deploy updating `generate_dashboard.py` leaves `live_data_writer.py` writing the OLD dashboard until the process is manually restarted (documented in handoff.md 2026-08-12 "ROOT of shipped-but-not-live class").
+
+**Fix:** Replace `from generate_dashboard import generate` with `import importlib; import generate_dashboard as _gd_mod; importlib.reload(_gd_mod); _gd_mod.generate()`. `importlib.reload()` is the ONLY standard-library mechanism to force re-reading of updated source in a running process.
+
+**10-Point Audit:**
+| Point | Result |
+|-------|--------|
+| 1 Static analysis | py_compile PASS, mypy PASS, ruff PASS |
+| 2 Trade path trace | NOT in trading path — display-only companion process |
+| 3 Adversarial scenarios | Reload on syntax-error caught by outer except block; first-cycle double-load is harmless; partial-file-write during reload caught by except block |
+| 4 Full top-to-bottom read | ✓ 144 lines |
+| 5 Cross-references | from generate_dashboard (lazy, fixed), from data.gex (lazy), from alerts (lazy) — all in exception-safe blocks |
+| 6 Logic contradictions | L74 comment was wrong (fixed) |
+| 7 Redundancy | None |
+| 8 State persistence | Lock-file only (fcntl.flock), no state files |
+| 9 Data source tier | N/A |
+| 10 Timezone/logging | N/A |
+
+**RC Scan:**
+| RC | Result |
+|----|--------|
+| RC-1 | PASS — `datetime.now(ZoneInfo("America/New_York"))` at L94 |
+| RC-2 | PASS — `_HERE = Path(__file__).resolve().parent` at L24 |
+| RC-3 | PASS — all except blocks log |
+| RC-4 | N/A |
+| RC-5 | N/A |
+| RC-6 | N/A |
+| RC-7 | N/A |
+| RC-8 | N/A |
+
+**Impact radius:** ZERO — `live_data_writer` not imported by any module. `generate_dashboard` importers: `run_cycle.py` (separate OS process; `sys.modules` is per-process; reload in live_data_writer cannot affect run_cycle). No trading path affected.
+
+**Board vote (cold parallel subagents):** A — FAIL (counter-prompted Round 1; objection: missing step documentation, NOT code defect; all evidence provided) | B — PASS | C — PASS
+**Cold Second-Agent:** IN PROGRESS

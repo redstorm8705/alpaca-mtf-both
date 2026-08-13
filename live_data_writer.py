@@ -71,9 +71,13 @@ def main():
 
     while True:
         try:
-            # Import inside loop so any hot-reload of generate_dashboard works
-            from generate_dashboard import generate
-            generate()
+            # importlib.reload() forces re-read of updated source on each cycle.
+            # 'from X import Y' inside a loop does NOT reload — Python caches
+            # modules by name; only importlib.reload() re-reads the source file.
+            import importlib
+            import generate_dashboard as _gd_mod
+            importlib.reload(_gd_mod)
+            _gd_mod.generate()
             # Success — reset error streak
             if _consec_errors > 0:
                 logger.info(
