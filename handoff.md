@@ -53,10 +53,26 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   guard GAI asked for already exists in `lifecycle.py`; MRI-gated not score-gated; fired 0× on the
   flagged days) and trailing-stop-null-after-partial (the trail WAS set; the EOD snapshot schema just
   omits `trail_stop`). Verify audit-pipeline "bugs" at source before building.
-- **⏩ NEXT owed builds (priority order, each = full gate):** (1) SNOW stop auto-rearm (risk-path —
+- **✅ NVDA/qhm ledger REFUSED — RESOLVED (2026-08-12, operator-confirmed).** `ownership_guard`
+  `sync_ledger REFUSED` fired 78× (every ~20 min RTH) — protected floor 2 vs live net 1, freezing NVDA
+  in the ledger. VERIFIED legitimate: the QHM earnings profit-take Tier-1 trimmed NVDA 2→1 today ahead
+  of its 2026-08-26 earnings (`qhm_earnings_trim.json` tier1=done; `quarterly_holds` qty_filled=1); NVDA
+  protected throughout (GTC stop live @ $211.58). Cleared via `confirm_ledger_heal.py NVDA qhm 1` +
+  `run_ledger_sync.py` → floor healed 2→1, drift=0, confirm consumed, whole ledger reconciled clean.
+- **⏭️ NEXT BUILD (SCOPED + DESIGNED, no code) — QHM earnings-trim → ledger auto-confirm ROOT FIX.**
+  Full pre-scoped package: `logs/design_records/qhm_earnings_trim_ledger_autoconfirm_2026-08-12.md`.
+  Root of the NVDA incident above: the earnings-trim (a legit system reduction) doesn't sync the
+  ownership ledger → manual confirm needed after EVERY trim. Fix: a shared
+  `record_system_heal_confirmation(sym,tier,target_qty,source)` in `ownership_guard.py` + a fill-
+  confirmed hook in `quarterly_hold_manager._maybe_earnings_trim` (L1983) writing
+  `confirmed_by="earnings_trim_auto"` for the actual post-trim qty. SAFETY: fill-confirmed-only, actual-
+  not-intended qty, never bypasses the never-shrink guard (unconfirmed shrink still REFUSES). Scope =
+  earnings-trim T1+T2 only (Rafael). Full gate (2 large files incl. the ownership_guard SAFETY control;
+  masked-loss+reliability+data-integrity board). Recurrence-prevention (next trim days away), NOT acute.
+- **⏩ OTHER owed builds (priority order, each = full gate):** (1) SNOW stop auto-rearm (risk-path —
   its broker stop keeps getting dropped; bot re-armed a day stop 8/12 but the re-arm path is
   unreliable); (2) fifo_pnl lot-carry-forward ROOT (the deeper unification — make the incremental FIFO
-  derive from pnl_ledger's complete-history source; flag-only above closed the latent reporting risk,
+  derive from pnl_ledger's complete-history source; the flag-only fix closed the latent reporting risk,
   not the root); (3) writer hot-reload root (`live_data_writer.py` re-staleifies the dashboard on every
   deploy — display only); (4) the two `_tracker_pnl`/`heal_history` telemetry follow-ups above.
 
