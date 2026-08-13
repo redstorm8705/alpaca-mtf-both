@@ -12,6 +12,29 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
 
+**⏭️⏭️ IMMEDIATE NEXT BUILD (Rafael-chosen, ready): QHM earnings-trim → ownership-ledger auto-confirm.**
+Full pre-scoped package: `logs/design_records/qhm_earnings_trim_ledger_autoconfirm_2026-08-12.md`. Take
+it through the full gate (safety control — ownership_guard + quarterly_hold_manager; masked-loss +
+reliability + data-integrity board). This is Tier-1.2 and the highest-value ready build.
+
+**📊 2026-08-12 — AUGUST P&L AUDIT (Alpaca-sourced; tracker math NOT used) + LEDGER-INTEGRITY result:**
+- **Equity now $2,817 (live).** ALL-TIME HIGH = **$2,903.91 on 2026-04-17** → currently ~3% (live)/~5%
+  (EOD) BELOW the ATH; NOT near/testing ATHs (no new high since April). August MTD +$95 (+3.6%) EOD /
+  ~+6% live, but PEAKED Aug-4 ($2,864.85) then pulled back. **Realized (pnl_ledger FIFO): +$41.47 =
+  intraday −$31.10 + QHM +$72.57** — the core INTRADAY strategy is net-negative realized in August; QHM
+  holds + earnings-trims carried the month, and most of the equity gain is UNREALIZED markup on the
+  QHM holds (~$148 open unrealized). (Intraday-edge review is a Tier-2 priority.)
+- **LEDGER INTEGRITY — P&L is SOUND (within ~$7 / 0.25%).** The pnl_ledger invariant "fails" at
+  drift=$5.99 vs a $5.00 tol, but diagnosed definitively: 594 activities = 488 FILL + 106 FEE (no
+  dividends/interest/journals); unrealized reconciles to the PENNY (Alpaca $148.57 vs ledger $148.57);
+  realized is complete (0 unmatched_closes, fills from inception). Drift = −$1.14 unmodeled reg fees +
+  a ~$7.13 realized-methodology residual (ledger pure-FIFO $163.06 vs Alpaca equity-implied $170.19,
+  across 488 fills w/ many same-symbol re-entries + short round-trips). NOT corruption / carry-forward /
+  phantom. Fluctuates around the tol (ledger_auth=True most days). **LOW-PRIORITY follow-ups:** (a) a
+  fill-by-fill FIFO-vs-Alpaca realized recon to pinpoint the ~$7; (b) model reg fees in the invariant so
+  it stops spuriously failing. Tier-1.1 is therefore NOT a critical bug — the P&L numbers above are
+  trustworthy.
+
 **✅ 2026-08-12 — PR #130 NOW LIVE + writer-stale ROOT identified (operational, no code shipped):**
 - **mtf-writer restarted 2026-08-12 16:21 UTC** → PR #130 CONFIRMED LIVE at source: dashboard QHM rows
   render real stops (NVDA $211.58, GOOGL $338.62, GE $307.33, GEV $863.06, LLY $1011.60 — each matches

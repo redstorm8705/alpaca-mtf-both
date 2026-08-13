@@ -9770,3 +9770,25 @@ syncs the ownership ledger → manual confirm required after every trim. Pre-sco
 `record_system_heal_confirmation` in ownership_guard.py + fill-confirmed hook in
 `_maybe_earnings_trim`; `confirmed_by="earnings_trim_auto"`; never bypasses the never-shrink guard).
 Full gate owed (2 large files incl. the ownership_guard SAFETY control). Recurrence-prevention, not acute.
+
+---
+
+### 2026-08-12 — August P&L audit (Alpaca-sourced) + pnl_ledger invariant DIAGNOSED (P&L sound)
+
+**August P&L (Alpaca portfolio history + pnl_ledger FIFO; tracker math NOT used):** equity $2,817 live;
+ALL-TIME HIGH $2,903.91 (2026-04-17) → ~3-5% BELOW ATH, no new high since April (contra the "testing
+ATHs" read). August MTD +$95 (+3.6%) EOD/~+6% live, peaked Aug-4 $2,864.85 then pulled back. Realized
+(ledger) +$41.47 = intraday −$31.10 + QHM +$72.57 → core intraday strategy net-negative realized in
+August; QHM holds + earnings-trims carried it; most equity gain is UNREALIZED QHM markup (~$148).
+
+**pnl_ledger invariant drift ($5.99 vs $5 tol) — DIAGNOSED, NOT a bug (verify-at-source):** 594
+activities = 488 FILL + 106 FEE only (no dividends/interest/journals). Unrealized reconciles to the
+penny (Alpaca $148.5717 vs ledger $148.5700). Realized complete (0 unmatched_closes, fills from
+inception 2026-04-06). Drift decomposition: −$1.14 unmodeled reg fees (TAF/CAT/REG) + a ~$7.13
+realized-methodology residual (ledger pure-FIFO realized $163.06 vs Alpaca equity-implied $170.19),
+across 488 fills with many same-symbol re-entries + short round-trips. ~0.25% of equity; fluctuates
+around the tol (ledger_auth=True most days). **Conclusion: P&L is trustworthy within ~$7; NOT a
+carry-forward/phantom/corruption bug.** LOW-PRIORITY follow-ups: (a) fill-by-fill FIFO-vs-Alpaca
+realized recon to pinpoint the ~$7; (b) model reg fees (and confirm the residual) in the invariant so
+it stops spuriously flipping ledger_auth=False. Tier-1.1 = low-severity; Tier-1.2 (QHM-trim
+auto-confirm, scoped) is the real Tier-1 build.
