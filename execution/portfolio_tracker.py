@@ -870,11 +870,52 @@ class PortfolioTracker:
                     f"pnl_ledger invariant FAIL drift=${_led_inv.get('drift')}"
                 )
         except Exception as _led_err:
-            # _pnl_today already holds the dual-compute default set above.
-            logger.warning(
-                "pnl_ledger unavailable/invariant-fail for %s — dual-compute "
-                "fallback kept: %s", today, _led_err,
+            # Option C FLAG-ONLY (2026-08-12, board 4/4 + Gro + GAI, 3 review rounds).
+            # pnl_ledger (the phantom-proof authority) is down. The two remaining
+            # sources are BOTH unreliable and can be blind to the SAME loss, so NO
+            # substitute value is safe (tracker-preference AND min() were both rejected
+            # — proof below), and we deliberately do NOT change the reported value here.
+            # The CONTROL is the FLAG: mark the day unreconciled so reconcile_eod
+            # (~4:10pm ET) recomputes pnl_today from the immutable Alpaca fill log.
+            #   • _tracker_pnl sums today's closed-trade P&L, but a _fill_unverified /
+            #     entry<=0 exit is booked at pnl=$0 (record_exit) and is NOT filtered
+            #     from this sum (unlike get_stats) — it masks that leg's loss.
+            #   • _alpaca_pnl (incremental FIFO) drifts on lot carry-forward; and for
+            #     the SAME entry<=0 trade the orphan-seed skip makes FIFO contribute $0
+            #     too (fifo_pnl synthetic-short path) — the identical blind spot, which
+            #     can make both sources AGREE while both omit the loss. min() therefore
+            #     cannot guarantee never-mask (board + Gro + GAI).
+            # Trigger on EITHER source disagreement (independent-error class) OR any
+            # _fill_unverified trade today (shared-blind-spot class — may not disagree).
+            # _a4_gap already sets its own flag+reason and is excluded.
+            _has_fill_unverified = any(
+                t.get("_fill_unverified") for t in today_trades
             )
+            _sources_drift = (
+                _alpaca_pnl is not None
+                and abs(_alpaca_pnl - _tracker_pnl) > 0.005
+            )
+            if not _a4_gap and (_sources_drift or _has_fill_unverified):
+                _pnl_unreconciled = True
+                if not _pnl_unreconciled_reason:
+                    _pnl_unreconciled_reason = (
+                        "ledger_down_fill_unverified" if _has_fill_unverified
+                        else "ledger_down_source_disagreement"
+                    )
+                logger.warning(
+                    "pnl_ledger not authoritative for %s (alpaca=$%.2f tracker=$%.2f "
+                    "fill_unverified=%s) — reported value left at the dual-compute "
+                    "default; day FLAGGED unreconciled for reconcile_eod (no substitute "
+                    "value is verifiable without the ledger): %s",
+                    today,
+                    (_alpaca_pnl if _alpaca_pnl is not None else float("nan")),
+                    _tracker_pnl, _has_fill_unverified, _led_err,
+                )
+            else:
+                logger.warning(
+                    "pnl_ledger unavailable/invariant-fail for %s — dual-compute "
+                    "fallback kept: %s", today, _led_err,
+                )
         _pnl_drift = (
             round(_alpaca_pnl - _tracker_pnl, 2) if _alpaca_pnl is not None else None
         )
