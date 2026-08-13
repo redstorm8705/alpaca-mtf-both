@@ -1,0 +1,54 @@
+Nightly Gemini Audit — 2026-08-12
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['execution/portfolio_tracker.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. execution.broker | [SMCI] DAY STOP submitted (retry) failure during RTH (40310000 / insufficient buying_power) | SMCI position exposure potentially unhedged at moment of retry.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+- **[SMCI] ORPHANED POSITION ADOPTED**: `execution.orphan_manager` reports adoption of 1 share at $32.68. This indicates the position was not correctly tracked in the `portfolio_tracker` state across the `SIGTERM` (signal 15) event at 19:57:13, causing an orphan recovery that resulted in the buying power error on the subsequent stop submission.
+- **`SIGTERM` processing**: The bot saved state, but the `ledger_sync` (19:40:12) and final `portfolio_tracker` stats (19:57:17) show a mismatch between active ticker counts and orphans, leading to the manual adoption routine.
+- **[ANOMALY-3] TQI degradation**: Repeated warnings (last-5-trade avg=25/100) are triggering; this indicates a consistent failure of stop placement or exit discipline over the last 15 minutes of the logs.
+
+### PERFORMANCE AUDIT
+- **Trade Check**: SMCI trade (2026-08-12) shows P&L of 8.46 on a $2.5K account. While P&L is positive, the stop submission error at 19:57:58 indicates a high risk of manual-bot drift where the `buying_power` calculation is not correctly accounting for open trades post-orphan adoption.
+- **R:R / Target**: The SMCI trade was set with a target of $38.29 (or $38.04 in the orphan adoption log). The trade was closed at $36.915/$36.96. The exit reason was `external_close`, suggesting the bot is not hitting targets autonomously and relying on external overrides/manual intervention.
+
+### TRADE INTEGRITY
+- **P&L recording**: The `pnl_ledger` `invariant-fail` in `execution.portfolio_tracker` (20:01:03) with a drift of $6.02 is significant. Per instructions, this is `WARN`, but the frequency suggests the `fifo_reconciler` is failing to resolve the drift after the SMCI orphan re-adoption.
+
+### MODIFIED FILE FINDINGS
+- **execution/portfolio_tracker.py**:
+  - `get_unverified_exits`: The logic to filter `expired` trades into a list and return them for reconciliation is sound, but the `try/except` block surrounding `_iso_to_dt` catches the exception but doesn't force a reconciliation write to `trade_log.json` for the corrupted/None timestamp, merely logging a `warning`. This creates a permanent stale entry in the `_unverified_exits` memory dictionary until the next `os.execv` cycle.
+
+### P5 STATUS
+- P5-C1: UNTOUCHED
+- P5-C2: UNTOUCHED
+- P5-H1: FIXED (PDT REMOVED)
+- P5-H2: TRIGGERED (SMCI stop submission error suggests overlap)
+- P5-H3: TRIGGERED (Orphan handling is failing to clear tracker)
+- P5-H4: UNTOUCHED
+- P5-H5: FIXED
+- P5-M1: UNTOUCHED
+- P5-M2: UNTOUCHED
+- P5-M3: UNTOUCHED
+- P5-L1: UNTOUCHED
+- P5-L2: UNTOUCHED
+- P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+- **EXECUTION BUG | HIGH | execution/broker.py | Orphaned position re-entry stop submission failure | Failure to check available buying power before submitting a retry-stop order leads to 40310000 errors.**
+- **INFRASTRUCTURE | MEDIUM | execution/portfolio_tracker.py | stale orphan entry after failed parse | `get_unverified_exits` logs a warning but fails to update the persistence layer when `_iso_to_dt` returns `None`, causing symbols to remain in memory indefinitely.**
+
+### FIX VALIDATION
+FIX VALIDATION: N/A
+
+### RECOMMENDED ACTIONS
+1. **SMCI Risk Management**: Immediately verify the `SMCI` position status in the Alpaca dashboard; manual closure is required if the bot's stop order (`a4f73fe2-88e3-44a1-afda-44c0e593caca`) remains unfulfilled due to the buying power block.
+2. **Buying Power Audit**: Review `execution/risk_manager.py` to ensure orphan adoption accounts for committed margin requirements before the broker attempts a `SELL` order.
+3. **Ledger Heal**: Run `confirm_ledger_heal.py` as requested in the logs for `NVDA/qhm` to clear the current sync lock.
+4. **Portfolio Tracker**: Modify `get_unverified_exits` to append to `syms_to_remove` when `_iso_to_dt` returns `None` to prevent the memory leak in `_unverified_exits`.
+5. **SIGTERM Logic**: Investigate `main.py` why the `SIGTERM` received at 19:57:13 resulted in an orphaned `SMCI` position despite the bot having identified it previously.

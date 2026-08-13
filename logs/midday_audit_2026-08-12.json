@@ -1,0 +1,115 @@
+{
+  "audit_date": "2026-08-12",
+  "run_ts": "2026-08-12T10:30:01.872368-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 2,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "NORMAL": 27
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 16,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-12 16:00:12,645 WARNING ledger_sync ledger_sync wall-time 10.7s (fills=487 orders=2336)",
+      "2026-08-12 16:04:08,681 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-12 16:13:24,208 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-12 16:20:12,745 WARNING ledger_sync ledger_sync wall-time 11.5s (fills=487 orders=2336)",
+      "2026-08-12 16:20:52,415 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.0/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 4.186699999999995,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 4.186699999999995,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": 4.186699999999995,
+      "entry_price": 32.6833,
+      "exit_price": 36.87,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 24.07,
+      "target": 50.58
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": 4.186699999999995,
+      "entry_price": 32.6833,
+      "exit_price": 36.87,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 24.07,
+      "target": 50.58
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": 4.186699999999995,
+        "entry_price": 32.6833,
+        "exit_price": 36.87,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 24.07,
+        "target": 50.58
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "RBLX",
+      "SMCI",
+      "SNOW"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "SMCI"
+    ],
+    "by_symbol": {
+      "SMCI": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
