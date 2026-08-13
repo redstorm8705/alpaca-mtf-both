@@ -9749,3 +9749,24 @@ like `get_stats`; (b) `heal_history` leaves `alpaca_pnl`/`tracker_pnl` telemetry
 `monthly_review`/`metrics` read those fields directly. **Also logged (audit-pipeline hygiene):** two
 GAI-meta/nightly "performance bugs" this week (breakeven-truncation, trailing-stop-null-after-partial)
 were FALSE POSITIVES on source verification — verify pipeline findings at source before building.
+
+---
+
+### 2026-08-12 — NVDA/qhm ownership-ledger REFUSED — RESOLVED (operator-confirmed) + ROOT scoped
+
+**Incident (real+current, Gemini `gai_meta` directive that DID survive verification):** `ownership_guard
+sync_ledger REFUSED — protected floor shrink NVDA/qhm {was:2, would_be:1}` fired 78× (every ~20 min RTH,
+latest 21:40 UTC). The guard correctly refuses to shrink a protected floor without operator confirmation
+(a legit trim and a breach are automation-indistinguishable). **Verified LEGITIMATE, not a breach:** the
+QHM earnings profit-take Tier-1 trimmed NVDA 2→1 today ahead of its 2026-08-26 earnings
+(`qhm_earnings_trim.json` tier1=done, t1_fired 08-12; `quarterly_holds.json` qty_filled=1). NVDA
+protected throughout (GTC stop live @ $211.58, +$24 unrealized). **Resolved:** `confirm_ledger_heal.py
+NVDA qhm 1` (Rafael-authorized) + `run_ledger_sync.py` → NVDA/qhm protected_floor healed 2→1, drift=0.0,
+confirmation consumed, entire ledger reconciled clean (all symbols drift=0).
+
+**ROOT cause (anti-silo gap) + fix SCOPED (no code):** the earnings-trim reduces the position but never
+syncs the ownership ledger → manual confirm required after every trim. Pre-scoped package:
+`logs/design_records/qhm_earnings_trim_ledger_autoconfirm_2026-08-12.md` (shared
+`record_system_heal_confirmation` in ownership_guard.py + fill-confirmed hook in
+`_maybe_earnings_trim`; `confirmed_by="earnings_trim_auto"`; never bypasses the never-shrink guard).
+Full gate owed (2 large files incl. the ownership_guard SAFETY control). Recurrence-prevention, not acute.
