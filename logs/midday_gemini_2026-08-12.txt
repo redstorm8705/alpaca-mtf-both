@@ -1,0 +1,37 @@
+Midday Gemini Audit — 2026-08-12
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity:** SMCI entry $32.68, exit $36.87. P&L +$4.19 is correct for a long position. Exit price is above the entry, confirming correct P&L sign.
+- **Score→Outcome:** Trade occurred with a 10/12 score, which is well above the `MIN_LONG_SCORE` of 8. The outcome was profitable, showing positive correlation for this sample.
+- **Stop-Hit Rate:** 0% (0 stops). While statistically insignificant due to the small sample size (1 trade), this is consistent with a healthy early-session performance.
+
+### ENTRY QUALITY
+- Entries were appropriately filtered. Log records show the bot correctly blocked 10 signals due to the dynamic `MIN_SCORE` being raised to 10/12 based on the regime analysis.
+- ORB gates functioned as expected, preventing entry when price action failed to confirm the breakout/breakdown levels relative to SPY.
+
+### EXIT QUALITY
+- No issues. The exit occurred after a partial fill (as noted in closed trade details), and the trade resulted in a profit.
+
+### MRI ALIGNMENT
+- The MRI news injection was correctly gated (`MRI news injection GATED: 32 alert(s) → +35pts capped at +10pts`). Sizing logic correctly accounted for CPI normalization and the midday doldrums, reducing size to 75%.
+
+### LOG ANOMALIES
+- **WARNING [ANOMALY-3]:** `TQI degradation: last-5-trade avg=25.0/100 < 30`. This is a recurring monitoring event alerting to low Trade Quality Index. 
+- **Drift:** `drift=$1.15` noted in `ledger_sync`. While below critical thresholds for a $2.5K account, it indicates a minor variance between local tracking and Alpaca API reporting.
+
+### NEW BUGS / CONCERNS
+- **INFRASTRUCTURE | MEDIUM | Drift discrepancy in Portfolio Tracker |** The log `execution.portfolio_tracker` reports an EOD drift of $1.15. While the bot successfully reconciles via `update_daily_pnl_from_alpaca`, consistent drift > $1.00 on a small paper account may indicate latency in the `ledger_sync` or rounding errors in the FIFO calculation module.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **INFRA:** Investigate `ledger_sync` drift ($1.15) to ensure local state doesn't diverge further during high-volatility periods.
+2. **ALPHA:** Review the TQI degradation (ANOMALY-3) trends; although current trades are profitable, the drop in TQI suggests that the "easy" entries are becoming scarce. Monitor if `MIN_SCORE` needs further manual tightening if TQI stays < 30.
