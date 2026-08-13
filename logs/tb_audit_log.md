@@ -9723,3 +9723,29 @@ phantom_broker drift (re-adopted 1sh @ $32.68, stop $30.11, tgt $38.04).
 **RC-4 count: stays 0** — new instance found+fixed same session (per the CLAUDE.md convention for the
 2026-07-03 same-session RC-4 finds). **Follow-ups (NOT this diff):** fifo_pnl lot-carry-forward ROOT
 cause; partial-external-close qty reconcile (Q4); alert-dedup + shutdown-path query timeout wrapper.
+
+---
+
+### 2026-08-12 — EOD ledger-down unreconciled FLAG (portfolio_tracker.py write_eod_summary) — SHIPPED (PR #138, main `1712ca1`)
+
+**Issue (data-integrity, from the "EOD P&L drift >$10" directive):** on the ledger-down (`except`) path,
+`write_eod_summary` left `pnl_today` at the incremental-FIFO default and set NO unreconciled flag — a
+drifting or loss-masking value reported as trusted. Neither non-authoritative source is safe: a
+`_fill_unverified`/entry≤0 exit is booked $0 in BOTH `_tracker_pnl` (un-filtered, unlike `get_stats`)
+AND the incremental FIFO (orphan-seed skip → synthetic short), so both can omit the SAME loss and even
+agree. Evidence: `EOD P&L DRIFT` warnings (445 in mtf_bot.log; 08-07 +$20.42, 08-10 -$14.51) + ledger
+non-authoritative 08-12 (`pnl_ledger_authoritative=False`).
+
+**Fix (FLAG-ONLY — no value substitution):** set `_pnl_unreconciled=True` (+ reason) when `not _a4_gap
+and (sources drift >$0.005 OR any _fill_unverified trade today)` → `reconcile_eod` recomputes from real
+fills. Value deliberately unchanged. **The gate KILLED two value-substitution designs across 3 rounds:**
+prefer-tracker (4-0 REJECT: tracker masks when it undercounts) and `min()` (Gro+GAI+masked-loss REJECT:
+signed P&L — both sources can understate the same loss). Converged on flag-only: board 4/4 (6 reviewer
+passes) + Gro+GAI APPROVE + cold-2nd PASS + adversarial claims-review PASS + statics clean. Reporting-
+layer only (does NOT feed kill-switch/sizing — verified thrice). DEPLOYED-UNEXERCISED.
+
+**New pre-existing follow-ups surfaced:** (a) `_tracker_pnl` should exclude `_fill_unverified` trades
+like `get_stats`; (b) `heal_history` leaves `alpaca_pnl`/`tracker_pnl` telemetry stale while
+`monthly_review`/`metrics` read those fields directly. **Also logged (audit-pipeline hygiene):** two
+GAI-meta/nightly "performance bugs" this week (breakeven-truncation, trailing-stop-null-after-partial)
+were FALSE POSITIVES on source verification — verify pipeline findings at source before building.
