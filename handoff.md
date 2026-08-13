@@ -36,10 +36,29 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   re-adopted the live 1sh @ $32.68 (stop $30.11, tgt $38.04).** FOLLOW-UPS (NOT shipped): fifo_pnl
   lot-carry-forward ROOT cause; partial-external-close qty reconcile (Q4); alert-dedup + shutdown-path
   query timeout wrapper.
+- **✅ EOD ledger-down unreconciled FLAG — SHIPPED & DEPLOYED (PR #138 → main `1712ca1`; OCI restarted;
+  DEPLOYED-UNEXERCISED).** `write_eod_summary` ledger-down (`except`) path previously left `pnl_today`
+  at the incremental-FIFO default with NO unreconciled flag — a drifting/loss-masking value reported as
+  trusted. FLAG-ONLY fix (no value substitution): set `_pnl_unreconciled=True` when `not _a4_gap and
+  (sources drift >$0.005 OR any _fill_unverified trade today)` → `reconcile_eod` recomputes from real
+  fills. Gate KILLED two value-substitution designs across 3 rounds — prefer-tracker (masks when tracker
+  undercounts a `_fill_unverified`/entry≤0 exit → $0) and `min()` (masks when BOTH sources understate the
+  same loss); converged on flag-only (the control is the flag, not the value). Board 4/4 + Gro+GAI +
+  cold-2nd + adversarial PASS. Reporting-only (does NOT feed kill-switch/sizing). **NEW pre-existing
+  follow-ups surfaced by the review:** (a) `_tracker_pnl` should exclude `_fill_unverified` trades like
+  `get_stats` does; (b) `heal_history` leaves `alpaca_pnl`/`tracker_pnl` telemetry stale while
+  `monthly_review`/`metrics` read those fields directly.
+- **⚠️ AUDIT-PIPELINE FALSE-POSITIVES (2026-08-12):** this week's two headline "performance bugs" from
+  the GAI meta / nightly audit did NOT survive source verification — breakeven-truncation (the 0.5×ATR
+  guard GAI asked for already exists in `lifecycle.py`; MRI-gated not score-gated; fired 0× on the
+  flagged days) and trailing-stop-null-after-partial (the trail WAS set; the EOD snapshot schema just
+  omits `trail_stop`). Verify audit-pipeline "bugs" at source before building.
 - **⏩ NEXT owed builds (priority order, each = full gate):** (1) SNOW stop auto-rearm (risk-path —
   its broker stop keeps getting dropped; bot re-armed a day stop 8/12 but the re-arm path is
-  unreliable); (2) fifo_pnl lot-carry-forward ROOT (the deeper fix behind the SMCI class); (3) writer
-  hot-reload root (`live_data_writer.py` re-staleifies the dashboard on every deploy — display only).
+  unreliable); (2) fifo_pnl lot-carry-forward ROOT (the deeper unification — make the incremental FIFO
+  derive from pnl_ledger's complete-history source; flag-only above closed the latent reporting risk,
+  not the root); (3) writer hot-reload root (`live_data_writer.py` re-staleifies the dashboard on every
+  deploy — display only); (4) the two `_tracker_pnl`/`heal_history` telemetry follow-ups above.
 
 **🆕 Same-day continuation closed out both open questions from the entries below — see the
 ADDENDUM at the top of `logs/pending_claude_session_2026-08-11.md` for full evidence:**
