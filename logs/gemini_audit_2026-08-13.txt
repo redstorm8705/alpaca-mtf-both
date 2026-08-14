@@ -1,0 +1,48 @@
+Nightly Gemini Audit — 2026-08-13
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['execution/portfolio_tracker.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **[ANOMALY-3] TQI Degradation**: The log consistently shows `[ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30`. This is triggering multiple times per hour. While not a crash, it indicates that current trade performance is significantly below the internal threshold for effective risk-scaling, likely forcing the bot into a defensive, reduced-size posture.
+*   **NEWS HALT**: Multiple `⛔ NEWS HALT` cycles occurred (e.g., 2026-08-13 19:16:54). While correctly blocking *new* entries, the bot remains in a state of flux with multiple active overnight holdings (MARA, SNOW, RBLX).
+*   **Ledger Sync Latency**: `2026-08-13 19:20:12` and `20:00:13` show `ledger_sync` wall-times of 11.3s-11.4s. This is high for a $2.5K account and may suggest excessive I/O wait times on the `trade_log.json` file during high-frequency scan periods.
+
+### PERFORMANCE AUDIT
+*   **P&L Integrity**: The provided `SMCI` trade (Entry: 32.68, Exit: 39.19, P&L: 6.51) matches the `pnl_today` figure. 
+*   **Stop Rate**: The bot shows high selectivity (skipping entries due to "Falling Knife" filters at 19:11:38, 19:11:42, 19:45:00). Current win rate (36.8%) is low; the "falling knife" (counter-trend) gate is critical, as recent exits (SPY, AMZN) were stop-hits. The risk management strategy of avoiding long-into-decline appears to be the only thing preventing higher P&L drawdown.
+*   **R:R Analysis**: The bot targets 2.5× ATR but recent exits (SPY, AMZN) have resulted in losses roughly equivalent to the entry-ATR buffer, suggesting the "overnight_atr_buffer_exit" logic is effectively cutting losses early, which is preferred given the poor current TQI.
+
+### TRADE INTEGRITY
+*   **Verification**: No trades were found with `pnl=0.0` where the exit price differed from the entry price, except for the expected `SMCI` partial-exit tranche at 32.6833.
+*   **Recording**: All exit reasons (external_close, target, stop_hit) map correctly to the trade flow.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/portfolio_tracker.py`**:
+    *   **Logic Gap**: `patch_exit_pnl` (line 152) uses `_qty_at_close` for P&L calculations. The audit reveals that if a trade is not fully closed by the `patch`, the `pnl_remaining` calculation at line 199 assumes all remaining quantity was closed at the patched price. If the trade is only *partially* filled/closed, this calculation logic is technically incorrect but functionally bypassed by the `_fill_unverified` logic. 
+    *   **Efficiency**: The `get_unverified_exits` function performs an O(N) traversal of `_unverified_exits` every cycle. Given the bot's scan frequency, this could contribute to the 11s `ledger_sync` latency.
+
+### P5 STATUS
+*   P5-C1 (FVG Index): UNTOUCHED
+*   P5-C2 (run_movers): UNTOUCHED
+*   P5-H1 (PDT): FIXED (Verified removed)
+*   P5-H2 (Crosstalk): UNTOUCHED
+*   P5-H3 (Orphan GTC): UNTOUCHED
+*   P5-H4 (Rule 2): UNTOUCHED
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | MEDIUM | execution/portfolio_tracker.py | Ledger Write Stalls** | High wall-time (11.4s) in `ledger_sync` indicates the current `_atomic_write` implementation (writing the full object to `trade_log.json`) is creating I/O contention. 
+    *   *Failure Condition*: Excessive wall-time during sync prevents the bot from processing the next cycle, delaying entry/exit logic by >10 seconds.
+
+### FIX VALIDATION
+*   **FIX VALIDATION**: PASS. The RC-4 datetime fix in `get_unverified_exits` and `patch_exit_pnl` (using `_iso_to_dt`) successfully prevented the "silent stuck" issue reported in previous logs.
+
+### RECOMMENDED ACTIONS
+1.  **I/O Optimization**: Migrate `trade_log.json` from full-object `json.dump` to an append-only JSONL format for the `closed` list to reduce the wall-time latency of `ledger_sync`.
+2.  **TQI Audit**: The `[ANOMALY-3]` is persistent. Audit `execution/exit_logic.py` for any skew in TQI calculation that might be artificially suppressing the scores of winning trades, causing the 28.4/100 average.
+3.  **Position Risk**: Ensure no new entries are triggered until `ledger_sync` wall-times stabilize, as current delays are encroaching on the RTH execution window.
