@@ -1,0 +1,43 @@
+Midday Gemini Audit — 2026-08-13
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 4
+- Naked position detected (no protective stop order assigned to live paper trade): AMZN (long, 2sh)
+- Naked position detected (no protective stop order assigned to live paper trade): PANW (long, 2sh)
+- Naked position detected (no protective stop order assigned to live paper trade): QQQ (long, 2sh)
+- Naked position detected (no protective stop order assigned to live paper trade): TOST (long, 2sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **Integrity**: The SMCI trade ($32.68 entry → $39.19 exit) correctly reflects a positive P&L. 
+- **P&L Signs**: Long position profit is positive ($19.52), consistent with exit > entry.
+- **Stop Rate**: 0% stop-hit rate is noted; however, this is likely skewed by the presence of 4 open positions that currently lack protective stops.
+- **Score Correlation**: The single closed trade (SMCI) had a score of 10/12, which aligns with the winning outcome.
+
+### ENTRY QUALITY
+- **Observations**: Current entries appear consistent with the MTF confluence scoring (≥ 8). 
+- **Filtering**: The bot correctly gated the [DDOG] entry due to the structural counter-trend condition (-5.9% 1m return), demonstrating functional logic for risk mitigation.
+
+### EXIT QUALITY
+- **Observations**: Exit logic appears functional for the single closed trade. The primary concern is the failure to maintain protective stops for the remaining long positions (AMZN, PANW, QQQ, TOST), which indicates a breakdown in the `execution.risk_manager` or `execution.exit_logic` oversight during the session.
+
+### MRI ALIGNMENT
+- **Observations**: The MRI session distribution shows "NORMAL" market conditions (10/100). The `macro_risk_index` successfully gated news injections. Sizing at 75% for mid-day matches the `strategy.run_cycle` log output.
+
+### LOG ANOMALIES
+- **WARNING [ANOMALY-3]**: TQI degradation detected (avg 28.4 < 30). This suggests the bot is operating in a regime where the current exit/stop strategy may be underperforming relative to market volatility.
+- **GATED Alerts**: 26 news alerts gated at +10pts, indicating that the news monitor is active and preventing potentially erratic entries during high-volatility news events.
+
+### NEW BUGS / CONCERNS
+- CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | description: Failure to maintain GTC stop orders for open positions | exact condition: The `LIVE STOP COVERAGE` report identifies AMZN, PANW, QQQ, and TOST as "NAKED," despite the bot's architecture requiring protective stops.
+- CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | description: Potential synchronization lag between ledger and Alpaca | exact condition: `ledger_sync` reflects positions that are not correctly associated with protective stops in the live execution layer.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediately trigger a `risk_manager.reconcile_stops()` event to force-submit protective GTC stops for all naked positions (AMZN, PANW, QQQ, TOST).
+2. **EXECUTION**: Audit `execution.risk_manager` for silent failures in the GTC stop submission loop; check for potential interactions with `OM-BUG-1` (even though extended hours are excluded, the logic may be gating RTH submissions).
+3. **ALPHA**: Investigate the TQI degradation (Anomaly-3) and evaluate if `INTRADAY_STOP_ATR_MULT` needs adjustment to prevent stop-hunting in current TQI levels.

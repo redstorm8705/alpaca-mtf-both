@@ -1,0 +1,160 @@
+{
+  "audit_date": "2026-08-13",
+  "run_ts": "2026-08-13T10:30:01.525603-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "PANW",
+      "AMZN",
+      "QQQ",
+      "TOST",
+      "SMCI"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 10,
+      "NORMAL": 18
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 23,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-13 16:05:36,851 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-13 16:14:12,249 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-13 16:20:11,904 WARNING ledger_sync ledger_sync wall-time 10.7s (fills=492 orders=2354)",
+      "2026-08-13 16:21:22,944 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-13 16:28:32,794 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 19.520099999999985,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 19.520099999999985,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": 19.520099999999985,
+      "entry_price": 32.6833,
+      "exit_price": 39.19,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 24.07,
+      "target": 50.58
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": 19.520099999999985,
+      "entry_price": 32.6833,
+      "exit_price": 39.19,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 24.07,
+      "target": 50.58
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": 19.520099999999985,
+        "entry_price": 32.6833,
+        "exit_price": 39.19,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 24.07,
+        "target": 50.58
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "AMZN",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "PANW",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "QQQ",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "TOST",
+        "side": "long",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "RBLX",
+      "SNOW"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 7,
+    "symbols": [
+      "AMZN",
+      "PANW",
+      "QQQ",
+      "SMCI",
+      "TOST"
+    ],
+    "by_symbol": {
+      "TOST": {
+        "buy": 2,
+        "sell": 0
+      },
+      "QQQ": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "PANW": {
+        "buy": 1,
+        "sell": 0
+      },
+      "SMCI": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}
