@@ -1,0 +1,43 @@
+Midday Gemini Audit — 2026-08-14
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected. (Note: Although `ledger_sync` recorded a drift of $+79.46, the bot successfully identified the reconciliation anomaly for `SNOW` and initiated an auto-heal sequence, preventing a naked position or sustained P&L corruption).
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity:** Both closed trades (`RBLX`, `PANW`) correctly registered as `stop_hit`.
+- **P&L Integrity:** 
+    - `RBLX`: Entry $36.21, Exit $38.73. With a $5.04 loss on what appears to be a long position (exit > entry), there is an apparent **recording discrepancy** or slippage-related accounting mismatch, as the math does not align with a standard profit/loss calculation.
+    - `PANW`: Entry $395.93, Exit $395.93, P&L $0.00. This is technically compliant with the "overnight_breakeven" exit reason (stop moved to entry), but the logging reflects a zero-sum trade which aligns with the provided guidance.
+- **Stop-Hit Rate:** 100% stop-hit rate (2/2) on the closed trades indicates the strategy is currently failing to navigate the intraday volatility, specifically the `ELEVATED` MRI regime.
+
+### ENTRY QUALITY
+- **Correlation/Filtering:** Entries were correctly gated by sector correlation (`META` blocked due to `AMZN` holding) and ORB gates (`AMD`, `TOST`, `DDOG` blocked). The logic is functioning correctly in suppressing lower-quality entries during unfavorable market conditions.
+
+### EXIT QUALITY
+- **Reversal Handling:** `SNOW` and `AMZN` reversal signals decayed to 1 (neutral), correctly avoiding premature exits or unnecessary churn, which aligns with the "no-trade" bias observed in the logs.
+
+### MRI ALIGNMENT
+- **Regime:** The bot correctly identified an `ELEVATED` MRI regime (score 40/100).
+- **Position Sizing:** The bot appropriately applied an `0.85x` size floor and a `0.12x` intraday multiplier, showing active and correct risk-reduction behavior in response to the macro environment.
+
+### LOG ANOMALIES
+- `WARNING`: `ledger_sync` reported a P&L drift of $+79.46 between Alpaca and the local tracker.
+- `WARNING`: `SNOW` phantom_tracker found a position in the tracker that was not present in the Alpaca API.
+- `WARNING`: `ANOMALY-3` reported TQI degradation (last-5-trade avg=29.4 < 30).
+- `WARNING`: `ledger_sync` recorded a wall-time of 10.6s, which is high and suggests significant I/O pressure or API latency.
+
+### NEW BUGS / CONCERNS
+- **INFRASTRUCTURE | MEDIUM | Ledger Reconciliation Drift:** The significant drift between the Alpaca ledger and the local tracker ($79.46) suggests that the `ledger_sync` process may be struggling with the state of long-duration or complex-exit trades. While auto-heal is active, the frequency of `ledger_sync` warning cycles is increasing.
+- **EXECUTION BUG | MEDIUM | RBLX P&L Calculation:** The `RBLX` trade log shows a long entry at $36.21 and an exit at $38.73, yet reports a P&L of $-5.04. This is a mathematical impossibility for a long trade and suggests the logging engine is fetching the wrong P&L value for the entry/exit pair.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **INFRASTRUCTURE:** Investigate the `ledger_sync` wall-time spikes (>10s); check if `499` fills and `2378` orders are causing excessive query overhead on the local database (Index optimization recommended).
+2. **EXECUTION:** Audit the `execution.fifo_pnl` logic to determine why `RBLX` recorded a loss on a positive price differential (check for fee-drag miscalculation or stale entry-price injection).
+3. **ALPHA:** Review the stop-hit rate vs. `INTRADAY_STOP_ATR_MULT` settings; during `ELEVATED` MRI regimes, current stops are being consistently tagged before reversals occur. Consider widening stops specifically during `ELEVATED` epochs.
