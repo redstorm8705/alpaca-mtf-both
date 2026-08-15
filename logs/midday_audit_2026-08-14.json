@@ -1,0 +1,139 @@
+{
+  "audit_date": "2026-08-14",
+  "run_ts": "2026-08-14T10:30:02.131778-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "PANW",
+      "RBLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 26,
+    "levels": {
+      "NORMAL": 3,
+      "ELEVATED": 23
+    },
+    "last_score": 40,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 51,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-14 15:56:34,839 | WARNING  | scan_to_html | [SNOW] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positio",
+      "2026-08-14 15:57:17,421 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$55.90 tracker=$-23.56 drift=$+79.46",
+      "2026-08-14 16:00:12,123 WARNING ledger_sync ledger_sync wall-time 10.9s (fills=499 orders=2378)",
+      "2026-08-14 16:03:01,728 | WARNING  | execution.drift_detector | DRIFT SNOW phantom_tracker | persist=15/2 conf=1.00 inflight=False | tracker={'directi",
+      "2026-08-14 16:03:01,791 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.4/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -5.039999999999992,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -2.519999999999996,
+    "best": {
+      "symbol": "PANW",
+      "pnl": 0.0,
+      "entry_price": 395.93,
+      "exit_price": 395.93,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 379.4,
+      "target": 430.38
+    },
+    "worst": {
+      "symbol": "RBLX",
+      "pnl": -5.039999999999992,
+      "entry_price": 36.21,
+      "exit_price": 38.73,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 11,
+      "mri_level": "ELEVATED",
+      "stop": 47.16,
+      "target": 13.41
+    },
+    "trades": [
+      {
+        "symbol": "RBLX",
+        "pnl": -5.039999999999992,
+        "entry_price": 36.21,
+        "exit_price": 38.73,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 11,
+        "mri_level": "ELEVATED",
+        "stop": 47.16,
+        "target": 13.41
+      },
+      {
+        "symbol": "PANW",
+        "pnl": 0.0,
+        "entry_price": 395.93,
+        "exit_price": 395.93,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 379.4,
+        "target": 430.38
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "AMZN",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "QQQ",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 4,
+    "symbols": [
+      "PANW",
+      "RBLX",
+      "SNOW"
+    ],
+    "by_symbol": {
+      "PANW": {
+        "buy": 0,
+        "sell": 2
+      },
+      "SNOW": {
+        "buy": 0,
+        "sell": 1
+      },
+      "RBLX": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}

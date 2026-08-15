@@ -1,0 +1,54 @@
+Nightly Gemini Audit — 2026-08-14
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+*Reasoning: While the P&L drift is explicitly marked as "benign" in the protocol, the frequency and persistence of the "SNOW phantom_tracker" error and the recurring "ANOMALY-3" (TQI degradation) indicate systemic issues with state tracking and exit discipline.*
+
+### LOG ANOMALIES
+*   **Persistent Reconciliation Break:** `[SNOW] context strip: tracker lists a FILLED position (status=open, qty=1) that Alpaca /v2/positions does not hold` appears at 19:32:04, 19:43:05, and 19:51:44. This confirms a recurring state mismatch between the `portfolio_tracker` and the Alpaca broker API.
+*   **TQI Degradation:** `[ANOMALY-3] TQI degradation: last-5-trade avg=29.4/100 < 30` recurring consistently. This suggests the bot's signal-to-noise ratio is declining significantly, warranting the "review exit discipline" warning provided by the system.
+*   **Entry Block/Skip:** `[META] Sector correlation BLOCKED` (19:51:29) and `[CRWD] COUNTER-TREND GATE` (multiple occurrences) indicate that risk-gating logic is functioning but significantly reducing trade frequency.
+
+### PERFORMANCE AUDIT
+*   **Integrity:** P&L signs for `RBLX` (short, -2.52) and `PANW` (long, -21.04) are correct (Losses).
+*   **Trade Analysis:** The two trades closed today (`RBLX`, `PANW`) were both stopped out. Both were flagged as `overnight_atr_buffer_exit`.
+*   **Outcome Correlation:** The system continues to score potential entries at 10/12, but the trade outcomes for the last two entries have been negative, validating the `ANOMALY-3` TQI warning. The R:R for `PANW` was compromised by the overnight gap, resulting in a 0.0 P&L exit despite the entry price of 395.93 and a stop of 379.4.
+
+### TRADE INTEGRITY
+*   **Phantom Tracker:** The `SNOW` position persists in the `portfolio_tracker` as `qty=1`, `entry_price=328.94`, while `broker=None`. This phantom position is not being purged despite repeated drift-detector alerts.
+
+### MODIFIED FILE FINDINGS
+(No source files modified in last 24h)
+
+### P5 STATUS
+*   **P5-C1 (FVG Index):** UNTOUCHED
+*   **P5-C2 (ImportError):** UNTOUCHED
+*   **P5-H1 (PDT):** DELETED (As per instructions)
+*   **P5-H2 (Fill crosstalk):** UNTOUCHED
+*   **P5-H3 (Orphan GTC 404):** UNTOUCHED
+*   **P5-H4 (Rule 2 dead code):** UNTOUCHED
+*   **P5-H5 (GTC suppression):** FIXED
+*   **P5-M1 (Watchdog loop):** UNTOUCHED
+*   **P5-M2 (MRI stale cache):** UNTOUCHED
+*   **P5-M3 (JSON growth):** UNTOUCHED
+*   **P5-L1 (Classification):** UNTOUCHED
+*   **P5-L2 (EOD write timing):** UNTOUCHED
+*   **P5-L3 (Data writer reconnect):** UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/drift_detector.py | Persistent failure to purge phantom_tracker state | The drift detector logs the error repeatedly but lacks a cleanup trigger to remove the `SNOW` tracker entry when it identifies the broker status as flat.**
+*   **INFRASTRUCTURE | LOW | execution/portfolio_tracker.py | EOD P&L Drift alert frequency | The drift alert is logging as a WARNING every 5-10 minutes, which is creating excessive noise in the logs. This should be moved to INFO level or consolidated to once per session.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate:** Implement a manual purge for the `SNOW` phantom tracker entry to clear the persistent reconciliation error.
+2.  **High:** Investigate the `ANOMALY-3` trigger; current performance suggests the exit discipline logic is not effectively protecting capital against the volatility reflected in the current MRI "ELEVATED" state.
+3.  **Medium:** Adjust `drift_detector.py` to escalate from log warning to automated deletion if a `broker=None` state persists for more than 3 consecutive cycles.
+4.  **Low:** Consolidate P&L drift reporting in `portfolio_tracker.py` to prevent log bloat.
