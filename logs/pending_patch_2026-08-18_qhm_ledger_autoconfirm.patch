@@ -1,0 +1,257 @@
+# Pending Patch: QHM earnings-trim → ownership-ledger auto-confirm root fix
+# Session: 2026-08-18 (nightly autonomous, Rafael NOT present)
+# Design record: logs/design_records/qhm_earnings_trim_ledger_autoconfirm_2026-08-12.md
+# Status: DRAFT ONLY — RTH-chain, requires human-session board + Gro + GAI pre-ship audit
+# Board vote: 3/3 FAIL on initial draft; FAIL reasons are addressable. This file
+#   incorporates ALL board findings. Re-vote required before ship.
+#
+# Board findings incorporated:
+#   A (Reliability) FAIL-1: RC-5 shared tmp path → fixed (PID-unique suffix)
+#   A (Reliability) FAIL-2: T2 broker read immediately post-submission → fixed (settle poll)
+#   B (Never-launder) FAIL-1: T1 breach-launder via <= condition → fixed (strict equality guard)
+#   B (Never-launder) FAIL-2: T2 submission-vs-fill race → fixed (settle poll)
+#   C (Quant Logic) FAIL: T2 needs settle poll → fixed
+#   A+B+C CONSENSUS: rename to _record_system_heal_confirmation (module-private)
+#
+# Files changed:
+#   execution/ownership_guard.py  — add _record_system_heal_confirmation helper
+#   execution/quarterly_hold_manager.py — T1 + T2 hooks in trim execution functions
+#
+# NOTE TO RAFAEL: This diff is READY for final Gro + GAI pre-ship audit. The board
+# vote on this corrected version has NOT yet run. The human session must:
+#   1. Run a fresh board vote (3 cold subagents) on THIS corrected diff
+#   2. Run Gro + GAI preship audit on the exact diff
+#   3. Run preship_gate / record_cold2 / record_adversarial markers
+#   4. Apply + commit + push + OCI deploy
+
+# ============================================================
+# CHANGE 1: execution/ownership_guard.py
+# Add _record_system_heal_confirmation() helper
+# Insert AFTER _consume_heal_confirmations() (around line 582)
+# ============================================================
+
+# --- INSERT (new function, module-level, after _consume_heal_confirmations) ---
+
+def _record_system_heal_confirmation(
+    sym: str, tier: str, target_qty: float, source: str
+) -> bool:
+    """System-initiated heal confirmation — same JSON format as confirm_ledger_heal.py.
+
+    Writes to ledger_heal_confirmations.json so the next sync_ledger call can
+    automatically accept a protected-tier shrink that was executed by the system
+    (e.g. earnings-trim). Reads live broker net via execution.broker.get_position
+    and verifies net >= target_qty - eps before writing — fail-safe: if the fill
+    has not settled, returns False and lets the guard REFUSE + page rather than
+    laundering a breach. Atomic tmp→replace with PID-unique tmp path (RC-5),
+    matching the established multi-writer pattern of _consume_heal_confirmations.
+
+    AUTHORIZED CALLERS: execution.quarterly_hold_manager._execute_earnings_trim_tier1
+    and _execute_earnings_trim_tier2 ONLY. Any other caller requires a full board
+    vote + Gro/GAI audit before adding.
+
+    Returns True if the confirmation was written, False otherwise (fail-safe,
+    guard keeps REFUSING, operator must run confirm_ledger_heal.py manually).
+    """
+    import time as _time
+    try:
+        # Read live broker net to verify the reduction actually happened
+        try:
+            from execution.broker import get_position as _get_position
+            _pos = _get_position(sym)
+            live_net = float(getattr(_pos, "qty", 0) or 0) if _pos else 0.0
+        except Exception as _e:
+            logger.warning(
+                "_record_system_heal_confirmation: %s/%s broker read failed (%s) — "
+                "no confirm written (fail-safe: guard keeps REFUSING)", sym, tier, _e)
+            return False
+
+        eps = 1e-6
+        if live_net < target_qty - eps:
+            logger.warning(
+                "_record_system_heal_confirmation: %s/%s live_net=%.6f < target=%.6f — "
+                "fill not reflected; no confirm written (fail-safe).",
+                sym, tier, live_net, target_qty)
+            return False
+
+        confirm = {
+            "target_qty": target_qty,
+            "net_at_confirm": live_net,
+            "confirmed_ts": _time.time(),
+            "confirmed_by": source,
+        }
+
+        key = f"{sym}/{tier}"
+        existing = _load_heal_confirmations()
+        existing[key] = confirm
+
+        # RC-5: PID-unique tmp path — matches _consume_heal_confirmations pattern
+        # (multi-writer: bot process + RTH cron both read-modify-write this file)
+        import os as _os
+        import json as _json
+        tmp_path = _HEAL_CONFIRM_PATH.with_suffix(f".{_os.getpid()}.tmp")
+        _HEAL_CONFIRM_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp_path, "w") as _f:
+            _json.dump(existing, _f, indent=2)
+            _f.flush()
+            _os.fsync(_f.fileno())
+        tmp_path.replace(_HEAL_CONFIRM_PATH)
+
+        logger.info(
+            "_record_system_heal_confirmation: %s/%s written — target=%.0f, "
+            "net_at_confirm=%.0f, confirmed_by=%s",
+            sym, tier, target_qty, live_net, source)
+        return True
+
+    except Exception as e:  # RC-3: fail-soft; guard keeps REFUSING on any error
+        logger.warning(
+            "_record_system_heal_confirmation: %s/%s unexpected error (%s) — "
+            "no confirm written (fail-safe)", sym, tier, e)
+        return False
+
+
+# ============================================================
+# CHANGE 2: execution/quarterly_hold_manager.py
+# T1 hook in _execute_earnings_trim_tier1
+# Insert AFTER logger.warning("QHM EARNINGS-TRIM TIER1: ...") line
+# and BEFORE try: self._alert(...)
+# (approximately line 2393 in the original file)
+# ============================================================
+
+# --- INSERT (T1 hook, after logger.warning("QHM EARNINGS-TRIM TIER1: ...")) ---
+
+            # QHM → ledger auto-confirm (design record 2026-08-12).
+            # FILL-CONFIRMED ONLY: we call this ONLY after the 15s poll confirmed
+            # that the broker net is at or below _target_qty (_confirmed_qty is set).
+            # NEVER-LAUNDER GUARD (Board B 2026-08-18): only auto-confirm if the
+            # actual post-trim broker net EXACTLY matches the intended post-trim target
+            # (_orig_qty - trim_qty). A mismatch (net below intended) indicates a
+            # concurrent breach or stop-fire beyond the trim — we SKIP the auto-confirm
+            # and let the guard refuse so the operator investigates.
+            _intended_t1_target = _orig_qty - trim_qty
+            if abs(float(_confirmed_qty) - float(_intended_t1_target)) > 0.5:
+                logger.warning(
+                    "QHM earnings-trim: %s tier1 ledger heal-confirm SKIPPED — "
+                    "confirmed_qty=%d != intended_target=%d (concurrent position change "
+                    "detected; manual confirm_ledger_heal.py required).",
+                    pos.symbol, _confirmed_qty, _intended_t1_target)
+            else:
+                try:
+                    from execution.ownership_guard import _record_system_heal_confirmation as _rhc
+                    _auto_ok = _rhc(
+                        pos.symbol, "qhm", float(_confirmed_qty), "earnings_trim_auto")
+                    if _auto_ok:
+                        logger.info(
+                            "QHM earnings-trim: %s tier1 ledger heal-confirm written "
+                            "(target_qty=%d, source=earnings_trim_auto)",
+                            pos.symbol, _confirmed_qty)
+                    else:
+                        logger.warning(
+                            "QHM earnings-trim: %s tier1 ledger heal-confirm NOT written "
+                            "(net < target or broker read failed) — manual confirm needed.",
+                            pos.symbol)
+                except Exception as _rhc_e:  # RC-3: fail-soft; trim succeeded; ledger is dependency
+                    logger.warning(
+                        "QHM earnings-trim: %s tier1 _record_system_heal_confirmation "
+                        "error: %s (trim completed; manual ledger confirm needed).",
+                        pos.symbol, _rhc_e)
+
+# --- END INSERT ---
+
+
+# ============================================================
+# CHANGE 3: execution/quarterly_hold_manager.py
+# T2 hook in _execute_earnings_trim_tier2
+# Insert AFTER logger.warning("QHM EARNINGS-TRIM TIER2: ...") line
+# and BEFORE try: self._alert(...)
+# (approximately line 2550 in the original file)
+#
+# KEY DESIGN: T2 polls for fill settlement (≤10s) before writing the confirm,
+# mirroring T1's pattern. close_position() returns True on SUBMISSION, not fill.
+# Writing net_at_confirm before settlement produces a stale mismatch at sync time.
+# Board B+C+A all converged on this fix.
+# ============================================================
+
+# --- INSERT (T2 hook, after logger.warning("QHM EARNINGS-TRIM TIER2: ...")) ---
+
+            # QHM → ledger auto-confirm (design record 2026-08-12): T2 full exit.
+            # SETTLE POLL: close_position() returns True on submission, not fill.
+            # Writing the confirm before the fill settles causes net_at_confirm !=
+            # live_net at sync time → match rejected → confirm useless (Board B+C+A
+            # unanimous, 2026-08-18). Poll up to 10s for net=0 before writing.
+            # If poll times out (fill not settled within 10s), skip — manual path.
+            try:
+                import time as _t2_time
+                _t2_deadline = _t2_time.monotonic() + 10.0
+                _t2_time.sleep(2)  # initial 2s — covers the typical fast-fill case
+                _t2_net = self._earnings_trim_broker_qty(pos)
+                while _t2_time.monotonic() < _t2_deadline:
+                    if _t2_net is not None and _t2_net == 0:
+                        break
+                    _t2_time.sleep(1)
+                    _t2_net = self._earnings_trim_broker_qty(pos)
+
+                if _t2_net is not None and _t2_net == 0:
+                    # Fill confirmed. Write the ledger confirm for floor 0.
+                    try:
+                        from execution.ownership_guard import _record_system_heal_confirmation as _rhc
+                        _auto_ok = _rhc(pos.symbol, "qhm", 0.0, "earnings_trim_auto")
+                        if _auto_ok:
+                            logger.info(
+                                "QHM earnings-trim: %s tier2 ledger heal-confirm written "
+                                "(target_qty=0, source=earnings_trim_auto)", pos.symbol)
+                        else:
+                            logger.warning(
+                                "QHM earnings-trim: %s tier2 ledger heal-confirm NOT written "
+                                "(broker read in helper failed) — manual confirm needed.",
+                                pos.symbol)
+                    except Exception as _rhc_e:  # RC-3: fail-soft
+                        logger.warning(
+                            "QHM earnings-trim: %s tier2 _record_system_heal_confirmation "
+                            "error: %s (manual ledger confirm needed).", pos.symbol, _rhc_e)
+                else:
+                    # Fill not confirmed within poll window — skip auto-confirm.
+                    # Guard will still REFUSE the ledger shrink; operator must
+                    # run confirm_ledger_heal.py after verifying the fill in Alpaca.
+                    logger.warning(
+                        "QHM earnings-trim: %s tier2 fill NOT confirmed within 10s poll "
+                        "(broker_net=%s) — ledger heal-confirm skipped; manual confirm "
+                        "needed after verifying fill in Alpaca.", pos.symbol, _t2_net)
+            except Exception as _t2_poll_e:  # RC-3: fail-soft; exit already recorded
+                logger.warning(
+                    "QHM earnings-trim: %s tier2 settle poll/confirm error: %s "
+                    "(manual ledger confirm needed).", pos.symbol, _t2_poll_e)
+
+# --- END INSERT ---
+
+
+# ============================================================
+# TEST PLAN (Rule C front-loaded simulation — per design record)
+# ============================================================
+# T1 scenario (NVDA, floor=2):
+#   - T1 trim fires: sells 1 share, _confirmed_qty=1
+#   - _intended_t1_target = 2-1 = 1; abs(1-1) <= 0.5 → equality guard passes
+#   - _record_system_heal_confirmation("NVDA", "qhm", 1.0, "earnings_trim_auto") called
+#   - Helper reads live_net=1, writes {target_qty:1, net_at_confirm:1, confirmed_by:earnings_trim_auto}
+#   - Next sync_ledger(positions_settled=True): floor=2, live=1 → shrink → confirm matches → floor=1 ✓
+#
+# T1 breach scenario (NVDA, floor=4, concurrent external sell):
+#   - T1 targets 2→2 (trim 2), but external sell fires simultaneously → net=1
+#   - _confirmed_qty=1, _intended_t1_target=2; abs(1-2)=1 > 0.5 → equality guard SKIPS confirm
+#   - Guard REFUSES the shrink → operator paged → breach investigated ✓ (never laundered)
+#
+# T1 fill-not-filled scenario:
+#   - Poll times out: _confirmed_qty=None → early return before hook → no confirm ✓
+#
+# T2 scenario (NVDA, floor=1 after T1 sync):
+#   - T2 fires: close_position() → True (submission)
+#   - Poll: 2s + up to 8s polling → net=0 confirmed
+#   - _record_system_heal_confirmation("NVDA", "qhm", 0.0, ...) called with fill settled
+#   - Helper reads live_net=0, net_at_confirm=0, target=0 → writes confirm
+#   - Next sync: floor=1, live=0 → shrink → confirm matches → floor=0 ✓
+#
+# T2 fill-not-settled within 10s:
+#   - Poll times out (net>0) → NO confirm written → guard REFUSES → operator paged ✓
+#
+# Genuine breach (external unauthorized sell, no earnings trim):
+#   - Neither T1 nor T2 hook fires (not in _execute_earnings_trim functions) → no auto-confirm ✓
+#   - Guard REFUSES → operator paged ✓
