@@ -582,6 +582,95 @@ def _consume_heal_confirmations(keys: set) -> None:
         logger.warning("heal-confirmation consume failed (%s) - will re-page next run.", e)
 
 
+# ── System authorized tier reduction (v4-B: direct, synchronous, no confirm file) ──
+def apply_authorized_tier_reduction(symbol: str, tier: str, fresh_net: float,
+                                    source: str = "system") -> bool:
+    """A strategy that has just SOLD part/all of its OWN protected tier writes that tier's new,
+    broker-verified qty DIRECTLY into the ledger — the AUTHORIZED path that lowers a protected
+    baseline (the seller owns what it sold). It does NOT route through / get refused by the
+    never-shrink guard (whose job is to refuse UNAUTHORIZED replay-shrinks). Identity-inherent +
+    SYNCHRONOUS: no persisted confirmation, no async consume, no net-value matching → the
+    stale-confirmation race class (v1/v3, board-rejected 4×) cannot occur.
+
+    PURE-TIER SCOPE GUARD (board 2026-08-16): applies ONLY when the ledger shows the symbol PURE in
+    this tier (no OTHER tier holds shares). For a pure-tier symbol the broker net == the tier qty, so
+    writing net into the tier is exactly tier-accurate. If ANY other tier holds shares (CO-HELD), this
+    REFUSES (returns False) + pages, and the operator confirm_ledger_heal path remains the fallback —
+    a co-held symbol's tier-blind raw-net inputs cannot be trusted (that is the deferred Movers-class
+    ownership work: per-strategy tags + qty-bounded partial close).
+
+    SAFETY: `fresh_net` is a BROKER-VERIFIED, post-action read supplied by the caller (never `old -
+    delta` arithmetic — so a concurrent stop that also reduced the position is captured too). Acts ONLY
+    on a genuine REDUCTION (fresh_net < current tier qty); sets both the tier qty AND alpaca_net_qty to
+    fresh_net (ground truth) and recomputes drift. NON-BLOCKING: local ledger read-modify-write under a
+    SHORT-timeout (1.5s) cross-process lock; NO network I/O. NEVER raises (internal try/except; caller
+    also wraps). Returns True iff a reduction was written.
+    """
+    _sym = str(symbol)
+    if tier not in _PROTECTED_TIERS:
+        logger.warning("apply_authorized_tier_reduction: tier %r not protected — no-op (%s)", tier, _sym)
+        return False
+    try:
+        net = float(fresh_net)
+    except (TypeError, ValueError):
+        logger.warning("apply_authorized_tier_reduction: non-numeric fresh_net %r for %s — no-op",
+                       fresh_net, _sym)
+        return False
+    import math
+    if not math.isfinite(net) or net < -_QTY_EPS:
+        logger.warning("apply_authorized_tier_reduction: bad fresh_net %r for %s — no-op (fail-safe)",
+                       net, _sym)
+        return False
+    try:
+        with _ledger_write_lock(timeout_s=1.5):
+            try:
+                ledger = load_ledger()
+            except LedgerError as _le:
+                logger.critical("apply_authorized_tier_reduction: ledger unreadable (%s) for %s — skip; "
+                                "periodic sync reconciles.", _le, _sym)
+                return False
+            ent = ledger.get("positions", {}).get(_sym)
+            if not ent:
+                logger.warning("apply_authorized_tier_reduction: %s absent from ledger — skip (sync "
+                               "reconciles).", _sym)
+                return False
+            tiers = ent.setdefault("tiers", {})
+            cur = float(tiers.get(tier, {}).get("qty", 0.0) or 0.0)
+            other = sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
+                        for t in _TIERS if t != tier)
+            # PURE-TIER GUARD: co-held → tier-blind inputs untrusted → REFUSE + page.
+            if other > _QTY_EPS:
+                logger.warning("apply_authorized_tier_reduction: %s co-held (other tiers=%g) — REFUSED "
+                               "(auto path is pure-%s only; operator confirm remains).", _sym, other, tier)
+                page_floor_blind(_sym, tier, "authorized_reduction_coheld",
+                                 f"other={other:g} fresh_net={net:g} src={source}")
+                return False
+            # Only ACT on a genuine reduction (net < current tier qty). A non-reduction is not a trim we
+            # authorize here — skip, let the periodic sync handle any increase.
+            if net > cur - _QTY_EPS:
+                logger.info("apply_authorized_tier_reduction: %s fresh_net %g not below current %s %g — "
+                            "no reduction to apply; skip.", _sym, net, tier, cur)
+                return False
+            tiers.setdefault(tier, {})["qty"] = round(net, 6)
+            ent["alpaca_net_qty"] = round(net, 6)
+            ent["drift"] = round(net - sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
+                                           for t in _TIERS), 6)
+            try:
+                save_ledger(ledger)
+            except Exception as _se:  # RC-3
+                logger.critical("apply_authorized_tier_reduction: SAVE FAILED for %s/%s post-trim — "
+                                "ledger NOT updated (stale/over-protective) until next sync: %s",
+                                _sym, tier, _se)
+                return False
+            logger.warning("apply_authorized_tier_reduction: %s/%s %g→%g (authorized reduction, net=%g, "
+                           "src=%s).", _sym, tier, cur, net, net, source)
+            return True
+    except Exception as _e:  # RC-3: never raise into the caller
+        logger.warning("apply_authorized_tier_reduction: unexpected error for %s/%s (%s) — no-op.",
+                       _sym, tier, _e)
+        return False
+
+
 # ── Heal / audit tool — full replay, refuse to shrink a protected floor ────────
 def _fill_time_key(f: dict) -> str:
     """Sort key for a fill — Alpaca activities carry `transaction_time` (ISO-8601,
