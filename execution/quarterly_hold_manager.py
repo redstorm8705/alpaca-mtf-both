@@ -2421,6 +2421,19 @@ class QuarterlyHoldManager:
                 logger.warning(
                     "QHM earnings-trim: %s post-trim resync failed: %s (non-blocking).",
                     pos.symbol, _rs_e)
+            # ANTI-SILO (v4-B, 2026-08-16, board-endorsed): directly + synchronously reduce this qhm
+            # holding's OWN ledger tier to the broker-verified post-trim net (no confirmation file, no
+            # async match → no stale-confirmation race). NON-BLOCKING: reuses the already-poll-verified
+            # _confirmed_qty as the fresh net (no new broker read). GUARDED to pure-qhm inside the
+            # helper (co-held → refuses → operator confirm remains). Fail-safe; never raises here.
+            try:
+                from execution import ownership_guard as _og
+                _og.apply_authorized_tier_reduction(
+                    pos.symbol, "qhm", float(_confirmed_qty), "earnings_trim_t1")
+            except Exception as _hc_e:  # RC-3: never break the trim path
+                logger.warning(
+                    "QHM earnings-trim: %s tier1 ledger reduction failed: %s (non-blocking; operator "
+                    "confirm_ledger_heal remains the fallback).", pos.symbol, _hc_e)
             if _confirmed_qty >= 1:
                 self._earnings_trim_restore_stop(
                     pos, _confirmed_qty, _restore_px, "tier1 post-sell stop")
@@ -2525,6 +2538,29 @@ class QuarterlyHoldManager:
             pos.updated_at = self._now_et().isoformat()
             _deregister_symbol(pos.symbol)
             self._save_state()
+
+            # ANTI-SILO (v4-B, 2026-08-18): full exit → directly reduce the qhm tier to 0. close()
+            # returns on SUBMISSION not fill, so POLL (bounded ~10s, analogous to tier-1's fill-poll)
+            # for the broker to report FLAT before writing — a pre-fill read must NOT no-op a real full
+            # exit (the data-integrity board REJECT on the no-poll version). Writes qhm=0 ONLY when
+            # confirmed flat (_bq==0); a read failure (None) or an unsettled/partial net (>0 at the
+            # deadline) SKIPS → the periodic sync / operator confirm reconciles (status quo, no
+            # regression). GUARDED to pure-qhm inside the helper. Fail-safe; never raises here.
+            try:
+                import time as _time
+                from execution import ownership_guard as _og
+                _t2_deadline = _time.monotonic() + 10.0
+                _bq_t2 = self._earnings_trim_broker_qty(pos)
+                while (_bq_t2 is None or _bq_t2 > 0) and _time.monotonic() < _t2_deadline:
+                    _time.sleep(1)
+                    _bq_t2 = self._earnings_trim_broker_qty(pos)
+                if _bq_t2 == 0:
+                    _og.apply_authorized_tier_reduction(
+                        pos.symbol, "qhm", 0.0, "earnings_trim_t2")
+            except Exception as _hc_e:  # RC-3
+                logger.warning(
+                    "QHM earnings-trim: %s tier2 ledger reduction failed: %s (non-blocking).",
+                    pos.symbol, _hc_e)
 
             fresh_state = self._load_earnings_trim_state()
             fresh_sym_state = dict(fresh_state.get(pos.symbol, {}))
