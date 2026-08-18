@@ -34,7 +34,7 @@ _SLACK_URL         = None  # loaded from .env
 _MAX_RETRIES       = 3
 _API_TIMEOUT       = 180   # seconds, matches auto_ai_audit.py
 _GRO_BASE_URL      = "https://api.groq.com/openai/v1"
-_GRO_MODEL         = "llama-3.3-70b-versatile"
+_GRO_MODEL         = "openai/gpt-oss-120b"
 _GEMINI_MODEL      = "gemini-3.1-flash-lite"
 # explicit cap — flash default 8192 causes mid-response truncation
 _GEMINI_MAX_TOKENS = 16384

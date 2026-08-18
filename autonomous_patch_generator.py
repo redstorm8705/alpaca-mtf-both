@@ -64,7 +64,7 @@ _MAX_FILE_CHARS_FOR_LLM = 300_000
 # AWP audit fix (2026-06-30): migrated DeepSeek -> Gro (Groq). See module
 # docstring for why. Matches CLAUDE.md's Gro/GAI DIRECT API PROTOCOL.
 _GRO_BASE_URL = "https://api.groq.com/openai/v1"
-_GRO_MODEL    = "llama-3.3-70b-versatile"
+_GRO_MODEL    = "openai/gpt-oss-120b"
 # AWP audit fix (2026-07-01): Groq free-tier TPD (100K tokens/day) is exhausted
 # after ~3 directives (5 LLM calls each), leaving the rest 429'd → 0 processed.
 # Route drafting through Gemini (no TPD wall in our usage); keep Groq as fallback.
