@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-08-17
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+While trade execution on the AMZN stop hit is technically sound, the persistence of significant P&L drift between the `portfolio_tracker` ($-14.88) and the `pnl_ledger` ($20.12) indicates a degradation in the integrity of the tracking/ledger sync mechanism.
+
+### PERFORMANCE AUDIT
+- **AMZN Trade**: Entry $268.07, Exit $260.63. P&L is correctly calculated as -$7.44 per share (2 shares implied, total -$14.88). P&L sign is correct for a long entry that hit a stop.
+- **Stop Alignment**: The exit price of $260.63 triggered below the stop-hit threshold of $241.39. This indicates the stop-loss mechanism functioned as a protective order and was filled at a market slippage point acceptable for the current volatility regime.
+- **Win Rate/Stop Rate**: 100% stop-hit rate for a single trade is statistically insignificant but highlights the aggressive nature of the current entry/exit parameters under "STRESSED" MRI conditions.
+
+### ENTRY QUALITY
+- **No issues**: The scan correctly identified symbols, and the dynamic `MIN_SCORE` correctly filtered out candidates. The bot effectively utilized the "BoD-1" (Buffer of Day) gate to prevent entries during the 9:30–10:00 AM expansion period, demonstrating disciplined entry adherence.
+
+### EXIT QUALITY
+- **No issues**: The stop was hit, and the order was managed. The exit price is within a reasonable range of the stop floor given the market conditions.
+
+### MRI ALIGNMENT
+- **Regime Mismatch**: The session is classified as STRESSED (41/100). The bot correctly applied sizing floors (0.70x) and dynamic score thresholds to tighten the entry criteria, showing correct alignment between the risk management module and the MRI environment.
+
+### LOG ANOMALIES
+- **EOD P&L DRIFT**: `WARNING | EOD P&L DRIFT: Alpaca=$-24.63 tracker=$-14.88 drift=$-9.75`. This drift is outside the acceptable variance and complicates authoritative P&L reporting.
+- **Ledger Sync Latency**: `2026-08-17 17:20:12,995 WARNING ledger_sync ledger_sync wall-time 11.2s`. This is significantly high and likely points to a database index bottleneck or excessive I/O wait during the EOD sync process.
+
+### NEW BUGS / CONCERNS
+- **INFRASTRUCTURE | MEDIUM | P&L Ledger/Tracker Divergence** | The `portfolio_tracker` ($-14.88) and `pnl_ledger` ($20.12) are significantly out of sync. This suggests that while the trade events are being captured, the reconciliation logic is failing to aggregate the net position or calculate realized gains accurately across the two modules.
+- **INFRASTRUCTURE | LOW | Excessive Ledger Sync Wall-time** | The `ledger_sync` function is taking 11.2s to complete. This creates a risk of blocking the main thread during high-volatility periods or EOD finalizations.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **INFRASTRUCTURE**: Investigate the `execution.portfolio_tracker` reconciliation logic. The drift between the tracker and the ledger suggests the `pnl_ledger` is not correctly consuming the trade events emitted by the `entry_logic` or is miscalculating the basis price of the open lots.
+2. **INFRASTRUCTURE**: Perform an optimization on `ledger_sync`. Given the growth in the number of orders (2,407), the sync is likely performing a full table scan rather than an incremental diff. Implement an index on `order_id` or `timestamp` for the orders table to reduce wall-time.
+3. **ALPHA**: Continue monitoring the "STRESSED" MRI distribution. If the win rate remains at 0%, consider further raising the `MIN_LONG_SCORE` above 10/12 to prioritize "High Conviction" setups only.

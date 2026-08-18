@@ -1,0 +1,54 @@
+Nightly Gemini Audit — 2026-08-17
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+While no catastrophic conditions exist, the bot has unresolved infrastructure issues (P5 queue) and persistent P&L reporting mismatches that, while labeled "self-healing," indicate an ongoing lack of ledger reliability for the 8:30pm ET reconciliation window.
+
+### LOG ANOMALIES
+*   **P5-C2 Triggered**: The log indicates no successful execution of premarket scans or volume-based gate-keepers for movers, consistent with the P5-C2 `ImportError` on `DataFetcher`.
+*   **Persistent Drift**: `EOD P&L DRIFT` of `$-9.75` appears consistently across multiple time-stamped logs (19:35, 19:43, 19:49, 19:57), confirming the drift remains unhealed for the duration of the RTH session. 
+*   **Error 42210000**: Although listed as a known bug (OM-BUG-1), frequent ledger sync warnings and potential GTC order issues warrant monitoring as they relate to `ledger_sync` stability.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The only trade in the last 7 days (`AMZN` exit on 2026-08-17) shows a loss of `$-14.88`. The P&L sign is correct for a long entry at 268.07 exiting at 260.63.
+*   **Score/Outcome**: The 12-point `AMZN` entry (Aug 13) resulted in a loss, suggesting that even with high confluence scores (12/12), the current `overnight_atr_buffer_exit` (9-scan breach) logic is aggressively closing positions during volatility spikes, potentially clipping winners that would have recovered.
+*   **R:R Analysis**: No recent winners to verify target achievement; the stop-hit rate is currently 100% for the last 3 closed trades (`RBLX`, `PANW`, `AMZN`).
+
+### TRADE INTEGRITY
+*   **AMZN (2026-08-17)**: The trade successfully recorded a `-14.88` loss. However, the telemetry in the EOD snapshot shows the P&L split across two separate fills at different timestamps (`14:43:56` and `14:43:57`), which caused the tracker to deviate from the Alpaca total P&L. This is a known artifact of the `ledger_sync` process and not a logic error.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24h.
+
+### P5 STATUS
+*   P5-C1 (FVG Crash): UNTOUCHED
+*   P5-C2 (ImportError): UNTOUCHED
+*   P5-H1 (PDT): FIXED (Archived/Removed)
+*   P5-H2 (Fill crosstalk): UNTOUCHED
+*   P5-H3 (Orphan GTC): UNTOUCHED
+*   P5-H4 (Rule 2): UNTOUCHED
+*   P5-H5 (Fixed): FIXED
+*   P5-M1 (Watchdog loop): UNTOUCHED
+*   P5-M2 (MRI Stale): UNTOUCHED
+*   P5-M3 (JSON Growth): UNTOUCHED
+*   P5-L1 (Loss Driver): UNTOUCHED
+*   P5-L2 (EOD Timing): UNTOUCHED
+*   P5-L3 (Reconn): UNTOUCHED
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | MEDIUM | `ledger_sync` | Persistent P&L reporting mismatch**. While flagged as benign, the continuous recurrence of `$-9.75` drift suggests that the "self-healing" mechanism is either failing to trigger or is consistently delayed.
+*   **EXECUTION BUG | MEDIUM | `execution.entry_logic` | Counter-trend logic sensitivity**. The `CRWD` short-entry gate (19:49:48) correctly identified a bounce, but the decision to skip appears to be based on a static `1-month return` metric. If this is not validated against the current `MRI` level, it may prevent legitimate breakdown trades in "Stressed" regimes.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Resolve P5-C2**: Prioritize the `ImportError` for `DataFetcher` in `run_movers.py` to restore market scan capability.
+2.  **Ledger Audit**: Investigate why `pnl_drift` remains constant at `$-9.75` for the entire afternoon session, even if it is not "CATASTROPHIC," to improve the reliability of the 4:05pm audit snapshot.
+3.  **Optimize Exit Logic**: Review if `overnight_atr_buffer_exit` is too sensitive; with 100% loss rate on recent overnight holds, the ATR multiplier for overnight exit triggers may need to be widened.
+4.  **Clean up `score_comparison`**: Implement a pruning mechanism for the `score_comparison` JSON to prevent it from growing indefinitely (P5-M3).

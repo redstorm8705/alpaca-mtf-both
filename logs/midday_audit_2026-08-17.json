@@ -1,0 +1,120 @@
+{
+  "audit_date": "2026-08-17",
+  "run_ts": "2026-08-17T10:30:01.571618-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "ELEVATED": 27,
+      "STRESSED": 2
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 21,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-17 16:03:57,956 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-24.63 tracker=$-14.88 drift=$-9.75",
+      "2026-08-17 16:11:23,037 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-24.63 tracker=$-14.88 drift=$-9.75",
+      "2026-08-17 16:17:41,139 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-24.63 tracker=$-14.88 drift=$-9.75",
+      "2026-08-17 16:20:13,901 WARNING ledger_sync ledger_sync wall-time 12.3s (fills=504 orders=2407)",
+      "2026-08-17 16:23:46,433 | WARNING  | execution.entry_logic | [CRWD] COUNTER-TREND GATE [short]: 1-month return +5.87% opposes the trade on a structura"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -14.879999999999995,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -14.879999999999995,
+    "best": {
+      "symbol": "AMZN",
+      "pnl": -14.879999999999995,
+      "entry_price": 268.07,
+      "exit_price": 260.63,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 241.39,
+      "target": 323.57
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": -14.879999999999995,
+      "entry_price": 268.07,
+      "exit_price": 260.63,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 241.39,
+      "target": 323.57
+    },
+    "trades": [
+      {
+        "symbol": "AMZN",
+        "pnl": -14.879999999999995,
+        "entry_price": 268.07,
+        "exit_price": 260.63,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 241.39,
+        "target": 323.57
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "COIN",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "QQQ",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "AMZN",
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 0,
+        "sell": 1
+      },
+      "AMZN": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
