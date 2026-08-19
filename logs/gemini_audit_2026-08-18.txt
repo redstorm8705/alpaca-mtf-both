@@ -1,0 +1,53 @@
+Nightly Gemini Audit — 2026-08-18
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. execution.ownership_guard | sync_ledger REFUSED / protected-floor shrink on `GEV/qhm` | The system has refused to reconcile a position shrinkage (GEV/qhm 1.0 -> 0.0), resulting in a "sold" position being frozen in the ledger. This prevents subsequent trade adjustments and signals a breakdown in the automation's ability to clear closed positions, requiring manual operator intervention.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **CRITICAL Loop:** `execution.ownership_guard` and `ledger_sync` are repeatedly logging "NOT healed" (streak=20) for `GEV/qhm`. The automated reconciliation path is broken.
+*   **Rule 1 Lockout:** The system is correctly triggering the "PREMARKET RED LOCKOUT" (14/16 movers red), which is currently blocking all long entries as designed.
+*   **Ledger Wall-time:** `ledger_sync` recorded a wall-time of 11.7s, indicating a significant bottleneck in ledger processing, likely exacerbated by the stuck `GEV` position.
+
+### PERFORMANCE AUDIT
+*   **QQQ Trade (2026-08-18):** `pnl=-29.96`. The exit was triggered by `overnight_atr_buffer_exit | 9-scan breach`. The price logic is consistent with the provided trade JSON.
+*   **Regime/Score:** The bot is consistently flagging high-score setups (e.g., PANW 12/12, MSFT 10/12) but is correctly suppressing long entry due to the Rule 1 constraint.
+*   **Stop Rate:** 100% of the single closed trade in the provided window was a loss. While this sample size (N=1) is too small to determine a regime mismatch, the bot is currently in a defensive posture (Rule 1 blocked).
+
+### TRADE INTEGRITY
+*   **Recorded Exit Price:** The exit price `717.05` for `QQQ` (recorded in the `trades` array of the EOD snapshot) matches the logic provided in the `exit_reason`.
+*   **P&L Consistency:** The `pnl` field `-29.96` in the `trades` list correctly reflects the loss from the entry at `732.03` to the exit at `717.05` for 2 shares.
+
+### MODIFIED FILE FINDINGS
+*   **Note:** No source files were modified in the last 24h. The issues reported are systemic to current state management.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: OBSOLETE (PDT DELETED)
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **CATEGORY:** EXECUTION BUG | **SEVERITY:** CRITICAL | **file:** `execution.ownership_guard` | **description:** Permanent lockout of ledger reconciliation. The system requires manual operator override for a `GEV/qhm` position change that is not being successfully processed, creating a cumulative streak of 20 failed heals.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Manual Heal:** Execute `confirm_ledger_heal.py GEV qhm 0` to clear the `GEV/qhm` position and resolve the 20-streak `ledger_sync` failure.
+2.  **Investigate Ledger Bottleneck:** Inspect the `ledger_sync` performance (11.7s). This indicates a possible O(N^2) or blocking I/O issue during the reconciliation of the 2421 orders in queue.
+3.  **Audit `orphan_manager.py`:** While the current log shows the GEV issue as a `sync_ledger` conflict, ensure the `qhm` (Quantity/Hold Management) logic isn't improperly flagging legitimate exits as unauthorized reductions.
+4.  **Monitor P&L Drift:** The `drift=$+49.74` is likely attributable to the `GEV` position discrepancy; verify that the `pnl_today` figure is indeed the correct accounting metric after the manual heal.
