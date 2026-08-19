@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-08-18
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity:** The closed trade for QQQ shows an entry price of $732.03 and an exit price of $732.03. While the P&L is recorded as $0.00, this is consistent with an `overnight_breakeven` exit logic (as per KNOWN BENIGN PATTERNS). 
+*   **Stop-hit Analysis:** The session recorded a 100% stop-hit rate (1 of 1). While the sample size is small, the bot is struggling to find positive expectancy in the current `STRESSED` MRI regime.
+*   **Drift Alert:** The log reports `EOD P&L DRIFT: Alpaca=$19.78 tracker=$-29.96 drift=$+49.74`. This is a significant discrepancy between the local tracker and the Alpaca ledger.
+
+### ENTRY QUALITY
+*   **Strategy Discipline:** The bot correctly identified the `RULE 1 — PREMARKET RED LOCKOUT` and successfully blocked multiple long entries (AMZN, AVGO). 
+*   **Signal Filtering:** The bot is correctly applying dynamic `MIN_SCORE` (raised to 10/12) and filtering signals based on weekly bias (e.g., AAPL, AMD, GOOGL). 
+*   **ORB Gate:** The bot is enforcing the `ORB gate` (breakdown below range) correctly, blocking short entries when the condition is not met.
+
+### EXIT QUALITY
+*   **Exit Accuracy:** The QQQ trade stopped out at $732.03. The provided `stop` price was $713.08. Since the exit price ($732.03) is significantly higher than the stop price ($713.08), this indicates the exit was triggered by an internal "breakeven" or "time-exit" logic rather than a stop-loss violation, despite the `stop_hit` flag in the `CLOSED TRADE DETAILS`. 
+
+### MRI ALIGNMENT
+*   **Regime Handling:** The bot correctly identified the MRI regime as `STRESSED` (41/100). The sizing logic applied an `0.70x` floor and an `0.85x` mult, indicating proper risk reduction during periods of elevated market stress.
+
+### LOG ANOMALIES
+*   **P&L Drift:** Significant discrepancy in EOD P&L ($49.74 drift).
+*   **Entry/Exit Mismatch:** `CLOSED TRADE DETAILS` labels the QQQ trade as `stop_hit` with a `stop=$713.08`, but the trade closed at `$732.03` (the entry price). This is a labeling inconsistency in the logs.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | MEDIUM | P&L Reporting Drift:** The `execution.portfolio_tracker` shows a $49.74 drift between the authoritative ledger and local state. This suggests either a failure to account for slippage or fees in the tracker or a partial fill/partial exit accounting failure.
+*   **EXECUTION BUG | LOW | Incorrect Flagging:** `CLOSED TRADE DETAILS` tags the QQQ exit as `stop_hit` despite the exit price being identical to the entry price. This flag should reflect the actual exit reason (e.g., `breakeven_exit`).
+
+### FIX VALIDATION
+N/A — No prior fixes provided to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRA:** Investigate the `portfolio_tracker` drift. Verify if fees or partial fills are being captured correctly in the local `fifo_pnl` state. 
+2.  **EXECUTION:** Audit the `stop_hit` flagging logic. If a trade closes at the entry price, the system should log `breakeven` rather than `stop_hit` to avoid misleading performance auditing.
+3.  **ALPHA:** Continue monitoring the effectiveness of the 10/12 dynamic score threshold, as the 100% stop-hit rate in a `STRESSED` regime warrants caution despite current filter efficacy.
