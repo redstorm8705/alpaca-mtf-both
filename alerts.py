@@ -143,19 +143,49 @@ def _ntfy(title: str, body: str, priority: int = 3, tags: list | None = None) ->
         return False
 
 
-def _slack(title: str, body: str, emoji: str = ":chart_with_upwards_trend:") -> bool:
-    """POST to Slack incoming webhook. Returns True on success."""
-    if not _SLACK_WEBHOOK:
-        return False
-    title = _sanitize(title)
-    body  = _sanitize(body)
-    payload = json.dumps({
-        "text": f"{emoji} *{title}*\n{body}"
-    }).encode()
+# ── Slack chunking (Rafael 2026-08-18: long audit summaries were TRUNCATED in-client — a
+# cut-off message is useless. Split into (i/N) parts on line boundaries, sent in order, each
+# safely under Slack's display limit, so a message is NEVER cut off). ─────────────────────
+_SLACK_CHUNK_LIMIT = 3500  # safe margin under Slack's ~4000-char in-client truncation
+
+
+def _chunk_text(text: str, limit: int = _SLACK_CHUNK_LIMIT) -> list:
+    """Split text into <=limit-char chunks on NEWLINE boundaries (never mid-line, unless a
+    single line itself exceeds limit → hard-wrapped). LOSSLESS — including interior blank
+    lines and a trailing newline: uses a None sentinel to distinguish 'nothing pending' from
+    'a pending blank/empty line', so blank separators are never dropped at a flush boundary
+    (cold-2nd 2026-08-18). Never raises."""
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) <= limit:
+        return [text]
+    chunks: list = []
+    cur = None                              # None = nothing pending; "" = a pending blank line
+    for line in text.split("\n"):
+        while len(line) > limit:            # a single over-long line → hard-wrap
+            if cur is not None:
+                chunks.append(cur)
+                cur = None
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if cur is None:
+            cur = line
+        elif len(cur) + 1 + len(line) > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}"
+    if cur is not None:
+        chunks.append(cur)
+    return chunks
+
+
+def _post_slack_text(text: str) -> bool:
+    """POST one Slack webhook message. Returns True on HTTP 200. Never raises."""
     try:
         req = urllib.request.Request(
             _SLACK_WEBHOOK,
-            data=payload,
+            data=json.dumps({"text": text}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -164,6 +194,33 @@ def _slack(title: str, body: str, emoji: str = ":chart_with_upwards_trend:") -> 
     except Exception as e:
         logger.warning(f"Slack send failed: {e}")
         return False
+
+
+def _send_slack_chunked(text: str) -> bool:
+    """Send `text` as 1+ Slack messages, chunked so nothing truncates. When >1 part, each is
+    prefixed '(i/N)' and sent IN ORDER (short sleep between). Returns True iff EVERY part
+    posted, so a caller's failure logging still fires if any part drops. Never raises."""
+    if not _SLACK_WEBHOOK:
+        return False
+    parts = _chunk_text(text)
+    n = len(parts)
+    ok = True
+    for i, part in enumerate(parts, 1):
+        prefix = f"({i}/{n})\n" if n > 1 else ""
+        if not _post_slack_text(prefix + part):
+            ok = False
+        if i < n:
+            time.sleep(0.4)                 # preserve delivery order; avoid a rate burst
+    return ok
+
+
+def _slack(title: str, body: str, emoji: str = ":chart_with_upwards_trend:") -> bool:
+    """POST to Slack incoming webhook (auto-chunked so long bodies never truncate). True on success."""
+    if not _SLACK_WEBHOOK:
+        return False
+    title = _sanitize(title)
+    body  = _sanitize(body)
+    return _send_slack_chunked(f"{emoji} *{title}*\n{body}")
 
 
 def _send(title: str, body: str, priority: int = 3, tags: list | None = None, emoji: str = ":robot_face:") -> None:
@@ -195,19 +252,8 @@ def send_slack(message: str) -> None:
         return
     message = _sanitize(message)
     ts = datetime.now(PT).strftime("%H:%M PT")
-    payload = json.dumps({"text": f"{message}\n— {ts}"}).encode()
-    try:
-        req = urllib.request.Request(
-            _SLACK_WEBHOOK,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=4, context=_SSL_CTX) as resp:
-            if resp.status != 200:
-                logger.warning(f"Slack send_slack got status {resp.status}")
-    except Exception as e:
-        logger.warning(f"send_slack failed: {e}")
+    if not _send_slack_chunked(f"{message}\n— {ts}"):
+        logger.warning(f"send_slack failed (one or more parts): {message[:120]}")
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
