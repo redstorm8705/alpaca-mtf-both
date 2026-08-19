@@ -738,8 +738,26 @@ def sync_ledger(fills: list, positions: list,
             # No map, or this order_id was not joined → fall back to the fill's own coid
             # (pre-joined fills / tests). Raw Alpaca fills carry none → intraday.
             _coid = f.get("client_order_id")
-        tier = tier_of_coid(_coid) or "intraday"
+        _tagged = tier_of_coid(_coid)
+        tier = _tagged or "intraday"
         tq = tiers_qty.setdefault(sym, {})
+        # UNTAGGED-SELL RE-ATTRIBUTION (board 2026-08-19, NVDA phantom-short fix): an UNTAGGED sell
+        # (no tier coid — e.g. a stop/close on a protected-tier name whose order did not carry the
+        # qhm/forever6 coid) on a symbol where intraday holds NOTHING is a mis-attributed
+        # protected-tier exit, NOT an intraday short. Attribute it to the protected tier that
+        # actually holds the shares (qhm first, then forever6) so intraday is never driven
+        # synthetically short. SCOPE: fires ONLY when intraday is empty (tq["intraday"] <= eps) —
+        # the pure-protected case (e.g. NVDA, no intraday shares). A CO-HELD symbol (real intraday
+        # shares present) is left UNCHANGED from pre-fix behavior — attributing an ambiguous untagged
+        # sell across co-held tiers is the deferred Movers-class ownership work, not decided here.
+        # TAGGED fills are authoritative + untouched (an explicit IN- coid stays intraday even if it
+        # shorts). If no protected tier fully covers it, it is a genuine short and stays on intraday.
+        if (_tagged is None and side not in ("buy", "buy_to_cover")
+                and tq.get("intraday", 0.0) <= _QTY_EPS):
+            for _pt in ("qhm", "forever6"):
+                if tq.get(_pt, 0.0) >= q - _QTY_EPS:
+                    tier = _pt
+                    break
         tq[tier] = tq.get(tier, 0.0) + (q if side in ("buy", "buy_to_cover") else -q)
         # FIFO long-lot tracking for avg_cost (buys add lots; sells consume oldest).
         lt = lots.setdefault(sym, {}).setdefault(tier, [])
