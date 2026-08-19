@@ -8,14 +8,42 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-12 ~09:20 PDT, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-08-19 ~14:00 PDT, interactive Rafael present; wrapping near weekly limit → CROSS-ACCOUNT to a diff Claude Gmail acct) — pick up here
 
-**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → `notebooklm use $(cat ~/.claude/master_brain_id)` + query.
+**⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → read **`logs/design_records/slack_messaging_overhaul_2026-08-19.md`** (the NEXT build, fully scoped).
 
-**⏭️⏭️ IMMEDIATE NEXT BUILD (Rafael-chosen, ready): QHM earnings-trim → ownership-ledger auto-confirm.**
-Full pre-scoped package: `logs/design_records/qhm_earnings_trim_ledger_autoconfirm_2026-08-12.md`. Take
-it through the full gate (safety control — ownership_guard + quarterly_hold_manager; masked-loss +
-reliability + data-integrity board). This is Tier-1.2 and the highest-value ready build.
+**✅ SHIPPED (all merged + live on OCI @ 08bddc2):** [08-18] Tier-1.2 **v4-B** QHM earnings-trim → direct authorized
+ledger reduction, pure-qhm guarded (#147); **Gro-model fix** llama→gpt-oss-120b in autonomous_review +
+autonomous_patch_generator (#148); **Slack no-truncation chunking** (i/N) in alerts.py (#149); **GEV ledger
+unstuck**. [08-19] **NVDA phantom-short FIXED (#151)** — sync_ledger now re-attributes an UNTAGGED sell on an
+intraday-EMPTY symbol to the protected tier that holds it (not a synthetic intraday short); verified on real
+26-fill history (OLD→intraday:-1/qhm:2, NEW→intraday:0/qhm:1) + landed live via confirm_ledger_heal NVDA qhm 1.
+All 5 QHM names now clean; COIN/MARA negative-intraday confirmed GENUINE shorts (ledger==broker). Gate note: Gro
+WAIVED in preship_audit on these (its own _gro still dead-llama — fixed in the Slack overhaul WS1 below).
+
+**⏭️⏭️ IMMEDIATE NEXT — SLACK MESSAGING OVERHAUL (Rafael mandate 08-19: "broken, non-informative, cut off,
+useless as a tool; autonomous runs failing; UX designer + BGG fix it fully").** Fully audited + planned in
+`logs/design_records/slack_messaging_overhaul_2026-08-19.md`. Sequenced workstreams:
+- **WS1 (do FIRST, mechanical quick-win — fixes the "autonomous failing" 404):** dead-Gro sweep. TWO live sites
+  still on llama-3.3-70b-versatile: `auto_ai_audit.py:77` (`_GRO_MODEL`; cap `_GRO_MAX_COMPLETION_TOKENS=3000`
+  too low) and `.claude/preship/preship_audit.py:172` (max_tokens=1500). → gpt-oss-120b + `reasoning_effort:low`
+  + adequate max_tokens (gpt-oss is a reasoning model → low cap yields EMPTY content; verified gpt-oss returns
+  content). Update the stale llama COMMENT in autonomous_patch_generator.py:316. Gate both (gated files). Ship.
+- **WS2 (design-led, the bulk — UX seat + BGG design pass BEFORE code):** formatting redesign — audit messages
+  render as one wall (no line breaks) + per-field mid-word truncation. Shared Slack-format helper (\n / Block
+  Kit / mrkdwn); migrate the ~13 audit/report emitters. PT timestamps; summarize-not-cut.
+- **WS3:** current-state accuracy (don't page resolved issues, e.g. it paged the already-unstuck GEV) + actionable verdicts.
+
+**RESOLVED / NON-ISSUES this session:** Dashboard "TQQQ short 5/12" is NOT a restriction — TQQQ is fully
+long/short tradeable (Bucket A); "short 5/12" is just the higher no-signal side on a sub-threshold row (fold
+clearer "no signal" wording into WS2/scanner display, no decision needed). "Soft stops" explained to Rafael:
+the yellow $ stop = the real GTC exchange backstop (wide, always fires); "soft ~$X · N/9" = the bot's tighter
+overnight breakeven exit (~entry−0.5×ATR, only while bot runs, needs a 9-scan sustained breach) — relabel
+clearly in WS2. `_gai` in preship_audit locally edited to gemini-3.5-flash (uncommitted, folds into WS1).
+
+**LOWER-PRIORITY QUEUE (after the Slack overhaul):** QHM/F6 dip-accumulation exempt from the intraday Rule-1
+red-lockout (risk-path, board vote); per-tier P&L attribution (weekly summary "not actionable"); alert
+severity/dedup ("CRITICAL BOT SHUTDOWN" on the routine 2AM restart → INFO + dedup repeats — folds into WS3).
 
 **📊 2026-08-12 — AUGUST P&L AUDIT (Alpaca-sourced; tracker math NOT used) + LEDGER-INTEGRITY result:**
 - **Equity now $2,817 (live).** ALL-TIME HIGH = **$2,903.91 on 2026-04-17** → currently ~3% (live)/~5%
