@@ -9792,3 +9792,10 @@ carry-forward/phantom/corruption bug.** LOW-PRIORITY follow-ups: (a) fill-by-fil
 realized recon to pinpoint the ~$7; (b) model reg fees (and confirm the residual) in the invariant so
 it stops spuriously flipping ledger_auth=False. Tier-1.1 = low-severity; Tier-1.2 (QHM-trim
 auto-confirm, scoped) is the real Tier-1 build.
+
+## 2026-08-19 Nightly Autonomous — live_data_writer.py
+
+| File | Lines | Date | Status | Notes |
+|------|-------|------|--------|-------|
+| `live_data_writer.py` | 144 | 2026-08-19 | QUEUED — Board B FAIL | **Full read: 144L/1 chunk. Finding: L74-76 comment "hot-reload" is false — Python module cache means generate_dashboard.py changes are invisible to live_data_writer until service restart. Proposed fix: importlib.reload(). Board A PASS, B FAIL (importlib.reload creates 30s code-exec trigger — adversarial concern), C PASS. Static: py_compile/mypy/ruff all PASS on proposed version. Queued in queued_for_review_2026-08-19.md for Rafael decision on acceptable attack surface.** RC-1 PASS | RC-2 PASS | RC-3 PASS | RC-4 N/A | RC-5 N/A | RC-6 N/A | RC-7 N/A | RC-8 N/A |
+
