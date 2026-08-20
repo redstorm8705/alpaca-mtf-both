@@ -1,0 +1,36 @@
+Midday Gemini Audit — 2026-08-19
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+- Naked Position (no protective stop): AMZN (long, 2sh), PLTR (long, 2sh), SOXS (long, 3sh), SPY (long, 2sh) — These positions were flagged as having no stop orders in the live snapshot, representing a total lack of risk control for the listed symbols.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- The only closed trade, COIN, resulted in $0.00 P&L despite being a "stop_hit". The entry price of $149.68 matches the exit price of $149.68. While the session summary acknowledges the D1 data degradation, the fact that a stop-hit resulted in a zero-loss exit suggests a failure in the stop-loss submission or a failure in the execution logic to register the actual loss against the stop price of $165.28.
+- The stop-hit rate is 20% on a very small sample, but with the lack of recorded P&L for these stops, the true performance impact is currently unobservable.
+
+### ENTRY QUALITY
+- Multiple entries occurred while MRI was in a "STRESSED" state (PLTR, AMZN, SPY, SOXS). While the bot seems to have a sizing floor (0.70x at 17:26), entering during STRESSED market regimes (45/100) on a 10/12 score indicates that the entry logic may be ignoring the high-level MRI environment when picking signals.
+
+### EXIT QUALITY
+- No meaningful exit quality data available due to the single recorded exit being a $0.00 outcome despite a stop_hit flag. This points to a potential failure in the exit engine to properly track and execute the stop-loss price provided in the configuration.
+
+### MRI ALIGNMENT
+- The bot logged "[ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30". This confirms the bot is operating outside of its ideal efficiency band and suggests that the strategy's current confluence parameters are not adequately adapting to the STRESSED MRI environment.
+
+### LOG ANOMALIES
+- The log shows consistent "EOD summary written" and "Alpaca FIFO EOD" entries every 5 minutes, which conforms to the defined benign pattern, but the persistence of these in a short log window and the accompanying "watchdog_headroom" warnings suggest the system is laboring under the current market regime.
+
+### NEW BUGS / CONCERNS
+- EXECUTION BUG | CRITICAL | Naked position failure: The system failed to submit/maintain stop orders for 4 open positions, despite the presence of a `risk_manager` module.
+- EXECUTION BUG | HIGH | Exit price mismatch: The COIN trade is marked `stop_hit` but shows P&L of $0.00 and exit price equal to entry price. This indicates that the stop-loss execution logic is either not firing, not updating, or being overridden at the moment of exit.
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediate emergency intervention to manually close or place stop-loss orders for AMZN, PLTR, SOXS, and SPY to resolve the naked position catastrophic condition.
+2. **EXECUTION**: Audit `execution.risk_manager` and `execution.entry_logic` to determine why stop orders are not persisting or are being dropped (Potential connection to the Error 42210000 logic, even though not explicitly observed in RTH).
+3. **ALPHA**: Re-evaluate the `MIN_SCORE` logic for STRESSED MRI regimes; current thresholds are allowing entries into volatile conditions that are resulting in TQI degradation.

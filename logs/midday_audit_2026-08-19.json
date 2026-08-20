@@ -1,0 +1,209 @@
+{
+  "audit_date": "2026-08-19",
+  "run_ts": "2026-08-19T10:30:01.799815-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.2,
+    "flagged_entries": [
+      {
+        "symbol": "PLTR",
+        "ts": "2026-08-19 08:07:31",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 173.12,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "AMZN",
+        "ts": "2026-08-19 08:22:31",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 262.96,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SPY",
+        "ts": "2026-08-19 08:22:35",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 771.41,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SOXS",
+        "ts": "2026-08-19 08:30:33",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 46.48,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "PLTR",
+      "AMZN",
+      "SPY",
+      "SOXS",
+      "COIN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "STRESSED": 26,
+      "HIGH": 2
+    },
+    "last_score": 45,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 21,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-19 16:00:13,424 WARNING ledger_sync ledger_sync wall-time 12.2s (fills=516 orders=2437)",
+      "2026-08-19 16:05:27,095 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-19 16:12:30,283 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-19 16:20:13,207 WARNING ledger_sync ledger_sync wall-time 11.5s (fills=516 orders=2437)",
+      "2026-08-19 16:20:27,457 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.0/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "COIN",
+      "pnl": 0.0,
+      "entry_price": 149.68,
+      "exit_price": 149.68,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 165.28,
+      "target": 117.17
+    },
+    "worst": {
+      "symbol": "COIN",
+      "pnl": 0.0,
+      "entry_price": 149.68,
+      "exit_price": 149.68,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 165.28,
+      "target": 117.17
+    },
+    "trades": [
+      {
+        "symbol": "COIN",
+        "pnl": 0.0,
+        "entry_price": 149.68,
+        "exit_price": 149.68,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 165.28,
+        "target": 117.17
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "AMZN",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "PLTR",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "SOXS",
+        "side": "long",
+        "qty": 3.0
+      },
+      {
+        "symbol": "SPY",
+        "side": "long",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 8,
+    "symbols": [
+      "AMZN",
+      "COIN",
+      "GEV",
+      "PLTR",
+      "SOXS",
+      "SPY"
+    ],
+    "by_symbol": {
+      "SOXS": {
+        "buy": 1,
+        "sell": 0
+      },
+      "SPY": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "COIN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "PLTR": {
+        "buy": 1,
+        "sell": 0
+      },
+      "GEV": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
