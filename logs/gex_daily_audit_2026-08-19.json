@@ -1,0 +1,446 @@
+{
+  "date": "2026-08-19",
+  "generated": "2026-08-19 01:30 PM PT",
+  "gex": {
+    "snapshots_today": 25,
+    "label_distribution": {
+      "SPY": {
+        "NEAR-FLIP": 13,
+        "NEGATIVE": 9,
+        "UNKNOWN": 3
+      },
+      "QQQ": {
+        "NEGATIVE": 24,
+        "UNKNOWN": 1
+      }
+    },
+    "timeline": [
+      {
+        "ts": "2026-08-19 06:35 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1631.1,
+          "flip": 733.0,
+          "valid": 350
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2604.1,
+          "flip": 690.0,
+          "valid": 394
+        }
+      },
+      {
+        "ts": "2026-08-19 06:51 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2529.9,
+          "flip": null,
+          "valid": 369
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3071.6,
+          "flip": null,
+          "valid": 404
+        }
+      },
+      {
+        "ts": "2026-08-19 07:06 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2103.1,
+          "flip": null,
+          "valid": 353
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3484.2,
+          "flip": 682.0,
+          "valid": 420
+        }
+      },
+      {
+        "ts": "2026-08-19 07:22 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1641.5,
+          "flip": null,
+          "valid": 339
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3309.2,
+          "flip": 685.0,
+          "valid": 437
+        }
+      },
+      {
+        "ts": "2026-08-19 07:37 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1376.5,
+          "flip": 737.0,
+          "valid": 290
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3305.4,
+          "flip": 685.0,
+          "valid": 369
+        }
+      },
+      {
+        "ts": "2026-08-19 07:53 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -695.2,
+          "flip": null,
+          "valid": 310
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3301.9,
+          "flip": 690.0,
+          "valid": 391
+        }
+      },
+      {
+        "ts": "2026-08-19 08:08 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 198.0,
+          "flip": 781.0,
+          "valid": 353
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3043.3,
+          "flip": 690.0,
+          "valid": 410
+        }
+      },
+      {
+        "ts": "2026-08-19 08:24 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 11.3,
+          "flip": 790.0,
+          "valid": 343
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3129.4,
+          "flip": null,
+          "valid": 366
+        }
+      },
+      {
+        "ts": "2026-08-19 08:39 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -541.0,
+          "flip": 755.0,
+          "valid": 330
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3256.6,
+          "flip": 685.0,
+          "valid": 386
+        }
+      },
+      {
+        "ts": "2026-08-19 08:55 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1210.7,
+          "flip": null,
+          "valid": 345
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3307.4,
+          "flip": 684.0,
+          "valid": 385
+        }
+      },
+      {
+        "ts": "2026-08-19 09:10 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -706.1,
+          "flip": 735.0,
+          "valid": 300
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3197.7,
+          "flip": null,
+          "valid": 338
+        }
+      },
+      {
+        "ts": "2026-08-19 09:25 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -302.6,
+          "flip": 757.0,
+          "valid": 318
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2963.6,
+          "flip": 685.0,
+          "valid": 364
+        }
+      },
+      {
+        "ts": "2026-08-19 09:40 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -985.8,
+          "flip": 733.0,
+          "valid": 342
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3291.5,
+          "flip": 685.0,
+          "valid": 367
+        }
+      },
+      {
+        "ts": "2026-08-19 09:56 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -1795.2,
+          "flip": 752.0,
+          "valid": 340
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3234.8,
+          "flip": null,
+          "valid": 379
+        }
+      },
+      {
+        "ts": "2026-08-19 10:11 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1648.4,
+          "flip": 734.0,
+          "valid": 341
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3480.4,
+          "flip": 695.0,
+          "valid": 362
+        }
+      },
+      {
+        "ts": "2026-08-19 10:27 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -1715.1,
+          "flip": 733.0,
+          "valid": 326
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3737.1,
+          "flip": null,
+          "valid": 368
+        }
+      },
+      {
+        "ts": "2026-08-19 10:42 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2648.7,
+          "flip": null,
+          "valid": 313
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3856.7,
+          "flip": 695.0,
+          "valid": 338
+        }
+      },
+      {
+        "ts": "2026-08-19 10:58 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -1820.4,
+          "flip": 752.0,
+          "valid": 323
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3512.7,
+          "flip": 682.0,
+          "valid": 342
+        }
+      },
+      {
+        "ts": "2026-08-19 11:13 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2545.1,
+          "flip": 750.0,
+          "valid": 314
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3570.3,
+          "flip": 682.0,
+          "valid": 346
+        }
+      },
+      {
+        "ts": "2026-08-19 11:28 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -1790.3,
+          "flip": 735.0,
+          "valid": 302
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3721.8,
+          "flip": 695.0,
+          "valid": 335
+        }
+      },
+      {
+        "ts": "2026-08-19 11:44 AM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2403.6,
+          "flip": 752.0,
+          "valid": 293
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -3773.6,
+          "flip": 690.0,
+          "valid": 332
+        }
+      },
+      {
+        "ts": "2026-08-19 12:00 PM PT",
+        "SPY": {
+          "label": "UNKNOWN",
+          "raw_gex_m": -775.9,
+          "flip": null,
+          "valid": 261
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2833.1,
+          "flip": 690.0,
+          "valid": 284
+        }
+      },
+      {
+        "ts": "2026-08-19 12:15 PM PT",
+        "SPY": {
+          "label": "UNKNOWN",
+          "raw_gex_m": -452.0,
+          "flip": null,
+          "valid": 264
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2878.7,
+          "flip": 682.0,
+          "valid": 269
+        }
+      },
+      {
+        "ts": "2026-08-19 12:31 PM PT",
+        "SPY": {
+          "label": "UNKNOWN",
+          "raw_gex_m": -532.5,
+          "flip": null,
+          "valid": 240
+        },
+        "QQQ": {
+          "label": "UNKNOWN",
+          "raw_gex_m": -2783.0,
+          "flip": null,
+          "valid": 266
+        }
+      },
+      {
+        "ts": "2026-08-19 12:46 PM PT",
+        "SPY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -1832.8,
+          "flip": 733.0,
+          "valid": 288
+        },
+        "QQQ": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -2961.5,
+          "flip": 685.0,
+          "valid": 282
+        }
+      }
+    ]
+  },
+  "decision_impacts": {
+    "layer8_reads": 48,
+    "layer8_last": [
+      "2026-08-19 19:43:07,542 | INFO     | strategy.run_cycle | GEX Layer8: label=UNKNOWN raw_gex_m=-532.5 flip=None age=12min",
+      "2026-08-19 19:51:41,486 | INFO     | strategy.run_cycle | GEX Layer8: label=NEGATIVE raw_gex_m=-1832.8 flip=733.0 age=6min",
+      "2026-08-19 19:58:29,780 | INFO     | strategy.run_cycle | GEX Layer8: label=NEGATIVE raw_gex_m=-1832.8 flip=733.0 age=12min"
+    ],
+    "floor_raise_lines_mentioning_gex": 46,
+    "floor_raise_samples": [
+      "    | strategy.run_cycle | Dynamic MIN_SCORE: raised to 10/12 [SPY=CLEAR/8 VIX=15.0/8 MRI=STRESSED/10 P&L=+0.0%/8 ATH=1.06%/8 MTD=0/0 Regime=none/8 FTD=none/8 GEX=UNKNOWN/8 \u2192 effective=10/12] \u2014 10 signal(s) filtered out.",
+      "    | strategy.run_cycle | Dynamic MIN_SCORE: raised to 10/12 [SPY=CLEAR/8 VIX=15.0/8 MRI=STRESSED/10 P&L=+0.0%/8 ATH=1.12%/8 MTD=0/0 Regime=none/8 FTD=none/8 GEX=NEGATIVE/9 \u2192 effective=10/12] \u2014 7 signal(s) filtered out.",
+      "    | strategy.run_cycle | Dynamic MIN_SCORE: raised to 10/12 [SPY=CLEAR/8 VIX=15.0/8 MRI=STRESSED/10 P&L=+0.0%/8 ATH=1.14%/8 MTD=0/0 Regime=none/8 FTD=none/8 GEX=NEGATIVE/9 \u2192 effective=10/12] \u2014 7 signal(s) filtered out."
+    ],
+    "kelly_gex_mult_applications": 0,
+    "kelly_gex_mult_samples": []
+  },
+  "entries_today": [
+    {
+      "ts": "2026-08-19T08:07:31.901254-07:00",
+      "symbol": "PLTR",
+      "direction": "long",
+      "size": 2,
+      "price": 173.12,
+      "score": 10
+    },
+    {
+      "ts": "2026-08-19T08:22:31.763046-07:00",
+      "symbol": "AMZN",
+      "direction": "long",
+      "size": 2,
+      "price": 262.96,
+      "score": 10
+    },
+    {
+      "ts": "2026-08-19T08:22:35.770504-07:00",
+      "symbol": "SPY",
+      "direction": "long",
+      "size": 2,
+      "price": 771.41,
+      "score": 10
+    },
+    {
+      "ts": "2026-08-19T08:30:33.593855-07:00",
+      "symbol": "SOXS",
+      "direction": "long",
+      "size": 3,
+      "price": 46.48,
+      "score": 10
+    }
+  ],
+  "note": "GEX_ENABLED=True (Rafael 2026-07-03). NEGATIVE SPY GEX raises MIN_SCORE +1 (Layer 8); Kelly risk x1.30 on NEGATIVE / x1.15 on POSITIVE for warmed-up signal types (no mult Fridays)."
+}

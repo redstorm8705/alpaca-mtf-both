@@ -1,0 +1,48 @@
+Nightly Gemini Audit — 2026-08-19
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['alerts.py', 'autonomous_review.py', 'autonomous_patch_generator.py', 'execution/ownership_guard.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/ownership_guard.py/check_never_sell_floor | Ledger read failure + type-corrupt .bak resolution results in an unhandled exception block being swallowed by `page_floor_blind` while the guard returns a REJECT for a protected symbol, but the `try-except` block in `check_never_sell_floor` around `protected_floor(_bak, symbol)` potentially fails to halt execution flow properly if `protected_floor` raises, causing a potential silent sell-through of a protected asset.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[ANOMALY-3] TQI degradation:** Persistent across the session (avg=28.0/100). This indicates the bot is frequently entering sub-optimal or high-risk configurations.
+* **[CRWD] COUNTER-TREND GATE:** `[CRWD] COUNTER-TREND GATE [short]: 1-month return +5.50% opposes the trade... skipping`. This confirms the gate is working, but it triggered 3 times for [CRWD] in 30 minutes, suggesting high conviction in a potentially trapped trade.
+* **[META] Sector correlation BLOCKED:** Correctly triggered and blocked [META] to preserve AMZN exposure.
+
+### PERFORMANCE AUDIT
+* **COIN Trade (2026-08-19):** Stop hit at 159.535 (Short entry 149.68). This is a -6.58% loss ($19.71 total). The price moved against the short entry.
+* **Score correlation:** The system is heavily skewed towards "B" bucket entries with a score of 10/12. Performance for these is consistently poor in the current macro regime (MRI STRESSED=55).
+* **Regime Mismatch:** Win rate is currently 0.0% for the last 150 trades (verified win rate 35% historically). The current market regime (MRI STRESSED) is aggressively punishing the 10/12 score logic.
+* **Stop Hit Rate:** Excessive. The "overnight_atr_buffer_exit" is triggering too frequently on gapped moves, suggesting the ATR-based buffer is insufficient for the current high-volatility regime.
+
+### TRADE INTEGRITY
+* **COIN (2026-08-19):** The `pnl` for the COIN trade is listed as -19.71. Checking `_pnl_selfcheck_telemetry`: entry was 149.68 for 2qty, total 299.36. Exit was approx 159.535 × 2 = 319.07. Loss is -19.71. P&L matches.
+* **Partial Exit (SMCI, 2026-08-12):** `ts`: "2026-08-12T06:38:08.060776-07:00". `pnl` is 0.0, but `price` is 32.6833 vs entry 36.87. This is a recording inconsistency; even if it was a breakeven exit, the price delta implies a loss.
+
+### MODIFIED FILE FINDINGS
+* **execution/ownership_guard.py:** 
+    * `check_never_sell_floor`: The logic relies on `_bak = _load_bak_ledger()`. If both `load_ledger()` and `_load_bak_ledger()` fail, the code uses a `try-except` block that catches the error but does not prevent potential order execution if the flow is not explicitly `return`ed properly (the `_bak` assignment continues).
+* **alerts.py:** 
+    * `_chunk_text` and `_send_slack_chunked`: The logic correctly avoids truncating multi-part messages by splitting on `\n`. This resolves the prior truncation bug.
+
+### P5 STATUS
+* **P5-C1:** UNTOUCHED
+* **P5-C2:** UNTOUCHED
+* **P5-H2-H5:** UNTOUCHED
+* **P5-M1-M3:** UNTOUCHED
+* **P5-L1-L3:** UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/ownership_guard.py:** In `check_never_sell_floor`, if both `load_ledger()` and `_bak_floor` calculations raise an exception, the function returns a `GuardResult` but logging indicates a critical failure. The logic flow `ledger = _bak` after the catch allows the function to continue processing the order with a potentially stale or compromised ledger, creating a risk that a SELL order is approved based on outdated data for a protected symbol.
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Critical:** Patch `execution/ownership_guard.py` to ensure that if `protected_floor` for the backup ledger raises an exception, the function returns a `REJECT` immediately, ensuring the system fails closed under double-blind failure.
+2. **Strategy:** Increase `INTRADAY_STOP_ATR_MULT` from 1.2 to 1.5 in paper profile due to high overnight gap volatility causing premature stop-outs.
+3. **Infrastructure:** Audit `run_movers.py` (P5-C2) to remove the nonexistent `DataFetcher` import; it is currently a "ticking clock" crash for the move-scan logic.
