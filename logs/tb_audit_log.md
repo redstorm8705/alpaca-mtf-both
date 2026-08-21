@@ -9792,3 +9792,5 @@ carry-forward/phantom/corruption bug.** LOW-PRIORITY follow-ups: (a) fill-by-fil
 realized recon to pinpoint the ~$7; (b) model reg fees (and confirm the residual) in the invariant so
 it stops spuriously flipping ledger_auth=False. Tier-1.1 = low-severity; Tier-1.2 (QHM-trim
 auto-confirm, scoped) is the real Tier-1 build.
+
+- **2026-08-20 (S, interactive)** — Slack WS1 dead-Gro sweep SHIPPED+LIVE (PR#155, main 1bb8f57). auto_ai_audit.py + preship_audit.py: llama-3.3-70b(404)→openai/gpt-oss-120b (reasoning_effort:low + max_completion_tokens; 8k TPM → budget 20000→9000 chars, cap 3000→2500). _gai→gemini-flash-latest. Gate: statics+cold-2nd PASS+log-evidence+adversarial 7/7+Gro/GAI preship APPROVE. Verified LIVE on OCI (Gro returned content).
