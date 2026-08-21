@@ -74,7 +74,9 @@ _PT = ZoneInfo("America/Los_Angeles")
 
 # ── API constants ─────────────────────────────────────────────────────────────
 _GRO_BASE_URL = "https://api.groq.com/openai/v1"
-_GRO_MODEL = "llama-3.3-70b-versatile"
+_GRO_MODEL = "openai/gpt-oss-120b"  # was llama-3.3-70b-versatile (DEAD — Groq 404, 2026-08).
+# gpt-oss-120b is a REASONING model → the call MUST pass reasoning_effort:"low" and use
+# max_completion_tokens (not max_tokens), else hidden reasoning eats the budget → EMPTY content.
 _GEMINI_MODEL = "gemini-3.1-flash-lite"  # cost fix 2026-07-11 (Rafael): pro-preview was the
 # single premium caller in the whole pipeline and depleted credits in a week — flash is
 # what nightly/midday audits already use and is adequate for the meta-audit cross-review.
@@ -100,14 +102,14 @@ _META_TELEMETRY_EVENT_TYPES = frozenset({
     "delta_shadow", "mri_refresh", "halt_eval", "breadth_refresh",
 })
 _META_MAX_EVENTS = 500             # backstop cap (most-recent) after telemetry filter
-# Groq free tier ("on_demand") is hard-capped at 12,000 tokens/MINUTE (TPM), counting
-# input + completion together — NOT the 131k context window. Even after telemetry
-# filtering the body is ~17k tokens (73% of it the 100-line bot-log tail), so Groq
-# 413s. Groq therefore gets a trimmed bot-log tail + a bounded completion so
-# input+output clears 12k TPM. Gemini (1M window, no TPM issue) keeps the full tail.
+# Groq free tier ("on_demand") caps gpt-oss-120b at 8,000 tokens/MINUTE (TPM), counting
+# input + completion together (verified 2026-08-20 via x-ratelimit-limit-tokens: 8000) — this
+# is LOWER than llama-3.3-70b's old 12k TPM, so the input budget + completion cap must together
+# clear 8k. ~9k-char prompt (~4.3k tok at ~2.1 ch/tok) + 2500 completion ≈ 6.8k, safely under.
+# Gemini (1M window, no TPM issue) keeps the full tail.
 _GRO_BOT_LOG_LINES = 15            # Groq-only bot-log tail (vs 100 for Gemini)
-_GRO_MAX_COMPLETION_TOKENS = 3000  # bound Groq output so input+output ≤ 12k TPM
-_GRO_PROMPT_CHAR_BUDGET = 20_000   # Groq-only clamp (~7.7k tok at 2.59 ch/tok); backstop
+_GRO_MAX_COMPLETION_TOKENS = 2500  # bound Groq completion so input+completion ≤ 8k TPM (gpt-oss)
+_GRO_PROMPT_CHAR_BUDGET = 9_000    # Groq-only clamp (~4.3k tok at ~2.1 ch/tok); keeps total < 8k TPM
 
 # ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
 _GRO_ROLE_PREAMBLE = (
@@ -1151,10 +1153,13 @@ def _call_groq(prompt: str) -> dict:
                 "model": _GRO_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
-                # Bound completion so input+output clears Groq's 12k-TPM free-tier
-                # cap (the meta-audit's 413 was a TPM rate limit, not the context
-                # window). 3000 is ample for the audit verdict + JSON findings block.
-                "max_tokens": _GRO_MAX_COMPLETION_TOKENS,
+                # gpt-oss-120b is a REASONING model. reasoning_effort:"low" keeps the
+                # hidden reasoning tokens small (verified ~440 completion tok) so they
+                # don't consume the completion budget — a low cap WITHOUT this returns
+                # EMPTY content. max_completion_tokens (not the legacy max_tokens) is
+                # the reasoning-model param; input+completion stays under the 8k TPM cap.
+                "reasoning_effort": "low",
+                "max_completion_tokens": _GRO_MAX_COMPLETION_TOKENS,
             },
             timeout=_API_TIMEOUT_S,
         )

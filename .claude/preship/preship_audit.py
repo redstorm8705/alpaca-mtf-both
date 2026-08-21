@@ -169,11 +169,15 @@ def _gro(prompt, key):
     r = _curl(
         "https://api.groq.com/openai/v1/chat/completions",
         [f"Authorization: Bearer {key}", "Content-Type: application/json"],
-        {"model": "llama-3.3-70b-versatile", "messages": [
+        # gpt-oss-120b (was llama-3.3-70b-versatile — DEAD, Groq 404). Reasoning model:
+        # reasoning_effort:"low" + max_completion_tokens (not max_tokens) or reasoning eats
+        # the budget → empty content. 4096 is ample for a diff-audit verdict; a preship diff
+        # is small so input+completion stays well under Groq's 8k-TPM gpt-oss cap.
+        {"model": "openai/gpt-oss-120b", "reasoning_effort": "low", "messages": [
             {"role": "system",
              "content": "You are a Senior Staff HFT engineer auditing a diff "
                         "before it ships. Concrete, no hedging."},
-            {"role": "user", "content": prompt}], "max_tokens": 1500},
+            {"role": "user", "content": prompt}], "max_completion_tokens": 4096},
         key)
     if "choices" not in r:
         raise RuntimeError(str(r).replace(key, "***")[:200])
