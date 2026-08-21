@@ -1,0 +1,156 @@
+{
+  "audit_date": "2026-08-20",
+  "run_ts": "2026-08-20T10:30:01.611777-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [
+      {
+        "symbol": "TSLA",
+        "ts": "2026-08-20 10:29:43",
+        "score": 12,
+        "mri": "STRESSED",
+        "price": 342.5,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SPY",
+        "ts": "2026-08-19 08:22:35",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 771.41,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "TSLA",
+      "SPY"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "STRESSED": 25,
+      "ELEVATED": 2
+    },
+    "last_score": 42,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 35,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-20 15:50:59,974 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-15.28 tracker=$-8.56 drift=$-6.72",
+      "2026-08-20 15:57:05,686 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-20 15:58:03,211 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-15.28 tracker=$-8.56 drift=$-6.72",
+      "2026-08-20 16:00:13,424 WARNING ledger_sync ledger_sync wall-time 11.8s (fills=519 orders=2456)",
+      "2026-08-20 16:05:13,572 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "SPY",
+      "pnl": 0.0,
+      "entry_price": 771.41,
+      "exit_price": 771.41,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 767.18,
+      "target": 782.06
+    },
+    "worst": {
+      "symbol": "SPY",
+      "pnl": 0.0,
+      "entry_price": 771.41,
+      "exit_price": 771.41,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 767.18,
+      "target": 782.06
+    },
+    "trades": [
+      {
+        "symbol": "SPY",
+        "pnl": 0.0,
+        "entry_price": 771.41,
+        "exit_price": 771.41,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 767.18,
+        "target": 782.06
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "TSLA",
+        "side": "short",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "AMZN",
+      "GE",
+      "GEV",
+      "LLY",
+      "MARA",
+      "NVDA",
+      "PLTR",
+      "SOXS",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 5,
+    "symbols": [
+      "GOOGL",
+      "SPY",
+      "TSLA"
+    ],
+    "by_symbol": {
+      "TSLA": {
+        "buy": 0,
+        "sell": 0
+      },
+      "GOOGL": {
+        "buy": 0,
+        "sell": 2
+      },
+      "SPY": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

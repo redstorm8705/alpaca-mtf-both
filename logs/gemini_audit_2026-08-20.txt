@@ -1,0 +1,56 @@
+Nightly Gemini Audit — 2026-08-20
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1. `execution.ownership_guard` | `sync_ledger` | `GOOGL` protected floor shrink refused; no new sells allowed, effectively freezing the bot's ability to reduce risk on this symbol despite being in an open position.
+2. `execution.fill_helpers` | `MARA` fill unverified; P&L calculation fell back to entry_price, resulting in incorrect portfolio and TQI metrics for the duration of the trade until late reconciliation.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+- **[CRITICAL] `execution.ownership_guard`**: Ongoing refusal to sync `GOOGL/qhm` ledger (streak=14) indicates a logic block preventing the bot from adjusting positions that likely require human-in-the-loop intervention but are currently "stuck" in the bot's memory vs actual holdings.
+- **[CRITICAL] `execution.fill_helpers`**: `[MARA] FILL UNVERIFIED` occurring twice for the same symbol/trade, forcing a P&L fallback to `entry_price`.
+- **[WARNING] `scan_to_html`**: Explicit mismatch detected where tracker lists 3 shares and Alpaca returns 0, leading to the "genuine reconciliation break."
+
+### PERFORMANCE AUDIT
+- **P&L Accuracy**: The `MARA` short trade (ts `2026-08-20T12:52:30.671991-07:00`) initially used an `entry_price` fallback of 10.89 for P&L, which is technically a "wash" if used as an exit price, despite the real exit occurring at 10.93. The late `fill_correction` (19:52:47) fixed this, but for 7 hours, the bot's internal P&L was wrong.
+- **Stop/Exit Integrity**: The `MARA` trade was exited via `hard_stop` while the tracker still thought it held 3 shares. This mismatch forced the `broker` layer to report "position not found," triggering a `fill_helpers` error.
+- **Score Correlation**: The average 12pt score (approx 8.0) is not currently showing high correlation with success, likely due to the "STRESSED" MRI regime (42) forcing persistent size floors (0.70x).
+
+### TRADE INTEGRITY
+- **MARA Exit Recording**: The sequence of `stop_hit` (fallback) -> `fill_correction` -> `TQI degradation` shows that when `fill_helpers` fails, the `TQI` score calculation for that trade is rendered untrustworthy, creating a negative feedback loop for future sizing calculations.
+- **GOOGL/qhm Ledger**: The ledger for `GOOGL` is clearly corrupted (trying to shrink from 2.0 to -2.0, net 0.0), indicating an `ownership_guard` lock is preventing the bot from properly closing the leg.
+
+### MODIFIED FILE FINDINGS
+- No modifications in the last 24h as per log header.
+
+### P5 STATUS
+- P5-C1: UNTOUCHED
+- P5-C2: UNTOUCHED
+- P5-H1: (N/A)
+- P5-H2: TRIGGERED (The `MARA` and `GOOGL` issues both involve fill price/position count crosstalk between internal ledger and broker).
+- P5-H3: TRIGGERED (Orphan/untracked status encountered).
+- P5-H4: UNTOUCHED
+- P5-H5: FIXED
+- P5-M1: UNTOUCHED
+- P5-M2: UNTOUCHED
+- P5-M3: UNTOUCHED
+- P5-L1: UNTOUCHED
+- P5-L2: UNTOUCHED
+- P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+- **EXECUTION BUG | CRITICAL | `execution.ownership_guard`**: Ledger sync refusal causes permanent state lock on symbol. This is a critical risk-management block preventing the bot from responding to market exits.
+- **EXECUTION BUG | HIGH | `execution.fill_helpers`**: Fallback to `entry_price` on unverified fills biases total P&L metrics and triggers "ghost" TQI warnings, compounding sizing errors.
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Manual Ledger Heal**: Execute `confirm_ledger_heal.py GOOGL qhm 0` to release the `GOOGL` lock preventing order execution.
+2. **Reconciliation Audit**: Manually reconcile `MARA` and `GOOGL` with Alpaca `/v2/positions` outside of the bot's `ownership_guard` to ensure state alignment.
+3. **P&L Reporting Patch**: Update `execution.fill_helpers` to mark trades with fallback fills as "PENDING_RECONCILIATION" rather than using the `entry_price` to calculate P&L, to prevent `TQI` from consuming bad data.
+4. **TQI Filter**: Modify `strategy.run_cycle` to ignore `TQI` scores computed from unverified fills until the `fill_reconciler` has updated them.
+5. **Ownership Guard Thresholds**: Investigate why `ownership_guard` is attempting to reduce `GOOGL` to a net of 0 via a `shrink` command; this suggests an internal logic error in the `qhm` integration module.
