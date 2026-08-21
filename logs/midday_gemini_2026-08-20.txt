@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-08-20
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+- NAKED POSITION (No protective stop found for live position) | TSLA(short, 2sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **SPY Trade:** Entry $771.41, Exit $771.41. Log indicates "stop_hit" but P&L is $0.00. While the logic acknowledges `overnight_breakeven` in "KNOWN BENIGN PATTERNS," the mismatch between an executed stop and a zero-loss outcome suggests the stop-loss order was moved to breakeven, but the fill price of the exit was recorded at the entry price. This is within permitted benign patterns.
+- **TSLA Trade:** The position is live (2 shares short). No protective stop order was identified in the live coverage snapshot, violating the core risk mandate.
+- **General:** The 0% win rate and 100% stop-hit rate on closed trades, coupled with the "STRESSED" MRI environment, suggest the current strategy configuration (specifically the 10/12 score requirement) is failing to filter out the high-volatility regime.
+
+### ENTRY QUALITY
+- **ALPHA ISSUE:** Entry of TSLA @ $342.50 occurred while MRI was "STRESSED" (Score 42/100). Although the bot applied sizing multipliers, the systemic decision to enter during a high-risk regime (GEO_ENERGY event) resulted in an immediate drawdown/loss-trigger state.
+
+### EXIT QUALITY
+- **ALPHA ISSUE:** TSLA was entered at 10:29:43 PT and remains open. The lack of an attached stop-loss after nearly 7 hours of RTH indicates a potential failure in the order submission logic or a failure in the `risk_manager` to attach GTC stops for overnight positions.
+
+### MRI ALIGNMENT
+- The bot successfully identified the MRI as "STRESSED" (42/100) and attempted to scale down size; however, entering positions at all during a "STRESSED" regime in a $2.5K account is likely inconsistent with the risk-reward mandate, as evidenced by the 100% loss rate today.
+
+### LOG ANOMALIES
+- `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30`: This log warning confirms systematic degradation in decision quality.
+- `EOD P&L DRIFT: Alpaca=$-15.28 tracker=$-8.56 drift=$-6.72`: Significant drift indicates either unrecorded fees, missed partial fills, or synchronization issues between the portfolio tracker and the Alpaca ledger.
+
+### NEW BUGS / CONCERNS
+- CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | description: Failure to attach/maintain GTC protective stops for short positions. | exact condition: TSLA short position (2 shares) currently held overnight without a protective stop order.
+- CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | description: Significant P&L Drift between tracker and Alpaca. | exact condition: EOD P&L reconciliation showed a drift of $-6.72 (approx 23% of total daily P&L).
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION:** Immediate manual intervention required for TSLA (short 2 shares) to place a hard stop-loss order at the current `execution.risk_manager` suggested level or market-close price to remediate the "Naked Position" failure.
+2. **ALPHA:** Elevate `MIN_SCORE` threshold or implement an absolute entry-halt when MRI level = STRESSED, as the current filtering (10/12) is insufficient to prevent entering into high-volatility regimes.
+3. **INFRA:** Investigate `execution.portfolio_tracker` P&L drift logic; the $6.72 variance suggests that either commission costs are not being accurately accounted for in the tracking engine or that the tracker is failing to register late-day partial fills.
