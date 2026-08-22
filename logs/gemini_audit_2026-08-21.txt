@@ -1,0 +1,49 @@
+Nightly Gemini Audit — 2026-08-21
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['auto_ai_audit.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. execution.ownership_guard | sync_ledger REFUSED — protected floor shrink(s) (LLY, GOOGL) | Logic failure in manual-close vs. autonomous-breach differentiation resulting in frozen sell orders.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+- **[CRITICAL] execution.ownership_guard / ledger_sync**: System encountered a "protected floor shrink" for LLY and GOOGL. The ownership guard refused to synchronize the ledger, resulting in frozen sell orders. This confirms a state of total execution lockout for these symbols until operator intervention.
+- **[ANOMALY-3] TQI degradation**: Frequent reports (19:32, 19:41, 19:50, 20:00) indicating TQI < 30. This suggests the confluence/scoring engine is failing to produce high-quality setups.
+- **[CRITICAL] P&L Drift**: The drift of $+1.55 is within the stated "BENIGN" threshold, but the recurring critical ledger sync failures (streak=41) indicate that the bot is failing to reconcile its own state autonomously.
+
+### PERFORMANCE AUDIT
+- **Trade Analysis**: Reviewed `TSLA` (Entry 2026-08-20, Exit 2026-08-21). Entry price 342.50, Exit price 362.46. Direction: Short. 
+  - **P&L Integrity Check**: A short entry at 342.50 should result in a profit if the exit is < 342.50. The exit at 362.46 resulted in a loss of 39.92. This is mathematically correct (a loss), but the trade was a high-scoring setup (12/12) that hit the "overnight_atr_buffer_exit". 
+  - **Stop Analysis**: The stop logic is consistently triggering early exits (ATR buffers), which contributes to the observed TQI degradation and poor win rate.
+- **Score→Outcome Correlation**: The 12/12 score bucket for the TSLA short resulted in a -5.83% loss, suggesting that the "confluence" scoring is currently failing to filter out toxic momentum-against-the-trend scenarios.
+
+### TRADE INTEGRITY
+- **Recording Bugs**: The `TOST` partial exit record (ts: 2026-08-21T19:49:14.904) shows a partial P&L of $2.11 for 1 share, while the EOD self-check (Alpaca per trade) lists a TOST P&L of $3.66. The discrepancy between the event log and the broker fill report is indicative of an accounting lag or rounding issue in the partial-exit tracking logic.
+
+### MODIFIED FILE FINDINGS
+- **auto_ai_audit.py**: 
+  - Audited code; identified that while the prompt budget is clamped, the dependency on `requests` inside a loop without an explicit session object (`requests.Session()`) for the chart proxy and macro events is inefficient and potentially error-prone under load (P5-L3 context). No logic bugs in the modification, but the file is susceptible to network-drop-induced crashes.
+
+### P5 STATUS
+- P5-C1: UNTOUCHED
+- P5-C2: UNTOUCHED
+- P5-H3: TRIGGERED (The ownership guard/ledger sync failure is a manifestation of orphan/tracking issues).
+- P5-H4: UNTOUCHED
+- P5-H5: FIXED
+- P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+- **CATEGORY: EXECUTION BUG | SEVERITY: CRITICAL | file: execution/ownership_guard.py | description: Automated breach detection logic is overly defensive, preventing legitimate position management.** 
+  - Exact failure condition: When a user manually closes a position or a broker adjustment triggers a shrink, the `ownership_guard` interprets the reduced `would_be` count as a "breach" and freezes all further order execution for those tickers.
+
+### FIX VALIDATION
+- **FIX VALIDATION: PASS (P5-H5)**: The logic implemented for handling suppressed GTC stops is functioning as expected by logging and skipping.
+
+### RECOMMENDED ACTIONS
+1. **EMERGENCY**: Run `confirm_ledger_heal.py LLY qhm 0` and `confirm_ledger_heal.py GOOGL qhm 1` to clear the `ownership_guard` lockout.
+2. **INFRASTRUCTURE**: Update `ownership_guard.py` to allow manual position reduction without freezing the ticker; differentiate between "unauthorized reduction" and "broker-confirmed fill/close".
+3. **STRATEGY**: Review the `overnight_atr_buffer_exit` logic; the high rate of stop-hits on 12/12 scores suggests the ATR buffer is too tight for current volatility.
+4. **ACCOUNTING**: Audit `partial_exit` P&L calculation in `execution.exit_logic` to unify the math between the log events and the broker fill reporting.
+5. **RESILIENCE**: Implement `requests.Session()` in `auto_ai_audit.py` to prevent connection-reuse errors.
