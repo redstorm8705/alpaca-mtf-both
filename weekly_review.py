@@ -753,20 +753,13 @@ def _week_stats(week_eods: dict, figures=None) -> dict:
     # Simple visibility % (no deposit/withdrawal tracking — paper account, Rafael
     # 2026-08-05): a failed equity fetch just omits the % (week_pnl_pct stays None),
     # never breaks the page.
-    _equity       = _fetch_alpaca_equity()
-    _period_stats = compute_period_stats(
-        date.fromisoformat(_wk_dates[0]),
-        date.fromisoformat(_wk_dates[-1]),
-        current_equity=_equity,
-    )
-    week_pnl     = _period_stats.get("total_pnl", 0.0)
-    week_pnl_pct = _period_stats.get("pnl_pct")
-    total      = len(all_trades)
-    wins       = sum(1 for t in all_trades if _day_pnl(t) > 0)
-    wr         = round(wins / total * 100) if total else 0
-    # SINGLE-SOURCE $ (2026-08-22): the header's weekly P&L / trade-count / win-rate come from
-    # the SAME ReportFigures snapshot the per-day tiles use, so the header can't diverge from
-    # Σ(day-tiles). Metadata (avg_score/avg_tqi/overnight/exit_reasons/spy_events) stays from EOD.
+    _equity = _fetch_alpaca_equity()
+    # SINGLE-SOURCE $ (2026-08-22): the header's weekly P&L / trade-count / win-rate come from the
+    # SAME ReportFigures snapshot the per-day tiles use, so the header can't diverge from Σ(day-tiles).
+    # Metadata (avg_score/avg_tqi/overnight/exit_reasons/spy_events) stays from EOD.
+    # PERF (2026-08-22): call compute_period_stats ONLY when figures is unavailable — under _fig_ok
+    # its result is immediately overwritten, and it does a full build_ledger() per (archive) week,
+    # which turned the multi-archive render into a multi-minute job (cold-2nd NIT #2, now fixed).
     if _fig_ok:
         _ps = figures.period_stats(_wk_dates[0], _wk_dates[-1])
         week_pnl = _ps["total_pnl"]
@@ -775,6 +768,17 @@ def _week_stats(week_eods: dict, figures=None) -> dict:
         wr       = round(_ps["win_rate"])
         _base    = (_equity - _ps["total_pnl"]) if _equity is not None else None
         week_pnl_pct = (_ps["total_pnl"] / _base * 100.0) if (_base and _base > 0) else None
+    else:
+        _period_stats = compute_period_stats(
+            date.fromisoformat(_wk_dates[0]),
+            date.fromisoformat(_wk_dates[-1]),
+            current_equity=_equity,
+        )
+        week_pnl     = _period_stats.get("total_pnl", 0.0)
+        week_pnl_pct = _period_stats.get("pnl_pct")
+        total        = len(all_trades)
+        wins         = sum(1 for t in all_trades if _day_pnl(t) > 0)
+        wr           = round(wins / total * 100) if total else 0
     scores     = [t["score"] for t in all_trades if t.get("score")]
     avg_score  = round(sum(scores) / len(scores), 1) if scores else None
     tqi_scores = [t["tqi_score"] for t in all_trades if t.get("tqi_score") is not None]
