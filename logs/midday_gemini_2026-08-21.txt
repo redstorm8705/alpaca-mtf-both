@@ -1,0 +1,41 @@
+Midday Gemini Audit — 2026-08-21
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 3
+- Position left naked (no stop order found): NVDA(long, 1sh)
+- Position left naked (no stop order found): PANW(long, 2sh)
+- Position left naked (no stop order found): QQQ(long, 2sh)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- The TSLA closed trade (Entry $342.50, Exit $362.46, P&L $-39.92) is inconsistent with typical price movement for a long position (Exit > Entry should be a profit). The recorded exit price is $19.96 higher than entry, yet the P&L is negative, suggesting an incorrect P&L calculation or missing contract/lot sizing data.
+- The 0% win rate and the loss on a high-confidence score (12/12) suggest significant strategy misalignment with the current "ELEVATED" MRI regime.
+
+### ENTRY QUALITY
+- Entry at MRI=STRESSED (TSLA @ 2026-08-20 10:29:43 PT) is a high-risk violation of volatility-adjusted entry protocols. 
+
+### EXIT QUALITY
+- The bot failed to protect the TSLA position; the exit occurred at $362.46, significantly below the stop level of $368.92. While labeled `stop_hit`, the discrepancy between the stop price and exit price suggests slippage or a failure in the order management system's stop-loss execution logic.
+
+### MRI ALIGNMENT
+- The bot is operating in an `ELEVATED` MRI regime (36/100) due to high volumes of "Truth Social" alerts. The strategy is attempting to trade through this regime rather than widening stops or tightening sizing proportionally to the risk level.
+
+### LOG ANOMALIES
+- `CRITICAL execution.ownership_guard`: Ledger synchronization failure regarding protected floor shrinkage for GOOGL and LLY. This indicates a "split-brain" scenario between the portfolio tracker and the actual Alpaca state.
+- `ANOMALY-2`: `RIVN` shows 3 confirm-gate scans but no entry despite 6 open positions (well under the 20-position limit).
+- `ANOMALY-3`: TQI degradation (last-5-trade avg 27.8 < 30), signaling a failure in decision quality consistency.
+
+### NEW BUGS / CONCERNS
+- EXECUTION BUG | CRITICAL | Naked position state | The `LIVE STOP COVERAGE` confirms 3 tickers currently lack active stop orders.
+- EXECUTION BUG | HIGH | P&L Calculation error | TSLA trade recorded as a loss despite positive price delta (Entry $342.50 vs Exit $362.46).
+- INFRASTRUCTURE | HIGH | Ledger Sync Failure | `ownership_guard` refusing to sync because of "protected floor" conflicts; this prevents new, safer orders from being placed until manually resolved.
+
+### FIX VALIDATION
+None.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediately inject manual stops for NVDA, PANW, and QQQ via the Alpaca API to rectify the "naked" status. 
+2. **INFRASTRUCTURE**: Execute the `confirm_ledger_heal.py` commands cited in the logs to resolve the ownership guard lockout on GOOGL/LLY.
+3. **ALPHA**: Suspend all entries until MRI levels normalize below 30 or the `VOLSHADOW` logic is recalibrated for the current market sentiment (Truth Social alert density).
