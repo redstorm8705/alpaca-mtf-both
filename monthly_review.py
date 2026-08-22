@@ -1,3 +1,4 @@
+# ruff: noqa: E501 — report page: readable HTML f-strings + aligned doc/comment columns intentionally exceed 88 (matches reporting/report_figures.py)
 """
 monthly_review.py
 Calendar-format monthly performance page.
@@ -26,6 +27,7 @@ from zoneinfo import ZoneInfo
 from reporting.metrics import (
     _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
+from reporting.report_figures import build_report_figures, reconcile
 # Strategy Edge Report (All-Time) lives on monthly now (Rafael 2026-07-05) —
 # imported from weekly_review, not duplicated.
 from weekly_review import _load_trade_log, _strategy_validation_html
@@ -150,7 +152,7 @@ def _archive_href(y2: int, m2: int, from_archive: bool) -> str:
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
-def _compute_metrics(year: int, month: int) -> dict:
+def _compute_metrics(year: int, month: int, figures) -> dict:
     days = _month_days(year, month)
     # Simple visibility % (no deposit/withdrawal tracking — paper account, Rafael
     # 2026-08-05): a failed equity fetch just omits the % (pnl_pct stays None),
@@ -158,6 +160,22 @@ def _compute_metrics(year: int, month: int) -> dict:
     equity = _fetch_alpaca_equity()
     stats = compute_period_stats(days[0], days[-1], current_equity=equity)
     stats["wr"] = stats["win_rate"]   # backward compat with _stats_html
+    # SINGLE-SOURCE P&L (2026-08-22): the header's $ / trade-count / win-rate / profit-factor
+    # come from the SAME ReportFigures snapshot the calendar cells use, so the header can
+    # never diverge from the day cells (the "plagued since April" header≠cells bug). Metadata
+    # (avg_score, avg_tqi, overnight_count) stays from compute_period_stats — those are NOT P&L.
+    if figures is not None and getattr(figures, "available", False):
+        start, end = days[0].isoformat(), days[-1].isoformat()
+        ps = figures.period_stats(start, end)
+        stats["total_pnl"]     = ps["total_pnl"]
+        stats["total_trades"]  = ps["total_trades"]
+        stats["win_rate"]      = ps["win_rate"]
+        stats["wr"]            = ps["win_rate"]
+        stats["profit_factor"] = ps["profit_factor"]
+        # pnl_pct recomputed from the figures P&L so the % ties to the same source (P&L as a
+        # % of pre-period equity). Guard: no equity → omit the % (never a wrong number).
+        _base = (equity - ps["total_pnl"]) if equity is not None else None
+        stats["pnl_pct"] = (ps["total_pnl"] / _base * 100.0) if (_base and _base > 0) else None
     return stats
 
 
@@ -196,63 +214,51 @@ def _pf_color(v: float) -> str:
     )
 
 
-def _day_cell(d: date | None) -> str:
+def _day_cell(d: date | None, figures) -> tuple[str, float | None]:
+    """Render one calendar cell. Returns (html, day_pnl); the caller collects day_pnl for the
+    render-time reconciliation check. ALL $/count/win-rate come from the single ReportFigures
+    snapshot (never eod/tracker), so a day's $ and its WR are drawn from the same round-trip
+    list — a red day can't show 100% WR, and the cells sum to the headline by construction.
+    eod is read ONLY for the loss-driver display badge (metadata, not P&L)."""
     if d is None:
-        return '<td class="day empty"></td>'
+        return '<td class="day empty"></td>', None
 
     is_today   = (d == date.today())
     is_weekend = d.weekday() >= 5
-    eod        = _load_eod(d)
+    day        = d.isoformat()
+    has        = figures.has_day(day)   # a realized close landed this day
 
     classes = ["day"]
     if is_today:
         classes.append("today")
     if is_weekend:
         classes.append("weekend")
-    if not eod:
+    if not has:
         classes.append("no-data")
     cls = " ".join(classes)
 
     day_num = d.day
 
-    if not eod:
+    if not has:
         label = "" if is_weekend else "No closed trades"
         return (
             f'<td class="{cls}">'
             f'<div class="cell-date">{day_num}</div>'
             f'<div class="cell-empty">{label}</div>'
             f'</td>'
-        )
+        ), None
 
-    trades  = [t for t in (eod.get("trades") or []) if t.get("status") == "closed"]
-    # P&L display must use the SAME field the monthly total sums
-    # (compute_period_stats: alpaca_pnl if present else pnl_today) — else the
-    # "Monthly P&L" header (Σ alpaca_pnl) diverges from the visible daily cells
-    # (previously Σ pnl_today). Prefer the Alpaca-reconciled value (Rafael's
-    # Alpaca-sourced-P&L mandate); fall back to pnl_today. (Fix 2026-07-12.)
-    _ap     = eod.get("alpaca_pnl")
-    pnl     = float(_ap if _ap is not None else (eod.get("pnl_today", 0) or 0))
-    n       = len(trades)
-
-    if n == 0:
-        pnl_cls = _pnl_class(pnl)
-        pnl_str = _fmt_pnl(pnl) if pnl != 0.0 else "$0.00"
-        label   = "No tracker trades" if pnl != 0.0 else "No closed trades"
-        return (
-            f'<td class="{cls}">'
-            f'<div class="cell-date">{day_num}</div>'
-            f'<div class="cell-pnl {pnl_cls}">{pnl_str}</div>'
-            f'<div class="cell-empty">{label}</div>'
-            f'</td>'
-        )
-
-    wins      = sum(1 for t in trades if _day_pnl(t) > 0)
-    day_wr    = wins / n * 100
-    pnl_cls   = _pnl_class(pnl)
-    wr_color  = _wr_color(day_wr)
+    s        = figures.day_stats(day)   # pnl, n_trades, win_rate — all from the same round-trips
+    pnl      = s["pnl"]
+    n        = s["n_trades"]
+    day_wr   = s["win_rate"]
+    pnl_cls  = _pnl_class(pnl)
+    wr_color = _wr_color(day_wr)
 
     # pdt_day/pdt_badge removed S52 — SEC/FINRA rule amendment, board vote S50 28-0.
-    loss_driver = (eod.get("loss_driver") or "").lower()
+    # loss_driver is display metadata from the eod file (not P&L); absent -> no badge.
+    eod = _load_eod(d)
+    loss_driver = (eod.get("loss_driver") or "").lower() if eod else ""
     loss_badge  = ""
     if loss_driver:
         if loss_driver in _MECH_EXITS:
@@ -269,7 +275,7 @@ def _day_cell(d: date | None) -> str:
         f'{n} trade{"s" if n != 1 else ""} · {day_wr:.0f}% WR</div>'
         f'{loss_badge}'
         f'</td>'
-    )
+    ), pnl
 
 
 def _stats_html(m: dict) -> str:
@@ -315,28 +321,61 @@ def _stats_html(m: dict) -> str:
     )
 
 
-def _cal_html(year: int, month: int) -> str:
+def _cal_html(year: int, month: int, figures) -> tuple[str, list]:
+    """Build the month calendar. Returns (table_html, day_pnls) — day_pnls is collected from
+    each rendered cell so the caller can reconcile Σ(cells) against the header (single-source)."""
     weeks = calendar.monthcalendar(year, month)
     rows  = ""
+    day_pnls: list = []
     for week in weeks:
-        cells = "".join(
-            _day_cell(date(year, month, dn) if dn else None)
-            for dn in week[:5]      # Mon-Fri only (indices 0-4); drop Sat(5)/Sun(6)
-        )
-        rows += f"<tr>{cells}</tr>"
+        cells_html = ""
+        for dn in week[:5]:         # Mon-Fri only (indices 0-4); drop Sat(5)/Sun(6)
+            cell, day_pnl = _day_cell(date(year, month, dn) if dn else None, figures)
+            cells_html += cell
+            if day_pnl is not None:
+                day_pnls.append(day_pnl)
+        rows += f"<tr>{cells_html}</tr>"
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
     headers = "".join(f"<th>{h}</th>" for h in day_names)
-    return (
+    table = (
         '<table class="cal-table">'
         f"<thead><tr>{headers}</tr></thead>"
         f"<tbody>{rows}</tbody>"
         "</table>"
     )
+    return table, day_pnls
 
 
 def _build_html(year: int, month: int, is_archive: bool) -> str:
     now_pt      = datetime.now(PT)
-    metrics     = _compute_metrics(year, month)
+    figures     = build_report_figures()
+    metrics     = _compute_metrics(year, month, figures)
+    # Single-source coherence: build the calendar from the SAME figures snapshot and assert
+    # the header P&L equals Σ(day-cells). A breach renders a visible RECONCILIATION ERROR
+    # banner instead of shipping silently-contradictory numbers (report_figures.reconcile).
+    _cal_html_str, _day_pnls = _cal_html(year, month, figures)
+    # Reconcile ONLY when the single-source snapshot is live (header AND cells both from
+    # figures). On a transient Alpaca/ledger outage (figures.available=False) the header
+    # degrades to compute_period_stats while the cells show "no data" — comparing those two
+    # is meaningless, so show a soft "figures unavailable" notice, NOT an alarming red
+    # RECONCILIATION ERROR over a blank calendar (cold-2nd NIT #1, 2026-08-22).
+    if getattr(figures, "available", False):
+        _recon_ok, _recon_drift = reconcile(metrics["total_pnl"], _day_pnls)
+        _recon_banner = "" if _recon_ok else (
+            f'<div class="lt-banner" style="border-color:{STATUS_NEGATIVE}">'
+            f'<div><div class="lt-label" style="color:{STATUS_NEGATIVE}">&#9888; RECONCILIATION ERROR</div>'
+            f'<div class="lt-val" style="color:{STATUS_NEGATIVE}">Header &#8800; &Sigma; day-cells</div>'
+            f'<div class="lt-sub">Header P&amp;L ${metrics["total_pnl"]:,.2f} vs &Sigma; day-cells '
+            f'(drift ${_recon_drift:,.2f}) — numbers may be mixing sources; do not trust until resolved.</div>'
+            f'</div></div>'
+        )
+    else:
+        _recon_banner = (
+            f'<div class="lt-banner" style="border-color:{BORDER_LIGHT}">'
+            f'<div><div class="lt-label" style="color:{TEXT_MUTED}">LIVE FIGURES UNAVAILABLE</div>'
+            f'<div class="lt-sub">Alpaca/ledger fetch temporarily unavailable — header shows last computed '
+            f'totals; per-day cells may be incomplete until the next refresh.</div></div></div>'
+        )
     prev_m, next_m = _prev_next(year, month)
     month_label = date(year, month, 1).strftime("%B %Y")
     updated     = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
@@ -554,7 +593,8 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
 <div class="main">
   {_lt_banner}
   {_stats_html(metrics)}
-  {_cal_html(year, month)}
+  {_recon_banner}
+  {_cal_html_str}
   {_edge_report}
 </div>
 <div class="footer">alpaca-mtf-bot · paper account · auto-refresh 60s</div>
