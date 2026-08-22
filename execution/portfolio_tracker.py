@@ -691,8 +691,39 @@ class PortfolioTracker:
                     )
                 # ── end orphan seeding ───────────────────────────────────────────
 
+                # Protected-tier protective-stop close order_ids (P1 2026-08-21): when a
+                # QHM protective GTC stop fires, the hold closes and its symbol leaves
+                # get_quarterly_hold_symbols() the SAME day, so the intraday FIFO stops
+                # skipping it and its close-sell hits the "no long lots" branch — a phantom
+                # "synthetic short" (LLY's +$40.88 stop-out, 2026-08-21). The fired stop's
+                # order_id is RETAINED on the CLOSED position in the QHM state file (verified
+                # live: LLY state=CLOSED still carries stop_order_id), so collect it and pass
+                # it to the FIFO to skip that fill like a QHM symbol. PURE DISK READ — no
+                # Alpaca call is added to this EOD/shutdown path (the cold-2nd no-blocking
+                # rule holds by construction). Fail-safe: any error -> empty set -> the FIFO
+                # behaves exactly as before.
+                _protected_close_oids: set = set()
+                try:
+                    import json as _json_pc
+                    from execution.quarterly_hold_manager import _QHM_STATE_FILE
+                    if _QHM_STATE_FILE.exists():
+                        _qh = _json_pc.loads(_QHM_STATE_FILE.read_text())
+                        # quarterly_holds.json is a FLAT {symbol: position_dict} — NO
+                        # "positions" wrapper (_save_state writes {sym: pos.to_dict()};
+                        # get_quarterly_hold_symbols iterates it flat). cold-2nd 2026-08-21.
+                        _qh_items = _qh.values() if isinstance(_qh, dict) else _qh
+                        for _qp in _qh_items:
+                            if isinstance(_qp, dict) and _qp.get("stop_order_id"):
+                                _protected_close_oids.add(str(_qp["stop_order_id"]))
+                except Exception as _pce:
+                    logger.warning(
+                        "[FIFO] protected-close order-id build failed (%s) — proceeding "
+                        "without it (a protected close may re-flag synthetic short)", _pce,
+                    )
+
                 _alpaca_pnl, _alpaca_lots, _alpaca_per_trade, _seen_fill_ids = (
-                    _fifo_reconstruct(_day_fills, _prior_lots, _processed_fill_ids)
+                    _fifo_reconstruct(_day_fills, _prior_lots, _processed_fill_ids,
+                                      protected_close_order_ids=_protected_close_oids)
                 )
                 # Accumulate this run's newly-attributed fills onto the day's
                 # persisted baseline (2026-07-06 S-FIFO): _fifo_reconstruct only

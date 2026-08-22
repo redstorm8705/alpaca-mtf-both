@@ -138,6 +138,7 @@ def _fetch_alpaca_fills_for_date(date_str: str) -> list:
 
 def _fifo_reconstruct(
     fills: list, prior_lots: dict, processed_fill_ids: "set | None" = None,
+    protected_close_order_ids: "set | None" = None,
 ) -> tuple:
     """
     FIFO P&L reconstruction from Alpaca fills.
@@ -154,6 +155,11 @@ def _fifo_reconstruct(
         lot each time. Confirmed in production 2026-06-27 (AMD/PANW/SMCI/
         NVDA each had 30-80 duplicate lots; a stale NVDA lot caused a real
         EOD P&L drift). Board + Gro + GAI consensus fix.
+
+    protected_close_order_ids: fill order_ids that are protected-tier (QHM/forever6)
+        protective-stop CLOSES. Skipped from intraday FIFO (like QHM symbols) so a
+        legit tier stop-out isn't recorded as a phantom synthetic short when its
+        symbol has already left the QHM list at close-time. None = empty = no-op.
 
     Handles mixed buy/buy_to_cover labels via net-position-aware matching:
     a "buy" that arrives when net position is short is treated as a cover.
@@ -175,6 +181,14 @@ def _fifo_reconstruct(
     # circular-import risk in this foundational module.
     from execution.quarterly_hold_manager import get_quarterly_hold_symbols
     _qhm_syms = get_quarterly_hold_symbols()
+    # Tag-based protected-tier close skip (P1 2026-08-21): the symbol-based QHM skip
+    # below misses a protected (QHM/forever6) protective-stop CLOSE whose symbol already
+    # dropped from get_quarterly_hold_symbols() at close-time — the race that recorded
+    # LLY's legit +$40.88 stop-out as a phantom "synthetic short". The caller supplies
+    # the set of fill order_ids that are protected closes (found without a blocking
+    # Alpaca call); those fills skip intraday FIFO like QHM symbols. Default None =
+    # empty set = byte-identical to prior behaviour (safe no-op).
+    _protected_oids = protected_close_order_ids or set()
     lots      = copy.deepcopy(prior_lots)
     for _qs in list(_qhm_syms):
         lots.pop(_qs, None)
@@ -187,6 +201,16 @@ def _fifo_reconstruct(
         sym       = fill.get("symbol", "")
         if sym in _qhm_syms:
             continue   # QHM tracked separately — excluded from intraday EOD FIFO P&L
+        # Order_id-tagged protected close (catches the close-time race where the symbol
+        # already left the QHM list) — skipped from intraday FIFO like a QHM symbol.
+        _foid = fill.get("order_id", "")
+        if _foid and _foid in _protected_oids:
+            # Mark seen so a later same-day run whose protected set no longer has this
+            # order_id (stop cleared on a state transition) can't reprocess it as a
+            # synthetic short. cold-2nd 2026-08-21.
+            if fill_id:
+                seen_fill_ids.add(fill_id)
+            continue
         side      = fill.get("side", "")
         qty       = int(float(fill.get("qty", 0)))
         price     = float(fill.get("price", 0))
