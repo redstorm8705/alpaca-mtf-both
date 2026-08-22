@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from reporting.metrics import (
     _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
+from reporting.report_figures import build_report_figures, reconcile
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)  # noqa: E501
 
 # Exception handlers use logger (logging module).
@@ -738,9 +739,14 @@ def _classify_loss_driver(eod: dict):
         return ("STRATEGY", "#ff3b30")     # M-2: semantic label; UI maps → "✕ STRATEGY"
 
 
-def _week_stats(week_eods: dict) -> dict:
+def _week_stats(week_eods: dict, figures=None) -> dict:
     days = [v for v in week_eods.values() if v]
-    if not days:
+    _fig_ok = (figures is not None and getattr(figures, "available", False))
+    # Show the week when EITHER eod metadata OR the figures ledger has data — an empty-eod week
+    # (archive stubs whose eod files were pruned, or the current week before its first eod is
+    # written) still gets its figures-sourced $ so the header never reads $0 while the tiles show
+    # real ledger P&L (a false RECONCILIATION banner + incoherent header — cold-2nd FAIL 2026-08-22).
+    if not days and not _fig_ok:
         return {}
     all_trades = [t for d in days for t in (d.get("trades") or []) if t.get("status") == "closed"]  # noqa: E501
     _wk_dates = sorted(week_eods.keys())
@@ -758,6 +764,17 @@ def _week_stats(week_eods: dict) -> dict:
     total      = len(all_trades)
     wins       = sum(1 for t in all_trades if _day_pnl(t) > 0)
     wr         = round(wins / total * 100) if total else 0
+    # SINGLE-SOURCE $ (2026-08-22): the header's weekly P&L / trade-count / win-rate come from
+    # the SAME ReportFigures snapshot the per-day tiles use, so the header can't diverge from
+    # Σ(day-tiles). Metadata (avg_score/avg_tqi/overnight/exit_reasons/spy_events) stays from EOD.
+    if _fig_ok:
+        _ps = figures.period_stats(_wk_dates[0], _wk_dates[-1])
+        week_pnl = _ps["total_pnl"]
+        total    = _ps["total_trades"]
+        wins     = _ps["wins"]
+        wr       = round(_ps["win_rate"])
+        _base    = (_equity - _ps["total_pnl"]) if _equity is not None else None
+        week_pnl_pct = (_ps["total_pnl"] / _base * 100.0) if (_base and _base > 0) else None
     scores     = [t["score"] for t in all_trades if t.get("score")]
     avg_score  = round(sum(scores) / len(scores), 1) if scores else None
     tqi_scores = [t["tqi_score"] for t in all_trades if t.get("tqi_score") is not None]
@@ -1190,9 +1207,10 @@ def build_html(  # noqa: E501
     is_archive: bool = False,
     trade_log: "dict | None" = None,
     analysis_attempted: bool = False,
+    figures=None,
 ) -> str:
     day_trades = day_trades or []
-    stats   = _week_stats(week_eods)
+    stats   = _week_stats(week_eods, figures)
     today   = date.today()
     gen_ts      = datetime.now(PDT).strftime("%b %d · %I:%M %p PT")
     # C-1: read paper profile values, not module-level live defaults
@@ -1249,17 +1267,30 @@ def build_html(  # noqa: E501
 
     # ── Per-day tiles ─────────────────────────────────────────────────────────
     day_tiles = ""
+    _day_tile_pnls: list = []
+    _fig_ok = (figures is not None and getattr(figures, "available", False))
     for i, day_name in enumerate(["Monday","Tuesday","Wednesday","Thursday","Friday"]):
         d    = monday + timedelta(days=i)
         eod  = week_eods.get(d.isoformat())
         ds   = d.strftime("%b %d")
         is_today = (d == today)
+        # SINGLE-SOURCE $ (2026-08-22): tile P&L/count/WR come from the figures snapshot (the same
+        # one the header uses) so Σ(tiles) == header by construction. Collect every weekday's
+        # figures P&L for the render-time reconcile; metadata (driver/loss-badge) stays from EOD.
+        _fig_ds = figures.day_stats(d.isoformat()) if _fig_ok else None
+        if _fig_ds is not None:
+            _day_tile_pnls.append(_fig_ds["pnl"])
         if eod is not None:
-            pnl   = eod.get("pnl_today", 0)
+            if _fig_ds is not None:
+                pnl = _fig_ds["pnl"]
+                tc  = _fig_ds["n_trades"]
+                wr  = round(_fig_ds["win_rate"])
+            else:
+                pnl = eod.get("pnl_today", 0)
+                tc  = eod.get("trades_today", 0)
+                wr  = eod.get("win_rate_today", 0)
             cls   = "pos" if pnl > 0 else ("neg" if pnl < 0 else "zero")
             sign  = "+" if pnl >= 0 else "-"
-            tc    = eod.get("trades_today", 0)
-            wr    = eod.get("win_rate_today", 0)
             driver = _day_driver(eod)
             tile_cls = "day active" if is_today else "day"
             # Loss driver badge — only on red days
@@ -1296,6 +1327,24 @@ def build_html(  # noqa: E501
   {loss_driver_badge}
   {_note_html}
 </div>"""
+        elif _fig_ds is not None and _fig_ds["n_trades"] > 0:
+            # No eod file, but the FIFO ledger has realized closes this day (e.g. an archive week
+            # whose eod files were pruned) — render the authoritative figures $ so the tile isn't
+            # blank while the header counts it (keeps Σ(tiles) == header visible, not just internal).
+            pnl_f = _fig_ds["pnl"]
+            _c    = "pos" if pnl_f > 0 else ("neg" if pnl_f < 0 else "zero")
+            _sg   = "+" if pnl_f >= 0 else "-"
+            _tcf  = _fig_ds["n_trades"]
+            _wrf  = round(_fig_ds["win_rate"])
+            _tile_cls = "day active" if (d == today) else "day"
+            day_tiles += f"""
+<div class="{_tile_cls}">
+  <div class="day-name">{day_name}</div>
+  <div class="day-date">{ds}</div>
+  <div class="day-pnl {_c}">{_sg}${abs(pnl_f):.2f}</div>
+  <div class="day-driver">{_tcf} trade{"s" if _tcf!=1 else ""} · {_wrf}% win</div>
+  <div class="day-meta" style="font-size:9px;color:#4a5070">ledger (no session file)</div>
+</div>"""
         else:
             future = d > today
             _future_style = ' style="opacity:0.35;pointer-events:none"' if future else ''  # noqa: E501
@@ -1306,6 +1355,26 @@ def build_html(  # noqa: E501
   <div class="day-pnl zero">—</div>
   <div class="day-driver">{"Upcoming" if future else "No session data"}</div>
 </div>"""
+
+    # Render-time coherence: header weekly P&L vs Σ(day-tile P&L), both from the figures
+    # snapshot → drift 0 by construction; a breach means the page mixed sources (cold-2nd guard).
+    _recon_banner_wk = ""
+    if _fig_ok:
+        _rok, _rdrift = reconcile(stats.get("week_pnl", 0.0), _day_tile_pnls)
+        if not _rok:
+            _recon_banner_wk = (
+                '<div style="background:rgba(255,59,48,.1);border:1px solid #ff3b30;'
+                'border-radius:8px;padding:12px 16px;margin:14px 0;color:#ff3b30;font-size:12px">'
+                f'&#9888; RECONCILIATION ERROR — Weekly P&amp;L ${stats.get("week_pnl",0.0):,.2f} '
+                f'&#8800; &Sigma; day-tiles (drift ${_rdrift:,.2f}). Numbers may be mixing sources.</div>'
+            )
+    elif figures is not None:
+        _recon_banner_wk = (
+            '<div style="background:rgba(255,214,10,.08);border:1px solid #2a2f48;'
+            'border-radius:8px;padding:10px 16px;margin:14px 0;color:#8a94ae;font-size:11px">'
+            'Live figures temporarily unavailable — showing last computed totals; per-day tiles '
+            'may be incomplete until the next refresh.</div>'
+        )
 
     # ── Stats row ─────────────────────────────────────────────────────────────
     def _sv(val, fmt="{}", cls=""):
@@ -1634,6 +1703,7 @@ def build_html(  # noqa: E501
 <div class="container">
 
 {no_data_html}
+{_recon_banner_wk}
 {headline_html}
 
 {stats_html}
@@ -1710,10 +1780,14 @@ def main():
     _tl_count = len(trade_log.get("closed", []))
     print(f"  Trade log: {_tl_count} closed trade(s) loaded for strategy validation panel")  # noqa: E501
 
+    # Single canonical figures snapshot (one Alpaca-FIFO build) shared by every build_html call
+    # this run — header, per-day tiles, and the reconcile all read from it (single-source-of-truth).
+    _figures = build_report_figures()
+
     # Write root weekly_review.html (current/requested week, paths relative to root)
     html = build_html(monday, week_eods, backtest, analysis, day_trades,
                       archive_weeks=all_nav_weeks, is_archive=False, trade_log=trade_log,
-                      analysis_attempted=_ai_attempted)  # noqa: E501
+                      analysis_attempted=_ai_attempted, figures=_figures)  # noqa: E501
 
     tmp = OUT_HTML + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1725,7 +1799,7 @@ def main():
     arch_path = _os.path.join(LOGS_DIR, f"weekly_{monday.isoformat()}.html")
     html_arch = build_html(monday, week_eods, backtest, analysis, day_trades,
                            archive_weeks=all_nav_weeks, is_archive=True, trade_log=trade_log,
-                           analysis_attempted=_ai_attempted)  # noqa: E501
+                           analysis_attempted=_ai_attempted, figures=_figures)  # noqa: E501
     tmp_arch  = arch_path + ".tmp"
     with open(tmp_arch, "w", encoding="utf-8") as f:
         f.write(html_arch)
@@ -1748,7 +1822,7 @@ def main():
             wd = w + timedelta(days=i)
             w_eods[wd.isoformat()] = _load_eod(wd)
         stub_html = build_html(w, w_eods, backtest, None, day_trades,
-                               archive_weeks=all_nav_weeks, is_archive=True)
+                               archive_weeks=all_nav_weeks, is_archive=True, figures=_figures)
         tmp_stub  = w_path + ".tmp"
         with open(tmp_stub, "w", encoding="utf-8") as f:
             f.write(stub_html)
