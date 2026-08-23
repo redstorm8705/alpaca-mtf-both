@@ -149,7 +149,7 @@ def _ntfy(title: str, body: str, priority: int = 3, tags: list | None = None) ->
 _SLACK_CHUNK_LIMIT = 3500  # safe margin under Slack's ~4000-char in-client truncation
 
 
-def _chunk_text(text: str, limit: int = _SLACK_CHUNK_LIMIT) -> list:
+def _chunk_text(text: object, limit: int = _SLACK_CHUNK_LIMIT) -> list:
     """Split text into <=limit-char chunks on NEWLINE boundaries (never mid-line, unless a
     single line itself exceeds limit → hard-wrapped). LOSSLESS — including interior blank
     lines and a trailing newline: uses a None sentinel to distinguish 'nothing pending' from
@@ -194,6 +194,54 @@ def _post_slack_text(text: str) -> bool:
     except Exception as e:
         logger.warning(f"Slack send failed: {e}")
         return False
+
+
+def _post_slack_payload(payload: dict) -> bool:
+    """POST an arbitrary Slack webhook JSON payload (text and/or Block Kit `blocks`). True on HTTP
+    200. Never raises. Sibling of _post_slack_text (kept separate so the existing text path is
+    untouched)."""
+    try:
+        req = urllib.request.Request(
+            _SLACK_WEBHOOK,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=4, context=_SSL_CTX) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.warning(f"Slack send failed: {e}")
+        return False
+
+
+def send_slack_blocks(blocks: list, fallback_text: str) -> None:
+    """Send a Block Kit message per rules/slack_format.md (SLK01/SLK02): structured `blocks` plus a
+    top-level `fallback_text` that carries the answer (the phone notification preview + screen-reader
+    string). Chunks on BLOCK boundaries (Slack caps 50 blocks/message) so nothing is dropped. Falls
+    back to a plain-text send if there are no blocks, and to logging if Slack is not configured.
+    Never raises — a formatting error must never fail to alert (mirrors the module's fail-safe rule)."""
+    fallback_text = _sanitize(fallback_text)
+    if not _SLACK_WEBHOOK:
+        logger.warning(f"[ALERT no-op] {fallback_text[:120]}")
+        return
+    try:
+        blocks = list(blocks or [])
+    except Exception:
+        blocks = []
+    if not blocks:
+        # No blocks → never silently drop: send the fallback as plain text.
+        if not _send_slack_chunked(f"{fallback_text}\n— {datetime.now(PT).strftime('%H:%M PT')}"):
+            logger.warning(f"send_slack_blocks failed (text fallback): {fallback_text[:120]}")
+        return
+    CHUNK = 45   # headroom under Slack's 50-blocks/message hard limit
+    groups = [blocks[i:i + CHUNK] for i in range(0, len(blocks), CHUNK)]
+    n = len(groups)
+    for i, grp in enumerate(groups, 1):
+        text = fallback_text if n == 1 else f"{fallback_text} ({i}/{n})"
+        if not _post_slack_payload({"text": text, "blocks": grp}):
+            logger.warning(f"send_slack_blocks failed (part {i}/{n}): {fallback_text[:120]}")
+        if i < n:
+            time.sleep(0.4)                 # preserve delivery order; avoid a rate burst
 
 
 def _send_slack_chunked(text: str) -> bool:

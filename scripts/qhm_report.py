@@ -53,7 +53,7 @@ _HEARTBEAT = _ROOT / "logs" / "qhm_report_heartbeat.json"
 # (e.g. `requests`) degrades earnings to UNKNOWN rather than crashing the whole report (BGG guardrail 1).
 from reporting.pnl_ledger import fetch_positions, fetch_account          # noqa: E402
 from reporting.metrics import _fetch_alpaca_equity                        # noqa: E402
-from alerts import send_slack                                             # noqa: E402
+from alerts import send_slack, send_slack_blocks                          # noqa: E402
 
 _CONFIG_FILE = _ROOT / "data" / "state" / "quarterly_holds_config.json"
 
@@ -191,9 +191,42 @@ def _fmt_money(v) -> str:
     return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}" if v is not None else "—"
 
 
-def build_report() -> tuple[str, str]:
-    """Returns (markdown, slack_summary). Pure formatting from read-only data; never raises on
-    partial data — degrades with explicit flags."""
+# ── Block Kit builders (rules/slack_format.md SLK01–SLK15) ──────────────────────
+def _pnl_glyph(v) -> str:
+    """🟢 for a non-negative unrealized P&L, 🔴 for a loss (SLK08 pre-attentive triage, paired with
+    the signed number — never color alone)."""
+    f = _safe_float(v)
+    return "🟢" if (f is not None and f >= 0) else "🔴"
+
+
+def _earn_glyph(earn_status: str) -> str:
+    s = str(earn_status or "").upper()
+    if s.startswith("LOCKED"):
+        return "🔒 "
+    if s.startswith("APPROACHING"):
+        return "⚠️ "
+    return ""
+
+
+def _sec(text: str) -> dict:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+
+def _ctx(text: str) -> dict:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+def _hdr(text: str) -> dict:
+    return {"type": "header", "text": {"type": "plain_text", "text": str(text)[:150], "emoji": True}}
+
+
+_DIV = {"type": "divider"}
+
+
+def build_report() -> tuple[str, list, str]:
+    """Returns (markdown_archive, slack_blocks, slack_fallback_text). Pure formatting from read-only
+    data; never raises on partial data — degrades with explicit flags. The .md is the git archive;
+    the blocks are Block Kit per rules/slack_format.md; the fallback carries the answer (SLK02)."""
     now = datetime.now(PT)
     today_iso = now.strftime("%Y-%m-%d")
     state = _load_state()
@@ -221,6 +254,9 @@ def build_report() -> tuple[str, str]:
     active_rows: list[str] = []
     closed_rows: list[str] = []
     ghost_rows: list[str] = []
+    active_recs: list[dict] = []   # structured per-hold records → Block Kit
+    closed_recs: list[dict] = []
+    ghost_recs: list[dict] = []
     book_unrealized = 0.0
 
     def _row_cells(sym, shares, basis, price, upl, uplpc, stop, dist_stop, tgt_pct, pct_eq,
@@ -256,6 +292,8 @@ def build_report() -> tuple[str, str]:
                 f"| {sym} | {pos.get('qty','—')} | mkt {_fmt_money(mv)} | "
                 f"{_fmt_money(pos.get('unrealized_pl'))} | ⚠️ UNMANAGED — in Alpaca, not in QHM state |"
             )
+            ghost_recs.append({"sym": sym, "qty": pos.get("qty", "—"),
+                               "mv": _fmt_money(mv), "upl": _fmt_money(pos.get("unrealized_pl"))})
             continue
 
         # ZOMBIE: tracked in state but no live position (stopped/closed externally).
@@ -265,6 +303,9 @@ def build_report() -> tuple[str, str]:
                 f"| entry {_fmt_money(srow.get('avg_entry_price'))} | ⚠️ CLOSED/LIQUIDATED_EXTERNALLY "
                 f"— in state, no live position | {earn_status} |"
             )
+            closed_recs.append({"sym": sym, "state": srow.get("state", "?"),
+                                "qty_filled": srow.get("qty_filled", "?"),
+                                "entry": _fmt_money(srow.get("avg_entry_price")), "earn": earn_status})
             continue
 
         if pos is None:
@@ -310,6 +351,16 @@ def build_report() -> tuple[str, str]:
             _fmt_money(upl), uplpc_str, stop_str, dist_stop,
             tgt_pct_str, pct_eq, headroom, earn_status, days, thesis, note or "ok",
         ))
+        active_recs.append({
+            "sym": sym, "glyph": _pnl_glyph(upl),
+            "upl_money": _fmt_money(upl), "uplpc": uplpc_str,
+            "stop": stop_str, "dist": dist_stop,
+            "pct_eq": pct_eq, "tgt": tgt_pct_str, "earn": earn_status,
+            "earn_glyph": _earn_glyph(earn_status),
+            "qty": a_qty, "basis": _fmt_money(a_basis), "price": price_str,
+            "days": days, "note": note,
+            "sort_pnl": (_safe_float(upl) if _safe_float(upl) is not None else 0.0),
+        })
 
     eq_str = _fmt_money(equity) if equity is not None else "—"
     hdr = (
@@ -334,23 +385,52 @@ def build_report() -> tuple[str, str]:
                "|---|---|---|---|---|\n" + "\n".join(ghost_rows))
     md += "\n\n_Source: Alpaca /v2/positions (P&L golden) + data/state/quarterly_holds.json (intent) + FMP cached earnings. Read-only. Design: logs/design_records/qhm_weekly_report_2026-08-22.md_\n"
 
-    # Compact Slack summary (Rafael reads this).
-    n_active = len(active_rows)
-    slack = (f":bar_chart: *QHM Weekly Status — {today_iso}*  |  equity {eq_str}  |  "
-             f"book unrealized {_fmt_money(book_unrealized)}  |  {n_active} active hold(s)")
-    if closed_rows:
-        slack += f"  |  {len(closed_rows)} closed/exited"
-    if ghost_rows:
-        slack += f"  |  :warning: {len(ghost_rows)} unmanaged"
+    # ── Block Kit output per rules/slack_format.md (SLK01–SLK15) ───────────────
+    n_active = len(active_recs)
+    locked = sum(1 for r in active_recs if str(r["earn"]).upper().startswith("LOCKED"))
+    # SLK02 — the fallback carries the answer (phone notification preview + screen reader).
+    fallback = f"📊 QHM Weekly {today_iso} · {n_active} hold(s) · book {_fmt_money(book_unrealized)}"
+    if locked:
+        fallback += f" · 🔒{locked} earnings-locked"
+    if ghost_recs:
+        fallback += f" · ⚠️{len(ghost_recs)} unmanaged"
+    if (not live_ok) or (not config_ok) or (equity is None):
+        fallback += " · ⚠️ data degraded"
+
+    blocks: list = [_hdr(f"QHM Weekly Status · {today_iso}")]
+    blocks.append(_ctx(f"Equity {eq_str} · book unrealized *{_fmt_money(book_unrealized)}* · "
+                       f"{n_active} active hold(s)"))
     if flags:
-        slack += "\n" + "\n".join(flags)
-    for r in active_rows:
-        c = [x.strip() for x in r.strip("|").split("|")]
-        # Sym, Shares, Cost, Price, UnrlP&L, Unrl%, Stop, Dist, Target%, %eq, DipRoom, Earnings, Days, Thesis, Flag
-        slack += (f"\n• *{c[0]}* {c[1]}sh @ {c[2]} → {c[3]} | P&L {c[4]} ({c[5]}) | "
-                  f"stop {c[6]} ({c[7]}) | {c[9]}/{c[8]} eq | earnings {c[11]}"
-                  + (f" | {c[14]}" if c[14] and c[14] != "ok" else ""))
-    return md, slack
+        blocks.append(_sec("\n".join(flags)))
+    blocks.append(_DIV)
+    if active_recs:
+        # SLK13 — sort by attention: biggest losers first.
+        for r in sorted(active_recs, key=lambda x: x["sort_pnl"]):
+            line1 = f"{r['glyph']} *{r['sym']}*  *{r['upl_money']} ({r['uplpc']})*"
+            line2 = (f"🛡 Stop {r['stop']} · {r['dist']} cushion" if r["stop"] != "—"
+                     else "🛡 Stop —")
+            line3 = f"⚖️ {r['pct_eq']} of equity (cap {r['tgt']}) · {r['earn_glyph']}Earnings {r['earn']}"
+            if r["note"]:
+                line3 += f" · {r['note']}"
+            blocks.append(_sec(f"{line1}\n{line2}\n{line3}"))
+            blocks.append(_ctx(f"{r['qty']} sh · entry {r['basis']} → now {r['price']} · {r['days']}d held"))
+    else:
+        blocks.append(_sec("_No active QHM holds._"))
+    if closed_recs:
+        blocks.append(_DIV)
+        blocks.append(_sec("*Closed / exited* (in state, no live position)"))
+        for r in closed_recs:
+            blocks.append(_ctx(f"⚪ *{r['sym']}* · was {r['qty_filled']} sh @ {r['entry']} · "
+                               f"state {r['state']} · earnings {r['earn']}"))
+    if ghost_recs:
+        blocks.append(_DIV)
+        blocks.append(_sec("*⚠️ Unmanaged* — in Alpaca, not in QHM state"))
+        for r in ghost_recs:
+            blocks.append(_ctx(f"⚠️ *{r['sym']}* · {r['qty']} sh · mkt {r['mv']} · P&L {r['upl']}"))
+    blocks.append(_DIV)
+    blocks.append(_ctx(f"Source: Alpaca /v2/positions (P&L) + quarterly_holds.json · "
+                       f"{now.strftime('%b %d · %I:%M %p PT')}"))
+    return md, blocks, fallback
 
 
 def _write_heartbeat(ok: bool, note: str) -> None:
@@ -365,7 +445,7 @@ def _write_heartbeat(ok: bool, note: str) -> None:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     try:
-        md, slack = build_report()
+        md, blocks, fallback = build_report()
     except Exception as e:
         logger.error("qhm_report: build_report failed (%s)", e, exc_info=True)
         try:
@@ -376,11 +456,12 @@ def main() -> int:
         return 1
 
     # Slack-FIRST — delivery is decoupled from the file write (BGG guardrail 6).
+    # Block Kit per rules/slack_format.md (fallback carries the answer for the notification).
     slack_ok = False
     try:
-        send_slack(slack)
+        send_slack_blocks(blocks, fallback)
         slack_ok = True
-        logger.info("qhm_report: Slack summary sent")
+        logger.info("qhm_report: Slack blocks sent")
     except Exception as e:
         logger.warning("qhm_report: Slack send failed (%s)", e)
 
