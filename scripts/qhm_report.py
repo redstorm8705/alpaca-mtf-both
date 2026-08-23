@@ -29,6 +29,22 @@ if str(_ROOT) not in sys.path:
 PT = ZoneInfo("America/Los_Angeles")
 logger = logging.getLogger("qhm_report")
 
+# Populate ALPACA_* (and friends) from the repo .env, exactly as every other cron script does —
+# reporting.pnl_ledger.fetch_positions reads os.getenv at call time, so without this a cron/ssh
+# invocation (no ambient env) 401s and every hold falsely renders as CLOSED.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env")
+except ImportError:
+    pass  # python-dotenv absent (non-OCI env) → rely on ambient environment
+except Exception as _dotenv_err:
+    # A present-but-unreadable/malformed .env (e.g. mode-600 owned by another user, or a mid-rotation
+    # chmod) makes load_dotenv's open() raise a NON-ImportError. Left uncaught this runs at import,
+    # ABOVE main()'s try/except, so it would kill the report with NO failure Slack and NO heartbeat —
+    # the exact SILENT death the staleness guardrail exists to prevent. Degrade instead: continue with
+    # the ambient env; any resulting missing creds surface loudly via the LIVE-P&L-UNAVAILABLE flag.
+    logger.warning("qhm_report: load_dotenv skipped (%s) — using ambient environment", _dotenv_err)
+
 _STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
 _HEARTBEAT = _ROOT / "logs" / "qhm_report_heartbeat.json"
 
