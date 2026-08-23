@@ -111,6 +111,34 @@ pass did not, now REQUIRED in the build:
   (thread+barrier), clock-skew, and a truncated snapshot JSON; assert the banner fires / last-good serves. This
   is the regression mechanism so the fixes survive future edits (documentation-is-not-enforcement).
 
+## GAI EXTERNAL DESIGN REVIEW — structural gaps folded in (2026-08-20, gemini-flash-latest)
+GAI (Head-of-Quant-Eng lens) found gaps the adversarial pass and Gro did NOT — load-bearing:
+- **NON-FILL ACTIVITY INGESTION (CURRENT + real).** `build_ledger()` reads only FILL activities. Alpaca books
+  regulatory FEEs, dividends (DIV), and — once 0DTE goes live — option expirations (OPEX) as ACCOUNT
+  ACTIVITIES, not fills. The Aug audit ALREADY showed 106 FEE activities + a −$1.14 unmodeled-reg-fee drift =
+  the current invariant breach source. A worthless OPEX (future) leaves the lot open forever, realized shows $0
+  not −$500. FIX: `pnl_ledger.fetch_account_activities()` drains FEE/DIV/OPEX into the FIFO engine as synthetic
+  terminal events BEFORE matching. (This is why the invariant "fails" at ~$6 today — model the fees.)
+- **DUAL ATTRIBUTION LAYER (supersedes the design's single "entry's-final-exit-date" rule — that was too
+  crude).** A position with Lot A closed Aug 28 (+$1000) and Lot B closed Sep 3 (+$500), attributed wholly to
+  Sep, makes August show $0 despite $1000 settled in August. FIX — two explicitly-separated layers in
+  `report_figures.py`: **(a) Accounting/grid tiles attribute by FILL-EXECUTION date** (Lot A→Aug, Lot B→Sep;
+  day-cells match settled broker cash exactly); **(b) Performance/edge scorecard attributes by round-trip
+  LIFECYCLE** (entry-level WR/TQI). This ALSO resolves adversarial HOLE 3 cleanly — day-WR (fill/grid layer) and
+  headline-WR (lifecycle layer) are DIFFERENT labeled layers, never forced into "one set."
+- **PARENT/CHILD FAN-OUT.** `build_coid_map()` assumes 1:1 fill↔order; 1 order matched by 4 partial fills must
+  AGGREGATE by order_id before the metadata join, or one trade splits into 4 round-trips w/ fractional scores.
+- **BROKER-GENERATED ORDER IDs on stop-outs.** Server-side bracket/GTC-stop/liquidation fills may strip or
+  reassign `client_order_id` → metadata (score/TQI/exit_reason) drops on stop-outs. Need an order-map layer.
+- **APPEND-ONLY WATERMARKED FILL JOURNAL (scale/optimization).** Rebuilding lifetime ledger from Alpaca REST
+  every 30s render degrades + risks pagination truncation/throttling as history grows. Cache fills in an
+  append-only local store; query only `after=max(transaction_time)`. `reporting/fill_journal.py`.
+
+**BGG-ALIGNED PHASING (GAI iteration path by risk-reduced/effort):** P1 = non-fill FEE/OPEX ingestion (LOW
+effort, CRITICAL — fixes current drift). P2 = dual fill-date/lifecycle attribution in report_figures (MEDIUM,
+HIGH). P3 = append-only fill journal (MEDIUM, HIGH — scale). Single-source wiring + reconciliation gate wrap
+around all three.
+
 ## GATE + SEQUENCE (this is a BUILD, not a patch)
 Full reads (done) → **BGG design pass on THIS record** (board + Gro + GAI, Open Question / Self-QA Gate #4) →
 implement `report_figures.py` + migrate the 3 pages → statics + cold-2nd + adversarial-claims + impact →
