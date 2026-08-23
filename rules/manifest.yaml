@@ -1,0 +1,68 @@
+# rules/manifest.yaml — the single map: RULE-ID -> where it is DEFINED.
+# Consolidation (Rafael mandate 2026-08-22, Hybrid C+). Gates and memory pointers resolve rule IDs HERE.
+# The anti-drift lint (rules/lint_rules.py, pending) reads this file and FAILS CI if a rule definition
+# appears anywhere outside the file listed for its ID. CORE.md + OPERATING.md are ALWAYS-loaded (session start
+# reads them via the lean CLAUDE.md index, pending). Topic files hold the FULL rule text and load on demand.
+version: 1
+
+always_loaded:
+  - rules/CORE.md        # S* safety envelope, P* patch sequence, B* behaviour (self-governed, no gate backstop)
+  - rules/OPERATING.md   # G* governance
+
+# ── CORE rules (always-loaded pointers in CORE.md/OPERATING.md; FULL text -> topic file) ──────────────────
+core_rules:
+  # Safety envelope (full text -> rules/safety_envelope.md)
+  S01: {title: "paper=True locked to live-launch board vote", topic: rules/safety_envelope.md}
+  S02: {title: "7% kill switch; tiered upgrades need a board vote", topic: rules/safety_envelope.md}
+  S03: {title: "never-mask-a-loss (override only on confirmed fault)", topic: rules/safety_envelope.md}
+  S04: {title: "data tiers T1..T4; no yfinance for equities", topic: rules/safety_envelope.md}
+  S05: {title: "execution isolation (one trade client, one data client)", topic: rules/safety_envelope.md}
+  S06: {title: "risk-path diff -> mandatory cold board + masked-loss + Gro + GAI", topic: rules/safety_envelope.md}
+  S07: {title: "no .env secrets in tracked files", topic: rules/safety_envelope.md}
+  # Patch sequence (full text -> rules/patch_sequence.md)
+  P01: {title: "full-read gate; no grep as file exploration", topic: rules/patch_sequence.md}
+  P02: {title: "10-point audit + RC-1..RC-8", topic: rules/patch_sequence.md}
+  P03: {title: "board = cold parallel subagents, never roleplay", topic: rules/patch_sequence.md}
+  P04: {title: "Gro+GAI on RTH code; counter-prompt, never blind re-roll", topic: rules/patch_sequence.md}
+  P05: {title: "statics clean (py_compile/mypy/ruff)", topic: rules/patch_sequence.md}
+  P06: {title: "cold-2nd PASS; every revision = fresh review", topic: rules/patch_sequence.md}
+  P07: {title: "FINAL Gro+GAI pre-ship on the exact diff", topic: rules/patch_sequence.md}
+  P08: {title: "git single-channel deploy; DEPLOY_OK; no rsync", topic: rules/patch_sequence.md}
+  P09: {title: "session boundary resets every gate to zero", topic: rules/patch_sequence.md}
+  P10: {title: "Self-QA 4 pre-ship checks", topic: rules/patch_sequence.md}
+  # Behaviour (full text -> rules/behaviour.md)
+  B01: {title: "NO-GUESS: measure before you claim", topic: rules/behaviour.md}
+  B02: {title: "verify agent/board/Gro/GAI claims at source", topic: rules/behaviour.md}
+  B03: {title: "documentation-is-not-enforcement -> build the gate", topic: rules/behaviour.md}
+  B04: {title: "execute-don't-ask / no menu", topic: rules/behaviour.md}
+  B05: {title: "never suggest stopping", topic: rules/behaviour.md}
+  B06: {title: "don't narrate the plumbing", topic: rules/behaviour.md}
+  B07: {title: "kill filler; match length; admit uncertainty", topic: rules/behaviour.md}
+  B08: {title: "honesty: not LIVE until it ran in production", topic: rules/behaviour.md}
+  B09: {title: "no irreversible/external action without explicit yes", topic: rules/behaviour.md}
+  B10: {title: "ALWAYS-DYNAMIC / NEVER-STATIC (is-it-static gate)", topic: rules/behaviour.md}
+  B11: {title: "ANTI-BIAS + CITATION (kill false premises)", topic: rules/behaviour.md}
+  # Governance (full text -> rules/operating_governance.md)
+  G01: {title: "Rafael sole mandate authority; Gro/GAI/board advise only", topic: rules/operating_governance.md}
+  G02: {title: "Profitable > Perfect (within the envelope)", topic: rules/operating_governance.md}
+  G03: {title: "Build-don't-just-fix (MODE-2 forward pass, separate diff)", topic: rules/operating_governance.md}
+  G04: {title: "Feature Design Protocol (ask first)", topic: rules/operating_governance.md}
+  G05: {title: "Open Question Protocol (BGG on any fork)", topic: rules/operating_governance.md}
+  G06: {title: "Durable Sync on every ship + BGG-alignment", topic: rules/operating_governance.md}
+  G07: {title: "code-review-graph before grep/read", topic: rules/operating_governance.md}
+  G08: {title: "session start: handoff.md + Master Brain", topic: rules/operating_governance.md}
+  G09: {title: "wrap-up is Rafael's call only", topic: rules/operating_governance.md}
+  G10: {title: "free AI tiers first; paid only when necessary", topic: rules/operating_governance.md}
+  G11: {title: "ship ready items first", topic: rules/operating_governance.md}
+
+# ── on-demand topic files (full rule text; loaded only when the task touches them) ───────────────────────
+topic_files:
+  rules/safety_envelope.md:      {status: PENDING, source: "CLAUDE.md §Guardrails 1-2 + §Arch-Inv #6/#8 + §Build-Don't-Fix E", ids: [S01,S02,S03,S04,S05,S06,S07]}
+  rules/patch_sequence.md:       {status: PENDING, source: "CLAUDE.md §Mandatory-Patch-Sequence + §Full-Read + §Cold-2nd + §Deploy + §Session-Boundary + §Self-QA", ids: [P01,P02,P03,P04,P05,P06,P07,P08,P09,P10]}
+  rules/behaviour.md:            {status: PENDING, source: "CLAUDE.md §Response-Style + §No-Guess + §Verify-At-Source + §Doc-Not-Enforcement + §Behavior + memory feedback_no_static_regimes", ids: [B01,B02,B03,B04,B05,B06,B07,B08,B09,B10,B11]}
+  rules/operating_governance.md: {status: PENDING, source: "CLAUDE.md §Authority + §Profitable>Perfect + §Build-Don't-Fix A + §Feature-Design + §Open-Question + §Durable-Sync + §MCP + §Session-Memory", ids: [G01,G02,G03,G04,G05,G06,G07,G08,G09,G10,G11]}
+  rules/board_protocol.md:       {status: PENDING, source: "CLAUDE.md §Board-Audit-Protocol + §Board-Intelligence + §Domain-Mapping + §3-Point-Summary", ids: [BRD01]}
+  rules/reviewer_gates.md:       {status: PENDING, source: "CLAUDE.md §Reviewer-Context + §Disagreement + §Gro/GAI-Direct-API + §North-Star-Persona", ids: [REV01]}
+  rules/data_and_logging.md:     {status: PENDING, source: "CLAUDE.md §Guardrails 3/5/7/8 (logs-output, data-quality, structured-logging, PT-timezone)", ids: [DAT01]}
+  rules/architecture_invariants.md: {status: PENDING, source: "CLAUDE.md §Architecture-Invariants #1-5/#7/#9-13 (trading mechanics)", ids: [INV01]}
+  rules/autonomous_and_cost.md:  {status: PENDING, source: "CLAUDE.md §5-Hour-Autonomous-Chain + §Interactive-vs-API", ids: [AUT01]}
