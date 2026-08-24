@@ -187,10 +187,13 @@ def _gro(prompt, key):
 
 def _gai(prompt, key, paid_key=""):
     # Free key is used BY DEFAULT (the free tier is a DAILY quota that RESETS — do not permanently
-    # switch to paid after one 429). paid_key is a SEAMLESS AUTO-FAILOVER used ONLY on a real quota/
-    # rate error (429 / RESOURCE_EXHAUSTED), so the paid quota is spent only when free is genuinely
-    # exhausted — never out of inertia. (2026-08-09: this replaces a manual .env free→paid swap that
-    # was wasting paid quota for calls the free tier would have served.)
+    # switch to paid after one 429). PAID IS DEFAULT-OFF (Rafael mandate 2026-08-24): paid_key is
+    # spent ONLY when Rafael has explicitly opted in via env GEMINI_ALLOW_PAID (1/true/yes/on).
+    # Without that opt-in a free-tier 429 raises here and the CALLER engages the FREE option-C
+    # substitute (NVIDIA) — paid is NEVER auto-spent. This closes the silent-paid-default: the prior
+    # "seamless auto-failover / genuine last resort" was a COMMENT with no enforcement, so paid spend
+    # scaled with every free 429 (2 paid top-ups in one month, Aug 2026). Now it is a real gate —
+    # least-privilege / default-deny on the ONLY paid path in the repo.
     def _one(k):
         r = _curl(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={k}",
@@ -225,9 +228,14 @@ def _gai(prompt, key, paid_key=""):
     msg = str(last).lower()
     is_quota = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
                 or "rate limit" in msg or "rate-limit" in msg)
-    if paid_key and paid_key != key and is_quota:
+    # DEFAULT-DENY paid gate (Rafael mandate 2026-08-24): the paid key is spent ONLY when Rafael has
+    # explicitly set env GEMINI_ALLOW_PAID (1/true/yes/on). Unset/false => skip paid entirely and
+    # raise, so the caller engages the FREE option-C substitute. Paid can never be reached out of
+    # inertia — an owner-controlled grant is required, per the least-privilege principle.
+    _allow_paid = os.getenv("GEMINI_ALLOW_PAID", "").strip().lower() in ("1", "true", "yes", "on")
+    if _allow_paid and paid_key and paid_key != key and is_quota:
         try:
-            sys.stderr.write("[preship] GAI free exhausted after backoff — one paid last-resort attempt.\n")
+            sys.stderr.write("[preship] GEMINI_ALLOW_PAID set + GAI free exhausted — one paid last-resort attempt.\n")
             return _one(paid_key)
         except Exception:
             pass
@@ -235,8 +243,8 @@ def _gai(prompt, key, paid_key=""):
 
 def _nvidia(prompt, key):
     # OPTION-C SUBSTITUTE reviewer (Rafael-authorized 2026-08-24). Stands in for GAI ONLY when
-    # GAI is genuinely DOWN (free quota exhausted + paid depleted) so a single-provider outage
-    # never blocks EVERY ship. NVIDIA-hosted meta/llama-3.1-70b — a diverse lineage (Meta) from
+    # GAI is genuinely DOWN (free quota exhausted; paid NOT attempted unless GEMINI_ALLOW_PAID is
+    # explicitly set — default-deny) so a single-provider outage never blocks EVERY ship. NVIDIA-hosted meta/llama-3.1-70b — a diverse lineage (Meta) from
     # Gro (OpenAI-family gpt-oss), verified fast+free this session. It NEVER runs when GAI answers
     # (healthy GAI keeps the Gro+GAI 2-voice rigor); and it is engaged ONLY on a GAI *outage*
     # exception, NEVER on a GAI *REJECT* (a reject is a real verdict, not an outage). The marker
@@ -390,7 +398,8 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
             gai_txt = _gai(prompt + _reminder, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
             gai_v = _verdict(gai_txt)
     except Exception as e:
-        # OPTION C: GAI genuinely DOWN (free quota exhausted + paid depleted). Engage the
+        # OPTION C: GAI genuinely DOWN (free quota exhausted; paid NOT attempted unless the
+        # GEMINI_ALLOW_PAID default-deny gate is explicitly opened by Rafael). Engage the
         # substitute so a single-provider outage never blocks EVERY ship. Reached ONLY on a
         # GAI *outage* exception — never on a GAI *REJECT* (a reject returns a verdict, not an
         # exception, and is handled below with full Gro+GAI rigor). No NVIDIA key => fail-closed.
