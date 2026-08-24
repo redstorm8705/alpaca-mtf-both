@@ -171,13 +171,15 @@ def _gro(prompt, key):
         [f"Authorization: Bearer {key}", "Content-Type: application/json"],
         # gpt-oss-120b (was llama-3.3-70b-versatile — DEAD, Groq 404). Reasoning model:
         # reasoning_effort:"low" + max_completion_tokens (not max_tokens) or reasoning eats
-        # the budget → empty content. 4096 is ample for a diff-audit verdict; a preship diff
-        # is small so input+completion stays well under Groq's 8k-TPM gpt-oss cap.
+        # the budget → empty content. max_completion_tokens 2048 (was 4096): the reservation
+        # counts toward Groq's 8k-TPM free cap; at 4096 a diff+context near ~5k input tripped
+        # "Request too large ... Requested 8985 > Limit 8000" (2026-08-24). 2048 is ample for a
+        # verdict + a cited-defect rationale and keeps input+completion under 8k.
         {"model": "openai/gpt-oss-120b", "reasoning_effort": "low", "messages": [
             {"role": "system",
              "content": "You are a Senior Staff HFT engineer auditing a diff "
                         "before it ships. Concrete, no hedging."},
-            {"role": "user", "content": prompt}], "max_completion_tokens": 4096},
+            {"role": "user", "content": prompt}], "max_completion_tokens": 2048},
         key)
     if "choices" not in r:
         raise RuntimeError(str(r).replace(key, "***")[:200])
@@ -193,22 +195,69 @@ def _gai(prompt, key, paid_key=""):
         r = _curl(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={k}",
             ["Content-Type: application/json"],
+            # maxOutputTokens 2048 (was 8192): the 8192 reservation counts against the free-tier
+            # per-minute TOKEN budget and helped trip 429s on multi-file runs (Rafael 2026-08-24:
+            # "gai prompts in smaller amounts to stay under the free tier"). A verdict + a brief
+            # cited-defect rationale fits well under 2048; more only pads reasoning.
             {"contents": [{"parts": [{"text": prompt}]}],
-             "generationConfig": {"maxOutputTokens": 8192}},
+             "generationConfig": {"maxOutputTokens": 2048}},
             k)
         if "candidates" not in r:
             raise RuntimeError(str(r).replace(k, "***")[:200])
         return r["candidates"][0]["content"]["parts"][0]["text"]
-    try:
-        return _one(key)
-    except Exception as e:
-        msg = str(e).lower()
-        is_quota = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
-                    or "rate limit" in msg or "rate-limit" in msg)
-        if paid_key and paid_key != key and is_quota:
-            sys.stderr.write("[preship] GAI free-tier quota hit — auto-failing over to paid key.\n")
+    # FREE-FIRST discipline (Rafael): the free tier is a ROLLING quota — a brief backoff often
+    # clears a per-minute spike without spending paid. Retry free once with a short wait BEFORE
+    # any paid attempt; paid is a genuine last resort, not an inertia default.
+    last = None
+    for attempt in range(2):
+        try:
+            return _one(key)
+        except Exception as e:
+            last = e
+            msg = str(e).lower()
+            transient = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
+                         or "rate limit" in msg or "rate-limit" in msg or "503" in msg
+                         or "unavailable" in msg)
+            if transient and attempt == 0:
+                time.sleep(6)
+                continue
+            break
+    msg = str(last).lower()
+    is_quota = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
+                or "rate limit" in msg or "rate-limit" in msg)
+    if paid_key and paid_key != key and is_quota:
+        try:
+            sys.stderr.write("[preship] GAI free exhausted after backoff — one paid last-resort attempt.\n")
             return _one(paid_key)
-        raise
+        except Exception:
+            pass
+    raise last
+
+def _nvidia(prompt, key):
+    # OPTION-C SUBSTITUTE reviewer (Rafael-authorized 2026-08-24). Stands in for GAI ONLY when
+    # GAI is genuinely DOWN (free quota exhausted + paid depleted) so a single-provider outage
+    # never blocks EVERY ship. NVIDIA-hosted meta/llama-3.1-70b — a diverse lineage (Meta) from
+    # Gro (OpenAI-family gpt-oss), verified fast+free this session. It NEVER runs when GAI answers
+    # (healthy GAI keeps the Gro+GAI 2-voice rigor); and it is engaged ONLY on a GAI *outage*
+    # exception, NEVER on a GAI *REJECT* (a reject is a real verdict, not an outage). The marker
+    # records the substitution so any ship reviewed this way is auditable after the fact.
+    r = _curl(
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+        [f"Authorization: Bearer {key}", "Content-Type: application/json"],
+        {"model": "meta/llama-3.1-70b-instruct", "temperature": 0.2, "max_tokens": 2048,
+         "messages": [
+            {"role": "system",
+             "content": "You are a Senior Staff engineer auditing a diff before it ships "
+                        "to a live trading bot. Concrete, no hedging. REJECT only for a "
+                        "concrete failing input (input -> wrong output/crash) in the CHANGED "
+                        "lines, and QUOTE the exact offending line; a theoretical 'could' is a "
+                        "NIT, not a REJECT."},
+            {"role": "user", "content": prompt}]},
+        key)
+    if "choices" not in r:
+        raise RuntimeError(str(r).replace(key, "***")[:200])
+    return r["choices"][0]["message"]["content"]
+
 
 def _verdict(text):
     # Require EXACTLY ONE 'VERDICT:' line, then parse THAT line reject-biased. Rationale
@@ -295,7 +344,11 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     # distant unrelated functions (the old -U90 widened the blast radius).
     base_ok, _b, _ = _git(["rev-parse", "--verify", "--quiet", "origin/main"])
     base = "origin/main" if base_ok else "HEAD"
-    ok_d, diff, _ = _git(["diff", "--cached", base, "-U30", "--", relpath])
+    # -U15 (was -U30): -U30 on a large diff (e.g. preship_gate.py +148) pushed the prompt over
+    # Groq's 8k-TPM free cap ("Requested 8748 > 8000", 2026-08-24). -U15 still shows guards within
+    # 15 lines of each hunk (enough to avoid the missing-guard false-reject); the --context flag
+    # backfills any guard further away, per the REVIEWER-CONTEXT discipline.
+    ok_d, diff, _ = _git(["diff", "--cached", base, "-U15", "--", relpath])
     _head = CLAIM_PROMPT_HEAD if relpath in GATED_CLAIM_FILES else PROMPT_HEAD
     prompt = _head + (diff if diff.strip()
                       else f"(no change vs {base} for {relpath})")
@@ -326,7 +379,8 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                  "decision `VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`. Do NOT start any "
                  "other line with `VERDICT:` and do NOT restate the format.")
 
-    # GAI (required)
+    # GAI (required) — with the OPTION-C substitute on a genuine GAI outage (Rafael 2026-08-24).
+    gai_substituted = ""
     try:
         gai_txt = _gai(prompt, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
         gai_v = _verdict(gai_txt)
@@ -336,12 +390,36 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
             gai_txt = _gai(prompt + _reminder, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
             gai_v = _verdict(gai_txt)
     except Exception as e:
-        return False, f"{relpath}: GAI audit failed ({e}) — fail-closed, no marker"
+        # OPTION C: GAI genuinely DOWN (free quota exhausted + paid depleted). Engage the
+        # substitute so a single-provider outage never blocks EVERY ship. Reached ONLY on a
+        # GAI *outage* exception — never on a GAI *REJECT* (a reject returns a verdict, not an
+        # exception, and is handled below with full Gro+GAI rigor). No NVIDIA key => fail-closed.
+        nk = keys.get("NVIDIA_API_KEY", "")
+        if not nk:
+            return False, f"{relpath}: GAI audit failed ({e}) and no NVIDIA substitute key — fail-closed, no marker"
+        def _sub(p):
+            # one retry — the NVIDIA free tier occasionally times out on first hit (2026-08-24).
+            try:
+                return _nvidia(p, nk)
+            except Exception:
+                time.sleep(3)
+                return _nvidia(p, nk)
+        try:
+            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA llama-3.1-70b).\n")
+            gai_txt = _sub(prompt + _reminder)
+            gai_v = _verdict(gai_txt)
+            if gai_v == "INDETERMINATE":
+                gai_txt = _sub(prompt + _reminder)
+                gai_v = _verdict(gai_txt)
+            gai_substituted = "NVIDIA_llama-3.1-70b"
+        except Exception as e2:
+            return False, f"{relpath}: GAI down ({e}) AND option-C substitute failed after retry ({e2}) — fail-closed, no marker"
+    _gai_label = f"substitute {gai_substituted}" if gai_substituted else "GAI"
     if gai_v == "INDETERMINATE":
-        return False, (f"{relpath}: GAI INDETERMINATE — no parseable VERDICT line after a retry "
+        return False, (f"{relpath}: {_gai_label} INDETERMINATE — no parseable VERDICT line after a retry "
                        f"(NOT a content reject; re-run the audit). Last 300 chars:\n{gai_txt[-300:]}")
     if gai_v != "APPROVE":
-        return False, f"{relpath}: GAI REJECT — no marker.\n{gai_txt[-600:]}"
+        return False, f"{relpath}: {_gai_label} REJECT — no marker.\n{gai_txt[-600:]}"
 
     # Gro (required unless waived)
     if waive_gro:
@@ -363,11 +441,19 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
             return False, f"{relpath}: Gro REJECT — no marker.\n{gro_txt[-600:]}"
 
     os.makedirs(MARKER_DIR, exist_ok=True)
+    # marker["gai"] MUST stay the literal "APPROVE": the ship gate (preship_gate._marker_ok)
+    # exact-matches `gai == "APPROVE"` — a decorated value like "APPROVE (SUBST:...)" fails that
+    # check and BLOCKS the very ship the substitute just approved (cold-2nd 2026-08-24, self-
+    # defeating fail-closed bug). The substitution is recorded ONLY in the `gai_substituted`
+    # key (which the gate ignores) — that fully satisfies auditability without touching `gai`.
     marker = {"sha256": sha, "gro": gro_v, "gai": "APPROVE", "ts": int(time.time()),
               "file": relpath}
+    if gai_substituted:
+        marker["gai_substituted"] = gai_substituted  # audit trail: GAI was down; this voice stood in
     with open(os.path.join(MARKER_DIR, relpath.replace("/", "__") + ".json"), "w") as f:
         json.dump(marker, f, indent=2)
-    return True, (f"{relpath}: APPROVED (gro={gro_v} gai=APPROVE) — marker "
+    _gai_disp = f"APPROVE (SUBST:{gai_substituted})" if gai_substituted else "APPROVE"
+    return True, (f"{relpath}: APPROVED (gro={gro_v} gai={_gai_disp}) — marker "
                   f"written, sha {sha[:12]}")
 
 def main():
