@@ -275,7 +275,13 @@ def _marker_ok(relpath: str, ref: str):
         m = json.load(open(mpath))
     except Exception as e:
         return False, f"marker unreadable: {e}"
-    if time.time() - m.get("ts", 0) > MARKER_MAX_AGE_SEC:
+    # `.get("ts") or 0`, NOT `.get("ts", 0)`: cold-2nd finding, 2026-08-12 (same bug
+    # class as _design_record_ok's doc_path fix, found in this sibling function while
+    # verifying that one) — a dict.get default only fires on a MISSING key, not a
+    # present "ts": null, which would otherwise raise an uncaught TypeError on
+    # `time.time() - None` and fail this ship closed over one bad marker. `or 0`
+    # treats null the same as missing/zero: correctly "very old", not a crash.
+    if time.time() - (m.get("ts") or 0) > MARKER_MAX_AGE_SEC:
         return False, "marker stale (>24h)"
     if m.get("gro") not in ("APPROVE", "WAIVED") or m.get("gai") != "APPROVE":
         return False, f"not approved (gro={m.get('gro')} gai={m.get('gai')})"
@@ -319,7 +325,8 @@ def _cold2_ok(relpath: str, ref: str):
         m = json.load(open(mpath))
     except Exception as e:
         return False, f"cold-2nd marker unreadable: {e}"
-    if time.time() - m.get("ts", 0) > MARKER_MAX_AGE_SEC:
+    # `.get("ts") or 0`, NOT `.get("ts", 0)` — see _marker_ok's identical fix comment.
+    if time.time() - (m.get("ts") or 0) > MARKER_MAX_AGE_SEC:
         return False, "cold-2nd marker stale (>24h) — re-review"
     if str(m.get("verdict", "")).upper() != "PASS":
         return False, (f"cold-2nd verdict is {m.get('verdict')!r}, not PASS — "
@@ -360,7 +367,8 @@ def _adversarial_ok(relpath: str, ref: str):
         m = json.load(open(mpath))
     except Exception as e:
         return False, f"adversarial marker unreadable: {e}"
-    if time.time() - m.get("ts", 0) > MARKER_MAX_AGE_SEC:
+    # `.get("ts") or 0`, NOT `.get("ts", 0)` — see _marker_ok's identical fix comment.
+    if time.time() - (m.get("ts") or 0) > MARKER_MAX_AGE_SEC:
         return False, "adversarial marker stale (>24h) — re-verify claims"
     if str(m.get("verdict", "")).upper() != "PASS":
         return False, (f"adversarial verdict is {m.get('verdict')!r}, not PASS — a "
@@ -418,6 +426,105 @@ def _logevidence_ok(relpath: str, ref: str):
         f"If it does NOT: record_exemption.py {relpath} --reason \"<why>\".")
 
 
+def _design_record_ok(relpath: str):
+    """Self-QA check #4 teeth, SHIP-TIME MIRROR (added 2026-08-12; Schneier board-seat
+    finding on design_record_gate.py, verified against .claude/settings.json: that
+    PreToolUse hook is wired ONLY to the Write|Edit matcher, so a NEW gated .py/.sh file
+    created via Bash — a heredoc, `echo >`, `python3 -c "open(...).write(...)"` — never
+    triggers it at all. That is not a 'determined bypass' (editing a control), it is
+    simply not using the one tool being watched. This closes the hole at the ship
+    boundary (git commit/push), the SAME tool-agnostic checkpoint
+    _marker_ok/_cold2_ok/_logevidence_ok/_adversarial_ok already use, regardless of
+    which tool created the file — exact parity with how checks #1-3 are enforced.
+
+    Reads the SAME marker files design_record_gate.py's own PreToolUse hook
+    produces/consumes (.claude/preship/markers/design__*.json and
+    <slug>.designwaiver.json). Logic duplicated here rather than imported from
+    design_record_gate.py to avoid a circular import (that module already imports
+    _is_gated from this one) — matches this file's existing style of self-contained
+    check functions (_cold2_ok, _adversarial_ok, _logevidence_ok are each independent,
+    not shared, for the same reason).
+
+    Scope matches design_record_gate.py's own: ALL gated new .py/.sh files, GATED_SELF
+    included (not restricted to _is_bot_code) — the two layers must stay in lockstep or
+    a file exempt at one layer and covered at the other creates exactly the drift this
+    pairing exists to prevent.
+    """
+    if os.path.isdir(MARKER_DIR):
+        for name in os.listdir(MARKER_DIR):
+            if not (name.startswith("design__") and name.endswith(".json")):
+                continue
+            try:
+                m = json.load(open(os.path.join(MARKER_DIR, name)))
+                if not isinstance(m, dict):
+                    continue
+            except Exception:
+                # Cold-2nd fix, 2026-08-12: a syntactically-valid-but-non-dict marker
+                # (e.g. `[]`/`null`) previously raised AttributeError on the .get()
+                # calls below, OUTSIDE this try — uncaught, it propagated to main()'s
+                # fail-CLOSED catch-all and blocked the entire ship on one bad marker
+                # file, not just this one. The isinstance check above now catches the
+                # non-dict case before it can happen.
+                continue
+            covers = m.get("covers") or []
+            # isinstance(c, str) guard (cold-2nd 2026-08-23): a non-string covers
+            # element (`[null]`/`[12345]`) else raises AttributeError on c.endswith,
+            # DoS-blocking every ship until the poison marker is removed.
+            hit = any(
+                isinstance(c, str)
+                and ((c == relpath) or (c.endswith("/") and relpath.startswith(c)))
+                for c in covers
+            )
+            if not hit:
+                continue
+            # GAI preship finding, verified real (2026-08-12): `.get("doc_path", "")`'s
+            # default only applies when the KEY IS ABSENT, not when present-but-None —
+            # a marker with `"doc_path": null` made `doc` None, and
+            # os.path.join(REPO, None) raised an uncaught TypeError this `except
+            # OSError` never caught — which propagates all the way to main()'s
+            # fail-CLOSED catch-all, blocking an entire ship on one bad marker (same
+            # severity class as the earlier non-dict-marker finding this same pass
+            # already fixed). `or ""` catches None the same way a missing key does;
+            # open()-ing the resulting REPO path (a directory) correctly raises
+            # IsADirectoryError, a subclass of OSError, so it falls through to the
+            # existing skip-this-marker path below.
+            doc = m.get("doc_path") or ""
+            try:
+                with open(os.path.join(REPO, doc), "rb") as f:
+                    cur_sha = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                continue  # design doc missing/unreadable — this marker cannot validate
+            if cur_sha == m.get("doc_sha256"):
+                return True, "ok (design-record)"
+    waiver_path = os.path.join(
+        MARKER_DIR, relpath.replace("/", "__") + ".designwaiver.json")
+    if os.path.exists(waiver_path):
+        try:
+            m = json.load(open(waiver_path))
+            # `.get("ts") or 0`, NOT `.get("ts", 0)` — cold-2nd finding, round 4,
+            # 2026-08-12: this exact site was MISSED when the same fix was applied
+            # to its four siblings (_marker_ok, _cold2_ok, _adversarial_ok,
+            # design_record_gate._waiver_covers) earlier in this same pass. Here the
+            # local `except Exception: pass` DOES catch the resulting TypeError, so
+            # a "ts": null waiver doesn't crash the ship — but it was silently
+            # mistreated as "no waiver at all" (misleading: looks like an absent
+            # waiver, not a corrupted one), with no diagnostic. Fixed for the same
+            # reason as its siblings: correct, honest degradation over silent
+            # misclassification.
+            if (time.time() - (m.get("ts") or 0) <= MARKER_MAX_AGE_SEC
+                    and str(m.get("reason", "")).strip()):
+                return True, "ok (design-record waiver)"
+        except Exception:
+            pass
+    return False, (
+        "new file under a gated path with no design-record marker or waiver "
+        "covering it. Run the design pass, then: python3 "
+        f".claude/preship/record_design.py <feature-slug> --doc "
+        f"logs/design_records/<feature>.md --covers {relpath} — or, if this is "
+        "NOT new capability (needs Rafael's own go-ahead): python3 "
+        f".claude/preship/record_design_waiver.py {relpath} --reason \"<why>\"")
+
+
 def _changed_gated(range_args, ref_tmpl):
     """(fails, gated_files) for one diff range. Deletions are EXCLUDED — see T3."""
     ok, out = _git(["diff", "--name-status"] + range_args)
@@ -425,6 +532,15 @@ def _changed_gated(range_args, ref_tmpl):
         return (["FAIL-CLOSED: could not list shipped files (git error). "
                  "Aborting ship rather than allow-through. If this is a push, try "
                  "`git fetch origin` first — the upstream ref may be missing."], [])
+    # (status, path, old_path) — old_path is the SOURCE path for a rename/copy (R/C),
+    # else None. Needed by the design-record ADD check below: cold-2nd review,
+    # 2026-08-12, verified real — git diff --name-status auto-detects renames by
+    # DEFAULT (diff.renames defaults to true), so a `git mv scratch/x.py
+    # execution/new.py` reports status "R100", NOT "A" + "D". The pre-existing T3
+    # comment below ("Renames appear as A + D") describes the OLD, pre-rename-
+    # detection behavior and is stale — not fixed here (out of scope: it doesn't
+    # affect T3's own deletion-handling logic, which is unaffected either way) —
+    # but the design-record check below does NOT rely on that stale assumption.
     files = []
     for ln in out.splitlines():
         parts = ln.split("\t")
@@ -434,16 +550,20 @@ def _changed_gated(range_args, ref_tmpl):
         # T3 FIX: a DELETED path has no blob at the ref, so _content_sha returns ""
         # and the marker check fail-closes forever — `git rm <gated>` and every
         # RENAME became unshippable with no recovery path, which teaches the
-        # operator to bypass the gate. Deletions carry no code to audit. Renames
-        # appear as A + D; the A side is checked.
+        # operator to bypass the gate. Deletions carry no code to audit.
         if status.startswith("D"):
             continue
-        path = parts[-1].strip()          # for R/C the destination is last
+        if status.startswith(("R", "C")) and len(parts) >= 3:
+            old_path = parts[1].strip()
+            path = parts[2].strip()
+        else:
+            old_path = None
+            path = parts[-1].strip()
         if path:
-            files.append(path)
-    gated = [f for f in files if _is_gated(f)]
+            files.append((status, path, old_path))
+    gated = [(status, f, old) for status, f, old in files if _is_gated(f)]
     fails = []
-    for f in gated:
+    for status, f, old_path in gated:
         good, why = _marker_ok(f, ref_tmpl.format(f))
         if not good:
             fails.append(f"  - {f}: [Gro/GAI] {why}")
@@ -465,7 +585,29 @@ def _changed_gated(range_args, ref_tmpl):
             av_good, av_why = _adversarial_ok(f, ref_tmpl.format(f))
             if not av_good:
                 fails.append(f"  - {f}: [ADVERSARIAL] {av_why}")
-    return (fails, gated)
+        # Self-QA #4 teeth, ship-time mirror: a newly-ADDED .py/.sh gated file needs a
+        # design-record marker or waiver, regardless of which tool created it (see
+        # _design_record_ok docstring — the Bash-bypass fix for the Write/Edit-only
+        # PreToolUse hook). Triggers on "A" (pure add) OR a rename/copy whose SOURCE
+        # path was NOT already gated (cold-2nd fix: a rename from an ungated location
+        # — e.g. `git mv scratch/helper.py execution/new_feature.py` — is exactly the
+        # kind of Bash-only vector this mirror exists to close; it must not be waved
+        # through on the assumption the content was "already reviewed" when the
+        # source was never gated at all). A rename between two ALREADY-gated paths
+        # (e.g. execution/old.py -> execution/new.py) correctly does NOT re-trigger —
+        # that content was already covered wherever it started.
+        _, ext = os.path.splitext(f)
+        is_new_add = status.startswith("A")
+        is_rename_from_ungated = (
+            status.startswith(("R", "C"))
+            and old_path is not None
+            and not _is_gated(old_path)
+        )
+        if (is_new_add or is_rename_from_ungated) and ext in (".py", ".sh"):
+            dr_good, dr_why = _design_record_ok(f)
+            if not dr_good:
+                fails.append(f"  - {f}: [DESIGN-RECORD] {dr_why}")
+    return (fails, [f for _, f, _old in gated])
 
 
 _COMMIT_ARG_TAKING = ("-m", "--message", "-F", "--file", "-t", "--template",
