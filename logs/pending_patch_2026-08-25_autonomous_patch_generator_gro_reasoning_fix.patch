@@ -1,0 +1,41 @@
+diff --git a/autonomous_patch_generator.py b/autonomous_patch_generator.py
+index ce946a7..dc390d0 100644
+--- a/autonomous_patch_generator.py
++++ b/autonomous_patch_generator.py
+@@ -65,6 +65,11 @@ _MAX_FILE_CHARS_FOR_LLM = 300_000
+ # docstring for why. Matches CLAUDE.md's Gro/GAI DIRECT API PROTOCOL.
+ _GRO_BASE_URL = "https://api.groq.com/openai/v1"
+ _GRO_MODEL    = "openai/gpt-oss-120b"
++# gpt-oss-120b is a REASONING model: use max_completion_tokens (not max_tokens)
++# and reasoning_effort:"low" — else hidden reasoning eats the budget → EMPTY content.
++# 2500 completion + ~4K prompt stays under Groq's 8K TPM cap.
++# Mirrors auto_ai_audit.py's _GRO_MAX_COMPLETION_TOKENS = 2500, same model.
++_GRO_MAX_COMPLETION_TOKENS = 2500
+ # AWP audit fix (2026-07-01): Groq free-tier TPD (100K tokens/day) is exhausted
+ # after ~3 directives (5 LLM calls each), leaving the rest 429'd → 0 processed.
+ # Route drafting through Gemini (no TPD wall in our usage); keep Groq as fallback.
+@@ -158,7 +163,8 @@ def _call_gro(prompt: str) -> str | None:
+                     "model": _GRO_MODEL,
+                     "messages": [{"role": "user", "content": prompt}],
+                     "temperature": 0.1,
+-                    "max_tokens": 4096,
++                    "reasoning_effort": "low",
++                    "max_completion_tokens": _GRO_MAX_COMPLETION_TOKENS,
+                 },
+                 timeout=_API_TIMEOUT,
+             )
+@@ -313,10 +319,10 @@ def _generate_diff(
+     # 2026-08-05 board catch: this is the highest-token-volume call in the whole
+     # pipeline (up to _MAX_FILE_CHARS_FOR_LLM=300_000 chars, ~75-100K tokens) —
+     # it MUST route through _call_llm (Gemini-primary, ~1M-token context) rather
+-    # than call Groq directly. Groq's llama-3.3-70b-versatile has a 128K-token
+-    # window and — per this file's own 2026-07-01 fix note above — a 100K-
+-    # token/DAY free-tier budget that a single large-file call could now exhaust
+-    # outright, reintroducing that exact "0 processed" failure for a new reason.
++    # than call Groq directly. Groq's gpt-oss-120b reasoning model is capped at
++    # 8K tokens/minute (TPM) on the free tier — a single large-file call can
++    # exhaust the entire minute budget outright, reintroducing the "0 processed"
++    # failure for a new reason. Keep all large-context calls Gemini-primary.
+     _log("Generating diff via LLM (Gemini-primary)...")
+     response = _call_llm(prompt)
+     if response is None:
