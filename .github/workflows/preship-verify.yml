@@ -21,6 +21,8 @@
 #
 # OPERATOR SETUP (only Rafael can do these — see .github/BRANCH_PROTECTION.md):
 #   - Settings > Secrets and variables > Actions: add GEMINI_API_KEY (and GROQ_API_KEY).
+#     OPTIONAL: add NVIDIA_API_KEY to enable the option-C free substitute — ci_audit.py uses it
+#     ONLY on a Gemini outage (429/5xx) so a Gemini quota/rate outage cannot jam the merge gate.
 #   - Settings > Branches > Add rule for `main`: require a PR, require the status check
 #     named "preship", require review from Code Owners, and check
 #     "Do not allow bypassing the above settings".
@@ -153,6 +155,11 @@ jobs:
         if: steps.changed.outputs.any == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # OPTION-C substitute (2026-08-24): used by ci_audit.py ONLY when Gemini returns an outage
+          # code (429/5xx), so a Gemini quota/rate outage cannot fail the wall closed on infra alone.
+          # Optional — absent, the audit is unchanged (Gemini-only). It is a server-side secret the
+          # agent cannot read, so the "audit the agent cannot fake" property is preserved.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${GEMINI_API_KEY:-}" ]; then
