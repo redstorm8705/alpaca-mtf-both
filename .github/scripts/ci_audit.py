@@ -25,6 +25,20 @@ import urllib.request
 MODEL = "gemini-flash-latest"
 ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
             f"{MODEL}:generateContent")
+
+# OPTION-C SUBSTITUTE (2026-08-24) — a free NVIDIA-hosted reviewer (NVIDIA_MODEL below). It uses the
+# SAME free model as the LOCAL gate's option-C substitute (preship_audit._nvidia, added in the
+# preship-gate PR #169 — that function lands on main only when that PR merges; it is NOT imported
+# here, this CI path is self-contained). Engaged ONLY when Gemini returns an OUTAGE http code
+# (429 / 5xx) so a Gemini quota/rate outage cannot fail the server-side wall CLOSED on infra alone
+# (2026-08-24: Gemini free tier 429'd for a full day; every gated PR was unmergeable). It is NEVER
+# engaged on a Gemini REJECT (a reject is a real verdict, not an outage) or a parse failure. The
+# key is a SERVER-SIDE GitHub secret the coding agent cannot read — the "audit the agent cannot
+# fake" property is fully preserved; only the reviewer MODEL changes during a Gemini outage. Absent
+# NVIDIA_API_KEY the behaviour is UNCHANGED (Gemini-only, fail-closed) — the substitute is additive.
+NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
+NVIDIA_MODEL = "meta/llama-3.1-70b-instruct"
+_OUTAGE_CODES = (429, 500, 502, 503, 504)   # Gemini infra/quota outage → substitute may stand in
 MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input budget
 MAX_CONTEXT_CHARS = 300_000     # full-file bodies (helpers referenced but not in the diff);
                                 #   gemini-2.5-flash has a very large input window, so this is safe
@@ -134,8 +148,13 @@ def _verdict(text: str) -> str:
     return "INDETERMINATE"
 
 
-def _one_audit(prompt_text: str, key: str) -> "tuple[str, str]":
-    """Run ONE audit sample against Gemini. Returns (verdict, raw_text).
+def _one_audit(prompt_text: str, key: str) -> "tuple[str, str, int]":
+    """Run ONE audit sample against Gemini. Returns (verdict, raw_text, http_code).
+
+    http_code lets main() distinguish a Gemini OUTAGE (429/5xx) — where the option-C substitute
+    may stand in — from a REJECT verdict or a parse failure (neither of which is an outage). It is
+    the HTTP status on an HTTPError, 200 on a delivered-but-unparseable response, and 0 on a
+    non-HTTP failure (DNS/timeout/etc.).
 
     NEVER sys.exit — a transient API/parse failure is a NON-approve INDETERMINATE for THIS
     sample only, so the majority vote in main() can still decide from the other samples rather
@@ -159,13 +178,46 @@ def _one_audit(prompt_text: str, key: str) -> "tuple[str, str]":
             payload = json.load(r)
     except urllib.error.HTTPError as e:
         # Never interpolate the request object — it carries the key in the URL.
-        return "INDETERMINATE", f"audit API returned HTTP {e.code}"
+        return "INDETERMINATE", f"audit API returned HTTP {e.code}", e.code
     except Exception as e:
-        return "INDETERMINATE", f"audit API call failed ({type(e).__name__})"
+        return "INDETERMINATE", f"audit API call failed ({type(e).__name__})", 0
     try:
         text = payload["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
-        return "INDETERMINATE", "could not parse a verdict from the audit response"
+        return "INDETERMINATE", "could not parse a verdict from the audit response", 200
+    return _verdict(text), text, 200
+
+
+def _one_audit_nvidia(prompt_text: str, key: str) -> "tuple[str, str]":
+    """One audit sample via the OPTION-C NVIDIA substitute. SAME (verdict, raw_text) contract as
+    _one_audit, SAME _verdict() parser. Engaged ONLY on a Gemini OUTAGE (see main). Never sys.exit —
+    a substitute failure is a NON-approve INDETERMINATE for this sample, so fail-closed is preserved
+    at the aggregate. The key is a server-side GitHub secret the coding agent cannot read, so the
+    'audit the agent cannot fake' property holds exactly as it does for Gemini."""
+    body = json.dumps({
+        "model": NVIDIA_MODEL,
+        "temperature": 0.3,
+        "max_tokens": 2048,
+        "messages": [
+            {"role": "system", "content": PERSONA},
+            {"role": "user", "content": prompt_text},
+        ],
+    }).encode()
+    req = urllib.request.Request(
+        NVIDIA_ENDPOINT,
+        data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
+            payload = json.load(r)
+    except Exception as e:
+        return "INDETERMINATE", f"substitute API call failed ({type(e).__name__})"
+    try:
+        text = payload["choices"][0]["message"]["content"]
+    except Exception:
+        return "INDETERMINATE", "could not parse a verdict from the substitute response"
     return _verdict(text), text
 
 
@@ -229,10 +281,25 @@ def main() -> None:
     # unclean verdict) is NON-approve and never counts toward a pass — "an audit that did not run
     # is not an audit that passed" still holds at the aggregate. _verdict() is UNCHANGED (parity
     # with preship_audit._verdict preserved; the vote wraps it, it does not alter the parser).
+    # OPTION-C substitute key (server-side secret; absent => unchanged Gemini-only behaviour).
+    nvidia_key = os.environ.get("NVIDIA_API_KEY", "").strip()
     approvals = rejects = indets = 0
+    substituted = 0
     for i in range(N_SAMPLES):
-        v, text = _one_audit(prompt_text, key)
-        print(f"----- audit sample {i + 1}/{N_SAMPLES}: {v} -----")
+        v, text, http_code = _one_audit(prompt_text, key)
+        # A Gemini OUTAGE (429/5xx) — NOT a REJECT verdict and NOT a delivered-but-unparseable
+        # response (http_code 200) — retries THIS sample against the free substitute so a Gemini
+        # quota/rate outage cannot fail the wall CLOSED on infrastructure alone. A REJECT is a real
+        # verdict and is never overridden; without NVIDIA_API_KEY the substitute is skipped entirely.
+        if v == "INDETERMINATE" and http_code in _OUTAGE_CODES and nvidia_key:
+            sv, stext = _one_audit_nvidia(prompt_text, nvidia_key)
+            print(f"----- audit sample {i + 1}/{N_SAMPLES}: Gemini outage (HTTP {http_code}) "
+                  f"-> option-C substitute (NVIDIA {NVIDIA_MODEL}): {sv} -----")
+            v, text = sv, stext
+            if sv in ("APPROVE", "REJECT"):
+                substituted += 1
+        else:
+            print(f"----- audit sample {i + 1}/{N_SAMPLES}: {v} -----")
         print(text)
         print("--------------------------")
         if v == "APPROVE":
@@ -248,6 +315,11 @@ def main() -> None:
         print("::warning::full-file context exceeded the size cap and was truncated — a helper "
               "definition may be missing from the reviewer's view.")
 
+    if substituted:
+        print(f"::warning::{substituted}/{N_SAMPLES} sample(s) used the option-C NVIDIA substitute "
+              f"because Gemini was in a quota/rate outage. The server-side wall HELD via the free "
+              f"fallback (no weakening — the substitute key is a secret the agent cannot read). "
+              f"Re-run once Gemini recovers if a Gemini-primary verdict is preferred.")
     need = N_SAMPLES // 2 + 1        # simple majority: 2 of 3
     print(f"preship vote: APPROVE={approvals} REJECT={rejects} INDETERMINATE={indets} "
           f"(need >= {need} APPROVE to ship; else fail closed)")
