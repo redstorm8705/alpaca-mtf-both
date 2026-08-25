@@ -186,3 +186,21 @@ jobs:
           done < /tmp/gated.txt
           wc -c /tmp/gated_context.txt
           python3 .github/scripts/ci_audit.py /tmp/gated.diff /tmp/gated_context.txt
+
+      - name: GAI reviewer canary (config-bug tripwire — Gate 4)
+        # Anti-inert self-test for the REVIEWER PIPELINE itself (2026-08-25 failure class: a dead
+        # model alias `gemini-flash-latest` + a thinking model whose reasoning ate the token budget
+        # and emitted no verdict were mistaken for a Gemini OUTAGE for hours, silently routing to
+        # the substitute). Runs independently of the diff (if: always). Two layers:
+        #   1) the OFFLINE unit test proves the gate's own classification logic is sound (no network),
+        #   2) the LIVE canary asserts GAI can return a PARSEABLE verdict right now.
+        # It FAILS the wall ONLY on a deterministic CONFIG_BUG (retired pin / thinking-budget) —
+        # a transient OUTAGE (all models congested) exits 0 (the substitute covers it), so free-tier
+        # congestion can never false-block a merge.
+        if: always()
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 .claude/preship/test_gai_health.py
+          python3 .claude/preship/gai_health.py canary
