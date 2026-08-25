@@ -22,7 +22,13 @@ import sys
 import urllib.error
 import urllib.request
 
-MODEL = "gemini-flash-latest"
+# PINNED, NOT the `gemini-flash-latest` alias (root cause, 2026-08-25): that `-latest` alias
+# routed to an overloaded free-tier pool returning a PERSISTENT 503 UNAVAILABLE for a full day
+# (mistaken for a Gemini outage; the option-C substitute was carrying the CI wall the whole time),
+# while pinned models served in ~4s. The previously documented fallback `gemini-2.5-flash` is now
+# 404 (retired). Pin a working family version we control; the substitute still covers a genuine
+# outage. Verified 2026-08-25: gemini-3.5-flash 200/~4s clean VERDICT; -latest 503; 2.5-flash 404.
+MODEL = "gemini-3.5-flash"
 ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
             f"{MODEL}:generateContent")
 
@@ -41,7 +47,7 @@ NVIDIA_MODEL = "meta/llama-3.1-70b-instruct"
 _OUTAGE_CODES = (429, 500, 502, 503, 504)   # Gemini infra/quota outage → substitute may stand in
 MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input budget
 MAX_CONTEXT_CHARS = 300_000     # full-file bodies (helpers referenced but not in the diff);
-                                #   gemini-2.5-flash has a very large input window, so this is safe
+                                #   gemini-3.5-flash has a very large input window, so this is safe
 TIMEOUT_SEC = 120
 N_SAMPLES = 3           # majority-vote the stochastic reviewer: ship only if >=2 of 3 samples
                         # APPROVE (2026-07-28). A lone stochastic false-reject must not block a
@@ -165,7 +171,11 @@ def _one_audit(prompt_text: str, key: str) -> "tuple[str, str, int]":
     """
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"maxOutputTokens": 8192},
+        # thinkingConfig.thinkingBudget:0 — gemini-3.5-flash is a THINKING model; its hidden
+        # reasoning otherwise eats the token budget and the verdict text is never emitted
+        # (INDETERMINATE, which fails the vote closed on infra alone). Disabling thinking yields a
+        # clean verdict (root cause of the 2026-08-25 "GAI down" investigation).
+        "generationConfig": {"maxOutputTokens": 8192, "thinkingConfig": {"thinkingBudget": 0}},
     }).encode()
     req = urllib.request.Request(
         f"{ENDPOINT}?key={key}",

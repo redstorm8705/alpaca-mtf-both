@@ -195,15 +195,30 @@ def _gai(prompt, key, paid_key=""):
     # scaled with every free 429 (2 paid top-ups in one month, Aug 2026). Now it is a real gate —
     # least-privilege / default-deny on the ONLY paid path in the repo.
     def _one(k):
+        # PINNED to gemini-3.5-flash, NOT the `gemini-flash-latest` alias (root cause, 2026-08-25):
+        # the `-latest` alias routed to an overloaded free-tier pool returning a PERSISTENT 503
+        # UNAVAILABLE for a full day, while pinned models served instantly — and the previously
+        # documented fallback `gemini-2.5-flash` is now 404 (retired). A `-latest` alias is a moving
+        # target we don't control; pin a working family version we control. If THIS pin later 404s
+        # (retired) or 503s (overloaded), re-run the model-list probe and re-pin — automating that
+        # re-pin as a model-selection ladder is the tracked follow-up (not built here yet).
+        # (Verified 2026-08-25: gemini-3.5-flash 200 in ~4s with a
+        # clean VERDICT; gemini-flash-latest 503; gemini-2.5-flash 404.)
         r = _curl(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={k}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={k}",
             ["Content-Type: application/json"],
             # maxOutputTokens 2048 (was 8192): the 8192 reservation counts against the free-tier
             # per-minute TOKEN budget and helped trip 429s on multi-file runs (Rafael 2026-08-24:
             # "gai prompts in smaller amounts to stay under the free tier"). A verdict + a brief
             # cited-defect rationale fits well under 2048; more only pads reasoning.
+            # thinkingConfig.thinkingBudget:0 — gemini-3.5-flash is a THINKING model; without this
+            # its hidden reasoning consumes the whole maxOutputTokens budget and NO verdict text is
+            # emitted (parsed as INDETERMINATE, blocking every ship). Disabling thinking yields a
+            # clean terse verdict in ~1s (root cause 2 of the 2026-08-25 "GAI down" investigation;
+            # also in project memory: "thinkingBudget=0 — thinking can eat the budget").
             {"contents": [{"parts": [{"text": prompt}]}],
-             "generationConfig": {"maxOutputTokens": 2048}},
+             "generationConfig": {"maxOutputTokens": 2048,
+                                  "thinkingConfig": {"thinkingBudget": 0}}},
             k)
         if "candidates" not in r:
             raise RuntimeError(str(r).replace(k, "***")[:200])
