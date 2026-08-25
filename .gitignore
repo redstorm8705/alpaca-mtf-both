@@ -74,6 +74,12 @@ logs/*
 # Whitelisted for MTF FULL BOT AUDIT — JUNE 26 (standing multi-session audit initiative):
 !logs/mtf_full_bot_audit/
 !logs/mtf_full_bot_audit/*
+# Whitelisted for Self-QA gate #4 design records (record_design.py --doc target). These are
+# the actual audit-trail artifact the "BGG design-record" mechanism leans on — unlike the
+# ephemeral, per-machine marker JSONs under .claude/preship/markers/ (intentionally gitignored,
+# same as every other marker type), this .md content is meant to survive in git history.
+!logs/design_records/
+!logs/design_records/*
 # Whitelisted for interactive→API build-package scope docs and session decision queues:
 !logs/api_build_packages_*.md
 !logs/pending_claude_session_*.md

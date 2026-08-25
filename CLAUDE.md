@@ -89,6 +89,8 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 **Never suggest stopping (Rafael mandate 2026-07-09):** Do NOT tell Rafael to stop, pause, checkpoint, or "pick this up with fresh context," and do NOT recommend ending the session or ask "keep going or pause?". When he says continue/proceed, execute the next step and keep driving. A session that produced a lot of design/scoping is NOT a reason to wrap — find the highest-value thing that can be SHIPPED correctly through the gate this session and ship it. Manage context by offloading reads to subagents and writing durable docs, never by asking to stop. Only stop when Rafael says so.
 
+**Don't narrate the plumbing (Rafael mandate 2026-08-22):** Rafael does NOT need the behind-the-scenes deploy mechanics — the branch / push / CI-poll / merge / marker-recording play-by-play ("I don't need to see how the hotdog is made"). SUMMARIZE outcomes and CONFIRM the protocols/rules were followed; do not narrate each git/CI/marker step as it happens. What he wants to see: WHAT shipped, the RESULT (with proof for anything claimed LIVE), and a one-line gate confirmation (e.g. "gate: full-read · statics · cold-2nd ·  Gro+GAI APPROVE — all passed") — not the intermediate mechanics. Run the steps silently in the background; report the landing. Full detail stays in the logs/commits if he ever asks. This SAVES TOKENS and matches what he actually cares about: that the process was honored and the thing works.
+
 ---
 
 ## PROFITABLE > PERFECT — NORTH-STAR GUIDING PRINCIPLE (Rafael mandate 2026-07-26)
@@ -513,6 +515,33 @@ something, not that its conclusion follows.
 Pair this with the DISAGREEMENT PROTOCOL: a false claim is answered with a **counter-prompt carrying
 the specific refuting evidence — never a blind re-roll.** All four false premises in that session
 reversed in ONE round each when shown the evidence.
+
+### NO-GUESS MANDATE — MEASURE BEFORE YOU CLAIM, NEVER SHIP ON A HYPOTHESIS (Rafael mandate 2026-08-22)
+
+**Never state a hypothesis as fact. Never ship a fix, diagnosis, or root-cause claim based on an unverified
+cause.** Rafael, 2026-08-22: *"You should NEVER be guessing under any circumstances, ever."* This exists because
+a perf fix was shipped on a GUESSED bottleneck (`compute_period_stats`) that a profile — run only AFTER the
+ship — showed was not the actual/sole cause. Asserting an unmeasured cause IS guessing, and guessing ships the
+wrong fix. This is the VERIFY-AT-SOURCE rule applied to CAUSES and CLAIMS, not just to relaying others' claims.
+
+**THE RULE:** every CAUSAL / DIAGNOSTIC / PERFORMANCE / "this-fixes-X" claim MUST cite the measurement, trace,
+profile, or source line that CONFIRMS it — gathered and stated BEFORE the claim or the fix, never after.
+- A **root-cause** claim requires a repro or a trace that reproduces the fault from the cited cause.
+- A **perf** claim ("X is slow because Y" / "this speeds it up") requires a **profile** isolating Y as the cost
+  AND a **before/after measurement** proving the fix helped. No profile → no perf claim and no perf ship.
+- A **"this fixes the bug"** claim requires evidence that the addressed cause is the ACTUAL cause, not a
+  plausible-sounding one.
+- If a cause is not yet verified it is a **HYPOTHESIS** — say so explicitly ("hypothesis, unverified") and
+  VERIFY before acting. A hypothesis must never masquerade as a finding, and a fix must never ship on one.
+
+**THE GATE (per DOCUMENTATION-IS-NOT-ENFORCEMENT — the mechanism, not the wish):** the mandatory adversarial
+self-review (Self-QA #2) is EXTENDED to REJECT any fix whose commit/PR asserts a cause, root-cause, or perf win
+without a cited confirming measurement/trace in the diff's evidence. A perf/optimization fix additionally
+requires a recorded **before/after measurement** (`record_evidence.py <file> --measurement "<before→after, real
+numbers>"`) bound to the shipped content sha; absent it, `preship_gate` blocks the ship. This joins the Self-QA
+BUILDING gates (§SELF-QA GATE). Until that marker ships it is **mandatory-manual**: no causal/perf claim leaves
+my mouth or enters a commit without its measurement cited first — and "I profiled it" is a gate failure unless
+the profile numbers are shown.
 
 ### REVIEWER-CONTEXT — PRE-LOAD FACTS, DON'T PAY FOR FALSE REJECTS (Rafael mandate 2026-08-02)
 
