@@ -181,11 +181,15 @@ def _chunk_text(text: object, limit: int = _SLACK_CHUNK_LIMIT) -> list:
 
 
 def _post_slack_text(text: str) -> bool:
-    """POST one Slack webhook message. Returns True on HTTP 200. Never raises."""
+    """POST one Slack webhook message. Returns True on HTTP 200. Never raises.
+
+    unfurl_links/unfurl_media are disabled so a URL in the body (e.g. a billing
+    or docs link inside an error string) never balloons into a large preview
+    card — the #1 source of channel noise (Rafael 2026-08-26)."""
     try:
         req = urllib.request.Request(
             _SLACK_WEBHOOK,
-            data=json.dumps({"text": text}).encode(),
+            data=json.dumps({"text": text, "unfurl_links": False, "unfurl_media": False}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -199,11 +203,15 @@ def _post_slack_text(text: str) -> bool:
 def _post_slack_payload(payload: dict) -> bool:
     """POST an arbitrary Slack webhook JSON payload (text and/or Block Kit `blocks`). True on HTTP
     200. Never raises. Sibling of _post_slack_text (kept separate so the existing text path is
-    untouched)."""
+    untouched).
+
+    unfurl_links/unfurl_media default OFF (merged so a caller key still wins) to kill large link
+    preview cards — the same channel-noise fix as _post_slack_text (Rafael 2026-08-26)."""
     try:
+        body = {"unfurl_links": False, "unfurl_media": False, **(payload or {})}
         req = urllib.request.Request(
             _SLACK_WEBHOOK,
-            data=json.dumps(payload).encode(),
+            data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
