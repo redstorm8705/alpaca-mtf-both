@@ -8,7 +8,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-19 ~14:00 PDT, interactive Rafael present; wrapping near weekly limit → CROSS-ACCOUNT to a diff Claude Gmail acct) — pick up here
+## ⏩ LATEST (2026-08-25) — pick up here
+`git pull` → **main @ `323d07a`**. Authoritative cross-account state: **`logs/design_records/session_state_2026-08-25.md`** (merged `c4fd1db`, PR #177), then **`logs/design_records/agent_remediation_plan_2026-08-25.md`**. Verify any claim with `git show <sha>`. The dated block below is prior (08-19) context.
+
+## ⏩ PRIOR (2026-08-19 ~14:00 PDT, interactive Rafael present; wrapping near weekly limit → CROSS-ACCOUNT to a diff Claude Gmail acct)
 
 **⏩⏩ CROSS-ACCOUNT PICK-UP:** `git pull` → read this → read **`logs/design_records/slack_messaging_overhaul_2026-08-19.md`** (the NEXT build, fully scoped).
 
