@@ -1,0 +1,5 @@
+Midday Gemini Audit — 2026-08-25
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+================================================================================
+
+(Gemini API error — all models failed. Last: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model models/gemini-2.0-flash-lite is no longer available. Please update your code to use models/gemini-3.5-flash-lite for the latest features and improvements.', 'status': 'NOT_FOUND'}})
