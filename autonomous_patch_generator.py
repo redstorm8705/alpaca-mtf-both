@@ -666,11 +666,10 @@ def main() -> None:
             _log(f"WARN: Cannot parse directive line: {exc}")
 
     if not directives:
+        # No Slack on a clean/no-op run (Rafael 2026-08-26: "clean run, no work
+        # required" is pure channel noise). Logged for the operator; a genuine
+        # SILENT FAILURE or a processed run still Slacks below.
         _log("No pending_review directives found. Exiting.")
-        _slack(
-            "🔧 *autonomous_patch_generator.py* — ✅ clean run: "
-            "no pending directives, no work required."
-        )
         sys.exit(0)
 
     _log(f"Found {len(directives)} pending directive(s)")
