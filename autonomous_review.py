@@ -85,6 +85,41 @@ def _slack(msg: str) -> None:
         _log(f"Slack delivery failed: {exc}")
         _log(f"Undelivered message: {msg}")
 
+# ── Slack dedup — surface a recurring failure ONCE, not nightly ───────────────
+# Rafael 2026-08-26: the pipeline can fail for the SAME reason (e.g. free-tier
+# Gemini/Groq exhausted) every night; nagging the channel about a known ongoing
+# degradation is noise. Send a given failure `key`, then stay quiet for a cooldown.
+# A genuinely NEW failure key still pages immediately. Never raises — a dedup-state
+# error must not swallow the alert (it falls through to a normal send).
+_DEDUP_FILE       = _REPO_DIR / "data" / "state" / "pipeline_alert_dedup.json"
+_DEDUP_COOLDOWN_H = 72  # re-surface the same failure at most once per 3 days
+
+def _slack_dedup(msg: str, key: str, cooldown_h: int = _DEDUP_COOLDOWN_H) -> None:
+    # Epoch-float timestamps (never ISO strings) — version-proof and immune to any
+    # datetime.fromisoformat() parsing quirk across Python versions.
+    now_ts = datetime.now(PT).timestamp()
+    state: dict = {}
+    try:
+        if _DEDUP_FILE.exists():
+            state = json.loads(_DEDUP_FILE.read_text())
+        last = state.get(key)
+        if last is not None:
+            elapsed_h = (now_ts - float(last)) / 3600.0
+            if elapsed_h < cooldown_h:
+                _log(f"Slack deduped: key={key} {elapsed_h:.0f}h < {cooldown_h}h")
+                return
+    except Exception as exc:
+        _log(f"_slack_dedup state read failed ({exc}) — sending anyway")
+    _slack(msg)
+    try:
+        state[key] = now_ts
+        _DEDUP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _DEDUP_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        tmp.replace(_DEDUP_FILE)
+    except Exception as exc:
+        _log(f"_slack_dedup state write failed ({exc})")
+
 # ── Groq call ─────────────────────────────────────────────────────────────────
 def _call_groq(prompt: str) -> dict:
     api_key = os.environ.get("GROQ_API_KEY", "")
@@ -262,11 +297,10 @@ def _process_pending_item(json_path: Path) -> bool:
     _log("Calling Groq...")
     gro_result = _call_groq(prompt)
     if gro_result["error"]:
+        # Per-item failure is redundant with the run-level report (main() surfaces
+        # the `failed` bucket in its digest, or the deduped all-failed notice). Log
+        # only; no Slack, kills the nightly per-item "will retry" noise (2026-08-26).
         _log(f"Groq failed: {gro_result['error']}")
-        _slack(
-            f"⚠️ autonomous_review.py: Groq API failed for {target_file}."
-            " Will retry next night."
-        )
         return False  # leave status, retry tomorrow
 
     _log(
@@ -278,11 +312,8 @@ def _process_pending_item(json_path: Path) -> bool:
     _log("Calling Gemini...")
     gai_result = _call_gemini(prompt)
     if gai_result["error"]:
+        # Redundant with the run-level report — log only (see Groq branch above).
         _log(f"Gemini failed: {gai_result['error']}")
-        _slack(
-            f"⚠️ autonomous_review.py: Gemini API failed for {target_file}."
-            " Will retry next night."
-        )
         return False  # leave status, retry tomorrow
 
     _log(
@@ -482,9 +513,11 @@ def main() -> None:
 
     if not processed:
         _log("No items successfully processed tonight.")
-        _slack(
+        _slack_dedup(
             "⚠️ autonomous_review.py: All DS/GAI API calls failed tonight."
-            " Will retry tomorrow."
+            " Will retry tomorrow. (Deduped: silenced for 72h unless it recovers"
+            " then fails again, or a different failure appears.)",
+            key="all_dsgai_failed",
         )
         fcntl.flock(git_lock_fd, fcntl.LOCK_UN)
         sys.exit(1)
