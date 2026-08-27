@@ -1,0 +1,140 @@
+{
+  "audit_date": "2026-08-26",
+  "run_ts": "2026-08-26T10:30:01.804621-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "RIVN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "ELEVATED": 21,
+      "STRESSED": 10
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 36,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-26 16:05:11,703 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-13.18 tracker=$-10.66 drift=$-2.52",
+      "2026-08-26 16:10:41,999 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=27.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-26 16:11:31,230 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-13.18 tracker=$-10.66 drift=$-2.52",
+      "2026-08-26 16:16:59,850 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=27.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-26 16:18:38,709 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-13.18 tracker=$-10.66 drift=$-2.52"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -10.660000000000004,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -10.660000000000004,
+    "best": {
+      "symbol": "RIVN",
+      "pnl": -10.660000000000004,
+      "entry_price": 16.88,
+      "exit_price": 16.06,
+      "size": 13.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 14.95,
+      "target": 20.89
+    },
+    "worst": {
+      "symbol": "RIVN",
+      "pnl": -10.660000000000004,
+      "entry_price": 16.88,
+      "exit_price": 16.06,
+      "size": 13.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 14.95,
+      "target": 20.89
+    },
+    "trades": [
+      {
+        "symbol": "RIVN",
+        "pnl": -10.660000000000004,
+        "entry_price": 16.88,
+        "exit_price": 16.06,
+        "size": 13.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 14.95,
+        "target": 20.89
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "LLY",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "META",
+        "side": "long",
+        "qty": 2.0
+      },
+      {
+        "symbol": "NVDA",
+        "side": "long",
+        "qty": 3.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "AMZN",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "HOOD",
+      "SOXS",
+      "TOST"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 4,
+    "symbols": [
+      "LLY",
+      "META",
+      "RIVN"
+    ],
+    "by_symbol": {
+      "LLY": {
+        "buy": 1,
+        "sell": 0
+      },
+      "META": {
+        "buy": 1,
+        "sell": 0
+      },
+      "RIVN": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
