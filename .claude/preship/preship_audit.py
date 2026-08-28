@@ -260,23 +260,23 @@ def _nvidia(prompt, key):
     # OPTION-C SUBSTITUTE reviewer (Rafael-authorized 2026-08-24). Stands in for GAI ONLY when
     # GAI is genuinely DOWN (free quota exhausted; paid NOT attempted unless GEMINI_ALLOW_PAID is
     # explicitly set — default-deny) so a single-provider outage never blocks EVERY ship.
-    # NVIDIA-hosted nvidia/nemotron-3-super-120b-a12b — a diverse lineage (NVIDIA Nemotron) from
-    # Gro (OpenAI-family gpt-oss). RE-PINNED 2026-08-28: the prior meta/llama-3.1-70b-instruct was
-    # RETIRED (integrate.api.nvidia.com 410 Gone, EOL 2026-08-26) and its same-lineage successors
-    # are 404 for this account — verified via the /v1/models probe that nemotron-3-super IS live
-    # (200, clean VERDICT). It NEVER runs when GAI answers (healthy GAI keeps the Gro+GAI 2-voice
-    # rigor); engaged ONLY on a GAI *outage* exception, NEVER on a GAI *REJECT*. The marker records
-    # the substitution so any ship reviewed this way is auditable after the fact.
-    # `detailed_thinking off` is a Nemotron system directive: without it the reasoning model emits
-    # a long thinking preamble that buries the verdict / blows the token budget → INDETERMINATE.
+    # NVIDIA-hosted meta/llama-3.2-90b-vision-instruct — a diverse lineage (Meta) from Gro
+    # (OpenAI-family gpt-oss). RE-PINNED 2026-08-28: the prior meta/llama-3.1-70b-instruct was
+    # RETIRED (integrate.api.nvidia.com 410 Gone, EOL 2026-08-26). Candidates verified via the
+    # /v1/models probe: nemotron-3-super IS live but is a REASONING model that emits a long analysis
+    # and never lands a single clean VERDICT line on the large real gate prompt → INDETERMINATE
+    # (CI run 33217210058). llama-3.2-90b-vision-instruct is the Meta-lineage successor and returns
+    # exactly ONE clean `VERDICT:` line (the property the parser requires; a substitute REJECT is
+    # counter-promptable, an INDETERMINATE is a hard fail). It NEVER runs when GAI answers (healthy
+    # GAI keeps the Gro+GAI 2-voice rigor); engaged ONLY on a GAI *outage*, NEVER on a GAI *REJECT*.
+    # The marker records the substitution so any ship reviewed this way is auditable after the fact.
     r = _curl(
         "https://integrate.api.nvidia.com/v1/chat/completions",
         [f"Authorization: Bearer {key}", "Content-Type: application/json"],
-        {"model": "nvidia/nemotron-3-super-120b-a12b", "temperature": 0.2, "max_tokens": 2048,
+        {"model": "meta/llama-3.2-90b-vision-instruct", "temperature": 0.2, "max_tokens": 2048,
          "messages": [
             {"role": "system",
-             "content": "detailed_thinking off\n"
-                        "You are a Senior Staff engineer auditing a diff before it ships "
+             "content": "You are a Senior Staff engineer auditing a diff before it ships "
                         "to a live trading bot. Concrete, no hedging. REJECT only for a "
                         "concrete failing input (input -> wrong output/crash) in the CHANGED "
                         "lines, and QUOTE the exact offending line; a theoretical 'could' is a "
@@ -435,13 +435,13 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                 time.sleep(3)
                 return _nvidia(p, nk)
         try:
-            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA nemotron-3-super-120b).\n")
+            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA llama-3.2-90b).\n")
             gai_txt = _sub(prompt + _reminder)
             gai_v = _verdict(gai_txt)
             if gai_v == "INDETERMINATE":
                 gai_txt = _sub(prompt + _reminder)
                 gai_v = _verdict(gai_txt)
-            gai_substituted = "NVIDIA_nemotron-3-super-120b"
+            gai_substituted = "NVIDIA_llama-3.2-90b"
         except Exception as e2:
             return False, f"{relpath}: GAI down ({e}) AND option-C substitute failed after retry ({e2}) — fail-closed, no marker"
     _gai_label = f"substitute {gai_substituted}" if gai_substituted else "GAI"

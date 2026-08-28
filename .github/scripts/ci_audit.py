@@ -43,11 +43,13 @@ ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
 # fake" property is fully preserved; only the reviewer MODEL changes during a Gemini outage. Absent
 # NVIDIA_API_KEY the behaviour is UNCHANGED (Gemini-only, fail-closed) — the substitute is additive.
 NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
-# RE-PINNED 2026-08-28: meta/llama-3.1-70b-instruct RETIRED (410 Gone, EOL 2026-08-26) and its
-# same-lineage successors are 404 for this account. nvidia/nemotron-3-super-120b-a12b verified live
-# via the /v1/models probe (200, clean VERDICT). Nemotron is a reasoning model → the NVIDIA system
-# message below carries `detailed_thinking off` so it emits a terse verdict, not a thinking preamble.
-NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+# RE-PINNED 2026-08-28: meta/llama-3.1-70b-instruct RETIRED (410 Gone, EOL 2026-08-26). Meta-lineage
+# successor meta/llama-3.2-90b-vision-instruct verified live via /v1/models — returns exactly ONE
+# clean `VERDICT:` line. (nemotron-3-super was tried first but, as a reasoning model, emits a long
+# analysis that never lands a single clean VERDICT on the large gate prompt → INDETERMINATE, CI run
+# 33217210058. A substitute REJECT is counter-promptable; an INDETERMINATE is a hard fail — so clean
+# single-verdict parsing is the property that matters for the substitute.)
+NVIDIA_MODEL = "meta/llama-3.2-90b-vision-instruct"
 _OUTAGE_CODES = (429, 500, 502, 503, 504)   # Gemini infra/quota outage → substitute may stand in
 MAX_DIFF_CHARS = 120_000        # keep the request well inside the model's input budget
 MAX_CONTEXT_CHARS = 300_000     # full-file bodies (helpers referenced but not in the diff);
@@ -213,9 +215,7 @@ def _one_audit_nvidia(prompt_text: str, key: str) -> "tuple[str, str]":
         "temperature": 0.3,
         "max_tokens": 2048,
         "messages": [
-            # `detailed_thinking off` — Nemotron reasoning directive; without it the thinking
-            # preamble buries the verdict / blows the token budget → INDETERMINATE (2026-08-28).
-            {"role": "system", "content": "detailed_thinking off\n" + PERSONA},
+            {"role": "system", "content": PERSONA},
             {"role": "user", "content": prompt_text},
         ],
     }).encode()
