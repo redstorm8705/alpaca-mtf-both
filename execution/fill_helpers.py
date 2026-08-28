@@ -134,7 +134,9 @@ def _fill_unverified_fallback(symbol: str, trade: dict) -> float:
 
     Called when no fill can be matched, the recovered fill fails the sanity
     band, or no query lower-bound is derivable. Sets trade['_fill_unverified'],
-    increments the ANOMALY-5 counter, and fires a CRITICAL log + Slack alert.
+    increments the ANOMALY-5 counter, and fires a CRITICAL log. The immediate
+    Slack page was REMOVED 2026-08-28 (it false-alarmed on every normal slow
+    fill); the reconciler + the RC-4 90-min EXPIRED Slack own operator alerting.
     """
     global _fill_fallback_count
     # An unverified fill must not carry a close-reason label recovered from a
@@ -156,17 +158,16 @@ def _fill_unverified_fallback(symbol: str, trade: dict) -> float:
         f"[fallback #{_fill_fallback_count} today]"
     )
     _log_fill_anomaly(symbol, 0.0)
-    try:
-        from alerts import send_slack
-        send_slack(
-            f":rotating_light: FILL UNVERIFIED [{symbol}] "
-            f"Could not recover a verified close fill. "
-            f"P&L recorded using {_fallback_src}. "
-            f"MANUAL VERIFICATION REQUIRED. "
-            f"[fallback #{_fill_fallback_count} today]"
-        )
-    except Exception as _se:
-        logger.warning(f"[{symbol}] Slack CRITICAL alert failed: {_se}")
+    # NO immediate Slack here (Rafael 2026-08-28): the first miss is almost always a
+    # normal slow-settling market fill. fill_reconciler.run_fill_reconciliation()
+    # recovers the REAL price on a later cycle (proven in the logs: every "FILL
+    # UNVERIFIED" is followed 1-10s later by "Actual close fill: $X") and patches the
+    # P&L via patch_exit_pnl. Paging a CRITICAL "MANUAL VERIFICATION REQUIRED" on every
+    # such fill was a daily FALSE ALARM (and the paired EXIT showed a fake ~$0 P&L). A
+    # GENUINELY stuck fill still pages: fill_reconciler's RC-4 EXPIRED Slack fires
+    # once the 90-min reconciliation window closes without recovery. The CRITICAL log
+    # above + the ANOMALY-5 counter remain, so a fallback SPIKE still surfaces via
+    # run_cycle's ANOMALY-5 check.
     return _fallback
 
 
