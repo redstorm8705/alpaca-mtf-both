@@ -1,0 +1,203 @@
+{
+  "audit_date": "2026-08-27",
+  "run_ts": "2026-08-27T10:30:01.614920-07:00",
+  "entry_analysis": {
+    "entry_count": 5,
+    "exit_count": 3,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.2,
+    "flagged_entries": [
+      {
+        "symbol": "AMZN",
+        "ts": "2026-08-19 08:22:31",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 262.96,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "SOXS",
+        "ts": "2026-08-19 08:30:33",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 46.48,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "SPY",
+      "RIVN",
+      "AMZN",
+      "TOST",
+      "SOXS"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "NORMAL": 31
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 49,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-27 16:14:13,170 | WARNING  | execution.entry_logic | [QQQ] CORRELATION GATE BLOCK: rho(daily,20d)=0.93 > 0.70 with SPY \u2014 skipping entry.",
+      "2026-08-27 16:14:24,961 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-21.99 tracker=$-16.88 drift=$-5.11",
+      "2026-08-27 16:19:49,894 | WARNING  | strategy.run_cycle | [ANOMALY-2] [PANW] confirm_gate=6 scans but no entry \u2014 risk.open_positions=4 vs tracker=4 | ",
+      "2026-08-27 16:19:49,894 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.0/100 < 30 \u2014 review exit discipline and sto",
+      "2026-08-27 16:20:13,308 WARNING ledger_sync ledger_sync wall-time 12.1s (fills=556 orders=2583)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 4,
+    "wins": 2,
+    "losses": 2,
+    "total_pnl": -12.940099999999887,
+    "win_rate": 0.5,
+    "profit_factor": 0.295589027822389,
+    "avg_win": 2.7150000000000247,
+    "avg_loss": -9.185049999999968,
+    "best": {
+      "symbol": "TOST",
+      "pnl": 2.980000000000004,
+      "entry_price": 34.44,
+      "exit_price": 35.93,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 31.93,
+      "target": 39.65
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": -12.319999999999936,
+      "entry_price": 262.96,
+      "exit_price": 256.8,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 242.87,
+      "target": 315.32
+    },
+    "trades": [
+      {
+        "symbol": "TOST",
+        "pnl": 2.980000000000004,
+        "entry_price": 34.44,
+        "exit_price": 35.93,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 31.93,
+        "target": 39.65
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -12.319999999999936,
+        "entry_price": 262.96,
+        "exit_price": 256.8,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 242.87,
+        "target": 315.32
+      },
+      {
+        "symbol": "SOXS",
+        "pnl": -6.0501000000000005,
+        "entry_price": 46.48,
+        "exit_price": 44.4633,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 36.36,
+        "target": 72.84
+      },
+      {
+        "symbol": "SPY",
+        "pnl": 2.4500000000000455,
+        "entry_price": 769.68,
+        "exit_price": 772.13,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 12,
+        "mri_level": "NORMAL",
+        "stop": 766.51,
+        "target": 775.89
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "RIVN",
+        "side": "long",
+        "qty": 3.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "HOOD",
+      "LLY",
+      "META",
+      "NVDA",
+      "SPY"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 9,
+    "symbols": [
+      "AMZN",
+      "RIVN",
+      "SOXS",
+      "SPY",
+      "TOST"
+    ],
+    "by_symbol": {
+      "SPY": {
+        "buy": 2,
+        "sell": 1
+      },
+      "RIVN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 0,
+        "sell": 1
+      },
+      "TOST": {
+        "buy": 0,
+        "sell": 1
+      },
+      "SOXS": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
