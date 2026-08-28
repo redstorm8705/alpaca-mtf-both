@@ -1092,10 +1092,25 @@ def _post_slack_summary(
     now_pt = datetime.now(_PT)
     ts = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
+    # Terse-classify an API error so a raw provider error blob (e.g. Gemini's full
+    # RESOURCE_EXHAUSTED / "prepayment credits depleted" JSON with billing URLs) never
+    # gets dumped into Slack — the #1 noise Rafael flagged 2026-08-26. A quota/credit
+    # exhaustion (the expected free-tier state) collapses to one plain line; any other
+    # error is single-lined and truncated. No URL survives → nothing to unfurl.
+    def _terse_error(err: object) -> str:
+        e = " ".join(str(err or "unknown error").split())
+        low = e.lower()
+        if any(k in low for k in (
+            "resource_exhausted", "quota", "prepayment", "credits are depleted",
+            "429", "rate limit", "rate_limit", "exceeded your current",
+        )):
+            return "unavailable (free-tier quota/credits exhausted)"
+        return e[:120] + ("…" if len(e) > 120 else "")
+
     # Build short excerpts (first 350 chars of each response)
     def _excerpt(result: dict, label: str) -> str:
         if not result["text"]:
-            return f"*{label}:* ❌ FAILED — {result['error']}"
+            return f"*{label}:* ❌ {_terse_error(result['error'])}"
         preview = result["text"][:350].replace("\n", " ").strip()
         return f"*{label} (preview):* {preview}…"
 
