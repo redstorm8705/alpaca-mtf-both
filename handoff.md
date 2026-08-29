@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-08-09 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-08-29 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,8 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-08-25) — pick up here
-`git pull` → **main @ `323d07a`**. Authoritative cross-account state: **`logs/design_records/session_state_2026-08-25.md`** (merged `c4fd1db`, PR #177), then **`logs/design_records/agent_remediation_plan_2026-08-25.md`**. Verify any claim with `git show <sha>`. The dated block below is prior (08-19) context.
+## ⏩ LATEST (2026-08-29 PM) — pick up here
+`git pull` → **main**. **ACTIVE THREAD: DAY-TRADE TIER v2 (the growth engine).** A design record was written this session recording a BGGN pass (Board 4 cold seats + Gro + GAI-via-NVIDIA-substitute, GAI 429-blocked) on the tier design — spec + the per-seat findings it is derived from are in **`logs/design_records/day_tier_v2_design_2026-08-29.md`** (READ FIRST; verify the record against this session's transcript/task outputs). Per that record, the design decisions to carry forward are: meta-label (side/whether/entry) rather than a strict AND-gate; **30m primary + 15m trigger** (the timeframe-audit finding); trade the UNDERLYING rather than the leveraged-ETF where buying power allows; GEX computed on the underlying + DTE/time-of-day conditioning; **10% allocation start → 15%**; separate fade/ride R profiles; a shuffled-GEX control + a pre-registered kill threshold. These are design scope, not yet code — nothing has shipped; the build (below) still runs the full gate.
+
+**NEXT (single exact action):** build §5 step 1 — **fix `data/gex.py`** to compute GEX on the UNDERLYING (mapped to ETF by leverage×NAV) + add day-trade universe (TSLL/NVDL/TQQQ/SOXL). RISK-PATH → full patch sequence + preship gate + masked-loss seat. LIVE, no shadow (Rafael mandate). Then §5 step 2 = dynamic 4-tier net −7% kill.
+
+**QUEUED (Rafael):** 10-gate remediation Gate 3 (build-don't-fix + CI mirror); Slack inline-text-reports audit (`slack_messaging_overhaul_2026-08-19.md` WS2/WS3). **BOOKMARKED (lower prio):** Forever-6 live + hybrid-margin.
+
+**OPEN (root-caused, unfixed):** P0 fill-unverified → $0-P&L race in `fill_helpers.py` / `fill_reconciler.py` (see the 2026-08-28 memory + tb_audit_log entry).
+
+_The dated block below is prior (08-19) context._
 
 ## ⏩ PRIOR (2026-08-19 ~14:00 PDT, interactive Rafael present; wrapping near weekly limit → CROSS-ACCOUNT to a diff Claude Gmail acct)
 
