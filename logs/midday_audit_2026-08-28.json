@@ -1,0 +1,164 @@
+{
+  "audit_date": "2026-08-28",
+  "run_ts": "2026-08-28T10:30:01.210221-07:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 4,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.6666666666666666,
+    "flagged_entries": [
+      {
+        "symbol": "HOOD",
+        "ts": "2026-08-24 09:39:11",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 108.05,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "QQQ",
+      "RIVN",
+      "HOOD"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "NORMAL": 31
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 37,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-28 16:02:27,259 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$2.95 tracker=$-2.90 drift=$+5.85",
+      "2026-08-28 16:07:54,186 | WARNING  | execution.drift_detector | DRIFT QQQ phantom_tracker | persist=3/2 conf=1.00 inflight=False | tracker={'direction",
+      "2026-08-28 16:08:47,705 | WARNING  | scan_to_html | [QQQ] context strip: tracker lists a FILLED position (status=open, qty=2) that Alpaca /v2/position",
+      "2026-08-28 16:09:24,113 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$2.95 tracker=$-2.90 drift=$+5.85",
+      "2026-08-28 16:14:39,523 | WARNING  | execution.drift_detector | DRIFT QQQ phantom_tracker | persist=4/2 conf=1.00 inflight=False | tracker={'direction"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -0.19999999999998863,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -0.06666666666666288,
+    "best": {
+      "symbol": "RIVN",
+      "pnl": 0.0,
+      "entry_price": 16.75,
+      "exit_price": 16.75,
+      "size": 3.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "NORMAL",
+      "stop": 14.99,
+      "target": 20.43
+    },
+    "worst": {
+      "symbol": "HOOD",
+      "pnl": -0.19999999999998863,
+      "entry_price": 108.05,
+      "exit_price": 107.95,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 95.53,
+      "target": 140.69
+    },
+    "trades": [
+      {
+        "symbol": "HOOD",
+        "pnl": -0.19999999999998863,
+        "entry_price": 108.05,
+        "exit_price": 107.95,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 95.53,
+        "target": 140.69
+      },
+      {
+        "symbol": "RIVN",
+        "pnl": 0.0,
+        "entry_price": 16.75,
+        "exit_price": 16.75,
+        "size": 3.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "NORMAL",
+        "stop": 14.99,
+        "target": 20.43
+      },
+      {
+        "symbol": "QQQ",
+        "pnl": 0.0,
+        "entry_price": 718.94,
+        "exit_price": 718.94,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "NORMAL",
+        "stop": 709.98,
+        "target": 737.48
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "META"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 8,
+    "symbols": [
+      "HOOD",
+      "NVDA",
+      "QQQ",
+      "RIVN"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 0,
+        "sell": 1
+      },
+      "QQQ": {
+        "buy": 0,
+        "sell": 2
+      },
+      "RIVN": {
+        "buy": 0,
+        "sell": 3
+      },
+      "HOOD": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
