@@ -422,6 +422,36 @@ both of them.** Knowing a failure mode provides zero protection against committi
 4. Prefer making the wrong thing **impossible** over making it **forbidden**.
 5. Treat a repeated violation as evidence about the CONTROL, not about the violator.
 
+### NO-GUESS MANDATE — ROOT-CAUSE BEFORE YOU CLAIM, MECHANICALLY ENFORCED (hardened 2026-08-28)
+
+**NEVER state a hypothesis as fact, and NEVER act on an unverified cause.** A causal, comparative,
+performance, or root-cause claim — in a chat message, a recommendation, OR a commit — MUST cite the
+measurement, trace, tool-result, probe output, or `file:line` that confirms it, **gathered BEFORE the
+claim**; otherwise it MUST be tagged `[hypothesis — unverified]` and verified before any action is
+taken on it. "It's probably X", "the root cause is X", "A is faster/weaker/better than B" with no test
+behind it are PROHIBITED. When a system fails, ISOLATE and TEST each hypothesis at its source (execute
+it > targeted probe > read the live state) before naming a cause. **One wrong guess does not earn a
+second — step back and find the TRUE root cause; do not iterate guesses.**
+
+**MECHANICALLY ENFORCED (per DOCUMENTATION-IS-NOT-ENFORCEMENT — this is a control, not a memory note):**
+`.claude/preship/no_guess_gate.py` is a Stop hook (registered in `.claude/settings.json` beside
+`execute_dont_ask_gate.py`) that BLOCKS a turn-ending message making a comparative/causal/superlative
+claim carrying NEITHER cited evidence NOR a hypothesis label, forcing a redo. Built 2026-08-24; it sat
+un-merged (a request, not a control) until 2026-08-28 — which is exactly why the failure below happened.
+
+**The failure that made it a GATE (2026-08-28):** GAI "stopped working." Instead of root-causing, the
+agent GUESSED three times off the surface `429` — "self-inflicted rate-limiting", then "enable paid
+Gemini", then swapped the NVIDIA substitute model twice — burning real time and tokens AFTER Rafael had
+explicitly said do not guess. The true cause surfaced ONLY when forced to test each key at source:
+**OCI's `.env` `GEMINI_API_KEY` was the DEPLETED PAID key (`…BG2jlw`) while the WORKING FREE key
+(`…fgnclA`) sat in the local `.env`.** The no-guess gate would have blocked every one of those claims.
+
+**Durable diagnostic (the specific lesson):** a `429 "prepayment credits are depleted"` is a KEY /
+BILLING signal (that key's project has prepaid billing at $0) — NOT a free-tier rate limit and NOT a
+dead model. On ANY external-API failure, test EACH key directly (`?key=<k>` → 200 vs 429) and confirm
+WHICH key each surface uses — **OCI `.env`, local `.env`, and the CI secret can hold DIFFERENT keys.**
+Fix the key, not the model.
+
 ### SELF-QA GATE — THE 4 PRE-SHIP SELF-CHECKS, MECHANICALLY ENFORCED (Rafael mandate 2026-08-09)
 
 **Rafael must not have to be the QA on his own bot.** The QA has to run itself — every session, every
