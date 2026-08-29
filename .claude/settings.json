@@ -22,6 +22,15 @@
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/preship/bgg_prompt_bias_gate.py"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/preship/design_record_gate.py"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

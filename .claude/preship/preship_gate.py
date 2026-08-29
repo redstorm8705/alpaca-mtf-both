@@ -418,6 +418,105 @@ def _logevidence_ok(relpath: str, ref: str):
         f"If it does NOT: record_exemption.py {relpath} --reason \"<why>\".")
 
 
+def _design_record_ok(relpath: str):
+    """Self-QA check #4 teeth, SHIP-TIME MIRROR (added 2026-08-12; Schneier board-seat
+    finding on design_record_gate.py, verified against .claude/settings.json: that
+    PreToolUse hook is wired ONLY to the Write|Edit matcher, so a NEW gated .py/.sh file
+    created via Bash — a heredoc, `echo >`, `python3 -c "open(...).write(...)"` — never
+    triggers it at all. That is not a 'determined bypass' (editing a control), it is
+    simply not using the one tool being watched. This closes the hole at the ship
+    boundary (git commit/push), the SAME tool-agnostic checkpoint
+    _marker_ok/_cold2_ok/_logevidence_ok/_adversarial_ok already use, regardless of
+    which tool created the file — exact parity with how checks #1-3 are enforced.
+
+    Reads the SAME marker files design_record_gate.py's own PreToolUse hook
+    produces/consumes (.claude/preship/markers/design__*.json and
+    <slug>.designwaiver.json). Logic duplicated here rather than imported from
+    design_record_gate.py to avoid a circular import (that module already imports
+    _is_gated from this one) — matches this file's existing style of self-contained
+    check functions (_cold2_ok, _adversarial_ok, _logevidence_ok are each independent,
+    not shared, for the same reason).
+
+    Scope matches design_record_gate.py's own: ALL gated new .py/.sh files, GATED_SELF
+    included (not restricted to _is_bot_code) — the two layers must stay in lockstep or
+    a file exempt at one layer and covered at the other creates exactly the drift this
+    pairing exists to prevent.
+    """
+    if os.path.isdir(MARKER_DIR):
+        for name in os.listdir(MARKER_DIR):
+            if not (name.startswith("design__") and name.endswith(".json")):
+                continue
+            try:
+                m = json.load(open(os.path.join(MARKER_DIR, name)))
+                if not isinstance(m, dict):
+                    continue
+            except Exception:
+                # Cold-2nd fix, 2026-08-12: a syntactically-valid-but-non-dict marker
+                # (e.g. `[]`/`null`) previously raised AttributeError on the .get()
+                # calls below, OUTSIDE this try — uncaught, it propagated to main()'s
+                # fail-CLOSED catch-all and blocked the entire ship on one bad marker
+                # file, not just this one. The isinstance check above now catches the
+                # non-dict case before it can happen.
+                continue
+            covers = m.get("covers") or []
+            # isinstance(c, str) guard (cold-2nd 2026-08-23): a non-string covers
+            # element (`[null]`/`[12345]`) else raises AttributeError on c.endswith,
+            # DoS-blocking every ship until the poison marker is removed.
+            hit = any(
+                isinstance(c, str)
+                and ((c == relpath) or (c.endswith("/") and relpath.startswith(c)))
+                for c in covers
+            )
+            if not hit:
+                continue
+            # GAI preship finding, verified real (2026-08-12): `.get("doc_path", "")`'s
+            # default only applies when the KEY IS ABSENT, not when present-but-None —
+            # a marker with `"doc_path": null` made `doc` None, and
+            # os.path.join(REPO, None) raised an uncaught TypeError this `except
+            # OSError` never caught — which propagates all the way to main()'s
+            # fail-CLOSED catch-all, blocking an entire ship on one bad marker (same
+            # severity class as the earlier non-dict-marker finding this same pass
+            # already fixed). `or ""` catches None the same way a missing key does;
+            # open()-ing the resulting REPO path (a directory) correctly raises
+            # IsADirectoryError, a subclass of OSError, so it falls through to the
+            # existing skip-this-marker path below.
+            doc = m.get("doc_path") or ""
+            try:
+                with open(os.path.join(REPO, doc), "rb") as f:
+                    cur_sha = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                continue  # design doc missing/unreadable — this marker cannot validate
+            if cur_sha == m.get("doc_sha256"):
+                return True, "ok (design-record)"
+    waiver_path = os.path.join(
+        MARKER_DIR, relpath.replace("/", "__") + ".designwaiver.json")
+    if os.path.exists(waiver_path):
+        try:
+            m = json.load(open(waiver_path))
+            # `.get("ts") or 0`, NOT `.get("ts", 0)` — cold-2nd finding, round 4,
+            # 2026-08-12: this exact site was MISSED when the same fix was applied
+            # to its four siblings (_marker_ok, _cold2_ok, _adversarial_ok,
+            # design_record_gate._waiver_covers) earlier in this same pass. Here the
+            # local `except Exception: pass` DOES catch the resulting TypeError, so
+            # a "ts": null waiver doesn't crash the ship — but it was silently
+            # mistreated as "no waiver at all" (misleading: looks like an absent
+            # waiver, not a corrupted one), with no diagnostic. Fixed for the same
+            # reason as its siblings: correct, honest degradation over silent
+            # misclassification.
+            if (time.time() - (m.get("ts") or 0) <= MARKER_MAX_AGE_SEC
+                    and str(m.get("reason", "")).strip()):
+                return True, "ok (design-record waiver)"
+        except Exception:
+            pass
+    return False, (
+        "new file under a gated path with no design-record marker or waiver "
+        "covering it. Run the design pass, then: python3 "
+        f".claude/preship/record_design.py <feature-slug> --doc "
+        f"logs/design_records/<feature>.md --covers {relpath} — or, if this is "
+        "NOT new capability (needs Rafael's own go-ahead): python3 "
+        f".claude/preship/record_design_waiver.py {relpath} --reason \"<why>\"")
+
+
 def _changed_gated(range_args, ref_tmpl):
     """(fails, gated_files) for one diff range. Deletions are EXCLUDED — see T3."""
     ok, out = _git(["diff", "--name-status"] + range_args)
@@ -425,7 +524,7 @@ def _changed_gated(range_args, ref_tmpl):
         return (["FAIL-CLOSED: could not list shipped files (git error). "
                  "Aborting ship rather than allow-through. If this is a push, try "
                  "`git fetch origin` first — the upstream ref may be missing."], [])
-    files = []
+    files = []          # (status, dest_path, old_path)
     for ln in out.splitlines():
         parts = ln.split("\t")
         if len(parts) < 2:
@@ -439,11 +538,16 @@ def _changed_gated(range_args, ref_tmpl):
         if status.startswith("D"):
             continue
         path = parts[-1].strip()          # for R/C the destination is last
+        # For a rename/copy (R/C) the SOURCE path is parts[1]; A/M carry no source.
+        # Needed only by the design-record check below (to skip renames FROM an
+        # already-gated path — those are not NEW capability).
+        old_path = (parts[1].strip()
+                    if status.startswith(("R", "C")) and len(parts) >= 3 else None)
         if path:
-            files.append(path)
-    gated = [f for f in files if _is_gated(f)]
+            files.append((status, path, old_path))
+    gated = [(s, f, o) for (s, f, o) in files if _is_gated(f)]
     fails = []
-    for f in gated:
+    for status, f, old_path in gated:
         good, why = _marker_ok(f, ref_tmpl.format(f))
         if not good:
             fails.append(f"  - {f}: [Gro/GAI] {why}")
@@ -465,7 +569,21 @@ def _changed_gated(range_args, ref_tmpl):
             av_good, av_why = _adversarial_ok(f, ref_tmpl.format(f))
             if not av_good:
                 fails.append(f"  - {f}: [ADVERSARIAL] {av_why}")
-    return (fails, gated)
+        # Self-QA #4 SHIP-TIME MIRROR (Gate 5): a NEW gated .py/.sh — an add, or a
+        # rename FROM an ungated path (both = new gated capability) — needs a
+        # design-record marker or waiver. Closes the Bash-created bypass of
+        # design_record_gate.py's Write|Edit-only PreToolUse hook, tool-agnostically at
+        # the ship boundary. Scope is ALL gated new .py/.sh (GATED_SELF included), in
+        # lockstep with the PreToolUse layer.
+        _, ext = os.path.splitext(f)
+        is_new_add = status.startswith("A")
+        is_rename_from_ungated = (status.startswith(("R", "C"))
+                                  and old_path is not None and not _is_gated(old_path))
+        if (is_new_add or is_rename_from_ungated) and ext in (".py", ".sh"):
+            dr_good, dr_why = _design_record_ok(f)
+            if not dr_good:
+                fails.append(f"  - {f}: [DESIGN-RECORD] {dr_why}")
+    return (fails, [f for _, f, _o in gated])
 
 
 _COMMIT_ARG_TAKING = ("-m", "--message", "-F", "--file", "-t", "--template",
