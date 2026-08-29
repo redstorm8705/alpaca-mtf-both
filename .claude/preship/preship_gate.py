@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  — dense rationale comments run long (project convention, 81 sibling files)
 """
 PreToolUse hook — SHIP GATE v2 (GAI-audited 2026-07-03).
 
@@ -24,6 +25,14 @@ import subprocess
 import time
 import shlex
 import re
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    # DYNAMIC-OPTIMAL gate (remediation 1+2)
+    from no_static_scan import scan as _static_scan
+except Exception:
+    # _dynamic_ok fail-CLOSES for risk files if this can't load (Gate 4 self-test catches it)
+    _static_scan = None  # type: ignore[assignment]
 
 # Derived from __file__, NOT hardcoded (2026-07-22). A hardcoded absolute path made the
 # gate silently inert on any machine but its author's — which is exactly the failure the
@@ -59,6 +68,21 @@ GATED_CLAIM_FILES = frozenset({"handoff.md"})
 # artifact in the repo. No bootstrap problem: the marker writers work on any
 # staged file.
 GATED_SELF = (".claude/preship/", ".claude/settings.json", ".github/")
+# RISK/SCORING scope for the DYNAMIC-OPTIMAL gate (remediation Gate 1+2, 2026-08-25/28).
+# These are the files where a hardcoded numeric DECISION THRESHOLD is the documented
+# no-static-regimes violation (the MRI redesign shipped VIX/TLT/level cutoffs static).
+# _dynamic_ok scans NEW/CHANGED literals in these and blocks an isolated, un-derived,
+# un-tagged threshold. DIFF-SCOPED, so pre-existing thresholds are grandfathered for
+# migration — an edit touching no threshold is never blocked, and a static number PAIRED
+# with a different-signal check-and-balance is allowed (Rafael 2026-08-28: "vix 25 and
+# spy -1%"), enforced inside no_static_scan.
+_RISK_SCORING = ("events/macro_risk_index.py", "execution/kelly.py",
+                 "execution/risk_manager.py", "execution/entry_logic.py",
+                 "execution/exit_logic.py", "indicators/", "strategy/")
+
+def _in_risk_scope(path: str) -> bool:
+    path = path[2:] if path.startswith("./") else path
+    return path.startswith(_RISK_SCORING) or path in ("main.py", "config.py")
 
 def _is_gated(path: str) -> bool:
     path = path[2:] if path.startswith("./") else path
@@ -418,6 +442,76 @@ def _logevidence_ok(relpath: str, ref: str):
         f"If it does NOT: record_exemption.py {relpath} --reason \"<why>\".")
 
 
+def _added_lines(range_args, relpath):
+    """Set of NEW-file line numbers this diff ADDS/MODIFIES for `relpath` (the '+' lines),
+    so the dynamic gate is DIFF-SCOPED — only new/changed thresholds are checked and
+    pre-existing ones are grandfathered. Returns None on a git error (caller fail-CLOSES)."""
+    ok, out = _git(["diff", "--unified=0"] + list(range_args) + ["--", relpath])
+    if not ok:
+        return None
+    added, newln = set(), 0
+    for ln in out.splitlines():
+        if ln.startswith("@@"):
+            m = re.search(r"\+(\d+)", ln)
+            newln = int(m.group(1)) if m else newln
+            continue
+        if ln.startswith("+") and not ln.startswith("+++"):
+            added.add(newln)
+            newln += 1
+        elif ln.startswith("-") and not ln.startswith("---"):
+            continue  # removed line does not advance the NEW-file counter
+        elif ln.startswith("\\"):
+            continue  # "\ No newline at end of file" — a marker, not a real line; do NOT advance
+        elif not ln.startswith(("---", "+++")):
+            newln += 1  # context (rare with -U0)
+    return added
+
+
+def _dynamic_ok(relpath, ref, range_args):
+    """DYNAMIC-OPTIMAL gate (remediation Gate 1+2, BGGN 2026-08-25; Rafael 2026-08-28
+    block-immediately + pairing rule). Blocks a NEW/CHANGED ISOLATED static numeric DECISION
+    THRESHOLD in a risk/scoring file unless it is derived from data, PAIRED with a
+    different-signal check-and-balance (`vix > 25 and spy_pct <= -1.0`), or carries a
+    `# PROV:<id>`/`# STATIC-WAIVER:<id>` tag. The MRI redesign shipped VIX/TLT/level cutoffs as
+    hardcoded statics in violation of the permanent no-static-regimes mandate — this makes that
+    impossible to ADD going forward. DIFF-SCOPED (only '+' lines) so pre-existing thresholds are
+    grandfathered for migration and an edit touching no threshold is never blocked.
+    no_static_scan exempts PROV/WAIVER-tagged, whitelisted, derivation-call and paired
+    literals."""
+    if not relpath.endswith(".py"):
+        return True, "ok (non-py)"
+    if _static_scan is None:
+        return False, ("DYNAMIC scanner (no_static_scan) failed to import — fail-CLOSED for "
+                       "risk/scoring code. Fix the scanner (Gate 4 self-test catches this).")
+    if ref.startswith("WT:"):
+        try:
+            src = open(os.path.join(REPO, ref[3:]), encoding="utf-8").read()
+        except OSError:
+            return False, "FAIL-CLOSED: cannot read working-tree content for dynamic gate"
+    else:
+        ok, out = _git(["cat-file", "blob", ref], want_bytes=True)
+        if not ok:
+            return False, "FAIL-CLOSED: cannot read staged content for dynamic check"
+        src = out.decode("utf-8", "replace")
+    added = _added_lines(range_args, relpath)
+    if added is None:
+        return False, "FAIL-CLOSED: could not compute the diff for the dynamic check"
+    try:
+        viols = [v for v in _static_scan(relpath, src) if v.line in added]
+    except Exception as e:
+        return False, f"FAIL-CLOSED: dynamic scanner raised ({type(e).__name__}: {e})"
+    if not viols:
+        return True, "ok"
+    shown = "; ".join(f"L{v.line} `{v.snippet}` (={v.literal})" for v in viols[:5])
+    more = f" (+{len(viols) - 5} more)" if len(viols) > 5 else ""
+    return False, (
+        f"NEW isolated static threshold(s) in risk/scoring code — DERIVE from data (a "
+        f"derive_*/fit_*/quantile call), PAIR it with a different-signal check-and-balance "
+        f"(e.g. `and spy_pct <= -1.0`), or if genuinely structural tag the line "
+        f"`# PROV:<derivation-id>`: {shown}{more}. "
+        f"[no-static-regimes mandate, remediation Gate 1+2]")
+
+
 def _design_record_ok(relpath: str):
     """Self-QA check #4 teeth, SHIP-TIME MIRROR (added 2026-08-12; Schneier board-seat
     finding on design_record_gate.py, verified against .claude/settings.json: that
@@ -583,6 +677,13 @@ def _changed_gated(range_args, ref_tmpl):
             dr_good, dr_why = _design_record_ok(f)
             if not dr_good:
                 fails.append(f"  - {f}: [DESIGN-RECORD] {dr_why}")
+        # DYNAMIC-OPTIMAL gate (remediation Gate 1+2, Rafael block-immediately 2026-08-28): no NEW
+        # ISOLATED static decision-threshold in risk/scoring code — diff-scoped (pre-existing
+        # grandfathered); a paired/derived/PROV-tagged literal is allowed.
+        if _in_risk_scope(f) and f.endswith(".py"):
+            dyn_good, dyn_why = _dynamic_ok(f, ref_tmpl.format(f), range_args)
+            if not dyn_good:
+                fails.append(f"  - {f}: [DYNAMIC] {dyn_why}")
     return (fails, [f for _, f, _o in gated])
 
 
