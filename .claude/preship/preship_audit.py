@@ -452,6 +452,7 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
         return False, f"{relpath}: {_gai_label} REJECT — no marker.\n{gai_txt[-600:]}"
 
     # Gro (required unless waived)
+    gro_substituted = ""
     if waive_gro:
         gro_v = "WAIVED"
     else:
@@ -462,13 +463,49 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                 gro_txt = _gro(prompt + _reminder, keys.get("GROQ_API_KEY", ""))
                 gro_v = _verdict(gro_txt)
         except Exception as e:
-            return False, (f"{relpath}: Gro audit failed ({e}). Re-run with "
-                           "--waive-gro only if Rafael authorizes.")
+            # OPTION-C SYMMETRY (Rafael 2026-08-28: "NVIDIA is always keyed and ready — use it
+            # as a backup in situations exactly like this"). Gro's free tier has a HARD 8k-TPM
+            # PER-REQUEST cap a large diff can exceed outright ("Request too large"), plus a
+            # per-minute budget that rate-limits under load — a Gro OUTAGE, not a REJECT (a
+            # reject returns a verdict, not an exception). Engage the SAME option-C NVIDIA
+            # substitute the GAI path uses, instead of hard-failing to a manual --waive-gro.
+            # Reached ONLY on a Gro *outage* exception, never a *REJECT*. No NVIDIA key => the
+            # old --waive-gro path.
+            nk = keys.get("NVIDIA_API_KEY", "")
+            if not nk:
+                return False, (f"{relpath}: Gro audit failed ({e}) and no NVIDIA substitute "
+                               "key. Re-run with --waive-gro only if Rafael authorizes.")
+            def _gsub(p):
+                try:
+                    return _nvidia(p, nk)
+                except Exception:
+                    time.sleep(3)
+                    return _nvidia(p, nk)
+            try:
+                sys.stderr.write(f"[preship] Gro down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA llama-3.2-90b).\n")
+                gro_txt = _gsub(prompt + _reminder)
+                gro_v = _verdict(gro_txt)
+                if gro_v == "INDETERMINATE":
+                    gro_txt = _gsub(prompt + _reminder)
+                    gro_v = _verdict(gro_txt)
+                gro_substituted = "NVIDIA_llama-3.2-90b"
+            except Exception as e2:
+                return False, (f"{relpath}: Gro down ({e}) AND option-C substitute failed after "
+                               f"retry ({e2}). Re-run with --waive-gro only if Rafael authorizes.")
+        _gro_lbl = f"substitute {gro_substituted}" if gro_substituted else "Gro"
         if gro_v == "INDETERMINATE":
-            return False, (f"{relpath}: Gro INDETERMINATE — no parseable VERDICT line after a "
+            return False, (f"{relpath}: {_gro_lbl} INDETERMINATE — no parseable VERDICT line after a "
                            f"retry (NOT a content reject; re-run). Last 300 chars:\n{gro_txt[-300:]}")
         if gro_v != "APPROVE":
-            return False, f"{relpath}: Gro REJECT — no marker.\n{gro_txt[-600:]}"
+            return False, f"{relpath}: {_gro_lbl} REJECT — no marker.\n{gro_txt[-600:]}"
+    # DIVERSITY NOTE: if BOTH voices fell back to the same NVIDIA model, the 2-voice review is
+    # degraded to one model reviewing twice — still better than blocking, and the marker records
+    # both substitutions so a true 2-voice re-run is available once a primary recovers. Surfaced,
+    # never silently passed (Rafael-visible on stderr).
+    if gro_substituted and gai_substituted and gro_substituted == gai_substituted:
+        sys.stderr.write(f"[preship] NOTE: both Gro and GAI fell back to {gro_substituted} — "
+                         "degraded 2-voice (same model twice); re-run when a primary provider "
+                         "recovers for an independent second voice.\n")
 
     os.makedirs(MARKER_DIR, exist_ok=True)
     # marker["gai"] MUST stay the literal "APPROVE": the ship gate (preship_gate._marker_ok)
@@ -480,10 +517,13 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
               "file": relpath}
     if gai_substituted:
         marker["gai_substituted"] = gai_substituted  # audit trail: GAI was down; this voice stood in
+    if gro_substituted:
+        marker["gro_substituted"] = gro_substituted  # audit trail: Gro was down; this voice stood in
     with open(os.path.join(MARKER_DIR, relpath.replace("/", "__") + ".json"), "w") as f:
         json.dump(marker, f, indent=2)
     _gai_disp = f"APPROVE (SUBST:{gai_substituted})" if gai_substituted else "APPROVE"
-    return True, (f"{relpath}: APPROVED (gro={gro_v} gai={_gai_disp}) — marker "
+    _gro_disp = f"{gro_v} (SUBST:{gro_substituted})" if gro_substituted else gro_v
+    return True, (f"{relpath}: APPROVED (gro={_gro_disp} gai={_gai_disp}) — marker "
                   f"written, sha {sha[:12]}")
 
 def main():
