@@ -125,6 +125,45 @@ jobs:
           done < /tmp/gated.txt
           exit $FAIL
 
+      - name: Dynamic-optimal gate (no NEW static risk/scoring threshold) — Gate 1+2 CI mirror
+        # SERVER-SIDE MIRROR of preship_gate._dynamic_ok (remediation Gate 1+2, 2026-08-29).
+        # Reuses the SAME functions — preship_gate._in_risk_scope / _dynamic_ok /
+        # no_static_scan.scan — so there is ZERO re-mirrored scanner logic to drift (unlike
+        # the _is_gated mirror above, this imports the real code). A NEW isolated static
+        # decision-threshold in risk/scoring code therefore cannot merge even if the local
+        # PreToolUse hook was bypassed (--no-verify, or a clone without the hook registered).
+        # DIFF-SCOPED to BASE..HEAD (pre-existing thresholds grandfathered) and FAIL-CLOSED,
+        # identical to the local hook. Deterministic + offline (stdlib ast + git only) — no
+        # API key, so it cannot be jammed by a reviewer outage.
+        if: steps.changed.outputs.any == 'true'
+        env:
+          BASE: ${{ steps.changed.outputs.base }}
+          HEAD: ${{ steps.changed.outputs.head }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, ".claude/preship")
+          import preship_gate as pg
+          base, head = os.environ["BASE"], os.environ["HEAD"]
+          fails = []
+          for line in open("/tmp/gated.txt"):
+              f = line.strip()
+              if not f or not f.endswith(".py") or not pg._in_risk_scope(f):
+                  continue
+              exists, _ = pg._git(["cat-file", "-e", f"{head}:{f}"])
+              if not exists:
+                  continue  # deleted at HEAD — no blob to scan
+              ok, why = pg._dynamic_ok(f, f"{head}:{f}", [f"{base}..{head}"])
+              if not ok:
+                  fails.append(f"  - {f}: {why}")
+          if fails:
+              print("DYNAMIC-OPTIMAL gate FAILED — new static threshold in risk/scoring code:")
+              print("\n".join(fails))
+              sys.exit(1)
+          print("dynamic-optimal gate: OK (no new isolated static risk/scoring threshold)")
+          PY
+
       - name: Guard — local gate machinery must not be weakened silently
         if: steps.changed.outputs.any == 'true'
         run: |
