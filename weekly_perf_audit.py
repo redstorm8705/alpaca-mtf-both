@@ -1129,7 +1129,7 @@ Audit generated: {_fmt_pt(datetime.now(_PT))}
 Total trades: {len(closed)} ({len(winners)} wins, {len(losers)} losses)
 Week P&L: ${total_pnl:+.2f} | Win rate: {wr:.1f}%
 Avg win: ${avg_win:.2f} | Avg loss: ${avg_loss:.2f}
-R:R: {abs(avg_win/avg_loss):.2f if avg_loss != 0 else 0.0}
+R:R: {(abs(avg_win/avg_loss) if avg_loss != 0 else 0.0):.2f}
 
 ═══════ FAILURE CATEGORY BREAKDOWN ═══════
 {cat_block}
