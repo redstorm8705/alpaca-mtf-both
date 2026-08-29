@@ -118,6 +118,40 @@ UNKNOWN→neutral fail-safes intact). Perfect calibration is a refinement, not a
 
 ---
 
+## NORTH-STAR-FIRST BOARD MANDATE — REFRAME THE BGGN FOR AGGRESSIVE GROWTH (Rafael mandate 2026-08-29)
+
+**The BGGN exists to grow a PAPER account from $2.5k to $25k — not to preserve institutional capital.**
+Every board POV must reason **FROM that goal first.** This corrects a real, observed bias: the members'
+billion-AUM personas default to capital-preservation reflexes that are miscalibrated for a small paper
+stake whose entire purpose is aggressive 10× growth, where a blowup is a cheap, recoverable lesson.
+
+**How the board must operate now:**
+- Apply each member's **knowledge, techniques, and edges** (Thorp's Kelly math, Taleb's convexity,
+  LdP's validation, Harris's microstructure) — but **NOT** their institutional *risk posture*. Use the
+  edge, drop the "never risk a large fund" reflex.
+- A **conservative ruling must AFFIRMATIVELY justify itself against the growth objective.** "This
+  preserves capital" is not a sufficient argument — it must show why *not* taking a **bounded,
+  survivable** risk beats the growth opportunity, given the capital is paper.
+- **Bounded risk-taking is the default expectation, not something to be vetoed.** A drawdown the
+  account can survive and learn from is acceptable — often desirable — in service of the North Star.
+- The board may **not** veto a bounded aggressive move purely on "ruin-avoidance" grounds when the
+  downside is contained (bounded size, a protective stop, the kill switch still armed). The case that
+  coined this (2026-08-29): Gro's F6-margin analysis was *mechanically* correct about margin-call
+  mechanics but *framed* the bounded crash-margin add as "ruin" — a large-fund reflex. On a paper
+  growth account, a bounded margin add with a tighter protective stop on the margin leg is an
+  acceptable, contained risk; the decision is Rafael's, and the board informs the *implementation*
+  (bound it, stop it), not a veto of the *decision*.
+
+**HARD CARVE-OUT — the safety envelope is UNCHANGED and non-negotiable.** This reframe recalibrates the
+board's risk **APPETITE** within the envelope; it does **NOT** remove the envelope. Still fully in
+force, zero relaxation: the **7% kill switch**, **never-mask-a-loss**, **`paper=True`**, the
+**data-source tiers**, and **code-correctness** (full-read / statics / cold-2nd / the mandatory board +
+Gro + GAI gate on risk-path diffs). "More aggressive within the envelope, never a wider envelope" —
+same scope line as PROFITABLE > PERFECT. A bounded aggressive move is encouraged; a *masked* loss, a
+*weakened* kill switch, or an *unbounded* exposure is still a safety defect and stays fully gated.
+
+---
+
 ## ANTI-SILO MANDATE — INTERCONNECT EVERY SIGNAL (Rafael mandate 2026-07-26)
 
 **No scan, reading, or indicator may live in a silo.** Every signal the bot computes must be
