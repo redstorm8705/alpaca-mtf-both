@@ -56,6 +56,24 @@ _MARKET_SYMBOLS = ["SPY", "QQQ"]
 # Near-flip threshold: net GEX is < 10% of total gross gamma exposure
 _NEAR_FLIP_RATIO = 0.10
 
+# ── Day-trade tier universe (design record day_tier_v2_design_2026-08-29 §2) ────
+# GEX is computed on the UNDERLYING's chain. A leveraged single-name/index tracker's OWN
+# option chain is thin/ghost (board Harris+Sinclair 2026-08-29), so its dealer-gamma regime
+# is INHERITED from the underlying it tracks — the regime LABEL is instrument-agnostic (a 2x
+# tracker sits in the same dealer-gamma regime as its underlying). We therefore compute GEX for
+# the Mag-7 underlyings and RESOLVE a tracker symbol to its underlying at read time
+# (get_gex_regime) — no need to compute the tracker's own (censored) chain.
+_DAYTRADE_UNDERLYINGS = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]
+# leveraged tracker -> underlying whose GEX regime it inherits. Only CLEAN single-underlying
+# maps are wired now; SOXL is deferred (its index isn't directly optionable — SMH vs SOXX proxy
+# is a pending design decision, not guessed here). QQQ/TSLA/NVDA underlyings are already computed
+# above, so the map adds no new compute, only read-time resolution.
+_ETF_UNDERLYING_MAP = {
+    "TSLL": "TSLA",   # 1.5x TSLA
+    "NVDL": "NVDA",   # 2x NVDA
+    "TQQQ": "QQQ",    # 3x QQQ
+}
+
 # ── Local-greeks model assumptions (2026-07-03 board conditions) ──────────────
 # Regime label is insensitive to ±100bp on either constant (Kyle board note);
 # both are logged with every snapshot so the shadow review can audit them.
@@ -763,8 +781,13 @@ def refresh_gex() -> None:
         logger.debug("GEX: dte calc failed (date_lte=%r): %s", date_lte, _dte_e)
         _dte = None
 
-    # Universe: market anchors + current bot positions (deduped, order preserved)
-    symbols = list(dict.fromkeys(_MARKET_SYMBOLS + _position_symbols()))
+    # Universe: market anchors + Mag-7 day-tier underlyings + current bot positions.
+    # Resolve any leveraged tracker (a held TSLL/NVDL/TQQQ from _position_symbols) to its
+    # UNDERLYING at WRITE time too, so refresh computes the underlying's real chain — never the
+    # tracker's thin/ghost chain (which read-time resolution in get_gex_regime would skip anyway).
+    # dedup collapses a tracker+underlying pair to one compute; order preserved.
+    _raw_universe = _MARKET_SYMBOLS + _DAYTRADE_UNDERLYINGS + _position_symbols()
+    symbols = list(dict.fromkeys(_ETF_UNDERLYING_MAP.get(_s, _s) for _s in _raw_universe))
 
     results: dict = {}
     for symbol in symbols:
@@ -819,28 +842,38 @@ def refresh_gex() -> None:
             results[symbol] = {"error": "no_snapshots"}
             continue
 
-        gex = _compute_gex(snapshots, oi_map, spot)
-        gex["spot"]              = round(spot, 2)
-        gex["contracts_fetched"] = len(oi_map)
-        gex["expiry"]            = date_lte     # this week's Friday (weekly expiry)
-        gex["dte"]               = _dte         # calendar days to that Friday
-        gex["window"]            = "weekly"
-        # confirmed_ts marks this label as computed from a spot that PASSED the consistency
-        # guard at ts_str. get_gex_regime ages off this (not the snapshot write time) so a
-        # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
-        gex["confirmed_ts"]      = ts_str
-        gex["quote_mid"]         = round(_quote["mid"], 2) if _quote else None
-        results[symbol]          = gex
-        # INFO (was debug): this line IS the shadow-review record — must be visible
-        # at production log level or the 30-session clock never accumulates evidence.
-        _pin = gex.get("pin", {})
-        logger.info(
-            "GEX [%s]: %s $%sM | PIN centroid=%s wall=%s conf=%s (atm=%s) exp=%s | valid=%d/%d | skips=%s",
-            symbol, gex["label"], gex["raw_gex_m"],
-            _pin.get("centroid"), _pin.get("wall"), _pin.get("confidence"),
-            _pin.get("atm_capture"), _pin.get("expiry"),
-            gex["contract_count"], len(oi_map), gex["skips"],
-        )
+        # ISOLATE per-symbol compute (2026-08-30): a bad quote / math edge on ONE symbol must not
+        # abort the whole 15-min refresh (which would blank GEX for EVERY symbol). refresh_gex runs
+        # on the live_data_writer thread — NOT the run_cycle trading thread, so this can never starve
+        # check_exits() — but a blanked snapshot still degrades all downstream GEX reads to UNKNOWN.
+        # Per-symbol try/except keeps one bad name from taking the others down; error entry -> UNKNOWN
+        # read (fail-safe). Widening the universe to the Mag-7 makes this isolation load-bearing.
+        try:
+            gex = _compute_gex(snapshots, oi_map, spot)
+            gex["spot"]              = round(spot, 2)
+            gex["contracts_fetched"] = len(oi_map)
+            gex["expiry"]            = date_lte     # this week's Friday (weekly expiry)
+            gex["dte"]               = _dte         # calendar days to that Friday
+            gex["window"]            = "weekly"
+            # confirmed_ts marks this label as computed from a spot that PASSED the consistency
+            # guard at ts_str. get_gex_regime ages off this (not the snapshot write time) so a
+            # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
+            gex["confirmed_ts"]      = ts_str
+            gex["quote_mid"]         = round(_quote["mid"], 2) if _quote else None
+            results[symbol]          = gex
+            # INFO (was debug): this line IS the shadow-review record — must be visible
+            # at production log level or the 30-session clock never accumulates evidence.
+            _pin = gex.get("pin", {})
+            logger.info(
+                "GEX [%s]: %s $%sM | PIN centroid=%s wall=%s conf=%s (atm=%s) exp=%s | valid=%d/%d | skips=%s",
+                symbol, gex["label"], gex["raw_gex_m"],
+                _pin.get("centroid"), _pin.get("wall"), _pin.get("confidence"),
+                _pin.get("atm_capture"), _pin.get("expiry"),
+                gex["contract_count"], len(oi_map), gex["skips"],
+            )
+        except Exception as _sym_e:
+            logger.warning("GEX [%s]: per-symbol compute failed — %s", symbol, _sym_e)
+            results[symbol] = {"error": "compute_exception", "detail": str(_sym_e)[:120]}
 
     snapshot = {"ts": ts_str, "symbols": results}
 
@@ -863,7 +896,10 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
     raw_gex_m, flip_strike, age_minutes.
     Stale guard: if snapshot > GEX_STALE_MINUTES old, returns label=STALE.
     Called by run_cycle.py (Layer 8) and kelly.py (edge multiplier) during RTH.
+    A leveraged tracker (TSLL/NVDL/TQQQ) inherits its UNDERLYING's regime (design record
+    day_tier_v2 §2; board Harris+Sinclair) — its own chain is thin/ghost. No-op otherwise.
     """
+    symbol = _ETF_UNDERLYING_MAP.get(symbol, symbol)
     import config as _cfg
     stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 30)
     stale_neg     = getattr(_cfg, "GEX_STALE_MINUTES_NEG", stale_minutes)
