@@ -79,6 +79,32 @@ Per-trade decision-stack to `trade_events.jsonl` (Decision-Explainability doctri
 7c. **Entry-mechanic — RESOLVED (Full BGGN: board + Gro + GAI, unanimous RIGHT-WITH-REFINEMENT).** Direction kept (blind raw-gap = negative-EV; confirmation flips it positive). Three refinements: (a) **VWAP alone is too weak** — early on a gap-up "above VWAP" is trivially true; the real signal is a **HIGHER-LOW that holds the STRUCTURAL level** (prior-day / pre-market high, opening-range high) on **sustained relative volume** — VWAP is confluence, not the gate. (b) **TWO entry modes, not pullback-only** (pullback-only forfeits the runaway right-tail winners + adverse-selects the choppy middle): **DRIVE mode** = opening-range hold + prior-level reclaim in first 1-5 min; **PULLBACK mode** = first higher-low holding the structural level. (c) **The single best continuation-vs-fade tell = THE RETEST:** higher-low(long)/lower-high(short) that HOLDS the broken level on volume = continuation (take it); round-trip back through the level = fade (reject/short). (d) **SHORT SIDE ASYMMETRIC** — borrow/locate limits, squeeze, LULD halt-UP (reopens past stop) → run shorts SMALLER + TIGHTER, exclude low-float halt-up candidates. Gate universe on RVOL>>1 + catalyst before any entry fires.
 8. **NO MORE RESUME CRONS** (Rafael 2026-08-29): Anthropic auto-resumes on usage limits; stop arming +5h cron backstops. Prior usage-limit-resume-cron memory is SUPERSEDED. (Cron da23a015 deleted.)
 
+## 5b. TRACK-A BUILD FINDING (2026-08-30, gate-surfaced — reshapes the build order)
+Built `execution/day_trade_manager.py` (full Track-A engine, 642 lines) + `data/gex.py get_gex_levels`.
+Four cold-2nd rounds + a masked-loss board pass. **The DECISION engine is gate-VALIDATED** — structural
+MA-side bias (13/21/30-EMA + 20/150/200/325-SMA + 10wk + 10mo + quarterly), per-symbol GEX regime +
+`get_gex_levels`, fade-to-pin/ride-the-break direction logic, 30m/15m + orthogonal-RVOL confirm, and the
+budget-bounded min()-only sizing all PASSED. Fixed en route: a decorative sub-kill (now real: Alpaca-marked
+P&L accrual + trip + flatten), unprotected-entry-on-stop-failure, reconcile no-op, missing orthogonal confirm.
+
+**THE BLOCKER (real, not fixable in the module alone):** the Track-A ORDER-EXECUTION layer (close / flatten /
+emergency-undo) cannot be tier-safe with the shared broker's tools. `close_position(symbol)` does a FULL-symbol
+close (tier ignored under `OWNERSHIP_GUARD_ENFORCE=False`, and `"daytrade"` isn't a registered tier), and the
+close/partial-close machinery does a **symbol-blanket `cancel_open_orders_for_symbol` on a 40310000** — so a
+day-tier close of a Mag-7 name the INTRADAY or QHM tier co-holds would **clobber the co-resident tier's shares
+and/or cancel its live protective stop**. This is the exact Movers/QHM cross-strategy collision the project
+retired the Movers bot over ([MOVERS-RETIRED], July): a same-symbol second strategy sharing the fungible Alpaca
+lot with no tier-safe close. A same-day tier trading Mag-7 (which the intraday tier also trades) hits it head-on.
+
+**NEXT BUILD (the real prerequisite — retires the Movers/QHM debt):** tier-safe order infra —
+(1) register `"daytrade"` in `execution/ownership_guard.py`; (2) **qty-bounded partial closes** (close only
+the day-tier's own qty, via `partial_close_position` + fill-qty confirmation via `broker.get_order`);
+(3) **tier-aware blanket-cancel** (the 40310000 retry must cancel only the CLOSING tier's own blocking orders,
+never another tier's protective stop) — a hotspot `broker.py` change touching ALL tiers → Feature Design
+Protocol + full BGGN + masked-loss seat before code. Then the validated Track-A engine's entry/close/flatten
+sit safely on top. The decision-engine code is preserved (session scratchpad `day_trade_manager_validated_decision_engine.py`
++ working tree, UNCOMMITTED — not shipped, since its order-handling fails the cold-2nd until the infra lands).
+
 ## 6. STILL OWED / BOOKMARKED
 - Forever-6 LIVE + hybrid-margin (Rafael override of board cash-only) — PAUSED, lower priority than this growth engine.
 - Monday allocation simulation (computed 2026-08-29): current book QHM $4,516 (LLY/GEV/GE) + intraday $1,503 (META/GOOGL); equity ~$2,455, BP ~$2,598, maintenance cushion ~$650. Day-tier 10-25% = $245-614; 25% tier stop = $61-153/day = 2.5-6.2% of account; 4 max-loss days = 10-17% of account (bounded).
