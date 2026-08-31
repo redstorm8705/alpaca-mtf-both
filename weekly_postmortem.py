@@ -616,9 +616,10 @@ def _build_wtp_table(
     earnings_cache: dict,
 ) -> tuple[str, str, dict]:
     """
-    Returns (full_table_md, slack_table_md, stats_dict).
-    Full table: all 15 columns.
-    Slack table: 8 key columns for Slack readability.
+    Returns (full_table_md, slack_compact, stats_dict).
+    full_table_md: all 15 columns — goes to the .md report + the Gemini prompt.
+    slack_compact: a mobile-friendly one-liner per trade for the Slack post (the old wide
+    9-col markdown table wrapped into unreadable soup on phones — Rafael 2026-08-30).
     """
     full_header = (
         "| Symbol | Dir | Entry$ | Exit$ | P&L | Exit Reason | Score | MRI | "
@@ -626,12 +627,8 @@ def _build_wtp_table(
         "|--------|-----|--------|-------|-----|-------------|-------|-----|"
         "----------|-----|------|--------|-------|------------|-------------|\n"
     )
-    slack_header = (
-        "| Symbol | Dir | Entry$ | Exit$ | P&L | Exit Reason | Stage | Wkly Close | Δ Exit→Wkly |\n"
-        "|--------|-----|--------|-------|-----|-------------|-------|------------|-------------|\n"
-    )
     full_rows  = []
-    slack_rows = []
+    slack_compact: list[str] = []   # mobile-friendly one-liner per trade (replaces the wide Slack table)
     total_pnl  = 0.0
     agg_missed = 0.0
 
@@ -682,9 +679,11 @@ def _build_wtp_table(
             f"{score} | {mri} | {earn_s} | {tqi} | {hold_s} | {r_s} | "
             f"{stage} | {wkly_s} | {delta_s} |"
         )
-        slack_rows.append(
-            f"| {sym} | {dir_s} | {entry_s} | {exit_s} | {pnl_s} | "
-            f"{rsn_s} | {stage} | {wkly_s} | {delta_s} |"
+        # Mobile-friendly one-liner (the wide 9-col markdown table wrapped into unreadable soup on
+        # phones — Rafael 2026-08-30). The full 15-col table stays in the .md report + Gemini prompt.
+        # "vs wkly" = Exit→weekly-close delta (positive = the bot exited early / left money on the table).
+        slack_compact.append(
+            f"{dir_s} *{sym}*  {pnl_s}  ·  {rsn_s}  ·  vs wkly {delta_s}  ·  {stage}"
         )
 
     stats = {
@@ -698,9 +697,8 @@ def _build_wtp_table(
         # excluded from total_pnl. Surfaced so the total is never silently understated.
         "unmatched":    sum(1 for t in trades if t.get("_unmatched")),
     }
-    full_table  = full_header  + "\n".join(full_rows)
-    slack_table = slack_header + "\n".join(slack_rows)
-    return full_table, slack_table, stats
+    full_table = full_header + "\n".join(full_rows)
+    return full_table, "\n".join(slack_compact), stats
 
 # ── Gemini ─────────────────────────────────────────────────────────────────────
 
@@ -833,7 +831,7 @@ def _slack_raw(text: str) -> None:
         logger.warning(f"Slack post failed: {e}")
 
 
-def _post_slack(slack_table: str, stats: dict, report_path: Path, week_str: str,
+def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
                 fallback_note: str = "") -> None:
     if not SLACK_WEBHOOK:
         logger.warning("SLACK_WEBHOOK_URL not set — skipping Slack.")
@@ -851,8 +849,8 @@ def _post_slack(slack_table: str, stats: dict, report_path: Path, week_str: str,
         f"W/L: `{stats['winners']}/{stats['losers']}` | "
         f"Earnings-adjacent: `{stats['earnings_cnt']}` | "
         f"Agg. missed move: `${stats['agg_missed']}`{_unm}\n"
-        f"```\n{slack_table}\n```\n"
-        f"_Full report (15-col table + Gemini analysis): `logs/{report_path.name}`_"
+        f"{slack_lines}\n"
+        f"_Full 15-col table + Gemini analysis: `logs/{report_path.name}`_"
     )
     _slack_raw(msg)
 
@@ -921,7 +919,7 @@ def main() -> None:
     earnings_cache = _load_earnings_cache()
 
     logger.info("Building WTP table...")
-    full_table, slack_table, stats = _build_wtp_table(
+    full_table, slack_lines, stats = _build_wtp_table(
         trades, friday_closes, weekly_closes, earnings_cache
     )
 
@@ -971,7 +969,7 @@ def main() -> None:
     report_path.write_text(report, encoding="utf-8")
     logger.info(f"WTP written → {report_path}")
 
-    _post_slack(slack_table, stats, report_path, week_str, fallback_note)
+    _post_slack(slack_lines, stats, report_path, week_str, fallback_note)
     logger.info("Done.")
 
 
