@@ -1,0 +1,642 @@
+# ruff: noqa: E501
+"""
+execution/day_trade_manager.py — DAY-TRADE TIER, TRACK A (GEX-core). The growth engine.
+
+Tier taxonomy: DAY-TRADE (this, same-day, flat by close) · INTRADAY (legacy confluence signal,
+2-3 day holds) · QHM (quarterly) · FOREVER-6 (never-sell). Design of record:
+logs/design_records/day_tier_v2_design_2026-08-29.md (BGGN-aligned: Board + Gro + GAI).
+
+STATUS: DARK — `config.DAYTRADE_ENABLED` defaults False. Every entry/exit path checks `_enabled()`
+first; while False this module is INERT (returns immediately, places no orders). Wiring it into the
+live cycle changes NOTHING until the flag is flipped. This diff ships TRACK A (GEX-core) end-to-end;
+Track B (movers) + the hedge-fund red-day audit system are their own later diffs (design record §7/§7b).
+
+TRACK A pipeline (per name, each cycle):
+  1. SIDE   — multi-horizon MA structural bias (13/21/30-EMA + 20/150/200/325-SMA + 10wk + 10mo
+              Faber + quarterly). Requires a net ≥2-horizon majority → 'long'/'short', else skip.
+  2. REGIME — per-symbol GEX label (data/gex.get_gex_regime). POSITIVE=+gamma (dealers pin →
+              FADE to pin) ; NEGATIVE=−gamma (dealers amplify → RIDE a wall break). NEAR-FLIP/
+              STALE/UNKNOWN → skip (no gamma edge, fail-safe).
+  3. LEVELS — pin centroid + call/put walls (data/gex.get_gex_levels). Fade targets the pin; ride
+              targets beyond the broken wall. No usable levels → skip.
+  4. CONFIRM— 30m-primary MACD agreement + 15m trigger in the SIDE direction (board timeframe audit).
+  5. SIZE   — bounded to the Track-A sub-allocation budget; per-name notional cap; min()-only clamps
+              (never up-sizes). 6. ORDER — limit entry + DAY protective stop (tier="daytrade", same-day).
+  7. FLAT   — every day-tier position closed by EOD; never carries overnight.
+
+RISK (design record §3/§7b; board Thorp/Taleb/Dalio): tier allocation starts 15% of equity → 25%;
+DIVIDED Track A 65% / Track B 35%; sub-kills A=25%-of-A, nested under tier-25% and account-7% net
+kills. This tier NEVER loosens the account kill switch or the gross/overnight caps. Every order is
+tagged tier="daytrade" (registered in execution/ownership_guard.py — a later diff) so fills attribute
+correctly and the never-sell floor is NOT applied to this liquidatable tier.
+
+SAFETY: every external read (bars, price, GEX) fails safe (empty-DF/None/UNKNOWN → skip the name,
+never a crash, never an up-size). All sizing clamps are bounded-down (min()-only).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import config
+
+logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_STATE_PATH = _PROJECT_ROOT / "data" / "state" / "day_trades.json"
+
+PT = ZoneInfo("America/Los_Angeles")
+ET = ZoneInfo("America/New_York")
+
+_TIER = "daytrade"   # client_order_id tier tag (must be registered in ownership_guard.py — later diff)
+
+
+def _cfg(name: str, default):
+    """getattr-with-default: import-safe before the config diff lands; a missing constant fails
+    safe to the disabled / most-conservative value."""
+    return getattr(config, name, default)
+
+
+class DayTradeManager:
+    """Self-contained day-trade tier mirroring the QuarterlyHoldManager heavyweight pattern:
+    instantiated once in main.py (module-level `day_mgr`), driven each cycle by run_cycle.py.
+    Every public method is inert while config.DAYTRADE_ENABLED is False."""
+
+    def __init__(self, broker, alerter=None, config_overrides: dict | None = None,
+                 state_path: Path = _STATE_PATH, dry_run: bool = False, clock=None) -> None:
+        self._broker = broker
+        self._alerter = alerter
+        self._cfg_overrides = dict(config_overrides or {})
+        self._state_path = state_path
+        self._dry_run = dry_run
+        self._clock = clock
+        self._positions: dict = {}          # symbol -> {qty, side, entry, stop, target, track, entry_type, order_id, stop_order_id, opened_ts}
+        self._session_realized: float = 0.0  # today's realized day-tier P&L (sub-kill accounting)
+        self._session_date: str = ""         # PT date the realized/kill state belongs to
+        self._killed_today: bool = False      # tier daily-kill latch
+        self._load_state()
+
+    # ── State (atomic tmp→fsync→replace, mirrors QHM) ──────────────────────────────────────
+    def _load_state(self) -> None:
+        try:
+            if self._state_path.exists():
+                data = json.loads(self._state_path.read_text())
+                if isinstance(data, dict):
+                    self._positions = data.get("positions", {}) or {}
+                    self._session_realized = float(data.get("session_realized", 0.0) or 0.0)
+                    self._session_date = str(data.get("session_date", "") or "")
+                    self._killed_today = bool(data.get("killed_today", False))
+        except Exception as e:
+            logger.warning("DAYTRADE: state load failed (starting clean): %s", e)
+            self._positions, self._session_realized, self._killed_today = {}, 0.0, False
+
+    def _save_state(self) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "positions": self._positions,
+                "session_realized": round(self._session_realized, 4),
+                "session_date": self._session_date,
+                "killed_today": self._killed_today,
+                "ts": datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT"),
+            }
+            tmp = self._state_path.with_suffix(".tmp")
+            with open(tmp, "w") as f:
+                f.write(json.dumps(payload, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(self._state_path)
+        except Exception as e:
+            logger.warning("DAYTRADE: state save failed: %s", e)
+
+    def _now_et(self) -> datetime:
+        return self._clock() if self._clock is not None else datetime.now(ET)
+
+    def _roll_session(self) -> None:
+        """Reset the daily realized-P&L / kill latch on a new PT trading day."""
+        today = datetime.now(PT).strftime("%Y-%m-%d")
+        if today != self._session_date:
+            self._session_date = today
+            self._session_realized = 0.0
+            self._killed_today = False
+
+    def _enabled(self) -> bool:
+        return bool(_cfg("DAYTRADE_ENABLED", False))
+
+    # ── Public interface (main.py / run_cycle.py) ──────────────────────────────────────────
+    def reconcile_on_startup(self) -> None:
+        """On restart, VERIFY each locally-tracked day-tier position still exists at the broker; drop any
+        that closed while we were down (a stale local record) so check_exits/flatten never act on a phantom.
+        Inert while disabled; read-only (no orders).
+        HONEST LIMIT (masked-loss board finding): full ADOPTION of an untracked broker position that this
+        tier opened before a crash requires the client_order_id tier tag via the ownership ledger — that
+        lands with the ownership_guard registration diff (which also first enables this tier). Until then
+        this tier does not trade (DAYTRADE_ENABLED False), so such an orphan cannot arise."""
+        if not self._enabled():
+            return
+        self._roll_session()
+        dropped = 0
+        for sym in list(self._positions.keys()):
+            try:
+                if self._broker.get_position(sym) is None:
+                    self._positions.pop(sym, None)
+                    dropped += 1
+                    logger.info("DAYTRADE: reconcile — tracked %s no longer at broker; dropped stale record", sym)
+            except Exception as e:
+                logger.debug("DAYTRADE: reconcile broker check failed for %s (keeping): %s", sym, e)
+        if dropped:
+            self._save_state()
+        logger.info("DAYTRADE: reconcile_on_startup — %d tracked position(s), %d stale dropped", len(self._positions), dropped)
+
+    def maybe_enter_positions(self) -> list[str]:
+        """Track-A entry pass. Returns symbols entered this cycle; empty while disabled, killed,
+        outside the window, or at the concurrency cap."""
+        if not self._enabled():
+            return []
+        self._roll_session()
+        if self._check_sub_kill():   # trips + flattens on a -25%-of-budget breach; blocks new entries
+            return []
+        if not self._in_entry_window():
+            return []
+        max_pos = int(_cfg("DAYTRADE_MAX_POSITIONS", 4))
+        if len(self._positions) >= max_pos:
+            return []
+        entered: list[str] = []
+        for symbol in self._track_a_universe():
+            if len(self._positions) >= max_pos:
+                break
+            if symbol in self._positions:
+                continue
+            try:
+                decision = self._evaluate_track_a(symbol)
+                if decision is None:
+                    continue
+                if self._enter(symbol, decision):
+                    entered.append(symbol)
+            except Exception as e:   # one bad symbol never aborts the pass
+                logger.warning("DAYTRADE[A] %s: entry evaluation failed — %s", symbol, e)
+        if entered:
+            self._save_state()
+        return entered
+
+    def check_exits(self) -> list[str]:
+        """Structural-TP / stop reconcile for open day-tier positions. The broker-side DAY stop
+        handles hard stops; this closes on the structural target (pin/VWAP) and reconciles fills.
+        Inert while disabled."""
+        if not self._enabled():
+            return []
+        self._roll_session()
+        if self._check_sub_kill():   # mark-to-market breach → flattens everything; nothing left to TP-check
+            return []
+        closed: list[str] = []
+        for symbol, pos in list(self._positions.items()):
+            try:
+                if self._should_take_profit(symbol, pos):
+                    if self._close(symbol, pos, reason="target"):
+                        closed.append(symbol)
+            except Exception as e:
+                logger.warning("DAYTRADE: exit check failed for %s — %s", symbol, e)
+        if closed:
+            self._save_state()
+        return closed
+
+    def flatten_all(self, reason: str = "eod") -> int:
+        """Close EVERY open day-tier position (same-day tier never carries overnight). Inert while
+        disabled. Returns count flattened."""
+        if not self._enabled():
+            return 0
+        n = 0
+        for symbol, pos in list(self._positions.items()):
+            try:
+                if self._close(symbol, pos, reason=reason):
+                    n += 1
+            except Exception as e:
+                logger.warning("DAYTRADE: flatten failed for %s — %s", symbol, e)
+        if n:
+            self._save_state()
+        return n
+
+    def safe_stop(self, circuit_breaker: bool = False) -> None:
+        """Shutdown hook — persist state only; never place orders on a shutdown path."""
+        try:
+            self._save_state()
+        except Exception as e:
+            logger.warning("DAYTRADE: safe_stop save failed: %s", e)
+
+    def get_status(self) -> list[dict]:
+        return [{"symbol": s, **(p if isinstance(p, dict) else {})} for s, p in self._positions.items()]
+
+    # ── Windows / universe ─────────────────────────────────────────────────────────────────
+    def _in_entry_window(self) -> bool:
+        """After the opening range settles, and before the EOD flatten zone (a same-day tier must
+        not open near the close)."""
+        now = self._now_et()
+        mins = now.hour * 60 + now.minute
+        earliest = 9 * 60 + 30 + int(_cfg("TOD_MARKET_OPEN_BUFFER_MINS", 30))
+        latest = int(_cfg("TOD_MARKET_CLOSE", 16 * 60)) - int(_cfg("TOD_EOD_NO_ENTRY_MINS", 15))
+        return earliest <= mins <= latest
+
+    def _track_a_universe(self) -> list[str]:
+        """Track-A candidates: the Mag-7 core (design record §2). The options-liquidity routing gate
+        (near-ATM weekly OI + option spread, §7) is a follow-up refinement; the Mag-7 already have the
+        liquid concentrated chains the gamma edge needs."""
+        return list(_cfg("DAYTRADE_UNIVERSE", ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]))
+
+    # ── SIDE: multi-horizon MA structural bias ─────────────────────────────────────────────
+    def _structural_side(self, symbol: str) -> str | None:
+        """'long' / 'short' from the full project MA stack across daily/weekly/monthly horizons.
+        Requires a net ≥2-horizon majority (whitelisted structural margin — no calibrated cutoff),
+        else None (two-sided → Track A wants a clear structural lean). Fails safe to None on any
+        missing data."""
+        from data.fetcher import fetch_bars
+        from indicators.moving_averages import add_all_mas, get_ma_summary
+
+        daily = fetch_bars(symbol, config.TF_DAILY, num_bars=max(config.SMA_325 + 5, 330))
+        if daily.empty or len(daily) < config.SMA_200:
+            return None
+        daily = add_all_mas(daily)
+        mas = get_ma_summary(daily)
+        price = mas.get("price")
+        if not price or price <= 0:
+            return None
+        ema21 = float(daily["close"].ewm(span=21, adjust=False).mean().iloc[-1])   # 21-EMA (Rafael 2026-08-29)
+
+        weekly = fetch_bars(symbol, config.TF_WEEKLY, num_bars=15)
+        wk10 = float(weekly["close"].rolling(10).mean().iloc[-1]) if (not weekly.empty and len(weekly) >= 10) else None
+        monthly = fetch_bars(symbol, config.TF_MONTHLY, num_bars=13)
+        mo10 = float(monthly["close"].rolling(10).mean().iloc[-1]) if (not monthly.empty and len(monthly) >= 10) else None
+        qtr_up = bool(monthly["close"].iloc[-1] > monthly["close"].iloc[-4]) if (not monthly.empty and len(monthly) >= 4) else None
+
+        # Each horizon votes bull (True) / bear (False) / unknown (None).
+        signals = [
+            price > mas.get("ema_30", price),
+            mas.get("ema_13", 0) > mas.get("ema_30", 0),
+            price > ema21,
+            mas.get("above_150"),
+            mas.get("above_200"),
+            mas.get("above_325"),
+            (price > wk10) if wk10 is not None else None,
+            (price > mo10) if mo10 is not None else None,
+            qtr_up,
+        ]
+        votes = [s for s in signals if s is not None]
+        if not votes:
+            return None
+        n_bull = sum(1 for s in votes if s)
+        n_bear = len(votes) - n_bull
+        if n_bull - n_bear >= 2:
+            return "long"
+        if n_bear - n_bull >= 2:
+            return "short"
+        return None
+
+    # ── REGIME + LEVELS: per-symbol GEX ────────────────────────────────────────────────────
+    def _gex(self, symbol: str) -> tuple[str, dict]:
+        """(regime_label, levels). regime ∈ {POSITIVE, NEGATIVE, UNKNOWN}; NEAR-FLIP/STALE map to
+        UNKNOWN (no tradeable gamma edge). levels = {'centroid','call_wall','put_wall','spot'} or {}.
+        Both fail safe (UNKNOWN / {}) so a bad read only skips the name."""
+        try:
+            from data.gex import get_gex_regime, get_gex_levels
+            label = get_gex_regime(symbol).get("label", "UNKNOWN")
+            regime = label if label in ("POSITIVE", "NEGATIVE") else "UNKNOWN"
+            levels = get_gex_levels(symbol) if regime != "UNKNOWN" else {}
+            return regime, (levels if isinstance(levels, dict) else {})
+        except Exception as e:
+            logger.debug("DAYTRADE: GEX read failed for %s (→ UNKNOWN): %s", symbol, e)
+            return "UNKNOWN", {}
+
+    # ── ENTRY DECISION: side × regime × levels × confirmation ──────────────────────────────
+    def _evaluate_track_a(self, symbol: str) -> dict | None:
+        """Return an entry plan {side, entry_type, entry_price, target, ...} or None (no trade).
+
+        FADE (+gamma / POSITIVE): dealers pin → price reverts to the centroid. Enter only when price
+        sits BETWEEN spot and a wall on the side that returns TOWARD the pin in the SIDE direction,
+        with the pin as the structural target. Fade is a mean-reversion entry: structural LONG fades
+        UP to the pin from below; structural SHORT fades DOWN to the pin from above.
+        RIDE (−gamma / NEGATIVE): dealers amplify → price runs through walls. Enter only on a 30m/15m
+        momentum break in the SIDE direction through the relevant wall, wall→next as the runner target.
+        Both require the 30m-primary + 15m confirmation in the side direction (board timeframe audit)."""
+        side = self._structural_side(symbol)
+        if side not in ("long", "short"):
+            return None
+        regime, levels = self._gex(symbol)
+        if regime == "UNKNOWN":
+            return None
+        centroid = levels.get("centroid")
+        call_wall = levels.get("call_wall")
+        put_wall = levels.get("put_wall")
+        if not centroid:
+            return None
+        entry_price = self._live_price(symbol)
+        if not entry_price:
+            return None
+        if not self._entry_confirmed(symbol, side):
+            return None
+
+        if regime == "POSITIVE":
+            # FADE to pin — only when the pin sits AHEAD of price in the side's direction (a real
+            # reversion trade toward the centroid), i.e. long fades up to a pin above; short fades
+            # down to a pin below. Otherwise the pin is behind price → not a fade setup → skip.
+            if side == "long" and centroid > entry_price:
+                return {"side": side, "entry_type": "fade", "regime": regime,
+                        "entry_price": entry_price, "target": float(centroid)}
+            if side == "short" and centroid < entry_price:
+                return {"side": side, "entry_type": "fade", "regime": regime,
+                        "entry_price": entry_price, "target": float(centroid)}
+            return None
+        # NEGATIVE → RIDE the break, in the side direction through the relevant wall.
+        if side == "long" and call_wall and entry_price >= float(call_wall):
+            return {"side": side, "entry_type": "ride", "regime": regime,
+                    "entry_price": entry_price, "target": None}   # trailing runner (exits diff)
+        if side == "short" and put_wall and entry_price <= float(put_wall):
+            return {"side": side, "entry_type": "ride", "regime": regime,
+                    "entry_price": entry_price, "target": None}
+        return None
+
+    def _entry_confirmed(self, symbol: str, side: str) -> bool:
+        """30m-primary MACD agreement + 15m trigger in `side` direction (board: 30m primary / 15m
+        trigger). Fails safe to False (no confirmation → no entry)."""
+        try:
+            from data.fetcher import fetch_bars
+            from indicators.macd import add_both_macds, dual_macd_agreement
+            from indicators.moving_averages import add_all_mas, get_ma_summary
+            m30 = fetch_bars(symbol, config.TF_30M, num_bars=config.BARS_TO_FETCH.get(config.TF_30M, 400))
+            if m30.empty or len(m30) < 2:
+                return False
+            m30 = add_both_macds(m30)
+            agree = dual_macd_agreement(m30, "long" if side == "long" else "short")
+            if not agree.get("both_agree"):
+                return False
+            m15 = fetch_bars(symbol, config.TF_15M, num_bars=config.BARS_TO_FETCH.get(config.TF_15M, 150))
+            if m15.empty or len(m15) < 2:
+                return False
+            mas15 = get_ma_summary(add_all_mas(m15))
+            price = mas15.get("price")
+            ema13, ema30 = mas15.get("ema_13"), mas15.get("ema_30")
+            if price is None or ema13 is None or ema30 is None:
+                return False
+            ema_ok = (price > ema13 and ema13 >= ema30) if side == "long" else (price < ema13 and ema13 <= ema30)
+            if not ema_ok:
+                return False
+            # ORTHOGONAL confirm (board §2: MACD+EMA are collinear price-derivatives — add ONE non-price
+            # signal). Relative-volume participation on the 15m series, self-calibrated to the recent MEDIAN
+            # (a derivation, not a static threshold): the current bar must exceed the recent median volume so
+            # entries ride real participation, not a thin-tape drift. Fails OPEN (volume unavailable → the
+            # MACD+EMA confirms still gate) so a data gap never manufactures an entry.
+            try:
+                vols = m15["volume"].dropna()
+                if len(vols) >= 6:
+                    cur_vol = float(vols.iloc[-1])
+                    med_vol = float(vols.iloc[-20:-1].median())
+                    if med_vol > 0 and cur_vol < med_vol:
+                        return False
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.debug("DAYTRADE: entry-confirm failed for %s (→ False): %s", symbol, e)
+            return False
+
+    # ── SIZE: bounded to the Track-A sub-allocation ────────────────────────────────────────
+    def _track_a_budget(self) -> float:
+        """Dollar budget for Track A this session = equity × tier-alloc × Track-A-frac. Fails safe
+        to 0 (→ no size → no entry) if equity is unavailable."""
+        try:
+            acct = self._broker.get_account()
+            equity = float(getattr(acct, "equity", 0) or 0)
+        except Exception as e:
+            logger.warning("DAYTRADE: equity fetch failed (budget→0): %s", e)
+            return 0.0
+        if equity <= 0:
+            return 0.0
+        return equity * float(_cfg("DAYTRADE_ALLOCATION_PCT", 0.15)) * float(_cfg("DAYTRADE_TRACK_A_FRAC", 0.65))
+
+    def _size_shares(self, entry_price: float, stop_price: float) -> int:
+        """Bounded share count: dollar_cap capped at BOTH the per-name notional cap AND the remaining
+        Track-A budget; shares = int(dollar_cap / stop_distance); then min()-clamped to the notional
+        cap. Floor to 1 only when the cap can afford ≥1 share. All clamps are bounded-DOWN (never
+        up-sizes). Returns 0 → no entry."""
+        stop_distance = abs(entry_price - stop_price)
+        if entry_price <= 0 or stop_distance <= 0:
+            return 0
+        if stop_distance > entry_price:
+            # Abnormal stop wider than 100% of price (corrupt ATR) — reject rather than let the 1-share
+            # floor permit a per-share risk beyond dollar_cap (cold-2nd NIT). Unreachable at Mag-7 prices
+            # under a sane ATR, but fail-closed anyway.
+            logger.warning("DAYTRADE: stop_distance %.2f > entry %.2f (abnormal ATR) — skip sizing", stop_distance, entry_price)
+            return 0
+        budget = self._track_a_budget()
+        if budget <= 0:
+            return 0
+        used = sum(float(p.get("entry", 0)) * int(p.get("qty", 0))
+                   for p in self._positions.values() if p.get("track") == "A")
+        remaining = max(budget - used, 0.0)
+        name_cap = budget * float(_cfg("DAYTRADE_MAX_NAME_NOTIONAL_FRAC", 0.50))
+        dollar_cap = min(remaining, name_cap)
+        if dollar_cap < entry_price:          # cannot afford even 1 share within budget → skip
+            return 0
+        raw = int(dollar_cap / stop_distance)
+        by_notional = int(dollar_cap / entry_price)
+        shares = min(raw, by_notional)
+        return max(shares, 1) if by_notional >= 1 else 0
+
+    # ── ORDER: limit entry + DAY protective stop ───────────────────────────────────────────
+    def _enter(self, symbol: str, plan: dict) -> bool:
+        side = plan["side"]
+        entry_price = plan["entry_price"]
+        # Stop/target from the risk manager (ATR-based, VIX-widened). Tight for a same-day fade.
+        stop_price, atr_target = self._stop_and_target(symbol, entry_price, side)
+        if not stop_price:
+            return False
+        target = plan.get("target") or atr_target   # fade → pin centroid; ride → ATR/trailing target
+        shares = self._size_shares(entry_price, stop_price)
+        if shares <= 0:
+            logger.info("DAYTRADE[A] %s: size resolved to 0 within budget — skip", symbol)
+            return False
+        buy_side = "buy" if side == "long" else "sell_short"
+        limit_price = round(entry_price * (1 + (0.001 if side == "long" else -0.001)), 2)
+        if self._dry_run:
+            logger.info("DAYTRADE[A] DRY %s %s x%d @~%.2f stop=%.2f tgt=%s (%s/%s)",
+                        symbol, buy_side, shares, limit_price, stop_price, target, plan["regime"], plan["entry_type"])
+            return False
+        order = self._broker.submit_limit_order(symbol, shares, buy_side, limit_price, False, tier=_TIER)
+        if not (order and getattr(order, "id", None)):
+            logger.warning("DAYTRADE[A] %s: entry order rejected", symbol)
+            return False
+        stop_side = "sell" if side == "long" else "buy"
+        # allow_cancel_blocking=False (2026-07-20 stop_protection.py hardening): a 40310000/held-for-orders
+        # must NOT trigger the broker's internal SYMBOL-BLANKET cancel+retry, which would cancel another
+        # tier's live protective stop on the same ticker. We handle a stop failure tier-safely below instead.
+        stop_order = self._broker.submit_day_stop_order(symbol, shares, stop_side, round(float(stop_price), 2), tier=_TIER, allow_cancel_blocking=False)
+        if not (stop_order and getattr(stop_order, "id", None)):
+            # NEVER hold a naked day-tier position. The protective DAY stop failed to place, so undo the
+            # entry and do NOT record it. The entry is a marketable LIMIT that returns on ACCEPTANCE, not
+            # fill, so BOTH sub-cases must be covered: (1) still RESTING/unfilled — cancel THIS tier's own
+            # entry order (by id) so it can't fill later into a naked, untracked position; (2) already
+            # FILLED/partial — close_position exits the fill (404-as-success makes the no-fill case a
+            # harmless no-op). TIER-SAFE (cold-2nd catch): cancel by the entry ORDER ID, never a symbol-
+            # blanket cancel — a blanket cancel would destroy another tier's live protective stop on the
+            # same ticker (the Movers/QHM cross-strategy collision class this project was burned by).
+            logger.critical("DAYTRADE[A] %s: DAY stop placement FAILED — cancelling THIS tier's entry order + flattening any fill (no naked position)", symbol)
+            _entry_id = getattr(order, "id", None)
+            try:
+                if _entry_id:
+                    self._broker.cancel_order(_entry_id)
+            except Exception as cae:
+                logger.critical("DAYTRADE[A] %s: entry-order CANCEL failed after stop failure — %s", symbol, cae)
+            try:
+                self._broker.close_position(symbol, tier=_TIER)
+            except Exception as ce:
+                logger.critical("DAYTRADE[A] %s: emergency flatten ALSO failed after stop failure — %s", symbol, ce)
+            self._alert(f"{symbol}: protective stop failed; this tier's entry order cancelled + any fill flattened (no naked position).")
+            return False
+        self._positions[symbol] = {
+            "qty": shares, "side": side, "entry": entry_price, "stop": float(stop_price),
+            "target": float(target) if target else None, "track": "A", "entry_type": plan["entry_type"],
+            "regime": plan["regime"], "order_id": getattr(order, "id", None),
+            "stop_order_id": getattr(stop_order, "id", None) if stop_order else None,
+            "opened_ts": datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT"),
+        }
+        self._log("entry", symbol, entry_price, shares, plan)
+        return True
+
+    def _stop_and_target(self, symbol: str, entry_price: float, side: str):
+        """(stop_price, atr_target) via RiskManager.get_stop_and_target. Fails safe to (None, None)."""
+        try:
+            from data.fetcher import fetch_bars
+            from data.premarket import calculate_atr
+            from execution.risk_manager import RiskManager
+            daily = fetch_bars(symbol, config.TF_DAILY, num_bars=config.ATR_PERIOD + 5)
+            if daily.empty:
+                return None, None
+            atr_pct = calculate_atr(daily, config.ATR_PERIOD) / 100.0   # calculate_atr returns PERCENT (×100)
+            atr_value = atr_pct * entry_price
+            try:
+                _equity = float(getattr(self._broker.get_account(), "equity", 0) or 0) or entry_price
+            except Exception:
+                _equity = entry_price
+            rm = RiskManager(portfolio_value=_equity)   # get_stop_and_target is ATR-based; equity only for the ctor
+            stop_price, target_price = rm.get_stop_and_target(entry_price, side, "intraday", atr_value=atr_value)
+            return stop_price, target_price
+        except Exception as e:
+            logger.warning("DAYTRADE: stop/target failed for %s (→ skip): %s", symbol, e)
+            return None, None
+
+    def _should_take_profit(self, symbol: str, pos: dict) -> bool:
+        """Structural TP: fade → price reached the pin centroid target; ride → handled by the
+        trailing-runner logic in the exits diff (returns False here). Fails safe to False."""
+        target = pos.get("target")
+        if pos.get("entry_type") != "fade" or not target:
+            return False
+        price = self._live_price(symbol)
+        if not price:
+            return False
+        return (price >= float(target)) if pos.get("side") == "long" else (price <= float(target))
+
+    def _close(self, symbol: str, pos: dict, reason: str) -> bool:
+        if self._dry_run:
+            logger.info("DAYTRADE[A] DRY close %s (%s)", symbol, reason)
+            return False
+        # Realized P&L for the sub-kill: read Alpaca's mark-to-market unrealized_pl on the LIVE position
+        # immediately BEFORE closing — Alpaca-sourced, NOT this module's entry bookkeeping (masked-loss
+        # board directive). The account 7% NET kill stays the authoritative Alpaca-accurate backstop;
+        # this feeds only the tier-level sub-kill throttle. Precise per-fill TCA lands with the §7b audit diff.
+        realized = 0.0
+        try:
+            live_pos = self._broker.get_position(symbol)
+            realized = float(getattr(live_pos, "unrealized_pl", 0) or 0)
+        except Exception:
+            realized = 0.0
+        try:
+            ok = self._broker.close_position(symbol, tier=_TIER)
+        except Exception as e:
+            logger.warning("DAYTRADE: close failed for %s — %s", symbol, e)
+            return False
+        if ok:
+            self._session_realized += realized   # accrue for the Track-A sub-kill (see _check_sub_kill)
+            self._log("exit", symbol, self._live_price(symbol) or pos.get("entry", 0.0), int(pos.get("qty", 0)),
+                      {"side": pos.get("side"), "regime": pos.get("regime"), "entry_type": pos.get("entry_type"),
+                       "reason": reason, "realized_pl": round(realized, 2)})
+            self._positions.pop(symbol, None)
+        return bool(ok)
+
+    # ── Track-A SUB-KILL (design record §3/§7b, board Thorp/Taleb/Dalio) ───────────────────
+    def _tier_a_pnl(self) -> float:
+        """Track-A session P&L = accrued realized (from closes) + current Alpaca-marked unrealized on
+        open Track-A positions. Alpaca-sourced. Feeds ONLY the tier sub-kill throttle — the account 7%
+        NET kill (execution/risk_manager.py) remains the authoritative Alpaca-accurate loss backstop, so
+        an approximate tier P&L here can never MASK a real loss."""
+        unreal = 0.0
+        for sym, p in self._positions.items():
+            if p.get("track") != "A":
+                continue
+            try:
+                lp = self._broker.get_position(sym)
+                unreal += float(getattr(lp, "unrealized_pl", 0) or 0)
+            except Exception:
+                continue
+        return self._session_realized + unreal
+
+    def _check_sub_kill(self) -> bool:
+        """Trip the Track-A daily sub-kill when the tier session P&L breaches -KILL_PCT of its budget:
+        latch _killed_today (blocks new entries) AND flatten open Track-A positions (halt for the day).
+        Marks open positions to market, so it fires on unrealized drawdown too, not just realized. Returns
+        True if the kill is (now or already) active. Fails safe: on a zero/failed budget it does NOT trip
+        (never blocks trading on a transient equity-fetch failure — the account kill still guards)."""
+        if self._killed_today:
+            return True
+        budget = self._track_a_budget()
+        if budget <= 0:
+            return False
+        threshold = -budget * float(_cfg("DAYTRADE_TRACK_A_KILL_PCT", 0.25))
+        pnl = self._tier_a_pnl()
+        if pnl <= threshold:
+            self._killed_today = True
+            logger.critical("DAYTRADE: Track-A SUB-KILL tripped — session P&L %.2f <= %.2f (%.0f%% of $%.0f budget). Halting + flattening.",
+                            pnl, threshold, float(_cfg("DAYTRADE_TRACK_A_KILL_PCT", 0.25)) * 100, budget)
+            self._alert(f"Track-A SUB-KILL: session P&L {pnl:.0f} breached -{int(_cfg('DAYTRADE_TRACK_A_KILL_PCT', 0.25) * 100)}% of budget — halted for the day + flattening.")
+            self.flatten_all(reason="sub_kill")
+            self._save_state()
+            return True
+        return False
+
+    # ── Helpers ────────────────────────────────────────────────────────────────────────────
+    def _alert(self, msg: str) -> None:
+        try:
+            if self._alerter is not None:
+                self._alerter.send(f"[DAYTRADE] {msg}")
+        except Exception as e:
+            logger.debug("DAYTRADE: alert failed: %s", e)
+
+    def _live_price(self, symbol: str) -> float | None:
+        """Real-time last trade with bar-close fallback. None → caller skips (never a bad tick)."""
+        try:
+            from data.alpaca_data import get_latest_trade
+            p = get_latest_trade(symbol)
+            if p and p > 0:
+                return float(p)
+        except Exception:
+            pass
+        try:
+            from data.fetcher import fetch_bars
+            df = fetch_bars(symbol, config.TF_15M, num_bars=2)
+            if not df.empty:
+                c = float(df["close"].iloc[-1])
+                return c if 0.50 <= c <= 99_999 else None
+        except Exception:
+            pass
+        return None
+
+    def _log(self, event: str, symbol: str, price: float, size: int, plan: dict) -> None:
+        try:
+            from trade_logger import log_event
+            log_event(event, symbol=symbol, price=float(price or 0.0), size=int(size),
+                      data_source="alpaca_data", tier=_TIER, side=plan.get("side"),
+                      gex_regime=str(plan.get("regime", "")).lower(), entry_type=plan.get("entry_type"),
+                      reason=plan.get("reason", ""))
+        except Exception as e:
+            logger.debug("DAYTRADE: trade_logger emit failed (%s %s): %s", event, symbol, e)

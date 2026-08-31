@@ -1,0 +1,53 @@
+diff --git a/data/gex.py b/data/gex.py
+index e019664..03543db 100644
+--- a/data/gex.py
++++ b/data/gex.py
+@@ -939,3 +939,48 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
+     except Exception as e:
+         logger.warning("GEX get_gex_regime failed: %s", e)
+         return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
++
++
++def get_gex_levels(symbol: str = "SPY") -> dict:
++    """Read the cached GEX pin/wall LEVELS for `symbol` — the gamma-concentration pin centroid + the
++    call/put walls from the front-expiry _compute_pin. Per-symbol; a leveraged tracker inherits its
++    underlying's levels (same resolution as get_gex_regime). Returns
++    {'centroid','call_wall','put_wall','spot','confidence','age_minutes'} or {} on ANY stale / error /
++    missing-pin read (FAIL-SAFE — a caller with no levels simply skips the name). These are
++    decision-SUPPORT levels (OI is T+1-stale), never a hard trigger. Consumed by the day-trade tier's
++    fade-to-pin / ride-the-break logic (execution/day_trade_manager.py). Never raises."""
++    symbol = _ETF_UNDERLYING_MAP.get(symbol, symbol)
++    import config as _cfg
++    stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 30)
++    try:
++        if not _SNAP_PATH.exists():
++            return {}
++        snap = json.loads(_SNAP_PATH.read_text())
++        ts_str = snap.get("ts", "")
++        sym_data = snap.get("symbols", {}).get(symbol, {})
++        if not isinstance(sym_data, dict) or not sym_data or "error" in sym_data:
++            return {}
++        # Age off the per-symbol confirmed_ts (last clean spot-verified compute), identical to
++        # get_gex_regime — stale levels are as untrustworthy as a stale label.
++        _age_ts = sym_data.get("confirmed_ts") or ts_str
++        try:
++            ts_dt = datetime.strptime(_age_ts, "%Y-%m-%d %I:%M %p PT").replace(tzinfo=PT)
++            age_minutes = (datetime.now(PT) - ts_dt).total_seconds() / 60
++        except Exception:
++            age_minutes = 9999.0
++        if age_minutes > stale_minutes:
++            return {}
++        pin = sym_data.get("pin", {})
++        if not isinstance(pin, dict) or pin.get("kind") in (None, "none", "error"):
++            return {}
++        return {
++            "centroid":    pin.get("centroid"),
++            "call_wall":   pin.get("call_wall"),
++            "put_wall":    pin.get("put_wall"),
++            "spot":        sym_data.get("spot"),
++            "confidence":  pin.get("confidence"),
++            "age_minutes": round(age_minutes, 1),
++        }
++    except Exception as e:
++        logger.warning("GEX get_gex_levels failed: %s", e)
++        return {}

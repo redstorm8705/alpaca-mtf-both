@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+# ruff: noqa: E501  — dense doc/guidance strings run long (project convention)
+# ============================================================================================
+# WIP DRAFT — Alignment Gate (Self-QA #5). Blocked at write-time by design_record_gate (correctly:
+# it's a NEW gated .py with no design-record marker yet). Resume path in scratchpad/
+# alignment_gate_RESUME.md. This gate must itself run Feature Design + full board/Gro/GAI + final
+# preship before it ships. Do NOT ship this file as-is without that gauntlet.
+# ============================================================================================
+"""
+record_alignment.py — register a MISSION-ALIGNMENT marker for a new-capability build (Self-QA gate
+#5, "Alignment Gate" — Rafael 2026-08-30; BGGN-aligned design in
+logs/design_records/alignment_gate_2026-08-30.md; board Beck/Kim + Simons/Thorp + Taleb +
+Majors/Schneier, Gro, GAI).
+
+    python3 .claude/preship/record_alignment.py <feature-slug> --doc <alignment_doc.md path>
+        --covers <path1> [<path2> ...]
+
+WHY (the gap this closes): every OTHER gate checks a build for CORRECTNESS (statics, cold-2nd),
+SAFETY (no-static scanner, masked-loss board, 7% kill) or HONESTY (adversarial, log-evidence,
+no-guess). NONE checks whether a build ADVANCES THE MISSION ($2.5k→$25k). A change can pass every
+gate and still be a waste of time — not moving the goal, not the most-dynamic form, or quietly
+violating a North-Star dogma. This marker attests that an INDEPENDENT critic (a fresh cold subagent
+given ONLY the diff + the three questions, not the author's framing) interrogated the build and
+recorded its findings:
+  (1) DOGMA CHECK — price-action-first · no-static-regimes · aggressive-growth-in-envelope · anti-silo
+  (2) VALUE RANK — is this the highest-value $2.5k→$25k move, or polish/busywork? (cite a real
+      competing roadmap item it beat, or state none exists)
+  (3) DYNAMISM CHECK — is there a more adaptive/regime-aware form; if not built, why? ("not yet,
+      because …" is a full PASS)
+
+WHAT IS AND ISN'T CHECKED HERE (the honest core — board Thorp/Simons/Schneier): "does this advance
+$2.5k→$25k / is it the most dynamic" is a JUDGMENT, not a number — a script CANNOT verdict
+mission-value (stating a forecast as a verdict violates the NO-GUESS mandate; Gro's "$150 ROI" and
+GAI's "score ≥80" were both rejected as false precision). So this script enforces ONLY STRUCTURAL
+process-compliance — content-agnostic, mechanical, no judgment call:
+  • the three required sections are present and above a length floor (screens the empty case);
+  • TEMPLATE-REUSE (the anti-buzzword mechanism, Schneier/Majors): difflib similarity vs every prior
+    alignment_*.md — a copy-pasted formula is BLOCKED ("name what's different about THIS diff").
+    Checks NOVELTY, which a script CAN verify and buzzword-templating cannot survive;
+  • CITATION-EXISTENCE: the doc must name ≥1 real symbol that grep-confirms in a covered file's
+    STAGED content (same grep-verify technique record_logevidence uses) — so the critique engaged
+    with the ACTUAL build, not a generic essay;
+  • sha-binds to each covered file's STAGED content, so a code edit invalidates the marker (a fresh
+    critique is needed) — exactly like the cold-2nd / adversarial markers.
+It NEVER blocks on the critique's CONCLUSION: "not the most dynamic", "this is polish", "no better
+idea exists" are all fully PASSING answers — blocking on them would violate PROFITABLE>PERFECT's own
+text (Taleb: a gate that enforces a dogma by violating a dogma is a bug in the governance). Negative
+findings are surfaced to the roadmap by the ship-time mirror, never suppressed.
+
+HONEST LIMIT (named, per the design_record_gate precedent): a script cannot prove the critic
+subagent was genuinely BLIND to the author's framing (self-collusion / fabricated independence is the
+one failure mode no mechanical layer catches). Layer 2 is a periodic low-frequency SAMPLE AUDIT
+(Rafael or a fresh cross-session GAI, zero prior context, reads N% of alignment docs against their
+real diffs and asks "does this engage with THIS change, or could it apply to almost anything?").
+
+SHIP-TIME, not write-time (correction to the board's PreToolUse suggestion): the critique reviews the
+DIFF, which does not exist at first-write time — so, like cold-2nd/adversarial, enforcement lives in
+preship_gate._alignment_ok() at commit/push, and this marker binds to the staged content.
+`--doc` must resolve INSIDE logs/design_records/ (realpath+commonpath containment — Schneier).
+"""
+import sys
+import os
+import json
+import time
+import hashlib
+import subprocess
+import difflib
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DOC_DIR_REAL = os.path.realpath(os.path.join(REPO, "logs", "design_records"))
+MARKER_DIR = os.path.join(REPO, ".claude", "preship", "markers")
+
+_REQUIRED_SECTIONS = ("## Dogma check", "## Value rank", "## Dynamism check")
+_MIN_SECTION_CHARS = 120          # a heading with a one-liner is not a critique — demand substance
+_TEMPLATE_SIM_THRESHOLD = 0.55    # difflib ratio vs a prior alignment doc above this = a reused template
+
+
+def _staged_sha(relpath: str):
+    """sha256 of relpath's STAGED blob, or None if not staged (so the caller can report it)."""
+    r = subprocess.run(["git", "-C", REPO, "cat-file", "blob", f":{relpath}"],
+                       capture_output=True, timeout=15)
+    if r.returncode != 0:
+        return None
+    return hashlib.sha256(r.stdout).hexdigest()
+
+
+def _staged_text(relpath: str) -> str:
+    """STAGED text of relpath (for the citation-existence grep), or '' on any failure."""
+    r = subprocess.run(["git", "-C", REPO, "cat-file", "blob", f":{relpath}"],
+                       capture_output=True, timeout=15)
+    return r.stdout.decode("utf-8", "ignore") if r.returncode == 0 else ""
+
+
+def _file_sha256(relpath: str):
+    try:
+        with open(os.path.join(REPO, relpath), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _argval(argv, flag):
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    return argv[i + 1] if i + 1 < len(argv) else None
+
+
+def _covers_list(argv):
+    if "--covers" not in argv:
+        return []
+    i = argv.index("--covers")
+    out = []
+    for tok in argv[i + 1:]:
+        if tok.startswith("--"):
+            break
+        out.append(tok[2:] if tok.startswith("./") else tok)
+    return out
+
+
+def _cited_symbols(doc_text: str):
+    """Symbols the critique names, to grep-verify it engaged with the real diff. We take
+    backtick-quoted `tokens` and CamelCase/snake_case identifiers >= 4 chars — cheap, stdlib."""
+    import re
+    toks = set(re.findall(r"`([A-Za-z_][\w./]{3,})`", doc_text))
+    toks |= set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{4,})\b", doc_text))
+    return {t for t in toks if len(t) >= 4}
+
+
+def main(argv):
+    if not argv or argv[0].startswith("-"):
+        sys.stderr.write(__doc__)
+        return 2
+    slug = argv[0]
+    doc = _argval(argv, "--doc")
+    covers = _covers_list(argv[1:])
+    if not doc:
+        sys.stderr.write('record_alignment: --doc "<path to logs/design_records/alignment_*.md>" is required\n')
+        return 2
+    if not covers:
+        sys.stderr.write("record_alignment: --covers <path1> [...] is required — name the new-capability path(s) this critique covers\n")
+        return 2
+    while doc.startswith("./"):
+        doc = doc[2:]
+    doc_real = os.path.realpath(os.path.join(REPO, doc))
+    try:
+        _contained = os.path.commonpath([doc_real, _DOC_DIR_REAL]) == _DOC_DIR_REAL
+    except ValueError:
+        _contained = False
+    if not _contained:
+        sys.stderr.write(f"record_alignment: --doc must resolve inside logs/design_records/ (got {doc!r}) — one auditable location, no '..' escape\n")
+        return 2
+    try:
+        with open(doc_real, encoding="utf-8", errors="ignore") as f:
+            doc_text = f.read()
+    except OSError as e:
+        sys.stderr.write(f"record_alignment: cannot read alignment doc {doc!r}: {e}\n")
+        return 1
+
+    # ── STRUCTURAL check 1: the three required sections, each above the length floor ──
+    missing = [s for s in _REQUIRED_SECTIONS if s not in doc_text]
+    if missing:
+        sys.stderr.write(f"record_alignment: alignment doc is missing required section(s): {missing}. "
+                         f"Required (independent critic, given only the diff): {list(_REQUIRED_SECTIONS)}.\n")
+        return 2
+    # slice each section body to its next '## ' and length-check it
+    for i, sec in enumerate(_REQUIRED_SECTIONS):
+        start = doc_text.index(sec) + len(sec)
+        nexts = [doc_text.find(s, start) for s in _REQUIRED_SECTIONS if doc_text.find(s, start) != -1]
+        end = min(nexts) if nexts else len(doc_text)
+        body = doc_text[start:end].strip()
+        if len(body) < _MIN_SECTION_CHARS:
+            sys.stderr.write(f"record_alignment: section {sec!r} is {len(body)} chars (< {_MIN_SECTION_CHARS}) — "
+                             "a heading with a one-liner is not a critique. Have the independent critic actually engage.\n")
+            return 2
+
+    # ── STRUCTURAL check 2: TEMPLATE-REUSE (anti-buzzword novelty) vs every prior alignment doc ──
+    for name in sorted(os.listdir(_DOC_DIR_REAL)):
+        if not (name.startswith("alignment_") and name.endswith(".md")):
+            continue
+        if os.path.realpath(os.path.join(_DOC_DIR_REAL, name)) == doc_real:
+            continue  # don't compare the doc to itself
+        try:
+            prior = open(os.path.join(_DOC_DIR_REAL, name), encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        ratio = difflib.SequenceMatcher(None, doc_text, prior).ratio()
+        if ratio >= _TEMPLATE_SIM_THRESHOLD:
+            sys.stderr.write(f"record_alignment: this critique is {ratio:.0%} similar to {name} — it reads as a REUSED "
+                             "TEMPLATE. A copy-pasted formula proves nothing; name what is actually DIFFERENT about THIS "
+                             "diff (the specific dynamism/value/dogma findings for these exact changes).\n")
+            return 2
+
+    # ── STRUCTURAL check 3: CITATION-EXISTENCE — the critique must name a real symbol from a covered STAGED file ──
+    corpus = "\n".join(_staged_text(c) for c in covers)
+    if not corpus.strip():
+        sys.stderr.write(f"record_alignment: none of --covers {covers} is staged (git add them first) — the "
+                         "critique binds to the staged diff, and citation-existence greps the staged content.\n")
+        return 2
+    cited = _cited_symbols(doc_text)
+    if not any(sym in corpus for sym in cited):
+        sys.stderr.write("record_alignment: the critique names no symbol that appears in the covered staged code — it "
+                         "reads as a generic essay, not a review of THIS build. Cite a real function/class/const from the diff.\n")
+        return 2
+
+    # ── Bind to each covered file's STAGED sha (a code edit invalidates the marker) ──
+    covered = []
+    for c in covers:
+        s = _staged_sha(c)
+        if s is None:
+            sys.stderr.write(f"record_alignment: covered path {c!r} is not staged — stage it so the marker binds to the shipped bytes.\n")
+            return 2
+        covered.append({"path": c, "staged_sha256": s})
+
+    os.makedirs(MARKER_DIR, exist_ok=True)
+    marker_path = os.path.join(MARKER_DIR, f"align__{slug}.json")
+    tmp_path = marker_path + f".tmp{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump({
+            "feature": slug,
+            "doc_path": doc,
+            "doc_sha256": _file_sha256(doc),
+            "covers": covered,
+            "ts": time.time(),
+        }, f, indent=2)
+    os.replace(tmp_path, marker_path)
+    print(f"alignment critique registered: {slug}")
+    print(f"  doc: {doc}")
+    print(f"  covers: {[c['path'] for c in covered]}")
+    print(f"  marker: {os.path.relpath(marker_path, REPO)}")
+    print("  NOTE: structural compliance only — the critique's CONCLUSIONS ('not most dynamic', 'polish', "
+          "'no better idea') are all PASSING; negative findings are surfaced to the roadmap, never blocked.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
