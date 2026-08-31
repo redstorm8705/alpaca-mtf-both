@@ -1,6 +1,13 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-08-30 — day-tier order-safety Diff A + Slack post-mortem fix — SHIPPED; Alignment Gate — DESIGNED (paused, weekly-limit wrap)
+
+- **#206 `73badf2` — day-tier order-safety Diff A (INERT+additive):** `broker.cancel_open_orders_for_symbol(symbol, only_tier=None)` tier-filters the 40310000 blanket-cancel via `tier_of_coid` (fail-toward-inaction on unattributable), default `None`=byte-identical legacy; `ownership_guard` registers empty `"daytrade"` tier (`DT`, not protected). Retires the Movers/QHM co-tier-clobber at root (day_tier_v2 §5c). Gate: statics clean, cold-2nd PASS (both files), adversarial PASS, log-exemption, Gro+GAI preship APPROVE (broker faed08c4, ownership_guard 01c306ac). Grep-dormant: 0 `tier="daytrade"` callers outside ownership_guard.
+- **#207 `f9eb0e3` — Slack weekly post-mortem mobile fix:** `weekly_postmortem._build_wtp_table` returns a per-trade one-liner (no wrapping 9-col table in the Slack body); full 15-col table kept in .md + Gemini prompt. Gated + preship APPROVE.
+- **GEX regime artifact — BGGN design ALIGNMENT (no code):** verified live that Alpaca serves weekend option OI (Fri-close, static to Mon open) + that we currently compute GEX regime for SPY/QQQ only (per-name levels held/unshipped). Gro+GAI+2 cold board seats (Sosnoff/Sinclair/Nathan+Harris; Taleb/Douglas) converged NO-split: build the compute + wire regime→Track-A (fade in +gamma / ride in −gamma, size-down near walls, fail-CLOSED), NOT a static support/resistance report; regime sign gates everything (walls accelerate in −gamma); Mon pre-market authoritative + optional Sun-night human preview labeled anti-anchoring. Full record: `logs/design_records/gex_regime_artifact_2026-08-30.md`. Queued behind the held `get_gex_levels` ship.
+- **Alignment Gate (Self-QA #5) — DESIGNED, NOT shipped (paused for weekly-limit wrap):** independent-cold-critic mission-alignment marker (Dogma/Value/Dynamism), STRUCTURAL enforcement only (sections+length+difflib template-reuse+citation-existence+staged-sha), never blocks on the conclusion; ship-time in `preship_gate._alignment_ok()` (corrected from the board's PreToolUse sketch — critique needs the diff). Resume: `scratchpad/alignment_gate_RESUME.md` + `record_alignment_DRAFT.py`. Parked `_FORWARD_RE` buzzword-regex REVERTED (board: security theater). Runs its own full gauntlet before ship.
+
 ## 2026-07-13 — QHM dip-add: OPTION-C stop-safe add (wash-trade fix) — SHIPPED
 
 The activated dip-add couldn't place a buy: each QHM position holds a GTC sell-stop and Alpaca blocks
