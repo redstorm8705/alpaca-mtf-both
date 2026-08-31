@@ -744,23 +744,39 @@ class MacroRiskIndex:
                 else:
                     components["jpy"] = {"value": None, "pts": 0}
 
-            # ── 4. TLT FLIGHT TO SAFETY (0–15 pts) ───────────────────────────
-            # TLT rising while equities sell off = classic risk-off flight.
-            # Signal requires TLT up AND SPY down — pure TLT rise may be an
-            # inflation expectation change (different dynamic).
+            # ── 4. TLT — DUAL-REGIME RISK-OFF (0–15 pts) ─────────────────────
+            # (a) FLIGHT-TO-SAFETY: TLT up while equities fall = classic risk-off.
+            # (b) RATE SELLOFF (2026-08-24, board+Gro+GAI): TLT DOWN + SPY DOWN
+            #     (yields up) — the risk-off regime (a) was BLIND to (Aug 20 2026:
+            #     TLT -0.82% + SPY -0.84% scored 0). Both only ADD points (-> lower
+            #     size floor); mutually exclusive by sign of tlt_pct (no double-count).
+            #     MRI can only cut size, never raise it: fail-safe.
+            # GUARDRAIL (masked-loss seat): (a) treats spy_pct None as permissive
+            #     (bonds-up is unambiguous). (b) must NOT — it requires a CONFIRMED
+            #     spy_pct < 0: bonds-down + stocks-UP is benign risk-ON rotation, and
+            #     bonds-down + SPY-unknown must not fire risk-off on missing data.
             tlt_pct  = _alpaca_session_pct("TLT")   # T1 — Alpaca Data API
             spy_pct  = _alpaca_session_pct("SPY")   # T1 — Alpaca Data API
             if tlt_pct is not None:
+                _tlt_note = "TLT % chg (no risk-off signal)"
                 if tlt_pct > 1.0 and (spy_pct is None or spy_pct < 0):
                     tlt_pts = 15
+                    _tlt_note = "TLT % chg (flight-to-safety: TLT up + SPY down)"
                 elif tlt_pct > 0.5 and (spy_pct is None or spy_pct < 0):
                     tlt_pts = 10
+                    _tlt_note = "TLT % chg (flight-to-safety: TLT up + SPY down)"
+                elif tlt_pct < -1.0 and spy_pct is not None and spy_pct < 0:
+                    tlt_pts = 15
+                    _tlt_note = "TLT % chg (rate selloff: bonds+stocks down)"
+                elif tlt_pct < -0.5 and spy_pct is not None and spy_pct < 0:
+                    tlt_pts = 10
+                    _tlt_note = "TLT % chg (rate selloff: bonds+stocks down)"
                 else:
                     tlt_pts = 0
                 components["tlt"] = {
                     "value": round(tlt_pct, 2),
                     "pts":   tlt_pts,
-                    "note":  "TLT session % chg (confirmed with SPY direction)",
+                    "note":  _tlt_note,
                 }
                 raw += tlt_pts
             else:
