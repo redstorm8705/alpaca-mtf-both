@@ -1301,7 +1301,14 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                 f"[{symbol}] Partial close blocked (40310000 held_for_orders) — "
                 f"cancelling all open orders and retrying once."
             )
-            freed = cancel_open_orders_for_symbol(symbol)
+            # TIER-SAFE CANCEL (day-tier order-safety Diff B, design record §5c): for the
+            # "daytrade" tier, the 40310000 recovery cancels ONLY its own blocking orders (via
+            # Diff A's only_tier) — never a co-held tier's live protective stop on a shared lot
+            # (the Movers/QHM collision the project retired the Movers bot over). Every OTHER tier
+            # resolves to only_tier=None, the legacy BLANKET cancel, byte-for-byte unchanged.
+            # Inert until the Track-A day-tier module (diff #2) becomes the first daytrade caller.
+            _only_tier = tier if tier == "daytrade" else None
+            freed = cancel_open_orders_for_symbol(symbol, only_tier=_only_tier)
             logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying partial close…")
             try:
                 order = client.submit_order(order_data)
