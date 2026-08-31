@@ -143,6 +143,32 @@ in the client_order_id (`ownership_guard.make_coid` → `tier_of_coid`).
 Then the §5b-held Track-A engine's entry/close/flatten sit safely on top → diff #2 (the module) ships → config/
 wiring/enable → Track B → audit.
 
+## 5d. OVERNIGHT-SAFETY REQUIREMENT — Diff B is necessary, NOT sufficient (2026-08-31, Rafael Q + Gro + GAI converged)
+Rafael's question ("can an overnight gap-down trigger this? does the day-tier force flat-by-close?") surfaced a
+candidate naked-overnight path Diff B alone does NOT close (DESIGN-ANALYSIS finding — Gro+GAI design-review
+reasoning, NOT yet observed in a production log). Gro (gpt-oss-120b) and GAI (gemini-3.5-flash) INDEPENDENTLY
+reasoned to the same sequence ("deadlock-grip"):
+  1. ~15:55 ET the day-tier calls flatten_all(eod) on a Mag-7 name a CO-HELD tier (intraday/qhm) also holds.
+  2. Alpaca returns 40310000 because the CO-HELD tier's protective stop reserves the shares.
+  3. Diff B (correctly) cancels ONLY the day-tier's own orders → the co-held stop is left intact → the flatten
+     RETRY re-fails → partial_close_position returns False (close does NOT execute).
+  4. 16:00 ET: the day-tier's DAY stop expires (day-tier uses DAY stops, not GTC).
+  5. Result: the day-tier position rides OVERNIGHT with NO protective stop → exposed to an overnight gap-down.
+Diff B is the right FIRST layer (prevents clobbering the co-held stop — the Movers/QHM collision) but is
+necessary, NOT sufficient, alone.
+
+RECOMMENDED GATE (from this analysis; surfaced to Rafael 2026-08-31, awaiting his explicit confirmation) — the
+day-tier should NOT trade real size until ALL of these are live + gated, folded into Diff C + the module (diff #2):
+  (a) BLOCKED-CLOSE CRITICAL alert the moment an EOD flatten is blocked (already Diff C §5c point 4);
+  (b) GTC PROTECTIVE-STOP FALLBACK — if a day-tier position cannot be flattened by the close, attach a GTC stop
+      BEFORE the DAY stop expires, so a stuck position is NEVER naked overnight;
+  (c) FORCE-LIQUIDATE-AT-OPEN — any day-tier position surviving past the close is force-closed at the next open
+      (a recovery-registry state transition).
+REJECTED (masked-loss / collision re-introduction): GAI's "order-dominance / let the day-tier cancel the co-held
+tier's stop to force its own close" — that RE-INTRODUCES the exact cross-strategy stop-clobber Diff B exists to
+prevent. The safe answer is a FALLBACK STOP on the stuck share, never overriding another tier's protection.
+Full board + Gro + GAI + masked-loss seat design the (b)/(c) mechanics when Diff C / the module is built.
+
 ## 6. STILL OWED / BOOKMARKED
 - Forever-6 LIVE + hybrid-margin (Rafael override of board cash-only) — PAUSED, lower priority than this growth engine.
 - Monday allocation simulation (computed 2026-08-29): current book QHM $4,516 (LLY/GEV/GE) + intraday $1,503 (META/GOOGL); equity ~$2,455, BP ~$2,598, maintenance cushion ~$650. Day-tier 10-25% = $245-614; 25% tier stop = $61-153/day = 2.5-6.2% of account; 4 max-loss days = 10-17% of account (bounded).
