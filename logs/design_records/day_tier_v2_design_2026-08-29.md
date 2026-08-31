@@ -105,6 +105,44 @@ Protocol + full BGGN + masked-loss seat before code. Then the validated Track-A 
 sit safely on top. The decision-engine code is preserved (session scratchpad `day_trade_manager_validated_decision_engine.py`
 + working tree, UNCOMMITTED — not shipped, since its order-handling fails the cold-2nd until the infra lands).
 
+## 5c. TIER-SAFE ORDER INFRA — BGGN-ALIGNED DESIGN (2026-08-30, board Peterffy/Harris/Taleb/Kim-Beck + Gro + GAI)
+Resolves the §5b blocker so the day-tier (and any co-holding tier) can close/cancel WITHOUT clobbering
+a co-resident tier on a shared Mag-7 lot. **Verified mechanism:** orders already carry their owning tier
+in the client_order_id (`ownership_guard.make_coid` → `tier_of_coid`).
+
+**ALIGNED DESIGN (all three voices):**
+1. **Tier-aware cancel** — `cancel_open_orders_for_symbol(symbol, only_tier=None)`: when only_tier set, cancel
+   ONLY orders whose tier_of_coid matches. **FAIL-TOWARD-INACTION (board hard rule):** an unattributable /
+   untagged / legacy coid (tier_of_coid→None) is NEVER cancelled by the filtered path. Default None =
+   legacy blanket, byte-for-byte unchanged.
+2. **Qty-bounded close** — the day-tier closes only its OWN qty (`partial_close_position`), never the whole lot.
+3. **SCOPED ownership check on the day-tier close path (Rafael YES 2026-08-30)** — Alpaca's held-for-orders is
+   a MAGNITUDE check, not an ownership check (Harris/Taleb), so a qty-close can silently eat another tier's
+   shares if the day-tier's own qty bookkeeping drifts (the RC-6/RC-8/Movers drift class, ZERO error surface).
+   A scoped free-shares/ownership check on the day-tier's close closes it — WITHOUT flipping the global
+   OWNERSHIP_GUARD_ENFORCE (board+GAI: disproportionate blast radius; **Gro's minority "enable the global flag"
+   is OVERRULED — the scoped check addresses the concern without touching the other 3 tiers**).
+4. **Blocked-close policy (Rafael YES 2026-08-30):** a correctly-BLOCKED close fires a CRITICAL alert + auto-
+   retries closing only the FREE shares — the day-tier must NEVER silently ride naked overnight (Taleb; its
+   whole premise is flat-by-close).
+
+**SEQUENCING (Kim/Beck tidy-first — small reversible diffs):**
+- **Diff A (in progress):** additive `only_tier=None` param on cancel_open_orders_for_symbol + register
+  "daytrade" in ownership_guard (Tier/_TIERS/_TIER_CODE="DT", NOT _PROTECTED). INERT — nothing passes a tier
+  yet. Call-site inventory done: all 5 callers pass None (blanket, unchanged); circuit-breaker stays blanket
+  (Architecture Invariant #7). Ships on cold-2nd + statics + final Gro/GAI preship.
+- **Diff B:** wire ONLY the day-tier's close/partial-close/entry-undo to pass tier="daytrade" (+ qty-bounded
+  partial_close + fill-qty via broker.get_order). Full gate; leaves intraday/qhm/forever6 blanket calls untouched.
+- **Diff C:** the scoped ownership check (#3) + blocked-close alert+retry (#4) + the desynced-ledger cross-tier
+  test the board wants BEFORE the day-tier trades real size.
+- **NOT in scope:** flipping global OWNERSHIP_GUARD_ENFORCE (separate, larger, all-tier decision).
+- **The one test (board):** desynced-ledger — two tiers on one symbol, protected tier's stop holds its qty,
+  day-tier requests a qty-close for a WRONG amount (drift) still within aggregate free-qty → must be caught by
+  the scoped check, not silently succeed.
+
+Then the §5b-held Track-A engine's entry/close/flatten sit safely on top → diff #2 (the module) ships → config/
+wiring/enable → Track B → audit.
+
 ## 6. STILL OWED / BOOKMARKED
 - Forever-6 LIVE + hybrid-margin (Rafael override of board cash-only) — PAUSED, lower priority than this growth engine.
 - Monday allocation simulation (computed 2026-08-29): current book QHM $4,516 (LLY/GEV/GE) + intraday $1,503 (META/GOOGL); equity ~$2,455, BP ~$2,598, maintenance cushion ~$650. Day-tier 10-25% = $245-614; 25% tier stop = $61-153/day = 2.5-6.2% of account; 4 max-loss days = 10-17% of account (bounded).

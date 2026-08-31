@@ -185,20 +185,42 @@ def get_open_orders(symbol: str | None = None) -> "list | None":
         return None  # None = unknown state; callers must not treat this as empty
 
 
-def cancel_open_orders_for_symbol(symbol: str) -> int:
+def cancel_open_orders_for_symbol(symbol: str, only_tier: str | None = None) -> int:
     """
-    Cancel all open orders for a symbol. Returns count of cancelled orders.
-    Used to clear held_for_orders locks when a partial close fails with 40310000.
+    Cancel open orders for a symbol. Returns count of cancelled orders.
+    Used to clear held_for_orders locks when a partial/full close fails with 40310000.
+
+    TIER-AWARE (2026-08-30, day-tier order-safety — design record §5c; board+Gro+GAI): when
+    `only_tier` is set, cancel ONLY orders whose client_order_id parses to that tier (via
+    ownership_guard.tier_of_coid) — so one tier's close never cancels ANOTHER tier's live
+    protective stop on a shared symbol (the Movers/QHM collision). FAIL-TOWARD-INACTION (board
+    hard rule): an order whose coid does NOT parse to `only_tier` — including an untagged / legacy /
+    manually-placed order (tier_of_coid → None) — is NEVER cancelled by the filtered path; an
+    unattributable order is not ours to cancel, and cancelling it would be worse than today's
+    blanket clobber. `only_tier=None` (the DEFAULT) preserves the legacy BLANKET cancel EXACTLY —
+    every existing caller is byte-for-byte unchanged, and the circuit-breaker full-liquidation
+    (Architecture Invariant #7) MUST keep passing None so it closes everything unconditionally.
     """
     orders = get_open_orders(symbol)
     if orders is None:
         logger.error(f"[{symbol}] Cannot cancel orders: get_open_orders returned None (API failure)")
         return 0
+    _tier_of_coid = None
+    if only_tier is not None:
+        # local import (once) avoids a broker↔ownership_guard import cycle at module load
+        from execution.ownership_guard import tier_of_coid as _tier_of_coid
     cancelled = 0
     for order in orders:
+        if only_tier is not None:
+            _owner = _tier_of_coid(getattr(order, "client_order_id", None))
+            if _owner != only_tier:
+                # fail-toward-inaction: another tier's order, or an unattributable one → leave it alone
+                logger.debug("[%s] tier-aware cancel: leaving order %s (owner=%r, only_tier=%r)",
+                             symbol, getattr(order, "id", "?"), _owner, only_tier)
+                continue
         if cancel_order(str(order.id)):
             cancelled += 1
-            logger.info(f"[{symbol}] Cancelled blocking order {order.id} (type={order.type})")
+            logger.info(f"[{symbol}] Cancelled blocking order {order.id} (type={order.type}, tier_filter={only_tier or 'ALL'})")
     return cancelled
 
 

@@ -67,10 +67,14 @@ _LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
 _HEAL_CONFIRM_PATH = _ROOT / "data" / "state" / "ledger_heal_confirmations.json"
 _HEAL_CONFIRM_TTL_S = 7200  # a confirmation is valid 2h; a stale one can never authorize a later reduction
 
-Tier = Literal["intraday", "qhm", "forever6"]
-_TIERS: tuple[str, ...] = ("intraday", "qhm", "forever6")
-# 2-char client_order_id tier prefixes (parse-friendly, short).
-_TIER_CODE = {"intraday": "IN", "qhm": "QH", "forever6": "F6"}
+Tier = Literal["intraday", "qhm", "forever6", "daytrade"]
+_TIERS: tuple[str, ...] = ("intraday", "qhm", "forever6", "daytrade")
+# 2-char client_order_id tier prefixes (parse-friendly, short). "daytrade"=DT registered
+# 2026-08-30 (day-tier order-safety — design record §5c). Deliberately NOT in _PROTECTED_TIERS
+# below: the day-tier is a same-day LIQUIDATABLE tier, not a never-sell floor. Inert until the
+# day-tier tags orders with tier="daytrade" — every `for t in _TIERS` sum includes
+# tier_qty(...,"daytrade")=0 while the tier holds nothing, so registration changes no floor/qty math.
+_TIER_CODE = {"intraday": "IN", "qhm": "QH", "forever6": "F6", "daytrade": "DT"}
 _CODE_TIER = {v: k for k, v in _TIER_CODE.items()}
 
 # Tiers whose shares are ring-fenced (never sold by another tier). Their combined
@@ -1001,13 +1005,14 @@ def launch_init(alpaca_positions: list, force: bool = False) -> dict:
             avg = float(p.get("avg_entry_price", 0.0) or 0.0)
         except (TypeError, ValueError):
             continue
+        # Build the per-tier map from _TIERS so a newly-seeded entry has the SAME key set as a
+        # sync_ledger()-rebuilt one (incl. any registered tier like "daytrade":0) — no schema
+        # asymmetry between seed and rebuild. Only intraday is seeded with the net qty.
+        _tiers: dict[str, dict] = {t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None} for t in _TIERS}
+        _tiers["intraday"] = {"qty": q, "avg_cost": avg, "last_fill_id": stamp}
         ledger["positions"][sym] = {
             "alpaca_net_qty": q,
-            "tiers": {
-                "intraday": {"qty": q, "avg_cost": avg, "last_fill_id": stamp},
-                "qhm": {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None},
-                "forever6": {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None},
-            },
+            "tiers": _tiers,
             "drift": 0.0,
         }
         seeded.append({"symbol": sym, "qty": q, "avg_cost": avg})
