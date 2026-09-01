@@ -1,0 +1,52 @@
+Nightly Gemini Audit — 2026-08-31
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['weekly_postmortem.py', 'execution/broker.py', 'execution/ownership_guard.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+
+*   execution/orphan_manager.py | POSITION COUNT DRIFT | CRITICAL: Bot reports 0 open positions in `risk.open_positions` while 1 position exists in the portfolio tracker (META), leading to an emergency correction. This discrepancy indicates a loss of state synchronization in the risk management loop, potentially leaving a position unmonitored by stop-loss or exit logic during the period of drift (2026-08-31 20:02:08).
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **POSITION COUNT DRIFT**: `[2026-08-31 20:02:08,871]` Orphan Manager detected a drift between `risk.open_positions` (0) and `tracker` (1). This is critical as the risk manager relies on the `risk` variable to enforce exposure limits.
+*   **SIGTERM/Orphaned Position**: `[2026-08-31 20:01:57,805]` Bot received `SIGTERM` but failed to close the `META` position, leaving it as an orphan hold. This confirms the drift observed at 20:02:08 was an actual state mismatch.
+*   **ANOMALY-2 (Repeated)**: The `[ANOMALY-2] [SOXL] confirm_gate=4` warning persisted across multiple cycles despite the tracker claiming open positions. This suggests the `confirm_gate` logic is not correctly reading the actual state of open positions, which may have contributed to the drift.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The ledger snapshot shows no trades for the 31st, which is consistent with the "market closed" gate preventing new entries.
+*   **Score/Outcome**: The 12-point confluence system continued to score high-bias stocks (NVDA, QQQ, AAPL) through the session, but no entries were taken due to the EOD gate.
+*   **Stop Rate**: The historical data from 2026-08-24 to 2026-08-28 shows 5 `stop_hit` events out of 16 entries (31%), which is within the acceptable range for this risk profile, though the `sharpe_ratio` of -1.333 reflects a struggling performance during the audited week.
+
+### TRADE INTEGRITY
+*   **Recording Anomalies**: Trade `2026-08-28T09:33:59.332336-07:00` (QQQ) shows `pnl: 0.0` but an exit at `718.94`. Since the entry was `718.94`, this is a breakeven exit, but the "hard_stop" reason provided for a zero-dollar loss suggests a potential reporting discrepancy between the `stop_hit` event and the P&L calculation logic.
+
+### MODIFIED FILE FINDINGS
+*   **weekly_postmortem.py**: The reconstruction logic for `_reconstruct_closed_trades` correctly uses `_parse_alpaca_ts`. However, the logic for handling unmatched entries (`entry_price` is None) is robust but results in `?` placeholders. This is acceptable for a reporting tool, provided the UI downstream handles strings.
+*   **execution/broker.py**: The classification of `PROTECTION_UNKNOWN` correctly identifies an ambiguity state, but callers (not shown) must be audited to ensure they do not interpret `is PROTECTION_UNKNOWN` as a failure.
+*   **execution/ownership_guard.py**: The atomic rotation logic `_LEDGER_BAK_PATH.replace()` is safe. However, the `check_never_sell_floor` logic uses `_cached_protected_symbols()` as a fallback when the ledger is unreadable. This is a fail-open design which, while safe for exit-liquidity, is a significant risk if the ownership ledger itself is the source of truth for the protected floor.
+
+### P5 STATUS
+*   P5-C1 | UNTOUCHED
+*   P5-C2 | UNTOUCHED
+*   P5-H1 | FIXED (Irrelevant, removed)
+*   P5-H2 | UNTOUCHED
+*   P5-H3 | UNTOUCHED
+*   P5-H4 | UNTOUCHED
+*   P5-H5 | FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/orphan_manager.py | State drift between `risk.open_positions` and portfolio tracker | Failure to sync position state leads to orphan positions persisting after signal-gate triggers.**
+*   **INFRASTRUCTURE | MEDIUM | execution/broker.py | `_hold_state` logic logging redundancy | Excessive logging in `_hold_state` when reading the order book can bloat logs during API noise, potentially delaying the detection of actual anomalies.**
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PASS** (P5-H5 confirmed fixed by log observation of skipping entries).
+
+### RECOMMENDED ACTIONS
+1.  **Immediate**: Audit `orphan_manager.py` to identify why the risk tracker count drifted; implement a mandatory `force_reconcile` call on `SIGTERM` to ensure all positions are accounted for before shutdown.
+2.  **Infrastructure**: Resolve the `ANOMALY-2` warning in `strategy.run_cycle` by checking if the `confirm_gate` is using stale `risk.open_positions` instead of a live lookup to the `portfolio_tracker`.
+3.  **Maintenance**: Prune the `score_comparison` and `trade_events` logs as per P5-M3; the `ledger_sync` warning (12s) suggests the log file is becoming a bottleneck.
+
+================================================================================
+SUPPRESSION POST-FILTER: 1 false-alarm removed, 0 acknowledged | card verdict FAIL → FAIL (see logs/audit_suppressions.jsonl)
