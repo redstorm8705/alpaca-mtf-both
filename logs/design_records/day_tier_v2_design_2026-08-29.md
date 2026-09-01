@@ -172,3 +172,44 @@ Full board + Gro + GAI + masked-loss seat design the (b)/(c) mechanics when Diff
 ## 6. STILL OWED / BOOKMARKED
 - Forever-6 LIVE + hybrid-margin (Rafael override of board cash-only) — PAUSED, lower priority than this growth engine.
 - Monday allocation simulation (computed 2026-08-29): current book QHM $4,516 (LLY/GEV/GE) + intraday $1,503 (META/GOOGL); equity ~$2,455, BP ~$2,598, maintenance cushion ~$650. Day-tier 10-25% = $245-614; 25% tier stop = $61-153/day = 2.5-6.2% of account; 4 max-loss days = 10-17% of account (bounded).
+
+## 7. PRE-CLOSE STOP-COVERAGE SWEEP — SHIPPED 2026-09-01 (PR #216, OCI `2b10e5c`)
+Rafael-approved (one-page package) + board 3-0 (Reliability/Exec-risk-masked-loss/Quant) + Gro + GAI
+APPROVE-WITH-CHANGES. Turns on the board-hardened but previously-INERT `reconcile_protection`
+(execution/stop_protection.py) as a pre-close safety net: in the final `config.PRECLOSE_SWEEP_MINUTES`
+(15) before the REAL close (Alpaca `get_clock().next_close` — half-day aware), `run_cycle` fires it
+once/cycle to guarantee every open intraday/daytrade position has a live full-qty DAY stop before the
+overnight GTC window (the 4:05 PM AH block). Verified LIVE on OCI: heartbeat `PRECLOSE-SWEEP: not-yet
+(232.2 min to real close)` at 12:08 ET — hook exercising clean; the sweep itself first fires today ~15:45 ET.
+Board-required upgrades folded in: (a) forever6 excluded (fails CLOSED, `_forever6_symbols`) — reconcile
+reads full net not net−F6, so it would otherwise stop the never-sell book; (b) account-wide
+`get_open_positions` (ONE fetch, was per-symbol) so N serial socket timeouts can't stall the 12-min
+watchdog near the close. Safety verified at source: runs AFTER check_exits (never delays an exit);
+`allow_cancel_blocking=False`; DAY stops expire 16:00 → no 40310000 collision with the 16:05 AH GTC block;
+7% kill switch is equity-derived → a cover cannot mask a loss. 46 tests pass (+ new `test_forever6_excluded`
++ positions N→1 assertion); cold-2nd PASS; FINAL Gro+GAI preship APPROVE on the exact diff.
+
+### 7a. Phase-B tracked (NOT blockers — do before the daytrade tier ARMS)
+- **Reverse-fill residual (Exec-risk seat):** a resting profit-limit invisible in one `get_open_orders` read →
+  reconcile places/covers, `_raw_close_position` (Alpaca DELETE-position) leaves the limit resting, and the
+  next cycle short-circuits at `already_protected` BEFORE the `other_cov` check → on a reversal the limit
+  over-sells. Fix: re-check `other_cov` even on the `already_protected` branch, OR cancel the resting limit
+  before `_cover`. Pre-existing to the hardened `_cover`; low-prob (lag + reversal); does NOT mask a loss.
+- **Daytrade `tier=` plumbing (Quant seat):** reconcile submits with the default `tier="intraday"`, so a future
+  `cancel_open_orders_for_symbol(only_tier="daytrade")` won't recognize a reconcile-placed daytrade stop. Plumb
+  `tier=` from the trade into the submit BEFORE the daytrade tier arms. Nit today (DAY stop expires 16:00).
+- **Mixed-tier trade-off (Quant seat):** excluding a mixed F6 ticker drops reconcile coverage of its INTRADAY
+  leg too (conservative v1 — an unmanaged intraday leg beats an F6 oversell). Tier-aware net (`net − F6_qty`)
+  is the Phase-B refinement; do NOT "fix" the exclusion into a full-net stop.
+
+### 7b. DAY-TIER ENGINE — Rafael's binding requirements (2026-09-01, flagged at pre-close approval)
+The day-tier ENGINE (separate build after this) runs its scan **every 2-3 min**, NOT the 5-min main cycle
+(smaller name universe → faster). Two HARD requirements for that engine's design session (Feature Design
+Protocol + board + Gro/GAI gate BEFORE code):
+1. **ANTI-SILO (bidirectional confluence):** the 2-3 min day-tier must UPDATE the broader shared confluence
+   indicators the 5-min scan consumes (and read them) — overlapping indicators feed each other, not siloed.
+   Per the ANTI-SILO MANDATE: adds-signal + fails-safe + stays-testable at every cross-use.
+2. **API-BUDGET ISOLATION:** the faster loop's added API volume must NOT starve the 5-min scan's ability to
+   make its calls (rate-limit headroom + no thread contention). Design must bound/schedule day-tier API calls
+   so the main cycle's T1 fetches are never crowded out. (The pre-close sweep already respects this — one
+   account-wide orders fetch + one positions fetch per in-window cycle, no per-symbol calls.)
