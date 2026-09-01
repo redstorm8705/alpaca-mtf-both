@@ -59,6 +59,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from slack_format import mobile_clean  # WS2 shared Slack formatter (mobile-safe markdown tables)
+
 # ── Load .env (required for cron — systemd/cron does not pre-load .env) ──────
 from dotenv import load_dotenv
 if not load_dotenv():
@@ -1107,12 +1109,15 @@ def _post_slack_summary(
             return "unavailable (free-tier quota/credits exhausted)"
         return e[:120] + ("…" if len(e) > 120 else "")
 
-    # Build short excerpts (first 350 chars of each response)
+    # Build short excerpts (first ~350 chars). Route through the shared WS2 mobile_clean()
+    # so markdown tables in the LLM reply render as compact `a · b · c` lines instead of
+    # collapsing into an unreadable pipe-wrapped blob on mobile (the .replace("\n"," ") bug).
+    # mobile_clean() adds its own ellipsis on truncation, so no trailing "…" is appended here.
     def _excerpt(result: dict, label: str) -> str:
         if not result["text"]:
             return f"*{label}:* ❌ {_terse_error(result['error'])}"
-        preview = result["text"][:350].replace("\n", " ").strip()
-        return f"*{label} (preview):* {preview}…"
+        preview = mobile_clean(result["text"], max_chars=350)
+        return f"*{label} (preview):* {preview}"
 
     text = (
         f":robot_face: *Auto AI {mode_label.title()} — {ts}*\n"
