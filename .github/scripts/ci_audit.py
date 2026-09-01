@@ -76,6 +76,17 @@ evaluates live
 stop losses — a blocking call or an unhandled exception there can leave positions
 unmanaged.
 
+BUT NOT every file here runs on that trading path — judge each file by its ACTUAL role (its
+path + its own module docstring/comments). Files in the live trade loop (main.py,
+strategy/run_cycle.py, and execution/*.py such as broker / entry_logic / exit_logic /
+portfolio_tracker / stop_protection / risk_manager) DO run during RTH — apply the
+"leaves-positions-unmanaged" lens there. But SHIP-TIME GATE tooling (.claude/preship/*,
+.github/scripts/*) and CRON audit/report scripts (*_audit.py, autonomous_*.py, weekly_*.py,
+and shared helpers they import, e.g. gai_client.py) do NOT run in the live trade loop: an
+unhandled exception in those FAILS THE SHIP-GATE (fail-closed — the intended behaviour) or
+SKIPS A REPORT; it can NEVER leave a live position unmanaged, and MUST NOT be rejected on that
+basis. Do not assert a file is on the trading path unless its path/role actually places it there.
+
 You are given TWO sections: first the unified DIFF (what changed), then the FULL CURRENT
 CONTENT of each changed file (the post-change file in its entirety). The full content
 exists so you are NOT judging through a keyhole: whenever the diff references an
