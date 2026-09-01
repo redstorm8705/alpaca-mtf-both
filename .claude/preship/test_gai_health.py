@@ -43,7 +43,8 @@ except Exception:
     check("model-list-down -> GeminiOutage", False)
 
 # 3a. pinned congested (present in list, fails), an alternate serves -> self-heal + note
-alt = "gemini-3.5-flash-lite"
+assert len(gh.CANDIDATE_MODELS) >= 2, "gai_health ladder must have >=2 models (primary + a fallback) for the self-heal path"
+alt = gh.CANDIDATE_MODELS[1]   # a REAL alternate candidate (dynamic, guarded by the assert above) so the self-heal loop actually tries it (was hardcoded gemini-3.5-flash-lite, which left the ladder 2026-08-31)
 with_stub({gh.PINNED_MODEL: None, alt: "OK"}, True, [gh.PINNED_MODEL, alt])
 m, note = gh.pick_working_gemini("k", log=lambda _m: None)
 check("pinned-congested + alt-serves -> alternate", m == alt)
@@ -92,7 +93,7 @@ st, d = gh.canary("k", sleep=NOSLEEP)
 check("canary HEALTHY", st == gh.HEALTHY)
 
 # 7. canary CONFIG_BUG: pinned RETIRED (absent from model-list) -> blocks, immediate
-stub_probe(lambda m, k, p="x", t=30: (200, "VERDICT: APPROVE"), names=["gemini-3.5-flash-lite"])
+stub_probe(lambda m, k, p="x", t=30: (200, "VERDICT: APPROVE"), names=[alt])   # a non-pinned model in the list -> pinned is 'absent' (retired)
 st, d = gh.canary("k", sleep=NOSLEEP)
 check("canary retired-pin -> CONFIG_BUG", st == gh.CONFIG_BUG and "RETIRED" in d)
 
