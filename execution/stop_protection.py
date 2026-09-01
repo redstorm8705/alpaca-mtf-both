@@ -57,7 +57,7 @@ from execution.broker import (
     PROTECTION_UNKNOWN,
     close_position,
     get_open_orders,
-    get_open_position,
+    get_open_positions,
     submit_day_stop_order,
     submit_gtc_stop_order,
 )
@@ -170,6 +170,33 @@ def _qhm_symbols() -> set:
         return set()
 
 
+def _forever6_symbols() -> set:
+    """Forever-6 HELD symbols this reconciler must NOT manage — F6 shares deliberately carry NO
+    protective stop (the never-sell floor). Excluded (added 2026-09-01, board 3-0 + Gro + GAI)
+    because reconcile reads the FULL Alpaca net per symbol and does NOT subtract the F6 floor
+    (the floor lives only inside broker.submit_*): on a mixed-tier ticker (an intraday leg + an
+    F6 leg in the same symbol, e.g. TSLA) it would place a full-net stop OVER the F6 shares and
+    read `already_protected` (silent) next cycle → on trigger it SELLS the never-sell book — a
+    masked invariant breach with no page (Quant/Exec-risk seats' highest-risk mode). Keyed by
+    HELD symbol so a mixed ticker is excluded whole — the conservative v1 posture (an unmanaged
+    intraday leg beats an F6 oversell; tier-aware net is Phase-B). Reuses
+    orphan_manager._get_forever6_syms (fails CLOSED to the cached protected set on a ledger
+    error); this wrapper ALSO fails CLOSED on any unexpected raise so F6 is never left managed on
+    an error — NOT the fail-open posture of _qhm_symbols above (a stray QHM stop is separate; a
+    stray F6 stop sells a permanent hold). Never raises."""
+    try:
+        from execution.orphan_manager import _get_forever6_syms
+        return set(_get_forever6_syms() or [])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("stop-protect: F6 symbol lookup raised — failing CLOSED (excluding cached "
+                       "protected symbols) to preserve the never-sell floor: %s", e)
+        try:
+            from execution.ownership_guard import _cached_protected_symbols
+            return set(_cached_protected_symbols() or [])
+        except Exception:  # noqa: BLE001
+            return set()
+
+
 def _order_side(o) -> str:
     _s = getattr(o, "side", "")
     return str(getattr(_s, "value", _s)).lower()
@@ -276,6 +303,7 @@ def reconcile_protection(
         "paged": [],
         "skipped": [],       # unknown state — failed safe on the order (also paged, throttled)
         "excluded_qhm": [],
+        "excluded_forever6": [],   # F6 held symbols — deliberately stop-free (never-sell floor)
         # Broker said the qty is already held by a stable live protective order, i.e. our
         # get_open_orders read was STALE and the position was protected all along. Counted
         # separately from already_protected (which is derived from our own read) because the
@@ -292,6 +320,7 @@ def reconcile_protection(
         use_gtc = session in _GTC_SESSIONS
 
     qhm = _qhm_symbols()
+    f6 = _forever6_symbols()   # F6 held symbols — excluded like QHM (see _forever6_symbols)
     now_mono = time.monotonic()
 
     # PRE-WIRE-BLOCKER-2 (2026-07-20, board: reliability+exec-risk+GAI all APPROVE PART A):
@@ -321,6 +350,29 @@ def reconcile_protection(
                 continue
             _orders_by_symbol.setdefault(_sym, []).append(_o)
 
+    # Account-wide POSITION snapshot — ONE fetch per sweep, looked up per symbol in the loop below
+    # (mirrors the get_open_orders fix above / PRE-WIRE-BLOCKER-2). REPLACES the prior PER-SYMBOL
+    # get_open_position(symbol) in the loop, whose N sequential REST calls (each bounded only by the
+    # 15s socket timeout) could serialize into the 12-min run_cycle watchdog near the close and
+    # trigger an os.execv self-restart that leaves positions UNMONITORED through the close — the
+    # exact opposite of a pre-close safety net (Reliability + Exec-risk seats, 2026-09-01). Unlike
+    # get_open_orders (which catches internally and returns None), get_open_positions() RAISES on
+    # API error, so wrap it: None ONLY on API failure. LOAD-BEARING: `_all_positions is None` fails
+    # SAFE on EVERY symbol below (skip + page), never an empty book — preserving the exact
+    # per-symbol "non-404 error → skip+page" semantics, now account-wide.
+    try:
+        _all_positions = get_open_positions()
+    except Exception as _pos_fetch_err:  # noqa: BLE001 — any API error → unknown → fail safe below
+        _all_positions = None
+        logger.warning("STOP-PROTECT: account-wide get_open_positions failed — failing safe on "
+                       "every symbol this sweep: %s", _pos_fetch_err)
+    _positions_by_symbol: dict = {}
+    if _all_positions is not None:
+        for _p in _all_positions:
+            _psym = getattr(_p, "symbol", None)
+            if _psym is not None:
+                _positions_by_symbol[_psym] = _p
+
     open_symbols = set()
 
     for symbol, trade in list(getattr(tracker, "open_trades", {}).items()):
@@ -330,6 +382,9 @@ def reconcile_protection(
                 continue
             if symbol in qhm:
                 summary["excluded_qhm"].append(symbol)  # quarterly holds are not ours to manage
+                continue
+            if symbol in f6:
+                summary["excluded_forever6"].append(symbol)  # F6 shares carry no stop by design
                 continue
             direction = str(trade.get("direction", "")).lower()
             if direction not in ("long", "short"):
@@ -348,11 +403,14 @@ def reconcile_protection(
                 _skip_unknown(symbol, summary, "get_open_orders unavailable (API failure)")
                 continue
             orders = _orders_by_symbol.get(symbol, [])   # [] = no open orders for this symbol (NOT None)
-            try:
-                pos = get_open_position(symbol)
-            except Exception as _pe:  # non-404 API error → unknown → fail safe + page
-                _skip_unknown(symbol, summary, f"get_open_position raised: {_pe!r}")
+            # Position from the ONE account-wide snapshot above. LOAD-BEARING: a None snapshot is an
+            # API FAILURE → fail-safe EVERY symbol (skip + page), never an empty book — this `is None`
+            # check MUST precede the .get() so the None≠empty contract holds account-wide (identical
+            # to the _all_orders guard, and preserving the prior per-symbol non-404-error → skip+page).
+            if _all_positions is None:
+                _skip_unknown(symbol, summary, "get_open_positions unavailable (API failure)")
                 continue
+            pos = _positions_by_symbol.get(symbol)   # None = Alpaca shows no position (closed/stale)
             if pos is None:
                 # Alpaca has no position — nothing to protect (closed / stale tracker entry).
                 # Not a naked-position risk; observability only, and clear any skip streak.
@@ -563,10 +621,11 @@ def reconcile_protection(
     # protected" indistinguishable from "silently not wired at all". For a module that spent
     # weeks deployed-but-inert, that is the one state we cannot afford to be unable to observe.
     logger.info("STOP-PROTECT [%s]: protected %d | broker-held %d | placed %d | covered %d | "
-                "paged %d | skipped %d | qhm-excl %d | @ %s ET", session,
+                "paged %d | skipped %d | qhm-excl %d | f6-excl %d | @ %s ET", session,
                 len(summary["already_protected"]), len(summary["broker_held"]),
                 len(summary["placed"]), len(summary["covered"]), len(summary["paged"]),
                 len(summary["skipped"]), len(summary["excluded_qhm"]),
+                len(summary["excluded_forever6"]),
                 datetime.now(ET).strftime("%H:%M:%S"))
     return summary
 
