@@ -1,0 +1,75 @@
+{
+  "audit_date": "2026-08-31",
+  "run_ts": "2026-08-31T10:30:01.516924-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 33,
+    "levels": {
+      "STRESSED": 6,
+      "ELEVATED": 27
+    },
+    "last_score": 40,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 4,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-08-31 16:20:13,605 WARNING ledger_sync ledger_sync wall-time 12.4s (fills=569 orders=2612)",
+      "2026-08-31 16:40:13,546 WARNING ledger_sync ledger_sync wall-time 12.0s (fills=569 orders=2612)",
+      "2026-08-31 17:00:14,221 WARNING ledger_sync ledger_sync wall-time 12.9s (fills=569 orders=2612)",
+      "2026-08-31 17:20:13,797 WARNING ledger_sync ledger_sync wall-time 12.3s (fills=569 orders=2612)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "META",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 1,
+    "symbols": [
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
