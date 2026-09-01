@@ -387,7 +387,13 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     # Groq's 8k-TPM free cap ("Requested 8748 > 8000", 2026-08-24). -U15 still shows guards within
     # 15 lines of each hunk (enough to avoid the missing-guard false-reject); the --context flag
     # backfills any guard further away, per the REVIEWER-CONTEXT discipline.
-    ok_d, diff, _ = _git(["diff", "--cached", base, "-U15", "--", relpath])
+    # CLAIM gate (handoff.md prose) uses -U0: in a factual-claims audit the "context" lines are
+    # OTHER, already-shipped claims — showing them 15-deep made the reviewer re-litigate and
+    # false-REJECT UNCHANGED bullets (2026-08-31: rejected #203/#209 which this edit never touched)
+    # DESPITE the prompt forbidding a reject on a space-prefixed context line. -U0 shows the reviewer
+    # ONLY the new/removed claim lines. Code files keep -U15 (nearby guards must stay visible).
+    _uctx = "-U0" if relpath in GATED_CLAIM_FILES else "-U15"
+    ok_d, diff, _ = _git(["diff", "--cached", base, _uctx, "--", relpath])
     _head = CLAIM_PROMPT_HEAD if relpath in GATED_CLAIM_FILES else PROMPT_HEAD
     prompt = _head + (diff if diff.strip()
                       else f"(no change vs {base} for {relpath})")
