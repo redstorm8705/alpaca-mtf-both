@@ -60,6 +60,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from slack_format import mobile_clean  # WS2 shared Slack formatter (mobile-safe markdown tables)
+from gai_client import GAI_MODEL_LADDER, call_gai  # single source of truth for the live Gemini model ladder
 
 # ── Load .env (required for cron — systemd/cron does not pre-load .env) ──────
 from dotenv import load_dotenv
@@ -79,9 +80,10 @@ _GRO_BASE_URL = "https://api.groq.com/openai/v1"
 _GRO_MODEL = "openai/gpt-oss-120b"  # was llama-3.3-70b-versatile (DEAD — Groq 404, 2026-08).
 # gpt-oss-120b is a REASONING model → the call MUST pass reasoning_effort:"low" and use
 # max_completion_tokens (not max_tokens), else hidden reasoning eats the budget → EMPTY content.
-_GEMINI_MODEL = "gemini-3.1-flash-lite"  # cost fix 2026-07-11 (Rafael): pro-preview was the
-# single premium caller in the whole pipeline and depleted credits in a week — flash is
-# what nightly/midday audits already use and is adequate for the meta-audit cross-review.
+_GEMINI_MODEL = GAI_MODEL_LADDER[0]  # display/model-field only; call_gai ladders the full
+# gai_client.GAI_MODEL_LADDER at call time (single source of truth), so a churned/retired model
+# auto-skips to the next live one. Was a hardcoded gemini-3.1-flash-lite pin (the recurring churn
+# failure); the ladder + thinking_budget=0 now live once in gai_client for every caller.
 _API_TIMEOUT_S = 180  # 3-minute wall-clock limit per API call
 
 # ── Meta-audit constants ──────────────────────────────────────────────────────
@@ -1204,15 +1206,13 @@ def _call_groq(prompt: str) -> dict:
         }
 
 
-# ── Gemini call (google.genai SDK — replaces deprecated google.generativeai) ──
+# ── Gemini call — routed through the shared laddered client (single source of truth) ──
 def _call_gemini(prompt: str) -> dict:
-    """Submit prompt to Google Gemini API via google.genai SDK.
-
-    Uses _GEMINI_MODEL (gemini-3.1-flash-lite as of 2026-07-11 — cost fix; see the
-    constant). google.generativeai is deprecated; google.genai is the current SDK.
-    Falls back to REST if the SDK is unavailable.
-
-    Returns {text, model, tokens, elapsed_s, error}.
+    """Submit prompt to Gemini via gai_client.call_gai — the SINGLE source of truth for the model
+    ladder (gai_client.GAI_MODEL_LADDER) + thinking_budget=0. A churned / quota'd / retired model
+    auto-skips to the next LIVE one, so a single dead model can never again false-flag "GAI down"
+    here (the recurring 2026-08 failure). Returns {text, model, tokens, elapsed_s, error}; tokens is
+    None — call_gai is a stdlib REST call and does not surface usage_metadata (not needed here).
     """
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
@@ -1226,70 +1226,18 @@ def _call_gemini(prompt: str) -> dict:
 
     t0 = time.monotonic()
     try:
-        from google import genai  # type: ignore[import-untyped]
-        from google.genai import types  # type: ignore[import-untyped]
-
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1),
-        )
-        text = response.text if hasattr(response, "text") else str(response)
-        usage = getattr(response, "usage_metadata", None)
-        tokens = (
-            getattr(usage, "total_token_count", None) if usage else None
-        )
+        text = call_gai(prompt, api_key, max_output_tokens=8192, timeout=_API_TIMEOUT_S)
         return {
             "text": text,
             "model": _GEMINI_MODEL,
-            "tokens": tokens,
-            "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": None,
-        }
-    except ImportError:
-        return _call_gemini_rest(prompt, api_key, t0)
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "text": None,
-            "model": _GEMINI_MODEL,
-            "tokens": None,
-            "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": str(exc),
-        }
-
-
-def _call_gemini_rest(prompt: str, api_key: str, t0: float) -> dict:
-    """Gemini via REST — fallback if google.genai library is unavailable."""
-    import requests  # type: ignore[import-untyped]
-
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{_GEMINI_MODEL}:generateContent?key={api_key}"
-        )
-        resp = requests.post(
-            url,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1},
-            },
-            timeout=_API_TIMEOUT_S,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return {
-            "text": text,
-            "model": f"{_GEMINI_MODEL}-rest",
             "tokens": None,
             "elapsed_s": round(time.monotonic() - t0, 2),
             "error": None,
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — GAIError (whole ladder failed) or any transport error
         return {
             "text": None,
-            "model": f"{_GEMINI_MODEL}-rest",
+            "model": _GEMINI_MODEL,
             "tokens": None,
             "elapsed_s": round(time.monotonic() - t0, 2),
             "error": str(exc),

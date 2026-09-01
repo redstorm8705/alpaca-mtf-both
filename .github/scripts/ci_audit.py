@@ -28,9 +28,13 @@ import urllib.request
 # while pinned models served in ~4s. The previously documented fallback `gemini-2.5-flash` is now
 # 404 (retired). Pin a working family version we control; the substitute still covers a genuine
 # outage. Verified 2026-08-25: gemini-3.5-flash 200/~4s clean VERDICT; -latest 503; 2.5-flash 404.
-MODEL = "gemini-3.5-flash"
-ENDPOINT = ("https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{MODEL}:generateContent")
+# MODEL-SELECTION LADDER (2026-08-31): a single pinned Gemini model churns fast (gemini-3.5-flash
+# went 200 -> 404 within hours on 2026-08-31). _one_audit tries these in order, skipping a
+# 404/429/503 to the next — different models carry SEPARATE free-tier quotas, so a 429 on one is
+# often 200 on the next. First model returning candidates wins; a whole-ladder failure is an
+# INDETERMINATE sample (fail-closed at the majority vote), which then engages the NVIDIA substitute.
+MODEL_LADDER = ("gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
+MODEL = MODEL_LADDER[0]  # display/back-compat only; the ladder is authoritative in _one_audit
 
 # OPTION-C SUBSTITUTE (2026-08-24) — a free NVIDIA-hosted reviewer (NVIDIA_MODEL below). It uses the
 # SAME free model as the LOCAL gate's option-C substitute (preship_audit._nvidia, added in the
@@ -71,6 +75,17 @@ the files run DURING regular trading hours, synchronously on the same thread tha
 evaluates live
 stop losses — a blocking call or an unhandled exception there can leave positions
 unmanaged.
+
+BUT NOT every file here runs on that trading path — judge each file by its ACTUAL role (its
+path + its own module docstring/comments). Files in the live trade loop (main.py,
+strategy/run_cycle.py, and execution/*.py such as broker / entry_logic / exit_logic /
+portfolio_tracker / stop_protection / risk_manager) DO run during RTH — apply the
+"leaves-positions-unmanaged" lens there. But SHIP-TIME GATE tooling (.claude/preship/*,
+.github/scripts/*) and CRON audit/report scripts (*_audit.py, autonomous_*.py, weekly_*.py,
+and shared helpers they import, e.g. gai_client.py) do NOT run in the live trade loop: an
+unhandled exception in those FAILS THE SHIP-GATE (fail-closed — the intended behaviour) or
+SKIPS A REPORT; it can NEVER leave a live position unmanaged, and MUST NOT be rejected on that
+basis. Do not assert a file is on the trading path unless its path/role actually places it there.
 
 You are given TWO sections: first the unified DIFF (what changed), then the FULL CURRENT
 CONTENT of each changed file (the post-change file in its entirety). The full content
@@ -177,31 +192,39 @@ def _one_audit(prompt_text: str, key: str) -> "tuple[str, str, int]":
     """
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
-        # thinkingConfig.thinkingBudget:0 — gemini-3.5-flash is a THINKING model; its hidden
-        # reasoning otherwise eats the token budget and the verdict text is never emitted
-        # (INDETERMINATE, which fails the vote closed on infra alone). Disabling thinking yields a
-        # clean verdict (root cause of the 2026-08-25 "GAI down" investigation).
+        # thinkingConfig.thinkingBudget:0 — a thinking model otherwise spends the token budget on
+        # hidden reasoning and emits no verdict (INDETERMINATE, which fails the vote closed on infra
+        # alone). Disabling thinking yields a clean verdict (2026-08-25 "GAI down" root cause).
         "generationConfig": {"maxOutputTokens": 8192, "thinkingConfig": {"thinkingBudget": 0}},
     }).encode()
-    req = urllib.request.Request(
-        f"{ENDPOINT}?key={key}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
-            payload = json.load(r)
-    except urllib.error.HTTPError as e:
-        # Never interpolate the request object — it carries the key in the URL.
-        return "INDETERMINATE", f"audit API returned HTTP {e.code}", e.code
-    except Exception as e:
-        return "INDETERMINATE", f"audit API call failed ({type(e).__name__})", 0
-    try:
-        text = payload["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        return "INDETERMINATE", "could not parse a verdict from the audit response", 200
-    return _verdict(text), text, 200
+    # Ladder across live models: a 404 (retired) / 429 (quota) / 503 (overload) on one skips to the
+    # next. Never interpolate the request object into any message — it carries the key in the URL.
+    _last_code = 0
+    for _model in MODEL_LADDER:
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent?key={key}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
+                payload = json.load(r)
+        except urllib.error.HTTPError as e:
+            _last_code = e.code
+            continue  # retired/quota/overload — try the next ladder model
+        except Exception:
+            _last_code = 0
+            continue
+        try:
+            text = payload["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            _last_code = 200
+            continue  # delivered but unparseable — try the next model
+        return _verdict(text), text, 200
+    # Whole ladder failed → INDETERMINATE for THIS sample (fail-closed at the majority vote; on a
+    # genuine Gemini outage across all models, main() then engages the NVIDIA option-C substitute).
+    return "INDETERMINATE", f"all Gemini ladder models failed (last HTTP {_last_code})", _last_code
 
 
 def _one_audit_nvidia(prompt_text: str, key: str) -> "tuple[str, str]":

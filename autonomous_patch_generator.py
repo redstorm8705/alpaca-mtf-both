@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  — long LLM-prompt strings + rationale comments are intentionally long (matches the sibling audit scripts)
 """autonomous_patch_generator.py — Stage 1.5 of the autonomous patch pipeline.
 
 Runs on OCI at 6 PM ET (23:00 UTC) weeknights, between:
@@ -41,6 +42,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from gai_client import call_gai  # single source of truth for the live Gemini model ladder
+
 # ── Config ────────────────────────────────────────────────────────────────────
 _REPO_DIR     = Path("/home/ubuntu/mtf-bot")
 _LOGS_DIR     = _REPO_DIR / "logs"
@@ -70,9 +73,8 @@ _GRO_MODEL    = "openai/gpt-oss-120b"
 # Route drafting through Gemini (no TPD wall in our usage); keep Groq as fallback.
 # The independent DS/GAI cross-check remains a separate stage (autonomous_review.py),
 # so model-diversity is preserved where it matters. Rafael approved 2026-07-01.
-_GAI_MODEL    = "gemini-3.1-flash-lite"
-_GAI_URL      = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                 "gemini-3.1-flash-lite:generateContent")
+# GAI model + endpoint now come from gai_client.call_gai (single source of truth: the
+# GAI_MODEL_LADDER + thinking_budget=0) — no per-file model pin can go stale here again.
 _SLACK_URL    = None  # loaded from .env
 
 ET = ZoneInfo("America/New_York")
@@ -176,27 +178,12 @@ def _call_gai(prompt: str) -> str | None:
     if not api_key:
         _log("ERROR: GEMINI_API_KEY not set")
         return None
-    import requests  # type: ignore[import-untyped]
+    # Shared laddered client (single source: gai_client.GAI_MODEL_LADDER + thinking_budget=0); a
+    # churned/retired model auto-skips to the next live one. Outer retry handles a transient
+    # whole-ladder failure. Returns None on total failure (caller falls back to Groq).
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.post(
-                f"{_GAI_URL}?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": 4096,
-                        "temperature": 0.1,
-                        "thinkingConfig": {"thinkingBudget": 0},
-                    },
-                },
-                timeout=_API_TIMEOUT,
-            )
-            resp.raise_for_status()
-            cands = resp.json().get("candidates", [])
-            if cands and cands[0].get("content", {}).get("parts"):
-                return cands[0]["content"]["parts"][0]["text"]
-            return None
+            return call_gai(prompt, api_key, max_output_tokens=4096, timeout=_API_TIMEOUT)
         except Exception as exc:
             _log(f"Gai attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:

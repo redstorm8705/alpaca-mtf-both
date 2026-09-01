@@ -19,6 +19,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from gai_client import GAI_MODEL_LADDER  # single source of truth for the live Gemini model ladder
 from dotenv import load_dotenv  # must precede module-level os.getenv() calls (E402 fix)
 
 load_dotenv()
@@ -41,7 +43,7 @@ BASE_DIR        = Path(__file__).parent
 LOGS_DIR        = BASE_DIR / "logs"
 BOT_LOG         = LOGS_DIR / "mtf_bot.log"
 TRADE_EVENTS    = LOGS_DIR / "trade_events.jsonl"
-GEMINI_MODEL    = "gemini-3.1-flash-lite"
+GEMINI_MODEL    = GAI_MODEL_LADDER[0]   # primary + display; the full ladder drives the fallback loop
 MAX_LOG_LINES   = 500   # cap — avoid blowing context on noisy INFO lines
 MAX_FILE_CHARS  = 20_000 # cap per source file
 AUDIT_DATE      = _now.strftime("%Y-%m-%d")
@@ -519,24 +521,17 @@ address it)
 
 def _call_gemini(prompt: str) -> str:
     """Send prompt to Gemini, return text response. Falls back through model tiers."""
-    models_to_try = [GEMINI_MODEL, "gemini-2.0-flash-lite"]
-    from google import genai
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    last_err = None
-    for model in models_to_try:
-        try:
-            logger.info(f"  Trying model: {model}")
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-            )
-            logger.info(f"  Success with {model}")
-            return response.text or ""
-        except Exception as e:
-            logger.warning(f"  {model} failed: {e}")
-            last_err = e
-    logger.error(f"All Gemini models exhausted. Last error: {last_err}")
-    return f"(Gemini API error — all models failed. Last: {last_err})"
+    # Shared laddered client — the SINGLE source of truth for the model list (gai_client.GAI_MODEL_LADDER)
+    # AND thinking_budget=0. Replaces the old [GEMINI_MODEL, dead gemini-2.0-flash-lite] SDK loop, which
+    # (a) pinned a retired fallback and (b) set NO thinking_budget=0 — so a thinking model returning
+    # empty text was swallowed by `return response.text or ""` instead of laddering on. call_gai sets
+    # thinking_budget=0 and treats an empty/unparseable response as skip-to-next-model.
+    from gai_client import GAIError, call_gai
+    try:
+        return call_gai(prompt, GEMINI_API_KEY, max_output_tokens=8192)
+    except GAIError as e:
+        logger.error(f"All Gemini models exhausted: {e}")
+        return f"(Gemini API error — all models failed: {e})"
 
 
 def _slack(title: str, body: str, emoji: str = ":robot_face:") -> bool:
