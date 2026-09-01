@@ -35,8 +35,9 @@ def _order(side: str, otype: str = "stop", qty: float = 1, oid: str = "o1", stat
 _DEF_ORDER = _order("sell")  # module-level singleton default (ruff B008)
 
 
-def _position(direction: str, qty: float, price: float):
-    return types.SimpleNamespace(qty=qty, side=direction, current_price=price)
+def _position(direction: str, qty: float, price: float, symbol: str = "X"):
+    # symbol carried so the account-wide get_open_positions() snapshot keys correctly.
+    return types.SimpleNamespace(symbol=symbol, qty=qty, side=direction, current_price=price)
 
 
 class _Tracker:
@@ -83,24 +84,30 @@ class StopProtectionInvariant(unittest.TestCase):
 
     def _run(self, *, open_orders, position, trade, session="rth", place=True,
              submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
-             position_raises=False, cover_fill=89.5, qhm=(), tracker=None):
+             position_raises=False, cover_fill=89.5, qhm=(), f6=(), tracker=None):
         tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
         risk = _Risk()
         goo = mock.Mock(return_value=open_orders)
-        gop = mock.Mock(side_effect=RuntimeError("boom") if position_raises else None, return_value=position)
+        # Account-wide positions snapshot (replaces per-symbol get_open_position). A RAISING fetch
+        # models an API failure → reconcile fails safe on every symbol; None position → empty book.
+        _pos_list = [] if position is None else [position]
+        gop = mock.Mock(side_effect=RuntimeError("boom") if position_raises else None,
+                        return_value=_pos_list)
         sday = mock.Mock(return_value=submit_day)
         sgtc = mock.Mock(return_value=submit_gtc)
         cpos = mock.Mock(return_value=close_ok)
         fill = mock.Mock(return_value=cover_fill)
         qhmm = mock.Mock(return_value=set(qhm))
+        f6m = mock.Mock(return_value=set(f6))
         page = mock.Mock()
         with mock.patch.object(sp, "get_open_orders", goo), \
-             mock.patch.object(sp, "get_open_position", gop), \
+             mock.patch.object(sp, "get_open_positions", gop), \
              mock.patch.object(sp, "submit_day_stop_order", sday), \
              mock.patch.object(sp, "submit_gtc_stop_order", sgtc), \
              mock.patch.object(sp, "close_position", cpos), \
              mock.patch.object(sp, "fetch_actual_fill_price_or_none", fill), \
              mock.patch.object(sp, "_qhm_symbols", qhmm), \
+             mock.patch.object(sp, "_forever6_symbols", f6m), \
              mock.patch.object(sp, "_page", page):
             summary = sp.reconcile_protection(tracker, risk, session=session, place=place)
         return summary, dict(day=sday, gtc=sgtc, close=cpos, fill=fill, page=page,
@@ -234,6 +241,14 @@ class StopProtectionInvariant(unittest.TestCase):
     def test_qhm_excluded(self):
         s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), qhm=("X",))
         self.assertEqual(s["excluded_qhm"], ["X"])
+        m["day"].assert_not_called()
+
+    # 14b — forever6 held symbol is EXCLUDED (F6 shares deliberately carry NO stop; placing one
+    # would sell into the never-sell floor). Board 3-0 + Gro + GAI, 2026-09-01.
+    def test_forever6_excluded(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), f6=("X",))
+        self.assertEqual(s["excluded_forever6"], ["X"])
+        self.assertEqual(len(s["placed"]), 0)
         m["day"].assert_not_called()
 
     # 15 — pos None (Alpaca flat) → skip quietly, no place, no crash
@@ -405,13 +420,20 @@ class PageThrottle(unittest.TestCase):
                submit_day=_DEF_ORDER, close_ok=True, mono=1000.0, tracker=None):
         tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
         page = mock.Mock()
+        # account-wide snapshot: mirror the old per-symbol mock (the SAME `position` for EVERY open
+        # tracker symbol) so multi-symbol throttle tests see every symbol. None → empty book.
+        _pos_objs = ([] if position is None else
+                     [types.SimpleNamespace(symbol=_s, qty=position.qty, side=position.side,
+                                            current_price=position.current_price)
+                      for _s in tracker.open_trades])
         with mock.patch.object(sp, "get_open_orders", mock.Mock(return_value=open_orders)), \
-             mock.patch.object(sp, "get_open_position", mock.Mock(return_value=position)), \
+             mock.patch.object(sp, "get_open_positions", mock.Mock(return_value=_pos_objs)), \
              mock.patch.object(sp, "submit_day_stop_order", mock.Mock(return_value=submit_day)), \
              mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=_DEF_ORDER)), \
              mock.patch.object(sp, "close_position", mock.Mock(return_value=close_ok)), \
              mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
              mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp, "_forever6_symbols", mock.Mock(return_value=set())), \
              mock.patch.object(sp.time, "monotonic", mock.Mock(return_value=mono)), \
              mock.patch.object(sp, "_page", page):
             summary = sp.reconcile_protection(tracker, _Risk(), session=session, place=place)
@@ -500,12 +522,13 @@ class PageThrottle(unittest.TestCase):
         boom = mock.Mock(side_effect=RuntimeError("kaboom"))
         page = mock.Mock()
         with mock.patch.object(sp, "get_open_orders", mock.Mock(return_value=[])), \
-             mock.patch.object(sp, "get_open_position", mock.Mock(return_value=_position("long", 3, 110.0))), \
+             mock.patch.object(sp, "get_open_positions", mock.Mock(return_value=[_position("long", 3, 110.0)])), \
              mock.patch.object(sp, "submit_day_stop_order", boom), \
              mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=_DEF_ORDER)), \
              mock.patch.object(sp, "close_position", mock.Mock(return_value=True)), \
              mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
              mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp, "_forever6_symbols", mock.Mock(return_value=set())), \
              mock.patch.object(sp.time, "monotonic", mock.Mock(return_value=500.0)), \
              mock.patch.object(sp, "_page", page):
             s = sp.reconcile_protection(_Tracker({"X": _trade(stop=95.0)}), _Risk(), session="rth", place=True)
@@ -516,21 +539,30 @@ class PageThrottle(unittest.TestCase):
     # ── PRE-WIRE-BLOCKER-2: ONE account-wide get_open_orders fetch, sliced per symbol ──
     def _run_multi(self, *, open_trades, account_orders, positions, submit=None):
         tracker = _Tracker(dict(open_trades))
-        goo = mock.Mock(return_value=account_orders)     # account-wide (no-arg) fetch
-        gop = mock.Mock(side_effect=lambda sym: positions.get(sym))
+        goo = mock.Mock(return_value=account_orders)     # account-wide (no-arg) orders fetch
+        # account-wide POSITIONS fetch: build the list from the per-symbol dict, tagging each
+        # object's .symbol so the snapshot keys correctly (mirrors the real Alpaca list). This is
+        # ONE fetch for the whole book — the property PRE-WIRE-BLOCKER-2 now extends to positions.
+        _pos_objs = []
+        for _sym, _p in positions.items():
+            if _p is not None:
+                _p.symbol = _sym
+                _pos_objs.append(_p)
+        gop = mock.Mock(return_value=_pos_objs)
         sub = submit if submit is not None else _order("sell", oid="newstop")
         sday = mock.Mock(return_value=sub)
         page = mock.Mock()
         with mock.patch.object(sp, "get_open_orders", goo), \
-             mock.patch.object(sp, "get_open_position", gop), \
+             mock.patch.object(sp, "get_open_positions", gop), \
              mock.patch.object(sp, "submit_day_stop_order", sday), \
              mock.patch.object(sp, "submit_gtc_stop_order", mock.Mock(return_value=sub)), \
              mock.patch.object(sp, "close_position", mock.Mock(return_value=True)), \
              mock.patch.object(sp, "fetch_actual_fill_price_or_none", mock.Mock(return_value=89.5)), \
              mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
+             mock.patch.object(sp, "_forever6_symbols", mock.Mock(return_value=set())), \
              mock.patch.object(sp, "_page", page):
             summary = sp.reconcile_protection(tracker, _Risk(), session="rth", place=True)
-        return summary, goo, sday, page
+        return summary, goo, gop, sday, page
 
     @staticmethod
     def _osym(symbol, side="sell", otype="stop", qty=3, status="new", oid="o"):
@@ -541,9 +573,10 @@ class PageThrottle(unittest.TestCase):
     def test_partA_single_account_wide_fetch(self):
         trades = {s: _trade() for s in ("AAA", "BBB", "CCC")}
         pos = {s: _position("long", 3, 110.0) for s in trades}
-        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=[], positions=pos)
-        goo.assert_called_once()                          # <-- one fetch, not three
+        s, goo, gop, sday, page = self._run_multi(open_trades=trades, account_orders=[], positions=pos)
+        goo.assert_called_once()                          # <-- one orders fetch, not three
         self.assertEqual(goo.call_args, mock.call())      # <-- no-arg (account-wide), not per-symbol
+        gop.assert_called_once()                          # <-- one POSITIONS fetch too (no per-symbol serialization)
         self.assertEqual(len(s["placed"]), 3, "all three naked positions get a stop from one fetch")
 
     # PER-SYMBOL SLICING: a symbol sees ONLY its own orders from the shared book.
@@ -552,7 +585,7 @@ class PageThrottle(unittest.TestCase):
         pos = {"AAA": _position("long", 3, 110.0), "BBB": _position("long", 3, 110.0)}
         # The book has a covering stop for AAA only. BBB must NOT be seen as protected by it.
         book = [self._osym("AAA", side="sell", otype="stop", qty=3)]
-        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=book, positions=pos)
+        s, goo, gop, sday, page = self._run_multi(open_trades=trades, account_orders=book, positions=pos)
         goo.assert_called_once()
         self.assertIn(("AAA", 3.0, 3.0), s["already_protected"], "AAA is covered by its own stop")
         self.assertEqual([p[0] for p in s["placed"]], ["BBB"], "BBB is naked — AAA's stop does not protect it")
@@ -561,7 +594,7 @@ class PageThrottle(unittest.TestCase):
     def test_partA_none_fetch_fails_safe_all_symbols(self):
         trades = {s: _trade() for s in ("AAA", "BBB", "CCC")}
         pos = {s: _position("long", 3, 110.0) for s in trades}
-        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=None, positions=pos)
+        s, goo, gop, sday, page = self._run_multi(open_trades=trades, account_orders=None, positions=pos)
         goo.assert_called_once()
         self.assertEqual(len(s["placed"]), 0, "an account-wide API failure must place NOTHING")
         self.assertEqual(len(s["skipped"]), 3, "every symbol fails safe on the shared None fetch")
@@ -575,7 +608,7 @@ class PageThrottle(unittest.TestCase):
         pos = {"AAA": _position("long", 3, 110.0)}
         _bad = types.SimpleNamespace(id="bad", side="sell", type="stop", qty=3, status="new", stop_price=100.0)
         # _bad has NO .symbol attribute; a real AAA stop is absent → AAA must still place.
-        s, goo, sday, page = self._run_multi(open_trades=trades, account_orders=[_bad], positions=pos)
+        s, goo, gop, sday, page = self._run_multi(open_trades=trades, account_orders=[_bad], positions=pos)
         goo.assert_called_once()
         self.assertEqual([p[0] for p in s["placed"]], ["AAA"],
                          "a symbol-less order must NOT count as AAA's protection")

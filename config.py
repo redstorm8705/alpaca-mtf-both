@@ -347,6 +347,14 @@ TOD_EOD_NO_ENTRY_MINS        = 15   # stop new entries 15 min before close
 TOD_POWER_HOUR_START         = 15 * 60        # 3:00 PM ET in minutes-since-midnight
 TOD_MARKET_CLOSE             = 16 * 60        # 4:00 PM ET
 
+# Pre-close stop-coverage sweep window (board 3-0 + Gro + GAI, 2026-09-01): in the final
+# PRECLOSE_SWEEP_MINUTES before the REAL close (Alpaca clock next_close — half-day aware, NOT
+# the hardcoded 16:00 above), run_cycle fires reconcile_protection(session="rth", place=True) once
+# per cycle to guarantee every open intraday/daytrade position has a live DAY stop covering its
+# full qty before the overnight GTC window. 15 (not a tighter value) so the window spans ≥2 of the
+# observed ~5.5-6 min RTH cycles and cannot silently never-fire (config.py TOD comment precedent).
+PRECLOSE_SWEEP_MINUTES       = 15
+
 # Mid-day doldrums (12:00–2:00 PM ET): low volume, choppy, spreads widen
 # Bot will still run but applies a 0.75x size multiplier in this window
 TOD_MIDDAY_START             = 12 * 60        # 12:00 PM ET

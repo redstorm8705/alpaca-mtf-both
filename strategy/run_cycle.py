@@ -1701,6 +1701,48 @@ def run_cycle(
     # poll_secs=0.1 + no_retry=True — fills are 5–15 min old (settled); no blocking risk.
     _run_fill_recon(tracker, kelly=kelly, risk=risk)
 
+    # ── Pre-close stop-coverage sweep (board 3-0 + Gro + GAI, 2026-09-01) ─────────────────────
+    # Final safety net: in the last config.PRECLOSE_SWEEP_MINUTES before the REAL close (Alpaca
+    # clock next_close — HALF-DAY AWARE, not the hardcoded 16:00), guarantee every open intraday/
+    # daytrade position has a live DAY stop covering its full qty BEFORE the overnight GTC window
+    # (the AH block at 4:05 PM). Reuses the board-hardened reconcile_protection: places a missing
+    # stop, covers a breached one at the ACTUAL fill (RC-4), PAGES any stop-qty≠share-qty mismatch;
+    # QHM + forever6 excluded; allow_cancel_blocking=False so a 40310000 can NEVER cancel a good
+    # stop; the 7% kill switch is equity-derived so a cover here cannot mask a loss. FAIL-SAFE /
+    # NON-CRASHING (this try/except is NOT a time bound — it runs AFTER check_exits + fill_recon so
+    # it can never delay an exit, and reconcile now does account-wide fetches [one orders + one
+    # positions], no per-symbol serialization, so it cannot stall the watchdog). Session="rth" →
+    # DAY stops that auto-expire 16:00, so no 40310000 collision with the 16:05 AH GTC block. A
+    # HEARTBEAT is logged EVERY RTH cycle (not-yet / fired / passed) so a never-fired window is
+    # observable — the deployed-but-inert failure class this project has hit before.
+    try:
+        _pc_next_close = get_clock().get("next_close")
+        _pc_mins_to_close = (
+            (_pc_next_close - now).total_seconds() / 60.0
+            if _pc_next_close is not None else None
+        )
+        if _pc_mins_to_close is None:
+            _pc_state = "no-close-time"
+        elif 0 < _pc_mins_to_close <= config.PRECLOSE_SWEEP_MINUTES:
+            from execution.stop_protection import reconcile_protection
+            _pc_sum = reconcile_protection(tracker, risk, session="rth", place=True)
+            _pc_state = (
+                f"fired: protected={len(_pc_sum['already_protected'])} "
+                f"placed={len(_pc_sum['placed'])} covered={len(_pc_sum['covered'])} "
+                f"paged={len(_pc_sum['paged'])} qhm={len(_pc_sum['excluded_qhm'])} "
+                f"f6={len(_pc_sum['excluded_forever6'])}"
+            )
+        elif _pc_mins_to_close <= 0:
+            _pc_state = "passed"
+        else:
+            _pc_state = "not-yet"
+        logger.info(
+            "PRECLOSE-SWEEP: %s (%.1f min to real close)",
+            _pc_state, _pc_mins_to_close if _pc_mins_to_close is not None else -1.0,
+        )
+    except Exception as _pc_err:
+        logger.warning("Pre-close stop-coverage sweep failed (non-fatal): %s", _pc_err)
+
     # ── Dynamic tracker↔broker DRIFT DETECTOR (2026-08-09, Rafael mandate; board+Gro+GAI) ──
     # READ-ONLY: surfaces tracker↔Alpaca position drift (the #4-#7 visibility half — phantom
     # positions, direction/qty mismatch, $0-P&L-risk entry) IMMEDIATELY, every cycle, with
@@ -1709,7 +1751,7 @@ def run_cycle(
     # calibrates from observed race lifetimes). NEVER mutates a position — pure detect + emit
     # (evidence stream for the future auto-corrector). Placed AFTER check_exits + fill-recon so it
     # can never delay an exit on the trading thread. Fully fail-safe (module-internal + this wrap).
-    _drift_records = []
+    _drift_records: list = []
     try:
         from execution.drift_detector import detect_and_emit_drift
         from execution.broker import get_open_positions, get_open_orders
