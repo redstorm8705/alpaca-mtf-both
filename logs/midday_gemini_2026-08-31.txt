@@ -1,0 +1,37 @@
+Midday Gemini Audit — 2026-08-31
+Model: gemini-3.1-flash-lite | Verdict: PASS
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: PASS
+(The bot is functioning within expected parameters; the lack of closed trades is consistent with the current restrictive entry gates and ORB-blocking logic.)
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity:** There are no closed trades in the current session. The bot successfully logged 1 fill (NVDA) via the Alpaca feed, consistent with the `trade_events` degradation context (D1). 
+- **P&L Integrity:** `pnl_today` from the authoritative ledger correctly reports $0.00. The session-end reconciliation between the tracker and the ledger shows a minor drift ($1.80), which is within acceptable noise limits for an intraday paper-trading lifecycle.
+- **Score/Outcome Correlation:** N/A (No closed trades).
+
+### ENTRY QUALITY
+- **Observations:** The bot correctly identified multiple high-score signals (NVDA, PANW, META) but applied conservative entry logic. The `ORB gate` functioned correctly, blocking entries (e.g., `[PANW] ORB gate BLOCK (long): SPY 765.59 ≤ ORB_H 767.62`) due to insufficient breakout confirmation against the SPY benchmark.
+- **Filtering:** The bot is correctly respecting weekly bias filters (`[AMD] LONG signal filtered by weekly bias (BEARISH)`) and the dynamic `MIN_SCORE` which was elevated to 9/12, effectively filtering out lower-conviction setups.
+
+### EXIT QUALITY
+- **Observations:** All 6 open positions are verified to have protective stops (`LIVE STOP COVERAGE: ✅`). No exits were triggered during the observation window.
+
+### MRI ALIGNMENT
+- **Observations:** The MRI reached `ELEVATED` (40) levels. The bot correctly applied sizing reductions: `[strategy.run_cycle] MRI ELEVATED (score=40) — size floor 0.85x applied.` and a further midday reduction to 75% sizing. The logic is tightly coupled with the current risk environment.
+
+### LOG ANOMALIES
+- **None detected.** The log cadence for the EOD summary and periodic crash-safety flushes matches the 5-minute expectation.
+
+### NEW BUGS / CONCERNS
+- **None.** The bot's behavior regarding entry gating during the `9:30–10:00 AM ET` power-hour window and current RTH status is consistent with defined operational parameters.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **INFRA:** Monitor the `trade_events.jsonl` D1 degradation. While the bot currently uses the `Alpaca Fills` feed as ground truth, ensure the log-reconstruction logic remains robust during the next EOD cycle.
+2. **ALPHA:** None. The current conservative entry behavior is appropriate given the `ELEVATED` MRI and `NEGATIVE` GEX regime.
