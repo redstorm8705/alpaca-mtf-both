@@ -939,3 +939,92 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
     except Exception as e:
         logger.warning("GEX get_gex_regime failed: %s", e)
         return {"label": "UNKNOWN", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": None}
+
+
+def get_gex_levels(symbol: str = "SPY") -> dict:
+    """READ-ONLY accessor for the ACTIONABLE per-symbol pin/wall LEVELS already computed and
+    PERSISTED in the GEX snapshot's per-symbol `pin` dict (centroid / wall / call_wall / put_wall
+    + confidence / dispersion). It RECOMPUTES NOTHING — it just surfaces what _compute_pin already
+    wrote. Mirrors get_gex_regime's tracker-resolution + stale guard EXACTLY, so a STALE or
+    SENTINEL-UNKNOWN symbol (no snapshot / error entry / missing entry) reads STALE/UNKNOWN with
+    None levels here too — you can never get a fresh actionable level under a stale/absent snapshot.
+
+    CONSUMERS MUST GATE ON `levels_ok`, NOT ON `label`. A fresh, non-error entry can legitimately
+    carry label="UNKNOWN" — the flip/quality gate quarantines the regime LABEL (see _compute_gex)
+    while _compute_pin still resolves an actionable pin. In that case this returns label="UNKNOWN"
+    WITH real levels and levels_ok=True (by design — the pin stays usable when the label is
+    quarantined). A Layer B check like `label != "UNKNOWN"` would WRONGLY drop a good pin; use
+    `levels_ok`.
+
+    Purpose: the day-tier Layer B whether-to-act (fade a failed sweep back to the pin/centroid,
+    or ride a break through a wall) needs these per-name levels. INERT until Layer B is wired —
+    there is NO live caller today (additive to this file; every existing consumer of get_gex_regime
+    is byte-unchanged).
+
+    Returns a dict:
+      {"label", "spot", "centroid", "wall", "call_wall", "put_wall", "confidence", "dispersion",
+       "expiry", "dte", "age_minutes", "levels_ok": bool}
+    levels_ok is True ONLY when the entry is fresh, non-error, and _compute_pin actually resolved a
+    centroid (pin.kind == "centroid+wall"); otherwise every level field is None/0.0 and levels_ok
+    is False — fail-safe: never emit an actionable level the compute could not produce. Never raises.
+    """
+    _none = {"label": "UNKNOWN", "spot": None, "centroid": None, "wall": None,
+             "call_wall": None, "put_wall": None, "confidence": 0.0, "dispersion": None,
+             "expiry": None, "dte": None, "age_minutes": None, "levels_ok": False}
+    symbol = _ETF_UNDERLYING_MAP.get(symbol, symbol)
+    import config as _cfg
+    stale_minutes = getattr(_cfg, "GEX_STALE_MINUTES", 30)
+    stale_neg     = getattr(_cfg, "GEX_STALE_MINUTES_NEG", stale_minutes)
+    try:
+        if not _SNAP_PATH.exists():
+            return dict(_none)
+        snap = json.loads(_SNAP_PATH.read_text())
+        ts_str   = snap.get("ts", "")
+        sym_data = snap.get("symbols", {}).get(symbol, {})
+        if not isinstance(sym_data, dict) or not sym_data or "error" in sym_data:
+            return dict(_none)
+        # Age off the per-symbol confirmed_ts (last CLEAN compute), falling back to snapshot ts —
+        # identical to get_gex_regime so the STALE clock is shared.
+        _age_ts = sym_data.get("confirmed_ts") or ts_str
+        try:
+            ts_dt       = datetime.strptime(_age_ts, "%Y-%m-%d %I:%M %p PT").replace(tzinfo=PT)
+            age_minutes = (datetime.now(PT) - ts_dt).total_seconds() / 60
+        except Exception:
+            age_minutes = 9999.0
+        label = sym_data.get("label", "UNKNOWN")
+        # Same asymmetric stale window get_gex_regime uses (NEGATIVE ages faster) so levels and
+        # regime go STALE together.
+        _eff_stale = min(stale_minutes, stale_neg) if label == "NEGATIVE" else stale_minutes
+        if age_minutes > _eff_stale:
+            _r = dict(_none)
+            _r["label"] = "STALE"
+            _r["age_minutes"] = age_minutes
+            return _r
+        pin = sym_data.get("pin") or {}
+        if (not isinstance(pin, dict) or pin.get("kind") != "centroid+wall"
+                or pin.get("centroid") is None):
+            # Fresh entry but the pin never resolved (kind none/error) — surface the label + age +
+            # spot/dte, but NO actionable level (fail-safe).
+            _r = dict(_none)
+            _r["label"] = label
+            _r["age_minutes"] = age_minutes
+            _r["spot"] = sym_data.get("spot")
+            _r["dte"] = sym_data.get("dte")
+            return _r
+        return {
+            "label":       label,
+            "spot":        sym_data.get("spot"),
+            "centroid":    pin.get("centroid"),
+            "wall":        pin.get("wall"),
+            "call_wall":   pin.get("call_wall"),
+            "put_wall":    pin.get("put_wall"),
+            "confidence":  pin.get("confidence", 0.0),
+            "dispersion":  pin.get("dispersion"),
+            "expiry":      pin.get("expiry"),
+            "dte":         sym_data.get("dte"),
+            "age_minutes": age_minutes,
+            "levels_ok":   True,
+        }
+    except Exception as e:
+        logger.warning("GEX get_gex_levels failed: %s", e)
+        return dict(_none)
