@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from gai_client import GAI_MODEL_LADDER  # single source of truth for the live Gemini model ladder
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -46,7 +47,7 @@ SLACK_WEBHOOK   = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 ALPACA_KEY      = os.getenv("ALPACA_API_KEY", "").strip()
 ALPACA_SECRET   = os.getenv("ALPACA_SECRET_KEY", "").strip()
 ALPACA_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
-GEMINI_MODEL    = "gemini-3.1-flash-lite"
+GEMINI_MODEL    = GAI_MODEL_LADDER[0]   # primary + display; the full ladder drives the fallback loop
 
 BASE_DIR        = Path(__file__).resolve().parent
 LOGS_DIR        = BASE_DIR / "logs"
@@ -788,7 +789,7 @@ def _call_gemini(prompt: str) -> str:
             thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),
         )
         last_err = None
-        for model in [GEMINI_MODEL, "gemini-flash-latest"]:
+        for model in GAI_MODEL_LADDER:   # single-source live ladder (was [primary, gemini-flash-latest])
             try:
                 logger.info(f"  Trying model: {model}")
                 r   = client.models.generate_content(model=model, contents=prompt, config=cfg)

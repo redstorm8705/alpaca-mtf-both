@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  — long LLM-prompt strings + rationale comments are intentionally long (matches the sibling audit scripts)
 """autonomous_review.py — Stage 2 of the autonomous patch pipeline.
 
 Runs on OCI at 11 PM ET (weeknights) after the CCR's 10 PM run.
@@ -25,6 +26,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from gai_client import GAI_MODEL_LADDER, call_gai  # single source of truth for the live Gemini model ladder
+
 # ── Config ────────────────────────────────────────────────────────────────────
 _REPO_DIR          = Path("/home/ubuntu/mtf-bot")
 _LOGS_DIR          = _REPO_DIR / "logs"
@@ -35,7 +38,7 @@ _MAX_RETRIES       = 3
 _API_TIMEOUT       = 180   # seconds, matches auto_ai_audit.py
 _GRO_BASE_URL      = "https://api.groq.com/openai/v1"
 _GRO_MODEL         = "openai/gpt-oss-120b"
-_GEMINI_MODEL      = "gemini-3.1-flash-lite"
+_GEMINI_MODEL      = GAI_MODEL_LADDER[0]   # display only; call_gai ladders the full gai_client.GAI_MODEL_LADDER
 # explicit cap — flash default 8192 causes mid-response truncation
 _GEMINI_MAX_TOKENS = 16384
 
@@ -164,39 +167,30 @@ def _call_groq(prompt: str) -> dict:
 
 # ── Gemini call ───────────────────────────────────────────────────────────────
 def _call_gemini(prompt: str) -> dict:
+    # Shared laddered client — the SINGLE source of truth for the model list
+    # (gai_client.GAI_MODEL_LADDER) + thinking_budget=0. A churned / quota'd / retired model
+    # auto-skips to the next LIVE one, so one dead model can never false-flag "GAI down". The
+    # outer retry loop handles a transient whole-ladder failure. Replaces the old SDK-pinned
+    # call + _call_gemini_rest fallback (call_gai IS the laddered REST path now).
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return {
             "text": None, "error": "GEMINI_API_KEY not set", "model": _GEMINI_MODEL,
         }
     t0 = time.monotonic()
+    last = None
     for attempt in range(_MAX_RETRIES):
         try:
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=_GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=_GEMINI_MAX_TOKENS,
-                ),
-            )
-            text = response.text if hasattr(response, "text") else str(response)
-            usage = getattr(response, "usage_metadata", None)
+            text = call_gai(prompt, api_key, max_output_tokens=_GEMINI_MAX_TOKENS, timeout=_API_TIMEOUT)
             return {
                 "text": text,
                 "model": _GEMINI_MODEL,
-                "tokens": (
-                    getattr(usage, "total_token_count", None) if usage else None
-                ),
+                "tokens": None,
                 "elapsed_s": round(time.monotonic() - t0, 2),
                 "error": None,
             }
-        except ImportError:
-            return _call_gemini_rest(prompt, api_key, t0)
         except Exception as exc:
+            last = exc
             _log(f"Gemini attempt {attempt+1}/{_MAX_RETRIES} failed: {exc}")
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(2 ** attempt * 5)
@@ -204,43 +198,8 @@ def _call_gemini(prompt: str) -> dict:
         "text": None,
         "model": _GEMINI_MODEL,
         "elapsed_s": round(time.monotonic() - t0, 2),
-        "error": f"All {_MAX_RETRIES} attempts failed",
+        "error": f"All {_MAX_RETRIES} attempts failed (last: {last})",
     }
-
-def _call_gemini_rest(prompt: str, api_key: str, t0: float) -> dict:
-    import requests  # type: ignore[import-untyped]
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models"
-            f"/{_GEMINI_MODEL}:generateContent?key={api_key}"
-        )
-        resp = requests.post(
-            url,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": _GEMINI_MAX_TOKENS,
-                },
-            },
-            timeout=_API_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return {
-            "text": text,
-            "model": f"{_GEMINI_MODEL}-rest",
-            "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": None,
-        }
-    except Exception as exc:
-        return {
-            "text": None,
-            "model": f"{_GEMINI_MODEL}-rest",
-            "elapsed_s": round(time.monotonic() - t0, 2),
-            "error": str(exc),
-        }
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
 def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess:

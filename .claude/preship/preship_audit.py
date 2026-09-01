@@ -194,35 +194,36 @@ def _gai(prompt, key, paid_key=""):
     # "seamless auto-failover / genuine last resort" was a COMMENT with no enforcement, so paid spend
     # scaled with every free 429 (2 paid top-ups in one month, Aug 2026). Now it is a real gate —
     # least-privilege / default-deny on the ONLY paid path in the repo.
+    # MODEL-SELECTION LADDER (2026-08-31 — the tracked follow-up, finally built). A SINGLE pinned
+    # Gemini model churns fast: gemini-3.5-flash went 200 -> 503 -> 429 -> 404 within hours on
+    # 2026-08-31, which repeatedly false-flagged "GAI down" and dropped ships to the slow NVIDIA
+    # substitute. Try a LADDER of family models; a 404 (retired) or 429/503 (quota/overload) on ONE
+    # model skips to the next — different models carry SEPARATE free-tier quotas, so a 429 on one is
+    # often 200 on the next (verified 2026-08-31 same key: 3.5-flash 404 while 3.7-flash +
+    # 3.1-flash-lite returned 200). First model returning candidates wins; only if the WHOLE ladder
+    # fails does the caller escalate (free retry -> paid-if-allowed -> NVIDIA substitute).
+    # thinkingBudget:0 keeps a thinking model from spending the whole maxOutputTokens on hidden
+    # reasoning (INDETERMINATE otherwise). maxOutputTokens 2048 stays under the free per-minute cap.
+    _GAI_LADDER = ("gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
+
     def _one(k):
-        # PINNED to gemini-3.5-flash, NOT the `gemini-flash-latest` alias (root cause, 2026-08-25):
-        # the `-latest` alias routed to an overloaded free-tier pool returning a PERSISTENT 503
-        # UNAVAILABLE for a full day, while pinned models served instantly — and the previously
-        # documented fallback `gemini-2.5-flash` is now 404 (retired). A `-latest` alias is a moving
-        # target we don't control; pin a working family version we control. If THIS pin later 404s
-        # (retired) or 503s (overloaded), re-run the model-list probe and re-pin — automating that
-        # re-pin as a model-selection ladder is the tracked follow-up (not built here yet).
-        # (Verified 2026-08-25: gemini-3.5-flash 200 in ~4s with a
-        # clean VERDICT; gemini-flash-latest 503; gemini-2.5-flash 404.)
-        r = _curl(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={k}",
-            ["Content-Type: application/json"],
-            # maxOutputTokens 2048 (was 8192): the 8192 reservation counts against the free-tier
-            # per-minute TOKEN budget and helped trip 429s on multi-file runs (Rafael 2026-08-24:
-            # "gai prompts in smaller amounts to stay under the free tier"). A verdict + a brief
-            # cited-defect rationale fits well under 2048; more only pads reasoning.
-            # thinkingConfig.thinkingBudget:0 — gemini-3.5-flash is a THINKING model; without this
-            # its hidden reasoning consumes the whole maxOutputTokens budget and NO verdict text is
-            # emitted (parsed as INDETERMINATE, blocking every ship). Disabling thinking yields a
-            # clean terse verdict in ~1s (root cause 2 of the 2026-08-25 "GAI down" investigation;
-            # also in project memory: "thinkingBudget=0 — thinking can eat the budget").
-            {"contents": [{"parts": [{"text": prompt}]}],
-             "generationConfig": {"maxOutputTokens": 2048,
-                                  "thinkingConfig": {"thinkingBudget": 0}}},
-            k)
-        if "candidates" not in r:
-            raise RuntimeError(str(r).replace(k, "***")[:200])
-        return r["candidates"][0]["content"]["parts"][0]["text"]
+        _last_err = None
+        for _model in _GAI_LADDER:
+            try:
+                r = _curl(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent?key={k}",
+                    ["Content-Type: application/json"],
+                    {"contents": [{"parts": [{"text": prompt}]}],
+                     "generationConfig": {"maxOutputTokens": 2048,
+                                          "thinkingConfig": {"thinkingBudget": 0}}},
+                    k)
+                if "candidates" in r:
+                    return r["candidates"][0]["content"]["parts"][0]["text"]
+                _last_err = RuntimeError(str(r).replace(k, "***")[:200])
+            except Exception as _e:
+                _last_err = _e
+            # this model failed (retired 404 / quota 429 / overload 503 / error) — try the next one
+        raise _last_err if _last_err else RuntimeError("all GAI ladder models failed")
     # FREE-FIRST discipline (Rafael): the free tier is a ROLLING quota — a brief backoff often
     # clears a per-minute spike without spending paid. Retry free once with a short wait BEFORE
     # any paid attempt; paid is a genuine last resort, not an inertia default.

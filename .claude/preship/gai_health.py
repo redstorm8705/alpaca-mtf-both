@@ -23,13 +23,15 @@ import sys
 import tempfile
 import time
 
-# Pinned reviewer model (kept in lockstep with preship_audit.py / ci_audit.py). NOT a `-latest`
-# alias — those route to shifting/overloaded pools we do not control (the root cause).
-PINNED_MODEL = "gemini-3.5-flash"
-
-# Auto-fall-forward order when the pinned model is retired/congested. Lite variants are the least
-# congested (verified 2026-08-25). The list is data, not a moving alias.
-CANDIDATE_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
+# Reviewer model ladder. CANONICAL SOURCE = gai_client.GAI_MODEL_LADDER (2026-08-31 permanent
+# single-source fix for recurring Gemini model-churn). This gate script stays STDLIB-ONLY / import-
+# free for CI isolation, so it carries a lockstep MIRROR of that ladder — KEEP THE TWO IDENTICAL
+# (same pattern as preship_audit.py / ci_audit.py). NOT a `-latest` alias (those route to shifting/
+# overloaded pools we do not control — a root cause). Verified live 2026-08-31: gemini-3.7-flash +
+# 3.1-flash-lite + 3-flash-preview + flash-latest all served 200; the old gemini-3.5-flash pin
+# returned 404 (retired) — the exact churn (a single dead pin false-blocking CI) this fix removes.
+CANDIDATE_MODELS = ["gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest"]
+PINNED_MODEL = CANDIDATE_MODELS[0]   # 3.1-flash-lite: proven to emit a clean single VERDICT for the gate
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta"
 # thinkingBudget:0 is MANDATORY — gemini-3.5-flash is a thinking model; without it the hidden
