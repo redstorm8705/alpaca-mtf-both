@@ -767,6 +767,16 @@ DAYTRADE_MAINT_CUSHION_USD  = 650.0  # do not let day-tier gross notional push t
 # bound the fast loop's Alpaca calls so the 5-min main scan's T1 fetches are never crowded out.
 DAYTRADE_MAX_API_CALLS_PER_RUN = 60
 
+# Order-execution tunables (Increment 3 — read by execution/day_trade_manager.py). Rafael:
+# the stop-retry count is tunable/dynamic (a transient Alpaca glitch deserves retries, not a
+# panic-flatten). The ratio tunables are PROV-tagged starting values for a zero-history tier.
+DAYTRADE_STOP_RETRIES        = 2      # retry an UNCONFIRMED protective stop this many MORE times before flattening
+DAYTRADE_STOP_RETRY_WAIT_S   = 1.0    # backoff (s) between stop-placement retries
+DAYTRADE_ENTRY_SLIPPAGE_PCT  = 0.002  # PROV:daytier-v2-2026-08-29  marketable-limit crosses the quote by this frac (caps worst fill vs a naked market order)
+DAYTRADE_STOP_BUFFER_PCT     = 0.001  # PROV:daytier-v2-2026-08-29  buffer beyond the broken wall for a RIDE stop
+DAYTRADE_FILL_POLL_S         = 1.0    # poll interval (s) when confirming an entry fill
+DAYTRADE_FILL_POLL_MAX       = 8      # max fill-confirm polls before treating the entry as unfilled (cancel + skip)
+
 
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 
