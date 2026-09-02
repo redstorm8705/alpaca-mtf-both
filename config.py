@@ -718,6 +718,56 @@ MIN_POSITION_VALUE_ADVISORY  = 200   # Advisory floor for non-fractionable symbo
 OWNERSHIP_GUARD_ENFORCE = False
 
 
+# ─── DAY-TRADE TIER (Track A GEX-core) — Rafael growth engine ─────────────────
+# The same-day, flat-by-close growth tier. The read-only meta-label PIPELINE
+# (SIDE / GEX-whether-to-act / entry-trigger / sizing) already shipped inert
+# (increments 1-6); this block holds the constants the LIVE order module + the
+# 2-3 min execution runner will read. DARK until DAYTRADE_ENABLED=True — every
+# consumer is gated on that master flag, so nothing here changes RTH behavior
+# while it is False (INERT, mirrors FOREVER6_ENABLED). Design record:
+# logs/design_records/day_tier_v2_design_2026-08-29.md — §3 (risk), §7b.6
+# (allocation), §7 (cadence + flat-by-close). Flip to True ONLY after the live
+# order module clears the full board + Gro + GAI + masked-loss gate (risk-path).
+DAYTRADE_ENABLED            = False   # master flag — DARK until the live order path is gated + shipped
+DAYTRADE_TRACK_B_ENABLED    = False   # Track B (dynamic movers) OFF day-1 (board + Gro + GAI unanimous) — Track A only
+
+# Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
+# _DAYTRADE_UNDERLYINGS (per-symbol GEX already live). Leveraged trackers
+# (TSLL/NVDL/TQQQ/SOXL) are a buying-power expedient, added after A validates.
+DAYTRADE_UNIVERSE = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]
+
+# Allocation (§7b.6): the tier gets DAYTRADE_ALLOC_PCT of equity, split Track A /
+# Track B. Track B is CASH-ONLY (no margin) + one-way fungible (A may borrow B's
+# idle budget on a strong-A/no-mover day; B may NEVER borrow A's). Track A sizes
+# off BUYING POWER (account trades ~4x margin); Track B off settled CASH.
+# PROV:daytier-v2-2026-08-29 — the allocation split + kill percentages below are board-policy
+# capital budgets for a NEW tier with ZERO trade history (design record §3, §7b.6). There is no
+# day-tier data to derive them from yet; §7b.6 flags them explicitly as STARTING values to be
+# recalibrated from live P&L (roadmap: scale alloc 15%→25% as Track B validates). Structural, not fitted.
+DAYTRADE_ALLOC_PCT          = 0.15   # PROV:daytier-v2-2026-08-29  15% of equity to the whole day-tier (start; scale to 0.25 as B validates)
+DAYTRADE_TRACK_A_PCT        = 0.65   # PROV:daytier-v2-2026-08-29  Track A share of the tier allocation
+DAYTRADE_TRACK_B_PCT        = 0.35   # PROV:daytier-v2-2026-08-29  Track B share (cash-only)
+DAYTRADE_TRACK_B_CASH_ONLY  = True   # HARD: Track B never uses margin (halt-reopen gap containment)
+
+# Kills (§3, §7b.6) — nested: track sub-kills sum < tier kill < account 7% kill.
+DAYTRADE_TIER_KILL_PCT      = 0.25   # PROV:daytier-v2-2026-08-29  flatten + halt the whole day-tier at −25% of tier allocated capital
+DAYTRADE_TRACK_A_KILL_PCT   = 0.25   # PROV:daytier-v2-2026-08-29  Track A sub-kill: −25% of A's budget
+DAYTRADE_TRACK_B_KILL_PCT   = 0.20   # PROV:daytier-v2-2026-08-29  Track B sub-kill: −20% of B's budget (tighter — unvalidated + halt tail)
+
+# Cadence + flat-by-close (§7 CADENCE; §5d/§7b overnight-safety).
+DAYTRADE_SCAN_INTERVAL_MIN  = 2      # fast EXECUTION-loop cadence (min); the SIGNAL stays on 15/30m bar-close
+DAYTRADE_FORCE_FLAT_MINUTES = 20     # force-liquidate the tier's OWN positions in the final N min before the REAL
+                                     # close (Alpaca clock next_close — half-day aware). MUST be > PRECLOSE_SWEEP_MINUTES
+                                     # so the day-tier flattens BEFORE the pre-close sweep places any intraday-tagged
+                                     # DAY stop on a still-open day-tier lot (avoids the mis-tagged-stop flatten
+                                     # deadlock — masked-loss seat C2, 2026-09-02).
+DAYTRADE_MAINT_CUSHION_USD  = 650.0  # do not let day-tier gross notional push the account maintenance cushion below this
+
+# Per-run API-call cap (reliability seat C5 + ANTI-SILO API-budget isolation §7b.2):
+# bound the fast loop's Alpaca calls so the 5-min main scan's T1 fetches are never crowded out.
+DAYTRADE_MAX_API_CALLS_PER_RUN = 60
+
+
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 
 def validate_config():
@@ -813,6 +863,43 @@ def validate_config():
         errors.append("ALPACA_API_KEY not set in environment (.env not loaded?)")
     if not _os.getenv("ALPACA_SECRET_KEY"):
         errors.append("ALPACA_SECRET_KEY not set in environment (.env not loaded?)")
+
+    # Day-tier kill nesting coherence (2026-09-02, board + Gro + GAI day-tier design).
+    # Fail CLOSED if a mis-set inverts the nesting — the day-tier must never be able to
+    # lose more than the account daily kill tolerates. Runs regardless of DAYTRADE_ENABLED
+    # so a bad edit is caught even while the tier is DARK. (§7b.6 nesting: track sub-kills
+    # sum < tier kill < account daily kill; force-flat before the pre-close sweep.)
+    if not (0 < DAYTRADE_ALLOC_PCT < 1.0):
+        errors.append(f"DAYTRADE_ALLOC_PCT ({DAYTRADE_ALLOC_PCT}) must be between 0 and 1")
+    if abs((DAYTRADE_TRACK_A_PCT + DAYTRADE_TRACK_B_PCT) - 1.0) > 1e-9:  # PROV:daytier-v2-2026-08-29  float-equality epsilon (structural, not a risk threshold)
+        errors.append(
+            f"DAYTRADE track split must sum to 1.0: A {DAYTRADE_TRACK_A_PCT} + "
+            f"B {DAYTRADE_TRACK_B_PCT} = {DAYTRADE_TRACK_A_PCT + DAYTRADE_TRACK_B_PCT}"
+        )
+    _dt_sub_kill_sum = (
+        DAYTRADE_TRACK_A_KILL_PCT * DAYTRADE_TRACK_A_PCT
+        + DAYTRADE_TRACK_B_KILL_PCT * DAYTRADE_TRACK_B_PCT
+    )
+    if _dt_sub_kill_sum >= DAYTRADE_TIER_KILL_PCT:
+        errors.append(
+            f"Day-tier sub-kills sum ({_dt_sub_kill_sum:.4f} of tier) must be < tier kill "
+            f"({DAYTRADE_TIER_KILL_PCT}) — kill nesting inverted"
+        )
+    # Only enforce the account-terms nesting when the tier is ARMED — while DARK it
+    # contributes zero risk, and the day-tier only ever runs on the paper 7% kill
+    # (0.0375 < 0.07). If it were ever armed under the 3% live/default profile this
+    # correctly fails CLOSED (0.0375 !< 0.03), blocking a genuinely-unnested config.
+    if DAYTRADE_ENABLED and DAYTRADE_TIER_KILL_PCT * DAYTRADE_ALLOC_PCT >= MAX_DAILY_LOSS_PCT:
+        errors.append(
+            f"Day-tier kill in account terms ({DAYTRADE_TIER_KILL_PCT * DAYTRADE_ALLOC_PCT:.4f}) "
+            f"must be < account daily kill ({MAX_DAILY_LOSS_PCT}) when DAYTRADE_ENABLED"
+        )
+    if DAYTRADE_FORCE_FLAT_MINUTES <= PRECLOSE_SWEEP_MINUTES:
+        errors.append(
+            f"DAYTRADE_FORCE_FLAT_MINUTES ({DAYTRADE_FORCE_FLAT_MINUTES}) must be > "
+            f"PRECLOSE_SWEEP_MINUTES ({PRECLOSE_SWEEP_MINUTES}) so the day-tier flattens "
+            f"before the pre-close sweep can place an intraday-tagged stop on a day-tier lot"
+        )
 
     # Log results
     for w in warnings:
