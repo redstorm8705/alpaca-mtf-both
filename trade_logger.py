@@ -126,6 +126,16 @@ def log_event(
         os.makedirs(_JSONL.parent, exist_ok=True)
         with open(_JSONL, "a") as f:
             f.write(json.dumps(record, default=_json_default) + "\n")
+            # DURABILITY (day-tier live build, data-integrity seat 2026-09-02):
+            # flush+fsync so the event reaches stable storage before the call
+            # returns. Without it, page-cache data is lost on a host hard-stop or
+            # OCI reboot — a weekend-gap vector for a multi-day paper-live run (the
+            # day-tier's canonical P&L flows through here). Cost is ms-scale at a
+            # few events per 5-min cycle, so fsync-per-event is safe on the
+            # run_cycle thread; inside the try, so an fsync failure hits the same
+            # throttled write-fail alert below (never stalls the trading thread).
+            f.flush()
+            os.fsync(f.fileno())
     except Exception as e:
         # Observability follow-up to D1 (2026-07-28): escalate the previously-silent
         # WARNING to ERROR + a throttled operator Slack. A silent WARNING let a 7-day
