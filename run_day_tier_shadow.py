@@ -32,6 +32,15 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# Self-load .env so this runs with T1 auth under cron (matches the standalone-cron pattern:
+# nightly_audit / midday_audit / run_ftd all call load_dotenv). GUARDED because dotenv is absent
+# in some environments (e.g. the unit-test host); there the caller/env supplies credentials.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 PT = ZoneInfo("America/Los_Angeles")
 _PROJECT_ROOT = Path(__file__).resolve().parent          # RC-2: file lives at repo root
 _SHADOW_LOG = _PROJECT_ROOT / "logs" / "day_tier_shadow.jsonl"
