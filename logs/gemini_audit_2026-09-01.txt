@@ -1,0 +1,48 @@
+Nightly Gemini Audit — 2026-09-01
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['gai_client.py', 'nightly_audit.py', 'weekly_review.py', 'autonomous_review.py', 'config.py', 'midday_audit.py', 'auto_ai_audit.py', 'slack_format.py', 'autonomous_patch_generator.py', 'weekly_postmortem.py', 'strategy/run_cycle.py', 'strategy/day_tier_side.py', 'execution/stop_protection.py', '.github/scripts/ci_audit.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution/stop_protection.py` | `reconcile_protection` | `_all_orders` fetch failure results in `_all_orders` being `None`, which is then used in `_orders_by_symbol` logic. If `_all_orders` is `None`, the loop skips the order-book check entirely, causing the bot to perceive all positions as naked and attempt to place redundant stops over live ones, risking over-coverage/reverse-fill.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **[MARA] DAY STOP submitted / STOP-PROTECT: placed MISSING buy stop**: The log at `2026-09-01 19:45:30` shows a stop being placed for MARA. However, the `trade_events.jsonl` entry for MARA (ts: `2026-09-01T11:53:35`) shows it as a **SHORT** position. A "BUY stop" is the correct protective order for a short, but the `execution.stop_protection` logic is triggering a "MISSING" alert for a position that was already active.
+*   **Shorting pre-flight FAILED**: Multiple instances (e.g., `19:46:14`, `19:53:02`) show shorting blocked due to `buying_power` checks, despite `shorting_enabled=True`. This indicates a potential discrepancy between the `RiskManager`'s view of available margin and the `execution.entry_logic` pre-flight check.
+*   **EOD P&L DRIFT**: Persistent drift of `$-18.36` across multiple snapshots. While the provenance header notes this is pre-heal telemetry, the consistency of this specific drift value across the entire 20:00 ET window suggests a potential mismatch in the `ledger_sync` or `portfolio_tracker` calculation for the MARA short position.
+
+### PERFORMANCE AUDIT
+*   **MARA Short (2026-09-01)**: The trade event shows an entry at `$10.25` (short). The EOD self-check telemetry shows an exit at `$10.25` (breakeven) but lists the side as "long" and entry at `$13.31`. This is a clear recording bug where the tracker is misidentifying the side and entry price of the MARA short position.
+*   **Score vs. Outcome**: The bot is consistently scoring short setups (e.g., NVDL, SOFI, MSTR) with 10/12 or 12/12, yet the `execution.entry_logic` is blocking these trades due to `buying_power` constraints. The bot is effectively "scoring" high-conviction trades it cannot execute, leading to a divergence between the strategy's theoretical performance and actual P&L.
+
+### TRADE INTEGRITY
+*   **MARA Recording Bug**: The `_pnl_selfcheck_telemetry_NOT_A_LOSS` section in the EOD snapshot reports the MARA short as a "long" with an entry of `$13.31`. This contradicts the `trade_events.jsonl` entry (`2026-09-01T11:53:35`) which correctly identifies it as a short at `$10.25`. This indicates the `portfolio_tracker` is failing to correctly map the trade side from the event log.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/stop_protection.py`**:
+    *   **Bug**: The `reconcile_protection` function handles `get_open_orders()` returning `None` (API failure) by skipping the order-book check.
+    *   **Failure Condition**: If `_all_orders` is `None`, `_orders_by_symbol` remains empty. The loop then treats every position as having zero protective orders, triggering `_throttled_page` and potentially placing redundant stops.
+    *   **Fix**: If `get_open_orders()` returns `None`, the function must `return` or `raise` to prevent acting on a blind state.
+*   **`gai_client.py`**:
+    *   **Observation**: The ladder implementation is robust, but the `call_gai` function does not explicitly handle the case where `payload["candidates"]` exists but is empty, which could lead to an `IndexError` if not for the broad `except` block. This is acceptable but could be more explicit.
+
+### P5 STATUS
+*   **P5-C1 (FVG MultiIndex)**: UNTOUCHED.
+*   **P5-C2 (run_movers.py)**: UNTOUCHED.
+*   **P5-H2 (Fill price crosstalk)**: TRIGGERED (evidenced by the MARA recording mismatch).
+*   **P5-H3 (Orphan GTC)**: UNTOUCHED.
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | `execution/stop_protection.py` | Blind-state order placement | If `get_open_orders()` returns `None`, the reconciler assumes all positions are naked and attempts to place stops, risking duplicate orders.**
+*   **ALPHA ISSUE | MEDIUM | `execution/entry_logic.py` | Buying power miscalculation | Shorting is blocked despite `shorting_enabled=True` and sufficient equity, suggesting the `buying_power` check is not accounting for the short-sale proceeds correctly.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **CRITICAL**: Patch `execution/stop_protection.py` to fail-closed (return/raise) if `get_open_orders()` returns `None`.
+2.  **HIGH**: Investigate `execution/entry_logic.py` to determine why shorting is blocked; verify if the `buying_power` calculation is correctly adding short-sale proceeds to the available margin.
+3.  **MEDIUM**: Audit `execution/portfolio_tracker.py` to fix the side-mapping logic that caused the MARA short to be recorded as a "long" in the EOD telemetry.
+4.  **LOW**: Prune the `score_comparison` JSON or implement a rolling window to address P5-M3.
