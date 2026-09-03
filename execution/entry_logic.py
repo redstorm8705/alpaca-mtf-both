@@ -1613,6 +1613,29 @@ def execute_entries(
                     logger.warning(f"[{symbol}] MR log-extra build failed ({_mrlog_e}) — "
                                    f"logging strategy tag only.")
                     _mr_log_extra = {"strategy": "mean_reversion"}
+            # ── Forward GEX-vs-outcome log (2026-09-03, Rafael-approved) ──────────────────
+            # Capture the GEX regime AT ENTRY into the trade_events.jsonl entry event so the
+            # closed-trade outcome (R-multiple — derivable from the entry/exit/stop already logged)
+            # can later be paired with the regime that DROVE the Kelly GEX multiplier. This is the
+            # calibration data to tune GEX_EDGE_MULT_MOMENTUM_POS / GEX_EDGE_MULT_MR_NEG from their
+            # v1 neutral 1.00 toward their optimal de-weights — history can't (zero entry/GEX date
+            # overlap; see logs/design_records/intraday_gex_interconnect_2026-09-03.md). Cached
+            # snapshot reads via data.gex (NO network — get_gex_regime reads logs/gex_snapshot.json),
+            # fail-safe (UNKNOWN on any miss), and self-contained try/except so a logging-field
+            # failure NEVER raises into the entry path (mirrors the _mr_log_extra reliability catch).
+            # Applies to ALL entries (momentum + MR); `strategy` is already logged (trend = no tag /
+            # MR = "mean_reversion"), so each row carries {regime, strategy} and pairs to its outcome.
+            _gex_log_extra: dict = {}
+            try:
+                from data.gex import get_gex_regime as _gex_reg_log
+                _gex_spy_log = _gex_reg_log("SPY") or {}
+                _gex_log_extra = {
+                    "gex_spy_regime": _gex_spy_log.get("label", "UNKNOWN"),
+                    "gex_spy_raw":    _gex_spy_log.get("raw_gex_m"),
+                    "gex_sym_regime": (_gex_reg_log(symbol) or {}).get("label", "UNKNOWN"),
+                }
+            except Exception as _gexlog_e:
+                logger.debug("[%s] GEX-outcome log capture skipped (non-fatal): %s", symbol, _gexlog_e)
             try:
                 tracker.record_entry(
                     symbol=symbol,
@@ -1641,6 +1664,7 @@ def execute_entries(
                     # carries "conditions"; this was the only missing link (per-factor never logged).
                     conditions=sig.get("conditions"),
                     **_mr_log_extra,
+                    **_gex_log_extra,   # forward GEX-at-entry regime for outcome-pairing calibration
                 )
                 # Tag MR strategy on the persisted trade dict (item 2 diff 3d) — record_entry does
                 # NOT persist strategy (it only forwards it to the JSONL event), so without this the
