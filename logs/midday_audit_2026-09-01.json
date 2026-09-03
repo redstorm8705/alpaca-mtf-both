@@ -1,0 +1,69 @@
+{
+  "audit_date": "2026-09-01",
+  "run_ts": "2026-09-01T10:30:01.778015-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 33,
+    "levels": {
+      "STRESSED": 29,
+      "ELEVATED": 4
+    },
+    "last_score": 50,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 5,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-01 16:20:13,417 WARNING ledger_sync ledger_sync wall-time 12.3s (fills=569 orders=2618)",
+      "2026-09-01 16:40:14,115 WARNING ledger_sync ledger_sync wall-time 12.6s (fills=569 orders=2618)",
+      "2026-09-01 16:42:36,152 | WARNING  | execution.entry_logic | [SOXS] COUNTER-TREND GATE [long]: 1-month return -1.66% opposes the trade on a structural",
+      "2026-09-01 17:00:13,993 WARNING ledger_sync ledger_sync wall-time 12.6s (fills=569 orders=2618)",
+      "2026-09-01 17:20:14,118 WARNING ledger_sync ledger_sync wall-time 12.1s (fills=569 orders=2618)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "META",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 0,
+    "symbols": [],
+    "by_symbol": {}
+  }
+}
