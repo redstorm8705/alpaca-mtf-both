@@ -642,6 +642,15 @@ MR_SPY_DOWNTREND_SMA  = 50      # SPY < this SMA (days) = intermediate downtrend
 GEX_EDGE_MULT_MOMENTUM  = 1.30    # NEGATIVE regime — full (was 1.00 shadow; 1.10 staged)
 GEX_EDGE_MULT_MR        = 1.15    # POSITIVE regime — full (was 1.00 shadow; 1.05 staged)
 GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/UNKNOWN (fail-safe)
+# Strategy-aware refinement (2026-09-03, board 2 cold seats + Gro + GAI): the regime up-weights
+# above are correct for the strategy each regime FAVORS, but were applied strategy-BLIND. A
+# POSITIVE (+gamma / pinning) backdrop is a MEAN-REVERSION tailwind (MR keeps x1.15) but a HEADWIND
+# for a momentum/trend breakout — dealers dampen the move, so the breakout tends to fade. Applying
+# the MR up-weight to a momentum trade up-sized exactly the setups most likely to fail. Momentum/
+# trend in POSITIVE now takes this multiplier instead. 1.00 = neutral in v1 (removes the mis-signed
+# 1.15x up-weight; down-only vs prior); forward-calibrate toward a de-weight (<1.0) once the
+# GEX-vs-breakout-outcome log has enough paired samples (history can't — see design record).
+GEX_EDGE_MULT_MOMENTUM_POS = 1.00  # PROV:gex-momentum-pos-headwind — momentum/trend multiplier in POSITIVE/+gamma
 GEX_MIN_SCORE_NEG_BUMP  = 1       # Layer-8: +1 MIN_SCORE on GEX=NEGATIVE (pickier on high-vol days)
 
 # ─── GEX SPOT-CONSISTENCY GUARD (Diff A — 2026-07-26, board 5 seats + Gro + GAI) ──────────

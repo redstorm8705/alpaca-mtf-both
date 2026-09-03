@@ -358,7 +358,18 @@ class KellySizer:
                         # enclosing except → mult stays 1.0 (fail-neutral).
                         _gex_edge_mult = config.GEX_EDGE_MULT_MOMENTUM
                     elif _gex_regime == "POSITIVE":
-                        _gex_edge_mult = config.GEX_EDGE_MULT_MR
+                        # Strategy-aware (2026-09-03, board 2 cold seats + Gro + GAI): +gamma/
+                        # POSITIVE is a mean-reversion tailwind (MR keeps the x1.15 up-weight) but a
+                        # HEADWIND for a momentum/trend breakout — dealers dampen the move, so the
+                        # breakout tends to fade. The prior strategy-BLIND 1.15x up-sized exactly the
+                        # momentum setups most likely to fail. Momentum/trend (strategy !=
+                        # "mean_reversion") now takes GEX_EDGE_MULT_MOMENTUM_POS (1.00 neutral in v1;
+                        # down-only vs the prior 1.15). Direct config access — a missing attr fails
+                        # into the enclosing except -> mult stays 1.0 (fail-neutral), per GAI R3 above.
+                        _gex_edge_mult = (
+                            config.GEX_EDGE_MULT_MR if strategy == "mean_reversion"
+                            else config.GEX_EDGE_MULT_MOMENTUM_POS
+                        )
                     # NEAR-FLIP / STALE / UNKNOWN: multiplier stays 1.0
                     if _gex_edge_mult != 1.0:
                         # INFO (was debug, 2026-07-03): this line is the daily
