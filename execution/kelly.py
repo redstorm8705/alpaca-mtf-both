@@ -351,12 +351,19 @@ class KellySizer:
                     from data.gex import get_gex_regime as _get_gex_kelly
                     _gex_regime = _get_gex_kelly("SPY").get("label", "UNKNOWN")
                     if _gex_regime == "NEGATIVE":
-                        # GAI R3 (2026-07-03): direct access, not getattr-with-
-                        # default — the old 1.30/1.15 fallbacks would silently
-                        # bypass the staged 1.10/1.05 values if the config attr
-                        # were ever missing. Missing attr now raises into the
-                        # enclosing except → mult stays 1.0 (fail-neutral).
-                        _gex_edge_mult = config.GEX_EDGE_MULT_MOMENTUM
+                        # Strategy-aware mirror (2026-09-03, board 2 cold seats + Gro + GAI): -gamma/
+                        # NEGATIVE (dealers amplify → moves TREND, don't revert) is a momentum/trend
+                        # TAILWIND (momentum keeps the x1.30 up-weight) but a HEADWIND for a
+                        # mean-reversion entry — the reversion an MR trade needs is what -gamma
+                        # suppresses. The prior strategy-BLIND 1.30x up-sized MR trades in the regime
+                        # least friendly to them. MR (strategy == "mean_reversion") now takes
+                        # GEX_EDGE_MULT_MR_NEG (1.00 neutral in v1; down-only vs the prior 1.30).
+                        # GAI R3 (2026-07-03): direct config access, not getattr-with-default — a
+                        # missing attr raises into the enclosing except → mult stays 1.0 (fail-neutral).
+                        _gex_edge_mult = (
+                            config.GEX_EDGE_MULT_MR_NEG if strategy == "mean_reversion"
+                            else config.GEX_EDGE_MULT_MOMENTUM
+                        )
                     elif _gex_regime == "POSITIVE":
                         # Strategy-aware (2026-09-03, board 2 cold seats + Gro + GAI): +gamma/
                         # POSITIVE is a mean-reversion tailwind (MR keeps the x1.15 up-weight) but a

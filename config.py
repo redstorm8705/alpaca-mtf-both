@@ -651,6 +651,13 @@ GEX_EDGE_MULT_NEUTRAL   = 1.00    # edge multiplier when GEX=NEAR-FLIP or STALE/
 # 1.15x up-weight; down-only vs prior); forward-calibrate toward a de-weight (<1.0) once the
 # GEX-vs-breakout-outcome log has enough paired samples (history can't — see design record).
 GEX_EDGE_MULT_MOMENTUM_POS = 1.00  # PROV:gex-momentum-pos-headwind — momentum/trend multiplier in POSITIVE/+gamma
+# Mirror of the above for the NEGATIVE/-gamma regime (2026-09-03, board 2 cold seats + Gro + GAI):
+# -gamma (dealers amplify -> moves TREND, don't revert) is a momentum/trend TAILWIND (momentum keeps
+# x1.30) but a HEADWIND for a mean-reversion entry — the reversion an MR trade needs is exactly what
+# -gamma suppresses. The prior strategy-BLIND 1.30x up-sized MR trades in the regime least friendly to
+# them. 1.00 = neutral in v1 (removes the mis-signed up-weight; down-only vs the prior 1.30);
+# forward-calibrate toward a de-weight (<1.0) from the same forward outcome log.
+GEX_EDGE_MULT_MR_NEG    = 1.00     # PROV:gex-mr-neg-headwind — mean-reversion multiplier in NEGATIVE/-gamma
 GEX_MIN_SCORE_NEG_BUMP  = 1       # Layer-8: +1 MIN_SCORE on GEX=NEGATIVE (pickier on high-vol days)
 
 # ─── GEX SPOT-CONSISTENCY GUARD (Diff A — 2026-07-26, board 5 seats + Gro + GAI) ──────────
