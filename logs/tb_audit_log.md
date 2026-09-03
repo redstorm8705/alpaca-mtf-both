@@ -9865,3 +9865,10 @@ auto-confirm, scoped) is the real Tier-1 build.
 - FIX (down-only, non-risk-path): POSITIVE branch → GEX_EDGE_MULT_MR (1.15) if strategy==mean_reversion else GEX_EDGE_MULT_MOMENTUM_POS (new config const, 1.00). Momentum+POSITIVE 1.15→1.00; MR+POSITIVE keeps 1.15; NEGATIVE unchanged; UNKNOWN fail-safe 1.0. strategy is an existing get_risk_pct param.
 - Gates: full read (481L) + RC audit + statics + no_static_scan + functional test (ratios verified) + cold-2nd PASS (enumerated 5x2 cases, provably down-only) + Gro/GAI preship APPROVE x2 + CI preship pass. Deployed via rebase-reconcile of the recurring report-commit divergence; verified live on OCI.
 - Follow-ups (not shipped): (1) forward GEX-vs-breakout-outcome log to calibrate momentum+POSITIVE toward <1.0 (history has zero overlap — trade_events ends 2026-06-05, GEX history starts 2026-07-03); (2) MR+NEGATIVE mirror mis-sign (also 1.30, arguably a headwind for MR); (3) continuous-strength/distance-to-pin if a per-symbol layer is added later.
+
+## 2026-09-03 — Intraday audit #1 FIX #2 (mirror): MR+NEGATIVE strategy-aware (PR #241, OCI e3d7364)
+- Mirror of #239. NEGATIVE branch of the GEX Kelly multiplier was still strategy-blind (1.30x all). -gamma is a momentum tailwind but a HEADWIND for mean-reversion (suppresses the reversion MR needs), so MR was up-sized 1.30x in its least-friendly regime.
+- FIX (down-only): NEGATIVE branch → GEX_EDGE_MULT_MR_NEG (new PROV const, 1.00) if strategy==mean_reversion else GEX_EDGE_MULT_MOMENTUM (1.30). MR+NEGATIVE 1.30→1.00; momentum+NEGATIVE keeps 1.30; POSITIVE branch unchanged.
+- Reconciliation COMPLETE: each strategy up-weighted only in its favorable regime (momentum{NEG 1.30,POS 1.00}, MR{POS 1.15,NEG 1.00}); both headwind cells neutral; fail-safe 1.0.
+- Gates: statics + no_static_scan + full-matrix functional test + cold-2nd PASS (down-only enumerated) + Gro/GAI preship APPROVE x2 + CI pass. Verified live on OCI.
+- Remaining follow-ups: forward GEX-vs-breakout-outcome log (calibrate the 1.00 neutrals toward <1.0 de-weights); intraday exits audit (next strategy).
