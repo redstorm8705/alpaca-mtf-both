@@ -2154,6 +2154,27 @@ def _check_exits_extended_hours(
                     fill_price = _fetch_actual_fill_price(
                         symbol, trade, poll_secs=0.3, submitted_after=_after_ts
                     )
+                # ── RC-4 / never-mask-a-loss (2026-09-03, board masked-loss seat + Gro + GAI) ──
+                # If the fill STILL cannot be resolved after the fallback, the EH exit price is
+                # unknown. Previously this branch recorded P&L off $0.00 SILENTLY — hiding a real
+                # overnight/premarket loss from the daily kill-switch total. Mirror check_exits'
+                # RC-4 handling (L1883-1895 / L1976-1988): flag `_fill_unverified` so the ledger
+                # reconciliation heal repairs the P&L and the _record_tqi UNVERIFIED guard keeps the
+                # poisoned R-multiple out of Kelly, and fire the operator RC-4 alert. fill_price is
+                # left at 0.0 on purpose (matches the RTH path) — this ADDS visibility, it never
+                # changes the exit action or masks anything.
+                if fill_price <= 0:
+                    trade["_fill_unverified"] = True
+                    logger.critical(
+                        "[%s] EH exit: fill price UNVERIFIED after fallback — recording $0.00 "
+                        "(P&L unreliable, flagged for reconciliation). Manual review required.",
+                        symbol,
+                    )
+                    try:
+                        from alerts import send_slack
+                        send_slack(f":rotating_light: [{symbol}] RC-4: EH exit fill unverified — exit recorded at $0.00. Manual P&L review required.")
+                    except Exception as _eh_slack_e:
+                        logger.error("[%s] RC-4 EH Slack alert failed: %s", symbol, _eh_slack_e)
                 filled_qty = int(float(getattr(order, "filled_qty", None) or 1))
                 if trade.get("pm_exit_type") == "partial":
                     trail_dist = atr_value * config.TRAIL_STOP_ATR_MULT
