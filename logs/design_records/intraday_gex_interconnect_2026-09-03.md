@@ -77,8 +77,13 @@ has 37 entries ending 2026-06-05; all GEX history (`logs/gex_daily_audit_*.json`
 paired-sample collection drawing from `gex_daily_audit_*.json`.
 
 **OPEN FOLLOW-UPS (not shipped):**
-1. **Forward GEX-vs-breakout-outcome log** — the validation infra to calibrate the momentum+POSITIVE
-   multiplier from 1.00 toward a headwind de-weight (<1.0). Prereq for any magnitude change. Read-only.
+1. **Forward GEX-vs-breakout-outcome log** — ✅ SHIPPED (PR #243, OCI live). `execute_entries` now
+   captures `gex_spy_regime` + `gex_spy_raw` + `gex_sym_regime` at each fill into the trade_events.jsonl
+   entry event (logging-only, fail-safe, non-risk). A closed trade's outcome (R-multiple from entry/
+   exit/stop) pairs with its entry regime → the calibration input to tune `GEX_EDGE_MULT_MOMENTUM_POS`
+   and `GEX_EDGE_MULT_MR_NEG` from 1.00 toward optimal de-weights. **DATA ACCRUES OVER WEEKS** — the
+   calibration itself (an offline script reading the paired rows once enough accumulate, per LdP
+   min-sample/purging from board seat 2) is the future step; nothing more to build now, just let it run.
 2. **MR+NEGATIVE mirror mis-sign** — ✅ SHIPPED (PR #241, OCI `e3d7364`). NEGATIVE branch made
    strategy-aware: MR in −gamma → `GEX_EDGE_MULT_MR_NEG` (1.00 neutral, PROV); momentum keeps 1.30.
    Full reconciliation now complete — each strategy up-weighted only in its favorable regime:

@@ -9872,3 +9872,9 @@ auto-confirm, scoped) is the real Tier-1 build.
 - Reconciliation COMPLETE: each strategy up-weighted only in its favorable regime (momentum{NEG 1.30,POS 1.00}, MR{POS 1.15,NEG 1.00}); both headwind cells neutral; fail-safe 1.0.
 - Gates: statics + no_static_scan + full-matrix functional test + cold-2nd PASS (down-only enumerated) + Gro/GAI preship APPROVE x2 + CI pass. Verified live on OCI.
 - Remaining follow-ups: forward GEX-vs-breakout-outcome log (calibrate the 1.00 neutrals toward <1.0 de-weights); intraday exits audit (next strategy).
+
+## 2026-09-03 — Intraday audit #1 follow-up 1 SHIPPED: forward GEX-vs-outcome log (PR #243)
+- execute_entries now captures gex_spy_regime + gex_spy_raw + gex_sym_regime at each fill into the trade_events.jsonl entry event (via record_entry(**_gex_log_extra)). Logging-only, self-contained fail-safe try/except (never raises into the entry path), local cached-file reads (no network), post-fill only. Keys disjoint from _mr_log_extra + explicit kwargs.
+- Purpose: pair each entry, regime with its closed-trade outcome (R-multiple) to calibrate GEX_EDGE_MULT_MOMENTUM_POS / GEX_EDGE_MULT_MR_NEG from 1.00 toward optimal de-weights (history cannot — zero overlap). Data accrues over weeks; offline calibration script is the future step.
+- Gates: statics + no_static_scan + capture functional test + cold-2nd PASS (5 checks: never-raise, no ** collision, non-blocking, no behavior change, field correctness) + Gro/GAI preship APPROVE. Live on OCI.
+- STRATEGY #1 (entry) intraday audit now COMPLETE (2 sizing fixes + calibration log). Next strategy: exits (exit_logic.py).
