@@ -1756,8 +1756,10 @@ def run_cycle(
         from execution.drift_detector import detect_and_emit_drift
         from execution.broker import get_open_positions, get_open_orders
         from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-        from execution.orphan_manager import _get_forever6_syms
-        _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms()
+        from execution.orphan_manager import _get_forever6_syms, _get_daytrade_syms
+        # day-tier positions are DT-tagged + outside tracker.open_trades → they read as phantom_broker
+        # drift every cycle; exclude them so the day-tier does not flood the drift feed once live.
+        _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms() | _get_daytrade_syms()
         _drift_records = detect_and_emit_drift(
             tracker, _drift_exclude,
             log_event=_log_trade_event, send_slack=send_slack,
@@ -1780,7 +1782,8 @@ def run_cycle(
         from execution.broker import get_open_orders as _goo_dc
         from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_dc
         from execution.orphan_manager import _get_forever6_syms as _f6_dc
-        _dc_exclude = set(_qhs_dc()) | _f6_dc()
+        from execution.orphan_manager import _get_daytrade_syms as _dt_dc
+        _dc_exclude = set(_qhs_dc()) | _f6_dc() | _dt_dc()
 
         def _heal_phantom(_sym, _trade):
             # REAL fill or None — the anti-fabrication guard. None => the corrector drops NOTHING.

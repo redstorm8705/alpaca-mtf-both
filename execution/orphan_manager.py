@@ -898,6 +898,26 @@ def _get_forever6_syms() -> set:
         return _og_protected_cache()
 
 
+def _get_daytrade_syms() -> set:
+    """Symbols the day-trade tier currently HOLDS (ledger daytrade qty > 0).
+
+    Excluded from the startup orphan set so a day-tier position — tracked in
+    day_tier_state.json + the ownership ledger (DT- client_order_id), never in
+    tracker.open_trades — is not adopted as an intraday orphan on restart (which would
+    mislabel its tier, count it against intraday risk, hand it to check_exits). Mirrors
+    _get_forever6_syms / _get_qhm_syms, EXCEPT the error fallback is a plain set(), not
+    the protected cache: daytrade is NOT in _PROTECTED_TIERS (forever6, qhm), so no
+    never-sell floor needs defending and that cache never holds a day-tier symbol. Worst
+    case on a ledger error is a one-restart mislabel — benign, self-correcting."""
+    try:
+        _l = _og_load_ledger()
+        return {s for s in _l.get("positions", {})
+                if _og_tier_qty(_l, s, "daytrade") > 0}
+    except Exception as _de:
+        logger.warning("orphan_manager: daytrade-symbols lookup failed: %s", _de)
+        return set()
+
+
 def reconcile_positions(
     tracker: "PortfolioTracker",
     risk: "Optional[RiskManager]" = None,
@@ -955,8 +975,10 @@ def reconcile_positions(
     # proven populated by production logs before this fix.
     # forever6 excluded for the same reason as QHM (see _get_forever6_syms): an F6
     # anchor is never an intraday orphan — forever_hold_manager + the floor own it.
+    # day-tier: DT-tagged, tracked outside tracker.open_trades — excluded from adoption
     orphans = (
         (alpaca_symbols - tracker_symbols) - _get_qhm_syms() - _get_forever6_syms()
+        - _get_daytrade_syms()
     )
 
     # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
