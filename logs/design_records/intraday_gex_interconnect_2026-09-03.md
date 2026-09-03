@@ -79,8 +79,10 @@ paired-sample collection drawing from `gex_daily_audit_*.json`.
 **OPEN FOLLOW-UPS (not shipped):**
 1. **Forward GEX-vs-breakout-outcome log** — the validation infra to calibrate the momentum+POSITIVE
    multiplier from 1.00 toward a headwind de-weight (<1.0). Prereq for any magnitude change. Read-only.
-2. **MR+NEGATIVE mirror mis-sign** — MR trades in −gamma also get 1.30× (a −gamma break is a headwind
-   for mean-reversion). Left unchanged (out of the approved scope); separate decision + gate.
+2. **MR+NEGATIVE mirror mis-sign** — ✅ SHIPPED (PR #241, OCI `e3d7364`). NEGATIVE branch made
+   strategy-aware: MR in −gamma → `GEX_EDGE_MULT_MR_NEG` (1.00 neutral, PROV); momentum keeps 1.30.
+   Full reconciliation now complete — each strategy up-weighted only in its favorable regime:
+   momentum{NEG 1.30, POS 1.00}, MR{POS 1.15, NEG 1.00}, UNKNOWN/stale 1.0. Same down-only gate as #239.
 3. **Continuous-in-strength + distance-to-pin** refinements (seat 1 / Gro / GAI) — relevant IF a
    per-symbol day_tier_gex_action layer is added later; the shipped fix uses SPY index-level regime
    (kelly.py), where the per-symbol pin-distance caveat does not apply.
