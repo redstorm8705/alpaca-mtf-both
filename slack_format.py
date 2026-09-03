@@ -23,8 +23,14 @@ _MULTI_BLANK = re.compile(r"\n{3,}")
 
 
 def _is_table_sep(stripped: str) -> bool:
-    """True for a markdown table separator row like `|---|:--:|---|` (nonempty, only |:- and spaces)."""
-    return bool(stripped) and set(stripped) <= _TABLE_SEP_CHARS
+    """True for a markdown table separator row like `|---|:--:|---|` (nonempty, CONTAINS a pipe,
+    only |:- and spaces).
+
+    The pipe requirement matters: a real markdown table separator always has pipes. A bare `---`
+    / `- - -` / `:--:` line with NO pipe is a horizontal-rule or section divider — it carries no
+    table data but IS a real content line — so it must be PRESERVED, not silently dropped. Without
+    the `"|" in stripped` guard, `set("---") <= {"|",":","-"," "}` is True and the divider vanishes."""
+    return bool(stripped) and "|" in stripped and set(stripped) <= _TABLE_SEP_CHARS
 
 
 def _is_table_row(stripped: str) -> bool:

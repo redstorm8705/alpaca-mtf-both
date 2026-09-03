@@ -40,6 +40,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# Mobile-clean formatter (Slack WS2): the single chokepoint _send_slack_chunked routes EVERY outbound
+# Slack message through this, so markdown tables / multi-line LLM replies render readably on mobile
+# (tables → "a · b · c" lines, separators dropped, newlines preserved) instead of wrapping into
+# garbage. It is pure, deterministic, idempotent, and formatting-only. Defensive import with an
+# identity fallback — alerts.py must NEVER fail to alert if the formatter is somehow unavailable.
+try:
+    from slack_format import mobile_clean as _mobile_clean
+except Exception:  # pragma: no cover — keep alerting alive even if the formatter can't import
+    def _mobile_clean(text, max_chars=None):  # type: ignore[misc]
+        # Degraded identity fallback: mirror mobile_clean's contract closely enough to never
+        # surprise a caller — any falsy input (None / "" / 0 / False / []) -> "" (matching
+        # mobile_clean's `if not text: return ""`), any other non-str -> str(text), str -> as-is.
+        # Never raises. Reachable only if slack_format (pure-stdlib) fails to import.
+        return "" if not text else (text if isinstance(text, str) else str(text))
+
 # macOS Python 3.10 ships without system CA certs — use certifi bundle so
 # Slack (and ntfy) HTTPS calls don't fail with CERTIFICATE_VERIFY_FAILED.
 try:
@@ -258,6 +273,7 @@ def _send_slack_chunked(text: str) -> bool:
     posted, so a caller's failure logging still fires if any part drops. Never raises."""
     if not _SLACK_WEBHOOK:
         return False
+    text = _mobile_clean(text)   # WS2 chokepoint: every outbound message is mobile-clean (idempotent)
     parts = _chunk_text(text)
     n = len(parts)
     ok = True
