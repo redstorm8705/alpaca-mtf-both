@@ -728,7 +728,10 @@ OWNERSHIP_GUARD_ENFORCE = False
 # logs/design_records/day_tier_v2_design_2026-08-29.md — §3 (risk), §7b.6
 # (allocation), §7 (cadence + flat-by-close). Flip to True ONLY after the live
 # order module clears the full board + Gro + GAI + masked-loss gate (risk-path).
-DAYTRADE_ENABLED            = False   # master flag — DARK until the live order path is gated + shipped
+DAYTRADE_ENABLED            = True    # LIVE (paper) 2026-09-02, Rafael-approved go-live — the 2-min runner
+                                     # (run_day_tier.py, */2 RTH cron) places Track-A orders; Track B stays OFF.
+                                     # Kill switch: flip to False + restart. Armed only under --profile paper
+                                     # (validate_config fails-closed under the 3% live/default profile).
 DAYTRADE_TRACK_B_ENABLED    = False   # Track B (dynamic movers) OFF day-1 (board + Gro + GAI unanimous) — Track A only
 
 # Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
