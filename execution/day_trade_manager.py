@@ -534,10 +534,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         _today = f"{_now_et():%Y%m%d}"
 
         def _state_blocks(v: dict) -> bool:
-            st = v.get("state")
-            if st == "submitted":
-                return True
-            if st in ("filled", "protected", "fill_unverified"):
+            # Block re-entry only on a SAME-DAY unresolved record. reconcile_open_state resolves a
+            # 'submitted' record every tick (before entries), and a prior-day record is stale — it
+            # must not permanently bench the symbol (masked-loss re-review note).
+            if v.get("state") in ("submitted", "filled", "protected", "fill_unverified"):
                 return str(v.get("bar_id") or "").split("-", 1)[0] == _today
             return False
 
@@ -806,3 +806,186 @@ def tier_kill_check(equity: float) -> bool:
     except Exception as e:  # noqa: BLE001
         logger.warning("day-tier tier_kill_check error: %s", e)
         return False
+
+
+# ── per-tick reconcile (the board-named go-live gate for the cron runner) ────────────────────────
+def _has_live_daytrade_stop(symbol: str) -> "bool | None":
+    """True if a live DT-tagged STOP order rests on `symbol`; False if none rests; None if the order
+    book is UNREADABLE (the caller treats None as 'cannot confirm' — fail-safe: never flatten a
+    possibly-protected position on a transient read failure). A resting DT ENTRY (limit) order is not
+    a stop and does NOT count."""
+    from execution import broker
+    from execution.ownership_guard import tier_of_coid
+    try:
+        orders = broker.get_open_orders(symbol)
+    except Exception:
+        return None
+    if orders is None:
+        return None
+    for o in orders:
+        try:
+            if tier_of_coid(getattr(o, "client_order_id", None)) != "daytrade":
+                continue
+            otype = str(getattr(o, "order_type", None) or getattr(o, "type", "") or "").lower()
+            if "stop" in otype:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _order_filled_qty(order_id: str) -> "tuple[bool, float]":
+    """(readable, filled_qty) for an order. readable=False when the order cannot be read (empty id,
+    None, or an exception) — the caller must NOT treat an unreadable order as zero-fill."""
+    from execution import broker
+    if not order_id:
+        return False, 0.0
+    try:
+        o = broker.get_order(order_id)
+    except Exception:
+        return False, 0.0
+    if o is None:
+        return False, 0.0
+    try:
+        return True, float(getattr(o, "filled_qty", 0) or 0)
+    except Exception:
+        return False, 0.0
+
+
+def _mark_symbol_flattened(symbol: str) -> None:
+    """After a reconcile flatten of `symbol`, transition its non-terminal entry:: state records to
+    'flattened_no_stop' so a submitted/filled/protected/fill_unverified record does not permanently
+    bench the symbol from re-entry (masked-loss re-review note). Never raises."""
+    try:
+        st = _load_state()
+        changed = False
+        for k, v in st.items():
+            if (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol
+                    and v.get("state") in ("submitted", "filled", "protected", "fill_unverified")):
+                v["state"] = "flattened_no_stop"
+                changed = True
+        if changed:
+            _save_state(st)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_mark_symbol_flattened(%s) failed: %s", symbol, e)
+
+
+def reconcile_open_state() -> dict:
+    """Per-tick reconcile — called at the TOP of each runner tick, BEFORE entries. The runner is a
+    2-3 min cron, so every tick is a fresh process; this is the board-named go-live gate that ensures
+    no day-tier position is ever left NAKED or double-managed across that process boundary (the
+    submit→log / fill→stop crash windows). No-op when DAYTRADE_ENABLED is False; never raises.
+
+    For each day-tier-OWNED symbol (durable-log open set ∪ the state file's non-terminal records,
+    incl. the 'submitted' crash window) that has a LIVE broker position:
+      • a live DT stop rests           → count 'protected', leave it (already safe);
+      • NO live DT stop rests (NAKED)   → scoped-flatten own qty + page (fill-without-stop, a
+                                          'submitted' crash-window fill, or a vanished stop);
+      • order book UNREADABLE           → do NOT flatten (fail-safe) + page.
+    A 'submitted' record with NO position (a crashed entry that never filled) → cancel any resting DT
+    order for the symbol (so it can't fill mid-next-bar) + mark the record terminal."""
+    if not _enabled():
+        return {"enabled": False}
+    from execution import broker
+    summary = {"checked": 0, "flattened": 0, "protected": 0, "unreadable": 0, "cleared": 0}
+    try:
+        targets = _flatten_targets()  # log ∪ state(filled/protected/fill_unverified)
+        state = _load_state()
+        submitted = {}
+        for k, v in state.items():
+            if k.startswith("entry::") and isinstance(v, dict) and v.get("state") == "submitted":
+                sym = str(v.get("symbol") or "")
+                if sym:
+                    submitted[sym] = k
+                    targets.setdefault(sym, {
+                        "symbol": sym, "side": str(v.get("side") or "long"),
+                        "qty": abs(int(float(v.get("qty") or 0))),
+                        "entry_price": float(v.get("fill_px") or v.get("stop_px") or 0.0),
+                        "trade_id": str(v.get("coid") or ""), "order_id": str(v.get("order_id") or ""),
+                    })
+        for sym, tgt in targets.items():
+            summary["checked"] += 1
+            # OWNED-QTY RESOLUTION (cold-2nd Threat 1 + masked-loss #4/residual): a target sourced ONLY
+            # from a 'submitted' record carries the INTENDED size, NOT an owned qty. It must never drive
+            # a flatten or a retire until the ORDER's ACTUAL fill is confirmed — else a never-filled
+            # entry on a co-held symbol would flatten the OTHER tier's shares (a B1 breach). Log/filled/
+            # protected targets carry a CONFIRMED owned qty and are trusted as-is.
+            if sym in submitted:
+                oid = tgt.get("order_id", "")
+                readable, filled = _order_filled_qty(oid)
+                if not readable:
+                    summary["unreadable"] += 1
+                    _page(f"[{sym}] day-tier reconcile: 'submitted' order UNREADABLE — cannot confirm "
+                          f"fill/ownership; NO action this tick. coid={oid}")
+                    continue
+                if filled < 1:
+                    # never filled → the day-tier owns 0 of this symbol; cancel our resting entry and
+                    # retire. Any live position on the symbol belongs to ANOTHER tier — never touched.
+                    try:
+                        broker.cancel_open_orders_for_symbol(sym, only_tier="daytrade")
+                    except Exception:
+                        pass
+                    # cancel-race: a fill can land between the read above and the async cancel — re-read;
+                    # if it now shows filled/unreadable, do NOT retire (next tick's position read handles it).
+                    r2, f2 = _order_filled_qty(oid)
+                    if f2 >= 1 or not r2:
+                        _page(f"[{sym}] day-tier reconcile: 'submitted' order filled/unreadable AFTER "
+                              f"cancel (race) — NOT retiring; next tick reconciles. coid={oid}")
+                        continue
+                    st = _load_state()
+                    if submitted[sym] in st:
+                        st[submitted[sym]]["state"] = "unfilled_cancelled"
+                        _save_state(st)
+                    summary["cleared"] += 1
+                    continue
+                want = int(filled)                     # CONFIRMED owned qty from the order's fill
+            else:
+                want = int(tgt.get("qty") or 0)        # confirmed-owned (log / filled / protected)
+
+            # Position + protection check. get_open_position returns None ONLY on a confirmed 404; it
+            # RAISES on any other error (429/500/network) → NEVER treat an unreadable read as 'flat'.
+            try:
+                pos = broker.get_open_position(sym)
+                pos_readable = True
+            except Exception:
+                pos, pos_readable = None, False
+            if not pos_readable:
+                summary["unreadable"] += 1
+                _page(f"[{sym}] day-tier reconcile: position read failed (transient) — NO action this "
+                      f"tick. Manual check if persistent.")
+                continue
+            if pos is None:
+                # Confirmed absent. A 'submitted' target we just confirmed filled>=1 but with no live
+                # position = endpoint lag → leave it (next tick reconciles); do NOT retire. A confirmed-
+                # owned (log/filled/protected) target that is gone simply closed — nothing to do.
+                if sym in submitted:
+                    _page(f"[{sym}] day-tier reconcile: 'submitted' order filled {want} but position "
+                          f"absent (endpoint lag) — NOT retiring; next tick reconciles.")
+                continue
+            stop_state = _has_live_daytrade_stop(sym)
+            if stop_state is True:
+                summary["protected"] += 1
+                continue
+            if stop_state is None:
+                summary["unreadable"] += 1
+                _page(f"[{sym}] day-tier reconcile: order book unreadable — cannot confirm a "
+                      f"protective stop; NOT flattening (fail-safe). Manual check.")
+                continue
+            # NAKED (no live DT stop) → scoped-flatten the day-tier's OWN CONFIRMED qty. flatten_position's
+            # net-side/qty guard additionally protects any co-held tier.
+            held = abs(int(float(getattr(pos, "qty", 0) or 0)))
+            qty = min(held, want) if want > 0 else 0
+            if qty < 1:
+                _page(f"[{sym}] day-tier reconcile: NAKED position but own confirmed-qty 0 — NOT closing "
+                      f"the cross-tier net; manual check.")
+                continue
+            if flatten_position(sym, qty, tgt["side"], entry_price=tgt["entry_price"],
+                                trade_id=tgt["trade_id"], order_id_hint=tgt["order_id"],
+                                reason="reconcile_naked_flatten"):
+                summary["flattened"] += 1
+                _mark_symbol_flattened(sym)  # retire the state record(s) so re-entry is not benched
+        logger.info("day-tier reconcile: %s", summary)
+        return summary
+    except Exception as e:  # noqa: BLE001 — reconcile must never crash the runner tick
+        logger.error("day-tier reconcile_open_state raised: %s", e)
+        return {"error": repr(e)}
