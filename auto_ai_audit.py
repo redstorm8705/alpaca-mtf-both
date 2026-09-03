@@ -1115,25 +1115,75 @@ def _post_slack_summary(
     # so markdown tables in the LLM reply render as compact `a · b · c` lines instead of
     # collapsing into an unreadable pipe-wrapped blob on mobile (the .replace("\n"," ") bug).
     # mobile_clean() adds its own ellipsis on truncation, so no trailing "…" is appended here.
-    def _excerpt(result: dict, label: str) -> str:
-        if not result["text"]:
-            return f"*{label}:* ❌ {_terse_error(result['error'])}"
-        preview = mobile_clean(result["text"], max_chars=350)
-        return f"*{label} (preview):* {preview}"
+    # Rafael 2026-09-03: show the FULL report in Slack — NO "link to full report", NO truncated
+    # inline-text preview. Render each provider's COMPLETE reply as clean Block Kit section blocks:
+    # convert GitHub markdown (## headers, **bold**) to Slack mrkdwn, mobile_clean the tables, and
+    # split on line boundaries into <=2900-char blocks (Slack's per-section cap is 3000). Fail-safe:
+    # a provider error collapses to one terse line; total blocks are capped to Slack's 50-block limit.
+    import re as _re
 
-    text = (
-        f":robot_face: *Auto AI {mode_label.title()} — {ts}*\n"
-        f"Gro: {'✅' if gro_ok else '❌'}  |  "
-        f"GAI: {'✅' if gai_ok else '❌'}\n\n"
-        f"{_excerpt(gro_result, 'Groq')}\n\n"
-        f"{_excerpt(gai_result, 'Gemini')}\n\n"
-        f"Full report: `{out_path.name}`"
-    )
+    def _md_to_slack(s: str) -> str:
+        # ATX headers — OPEN (`## x`) or CLOSED (`## x ##`): strip leading AND trailing #, bold the line.
+        s = _re.sub(r"^\s*#{1,6}\s*(.+?)\s*#*\s*$", r"*\1*", s, flags=_re.M)
+        # GitHub bold is `**`; Slack bold is a single `*`. Collapse ANY run of 2+ asterisks to ONE `*`.
+        # This converts **bold** -> *bold*, cleans a truncated/unbalanced `**span` and a `****` rule, and
+        # — unlike a blanket .replace("**","") (cold-2nd R2 FAIL) — NEVER merges two adjacent bold spans:
+        # `**Entry:****Stop:**` -> `*Entry:*Stop:*` (boundary kept), and no literal `**` ever leaks.
+        s = _re.sub(r"\*\*+", "*", s)
+        return s
+
+    def _chunk_lines(s: str, limit: int = 2900) -> list:
+        out: list = []
+        cur = ""
+        for line in s.split("\n"):
+            if len(line) > limit:                       # a single over-long line — hard-split it
+                if cur:
+                    out.append(cur)
+                    cur = ""
+                for i in range(0, len(line), limit):
+                    out.append(line[i:i + limit])
+                continue
+            if cur and len(cur) + 1 + len(line) > limit:
+                out.append(cur)
+                cur = line
+            else:
+                cur = f"{cur}\n{line}" if cur else line
+        if cur:
+            out.append(cur)
+        return out
+
+    def _report_blocks(result: dict, label: str) -> list:
+        if not result["text"]:
+            return [{"type": "section", "text": {"type": "mrkdwn",
+                     "text": f"*{label}:* ❌ {_terse_error(result['error'])}"}}]
+        cleaned = mobile_clean(_md_to_slack(result["text"]))
+        blks = [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{label} — full report*"}}]
+        for chunk in _chunk_lines(cleaned):
+            if chunk.strip():
+                blks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+        return blks
+
+    blocks: list = [
+        {"type": "section", "text": {"type": "mrkdwn",
+            "text": f":robot_face: *Auto AI {mode_label.title()} — {ts}*\n"
+                    f"Gro: {'✅' if gro_ok else '❌'}  |  GAI: {'✅' if gai_ok else '❌'}"}},
+        {"type": "divider"},
+    ]
+    blocks += _report_blocks(gro_result, "Groq")
+    blocks.append({"type": "divider"})
+    blocks += _report_blocks(gai_result, "Gemini")
+    # Slack rejects a payload with >50 blocks — cap and note (NO file link; the on-disk archive remains).
+    if len(blocks) > 50:
+        blocks = blocks[:49]
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+            "text": "_(report exceeded Slack's 50-block limit — trimmed to fit)_"}]})
+    fallback = (f"Auto AI {mode_label.title()} — {ts} — "
+                f"Gro {'ok' if gro_ok else 'err'} / GAI {'ok' if gai_ok else 'err'}")
 
     try:
         resp = requests.post(
             webhook,
-            json={"text": text},
+            json={"blocks": blocks, "text": fallback},
             timeout=10,
         )
         resp.raise_for_status()
