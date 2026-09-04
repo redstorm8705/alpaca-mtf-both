@@ -1,0 +1,63 @@
+Midday Gemini Audit — 2026-09-03
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### PERFORMANCE AUDIT
+- **Integrity & P&L Sign Consistency**:
+  - `MARA`: Entry $10.25 → Exit $11.61, P&L = `$-8.16`. The target levels ($8.80, $7.34, $2.98) and stop level ($13.04) confirm this was a **short** position. Exit price ($11.61) > Entry price ($10.25) correctly yielded a loss.
+  - `HOOD`: Entry $106.10 → Exit $121.90, P&L = `+$15.80`. Target levels ($113.91, $121.72, $145.16) and stop ($91.07) confirm a **long** position. Exit ($121.90) > Entry ($106.10) correctly yielded a profit.
+- **Score → Outcome Correlation**: Mixed / Inverted on sample size $N=2$ (Score 12/12 lost on MARA short, Score 10/12 won on HOOD long).
+- **Stop Rate & Sub-strategy Edge**:
+  - Stop-hit rate for the session is 50% (1 stop hit out of 2 closed trades).
+  - Intraday short Kelly stats show systematic negative edge: `short_intraday` (49 trades, WR 18.4%, PF 0.21) vs. `long_intraday` (93 trades, WR 31.2%, PF 1.26).
+
+---
+
+### ENTRY QUALITY
+- **Shorting in Bull Regime**: MARA short entry occurred despite underlying composite market regime showing bullish metrics (`SPY/50SMA=+2.12%`, GEX positive). This contributes to the persistent underperformance in `short_intraday` (PF 0.21).
+
+---
+
+### EXIT QUALITY
+- **HOOD Partial Target**: Hit near T2 ($121.72 target vs $121.90 fill) with valid partial profit locking.
+- **MARA Stop Exit**: Stopped out at $11.61, well before the structural stop of $13.04, likely via trailing stop or risk tightening under stressed conditions.
+
+---
+
+### MRI ALIGNMENT
+- Both closed positions (`MARA` and `HOOD`) were entered while MRI was flagged as `STRESSED`. 
+- Log shows MRI news injection is functioning properly with market confirmation gating: `MRI news injection GATED: 39 alert(s) → +35pts capped at +10pts (price_score=0, no market confirmation)`.
+
+---
+
+### LOG ANOMALIES
+- `WARNING | news_monitor`: False positive NLP keyword trigger on general news (`Anatomage Replica` matched keyword `'nato'`), incurring a base penalty before market gating prevented adverse sizing.
+- `WARNING | execution.quarterly_hold_manager`: `QHM dip-add: GE RegT BP <= 0 ($0) — skip add` — buying power restriction blocked rebalancing.
+- `WARNING | strategy.run_cycle`: `[ANOMALY-2] [CRM] confirm_gate=3 scans but no entry — risk.open_positions=2 vs tracker=2 | MAX_OPEN_POSITIONS=20`.
+
+---
+
+### NEW BUGS / CONCERNS
+1. **ALPHA ISSUE | MEDIUM** | Short intraday Kelly allocation active despite severe negative edge | Variable: `kelly.short_intraday.PF` (0.21 over 49 trades, WR 18.4%). Condition: Bot continues taking short intraday trades under strong bull regime without an automated profit factor kill floor or deactivation threshold below PF < 0.5.
+2. **INFRASTRUCTURE | LOW** | Substring/Keyword collision in news filter | Variable: `news_monitor` keyword matching `'nato'`. Condition: Substring match captures `'Anatomage'` containing `'nato'` / case-insensitive tokenization without word boundary enforcement (`\bnato\b`), triggering spurious caution alerts.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **[ALPHA] Short Sub-Strategy Edge Floor**: Implement an automatic lockout/pause for `short_intraday` when rolling Kelly PF drops below 0.50 or regime composite is `BULL`.
+2. **[INFRA] Regex Word Boundaries on News Keywords**: Update `news_monitor` keyword parsing to use exact word boundaries (`\b<keyword>\b`) to avoid false-positive alerts like `Anatomage` triggering `nato`.
+3. **[EXECUTION] Investigate ANOMALY-2 Entry Gating**: Trace why `[CRM]` was blocked after 3 qualifying confirm gate scans when position limits (`risk.open_positions=2` vs `MAX_OPEN_POSITIONS=20`) were not breached.

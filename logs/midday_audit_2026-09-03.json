@@ -1,0 +1,155 @@
+{
+  "audit_date": "2026-09-03",
+  "run_ts": "2026-09-03T10:30:01.804612-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [
+      {
+        "symbol": "MARA",
+        "ts": "2026-09-01 11:53:35",
+        "score": 12,
+        "mri": "STRESSED",
+        "price": 10.25,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "HOOD",
+        "ts": "2026-09-02 10:54:29",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 106.1,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "MARA",
+      "HOOD"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 34,
+    "levels": {
+      "STRESSED": 23,
+      "NORMAL": 11
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 59,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-03 16:11:04,696 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$18.89 tracker=$7.64 drift=$+11.25",
+      "2026-09-03 16:16:22,859 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: GE RegT BP <= 0 ($0) \u2014 skip add",
+      "2026-09-03 16:17:05,562 | WARNING  | execution.entry_logic | [NET] COUNTER-TREND GATE [long]: 1-month return -3.56% opposes the trade on a structurall",
+      "2026-09-03 16:17:52,928 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$18.89 tracker=$7.64 drift=$+11.25",
+      "2026-09-03 16:20:13,736 WARNING ledger_sync ledger_sync wall-time 12.6s (fills=576 orders=2651)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": 7.640000000000015,
+    "win_rate": 0.5,
+    "profit_factor": 1.9362745098039238,
+    "avg_win": 15.800000000000011,
+    "avg_loss": -8.159999999999997,
+    "best": {
+      "symbol": "HOOD",
+      "pnl": 15.800000000000011,
+      "entry_price": 106.1,
+      "exit_price": 121.9,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 91.07,
+      "target": 145.16
+    },
+    "worst": {
+      "symbol": "MARA",
+      "pnl": -8.159999999999997,
+      "entry_price": 10.25,
+      "exit_price": 11.61,
+      "size": 6.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "STRESSED",
+      "stop": 13.04,
+      "target": 2.98
+    },
+    "trades": [
+      {
+        "symbol": "MARA",
+        "pnl": -8.159999999999997,
+        "entry_price": 10.25,
+        "exit_price": 11.61,
+        "size": 6.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "STRESSED",
+        "stop": 13.04,
+        "target": 2.98
+      },
+      {
+        "symbol": "HOOD",
+        "pnl": 15.800000000000011,
+        "entry_price": 106.1,
+        "exit_price": 121.9,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 91.07,
+        "target": 145.16
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "HOOD",
+      "LLY",
+      "META",
+      "NVDA"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "HOOD",
+      "MARA"
+    ],
+    "by_symbol": {
+      "MARA": {
+        "buy": 1,
+        "sell": 0
+      },
+      "HOOD": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

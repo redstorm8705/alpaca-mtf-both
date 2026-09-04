@@ -1,0 +1,36 @@
+Midday Gemini Audit — 2026-09-02
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+The bot is currently experiencing a significant P&L reporting discrepancy. The `execution.portfolio_tracker` reports an EOD P&L drift of **$-92.48** (Alpaca: $-74.27 vs. Tracker: $18.21). While the `tracker` P&L is marked as "authoritative," the drift indicates a failure in the synchronization between the internal FIFO engine and the Alpaca API state. No closed trades are listed in the `CLOSED TRADE DETAILS`, yet the `portfolio_tracker` reports `lots_closed=1`. This is likely a manifestation of the known `D1` entry-event degradation, but the magnitude of the drift suggests the internal ledger is failing to reconcile with the actual account state.
+
+### ENTRY QUALITY
+Entries are being correctly gated by the `ORB gate` and `Sector correlation` logic. The bot successfully blocked `AAPL` due to sector concentration (`META` held) and blocked `META`, `AVGO`, and `TSLL` due to `ORB` breakdown confirmation requirements. The logic is functioning as intended to prevent poor entries in the current `STRESSED` MRI regime.
+
+### EXIT QUALITY
+No issues detected. Protective stops are confirmed for all 7 open positions.
+
+### MRI ALIGNMENT
+The bot correctly identified the `STRESSED` MRI level (46/100) and applied the size floor of 0.70x. The sizing logic is responding appropriately to the current market regime.
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT:** `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-74.27 tracker=$18.21 drift=$-92.48`. This indicates a persistent mismatch between the bot's internal accounting and the brokerage's actual state.
+*   **News Monitor Alert:** `WARNING | news_monitor | ⚡ CURRENTS ALERT: 1 article(s) detected`. The bot correctly identified a high-risk news event, though no trade was triggered, demonstrating effective risk-gating.
+
+### NEW BUGS / CONCERNS
+*   **INFRASTRUCTURE | HIGH | P&L Reconciliation Failure |** The `execution.portfolio_tracker` reports a significant drift ($-92.48) between the internal tracker and the Alpaca API. This suggests the `FIFO` logic is not correctly capturing the exit of the 1 lot reported as closed.
+*   **EXECUTION BUG | MEDIUM | Trade Accounting Inconsistency |** The `CLOSED TRADE DETAILS` section is empty, yet `portfolio_tracker` reports `lots_closed=1`. This confirms that the `D1` entry-event degradation is also impacting the exit-event logging, rendering the `CLOSED TRADE DETAILS` report unreliable for audit.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE:** Prioritize the fix for `D1` (entry-event logging) to restore the integrity of the `CLOSED TRADE DETAILS` report, as the current under-counting prevents accurate P&L attribution.
+2.  **EXECUTION:** Audit the `execution.fifo_pnl` module to determine why the `lots_closed=1` event is not being reflected in the `CLOSED TRADE DETAILS` log, despite being captured by the `portfolio_tracker`.
+3.  **ALPHA:** Monitor the `EOD P&L DRIFT` over the next 48 hours; if the drift continues to widen, the `portfolio_tracker` should be forced to re-sync its state directly from the Alpaca `GET /v2/account/portfolio/history` endpoint rather than relying on incremental FIFO updates.

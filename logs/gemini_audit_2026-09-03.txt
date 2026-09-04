@@ -1,0 +1,63 @@
+Nightly Gemini Audit — 2026-09-03
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['trade_logger.py', 'alerts.py', 'config.py', 'slack_format.py', 'run_day_tier.py', 'strategy/run_cycle.py', 'strategy/day_tier_logger.py', 'execution/kelly.py', 'execution/entry_logic.py', 'execution/orphan_manager.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a persistent, high-magnitude P&L drift and a recurring anomaly in the `confirm_gate` logic that requires investigation.
+
+### LOG ANOMALIES
+*   **[ANOMALY-2]**: `[CRM]` and `[QQQ]` consistently report `confirm_gate=9 scans but no entry`. This indicates a potential logic stall in the `confirm_gate` counter or a mismatch between the `strategy.run_cycle` scan count and the `execution.entry_logic` gate state.
+*   **EOD P&L DRIFT**: The drift of `+$11.25` is persistent across multiple logs. While the provenance header notes this is expected pre-heal, the magnitude is significant relative to the daily P&L of `$7.64`.
+*   **ledger_sync wall-time**: Multiple warnings for `ledger_sync` taking `>12s` suggest the ledger is becoming bloated or the sync process is hitting I/O bottlenecks.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `MARA` short (entry 10.25, exit 11.61) correctly recorded a loss of `-8.16` (6 shares × 1.36 loss = 8.16). The P&L sign is correct.
+*   **Stop Rate**: The `MARA` trade was stopped out. With only 1 trade in the provided window, the stop rate is 100%. This is not statistically significant but warrants monitoring.
+*   **R:R Analysis**: The `MARA` trade was a short with a target of 2.98 and a stop of 13.04. The exit at 11.61 occurred well before the target, consistent with the `overnight_atr_buffer_exit` reason.
+
+### TRADE INTEGRITY
+*   **No issues found**: All recorded trades in the provided JSON appear to have consistent P&L and price data.
+
+### MODIFIED FILE FINDINGS
+*   **trade_logger.py**: The `_json_default` function correctly handles `numpy` types. The `fsync` implementation is robust. No bugs found.
+*   **alerts.py**: The `_chunk_text` and `_mobile_clean` logic is sound. The use of `certifi` for SSL context is correct for the environment. No bugs found.
+*   **config.py**: The `LEVERAGED_NOTIONAL_MAX_PCT` is correctly set to 0.05. No configuration violations detected.
+*   **slack_format.py**: The logic for stripping table separators and converting rows to `a · b · c` format is correct and safe. No bugs found.
+*   **run_day_tier.py**: The `_clock_state` function correctly handles the `None` case for `next_close`. The `_maybe_sample_prices` logic correctly uses the `_SAMPLE_MARK` file to prevent duplicate sampling. No bugs found.
+*   **strategy/run_cycle.py**: The `_load_spy_52w_high` and `_save_spy_52w_high` functions correctly implement the fail-safe persistence requested by the board. No bugs found.
+*   **strategy/day_tier_logger.py**: The `_durable_append` function correctly handles the "torn line" recovery by checking for a trailing newline. No bugs found.
+*   **execution/kelly.py**: The `_a2_mult` logic correctly implements the linear ramp for drawdown. No bugs found.
+*   **execution/entry_logic.py**: The `_find_recent_fvgs` function correctly handles column normalization. No bugs found.
+*   **execution/orphan_manager.py**: The `cancel_and_reconcile_gtc_stops` function correctly implements the "FAIL-CLOSED" logic for missing/corrupt QHM state files. No bugs found.
+*   **execution/day_trade_manager.py**: The `_gross_cap_ok` function correctly checks the maintenance cushion. No bugs found.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: FIXED (PDT logic deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/entry_logic.py**: The `confirm_gate` logic appears to be incrementing or checking state incorrectly, leading to the `[ANOMALY-2]` warnings where symbols are stuck at 9 scans without triggering an entry.
+*   **INFRASTRUCTURE | LOW | execution/portfolio_tracker.py**: The `ledger_sync` wall-time warnings indicate that the ledger synchronization is becoming a performance bottleneck.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `confirm_gate`**: Debug `execution/entry_logic.py` to determine why `CRM` and `QQQ` are stalling at 9 scans. Verify if the `gate_state` is being correctly persisted and incremented across cycles.
+2.  **Optimize `ledger_sync`**: Profile the `ledger_sync` function to identify why it is taking >12s. Consider batching or indexing the ledger to reduce I/O overhead.
+3.  **Monitor P&L Drift**: Continue monitoring the `pnl_drift` post-heal. If the drift remains consistently high after the 8:30 PM ET ledger heal, investigate the `PortfolioTracker` reconciliation logic.
