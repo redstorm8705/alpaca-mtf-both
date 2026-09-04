@@ -201,6 +201,22 @@ class KellySizer:
         strategy="mean_reversion" books to the dedicated MR key; "" (default) = trend.
         """
         key = self._key(direction, trade_mode, strategy)
+        # Never poison the LIVE sizing sample with a fabricated fill. An unverified/missing
+        # exit reaches record_trade as exit_price<=0 (e.g. an EH partial whose fill could not
+        # be recovered -> fill_price=0.0), which would fabricate a catastrophic +/-(entry/risk)
+        # R-multiple -- the exact phantom rebuild_from_trades (L449) already excludes. Mirror it
+        # here so the INCREMENTAL path cannot inject a 0.0-exit phantom either. (The distinct
+        # entry_price-fallback case, where exit==entry>0 -> a fake 0.0R loss, is guarded at the
+        # call sites via _fill_unverified.) Skip: the trade re-enters Kelly via rebuild_from_trades
+        # once patch_exit_pnl verifies the fill and clears the flag.
+        if exit_price <= 0:
+            logger.warning(
+                "Kelly [%s]: record_trade skipped -- exit_price=%.4f <= 0 "
+                "(unverified/missing fill; would fabricate an R-multiple). "
+                "Re-enters via rebuild_from_trades once the fill is verified.",
+                key, exit_price,
+            )
+            return
         if key not in self._stats:
             self._stats[key] = {"wins": [], "losses": []}
 

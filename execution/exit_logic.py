@@ -385,7 +385,12 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     _record_tqi(tracker.closed_trades[-1], kelly)
                 if risk is not None:
                     risk.register_close(pnl or 0.0)
-                if pnl is not None:
+                # Never feed an unverified fill into Kelly's live sizing sample: _ts_fill is
+                # the entry_price fallback when the fill cannot be recovered -> a fake 0.0R loss
+                # that masks the real loss (exit==entry>0 slips past record_trade's exit<=0
+                # guard). Mirror _record_tqi / rebuild_from_trades (L441) -- skip; the trade
+                # re-enters Kelly via the EOD rebuild once patch_exit_pnl verifies the fill.
+                if pnl is not None and not trade.get("_fill_unverified"):
                     kelly.record_trade(
                         direction, trade["trade_mode"],
                         entry_price, _ts_fill,
@@ -2199,10 +2204,16 @@ def _check_exits_extended_hours(
                     # exit was invisible to the daily kill-switch total.
                     if risk is not None:
                         risk.register_close(pnl or 0.0)
-                    kelly.record_trade(
-                        direction, trade.get("trade_mode", "swing"),
-                        entry_price, fill_price, trade.get("stop"), filled_qty,
-                    )
+                    # Never feed an unverified fill into Kelly: fill_price is 0.0 here when the
+                    # EH fill could not be recovered (RC-4 guard above) -> a fabricated
+                    # +/-(entry/risk) R-multiple. Skip (record_trade's exit<=0 guard also blocks
+                    # it; this is the explicit call-site mirror); re-enters via the EOD rebuild
+                    # once patch_exit_pnl verifies the fill (mirrors rebuild_from_trades L441).
+                    if not trade.get("_fill_unverified"):
+                        kelly.record_trade(
+                            direction, trade.get("trade_mode", "swing"),
+                            entry_price, fill_price, trade.get("stop"), filled_qty,
+                        )
                     logger.info(
                         f"[{symbol}] EH partial exit confirmed: fill=${fill_price:.2f} "
                         f"| P&L ${pnl:.2f} | Trail @ ${trail_stop:.2f} "
