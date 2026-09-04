@@ -1,0 +1,55 @@
+Nightly Gemini Audit — 2026-09-02
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['run_day_tier_shadow.py', 'data/gex.py', 'strategy/day_tier_sizing.py', 'strategy/day_tier_entry_trigger.py', 'strategy/day_tier_decision.py', 'strategy/day_tier_gex_action.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution.stop_protection | [HOOD] STOP-PROTECT: placed MISSING sell stop x2 @ $91.07 (DAY) — order a82c5224-ffd6-4ae4-bb14-3f3724a43712 | Impacted: HOOD (2026-09-02 15:46:12 ET)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **Stop Protection Failure**: At 2026-09-02 19:46:12, `execution.stop_protection` detected a "MISSING sell stop" for HOOD. While the system attempted to place a replacement, the existence of a "missing" stop for an active position is a critical failure in the risk management lifecycle.
+* **Ledger Sync Latency**: `ledger_sync` wall-time reached 12.6s and 12.8s (2026-09-02 19:40:13 and 20:00:14). This exceeds standard latency thresholds and risks stale state propagation during high-volatility periods.
+* **EOD P&L Drift**: Consistent drift of $-92.48 (Alpaca $-74.27 vs Tracker $18.21) persists across multiple snapshots. While the documentation notes this is pre-heal telemetry, the magnitude is significant and warrants monitoring to ensure the 8:30pm ET heal is successful.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity**: The trade for HOOD (Entry: 2026-09-02 10:54:29, Price: $106.10) shows a stop at $91.07. The stop protection log indicates the system lost track of this stop, requiring a manual re-submission.
+* **Score/Outcome**: The bot is currently in a "STRESSED" MRI state (score 46). The entry logic is correctly applying the 0.70x size floor. However, the "Counter-Trend Gate" is effectively preventing entries (e.g., SPY, AMZN, TQQQ) due to 1-month negative returns, which is consistent with the "don't long a falling knife" policy.
+* **R:R Analysis**: The HOOD trade target ($145.16) vs. entry ($106.10) and stop ($91.07) provides an R:R of ~2.6, which aligns with the target ATR multiplier of 2.5.
+
+### TRADE INTEGRITY
+* **No issues found** in the provided JSON trade events, other than the stop-tracking failure noted in the logs.
+
+### MODIFIED FILE FINDINGS
+* **strategy/day_tier_sizing.py**: The logic `shares = int(math.floor(notional / px))` is robust for whole-share requirements. However, the `try-except` block around `track` string conversion is slightly redundant given the explicit `if/else` check, but it is safe.
+* **strategy/day_tier_entry_trigger.py**: The `_vol_ok` function uses `df["volume"].dropna()`. If `df` is a slice of a larger DataFrame, this could trigger a `SettingWithCopyWarning` if the logic were to attempt an assignment, but as a read-only function, it is safe.
+* **data/gex.py**: The `_get_spot_quote` function correctly handles `float()` conversion errors. The logic for `_spot_is_suspect` is sound, but ensure that `GEX_SPOT_GUARD_ENABLED` is set to `True` in `config.py` to prevent the bot from trading on stale/bad prints.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H1**: UNTOUCHED (PDT deleted)
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+* **P5-H5**: FIXED
+* **P5-M1**: UNTOUCHED
+* **P5-M2**: UNTOUCHED
+* **P5-M3**: UNTOUCHED
+* **P5-L1**: UNTOUCHED
+* **P5-L2**: UNTOUCHED
+* **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | HIGH | execution.stop_protection | Stop-tracking desync | The system failed to maintain the stop order for HOOD, requiring a "MISSING" stop recovery. This indicates a race condition between the broker-held order state and the internal tracker.**
+* **INFRASTRUCTURE | MEDIUM | ledger_sync | High latency in ledger synchronization | Wall-time > 12s suggests the ledger sync is becoming a bottleneck, potentially delaying order updates.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate**: Investigate `execution.stop_protection` for race conditions where orders are submitted but not registered in the internal tracker.
+2. **High**: Optimize `ledger_sync` to reduce wall-time; consider batching or asynchronous updates if the current sync is blocking the main loop.
+3. **Medium**: Verify the 8:30pm ET ledger heal successfully resolves the $-92.48 drift. If drift persists post-heal, initiate a full ledger audit.
+4. **Low**: Review `run_movers.py` (P5-C2) to resolve the `DataFetcher` import error.
