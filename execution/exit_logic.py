@@ -395,6 +395,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     symbol=symbol, direction=direction,
                     pnl=pnl or 0.0, reason="trail_stop",
                     tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                    unverified=trade.get("_fill_unverified", False),
                 )
                 continue
 
@@ -987,7 +988,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     f"| Level {t_idx + 1}/3"
                 )
                 alert_partial(symbol=symbol, tranche=t_idx + 1, pnl=pnl,
-                              qty=qty_to_cls, price=current_price)
+                              qty=qty_to_cls, price=current_price,
+                              unverified=trade.get("_fill_unverified", False))
                 _log_trade_event(
                     "partial_exit", symbol=symbol, price=fill_price, size=qty_to_cls,
                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
@@ -1373,7 +1375,8 @@ def check_exits(
                             closed.append(symbol)
                             alert_exit(symbol=symbol, direction=direction,
                                        pnl=pnl or 0.0, reason="overnight_atr_buffer_exit",
-                                       tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                                       tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                                       unverified=trade.get("_fill_unverified", False))
                         else:
                             _ap_pos = get_open_position(symbol)
                             if _ap_pos is None:
@@ -1442,7 +1445,8 @@ def check_exits(
                                 alert_exit(symbol=symbol, direction=direction,
                                            pnl=pnl or 0.0,
                                            reason="overnight_atr_buffer_exit | gtc_stop_executed",
-                                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                                           unverified=trade.get("_fill_unverified", False))
                             else:
                                 logger.error(
                                     f"[{symbol}] OVERNIGHT BREAKEVEN: close_position failed and "
@@ -1486,7 +1490,8 @@ def check_exits(
                 closed.append(symbol)
                 alert_exit(symbol=symbol, direction=direction,
                            pnl=pnl or 0.0, reason="thesis_invalidation",
-                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                           unverified=trade.get("_fill_unverified", False))
             continue
 
         # ── 0C. Break-even stop promotion ────────────────────────────────────
@@ -1592,7 +1597,8 @@ def check_exits(
                     closed.append(symbol)
                     alert_exit(symbol=symbol, direction=direction,
                                pnl=pnl or 0.0, reason="hard_stop",
-                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                               unverified=trade.get("_fill_unverified", False))
                     if direction == "short":
                         _eod_ts = datetime.now(
                             ZoneInfo("America/New_York")
@@ -1673,7 +1679,8 @@ def check_exits(
                     closed.append(symbol)
                     alert_exit(symbol=symbol, direction=direction,
                                pnl=pnl or 0.0, reason="target",
-                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                               tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                               unverified=trade.get("_fill_unverified", False))
                 else:
                     logger.warning(
                         f"[{symbol}] Target exit close_position() returned False — "
@@ -2051,7 +2058,8 @@ def check_exits(
                 closed.append(symbol)
                 alert_exit(symbol=symbol, direction=direction,
                            pnl=pnl or 0.0, reason="signal",
-                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0)
+                           tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                           unverified=trade.get("_fill_unverified", False))
 
         else:
             # H-2: Reversal counter decay — one neutral scan reduces count by 1
