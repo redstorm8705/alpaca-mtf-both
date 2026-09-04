@@ -8,9 +8,11 @@ day, similar to what Alpaca is showing — a snapshot of how each tier is perfor
 P/L at that moment). I want the snapshot so it can be UNREALIZED. At market close and after the
 official reconcile, we can have it be realized P/L."
 
-So the HOURLY card is UNREALIZED (open positions marked to market now), broken out per tier.
-A realized per-tier version is a separate post-close job (fast-follow, tracked in the design
-record) — realized-per-tier attribution belongs after the authoritative reconcile, not intraday.
+TWO MODES (one file, one cron each):
+  - default (hourly RTH): UNREALIZED per tier — open positions marked to market now.
+  - `--realized` (once, post-close after the reconcile): REALIZED per tier — Alpaca-FIFO P&L
+    from round-trips CLOSED today, attributed by client_order_id tier tag. Rafael 2026-09-04:
+    "at market close and after the official reconcile, we can have it be realized P/L."
 
 WHAT IT POSTS (compact Block Kit card):
   - Reference headline: account day P&L = equity − last_equity (exactly Alpaca's day number) + % + equity.
@@ -35,6 +37,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -182,25 +185,184 @@ def build_card(s: dict) -> dict:
     return {"blocks": blocks, "text": fallback}
 
 
-def main() -> int:
-    try:
-        s = compute_snapshot()
-        payload = build_card(s)
-    except Exception as e:
-        logger.error("snapshot computation/render failed — NOT posting (no wrong number): %s", e)
-        return 1
+# ── REALIZED mode (post-close) ────────────────────────────────────────────────
+
+def _today_pt() -> str:
+    """PT calendar date, matching reporting.pnl_ledger._pt_date's per_day keys."""
+    return datetime.now(PT).strftime("%Y-%m-%d")
+
+
+def _realized_by_tier(fills: list, coid_map: dict, today: str) -> tuple[dict, dict, float]:
+    """One unified FIFO per symbol where each LOT carries its entry tier; a close books each
+    matched lot's realized P&L to THAT lot's tier. Correct across cross-tier closes (a full-net
+    sell matches an intraday lot and a daytrade lot and books each to its own tier) with NO phantom-
+    lot corruption and NO reliance on entry-timestamp uniqueness. Mirrors
+    reporting.pnl_ledger.compute_realized's FIFO (same net-based cover-first logic), tier-tagged.
+    Returns (tier_today, tier_syms_today, total_today) for exit_date == today only."""
+    lots: dict = defaultdict(deque)          # sym -> deque[(qty, price, side, tier)]
+    tier_today = {t: 0.0 for t in _TIERS}
+    tier_syms: dict = {t: defaultdict(float) for t in _TIERS}
+    total_today = 0.0
+
+    def _close(sym: str, want_side: str, qty: int, price: float, day: str) -> int:
+        nonlocal total_today
+        dq = lots[sym]
+        rem = qty
+        while rem > 0 and dq and dq[0][2] == want_side:
+            lqty, lprice, lside, ltier = dq[0]
+            take = min(lqty, rem)
+            pnl = (price - lprice) * take if want_side == "long" else (lprice - price) * take
+            if day == today:
+                tier_today[ltier] += pnl
+                tier_syms[ltier][sym] += pnl
+                total_today += pnl
+            if lqty == take:
+                dq.popleft()
+            else:
+                dq[0] = (lqty - take, lprice, lside, ltier)
+            rem -= take
+        return rem
+
+    for f in fills:
+        sym = f.get("symbol", "")
+        side = f.get("side", "")                       # byte-identical to compute_realized (no .lower())
+        try:
+            qty = int(float(f.get("qty", 0)))
+            price = float(f.get("price", 0.0))
+        except (TypeError, ValueError):
+            continue
+        day = pl._pt_date(f.get("transaction_time", ""))   # identical bucketing to compute_realized
+        if not sym or qty <= 0 or not day:
+            continue
+        tier = og.tier_of_coid(coid_map.get(f.get("order_id"))) or "intraday"
+        if tier not in _TIERS:
+            tier = "intraday"
+        dq = lots[sym]
+        net = sum(q * (1 if sd == "long" else -1) for q, _p, sd, _tr in dq)
+        if side in ("buy", "buy_to_cover"):
+            if net < 0:
+                leftover = _close(sym, "short", qty, price, day)
+                if leftover > 0:
+                    dq.append((leftover, price, "long", tier))
+            else:
+                dq.append((qty, price, "long", tier))
+        elif side in ("sell", "sell_short"):
+            if net > 0:
+                leftover = _close(sym, "long", qty, price, day)
+                if leftover > 0:
+                    dq.append((leftover, price, "short", tier))
+            else:
+                dq.append((qty, price, "short", tier))
+    return tier_today, tier_syms, round(total_today, 2)
+
+
+def compute_realized_snapshot() -> dict:
+    """Post-close REALIZED P&L per tier from Alpaca-FIFO trades CLOSED today.
+
+    The TOTAL comes from the audited reporting.pnl_ledger.compute_realized (authoritative). The
+    per-tier SPLIT comes from _realized_by_tier — a unified FIFO whose lots carry their entry tier,
+    so a single full-net close of a symbol co-held by two non-protected tiers (intraday+daytrade;
+    only forever6/qhm are ring-fenced) books each tier's shares to that tier exactly. This avoids
+    both the per-tier SUBSET-FIFO phantom-lot corruption and the entry-timestamp-collision failure
+    (cold-2nd 2026-09-04). `unattributed` = authoritative total − Σ tiers; it is ~0 by construction
+    (same FIFO), and any real divergence is logged + surfaced rather than showing a wrong split."""
+    today = _today_pt()
+    account = pl.fetch_account() or {}
+    equity = float(account.get("equity", 0.0) or 0.0)
+    last_equity = float(account.get("last_equity", equity) or 0.0)
+    account_today = round(equity - last_equity, 2)
+    account_pct = round(account_today / last_equity * 100, 2) if last_equity else 0.0
+
+    fills = pl.fetch_all_fills() or []
+    orders = pl.fetch_all_orders() or []
+    coid_map = pl.build_coid_map(orders)              # {order_id: client_order_id}
+
+    full = pl.compute_realized(fills)                 # authoritative TOTAL
+    total_realized = round(float(full.get("per_day", {}).get(today, 0.0) or 0.0), 2)
+
+    tier_raw, tier_syms, _tier_total = _realized_by_tier(fills, coid_map, today)   # per-tier SPLIT
+    tier_realized = {t: round(tier_raw[t], 2) for t in _TIERS}
+    pos_lines: dict[str, list] = {
+        t: [(s, round(v, 2)) for s, v in tier_syms[t].items() if abs(v) >= 0.005] for t in _TIERS
+    }
+    unattributed = round(total_realized - round(sum(tier_realized.values()), 2), 2)
+    if abs(unattributed) >= 0.50:                     # tier-FIFO diverged from the audited total → surface, don't hide
+        logger.warning("pnl_snapshot realized: per-tier split %.2f != authoritative total %.2f (residual %.2f)",
+                       sum(tier_realized.values()), total_realized, unattributed)
+    return {
+        "equity": equity,
+        "account_today": account_today,
+        "account_pct": account_pct,
+        "tier_realized": tier_realized,
+        "pos_lines": pos_lines,
+        "total_realized": total_realized,
+        "unattributed": unattributed,
+    }
+
+
+def build_realized_card(s: dict) -> dict:
+    """Render the REALIZED snapshot dict as a Slack Block Kit payload."""
+    now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
+    sign_pct = f"{s['account_pct']:+.2f}%"
+    blocks: list = [
+        {"type": "header", "text": {"type": "plain_text",
+            "text": f"📕 Realized P&L — Close · {now_pt}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn",
+            "text": f"*Realized today:* {_dollar(s['total_realized'])}   ·   *Account day (Alpaca):* {_dollar(s['account_today'])} ({sign_pct})   ·   *Equity:* {_dollar(s['equity'])}"}},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": "Realized P&L from trades CLOSED today (Alpaca FIFO round-trips, post-close). Account day = `equity − last_equity` (realized + open MTM)."}]},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Realized today — by tier*"}},
+    ]
+    for t in _TIERS:
+        v = s["tier_realized"][t]
+        lines = s["pos_lines"][t]
+        head = f"*{_TIER_LABEL[t]}*   {_dollar(v)}"
+        if lines:
+            body = "\n".join(f"• {sym}  {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}\n{body}"}})
+        else:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}   _(no closed trades today)_"}})
+    ua = s.get("unattributed", 0.0)
+    if abs(ua) >= 0.50:                             # rounding/edge guard — should not normally render
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": f"*Unattributed*   {_dollar(ua)}\n_residual vs the authoritative total (rounding / an entry with no tagged fill)_"}})
+    blocks.append({"type": "divider"})
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+        "text": "*Realized today* is the authoritative full-FIFO total (Alpaca, post-close); each round-trip is booked to the tier that OPENED it, so tiers sum to the total even when one order closed a symbol co-held by >1 tier. Open positions' unrealized is in the hourly snapshots."}]})
+
+    fallback = f"Realized P&L (close) {now_pt}: realized today {_dollar(s['total_realized'])}, account day {_dollar(s['account_today'])}, equity {_dollar(s['equity'])}"
+    return {"blocks": blocks, "text": fallback}
+
+
+# ── Slack post + entrypoint ────────────────────────────────────────────────────
+
+def _post(payload: dict, label: str) -> int:
     webhook = os.getenv("SLACK_WEBHOOK_URL", "").strip()
     if not webhook:
-        logger.error("SLACK_WEBHOOK_URL not set — snapshot computed but not posted")
-        logger.info("snapshot: %s", payload["text"])
+        logger.error("SLACK_WEBHOOK_URL not set — %s computed but not posted", label)
+        logger.info("%s: %s", label, payload["text"])
         return 1
     try:
         status = audit_slack.post_to_slack(payload, webhook)
-        logger.info("posted P&L snapshot (HTTP %s): %s", status, payload["text"])
+        logger.info("posted %s (HTTP %s): %s", label, status, payload["text"])
         return 0
     except Exception as e:
-        logger.error("Slack post failed: %s", e)
+        logger.error("Slack post failed (%s): %s", label, e)
         return 1
+
+
+def main() -> int:
+    realized = "--realized" in sys.argv[1:]
+    try:
+        if realized:
+            payload = build_realized_card(compute_realized_snapshot())
+        else:
+            payload = build_card(compute_snapshot())
+    except Exception as e:
+        logger.error("snapshot computation/render failed — NOT posting (no wrong number): %s", e)
+        return 1
+    return _post(payload, "realized P&L snapshot" if realized else "P&L snapshot")
 
 
 if __name__ == "__main__":
