@@ -68,11 +68,19 @@ lastday→now move, so a qty-share split is exact, not proportional-approximate.
 Surfaces a NEW cross-cut (per-tier day P&L) of existing signals for operator visibility. Fails
 safe (never posts a wrong number). No coupling into any decision path — pure read-only reporting.
 
+## Realized mode — SHIPPED 2026-09-04 (same file, `--realized`)
+Post-close per-tier REALIZED P&L (Rafael: "at market close and after the official reconcile, we
+can have it be realized P/L"). Implemented as `compute_realized_snapshot()` + `build_realized_card()`
+in the same file, selected by `--realized`. Sourcing: `reporting.pnl_ledger.fetch_all_fills` +
+`fetch_all_orders` → `build_coid_map`; each fill is attributed by `ownership_guard.tier_of_coid`
+(untagged → intraday); `compute_realized` is run per tier and `per_day[today]` is that tier's
+realized today. Every fill partitions to exactly one tier, so Σ tiers == total realized (no
+residual). Per-tier FIFO is exact — tiers never cross lots. Realized = the closed round-trip P&L,
+which is the correct definition here (unlike the intraday card, "round-trip" is what realized MEANS,
+so there is no round-trip-vs-today's-move wrinkle). Cron: one post-close line at 18:45 ET (after the
+`pnl_ledger --heal-apply` reconcile that runs 16:30–18:30 ET).
+
 ## Fast-follows (tracked)
-- **Post-close per-tier REALIZED version** (Rafael: "at market close and after the official
-  reconcile, we can have it be realized P/L") — a separate post-close job that reads the healed
-  authoritative ledger / Alpaca-FIFO and shows realized P&L per tier. Its per-tier realized must
-  be measured consistently with the reconcile (not naive round-trip) so it reconciles.
 - Optional per-tier TOTAL (open, since-entry) unrealized alongside today's — deferred.
 - Strict in-script market-open check (the RTH cron schedule already bounds when it runs).
 
