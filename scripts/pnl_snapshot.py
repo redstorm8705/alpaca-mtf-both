@@ -147,41 +147,39 @@ def compute_snapshot() -> dict:
     }
 
 
+def _tier_rows(tier_vals: dict, pos_lines: dict, empty_word: str) -> list:
+    """Compact per-tier rows: active tiers show name+total then inline positions; tiers with
+    nothing are collapsed into a single dim line. Shared by the unrealized + realized cards."""
+    rows: list = []
+    flat: list = []
+    for t in _TIERS:
+        lines = pos_lines.get(t, [])
+        if lines:
+            pos = " · ".join(f"{sym} {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
+            rows.append(f"*{_TIER_LABEL[t]}*  {_dollar(tier_vals[t])}\n{pos}")
+        else:
+            flat.append(_TIER_LABEL[t])
+    if flat:
+        rows.append(f"_{' · '.join(flat)}: {empty_word}_")
+    return rows
+
+
 def build_card(s: dict) -> dict:
-    """Render the snapshot dict as a Slack Block Kit payload {"blocks":[...], "text": fallback}."""
+    """Render the UNREALIZED snapshot as a compact Slack Block Kit payload (no equity, inline
+    positions, empty tiers collapsed)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
     sign_pct = f"{s['account_pct']:+.2f}%"
+    rows = [f"*Unrealized by tier*  ·  {_dollar(s['total_unreal_today'])}"]
+    rows += _tier_rows(s["tier_unreal"], s["pos_lines"], "flat")
+    if abs(s["other_today"]) >= 0.50:
+        rows.append(f"_Other {_dollar(s['other_today'])}_")
     blocks: list = [
-        {"type": "header", "text": {"type": "plain_text",
-            "text": f"💹 P&L Snapshot · {now_pt}", "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*Today (Alpaca):* {_dollar(s['account_today'])}  ({sign_pct})   ·   *Equity:* {_dollar(s['equity'])}"}},
-        {"type": "context", "elements": [{"type": "mrkdwn",
-            "text": "Account day P&L = Alpaca `equity − last_equity`. Per-tier below is *unrealized* (open positions, marked to market now)."}]},
-        {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*Unrealized today — by tier*   (total {_dollar(s['total_unreal_today'])})"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"💹 P&L Snapshot · {now_pt}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Today  {_dollar(s['account_today'])}  ({sign_pct})*"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(rows)}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": "open positions, marked to market · realized after close"}]},
     ]
-    for t in _TIERS:
-        v = s["tier_unreal"][t]
-        lines = s["pos_lines"][t]
-        head = f"*{_TIER_LABEL[t]}*   {_dollar(v)}"
-        if lines:
-            body = "\n".join(f"• {sym}  {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}\n{body}"}})
-        else:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}   _(no open positions)_"}})
-    other_v = s["other_today"]
-    if abs(other_v) >= 0.50:                        # suppress sub-dollar rounding residue; show a real untracked amount
-        unsyms = s.get("untracked_syms", [])
-        names = ", ".join(sym for sym, _v in sorted(unsyms, key=lambda x: x[1])[:8]) if unsyms else ""
-        note = f"\n_{len(unsyms)} position(s) not tier-tagged: {names}_" if names else ""
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Other / untracked*   {_dollar(other_v)}{note}"}})
-    blocks.append({"type": "divider"})
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-        "text": "Unrealized (open-position) P&L, marked to market now — realized P&L finalizes in the post-close reconcile. Per-tier split from the ownership ledger; the account headline is authoritative."}]})
-
-    fallback = f"P&L Snapshot {now_pt}: today {_dollar(s['account_today'])} ({sign_pct}), open unrealized {_dollar(s['total_unreal_today'])}, equity {_dollar(s['equity'])}"
+    fallback = f"P&L {now_pt}: today {_dollar(s['account_today'])} ({sign_pct}), unrealized {_dollar(s['total_unreal_today'])}"
     return {"blocks": blocks, "text": fallback}
 
 
@@ -301,37 +299,21 @@ def compute_realized_snapshot() -> dict:
 
 
 def build_realized_card(s: dict) -> dict:
-    """Render the REALIZED snapshot dict as a Slack Block Kit payload."""
+    """Render the REALIZED snapshot as a compact Slack Block Kit payload (no equity, inline
+    positions, empty tiers collapsed)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
     sign_pct = f"{s['account_pct']:+.2f}%"
+    rows = ["*Realized by tier*"]
+    rows += _tier_rows(s["tier_realized"], s["pos_lines"], "none")
+    if abs(s.get("unattributed", 0.0)) >= 0.50:      # rounding/edge guard — should not normally render
+        rows.append(f"_Unattributed {_dollar(s['unattributed'])}_")
     blocks: list = [
-        {"type": "header", "text": {"type": "plain_text",
-            "text": f"📕 Realized P&L — Close · {now_pt}", "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*Realized today:* {_dollar(s['total_realized'])}   ·   *Account day (Alpaca):* {_dollar(s['account_today'])} ({sign_pct})   ·   *Equity:* {_dollar(s['equity'])}"}},
-        {"type": "context", "elements": [{"type": "mrkdwn",
-            "text": "Realized P&L from trades CLOSED today (Alpaca FIFO round-trips, post-close). Account day = `equity − last_equity` (realized + open MTM)."}]},
-        {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "*Realized today — by tier*"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"📕 Realized · Close · {now_pt}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Realized today  {_dollar(s['total_realized'])}*   ·   day {_dollar(s['account_today'])} ({sign_pct})"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(rows)}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": "closed-trade P&L, Alpaca FIFO · booked to the opening tier"}]},
     ]
-    for t in _TIERS:
-        v = s["tier_realized"][t]
-        lines = s["pos_lines"][t]
-        head = f"*{_TIER_LABEL[t]}*   {_dollar(v)}"
-        if lines:
-            body = "\n".join(f"• {sym}  {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}\n{body}"}})
-        else:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{head}   _(no closed trades today)_"}})
-    ua = s.get("unattributed", 0.0)
-    if abs(ua) >= 0.50:                             # rounding/edge guard — should not normally render
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*Unattributed*   {_dollar(ua)}\n_residual vs the authoritative total (rounding / an entry with no tagged fill)_"}})
-    blocks.append({"type": "divider"})
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-        "text": "*Realized today* is the authoritative full-FIFO total (Alpaca, post-close); each round-trip is booked to the tier that OPENED it, so tiers sum to the total even when one order closed a symbol co-held by >1 tier. Open positions' unrealized is in the hourly snapshots."}]})
-
-    fallback = f"Realized P&L (close) {now_pt}: realized today {_dollar(s['total_realized'])}, account day {_dollar(s['account_today'])}, equity {_dollar(s['equity'])}"
+    fallback = f"Realized {now_pt}: realized {_dollar(s['total_realized'])}, day {_dollar(s['account_today'])}"
     return {"blocks": blocks, "text": fallback}
 
 
