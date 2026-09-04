@@ -355,11 +355,27 @@ def alert_entry(symbol: str, direction: str, shares: int, price: float,
 
 
 def alert_exit(symbol: str, direction: str, pnl: float, reason: str,
-               tqi: int | None = None) -> None:
-    """Fire on full position close."""
+               tqi: int | None = None, unverified: bool = False) -> None:
+    """Fire on full position close.
+
+    unverified=True (2026-09-03): the close fill could not be recovered inside the exit
+    poll budget, so `pnl` is the entry_price fallback (~$0.00), NOT the real P&L — the
+    fill reconciler patches the true number within the RC-4 window. Render "P&L pending
+    reconciliation" instead of a definitive "+$0.00" so a real (possibly losing) exit is
+    never shown to the operator as a flat/scratch trade. Display-only, non-risk-path; the
+    default False keeps every non-opted-in caller byte-identical."""
+    tqi_str  = f" | TQI: {tqi}/100" if tqi is not None else ""
+    if unverified:
+        title = f"EXIT {symbol} — P&L pending reconciliation"
+        body  = (
+            f"Reason: {reason}{tqi_str}\nDirection: {direction}\n"
+            f"⏳ Fill unverified — real P&L is being reconciled (this is NOT $0.00)."
+        )
+        _send(title, body, priority=4, tags=["hourglass_flowing_sand", "door"],
+              emoji=":hourglass_flowing_sand:")
+        return
     pnl_sign = "+" if pnl >= 0 else ""
     pnl_tag  = "white_check_mark" if pnl >= 0 else "x"
-    tqi_str  = f" | TQI: {tqi}/100" if tqi is not None else ""
     title = f"EXIT {symbol} {pnl_sign}${pnl:.2f}"
     body  = f"Reason: {reason}{tqi_str}\nDirection: {direction}"
     priority = 4 if abs(pnl) >= 20 else 3
@@ -367,10 +383,16 @@ def alert_exit(symbol: str, direction: str, pnl: float, reason: str,
           emoji=":white_check_mark:" if pnl >= 0 else ":x:")
 
 
-def alert_partial(symbol: str, tranche: int, pnl: float, qty: int, price: float) -> None:
-    """Fire on partial tranche close."""
+def alert_partial(symbol: str, tranche: int, pnl: float, qty: int, price: float,
+                  unverified: bool = False) -> None:
+    """Fire on partial tranche close.
+
+    unverified=True: the partial-close fill was not recovered, so `pnl` is a fallback
+    (~$0.00), not real — show "pending reconciliation" instead of a definitive $0.00
+    (mirrors alert_exit). Default False keeps existing callers byte-identical."""
     title = f"PARTIAL T{tranche} {symbol}"
-    body  = f"{qty} shares @ ${price:.2f} | PnL: ${pnl:+.2f}"
+    _pnl_str = "pending reconciliation" if unverified else f"${pnl:+.2f}"
+    body  = f"{qty} shares @ ${price:.2f} | PnL: {_pnl_str}"
     _send(title, body, priority=3, tags=["scissors", "chart_with_upwards_trend"],
           emoji=":scissors:")
 
