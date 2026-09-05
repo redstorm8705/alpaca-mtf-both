@@ -16,6 +16,14 @@ SECTOR_MAP: dict = {
     "SMCI": "semis",  "MRVL": "semis",  "ARM":  "semis",
     "TXN":  "semis",  "KLAC": "semis",  "LRCX": "semis",
     "AMAT": "semis",  "ON":   "semis",  "WOLF": "semis",
+    # Memory-cycle add (2026-09-05, Rafael + board): SNDK (NAND), DRAM (Roundhill
+    # Memory ETF), EWY (iShares S. Korea — Samsung/SK Hynix memory weight). Tagged
+    # "semis" so the concentration gate treats them as one memory/semis cluster with
+    # MU (already "semis"). EWY is a broad Korea ETF but memory-heavy — "semis" is a
+    # deliberate CONSERVATIVE choice: the gate only ever REDUCES entries (blocks a
+    # correlated candidate), never adds risk, so over-tagging fails safe. Closes the
+    # prior ETF/unmapped bypass (unmapped names + ETFs were "always allowed through").
+    "SNDK": "semis",  "DRAM": "semis",  "EWY":  "semis",
     # Big Tech / Mega-cap
     "AAPL": "bigtech", "AMZN": "bigtech", "META": "bigtech",
     "GOOGL":"bigtech", "MSFT": "bigtech", "NFLX": "bigtech",
