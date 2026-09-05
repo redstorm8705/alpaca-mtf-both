@@ -450,14 +450,39 @@ def _build_ds_gai_prompt(
         "Then provide your full audit findings."
     )
 
+# ── Risk-path scope gate (Rafael 2026-09-04) ──────────────────────────────────
+# The board correctly REJECTED every risk-path directive (execution/strategy files) — a red-teamer
+# + risk reviewer will almost always decline a recommended fix to a 2000-line execution file, and
+# should. So autonomous auto-patching is now RESCOPED to NON-risk-path files only; everything else
+# is routed to human review (never auto-patched). DEFAULT-DENY / fail-safe: a file that does not
+# match this narrow allowlist is treated as risk-path and skipped. Allowlist = files that CANNOT
+# affect RTH execution / sizing / orders (docs + tests). Widen deliberately, never by default.
+def _is_non_risk_path(file_rel: str) -> bool:
+    p = file_rel.replace("\\", "/").lower().lstrip("./")
+    parts = [seg for seg in p.split("/") if seg]
+    # 1. A documentation / design-record / audit-log text file, anywhere in the tree.
+    if p.endswith((".md", ".rst", ".txt")):
+        return True
+    # 2. The test suite — a genuine "tests" path SEGMENT, not the substring "tests"
+    #    inside another name (e.g. "tests_helper.py" is NOT a test dir → risk-path).
+    if "tests" in parts:
+        return True
+    # NB: a bare "docs/" directory rule was REMOVED (cold-2nd 2026-09-04): docs/ held a
+    # launchd .plist that controls bot launch — an execution-affecting artifact the pipeline
+    # must never auto-patch. Real doc targets are already covered by the .md/.rst/.txt rule
+    # above; anything else under docs/ is default-denied to human review, as it should be.
+    return False                                  # everything else → risk-path → human review
+
+
 # ── Process one directive ─────────────────────────────────────────────────────
-# Status outcomes (S58 state machine):
-#   "processed"        — pipeline succeeded, pending_ds_gai JSON + patch written
-#   "failed_permanent" — structural failure (missing file, board reject,
-#                        non-diff output); never retried
-#   "retry"            — transient failure (API down); status left pending_review
+# Status outcomes (S58 state machine + 2026-09-04 rescope):
+#   "processed"         — pipeline succeeded, pending_ds_gai JSON + patch written
+#   "skipped_risk_path" — target is a risk-path file; routed to human, never auto-patched (NORMAL)
+#   "board_rejected"    — the board declined the finding/fix (NORMAL — the gate working)
+#   "failed_permanent"  — structural failure (missing file, bad directive, non-diff output)
+#   "retry"             — transient failure (API down); status left pending_review
 def _process_directive(directive: dict) -> str:
-    """Process one directive → 'processed' | 'failed_permanent' | 'retry'."""
+    """Process one directive → 'processed'|'skipped_risk_path'|'board_rejected'|'failed_permanent'|'retry'."""
     file_rel  = directive.get("file", "")
     finding   = directive.get("finding", "")
     rec_fix   = directive.get("recommended_fix", "")
@@ -488,6 +513,12 @@ def _process_directive(directive: dict) -> str:
     if not file_path.exists():
         _log(f"SKIP (permanent): target file not found: {file_path}")
         return "failed_permanent"
+
+    # ── Risk-path scope gate (2026-09-04): auto-patch NON-risk-path files only ──
+    if not _is_non_risk_path(file_rel):
+        _log(f"SKIP (risk-path): {file_rel} is a risk-path file — autonomous auto-patching is "
+             "restricted to non-risk-path files (docs/tests); routed to human review, not auto-patched.")
+        return "skipped_risk_path"
 
     _log(f"Processing: {file_rel} | {rc_class} | {finding[:60]}...")
 
@@ -521,8 +552,8 @@ def _process_directive(directive: dict) -> str:
         return "retry"
     reject_count = board_verdicts.count("REJECT")
     if reject_count >= 2:
-        _log(f"Board rejected {file_rel}: {board_verdicts} — permanent, no diff")
-        return "failed_permanent"
+        _log(f"Board declined {file_rel}: {board_verdicts} — no auto-patch (normal; gate working)")
+        return "board_rejected"
 
     # ── Diff generation ───────────────────────────────────────────────────────
     diff = _generate_diff(file_path, file_content, finding, rec_fix)
@@ -666,6 +697,8 @@ def main() -> None:
     processed_count = 0
     permanent_count = 0
     retry_count     = 0
+    skipped_count   = 0   # risk-path files routed to human review (NORMAL under the rescope)
+    rejected_count  = 0   # board declined the finding/fix (NORMAL — the gate working)
     for directive in directives:
         try:
             result = _process_directive(directive)
@@ -682,6 +715,12 @@ def main() -> None:
         if result == "processed":
             outcomes[key] = "processed"
             processed_count += 1
+        elif result == "skipped_risk_path":
+            outcomes[key] = "skipped_risk_path"   # terminal: routed to human, not re-picked
+            skipped_count += 1
+        elif result == "board_rejected":
+            outcomes[key] = "board_rejected"       # terminal: board declined
+            rejected_count += 1
         elif result == "failed_permanent":
             outcomes[key] = "failed_permanent"
             permanent_count += 1
@@ -707,25 +746,35 @@ def main() -> None:
     _write_atomic(directives_path, "\n".join(all_lines) + "\n")
     _log(
         f"Updated audit_directives.jsonl "
-        f"({processed_count} processed, {permanent_count} failed_permanent, "
+        f"({processed_count} processed, {skipped_count} risk-path→human, "
+        f"{rejected_count} board-declined, {permanent_count} structural-skip, "
         f"{retry_count} left for retry)"
     )
 
-    # ── Slack summary (Majors: distinguish silent failure from clean run) ────
+    # ── Slack summary (2026-09-04 rescope) — NO false 🚨. A board-decline or a risk-path skip is
+    # the pipeline WORKING, not a failure (→ ℹ️). But a STRUCTURAL failure (missing file, malformed
+    # directive, oversized file) or a transient LLM-unreachable backlog IS worth a human glance
+    # (→ ⚠️) and must NOT be laundered into the calm ℹ️ bucket. A run that auto-patched is 🔧. ──
     ts_pt = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    if processed_count == 0 and (permanent_count + retry_count) > 0:
+    _tail = (f"{skipped_count} risk-path→human · {rejected_count} board-declined · "
+             f"{permanent_count} structural-skip · {retry_count} retry next run")
+    if processed_count > 0:
         _slack(
-            f"🚨 *autonomous_patch_generator.py — {ts_pt}*\n\n"
-            f"SILENT FAILURE: {len(directives)} pending, ZERO processed.\n"
-            f"failed_permanent: {permanent_count} | retry: {retry_count}\n"
-            f"Review logs/autonomous_patch_generator.log — human attention needed."
+            f"🔧 *autonomous_patch_generator.py — {ts_pt}*\n\n"
+            f"Auto-patched {processed_count} non-risk-path item(s) → pending_ds_gai_*.json.\n"
+            f"{_tail}\n\nautonomous_review.py runs at 7:30 PM ET to call Gro/GAI on these."
+        )
+    elif permanent_count > 0 or retry_count > 0:
+        _slack(
+            f"⚠️ *autonomous_patch_generator.py — {ts_pt}*\n\n"
+            f"{permanent_count} structural failure(s) need review; {retry_count} could not reach "
+            f"the review LLM (transient, will retry next run).\n{_tail}"
         )
     else:
         _slack(
-            f"🔧 *autonomous_patch_generator.py — {ts_pt}*\n\n"
-            f"Processed: {processed_count} → pending_ds_gai_*.json written\n"
-            f"failed_permanent: {permanent_count} | retry next run: {retry_count}\n\n"
-            "autonomous_review.py runs at 7:30 PM ET to call DS/GAI on these items."
+            f"ℹ️ *autonomous_patch_generator.py — {ts_pt}*\n\n"
+            f"{len(directives)} directive(s) reviewed, 0 auto-patched — expected: auto-patching is "
+            f"scoped to non-risk-path files (docs/tests).\n{_tail}\nNo action needed."
         )
 
     _log(

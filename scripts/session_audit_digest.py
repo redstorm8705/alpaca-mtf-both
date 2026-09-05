@@ -24,7 +24,12 @@ import glob
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LOGS = os.path.join(_HERE, "..", "logs")
 
-_DONE = {"processed", "applied", "done", "closed", "resolved", "context_only"}
+# _DONE = terminal directive statuses that must NOT show as OPEN in the digest.
+# The last three are autonomous_patch_generator's terminal outcomes (2026-09-04):
+# a board-declined, risk-path-skipped, or structurally-failed directive is done
+# (never re-picked). failed_permanent was a pre-existing terminal status too.
+_DONE = {"processed", "applied", "done", "closed", "resolved", "context_only",
+         "board_rejected", "skipped_risk_path", "failed_permanent"}
 
 
 def _newest(pattern: str) -> str | None:
