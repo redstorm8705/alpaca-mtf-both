@@ -1,0 +1,76 @@
+Nightly Gemini Audit — 2026-09-04
+Model: gemini-3.1-flash-lite | Verdict: PASS
+Modified files: ['alerts.py', 'auto_ai_audit.py', 'scripts/pnl_snapshot.py', 'execution/kelly.py', 'execution/exit_logic.py']
+================================================================================
+
+### CATASTROPHIC ALERT: [0]
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: PASS
+
+---
+
+### LOG ANOMALIES
+- **STOP-PROTECTION Placement for AVGO**: At `19:51:31` (`15:51 ET`), `execution.stop_protection` successfully placed a missing RTH BUY stop for AVGO (`BUY 2 @ $377.51`, Order ID `1848185b-0422-44af-8315-8c7aed74bddd`). Stop protection guard self-healed the position safely before close.
+- **QHM RegT BP Skips**: Multiple warnings from `execution.quarterly_hold_manager` (`QHM dip-add: GE RegT BP <= 0 ($0) — skip add`). Account has fully allocated intraday capital; dip-add gating operated safely as designed.
+- **MRI News Gating**: `19:44:09` & `19:51:11`: News alerts capped (+35pts capped at +10pts due to `price_score=0`). Regime engine functioned normally without unconfirmed panic halt.
+- **EOD Dual-Compute Drift**: Pre-heal telemetry logged `drift=$-24.63` (`alpaca_pnl=20.33` vs `tracker_pnl=44.96`). As noted in system invariants, this is pre-heal telemetry prior to 8:30 PM ET settlement and does not drive live execution.
+
+---
+
+### PERFORMANCE AUDIT
+- **P&L Sign Correctness**: 
+  - `HOOD` (`long`): Entry `$106.10`, Partial Exit `$121.90` (`+$15.80`), Final Exit `$121.90` (breach cover at `$106.10` BE baseline / `$121.90` fill, total P&L `$31.60`).
+  - `META` (`long`): Entry `$576.48`, Partial Exit `$594.69` (`+$18.21`), Final Exit `$605.64` (`+$29.16`, total P&L `$47.37`). Both trades yielded correct positive profit signs.
+- **Score→Outcome Correlation**: Both winning trades exited today (`HOOD` score 10, `META` score 5 legacy orphan) completed profitable runs.
+- **Stop Hit & Target Realization**: Stops trailing and ratchet logic functioned accurately. R-multiples were captured positively across both positions.
+
+---
+
+### TRADE INTEGRITY
+- **Trade Records vs Reality**: All trade events in `trade_events.jsonl` match single-timestamp records properly.
+- **No Unreconciled Realized Fills**: Realized trades for 2026-09-04 (`HOOD` and `META`) show matching quantities, valid exit prices, and correctly tracked residual P&L.
+
+---
+
+### MODIFIED FILE FINDINGS
+- **`alerts.py`**: Clean. Safe-guards against Slack API failures and respects Block Kit / text chunking rules.
+- **`auto_ai_audit.py`**: Clean. API models properly resolved via `gai_client` ladder and Groq TPM limits respected.
+- **`scripts/pnl_snapshot.py`**: Clean. Read-only Alpaca MTM + ownership ledger reader. Fallbacks and residual allocations to `Other` operate safely without state mutation.
+- **`execution/kelly.py`**: Clean. Handles negative Kelly fallback gracefully (`KELLY_MIN_RISK_PCT`), maintains ATH equity updates unconditionally, and properly segregates Mean Reversion strategies.
+- **`execution/exit_logic.py`**: Clean. Trail stop evaluation happens prior to ratchet logic, preventing race conditions with existing broker-held orders.
+
+---
+
+### P5 STATUS
+- **P5-C1** (FVG MultiIndex silent crash): UNTOUCHED (Not triggered in log).
+- **P5-C2** (run_movers.py ImportError): UNTOUCHED.
+- **P5-H1** (PDT enforcement): OBSOLETE (Permanently deleted).
+- **P5-H2** (Fill price crosstalk): UNTOUCHED.
+- **P5-H3** (Orphan GTC 404 path): UNTOUCHED.
+- **P5-H4** (Rule 2 dead code): UNTOUCHED.
+- **P5-H5** (GTC stop suppressed at PDT=3/3): FIXED.
+- **P5-M1** (Cycle watchdog restart loop): UNTOUCHED.
+- **P5-M2** (MRI score cached stale): UNTOUCHED.
+- **P5-M3** (score_comparison JSON unbounded growth): UNTOUCHED.
+- **P5-L1** (_classify_loss_driver label): UNTOUCHED.
+- **P5-L2** (eod JSON timing): UNTOUCHED.
+- **P5-L3** (live_data_writer reconnect): UNTOUCHED.
+
+---
+
+### NEW BUGS FOUND
+None
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Monitor Nightly Ledger Reconciler**: Verify that the 8:30 PM ET ledger sync resolves the provisional `$24.63` pre-heal drift between Alpaca paper settlement and internal tracker.
+2. **Review QHM RegT Buying Power Allocation**: Ensure non-intraday capital limits for QHM dip-adds align with desired overnight cash reserves when multiple intraday positions are active.

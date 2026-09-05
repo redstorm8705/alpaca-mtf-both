@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-09-04
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **HOOD Trade:** Entry $106.10, Exit $106.10. P&L $0.00. While the log notes "overnight_breakeven exit reason" as a valid pattern, the `CLOSED TRADE DETAILS` lists this as a "stop-hit" with a stop price of $91.07. This is a contradiction: if the stop was hit, the exit price should be near $91.07, not $106.10. If it was a breakeven exit, it should not be categorized as a "stop-hit" in the summary.
+- **P&L Drift:** The `portfolio_tracker` reports an EOD P&L drift of $-3.61 (Alpaca $41.35 vs. Tracker $44.96). While within the realm of paper-trading latency, it indicates a discrepancy between the authoritative ledger and the bot's internal state.
+- **Win Rate:** 0% (1 loss). The sample size is too small to draw statistical conclusions, but the stop-hit rate of 100% on closed trades suggests the current entry logic is failing to capture momentum in the current regime.
+
+### ENTRY QUALITY
+- **MRI Alignment:** The HOOD entry was taken at an `MRI=STRESSED` level. Per the `FLAGGED ENTRIES` list, this is a known issue. Entering at `STRESSED` levels without sufficient market confirmation (as seen in the `macro_risk_index` log for other tickers) is a systematic degradation of entry quality.
+
+### EXIT QUALITY
+- **HOOD Exit:** The exit price ($106.10) matches the entry price ($106.10) exactly, yet the summary labels it a "stop-hit." This suggests the `execution.portfolio_tracker` or the exit-logic module is misclassifying exit reasons, which obscures the true performance of the stop-loss mechanism.
+
+### MRI ALIGNMENT
+- The bot correctly identified `MRI=STRESSED` for HOOD but proceeded with the entry anyway. The `macro_risk_index` log shows that for other tickers (e.g., 17:27:04 PT), the bot correctly gated entries due to lack of market confirmation. The HOOD entry appears to have bypassed this gate or was initiated prior to the current MRI logic enforcement.
+
+### LOG ANOMALIES
+- **EOD P&L DRIFT:** `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$41.35 tracker=$44.96 drift=$-3.61`.
+- **QHM Dip-Add:** `WARNING | execution.quarterly_hold_manager | QHM dip-add: GE RegT BP <= 0 ($0) — skip add`. This indicates the bot is attempting to add to positions when buying power is exhausted.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | MEDIUM | Exit reason misclassification |** The system records a "stop-hit" for a trade that exited at the entry price ($106.10). This mislabeling prevents accurate analysis of stop-loss effectiveness.
+- **ALPHA ISSUE | MEDIUM | MRI Gate Bypass |** The bot entered a trade on HOOD while `MRI=STRESSED`, despite the `macro_risk_index` logic being designed to gate such entries.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION:** Audit the `execution.exit_logic` to ensure that `stop_hit` flags are only applied when the exit price is within the defined `INTRADAY_STOP_ATR_MULT` range of the entry price.
+2. **ALPHA:** Review the `entry_logic` for HOOD to determine why the `MRI=STRESSED` gate failed to prevent the entry, specifically checking if the entry occurred before the MRI state was fully updated.
+3. **INFRASTRUCTURE:** Investigate the source of the $3.61 P&L drift; ensure that commission costs are being calculated identically in both the tracker and the Alpaca ledger.
