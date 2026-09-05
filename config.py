@@ -29,6 +29,11 @@ WATCHLIST = [
     "MSFT", "GOOGL", "NET",  "SNOW", "DDOG",
     "ADBE", "AVGO",  "RBLX", "RIVN", "HOOD",
     "MARA", "SOXL",  "SOXS",
+    # Memory-cycle names (2026-09-05, Rafael + board/Gro/GAI): MU/SNDK single-stocks,
+    # DRAM (Roundhill Memory ETF), EWY (iShares South Korea — Samsung/SK Hynix memory weight).
+    # All tagged "semis" in data/sectors.py so the sector-concentration gate treats the correlated
+    # memory cluster as one theme (closes the ETF/unmapped bypass the board flagged).
+    "MU", "SNDK", "DRAM", "EWY",
     # Bucket A — leveraged ETF swing holds (allocation PCT below)
     "TSLL", "NVDL", "TQQQ", "SQQQ",
 ]
@@ -406,7 +411,14 @@ VIX_BE_WIDEN_THRESHOLD_2 = 30.0   # VIX ≥ 30 → 0.50×ATR buffer
 # hostage to any other strategy's worst day: a maintenance call would force-liquidate the anchors).
 # Ships DARK until the module is wired + live-validated.
 FOREVER6_ENABLED = False                       # master flag — DARK until validated live
-FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA"]  # curated, grows manually
+FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
+                     "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael); tier is DARK
+# KNOWN RISK (Rafael-accepted 2026-09-05; CLOSE before FOREVER6_ENABLED flips): the never-sell exit
+# design is trim-only at 10x/20x gain with NO other exit — it has no handling for an ETF issuer
+# WINDING DOWN the fund (DRAM/EWY). A sponsor closure force-liquidates a "never-sell" holding on the
+# sponsor's timeline, possibly while underwater — a failure class single-stocks don't have. Add
+# fund-closure/wind-down detection before this tier goes live. Separate caveat: memory is a cyclical
+# (boom/bust) sub-sector, so "forever" duration is a judgment call for these names (tier is DARK).
 # Dynamic starter trigger: SPY down ≥ max(2.0, 0.15×VIX)% on the CLOSE — keeps it a ~2σ event across
 # regimes (VIX 13→2% floor, 20→3%, 27→4%). Board Shaw/Dalio formula; NOT a static −2% (no-static rule).
 FOREVER6_STARTER_TRIGGER_FLOOR_PCT = 2.0
@@ -753,7 +765,16 @@ DAYTRADE_TRACK_B_ENABLED    = False   # Track B (dynamic movers) OFF day-1 (boar
 # Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
 # _DAYTRADE_UNDERLYINGS (per-symbol GEX already live). Leveraged trackers
 # (TSLL/NVDL/TQQQ/SOXL) are a buying-power expedient, added after A validates.
-DAYTRADE_UNIVERSE = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]
+DAYTRADE_UNIVERSE = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA",
+                     "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael)
+# DRAM (~$60) and EWY (~$189) are the day-tier FOCAL POINTS — they fit the whole-share Track-A
+# budget (~$263 of equity) and will trade. MU (~$1,015) and SNDK (~$1,740) exceed one whole share
+# of that budget, so the sizing floor (floor(notional/price)=0) safely SKIPS them every session
+# until equity grows — Rafael-accepted (2026-09-05). MUST stay in sync with data/gex.py
+# _DAYTRADE_UNDERLYINGS below, or a new name reads GEX=UNKNOWN and stands down (never trades).
+# ACCEPTED COST / fast-follow: there is no pre-trade RTH spread gate; DRAM/EWY are thinner than the
+# Mag-7 so their intraday fill-spread is an accepted cost for now (day-tier is flat-by-close, so
+# EWY's overnight KOSPI-gap risk does NOT reach this tier).
 
 # Allocation (§7b.6): the tier gets DAYTRADE_ALLOC_PCT of equity, split Track A /
 # Track B. Track B is CASH-ONLY (no margin) + one-way fungible (A may borrow B's

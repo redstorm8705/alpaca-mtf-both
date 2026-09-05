@@ -63,7 +63,14 @@ _NEAR_FLIP_RATIO = 0.10
 # tracker sits in the same dealer-gamma regime as its underlying). We therefore compute GEX for
 # the Mag-7 underlyings and RESOLVE a tracker symbol to its underlying at read time
 # (get_gex_regime) — no need to compute the tracker's own (censored) chain.
-_DAYTRADE_UNDERLYINGS = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]
+_DAYTRADE_UNDERLYINGS = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA",
+                         "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael)
+# Day-tier focal points DRAM/EWY (ETFs) + MU/SNDK single-stocks. GEX is computed on each name's OWN
+# chain here (they are the actual underlyings, not trackers — no _ETF_UNDERLYING_MAP entry needed).
+# The symbol-agnostic quality gate (atm>=3, windowed capture>=0.40, windowed>=10) fail-safes a thin
+# ETF chain to UNKNOWN, and Layer B then stands down — no special-casing. MUST stay in sync with
+# config.DAYTRADE_UNIVERSE (an independent literal). +4 names = +4 per-symbol passes per 15-min
+# refresh (bounded by _MAX_CONTRACT_PAGES=2); per-symbol try/except isolates any one bad chain.
 # leveraged tracker -> underlying whose GEX regime it inherits. Only CLEAN single-underlying
 # maps are wired now; SOXL is deferred (its index isn't directly optionable — SMH vs SOXX proxy
 # is a pending design decision, not guessed here). QQQ/TSLA/NVDA underlyings are already computed
