@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-02 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-04 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,12 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-02) — pick up here
+## ⏩ LATEST (2026-09-04) — pick up here
+**MOST RECENT SHIP (2026-09-04, PR #262 → main+OCI `4f9e8c5`):** autonomous_patch_generator.py rescoped to non-risk paths (default-deny allowlist `_is_non_risk_path`) so the board stops declining every directive; the false `SILENT FAILURE` Slack is replaced with a 🔧/⚠️/ℹ️ three-way; `session_audit_digest._DONE` now recognizes the new terminal statuses. Both are cron-run (no service restart). Full detail + gate record: `logs/tb_audit_log.md` (2026-09-04 entry). verify: `gh pr view 262 --json state`→MERGED; OCI `grep -c _is_non_risk_path autonomous_patch_generator.py`→2; OCI `grep -Ec "board_rejected|skipped_risk_path" scripts/session_audit_digest.py`→1; OCI `grep -c "Board rejected" logs/autonomous_patch_generator.log`→58.
+**NON-BLOCKING fast-follow:** `tests/test_autonomous_patch_generator.py` (would lock the allowlist) is NOT on disk — the Write was blocked by the new-file design-record gate, which needs Rafael's go-ahead + a waiver. verify: `ls tests/test_autonomous_patch_generator.py`→absent.
+**NEXT QUEUED (Rafael, in order):** memory-names all-tier-eligible — add MU/SNDK/DRAM/EWY to config.py WATCHLIST + DAYTRADE_UNIVERSE + FOREVER6_UNIVERSE + quarterly_holds_config.json picks (QHM); risk-path (universe/frequency) → full board + Gro/GAI gate; flag DRAM/EWY liquidity for day-tier/GEX. Then the GEX skip-0DTE soak review (≥1 RTH session incl. an expiry Friday) → promote into `_expiry_range` + wire day-tier Layer-B to pin.
+
+### (prior standing state below) ⏩ 2026-09-02 — day-tier
 **DAY-TRADE TIER IS DEPLOYED + ARMED (paper), NOT YET EXERCISED.** All 6 increments merged to `main` (PR #233, `e7ca675`) + deployed to OCI; `DAYTRADE_ENABLED=True`; the `*/2` RTH cron for `run_day_tier.py` is installed alongside the shadow `*/30`. The market has been CLOSED since the flip, so it has placed ZERO live orders — first orders can only fire at the **Thu 2026-09-03 09:30 ET open**. A manual OCI tick returned `{"skipped":"market_closed"}` + wrote its heartbeat, confirming the loop runs + correctly no-ops while closed. THE spec: **`logs/design_records/day_tier_live_build_2026-09-02.md`** (§2 blockers B1-B9, §3 Rafael amendments, §4 increment plan, §5 log schema, §5b tracked fast-follows) on `day_tier_v2_design_2026-08-29.md` (architecture).
 verify: `gh pr view 233 --json state` → MERGED; OCI `cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD` → `e7ca675`; `crontab -l | grep run_day_tier.py`; `grep -m1 '^DAYTRADE_ENABLED' config.py` → True; `systemctl is-active mtf-bot mtf-writer mtf-http` → active; `cat logs/day_tier.heartbeat`.
 **THURSDAY WATCH (first live session):** after the 09:30 ET open, watch OCI `tail logs/day_tier_runner_cron.log`, `wc -l logs/day_tier_events.jsonl` (the durable decision/price-path log — every entry/30-min-sample/exit), the heartbeat status, and account/tier P&L (Alpaca fills = SoT). Confirm the reconcile, force-flat (~15:40 ET, before the 15:45 pre-close sweep), and tier-kill behave live. Track A only; Track B OFF.
