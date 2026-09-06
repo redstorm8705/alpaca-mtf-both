@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-scripts/gex_weekend_report.py — WEEKEND GEX levels report (Rafael request 2026-09-06).
+scripts/gex_weekend_report.py — WEEKLY GEX support/resistance report (Rafael request 2026-09-06).
 
-Delivers Friday's dealer-gamma picture for the names Rafael trades (SPY/QQQ + the Mag-7 +
-memory-cycle day-tier underlyings) so the week can be planned over the weekend: regime label,
-pin/centroid, call & put walls, net GEX, confidence — per symbol, to Slack + an archived md.
+Delivers, in plain English, the support & resistance levels to watch Mon–Fri of the UPCOMING week
+for **SPY and QQQ only** (Rafael 2026-09-06 — index-level, not single-name), from Friday's dealer-
+gamma. Per the board+Gro+GAI design (2026-09-06, unanimous), each name shows AT MOST 3 levels:
+  🔴 Resistance = call wall · 🟢 Support = put wall · ⚖️ Pivot = gamma flip,
+with a regime-colored one-line read (positive gamma → walls are brakes/mean-revert; negative gamma →
+walls are breakout/acceleration; near-flip → coin-flip) and the honest "Friday-snapshot re-forms
+daily" caveat. Also carries the regime label, pin/centroid, net GEX, confidence as supporting detail.
 
 WHY A SEPARATE PATH (not refresh_gex): the live GEX writer computes spot from the real-time
 last-trade + an NBBO spot-consistency GUARD (board+Gro+GAI 2026-07-26). On a weekend, single-name
@@ -73,10 +77,9 @@ def _friday_close(symbol: str) -> float | None:
 
 
 def _universe() -> list[str]:
-    """SPY/QQQ + Mag-7 + memory-cycle day-tier underlyings (deduped, order preserved). Mirrors
-    data.gex's report set without the tracker→underlying map (these are the underlyings)."""
-    raw = list(gex._MARKET_SYMBOLS) + list(gex._DAYTRADE_UNDERLYINGS)
-    return list(dict.fromkeys(raw))
+    """SPY and QQQ only (Rafael 2026-09-06 — the weekly S/R report is index-level, not single-name).
+    Kept as a function so the set is one obvious edit point."""
+    return ["SPY", "QQQ"]
 
 
 def _compute_symbol(symbol: str, date_gte: str, date_lte: str) -> dict:
@@ -112,13 +115,15 @@ def _compute_symbol(symbol: str, date_gte: str, date_lte: str) -> dict:
 
 
 def _regime_glyph(label: str | None) -> str:
+    """Non-color regime markers so 🔴/🟢 stay reserved for resistance/support levels (avoids the
+    green-POSITIVE / red-NEGATIVE collision with the red-resistance / green-support legend)."""
     s = str(label or "").upper()
     if s == "POSITIVE":
-        return "🟢"
+        return "🧲"   # pinned / mean-revert
     if s == "NEGATIVE":
-        return "🔴"
+        return "⚡"    # accelerant / trending
     if s == "NEAR-FLIP":
-        return "🟡"
+        return "🔀"   # coin-flip
     return "⚪"
 
 
@@ -149,56 +154,155 @@ def _hdr(text: str) -> dict:
 _DIV = {"type": "divider"}
 
 
+def _regime_plain(label: str | None) -> str:
+    """Plain-English regime name for the report header."""
+    s = str(label or "").upper()
+    if s == "POSITIVE":
+        return "calm · mean-revert week"
+    if s == "NEGATIVE":
+        return "volatile · trending week"
+    if s == "NEAR-FLIP":
+        return "coin-flip week"
+    return "regime unknown"
+
+
+def _fmt_lvl(v) -> str:
+    """A price level -> "$1,234.56", or "—" when the level is missing."""
+    if isinstance(v, (int, float)):
+        return f"${v:,.2f}"
+    return "—"
+
+
+def _walls_converged(cw, pw, spot) -> bool:
+    """True when the call & put walls collapse onto ~one strike (gamma pinned near spot). In that
+    state the 'resistance above / support below' bracket is degenerate (both walls at the same
+    price), so the read switches to a single-magnet framing instead of 'break of $X (down) or $X
+    (up)'. Band = 0.2% of spot (e.g. SPY $770 -> ~$1.54)."""
+    if not (isinstance(cw, (int, float)) and isinstance(pw, (int, float))):
+        return False
+    ref = spot if isinstance(spot, (int, float)) and spot > 0 else max(abs(cw), abs(pw), 1.0)
+    return abs(cw - pw) <= 0.002 * ref
+
+
+def _sr_read(label: str | None, cw, pw, flip, spot) -> str:
+    """Regime-colored one-line 'what to watch M–F' read (board+Gro+GAI 2026-09-06). References ONLY
+    the levels actually present, and switches to a single-magnet framing when the walls converge, so
+    it never prints a broken 'break of $X (down) or $X (up)' or a bare '—' inside a sentence."""
+    s = str(label or "").upper()
+    cwp, pwp, fp = _fmt_lvl(cw), _fmt_lvl(pw), _fmt_lvl(flip)
+    have_walls = isinstance(cw, (int, float)) and isinstance(pw, (int, float))
+    have_flip = isinstance(flip, (int, float))
+    converged = _walls_converged(cw, pw, spot)
+    bracket = have_walls and not converged and cw > pw   # proper resistance-above / support-below
+    if converged:
+        lvl = cwp   # walls are ~equal; cw is the magnet strike
+        if s == "POSITIVE":
+            return f"Gamma is pinned at {lvl} (near spot) — price likely magnetizes to {lvl}; expect a tight range."
+        if s == "NEGATIVE":
+            return f"Gamma is concentrated at {lvl} (near spot) with dealers short gamma — expect a volatile fight around {lvl}; a decisive break either way likely ACCELERATES."
+        if s == "NEAR-FLIP":
+            return f"Gamma concentrated at {lvl} — the first decisive break away from it sets the week's character."
+        return f"Gamma concentrated at {lvl} — watch for a decisive break from it."
+    if bracket:
+        if s == "POSITIVE":
+            tail = f" while above the {fp} pivot" if have_flip else ""
+            return f"Expect chop between {pwp} and {cwp}; rallies to {cwp} and dips to {pwp} likely fade back toward the middle{tail}."
+        if s == "NEGATIVE":
+            tail = f" Below the {fp} pivot, moves speed up." if have_flip else ""
+            return f"Not a fade market — a break of {pwp} (down) or {cwp} (up) likely ACCELERATES.{tail}"
+        if s == "NEAR-FLIP":
+            piv = f"the {fp} pivot" if have_flip else "either edge"
+            return f"Direction unresolved — the first clean move through {piv} (range {pwp}–{cwp}) sets the week's character."
+    # walls missing or inverted (cw <= pw): don't assert a bracket that isn't there
+    if have_flip:
+        return f"Levels thin this week — watch the {fp} gamma-flip pivot as the dividing line."
+    return "Regime unknown or levels thin — not strongly actionable this week."
+
+
 def build_report() -> tuple[str, list, str]:
     """Returns (markdown_archive, slack_blocks, slack_fallback_text). Pure formatting over the
-    read-only computed rows. Block Kit per rules/slack_format.md (SLK01/SLK02)."""
+    read-only computed rows — SPY/QQQ support/resistance to watch Mon–Fri. Block Kit per
+    rules/slack_format.md (SLK01/SLK02)."""
     date_gte, date_lte = gex._expiry_range()
     today_iso = datetime.now(PT).strftime("%Y-%m-%d")
     rows = [_compute_symbol(sym, date_gte, date_lte) for sym in _universe()]
     ok = [r for r in rows if r.get("label") not in (None, "UNKNOWN")]
 
-    # ── Slack (Block Kit) ──
-    blocks: list = [_hdr(f"GEX Weekend Report · {today_iso}")]
-    blocks.append(_ctx(f"Friday close · week expiry {date_lte} · {len(ok)}/{len(rows)} names\n"
-                       f"🟢 pin/mean-revert · 🔴 trend/squeeze-prone · 🟡 near-flip"))
-    blocks.append(_DIV)
+    # ── Slack (Block Kit) — S/R levels to watch this week ──
+    blocks: list = [_hdr(f"GEX Weekly Levels · {today_iso}")]
+    blocks.append(_ctx(f"Support/resistance to watch Mon–Fri (this week's expiry {date_lte}) · "
+                       f"Friday close as spot · {len(ok)}/{len(rows)} names\n"
+                       f"🔴 resistance (call wall) · 🟢 support (put wall) · ⚖️ pivot (gamma flip)\n"
+                       f"regime: 🧲 calm/mean-revert · ⚡ volatile/trending · 🔀 coin-flip"))
     for r in rows:
         g = _regime_glyph(r.get("label"))
         sym = r.get("symbol")
+        blocks.append(_DIV)
         if r.get("label") in (None, "UNKNOWN"):
-            blocks.append(_sec(f"{g} *{sym}* UNKNOWN · _{r.get('reason', 'no data')}_"))
+            blocks.append(_sec(f"{g} *{sym}* — levels unavailable · _{r.get('reason', 'no data')}_"))
             continue
-        line1 = f"{g} *{sym}* {r.get('label')} · ${_num(r.get('spot'))}"
-        line2 = (f"pin {_num(r.get('centroid'))} · walls {_num(r.get('put_wall'))}–{_num(r.get('call_wall'))} · "
-                 f"GEX {_gex_m(r.get('raw_gex_m'))} · conf {_num(r.get('confidence'))}")
-        blocks.append(_sec(f"{line1}\n{line2}"))
+        cw, pw, flip, spot = r.get("call_wall"), r.get("put_wall"), r.get("flip_strike"), r.get("spot")
+        if _walls_converged(cw, pw, spot):
+            lvl_lines = f"🎯 Gamma magnet (walls converged near spot): *{_fmt_lvl(cw)}*"
+            if isinstance(flip, (int, float)):
+                lvl_lines += f"\n⚖️ Pivot (gamma flip): *{_fmt_lvl(flip)}*"
+        else:
+            lvl_lines = (f"🔴 Resistance (call wall): *{_fmt_lvl(cw)}*\n"
+                         f"🟢 Support (put wall): *{_fmt_lvl(pw)}*\n"
+                         f"⚖️ Pivot (gamma flip): *{_fmt_lvl(flip)}*")
+        blocks.append(_sec(f"{g} *{sym}* — {_regime_plain(r.get('label'))} · spot {_fmt_lvl(spot)}\n{lvl_lines}"))
+        blocks.append(_sec(f"_Watch M–F:_ {_sr_read(r.get('label'), cw, pw, flip, spot)}"))
+        blocks.append(_ctx(f"pin {_num(r.get('centroid'))} · net GEX {_gex_m(r.get('raw_gex_m'))} · "
+                           f"confidence {_num(r.get('confidence'))}"))
     blocks.append(_DIV)
-    blocks.append(_ctx("Source: Alpaca option chain (Fri OI) + Fri close as spot · read-only · "
-                       "not the live RTH signal (live GEX uses a guarded real-time spot)"))
+    blocks.append(_ctx("Friday's snapshot for this week's expiry — sharpest Mon–Tue, re-forms daily as "
+                       "options trade. Weight by confidence; re-check midweek. Read-only report; not the "
+                       "live RTH GEX signal (which uses a guarded real-time spot)."))
 
     # ── Fallback (SLK02 — carries the answer for the phone/notification) ──
-    fb_bits = [f"{_regime_glyph(r.get('label'))}{r.get('symbol')}" for r in rows if r.get("label") not in (None, "UNKNOWN")]
-    fallback = f"GEX Weekend Report {today_iso} (Fri close): " + " ".join(fb_bits) if fb_bits else f"GEX Weekend Report {today_iso}: no computable names"
-
-    # ── Markdown archive (a table is fine in the md file; Slack uses Block Kit) ──
-    md_lines = [
-        f"# GEX Weekend Report — {today_iso}",
-        f"_Friday close as spot · week expiry {date_lte} · {len(ok)}/{len(rows)} names computed · read-only_",
-        "",
-        "| Sym | Regime | Spot | Pin | Call wall | Put wall | Net GEX | Conf | Contracts |",
-        "|---|---|---|---|---|---|---|---|---|",
-    ]
+    fb_bits = []
     for r in rows:
         if r.get("label") in (None, "UNKNOWN"):
-            md_lines.append(f"| {r.get('symbol')} | UNKNOWN ({r.get('reason','')}) | — | — | — | — | — | — | — |")
+            continue
+        cw, pw, spot = r.get("call_wall"), r.get("put_wall"), r.get("spot")
+        if _walls_converged(cw, pw, spot):
+            fb_bits.append(f"{r.get('symbol')} {r.get('label')} magnet {_fmt_lvl(cw)}")
         else:
-            md_lines.append(
-                f"| {r.get('symbol')} | {r.get('label')} | {_num(r.get('spot'))} | {_num(r.get('centroid'))} | "
-                f"{_num(r.get('call_wall'))} | {_num(r.get('put_wall'))} | {_gex_m(r.get('raw_gex_m'))} | "
-                f"{_num(r.get('confidence'))} | {r.get('contract_count', '—')} |")
-    md_lines += ["", "Read: 🟢 POSITIVE gamma → dealers dampen moves, price pins/mean-reverts toward the centroid "
-                 "(walls act as magnets). 🔴 NEGATIVE → dealers amplify, trend/squeeze-prone. 🟡 NEAR-FLIP → transitional.",
-                 "", "_Read-only report; not the live RTH GEX signal (which uses a guarded real-time spot)._"]
+            fb_bits.append(f"{r.get('symbol')} {r.get('label')} S{_fmt_lvl(pw)}/R{_fmt_lvl(cw)}")
+    fallback = (f"GEX Weekly Levels {today_iso}: " + " · ".join(fb_bits)) if fb_bits else f"GEX Weekly Levels {today_iso}: no computable names"
+
+    # ── Markdown archive (S/R-led; Slack uses Block Kit) ──
+    md_lines = [
+        f"# GEX Weekly Levels — {today_iso}",
+        f"_Support/resistance to watch Mon–Fri · this week's expiry {date_lte} · Friday close as spot · "
+        f"{len(ok)}/{len(rows)} names · read-only_",
+        "",
+    ]
+    for r in rows:
+        sym = r.get("symbol")
+        if r.get("label") in (None, "UNKNOWN"):
+            md_lines += [f"## {sym} — levels unavailable ({r.get('reason', '')})", ""]
+            continue
+        cw, pw, flip, spot = r.get("call_wall"), r.get("put_wall"), r.get("flip_strike"), r.get("spot")
+        if _walls_converged(cw, pw, spot):
+            lvl_md = [f"- 🎯 **Gamma magnet (walls converged near spot):** {_fmt_lvl(cw)}"]
+            if isinstance(flip, (int, float)):
+                lvl_md.append(f"- ⚖️ **Pivot (gamma flip):** {_fmt_lvl(flip)}")
+        else:
+            lvl_md = [f"- 🔴 **Resistance (call wall):** {_fmt_lvl(cw)}",
+                      f"- 🟢 **Support (put wall):** {_fmt_lvl(pw)}",
+                      f"- ⚖️ **Pivot (gamma flip):** {_fmt_lvl(flip)}"]
+        md_lines += [
+            f"## {sym} — {r.get('label')} ({_regime_plain(r.get('label'))}) · spot {_fmt_lvl(spot)}",
+            *lvl_md,
+            f"- pin {_num(r.get('centroid'))} · net GEX {_gex_m(r.get('raw_gex_m'))} · "
+            f"confidence {_num(r.get('confidence'))}",
+            f"- **Watch M–F:** {_sr_read(r.get('label'), cw, pw, flip, spot)}",
+            "",
+        ]
+    md_lines += ["> Friday's snapshot for this week's expiry — sharpest Mon–Tue, re-forms daily as options "
+                 "trade. Weight by confidence; re-check midweek.",
+                 "> Read-only report; not the live RTH GEX signal (which uses a guarded real-time spot).", ""]
     md = "\n".join(md_lines) + "\n"
     return md, blocks, fallback
 
