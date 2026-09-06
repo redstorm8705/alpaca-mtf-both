@@ -94,6 +94,29 @@ def _configured_universe() -> tuple[set[str], bool]:
         return set(), False
 
 
+_CFG_EARN_CACHE: dict[str, str] = {}
+_CFG_EARN_DONE = False
+
+
+def _config_earnings_map() -> dict[str, str]:
+    """{SYMBOL: earnings-date ISO} from quarterly_holds_config.json 'picks' (`earnings_exit_before`,
+    the QHM's per-pick earnings deadline). The config carries a date for EVERY pick, so this covers
+    holds (GE/GEV/LLY/…) that are NOT in config.WATCHLIST and thus absent from the FMP 10-day preload
+    cache `get_cached_earnings_dates` reads — the root cause of the all-UNKNOWN earnings column
+    (Rafael 2026-09-05). Memoized per run; {} on any failure; never raises; no API call."""
+    global _CFG_EARN_DONE
+    if not _CFG_EARN_DONE:
+        _CFG_EARN_DONE = True
+        try:
+            cfg = json.loads(_CONFIG_FILE.read_text())
+            for sym, row in (cfg.get("picks") or {}).items():
+                if isinstance(row, dict) and row.get("earnings_exit_before"):
+                    _CFG_EARN_CACHE[str(sym).upper()] = str(row["earnings_exit_before"])[:10]
+        except Exception as e:
+            logger.debug("qhm_report: config-earnings map load failed (%s)", e)
+    return _CFG_EARN_CACHE
+
+
 def _fetch_positions_map() -> tuple[dict, bool]:
     """{symbol: alpaca_position_dict}, and a live_ok flag. Never raises."""
     try:
@@ -126,7 +149,9 @@ def _resolve_equity(pos_map: dict) -> tuple[float | None, str]:
 
 
 def _earnings_status(symbol: str, state_row: dict) -> tuple[str | None, str]:
-    """(earnings_date_iso|None, categorical status). Cached FMP first, then state earnings_gate_date.
+    """(earnings_date_iso|None, categorical status). Source order: live FMP cache (authoritative, but
+    only covers config.WATCHLIST symbols) → QHM config `earnings_exit_before` (covers EVERY pick,
+    including holds not in WATCHLIST) → state earnings_gate_date → UNKNOWN.
     SAFE(>14d) / APPROACHING(<=14d) / LOCKED(<=3d) / PAST / UNKNOWN. Never raises."""
     edate: date | None = None
     today = datetime.now(PT).date()
@@ -141,6 +166,17 @@ def _earnings_status(symbol: str, state_row: dict) -> tuple[str | None, str]:
             edate = sorted(dates)[-1]  # all past → most recent → PAST
     except Exception as e:
         logger.debug("qhm_report: cached earnings unavailable for %s (%s)", symbol, e)
+    if edate is None:
+        # Config-earnings fallback — the fix for the all-UNKNOWN column (Rafael 2026-09-05). Holds
+        # GE/GEV/LLY are not in config.WATCHLIST, so get_cached_earnings_dates (10-day preload cache)
+        # never has them and the FMP block above always misses. `earnings_exit_before` is the QHM's
+        # per-pick earnings date (verified against each thesis, e.g. NVDA "~Aug 19" ↔ 2026-08-19).
+        cfg_raw = _config_earnings_map().get(symbol.upper())
+        if cfg_raw:
+            try:
+                edate = date.fromisoformat(cfg_raw)
+            except Exception:
+                edate = None
     if edate is None:
         raw = state_row.get("earnings_gate_date")
         if raw:
