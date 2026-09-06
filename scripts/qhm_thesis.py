@@ -182,7 +182,8 @@ def _sec_13f_hits(symbol: str) -> int | None:
     A crude institutional-interest proxy (the free index gives a total hit count, not per-investor deltas)."""
     # SEC EDGAR requires a UA that includes a contact EMAIL, else it 403s. Neutral placeholder
     # (SEC does not verify it; not Rafael's personal address — privacy).
-    data = _http_json(f"{_SEC_FTS}?{urllib.parse.urlencode({'q': f'\"{symbol}\"', 'forms': '13F-HR'})}",
+    _q = urllib.parse.urlencode({"q": f'"{symbol}"', "forms": "13F-HR"})   # exact-phrase quotes; no backslash (py3.10/3.11 f-string)
+    data = _http_json(f"{_SEC_FTS}?{_q}",
                       headers={"User-Agent": "alpaca-mtf-bot QHM research contact@alpaca-mtf-bot.dev"})
     try:
         return int(((data.get("hits") if isinstance(data, dict) else None) or {}).get("total", {}).get("value"))
