@@ -237,34 +237,43 @@ def _post_slack_payload(payload: dict) -> bool:
         return False
 
 
-def send_slack_blocks(blocks: list, fallback_text: str) -> None:
+def send_slack_blocks(blocks: list, fallback_text: str) -> bool:
     """Send a Block Kit message per rules/slack_format.md (SLK01/SLK02): structured `blocks` plus a
     top-level `fallback_text` that carries the answer (the phone notification preview + screen-reader
     string). Chunks on BLOCK boundaries (Slack caps 50 blocks/message) so nothing is dropped. Falls
     back to a plain-text send if there are no blocks, and to logging if Slack is not configured.
-    Never raises — a formatting error must never fail to alert (mirrors the module's fail-safe rule)."""
+    Never raises — a formatting error must never fail to alert (mirrors the module's fail-safe rule).
+
+    Returns True iff Slack is configured AND every part actually posted (HTTP 200). Returns False when
+    the webhook is unset, the text-fallback send failed, or ANY block-group POST failed — so a caller
+    can log honestly instead of assuming success (the return was previously None, which let callers
+    treat a no-op / failed delivery as 'sent'; Rafael 2026-09-06)."""
     fallback_text = _sanitize(fallback_text)
     if not _SLACK_WEBHOOK:
         logger.warning(f"[ALERT no-op] {fallback_text[:120]}")
-        return
+        return False
     try:
         blocks = list(blocks or [])
     except Exception:
         blocks = []
     if not blocks:
         # No blocks → never silently drop: send the fallback as plain text.
-        if not _send_slack_chunked(f"{fallback_text}\n— {datetime.now(PT).strftime('%H:%M PT')}"):
+        ok = _send_slack_chunked(f"{fallback_text}\n— {datetime.now(PT).strftime('%H:%M PT')}")
+        if not ok:
             logger.warning(f"send_slack_blocks failed (text fallback): {fallback_text[:120]}")
-        return
+        return ok
     CHUNK = 45   # headroom under Slack's 50-blocks/message hard limit
     groups = [blocks[i:i + CHUNK] for i in range(0, len(blocks), CHUNK)]
     n = len(groups)
+    all_ok = True
     for i, grp in enumerate(groups, 1):
         text = fallback_text if n == 1 else f"{fallback_text} ({i}/{n})"
         if not _post_slack_payload({"text": text, "blocks": grp}):
             logger.warning(f"send_slack_blocks failed (part {i}/{n}): {fallback_text[:120]}")
+            all_ok = False
         if i < n:
             time.sleep(0.4)                 # preserve delivery order; avoid a rate burst
+    return all_ok
 
 
 def _send_slack_chunked(text: str) -> bool:

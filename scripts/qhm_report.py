@@ -493,13 +493,19 @@ def main() -> int:
 
     # Slack-FIRST — delivery is decoupled from the file write (BGG guardrail 6).
     # Block Kit per rules/slack_format.md (fallback carries the answer for the notification).
-    slack_ok = False
     try:
-        send_slack_blocks(blocks, fallback)
-        slack_ok = True
-        logger.info("qhm_report: Slack blocks sent")
+        slack_ok = bool(send_slack_blocks(blocks, fallback))
     except Exception as e:
-        logger.warning("qhm_report: Slack send failed (%s)", e)
+        # send_slack_blocks is contracted never to raise; keep the guard as defense-in-depth.
+        slack_ok = False
+        logger.warning("qhm_report: Slack send raised unexpectedly (%s)", e)
+    if slack_ok:
+        logger.info("qhm_report: Slack blocks sent")
+    else:
+        # Honest logging (Rafael 2026-09-06): the prior code set slack_ok=True whenever the call did
+        # not raise, so it logged "sent" and reported slack=ok in the heartbeat even when the webhook
+        # was unset or every POST failed. send_slack_blocks now returns real delivery status.
+        logger.warning("qhm_report: Slack delivery FAILED or not configured (see alerts warnings above)")
 
     # Atomic write of the archived .md (RC-5).
     md_ok = False
