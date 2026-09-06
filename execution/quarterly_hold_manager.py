@@ -70,6 +70,13 @@ _ATR_BARS = 65  # McKinney fix: 14wk × 5d = 70 bars; use 65 for buffer
 _ATR_MULT = 2.5
 _HARD_FLOOR_PCT = 0.15  # 15% hard floor from entry (ATR or floor, whichever is higher)
 
+# QHM exposure caps (Rafael 2026-09-06). Forward ENTRY/ADD gate only — never auto-trims an
+# existing hold (grandfathered over-cap LLY/GEV stay). A new-entry tranche that would breach is
+# BLOCKED; a dip-add is CLAMPED to remaining room (partial) and skipped if room < 1 share. The
+# gate FAILS CLOSED (blocks) when equity or any held position's live price cannot be read.
+_QHM_AGG_CAP_PCT = 0.40       # aggregate: total QHM market value <= 40% of account equity
+_QHM_PER_NAME_CAP_PCT = 0.20  # hard per-name ceiling: any single QHM name <= 20% of equity
+
 # Entry schedule — board-approved S48b
 _TRANCHE_FRACTIONS = [1 / 3, 1 / 3, 1 / 3]
 _TRANCHE_DAYS = [1, 3, 5]            # calendar trading days since entry_day
@@ -1756,6 +1763,29 @@ class QuarterlyHoldManager:
                     pos.symbol, add_qty, _afford, _regt_bp)
                 add_qty = _afford
 
+            # QHM exposure cap (Rafael 2026-09-06): CLAMP the dip-add to remaining cap room —
+            # the LOWER of the aggregate 40% headroom and the per-name 20% headroom (a partial
+            # is fine; never beyond). Placed BEFORE the stop-cancel below so we never cancel a
+            # protective stop for an add we then reject. Fail-CLOSED (None -> skip). The 20%
+            # ceiling here binds tighter than the existing dip-add ceiling (target x 1.375),
+            # so it is the effective per-name cap.
+            _cap_room = self._qhm_cap_room_shares(pos.symbol, live_price, equity)
+            if _cap_room is None:
+                logger.warning(
+                    "QHM dip-add: %s QHM cap check unavailable (equity/price unreadable) — "
+                    "fail-closed, skip add", pos.symbol)
+                return
+            if add_qty > _cap_room:
+                if _cap_room < 1:
+                    logger.info(
+                        "QHM dip-add: %s at/over QHM cap (agg 40%%/name 20%%) — skip add",
+                        pos.symbol)
+                    return
+                logger.info(
+                    "QHM dip-add: %s clamped %d→%d sh by QHM cap (agg 40%%/name 20%%)",
+                    pos.symbol, add_qty, _cap_room)
+                add_qty = _cap_room
+
             # ── OPTION C: stop-safe add (board + Gro + GAI unanimous 2026-07-13) ──
             # A QHM position holds a resting GTC sell-stop; Alpaca blocks a same-symbol
             # BUY (wash-trade). So, RTH-only: cancel the stop -> marketable-limit add ->
@@ -2771,6 +2801,25 @@ class QuarterlyHoldManager:
             raw_qty = target_notional / live_price
             qty = max(int(raw_qty), 1)
 
+            # QHM exposure cap (Rafael 2026-09-06): BLOCK a new-entry tranche that would push
+            # aggregate QHM exposure over 40% of equity or this name over 20%. New entries block
+            # (all-or-nothing) — only dip-adds partial-fill to the ceiling. Fail-CLOSED (None ->
+            # block). Checked AFTER the max(int(),1) so a sub-1-share room correctly blocks rather
+            # than re-inflating to 1 and breaching the cap (RC-7).
+            _room = self._qhm_cap_room_shares(pos.symbol, live_price, equity)
+            if _room is None:
+                logger.warning(
+                    "QuarterlyHoldManager: %s tranche %d — QHM cap check unavailable "
+                    "(equity/price unreadable) — fail-closed, entry BLOCKED",
+                    pos.symbol, pos.tranche)
+                return False
+            if qty > _room:
+                logger.info(
+                    "QuarterlyHoldManager: %s tranche %d — would breach QHM cap "
+                    "(agg 40%%/name 20%%): need %d sh, room %d — entry BLOCKED",
+                    pos.symbol, pos.tranche, qty, _room)
+                return False
+
             # Limit price: 0.1% above current (fills quickly on liquid large-caps)
             limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
 
@@ -3137,6 +3186,51 @@ class QuarterlyHoldManager:
                 "QuarterlyHoldManager: _resync_from_alpaca failed for %s: %s",
                 pos.symbol, e,
             )
+
+    def _qhm_total_notional(self) -> Optional[float]:
+        """Total live market value of ALL QHM holds (every position with qty_filled > 0),
+        priced live. FAIL-CLOSED for the exposure cap: returns None if ANY held position's
+        live price cannot be read, so the cap caller BLOCKS rather than under-counting
+        exposure and letting a breach through. Distinct from _get_quarterly_notional_excl,
+        which excludes self, filters by state, and treats an unreadable price as 0 (safe for
+        Kelly DOWN-sizing, UNSAFE as a cap basis). Includes every state that holds shares
+        (ACTIVE/AWAITING_FILL/PENDING_*), since a filled position is live exposure regardless
+        of its state label (closes the roadmap-flagged state-filter gap)."""
+        total = 0.0
+        for sym, pos in self._positions.items():
+            if not pos.qty_filled or pos.qty_filled <= 0:
+                continue
+            p = self._get_live_price(sym)
+            if not p or p <= 0:
+                logger.warning(
+                    "QHM cap: live price unavailable for held %s — fail-closed (blocking add)",
+                    sym)
+                return None
+            total += p * pos.qty_filled
+        return total
+
+    def _qhm_cap_room_shares(self, symbol: str, live_price: float, equity: float) -> Optional[int]:
+        """Max additional whole shares of `symbol` allowed before hitting the LOWER of the
+        aggregate 40% cap and the per-name 20% ceiling (Rafael 2026-09-06). Returns:
+          None -> FAIL-CLOSED, caller must BLOCK (equity<=0, live_price<=0, or aggregate
+                  notional unreadable);
+          0    -> no room (already at/over a cap);
+          N>=1 -> at most N more shares fit.
+        Floors to whole shares so a partial can never round OVER a cap (RC-7 aware — the
+        caller must apply this BEFORE any max(int(x),1) zero-share re-inflation)."""
+        if equity <= 0 or not live_price or live_price <= 0:
+            return None
+        total = self._qhm_total_notional()
+        if total is None:
+            return None
+        pos = self._positions.get(symbol)
+        cur_sym = (live_price * pos.qty_filled) if (pos and pos.qty_filled and pos.qty_filled > 0) else 0.0
+        agg_room = _QHM_AGG_CAP_PCT * equity - total          # aggregate headroom ($)
+        name_room = _QHM_PER_NAME_CAP_PCT * equity - cur_sym  # per-name headroom ($)
+        room = min(agg_room, name_room)
+        if room <= 0:
+            return 0
+        return int(room / live_price)                         # floor → never over the cap
 
     def _get_quarterly_notional_excl(self, exclude_symbol: str) -> float:
         """Kelly fix: total live notional of other quarterly holds.
