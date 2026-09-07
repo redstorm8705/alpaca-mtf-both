@@ -12,17 +12,21 @@ Produces (per rules/slack_format.md SLK01-SLK15 for the Slack half):
   - a Block-Kit Slack post (headline + per-candidate + current-holds refresh + cap check)
 It is a DRAFT for Rafael + Claude to finalize in-session (the high-conviction call stays human+Claude).
 
-Comprehensive per-candidate research (free/working sources verified 2026-09-05; FMP transcripts are
-premium-blocked so replaced by analyst consensus + LLM reasoning):
-  - earnings date + holding period    FMP /stable/earnings-calendar
+Comprehensive per-candidate research — CCR-parity rebuild 2026-09-06 (100% of the old CCR routine's
+elements; OCI has no WebSearch/Claude-subagents, so those become HTTP fetches + Gro/GAI 4-lens):
+  - earnings date + holding period    FMP /stable/earnings-calendar (enter post-earnings → day before next)
   - analyst guidance signal           FMP /stable/grades-consensus
   - dip-into-earnings screen          Alpaca daily bars -> %vs50dMA / %off-20d-high / RSI14
-  - 13F institutional accumulation    SEC EDGAR free full-text 13F-HR search
-  - sector tailwind + 4-board thesis  Gro + GAI (AB/BoD/TB/Execution lenses)
-  - current-holds thesis refresh + QHM cap check (aggregate 40% / per-name 15% — SIZING/warning only,
+  - REAL named-superinvestor 13F      Dataroma stock page (fetched holders, e.g. Buffett/Tepper/Coleman;
+                                      an uncovered name shows 'none tracked' — NEVER fabricated, Rafael 2026-09-06)
+  - 4-lens board thesis               Gro + GAI (AB/BoD/TB/Execution) → EXEC SUMMARY (2-3 picks) + PER-CANDIDATE
+                                      (LLM-SYNTHESIZED earnings read, tailwind, thesis, risk) + BOARD VOTE
+                                      (stops / intraday coexistence / entry-timing) + CURRENT-HOLDS refresh
+  - QHM cap check (aggregate 40% / per-name 20% — aligned to the ENFORCED code cap #273; WARNING/sizing only,
     never an auto-trim; grandfathered over-cap holds are flagged, not sold — Rafael 2026-09-05)
+  - pending-approvals scan (CCR secondary task; read-only, never applied)
 
-Data tiers: T1 Alpaca (read-only) · T2 FMP · SEC EDGAR (free) · Gro/GAI (reasoning). NO order execution,
+Data tiers: T1 Alpaca (read-only) · T2 FMP · Dataroma (free 13F) · Gro/GAI (reasoning). NO order execution,
 NO broker calls, NO data/state writes. Read-only research -> logs/ + Slack. paper=True untouched.
 Usage: python3 scripts/qhm_thesis.py [--dry-run]   (--dry-run: build memo, skip Slack send)
 """
@@ -31,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -59,7 +64,6 @@ ET = ZoneInfo("America/New_York")
 
 _FMP = "https://financialmodelingprep.com/stable"
 _ALPACA_DATA = "https://data.alpaca.markets/v2/stocks"
-_SEC_FTS = "https://efts.sec.gov/LATEST/search-index"
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_MODEL = "openai/gpt-oss-120b"          # llama-3.3-70b was retired by Groq (2026); gpt-oss-120b is the live large chat model
 _TIMEOUT = 20.0
@@ -74,9 +78,11 @@ _BEYOND_SCAN = {
 }
 _TOP_INVESTORS = ["Druckenmiller", "Ackman", "Cohen", "Tepper", "Buffett", "Einhorn"]
 
-# QHM sizing caps (board 2026-09-05) — SIZING/WARNING signal for NEW buys, never an auto-trim.
+# QHM sizing caps — WARNING signal for NEW buys, never an auto-trim. Aligned 2026-09-06 to the
+# ENFORCED code cap in execution/quarterly_hold_manager.py (#273: 40% aggregate / 20% per-name);
+# the warning must match what the live entry path actually enforces.
 _QHM_AGG_CAP_PCT = 0.40
-_QHM_NAME_CAP_PCT = 0.15
+_QHM_NAME_CAP_PCT = 0.20
 # Dip screen: a buyable pullback into a catalyst.
 _DIP_VS50_MAX = 3.0      # within +3% of the 50d MA (not extended)
 _DIP_OFFHIGH_MAX = -4.0  # >=4% off the 20d high
@@ -177,18 +183,49 @@ def _dip_metrics(symbol: str) -> dict:
     }
 
 
-def _sec_13f_hits(symbol: str) -> int | None:
-    """Count of 13F-HR filings mentioning the symbol (SEC EDGAR free full-text search). None on failure.
-    A crude institutional-interest proxy (the free index gives a total hit count, not per-investor deltas)."""
-    # SEC EDGAR requires a UA that includes a contact EMAIL, else it 403s. Neutral placeholder
-    # (SEC does not verify it; not Rafael's personal address — privacy).
-    _q = urllib.parse.urlencode({"q": f'"{symbol}"', "forms": "13F-HR"})   # exact-phrase quotes; no backslash (py3.10/3.11 f-string)
-    data = _http_json(f"{_SEC_FTS}?{_q}",
-                      headers={"User-Agent": "alpaca-mtf-bot QHM research contact@alpaca-mtf-bot.dev"})
+_DATAROMA_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def _dataroma_13f(symbol: str) -> dict:
+    """Real named-superinvestor 13F holdings from Dataroma (free, public; ~80 curated funds like
+    Buffett/Berkshire, Tepper/Appaloosa, Coleman/Tiger Global). Returns {'count': int|None,
+    'holders': [names]} or {} on any failure / uncovered symbol.
+
+    HARD RULE (Rafael 2026-09-06): REAL fetched data ONLY — NEVER fabricated. An uncovered ticker
+    (verified: Dataroma returns no holder links for one) yields {} so the memo prints 'not tracked',
+    and no LLM is ever asked to invent a 13F holding. Needs a full browser UA (Dataroma blocks a
+    bare urllib UA)."""
     try:
-        return int(((data.get("hits") if isinstance(data, dict) else None) or {}).get("total", {}).get("value"))
-    except (TypeError, ValueError, AttributeError):   # belt-and-suspenders: FTS returned a non-dict shape
-        return None
+        req = urllib.request.Request(
+            f"https://www.dataroma.com/m/stock.php?sym={urllib.parse.quote(symbol)}",
+            headers={"User-Agent": _DATAROMA_UA})
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+            html = r.read().decode("utf-8", "replace")
+    except Exception as e:
+        logger.debug("dataroma fetch failed for %s: %s", symbol, e)
+        return {}
+    try:
+        m = re.search(r"Ownership count:</td><td><b>(\d+)</b>", html)
+        count = int(m.group(1)) if m else None
+        names = re.findall(r"holdings\.php\?m=[A-Za-z0-9]+[^>]*>([^<]+)</a>", html)
+        holders = list(dict.fromkeys(n.strip() for n in names if n.strip()))[:12]
+    except Exception as e:   # parse-shape change must not crash the run (never-fabricate = return {})
+        logger.debug("dataroma parse failed for %s: %s", symbol, e)
+        return {}
+    if count is None and not holders:
+        return {}   # not covered by the superinvestor set — honest empty, no fabrication
+    return {"count": count, "holders": holders}
+
+
+def _pending_approvals() -> list[str]:
+    """CCR-parity secondary task: names of any logs/pending_approvals_*.md awaiting Rafael (read-only
+    — never applies them). [] if none / on error."""
+    try:
+        return sorted(p.name for p in (_ROOT / "logs").glob("pending_approvals_*.md"))
+    except Exception as e:
+        logger.debug("pending-approvals scan failed: %s", e)
+        return []
 
 
 def _gro(prompt: str, system: str) -> str | None:
@@ -335,8 +372,9 @@ def build_slack(today: str, ranked: list[dict], holds: list[dict], equity: float
         line3 = f"vs50 {m.get('vs50','?')}% · {r.get('grade','?')}"
         blocks.append(_sec(f"{line1}\n{line2}\n{line3}"))
         ctx = f"last ${m.get('last','?')}"
-        if r.get("thirteenf") is not None:
-            ctx += f" · 13F mentions {r['thirteenf']:,}"
+        if r.get("dr_count"):
+            _top = ", ".join(r.get("dr_holders", [])[:3])
+            ctx += f" · 13F {r['dr_count']} funds" + (f" ({_top})" if _top else "")
         if r.get("sector"):
             ctx += f" · {r['sector']}"
         blocks.append(_ctx(ctx))
@@ -365,28 +403,65 @@ def top_board_summary(ranked: list[dict]) -> str:
 
 
 # ── Board (Gro + GAI, 4-lens) ──────────────────────────────────────────────────────────────────
-_GRO_SYS = ("You are a 4-seat investment board (AB: Thorp/Dalio/Asness/Brandt · BoD: Simons/Taleb/Kyle/Shaw · "
-            "TB: McKinney/Beck/Derman · Execution: Harris/Levitt) for a $2.5k->$25k paper account. Ground each "
-            "seat in its members' documented work. No hedging; directional. This is a DRAFT for human review.")
+_GRO_SYS = (
+    "You are a 4-seat investment board reviewing quarterly-hold (multi-week to multi-month) LONG "
+    "candidates for a $2.5k->$25k PAPER account. Seats, each grounded in its members' documented work:\n"
+    "  - AB (Analytics): Thorp (Kelly sizing), Dalio (regime/all-weather), Asness (value+momentum), Brandt (technical R:R)\n"
+    "  - BoD: Simons (signal), Taleb (tail/convexity), Kyle (microstructure), Shaw (stat-arb)\n"
+    "  - TB (Technical): McKinney (data integrity), Beck (integration), Derman (model risk)\n"
+    "  - Execution: Harris (entry/exit mechanics), Levitt (compliance)\n"
+    "Rules: ground each seat in documented frameworks; no hedging; directional answers; DRAFT for human "
+    "(Rafael+Claude) review, not an auto-trade.\n"
+    "13F HARD RULE (Rafael): the holder list given for each name is EXHAUSTIVE and really-fetched from Dataroma. "
+    "CITE the notable holders BY NAME (Rafael wants to see WHO holds it) — but ONLY names copied VERBATIM from "
+    "that name's list. Adding ANY fund not in the list (even a plausible one from your own memory) is a "
+    "HALLUCINATION and a hard review failure. If a name lists NONE, write 'none tracked'. Do NOT 'correct' or "
+    "supplement the list.\n"
+    "Any earnings-call read must be labeled LLM-SYNTHESIZED (from your training knowledge + the analyst grade), "
+    "NOT quoted as a live transcript.\n"
+    "Return EXACTLY these sections, with these exact headers:\n"
+    "## EXECUTIVE SUMMARY\n(the 2-3 STRONGEST buys — 2 or 3, not more — one-line thesis each)\n"
+    "## PER-CANDIDATE\n(for EACH pick: Sector | last-earnings read [LLM-SYNTHESIZED: guidance direction / margin / "
+    "TAM] | structural tailwind | 13F corroboration [name the notable holders, ONLY verbatim from that name's "
+    "EXHAUSTIVE fetched list] | thesis | key risk | holding window [enter post-earnings, hold to the day "
+    "before next earnings])\n"
+    "## BOARD VOTE\n"
+    "AB: R:R + Kelly %-equity per pick. BoD: is the edge alpha or beta; regime/tail risk over the hold. "
+    "TB: integration with the intraday bot — should the bot AVOID intraday trades on a hold symbol; stop criteria. "
+    "Execution: entry timing (immediately post-earnings vs wait 1-2 confirmation days); stop-loss design (hard -15% "
+    "vs true quarterly hold); coexistence with the intraday book.\n"
+    "## CURRENT HOLDS\n(ADD/HOLD/TRIM/EXIT per hold — flag-only; NEVER auto-trim; grandfathered over-cap holds are "
+    "HELD per Rafael, not sold)."
+)
 
 
 def _board_prompt(ranked: list[dict], holds: list[dict], equity: float | None) -> str:
     eq = f"${equity:,.0f}" if equity else "~$2,500"
-    lines = [f"ACCOUNT: PAPER, CURRENT equity {eq} (~4x margin buying power). GOAL is to grow this to $25,000 — "
-             f"$25k is the TARGET, NOT the current balance. Size every recommendation against the CURRENT {eq}.",
+    lines = [f"ACCOUNT: PAPER, CURRENT equity {eq} (~4x margin buying power). GOAL grow to $25,000 — $25k is the "
+             f"TARGET, NOT the current balance. Size every recommendation against the CURRENT {eq}.",
              "",
-             "QHM buy-the-dip-into-earnings candidates (dip metrics + analyst grade + earnings date):"]
+             "CANDIDATES (buy-the-dip-into-earnings; dip metrics + analyst grade + earnings date + REAL 13F holders). "
+             "The 13F list per name is EXHAUSTIVE and fetched — cite only those exact names, never add a fund:"]
     for r in ranked[:_SHORTLIST_N]:
         m = r["m"]
+        drh = "; ".join(r.get("dr_holders", [])) or "NONE tracked"
         lines.append(f"- {r['sym']} ({r.get('sector','')}): earn {r.get('earn','?')}, off-high {m.get('off20h')}%, "
-                     f"vs50 {m.get('vs50')}%, RSI {m.get('rsi')}, grade {r.get('grade','?')}, 13F-mentions {r.get('thirteenf','?')}")
-    lines.append("\nCurrent holds (do NOT auto-trim; flag over-cap): " +
-                 ", ".join(f"{h['sym']} {h.get('pct_eq','?')}%eq" for h in holds))
-    lines.append(f"\nQHM caps: aggregate {int(_QHM_AGG_CAP_PCT*100)}% of equity, per-name {int(_QHM_NAME_CAP_PCT*100)}%. "
-                 "Answer: (1) the 2-3 STRONGEST quarterly-hold buys and why (thesis + structural tailwind + risk), "
-                 "buy-pre-earnings-dip vs wait-for-reaction; (2) refresh each current hold's thesis (ADD/HOLD/TRIM/EXIT); "
-                 "(3) Kelly-right-sized %-equity per new buy within the caps. Be concrete, cite the metrics.")
+                     f"vs50 {m.get('vs50')}%, RSI {m.get('rsi')}, grade {r.get('grade','?')}; "
+                     f"13F superinvestors [EXHAUSTIVE, {r.get('dr_count') or '?'}]: {drh}")
+    lines.append("\nCurrent holds (do NOT auto-trim; flag over-cap only): " +
+                 (", ".join(f"{h['sym']} {h.get('pct_eq','?')}%eq" for h in holds) or "none"))
+    lines.append(f"\nQHM caps: aggregate {int(_QHM_AGG_CAP_PCT*100)}% of equity, per-name {int(_QHM_NAME_CAP_PCT*100)}% "
+                 "(WARNING/sizing only; grandfathered over-cap holds are HELD, not trimmed). Produce the sections "
+                 "defined in the system prompt. Be concrete; cite the metrics and only the listed 13F holders.")
     return "\n".join(lines)
+
+
+def _extract_section(text: str | None, header: str) -> str | None:
+    """Pull one '## HEADER' section body out of a board LLM response (for the Slack exec-summary). None if absent."""
+    if not text:
+        return None
+    m = re.search(rf"##\s*{re.escape(header)}\s*\n(.+?)(?:\n##\s|\Z)", text, re.S | re.I)
+    return m.group(1).strip() if m else None
 
 
 def run_board(ranked: list[dict], holds: list[dict], equity: float | None) -> tuple[str | None, str | None]:
@@ -399,33 +474,51 @@ def run_board(ranked: list[dict], holds: list[dict], equity: float | None) -> tu
 # ── Memo ───────────────────────────────────────────────────────────────────────────────────────
 def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float | None,
                gro: str | None, gai: str | None) -> str:
+    pend = _pending_approvals()
+    agg, name = int(_QHM_AGG_CAP_PCT * 100), int(_QHM_NAME_CAP_PCT * 100)
     lines = [f"# QHM Weekly Thesis — {today} (buy-the-dip into earnings)",
              f"_Generated {datetime.now(PT).strftime('%Y-%m-%d %I:%M %p PT')} · equity "
              f"{('$'+format(equity, ',.0f')) if equity else '—'} · DRAFT for in-session review_",
-             "",
-             "> Reliability note: runs on OCI compute + Gro/GAI (not Claude usage). Sources: FMP earnings-calendar "
-             "+ grades-consensus (analyst), Alpaca IEX bars (dip), SEC EDGAR 13F full-text (institutional), Gro+GAI "
-             "(4-board reasoning). FMP transcripts are premium-blocked — analyst consensus is the guidance proxy. "
-             "Verify earnings dates before trading (FMP free tier is partial).",
-             "",
-             "## Candidate screen (dip into an October/Nov earnings catalyst)",
-             "| Sym | Sector | Earnings | last | vs50 | off-20d-high | RSI | analyst | 13F-mentions |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             ""]
+    if pend:
+        lines += [f"> ⚠️ Pending approvals awaiting Rafael: {', '.join(pend)} — read-only note, NOT applied here.", ""]
+    lines += [
+        "## Methodology",
+        "- **Universe:** config.WATCHLIST + a curated S&P-500 candidate set (semis / AI-infra / defense / "
+        "energy-transition / healthcare) + current QHM holds; leveraged/inverse ETFs excluded.",
+        f"- **Screen:** Alpaca IEX daily bars → dip-into-earnings (within +{_DIP_VS50_MAX:.0f}% of the 50d MA AND "
+        f"≥{abs(_DIP_OFFHIGH_MAX):.0f}% off the 20d high), gated on an FMP earnings date in the next ~{_EARN_LOOKAHEAD_DAYS}d.",
+        "- **Enrichment:** FMP analyst grade; **Dataroma real named-superinvestor 13F holders** (fetched — an "
+        "uncovered name shows 'none tracked', NEVER fabricated). "
+        "Earnings-call reads are **LLM-SYNTHESIZED** (transcripts are FMP-premium-blocked), never quoted as live.",
+        "- **Board:** Gro + GAI, each running the 4 lenses (AB / BoD / TB / Execution) — DRAFT for human review.",
+        "- **Holding window:** enter post-earnings, hold to the day before the next earnings print.",
+        "",
+        "## Candidate screen (dip into an earnings catalyst)",
+        "| Sym | Sector | Earnings | last | vs50 | off-20d-high | RSI | analyst | 13F superinvestors (real, Dataroma) |",
+        "|---|---|---|---|---|---|---|---|---|"]
     for r in ranked:
         m = r["m"]
+        drh = ", ".join(r.get("dr_holders", [])[:4]) or "none tracked"
+        drc = r.get("dr_count")
+        drcell = f"{drc} funds: {drh}" if drc else drh
         lines.append(f"| {r['sym']} | {r.get('sector','')} | {r.get('earn','?')} | {m.get('last','?')} | "
-                     f"{m.get('vs50','?')}% | {m.get('off20h','?')}% | {m.get('rsi','?')} | {r.get('grade','?')} | {r.get('thirteenf','?')} |")
-    lines += ["", "## Current holds — thesis refresh + cap check"]
+                     f"{m.get('vs50','?')}% | {m.get('off20h','?')}% | {m.get('rsi','?')} | {r.get('grade','?')} | {drcell} |")
+    lines += ["", "## Board thesis — Gro (AB / BoD / TB / Execution)", gro or "_Gro unavailable this run._",
+              "", "## Board thesis — GAI (cross-check)", gai or "_GAI unavailable this run._",
+              "", "> **13F note:** holder names are really-fetched from Dataroma (the candidate table is the complete "
+              "set per name); the board cites from that fetched list. Any fund NOT in the table is unverified — "
+              "disregard it.",
+              "", "## Current holds — thesis refresh + cap check"]
     for h in holds:
         flag = " **⚠️ OVER PER-NAME CAP**" if h.get("over_cap") else ""
         lines.append(f"- **{h['sym']}** — {h.get('pct_eq','?')}% of equity{flag}. {h.get('dip','')}")
-    lines += ["", "## Board read (Gro — AB/BoD/TB/Execution)", gro or "_Gro unavailable this run._",
-              "", "## Board read (GAI — cross-check)", gai or "_GAI unavailable this run._",
-              "", "## Next steps",
+    lines += ["", "## Next steps",
               "- Rafael + Claude finalize the 2-3 picks in-session (this is a draft).",
-              "- New QHM buys are Kelly-right-sized within the caps (agg 40% / per-name 15%).",
+              f"- New QHM buys are Kelly-right-sized within the caps (agg {agg}% / per-name {name}%).",
               "- Over-cap grandfathered holds are flagged, NOT auto-trimmed (Rafael 2026-09-05).",
-              f"- Full data: logs/quarterly_holds_research_{today}.md",
+              "- 13F holdings are really-fetched from Dataroma; 'none tracked' = uncovered by the superinvestor set, "
+              "never fabricated.",
               ""]
     return "\n".join(lines)
 
@@ -478,14 +571,16 @@ def main() -> int:
     cands.sort(key=lambda c: c["m"].get("off20h", 0.0))
     ranked = cands[:_SHORTLIST_N]
 
-    # 3) enrich the shortlist (grades + 13F) — bounded to the shortlist to cap API calls
+    # 3) enrich the shortlist (grades + real 13F) — bounded to the shortlist to cap API calls
     for r in ranked:
         g = _grades(r["sym"])
         r["grade"] = g.get("consensus") or "—"
-        r["thirteenf"] = _sec_13f_hits(r["sym"])
+        dr = _dataroma_13f(r["sym"])                        # REAL named superinvestor holders (fetched)
+        r["dr_count"] = dr.get("count")
+        r["dr_holders"] = dr.get("holders") or []
 
     # 4) current holds refresh rows (dip metrics + REAL per-name cap check).
-    # pct_eq = market_value / equity from Alpaca positions; over_cap flags the per-name cap (15%).
+    # pct_eq = market_value / equity from Alpaca positions; over_cap flags the per-name cap (20%, enforced #273).
     # WARNING-only (never auto-trims — grandfathered over-cap holds like LLY/GEV are flagged, not sold).
     posmap = _positions()
     holds_rows: list[dict] = []
@@ -507,8 +602,9 @@ def main() -> int:
     gro, gai = (None, None)
     if ranked:
         gro, gai = run_board(ranked, holds_rows, equity)
-    if gro:
-        ranked[0]["board_verdict"] = gro.strip().split("\n\n")[0] if ranked else None
+    if gro and ranked:
+        exec_sum = _extract_section(gro, "EXECUTIVE SUMMARY")
+        ranked[0]["board_verdict"] = (exec_sum or gro.strip().split("\n\n")[0])[:700]
 
     # 6) memo (atomic) + Slack
     memo = build_memo(today, ranked, holds_rows, equity, gro, gai)
