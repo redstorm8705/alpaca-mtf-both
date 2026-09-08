@@ -14,14 +14,21 @@ TWO MODES (one file, one cron each):
     from round-trips CLOSED today, attributed by client_order_id tier tag. Rafael 2026-09-04:
     "at market close and after the official reconcile, we can have it be realized P/L."
 
-WHAT IT POSTS (compact Block Kit card):
-  - Reference headline: account day P&L = equity − last_equity (exactly Alpaca's day number) + % + equity.
-  - Per tier (intraday / qhm / forever6 / daytrade): today's UNREALIZED P&L =
-        this tier's ownership-split of each open position's unrealized_intraday_pl (today's MTM move),
-    with a per-position "today $" line under each tier that holds something.
-  - "Other / untracked": the unrealized on any shares not tier-tagged in the ownership ledger,
-    so the per-tier lines + Other always sum EXACTLY to the total open unrealized today.
-  - Footer: notes it is UNREALIZED (marked to market now); realized finalizes in the post-close reconcile.
+MARKET-CLOSED GUARD (Rafael 2026-09-07): neither mode posts on a non-trading day. `main()` checks the
+Alpaca calendar (`_is_trading_day_today`) and skips when today is definitively closed — holiday-aware,
+which a cron day-of-week rule is not (this fired on Labor Day, a weekday holiday). An UNKNOWN calendar
+read fails OPEN (proceeds) so a blip never drops a real trading-day snapshot — EXCEPT a fully-flat
+snapshot on an unknown calendar, which is skipped (it is indistinguishable from a closed day).
+
+WHAT IT POSTS (fixed compact Block Kit card — Rafael 2026-09-07):
+  - "Overall" headline: account day P&L = equity − last_equity (exactly Alpaca's day number) + %.
+  - One line PER TIER, always all four (Intraday / QHM / F6 / Day-Trade): today's UNREALIZED P&L =
+        this tier's ownership-split of each open position's unrealized_intraday_pl (today's MTM move).
+    No per-position ticker breakdown, no "Unrealized by tier" header, no empty-tier "flat" collapse —
+    every tier renders on its own line so a tier's P&L can never be hidden.
+  - "Other": the unrealized on any shares not tier-tagged in the ownership ledger — shown ONLY when it
+    is material (≥ $0.50). The per-tier figures are open-MTM only and do NOT sum to "Day" (which also
+    includes realized + fees); the footer states they are unrealized.
 
 SOURCING (per the P&L SOURCING RULE — Alpaca-authoritative, never tracker math):
   - equity / last_equity / positions (current_price, lastday_price, unrealized_intraday_pl, qty) :
@@ -57,8 +64,13 @@ from execution import ownership_guard as og      # per-tier qty ledger (load_led
 from scripts import audit_slack                   # Block Kit post_to_slack
 
 PT = ZoneInfo("America/Los_Angeles")
+_ET = ZoneInfo("America/New_York")               # Alpaca's calendar / market date is ET
 _TIERS = ("intraday", "qhm", "forever6", "daytrade")
 _TIER_LABEL = {"intraday": "Intraday", "qhm": "QHM", "forever6": "Forever-6", "daytrade": "Day-Trade"}
+# Compact labels for the UNREALIZED snapshot card only (Rafael 2026-09-07 wants "F6"); the realized
+# card keeps _TIER_LABEL's "Forever-6" untouched. The account-total headline is "Overall" (not "Day")
+# so it reads distinctly from the "Day-Trade" tier (Rafael 2026-09-07).
+_SNAP_LABEL = {"intraday": "Intraday", "qhm": "QHM", "forever6": "F6", "daytrade": "Day-Trade"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("pnl_snapshot")
@@ -67,6 +79,26 @@ logger = logging.getLogger("pnl_snapshot")
 def _dollar(v: float) -> str:
     s = f"${abs(v):,.2f}"
     return f"−{s}" if v < 0 else s
+
+
+def _is_trading_day_today():
+    """True/False whether today (ET market date) is a trading day per the Alpaca calendar, or None
+    if the calendar itself could not be read. Reuses reporting.pnl_ledger's REST plumbing (same
+    auth/retry path as every other Alpaca fetch here — no new SDK client, no raw market-data call).
+
+    Rafael 2026-09-07: the snapshot must NOT post on market-closed days. This fired on Labor Day
+    (Monday 2026-09-07) with an all-$0.00 card — a cron day-of-week guard cannot catch a holiday
+    that falls on a weekday, so the trading-day test must be data-driven (the Alpaca calendar returns
+    an entry ONLY for actual trading days in the range)."""
+    today = datetime.now(_ET).strftime("%Y-%m-%d")
+    try:
+        cal = pl._get_json(f"{pl._PAPER_BASE}/v2/calendar?start={today}&end={today}")
+    except Exception as e:
+        logger.warning("trading-day calendar check failed (%s) — proceeding (fail-open)", e)
+        return None
+    if not isinstance(cal, list):
+        return None
+    return any(isinstance(d, dict) and d.get("date") == today for d in cal)
 
 
 def compute_snapshot() -> dict:
@@ -165,21 +197,35 @@ def _tier_rows(tier_vals: dict, pos_lines: dict, empty_word: str) -> list:
 
 
 def build_card(s: dict) -> dict:
-    """Render the UNREALIZED snapshot as a compact Slack Block Kit payload (no equity, inline
-    positions, empty tiers collapsed)."""
+    """Render the UNREALIZED snapshot as a fixed four-line-per-tier Slack card (Rafael 2026-09-07).
+
+    Layout — nothing else:
+        *Overall*   <account day P&L>   (<pct>)    ← Alpaca's exact day number (equity − last_equity)
+        Intraday   <today unrealized>
+        QHM        <today unrealized>
+        F6         <today unrealized>
+        Day-Trade  <today unrealized>
+        [_Other  <today unrealized>_]              ← only if |Other| ≥ $0.50 (untagged-share MTM)
+
+    Deliberately DROPS the prior card's noise that Rafael flagged: the redundant "*Unrealized by
+    tier*" section header, the per-position ticker breakdown under each tier, and the empty-tier
+    "… : flat" collapse. All four tiers ALWAYS render (one line each) so a tier's P&L can never be
+    hidden. The account-total row is labeled "Overall" (not "Day") so it reads distinctly from the
+    "Day-Trade" tier (Rafael 2026-09-07). The per-tier figures are today's UNREALIZED MTM and do not
+    sum to Overall (which also includes realized + fees — the footer states this)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
     sign_pct = f"{s['account_pct']:+.2f}%"
-    rows = [f"*Unrealized by tier*  ·  {_dollar(s['total_unreal_today'])}"]
-    rows += _tier_rows(s["tier_unreal"], s["pos_lines"], "flat")
-    if abs(s["other_today"]) >= 0.50:
-        rows.append(f"_Other {_dollar(s['other_today'])}_")
+    tu = s["tier_unreal"]
+    lines = [f"*Overall*   {_dollar(s['account_today'])}   ({sign_pct})"]
+    lines += [f"*{_SNAP_LABEL[t]}*   {_dollar(tu[t])}" for t in _TIERS]
+    if abs(s["other_today"]) >= 0.50:                      # untagged-share MTM — surface only if material
+        lines.append(f"_Other   {_dollar(s['other_today'])}_")
     blocks: list = [
         {"type": "header", "text": {"type": "plain_text", "text": f"💹 P&L Snapshot · {now_pt}", "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Today  {_dollar(s['account_today'])}  ({sign_pct})*"}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(rows)}},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": "open positions, marked to market · realized after close"}]},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": "per-tier figures are unrealized · marked to market now · realized after close"}]},
     ]
-    fallback = f"P&L {now_pt}: today {_dollar(s['account_today'])} ({sign_pct}), unrealized {_dollar(s['total_unreal_today'])}"
+    fallback = f"P&L {now_pt}: overall {_dollar(s['account_today'])} ({sign_pct})"
     return {"blocks": blocks, "text": fallback}
 
 
@@ -336,14 +382,34 @@ def _post(payload: dict, label: str) -> int:
 
 def main() -> int:
     realized = "--realized" in sys.argv[1:]
+    trading = _is_trading_day_today()
+    if trading is False:                          # definitively market-closed today → no snapshot (Rafael 2026-09-07)
+        logger.info("market closed today (non-trading day per Alpaca calendar) — skipping %s snapshot",
+                    "realized" if realized else "unrealized")
+        return 0
     try:
         if realized:
-            payload = build_realized_card(compute_realized_snapshot())
+            snap = compute_realized_snapshot()
+            payload = build_realized_card(snap)
+            degenerate = (snap.get("account_today") == 0.0 and snap.get("total_realized") == 0.0
+                          and all(v == 0.0 for v in snap.get("tier_realized", {}).values()))
         else:
-            payload = build_card(compute_snapshot())
+            snap = compute_snapshot()
+            payload = build_card(snap)
+            degenerate = (snap.get("account_today") == 0.0
+                          and snap.get("total_unreal_today") == 0.0
+                          and all(v == 0.0 for v in snap.get("tier_unreal", {}).values()))
     except Exception as e:
         logger.error("snapshot computation/render failed — NOT posting (no wrong number): %s", e)
         return 1
+    # trading is True → post. trading is None means the calendar read FAILED (fail-open so a blip never
+    # drops a real trading-day snapshot) — but a fully-flat snapshot on an UNKNOWN calendar is exactly
+    # what a closed day looks like, so skip it rather than post a spurious all-$0.00 card. A truly flat
+    # snapshot on a real (unknown-calendar) trading day is $0.00 anyway, so skipping it loses nothing.
+    if trading is None and degenerate:
+        logger.info("calendar unreadable AND snapshot fully flat — skipping %s snapshot (looks like a closed day)",
+                    "realized" if realized else "unrealized")
+        return 0
     return _post(payload, "realized P&L snapshot" if realized else "P&L snapshot")
 
 
