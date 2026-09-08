@@ -246,10 +246,54 @@ def _expiry_range() -> tuple[str, str]:
     the wide window pulled far-OTM open interest from later expiries and dragged
     the zero-gamma flip implausibly far from spot (SPY flip $670 vs $752 spot).
     This-week-only OI concentrates near spot, giving a sensible weekly GEX + flip.
-    NOTE: get_gex_regime() feeds kelly.py + run_cycle Layer 8, so this changes an
-    execution-consumed signal — gated as such."""
+
+    CONSUMER SPLIT (board 2026-09-08): this function is used by the SATURDAY weekend
+    report (scripts/gex_weekend_report.py) — which wants this-week semantics and never
+    hits the Friday collapse (Saturday's window is [Sat, coming Fri]). The LIVE RTH
+    signal (refresh_gex) uses _signal_expiry_range() instead, which is Friday-conditional
+    skip-0DTE. Do NOT wire refresh_gex to this function; do NOT wire the weekend report to
+    _signal_expiry_range(). They estimate different things.
+
+    NOTE: get_gex_regime() feeds kelly.py + run_cycle Layer 8, so the SIGNAL window
+    change is an execution-consumed signal — gated as such."""
     today  = datetime.now(ET)
     friday = today + timedelta(days=(4 - today.weekday()) % 7)  # coming Fri (today if Fri)
+    return today.strftime("%Y-%m-%d"), friday.strftime("%Y-%m-%d")
+
+
+def _is_monthly_opex(d) -> bool:
+    """True iff date `d` is the 3rd Friday of its month — monthly options expiration, where
+    the SAME-DAY (0DTE) strip carries the DOMINANT dealer gamma. On monthly OpEx we do NOT
+    skip 0DTE (it would discard the dominant, un-soaked signal) — we stand down (see below)."""
+    return d.weekday() == 4 and 15 <= d.day <= 21
+
+
+def _signal_expiry_range() -> tuple[str, str]:
+    """Expiry window for the LIVE RTH GEX signal (refresh_gex only). FRIDAY-CONDITIONAL skip-0DTE
+    (board 2026-09-08, risk-seat conservative resolution — validated live by the #259 soak):
+
+      - Mon–Thu: IDENTICAL to _expiry_range() ([today ET, coming Fri]). The Mon–Thu SPY label
+        drives kelly.py's LIVE x1.15/x1.30 multiplier (kelly is carved out ONLY on Fridays), so
+        leaving Mon–Thu byte-identical means ZERO new main-book sizing effect (the masked-sizing
+        risk the risk seat flagged against an unconditional change).
+      - WEEKLY Friday: [today, coming Fri] collapses to a 0DTE-only span -> UNKNOWN regime ->
+        day-tier blackout (zero trades Fri 2026-09-04). Here we SKIP today's 0DTE and span +8 days
+        to the next liquid weekly, restoring an actionable near-spot pin/regime for the day-tier +
+        Layer-8 (kelly is carved out on Fridays, so no main-book sizing change even here).
+      - MONTHLY OpEx Friday (3rd Fri): STAND DOWN — fall back to _expiry_range() (which collapses
+        to UNKNOWN), because the same-day gamma DOMINATES on monthly OpEx and skip-0DTE is un-soaked
+        for that case. Conservative UNKNOWN, exactly as today, until a monthly-OpEx soak validates it."""
+    return _signal_window_for(datetime.now(ET).date())
+
+
+def _signal_window_for(today) -> tuple[str, str]:
+    """Pure date logic behind _signal_expiry_range (takes an ET `date`; testable without mocking now).
+    Weekly non-OpEx Friday -> skip-0DTE [tomorrow, +8d]; every other day -> this-week [today, coming Fri]
+    (byte-identical to _expiry_range's math)."""
+    if today.weekday() == 4 and not _is_monthly_opex(today):   # weekly (non-OpEx) Friday only
+        start = today + timedelta(days=1)                       # skip today's 0DTE
+        return start.strftime("%Y-%m-%d"), (start + timedelta(days=8)).strftime("%Y-%m-%d")
+    friday = today + timedelta(days=(4 - today.weekday()) % 7)  # Mon–Thu + monthly OpEx: coming Fri (today if Fri)
     return today.strftime("%Y-%m-%d"), friday.strftime("%Y-%m-%d")
 
 
@@ -296,6 +340,16 @@ def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, flo
             page_token = body.get("next_page_token")
             if not page_token:
                 break
+        else:
+            # for-else: the loop ran the full page cap WITHOUT an empty token -> more pages remain.
+            # Pagination is API-ordered (not proximity), so near-spot strikes MAY be truncated on a
+            # dense chain under the wider skip-0DTE window (board 2026-09-08, signal-seat tripwire).
+            # Fail-safe: _compute_gex's near-spot windowed quality gate still forces UNKNOWN if
+            # near-spot coverage is actually lost; this WARN just makes a truncation VISIBLE. A
+            # strike-range fetch filter is the documented follow-up if this ever fires.
+            logger.warning("GEX contracts [%s]: hit %d-page cap (%d contracts) with more pages "
+                           "remaining — near-spot strikes may be truncated on a dense chain",
+                           symbol, _MAX_CONTRACT_PAGES, len(oi_map))
     except Exception as e:
         logger.warning("GEX contracts [%s] failed: %s", symbol, e)
     return oi_map
@@ -779,14 +833,29 @@ def refresh_gex() -> None:
     ts_pt  = datetime.now(PT)
     ts_str = ts_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
-    date_gte, date_lte = _expiry_range()
+    date_gte, date_lte = _signal_expiry_range()   # Friday-conditional skip-0DTE (board 2026-09-08)
     try:
-        # calendar days to the weekly expiry; 0 on the expiry Friday itself (0DTE
-        # is correct — same-day expiry means zero days remaining, not one).
+        # fallback dte from the window's upper bound; per-symbol we OVERRIDE this from the FRONT
+        # (pin) expiry below, because get_gex_levels surfaces `dte` into the day-tier's
+        # _dte_proximity -> pin_strength -> act_ok (LOAD-BEARING, not display), and the skip-0DTE
+        # window's date_lte is the FAR edge (+8d), which would wrongly weaken the day-tier.
         _dte = (datetime.strptime(date_lte, "%Y-%m-%d").date() - datetime.now(ET).date()).days
-    except Exception as _dte_e:  # RC-3: log, don't silently swallow (display-only value)
+    except Exception as _dte_e:  # RC-3: log, don't silently swallow
         logger.debug("GEX: dte calc failed (date_lte=%r): %s", date_lte, _dte_e)
         _dte = None
+
+    # Prior per-symbol labels (for the [GEX_REGIME_RESTORED] transition log below) — read once,
+    # never fatal. Observability only (board 2026-09-08): correlate any Kelly sizing change to a
+    # regime being restored from UNKNOWN/STALE.
+    _prior_labels: dict = {}
+    try:
+        if _SNAP_PATH.exists():
+            _prev_snap = json.loads(_SNAP_PATH.read_text())
+            _prior_labels = {_s: (_d.get("label") if isinstance(_d, dict) else None)
+                             for _s, _d in (_prev_snap.get("symbols") or {}).items()}
+    except Exception as _pl_e:   # RC-3: corrupt prior snapshot -> skip the transition log this cycle (observability only)
+        logger.debug("GEX: prior-label load for transition log failed: %s", _pl_e)
+        _prior_labels = {}
 
     # Universe: market anchors + Mag-7 day-tier underlyings + current bot positions.
     # Resolve any leveraged tracker (a held TSLL/NVDL/TQQQ from _position_symbols) to its
@@ -859,9 +928,20 @@ def refresh_gex() -> None:
             gex = _compute_gex(snapshots, oi_map, spot)
             gex["spot"]              = round(spot, 2)
             gex["contracts_fetched"] = len(oi_map)
-            gex["expiry"]            = date_lte     # this week's Friday (weekly expiry)
-            gex["dte"]               = _dte         # calendar days to that Friday
-            gex["window"]            = "weekly"
+            # expiry/dte from the FRONT (pin) expiry, NOT the window's far edge (board 2026-09-08,
+            # signal seat): `dte` feeds the day-tier's act_ok, so it must reflect the near expiry the
+            # pin actually used. Fall back to the window bound only if the pin has no expiry.
+            _pin_exp = (gex.get("pin") or {}).get("expiry")
+            _front_dte = _dte
+            if _pin_exp:
+                try:
+                    _front_dte = (datetime.strptime(str(_pin_exp)[:10], "%Y-%m-%d").date()
+                                  - datetime.now(ET).date()).days
+                except Exception as _fe:
+                    logger.debug("GEX [%s]: front-expiry dte calc failed (pin exp=%r): %s", symbol, _pin_exp, _fe)
+            gex["expiry"]            = _pin_exp or date_lte
+            gex["dte"]               = _front_dte
+            gex["window"]            = "signal"     # Friday-conditional skip-0DTE signal window
             # confirmed_ts marks this label as computed from a spot that PASSED the consistency
             # guard at ts_str. get_gex_regime ages off this (not the snapshot write time) so a
             # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
@@ -881,6 +961,18 @@ def refresh_gex() -> None:
         except Exception as _sym_e:
             logger.warning("GEX [%s]: per-symbol compute failed — %s", symbol, _sym_e)
             results[symbol] = {"error": "compute_exception", "detail": str(_sym_e)[:120]}
+
+    # Regime-transition log (board 2026-09-08, GAI): flag any symbol moving from UNKNOWN/STALE/absent
+    # to an ACTIVE regime this cycle, so a Kelly sizing change can be correlated to the feed restoring.
+    for _s, _d in results.items():
+        if not isinstance(_d, dict):
+            continue
+        _newlab = _d.get("label")
+        _oldlab = _prior_labels.get(_s)
+        if _newlab in ("POSITIVE", "NEGATIVE", "NEAR-FLIP") and _oldlab in (None, "UNKNOWN", "STALE"):
+            _tp = _d.get("pin", {}) or {}
+            logger.info("[GEX_REGIME_RESTORED] %s %s->%s pin=%s flip=%s",
+                        _s, _oldlab or "absent", _newlab, _tp.get("centroid"), _d.get("flip_strike"))
 
     snapshot = {"ts": ts_str, "symbols": results}
 
