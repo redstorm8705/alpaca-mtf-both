@@ -101,5 +101,83 @@ class TestRealizedTierAttribution(unittest.TestCase):
                                s["total_realized"], places=2)
 
 
+class TestUnrealizedCard(unittest.TestCase):
+    """Rafael 2026-09-07: the hourly UNREALIZED card is a fixed Day + 4-tier layout — no per-position
+    names, no 'Unrealized by tier' header, no empty-tier 'flat' collapse."""
+
+    def _snap(self, other=0.0):
+        return {"equity": 2523.78, "account_today": -12.34, "account_pct": -0.49,
+                "tier_unreal": {"intraday": -4.27, "qhm": -8.07, "forever6": 0.0, "daytrade": 0.0},
+                "pos_lines": {"intraday": [("AVGO", -4.27)], "qhm": [("GE", -8.07)], "forever6": [], "daytrade": []},
+                "total_unreal_today": -12.34, "other_today": other, "untracked_syms": [], "n_positions": 6}
+
+    def test_fixed_layout_no_noise(self):
+        body = ps.build_card(self._snap())["blocks"][1]["text"]["text"]
+        self.assertNotIn("Unrealized by tier", body)      # redundant header removed
+        self.assertNotIn("AVGO", body)                    # no per-position names
+        self.assertNotIn("flat", body)                    # no empty-tier collapse
+        # "Overall" headline (distinct from the "Day-Trade" tier), then all four tiers, one per line
+        for lbl in ("Overall", "Intraday", "QHM", "F6", "Day-Trade"):
+            self.assertIn(lbl, body)
+        self.assertEqual(body.count("\n"), 4)             # Overall + 4 tiers = 5 lines
+
+    def test_other_only_when_material(self):
+        self.assertNotIn("Other", ps.build_card(self._snap(0.10))["blocks"][1]["text"]["text"])
+        self.assertIn("Other", ps.build_card(self._snap(-1.50))["blocks"][1]["text"]["text"])
+
+
+class TestTradingDayGuard(unittest.TestCase):
+    """Rafael 2026-09-07: no snapshot on market-closed days — holiday-aware via the Alpaca calendar
+    (a cron day-of-week guard cannot catch a weekday holiday like Labor Day)."""
+
+    def _today(self):
+        return ps.datetime.now(ps._ET).strftime("%Y-%m-%d")
+
+    def test_calendar_true_false_none(self):
+        with patch.object(pl, "_get_json", lambda url: [{"date": self._today()}]):
+            self.assertIs(ps._is_trading_day_today(), True)
+        with patch.object(pl, "_get_json", lambda url: []):                       # holiday/weekend
+            self.assertIs(ps._is_trading_day_today(), False)
+        with patch.object(pl, "_get_json", lambda url: (_ for _ in ()).throw(RuntimeError("x"))):
+            self.assertIsNone(ps._is_trading_day_today())                          # unreadable → None
+
+    def test_main_skips_closed_day_without_posting(self):
+        def _boom(*a, **k):
+            raise AssertionError("posted on a closed day")
+        with patch.object(ps, "_is_trading_day_today", lambda: False), \
+             patch.object(ps, "_post", _boom):
+            self.assertEqual(ps.main(), 0)                # returns 0, never reaches _post
+
+    def test_main_posts_on_trading_day_and_on_unknown(self):
+        s = TestUnrealizedCard()._snap()                  # non-degenerate (account_today = -12.34)
+        for tv in (True, None):                           # None (unknown calendar) fails OPEN → posts (movement present)
+            posted = []
+
+            def _rec(payload, label, _sink=posted):       # _sink default binds this iteration's list (no B023)
+                _sink.append(1)
+                return 0
+            with patch.object(ps, "_is_trading_day_today", lambda _tv=tv: _tv), \
+                 patch.object(ps, "compute_snapshot", lambda: s), \
+                 patch.object(ps, "_post", _rec):
+                self.assertEqual(ps.main(), 0)
+            self.assertEqual(len(posted), 1)
+
+    def test_main_unknown_calendar_skips_when_fully_flat(self):
+        """Fail-open safety: if the calendar is unreadable (None) AND the snapshot is fully flat
+        (account_today == 0 and every tier == 0), skip — that is what a closed day looks like, so
+        don't post a spurious all-$0.00 card even when the calendar API blips."""
+        flat = {"equity": 2523.78, "account_today": 0.0, "account_pct": 0.0,
+                "tier_unreal": {"intraday": 0.0, "qhm": 0.0, "forever6": 0.0, "daytrade": 0.0},
+                "pos_lines": {t: [] for t in ps._TIERS}, "total_unreal_today": 0.0,
+                "other_today": 0.0, "untracked_syms": [], "n_positions": 6}
+
+        def _boom(*a, **k):
+            raise AssertionError("posted a flat card on an unknown-calendar day")
+        with patch.object(ps, "_is_trading_day_today", lambda: None), \
+             patch.object(ps, "compute_snapshot", lambda: flat), \
+             patch.object(ps, "_post", _boom):
+            self.assertEqual(ps.main(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
