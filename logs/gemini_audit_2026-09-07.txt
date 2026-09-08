@@ -1,0 +1,86 @@
+Nightly Gemini Audit — 2026-09-07
+Model: gemini-3.1-flash-lite | Verdict: PASS
+Modified files: ['scripts/qhm_thesis.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: PASS
+
+---
+
+### LOG ANOMALIES
+- **News Monitor false alarms on keyword matches**: `news_monitor` flagged articles matching `'bankruptcy'` (local SoCal restaurant chain and Kenyan politician's children) and `'ppi'` ("Jassper Shipping...", Roald Dahl quote "impossible to make your eyes twinkle if you are not feeling twinkly yourself" due to substring matching `'ppi'` in "impossible" / "shipping"). Base penalty was 100% (price-confirmation requirement applied before trade), but neither halted trading systemically.
+- **DRAM missing daily data**: DRAM repeatedly logged `[DRAM] No daily data — long entry blocked (fail-closed)` and `short entry blocked (fail-closed)`. Fail-closed gating functioned as designed.
+- **ledger_sync runtime**: Two warnings at 19:40:14 (`wall-time 12.8s`) and 20:00:14 (`wall-time 12.3s`) for processing 580 fills and 2,678 orders. Latency is elevated due to growing order history, but within non-fatal operational tolerances.
+
+---
+
+### PERFORMANCE AUDIT
+- **Trade Records Analyzed**:
+  - `MARA` short (`2026-09-01T11:53:35`): Entry $10.25, size 6, stop $13.04, target $2.98. Exit on `2026-09-03T07:57:49` at $11.61 via `overnight_atr_buffer_exit` (thresh $10.72 breached). P&L = $(10.25 - 11.61) \times 6 = -$8.16. Correct sign and calculation.
+  - `HOOD` long (`2026-09-02T10:54:29`): Entry $106.10, size 2, stop $91.07, target $145.16.
+    - Partial exit (`2026-09-03T07:21:29`): 1 share at $121.90 (surpassing T2 $121.72). P&L = $(121.90 - 106.10) \times 1 = +$15.80. Correct.
+    - Exit remainder (`2026-09-04T06:36:37`): 1 share at $106.10 via `stop_breach_cover`. P&L recorded as $15.80 (cumulative realized P&L on the trade tracker rather than tranche P&L $0.00; verified benign in ledger heal).
+  - `META` long:
+    - Partial exit (`2026-09-02T07:01:49`): 1 share at $594.69, P&L +$18.21.
+    - Final stop hit (`2026-09-04T07:46:46`): 1 share at $605.64, P&L +$47.37. Realized gain on trailing/promoted stop.
+  - `AVGO` short (`2026-09-04T12:17:52`): Entry $355.76, size 2, stop $377.51, target $310.75. Currently held overnight (`2026-09-07` EOD snapshot confirms 1 open trade).
+- **All-Time Metrics**: Total trades 167 (144 verified), win rate 34.3%, profit factor 0.84, total P&L -$155.02.
+- **Stop vs Target Captured**: Recent trades reflect functional ATR stops and target tranche executions (`META` and `HOOD` successfully scaled out into strength at T1/T2).
+
+---
+
+### TRADE INTEGRITY
+- No signs of negative zero or unrecorded P&L.
+- EOD reconciliation is clean: `pnl_unreconciled=false`, `pnl_drift=0.0`.
+- All prices, stop triggers, and partial exit tranches conform to entry specifications.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### `scripts/qhm_thesis.py`
+- **Keyword Substring / API & Scrape Safety**:
+  - `_dip_metrics(symbol)`: Validates bar dict structures and guards against non-numeric or missing `"c"`/`"h"` entries, preventing empty sequences from entering `max()` or computing division by zero.
+  - `_dataroma_13f(symbol)`: Strict user-agent provided to bypass Cloudflare/bot-block, properly catches regex search misses and parses without fabricating holders.
+  - `_gro(prompt, system)`: Proper custom UA header included to avoid HTTP 403 blocks from Cloudflare on Groq endpoints.
+  - **Minor Observation**: In `top_board_summary()`, if `r.get("board_verdict")` is present, it truncates at 700 chars (`v[:700]`). This is a display-only Slack helper and does not affect execution or risk.
+- No execution, order, or state-mutation logic exists in this script (read-only research memo generator).
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED (strategy/signal_generator.py not modified today)
+- **P5-C2**: UNTOUCHED (run_movers.py not modified today)
+- **P5-H1**: OBSOLETE (PDT permanently deleted)
+- **P5-H2**: UNTOUCHED (fill price crosstalk)
+- **P5-H3**: UNTOUCHED (orphan GTC 404 path)
+- **P5-H4**: UNTOUCHED (TOD_MARKET_OPEN_BUFFER_MINS)
+- **P5-H5**: FIXED (verified prior fix intact)
+- **P5-M1**: UNTOUCHED (cycle watchdog restart loop)
+- **P5-M2**: UNTOUCHED (MRI score state validation)
+- **P5-M3**: UNTOUCHED (score_comparison JSON growth)
+- **P5-L1**: UNTOUCHED (_classify_loss_driver)
+- **P5-L2**: UNTOUCHED (eod snapshot timing)
+- **P5-L3**: UNTOUCHED (live_data_writer reconnect logic)
+
+---
+
+### NEW BUGS FOUND
+*None*
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Optimize news monitor keyword tokenization**: Update `news_monitor` to match words on word boundaries (`\bppi\b`) rather than raw substrings to eliminate false alarms triggered by words like "shipping" or "impossible".
+2. **Monitor `ledger_sync` execution wall-time**: Address the ~12-13s execution time in `ledger_sync` by archiving filled/canceled orders older than 30 days so the order sync payload does not degrade cycle time.
+3. **Address open P5-C2**: Remove or correct the obsolete `DataFetcher` import in `run_movers.py` to restore premarket movers scan functionality.
