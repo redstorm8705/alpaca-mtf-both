@@ -1,0 +1,117 @@
+{
+  "audit_date": "2026-09-08",
+  "run_ts": "2026-09-08T10:30:01.908757-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 1.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AVGO"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 32,
+    "levels": {
+      "STRESSED": 6,
+      "ELEVATED": 24,
+      "NORMAL": 2
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 75,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-08 16:15:18,485 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-08 16:15:18,488 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-08 16:15:44,905 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-08 16:15:44,908 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-08 16:16:17,230 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for NVDA has no prior lot and no tracker record \u2014 fill un"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -32.180000000000064,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -32.180000000000064,
+    "best": {
+      "symbol": "AVGO",
+      "pnl": -32.180000000000064,
+      "entry_price": 355.76,
+      "exit_price": 371.85,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 377.51,
+      "target": 310.75
+    },
+    "worst": {
+      "symbol": "AVGO",
+      "pnl": -32.180000000000064,
+      "entry_price": 355.76,
+      "exit_price": 371.85,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 377.51,
+      "target": 310.75
+    },
+    "trades": [
+      {
+        "symbol": "AVGO",
+        "pnl": -32.180000000000064,
+        "entry_price": 355.76,
+        "exit_price": 371.85,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 377.51,
+        "target": 310.75
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "AVGO",
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 0,
+        "sell": 1
+      },
+      "AVGO": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}

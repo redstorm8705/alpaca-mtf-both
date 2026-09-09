@@ -1,0 +1,91 @@
+Nightly Gemini Audit — 2026-09-08
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['scripts/day_tier_preflight.py', 'scripts/pnl_snapshot.py', 'data/gex.py', 'research/deflated_sharpe.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+The bot remains operational with active stop protection and risk management functioning properly. However, ledger synchronization was refused for `NVDA/qhm` due to a protected floor shrink awaiting manual operator confirmation (`confirm_ledger_heal.py`), and `DRAM` daily data missing triggered repeated fail-closed entry blocks.
+
+---
+
+### LOG ANOMALIES
+- **Ledger Sync Refused (Protected Floor Shrink)**:
+  - `execution.ownership_guard` logged `CRITICAL` at `19:40:13` and `20:00:14`: `sync_ledger REFUSED — protected floor shrink(s) {'NVDA/qhm': {'was': 1.0, 'would_be': -2.0, 'net': 0.0}}`. Streak count reached 14. This halts ledger updates for sell logic on protected tiers pending `confirm_ledger_heal.py NVDA qhm 0`.
+- **FIFO Orphan Warning**:
+  - `execution.portfolio_tracker` logged `FIFO orphan: closing fill for NVDA has no prior lot and no tracker record — fill unmatched` at `19:37:00`, `19:43:18`, `19:50:34`, and `19:56:48`. Matches the external QHM close recorded at `08:28:39`.
+- **Missing Data Fail-Closed**:
+  - `confluence` logged `WARNING: [DRAM] No daily data — long/short entry blocked (fail-closed)` across all evaluation scans. Fail-closed behavior executed correctly.
+- **Buying Power Exhaustion on Dip-Add**:
+  - `execution.quarterly_hold_manager` logged `WARNING: QHM dip-add: GE RegT BP <= 0 ($0) — skip add` at `19:42:20`, `19:48:38`, and `19:55:51`.
+- **Missing Stop Recovery**:
+  - `execution.stop_protection` successfully caught and placed a missing day stop on `UBER` (`BUY 2 @ $77.01`, order `3694238b-74d9-40e2-8a9a-00868ecefb54`) at `19:48:40`.
+
+---
+
+### PERFORMANCE AUDIT
+- **P&L Sign Integrity**:
+  - `MARA` short (`entry=$10.25`, `exit=$11.61`): P&L = -$8.16 (Loss on short when price rose — correct).
+  - `HOOD` long partial (`entry=$106.10`, `exit=$121.90`, qty 1): P&L = +$15.80 (Profit on long — correct).
+  - `HOOD` long cover (`entry=$106.10`, `exit=$106.10`, qty 1): P&L = $0.00 / recorded as breakeven trade cover — correct.
+  - `META` long partial (`price=$594.69`, tranche 1): P&L = +$18.21 — correct.
+  - `META` long stop hit (`price=$605.64`, trailing/GTC stop): P&L = +$47.37 — correct.
+  - `AVGO` short (`entry=$355.76`, `exit=$371.85`, qty 2): P&L = -$32.18 (Loss on short — correct).
+- **Exit vs. Target / Stop Execution**:
+  - `MARA` short was exited via `overnight_atr_buffer_exit` threshold breach ($10.72) at $11.61.
+  - `AVGO` short was exited via `overnight_atr_buffer_exit` threshold breach ($361.17) at $371.85.
+- **Performance Metrics**:
+  - Lifetime Win Rate: 34.0% (57 wins / 111 losses across 168 trades).
+  - Lifetime Profit Factor: 0.82; Sharpe Ratio: -1.061.
+
+---
+
+### TRADE INTEGRITY
+- **Trade Records**: All trade event records have internally consistent timestamps and pricing fields.
+- **EOD Snapshot Reconciliation**: `pnl_unreconciled` is `false`. The pre-heal dual-compute telemetry drift ($16.09) is benign and documented as pre-heal telemetry prior to the 8:30 PM ET reconciliation pass.
+
+---
+
+### MODIFIED FILE FINDINGS
+- `scripts/day_tier_preflight.py`: No bugs found. Clean read-only simulation loop with comprehensive exception handling per ticker.
+- `scripts/pnl_snapshot.py`: No bugs found. Sourcing is Alpaca-authoritative, with calendar checks and fallback handling for unallocated lots to `Other`.
+- `data/gex.py`: No bugs found. Expiry range logic properly handles 0DTE skip on weekly Fridays while maintaining standard behavior for monthly OpEx and Mon–Thu.
+- `research/deflated_sharpe.py`: No bugs found. Validated statistical calculations for Bailey & López de Prado (2012, 2014), including the `_MIN_N_HARD=30` sample floor and moment-dropping below 50 samples.
+
+---
+
+### P5 STATUS
+- `P5-C1` (FVG MultiIndex silent crash): UNTOUCHED
+- `P5-C2` (run_movers.py ImportError DataFetcher): UNTOUCHED
+- `P5-H1` (PDT enforcement): OBSOLETE (Invariant confirmed, zero live impact)
+- `P5-H2` (Fill price crosstalk): UNTOUCHED
+- `P5-H3` (Orphan GTC 404 path): UNTOUCHED
+- `P5-H4` (Rule 2 dead code): UNTOUCHED
+- `P5-H5` (GTC stop PDT=3/3): FIXED
+- `P5-M1` (Cycle watchdog restart loop): UNTOUCHED
+- `P5-M2` (MRI score cached stale): UNTOUCHED
+- `P5-M3` (score_comparison JSON growth): UNTOUCHED
+- `P5-L1` (_classify_loss_driver empty label): UNTOUCHED
+- `P5-L2` (eod JSON timing): UNTOUCHED
+- `P5-L3` (live_data_writer reconnect): UNTOUCHED
+
+---
+
+### NEW BUGS FOUND
+None.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Resolve NVDA QHM Ledger Desync**: Execute `python confirm_ledger_heal.py NVDA qhm 0` to acknowledge the external position closure and unfreeze protected sell logic in `ownership_guard`.
+2. **Investigate DRAM Data Feed**: Verify why daily bar ingestion failed for DRAM in Alpaca market data feed causing continuous fail-closed entry skips.
+3. **Monitor Account Buying Power**: Check allocation constraints preventing QHM dip-adds (GE skipped due to $0 available RegT BP).
