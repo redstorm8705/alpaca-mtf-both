@@ -1,0 +1,67 @@
+{
+  "audit_date": "2026-09-09",
+  "run_ts": "2026-09-09T10:30:02.603281-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 31
+    },
+    "last_score": 42,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 66,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-09 16:07:52,408 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-09 16:07:52,410 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-09 16:14:59,428 | WARNING  | strategy.run_cycle | Risk day (FOMC Minutes Jul meeting \u2014 50% size) \u2014 sizing at 50%",
+      "2026-09-09 16:15:22,412 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: GE RegT BP <= 0 ($0) \u2014 skip add",
+      "2026-09-09 16:16:06,151 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "UBER"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 0,
+    "symbols": [],
+    "by_symbol": {}
+  }
+}

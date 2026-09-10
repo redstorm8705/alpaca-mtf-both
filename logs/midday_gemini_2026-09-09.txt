@@ -1,0 +1,43 @@
+Midday Gemini Audit — 2026-09-09
+Model: gemini-3.1-flash-lite | Verdict: PASS
+================================================================================
+
+### CATASTROPHIC ALERT: None
+None — no catastrophic conditions detected.
+
+### VERDICT: PASS
+The session recorded zero fills and zero closed trades. The bot correctly navigated a "STRESSED" MRI environment by tightening entry requirements and enforcing safety gates (ORB and Quarterly Hold caps).
+
+### PERFORMANCE AUDIT
+- **Integrity**: Session P&L is $0.00 with 0 entries/exits. This is consistent with the ground truth provided by Alpaca Fills (0 fills).
+- **Accounting**: No matched-pair errors or P&L sign issues detected.
+- **Stop Coverage**: Deterministic check confirms 5/5 open positions have protective stops.
+
+### ENTRY QUALITY
+- **Discipline**: The bot successfully filtered 17 raw signals down to 6 via dynamic scoring, then blocked all 6 remaining entries via the **ORB (Opening Range Breakout) gate**.
+- **Logic Check**: `SPY` was at 763.15 while `ORB_H` was 764.38. The bot correctly identified "no confirmed breakout above range" and blocked LONG entries for SPY, QQQ, SNDK, and INTC.
+- **Leverage Safety**: Short signals for `TSLL` and `NVDL` were correctly skipped as these are flagged as "Leveraged ETF long-only."
+
+### EXIT QUALITY
+- No exits occurred during this audit window.
+
+### MRI ALIGNMENT
+- **MRI Level**: STRESSED (Score 42).
+- **Sizing Response**: The bot correctly applied a **0.70x size floor** and raised the **Dynamic MIN_SCORE to 10/12** (up from the base 8). This prevented entries into a technically stressed market.
+- **Risk Awareness**: The bot correctly identified "Risk day (FOMC Minutes)" and "Mid-day doldrums," applying cumulative sizing penalties (50% and 75% respectively).
+
+### LOG ANOMALIES
+- **QuarterlyHoldManager (QHM)**: `GE` add was skipped due to `RegT BP <= 0`. This indicates the paper account is at its buying power limit for that specific sub-module.
+- **Data Gap**: `[DRAM]` triggered a `WARNING: No daily data`. The bot correctly "failed-closed" and blocked the entry.
+- **Cycle Duration**: One cycle took 73s. While within the watchdog headroom (647s), it is on the higher side for a 41-ticker scan.
+
+### NEW BUGS / CONCERNS
+- **ALPHA ISSUE | LOW | Redundant Scan Cycles** | The log shows two full confluence scan sequences (17:28:41 and 17:29:26) within 45 seconds of each other. While not an execution bug, the high MRI/Stressed state should ideally trigger longer sleep intervals to preserve API rate limits, especially since the first scan already established the ORB block.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **ALPHA**: Investigate the `DRAM` daily data failure. Ensure the data provider (Alpaca/Polygon) has the correct mapping for this ticker or remove it from the scan universe to prevent log noise.
+2. **INFRA**: Monitor cycle duration. The 73s cycle time suggests potential latency in the `confluence` module's `VOLSHADOW` calculations or data fetching.
+3. **EXECUTION**: Verify why `GE` RegT BP is reported as `$0` in the `QuarterlyHoldManager`. Ensure the portfolio tracker is correctly syncing non-trade-event equity changes (like margin interest or paper-account resets).
