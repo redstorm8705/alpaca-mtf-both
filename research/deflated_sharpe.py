@@ -121,7 +121,10 @@ def expected_max_sharpe(n_trials: int, trials_sr_std: float) -> float:
     q1 = stats.norm.ppf(1.0 - 1.0 / n)
     q2 = stats.norm.ppf(1.0 - 1.0 / (n * math.e))
     if not (math.isfinite(q1) and math.isfinite(q2)):
-        return 0.0
+        # Floating-point saturation makes the extreme-value approximation
+        # undefined.  Returning the single-trial 0.0 sentinel here would
+        # silently turn DSR into an undeflated PSR.
+        return float("nan")
     return float(trials_sr_std * ((1.0 - _EULER) * q1 + _EULER * q2))
 
 

@@ -9989,3 +9989,29 @@ auto-confirm, scoped) is the real Tier-1 build.
   masked by older readable orders, and tier liquidation runs before account-level entry halts.
   Forced-close order ids and cumulative-fill watermarks are persisted before polling so a late fill
   cannot cause a second close against co-held shares.
+
+## 2026-09-11 — DSR saturation safeguard and Brick-2 data-contract review
+
+- **Evidence:** OCI `research.ic_engine` reports 21 matched realized trade outcomes. Its `score`,
+  `score_16pt`, `tsmom_12m`, and `tsmom_6m` fields are predictor columns on that same realized-trade
+  stream, not independent strategy return streams. OCI `score16_history.jsonl` has 1,472 final daily
+  score snapshots, while `score16_aggregator.py` archives one final ticker row per day; it does not
+  retain counterfactual entry/exit lifecycles. DSR across those columns would therefore misstate four
+  correlated predictors as four independently evaluated trading variants.
+- **Design review:** Groq: APPROVE WITH CHANGES; Google AI Studio: APPROVE. Both require DSR to remain
+  attached only to comparable complete strategy/shadow return streams and to emit unavailable when
+  cross-trial Sharpe dispersion is not measurable. Groq additionally required transparent configured
+  versus measured trial counts and same-frequency grouping for the future data-pipe build.
+- **Current code hardening:** `expected_max_sharpe` previously returned `0.0` when its Gaussian quantile
+  saturated at a trial count above float precision. That result would make `deflated_sharpe` compare
+  against an undeflated benchmark and could report a confident DSR. The change returns `NaN`; the
+  existing DSR calculation then yields `NaN` and `sharpe_not_noise=False`.
+- **10-point / RC review:** no broker, execution, market-data, state, or Slack paths; no RTH caller;
+  read-only numeric utility only. Boundary input is an integer above float quantile precision;
+  non-finite propagation is intentional and tested. No calendar/timezone/cache/rounding/concurrency
+  behavior changes. RC-1 through RC-8: not applicable beyond numeric non-finite handling, which fails
+  closed.
+- **Verification:** OCI Python 3.10 isolated suite `tests.test_deflated_sharpe`: 16/16 passed. OCI
+  `mypy --warn-unreachable --explicit-package-bases --ignore-missing-imports`: clean; `py_compile` and
+  `ruff --select E,W,F,B` passed locally. The broader Brick-2 integration remains blocked on a future
+  read-only, timestamped counterfactual strategy-lifecycle archive; no DSR value is fabricated today.
