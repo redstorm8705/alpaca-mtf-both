@@ -31,8 +31,9 @@ SAFETY GUARANTEES (each traced to a board finding):
        BEFORE submit; the write is CHECKED and the entry ABORTS if it fails (cold-2nd/reliability/
        masked-loss Finding C — a swallowed write let the same ENTER re-fire and double the size).
        An already-open day-tier position on the symbol (log OR state) also blocks re-entry.
-  B6 — Cumulative day-tier gross cap (≤ DAYTRADE_ALLOC_PCT × DAYTRADE_TRACK_A_PCT of equity) + the
-       ~$650 maintenance cushion, read from the LIVE book at wire-time, fail-CLOSED.
+  B6 — Wire-time quantity is clamped by the all-tier account gross cap, day-tier gross cap,
+       current buying power after the main-book reserve, actual equity-minus-maintenance cushion,
+       pending entries, and stop-distance risk. Every source is live and failures close the gate.
 
 CONCURRENCY: this module does whole-file read-modify-write on day_tier_state.json and has NO
 internal lock. Correctness under concurrent invocations is DELEGATED to the runner's flock (a
@@ -58,6 +59,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -77,6 +79,7 @@ PT = ZoneInfo("America/Los_Angeles")
 _STATE = Path(__file__).resolve().parent.parent / "logs" / "day_tier_state.json"
 
 _KILL_KEY = "_tier_killed_date"  # a "killed for the day" flag; survives a restart via the state file
+_HALT_KEY = "_tier_halted_date"   # data-blind fail-closed halt; protected positions remain managed
 # Terminal entry-record states pruned after _STATE_TTL_DAYS (reliability: unbounded-growth leak +
 # rising fsync cost on the hot path). Non-terminal states are NEVER pruned (they gate re-entry).
 _TERMINAL_STATES = frozenset({"protected", "flattened_no_stop", "flatten_failed",
@@ -168,7 +171,8 @@ def _enabled() -> bool:
 
 
 def _tier_killed_today(state: dict) -> bool:
-    return state.get(_KILL_KEY) == f"{_now_et():%Y%m%d}"
+    today = f"{_now_et():%Y%m%d}"
+    return state.get(_KILL_KEY) == today or state.get(_HALT_KEY) == today
 
 
 # ── gross-cap + cushion (B6) ───────────────────────────────────────────────────────────────────
@@ -197,25 +201,130 @@ def _current_daytrade_gross(open_trades: dict, positions_by_symbol: dict) -> flo
     return gross
 
 
-def _gross_cap_ok(new_notional: float, equity: float, open_trades: dict,
-                  positions_by_symbol: dict, buying_power: float) -> tuple[bool, str]:
-    """B6: adding `new_notional` must keep (a) total Track-A day-tier gross ≤ alloc×trackA×equity,
-    and (b) buying power minus the new notional ≥ the maintenance cushion. Fail-CLOSED on bad input."""
+def _enum_text(value) -> str:
+    return str(getattr(value, "value", value) or "").lower()
+
+
+def _account_gross(positions_by_symbol: dict) -> float:
+    """Authoritative all-tier gross from Alpaca positions. Any malformed lot fails closed."""
+    gross = 0.0
+    for pos in positions_by_symbol.values():
+        market_value = getattr(pos, "market_value", None)
+        if market_value is not None:
+            notional = abs(float(market_value))
+        else:
+            notional = abs(float(getattr(pos, "qty", 0))) * abs(float(getattr(pos, "current_price", 0)))
+        if not math.isfinite(notional):
+            raise ValueError("non-finite position notional")
+        gross += notional
+    return gross
+
+
+def _pending_entry_gross(open_orders: list, positions_by_symbol: dict) -> tuple[float, float]:
+    """Return (all-tier, day-tier) pending increasing-order notional; reducing orders do not count."""
+    from execution.ownership_guard import tier_of_coid
+    total = 0.0
+    day = 0.0
+    for order in open_orders:
+        symbol = str(getattr(order, "symbol", "") or "")
+        side = _enum_text(getattr(order, "side", None))
+        pos = positions_by_symbol.get(symbol)
+        pos_side = _enum_text(getattr(pos, "side", None)) if pos is not None else ""
+        qty = abs(float(getattr(order, "qty", 0) or 0))
+        filled = abs(float(getattr(order, "filled_qty", 0) or 0))
+        if not (math.isfinite(qty) and math.isfinite(filled)):
+            raise ValueError(f"non-finite pending qty for order {getattr(order, 'id', '?')}")
+        remaining = max(0.0, qty - filled)
+        is_reducing = ((pos_side == "long" and side == "sell")
+                       or (pos_side == "short" and side == "buy"))
+        if is_reducing:
+            held = abs(float(getattr(pos, "qty", 0) or 0))
+            if not math.isfinite(held):
+                raise ValueError(f"non-finite held qty for pending order {getattr(order, 'id', '?')}")
+            # Only the portion covered by the current position is reducing. Any excess could reverse
+            # the account and is therefore new gross exposure, including an oversized stop.
+            remaining = max(0.0, remaining - held)
+        if remaining <= 0:
+            continue
+        price_raw = getattr(order, "limit_price", None) or getattr(order, "stop_price", None)
+        if price_raw is None:
+            raise ValueError(f"unpriceable pending entry {getattr(order, 'id', '?')}")
+        price = abs(float(price_raw))
+        notional = remaining * price
+        if not (math.isfinite(notional) and price > 0):
+            raise ValueError(f"unpriceable pending entry {getattr(order, 'id', '?')}")
+        total += notional
+        if tier_of_coid(getattr(order, "client_order_id", None)) == "daytrade":
+            day += notional
+    return total, day
+
+
+def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float, equity: float,
+                       open_trades: dict, positions_by_symbol: dict, buying_power: float,
+                       maintenance_margin: float, maintenance_rate: float,
+                       open_orders: list, risk_equity: float | None = None) -> tuple[int, str]:
+    """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed."""
     try:
-        alloc = float(_cfg("DAYTRADE_ALLOC_PCT", 0.15))
-        track_a = float(_cfg("DAYTRADE_TRACK_A_PCT", 0.65))
+        risk_basis = min(equity, float(risk_equity)) if risk_equity is not None else equity
+        values = (order_price, stop_price, equity, buying_power, maintenance_margin, maintenance_rate, risk_basis)
+        if requested_qty < 1 or not all(math.isfinite(float(v)) for v in values):
+            return 0, "invalid/non-finite risk input — fail closed"
+        if order_price <= 0 or stop_price <= 0 or equity <= 0 or buying_power <= 0:
+            return 0, "non-positive risk input — fail closed"
+        if maintenance_margin < 0 or not (0 < maintenance_rate <= 1):
+            return 0, "maintenance data unavailable — fail closed"
+
+        reserve = float(_cfg("DAYTRADE_MAIN_BOT_BP_RESERVE_USD", 1200.0))
         cushion = float(_cfg("DAYTRADE_MAINT_CUSHION_USD", 650.0))
-        if equity <= 0 or new_notional <= 0:
-            return False, f"bad inputs equity={equity} new_notional={new_notional}"
-        cap = equity * alloc * track_a
-        cur = _current_daytrade_gross(open_trades, positions_by_symbol)
-        if cur + new_notional > cap + 1e-6:
-            return False, f"gross cap: {cur:.2f}+{new_notional:.2f} > cap {cap:.2f} (alloc {alloc}×A {track_a}×eq {equity:.2f})"
-        if buying_power - new_notional < cushion:
-            return False, f"cushion: BP {buying_power:.2f} − {new_notional:.2f} < ${cushion:.0f}"
-        return True, f"gross {cur:.2f}+{new_notional:.2f} ≤ cap {cap:.2f}; BP ok"
+        day_pct = float(_cfg("DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # PROV:daytier-bp-2026-09-08
+        global_ratio = float(_cfg("MAX_GROSS_EXPOSURE_RATIO", 2.5))
+        risk_pct = float(_cfg("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT", 0.02))  # PROV:daytier-bp-2026-09-08
+        if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, global_ratio, risk_pct)):
+            return 0, "invalid configured risk limit — fail closed"
+
+        account_gross = _account_gross(positions_by_symbol)
+        day_gross = _current_daytrade_gross(open_trades, positions_by_symbol)
+        if not (math.isfinite(day_gross) and day_gross >= 0):
+            return 0, "day-tier gross unreadable — fail closed"
+        pending_all, pending_day = _pending_entry_gross(open_orders, positions_by_symbol)
+
+        rooms = {
+            "global_gross": equity * global_ratio - account_gross - pending_all,
+            "day_gross": equity * day_pct - day_gross - pending_day,
+            "buying_power": buying_power - reserve,
+            # Pending entries have no posted maintenance yet. Charge them at a conservative 100%
+            # until they resolve so a concurrent main-book order cannot consume the cushion between
+            # this snapshot and our submit.
+            "maintenance": (equity - maintenance_margin - cushion - pending_all) / maintenance_rate,
+        }
+        stop_distance = abs(order_price - stop_price)
+        if stop_distance <= 0 or not math.isfinite(stop_distance):
+            return 0, "invalid stop distance — fail closed"
+        risk_qty = math.floor((risk_basis * risk_pct) / stop_distance)
+        notional_room = min(rooms.values())
+        notional_qty = math.floor(max(0.0, notional_room) / order_price)
+        safe_qty = max(0, min(int(requested_qty), int(risk_qty), int(notional_qty)))
+        why = (f"qty {requested_qty}→{safe_qty}; rooms="
+               + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items())
+               + f"; stop-risk cap={risk_qty}sh")
+        return safe_qty, why
     except Exception as e:
-        return False, f"gross-cap check error (fail-closed): {e!r}"
+        return 0, f"entry-cap error (fail-closed): {e!r}"
+
+
+def _account_entry_halt_reason(account) -> str | None:
+    """Return a reason when Alpaca or the durable main-book kill state forbids new entries."""
+    try:
+        if bool(getattr(account, "trading_blocked", False) or getattr(account, "account_blocked", False)):
+            return "Alpaca account is trading-blocked"
+        from execution.risk_manager import _load_kill_state
+        state = _load_kill_state()
+        today = f"{_now_et():%Y-%m-%d}"
+        if state.get("date") == today and (state.get("killed") or state.get("halt_entries")):
+            return "main account kill/halt is active"
+        return None
+    except Exception as e:
+        return f"account halt state unreadable (fail-closed): {e!r}"
 
 
 # ── structural stop price ──────────────────────────────────────────────────────────────────────
@@ -304,6 +413,34 @@ def _final_fill(order_id: str) -> tuple[float, float]:
         return 0.0, 0.0
 
 
+def _confirmed_order_fill(order_id: str, expected_qty: int) -> tuple[bool, float, float]:
+    """Poll an exit order for an actual fill. Returns (order_readable, qty, average price)."""
+    from execution import broker
+    polls = max(1, int(_cfg("DAYTRADE_FILL_POLL_MAX", 8)))
+    wait = float(_cfg("DAYTRADE_FILL_POLL_S", 1.0))
+    latest = (0.0, 0.0)
+    readable = False
+    for i in range(polls):
+        order = broker.get_order(order_id)
+        if order is not None:
+            readable = True
+            try:
+                qty = float(getattr(order, "filled_qty", 0) or 0)
+                price = float(getattr(order, "filled_avg_price", 0) or 0)
+                if math.isfinite(qty) and math.isfinite(price) and qty > 0 and price > 0:
+                    latest = (qty, price)
+                    if qty + 1e-9 >= expected_qty:
+                        return True, *latest
+                status = _enum_text(getattr(order, "status", None))
+                if status in ("canceled", "expired", "rejected", "done_for_day"):
+                    return True, *latest
+            except (TypeError, ValueError):
+                pass
+        if i < polls - 1:
+            time.sleep(wait)
+    return readable, *latest
+
+
 def _stop_is_live(order_obj) -> bool:
     """A submit_day_stop_order return is 'live' iff Alpaca ACCEPTED it: a real order object with a
     non-empty id (the PROTECTION_* sentinels and None are NOT). We TRUST the accepted submit return
@@ -314,6 +451,111 @@ def _stop_is_live(order_obj) -> bool:
     if order_obj is None or order_obj is broker.PROTECTION_ALREADY_HELD or order_obj is broker.PROTECTION_UNKNOWN:
         return False
     return bool(getattr(order_obj, "id", None))
+
+
+def _record_partial_exit(target: dict, order_id: str, fill_qty: int, fill_price: float,
+                         market_price: float, reason: str) -> bool:
+    """Persist a confirmed partial close and reduce the state-owned quantity before any retry."""
+    from strategy import day_tier_logger
+    import trade_logger
+    if fill_qty < 1 or not (math.isfinite(fill_price) and fill_price > 0):
+        return False
+    trade_id = str(target.get("trade_id") or "")
+    symbol = str(target.get("symbol") or "")
+    side = str(target.get("side") or "long")
+    entry = abs(float(target.get("entry_price") or 0.0))
+    if not trade_id or not symbol or not (math.isfinite(entry) and entry > 0):
+        return False
+    realized = round((fill_price - entry) * fill_qty if side == "long"
+                     else (entry - fill_price) * fill_qty, 2)
+    if not day_tier_logger.log_partial_exit_fill(
+        trade_id, symbol, order_id=order_id, exit_reason=reason,
+        fill_price=fill_price, fill_qty=float(fill_qty), market_price_at_exit=market_price,
+        realized_pnl=realized,
+    ):
+        return False
+    state = _load_state()
+    for key, value in state.items():
+        if key.startswith("entry::") and isinstance(value, dict) and value.get("coid") == trade_id:
+            old_qty = abs(int(float(value.get("fill_qty") or value.get("qty") or 0)))
+            value["fill_qty"] = max(0, old_qty - fill_qty)
+            if str(value.get("pending_exit_order_id") or "") == order_id:
+                value["pending_exit_accounted_qty"] = float(value.get("pending_exit_accounted_qty") or 0.0) + fill_qty
+    if not _save_state(state):
+        return False
+    target["qty"] = max(0, int(target.get("qty") or 0) - fill_qty)
+    try:
+        trade_logger.log_event("partial_exit", symbol=symbol, price=fill_price, size=fill_qty,
+                               data_source="daytrade", tier="daytrade", exit_reason=reason,
+                               trade_id=trade_id, realized_pnl=realized)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] partial-exit trade_logger write failed: %s", symbol, e)
+    return True
+
+
+def _set_pending_exit(trade_id: str, order_id: str, requested_qty: int) -> bool:
+    """Persist a close order before polling it, so a later fill cannot be retried blind."""
+    if not trade_id or not order_id or requested_qty < 1:
+        return False
+    state = _load_state()
+    for key, value in state.items():
+        if key.startswith("entry::") and isinstance(value, dict) and value.get("coid") == trade_id:
+            value["pending_exit_order_id"] = order_id
+            value["pending_exit_requested_qty"] = requested_qty
+            value["pending_exit_accounted_qty"] = 0.0
+            return _save_state(state)
+    return False
+
+
+def _clear_pending_exit(trade_id: str) -> None:
+    """Best-effort cleanup after a complete durable exit."""
+    state = _load_state()
+    for key, value in state.items():
+        if key.startswith("entry::") and isinstance(value, dict) and value.get("coid") == trade_id:
+            value["pending_exit_order_id"] = ""
+            value["pending_exit_requested_qty"] = 0
+            value["pending_exit_accounted_qty"] = 0.0
+            _save_state(state)
+            return
+
+
+def _resolve_pending_exit(target: dict) -> bool:
+    """Account a prior forced-close order, then make this tick ineligible to submit another one.
+
+    False means no recorded pending close exists. True means a pending order was observed or was
+    unreadable, so callers must wait a tick after reconciliation rather than risk a duplicate close.
+    """
+    from execution import broker
+    trade_id = str(target.get("trade_id") or "")
+    if not trade_id:
+        return False
+    state = _load_state()
+    entry = next((v for k, v in state.items() if k.startswith("entry::") and isinstance(v, dict)
+                  and v.get("coid") == trade_id), None)
+    if not isinstance(entry, dict):
+        return False
+    order_id = str(entry.get("pending_exit_order_id") or "")
+    if not order_id:
+        return False
+    requested = int(entry.get("pending_exit_requested_qty") or 0)
+    accounted = float(entry.get("pending_exit_accounted_qty") or 0.0)
+    readable, cumulative, price = _confirmed_order_fill(order_id, max(1, requested))
+    if not readable or not (math.isfinite(cumulative) and math.isfinite(accounted)) or cumulative + 1e-9 < accounted:
+        _halt_unresolved_exit(str(target.get("symbol") or ""), "Prior forced-close order is unreadable or inconsistent.")
+        return True
+    delta = int(math.floor(cumulative - accounted))
+    if delta > 0:
+        if price <= 0 or not _record_partial_exit(target, order_id, delta, price, price, "forced_close_late_fill"):
+            _halt_unresolved_exit(str(target.get("symbol") or ""), "Prior forced-close fill could not be persisted.")
+            return True
+    try:
+        order = broker.get_order(order_id)
+        terminal = _enum_text(getattr(order, "status", None)) in ("filled", "canceled", "expired", "rejected", "done_for_day")
+    except Exception:
+        terminal = False
+    if terminal:
+        _clear_pending_exit(trade_id)
+    return True
 
 
 # ── flatten (scoped, B1) ─────────────────────────────────────────────────────────────────────
@@ -361,30 +603,58 @@ def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: 
             mark = 0.0
         if mark <= 0:
             mark = abs(float(entry_price or 0.0))
+        pending_target = {"trade_id": trade_id, "symbol": symbol, "side": position_side,
+                          "entry_price": entry_price, "qty": qty}
+        if _resolve_pending_exit(pending_target):
+            # A prior close may have filled after its original polling budget. Reconcile its
+            # cumulative broker fill before a later tick considers another close.
+            return False
         # Cancel our OWN resting orders (the protective stop) so the market reduce isn't blocked.
         try:
             broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] flatten: tier-scoped cancel raised (continuing): %s", symbol, e)
-        ok = broker.partial_close_position(symbol, int(qty), tier="daytrade")
-        # Mark-based realized for the enrichment log (exact fill is authoritative in Alpaca).
+        close_order = broker.partial_close_position(symbol, int(qty), tier="daytrade", _return_order=True)
+        close_order_id = str(getattr(close_order, "id", "") or "")
+        if not close_order_id:
+            _page(f"[{symbol}] day-tier flatten submit was not attributable to an order ({reason}) — "
+                  f"cannot confirm the exit; {qty} sh may still be OPEN.")
+            return False
+        if not _set_pending_exit(trade_id, close_order_id, qty):
+            _halt_unresolved_exit(symbol, "Forced-close order could not be durably recorded before fill polling.")
+            return False
+        close_readable, closed_qty, closed_px = _confirmed_order_fill(close_order_id, qty)
+        if not close_readable or closed_qty + 1e-9 < qty or closed_px <= 0:
+            partial_qty = int(math.floor(closed_qty)) if math.isfinite(closed_qty) else 0
+            if partial_qty > 0 and closed_px > 0:
+                partial_target = pending_target
+                if not _record_partial_exit(partial_target, close_order_id, partial_qty, closed_px,
+                                            mark, f"{reason}_partial"):
+                    _halt_unresolved_exit(symbol, "A forced-close partial fill could not be persisted safely.")
+            _page(f"[{symbol}] day-tier flatten fill UNCONFIRMED/PARTIAL ({closed_qty:g}/{qty}, {reason}) — "
+                  "exit is not being recorded as complete; next tick retries any live residual.")
+            return False
+        # Broker-confirmed realized P&L; market mark remains a separate audit field.
         ep = abs(float(entry_price or 0.0))
         realized = 0.0
-        if mark > 0 and ep > 0:
-            realized = round((mark - ep) * qty if position_side == "long" else (ep - mark) * qty, 2)
-        if ok:
-            day_tier_logger.log_exit_fill(trade_id or f"DT-{symbol}", symbol,
-                                          order_id=order_id_hint, exit_reason=reason,
-                                          fill_price=mark, fill_qty=float(qty),
-                                          market_price_at_exit=mark, realized_pnl=realized)
-            trade_logger.log_event("exit", symbol=symbol, price=mark, size=int(qty),
+        if ep > 0:
+            realized = round((closed_px - ep) * qty if position_side == "long" else (ep - closed_px) * qty, 2)
+        if not day_tier_logger.log_exit_fill(trade_id or f"DT-{symbol}", symbol,
+                                             order_id=close_order_id, exit_reason=reason,
+                                             fill_price=closed_px, fill_qty=float(qty),
+                                             market_price_at_exit=mark, realized_pnl=realized):
+            _halt_unresolved_exit(symbol, "Forced-close fill could not be durably recorded.")
+            return False
+        try:
+            trade_logger.log_event("exit", symbol=symbol, price=closed_px, size=int(qty),
                                    data_source="daytrade", tier="daytrade", exit_reason=reason,
                                    trade_id=trade_id, realized_pnl=realized)
-            logger.info("[%s] day-tier flattened %d sh (%s) mark %.2f realized~%.2f",
-                        symbol, qty, reason, mark, realized)
-            return True
-        _page(f"[{symbol}] day-tier flatten FAILED ({reason}) — {qty} sh may still be OPEN. Manual check required.")
-        return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] forced-close trade_logger write failed: %s", symbol, e)
+        _clear_pending_exit(trade_id)
+        logger.info("[%s] day-tier flattened %d sh (%s) fill %.2f realized %.2f",
+                    symbol, qty, reason, closed_px, realized)
+        return True
     except Exception as e:  # noqa: BLE001
         _page(f"[{symbol}] day-tier flatten RAISED ({reason}): {e!r} — {qty} sh may be OPEN.")
         return False
@@ -424,7 +694,10 @@ def _flatten_targets() -> dict:
                                     "qty": abs(int(float(v.get("fill_qty") or v.get("qty") or 0))),
                                     "entry_price": float(v.get("fill_px") or v.get("stop_px") or 0.0),
                                     "trade_id": str(v.get("coid") or ""),
-                                    "order_id": str(v.get("order_id") or "")}
+                                    "order_id": str(v.get("order_id") or ""),
+                                    "stop_order_id": str(v.get("stop_order_id") or "")}
+                elif sym and sym in targets and not targets[sym].get("stop_order_id"):
+                    targets[sym]["stop_order_id"] = str(v.get("stop_order_id") or "")
     except Exception as e:  # noqa: BLE001
         logger.warning("flatten targets: state read failed: %s", e)
     return targets
@@ -507,7 +780,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         entry_ref = float(entry_ref)  # type: ignore[arg-type]  # None/non-numeric caught below
     except (TypeError, ValueError):
         return False
-    if entry_ref <= 0:
+    if not math.isfinite(entry_ref) or entry_ref <= 0:
         return False
 
     key = _entry_key(symbol, bar_id)
@@ -554,14 +827,39 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.warning("[%s] day-tier entry aborted — no sane structural stop", symbol)
             return False
 
+        # Bound against the actual marketable-limit price, not the signal reference. This closes
+        # the long-side +slippage boundary breach where 15×$100 passed a $1,500 cap but the submitted
+        # 15×$100.20 order reserved $1,503.
+        slip = float(_cfg("DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))
+        limit_px = round(entry_ref * (1.0 + slip) if direction == "long" else entry_ref * (1.0 - slip), 2)
+        if not (math.isfinite(limit_px) and limit_px > 0):
+            logger.warning("[%s] day-tier entry aborted — invalid marketable-limit price", symbol)
+            return False
+
         # Live book (fail-CLOSED) — used for BOTH the opposite-side guard and the B6 gross cap.
         try:
             acct = broker.get_account()
             buying_power = float(getattr(acct, "buying_power", 0.0) or 0.0)
+            live_equity = float(getattr(acct, "equity", 0.0) or 0.0)
+            day_start_raw = getattr(acct, "last_equity", None)
+            maintenance_raw = getattr(acct, "maintenance_margin", None)
+            if day_start_raw is None or maintenance_raw is None:
+                raise ValueError("account risk fields missing")
+            day_start_equity = float(day_start_raw)
+            maintenance_margin = float(maintenance_raw)
             positions = broker.get_open_positions()
             pos_by_sym = {getattr(p, "symbol", None): p for p in (positions or [])}
+            open_orders = broker.get_open_orders()
+            maintenance_rate = broker.get_asset_maintenance_margin_rate(symbol)
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] day-tier entry aborted — live book unreadable (fail-closed): %s", symbol, e)
+            return False
+        halt_reason = _account_entry_halt_reason(acct)
+        if halt_reason:
+            logger.warning("[%s] day-tier entry aborted — %s", symbol, halt_reason)
+            return False
+        if open_orders is None or maintenance_rate is None:
+            logger.warning("[%s] day-tier entry aborted — order book or maintenance rate unreadable (fail-closed)", symbol)
             return False
 
         # OPPOSITE-SIDE CO-HOLD GUARD (masked-loss D): never open a side opposite an existing
@@ -577,11 +875,15 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                             "(no cross-tier netting)", symbol, getattr(existing, "side", "?"), direction)
                 return False
 
-        new_notional = qty * entry_ref
-        ok, why = _gross_cap_ok(new_notional, equity, open_trades, pos_by_sym, buying_power)
-        if not ok:
+        qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
+                                      buying_power, maintenance_margin, maintenance_rate, open_orders,
+                                      risk_equity=day_start_equity)
+        if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False
+        logger.info("[%s] day-tier wire-time sizing — %s", symbol, why)
+        size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
+                "wire_cap_reason": why}
 
         # B3: mint the coid + WRITE the idempotency record BEFORE submit — and FAIL CLOSED if the
         # write does not persist (Finding C: a swallowed write let the same ENTER re-fire → double).
@@ -594,9 +896,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             return False
 
         # Marketable-limit entry (cap the worst fill vs a naked market order).
-        slip = float(_cfg("DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))
         order_side = "buy" if direction == "long" else "sell"
-        limit_px = round(entry_ref * (1.0 + slip) if direction == "long" else entry_ref * (1.0 - slip), 2)
         day_tier_logger.log_decision(decision_id or coid, symbol, decision=decision, trigger=trigger,
                                      size=size, trade_id=coid)
         order = broker.submit_limit_order(symbol, qty, order_side, limit_px, tier="daytrade")
@@ -663,7 +963,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         day_tier_logger.log_entry_fill(entry_coid, symbol, order_id=entry_order_id, decision_id=decision_id or coid,
                                        side=direction, requested_limit=limit_px, fill_price=fill_px,
                                        fill_qty=float(filled_qty_i), market_price_at_fill=mkt_at_fill,
-                                       equity_at_entry=equity, budget=float(size.get("budget") or 0.0),
+                                       equity_at_entry=live_equity, budget=float(size.get("budget") or 0.0),
                                        notional=round(filled_qty_i * fill_px, 2))
         trade_logger.log_event("entry", symbol=symbol, price=fill_px, size=filled_qty_i,
                                data_source="daytrade", tier="daytrade", direction=direction,
@@ -693,7 +993,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             if _stop_is_live(stop_obj):
                 # Mark protected BEFORE logging so a log call can never leave protected=False and
                 # trigger a false-flatten of a genuinely-live stop (cold-2nd T5).
-                state[key]["state"] = "protected"
+                state[key].update(state="protected", stop_order_id=str(getattr(stop_obj, "id", "")))
                 _save_state(state)
                 protected = True
                 day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=str(getattr(stop_obj, "id", "")),
@@ -744,9 +1044,36 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         return False
 
 
-# ── tier-kill (25% of tier budget) ───────────────────────────────────────────────────────────
-def tier_kill_check(equity: float) -> bool:
-    """If the day-tier's OPEN unrealized loss breaches DAYTRADE_TIER_KILL_PCT of the tier budget,
+# ── tier-kill ────────────────────────────────────────────────────────────────────────────────
+def _realized_loss_today() -> tuple[float, bool]:
+    """Loss-only realized floor from durable day-tier exits; gains cannot mask a later loss."""
+    from strategy import day_tier_logger
+    events, readable = day_tier_logger.read_events_checked()
+    if not readable:
+        return 0.0, False
+    total = 0.0
+    today = _now_et().date()
+    try:
+        for ev in events:
+            if ev.get("event") not in ("exit_fill", "partial_exit_fill"):
+                continue
+            ts = datetime.fromisoformat(str(ev.get("ts") or ""))
+            if ts.astimezone(ET).date() != today:
+                continue
+            pnl_raw = ev.get("realized_pnl")
+            if pnl_raw is None:
+                return 0.0, False
+            pnl = float(pnl_raw)
+            if not math.isfinite(pnl):
+                return 0.0, False
+            total += min(0.0, pnl)
+        return total, True
+    except Exception:
+        return 0.0, False
+
+
+def tier_kill_check(equity: float, day_start_equity: float | None = None) -> bool:
+    """If cumulative realized losses plus OPEN unrealized P&L breach the tier loss budget,
     force-flat the whole tier and mark it killed for the day. Reads the LIVE book. An unreadable
     quote FAILS CLOSED (masked-loss Finding B): it falls back to Alpaca's own unrealized_pl for the
     lot (prorated by the day-tier's share) and PAGES if even that is unavailable — never silently
@@ -755,12 +1082,51 @@ def tier_kill_check(equity: float) -> bool:
         return False
     from execution import broker
     try:
-        alloc = float(_cfg("DAYTRADE_ALLOC_PCT", 0.15))
-        kill_pct = float(_cfg("DAYTRADE_TIER_KILL_PCT", 0.25))
-        tier_budget = equity * alloc
-        if tier_budget <= 0:
-            return False
+        state = _load_state()
+        today_key = f"{_now_et():%Y%m%d}"
+        if state.get(_KILL_KEY) == today_key:
+            # A kill latches entry permission, but liquidation is not one-shot: retry every tick
+            # until no owned target remains. A transient close failure must not become permanent.
+            residual = _flatten_targets()
+            if residual:
+                closed = force_flat_all(reason="tier_kill_retry")
+                if closed < len(residual):
+                    _page(f"DAY-TIER KILL remains active: flattened {closed}/{len(residual)} residual "
+                          "position(s); retrying next tick.")
+            return True
+        if state.get(_HALT_KEY) == today_key:
+            return True
+        # Kill re-based to a DIRECT fraction of EQUITY (2026-09-08 BP sizing) — the old
+        # −25%×(equity×alloc) ≈ −$94 basis is a ~1.4% move = intraday noise once positions are BP-sized.
+        # Account-terms tier kill; validate_config asserts it stays < the 7% paper account kill.
+        kill_equity_pct = float(_cfg("DAYTRADE_TIER_KILL_EQUITY_PCT", 0.04))  # PROV:daytier-bp-2026-09-08
+        baseline_raw = day_start_equity if day_start_equity is not None else equity
+        baseline = float(baseline_raw)
+        if not (math.isfinite(baseline) and baseline > 0):
+            state = _load_state()
+            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
+            _save_state(state)
+            _page("DAY-TIER tier-kill baseline unreadable — halting new entries for the day (fail-closed).")
+            return True
+        kill_threshold = kill_equity_pct * baseline
+        realized_loss, realized_readable = _realized_loss_today()
+        if not realized_readable:
+            state = _load_state()
+            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
+            _save_state(state)
+            _page("DAY-TIER realized-loss log unreadable — halting new entries for the day (fail-closed); "
+                  "existing protected positions remain managed.")
+            return True
         targets = _flatten_targets()
+        if realized_loss <= -abs(kill_threshold):
+            closed = force_flat_all(reason="tier_kill_realized") if targets else 0
+            state = _load_state()
+            state[_KILL_KEY] = today_key
+            _save_state(state)
+            if targets and closed < len(targets):
+                _page(f"DAY-TIER KILL from realized losses: flattened {closed}/{len(targets)} position(s); "
+                      "residual liquidation will retry next tick.")
+            return True
         if not targets:
             return False
         positions = broker.get_open_positions()
@@ -778,28 +1144,35 @@ def tier_kill_check(equity: float) -> bool:
             except Exception:
                 cur = 0.0
             side = tgt.get("side", "long")
-            if cur > 0 and ent > 0 and q > 0:
+            if all(math.isfinite(v) and v > 0 for v in (cur, ent, q)):
                 upl += (cur - ent) * q if side == "long" else (ent - cur) * q
                 continue
             # Quote unreadable → fall back to Alpaca's own unrealized_pl, prorated to our share.
             try:
                 pos_upl = float(getattr(pos, "unrealized_pl", 0.0) or 0.0)
                 pos_qty = abs(float(getattr(pos, "qty", 0.0) or 0.0))
-                if pos_qty > 0 and q > 0:
+                if (math.isfinite(pos_upl) and math.isfinite(pos_qty) and math.isfinite(q)
+                        and pos_qty > 0 and q > 0):
                     upl += pos_upl * min(1.0, q / pos_qty)
                     continue
             except Exception:
                 pass
             blind = True  # could not evaluate this lot's P&L at all
         if blind:
-            _page(f"DAY-TIER tier-kill check is BLIND on ≥1 lot (no quote, no unrealized_pl) — "
-                  f"cannot fully evaluate the −{kill_pct:.0%} kill this tick. Manual check advised.")
-        if upl <= -abs(kill_pct * tier_budget):
-            _page(f"DAY-TIER KILL: open unrealized {upl:.2f} ≤ −{kill_pct:.0%} of tier budget "
-                  f"${tier_budget:.2f} — force-flattening the tier for the day.")
+            _page("DAY-TIER tier-kill check is BLIND on ≥1 lot (no quote, no unrealized_pl) — "
+                  "halting new entries for the day; protected positions remain managed.")
+            state = _load_state()
+            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
+            _save_state(state)
+            return True
+        loss_measure = realized_loss + upl
+        if loss_measure <= -abs(kill_threshold):
+            _page(f"DAY-TIER KILL: realized-loss floor {realized_loss:.2f} + open unrealized {upl:.2f} "
+                  f"= {loss_measure:.2f} ≤ −{kill_equity_pct:.0%} of SOD equity ${baseline:.2f} "
+                  f"(−${abs(kill_threshold):.2f}) — force-flattening the tier for the day.")
             force_flat_all(reason="tier_kill")
             state = _load_state()
-            state[_KILL_KEY] = f"{_now_et():%Y%m%d}"
+            state[_KILL_KEY] = today_key
             _save_state(state)
             return True
         return False
@@ -868,6 +1241,107 @@ def _mark_symbol_flattened(symbol: str) -> None:
             _save_state(st)
     except Exception as e:  # noqa: BLE001
         logger.debug("_mark_symbol_flattened(%s) failed: %s", symbol, e)
+
+
+def _record_confirmed_stop_exit(target: dict) -> "bool | None":
+    """Heal a broker-filled stop. True=recorded, False=no fill, None=unresolved/partial."""
+    from strategy import day_tier_logger
+    import trade_logger
+    trade_id = str(target.get("trade_id") or "")
+    if not trade_id:
+        return False
+    events, readable = day_tier_logger.read_events_checked(trade_id)
+    if not readable:
+        return None
+    if any(e.get("event") == "exit_fill" for e in events):
+        return True
+    stop_ids = [str(e.get("stop_order_id") or "") for e in events if e.get("event") == "stop_placed"]
+    state_stop_id = str(target.get("stop_order_id") or "")
+    if state_stop_id:
+        stop_ids.append(state_stop_id)
+    expected = int(target.get("qty") or 0)
+    if expected < 1:
+        return None
+    if not stop_ids:
+        return False
+    any_readable = False
+    any_unreadable = False
+    for stop_id in reversed([s for s in stop_ids if s]):
+        order_readable, qty, price = _confirmed_order_fill(stop_id, expected)
+        any_readable = any_readable or order_readable
+        any_unreadable = any_unreadable or not order_readable
+        # Alpaca reports filled_qty cumulatively. Durable partial-exit rows are the
+        # watermark: only an unrecorded delta may reduce day-tier ownership.
+        try:
+            accounted = sum(
+                abs(float(e.get("fill_qty") or 0.0)) for e in events
+                if e.get("event") == "partial_exit_fill" and str(e.get("order_id") or "") == stop_id
+            )
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(qty) and math.isfinite(accounted)) or qty + 1e-9 < accounted:
+            return None
+        delta = qty - accounted
+        if delta > 1e-9:  # PROV:daytier-bp-2026-09-08 — floating fill-quantity tolerance
+            partial_qty = int(math.floor(delta))
+            if partial_qty < 1 or price <= 0:
+                return None
+            if partial_qty + 1e-9 < expected:
+                if _record_partial_exit(target, stop_id, partial_qty, price, price,
+                                        "protective_stop_partial"):
+                    return False
+                return None
+            entry = abs(float(target.get("entry_price") or 0.0))
+            side = str(target.get("side") or "long")
+            if not (math.isfinite(entry) and entry > 0):
+                return None
+            realized = round((price - entry) * expected if side == "long" else (entry - price) * expected, 2)
+            if not day_tier_logger.log_exit_fill(
+                trade_id, str(target.get("symbol") or ""), order_id=stop_id,
+                exit_reason="protective_stop", fill_price=price, fill_qty=float(expected),
+                market_price_at_exit=price, realized_pnl=realized,
+            ):
+                return None
+            try:
+                trade_logger.log_event("exit", symbol=str(target.get("symbol") or ""), price=price,
+                                       size=expected, data_source="daytrade", tier="daytrade",
+                                       exit_reason="protective_stop", trade_id=trade_id,
+                                       realized_pnl=realized)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] protective-stop trade_logger write failed: %s", target.get("symbol"), e)
+            return True
+        if qty + 1e-9 < expected or price <= 0:
+            continue
+        entry = abs(float(target.get("entry_price") or 0.0))
+        side = str(target.get("side") or "long")
+        if not (math.isfinite(entry) and entry > 0):
+            return None
+        realized = round((price - entry) * expected if side == "long" else (entry - price) * expected, 2)
+        if not day_tier_logger.log_exit_fill(
+            trade_id, str(target.get("symbol") or ""), order_id=stop_id,
+            exit_reason="protective_stop", fill_price=price, fill_qty=float(expected),
+            market_price_at_exit=price, realized_pnl=realized,
+        ):
+            return None
+        trade_logger.log_event("exit", symbol=str(target.get("symbol") or ""), price=price,
+                               size=expected, data_source="daytrade", tier="daytrade",
+                               exit_reason="protective_stop", trade_id=trade_id,
+                               realized_pnl=realized)
+        return True
+    return False if any_readable and not any_unreadable else None
+
+
+def _halt_unresolved_exit(symbol: str, detail: str) -> None:
+    """Persist a no-entry halt and page once per symbol/day until exit P&L is reconciled."""
+    state = _load_state()
+    today = f"{_now_et():%Y%m%d}"
+    page_key = f"_unresolved_exit::{symbol}"
+    first = state.get(page_key) != today
+    state[_HALT_KEY] = today
+    state[page_key] = today
+    _save_state(state)
+    if first:
+        _page(f"[{symbol}] day-tier exit is unresolved — halting new entries for the day. {detail}")
 
 
 def reconcile_open_state() -> dict:
@@ -961,6 +1435,16 @@ def reconcile_open_state() -> dict:
                 if sym in submitted:
                     _page(f"[{sym}] day-tier reconcile: 'submitted' order filled {want} but position "
                           f"absent (endpoint lag) — NOT retiring; next tick reconciles.")
+                elif _record_confirmed_stop_exit(tgt):
+                    summary["cleared"] += 1
+                    _mark_symbol_flattened(sym)
+                    logger.info("[%s] day-tier reconcile: recorded broker-confirmed protective-stop exit", sym)
+                else:
+                    _halt_unresolved_exit(
+                        sym,
+                        "Position is absent but no complete broker-confirmed protective-stop fill "
+                        "could be recovered; realized loss cannot be bounded safely.",
+                    )
                 continue
             stop_state = _has_live_daytrade_stop(sym)
             if stop_state is True:
@@ -971,6 +1455,21 @@ def reconcile_open_state() -> dict:
                 _page(f"[{sym}] day-tier reconcile: order book unreadable — cannot confirm a "
                       f"protective stop; NOT flattening (fail-safe). Manual check.")
                 continue
+            exit_state = _record_confirmed_stop_exit(tgt)
+            if exit_state is True:
+                summary["cleared"] += 1
+                _mark_symbol_flattened(sym)
+                logger.info("[%s] day-tier reconcile: recorded filled stop; remaining net belongs to another tier", sym)
+                continue
+            if exit_state is None:
+                summary["unreadable"] += 1
+                _halt_unresolved_exit(
+                    sym,
+                    "No live protective stop remains, but its terminal fill is unreadable or partial; "
+                    "refusing to close an unattributable cross-tier quantity.",
+                )
+                continue
+            want = int(tgt.get("qty") or 0)
             # NAKED (no live DT stop) → scoped-flatten the day-tier's OWN CONFIRMED qty. flatten_position's
             # net-side/qty guard additionally protects any co-held tier.
             held = abs(int(float(getattr(pos, "qty", 0) or 0)))

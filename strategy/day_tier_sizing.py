@@ -1,24 +1,29 @@
 # ruff: noqa: E501
 """
-strategy/day_tier_sizing.py — Day-Tier position SIZING (PURE, READ-ONLY, INERT).
+strategy/day_tier_sizing.py — Day-Tier position SIZING (PURE budget fn — no order; wired to the LIVE runner).
 
 Sixth increment of the day-tier engine rebuild. Turns a triggered day-tier decision into a
 budget-bounded, conviction-scaled SHARE COUNT (design §2 "size per meta-label conviction, bounded
 by tier allocation + gross-notional cap"; §3 risk; §7b.6 allocation split). It is a PURE function:
 equity is passed IN (no broker call here), so it is deterministic and fully unit-testable, and it
 RETURNS a number — it places NO order (the order + the live equity/book fetch + the account-level
-gross-notional cap are Layer C's later RISK-PATH increments, gated with the full board + masked-loss
-seat when the tier is wired to trade). Wired to NOTHING today; committed INERT (the lost-engine lesson).
+gross-notional cap live at WIRE-TIME in day_trade_manager._bounded_entry_qty). Wired to the LIVE runner
+(run_day_tier.py) 2026-09-08 — still a PURE budget function here: no order, no broker call, deterministic
+and fully unit-testable (equity + buying_power are passed IN).
 
 THE SIZING (min()-ONLY — the conservative posture, never a max/upsize):
-  tier_budget   = equity × DAYTIER_ALLOC_PCT                       (the whole day-tier slice, §7b.6: 15%)
-  track_budget  = tier_budget × (TRACK_A_SHARE | TRACK_B_SHARE)    (A 65% / B 35%, §7b.6)
+  Track A: track_budget = min(buying_power × DAYTRADE_TRACK_A_PER_TRADE_BP_PCT,
+                              equity × DAYTRADE_TRACK_A_EQUITY_CEILING_PCT)
+  Track B: track_budget = equity × DAYTIER_ALLOC_PCT × TRACK_B_SHARE        (CASH-only; unchanged)
   target        = track_budget × conviction                       (conviction ∈ [0,1] scales within budget)
   notional      = min(target, track_budget)                       (never exceed the track's own budget)
   shares        = floor(notional / entry_ref)                     (RC-7: whole-share floor; 0 = can't afford → skip)
-This NEVER increases size beyond a slice of equity, and conviction only ever SHRINKS it from that
-slice. Track B is cash-only (§7b.6): its notional is already bounded by track_budget (a slice of
-equity, not margin) and flagged cash_only for the order layer to enforce no-margin.
+Conviction only ever SHRINKS the budget. Track A sizes from Alpaca's current BUYING POWER and is
+flat-by-close; a missing/non-positive/non-finite BP → size 0 (fail-CLOSED — NEVER an equity fallback,
+which would mask the failure and resurrect the old ~$243 equity cap). This function is the PER-TRADE
+budget ONLY; the AGGREGATE Track-A gross cap, the main-bot BP reserve, and the maintenance cushion are
+enforced at WIRE-TIME in day_trade_manager._bounded_entry_qty (board + Gro + GAI + masked-loss seat
+2026-09-08; design logs/design_records/day_tier_bp_sizing_2026-09-08.md). Track B is cash-only.
 
 WHAT IS NOT HERE (deferred to the wired Layer C, on purpose): the account-level GROSS-notional cap
 across concurrent positions (needs the live book), the ~$650 maintenance-cushion guard, the per-tier
@@ -33,6 +38,8 @@ from __future__ import annotations
 import logging
 import math
 
+import config
+
 logger = logging.getLogger(__name__)
 
 # Allocation policy (board-aligned §7b.6 — Thorp/Taleb/Dalio unanimous DIVIDE). PROV-tagged: these
@@ -45,15 +52,17 @@ _TRACK_A_SHARE = 0.65       # PROV:daytier-sizing — Track A (GEX-core) share o
 _TRACK_B_SHARE = 0.35       # PROV:daytier-sizing — Track B (movers) share; cash-only
 
 
-def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, track: str = "A") -> dict:
-    """Budget-bounded, conviction-scaled share count for a triggered day-tier decision. PURE + INERT.
+def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying_power=None, track: str = "A") -> dict:
+    """Budget-bounded, conviction-scaled share count for a triggered day-tier decision. PURE (no order).
 
     Args:
-      symbol    : the underlying.
-      decision  : a strategy.day_tier_decision result (needs would_consider + conviction).
-      entry_ref : the entry reference price (e.g. entry_trigger["entry_ref"]).
-      equity    : account equity (passed IN — no broker call here; the caller fetches it live).
-      track     : "A" (GEX-core, 65%) or "B" (movers, 35%, cash-only).
+      symbol       : the underlying.
+      decision     : a strategy.day_tier_decision result (needs would_consider + conviction).
+      entry_ref    : the entry reference price (e.g. entry_trigger["entry_ref"]).
+      equity       : account equity (passed IN — no broker call here; the caller fetches it live).
+      buying_power : account buying power (Track A budget basis; passed IN). None/≤0/non-finite on
+                     Track A → size 0, size_ok False (fail-CLOSED, no equity fallback). Ignored on Track B.
+      track        : "A" (GEX-core, sizes off buying power) or "B" (movers, cash-only).
 
     Returns:
       {"symbol", "shares": int, "notional", "budget", "track", "cash_only": bool,
@@ -91,8 +100,24 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, track:
             result["reason"] = f"non-positive equity({eq})/entry_ref({px})/conviction({conviction}) — size 0"
             return result
 
-        track_share = _TRACK_A_SHARE if _track == "A" else _TRACK_B_SHARE
-        track_budget = eq * _DAYTIER_ALLOC_PCT * track_share
+        if _track == "A":
+            # Track A sizes off BUYING POWER (Rafael 2026-09-08; config Track-A BP block). Missing/
+            # non-positive/non-finite BP → size 0, size_ok False (fail-CLOSED; NEVER an equity fallback —
+            # that would mask the failure and resurrect the old ~$243 equity cap).
+            try:
+                bp = float(buying_power) if buying_power is not None else 0.0
+            except (TypeError, ValueError):
+                bp = 0.0
+            if not (math.isfinite(bp) and bp > 0):
+                result["reason"] = f"track A: buying_power unavailable ({buying_power}) — size 0 (fail-closed)"
+                logger.info("[%s] day-tier SIZE: %s", symbol, result["reason"])
+                return result
+            per_trade_pct = float(getattr(config, "DAYTRADE_TRACK_A_PER_TRADE_BP_PCT", 0.20))  # PROV:daytier-bp-2026-09-08
+            equity_ceiling_pct = float(getattr(config, "DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # PROV:daytier-bp-2026-09-08
+            track_budget = min(bp * per_trade_pct, eq * equity_ceiling_pct)
+        else:
+            # Track B stays CASH-ONLY (settled-cash proxy = equity slice) — unchanged; B is OFF day-1.
+            track_budget = eq * _DAYTIER_ALLOC_PCT * _TRACK_B_SHARE
         result["budget"] = round(track_budget, 2)
 
         # min()-only: conviction scales DOWN from the track budget; the budget is the hard cap.
@@ -108,14 +133,14 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, track:
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
                 f"= ${target_notional:.2f} → {result['shares']} sh @ ${px:.2f} "
                 f"(${result['notional']:.2f}{', cash-only' if result['cash_only'] else ''}) "
-                f"— INERT, no order placed; account gross cap + cushion enforced at wire-time"
+                f"— per-trade budget; aggregate gross cap + main-bot reserve + cushion enforced at wire-time"
             )
         else:
             result["reason"] = (
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
                 f"= ${target_notional:.2f} < 1 share @ ${px:.2f} — size 0 (skip)"
             )
-        logger.info("[%s] day-tier SIZE (INERT): %s", symbol, result["reason"])
+        logger.info("[%s] day-tier SIZE: %s", symbol, result["reason"])
         return result
     except Exception as _e:  # a pure sizing helper must NEVER raise into a caller
         result["shares"] = 0

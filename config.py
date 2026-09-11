@@ -801,7 +801,24 @@ DAYTRADE_FORCE_FLAT_MINUTES = 20     # force-liquidate the tier's OWN positions 
                                      # so the day-tier flattens BEFORE the pre-close sweep places any intraday-tagged
                                      # DAY stop on a still-open day-tier lot (avoids the mis-tagged-stop flatten
                                      # deadlock — masked-loss seat C2, 2026-09-02).
-DAYTRADE_MAINT_CUSHION_USD  = 650.0  # do not let day-tier gross notional push the account maintenance cushion below this
+DAYTRADE_MAINT_CUSHION_USD  = 650.0  # minimum equity−maintenance_margin dollars left after a proposed entry
+
+# ─── Track-A BUYING-POWER sizing (Rafael directive 2026-09-08; board + Gro + GAI + masked-loss seat) ──
+# Replaces the equity-slice sizing that could not afford any name > ~$243/share (MSFT @ $491 was
+# blocked live 2026-09-08 despite a valid ENTER). Track A now sizes from Alpaca's current
+# ``buying_power`` field and remains flat by close, bounded by account and tier ceilings.
+# Design + full board synthesis: logs/design_records/day_tier_bp_sizing_2026-09-08.md. All four voices
+# converged on: (a) a modest per-trade BP fraction for a ZERO-history edge, (b) an EQUITY-relative
+# aggregate ceiling that binds the correlated-gap tail (kills are tick-evaluated → gappable), (c) an
+# explicit main-bot BP reserve (both processes draw from the same current buying-power pool),
+# (d) a re-based tier kill. PROV — structural starting values, no day-tier P&L history yet; recalibrate.
+DAYTRADE_TRACK_A_PER_TRADE_BP_PCT   = 0.20    # PROV:daytier-bp-2026-09-08 — per-trade Track-A budget = this × buying_power × conviction
+DAYTRADE_TRACK_A_EQUITY_CEILING_PCT = 0.60    # PROV:daytier-bp-2026-09-08 — aggregate Track-A gross ≤ this × EQUITY (binds the gap tail)
+DAYTRADE_MAIN_BOT_BP_RESERVE_USD    = 1200.0  # PROV — buying power reserved for the MAIN bot (day-tier = residual claimant)
+DAYTRADE_TIER_KILL_EQUITY_PCT       = 0.04    # PROV:daytier-bp-2026-09-08 — tier force-flat + halt at −4% of EQUITY (re-based from the
+                                              # −25%×tier-budget ≈ −$94 basis, a ~1.4% move = noise once positions are
+                                              # BP-sized). Account-terms kill; MUST stay < MAX_DAILY_LOSS_PCT (paper 7%).
+DAYTRADE_PER_TRADE_RISK_EQUITY_PCT  = 0.02    # PROV:daytier-bp-2026-09-08 — stop-distance loss per new trade ≤2% of SOD equity
 
 # Per-run API-call cap (reliability seat C5 + ANTI-SILO API-budget isolation §7b.2):
 # bound the fast loop's Alpaca calls so the 5-min main scan's T1 fetches are never crowded out.
@@ -937,11 +954,25 @@ def validate_config():
         )
     # Only enforce the account-terms nesting when the tier is ARMED — while DARK it
     # contributes zero risk, and the day-tier only ever runs on the paper 7% kill
-    # (0.0375 < 0.07). If it were ever armed under the 3% live/default profile this
-    # correctly fails CLOSED (0.0375 !< 0.03), blocking a genuinely-unnested config.
-    if DAYTRADE_ENABLED and DAYTRADE_TIER_KILL_PCT * DAYTRADE_ALLOC_PCT >= MAX_DAILY_LOSS_PCT:
+    # (0.04 < 0.07). If it were ever armed under the 3% live/default profile this
+    # correctly fails CLOSED (0.04 !< 0.03), blocking a genuinely-unnested config.
+    # The tier kill is now DAYTRADE_TIER_KILL_EQUITY_PCT — a DIRECT fraction of EQUITY
+    # (see tier_kill_check). This guard MUST reference that same constant; the prior
+    # DAYTRADE_TIER_KILL_PCT×DAYTRADE_ALLOC_PCT product no longer drives the kill, so
+    # validating it would be a phantom check (masked-loss seat 2026-09-08).
+    if not (0 < DAYTRADE_TIER_KILL_EQUITY_PCT < 1.0):
+        errors.append(f"DAYTRADE_TIER_KILL_EQUITY_PCT ({DAYTRADE_TIER_KILL_EQUITY_PCT}) must be between 0 and 1")
+    if not (0 < DAYTRADE_TRACK_A_PER_TRADE_BP_PCT <= 1.0):
+        errors.append("DAYTRADE_TRACK_A_PER_TRADE_BP_PCT must be in (0, 1]")
+    if not (0 < DAYTRADE_TRACK_A_EQUITY_CEILING_PCT <= MAX_GROSS_EXPOSURE_RATIO):
+        errors.append("DAYTRADE_TRACK_A_EQUITY_CEILING_PCT must be positive and no larger than the global gross cap")
+    if not (0 < DAYTRADE_PER_TRADE_RISK_EQUITY_PCT < DAYTRADE_TIER_KILL_EQUITY_PCT):
+        errors.append("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT must be positive and below the tier kill")
+    if DAYTRADE_MAIN_BOT_BP_RESERVE_USD < 0 or DAYTRADE_MAINT_CUSHION_USD < 0:
+        errors.append("Day-tier buying-power reserve and maintenance cushion cannot be negative")
+    if DAYTRADE_ENABLED and DAYTRADE_TIER_KILL_EQUITY_PCT >= MAX_DAILY_LOSS_PCT:
         errors.append(
-            f"Day-tier kill in account terms ({DAYTRADE_TIER_KILL_PCT * DAYTRADE_ALLOC_PCT:.4f}) "
+            f"Day-tier kill in account terms ({DAYTRADE_TIER_KILL_EQUITY_PCT:.4f}) "
             f"must be < account daily kill ({MAX_DAILY_LOSS_PCT}) when DAYTRADE_ENABLED"
         )
     if DAYTRADE_FORCE_FLAT_MINUTES <= PRECLOSE_SWEEP_MINUTES:

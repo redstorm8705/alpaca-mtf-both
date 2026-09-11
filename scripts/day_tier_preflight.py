@@ -46,15 +46,30 @@ logging.basicConfig(level=logging.WARNING, format="%(asctime)s | %(levelname)s |
 logger = logging.getLogger("day_tier_preflight")
 
 
-def _fetch_equity() -> float:
-    """Read-only account equity for the sizing step. 0.0 if unavailable (sizing then reports so)."""
+def _fetch_risk_snapshot() -> dict:
+    """Read-only account/book snapshot used by the same wire-time sizing guard as production."""
     try:
-        from reporting import pnl_ledger as pl
-        acct = pl.fetch_account() or {}
-        return float(acct.get("equity", 0.0) or 0.0)
+        from execution import broker
+        from strategy import day_tier_logger
+        acct = broker.get_account()
+        positions = broker.get_open_positions()
+        orders = broker.get_open_orders()
+        last_equity_raw = getattr(acct, "last_equity", None)
+        if last_equity_raw is None:
+            raise ValueError("account last_equity is missing")
+        return {
+            "equity": float(getattr(acct, "equity", 0.0) or 0.0),
+            "last_equity": float(last_equity_raw),
+            "buying_power": float(getattr(acct, "buying_power", 0.0) or 0.0),
+            "maintenance_margin": float(getattr(acct, "maintenance_margin", 0.0) or 0.0),
+            "positions": {getattr(p, "symbol", None): p for p in (positions or [])},
+            "orders": orders,
+            "open_trades": day_tier_logger.open_trades_from_log(),
+        }
     except Exception as e:
-        logger.warning("equity fetch failed (%s) — sizing step will report equity_unavailable", e)
-        return 0.0
+        logger.warning("risk snapshot failed (%s) — wire-time preflight will fail closed", e)
+        return {"equity": 0.0, "last_equity": 0.0, "buying_power": 0.0, "maintenance_margin": 0.0,
+                "positions": {}, "orders": None, "open_trades": {}}
 
 
 def _trunc(s, n: int = 80) -> str:
@@ -62,10 +77,11 @@ def _trunc(s, n: int = 80) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def evaluate_universe(universe, equity: float) -> list:
+def evaluate_universe(universe, equity: float, buying_power: float = 0.0,
+                      risk_snapshot: dict | None = None) -> list:
     """Run the live decision→trigger→size pipeline read-only for each symbol; return per-symbol rows.
     Mirrors run_day_tier.py's loop (decision.would_consider → trigger==ENTER → size.size_ok) but never
-    calls place_entry."""
+    calls place_entry. Track A sizes off buying_power (BP sizing 2026-09-08)."""
     rows = []
     for sym in universe:
         row = {"symbol": sym, "would_consider": None, "act_ok": None, "gex_label": None,
@@ -90,7 +106,8 @@ def evaluate_universe(universe, equity: float) -> list:
                 rows.append(row)
                 continue
 
-            z = compute_day_tier_size(sym, d, t.get("entry_ref"), equity, track="A")
+            z = compute_day_tier_size(sym, d, t.get("entry_ref"), equity,
+                                      buying_power=buying_power, track="A")
             z = z if isinstance(z, dict) else {}
             row["size_ok"] = bool(z.get("size_ok"))
             row["shares"] = z.get("shares")
@@ -99,6 +116,40 @@ def evaluate_universe(universe, equity: float) -> list:
                 row["reason"] = _trunc(z.get("reason"))
                 rows.append(row)
                 continue
+
+            if risk_snapshot is not None:
+                from execution import broker, day_trade_manager as dtm
+                direction = t.get("direction")
+                entry_ref_raw = t.get("entry_ref")
+                if direction not in ("long", "short") or entry_ref_raw is None:
+                    row["stop"] = "WIRE_RISK_UNKNOWN"
+                    row["reason"] = "direction/entry reference unavailable — fail closed"
+                    rows.append(row)
+                    continue
+                entry_ref = float(entry_ref_raw)
+                stop_px = dtm._compute_stop_price(t, direction, entry_ref)
+                slip = float(getattr(config, "DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))
+                limit_px = round(entry_ref * (1.0 + slip) if direction == "long"
+                                 else entry_ref * (1.0 - slip), 2)
+                rate = broker.get_asset_maintenance_margin_rate(sym)
+                if stop_px is None or rate is None or risk_snapshot.get("orders") is None:
+                    row["stop"] = "WIRE_RISK_UNKNOWN"
+                    row["reason"] = "stop/order-book/maintenance data unavailable — fail closed"
+                    rows.append(row)
+                    continue
+                safe_qty, wire_reason = dtm._bounded_entry_qty(
+                    int(z.get("shares") or 0), limit_px, stop_px, equity,
+                    risk_snapshot.get("open_trades", {}), risk_snapshot.get("positions", {}),
+                    buying_power, float(risk_snapshot.get("maintenance_margin", 0.0)),
+                    rate, risk_snapshot.get("orders", []),
+                    risk_equity=float(risk_snapshot.get("last_equity", 0.0)),
+                )
+                row["shares"] = safe_qty
+                if safe_qty < 1:
+                    row["stop"] = "WIRE_CAP"
+                    row["reason"] = _trunc(wire_reason)
+                    rows.append(row)
+                    continue
 
             row["stop"] = "WOULD_ENTER"
             row["reason"] = _trunc(t.get("reason"))
@@ -116,19 +167,21 @@ def main() -> int:
     if not universe:
         print("DAYTRADE_UNIVERSE is empty — nothing to simulate.")
         return 0
-    equity = _fetch_equity()
-    rows = evaluate_universe(universe, equity)
+    risk_snapshot = _fetch_risk_snapshot()
+    equity = float(risk_snapshot.get("equity", 0.0))
+    buying_power = float(risk_snapshot.get("buying_power", 0.0))
+    rows = evaluate_universe(universe, equity, buying_power, risk_snapshot=risk_snapshot)
 
     would_enter = [r for r in rows if r["stop"] == "WOULD_ENTER"]
     stops = Counter(r["stop"] for r in rows)
 
     if as_json:
-        print(json.dumps({"equity": equity, "universe": len(universe),
+        print(json.dumps({"equity": equity, "buying_power": buying_power, "universe": len(universe),
                           "would_enter": [r["symbol"] for r in would_enter],
                           "stops": dict(stops), "rows": rows}, default=str))
         return 0
 
-    print(f"DAY-TIER PREFLIGHT — equity=${equity:,.2f} · {len(universe)} symbols "
+    print(f"DAY-TIER PREFLIGHT — equity=${equity:,.2f} · BP=${buying_power:,.2f} · {len(universe)} symbols "
           f"(DAYTRADE_ENABLED={getattr(config, 'DAYTRADE_ENABLED', '?')})")
     print(f"{'SYM':<6}{'would?':<8}{'act_ok':<8}{'gex':<10}{'trigger':<9}{'size_ok':<9}{'stop':<21}reason")
     for r in rows:

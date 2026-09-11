@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 import logging
+import math
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -205,10 +206,9 @@ def cancel_open_orders_for_symbol(symbol: str, only_tier: str | None = None) -> 
     if orders is None:
         logger.error(f"[{symbol}] Cannot cancel orders: get_open_orders returned None (API failure)")
         return 0
-    _tier_of_coid = None
-    if only_tier is not None:
-        # local import (once) avoids a broker↔ownership_guard import cycle at module load
-        from execution.ownership_guard import tier_of_coid as _tier_of_coid
+    # Local import avoids a broker↔ownership_guard import cycle at module load. Importing the
+    # callable unconditionally here also keeps the filtered branch statically typed.
+    from execution.ownership_guard import tier_of_coid as _tier_of_coid
     cancelled = 0
     for order in orders:
         if only_tier is not None:
@@ -1221,11 +1221,12 @@ def _floor_bound_partial_qty_impl(symbol: str, qty: int, tier: str) -> int:
 
 
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
-                           *, _bypass_floor: bool = False) -> bool:
+                           *, _bypass_floor: bool = False, _return_order: bool = False):
     """
     Close a specific quantity of an open position (partial exit).
     Used for taking first-target profits while letting remainder run.
-    Returns True if successful.
+    Returns True if submitted. With the private ``_return_order`` flag, returns the submitted order
+    object so a safety-path caller can confirm the actual fill; failures still return False.
 
     Bug 4 fix (Apr 14 2026): detects 40310000 (held_for_orders) and auto-cancels
     all open blocking orders via cancel_open_orders_for_symbol(), then retries
@@ -1269,7 +1270,7 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
         )
         order = client.submit_order(order_data)
         logger.info(f"[{symbol}] Partial close: {qty} shares | Order ID: {order.id}")  # type: ignore[union-attr]
-        return True
+        return order if _return_order else True
     except Exception as e:
         err = str(e)
         # AWP audit fix (2026-06-28): apply the same not-found-as-success
@@ -1315,7 +1316,7 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                 logger.info(
                     f"[{symbol}] Partial close retry OK: {qty} shares | Order ID: {order.id}"  # type: ignore[union-attr]
                 )
-                return True
+                return order if _return_order else True
             except Exception as retry_e:
                 logger.error(
                     f"[{symbol}] Partial close retry FAILED after 40310000 clear: {retry_e}"
@@ -1599,6 +1600,30 @@ def get_asset_tradable(symbol: str) -> "bool | None":
         return bool(tradable) if tradable is not None else None
     except Exception as e:
         logger.warning(f"[{symbol}] get_asset_tradable failed: {e}")
+        return None
+
+
+def get_asset_maintenance_margin_rate(symbol: str) -> "float | None":
+    """Return Alpaca's maintenance-margin requirement as a decimal rate.
+
+    Alpaca currently exposes ``maintenance_margin_requirement`` as a percentage
+    (for example ``30`` means 30%).  Missing, non-numeric, non-finite, or
+    out-of-range values return None so a risk-path caller can fail closed.
+    """
+    client = _get_trading_client()
+    try:
+        asset = client.get_asset(symbol)
+        raw = getattr(asset, "maintenance_margin_requirement", None)
+        if raw is None:
+            logger.warning("[%s] maintenance-margin requirement is missing", symbol)
+            return None
+        rate = float(raw) / 100.0
+        if not math.isfinite(rate) or rate <= 0.0 or rate > 1.0:
+            logger.warning("[%s] invalid maintenance-margin requirement: %r", symbol, raw)
+            return None
+        return rate
+    except Exception as e:
+        logger.warning(f"[{symbol}] get_asset_maintenance_margin_rate failed: {e}")
         return None
 
 
