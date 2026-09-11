@@ -16,7 +16,7 @@ Graduates run_day_tier_shadow.py from logging-only to order-placing. Per tick (i
   3. FORCE-FLAT window: within DAYTRADE_FORCE_FLAT_MINUTES of the real close, flatten the tier and
      place NO new entries (the board's EOD go-live gate; runs BEFORE the pre-close sweep window so a
      day-tier lot never inherits an intraday-tagged sweep stop — config validates FORCE_FLAT > SWEEP).
-  4. TIER-KILL (day_trade_manager.tier_kill_check) — force-flat + halt for the day at −25% of tier.
+  4. TIER-KILL (day_trade_manager.tier_kill_check) — force-flat + halt for the day at −4% of equity.
   5. 30-min PRICE SAMPLING — one price_sample per open trade per 30-min bucket (Rafael's price PATH),
      derived restart-safely from the durable log.
   6. ENTRY LOOP — decision → trigger → size → place_entry, per symbol, idempotent per bar_id.
@@ -35,6 +35,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -147,12 +148,14 @@ def run_tick() -> dict:
         _touch_heartbeat("market_closed")
         return {"skipped": "market_closed"}
     try:
-        equity = float(broker.get_portfolio_value())
+        _acct = broker.get_account()
+        equity = float(getattr(_acct, "equity", 0.0) or 0.0)
+        day_start_equity = float(getattr(_acct, "last_equity", 0.0) or 0.0)
+        buying_power = float(getattr(_acct, "buying_power", 0.0) or 0.0)
     except Exception as e:  # noqa: BLE001
-        logger.error("equity fetch failed — skipping tick: %s", e)
-        _touch_heartbeat("equity_fail")
-        return {"skipped": "equity_fail"}
-
+        logger.error("account/equity fetch failed — position management continues; entries fail closed: %s", e)
+        _acct = None
+        equity = day_start_equity = buying_power = float("nan")
     # Reconcile FIRST — never leave a naked day-tier position across the cron's process boundary.
     recon = dtm.reconcile_open_state()
 
@@ -167,10 +170,29 @@ def run_tick() -> dict:
                 "mins_to_close": round(mins_to_close, 1) if mins_to_close is not None else None,
                 "reconcile": recon}
 
-    # Tier-kill (−25% of tier budget → force-flat + halt for the day).
-    if dtm.tier_kill_check(equity):
+    # Tier liquidation and a latched-kill retry are position management, so they run before every
+    # account-level entry gate. A main-book halt must never strand a day-tier residual intraday.
+    if dtm.tier_kill_check(equity, day_start_equity=day_start_equity):
         _touch_heartbeat("tier_killed")
         return {"phase": "tier_killed", "reconcile": recon}
+
+    # Account-data and entry-halt failures block only NEW risk. They run after reconcile/EOD/tier
+    # risk management so a zero-BP or killed account cannot bypass liquidation.
+    if not all(math.isfinite(v) and v > 0 for v in (equity, day_start_equity, buying_power)):
+        logger.error("account/equity fields invalid — no new entries this tick (fail-closed)")
+        _touch_heartbeat("account_invalid")
+        return {"skipped": "account_invalid", "reconcile": recon}
+    try:
+        from execution.risk_manager import RiskManager
+        if dtm._account_entry_halt_reason(_acct) or RiskManager(
+            equity, daily_start_value=day_start_equity
+        ).check_kill_switch():
+            _touch_heartbeat("account_halted")
+            return {"phase": "account_halted", "reconcile": recon}
+    except Exception as e:  # noqa: BLE001
+        logger.error("account kill evaluation failed — no new entries this tick (fail-closed): %s", e)
+        _touch_heartbeat("account_kill_unknown")
+        return {"skipped": "account_kill_unknown", "reconcile": recon}
 
     # 30-min price sampling for the open price PATH.
     _maybe_sample_prices()
@@ -195,7 +217,8 @@ def run_tick() -> dict:
             trigger = compute_entry_trigger(sym, decision)
             if trigger.get("trigger") != "ENTER":
                 continue
-            size = compute_day_tier_size(sym, decision, trigger.get("entry_ref"), equity, track="A")
+            size = compute_day_tier_size(sym, decision, trigger.get("entry_ref"), equity,
+                                         buying_power=buying_power, track="A")
             if not size.get("size_ok"):
                 continue
             if calls_used + per_entry_est > call_budget:
@@ -221,6 +244,29 @@ def main() -> int:
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+    # Apply the PAPER profile so THIS process's config matches the running paper account (the day-tier
+    # is paper-only — broker.paper=True is hardcoded; DAYTRADE_ENABLED is armed only under --profile
+    # paper). This sets MAX_DAILY_LOSS_PCT=0.07 here so the account-terms kill nesting is coherent in
+    # this process and does not depend on main.py's separate process (masked-loss seat 2026-09-08).
+    # Pure attribute mutation (mirrors main.py:290-293) — no side effects; the day-tier reads only
+    # DAYTRADE_* constants, so this changes NO day-tier behavior, only what the assertion below sees.
+    import config
+    try:
+        for _k, _v in config.PROFILES.get("paper", {}).items():
+            setattr(config, _k, _v)
+        config.ACTIVE_PROFILE = "paper"
+    except Exception as e:  # noqa: BLE001
+        logger.error("day-tier runner: failed to apply paper profile — refusing to run: %s", e)
+        return 1
+    # Carry our OWN account-terms kill-nesting check (do NOT depend on main.py's validate_config): the
+    # day-tier kill MUST be nested strictly below the account daily kill, or a mis-set could let the tier
+    # lose more than the account tolerates before halting. Fail CLOSED.
+    _tier_kill = float(getattr(config, "DAYTRADE_TIER_KILL_EQUITY_PCT", 0.04))
+    _acct_kill = float(getattr(config, "MAX_DAILY_LOSS_PCT", 0.03))
+    if not (0 < _tier_kill < _acct_kill):
+        logger.error("day-tier kill (%.4f) not nested below account kill (%.4f) — refusing to run",
+                     _tier_kill, _acct_kill)
+        return 1
     # flock singleton: if a prior 2-min tick still runs (holding the Alpaca connection / a re-peg),
     # exit immediately rather than overlap and double-submit (reliability seat C1).
     try:

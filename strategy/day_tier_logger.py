@@ -289,16 +289,30 @@ def log_exit_fill(trade_id: str, symbol: str, *, order_id: str, exit_reason: str
     return _durable_append([rec])
 
 
+@_guard
+def log_partial_exit_fill(trade_id: str, symbol: str, *, order_id: str, exit_reason: str,
+                          fill_price: float, fill_qty: float, market_price_at_exit: float,
+                          realized_pnl: float) -> bool:
+    """Record a confirmed partial exit without closing the remaining open-trade record."""
+    rec = _base("partial_exit_fill", trade_id, symbol)
+    rec.update(
+        order_id=order_id, exit_reason=exit_reason,
+        fill_price=round(float(fill_price), 4), fill_qty=float(fill_qty),
+        market_price_at_exit=round(float(market_price_at_exit), 4),
+        realized_pnl=round(float(realized_pnl), 2),
+    )
+    return _durable_append([rec])
+
+
 # ── Restart-safe read side ───────────────────────────────────────────────────────────────────
 
-def read_events(trade_id: str | None = None) -> list[dict]:
-    """Read all events (optionally filtered to one trade_id), TOLERATING a torn trailing line: a
-    `kill -9` mid-write before fsync can leave one partial JSON line, which is SKIPPED (+warned),
-    never aborts the read (data-integrity seat #6). Returns [] if the file does not exist yet."""
+def read_events_checked(trade_id: str | None = None) -> tuple[list[dict], bool]:
+    """Return ``(events, readable)`` so risk controls can distinguish an empty log from a failed read."""
     out: list[dict] = []
     if not _JSONL.exists():
-        return out
+        return out, True
     try:
+        complete = True
         with open(_JSONL, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -308,12 +322,21 @@ def read_events(trade_id: str | None = None) -> list[dict]:
                     ev = json.loads(line)
                 except Exception:
                     logger.warning("day_tier_events: skipping malformed/torn JSON line")
+                    complete = False
                     continue
                 if trade_id is None or ev.get("trade_id") == trade_id:
                     out.append(ev)
+        return out, complete
     except Exception as e:
         logger.error(f"day_tier_events read failed: {e}")
-    return out
+        return out, False
+
+
+def read_events(trade_id: str | None = None) -> list[dict]:
+    """Read all events (optionally filtered to one trade_id), TOLERATING a torn trailing line: a
+    `kill -9` mid-write before fsync can leave one partial JSON line, which is SKIPPED (+warned),
+    never aborts the read (data-integrity seat #6). Returns [] if the file does not exist yet."""
+    return read_events_checked(trade_id)[0]
 
 
 def open_trades_from_log() -> dict[str, dict]:
@@ -345,6 +368,15 @@ def open_trades_from_log() -> dict[str, dict]:
             }
         elif et == "exit_fill":
             exited.add(tid)
+        elif et == "partial_exit_fill" and tid in opened:
+            try:
+                remaining = max(0.0, float(opened[tid].get("fill_qty") or 0.0)
+                                - abs(float(ev.get("fill_qty") or 0.0)))
+                opened[tid]["fill_qty"] = remaining
+                if remaining <= 0:
+                    exited.add(tid)
+            except (TypeError, ValueError):
+                logger.warning("day_tier_events: malformed partial_exit_fill qty for %s", tid)
         elif et == "price_sample":
             s = ev.get("seq")
             if isinstance(s, int):

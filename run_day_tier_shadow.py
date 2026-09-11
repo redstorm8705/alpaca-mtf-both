@@ -73,7 +73,19 @@ def _equity() -> "float | None":
         return None
 
 
-def shadow_scan_symbol(symbol: str, equity: "float | None") -> dict:
+def _buying_power() -> "float | None":
+    """Live account buying power (read-only) for BP-based Track-A sizing, or None on failure (Track A
+    then logs size 0 — never blocks)."""
+    try:
+        from execution.broker import get_account
+        bp = float(getattr(get_account(), "buying_power", 0.0) or 0.0)
+        return bp if bp > 0 else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("shadow: buying_power fetch failed (%s) — Track A sizing will log 0", e)
+        return None
+
+
+def shadow_scan_symbol(symbol: str, equity: "float | None", buying_power: "float | None" = None) -> dict:
     """Run the read-only pipeline for one symbol and return its decision-stack record. Never raises;
     a failure yields a record with error set (so the log always accounts for every symbol)."""
     rec: dict = {"symbol": symbol, "ts": _fmt_pt(), "error": None,
@@ -90,7 +102,8 @@ def shadow_scan_symbol(symbol: str, equity: "float | None") -> dict:
 
         # Would-be size only on a live ENTER with a usable entry price + known equity.
         if trigger.get("trigger") == "ENTER" and trigger.get("entry_ref") and equity:
-            rec["size"] = compute_day_tier_size(symbol, decision, trigger["entry_ref"], equity, track="A")
+            rec["size"] = compute_day_tier_size(symbol, decision, trigger["entry_ref"], equity,
+                                                buying_power=buying_power, track="A")
         return rec
     except Exception as e:  # noqa: BLE001 — one symbol must never abort the sweep
         rec["error"] = repr(e)
@@ -118,7 +131,8 @@ def run_day_tier_shadow() -> dict:
     READ-ONLY + INERT — places no order. Never raises."""
     syms = _universe()
     equity = _equity()
-    records = [shadow_scan_symbol(s, equity) for s in syms]
+    buying_power = _buying_power()
+    records = [shadow_scan_symbol(s, equity, buying_power) for s in syms]
     wrote = _append_log(records)
     n_consider = sum(1 for r in records if (r.get("decision") or {}).get("would_consider"))
     n_enter = sum(1 for r in records if (r.get("trigger") or {}).get("trigger") == "ENTER")

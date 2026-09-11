@@ -9955,3 +9955,37 @@ auto-confirm, scoped) is the real Tier-1 build.
 - SHIPPED PR #259 (main 94eef62): read-only scripts/gex_skip0dte_shadow.py — recomputes skip-0DTE GEX for SPY/QQQ+Mag-7, logs label/pin/flip-vs-spot to logs/gex_skip0dte_shadow.jsonl, RTH cron */15 13-21 * * 1-5. Dry-run: 9/9 quality_ok + levels_ok, flips near spot. Strictly read-only (no data/gex.py change, no gex_snapshot write, no sizing/order path). Gates: statics + cold-2nd PASS + adversarial + logevidence-exempt + Gro/GAI preship APPROVE. Design: logs/design_records/gex_skip0dte_shadow_2026-09-04.md.
 - NEXT: review soak (≥1 RTH incl. expiry Friday) → promote skip-0DTE into _expiry_range (with ET-date tightening: datetime.now(gex.ET).date(), cold-2nd note) + day-tier Layer-B pin-action when label quarantined — RISK-PATH, full gate + soak as the sim → flip live. Also owed: pre-market readiness sim (the corrective for representing the tier "ready" without one).
 - Cold-2nd nit (deferred to the gex.py promotion): shadow's _skip0dte_window uses date.today() (host-local) vs ET — benign for the 8-day window; tighten to gex.ET when promoted.
+
+## 2026-09-09 — Day-tier buying-power sizing exact-diff audit (pre-ship revision)
+
+- Scope: `config.py`, `execution/broker.py`, `execution/day_trade_manager.py`, `run_day_tier.py`,
+  `run_day_tier_shadow.py`, `scripts/day_tier_preflight.py`, `strategy/day_tier_sizing.py`,
+  `strategy/day_tier_logger.py`, and focused tests. Risk-path because it can increase per-trade size.
+- RC scan: RC-1 no hand-built market/session calendar added; RC-2 state/log paths remain anchored to
+  `__file__`; RC-3 new broker/account/order/maintenance reads fail closed; RC-4 no new raw Slack
+  payload; RC-5 existing atomic state persistence retained; RC-6 no new timezone-naive comparison;
+  RC-7 all share math floors and never rounds up; RC-8 no new strategy cache/buffer mutation.
+- Initial exact-diff review: CHANGES REQUIRED. Verified failures were day-tier-only gross accounting,
+  a buying-power subtraction mislabeled as maintenance cushion, missing main-account halt awareness,
+  rejection rather than clamping at the aggregate cap, `entry_ref` rather than submitted-limit cap
+  pricing, and NaN comparison bypasses.
+- Revision: live all-tier positions and pending increasing orders now consume gross room; maintenance
+  room uses `equity - maintenance_margin - cushion` divided by Alpaca's symbol maintenance rate;
+  wire-time size clamps at the marketable-limit price and a 2%-of-equity stop-risk budget; every
+  numeric/account/order ambiguity yields zero shares. The runner evaluates the persisted/QHM-aware
+  main kill and the tier kill accumulates loss-only realized exit marks with open unrealized P&L on
+  SOD equity. Read-only preflight invokes the same wire cap.
+- Current limitation recorded in the design: main and day-tier snapshots are not transactional across
+  processes. Pending-order accounting closes the ordinary overlap window; a shared account-entry
+  reservation primitive remains cross-strategy hardening and requires its own risk-path diff.
+- Local focused verification at this revision: 41 sizing/gross/maintenance/kill/exit tests pass; full
+  day-tier strategy suites are run as isolated processes because an older test module installs a
+  synthetic top-level `alpaca` module in `sys.modules` during collection.
+- Second-review blockers were folded before re-review: account/BP entry failures now occur after
+  reconcile and EOD liquidation; pending reversal excess and pending maintenance are reserved;
+  malformed log rows and non-finite P&L halt entries; broker-confirmed forced/stop fills feed the
+  loss floor; a latched kill retries residual liquidation. Confirmed partial forced/protective exits
+  durably reduce the day tier's owned quantity before retries, unreadable newer stops cannot be
+  masked by older readable orders, and tier liquidation runs before account-level entry halts.
+  Forced-close order ids and cumulative-fill watermarks are persisted before polling so a late fill
+  cannot cause a second close against co-held shares.
