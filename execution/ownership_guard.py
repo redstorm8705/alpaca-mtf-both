@@ -848,6 +848,28 @@ def sync_ledger(fills: list, positions: list,
         if not _ent["tiers"]["qhm"].get("avg_cost"):
             _ent["tiers"]["qhm"]["avg_cost"] = _intra_avg
 
+    # A protected tier is LONG-ONLY by contract. Historical fills can still reconstruct a
+    # negative protected balance when an old exit acquired a QH/F6 tag but its legacy entry
+    # was untagged (or vice versa). That is an attribution artifact, never a negative floor.
+    # Move the negative balance back to intraday instead of leaving an impossible protected
+    # short: the total ledger sum, live-net comparison, and any real intraday short are all
+    # preserved, while the never-shrink guard only sees an actual positive floor reduction.
+    for _sym, _ent in ledger["positions"].items():
+        _tiers = _ent["tiers"]
+        for _pt in _PROTECTED_TIERS:
+            _protected_qty = float(_tiers.get(_pt, {}).get("qty", 0.0) or 0.0)
+            if _protected_qty >= -_QTY_EPS:
+                continue
+            _intra = float(_tiers.get("intraday", {}).get("qty", 0.0) or 0.0)
+            _tiers.setdefault("intraday", {})["qty"] = round(_intra + _protected_qty, 6)
+            _tiers.setdefault(_pt, {})["qty"] = 0.0
+            _tiers[_pt]["avg_cost"] = 0.0
+            logger.warning(
+                "sync_ledger: reattributed impossible negative protected replay %s/%s=%g "
+                "to intraday; protected tiers are long-only.",
+                _sym, _pt, _protected_qty,
+            )
+
     # NEVER-SHRINK-A-PROTECTED-FLOOR: compare the rebuild to the persisted baseline.
     # A protected tier (qhm/forever6) going DOWN vs the current ledger = truncated
     # replay → abort, never write, alert. (Absent/corrupt baseline → protected qty
