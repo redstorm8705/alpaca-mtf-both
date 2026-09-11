@@ -1,0 +1,77 @@
+Nightly Gemini Audit — 2026-09-10
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### LOG ANOMALIES
+- **Phantom UBER tracker position / Stop-protect deferred**: `execution.stop_protection` and `execution.drift_detector` persistently logged warnings for UBER (`persist=28/2 conf=1.00`, tracker short 2 @ 73.08, broker flat). The position closed at broker level (`2026-09-10T16:52:40Z`), but the internal tracker retained the position until the scheduled EOD sync.
+- **Protected Floor Shrink Refusal (NVDA/qhm)**: `CRITICAL execution.ownership_guard sync_ledger REFUSED — protected floor shrink(s) {'NVDA/qhm': {'was': 1.0, 'would_be': -2.0, 'net': 0.0}}` repeated across 68 cycles. An external exit of NVDA occurred on 2026-09-08, but the ledger sync has frozen automatic floor modification pending manual confirmation (`confirm_ledger_heal.py NVDA qhm 0`).
+- **Fail-closed Data Gaps on DRAM**: Confluence module repeatedly threw `WARNING | [DRAM] No daily data — long/short entry blocked (fail-closed)` across all scan cycles.
+- **Rule 1 Premarket Red Lockout Triggered**: 17/19 movers red $\ge 2\%$ (89%) triggered session-wide long lockout; correctly suppressed long entries for SOXS and QCOM.
+
+---
+
+### PERFORMANCE AUDIT
+- **P&L Sign Integrity**:
+  - `MARA` short (`2026-09-03T07:57:49Z`): Entry $10.25 (from reason log), Exit $11.61, Size 6. P&L = $(10.25 - 11.61) \times 6 = -\$8.16$. Correct sign and value.
+  - `HOOD` long (`2026-09-04T06:36:37Z`): Exit $106.10, Size 1, P&L = +$15.80. Correct.
+  - `META` long (`2026-09-04T07:46:46Z`): Exit $605.64, Size 1, P&L = +$47.37. Correct.
+  - `AVGO` short (`2026-09-08T07:55:35Z`): Entry $355.76, Exit $371.85, Size 2. P&L = $(355.76 - 371.85) \times 2 = -\$32.18$. Correct sign and value.
+- **Win Rate & R:R Capture**: All-time win rate sits at 34.0% with profit factor 0.82 and average R-multiple of -0.061. The high rate of overnight/stop breaches continues to clip runs before hitting T2/T3 targets.
+
+---
+
+### TRADE INTEGRITY
+- **Pending Exit Price on NVDA**: Record `2026-09-08T08:28:39.605933-07:00` for `NVDA` has `price: null` and `price_pending: true` with `data_source: "qhm_external_close"`. This matches the unhealed `NVDA/qhm` ledger state.
+- **EOD Drift Telemetry**: Pre-heal self-check reported Alpaca P&L $-\$6.86$ vs tracker $\$0.00$ (resulting from UBER close on broker side during the session). Pre-heal telemetry is non-blocking and self-heals at 8:30 PM ET; `pnl_unreconciled` is `false`.
+
+---
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24h.
+
+---
+
+### P5 STATUS
+- `P5-C1` (FVG MultiIndex silent crash): UNTOUCHED
+- `P5-C2` (run_movers.py ImportError on DataFetcher): UNTOUCHED
+- `P5-H1` (PDT enforcement): OBSOLETE (Rule permanently deleted)
+- `P5-H2` (Fill price crosstalk): UNTOUCHED
+- `P5-H3` (Orphan GTC 404 path): UNTOUCHED
+- `P5-H4` (Rule 2 dead code): UNTOUCHED
+- `P5-H5` (GTC stop suppressed at opened_today): FIXED (Retained)
+- `P5-M1` (Cycle watchdog restart loop): UNTOUCHED
+- `P5-M2` (MRI score cached stale across sessions): UNTOUCHED
+- `P5-M3` (score_comparison JSON unbounded growth): UNTOUCHED
+- `P5-L1` (_classify_loss_driver empty label): UNTOUCHED
+- `P5-L2` (eod_YYYY-MM-DD.json written before positions closed): UNTOUCHED
+- `P5-L3` (live_data_writer.py reconnect logic): UNTOUCHED
+
+---
+
+### NEW BUGS FOUND
+- **INFRASTRUCTURE | MEDIUM | `execution/ownership_guard.py:sync_ledger`**
+  - **Description**: `sync_ledger` protected floor shrink lock halts automated reconciliation streak (streak=68) after external position close, requiring manual CLI intervention to unfreeze position sizing/sells for that ledger symbol.
+  - **Failure Condition**: When an external close event occurs on a QHM-tracked symbol (e.g., `NVDA` manual or broker liquidations), `ownership_guard` interprets the floor shrink from `1.0` to `-2.0` (net `0.0`) as an unconfirmed breach, preventing clean state transitions.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Confirm NVDA Ledger Heal**: Run `python confirm_ledger_heal.py NVDA qhm 0` to unfreeze the ownership guard and clear the 68-cycle streak block.
+2. **Resolve UBER Drift via Nightly Heal**: Allow standard 8:30 PM ET reconcile pass to drop the stale UBER position from tracker to align with broker flat status.
+3. **Address DRAM Market Data Fetch**: Inspect market data pipeline for DRAM daily bar fetch failures causing repetitive fail-closed entry rejections.
+4. **Fix P5-C2 (`run_movers.py`)**: Correct the stale `DataFetcher` import in `run_movers.py:19` to prevent crashes during premarket mover scans.
