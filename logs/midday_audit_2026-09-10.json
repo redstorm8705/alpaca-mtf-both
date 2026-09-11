@@ -1,0 +1,73 @@
+{
+  "audit_date": "2026-09-10",
+  "run_ts": "2026-09-10T10:30:01.831868-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 31
+    },
+    "last_score": 48,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 68,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-10 16:13:55,145 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: GE RegT BP <= 0 ($0) \u2014 skip add",
+      "2026-09-10 16:14:34,313 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-10 16:14:34,317 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-10 16:20:11,954 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: GE RegT BP <= 0 ($0) \u2014 skip add",
+      "2026-09-10 16:20:15,138 WARNING ledger_sync ledger_sync wall-time 13.7s (fills=585 orders=2691)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "UBER"
+    ],
+    "by_symbol": {
+      "UBER": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}

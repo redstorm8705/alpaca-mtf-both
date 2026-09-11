@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-09-10
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+Position left naked (no stop) due to broker/tracker desync | UBER (Short, 2 shares)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **Integrity Check**: The session shows 0 closed trades in the summary, yet Alpaca Ground Truth reports 2 fills (UBER: 2B/0S). This confirms **Known Issue D1** (degraded entry-event logging).
+- **P&L Discrepancy**: Authoritative ledger shows $-0.11, while Alpaca reports $-6.86. This $6.75 drift is significant for a $2.5K account (0.27% session drift).
+- **Score Correlation**: N/A (No trades successfully matched/recorded).
+
+### ENTRY QUALITY
+- **Logic Failure**: The bot identified high-scoring signals (AAPL Long 10/12, NVDL Short 10/12) but correctly blocked them based on **Rule 1 (Premarket Red Lockout)** and **ORB Gates**.
+- **Affordability Error**: `execution.quarterly_hold_manager` blocked a GE dip-add because $323 > $26 RegT BP. This indicates the bot is attempting to scale into positions without sufficient buying power checks prior to the signal generation phase.
+
+### EXIT QUALITY
+- **Phantom Position**: UBER is currently held in the `phantom_tracker` (Short, 2 shares, @73.08) but the broker is "flat" according to `drift_detector`. However, Alpaca Ground Truth shows 2 Buy fills for UBER today. This implies the bot bought to cover a short, but the tracker still thinks the short is open.
+
+### MRI ALIGNMENT
+- **Regime Mismatch**: MRI is **STRESSED (48/100)** with 100% of samples in STRESSED. The bot correctly applied a **0.70x size floor**.
+- **Signal Filtering**: Dynamic MIN_SCORE was correctly raised to 10/12 due to MRI/GEX conditions, filtering 13/15 signals. Logic is functioning as intended for risk-off regimes.
+
+### LOG ANOMALIES
+- **EOD P&L DRIFT**: `Alpaca=$-6.86 tracker=$0.00 drift=$-6.86`.
+- **Data Gap**: `[DRAM] No daily data — long entry blocked`. Repeated warnings for DRAM indicate a stale universe or ticker symbol change (DRAM is often an index/sector indicator, not a tradeable equity on Alpaca).
+- **Reconciliation Failure**: `UBER is a SHORT phantom — left to reconcile (RIVN scar), not auto-healed.` The bot identified the drift but refused to heal it, citing a "RIVN scar" (likely a hardcoded exception or previous failure state).
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | Naked Position / Stop Coverage Failure** | `LIVE STOP COVERAGE` claims 4/4 positions have stops, but `drift_detector` shows UBER exists in the tracker with no corresponding broker position. If the tracker attempts to manage this "phantom," it may send rogue orders.
+- **EXECUTION BUG | HIGH | Reconciliation Lockout** | `execution.drift_corrector` refused to heal UBER. **Condition**: `auto-heal` triggered for a short phantom but was blocked by a "scar" logic branch. This prevents the bot from returning to a clean state.
+- **INFRASTRUCTURE | MEDIUM | Buying Power Blindness** | `quarterly_hold_manager` attempts orders that exceed RegT BP by >10x. **Condition**: GE dip-add requested $323 with only $26 available.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Manually reconcile UBER. Clear the `phantom_tracker` and ensure the Alpaca side is flat to match the broker's current state.
+2. **EXECUTION**: Investigate the "RIVN scar" logic in `execution.drift_corrector`. This hardcoded or persistent state is preventing the `auto-heal` function from resolving tracker/broker desyncs.
+3. **ALPHA**: Review `quarterly_hold_manager` sizing logic. It must check `account.buying_power` before emitting a "dip-add" signal to prevent repeated WARNING log spam and execution overhead.
