@@ -38,6 +38,11 @@ class TestFormulaUnits(unittest.TestCase):
         self.assertGreater(e100, e10)                                 # more trials -> higher expected max
         self.assertGreater(e10, 0.0)
 
+    def test_expected_max_sharpe_saturation_is_nan_not_zero(self):
+        # 1 - 1/N rounds to 1.0 at this scale, so scipy's ppf is +inf.
+        # That must not become the single-trial zero benchmark.
+        self.assertTrue(math.isnan(ds.expected_max_sharpe(10 ** 16, 0.5)))
+
 
 class TestSharpeStats(unittest.TestCase):
     def test_raises_on_degenerate(self):
@@ -99,6 +104,12 @@ class TestDeflatedSharpe(unittest.TestCase):
         r = ds.deflated_sharpe(self._series(0.15, 300), n_trials=1, trials_sr_std=0.5)
         self.assertEqual(r.sr_star_deflated, 0.0)
         self.assertAlmostEqual(r.dsr, r.psr, places=12)  # no deflation
+
+    def test_saturated_trial_count_cannot_report_confident_dsr(self):
+        r = ds.deflated_sharpe(self._series(0.15, 300), n_trials=10 ** 16, trials_sr_std=0.5)
+        self.assertTrue(math.isnan(r.sr_star_deflated))
+        self.assertTrue(math.isnan(r.dsr))
+        self.assertFalse(r.sharpe_not_noise)
 
     def test_moment_fallback_below_50(self):
         r = ds.deflated_sharpe(self._series(0.2, 40), n_trials=10, trials_sr_std=0.5)
