@@ -346,9 +346,9 @@ class KellySizer:
         if kelly_full <= 0:
             logger.warning(
                 "Kelly [%s]: NEGATIVE EXPECTANCY — kelly_full=%.3f "
-                "(WR=%.1%%, avg_win=%.2fR, avg_loss=%.2fR, n=%d). "
+                "(WR=%.1f%%, avg_win=%.2fR, avg_loss=%.2fR, n=%d). "
                 "Edge unconfirmed — falling back to KELLY_MIN_RISK_PCT (minimum floor sizing).",
-                key, kelly_full, win_rate, avg_win_r, avg_loss_r, total,
+                key, kelly_full, win_rate * 100, avg_win_r, avg_loss_r, total,
             )
             return config.KELLY_MIN_RISK_PCT
 
