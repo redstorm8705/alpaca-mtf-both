@@ -53,13 +53,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from slack_format import mobile_clean  # WS2 shared Slack formatter (mobile-safe markdown tables)
 from gai_client import GAI_MODEL_LADDER, call_gai  # single source of truth for the live Gemini model ladder
 
 # ── Load .env (required for cron — systemd/cron does not pre-load .env) ──────
@@ -524,7 +525,14 @@ def _compute_trade_stats(events: list[dict], fills: list[dict]) -> dict:
 
 
 def _load_prior_directives(n: int = _DIRECTIVES_HISTORY_WEEKS) -> list[dict]:
-    """Load last N weeks of audit directives for compliance tracking."""
+    """Load the last N *structured* directives for compliance tracking.
+
+    ``audit_directives.jsonl`` also retains ``context_only`` archive rows containing
+    raw Groq/Gemini output.  That text is evidence, not a directive: feeding it
+    back into a later audit lets an old trade table masquerade as current-week
+    activity.  A compliance prompt may consume only rows with the structured
+    ``file`` + ``finding`` contract.
+    """
     path = _LOGS_DIR / "audit_directives.jsonl"
     if not path.exists():
         return []
@@ -536,9 +544,11 @@ def _load_prior_directives(n: int = _DIRECTIVES_HISTORY_WEEKS) -> list[dict]:
                 if not raw:
                     continue
                 try:
-                    entries.append(json.loads(raw))
+                    entry = json.loads(raw)
                 except json.JSONDecodeError:
-                    pass
+                    continue
+                if entry.get("file") and entry.get("finding"):
+                    entries.append(entry)
     except OSError:
         pass
     return entries[-n:] if entries else []
@@ -826,14 +836,22 @@ def _format_meta_audit_body(
         parts.append("")
 
     # ── Prior directives (compliance tracking) ────────────────────────────
+    # These are structured findings only.  Never replay an archived raw LLM
+    # report here: its historical trade table can otherwise contaminate the
+    # current seven-day trade window.
     prior = ctx["prior_directives"]
     if prior:
         parts += [f"=== PRIOR AUDIT DIRECTIVES (last {len(prior)} weeks — evaluate compliance) ==="]
         for d in prior:
+            source = d.get("source", "unknown")
+            file_name = d.get("file", "unknown file")
+            finding = d.get("finding", "unspecified finding")
+            recommendation = d.get("recommended_fix", "")
             parts += [
-                f"Week {d.get('week', '?')} | {d.get('ts_pt', '')} | Status: {d.get('status', '?')}",
-                f"  Gro directives: {d.get('gro_directives_preview', 'N/A')[:600]}",
-                f"  GAI directives: {d.get('gai_directives_preview', 'N/A')[:600]}",
+                f"Week {d.get('week', '?')} | Source: {source} | Status: {d.get('status', '?')}",
+                f"  File: {file_name}",
+                f"  Finding: {finding[:500]}",
+                f"  Recommended fix: {recommendation[:500] or 'none recorded'}",
                 "",
             ]
     else:
@@ -1074,13 +1092,136 @@ def _build_gai_prompt(ctx: dict) -> str:
 
 
 # ── Slack post (meta-audit results) ──────────────────────────────────────────
+_TABLE_SEP_CHARS = frozenset("|:- ")
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    """Return True for a conventional GitHub-Markdown table row."""
+    stripped = line.strip()
+    return "|" in stripped and (
+        stripped.startswith("|") or stripped.endswith("|") or stripped.count("|") >= 2
+    )
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    """Return True for a GitHub-Markdown table separator row."""
+    stripped = line.strip()
+    return bool(stripped) and "|" in stripped and set(stripped) <= _TABLE_SEP_CHARS
+
+
+def _table_cells(line: str) -> list[str]:
+    """Return non-empty table cells without their surrounding pipes."""
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _slackify_report_line(line: str) -> str:
+    """Translate the small GitHub-Markdown subset emitted by the audit models."""
+    stripped = line.strip()
+    if stripped and set(stripped) <= {"-", " "}:
+        return ""  # Markdown horizontal rule: structural only, not Slack content.
+    header = re.match(r"^#{1,6}\s*(.+?)\s*#*\s*$", stripped)
+    if header:
+        return f"*{header.group(1)}*"
+    stripped = re.sub(r"\*\*+", "*", stripped)
+    if re.match(r"^[-*+]\s+", stripped):
+        stripped = re.sub(r"^[-*+]\s+", "• ", stripped)
+    return stripped
+
+
+def _wrap_slack_line(line: str, width: int = 42) -> list[str]:
+    """Wrap one report line for phone reading while preserving all text."""
+    if not line:
+        return [""]
+    # URLs, identifiers and a single unbroken word cannot be made shorter without
+    # losing information.  Slack may wrap those itself; normal prose is bounded.
+    return textwrap.wrap(
+        line, width=width, break_long_words=False, break_on_hyphens=False,
+    ) or [line]
+
+
+def _render_meta_report_text(report: str) -> str:
+    """Render a complete model report as phone-readable Slack mrkdwn.
+
+    GitHub tables are verticalized rather than flattened into long pipe rows.  No
+    cell or prose line is removed; section-size splitting happens separately.
+    """
+    lines = str(report or "").splitlines()
+    output: list[str] = []
+    i = 0
+    while i < len(lines):
+        if (i + 1 < len(lines)
+                and _is_markdown_table_row(lines[i])
+                and _is_markdown_table_separator(lines[i + 1])):
+            headers = _table_cells(lines[i])
+            i += 2
+            while i < len(lines) and _is_markdown_table_row(lines[i]):
+                cells = _table_cells(lines[i])
+                for index, value in enumerate(cells):
+                    header = headers[index] if index < len(headers) else "Additional detail"
+                    label = _slackify_report_line(header).strip("*")
+                    value = _slackify_report_line(value)
+                    for wrapped in _wrap_slack_line(f"*{label}* {value}"):
+                        output.append(wrapped)
+                output.append("")
+                i += 1
+            continue
+        line = _slackify_report_line(lines[i])
+        output.extend(_wrap_slack_line(line))
+        i += 1
+    return "\n".join(output).strip()
+
+
+def _chunk_slack_sections(text: str, limit: int = 2900) -> list[str]:
+    """Split complete report text on line boundaries under Slack's section limit."""
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        if len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(line[pos:pos + limit] for pos in range(0, len(line), limit))
+            continue
+        candidate = f"{current}\n{line}" if current else line
+        if current and len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _meta_report_blocks(result: dict, label: str) -> list[dict]:
+    """Build complete, readable Block Kit sections for one audit provider."""
+    text = result.get("text")
+    if not text:
+        error = " ".join(str(result.get("error") or "unknown error").split())
+        if any(token in error.lower() for token in (
+            "resource_exhausted", "quota", "prepayment", "credits are depleted",
+            "429", "rate limit", "rate_limit", "exceeded your current",
+        )):
+            error = "unavailable (free-tier quota/credits exhausted)"
+        return [{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"*{label}:* ❌ {error[:120]}"}}]
+    rendered = _render_meta_report_text(text)
+    blocks = [{"type": "section", "text": {"type": "mrkdwn",
+               "text": f"*{label} — full report*"}}]
+    blocks.extend(
+        {"type": "section", "text": {"type": "mrkdwn", "text": chunk}}
+        for chunk in _chunk_slack_sections(rendered) if chunk.strip()
+    )
+    return blocks
+
+
 def _post_slack_summary(
     gro_result: dict,
     gai_result: dict,
     out_path: Path,
     mode_label: str = "meta-audit",
 ) -> None:
-    """Post audit verdict summary to Slack via incoming webhook."""
+    """Post complete, phone-readable audit reports through the shared block sender."""
     webhook = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
     if not webhook:
         print(
@@ -1089,105 +1230,32 @@ def _post_slack_summary(
         )
         return
 
-    import requests  # type: ignore[import-untyped]
-
     gro_ok = gro_result["error"] is None
     gai_ok = gai_result["error"] is None
     now_pt = datetime.now(_PT)
     ts = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
-    # Terse-classify an API error so a raw provider error blob (e.g. Gemini's full
-    # RESOURCE_EXHAUSTED / "prepayment credits depleted" JSON with billing URLs) never
-    # gets dumped into Slack — the #1 noise Rafael flagged 2026-08-26. A quota/credit
-    # exhaustion (the expected free-tier state) collapses to one plain line; any other
-    # error is single-lined and truncated. No URL survives → nothing to unfurl.
-    def _terse_error(err: object) -> str:
-        e = " ".join(str(err or "unknown error").split())
-        low = e.lower()
-        if any(k in low for k in (
-            "resource_exhausted", "quota", "prepayment", "credits are depleted",
-            "429", "rate limit", "rate_limit", "exceeded your current",
-        )):
-            return "unavailable (free-tier quota/credits exhausted)"
-        return e[:120] + ("…" if len(e) > 120 else "")
-
-    # Build short excerpts (first ~350 chars). Route through the shared WS2 mobile_clean()
-    # so markdown tables in the LLM reply render as compact `a · b · c` lines instead of
-    # collapsing into an unreadable pipe-wrapped blob on mobile (the .replace("\n"," ") bug).
-    # mobile_clean() adds its own ellipsis on truncation, so no trailing "…" is appended here.
-    # Rafael 2026-09-03: show the FULL report in Slack — NO "link to full report", NO truncated
-    # inline-text preview. Render each provider's COMPLETE reply as clean Block Kit section blocks:
-    # convert GitHub markdown (## headers, **bold**) to Slack mrkdwn, mobile_clean the tables, and
-    # split on line boundaries into <=2900-char blocks (Slack's per-section cap is 3000). Fail-safe:
-    # a provider error collapses to one terse line; total blocks are capped to Slack's 50-block limit.
-    import re as _re
-
-    def _md_to_slack(s: str) -> str:
-        # ATX headers — OPEN (`## x`) or CLOSED (`## x ##`): strip leading AND trailing #, bold the line.
-        s = _re.sub(r"^\s*#{1,6}\s*(.+?)\s*#*\s*$", r"*\1*", s, flags=_re.M)
-        # GitHub bold is `**`; Slack bold is a single `*`. Collapse ANY run of 2+ asterisks to ONE `*`.
-        # This converts **bold** -> *bold*, cleans a truncated/unbalanced `**span` and a `****` rule, and
-        # — unlike a blanket .replace("**","") (cold-2nd R2 FAIL) — NEVER merges two adjacent bold spans:
-        # `**Entry:****Stop:**` -> `*Entry:*Stop:*` (boundary kept), and no literal `**` ever leaks.
-        s = _re.sub(r"\*\*+", "*", s)
-        return s
-
-    def _chunk_lines(s: str, limit: int = 2900) -> list:
-        out: list = []
-        cur = ""
-        for line in s.split("\n"):
-            if len(line) > limit:                       # a single over-long line — hard-split it
-                if cur:
-                    out.append(cur)
-                    cur = ""
-                for i in range(0, len(line), limit):
-                    out.append(line[i:i + limit])
-                continue
-            if cur and len(cur) + 1 + len(line) > limit:
-                out.append(cur)
-                cur = line
-            else:
-                cur = f"{cur}\n{line}" if cur else line
-        if cur:
-            out.append(cur)
-        return out
-
-    def _report_blocks(result: dict, label: str) -> list:
-        if not result["text"]:
-            return [{"type": "section", "text": {"type": "mrkdwn",
-                     "text": f"*{label}:* ❌ {_terse_error(result['error'])}"}}]
-        cleaned = mobile_clean(_md_to_slack(result["text"]))
-        blks = [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{label} — full report*"}}]
-        for chunk in _chunk_lines(cleaned):
-            if chunk.strip():
-                blks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
-        return blks
-
     blocks: list = [
+        {"type": "header", "text": {"type": "plain_text",
+            "text": f"Auto AI {mode_label.title()} · {now_pt.strftime('%b %d')}", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn",
-            "text": f":robot_face: *Auto AI {mode_label.title()} — {ts}*\n"
-                    f"Gro: {'✅' if gro_ok else '❌'}  |  GAI: {'✅' if gai_ok else '❌'}"}},
+            "text": f"*Providers*  Groq {'✅' if gro_ok else '❌'}\n"
+                    f"Google AI Studio {'✅' if gai_ok else '❌'}\n"
+                    f"Run {now_pt.strftime('%I:%M %p PT')}"}},
         {"type": "divider"},
     ]
-    blocks += _report_blocks(gro_result, "Groq")
+    blocks += _meta_report_blocks(gro_result, "Groq")
     blocks.append({"type": "divider"})
-    blocks += _report_blocks(gai_result, "Gemini")
-    # Slack rejects a payload with >50 blocks — cap and note (NO file link; the on-disk archive remains).
-    if len(blocks) > 50:
-        blocks = blocks[:49]
-        blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-            "text": "_(report exceeded Slack's 50-block limit — trimmed to fit)_"}]})
+    blocks += _meta_report_blocks(gai_result, "Google AI Studio")
     fallback = (f"Auto AI {mode_label.title()} — {ts} — "
                 f"Gro {'ok' if gro_ok else 'err'} / GAI {'ok' if gai_ok else 'err'}")
 
     try:
-        resp = requests.post(
-            webhook,
-            json={"blocks": blocks, "text": fallback},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        print("[auto_ai_audit] ✅ Slack summary posted")
+        from alerts import send_slack_blocks
+        if send_slack_blocks(blocks, fallback):
+            print("[auto_ai_audit] ✅ Slack summary posted")
+        else:
+            print("[auto_ai_audit] ⚠️  Slack post failed", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(
             f"[auto_ai_audit] ⚠️  Slack post failed: {exc}",
