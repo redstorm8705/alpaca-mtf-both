@@ -70,22 +70,26 @@ def _touch_heartbeat(status: str = "ok") -> None:
         logger.warning("heartbeat write failed: %s", e)
 
 
-def _clock_state() -> "tuple[bool, float | None]":
-    """(is_open, minutes_to_real_close) via broker.get_clock (half-day aware). On a clock read
-    failure returns (False, None) — fail-safe: treat as CLOSED so no entries fire on a bad clock."""
+def _clock_state() -> "tuple[str, float | None]":
+    """Return (OPEN/CLOSED/UNKNOWN, minutes_to_real_close) from Alpaca's half-day-aware clock.
+
+    UNKNOWN never permits an entry.  It differs from CLOSED because an open day-tier position still
+    needs reconciliation and a scoped forced exit when the clock endpoint is unavailable; treating
+    the two states as identical could leave that intraday-only position unmanaged through the close.
+    """
     from execution import broker
     try:
         clk = broker.get_clock()
         if not clk.get("is_open"):
-            return False, None
+            return "closed", None
         nc = clk.get("next_close")
         if nc is None:
-            return True, None
+            return "open", None
         now = datetime.now(getattr(nc, "tzinfo", None) or ET)
-        return True, (nc - now).total_seconds() / 60.0
+        return "open", (nc - now).total_seconds() / 60.0
     except Exception as e:  # noqa: BLE001
-        logger.warning("clock read failed (treating as closed): %s", e)
-        return False, None
+        logger.warning("clock read failed (entries blocked; owned day-tier positions will flatten): %s", e)
+        return "unknown", None
 
 
 def _maybe_sample_prices() -> None:
@@ -143,10 +147,7 @@ def run_tick() -> dict:
     from strategy.day_tier_entry_trigger import compute_entry_trigger
     from strategy.day_tier_sizing import compute_day_tier_size
 
-    is_open, mins_to_close = _clock_state()
-    if not is_open:
-        _touch_heartbeat("market_closed")
-        return {"skipped": "market_closed"}
+    clock_state, mins_to_close = _clock_state()
     try:
         _acct = broker.get_account()
         equity = float(getattr(_acct, "equity", 0.0) or 0.0)
@@ -158,6 +159,20 @@ def run_tick() -> dict:
         equity = day_start_equity = buying_power = float("nan")
     # Reconcile FIRST — never leave a naked day-tier position across the cron's process boundary.
     recon = dtm.reconcile_open_state()
+
+    # A failed clock read must never be mistaken for a known market closure.  It still cannot prove
+    # that submitting a new entry is safe, but an existing day-tier lot must not be left to cross the
+    # close unmanaged.  force_flat_all is tier-scoped and no-ops when the durable log/state has no
+    # owned target, so this cannot sell an unrelated tier's position.
+    if clock_state == "unknown":
+        targets = dtm._flatten_targets()
+        flattened = dtm.force_flat_all(reason="clock_unavailable") if targets else 0
+        _touch_heartbeat("clock_unknown_force_flat" if targets else "clock_unknown")
+        return {"phase": "clock_unknown", "flattened": flattened,
+                "owned_targets": len(targets), "reconcile": recon}
+    if clock_state != "open":
+        _touch_heartbeat("market_closed")
+        return {"skipped": "market_closed", "reconcile": recon}
 
     # Force-flat window: flatten the tier + NO new entries in the final N min before the real close.
     # An UNKNOWN close-distance (mins_to_close None) is treated as IN-window → fail-CLOSED (flatten,
