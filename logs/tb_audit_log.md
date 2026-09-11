@@ -10015,3 +10015,23 @@ auto-confirm, scoped) is the real Tier-1 build.
   `mypy --warn-unreachable --explicit-package-bases --ignore-missing-imports`: clean; `py_compile` and
   `ruff --select E,W,F,B` passed locally. The broader Brick-2 integration remains blocked on a future
   read-only, timestamped counterfactual strategy-lifecycle archive; no DSR value is fabricated today.
+
+## 2026-09-11 — score-comparison event ledger (data-capture increment)
+
+- **Root evidence:** OCI `score16_history.jsonl` had 1,472 final daily snapshots, but
+  `signal_generator.run_scan()` overwrote its score-comparison JSON on every scan. It preserved no per-scan
+  history, while the EOD records contained only live trades. This prevented reconstructing 12-point versus
+  16-point decision divergence and was the missing data contract discovered by the DSR Brick-2 review.
+- **Scope:** append one fully computed scan event only after the existing daily snapshot has been atomically
+  replaced. The helper makes no market-data or broker call, imports no execution module, reads no state, and
+  cannot alter the returned signals. A write error is caught and logged, returning `False` to the caller.
+- **RC review:** RC-1 no calendar logic; RC-2 absolute `__file__`-anchored log path; RC-3 no external data;
+  RC-4 no Slack payload; RC-5 flush+fsync once per complete event; RC-6 no time comparison; RC-7 no numeric
+  sizing; RC-8 no cache/state mutation. A possible torn final JSONL line is an offline-reader concern and is
+  explicitly specified for the future evaluator to skip, never infer.
+- **External design review:** Groq APPROVE; Google AI Studio APPROVE. Both required schema versioning,
+  explicit scan time, failure isolation, and durability. The unsupported assumption that a regular-file append
+  is automatically atomic was rejected; the design instead documents torn-tail tolerance.
+- **Verification:** local py_compile, Ruff E/W/F/B, and mypy unreachable checks passed. OCI Python 3.10
+  focused tests passed: parseable event with fsync and `OSError` isolation. The code remains deployed-unexercised
+  until the next completed scan writes the new event ledger.

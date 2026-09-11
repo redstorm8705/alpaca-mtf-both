@@ -31,6 +31,7 @@ import config
 
 # Absolute path anchor — prevents CWD-relative write failures (same pattern as kelly.py TB-2 fix)
 _LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+_SCORE_COMPARISON_EVENTS = _LOGS_DIR / "score_comparison_events.jsonl"
 
 # ── NEW-2 (PEAD): per-symbol earnings surprise cache ─────────────────────────
 # Keyed by symbol. Refreshed once per calendar day (daily_reset when date changes).
@@ -42,6 +43,25 @@ from data.sectors import SECTOR_MAP_SG as _SECTOR_MAP_SG  # noqa: E402
 
 logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
+
+
+def _append_score_comparison_event(event: dict) -> bool:
+    """Durably append one completed scan's already-computed score comparison.
+
+    This is evidence capture only. A failed write must never change the scan's
+    returned signals or interrupt the entry path.
+    """
+    try:
+        _SCORE_COMPARISON_EVENTS.parent.mkdir(exist_ok=True)
+        with open(_SCORE_COMPARISON_EVENTS, "a", encoding="utf-8") as out:
+            json.dump(event, out, default=str, separators=(",", ":"))
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+        return True
+    except Exception as exc:
+        logger.warning("Score comparison event append failed: %s", exc)
+        return False
 
 # ── 16-point system thresholds (log only — not traded) ───────────────────────
 SCORE_16PT_MAX     = 20   # extended: +c10 IBS, +c11 Pivot S/R, +c12 FOMC, +c13 PEAD (board-approved 2026-04-20)
@@ -930,6 +950,13 @@ def run_scan(
             f.flush()
             os.fsync(f.fileno())
         _tmp_path.replace(comp_path)
+        _append_score_comparison_event({
+            "schema_v": 1,
+            "scan_time": _now_et.isoformat(),
+            "trade_mode": trade_mode,
+            "universe": universe_size,
+            "tickers": score_comparison,
+        })
     except Exception as e:
         logger.warning(f"Score comparison log write failed: {e}")
 
