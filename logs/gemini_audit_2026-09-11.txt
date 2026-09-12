@@ -1,0 +1,47 @@
+Nightly Gemini Audit — 2026-09-11
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'run_day_tier_shadow.py', 'run_day_tier.py', 'scripts/day_tier_preflight.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_sizing.py', 'execution/broker.py', 'execution/kelly.py', 'execution/ownership_guard.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution.stop_protection | [RIVN], [EWY], [AAPL] — "placed MISSING sell stop" indicates the broker-held state was empty, yet the bot attempted to "protect" them. If these were not actually held by the broker, the bot is operating under a false assumption of protection.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **`pnl_ledger` invariant FAIL**: Occurs repeatedly (19:37, 19:44, 19:50, 19:57, 20:03). While the prompt states this is "PRE-HEAL" telemetry, the drift is consistent and non-zero.
+* **`ownership_guard` reattribution**: `[NVDA] reattributed impossible negative protected replay NVDA/qhm=-2 to intraday`. This indicates a state mismatch between the `qhm` tier and the `intraday` tier ledger, suggesting the `ownership_ledger.json` is not correctly tracking tier-specific share counts.
+* **`QuarterlyHoldManager` entry BLOCKED**: `NVDA tranche 1 — would breach QHM cap (agg 40%/name 20%): need 1 sh, room 0`. This suggests the QHM logic is attempting to add shares despite the cap being reached, indicating a potential logic loop in `quarterly_hold_manager.py`.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity**: The `TRADE EVENTS` list shows `UBER` exit on `2026-09-10` with `pnl: -0.1` and `price: 73.13`. The entry on `2026-09-08` was at `73.08`. A short position (entry 73.08, exit 73.13) should result in a loss of `0.05` per share. With `size: 2`, the P&L should be `-0.10`. The record is mathematically correct, but the `exit_reason: external_close_detected_ah` suggests the bot did not initiate the exit, which is consistent with the `price: null` entry for `NVDA` on `2026-09-08`.
+
+### TRADE INTEGRITY
+* **`NVDA` exit event**: The record for `NVDA` on `2026-09-08` has `price: null` and `price_pending: true`. This is a recording bug; the ledger should not accept an exit event without a resolved price, as it prevents accurate P&L calculation.
+
+### MODIFIED FILE FINDINGS
+* **`execution/day_trade_manager.py`**: The `_bounded_entry_qty` function uses `float(risk_equity)` without checking if `risk_equity` is `None` before the `float()` cast in the `min()` function. If `risk_equity` is `None`, this will raise a `TypeError`, causing the entry to fail closed.
+* **`strategy/day_tier_sizing.py`**: The `compute_day_tier_size` function uses `buying_power` as a basis for Track A sizing. If `buying_power` is `None`, it defaults to `0.0`, which correctly triggers the "fail-closed" logic, but the log message `buying_power unavailable (None)` is misleading as it implies the value was passed but invalid, rather than missing.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H1**: N/A (Deleted)
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+* **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/ownership_guard.py | Ledger drift/mismatch | The `ownership_ledger.json` is failing to maintain consistency between tiers, leading to "impossible negative" reattributions.**
+* **EXECUTION BUG | HIGH | execution/day_trade_manager.py | `_bounded_entry_qty` TypeError | `float(risk_equity)` will raise `TypeError` if `risk_equity` is `None`, causing entry failure.**
+* **INFRASTRUCTURE | MEDIUM | execution/day_trade_manager.py | `_confirm_fill` poll budget | The poll budget is set to 8, but the runner loop is 2-3 minutes. If Alpaca takes >8 seconds to report a fill, the bot will flatten the position unnecessarily.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate Audit of `ownership_ledger.json`**: Manually reconcile the ledger against Alpaca's current positions to resolve the "impossible negative" reattribution.
+2. **Patch `execution/day_trade_manager.py`**: Add a null-check for `risk_equity` in `_bounded_entry_qty` before casting to `float`.
+3. **Review `stop_protection` logic**: Investigate why the bot is attempting to place stops for symbols where the broker-held state is empty, potentially causing the "MISSING sell stop" warnings.
+4. **Increase `DAYTRADE_FILL_POLL_MAX`**: Given the 2-3 minute runner cadence, increase the poll budget to ensure fills are captured before the bot triggers a "flatten" on an unprotected position.
