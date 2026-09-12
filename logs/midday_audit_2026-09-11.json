@@ -1,0 +1,78 @@
+{
+  "audit_date": "2026-09-11",
+  "run_ts": "2026-09-11T10:30:01.862061-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "STRESSED": 21,
+      "ELEVATED": 6
+    },
+    "last_score": 21,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 1,
+    "warning_count": 195,
+    "watchdog_count": 1,
+    "error_samples": [
+      "2026-09-11 17:05:34,176 | ERROR    | main | MRI startup refresh timed out after 64.5s \u2014 level=NORMAL. Will self-correct on first scan cycle."
+    ],
+    "warning_samples": [
+      "2026-09-11 15:52:53,560 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-11 15:52:53,562 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-11 15:55:58,985 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-2 to intraday; prot",
+      "2026-09-11 15:55:58,995 WARNING ledger_sync ledger_sync wall-time 12.5s (fills=587 orders=2691)",
+      "2026-09-11 15:56:06,315 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: GE unaffordable ($324 > RegT BP $80) skip"
+    ],
+    "watchdog_lines": [
+      "2026-09-11 16:44:46,289 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 1,
+    "symbols": [
+      "GEV"
+    ],
+    "by_symbol": {
+      "GEV": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

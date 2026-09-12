@@ -1,0 +1,64 @@
+Midday Gemini Audit — 2026-09-11
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+*(WARN: No catastrophic safety breaches or naked positions; all 4 open positions have protective stops. However, ledger accounting drift and external data feed degradations require mitigation.)*
+
+---
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity & P&L**: Alpaca ground truth recorded 1 fill (`GEV`: 0B/1S), while zero closed trades are recorded in session summary due to known event log degradation (D1). All 4 existing open positions deterministically maintain matching protective stops.
+- **Trade Execution Verification**: No closed trades were completed in the provided window to evaluate entry-to-exit price delta or P&L signs.
+- **Kelly & Regime Drift**: Lifetime stats show `short_intraday` severely underperforming (WR 17.6%, Profit Factor 0.2 across 51 trades), whereas `long_intraday` maintains edge (WR 32.6%, PF 1.35).
+
+---
+
+### ENTRY QUALITY
+- **Discipline Maintained**: The bot successfully filtered out low-quality entries during midday. 
+  - Dynamic score threshold correctly stepped up from base `MIN_LONG_SCORE = 8` / `MIN_SHORT_SCORE = 8` to `effective=9/12` due to MRI (ELEVATED) and GEX (NEGATIVE).
+  - Higher-level weekly bias filters rejected 6 directional counter-trend setups (e.g., TSLA, COIN, CRWD shorts blocked by weekly BULLISH bias; AMZN, DDOG longs blocked by weekly BEARISH bias).
+  - ORB gates successfully blocked 10 breakout/breakdown signals (including AMD, AAPL, SOFI) as SPY (765.56) remained bounded within its range (`ORB_L 764.23` to `ORB_H 765.99`).
+
+---
+
+### EXIT QUALITY
+- No trade exits occurred during the logged window.
+
+---
+
+### MRI ALIGNMENT
+- **Regime Sizing & Caps**: Current session closed at ELEVATED (21/100, STRESSED: 21, ELEVATED: 6). Position sizing floor of 0.85x was appropriately applied.
+- **Feed Failure Handling**: VIX quote feed via FMP failed (`FMP None + cache stale (age=infs)`), triggering the fallback to `yfinance ^VIX=15.7`. Because `_vix_confirmed=False`, the engine properly gated news alert score additions (capped from +35pts to +20pts), demonstrating safe fail-soft behavior.
+
+---
+
+### LOG ANOMALIES
+- **PNL Ledger Invariant Drift**: At `17:23:54,067`, log reported: `WARNING | execution.portfolio_tracker | pnl_ledger unavailable/invariant-fail for 2026-09-11 — dual-compute fallback kept: pnl_ledger invariant FAIL drift=$21.16`.
+- **Data Feed Failure on DRAM**: Repeated warnings: `[DRAM] No daily data — long entry blocked (fail-closed)` and `short entry blocked (fail-closed)`.
+- **Stale Bar Age**: Bar age reported across all scan symbols was ~803–809 minutes old (`bar_age_min: 809.x`). While intraday scanner evaluation was operating, historical volume percentile bars reflect previous session close data.
+
+---
+
+### NEW BUGS / CONCERNS
+
+1. **INFRASTRUCTURE** | **HIGH** | `pnl_ledger` reconciliation invariant failure with $21.16 drift | Exact condition: Occurs during post-EOD FIFO reconciliation when dual-compute P&L verification compares Alpaca reported equity/realized changes against the internal transaction ledger. The variable `drift` evaluated to `$21.16` (exceeding tolerance), forcing an automated fallback to dual-compute mode.
+2. **INFRASTRUCTURE** | **MEDIUM** | Missing daily bar data for DRAM causing continuous fail-closed warnings | Exact condition: When ticker `DRAM` is evaluated in intraday mode, Alpaca daily bar feed returns empty barsets, forcing `confluence` to block entries fail-closed every cycle.
+3. **ALPHA ISSUE** | **MEDIUM** | Negative expectancy short intraday strategy draining capital | Exact condition: Across 51 closed trades in `short_intraday`, win rate is 17.6% with a profit factor of 0.20, indicating systematic regime misalignment for short intraday signals.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **INFRA**: Investigate the $21.16 `pnl_ledger` invariant drift in `execution/portfolio_tracker.py` between the Alpaca FIFO trade ledger and internal tracking to prevent ledger desynchronization.
+2. **INFRA**: Clean up scanner universe or update symbol mapping for `DRAM` to resolve the empty daily bar response and eliminate repetitive warning overhead.
+3. **ALPHA**: Re-evaluate intraday short criteria or raise minimum score thresholds specifically for `short_intraday` to curb negative expectancy (PF 0.20).
