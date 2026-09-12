@@ -1,0 +1,13 @@
+{
+  "schema_v": 1,
+  "complete": false,
+  "scope": "Score-selection and sizing shadow variants considered by the learning loop.",
+  "attestation_required": "Set complete to true only after an operator has audited every historical and current trial in this scope. The evaluator refuses DSR until then.",
+  "trials": [
+    {"id": "baseline_12pt_confluence", "status": "production"},
+    {"id": "score_16pt_shadow", "status": "shadow"},
+    {"id": "delta_of_signal_shadow", "status": "shadow"},
+    {"id": "volume_confirmation_shadow", "status": "shadow"},
+    {"id": "tsmom_sizing_variant", "status": "staged"}
+  ]
+}
