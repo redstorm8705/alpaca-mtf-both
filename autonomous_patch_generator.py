@@ -771,10 +771,16 @@ def main() -> None:
             f"the review LLM (transient, will retry next run).\n{_tail}"
         )
     else:
-        _slack(
-            f"ℹ️ *autonomous_patch_generator.py — {ts_pt}*\n\n"
-            f"{len(directives)} directive(s) reviewed, 0 auto-patched — expected: auto-patching is "
-            f"scoped to non-risk-path files (docs/tests).\n{_tail}\nNo action needed."
+        # No Slack on a "pipeline working normally, nothing to action" run (Rafael 2026-09-13):
+        # this branch fires only when processed=permanent=retry=0, i.e. every directive was a
+        # risk-path→human route and/or a board-decline — both NORMAL outcomes that need no
+        # immediate action. The old ℹ️ "No action needed" ping was pure channel noise. The
+        # risk-path items still reach the operator via the session-start audit digest (they stay
+        # in audit_directives.jsonl as skipped_risk_path), so muting the ping loses nothing. A run
+        # that auto-patched (🔧) or hit a structural/transient failure (⚠️) still Slacks above.
+        _log(
+            f"No Slack (nothing to action): {len(directives)} directive(s) reviewed, 0 auto-patched "
+            f"(non-risk-path scope) — {_tail}"
         )
 
     _log(
