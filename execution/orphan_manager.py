@@ -102,6 +102,35 @@ def tod_size_multiplier(tod_phase: str) -> float:
     }.get(tod_phase, 1.0)
 
 
+def _is_trading_day_today() -> Optional[bool]:
+    """Whether today (ET date) is a trading day per the Alpaca calendar: True,
+    False, or None if the calendar cannot be read. Verbatim mirror of
+    scripts/pnl_snapshot.py::_is_trading_day_today (same reporting.pnl_ledger REST
+    plumbing + list/dict/date check), lazy-imported to avoid module-load ordering.
+
+    FAIL-OPEN by design (board 3-1, 2026-09-13): callers treat None (unreadable
+    calendar) as 'assume a trading day' — the CURRENT cancel-before-RTH behavior,
+    whose worst case is an unnecessary cancel in a closed market that the after-hours
+    path re-arms. Failing CLOSED (retain on an unreadable calendar) would strand a
+    GTC in held_for_orders through a real RTH session, blocking exits all day (see
+    :330-332) — the worse polarity. Never raises."""
+    today = datetime.now(ET).strftime("%Y-%m-%d")
+    try:
+        from reporting import pnl_ledger as _pl
+        cal = _pl._get_json(
+            f"{_pl._PAPER_BASE}/v2/calendar?start={today}&end={today}"
+        )
+    except Exception as _e:
+        logger.debug(
+            "orphan_manager: trading-day calendar check failed (%s) — fail-open",
+            _e,
+        )
+        return None
+    if not isinstance(cal, list):
+        return None
+    return any(isinstance(d, dict) and d.get("date") == today for d in cal)
+
+
 # ---------------------------------------------------------------------------
 # GTC stop reconciliation (pre-market)
 # ---------------------------------------------------------------------------
@@ -208,6 +237,24 @@ def cancel_and_reconcile_gtc_stops(
         f"GTC reconciliation: checking {len(gtc_positions)} "
         f"overnight stop order(s)."
     )
+
+    # Wall-clock TOD is calendar-BLIND: get_tod_phase() returns "premarket" in the
+    # 08:45-09:30 ET window on ANY day, so on a weekend/holiday the premarket cancel
+    # below wrongly strips overnight GTC stops (observed live 2026-09-13). Compute the
+    # trading-day check ONCE and treat a NON-trading day like the "closed" phase at
+    # BOTH gates below (the adoption/retain gate and Patch 1's resubmit gate). This is
+    # NOT a naked "skip the cancel": the same stop price/qty/side validation still
+    # runs, so a VALIDATED stop is retained while a stale/mismatched one still
+    # cancels+resubmits (the flaw that got 05ad911 rejected). FAIL-OPEN: None on an
+    # unreadable calendar -> _nontrading_today stays False -> current behavior kept.
+    _nontrading_today = (_is_trading_day_today() is False)
+    if _nontrading_today:
+        logger.info(
+            "GTC reconciliation: today is NOT a trading day (Alpaca calendar) — "
+            "treating as the 'closed' phase: validated overnight GTC stops are "
+            "RETAINED (premarket cancel skipped); stale/mismatched stops still "
+            "cancel+resubmit."
+        )
 
     for symbol, trade in gtc_positions:
         order_id = trade.get("gtc_stop_order_id")
@@ -352,7 +399,7 @@ def cancel_and_reconcile_gtc_stops(
                 )
                 continue
 
-            if get_tod_phase() == "closed":
+            if get_tod_phase() == "closed" or _nontrading_today:
                 # Idempotent adoption: order was fetched BY the stored ID, so
                 # identity is established — only check the params are current.
                 # Stop comparator matches submission source (trail_stop or
@@ -589,7 +636,7 @@ def cancel_and_reconcile_gtc_stops(
     # this function already cancelled all GTC stops (above), so running this
     # block immediately re-submits them, creating an endless cancel/re-submit
     # loop every 10 min that burns rate limits and locks held_for_orders flags.
-    if get_tod_phase() == "closed":
+    if get_tod_phase() == "closed" or _nontrading_today:
         # Historical note (Bug 6 fix, Apr 14 2026): this block originally added
         # a PDT=3/3 + opened_today guard to match the AH GTC loop, avoiding a
         # 40310100 rejection + false-alarm Slack alert for today-opened
