@@ -88,6 +88,8 @@ _DIP_VS50_MAX = 3.0      # within +3% of the 50d MA (not extended)
 _DIP_OFFHIGH_MAX = -4.0  # >=4% off the 20d high
 _EARN_LOOKAHEAD_DAYS = 55  # "next month" + runway
 _SHORTLIST_N = 10          # enrich + board this many top dips
+_MAX_BOARD_BLOCKS = 6      # cap on Slack "Board read" section blocks (exec summary is 2-3 picks) —
+                           # bounds output so a verbose/malformed board response can't flood Slack
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: float = _TIMEOUT):
@@ -385,21 +387,55 @@ def build_slack(today: str, ranked: list[dict], holds: list[dict], equity: float
             cap_flag = " · ⚠️ OVER CAP" if h.get("over_cap") else ""
             blocks.append(_sec(f"• *{h['sym']}* {h.get('pct_eq','?')}% of equity{cap_flag}\n{h.get('dip','')}"))
     blocks.append(_DIV)
-    blocks.append(_sec("*Board read* (draft — full thesis in the memo)"))
-    blocks.append(_sec(top_board_summary(ranked)))
+    blocks.append(_sec("*Board read* — top picks (draft; full thesis in the memo)"))
+    blocks.extend(_board_read_blocks(ranked))
     blocks.append(_DIV)
     blocks.append(_ctx(f"Full memo: logs/quarterly_holds_research_{today}.md · "
                        f"{datetime.now(PT).strftime('%b %d · %I:%M %p PT')} · cap {int(_QHM_AGG_CAP_PCT*100)}% agg / {int(_QHM_NAME_CAP_PCT*100)}% name"))
     return blocks, fallback
 
 
-def top_board_summary(ranked: list[dict]) -> str:
-    """A short scannable board verdict for Slack (the full board text lives in the memo)."""
+def _board_read_blocks(ranked: list[dict]) -> list:
+    """The board EXECUTIVE SUMMARY as SEPARATE readable section blocks — one per pick/bullet — so it
+    is never a truncated inline wall (Rafael 2026-09-13: 'sent in parts, not inline, readable').
+    Falls back to a single 'pending' note when no board verdict is available."""
+    summary = ""
     for r in ranked:
         v = r.get("board_verdict")
         if v:
-            return v[:700]
-    return "_Board section pending (LLM voices unavailable this run) — see memo._"
+            summary = v.strip()
+            break
+    if not summary:
+        return [_sec("_Board section pending (LLM voices unavailable this run) — see memo._")]
+    parts: list[str] = []
+    cur: list[str] = []
+    for ln in summary.splitlines():
+        if re.match(r"^\s*[-*•]\s+", ln) and cur:   # a new bullet begins a new readable part
+            parts.append("\n".join(cur).strip())
+            cur = [ln]
+        else:
+            cur.append(ln)
+    if cur:
+        parts.append("\n".join(cur).strip())
+    parts = [p for p in parts if p]
+    if not parts:                                    # no bullets found → render as one part
+        parts = [summary]
+    # Bound the block count (Gro preship 2026-09-13): at most _MAX_BOARD_BLOCKS section blocks, each
+    # within the _sec 2900-char limit. A verbose/malformed board response is capped, never flooded
+    # into Slack; the full thesis always lives in the memo. (send_slack_blocks also chunks at <=45,
+    # so this is defense-in-depth against message spam, not a crash guard.)
+    out: list = []
+    truncated = False
+    for p in parts:
+        if len(out) >= _MAX_BOARD_BLOCKS:
+            truncated = True
+            break
+        out.append(_sec(p[:2800]))
+        if len(p) > 2800:
+            truncated = True
+    if truncated:
+        out.append(_ctx("…board read trimmed for Slack — full thesis in the memo."))
+    return out
 
 
 # ── Board (Gro + GAI, 4-lens) ──────────────────────────────────────────────────────────────────
@@ -604,7 +640,7 @@ def main() -> int:
         gro, gai = run_board(ranked, holds_rows, equity)
     if gro and ranked:
         exec_sum = _extract_section(gro, "EXECUTIVE SUMMARY")
-        ranked[0]["board_verdict"] = (exec_sum or gro.strip().split("\n\n")[0])[:700]
+        ranked[0]["board_verdict"] = (exec_sum or gro.strip().split("\n\n")[0])[:6000]
 
     # 6) memo (atomic) + Slack
     memo = build_memo(today, ranked, holds_rows, equity, gro, gai)
