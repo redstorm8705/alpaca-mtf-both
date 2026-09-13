@@ -180,19 +180,25 @@ def compute_snapshot() -> dict:
 
 
 def _tier_rows(tier_vals: dict, pos_lines: dict, empty_word: str) -> list:
-    """Compact per-tier rows: active tiers show name+total then inline positions; tiers with
-    nothing are collapsed into a single dim line. Shared by the unrealized + realized cards."""
+    """Compact per-tier rows for the realized card (only caller: build_realized_card). A tier with
+    ONE close renders on a single line ("*QHM* · GEV −$14.99") — no redundant separate tier-total,
+    since it equals the lone position (the double-print Rafael flagged). A tier with MULTIPLE closes
+    leads with the tier total, then the inline positions. Tiers with nothing collapse into one dim
+    line ("Intraday / Forever-6 / Day-Trade — no closes")."""
     rows: list = []
     flat: list = []
     for t in _TIERS:
         lines = pos_lines.get(t, [])
-        if lines:
-            pos = " · ".join(f"{sym} {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
-            rows.append(f"*{_TIER_LABEL[t]}*  {_dollar(tier_vals[t])}\n{pos}")
-        else:
+        if not lines:
             flat.append(_TIER_LABEL[t])
+            continue
+        pos = " · ".join(f"{sym} {_dollar(pv)}" for sym, pv in sorted(lines, key=lambda x: x[1]))
+        if len(lines) == 1:
+            rows.append(f"*{_TIER_LABEL[t]}* · {pos}")                              # tier · lone position
+        else:
+            rows.append(f"*{_TIER_LABEL[t]}*  {_dollar(tier_vals[t])} · {pos}")     # total + inline positions
     if flat:
-        rows.append(f"_{' · '.join(flat)}: {empty_word}_")
+        rows.append(f"_{' / '.join(flat)} — {empty_word}_")
     return rows
 
 
@@ -345,21 +351,30 @@ def compute_realized_snapshot() -> dict:
 
 
 def build_realized_card(s: dict) -> dict:
-    """Render the REALIZED snapshot as a compact Slack Block Kit payload (no equity, inline
-    positions, empty tiers collapsed)."""
+    """Render the post-close REALIZED card in Rafael's adopted layout. The ACCOUNT day P&L (Alpaca's
+    exact day number) is the bold headline; the realized closed-trade P&L sits below it; then the
+    compact per-tier breakdown. Header carries the date + time. Headline + breakdown share one
+    section (fewer Block Kit blocks — Rafael's 'too cluttered' feedback)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
+    date_pt = datetime.now(PT).strftime("%a %b %-d")             # "Fri Sep 11"
     sign_pct = f"{s['account_pct']:+.2f}%"
-    rows = ["*Realized by tier*"]
-    rows += _tier_rows(s["tier_realized"], s["pos_lines"], "none")
+    rows = _tier_rows(s["tier_realized"], s["pos_lines"], "no closes")
     if abs(s.get("unattributed", 0.0)) >= 0.50:      # rounding/edge guard — should not normally render
         rows.append(f"_Unattributed {_dollar(s['unattributed'])}_")
+    _acct_disp = _dollar(s["account_today"])                    # _dollar signs only negatives ...
+    if s["account_today"] > 0:
+        _acct_disp = "+" + _acct_disp                           # ... make a positive day explicit in the headline
+    body = (
+        f"*Account today   {_acct_disp}   ({sign_pct})*\n"
+        f"Realized (closed trades)   {_dollar(s['total_realized'])}\n"
+        + "\n".join(rows)
+    )
     blocks: list = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"📕 Realized · Close · {now_pt}", "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Realized today  {_dollar(s['total_realized'])}*   ·   day {_dollar(s['account_today'])} ({sign_pct})"}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(rows)}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"📕 Close · {date_pt} · {now_pt}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": body}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": "closed-trade P&L, Alpaca FIFO · booked to the opening tier"}]},
     ]
-    fallback = f"Realized {now_pt}: realized {_dollar(s['total_realized'])}, day {_dollar(s['account_today'])}"
+    fallback = f"Close {now_pt}: account {_dollar(s['account_today'])} ({sign_pct}), realized {_dollar(s['total_realized'])}"
     return {"blocks": blocks, "text": fallback}
 
 
