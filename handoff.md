@@ -8,6 +8,36 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-09-13, interactive Rafael present) — pick up here
+
+**SLACK-CARD UX REDESIGN — 3 ships, merged to main + pulled to OCI HEAD `1ef74bc`, deployed-unexercised (2026-09-13).** Rafael adopted a redesign of four
+Slack cards; three shipped (the fourth — the DS/GAI-failure alert in `autonomous_review.py` — was
+deliberately left as-is, already deduped). (1) **PR #298** `weekly_postmortem.py` — post-mortem card:
+drop the long/short arrow (it read as a false win/loss marker next to P&L), `—` for empty exit-reason,
+rows sorted worst→best, header relabels ("left on table", `·` seps, earnings only when nonzero, `-$X`
+total, monospace block). (2) **PR #299** `scripts/pnl_snapshot.py` — realized close card: account day
+P&L is the bold headline with realized below it, dated+timed header, compact per-tier rows (single-close
+tier on one line, no redundant total). (3) **PR #300** `autonomous_patch_generator.py` — muted the "No
+action needed" end-of-run ping (else branch → `_log`). ALL display/notification-only, off the trading
+thread; each fully gated (statics + OCI py3.10 + cold-2nd PASS + adversarial PASS + Gro/GAI preship
+APPROVE + log-exempt). Deployed-unexercised until each cron next runs (post-mortem Sat 09-19; realized
+card Mon 09-15 post-close; patch-gen next weeknight). verify: `gh pr view 298/299/300 --json state`→MERGED;
+OCI HEAD `1ef74bc`.
+
+**⏭️ NEXT PICK-UP (highest priority — SAFETY): the STOP-PROTECTION repair.** The wall-clock TOD
+classification bug is present (trace-backed in the design record) — `orphan_manager` cancels overnight
+GTC stops on weekends/holidays (OCI log 09-13 classified a Sunday as "premarket" and cancelled AAPL/EWY/
+RIVN GTC stops; they were stopless until the after-hours resubmit, market-closed so zero fill risk). ChatGPT's minimal fix (local commit `05ad911` on branch `hotfix/stop-protection-calendar`)
+was **board-REJECTED 3-0** (it deleted price/qty/side validation → could report a wrong/stale order as
+protection) and is **QUARANTINED — local only, never pushed, do NOT ship.** A revised full-verified-
+protection design is drafted (uncommitted; stashed as `chatgpt-stop-protection-wip-2026-09-13`, see
+`git stash list`) expanding scope to broker+orphan_manager+gtc_manager+exit_logic. **OPEN SCOPE FORK for
+Rafael:** minimal-safe-fix vs full state-machine rebuild — convene board+Gro+GAI first (Open Question
+Protocol). ALSO QUEUED: **day-tier zero-trades** — BP sizing has been live since PR #288 but the tier has
+placed ZERO trades; run `scripts/day_tier_preflight.py` at the Mon 09-15 open before trusting it (the
+"deployed ≠ ready" lesson).
+
+_(prior 2026-09-08 block below)_
 ## ⏩ LATEST (2026-09-08) — pick up here
 **MOST RECENT SHIP (2026-09-08, PR #283 → main+OCI `a88d8ea`):** Deflated/Probabilistic Sharpe brick 1 `research/deflated_sharpe.py` — PSR + DSR (Bailey & LdP) to correct a Sharpe for sample length, non-normality, and MULTIPLE TESTING across shadow signals (learning-loop TW-1 / whitespace-eval #1). Pure numpy/scipy, READ-ONLY, off the risk path, **no live caller yet** (brick 2 wires it into the IC report). Contracts: per-obs return SERIES in (no annualized scalar); hard n<30 floor→NaN+sharpe_not_noise False; normal-Sharpe fallback <50; DSR requires positive-finite trials_sr_std (None/NaN/≤0→DSR NaN, no SE fallback); sr_standard_error exposed for a Kelly haircut. Gate: statics + 14/14 tests (OCI py3.10) + cold-2nd PASS + adversarial PASS (round 2 — round 1 caught a real masked-number defect: NaN σ_trials→undeflated PSR as confident DSR; fixed) + Gro/GAI preship APPROVE (both files) + board design pass (LdP+Thorp+Gro+GAI). KNOWN NIT (deferred, unreachable): expected_max_sharpe returns 0 at n_trials≥6.6e15 — harden to NaN when brick 2 lands. Design: logs/design_records/deflated_sharpe_2026-09-07.md. verify: `gh pr view 283 --json state`→MERGED; OCI `venv/bin/python3 -m unittest tests.test_deflated_sharpe`→14 OK; no live caller: `grep -rl deflated_sharpe --include=*.py . | grep -vE 'research/deflated_sharpe.py|tests/'`→empty; read-only/no-execution-import: `grep -nE 'import (execution|strategy|broker)|open\(|requests' research/deflated_sharpe.py`→none.
 **PRIOR SHIP (2026-09-08, PR #281 → main+OCI `90d1487`):** GEX Friday-0DTE fix `data/gex.py` — the day-tier took ZERO trades Fri 2026-09-04 because `refresh_gex`'s `_expiry_range` window collapses to a 0DTE-only span on Fridays → regime UNKNOWN → day-tier Layer-B stand-down. Fix = new `_signal_expiry_range()`/`_signal_window_for()`: **Friday-CONDITIONAL** skip-0DTE — weekly (non-OpEx) Friday → `[tomorrow ET, +8d]` (validated by the #259 soak: SPY/QQQ levels_ok=True, pin 0.14–0.34% from spot); **Mon–Thu BYTE-IDENTICAL** to `_expiry_range` (kelly's live SPY x1.15/x1.30 input unchanged; kelly is Friday-carved-out anyway per kelly.py:365-366) → **ZERO main-book sizing change any day**; **monthly-OpEx Friday (3rd Fri) STANDS DOWN** (un-soaked). Weekend report keeps `_expiry_range`. Also: `dte`/`expiry` from the FRONT (pin) expiry (load-bearing — feeds day-tier `act_ok`); `[GEX_REGIME_RESTORED]` log; `_fetch_contracts` page-cap WARN. RISK-PATH: board (signal seat + risk-asymmetry seat) + Gro + GAI all APPROVE-WITH-CHANGES (folded); cold-2nd PASS + adversarial PASS (5/5 claims confirmed at source) + Gro/GAI preship APPROVE. mtf-writer+mtf-bot RESTARTED (market closed). Manifests only on Fridays (next 09-11). Design: logs/design_records/gex_skip0dte_fix_2026-09-07.md. verify: `gh pr view 281 --json state`→MERGED; OCI `git rev-parse --short HEAD`→`90d1487`; OCI `venv/bin/python3 -m unittest tests.test_gex_signal_window`→7 OK.
