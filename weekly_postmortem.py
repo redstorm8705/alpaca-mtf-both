@@ -629,7 +629,7 @@ def _build_wtp_table(
         "----------|-----|------|--------|-------|------------|-------------|\n"
     )
     full_rows  = []
-    slack_compact: list[str] = []   # mobile-friendly one-liner per trade (replaces the wide Slack table)
+    slack_rows: list[tuple] = []    # (pnl_sort_key, monospace row) — sorted worst→best for the Slack post
     total_pnl  = 0.0
     agg_missed = 0.0
 
@@ -680,11 +680,15 @@ def _build_wtp_table(
             f"{score} | {mri} | {earn_s} | {tqi} | {hold_s} | {r_s} | "
             f"{stage} | {wkly_s} | {delta_s} |"
         )
-        # Mobile-friendly one-liner (the wide 9-col markdown table wrapped into unreadable soup on
-        # phones — Rafael 2026-08-30). The full 15-col table stays in the .md report + Gemini prompt.
-        # "vs wkly" = Exit→weekly-close delta (positive = the bot exited early / left money on the table).
-        slack_compact.append(
-            f"{dir_s} *{sym}*  {pnl_s}  ·  {rsn_s}  ·  vs wkly {delta_s}  ·  {stage}"
+        # Mobile-friendly monospace row per trade. Drops the ambiguous long/short arrow (dir_s) that
+        # read as a win/loss marker next to P&L; an empty exit-reason renders as "—" (not a dangling
+        # "· ·"); rows are sorted worst→best on return so the biggest loss sits on top. The full 15-col
+        # table (with direction) stays in the .md report + Gemini prompt. "(vs wk X)" = Exit→weekly-close
+        # delta (positive = the bot exited early / left money on the table; direction already baked in).
+        _rsn = rsn_s or "—"
+        _sk  = pnl if pnl is not None else float("inf")   # unmatched (P&L '?') sort last
+        slack_rows.append(
+            (_sk, f"{sym:<5} {pnl_s:>8}  {_rsn:<12} {stage:<8} (vs wk {delta_s})")
         )
 
     stats = {
@@ -699,7 +703,8 @@ def _build_wtp_table(
         "unmatched":    sum(1 for t in trades if t.get("_unmatched")),
     }
     full_table = full_header + "\n".join(full_rows)
-    return full_table, "\n".join(slack_compact), stats
+    slack_rows.sort(key=lambda r: r[0])   # worst (most negative P&L) first; unmatched ('?') last
+    return full_table, "\n".join(row for _, row in slack_rows), stats
 
 # ── Gemini ─────────────────────────────────────────────────────────────────────
 
@@ -837,20 +842,24 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
     if not SLACK_WEBHOOK:
         logger.warning("SLACK_WEBHOOK_URL not set — skipping Slack.")
         return
-    pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
-    _unm = f" | Unmatched (pre-window): `{stats['unmatched']}`" if stats.get("unmatched") else ""
+    _pnl_disp = (f"+${stats['total_pnl']:.2f}" if stats["total_pnl"] >= 0
+                 else f"-${abs(stats['total_pnl']):.2f}")   # -$36.67, matching the per-row style
+    _unm = f"  ·  unmatched (pre-window) `{stats['unmatched']}`" if stats.get("unmatched") else ""
     # A non-authoritative (fills-fetch-failed) run leads with a loud warning so the operator never
     # reads the fallback tracker estimate as Alpaca-FIFO truth (data-integrity board T1).
     _warn = (":warning: *fills fetch INCOMPLETE — figures are the trade_events estimate, NOT "
              "authoritative Alpaca-FIFO P&L; investigate.*\n") if fallback_note else ""
+    # Earnings-adjacent only surfaces when non-zero (0 was pure noise). Per-trade rows go in a
+    # monospace code block (aligned columns, worst→best) so they never render as wrapped soup.
+    _earn_seg = f"  ·  earnings-adj `{stats['earnings_cnt']}`" if stats.get("earnings_cnt") else ""
+    _rows = f"_worst → best_\n```\n{slack_lines}\n```\n" if slack_lines.strip() else ""
     msg = (
         _warn
-        + f":bar_chart: *Weekly Trade Post-Mortem — {week_str}*\n"
-        f"P&L (Alpaca-FIFO): `{pnl_sign}${stats['total_pnl']}` | "
-        f"W/L: `{stats['winners']}/{stats['losers']}` | "
-        f"Earnings-adjacent: `{stats['earnings_cnt']}` | "
-        f"Agg. missed move: `${stats['agg_missed']}`{_unm}\n"
-        f"{slack_lines}\n"
+        + f":bar_chart: *Weekly Post-Mortem — {week_str}*\n"
+        f"P&L (Alpaca-FIFO): `{_pnl_disp}`  ·  "
+        f"W/L `{stats['winners']}/{stats['losers']}`  ·  "
+        f"left on table `${stats['agg_missed']}`{_earn_seg}{_unm}\n"
+        f"{_rows}"
         f"_Full 15-col table + Gemini analysis: `logs/{report_path.name}`_"
     )
     _slack_raw(msg)
