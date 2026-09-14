@@ -10035,3 +10035,28 @@ auto-confirm, scoped) is the real Tier-1 build.
 - **Verification:** local py_compile, Ruff E/W/F/B, and mypy unreachable checks passed. OCI Python 3.10
   focused tests passed: parseable event with fsync and `OSError` isolation. The code remains deployed-unexercised
   until the next completed scan writes the new event ledger.
+
+## 2026-09-13 — RTH DAY-stop backstop: CONFIRMED OPEN GAP (root cause held for Mon 09-15 open)
+
+**Finding (Alpaca-authoritative).** On 2026-09-12 the premarket reconcile cancelled AAPL/EWY/RIVN overnight
+GTC stops at 09:13 ET (correct — cancel before RTH). NO exchange DAY stop was placed for them during 09-12
+RTH: AAPL's full 09-12 stop-order history = ONE cancelled GTC (created 09-11 20:36 UTC, canceled 09-12
+12:53 UTC). `gtc_manager.submit_rth_day_stops` logged 0 lines on 09-12 (fired 09-08/09/10/11 but each only
+saw QHM holds -> "already have exchange-level stop protection"; NO positive example of it re-arming a
+cancelled INTRADAY stop). So intraday overnight positions ran 09-12 RTH on the software stop (`check_exits`)
+ALONE — no exchange backstop.
+
+**Severity: bounded.** Naked only if the bot is down/hung during RTH; the software stop is the primary,
+active-every-cycle protection. Belt-and-suspenders exchange-backstop hole, not an immediate blow-up.
+
+**Root cause NOT determined (NO-GUESS).** run_cycle reached the `_submit_rth_day_stops` call at
+strategy/run_cycle.py:914 (full RTH cycle set present on 09-12 — opening from 09:37 ET onward); the
+trade_engine shim (trade_engine.py:163) has no gate; the 09-12 premarket cancel cleared the GTC id cleanly
+(no "Could not cancel" warning). Yet submit_rth_day_stops never logged on 09-12 — its once-per-date gate
+returned early. Candidate causes (UNVERIFIED): the `_rth_day_stops_submitted_dates` once-per-date gate x a
+restart/state interaction, or a cancel/re-arm ordering issue. Must be nailed before any fix.
+
+**HELD for Mon 2026-09-15 open (Rafael 2026-09-13):** watch the 9:30 open live — does submit_rth_day_stops
+re-arm AAPL/EWY/RIVN? — capture conditions, THEN fix through the full risk-path gate. This is the board-
+flagged "RTH handoff" edge, now with concrete evidence. DISTINCT from PR #303 (weekend/holiday strip, shipped
++ live-verified 09-13).

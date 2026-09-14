@@ -10,32 +10,39 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-09-13, interactive Rafael present) — pick up here
 
-**SLACK-CARD UX REDESIGN — 3 ships, merged to main + pulled to OCI HEAD `1ef74bc`, deployed-unexercised (2026-09-13).** Rafael adopted a redesign of four
-Slack cards; three shipped (the fourth — the DS/GAI-failure alert in `autonomous_review.py` — was
-deliberately left as-is, already deduped). (1) **PR #298** `weekly_postmortem.py` — post-mortem card:
-drop the long/short arrow (it read as a false win/loss marker next to P&L), `—` for empty exit-reason,
-rows sorted worst→best, header relabels ("left on table", `·` seps, earnings only when nonzero, `-$X`
-total, monospace block). (2) **PR #299** `scripts/pnl_snapshot.py` — realized close card: account day
-P&L is the bold headline with realized below it, dated+timed header, compact per-tier rows (single-close
-tier on one line, no redundant total). (3) **PR #300** `autonomous_patch_generator.py` — muted the "No
-action needed" end-of-run ping (else branch → `_log`). ALL display/notification-only, off the trading
-thread; each fully gated (statics + OCI py3.10 + cold-2nd PASS + adversarial PASS + Gro/GAI preship
-APPROVE + log-exempt). Deployed-unexercised until each cron next runs (post-mortem Sat 09-19; realized
-card Mon 09-15 post-close; patch-gen next weeknight). verify: `gh pr view 298/299/300 --json state`→MERGED;
-OCI HEAD `1ef74bc`.
+**STOP-PROTECTION FIX — SHIPPED + LIVE-VERIFIED (PR #303 → main+OCI `47ff12a`, mtf-bot restarted 2026-09-13).**
+RISK-PATH; shipped as **Option T** (targeted calendar gate, not the full rebuild) through the full risk-path
+gate. `orphan_manager` now
+checks the Alpaca calendar before the premarket GTC-stop cancel: a NON-trading day is treated like the
+"closed" phase at BOTH gates (adoption/retain `:399` + Patch-1 resubmit `:639`), reusing pnl_snapshot's
+proven `_is_trading_day_today()`. A validated stop is RETAINED; a stale one still cancels+resubmits (the
+`05ad911` deleted-validation flaw is NOT reintroduced); FAIL-OPEN on an unreadable calendar. Fixes the
+weekend/holiday stop-strip observed live 09-13. **VERIFIED LIVE** at the 23:29 restart — the new "today is
+NOT a trading day" path fired; the 3 stale-offset stops cancelled+resubmitted at tracker price; all 7
+positions now hold GTC stops. Gate: full read 1756L + board (2 cold seats) + Gro + GAI + adversarial cold-2nd
+PASS (8-property naked-position trace) + statics/OCI-3.10 + log-evidence. The board-REJECTED minimal fix
+`05ad911` (local branch `hotfix/stop-protection-calendar`) stays **QUARANTINED — never pushed, do NOT ship.**
+verify: `gh pr view 303 --json state`→MERGED; OCI HEAD `47ff12a`; `grep -c _nontrading_today execution/orphan_manager.py`→5.
 
-**⏭️ NEXT PICK-UP (highest priority — SAFETY): the STOP-PROTECTION repair.** The wall-clock TOD
-classification bug is present (trace-backed in the design record) — `orphan_manager` cancels overnight
-GTC stops on weekends/holidays (OCI log 09-13 classified a Sunday as "premarket" and cancelled AAPL/EWY/
-RIVN GTC stops; they were stopless until the after-hours resubmit, market-closed so zero fill risk). ChatGPT's minimal fix (local commit `05ad911` on branch `hotfix/stop-protection-calendar`)
-was **board-REJECTED 3-0** (it deleted price/qty/side validation → could report a wrong/stale order as
-protection) and is **QUARANTINED — local only, never pushed, do NOT ship.** A revised full-verified-
-protection design is drafted (uncommitted; stashed as `chatgpt-stop-protection-wip-2026-09-13`, see
-`git stash list`) expanding scope to broker+orphan_manager+gtc_manager+exit_logic. **OPEN SCOPE FORK for
-Rafael:** minimal-safe-fix vs full state-machine rebuild — convene board+Gro+GAI first (Open Question
-Protocol). ALSO QUEUED: **day-tier zero-trades** — BP sizing has been live since PR #288 but the tier has
-placed ZERO trades; run `scripts/day_tier_preflight.py` at the Mon 09-15 open before trusting it (the
-"deployed ≠ ready" lesson).
+**ALSO SHIPPED this session (all merged→OCI, display/notification-only, deployed-unexercised until each cron/path next runs):**
+#298 `weekly_postmortem.py` card · #299 `scripts/pnl_snapshot.py` realized-close card · #300
+`autonomous_patch_generator.py` "no-action" ping mute · #302 `scripts/qhm_thesis.py` "Board read" rendered in
+readable per-pick parts (bounded ≤6 blocks). Plus the ChatGPT↔Claude coordination prompt
+(`logs/chatgpt_coordination_prompt.md`) + `logs/CROSS_ACCOUNT_CHANGELOG.md` (both accounts append + read it to
+catch up fast — per the parallel-handoff model). All fully gated.
+
+**⏭️ NEXT PICK-UP — MONDAY 2026-09-15 OPEN (both market-hours-gated; Rafael 2026-09-13 held both for the open):**
+1. **RTH DAY-stop backstop — CONFIRMED OPEN GAP (root cause held for Mon open).** Alpaca-authoritative: on
+   09-12 AAPL/EWY/RIVN's overnight GTC was cancelled premarket (09:13 ET) and **NO DAY stop was ever placed
+   during RTH** — `submit_rth_day_stops` (gtc_manager) logged **0 lines on 09-12** (fired 09-08..09-11 but only
+   ever saw QHM "already protected" — NO positive example of it re-arming a cancelled INTRADAY stop). So
+   intraday overnight positions run RTH on the software stop (`check_exits`) ALONE, no exchange backstop —
+   BOUNDED (naked only if the bot is down/hung during RTH), but a real risk-path gap. Root cause NOT determined
+   (no-guess). **ACTION: watch the Mon 9:30 open live** — does `submit_rth_day_stops` re-arm AAPL/EWY/RIVN? —
+   capture conditions, THEN fix through the full risk-path gate. (The board-flagged "RTH handoff" edge, now with
+   evidence. Logged in `logs/tb_audit_log.md` 2026-09-13.)
+2. **day-tier zero-trades** — BP sizing live since #288 but the tier has placed ZERO trades; run
+   `scripts/day_tier_preflight.py` at the Mon open before trusting it ("deployed ≠ ready" lesson).
 
 _(prior 2026-09-08 block below)_
 ## ⏩ LATEST (2026-09-08) — pick up here
