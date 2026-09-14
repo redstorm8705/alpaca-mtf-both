@@ -39,13 +39,16 @@ accumulates over time (crontab was backed up before the edit; details + revert s
 2026-09-14). Gate: Gro+GAI APPROVE + cold-2nd PASS + adversarial PASS + statics(py3.14+OCI3.10)
 + log-exempt (4 markers all bound to sha `cdfddc2` — verify: `grep -l cdfddc2 .claude/preship/markers/strategy__regime_state.py*`→lists preship/cold2/adversarial/logexempt).
 verify #308: `gh pr view 308 --json state`→MERGED; OCI HEAD `6542eb6`; enriched line carries raw numbers: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py >/dev/null 2>&1 && tail -1 logs/regime_history.jsonl'`→includes realized_vol/variance_ratio/hurst/mr_fresh; cron (16:12 ET, once/trading-day): `ssh mtf-bot 'crontab -l | grep "strategy/regime_state.py"'`→one line invoking `cron_tz_wrapper.py 16:12`; accumulation grows: `ssh mtf-bot 'wc -l logs/regime_history.jsonl'`.
-  - **Phase 2** (rolling empirical distributions replacing the static vol/MR thresholds — vol 12/25, VR<1.0,
-    Hurst<0.5) is RISK-PATH and separately board-gated (the design record `logs/design_records/regime_state_phase1_2026-09-13.md`
-    scopes Phase 2/3 as risk-path — `grep -n "Phase 2" logs/design_records/regime_state_phase1_2026-09-13.md`).
-    It also depends on the `logs/regime_history.jsonl` sample count the #308 cron is now accumulating: rolling
-    empirical distributions over a handful of samples are not statistically meaningful (LdP overfitting concern),
-    so the recommendation is to let the ledger accrue before building Phase 2. **Phase 3** (migrate consumers to
-    read `RegimeState`) is RISK-PATH. Full board gate each.
+  - **Phase 2 — SHADOW STEP SHIPPED (#310 → main+OCI `1dee784`).** `research/regime_empirical.py` (SHADOW,
+    log-only, 0 importers, non-risk-path) logs an adaptive empirical-tercile vol classification vs the static one
+    to `logs/regime_empirical_shadow.jsonl`, cron'd 16:14 ET/trading-day. The board design + rationale (vol-signal
+    only, keep the VR/Hurst anchors, historical-SPY distribution, one-sided clamp size=min(emp,static)) is in the
+    design record and the audit log.
+    verify: `gh pr view 310 --json state`→MERGED; `grep -rl "import.*regime_empirical" --include=*.py . | grep -v research/regime_empirical.py`→empty (0 importers); `ssh mtf-bot 'crontab -l | grep -c "research/regime_empirical.py"'`→1; design+rationale: `sed -n '1,40p' logs/design_records/regime_state_phase2_design_2026-09-14.md`; reproduce a shadow row (shows the n_eff / autocorrelation finding): `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 research/regime_empirical.py | tail -2'`; the shadow log + its content: `ssh mtf-bot 'tail -1 /home/ubuntu/mtf-bot/logs/regime_empirical_shadow.jsonl'`→a JSON row carrying empirical_label / static_label / clamped_size_mult.
+    STILL GATED — requires Rafael's go-ahead + full board-on-diff (see `logs/tb_audit_log.md` 2026-09-14): (a) the
+    volatility_regime `realized_vol` field-mixing bug fix (risk-path prereq — `grep -n "field-mixing" logs/tb_audit_log.md`);
+    (b) the LIVE risk-path flip, only after the shadow accrues + validates. **Phase 3** (migrate consumers to read
+    `RegimeState`) is RISK-PATH. Full board gate each.
   - **Phase-3 NIT (cold-2nd NIT-1, logged in tb_audit_log 2026-09-14 — `grep -n "NIT-1" logs/tb_audit_log.md`):**
     when VIX succeeds but the VIX3M sub-fetch fails, volatility_regime's neutral fallback (`vix_term_ratio=1.0`/
     composite NEUTRAL — see its `_fetch_vix3m_ratio`: `grep -n vix3m strategy/volatility_regime.py`) rides under
