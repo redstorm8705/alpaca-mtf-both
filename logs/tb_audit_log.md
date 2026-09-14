@@ -10139,3 +10139,20 @@ sufficiency. Approved by Rafael. Gate: Gro+GAI APPROVE + cold-2nd PASS + adversa
 statics(py3.14+OCI3.10) + design record + log-exempt. FINDING (shadow's job): overlapping 10d rvol windows
 -> autocorr 0.96 -> VIF 48 -> n_eff=10 on 509 raw samples -> sufficient=False; the live-flip design needs
 NON-overlapping sampling to reach n_eff>=30. FOLLOW-UP: OCI cron to accrue the shadow daily.
+
+---
+
+### 2026-09-14 — SHIPPED session_audit_digest ledger-health (PR #315 → e7d08c3)
+
+Rafael's session-start-ingestion gap: the "ledger_sync FAILING: N non-heals" state alerted nightly to Slack
+but never reached the session-start priority list. CORRECTION to the in-session "not ingested" read: the
+aggregator scripts/session_audit_digest.py already exists AND is run by the /session-start skill (Step 3d,
+on OCI), covering gemini nightly/midday/meta/directives. PR #315 added a ledger_health() section (first in
+main()) that reads run_ledger_sync's .ledger_sync_streak.json (schema/path/threshold match the writer:
+count>=3 = _HEALED_FALSE_STREAK_ALERT) and prints "!! LEDGER-SYNC STALE: N non-heals" when the streak is
+stale, so the ledger P0 now surfaces at session start. READ-ONLY, never-raises (count int() guarded for
+TypeError+ValueError+OverflowError incl JSON Infinity/1e400; added literals ASCII). Gate: Gro+GAI APPROVE +
+cold-2nd PASS + adversarial PASS (2 real pre-ship defects caught+fixed: unguarded int(), then OverflowError)
++ statics(py3.14+OCI3.10). REMAINING follow-ups (not this diff): not in the auto SessionStart hooks
+(grep -c session_audit_digest .claude/settings.json = 0) so it runs only via the manual skill, not on a
+resumed session; run locally it reads stale local logs vs OCI. Consider a SessionStart hook on resume.
