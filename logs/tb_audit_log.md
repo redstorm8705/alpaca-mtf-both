@@ -10105,3 +10105,37 @@ adversarial PASS + statics(py3.14+OCI3.10) + log-exempt. NOTE (adversarial, non-
 an undeclared/unpinned soft dep — present on OCI (run_macro_regime uses it unguarded); the guarded load
 degrades to UNKNOWN, never crashes, if it were ever absent. Follow-up: OCI cron to run the snapshot
 once/trading-day so the ledger accumulates.
+
+---
+
+### 2026-09-14 — FOUND (not yet fixed): volatility_regime.py realized_vol field-mixing (Phase-2 prerequisite)
+
+Surfaced by the LdP/Simons board seat during the regime Phase-2 design pass; VERIFIED at source.
+`RegimeDetector._refresh()` (strategy/volatility_regime.py:118-130) stores the **VIX level** into
+`self._realized_vol` on the primary path (VIX fetch OK) but **SPY 10-day realized vol** on the fallback
+path (VIX fetch failed) — two different populations (implied ~fwd-30d vs trailing realized), different
+magnitudes/distributions, both written to the single field `realized_vol` and logged to
+logs/regime_history.jsonl under that name. Impact: (1) the field is a misnomer (usually VIX, not realized
+vol); (2) an empirical distribution pooled over this field is CONTAMINATED (mixes two populations) — a
+Phase-2 blocker for using realized_vol as a distribution input; (3) the CURRENT static classifier
+(LOW<12/HIGH>25) also applies to whichever population won that day, tolerable only because the static bands
+are coarse. Severity low-med, NOT urgent (VIX fetch usually succeeds, so it's usually VIX). FIX options
+(Phase-2 prereq, risk-path — full gate): key the ledger by source (separate vix vs realized_vol fields), or
+pick one series for the classifier. Files: strategy/volatility_regime.py:78-130. Distinct from the shipped
+Phase-1 enrichment (#308), which faithfully logs whatever the detector returns.
+
+---
+
+### 2026-09-14 — SHIPPED research/regime_empirical.py (Phase-2 step 2: shadow empirical vol classifier)
+
+NON-BEHAVIORAL / LOG-ONLY / NON-RISK-PATH shadow module (0 trading-path importers; writes only
+logs/regime_empirical_shadow.jsonl). Implements the unanimous board design (LdP+Simons, Thorp+Taleb, Gro;
+design record logs/design_records/regime_state_phase2_design_2026-09-14.md). Computes what an adaptive
+empirical-tercile vol classifier WOULD say (from trailing SPY daily realized-vol history, T1, single clean
+population — sidesteps the volatility_regime field-mixing bug) and logs it alongside the static label +
+the board's one-sided clamp (clamped_size=min(emp,static), clamped_stop=max(emp,static); 1.25x size-up
+requires empirical-LOW AND absolute vol<12). MR signal untouched. Effective-N VIF haircut gates
+sufficiency. Approved by Rafael. Gate: Gro+GAI APPROVE + cold-2nd PASS + adversarial PASS +
+statics(py3.14+OCI3.10) + design record + log-exempt. FINDING (shadow's job): overlapping 10d rvol windows
+-> autocorr 0.96 -> VIF 48 -> n_eff=10 on 509 raw samples -> sufficient=False; the live-flip design needs
+NON-overlapping sampling to reach n_eff>=30. FOLLOW-UP: OCI cron to accrue the shadow daily.
