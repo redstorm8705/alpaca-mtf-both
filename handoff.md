@@ -17,22 +17,35 @@ NON-BEHAVIORAL / NON-RISK-PATH. New `strategy/regime_state.py`: one read-only `R
 object + a canonical ledger (`logs/regime_state.json` atomic + `logs/regime_history.jsonl` append). Changes NO
 gating/sizing/entry/exit; nothing on the trading path imports it (grep-verified 0 importers). Each component
 fail-safes to UNKNOWN; the aggregate never raises. Gate: design-record (non-behavioral, NO board for Phase 1) +
-Gro APPROVE + GAI APPROVE + cold-2nd PASS + adversarial PASS + statics(py3.14+OCI3.10) + log-exempt (all 4
-markers bind sha `210f77b`: `ls .claude/preship/markers/strategy__regime_state.py*`). **Fail-safe in the shipped
+Gro APPROVE + GAI APPROVE + cold-2nd PASS + adversarial PASS + statics(py3.14+OCI3.10) + log-exempt
+(markers under `.claude/preship/markers/strategy__regime_state.py*`; their current sha binding is verified in the #308 block below). **Fail-safe in the shipped
 code:** `_vol_component` gates `fresh` on `RegimeDetector._last_check` (set only on a real VIX/SPY fetch,
 volatility_regime.py:120/129), so a total VIX+SPY outage records vol as UNKNOWN rather than the detector's
 `__init__` NORMAL/0.0 default; and the CLI `sys.path.insert` lives in `main()` (side-effect-free import). Full
 gate history incl. the cold-2nd round-1 catch: `logs/tb_audit_log.md` 2026-09-14.
 verify fix present: `ssh mtf-bot 'grep -c _last_check strategy/regime_state.py'`→≥1 AND `ssh mtf-bot 'grep -n "sys.path.insert" strategy/regime_state.py'`→line inside `main()`.
-The deployed snapshot writes the ledger (`logs/regime_state.json` + `logs/regime_history.jsonl`); its values are
-point-in-time — reproduce + read them with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py | tail -3'`.
-Operational note for a Phase-3 cron: `source .env` before a standalone run — a bare CLI leaves `market_mr`
-UNKNOWN because SPY `fetch_bars` needs Alpaca auth (inside the bot process, env already loaded, it is fresh);
-whether the macro cache is present on OCI: `ssh mtf-bot 'ls -la /home/ubuntu/mtf-bot/logs/macro_regime_latest.json'`.
 Design: `logs/design_records/regime_state_phase1_2026-09-13.md`.
-verify: `gh pr view 306 --json state`→MERGED; OCI HEAD `c610e8a`; OCI `ls strategy/regime_state.py`; `grep -rl "import.*regime_state" --include=*.py . | grep -v strategy/regime_state.py`→empty (0 importers); reproduce the snapshot: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py | tail -2'`.
-  - **Phase 2** (rolling empirical distributions replacing the static vol/MR thresholds) + **Phase 3** (migrate
-    consumers to read `RegimeState`) are RISK-PATH — full board gate each, separately.
+verify #306: `gh pr view 306 --json state`→MERGED; `grep -rl "import.*regime_state" --include=*.py . | grep -v strategy/regime_state.py`→empty (0 importers).
+
+**LEDGER ENRICHMENT + ACCUMULATION CRON SHIPPED (PR #308 → main+OCI `6542eb6`, NO restart) — makes Phase 2
+buildable.** Still non-behavioral / read-only. (a) `_history_record` now logs the RAW signal numbers per
+`logs/regime_history.jsonl` line (realized_vol, vix_term_ratio, spy_vs_50sma_pct, variance_ratio, hurst,
+macro_composite_score, macro_confidence) + per-component freshness — not just labels — because a
+rolling-distribution recalibration must read the raw numbers, not the labels the static thresholds produced
+(circular). (b) `main()` now self-loads `.env` (python-dotenv, CLI-only, override=False — verify: `ssh mtf-bot 'grep -n load_dotenv strategy/regime_state.py'`→one hit inside `main()`), so a bare cron run gets
+`market_mr` fresh — the earlier "`source .env` first" note is SUPERSEDED. (c) an OCI cron appends one enriched
+sample per trading day at 16:12 ET post-close (`scripts/cron_tz_wrapper.py 16:12`), so the Phase-2 dataset
+accumulates over time (crontab was backed up before the edit; details + revert steps in `logs/tb_audit_log.md`
+2026-09-14). Gate: Gro+GAI APPROVE + cold-2nd PASS + adversarial PASS + statics(py3.14+OCI3.10)
++ log-exempt (4 markers all bound to sha `cdfddc2` — verify: `grep -l cdfddc2 .claude/preship/markers/strategy__regime_state.py*`→lists preship/cold2/adversarial/logexempt).
+verify #308: `gh pr view 308 --json state`→MERGED; OCI HEAD `6542eb6`; enriched line carries raw numbers: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py >/dev/null 2>&1 && tail -1 logs/regime_history.jsonl'`→includes realized_vol/variance_ratio/hurst/mr_fresh; cron (16:12 ET, once/trading-day): `ssh mtf-bot 'crontab -l | grep "strategy/regime_state.py"'`→one line invoking `cron_tz_wrapper.py 16:12`; accumulation grows: `ssh mtf-bot 'wc -l logs/regime_history.jsonl'`.
+  - **Phase 2** (rolling empirical distributions replacing the static vol/MR thresholds — vol 12/25, VR<1.0,
+    Hurst<0.5) is RISK-PATH and separately board-gated (the design record `logs/design_records/regime_state_phase1_2026-09-13.md`
+    scopes Phase 2/3 as risk-path — `grep -n "Phase 2" logs/design_records/regime_state_phase1_2026-09-13.md`).
+    It also depends on the `logs/regime_history.jsonl` sample count the #308 cron is now accumulating: rolling
+    empirical distributions over a handful of samples are not statistically meaningful (LdP overfitting concern),
+    so the recommendation is to let the ledger accrue before building Phase 2. **Phase 3** (migrate consumers to
+    read `RegimeState`) is RISK-PATH. Full board gate each.
   - **Phase-3 NIT (cold-2nd NIT-1, logged in tb_audit_log 2026-09-14 — `grep -n "NIT-1" logs/tb_audit_log.md`):**
     when VIX succeeds but the VIX3M sub-fetch fails, volatility_regime's neutral fallback (`vix_term_ratio=1.0`/
     composite NEUTRAL — see its `_fetch_vix3m_ratio`: `grep -n vix3m strategy/volatility_regime.py`) rides under
