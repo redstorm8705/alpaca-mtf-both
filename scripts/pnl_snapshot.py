@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501,E402  — E501: Slack mrkdwn literals; E402: imports follow the sys.path/.env bootstrap (cron self-auth)
 """
-scripts/pnl_snapshot.py — hourly per-tier UNREALIZED P&L snapshot to Slack (READ-ONLY).
+scripts/pnl_snapshot.py — per-tier P&L snapshot to Slack (READ-ONLY).
 
-Rafael 2026-09-04: "an hourly Slack notification that gives me a snapshot of the P/L for the
-day, similar to what Alpaca is showing — a snapshot of how each tier is performing (their daily
-P/L at that moment). I want the snapshot so it can be UNREALIZED. At market close and after the
-official reconcile, we can have it be realized P/L."
+Rafael 2026-09-14 (supersedes the 2026-09-04 unrealized default): the intraday/midday snapshot shows
+REALIZED P&L SO FAR THIS SESSION — "to see what has happened so far this session" — NOT unrealized MTM.
+Unrealized belongs in the weekly recap (alongside the aggregated missed-move). Realized-so-far reads
+live Alpaca fills and needs no overnight reconcile.
 
-TWO MODES (one file, one cron each):
-  - default (hourly RTH): UNREALIZED per tier — open positions marked to market now.
-  - `--realized` (once, post-close after the reconcile): REALIZED per tier — Alpaca-FIFO P&L
-    from round-trips CLOSED today, attributed by client_order_id tier tag. Rafael 2026-09-04:
-    "at market close and after the official reconcile, we can have it be realized P/L."
+THREE MODES (one file):
+  - default (hourly/midday RTH): REALIZED SO FAR — Alpaca-FIFO P&L from round-trips CLOSED so far today,
+    per tier (client_order_id tier tag). Card header "Session so far".
+  - `--realized` (once, post-close): the same realized figure as the final "Close" card.
+  - `--unrealized` (on demand / weekly): the legacy per-tier UNREALIZED MTM card (open positions marked
+    to market now). Rafael 2026-09-04: "I want the snapshot so it can be UNREALIZED" — now weekly-only.
 
 MARKET-CLOSED GUARD (Rafael 2026-09-07): neither mode posts on a non-trading day. `main()` checks the
 Alpaca calendar (`_is_trading_day_today`) and skips when today is definitively closed — holiday-aware,
@@ -350,11 +351,18 @@ def compute_realized_snapshot() -> dict:
     }
 
 
-def build_realized_card(s: dict) -> dict:
-    """Render the post-close REALIZED card in Rafael's adopted layout. The ACCOUNT day P&L (Alpaca's
-    exact day number) is the bold headline; the realized closed-trade P&L sits below it; then the
-    compact per-tier breakdown. Header carries the date + time. Headline + breakdown share one
-    section (fewer Block Kit blocks — Rafael's 'too cluttered' feedback)."""
+def build_realized_card(s: dict, close_mode: bool = True) -> dict:
+    """Render the REALIZED P&L card in Rafael's adopted layout. The ACCOUNT day P&L (Alpaca's exact
+    day number) is the bold headline; the realized closed-trade P&L (round-trips CLOSED today) sits
+    below it; then the compact per-tier breakdown.
+
+    `close_mode=True`  → the post-close "📕 Close" card.
+    `close_mode=False` → an intraday "📊 Session so far" card (Rafael 2026-09-14: the intraday/midday
+    snapshots show what has been REALIZED this session, not unrealized MTM — 'to see what has happened
+    so far this session'). Both read the same Alpaca-FIFO realized figure; intraday it is
+    realized-so-far-today, which reads live fills and needs NO overnight reconcile. Unrealized MTM is
+    intentionally excluded from these cards (it belongs in the weekly recap). Headline + breakdown
+    share one section (Rafael's 'too cluttered' feedback)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
     date_pt = datetime.now(PT).strftime("%a %b %-d")             # "Fri Sep 11"
     sign_pct = f"{s['account_pct']:+.2f}%"
@@ -364,17 +372,26 @@ def build_realized_card(s: dict) -> dict:
     _acct_disp = _dollar(s["account_today"])                    # _dollar signs only negatives ...
     if s["account_today"] > 0:
         _acct_disp = "+" + _acct_disp                           # ... make a positive day explicit in the headline
+    _realized_label = "Realized (closed trades)" if close_mode else "Realized so far (closed trades)"
     body = (
         f"*Account today   {_acct_disp}   ({sign_pct})*\n"
-        f"Realized (closed trades)   {_dollar(s['total_realized'])}\n"
+        f"{_realized_label}   {_dollar(s['total_realized'])}\n"
         + "\n".join(rows)
     )
+    if close_mode:
+        header = f"📕 Close · {date_pt} · {now_pt}"
+        ctx = "closed-trade P&L, Alpaca FIFO · booked to the opening tier"
+        verb = "Close"
+    else:
+        header = f"📊 Session so far · {now_pt}"
+        ctx = "realized closed-trade P&L so far today, Alpaca FIFO · booked to the opening tier · unrealized excluded (see weekly)"
+        verb = "Session"
     blocks: list = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"📕 Close · {date_pt} · {now_pt}", "emoji": True}},
+        {"type": "header", "text": {"type": "plain_text", "text": header, "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": body}},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": "closed-trade P&L, Alpaca FIFO · booked to the opening tier"}]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
     ]
-    fallback = f"Close {now_pt}: account {_dollar(s['account_today'])} ({sign_pct}), realized {_dollar(s['total_realized'])}"
+    fallback = f"{verb} {now_pt}: account {_dollar(s['account_today'])} ({sign_pct}), realized {_dollar(s['total_realized'])}"
     return {"blocks": blocks, "text": fallback}
 
 
@@ -396,24 +413,30 @@ def _post(payload: dict, label: str) -> int:
 
 
 def main() -> int:
-    realized = "--realized" in sys.argv[1:]
+    # Rafael 2026-09-14: the intraday/midday snapshot shows REALIZED P&L SO FAR THIS SESSION (what has
+    # actually happened / closed), not unrealized MTM. Modes:
+    #   default        → intraday "Session so far" realized card (realized-so-far-today, live fills)
+    #   --realized     → post-close "Close" realized card
+    #   --unrealized   → legacy per-tier unrealized MTM card (kept for the weekly recap / on demand)
+    close_mode = "--realized" in sys.argv[1:]
+    unrealized_mode = "--unrealized" in sys.argv[1:]
+    label = "unrealized P&L" if unrealized_mode else ("realized close P&L" if close_mode else "session realized P&L")
     trading = _is_trading_day_today()
     if trading is False:                          # definitively market-closed today → no snapshot (Rafael 2026-09-07)
-        logger.info("market closed today (non-trading day per Alpaca calendar) — skipping %s snapshot",
-                    "realized" if realized else "unrealized")
+        logger.info("market closed today (non-trading day per Alpaca calendar) — skipping %s snapshot", label)
         return 0
     try:
-        if realized:
-            snap = compute_realized_snapshot()
-            payload = build_realized_card(snap)
-            degenerate = (snap.get("account_today") == 0.0 and snap.get("total_realized") == 0.0
-                          and all(v == 0.0 for v in snap.get("tier_realized", {}).values()))
-        else:
+        if unrealized_mode:
             snap = compute_snapshot()
             payload = build_card(snap)
             degenerate = (snap.get("account_today") == 0.0
                           and snap.get("total_unreal_today") == 0.0
                           and all(v == 0.0 for v in snap.get("tier_unreal", {}).values()))
+        else:
+            snap = compute_realized_snapshot()
+            payload = build_realized_card(snap, close_mode=close_mode)
+            degenerate = (snap.get("account_today") == 0.0 and snap.get("total_realized") == 0.0
+                          and all(v == 0.0 for v in snap.get("tier_realized", {}).values()))
     except Exception as e:
         logger.error("snapshot computation/render failed — NOT posting (no wrong number): %s", e)
         return 1
@@ -422,10 +445,9 @@ def main() -> int:
     # what a closed day looks like, so skip it rather than post a spurious all-$0.00 card. A truly flat
     # snapshot on a real (unknown-calendar) trading day is $0.00 anyway, so skipping it loses nothing.
     if trading is None and degenerate:
-        logger.info("calendar unreadable AND snapshot fully flat — skipping %s snapshot (looks like a closed day)",
-                    "realized" if realized else "unrealized")
+        logger.info("calendar unreadable AND snapshot fully flat — skipping %s snapshot (looks like a closed day)", label)
         return 0
-    return _post(payload, "realized P&L snapshot" if realized else "P&L snapshot")
+    return _post(payload, label + " snapshot")
 
 
 if __name__ == "__main__":
