@@ -8,6 +8,7 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-13]` FINDING (open, held for Mon 09-15 open): RTH DAY-stop backstop not re-arming for intraday overnight positions — AAPL/EWY/RIVN had NO exchange stop during 09-12 RTH (software stop only). Bounded gap; root-cause + fix Monday. — logs/tb_audit_log.md
 - `[2026-09-13]` Stop-protection (RISK-PATH, board 4-0): orphan_manager now checks the Alpaca calendar before the premarket GTC-stop cancel — a non-trading day is treated like the "closed" phase (validated stops retained, stale ones still cancel+resubmit), fail-open. Fixes weekend/holiday stop-stripping (observed 09-13). — fix/orphan-gtc-nontrading-day — execution/orphan_manager.py
 - `[2026-09-13]` QHM Weekly Thesis Slack card: "Board read" now sent in readable per-pick parts (un-truncated; was one 700-char inline block) — fix/qhm-thesis-slack — scripts/qhm_thesis.py
 - `[2026-09-13]` Added cross-account coordination prompt for ChatGPT + this changelog — fix/qhm-thesis-slack — logs/chatgpt_coordination_prompt.md, logs/CROSS_ACCOUNT_CHANGELOG.md
