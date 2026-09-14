@@ -8,7 +8,47 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-14, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-14 PM, interactive Rafael present) — pick up here
+
+**P&L AUDIT + REPORTING FIX + LIVE FINDINGS. HEAD `8a9152c` (local=origin=OCI). DATE-LABEL FIX: an earlier
+block wrote "Monday 2026-09-15" — that is a date error: 2026-09-15 is a TUESDAY and 2026-09-14 is the Monday
+(verify: `python3 -c 'import datetime;print(datetime.date(2026,9,15).strftime("%A"),datetime.date(2026,9,14).strftime("%A"))'`→`Tuesday Monday`).
+So the "held for the Monday open" items (RTH DAY-stop watch, day-tier preflight) were due at the 2026-09-14
+09:30 ET open. Always re-derive the current date/market status at session start (`TZ=America/New_York date` +
+`mcp alpaca get_calendar start=<today> end=<today>`), never trust a stale weekday label in this file.**
+
+- **September P&L (authoritative Alpaca equity, per the P&L-SOURCING rule):** Aug 31 close $2,368.57 → Sep 11
+  close $2,430.57 = **+$62 MTD** (through Fri); today Mon in progress. Sept realized round-trips ≈ −$32 (shorts
+  AVGO −$32 / MARA −$8 + EWY −$20, offset by HOOD +$30 and the QHM trims GEV/NVDA/META). Open book unrealized
+  −$243 (QHM LLY/GE/GEV underwater). Entry/exit read: the SHORTS are the bleed (counter-trend). verify:
+  `mcp alpaca get_portfolio_history start=2026-08-29 timeframe=1D` (or `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python -m reporting.pnl_ledger'`).
+- **REPORTING FIX SHIPPED (Rafael 2026-09-14 spec — midday/post-market = REALIZED session-so-far, NOT
+  unrealized; weekly keeps unrealized):** #312 `scripts/pnl_snapshot.py` default card → "📊 Session so far"
+  realized (`--realized`=Close, `--unrealized`=legacy MTM for weekly); #313 `scripts/audit_slack.py` midday
+  card → "Realized P&L (so far)" via reporting.pnl_ledger FIFO (fail-safe fallback to labeled MTM). Both
+  READ-ONLY, gated (Gro+GAI+cold-2nd+adversarial). verify: `gh pr view 312 --json state`→MERGED; `gh pr view 313 --json state`→MERGED; `grep -c "Session so far" scripts/pnl_snapshot.py`→≥1; `grep -c "Realized P&L (so far)" scripts/audit_slack.py`→≥1.
+- **LIVE SAFETY FINDING — RTH DAY-stop backstop gap CONFIRMED (Mon 09-14 mid-session):** 4 intraday positions
+  had NO exchange stop (HOOD/MARA/QCOM/SOXS, ~$738), software-`check_exits`-covered only; the QHM/overnight
+  holds (AAPL/GE/GEV/GOOGL/LLY) DO have stops. This is the flagged backstop gap live. RISK-PATH design item
+  (should intraday get a belt-and-suspenders exchange backstop?) — board + Rafael. verify per-position
+  has_stop (a STOP-type open order for that symbol): `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python -c "from dotenv import load_dotenv;load_dotenv(\"/home/ubuntu/mtf-bot/.env\");from execution.broker import get_open_positions,get_open_orders;st={getattr(x,\"symbol\",\"\") for x in (get_open_orders() or []) if \"stop\" in str(getattr(x,\"type\",\"\")).lower()};print([(getattr(p,\"symbol\",\"\"),getattr(p,\"symbol\",\"\") in st) for p in (get_open_positions() or [])])"'` → intraday names show `(SYM, False)`.
+- **LEDGER heals — FRAGILE not corrupt:** the 09-10 Slack ("70 non-heals / $21.16 invariant drift") has
+  largely SELF-RESOLVED (reconcile PASSES now, drift $2.04<$5 — `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python -m reporting.pnl_ledger | grep -i invariant'`). The pnl heal fail-closes on a fixed ~$21 historical ghost (pnl_ledger.py:17 "7/2 phantom PANW/TSLA") when drift>$5, which stales the cards. QUEUE P1: root-cause that phantom.
+
+**⏭️ QUEUE (Rafael's asks + findings, not yet done):**
+1. **Session-start ingestion of autonomous reports** — session-start reads handoff+Master Brain only; the
+   nightly gemini_audit / meta-audit / ledger-sync alerts write to logs+Slack but are NEVER pulled into the
+   priority list (why the ledger issue festered). Rafael flagged this. Systemic fix, high leverage.
+2. **HTML P&L accuracy** — Rafael asked to verify dashboard/weekly/monthly HTMLs; static grep showed no embedded
+   P&L (JS-rendered) — needs a live render check at `http://137.131.51.250:8080/dashboard.html` vs authoritative.
+3. **Ledger $21 phantom (7/2 PANW/TSLA)** root-cause so the pnl heal stops tripping.
+4. **audit_slack midday card NIT (cosmetic, adversarial-flagged):** the "Account today" headline includes
+   unrealized MTM while the footer says "unrealized excluded" — reword the footer to scope it to the realized
+   line. One-word tweak, bundle with the next reporting touch.
+5. **RTH DAY-stop backstop** (the naked-intraday finding above) — risk-path design for the board.
+
+_(earlier 2026-09-14 block — regime object Phase 1/2:)_
+## ⏩ (2026-09-14 AM, regime object)
 
 **AUTHORITATIVE REGIME OBJECT — PHASE 1 SHIPPED (PR #306 → main+OCI `c610e8a`, NO restart — 0 importers).**
 NON-BEHAVIORAL / NON-RISK-PATH. New `strategy/regime_state.py`: one read-only `RegimeState` that composes the
