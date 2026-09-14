@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-04 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-14 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,62 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-13, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-14, interactive Rafael present) — pick up here
+
+**AUTHORITATIVE REGIME OBJECT — PHASE 1 SHIPPED (PR #306 → main+OCI `c610e8a`, NO restart — 0 importers).**
+NON-BEHAVIORAL / NON-RISK-PATH. New `strategy/regime_state.py`: one read-only `RegimeState` that composes the
+3 existing market-wide regime views — vol (`volatility_regime.RegimeDetector`), macro (READS the weekly cache
+`logs/macro_regime_latest.json`, does not re-run it), market-MR (`mr_regime.regime_state(SPY daily)`) — into one
+object + a canonical ledger (`logs/regime_state.json` atomic + `logs/regime_history.jsonl` append). Changes NO
+gating/sizing/entry/exit; nothing on the trading path imports it (grep-verified 0 importers). Each component
+fail-safes to UNKNOWN; the aggregate never raises. Gate: design-record (non-behavioral, NO board for Phase 1) +
+Gro APPROVE + GAI APPROVE + cold-2nd PASS + adversarial PASS + statics(py3.14+OCI3.10) + log-exempt (all 4
+markers bind sha `210f77b`: `ls .claude/preship/markers/strategy__regime_state.py*`). **Fail-safe in the shipped
+code:** `_vol_component` gates `fresh` on `RegimeDetector._last_check` (set only on a real VIX/SPY fetch,
+volatility_regime.py:120/129), so a total VIX+SPY outage records vol as UNKNOWN rather than the detector's
+`__init__` NORMAL/0.0 default; and the CLI `sys.path.insert` lives in `main()` (side-effect-free import). Full
+gate history incl. the cold-2nd round-1 catch: `logs/tb_audit_log.md` 2026-09-14.
+verify fix present: `ssh mtf-bot 'grep -c _last_check strategy/regime_state.py'`→≥1 AND `ssh mtf-bot 'grep -n "sys.path.insert" strategy/regime_state.py'`→line inside `main()`.
+The deployed snapshot writes the ledger (`logs/regime_state.json` + `logs/regime_history.jsonl`); its values are
+point-in-time — reproduce + read them with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py | tail -3'`.
+Operational note for a Phase-3 cron: `source .env` before a standalone run — a bare CLI leaves `market_mr`
+UNKNOWN because SPY `fetch_bars` needs Alpaca auth (inside the bot process, env already loaded, it is fresh);
+whether the macro cache is present on OCI: `ssh mtf-bot 'ls -la /home/ubuntu/mtf-bot/logs/macro_regime_latest.json'`.
+Design: `logs/design_records/regime_state_phase1_2026-09-13.md`.
+verify: `gh pr view 306 --json state`→MERGED; OCI HEAD `c610e8a`; OCI `ls strategy/regime_state.py`; `grep -rl "import.*regime_state" --include=*.py . | grep -v strategy/regime_state.py`→empty (0 importers); reproduce the snapshot: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 strategy/regime_state.py | tail -2'`.
+  - **Phase 2** (rolling empirical distributions replacing the static vol/MR thresholds) + **Phase 3** (migrate
+    consumers to read `RegimeState`) are RISK-PATH — full board gate each, separately.
+  - **Phase-3 NIT (cold-2nd NIT-1, logged in tb_audit_log 2026-09-14 — `grep -n "NIT-1" logs/tb_audit_log.md`):**
+    when VIX succeeds but the VIX3M sub-fetch fails, volatility_regime's neutral fallback (`vix_term_ratio=1.0`/
+    composite NEUTRAL — see its `_fetch_vix3m_ratio`: `grep -n vix3m strategy/volatility_regime.py`) rides under
+    vol `fresh=True`. Primary regime IS genuinely measured; sub-fields are display-only, no Phase-1 consumer. Add
+    per-sub-field freshness IF a Phase-3 consumer ever treats `vix_term_ratio` as authoritative.
+
+**ALSO this session:** PR #305 `scripts/optimizer_scan.py` — READ-ONLY optimizer-discovery scanner
+(HF+PyPI+GitHub+arXiv via stdlib urllib; downloads/stages NOTHING; writes `logs/optimizer_scan_<date>.{json,md}`).
+Merged→OCI (`cbff6c0`). Gate: design-record + cold-2nd PASS + preship GAI APPROVE / Gro WAIVED (file >8k Groq TPM). verify: `gh pr view 305 --json state`→MERGED.
+
+**⚠️ OCI HOST MIGRATED — verify before any deploy/ssh:** the LIVE trading box is now **`mtf-bot` = 137.131.51.250**
+(arm64, Ubuntu, Python 3.10.12, repo `/home/ubuntu/mtf-bot`, running `main.py --profile paper`, HEAD `c610e8a`).
+The old **129.153.208.32** (`mtf-bot-legacy-rollback`) is the legacy/rollback box. ssh alias `ssh mtf-bot`; deploys
+are `git pull --ff-only` on 137.131.51.250. (Stale note "OCI Phoenix 129.153.208.32" in CLAUDE.md/memory is
+SUPERSEDED — memory `project_cloud_infrastructure` updated 2026-09-14.)
+verify LIVE box: `ssh mtf-bot 'systemctl is-active mtf-bot'`→`active` AND `ssh mtf-bot 'pgrep -fa "python.*main.py"'`→shows `/home/ubuntu/mtf-bot/venv/bin/python3 main.py --profile paper`.
+verify LEGACY dead: `ssh mtf-bot-legacy-rollback 'systemctl is-active mtf-bot'`→`inactive`. (Confirmed both 2026-09-14 this session.)
+
+**⏭️ NEXT PICK-UP — MONDAY 2026-09-15 OPEN — two TODOs, both carried forward UNCHANGED from the 09-13 block
+below (Rafael held both for the open); the full documented findings live there + in `logs/tb_audit_log.md`
+(2026-09-13) — read them, do NOT re-derive:**
+1. **TODO — RTH DAY-stop backstop (open gap, root cause held for the open):** at the Mon 9:30 ET open, watch
+   live whether `submit_rth_day_stops` re-arms the overnight names; capture conditions; THEN fix through the
+   full risk-path gate. Background + evidence: see the 09-13 block below and `logs/tb_audit_log.md`.
+2. **TODO — day-tier zero-trades:** run `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 scripts/day_tier_preflight.py'`
+   at the Mon open (post-GEX-refresh ~9:40 ET) before trusting the tier ("deployed ≠ ready"); note the DRAM
+   `side=UNKNOWN` liquidity concern.
+verify these two items are the unchanged carry-forward: `grep -n "RTH DAY-stop\|day-tier zero-trades" handoff.md` (also present in the 09-13 block below).
+
+_(prior 2026-09-13 block — the authoritative detail for the two TODOs above:)_
+## ⏩ (2026-09-13, interactive Rafael present)
 
 **STOP-PROTECTION FIX — SHIPPED + LIVE-VERIFIED (PR #303 → main+OCI `47ff12a`, mtf-bot restarted 2026-09-13).**
 RISK-PATH; shipped as **Option T** (targeted calendar gate, not the full rebuild) through the full risk-path
