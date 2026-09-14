@@ -10083,3 +10083,25 @@ volatility_regime.py's documented neutral fallback (vix_term_ratio=1.0 / composi
 vol block's fresh=True. The `fresh` flag correctly reflects the PRIMARY vol-regime measurement; composite
 sub-fields are display-only with a documented neutral fallback and no Phase-1 consumer reads them. Add
 per-sub-field freshness IF a Phase-3 consumer ever treats vix_term_ratio as authoritative.
+
+---
+
+### 2026-09-14 — SHIPPED strategy/regime_state.py enrichment (raw ledger values + cron dotenv self-load)
+
+Phase-1 follow-up, still NON-BEHAVIORAL / NON-RISK-PATH (0 trading-path importers, read-only, logs/ only).
+Prepares the ledger as the raw material for the Phase-2 rolling-empirical-distribution recalibration.
+(1) `_history_record` enriches the logs/regime_history.jsonl line with the RAW numeric signal values
+(realized_vol, vix_term_ratio, spy_vs_50sma_pct, variance_ratio, hurst, macro_composite_score,
+macro_confidence) + per-component freshness (vol_fresh/macro_fresh/mr_fresh) alongside the summary labels
+— logging only the statically-derived labels would be circular (a threshold can't be re-derived from the
+labels it produced). `_d(key)` guards each component (non-dict/partial state -> {} -> never raises).
+(2) main() loads .env via python-dotenv (try/except, CLI-only, not on import; override=False), matching
+sibling cron run_macro_regime.py, so a standalone/cron snapshot has the Alpaca keys data.fetcher reads via
+os.getenv; without it market_mr fail-safes to UNKNOWN. WHY: found (not guessed) that the ledger had 4
+label-only samples and a bare CLI produced market_mr=UNKNOWN — Phase 2 was data-blocked and circular.
+Validated on OCI py3.10: bare `python3 strategy/regime_state.py` -> mr_fresh=True variance_ratio=0.9915
+hurst=0.3027 vol_fresh=True realized_vol=17.79 macro_fresh=False. Gate: Gro+GAI APPROVE + cold-2nd PASS +
+adversarial PASS + statics(py3.14+OCI3.10) + log-exempt. NOTE (adversarial, non-blocking): python-dotenv is
+an undeclared/unpinned soft dep — present on OCI (run_macro_regime uses it unguarded); the guarded load
+degrades to UNKNOWN, never crashes, if it were ever absent. Follow-up: OCI cron to run the snapshot
+once/trading-day so the ledger accumulates.

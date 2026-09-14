@@ -172,6 +172,38 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp.replace(path)
 
 
+def _history_record(state: dict) -> dict:
+    """One compact history line: the summary LABELS plus the RAW numeric signal values and per-component
+    freshness. The raw numbers (realized_vol, variance_ratio, hurst, term/50sma ratios, macro score) are what
+    a future rolling-empirical-distribution recalibration must read — logging only the statically-derived
+    labels would be circular (a threshold cannot be re-derived from the labels it produced). The `*_fresh`
+    flags let that consumer exclude stale samples from the distribution, exactly as the shadow trackers do.
+    All values are `.get()` with None defaults, so a partial/UNKNOWN state still yields a valid line."""
+    def _d(key: str) -> dict:
+        # Robust to a non-dict outer state AND a non-mapping sub-value (e.g. state["vol"] not a dict):
+        # either yields {}, so the .get()s below and `**summary` never raise. The sole producer
+        # compute_regime_state() always emits dict sub-values; this is defense-in-depth.
+        v = state.get(key) if isinstance(state, dict) else None
+        return v if isinstance(v, dict) else {}
+    vol, macro, mr, summary = _d("vol"), _d("macro"), _d("market_mr"), _d("summary")
+    return {
+        "ts": state.get("ts") if isinstance(state, dict) else None,
+        **summary,
+        # raw numeric signal values — Phase-2 rolling distributions read THESE, not the labels
+        "realized_vol": vol.get("realized_vol"),
+        "vix_term_ratio": vol.get("vix_term_ratio"),
+        "spy_vs_50sma_pct": vol.get("spy_vs_50sma_pct"),
+        "variance_ratio": mr.get("variance_ratio"),
+        "hurst": mr.get("hurst"),
+        "macro_composite_score": macro.get("composite_score"),
+        "macro_confidence": macro.get("confidence"),
+        # per-component freshness — a Phase-2 consumer filters stale samples out of the distribution
+        "vol_fresh": bool(vol.get("fresh")),
+        "macro_fresh": bool(macro.get("fresh")),
+        "mr_fresh": bool(mr.get("fresh")),
+    }
+
+
 def write_regime_ledger(state: dict) -> bool:
     """Atomically write the current state + append one compact history line. Best-effort, never raises."""
     ok = True
@@ -182,8 +214,7 @@ def write_regime_ledger(state: dict) -> bool:
         logger.warning("regime_state: current-state write failed (%s).", e)
         ok = False
     try:
-        summary = state.get("summary", {}) if isinstance(state, dict) else {}
-        line = json.dumps({"ts": state.get("ts"), **summary})
+        line = json.dumps(_history_record(state))
         with open(_HISTORY_PATH, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception as e:
@@ -209,6 +240,15 @@ def main() -> int:
     # standalone snapshot resolves them; importing this module stays side-effect-free.
     if str(_ROOT) not in sys.path:
         sys.path.insert(0, str(_ROOT))
+    # Load .env so a standalone/cron snapshot has the Alpaca keys the market-MR SPY fetch needs
+    # (data.fetcher reads os.getenv("ALPACA_API_KEY")); without it market_mr fail-safes to UNKNOWN.
+    # Matches the sibling cron run_macro_regime.py. Runs ONLY in the CLI entry, never on import; an
+    # in-process bot caller already has the env loaded.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_ROOT / ".env")
+    except Exception as _e:
+        logger.debug("regime_state: dotenv not loaded (%s) — market_mr may be UNKNOWN without env.", _e)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     state = get_regime_state(write=True)
     s = state["summary"]
