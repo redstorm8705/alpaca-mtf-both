@@ -10060,3 +10060,26 @@ restart/state interaction, or a cancel/re-arm ordering issue. Must be nailed bef
 re-arm AAPL/EWY/RIVN? — capture conditions, THEN fix through the full risk-path gate. This is the board-
 flagged "RTH handoff" edge, now with concrete evidence. DISTINCT from PR #303 (weekend/holiday strip, shipped
 + live-verified 09-13).
+
+---
+
+### 2026-09-14 — SHIPPED strategy/regime_state.py (authoritative RegimeState, Phase 1, non-behavioral)
+
+New Phase-1 aggregation object + ledger (logs/regime_state.json atomic + logs/regime_history.jsonl).
+Composes vol / weekly-macro-cache / market-MR into one read-only RegimeState. 0 trading-path importers;
+no gating/sizing/entry/exit change. Gate: design-record + Gro APPROVE + GAI APPROVE + cold-2nd PASS +
+adversarial PASS + statics (py3.14 + OCI py3.10) + log-exempt. OCI real-feed snapshot: vol fresh=normal
+(VIX 17.74) composite=NEUTRAL, macro UNKNOWN (cache absent on OCI), ledger written.
+
+CAUGHT PRE-SHIP by the cold-2nd (round-1 FAIL, fixed before merge): _vol_component stamped fresh=True
+unconditionally, but RegimeDetector.get_regime() returns __init__ defaults (regime=NORMAL, realized_vol=0.0)
+on a total VIX+SPY outage without raising — a fabricated default would have been written to the ledger as
+fresh. FIX: gate fresh on RegimeDetector._last_check (set only on a real VIX/SPY fetch success,
+volatility_regime.py:120/129). Also moved sys.path.insert out of module-import into main() so importing the
+module is side-effect-free on sys.path. Both re-verified: cold-2nd PASS + adversarial PASS + Gro/GAI APPROVE.
+
+FOLLOW-UP (Phase 3, cold-2nd NIT-1, non-blocking): when VIX succeeds but the VIX3M sub-fetch fails,
+volatility_regime.py's documented neutral fallback (vix_term_ratio=1.0 / composite NEUTRAL) rides under the
+vol block's fresh=True. The `fresh` flag correctly reflects the PRIMARY vol-regime measurement; composite
+sub-fields are display-only with a documented neutral fallback and no Phase-1 consumer reads them. Add
+per-sub-field freshness IF a Phase-3 consumer ever treats vix_term_ratio as authoritative.
