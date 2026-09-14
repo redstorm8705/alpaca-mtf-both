@@ -14,8 +14,10 @@ Design locked 2026-07-01 (board + Rafael approval):
     directly into the card. The audit LLM never restates a number; a deterministic
     validator (validate_no_pnl_rewrite) confirms no rogue dollar figure slipped in.
     [McKinney single-source-of-truth; Derman provenance; Thorp reconciliation]
-  - Midday card shows UNREALIZED (mark-to-market) P&L labeled "settles tonight";
-    nightly card shows REALIZED FIFO P&L. Paper-account settlement lag forces this.
+  - Midday card shows REALIZED P&L SO FAR THIS SESSION (Alpaca FIFO; Rafael 2026-09-14 — "see what
+    has happened so far this session"); unrealized MTM moved to the weekly recap. Nightly card shows
+    REALIZED FIFO P&L for the closed day. Fail-safe: if the realized-so-far compute is unavailable the
+    midday card falls back to labeled unrealized MTM rather than going blank.
   - Reconciliation (BGG 2026-07-27): the nightly card runs 4:05pm ET but the
     authoritative ledger heal runs 8:30pm ET, so pnl_drift/alpaca_pnl/tracker_pnl are
     PRE-HEAL dual-compute TELEMETRY — a raw drift here is EXPECTED, not a failure. The
@@ -98,22 +100,41 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
         else:
             source = ("Source: *Alpaca intraday* · _provisional — authoritative realized "
                       "P&L finalizes in tonight's 8:30pm ET reconciliation heal_")
-    else:  # midday — unrealized mark-to-market
-        upl = 0.0
-        n_open = 0
-        for p in (positions or []):
-            try:
-                upl += float(p.get("unrealized_pl", 0.0))
-                n_open += 1
-            except Exception:
-                continue
-        injected.append(_dollar(upl))
-        today_fields = [
-            {"type": "mrkdwn", "text": f"*Unrealized P&L*\n{_dollar(upl)}"},
-            {"type": "mrkdwn", "text": f"*Open positions*\n{n_open}"},
-        ]
-        source = ("Source: *Alpaca mark-to-market* · _provisional — realized P&L "
-                  "finalizes in tonight's post-market run (paper fills settle overnight)_")
+    else:  # midday — REALIZED P&L SO FAR THIS SESSION (Rafael 2026-09-14: "see what has happened
+           # so far this session" — not unrealized MTM, which now lives in the weekly recap).
+        n_open = len(positions or [])
+        realized_today = None
+        try:                                             # authoritative realized-so-far from Alpaca FIFO
+            import reporting.pnl_ledger as _pl
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            _today = _dt.now(_ZI("America/Los_Angeles")).strftime("%Y-%m-%d")
+            _fills = _pl.fetch_all_fills() or []
+            realized_today = round(float(_pl.compute_realized(_fills).get("per_day", {}).get(_today, 0.0) or 0.0), 2)
+        except Exception:
+            realized_today = None                        # fail-safe below — never a blank/broken card
+        if realized_today is not None:
+            injected.append(_dollar(realized_today))
+            today_fields = [
+                {"type": "mrkdwn", "text": f"*Realized P&L (so far)*\n{_dollar(realized_today)}"},
+                {"type": "mrkdwn", "text": f"*Open positions*\n{n_open}"},
+            ]
+            source = ("Source: *Alpaca FIFO* · _realized closed-trade P&L so far today · "
+                      "unrealized is in the weekly recap_")
+        else:                                            # realized compute unavailable → fall back to MTM, labeled
+            upl = 0.0
+            for p in (positions or []):
+                try:
+                    upl += float(p.get("unrealized_pl", 0.0))
+                except Exception:
+                    continue
+            injected.append(_dollar(upl))
+            today_fields = [
+                {"type": "mrkdwn", "text": f"*Unrealized P&L* _(realized-so-far unavailable)_\n{_dollar(upl)}"},
+                {"type": "mrkdwn", "text": f"*Open positions*\n{n_open}"},
+            ]
+            source = ("Source: *Alpaca mark-to-market* · _fallback — realized-so-far compute "
+                      "unavailable this run_")
 
     lifetime_fields = []
     if stats:
