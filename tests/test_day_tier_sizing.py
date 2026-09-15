@@ -140,6 +140,44 @@ class DayTierSizing(unittest.TestCase):
         for k in ("symbol", "shares", "notional", "budget", "track", "cash_only", "conviction", "size_ok", "reason"):
             self.assertIn(k, r)
 
+    # 11 -- MIN-1-SHARE FLOOR (Rafael 2026-09-15): a fired ENTER whose conviction-scaled notional floors
+    #       below 1 share still takes 1 share WHEN the per-trade track_budget affords a whole share
+    #       (track_budget >= px). The floored notional (1×px) never exceeds the per-trade budget.
+    def test_min_one_share_floor_fires(self):
+        # BP 4260 -> budget min(4260*0.20, 2382*0.60)=min(852,1429.2)=852; conviction 0.33, entry 360:
+        # notional 852*0.33=281.16 -> floor(281.16/360)=0, but track_budget 852 >= 360 -> floor to 1 sh.
+        r = sz.compute_day_tier_size("TSLA", _dec(conviction=0.33), entry_ref=360.0, equity=2382.0, buying_power=4260.0, track="A")
+        self.assertEqual(r["shares"], 1)
+        self.assertTrue(r["size_ok"])
+        self.assertLessEqual(r["notional"], r["budget"] + 0.01)   # floored notional never exceeds the budget
+        self.assertIn("FLOOR", r["reason"])
+
+    # 11b -- floor is GATED by the per-trade budget: when even 1 share exceeds track_budget
+    #        (track_budget < px) it does NOT fire -> stays 0 (the existing "cannot afford" behavior, test 7).
+    def test_min_one_share_floor_gated_by_budget(self):
+        # BP 1000 -> budget 200; entry 500 -> track_budget 200 < 500 -> NO floor -> 0 shares.
+        r = sz.compute_day_tier_size("NVDA", _dec(conviction=1.0), entry_ref=500.0, equity=2500.0, buying_power=1000.0, track="A")
+        self.assertEqual(r["shares"], 0)
+        self.assertFalse(r["size_ok"])
+        self.assertIn("< 1 share", r["reason"])
+
+    # 11c -- kill flag: DAYTRADE_MIN_ONE_SHARE_FLOOR=False disables the floor (reverts to skip); the skip
+    #        reason honestly names the disabled floor (Rule D per-feature kill flag). Restores config state.
+    def test_min_one_share_floor_killable(self):
+        had = hasattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR")
+        orig = getattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR", None)
+        try:
+            config.DAYTRADE_MIN_ONE_SHARE_FLOOR = False
+            r = sz.compute_day_tier_size("TSLA", _dec(conviction=0.33), entry_ref=360.0, equity=2382.0, buying_power=4260.0, track="A")
+            self.assertEqual(r["shares"], 0)
+            self.assertFalse(r["size_ok"])
+            self.assertIn("disabled", r["reason"])
+        finally:
+            if had:
+                config.DAYTRADE_MIN_ONE_SHARE_FLOOR = orig
+            else:
+                delattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -18,7 +18,15 @@ THE SIZING (min()-ONLY — the conservative posture, never a max/upsize):
   target        = track_budget × conviction                       (conviction ∈ [0,1] scales within budget)
   notional      = min(target, track_budget)                       (never exceed the track's own budget)
   shares        = floor(notional / entry_ref)                     (RC-7: whole-share floor; 0 = can't afford → skip)
-Conviction only ever SHRINKS the budget. Track A sizes from Alpaca's current BUYING POWER and is
+  MIN-1-SHARE FLOOR (Rafael CEO directive 2026-09-15): if `shares` floors to 0 but the per-trade
+    `track_budget` can afford a whole share (track_budget >= entry_ref), take 1 share — so a genuinely-
+    triggered ENTER is never DROPPED purely because conviction-scaling rounded it below one share. It is
+    bounded by track_budget (1×px <= budget by the guard) and re-clamped DOWN for margin/stop-risk/gross
+    at WIRE-TIME (day_trade_manager._bounded_entry_qty). Gated by config.DAYTRADE_MIN_ONE_SHARE_FLOOR
+    (default True; set False to disable — Rule D kill flag). A name too expensive for the per-trade
+    budget (track_budget < px) still skips (size 0). The day-tier is EOD force-flat, so the BP returns
+    before the close.
+Conviction only ever SHRINKS the budget, EXCEPT the documented MIN-1-SHARE FLOOR above. Track A sizes from Alpaca's current BUYING POWER and is
 flat-by-close; a missing/non-positive/non-finite BP → size 0 (fail-CLOSED — NEVER an equity fallback,
 which would mask the failure and resurrect the old ~$243 equity cap). This function is the PER-TRADE
 budget ONLY; the AGGREGATE Track-A gross cap, the main-bot BP reserve, and the maintenance cushion are
@@ -125,20 +133,46 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
         notional = min(target_notional, track_budget)
         # Whole-share floor (RC-7): int() of a sub-1.0 share count is 0 = cannot afford → skip.
         shares = int(math.floor(notional / px))
+        # MIN-1-SHARE FLOOR (Rafael CEO directive 2026-09-15): a genuinely-triggered ENTER whose
+        # conviction-scaled notional floors below one whole share still takes ONE share — PROVIDED the
+        # per-trade track_budget can afford a whole share (track_budget >= px). This never exceeds the
+        # per-trade budget cap (1×px <= track_budget by the guard), and the wire-time _bounded_entry_qty
+        # (execution/day_trade_manager.place_entry) still re-clamps DOWN for the main-bot BP reserve, the
+        # maintenance cushion, the day/global gross caps, and the <=2%-equity stop-risk cap — re-zeroing
+        # it whenever live margin/risk cannot afford it (min()-only, fail-closed). The day-tier is EOD
+        # force-flat at T-DAYTRADE_FORCE_FLAT_MINUTES, so this buying power is returned before the close.
+        # Sizing runs only after trigger==ENTER (run_day_tier.py entry loop). Kill flag:
+        # config.DAYTRADE_MIN_ONE_SHARE_FLOOR (default True; set False in config.py to disable — Rule D).
+        floor_enabled = bool(getattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR", True))
+        floored = False
+        if shares < 1 and track_budget >= px and floor_enabled:
+            shares = 1
+            floored = True
         result["shares"] = max(0, shares)
         result["notional"] = round(result["shares"] * px, 2)
         result["size_ok"] = result["shares"] >= 1
         if result["size_ok"]:
+            _floor_note = (
+                " [MIN-1-SHARE FLOOR: conviction-scaled notional < 1 share; per-trade budget affords 1 "
+                "— wire-time re-clamps for margin/stop-risk/gross]" if floored else ""
+            )
             result["reason"] = (
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
                 f"= ${target_notional:.2f} → {result['shares']} sh @ ${px:.2f} "
-                f"(${result['notional']:.2f}{', cash-only' if result['cash_only'] else ''}) "
+                f"(${result['notional']:.2f}{', cash-only' if result['cash_only'] else ''}){_floor_note} "
                 f"— per-trade budget; aggregate gross cap + main-bot reserve + cushion enforced at wire-time"
+            )
+        elif track_budget >= px and not floor_enabled:
+            # Budget COULD afford a whole share; the min-1-share floor is switched OFF. Report the REAL
+            # cause honestly (do NOT say 'budget < 1 share' when the floor being disabled is why).
+            result["reason"] = (
+                f"track {_track}: budget ${track_budget:.2f} affords a whole share @ ${px:.2f} but the "
+                f"MIN-1-SHARE FLOOR is disabled (DAYTRADE_MIN_ONE_SHARE_FLOOR=False) — size 0 (skip)"
             )
         else:
             result["reason"] = (
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
-                f"= ${target_notional:.2f} < 1 share @ ${px:.2f} — size 0 (skip)"
+                f"= ${target_notional:.2f} < 1 share @ ${px:.2f} — size 0 (skip; track_budget < 1 share)"
             )
         logger.info("[%s] day-tier SIZE: %s", symbol, result["reason"])
         return result
