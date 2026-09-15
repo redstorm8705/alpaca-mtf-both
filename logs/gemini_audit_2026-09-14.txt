@@ -1,0 +1,130 @@
+Nightly Gemini Audit — 2026-09-14
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['scripts/optimizer_scan.py', 'scripts/audit_slack.py', 'scripts/pnl_snapshot.py', 'scripts/qhm_thesis.py', 'strategy/regime_state.py', 'execution/orphan_manager.py', 'research/regime_empirical.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected. (Missing intraday stops on SOXS, MARA, HOOD, and QCOM were caught and placed by `execution.stop_protection` at 19:50:14 ET; pre-heal `pnl_drift` of $-3.12$ is verified dual-compute telemetry sampled prior to 8:30pm ET heal with no reader in live risk/kill paths).
+
+---
+
+### VERDICT: WARN
+Issues detected in network read timeouts, ownership guard replay desync, and pre-market GTC stop fallback math in `orphan_manager.py`, but all positions remain protected with active broker stops and the trading loop is functioning.
+
+---
+
+### LOG ANOMALIES
+- **Alpaca REST API Read Timeouts & Sync Ledger Hang**: Multiple read timeouts across `generate_dashboard` and `reporting.pnl_ledger` (e.g. `2026-09-14 19:36:46,430`, `19:40:36,459` to `19:44:08,785` retries 1/8 to 7/8). At `19:44:48,174`, `ledger_sync` logged `CRITICAL: wall-time 286.8s > 30.0s — Alpaca slow / pagination hang?` followed by another 94.7s hang at `20:01:36,658`.
+- **Ownership Guard Replay Negative Allocation**: `2026-09-14 19:44:48,163 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-2 to intraday; protected tiers are long-only.` This occurred again at `20:01:36,648`.
+- **Missing Day Stop Recovery (Stop-Protect Sweep)**: At `19:50:14`, `execution.stop_protection` identified 4 open positions lacking broker stops (`SOXS` 2 @ $39.06, `MARA` 4 @ $9.79, `HOOD` 2 @ $90.18, `QCOM` 2 @ $170.56) and successfully submitted DAY stop orders.
+- **Fail-Closed Missing Daily Data**: `confluence` repeatedly logged `[DRAM] No daily data — long entry blocked (fail-closed)` and `short entry blocked (fail-closed)`.
+- **TQI Degradation Warning**: `2026-09-14 19:43:41,600 | WARNING | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=29.4/100 < 30 — review exit discipline and stop placement.`
+
+---
+
+### PERFORMANCE AUDIT
+- **P&L Sign & Exit Audits**:
+  - `AVGO` short on `2026-09-08T07:55:35.278166-07:00`: entry=$355.76, exit=$371.85, size=2, pnl=$-32.18$. Short exit > entry = loss. Math: $(355.76 - 371.85) \times 2 = -32.18$. Correct.
+  - `UBER` short on `2026-09-10T13:34:23.251200-07:00`: entry=$73.08, exit=$73.13, size=2, pnl=$-0.10$. $(73.08 - 73.13) \times 2 = -0.10$. Correct.
+  - `RIVN` long on `2026-09-14T08:10:47.566761-07:00`: entry=$16.36, exit=$15.98, size=6, pnl=$-2.28$. $(15.98 - 16.36) \times 6 = -2.28$. Correct.
+  - `EWY` long on `2026-09-14T07:03:28.584385-07:00`: entry=$189.63, exit=$179.78 (reconciled in snapshot), size=2, pnl=$-19.70$. $(179.78 - 189.63) \times 2 = -19.70$. Correct.
+- **Stop-Hit Rate**: In the 2026-09-14 session, 2 trades closed (`EWY` hard_stop and `RIVN` overnight_atr_buffer_exit), both losses (0.0% win rate today, all-time win rate 33.3%). Stop-hit rate is 100% of closures today, indicating high vulnerability to overnight gap risk.
+
+---
+
+### TRADE INTEGRITY
+- **Discrepancy in `trade_events` vs `EOD SNAPSHOT` for EWY**:
+  In `trade_events` JSON (`ts: 2026-09-14T07:03:28.584385-07:00`), `EWY` exit is recorded as `price: 189.63, pnl: 0.0, reason: hard_stop`. However, in `EOD SNAPSHOT`, `EWY` reflects `exit_price: 179.78, pnl: -19.7, _patch_fill_source: fill_reconciler`. The initial event emitted a phantom break-even fill before `fill_reconciler` patched it to the actual execution price of $179.78.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### 1. `execution/orphan_manager.py`
+- **Function**: `cancel_and_reconcile_gtc_stops`
+- **Variable**: `fill_price`
+- **Code Path & Trace**:
+  ```python
+  fill_price = float(
+      order.filled_avg_price or trade.get("entry_price", 0)
+  )
+  ```
+  When Alpaca's order object has `filled_avg_price=None` (transiently during execution settlement), fallback defaults to `trade.get("entry_price", 0)`.
+  Then:
+  ```python
+  pnl = tracker.record_gtc_triggered(symbol, fill_price)
+  ```
+  `record_gtc_triggered` calculates $PnL = (exit\_price - entry\_price) \times qty$. If `fill_price` falls back to `entry_price`, $PnL$ evaluates exactly to $0.00$. This explains why `trade_events` initially logged `EWY` stop_hit with `price: 189.63` and `pnl: 0.0` despite the stop being hit at $179.78.
+- **Failure Condition**: Any GTC stop filled overnight where Alpaca does not supply `filled_avg_price` immediately on first query records a fake $0.00 P&L trade in the event stream until asynchronous reconciliation catches it.
+
+#### 2. `scripts/audit_slack.py`
+- **Function**: `findings_from_report`
+- **Variables**: `_CONT_FIELD`, `_ITEM_MARKER`, `new_item`
+- **Code Path & Trace**:
+  The parser groups continuation lines into finding blocks based on regex:
+  ```python
+  new_item = bool(_ITEM_MARKER.match(raw)) or (
+      bool(_BOLD_LEAD.match(line)) and not _CONT_FIELD.match(line))
+  ```
+  If a model emits findings using Markdown lists with sub-bullets that start with bold text not in `_CONT_FIELD` (e.g. `* **Context**: ...` or `* **Root Cause**: ...`), `_ITEM_MARKER` evaluates to `True` because of the leading list marker `* `, bypassing `and not _CONT_FIELD.match(line)` and splitting sub-bullets into separate findings.
+- **Failure Condition**: Any report containing bulleted continuation items like `* **Detail**: foo` splits into multiple fragmented findings on the Slack card.
+
+#### 3. `scripts/pnl_snapshot.py`
+- **Function**: `compute_snapshot`
+- **Variable**: `total_unreal_today`, `intraday_pl`
+- **Code Path & Trace**:
+  ```python
+  intraday_pl = float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
+  total_unreal_today += intraday_pl
+  ...
+  other_today = round(total_unreal_today - tier_sum, 2)
+  ```
+  Alpaca's `unrealized_intraday_pl` field for options or assets without previous session close can be missing or returned as `None`, which is guarded by `or 0.0`. Logic properly sums shares and avoids math crashes.
+- **Assessment**: No breaking execution bugs found.
+
+#### 4. `strategy/regime_state.py` & `research/regime_empirical.py` & `scripts/optimizer_scan.py` & `scripts/qhm_thesis.py`
+- Verified read-only, non-execution paths with proper fail-open/fail-safe wrappers.
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED (Not modified in last 24h)
+- **P5-C2**: UNTOUCHED (Not modified in last 24h)
+- **P5-H1**: OBSOLETE (PDT permanently removed)
+- **P5-H2**: UNTOUCHED
+- **P5-H3**: UNTOUCHED (Lines 240–247 of `orphan_manager.py` handle missing GTC orders by logging and calling `tracker.clear_gtc_stop_order_id(symbol)`, partially mitigating orphan GTC tracking)
+- **P5-H4**: UNTOUCHED
+- **P5-H5**: FIXED
+- **P5-M1**: UNTOUCHED
+- **P5-M2**: UNTOUCHED
+- **P5-M3**: UNTOUCHED
+- **P5-L1**: UNTOUCHED
+- **P5-L2**: UNTOUCHED
+- **P5-L3**: UNTOUCHED
+
+---
+
+### NEW BUGS FOUND
+
+1. **CATEGORY: EXECUTION BUG** | **SEVERITY: MEDIUM** | `execution/orphan_manager.py:252` | GTC fill price fallback masks actual loss with zero P&L |
+   **Exact Failure Condition**: When Alpaca returns `order.filled_avg_price = None` on a triggered GTC stop, `cancel_and_reconcile_gtc_stops` sets `fill_price = trade.get("entry_price", 0)`. This causes `tracker.record_gtc_triggered()` to record an exit at entry price ($PnL = 0.00$), corrupting immediate P&L event telemetry until `fill_reconciler` runs later. Should fall back to `order.stop_price` or `trade.get("stop")`, not `entry_price`.
+
+2. **CATEGORY: INFRASTRUCTURE** | **SEVERITY: MEDIUM** | `execution/ownership_guard.py` (referenced in logs `19:44:48,163` and `20:01:36,648`) | Negative protected replay reattribution loop |
+   **Exact Failure Condition**: Ledger replay consistently calculates an impossible negative position quantity for NVDA (`NVDA/qhm=-2`) and reattributes it to intraday. Indicates an unhandled partial-fill or misattributed close event order in the ledger history replay.
+
+---
+
+### FIX VALIDATION
+- **Prior Item**: Pre-market calendar holiday check in `execution/orphan_manager.py`.
+- **FIX VALIDATION**: PASS.
+- **Trace**: `orphan_manager.py` implements `_is_trading_day_today()` and sets `_nontrading_today = (_is_trading_day_today() is False)`. On line 324: `if get_tod_phase() == "closed" or _nontrading_today:` it correctly retains validated overnight GTC stops on weekends/holidays without stripping protection.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Patch GTC Stop Fallback in `orphan_manager.py`**:
+   Replace fallback `trade.get("entry_price", 0)` at line 253 with `getattr(order, "stop_price", None) or trade.get("trail_stop") or trade.get("stop") or trade.get("entry_price", 0)`. This prevents recording phantom break-even exits when Alpaca fill confirmation is delayed.
+2. **Investigate NVDA Ownership Ledger Event History**:
+   Inspect `data/state/ownership_ledger.json` and fills history for NVDA to eliminate the recurring `NVDA/qhm=-2` negative replay warning.
+3. **Investigate API Latency / Pagination Hang**:
+   Alpaca REST client experienced 286s and 94s hangs in `ledger_sync`. Add a strict HTTP request timeout and pagination limit in `reporting.pnl_ledger` to prevent blocking the execution thread.
