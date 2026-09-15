@@ -352,35 +352,37 @@ def compute_realized_snapshot() -> dict:
 
 
 def build_realized_card(s: dict, close_mode: bool = True) -> dict:
-    """Render the REALIZED P&L card in Rafael's adopted layout. The ACCOUNT day P&L (Alpaca's exact
-    day number) is the bold headline; the realized closed-trade P&L (round-trips CLOSED today) sits
-    below it; then the compact per-tier breakdown.
+    """Render the REALIZED P&L card in Rafael's adopted layout. The REALIZED closed-trade P&L
+    (round-trips CLOSED today, Alpaca FIFO) is the bold headline; then the compact per-tier
+    breakdown. Rafael 2026-09-15: the account equity delta (equity − last_equity) was REMOVED from
+    these cards — it is UNREALIZED-INCLUSIVE (it moves with the open QHM/Forever holds' MTM), so a
+    bold "Account today" headline on a realized-only card contradicted the whole purpose ("to see
+    what has happened this session"). The account equity number (and its %) belongs in the weekly
+    recap alongside unrealized, per Rafael's realized/unrealized split.
 
     `close_mode=True`  → the post-close "📕 Close" card.
     `close_mode=False` → an intraday "📊 Session so far" card (Rafael 2026-09-14: the intraday/midday
     snapshots show what has been REALIZED this session, not unrealized MTM — 'to see what has happened
     so far this session'). Both read the same Alpaca-FIFO realized figure; intraday it is
     realized-so-far-today, which reads live fills and needs NO overnight reconcile. Unrealized MTM is
-    intentionally excluded from these cards (it belongs in the weekly recap). Headline + breakdown
-    share one section (Rafael's 'too cluttered' feedback)."""
+    intentionally excluded from these cards (it belongs in the weekly recap)."""
     now_pt = datetime.now(PT).strftime("%-I:%M %p PT")
     date_pt = datetime.now(PT).strftime("%a %b %-d")             # "Fri Sep 11"
-    sign_pct = f"{s['account_pct']:+.2f}%"
     rows = _tier_rows(s["tier_realized"], s["pos_lines"], "no closes")
     if abs(s.get("unattributed", 0.0)) >= 0.50:      # rounding/edge guard — should not normally render
         rows.append(f"_Unattributed {_dollar(s['unattributed'])}_")
-    _acct_disp = _dollar(s["account_today"])                    # _dollar signs only negatives ...
-    if s["account_today"] > 0:
-        _acct_disp = "+" + _acct_disp                           # ... make a positive day explicit in the headline
-    _realized_label = "Realized (closed trades)" if close_mode else "Realized so far (closed trades)"
-    body = (
-        f"*Account today   {_acct_disp}   ({sign_pct})*\n"
-        f"{_realized_label}   {_dollar(s['total_realized'])}\n"
-        + "\n".join(rows)
-    )
+    # Realized closed-trade P&L is the bold headline (Rafael 2026-09-15). The prior "Account today"
+    # equity-delta line + its % were REMOVED: equity − last_equity is unrealized-inclusive and does
+    # not belong on a realized-only card (it belongs in the weekly recap). _dollar signs negatives;
+    # a positive session is made explicit with a leading "+".
+    _rz_disp = _dollar(s["total_realized"])
+    if s["total_realized"] > 0:
+        _rz_disp = "+" + _rz_disp
+    _realized_label = "Realized today" if close_mode else "Realized so far"
+    body = f"*{_realized_label}   {_rz_disp}*\n" + "\n".join(rows)
     if close_mode:
         header = f"📕 Close · {date_pt} · {now_pt}"
-        ctx = "closed-trade P&L, Alpaca FIFO · booked to the opening tier"
+        ctx = "realized closed-trade P&L, Alpaca FIFO · booked to the opening tier · unrealized excluded (see weekly)"
         verb = "Close"
     else:
         header = f"📊 Session so far · {now_pt}"
@@ -391,7 +393,7 @@ def build_realized_card(s: dict, close_mode: bool = True) -> dict:
         {"type": "section", "text": {"type": "mrkdwn", "text": body}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
     ]
-    fallback = f"{verb} {now_pt}: account {_dollar(s['account_today'])} ({sign_pct}), realized {_dollar(s['total_realized'])}"
+    fallback = f"{verb} {now_pt}: realized {_dollar(s['total_realized'])}"
     return {"blocks": blocks, "text": fallback}
 
 
