@@ -8,7 +8,36 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-14 PM, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-15 PM, interactive Rafael present) — pick up here
+
+**DAY-TIER NOW TRADES — MIN-1-SHARE SIZING FLOOR SHIPPED + LIVE (PR #319 → main+OCI `66fbd99`, NO restart).**
+RISK-PATH. Root cause (verified live, NO-GUESS): the day-tier fired real ENTER signals but took ZERO trades
+since go-live 2026-09-03 — `strategy/day_tier_sizing.compute_day_tier_size` rounded a conviction-scaled
+budget below one share's price to 0 shares (443 live OCI `day-tier SIZE ... < 1 share ... size 0 (skip)`
+log lines; today 2026-09-15 TSLA `$851×0.33=$283 < $360/sh` and MSFT `$483 < $499/sh` both fired ENTER and
+were dropped). FIX = MIN-1-SHARE FLOOR: a genuinely-triggered ENTER takes 1 share when the per-trade
+`track_budget >= price`; bounded by the per-trade budget (1×px ≤ budget); wire-time `_bounded_entry_qty`
+(day_trade_manager.place_entry) still re-clamps DOWN for BP−$1200 reserve / $650 maint cushion / 0.60×eq
+day-gross / 2.5×eq global-gross / ≤2%-eq stop-risk (min()-only — re-zeros if live margin can't afford it);
+EOD force-flat (T-20min) returns the BP before close. Kill flag `config.DAYTRADE_MIN_ONE_SHARE_FLOOR`
+(default True via getattr; NOT yet declared in config.py — fast-follow). Diff scope = ONLY
+`strategy/day_tier_sizing.py` + its test (`git show 36c1104 --stat` → 2 files); config.py kill switches
+(7% acct / −4% tier) and broker.py `paper=True` are NOT in the diff — the safety envelope is unchanged by
+construction, not by assertion. Gate: board 2 cold seats PASS (masked-loss/quant + reliability) + Gro/GAI
+preship APPROVE + cold-2nd PASS + adversarial PASS + log-evidence (443 OCI matches) + statics + 19/19 tests
++ OCI py3.10 + CI preship pass (re-run once past a transient Gemini-503 / NVIDIA-timeout INDETERMINATE — 0
+rejects, 1 real APPROVE first pass). LIVE-PROVEN on OCI: compute_day_tier_size with the exact TSLA skip
+numbers now returns shares=1 / size_ok=True; the preflight `size_ok=False` block is gone. NO restart
+(day_tier_sizing imported only by the day-tier cron runners + preflight + tests, NOT main.py/run_cycle.py).
+verify: `gh pr view 319 --json state`→MERGED; OCI HEAD `66fbd99`; `ssh mtf-bot 'grep -c "MIN-1-SHARE FLOOR" strategy/day_tier_sizing.py'`→5; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_day_tier_sizing 2>&1 | tail -1'`→OK (19).
+
+**⏭️ NEXT PICK-UP (2026-09-15):**
+1. WATCH the day-tier take its FIRST live trade now that sizing is unblocked — `ssh mtf-bot 'tail -20 logs/day_tier_runner_cron.log; wc -l logs/day_tier_events.jsonl'`. Confirm a fired ENTER sizes to ≥1 share, gets a protective stop, and EOD-flattens end-to-end ("deployed ≠ ready" — verify the first real entry).
+2. FAST-FOLLOW (non-blocking, both board seats + cold-2nd + adversarial NIT): declare `DAYTRADE_MIN_ONE_SHARE_FLOOR = True` in config.py's DAYTRADE_* block for kill-flag discoverability (getattr default already works).
+3. Carried from 09-14: RTH DAY-stop backstop (naked-intraday finding, risk-path design); ledger $21 phantom (7/2 PANW/TSLA) root-cause; session-start ingestion of autonomous reports.
+
+_(prior 2026-09-14 PM block below:)_
+## ⏩ (2026-09-14 PM, interactive Rafael present)
 
 **P&L AUDIT + REPORTING FIX + LIVE FINDINGS. HEAD `8a9152c` (local=origin=OCI). DATE-LABEL FIX: an earlier
 block wrote "Monday 2026-09-15" — that is a date error: 2026-09-15 is a TUESDAY and 2026-09-14 is the Monday
