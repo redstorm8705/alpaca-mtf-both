@@ -820,6 +820,20 @@ DAYTRADE_TIER_KILL_EQUITY_PCT       = 0.04    # PROV:daytier-bp-2026-09-08 — t
                                               # BP-sized). Account-terms kill; MUST stay < MAX_DAILY_LOSS_PCT (paper 7%).
 DAYTRADE_PER_TRADE_RISK_EQUITY_PCT  = 0.02    # PROV:daytier-bp-2026-09-08 — stop-distance loss per new trade ≤2% of SOD equity
 
+# MIN-1-SHARE FLOOR kill flag (Rafael CEO directive 2026-09-15; strategy/day_tier_sizing.py, PR #319).
+# When a genuinely-triggered day-tier ENTER's conviction-scaled notional floors below one whole share BUT
+# the per-trade track_budget can still afford a whole share (track_budget >= price), take 1 share instead
+# of dropping the signal. Root cause it fixes: the tier took ZERO trades 2026-09-03..15 because conviction-
+# scaling rounded AFFORDABLE signals to 0 (443 live "day-tier SIZE ... < 1 share ... size 0 (skip)" log
+# lines; e.g. TSLA $851×0.33=$283 < $360/sh). Bounded by the per-trade budget (1×price <= track_budget);
+# the wire-time _bounded_entry_qty (day_trade_manager) STILL re-clamps DOWN for the main-bot BP reserve /
+# maintenance cushion / day+global gross caps / ≤2%-equity stop-risk, so an unaffordable floored share is
+# re-zeroed. A name whose ONE share exceeds the per-trade budget (MU/SNDK) STILL skips — unchanged. This
+# only alters WHICH affordable signals fire, never the per-trade size cap or any account/tier kill, so it
+# is NOT risk-path (Rule E). True = ON (default — the behavior already shipped live in #319 via the code
+# getattr default). Set False to disable the floor entirely (Rule D per-feature kill flag; instant, no deploy).
+DAYTRADE_MIN_ONE_SHARE_FLOOR        = True    # day-tier min-1-share sizing floor — ON (kill: set False)
+
 # Per-run API-call cap (reliability seat C5 + ANTI-SILO API-budget isolation §7b.2):
 # bound the fast loop's Alpaca calls so the 5-min main scan's T1 fetches are never crowded out.
 DAYTRADE_MAX_API_CALLS_PER_RUN = 60
@@ -970,6 +984,10 @@ def validate_config():
         errors.append("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT must be positive and below the tier kill")
     if DAYTRADE_MAIN_BOT_BP_RESERVE_USD < 0 or DAYTRADE_MAINT_CUSHION_USD < 0:
         errors.append("Day-tier buying-power reserve and maintenance cushion cannot be negative")
+    if not isinstance(DAYTRADE_MIN_ONE_SHARE_FLOOR, bool):
+        # Guard the kill flag's TYPE: a string like "False" is truthy under bool(), which would
+        # silently leave the floor ON when an operator meant to disable it (reliability-seat footgun).
+        errors.append("DAYTRADE_MIN_ONE_SHARE_FLOOR must be a bool (True/False), not a string or other type")
     if DAYTRADE_ENABLED and DAYTRADE_TIER_KILL_EQUITY_PCT >= MAX_DAILY_LOSS_PCT:
         errors.append(
             f"Day-tier kill in account terms ({DAYTRADE_TIER_KILL_EQUITY_PCT:.4f}) "
