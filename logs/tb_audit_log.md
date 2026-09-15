@@ -10186,3 +10186,18 @@ py3.10 compile OK · cold-2nd PASS · adversarial (in-flight) · impact: callers
 run_day_tier_shadow.py, scripts/day_tier_preflight.py, tests — NOT main.py/run_cycle.py → NO restart.
 NIT (both seats + cold-2nd, non-blocking): DAYTRADE_MIN_ONE_SHARE_FLOOR not declared in config.py
 (getattr default True works; add for discoverability — fast-follow).
+
+---
+## 2026-09-15 (interactive, Rafael present) — DAY-TIER FLAG DECLARED + FIRST LIVE TRADE (honest record)
+
+**#321 (main+OCI `985fbbe`, NO restart):** declared `DAYTRADE_MIN_ONE_SHARE_FLOOR = True` in config.py
+(was getattr code-default only) + validate_config isinstance(bool) type-guard. Behavior-identical
+(default == prior code default); non-risk-path (18 ins/0 del, no value changed). Gate: cold-2nd PASS +
+adversarial PASS + Gro/GAI preship APPROVE + log-evidence (447 OCI matches) + statics + OCI py3.10.
+Closes the config-discoverability NIT flagged by both board seats + cold-2nd + adversarial on #319.
+
+**HONEST FIRST-TRADE RECORD (no overclaim):** the day-tier took its first-ever live trade today —
+MSFT short 1sh @ $499.25 (11:50 ET), protective_stop −$0.58 in 2 min. Verified at source: this was a
+NORMAL-conviction (0.66) entry on the OLD code (fired 34 min BEFORE the floor deployed 12:24 ET), NOT the
+min-1-share floor. The floor is DEPLOYED + sim-proven but NOT YET exercised by a real floored fill
+(fires on the next affordable low-conviction ENTER; market closed 16:00 ET). "Deployed, unexercised."

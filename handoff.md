@@ -20,7 +20,8 @@ were dropped). FIX = MIN-1-SHARE FLOOR: a genuinely-triggered ENTER takes 1 shar
 (day_trade_manager.place_entry) still re-clamps DOWN for BP−$1200 reserve / $650 maint cushion / 0.60×eq
 day-gross / 2.5×eq global-gross / ≤2%-eq stop-risk (min()-only — re-zeros if live margin can't afford it);
 EOD force-flat (T-20min) returns the BP before close. Kill flag `config.DAYTRADE_MIN_ONE_SHARE_FLOOR`
-(default True via getattr; NOT yet declared in config.py — fast-follow). Diff scope = ONLY
+(default True; now DECLARED in config.py + a validate_config bool type-guard — PR #321, OCI `985fbbe`).
+Diff scope of #319 = ONLY
 `strategy/day_tier_sizing.py` + its test (`git show 36c1104 --stat` → 2 files); config.py kill switches
 (7% acct / −4% tier) and broker.py `paper=True` are NOT in the diff — the safety envelope is unchanged by
 construction, not by assertion. Gate: board 2 cold seats PASS (masked-loss/quant + reliability) + Gro/GAI
@@ -32,8 +33,13 @@ numbers now returns shares=1 / size_ok=True; the preflight `size_ok=False` block
 verify: `gh pr view 319 --json state`→MERGED; OCI HEAD `66fbd99`; `ssh mtf-bot 'grep -c "MIN-1-SHARE FLOOR" strategy/day_tier_sizing.py'`→5; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_day_tier_sizing 2>&1 | tail -1'`→OK (19).
 
 **⏭️ NEXT PICK-UP (2026-09-15):**
-1. WATCH the day-tier take its FIRST live trade now that sizing is unblocked — `ssh mtf-bot 'tail -20 logs/day_tier_runner_cron.log; wc -l logs/day_tier_events.jsonl'`. Confirm a fired ENTER sizes to ≥1 share, gets a protective stop, and EOD-flattens end-to-end ("deployed ≠ ready" — verify the first real entry).
-2. FAST-FOLLOW (non-blocking, both board seats + cold-2nd + adversarial NIT): declare `DAYTRADE_MIN_ONE_SHARE_FLOOR = True` in config.py's DAYTRADE_* block for kill-flag discoverability (getattr default already works).
+1. WATCH the day-tier's FIRST FLOORED trade. The tier made its first-ever live trade today (MSFT short 1sh,
+   protective_stop −$0.58) — an OLD-code normal-conviction entry, NOT the min-1-share floor (full forensic
+   record + verify commands in `logs/tb_audit_log.md` 2026-09-15). As of this write there are 0 floored
+   fills; market closed 16:00 ET. Verify: `ssh mtf-bot 'grep -c "MIN-1-SHARE FLOOR" logs/day_tier_events.jsonl; grep -c entry_fill logs/day_tier_events.jsonl'` → prints `0` then `1`. Watch tomorrow's open for the first floored fill.
+2. ✅ DONE — `DAYTRADE_MIN_ONE_SHARE_FLOOR` declared in config.py + a validate_config bool type-guard (PR
+   #321 → main+OCI `985fbbe`, NO restart; behavior-identical, default True == prior code default). Gate:
+   cold-2nd + adversarial + Gro/GAI preship APPROVE + log-evidence (447) + statics + OCI py3.10.
 3. Carried from 09-14: RTH DAY-stop backstop (naked-intraday finding, risk-path design); ledger $21 phantom (7/2 PANW/TSLA) root-cause; session-start ingestion of autonomous reports.
 
 _(prior 2026-09-14 PM block below:)_
