@@ -10156,3 +10156,33 @@ cold-2nd PASS + adversarial PASS (2 real pre-ship defects caught+fixed: unguarde
 + statics(py3.14+OCI3.10). REMAINING follow-ups (not this diff): not in the auto SessionStart hooks
 (grep -c session_audit_digest .claude/settings.json = 0) so it runs only via the manual skill, not on a
 resumed session; run locally it reads stale local logs vs OCI. Consider a SessionStart hook on resume.
+
+---
+## 2026-09-15 (interactive, Rafael present) — DAY-TIER MIN-1-SHARE SIZING FLOOR (risk-path)
+
+**File:** strategy/day_tier_sizing.py (+ tests/test_day_tier_sizing.py). RISK-PATH (increases frequency
+0→n and per-trade size 0→1sh on a fired ENTER). Full gate.
+
+**Root cause (verified live, NO-GUESS):** day-tier armed since 2026-09-02 but ZERO trades. Live preflight
+Tue 2026-09-15 11:41 ET: TSLA fired trigger=ENTER but size_ok=False — `budget $851.92 × conviction 0.33
+= $282.76 < 1 share @ $360.84` → floor()=0 → runner skips (run_day_tier.py:237). Other 10 symbols are
+legit trigger!=ENTER (5, waiting on setup) or would_consider=False (5, no edge) — normal.
+
+**Fix:** MIN-1-SHARE FLOOR in compute_day_tier_size — when shares floors to 0 but track_budget >= px,
+take 1 share; gated by getattr(config,"DAYTRADE_MIN_ONE_SHARE_FLOOR",True) (kill flag, Rule D). Bounded
+by per-trade track_budget (1×px<=budget); wire-time _bounded_entry_qty (place_entry) still re-clamps DOWN
+for BP−$1200 reserve, $650 maint cushion, 0.60×eq day-gross, 2.5×eq global-gross, ≤2%-eq stop-risk
+(min()-only, re-zeros if unaffordable). EOD force-flat (T-20min) returns BP. Honest 3-way skip reason
+(floored / floor-disabled / can't-afford). Safety envelope UNCHANGED (7% kill, −4% tier kill, paper=True).
+
+**10-pt / RC:** full read (sizing 150L, runner 309L, _bounded_entry_qty+place_entry+stop verbatim, test
+146L). RC-7 = the fix (int-truncate-then-floor recovered after; notional recomputed). RC-3 fail-safe
+preserved (inside existing try). No naive datetime/CWD-path/atomic/API-field/buffer touched.
+
+**GATE:** board 2 cold seats (masked-loss/quant + reliability) PASS · Gro (gpt-oss-120b) PASS · GAI
+transient 503 (Gemini capacity, diagnosed at source: correct free key …fgnclA, models exist, not config)
+— NVIDIA preship-substitute available · statics py_compile/ruff/mypy clean · 19/19 unit tests · OCI
+py3.10 compile OK · cold-2nd PASS · adversarial (in-flight) · impact: callers = run_day_tier.py,
+run_day_tier_shadow.py, scripts/day_tier_preflight.py, tests — NOT main.py/run_cycle.py → NO restart.
+NIT (both seats + cold-2nd, non-blocking): DAYTRADE_MIN_ONE_SHARE_FLOOR not declared in config.py
+(getattr default True works; add for discoverability — fast-follow).
