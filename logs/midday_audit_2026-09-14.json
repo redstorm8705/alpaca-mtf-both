@@ -1,0 +1,176 @@
+{
+  "audit_date": "2026-09-14",
+  "run_ts": "2026-09-14T10:30:01.668707-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [
+      {
+        "symbol": "SOXS",
+        "ts": "2026-09-14 09:04:49",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 51.26,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "MARA",
+        "ts": "2026-09-14 09:12:20",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 11.53,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "SOXS",
+      "MARA",
+      "RIVN",
+      "EWY"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 20,
+      "ELEVATED": 11
+    },
+    "last_score": 39,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 94,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-14 16:19:32,991 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-14 16:19:32,993 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-14 16:20:08,720 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-25.10 tracker=$-21.98 drift=$-3.12",
+      "2026-09-14 16:20:14,595 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-2 to intraday; prot",
+      "2026-09-14 16:20:14,605 WARNING ledger_sync ledger_sync wall-time 13.4s (fills=601 orders=2720)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -2.279999999999994,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -1.139999999999997,
+    "best": {
+      "symbol": "EWY",
+      "pnl": 0.0,
+      "entry_price": 189.63,
+      "exit_price": 189.63,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 183.04,
+      "target": 203.36
+    },
+    "worst": {
+      "symbol": "RIVN",
+      "pnl": -2.279999999999994,
+      "entry_price": 16.36,
+      "exit_price": 15.98,
+      "size": 6.0,
+      "exit_event": "stop_hit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 15.17,
+      "target": 18.82
+    },
+    "trades": [
+      {
+        "symbol": "RIVN",
+        "pnl": -2.279999999999994,
+        "entry_price": 16.36,
+        "exit_price": 15.98,
+        "size": 6.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 15.17,
+        "target": 18.82
+      },
+      {
+        "symbol": "EWY",
+        "pnl": 0.0,
+        "entry_price": 189.63,
+        "exit_price": 189.63,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 183.04,
+        "target": 203.36
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "MARA",
+        "side": "long",
+        "qty": 4.0
+      },
+      {
+        "symbol": "SOXS",
+        "side": "long",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "AAPL",
+      "GE",
+      "GEV",
+      "GOOGL",
+      "LLY"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 6,
+    "symbols": [
+      "EWY",
+      "MARA",
+      "RIVN",
+      "SOXS"
+    ],
+    "by_symbol": {
+      "MARA": {
+        "buy": 1,
+        "sell": 0
+      },
+      "SOXS": {
+        "buy": 2,
+        "sell": 0
+      },
+      "RIVN": {
+        "buy": 0,
+        "sell": 1
+      },
+      "EWY": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}

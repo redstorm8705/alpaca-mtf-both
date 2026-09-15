@@ -1,0 +1,5 @@
+Midday Gemini Audit — 2026-09-14
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+================================================================================
+
+(Gemini API error — all models failed: all Gemini ladder models failed (last: HTTP 503))
