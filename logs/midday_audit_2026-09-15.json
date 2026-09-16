@@ -1,0 +1,172 @@
+{
+  "audit_date": "2026-09-15",
+  "run_ts": "2026-09-15T10:30:02.252355-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 4,
+    "partial_count": 1,
+    "stop_hit_count": 2,
+    "stop_hit_rate": 0.5,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "MSFT",
+      "HOOD",
+      "AAPL",
+      "QCOM"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "ELEVATED": 6,
+      "STRESSED": 25
+    },
+    "last_score": 48,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 84,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-15 16:16:24,379 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-15 16:16:24,381 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-15 16:16:55,809 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for MSFT has no prior lot and no tracker record \u2014 fill un",
+      "2026-09-15 16:17:01,178 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$6.47 tracker=$-7.62 drift=$+14.09",
+      "2026-09-15 16:20:15,453 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-2 to intraday; prot"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 4,
+    "wins": 1,
+    "losses": 3,
+    "total_pnl": -8.199999999999989,
+    "win_rate": 0.25,
+    "profit_factor": 1.5072815533980595,
+    "avg_win": 8.280000000000001,
+    "avg_loss": -5.49333333333333,
+    "best": {
+      "symbol": "QCOM",
+      "pnl": 8.280000000000001,
+      "entry_price": 179.55,
+      "exit_price": 187.83,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 12,
+      "mri_level": "ELEVATED",
+      "stop": 170.56,
+      "target": 198.28
+    },
+    "worst": {
+      "symbol": "HOOD",
+      "pnl": -8.380000000000024,
+      "entry_price": 114.4,
+      "exit_price": 110.21,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "ELEVATED",
+      "stop": 90.18,
+      "target": 164.77
+    },
+    "trades": [
+      {
+        "symbol": "AAPL",
+        "pnl": -7.519999999999982,
+        "entry_price": 333.33,
+        "exit_price": 329.57,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 321.54,
+        "target": 357.83
+      },
+      {
+        "symbol": "HOOD",
+        "pnl": -8.380000000000024,
+        "entry_price": 114.4,
+        "exit_price": 110.21,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "ELEVATED",
+        "stop": 90.18,
+        "target": 164.77
+      },
+      {
+        "symbol": "QCOM",
+        "pnl": 8.280000000000001,
+        "entry_price": 179.55,
+        "exit_price": 187.83,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 12,
+        "mri_level": "ELEVATED",
+        "stop": 170.56,
+        "target": 198.28
+      },
+      {
+        "symbol": "MSFT",
+        "pnl": -0.5799999999999841,
+        "entry_price": 499.25,
+        "exit_price": 499.83,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 499.82,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "QCOM",
+      "SOXS"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 8,
+    "symbols": [
+      "AAPL",
+      "GE",
+      "HOOD",
+      "MSFT",
+      "QCOM"
+    ],
+    "by_symbol": {
+      "GE": {
+        "buy": 0,
+        "sell": 1
+      },
+      "MSFT": {
+        "buy": 1,
+        "sell": 0
+      },
+      "HOOD": {
+        "buy": 0,
+        "sell": 2
+      },
+      "AAPL": {
+        "buy": 0,
+        "sell": 2
+      },
+      "QCOM": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

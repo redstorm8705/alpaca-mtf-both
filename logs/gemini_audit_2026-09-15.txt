@@ -1,0 +1,17 @@
+Nightly Gemini Audit — 2026-09-15
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['scripts/audit_slack.py', 'scripts/session_audit_digest.py', 'scripts/pnl_snapshot.py', 'strategy/day_tier_sizing.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+(WARN = Bot operational with protective mechanisms firing correctly; ledger heal sync blocked on protected floor shrink for GE/qhm needing operator confirmation; DRAM missing daily data; TQI degradation alert active.)
+
+---
+
+### LOG ANOMALIES
+* **Protected Floor Shrink Refusal (Ownership
