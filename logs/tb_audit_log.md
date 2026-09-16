@@ -10201,3 +10201,22 @@ MSFT short 1sh @ $499.25 (11:50 ET), protective_stop −$0.58 in 2 min. Verified
 NORMAL-conviction (0.66) entry on the OLD code (fired 34 min BEFORE the floor deployed 12:24 ET), NOT the
 min-1-share floor. The floor is DEPLOYED + sim-proven but NOT YET exercised by a real floored fill
 (fires on the next affordable low-conviction ENTER; market closed 16:00 ET). "Deployed, unexercised."
+
+---
+## 2026-09-15 (interactive, Rafael present) — QHM STOP-OUT LEDGER AUTO-HEAL (permanent fix, risk-path)
+
+**#324 (main+OCI `fea1079`, RESTARTED):** permanent fix for the recurring "ownership ledger won't self-heal
+after a QHM protective stop-out" (216 `sync_ledger REFUSED — protected floor shrink` CRITICAL lines; GE
+2026-09-15, NVDA 2026-08-12). Root cause: a passive GTC stop fill had no caller invoking the authorized-
+reduction channel, so sync_ledger's blind replay-vs-baseline compare refused every protected-tier decrease.
+Fix in `_detect_external_close`: verify QHM's OWN tracked `pos.stop_order_id` reports EXACT terminal
+`filled` (order-id verified, unforgeable; partially_filled/canceled/None/enum excluded via
+`lower().split('.')[-1]=='filled'`) → `apply_authorized_tier_reduction(sym,'qhm',0.0)` heals via the
+board-blessed caller-identity channel + labels exit `qhm_stop_out`. A manual/mystery close stays external →
+never-shrink freeze + operator confirm (breach protection UNCHANGED). First design (trust the QH- coid) was
+REJECTED by BOTH cold board seats for breach-laundering (coid is client-settable/forgeable) — the gate
+worked. Gate: full read 3303L + board 2 cold seats (masked-loss+reliability) + Gro/GAI preship APPROVE +
+cold-2nd PASS (round 2 — round 1 caught the partially_filled substring hole) + adversarial PASS + log-
+evidence 216 + statics local+OCI3.10. GE healed this session via confirm_ledger_heal (immediate relief).
+Deployed-unexercised until the next real QHM stop-out. Micro-follow-up: `_alert` in the heal branch is
+unguarded (pre-existing pattern, no new exposure).

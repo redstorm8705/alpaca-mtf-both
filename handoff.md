@@ -8,7 +8,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-15 PM, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-15 late-PM, interactive Rafael present) — pick up here
+
+**QHM stop-out ledger auto-heal — shipped (PR #324). Root cause, fix mechanism, and full gate are recorded
+in `logs/tb_audit_log.md` (2026-09-15 entry).**
+verify: `gh pr view 324 --json state`; `ssh mtf-bot 'git rev-parse --short HEAD; grep -c qhm_stop_out execution/quarterly_hold_manager.py'`.
+
+**NEXT (not yet built) — day-tier hairpin-stop design** (Rafael's next request): board + Gro + GAI design
+session on a dynamic minimum stop-distance floor + risk-based sizing for the day-tier; plus a tier display
+rename on the P&L cards. Working notes for the session are in this session's transcript + `logs/tb_audit_log.md`.
+
+_(prior 2026-09-15 PM block — day-tier min-1-share floor:)_
+## ⏩ (2026-09-15 PM, interactive Rafael present) — min-1-share floor
 
 **DAY-TIER NOW TRADES — MIN-1-SHARE SIZING FLOOR SHIPPED + LIVE (PR #319 → main+OCI `66fbd99`, NO restart).**
 RISK-PATH. Root cause (verified live, NO-GUESS): the day-tier fired real ENTER signals but took ZERO trades
