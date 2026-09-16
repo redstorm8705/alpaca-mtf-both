@@ -1280,15 +1280,46 @@ class QuarterlyHoldManager:
         try:
             alpaca_pos = self.broker.get_position(pos.symbol)
             if alpaca_pos is None and pos.qty_filled > 0:
-                # Position closed externally (GTC stop fired or manual)
+                # AUTHORIZED-STOP-OUT vs EXTERNAL/MANUAL (2026-09-15; board 2 cold seats + Gro; masked-
+                # loss + reliability). A protected (qhm) hold whose OWN tracked GTC stop fired is an
+                # AUTHORIZED reduction — verified by ORDER-ID (the exact stop QHM itself placed;
+                # unforgeable), NOT by parsing a client-settable coid tag. If our stop is confirmed
+                # FILLED we heal the qhm ledger tier to 0 via the board-blessed caller-identity channel
+                # (apply_authorized_tier_reduction) so the never-shrink guard does NOT freeze + spam
+                # operator-confirm on a legitimate protective stop-out (the GE 2026-09-15 recurrence). A
+                # close that is NOT our filled stop (manual/mystery) stays "external" → guard freezes +
+                # operator confirm (breach protection UNCHANGED). PURE-qhm only: the helper's own
+                # pure-tier guard refuses a co-held symbol → operator confirm remains (no regression).
+                _stop_filled = False
+                if pos.stop_order_id:
+                    try:
+                        from execution.broker import get_order as _get_order
+                        _so = _get_order(str(pos.stop_order_id))
+                        # EXACT terminal "filled" only — must NOT match "partially_filled" (a partial
+                        # stop fill + a manual remainder-close must stay "external" → freeze + operator
+                        # confirm, per breach protection). Normalize an OrderStatus.FILLED enum
+                        # stringify ("orderstatus.filled") via split(".")[-1] before the exact compare.
+                        _st = (str(getattr(_so, "status", "")).lower().split(".")[-1]
+                               if _so is not None else "")
+                        _stop_filled = (_st == "filled")
+                    except Exception as _sfe:  # RC-3: query failure → treat as external (fail-safe: freeze)
+                        logger.warning(
+                            "QuarterlyHoldManager: %s stop-fill check failed (%s) — treating as external.",
+                            pos.symbol, _sfe,
+                        )
+                        _stop_filled = False
+                _exit_reason = "qhm_stop_out" if _stop_filled else "external_close_detected"
+                _data_source = "qhm_stop_out" if _stop_filled else "qhm_external_close"
+                # Position closed (our GTC stop fired, or an external/manual close)
                 pos.state = HoldState.CLOSED
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 _deregister_symbol(pos.symbol)
                 result.positions_closed_externally += 1
                 logger.info(
-                    "QuarterlyHoldManager: %s external close detected "
-                    "State → CLOSED.",
+                    "QuarterlyHoldManager: %s %s — State → CLOSED.",
                     pos.symbol,
+                    "stopped out (own GTC stop filled)" if _stop_filled
+                    else "external/manual close detected",
                 )
                 # trade_events.jsonl — CLAUDE.md §7 structured exit event (Change B)
                 try:
@@ -1306,14 +1337,14 @@ class QuarterlyHoldManager:
                     _te = {
                         "ts": datetime.now(PT).isoformat(),  # RC-1: PT (CLAUDE.md §8)
                         "event": "exit",
-                        "exit_reason": "external_close_detected",
+                        "exit_reason": _exit_reason,
                         "symbol": pos.symbol,
                         "price": None,  # reconcile via Alpaca fills API
                         "price_pending": True,
                         "size": pos.qty_filled,
                         "mri_level": "N/A",
                         "score": 0,
-                        "data_source": "qhm_external_close",
+                        "data_source": _data_source,
                         "hold_days": _hold_days,
                         "pdt_used": 0,
                     }
@@ -1324,10 +1355,29 @@ class QuarterlyHoldManager:
                         "QuarterlyHoldManager: trade_events write failed for %s: %s",
                         pos.symbol, _te_e,
                     )
-                self._alert(
-                    f"📊 QHM: {pos.symbol} CLOSED externally (GTC stop or manual). "
-                    f"Review P&L via Alpaca fills API."
-                )
+                if _stop_filled:
+                    # AUTHORIZED reduction: heal the qhm ledger tier to 0 through the caller-identity
+                    # channel (broker-verified flat — this branch requires alpaca_pos is None). The
+                    # helper is pure-qhm-guarded, never raises, and no-ops on a co-held symbol (→
+                    # operator confirm remains). Mirrors the earnings-trim tier-2 full-exit precedent.
+                    self._alert(
+                        f"📊 QHM: {pos.symbol} stopped out (own GTC stop filled) — qhm ledger "
+                        f"auto-healed. Review P&L via Alpaca fills API."
+                    )
+                    try:
+                        from execution import ownership_guard as _og
+                        _og.apply_authorized_tier_reduction(pos.symbol, "qhm", 0.0, "qhm_stop_fill")
+                    except Exception as _hc_e:  # RC-3: never break the close path
+                        logger.warning(
+                            "QuarterlyHoldManager: %s qhm ledger heal after stop-out failed: %s "
+                            "(non-blocking; operator confirm_ledger_heal remains the fallback).",
+                            pos.symbol, _hc_e,
+                        )
+                else:
+                    self._alert(
+                        f"📊 QHM: {pos.symbol} CLOSED externally (manual/unattributed) — ledger frozen "
+                        f"pending operator confirm. Review P&L via Alpaca fills API."
+                    )
                 self._save_state()
                 return True
         except Exception as e:  # RC-3
