@@ -1,0 +1,53 @@
+Nightly Gemini Audit — 2026-09-16
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `execution.ownership_guard` | `sync_ledger` | `QCOM` drift of -1.0 shares persists across multiple cycles, indicating a ledger-tracker mismatch that prevents selling (sells frozen).
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **Persistent Ledger Drift:** `execution.ownership_guard` reports `drift on 1 symbol(s) {'QCOM': -1.0}` repeatedly from 13:00 to 18:40. This indicates the ledger is out of sync with the actual position, causing the guard to freeze sells for `QCOM`.
+* **Kill Switch Triggered:** `execution.risk_manager` triggered at 07:47:03 due to an intraday loss of -8.61% (exceeding the 7.00% limit). The bot remained in a "Kill switch active" state for the remainder of the session.
+* **FIFO Orphan Warnings:** `execution.portfolio_tracker` repeatedly reports `FIFO orphan: closing fill for MSFT/GE has no prior lot`. This suggests the tracker is failing to associate closing fills with existing positions, likely contributing to the P&L drift.
+
+### PERFORMANCE AUDIT
+* **Kill Switch Performance:** The bot correctly identified the -8.61% loss and halted new entries. However, the `pnl_today` in the EOD snapshot is 0.0, which contradicts the `risk_manager` log stating a loss of $192.65.
+* **Stop-Hit Analysis:** The `RIVN` trade (2026-09-14) hit a stop at 15.98 (entry 16.36) for a loss of -2.28. The `AAPL` trade (2026-09-15) hit a stop at 329.57 (entry 333.33) for a loss of -7.52. The stop-hit rate is high relative to the win rate, and the `pnl` values appear consistent with the price movements.
+
+### TRADE INTEGRITY
+* **P&L Recording:** The EOD snapshot `pnl_today` is 0.0, while the `risk_manager` log explicitly calculates a loss of $192.65. This discrepancy between the `risk_manager` (which tracks intraday risk) and the `portfolio_tracker` (which generates the EOD snapshot) indicates a failure in P&L aggregation.
+
+### MODIFIED FILE FINDINGS
+* **`execution/quarterly_hold_manager.py`**: The `get_quarterly_hold_quantities` function raises an exception if the state file is corrupt. While this is intended to "fail closed," the repeated `ownership_guard` warnings suggest that the ledger is not successfully reconciling the QHM positions, leading to the `QCOM` sell-freeze.
+* **`config.py`**: No logic errors found in the provided snippet, but the `OVERNIGHT_ENTRIES_ENABLED` constant is missing, which may cause `AttributeError` if accessed by the strategy runner.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H1**: FIXED (Deleted)
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+* **P5-H5**: FIXED
+* **P5-M1**: UNTOUCHED
+* **P5-M2**: UNTOUCHED
+* **P5-M3**: UNTOUCHED
+* **P5-L1**: UNTOUCHED
+* **P5-L2**: UNTOUCHED
+* **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | `execution.ownership_guard` | Ledger-Tracker Drift | The `sync_ledger` function fails to resolve the `QCOM` drift, resulting in a permanent sell-freeze for that symbol.**
+* **EXECUTION BUG | HIGH | `execution.portfolio_tracker` | P&L Aggregation Mismatch | The `pnl_today` in the EOD snapshot does not reflect the loss calculated by the `risk_manager`.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate:** Manually reconcile the `QCOM` position in the ledger to clear the sell-freeze.
+2. **High:** Investigate `execution.portfolio_tracker` to determine why `FIFO orphan` warnings are occurring and why the `risk_manager` loss is not reflected in the EOD P&L.
+3. **High:** Audit `execution.ownership_guard` to ensure it can recover from ledger drifts without requiring manual intervention.
+4. **Medium:** Verify if `OVERNIGHT_ENTRIES_ENABLED` is required by the strategy; if so, define it in `config.py`.

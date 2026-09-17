@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-09-16
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+Kill switch active but ledger drift indicates unauthorized position changes | QCOM
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **Integrity**: The session reports 0 entries and 0 exits in the summary, which matches the matched-pair engine state. However, the `ledger_sync` logs reveal active positions (GEV, GOOGL, LLY, MARA, SOXS, UBER) and a persistent drift in QCOM.
+- **P&L Sign Checks**: N/A (No closed trades).
+- **Score Correlation**: N/A (No new entries recorded).
+- **Stop-Hit Rate**: 0% (No exits recorded).
+- **Accounting**: The D1 known issue (missing entry events) is present, but the `ledger_sync` drift is a separate, more severe integrity failure.
+
+### ENTRY QUALITY
+- **No issues**: No new entries were attempted as the **Kill switch** was active throughout the logged period (16:22:20 ET through 17:27:25 ET).
+
+### EXIT QUALITY
+- **No issues**: No exits were recorded in the provided log window.
+
+### MRI ALIGNMENT
+- **Inconclusive**: MRI samples are 0. The bot is in a "midday" phase with a TQI of 32, but no trades were initiated to test alignment.
+
+### LOG ANOMALIES
+- **Ledger Drift**: `QCOM` shows a persistent drift of `-1.0` across all sync cycles.
+- **Impossible State**: `NVDA/qhm=-2` reattributed to intraday. The log states "protected tiers are long-only," indicating a logic failure in how the ownership guard handles short positions or partial fills in protected buckets.
+- **Sync Latency**: `ledger_sync` wall-time is high (~13.5s to 14.0s) for only 615 fills, suggesting database or API overhead.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | Ledger Drift on QCOM**: Variable `drift` = -1.0. The bot detects a mismatch between internal state and Alpaca reality. Because the Kill Switch is active, the bot cannot "trade out" of this error, leading to a frozen state for that symbol.
+- **EXECUTION BUG | HIGH | Reattribution of NVDA qhm=-2**: Variable `qhm` (Quantitative House Model) tier. The bot reattributed a negative value to the intraday tier because the protected tier is long-only. This indicates the bot allowed a short sale or an over-sell in a tier where it is logically prohibited.
+- **INFRASTRUCTURE | MEDIUM | Kill Switch Persistence**: The log shows "Kill switch active — no new entries" every 5 minutes. While safe, there is no log evidence explaining *why* the kill switch was triggered (e.g., `MAX_DAILY_LOSS_PCT` breach or manual intervention).
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Manually reconcile QCOM position on Alpaca to match internal ledger or force-reset the tracker to clear the `-1.0` drift, as "sells are frozen" on this symbol.
+2. **EXECUTION**: Investigate the `ownership_guard` logic regarding the `NVDA/qhm=-2` event; ensure short-sale orders are blocked for symbols currently held in "protected" (long-only) tiers to prevent reattribution errors.
+3. **INFRASTRUCTURE**: Investigate the 14-second `ledger_sync` latency; check if the number of orders (2764) being parsed is excessive for a $2.5K paper account, suggesting a failure to archive old orders.
