@@ -1,0 +1,64 @@
+{
+  "audit_date": "2026-09-16",
+  "run_ts": "2026-09-16T10:30:02.032380-07:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 0,
+    "levels": {}
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 41,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-16 06:32:56,535 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-16 06:32:56,537 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-16 06:43:33,967 | WARNING  | main | SIGTERM received (signal 15) \u2014 saving state and exiting. Open positions: SOXS, MARA, QCOM, UBER.",
+      "2026-09-16 06:43:34,180 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for MSFT has no prior lot and no tracker record \u2014 fill un",
+      "2026-09-16 06:43:34,180 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for GE has no prior lot and no tracker record \u2014 fill unma"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "SOXS",
+      "UBER"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 0,
+    "symbols": [],
+    "by_symbol": {}
+  }
+}
