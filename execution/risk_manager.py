@@ -125,6 +125,79 @@ def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
             pass  # logger/alerts broken; persistence failure must not break the trading loop
 
 
+def _in_rth_now() -> bool:
+    """True during regular US equity trading hours (Mon–Fri 09:30–16:00 ET). Wall-clock only (no
+    network → cannot fail overnight). The intraday kill only needs to NOT evaluate a NEW trip
+    off-hours, where `equity − last_equity` is a stale-baseline / overnight-mark artifact (the
+    2026-09-16 00:47 PT false trip). A LATCHED kill still blocks 24/7 — that is checked BEFORE this
+    gate in check_kill_switch. Half-day/holiday precision is unnecessary here (a genuine intraday loss
+    is measured on the next RTH tick), so a network-free wall-clock window is the fail-safe choice."""
+    now = datetime.now(_ET)
+    if now.weekday() >= 5:          # Sat/Sun
+        return False
+    _mins = now.hour * 60 + now.minute
+    return (9 * 60 + 30) <= _mins < (16 * 60)
+
+
+# ── Today-fills cache (kill-switch numerator; keeps the fills fetch OFF the hot path) ──
+# check_kill_switch runs on every can_open_position() in the entry loop (and the day-tier's ~2-min
+# loop), so the full-history fills fetch must NOT run per check (reliability board 2026-09-16). Cache
+# TODAY's raw fills with a short TTL; a PT-date change invalidates it. ok=False propagates a fetch
+# failure so the caller degrades to the equity measure (more sensitive).
+#
+# RAW FILLS, not FIFO round-trips (masked-loss board 2026-09-16, Finding 1, cut 4): the caller computes
+# each symbol's TODAY P&L directly from its fills + prior close (unrealized_intraday_pl on current
+# holdings + Σ fills' deviation from prior close), which is EXACT and lot-correct. The prior approaches
+# (FIFO since-entry realized; min(unrealized_pl, unrealized_intraday_pl) on the blended Alpaca position)
+# both MASKED a real intraday loss on a symbol held over AND traded again today, because Alpaca's net
+# position blends the cheap overnight lot with the pricey today lot in one avg_entry_price. Measuring
+# from the fills never blends. Each cached tuple: (symbol, side, qty, price). ALL symbols (the caller
+# applies the QHM/F6 exclusion), qty is the absolute fill size.
+_INTRADAY_PNL_TTL_S = 120
+_intraday_cache: dict = {"ts": 0.0, "pt_date": "", "fills": (), "ok": False}
+
+
+def _today_fills() -> "tuple[tuple, bool]":
+    """(today's FILLS [PT transaction date] as (symbol, side, qty, price), ok) from the fills API
+    (reporting.pnl_ledger.fetch_all_fills — the audited FIFO source). Cached (TTL) so the per-cycle
+    kill check never re-pages the full fills history inline. ok=False on ANY failure → caller degrades
+    to the equity-based measure. Never raises."""
+    import time as _time
+    now = _time.time()
+    pt_today = datetime.now(_PT).strftime("%Y-%m-%d")
+    c = _intraday_cache
+    if c["ok"] and c["pt_date"] == pt_today and (now - c["ts"]) < _INTRADAY_PNL_TTL_S:
+        return c["fills"], True
+    try:
+        from reporting.pnl_ledger import fetch_all_fills, _pt_date
+        out = []
+        for f in fetch_all_fills():
+            if _pt_date(f.get("transaction_time", "")) != pt_today:
+                continue  # not a TODAY fill → legitimately skip
+            # A TODAY fill that cannot be parsed/used must DEGRADE, never be silently dropped
+            # (masked-loss seat NIT#2, 2026-09-16): a dropped BUY leaves its shares in the live
+            # position's qty but out of the fill terms, so the open leg would treat today-added
+            # shares as prior-close-basis SOD inventory and MASK today's entry cost. Same doctrine
+            # the positions loop already follows. ok=False → caller uses the more-sensitive equity fallback.
+            sym = f.get("symbol")
+            side = str(f.get("side", "")).lower()
+            try:
+                q = abs(int(float(f.get("qty", 0))))
+                px = float(f.get("price", 0.0))
+            except (TypeError, ValueError):
+                return (), False
+            if not sym or q <= 0 or px <= 0 or side not in ("buy", "sell", "sell_short", "buy_to_cover"):
+                return (), False
+            out.append((sym, side, q, px))
+        fills = tuple(out)
+        _intraday_cache.update(ts=now, pt_date=pt_today, fills=fills, ok=True)
+        return fills, True
+    except Exception as e:  # RC-3
+        logger.warning("kill-switch fills fetch failed (%s) — degrading to the equity measure "
+                       "(more sensitive).", e)
+        return (), False
+
+
 def _safe_lev_mult(value: Any, config_name: str, symbol: str) -> float:
     """AWP audit fix (2026-06-28): defense-in-depth guard, same bug class as
     the h2_scalar zero-width-stop fix above. The four leveraged-ETF
@@ -165,6 +238,9 @@ class RiskManager:
         self.open_positions     = 0
         self.daily_pnl          = portfolio_value - self.daily_start_value
         self.killed             = False
+        # The intraday-loss figure the kill actually evaluated (position-based when available, else
+        # the equity-fallback). Exposed so the alert reports the REAL tripping number, not realized $0.
+        self.last_kill_measure  = 0.0
         # BUG-ADV-1: restore killed=True if same calendar day (survives os.execv)
         _ks = _load_kill_state()
         _today_et = datetime.now(_ET).strftime("%Y-%m-%d")
@@ -279,6 +355,132 @@ class RiskManager:
             logger.warning("kill-switch buy&hold intraday P&L fetch failed (%s) — using 0", e)
             return 0.0
 
+    def _intraday_trading_pnl(self) -> "tuple[float, bool]":
+        """PHANTOM-PROOF intraday TRADING P&L (excl QHM/F6 buy-and-hold), independent of Alpaca's
+        `last_equity` (whose staleness caused the 2026-09-16 false trip). Computed per NON-EXCLUDED
+        symbol DIRECTLY from that symbol's TODAY FILLS + its prior close — never from a blended net
+        position or a since-entry FIFO figure (both masked a real loss on a symbol held over AND traded
+        again today; masked-loss board 2026-09-16, cuts 1–3). Per symbol:
+
+          today_pnl(S) = (current_price − prior_close) × qty             # today's move on CURRENT holdings
+                       + Σ today fills:  buy → qty×(prior_close − price)  # today-added shares repriced from
+                                         sell→ qty×(price − prior_close)  #   the fill price back to prior close
+
+        The open leg is computed from RAW position fields (current_price, lastday_price, signed qty) —
+        NOT Alpaca's derived `unrealized_intraday_pl` — so the identity is self-contained (masked-loss
+        seat NIT#1); `qty` is Alpaca-signed (negative for shorts), so it is correct for shorts too. The
+        fill terms correct each today-transacted share from prior close to its actual fill price. They
+        telescope to the exact today move for held-over, opened-today, partial, pure-day-trade, long and
+        short — verified by hand — with NO avg_entry_price blending.
+
+        Prior close = the still-open symbol's Alpaca `lastday_price`. A symbol FLAT now (fully closed
+        today) has no position → no lastday_price: if its net today qty is 0 (a pure same-day round
+        trip, so prior close CANCELS) the fill terms reduce to today's realized cash (Σsell − Σbuy,
+        prior-close-free); otherwise a held-over lot was fully closed and its prior close is unavailable
+        → DEGRADE (ok=False → the more-sensitive equity fallback), never mask. Fetching prior close for
+        fully-closed held-over symbols is the exact refinement, logged as a forward-build.
+
+        ALL fills counted (no QHM/F6 filter on the fills): a QHM trim then contributes only its today
+        move (buy/sell repriced from prior close), matching the OLD equity measure (an equity delta
+        books a trim at exit − prior_close); excluding it would DROP a day-tier round-trip in a
+        QHM-listed name (GOOGL ∈ config.DAYTRADE_UNIVERSE ∩ QHM, day tier has no QHM entry block). The
+        QHM/F6 buy-and-hold is excluded on the OPEN (unrealized_intraday_pl) leg only — matching the old
+        measure's unrealized-only exclusion.
+
+        Returns (pnl, ok); ok=False on ANY fetch failure or missing prior close → caller falls back to
+        the equity measure (more sensitive; never masks). Never raises."""
+        from collections import defaultdict
+        fills, ok = _today_fills()
+        if not ok:
+            return 0.0, False
+        try:
+            from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+            excluded = set(get_quarterly_hold_symbols() or []) | self._forever6_held_symbols()
+            api_key = os.getenv("ALPACA_API_KEY", "")
+            secret = os.getenv("ALPACA_SECRET_KEY", "")
+            if not api_key or not secret:
+                logger.warning("kill-switch intraday P&L: API keys not set — degrading to equity measure.")
+                return 0.0, False
+            resp = requests.get(
+                f"{_ALPACA_BASE_URL}/v2/positions",
+                headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                logger.warning("kill-switch intraday P&L: positions HTTP %d — degrading to equity "
+                               "measure (more sensitive).", resp.status_code)
+                return 0.0, False
+            positions = resp.json()
+            if not isinstance(positions, list):
+                return 0.0, False
+            # OPEN leg: today's move on current holdings (Alpaca prior-close-relative field, signed for
+            # shorts) for NON-EXCLUDED symbols; and capture prior close per still-open symbol for the
+            # fill terms. One pass over positions.
+            prior_close: dict = {}
+            open_pnl = 0.0
+            for p in positions:
+                sym = p.get("symbol")
+                if not sym:
+                    continue
+                try:
+                    ld = p.get("lastday_price")
+                    if ld is not None:
+                        prior_close[sym] = float(ld)
+                    if sym not in excluded:
+                        # Open leg = today's move on CURRENT holdings, computed DIRECTLY from raw fields
+                        # (current_price − prior_close) × signed_qty — NOT Alpaca's derived
+                        # `unrealized_intraday_pl` (masked-loss seat NIT#1, 2026-09-16). This makes the
+                        # per-symbol telescoping [ open_leg + Σ fills(price vs prior_close) == true today
+                        # move ] an ARITHMETIC IDENTITY we own, with no dependence on how Alpaca defines
+                        # a today-opened position's intraday field. A non-excluded open leg with no prior
+                        # close (None) cannot be priced → degrade (never mask).
+                        if ld is None:
+                            return 0.0, False
+                        open_pnl += (float(p.get("current_price")) - float(ld)) * float(p.get("qty"))
+                except (TypeError, ValueError):
+                    # one unparseable position must not silently drop a leg → degrade (more sensitive)
+                    return 0.0, False
+            # FILL terms: per NON-EXCLUDED symbol, reprice each today-transacted share from its fill
+            # price back to prior close. Aggregate cash and qty by side first.
+            # ALL symbols (no exclusion) — a fill in a QHM/F6 name is a TRIM or a day-tier trade whose
+            # TODAY move must count (matching the old equity measure, and catching a day-tier round-trip
+            # in GOOGL ∈ DAYTRADE_UNIVERSE ∩ QHM). The buy-and-hold HELD shares are already excluded via
+            # the open leg above; here we count only the today-transacted shares' move from prior close.
+            buy_cash: dict = defaultdict(float)
+            sell_cash: dict = defaultdict(float)
+            buy_qty: dict = defaultdict(float)
+            sell_qty: dict = defaultdict(float)
+            traded: set = set()
+            for sym, side, q, px in fills:
+                traded.add(sym)
+                if side in ("buy", "buy_to_cover"):
+                    buy_cash[sym] += q * px
+                    buy_qty[sym] += q
+                else:  # "sell", "sell_short"
+                    sell_cash[sym] += q * px
+                    sell_qty[sym] += q
+            fill_pnl = 0.0
+            for sym in traded:
+                pc = prior_close.get(sym)
+                if pc is not None:
+                    # buy → Σ qty×(pc − price) = pc×buy_qty − buy_cash ; sell → Σ qty×(price − pc) = sell_cash − pc×sell_qty
+                    fill_pnl += (pc * buy_qty[sym] - buy_cash[sym]) + (sell_cash[sym] - pc * sell_qty[sym])
+                elif abs(buy_qty[sym] - sell_qty[sym]) < 1e-9:  # PROV:eps-zero-int-qty
+                    # (1e-9 is a float exact-zero test on a sum of INTEGER share quantities — a
+                    #  structural numerical epsilon, NOT a tunable regime/decision threshold.)
+                    # flat now with zero net today qty ⇒ pure same-day round trip (no SOD inventory);
+                    # prior close cancels ⇒ today P&L = realized cash = Σsell − Σbuy.
+                    fill_pnl += sell_cash[sym] - buy_cash[sym]
+                else:
+                    # flat now with non-zero net today qty ⇒ a held-over lot was fully closed today;
+                    # its prior close is unavailable (no position to read lastday_price from) → degrade.
+                    return 0.0, False
+            return round(open_pnl + fill_pnl, 2), True
+        except Exception as e:  # RC-3
+            logger.warning("kill-switch intraday P&L fetch failed (%s) — degrading to equity measure "
+                           "(more sensitive).", e)
+            return 0.0, False
+
     def check_kill_switch(self) -> bool:
         """Returns True if daily loss limit has been breached. Halts all new trades.
         Measure is Alpaca-EQUITY based (phantom-proof) minus QHM unrealized, OR-guarded
@@ -313,16 +515,33 @@ class RiskManager:
         #    full intraday loss (more negative) so a masked intraday loss still trips.
         #  - QHM down→ subtracting a negative ADDS it back, so a QHM loss does NOT trip
         #    the intraday kill — exactly the exclusion the board wanted.
-        # Fail-safe: on any fetch failure _buy_and_hold_intraday_pl()=0.0 → measure reverts
-        # to account-level equity_pnl (MORE sensitive / conservative — never masks a loss).
-        # A real 7% intraday loss always trips. daily_pnl remains for display only.
-        intraday_equity_pnl = self.equity_pnl - self._buy_and_hold_intraday_pl()
+        # PHANTOM-PROOF numerator (2026-09-16, board 2 cold seats + Gro + GAI + masked-loss seat): use
+        # the FILLS-BASED per-symbol intraday trading P&L (see _intraday_trading_pnl — for each
+        # non-QHM/F6 symbol: (current − prior_close)×qty on current holdings + Σ today fills repriced
+        # from prior close) instead of `equity − last_equity`, which false-tripped overnight on a stale
+        # last_equity carrying the LLY/GEV buy-and-hold drawdown. This measure has NO last_equity
+        # dependence, so it is valid 24/7.
+        _pos_pnl, _pos_ok = self._intraday_trading_pnl()
+        if _pos_ok:
+            intraday_equity_pnl = _pos_pnl
+        else:
+            # EQUITY FALLBACK — used only when the position/FIFO fetch fails. It is `equity − last_equity`
+            # minus QHM/F6 unrealized, so it is PHANTOM-PRONE off-hours (a stale SOD last_equity — the
+            # 2026-09-16 00:47 PT overnight false trip). It is MORE sensitive (never masks) but can
+            # false-trip on a stale baseline, so evaluate it ONLY during RTH; off hours, with no position
+            # data, do not evaluate a NEW trip (a latched kill still blocks — checked at the top). The
+            # RTH check is wall-clock only (no network) so it cannot fail overnight.
+            if not _in_rth_now():
+                return self.killed
+            intraday_equity_pnl = self.equity_pnl - self._buy_and_hold_intraday_pl()
+        self.last_kill_measure = intraday_equity_pnl   # accurate alert basis (vs the misleading realized $0)
         loss_pct = intraday_equity_pnl / self.daily_start_value
         if loss_pct <= -config.MAX_DAILY_LOSS_PCT:
             logger.critical(
-                f"KILL SWITCH TRIGGERED: intraday loss (excl QHM) {loss_pct:.2%} "
-                f"exceeds limit {config.MAX_DAILY_LOSS_PCT:.2%} "
-                f"(equity_pnl ${self.equity_pnl:+.2f}). Halting new entries."
+                f"KILL SWITCH TRIGGERED: intraday trading loss (excl QHM/F6 buy&hold) {loss_pct:.2%} "
+                f"exceeds limit {config.MAX_DAILY_LOSS_PCT:.2%} (intraday P&L "
+                f"${intraday_equity_pnl:+.2f}{'' if _pos_ok else ' [equity-fallback]'}; "
+                f"equity_pnl ${self.equity_pnl:+.2f}). Halting new entries."
             )
             self.killed = True
             # Finding 4: killed always implies halt_entries
@@ -880,15 +1099,31 @@ class RiskManager:
 
     def reset_daily(self, portfolio_value: float):
         """Call this at market open each day."""
-        # Finding 8: guard against mid-session reset while kill switch is active.
-        # reset_daily() should only fire at SOD; a mid-session call would clear
-        # a legitimate kill and restore full trading capacity without operator approval.
+        # Finding 8 + 2026-09-16 fix (reliability board): refuse only a MID-SAME-DAY reset of a still-
+        # active kill (that would clear a legitimate same-session kill without operator approval). A NEW
+        # ET DAY is a legitimate fresh session and MUST clear a prior-day latch — the old unconditional
+        # `if self.killed: return` made an ET-rollover reset abort whenever killed=True, so on a long-
+        # running process a (false or real) prior-day kill NEVER cleared and blocked trading forever.
         if self.killed:
-            logger.critical(
-                "reset_daily() called while kill switch is ACTIVE — aborting reset. "
-                "Kill switch must be cleared manually before daily reset proceeds."
+            _ks = _load_kill_state()
+            _today = datetime.now(_ET).strftime("%Y-%m-%d")
+            _ksdate = str(_ks.get("date")) if _ks.get("date") else ""
+            # Refuse a SAME-DAY active kill; ALSO fail-closed when the in-memory latch has NO backing
+            # persisted date (persist FAILED — CRITICAL-logged — or the state file was cleared out from
+            # under us): clearing then would silently drop a possibly-real same-session kill. Only a
+            # latch stamped a PRIOR ET day is a legitimate new-session auto-clear (the bug this fixes:
+            # the old unconditional `if self.killed: return` left a prior-day latch stuck forever).
+            if _ksdate == _today or _ksdate == "":
+                logger.critical(
+                    "reset_daily() called while an ACTIVE kill is in memory and %s — aborting reset "
+                    "(fail-closed). Clear the kill manually before daily reset proceeds.",
+                    "it is stamped TODAY" if _ksdate == _today else "no persisted date backs it",
+                )
+                return
+            logger.warning(
+                "reset_daily(): clearing a PRIOR-DAY kill latch (stamped %s ≠ today %s) — new "
+                "session, legitimate daily clear.", _ksdate, _today,
             )
-            return
         self.daily_start_value = portfolio_value
         self.portfolio_value   = portfolio_value
         self.daily_pnl         = 0.0
