@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-14 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-17 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,15 +8,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-15 late-PM, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-17, interactive Rafael present) — pick up here
 
-**QHM stop-out ledger auto-heal — shipped (PR #324). Root cause, fix mechanism, and full gate are recorded
-in `logs/tb_audit_log.md` (2026-09-15 entry).**
-verify: `gh pr view 324 --json state`; `ssh mtf-bot 'git rev-parse --short HEAD; grep -c qhm_stop_out execution/quarterly_hold_manager.py'`.
+**ACCOUNT KILL SWITCH — PHANTOM FALSE-TRIP FIXED, SHIPPED + LIVE (PR #327 → main+OCI `e0a857e`, service
+RESTARTED + verified). RISK-PATH.** The kill measured today's loss as `equity − last_equity`; Alpaca's SOD
+baseline was stale (~$188 above marked equity on 2026-09-16, carrying LLY's QHM multi-day drawdown), so it
+FALSE-TRIPPED off-hours (00:47 PT market-closed, + again that evening) and blocked new entries ~2 days.
+FIX: `execution/risk_manager.py::_intraday_trading_pnl` now computes today's TRADING P&L per NON-QHM/F6
+symbol DIRECTLY from today's fills + prior close — `(current−lastday_price)×qty` on holdings + Σ fills
+repriced from prior close — NO last_equity dependence (telescopes to the exact today move; q0 cancels).
+QHM/F6 excluded on the OPEN leg only; fills counted for all symbols. FAIL-SAFE: any missing/unparseable
+input → degrade to the RTH-gated `equity−last_equity` fallback (more sensitive, never masks). RTH gate now
+on the fallback branch only; `reset_daily` clears a PRIOR-day latch but refuses same-day/absent-date
+(fail-closed). GATE (4 review cuts; masked-loss seat caught 3 masking vectors Gro/GAI/cold-2nd missed):
+cold-2nd PASS · Gro APPROVE · GAI APPROVE · masked-loss board seat APPROVE · adversarial · log-evidence ·
+CI preship PASS. Live verify (OCI, 2026-09-17): `_intraday_trading_pnl -> −$3.72 ok=True`, `check_kill_switch
+-> False`. Full detail: `logs/tb_audit_log.md` 2026-09-17 entry.
+verify: `gh pr view 327 --json state`; `ssh mtf-bot 'git rev-parse --short HEAD; grep -c _intraday_trading_pnl execution/risk_manager.py'`.
 
-**NEXT (not yet built) — day-tier hairpin-stop design** (Rafael's next request): board + Gro + GAI design
-session on a dynamic minimum stop-distance floor + risk-based sizing for the day-tier; plus a tier display
-rename on the P&L cards. Working notes for the session are in this session's transcript + `logs/tb_audit_log.md`.
+**NEXT (queued, Rafael's earlier requests, NOT yet built):** (1) day-tier hairpin-stop design — dynamic
+min stop-distance floor (ATR-based) + risk-based sizing (design doc: this session's scratchpad
+`daytier_stop_design.md`); (2) raise the day-tier gross/budget cap (Rafael directive — risk-envelope
+change, needs board gate); (3) P&L-card tier display rename (intraday→core/swing; daytrade=true same-day);
+(4) forward-build: fetch prior close for FULLY-closed held-over symbols so the kill measure need not degrade
+to the equity fallback on a full swing/QHM exit (masked-loss seat known-limit; never-mask today, just
+reverts to the more-sensitive measure that day).
 
 _(prior 2026-09-15 PM block — day-tier min-1-share floor:)_
 ## ⏩ (2026-09-15 PM, interactive Rafael present) — min-1-share floor
