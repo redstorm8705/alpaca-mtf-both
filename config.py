@@ -848,6 +848,45 @@ DAYTRADE_STOP_BUFFER_PCT     = 0.001  # PROV:daytier-v2-2026-08-29  buffer beyon
 DAYTRADE_FILL_POLL_S         = 1.0    # poll interval (s) when confirming an entry fill
 DAYTRADE_FILL_POLL_MAX       = 8      # max fill-confirm polls before treating the entry as unfilled (cancel + skip)
 
+# ─── DAY-TIER MIN-STOP-DISTANCE GATE + RISK-BASED SIZING (hairpin fix 2026-09-18) ─────────────────
+# Rafael-approved design (F1–F4); board + Gro + GAI + masked-loss seat — RISK-PATH (changes per-trade
+# sizing mechanics + adds an entry gate). THE PROBLEM (live, trade_events.jsonl 2026-09-15..18): the
+# day tier entered "no-room" trades whose structural stop sat pennies from entry — a GEX pin mirrored
+# across the entry (FADE) or a wall a hair away (RIDE), INSIDE the bid/ask noise band — so a random
+# tick stopped them out for a few cents; and sizing (notional×conviction, stop-blind) deployed almost
+# no real dollar risk on those trades → pennies of P&L. Two coupled fixes:
+#   A (GATE, execution/day_trade_manager._min_stop_room_ok): before entry, require the structural stop
+#     to sit at least a volatility-scaled distance away = max(k×ATR(5m), spread_mult×live_spread). If
+#     the pin/wall is closer → SKIP. NEVER widen the stop past the pin (that breaks the setup's logic).
+#     Applies to FADE and RIDE. Fails CLOSED (skip) on an invalid ATR (<min bars) or a broken/unreadable
+#     quote — an unverifiable room budget is treated as no room.
+#   B (SIZE, execution/day_trade_manager._bounded_entry_qty): size from RISK, not notional. The target
+#     shares ≈ (risk% × SOD-equity) ÷ stop_distance, then clamped DOWN by every existing cap (per-trade
+#     budget, BP reserve, gross, maintenance). Same fixed dollar risk on every valid trade; a tighter
+#     (but Part-A-valid) stop earns more shares, a wider stop fewer — bounded by the per-trade budget.
+#
+# F1 — per-trade risk BASIS: START at 1% of SOD equity (ZERO day-tier trade history to size an edge on
+#   yet — fractional-Kelly-on-unknown-edge). The 2% ceiling below (DAYTRADE_PER_TRADE_RISK_EQUITY_PCT)
+#   is RETAINED as the hard cap; this BASIS is the ACTIVE driver and is clamped to <= that ceiling at
+#   wire-time. Ramp 1%→2% is a BOARD-GATED decision (measure ~20–30 trades' expectancy → board → raise
+#   the basis), NOT an automatic size amplifier (Rule E: a size increase never auto-flips). MUST stay in
+#   (0, DAYTRADE_PER_TRADE_RISK_EQUITY_PCT] — validate_config REJECTS 0.0 or > ceiling, so this is not a
+#   kill knob; the tier kill is DAYTRADE_ENABLED=False (flip + restart).
+DAYTRADE_PER_TRADE_RISK_BASIS_PCT = 0.01  # PROV:daytier-hairpin-2026-09-18 — ACTIVE per-trade risk basis (1% start; 2% ceiling retained; ramp board-gated)
+# F2 — min-stop distance = max(k×ATR(5m), spread_mult×spread). k=1.5 from Harris's noise-band
+#   derivation (a stop inside ~1.5×ATR(5m) is inside normal 5-min noise). The spread backstop keeps the
+#   floor from collapsing to ~0 on a thin/quiet tape where ATR≈0 (the seat's critical catch — without
+#   it the fix does nothing exactly when a hairpin bites). ATR is the ROBUST MEDIAN true range so a
+#   single spiky 5-min bar cannot inflate the floor and mask a hairpin.
+DAYTRADE_MIN_STOP_ATR_MULT    = 1.5   # PROV:daytier-hairpin-2026-09-18 — k: required stop_distance >= k × ATR(5m)
+DAYTRADE_MIN_STOP_SPREAD_MULT = 2.0   # PROV:daytier-hairpin-2026-09-18 — required stop_distance >= this × live bid/ask spread (thin-tape backstop)
+DAYTRADE_ATR_PERIOD           = 14    # ATR lookback (bars): robust median true range over this window
+DAYTRADE_ATR_MIN_BARS         = 15    # need >= this many 5m bars (period + 1 for the first TR) or the gate SKIPS (fail-closed)
+DAYTRADE_STOP_SPREAD_SANITY_PCT = 0.02  # PROV:daytier-hairpin-2026-09-18 — a live spread wider than this frac of mid is
+                                        # broken/crossed/stale → NOT a usable room reference → SKIP (fail-closed). Mirrors
+                                        # the board-blessed GEX_SPOT_SPREAD_SANITY_PCT=0.02: >200bps on a liquid day-tier
+                                        # name is a broken quote by microstructure, not a fitted threshold.
+
 
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 
@@ -999,6 +1038,36 @@ def validate_config():
             f"PRECLOSE_SWEEP_MINUTES ({PRECLOSE_SWEEP_MINUTES}) so the day-tier flattens "
             f"before the pre-close sweep can place an intraday-tagged stop on a day-tier lot"
         )
+
+    # Day-tier hairpin-fix constants (2026-09-18, risk-path). Fail CLOSED on a mis-set so a bad edit
+    # can never silently disable the min-stop gate or invert the risk basis vs the retained ceiling.
+    if not (0 < DAYTRADE_PER_TRADE_RISK_BASIS_PCT <= DAYTRADE_PER_TRADE_RISK_EQUITY_PCT):
+        errors.append(
+            f"DAYTRADE_PER_TRADE_RISK_BASIS_PCT ({DAYTRADE_PER_TRADE_RISK_BASIS_PCT}) must be in "
+            f"(0, DAYTRADE_PER_TRADE_RISK_EQUITY_PCT={DAYTRADE_PER_TRADE_RISK_EQUITY_PCT}] — the active "
+            f"risk basis can never exceed the retained hard ceiling"
+        )
+    if not (DAYTRADE_MIN_STOP_ATR_MULT > 0):
+        errors.append(f"DAYTRADE_MIN_STOP_ATR_MULT ({DAYTRADE_MIN_STOP_ATR_MULT}) must be > 0")
+    if DAYTRADE_MIN_STOP_SPREAD_MULT < 0:
+        errors.append(f"DAYTRADE_MIN_STOP_SPREAD_MULT ({DAYTRADE_MIN_STOP_SPREAD_MULT}) must be >= 0")
+    if DAYTRADE_ATR_PERIOD < 1 or DAYTRADE_ATR_MIN_BARS < 2:
+        errors.append(
+            f"Day-tier ATR params invalid: DAYTRADE_ATR_PERIOD ({DAYTRADE_ATR_PERIOD}) must be >= 1 and "
+            f"DAYTRADE_ATR_MIN_BARS ({DAYTRADE_ATR_MIN_BARS}) must be >= 2"
+        )
+    # Coupling guard (exec-seat C1): the robust-ATR window is trs[-DAYTRADE_ATR_PERIOD:] and the gate
+    # requires >= (DAYTRADE_ATR_MIN_BARS - 1) true ranges to fill it. If PERIOD < MIN_BARS-1 the window
+    # can NEVER fill → _robust_atr_5m returns None for every symbol → the tier silently benches (fails
+    # CLOSED but silent). Fail LOUD at boot instead so a mis-edit can't quietly stop all day-tier trading.
+    if DAYTRADE_ATR_PERIOD < DAYTRADE_ATR_MIN_BARS - 1:
+        errors.append(
+            f"DAYTRADE_ATR_PERIOD ({DAYTRADE_ATR_PERIOD}) must be >= DAYTRADE_ATR_MIN_BARS-1 "
+            f"({DAYTRADE_ATR_MIN_BARS - 1}) or the ATR window can never fill and the min-stop gate "
+            f"skips EVERY day-tier entry"
+        )
+    if not (0 < DAYTRADE_STOP_SPREAD_SANITY_PCT < 1):
+        errors.append(f"DAYTRADE_STOP_SPREAD_SANITY_PCT ({DAYTRADE_STOP_SPREAD_SANITY_PCT}) must be between 0 and 1")
 
     # Log results
     for w in warnings:
