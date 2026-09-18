@@ -278,9 +278,14 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         cushion = float(_cfg("DAYTRADE_MAINT_CUSHION_USD", 650.0))
         day_pct = float(_cfg("DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # PROV:daytier-bp-2026-09-08
         global_ratio = float(_cfg("MAX_GROSS_EXPOSURE_RATIO", 2.5))
-        risk_pct = float(_cfg("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT", 0.02))  # PROV:daytier-bp-2026-09-08
-        if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, global_ratio, risk_pct)):
+        # Part B (hairpin fix 2026-09-18): RISK is the sizing BASIS. Active basis = 1% of SOD equity
+        # (F1), clamped to the RETAINED 2% hard ceiling (DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) so the
+        # active basis can never exceed it. Both PROV:daytier-hairpin-2026-09-18.
+        risk_pct_basis = float(_cfg("DAYTRADE_PER_TRADE_RISK_BASIS_PCT", 0.01))
+        risk_pct_ceiling = float(_cfg("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT", 0.02))
+        if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, global_ratio, risk_pct_basis, risk_pct_ceiling)):
             return 0, "invalid configured risk limit — fail closed"
+        risk_pct = min(risk_pct_basis, risk_pct_ceiling)  # active basis, never above the retained ceiling
 
         account_gross = _account_gross(positions_by_symbol)
         day_gross = _current_daytrade_gross(open_trades, positions_by_symbol)
@@ -300,13 +305,23 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         stop_distance = abs(order_price - stop_price)
         if stop_distance <= 0 or not math.isfinite(stop_distance):
             return 0, "invalid stop distance — fail closed"
+        # Part B: RISK is the sizing BASIS, not a late ceiling. Target the fixed per-trade dollar risk
+        # (risk% × SOD-equity ÷ stop_distance), then clamp DOWN by every notional/BP/gross/maintenance
+        # cap. The stop-blind conviction-notional (requested_qty) no longer caps the size below the risk
+        # target — a tighter (but Part-A-valid) stop earns MORE shares for the SAME dollar risk (design
+        # "same risk on every trade"). Doubly bounded: <= the per-trade budget + gross/BP/maintenance caps
+        # (notional_qty, which enforces every account limit) AND the 1% active basis (<= the retained 2%
+        # ceiling). requested_qty>=1 stays a validity precondition only (checked at the top). risk_qty==0
+        # (one share's stop-risk already exceeds the budget) naturally SKIPS — this is exactly the F4
+        # min-1-share floor's subordination to the risk cap.
         risk_qty = math.floor((risk_basis * risk_pct) / stop_distance)
         notional_room = min(rooms.values())
         notional_qty = math.floor(max(0.0, notional_room) / order_price)
-        safe_qty = max(0, min(int(requested_qty), int(risk_qty), int(notional_qty)))
-        why = (f"qty {requested_qty}→{safe_qty}; rooms="
+        safe_qty = max(0, min(int(risk_qty), int(notional_qty)))
+        why = (f"requested {requested_qty} → risk-basis {risk_qty}sh "
+               f"(risk {risk_pct:.2%}×${risk_basis:.0f}/stop ${stop_distance:.4f}) → wired {safe_qty}; rooms="
                + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items())
-               + f"; stop-risk cap={risk_qty}sh")
+               + f"; notional cap={notional_qty}sh")
         return safe_qty, why
     except Exception as e:
         return 0, f"entry-cap error (fail-closed): {e!r}"
@@ -368,6 +383,112 @@ def _compute_stop_price(trigger: dict, direction: str, entry_px: float) -> float
     except Exception as e:  # noqa: BLE001
         logger.warning("day-tier stop-price compute failed: %s", e)
         return None
+
+
+# ── min-stop-distance gate (hairpin fix Part A — 2026-09-18, board + Gro + GAI + masked-loss) ─────
+def _robust_atr_5m(symbol: str) -> "float | None":
+    """Robust 5-min ATR in DOLLARS = the MEDIAN true range over the last DAYTRADE_ATR_PERIOD bars
+    (MEDIAN, not mean, so a single spiky 5-min bar cannot inflate the floor and let a hairpin through).
+    Sources the SAME fetch_bars(symbol, TF_5M, 30) the entry trigger already fetched THIS tick — 30
+    matches strategy.day_tier_entry_trigger._INTRADAY_BARS, so this is a shared-TTL-cache HIT (no extra
+    API call / rate-budget cost). Returns None if fewer than DAYTRADE_ATR_MIN_BARS usable bars or on any
+    error → the caller fails CLOSED (skips the entry). Never raises."""
+    try:
+        from data.fetcher import fetch_bars
+        period = int(_cfg("DAYTRADE_ATR_PERIOD", 14))
+        min_bars = int(_cfg("DAYTRADE_ATR_MIN_BARS", 15))
+        # 30 == day_tier_entry_trigger._INTRADAY_BARS (cache-key parity → hit). A divergence only wastes
+        # one cached-miss fetch; correctness is unaffected.
+        df = fetch_bars(symbol, config.TF_5M, num_bars=30)
+        if df is None or getattr(df, "empty", True):
+            return None
+        for col in ("high", "low", "close"):
+            if col not in getattr(df, "columns", []):
+                return None
+        if len(df) < min_bars:
+            return None
+        highs = [float(x) for x in df["high"].tolist()]
+        lows = [float(x) for x in df["low"].tolist()]
+        closes = [float(x) for x in df["close"].tolist()]
+        if not (len(highs) == len(lows) == len(closes)) or len(closes) < min_bars:
+            return None
+        trs = []
+        for i in range(1, len(closes)):
+            h, lo, pc = highs[i], lows[i], closes[i - 1]
+            if not (math.isfinite(h) and math.isfinite(lo) and math.isfinite(pc)):
+                continue
+            tr = max(h - lo, abs(h - pc), abs(lo - pc))
+            if math.isfinite(tr) and tr >= 0:
+                trs.append(tr)
+        window = trs[-period:]
+        # Require a stable-enough sample: at least (min_bars - 1) true ranges (min_bars bars → min_bars-1 TRs).
+        if len(window) < (min_bars - 1):
+            return None
+        window.sort()
+        m = len(window)
+        atr = window[m // 2] if m % 2 == 1 else (window[m // 2 - 1] + window[m // 2]) / 2.0
+        # Return a computed 0.0 as a VALID reading (a genuinely flat 5-min tape), not None: the design's
+        # spread backstop max(k×ATR, spread_mult×spread) is meant to supply the floor when ATR≈0. None is
+        # reserved for UNAVAILABLE data (handled by the early returns above); a real 0-range measurement
+        # is a number, and the gate's own min_stop>0 check fails closed if the spread is also ~0.
+        return atr if (math.isfinite(atr) and atr >= 0) else None
+    except Exception as e:  # noqa: BLE001 — ATR failure fails CLOSED at the caller (skip), never raises
+        logger.warning("[%s] day-tier ATR(5m) compute failed: %s", symbol, e)
+        return None
+
+
+def _min_stop_room_ok(symbol: str, direction: str, entry_px: float, stop_px: float) -> "tuple[bool, str]":
+    """Part A gate: True iff the structural stop sits at least a volatility-scaled distance from the
+    entry = max(k×ATR(5m), spread_mult×live_spread). Fails CLOSED (returns False) on an invalid ATR
+    (<DAYTRADE_ATR_MIN_BARS bars) OR a broken/crossed/stale/unreadable quote — a no-room trade must
+    never enter, and an unverifiable room budget is treated as no room. NEVER widens the stop (the
+    caller SKIPS). Applies identically to FADE and RIDE. Never raises."""
+    try:
+        stop_distance = abs(float(entry_px) - float(stop_px))
+        if not (math.isfinite(stop_distance) and stop_distance > 0):
+            return False, "min-stop gate: invalid stop distance — skip (fail-closed)"
+        k = float(_cfg("DAYTRADE_MIN_STOP_ATR_MULT", 1.5))
+        spread_mult = float(_cfg("DAYTRADE_MIN_STOP_SPREAD_MULT", 2.0))
+        sanity_pct = float(_cfg("DAYTRADE_STOP_SPREAD_SANITY_PCT", 0.02))
+        atr = _robust_atr_5m(symbol)
+        if atr is None or not (math.isfinite(atr) and atr >= 0):
+            return False, "min-stop gate: ATR(5m) unavailable (<min bars/invalid) — skip (fail-closed)"
+        atr_floor = k * atr
+        # Live spread backstop (thin/quiet tape where ATR≈0). A broken/crossed/stale quote (non-positive,
+        # crossed, or spread > sanity_pct of mid) is NOT a usable room reference → fail CLOSED.
+        from data.alpaca_data import get_latest_quote
+        q = get_latest_quote(symbol)
+        if not isinstance(q, dict):
+            return False, "min-stop gate: quote unreadable (402/None) — skip (fail-closed)"
+        try:
+            bid = float(q.get("bid") or 0.0)
+            ask = float(q.get("ask") or 0.0)
+        except (TypeError, ValueError):
+            return False, "min-stop gate: non-numeric quote — skip (fail-closed)"
+        if not (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask):
+            return False, f"min-stop gate: invalid/crossed quote bid={bid} ask={ask} — skip (fail-closed)"
+        mid = (bid + ask) / 2.0
+        spread = ask - bid
+        if mid <= 0 or spread > sanity_pct * mid:
+            return False, (f"min-stop gate: spread ${spread:.4f} > {sanity_pct:.1%} of mid ${mid:.2f} "
+                           f"(broken/crossed/stale quote) — skip (fail-closed)")
+        min_stop = max(atr_floor, spread_mult * spread)
+        # If NEITHER ATR nor the spread yields a positive floor (a flat tape AND a locked/zero-spread
+        # quote), there is no measurable room reference — fail CLOSED rather than let any tiny stop pass.
+        # This also makes a mis-set spread_mult=0 safe when ATR happens to be 0 (Gro NIT-D).
+        if not (min_stop > 0):
+            return False, "min-stop gate: no measurable room floor (ATR≈0 and spread≈0) — skip (fail-closed)"
+        if stop_distance + 1e-9 < min_stop:
+            return False, (f"min-stop gate: stop_distance ${stop_distance:.4f} < required ${min_stop:.4f} "
+                           f"(max of {k}×ATR ${atr_floor:.4f}, {spread_mult}×spread ${spread_mult * spread:.4f}) "
+                           f"— NO ROOM, skip (never widen the pin)")
+        return True, (f"min-stop gate OK: stop_distance ${stop_distance:.4f} >= ${min_stop:.4f} "
+                      f"({k}×ATR ${atr_floor:.4f} | {spread_mult}×spread ${spread_mult * spread:.4f})")
+    except Exception as e:  # noqa: BLE001 — a gate error fails CLOSED (skip); never an unchecked entry
+        # WARN (not INFO): a normal no-room skip is INFO at the caller; an EXCEPTION here is a gate
+        # malfunction (e.g. a data-API outage skipping every entry) and must be visible above INFO.
+        logger.warning("[%s] day-tier min-stop gate error (fail-closed skip): %s", symbol, e)
+        return False, f"min-stop gate error (fail-closed skip): {e!r}"
 
 
 # ── fill confirmation ──────────────────────────────────────────────────────────────────────────
@@ -835,6 +956,17 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if not (math.isfinite(limit_px) and limit_px > 0):
             logger.warning("[%s] day-tier entry aborted — invalid marketable-limit price", symbol)
             return False
+
+        # MIN-STOP-DISTANCE GATE (hairpin fix Part A — 2026-09-18). A structural stop inside the
+        # volatility/noise band = a "no-room" trade a random tick stops out for pennies. Require the
+        # entry→stop distance >= max(k×ATR(5m), spread_mult×live_spread); if the pin/wall is closer,
+        # SKIP (NEVER widen past the pin — that breaks the setup's logic). Fail-closed on invalid
+        # ATR / broken quote. Runs before the heavier live-book reads so a no-room setup skips cheaply.
+        room_ok, room_why = _min_stop_room_ok(symbol, direction, limit_px, stop_px)
+        if not room_ok:
+            logger.info("[%s] day-tier entry skipped — %s", symbol, room_why)
+            return False
+        logger.info("[%s] day-tier %s", symbol, room_why)
 
         # Live book (fail-CLOSED) — used for BOTH the opposite-side guard and the B6 gross cap.
         try:
