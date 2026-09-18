@@ -1,0 +1,6 @@
+Nightly Gemini Audit — 2026-09-17
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+Modified files: ['execution/risk_manager.py']
+================================================================================
+
+(Gemini API error — all models failed: all Gemini ladder models failed (last: HTTP 503))
