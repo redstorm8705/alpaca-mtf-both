@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-09-17
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity**: The `SOXS` trade resulted in a loss of $-11.54. Entry $51.26, Exit $45.49. As a short position, the bot should profit if entry > exit. Here, entry ($51.26) > exit ($45.49), which mathematically results in a profit of +$5.77 per share. The recorded P&L of $-11.54 indicates a **sign-flip error** in the P&L calculation engine for short positions.
+- **P&L Sign Check**: `META` and `AMZN` show losses ($-2.94 and $-0.89 respectively). These are long positions where exit < entry, which is correctly recorded as a loss.
+- **Score Correlation**: The `SOXS` trade had a high score (10/12) but resulted in a stop-hit. The `META` and `AMZN` trades had low scores (0/12) and were exited. The strategy is currently failing to filter low-score entries effectively, contributing to the 0% win rate.
+
+### ENTRY QUALITY
+- **MRI Alignment**: The `SOXS` entry was flagged as `MRI=STRESSED`. Despite the `STRESSED` regime, the bot initiated the trade. The `strategy.run_cycle` log shows the bot is aware of the `MRI=ELEVATED` regime, but the entry logic allowed a trade in a `STRESSED` state, which is a high-risk behavior.
+
+### EXIT QUALITY
+- **Exit Logic**: `META` and `AMZN` exits show `levels=unknown`. This suggests the exit logic failed to retrieve or calculate the target/stop levels at the time of exit, leading to a "blind" exit rather than a structured TP/SL execution.
+
+### MRI ALIGNMENT
+- The bot is operating in an `ELEVATED` MRI regime (36/100). While the bot adjusted the `MIN_SCORE` to 9/12, the persistence of `STRESSED` entries (like `SOXS`) suggests the `MRI` filter is not effectively blocking entries during high-volatility/stressed periods.
+
+### LOG ANOMALIES
+- **EOD P&L DRIFT**: `WARNING | EOD P&L DRIFT: Alpaca=$79.39 tracker=$-11.54 drift=$+90.93`. This is a significant discrepancy between the ledger and the tracker, likely exacerbated by the known `D1` entry-event logging degradation.
+- **DRAM Data**: `WARNING | [DRAM] No daily data — long entry blocked (fail-closed)`. This indicates a data feed issue for specific tickers.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L Sign-Flip on Short Positions | The `SOXS` trade (short) shows a loss of $-11.54 despite a favorable price move (Entry $51.26 > Exit $45.49). The P&L calculation logic is incorrectly applying the long-position P&L formula to a short position.**
+- **EXECUTION BUG | MEDIUM | Missing Exit Level Metadata | `META` and `AMZN` exits show `levels=unknown`. The exit manager is failing to log or retrieve the target/stop levels used for the trade exit.**
+- **ALPHA ISSUE | MEDIUM | Stressed Regime Entry | `SOXS` was entered while `MRI=STRESSED`. The strategy should have a hard block on entries when `MRI` is `STRESSED` regardless of the score.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Patch `execution.portfolio_tracker` to correctly identify position side (long/short) before calculating P&L to resolve the sign-flip error.
+2. **EXECUTION**: Debug `execution.exit_logic` to ensure `TP`/`SL` levels are correctly passed to the exit event logger to prevent `levels=unknown` status.
+3. **ALPHA**: Implement a hard-block in `strategy.signal_generator` for any ticker where `MRI=STRESSED`, overriding the `MIN_SCORE` dynamic adjustment.

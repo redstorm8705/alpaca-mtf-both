@@ -1,0 +1,166 @@
+{
+  "audit_date": "2026-09-17",
+  "run_ts": "2026-09-17T10:30:01.674593-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 3,
+    "partial_count": 0,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.25,
+    "flagged_entries": [
+      {
+        "symbol": "SOXS",
+        "ts": "2026-09-14 09:04:49",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 51.26,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "MSFT",
+      "META",
+      "AMZN",
+      "SOXS"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "ELEVATED": 30
+    },
+    "last_score": 36,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 61,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-17 16:11:54,830 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-17 16:11:54,832 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-17 16:12:34,344 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$79.39 tracker=$-11.54 drift=$+90.93",
+      "2026-09-17 16:17:54,047 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-09-17 16:18:51,025 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -15.370000000000061,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -5.1233333333333535,
+    "best": {
+      "symbol": "AMZN",
+      "pnl": -0.8900000000000148,
+      "entry_price": 252.34,
+      "exit_price": 251.45,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 251.49,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "SOXS",
+      "pnl": -11.539999999999992,
+      "entry_price": 51.26,
+      "exit_price": 45.49,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 39.06,
+      "target": 83.1
+    },
+    "trades": [
+      {
+        "symbol": "SOXS",
+        "pnl": -11.539999999999992,
+        "entry_price": 51.26,
+        "exit_price": 45.49,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 39.06,
+        "target": 83.1
+      },
+      {
+        "symbol": "META",
+        "pnl": -2.9400000000000546,
+        "entry_price": 669.39,
+        "exit_price": 672.33,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 671.8,
+        "target": 0.0
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -0.8900000000000148,
+        "entry_price": 252.34,
+        "exit_price": 251.45,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 251.49,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "MSFT",
+      "UBER"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 6,
+    "symbols": [
+      "AMZN",
+      "META",
+      "MSFT",
+      "SOXS"
+    ],
+    "by_symbol": {
+      "SOXS": {
+        "buy": 0,
+        "sell": 1
+      },
+      "AMZN": {
+        "buy": 1,
+        "sell": 1
+      },
+      "META": {
+        "buy": 1,
+        "sell": 0
+      },
+      "MSFT": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}
