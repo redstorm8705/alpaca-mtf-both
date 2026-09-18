@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-17 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-18 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,8 +8,32 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-17, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-18, interactive Rafael present) — pick up here
 
+**DAY-TIER HAIRPIN-STOP FIX — SHIPPED + LIVE (PR #330 → main+OCI `bdfdbb3`, services RESTARTED + verified
+in the deployed venv). RISK-PATH but NARROWS the envelope (1% cap replaces the prior 2%).** The day tier
+entered "no-room" trades whose protective stop sat pennies from entry (a GEX pin mirrored across entry / a
+wall a hair away) — inside the bid/ask noise band — and got tick-stopped for pennies (real, `trade_events.jsonl`:
+2026-09-15 08:50 MSFT day-tier short @499.25 / stop 499.82 = 57c → 08:52 protective_stop @499.83 = −$0.58;
+5 such day-tier protective_stops logged). TWO coupled fixes in `execution/day_trade_manager.py` (+ constants
+& validation in `config.py`): **(A)** `_min_stop_room_ok` in `place_entry` SKIPS an entry whose entry→stop
+distance < max(1.5×ATR(5m), 2×spread); NEVER widens the stop; fails CLOSED on invalid ATR (<15 bars) /
+broken-crossed-stale quote (spread>2% of mid) / flat-tape+locked-quote (`min_stop>0` guard); ATR = robust
+MEDIAN true range (spike can't inflate the floor); FADE+RIDE. **(B)** `_bounded_entry_qty` sizes by RISK not
+notional: shares = risk%×SOD-equity/stop_distance, clamped DOWN by every account cap (BP reserve, gross,
+maintenance); active basis 1% (F1) clamped ≤ retained 2% ceiling; the stop-blind conviction-notional no
+longer caps below the risk target; risk_qty==0 (1-share risk>1%) self-skips (F4). NEW config (validated +
+PROV-tagged): `DAYTRADE_PER_TRADE_RISK_BASIS_PCT=0.01`, `DAYTRADE_MIN_STOP_ATR_MULT=1.5`,
+`DAYTRADE_MIN_STOP_SPREAD_MULT=2.0`, `DAYTRADE_ATR_PERIOD=14`, `DAYTRADE_ATR_MIN_BARS=15`,
+`DAYTRADE_STOP_SPREAD_SANITY_PCT=0.02`; validate_config coupling guard `PERIOD>=MIN_BARS-1`. GATE (5 passes):
+masked-loss seat APPROVE + execution seat APPROVE (C1 coupling guard applied) + cold-2nd PASS + Gro APPROVE +
+GAI APPROVE (GAI round-1 REJECT resolved — 2 false premises refuted at source [phantom NameError; "gap
+inflates the median"] + 1 valid ATR==0 spread-floor gap FIXED). 4 markers × 2 files + CI preship PASS.
+Live-verified on OCI this session (deployed venv, real account) — the exact checks and their outputs are
+recorded in `logs/tb_audit_log.md` (2026-09-18 entry). Governs the next `*/2` day-tier ENTER.
+verify: `gh pr view 330 --json state`; `ssh mtf-bot "git rev-parse --short HEAD; grep -c _min_stop_room_ok execution/day_trade_manager.py"`.
+
+_(prior 2026-09-17 — kill-switch phantom fix, still live:)_
 **ACCOUNT KILL SWITCH — PHANTOM FALSE-TRIP FIXED, SHIPPED + LIVE (PR #327 → main+OCI `e0a857e`, service
 RESTARTED + verified). RISK-PATH.** The kill measured today's loss as `equity − last_equity`; Alpaca's SOD
 baseline was stale (~$188 above marked equity on 2026-09-16, carrying LLY's QHM multi-day drawdown), so it
@@ -26,10 +50,20 @@ CI preship PASS. Live verify (OCI, 2026-09-17): `_intraday_trading_pnl -> −$3.
 -> False`. Full detail: `logs/tb_audit_log.md` 2026-09-17 entry.
 verify: `gh pr view 327 --json state`; `ssh mtf-bot 'git rev-parse --short HEAD; grep -c _intraday_trading_pnl execution/risk_manager.py'`.
 
-**NEXT (queued, Rafael's earlier requests, NOT yet built):** (1) day-tier hairpin-stop design — dynamic
-min stop-distance floor (ATR-based) + risk-based sizing (design doc: this session's scratchpad
-`daytier_stop_design.md`); (2) raise the day-tier gross/budget cap (Rafael directive — risk-envelope
-change, needs board gate); (3) P&L-card tier display rename (intraday→core/swing; daytrade=true same-day);
+**NEXT (queued, Rafael's requests):** (1) ✅ DONE 2026-09-18 — day-tier hairpin-stop fix SHIPPED (PR #330,
+see ⏩ block above). (2) **ACTIVE — RAISE DAY-TIER AGGRESSION / USE MORE MARGIN** (Rafael directive
+2026-09-18: "more aggressive, use margin since it's a day-trade flat by close"). Grounding facts (evidence):
+the tier sizes off Alpaca `buying_power` — NOT cash — (`execution/day_trade_manager.py::place_entry` reads
+`acct.buying_power`; `strategy/day_tier_sizing.py` budgets `bp × DAYTRADE_TRACK_A_PER_TRADE_BP_PCT`) and
+force-flats before the close (`config.DAYTRADE_FORCE_FLAT_MINUTES=20`), so it already trades on available
+margin (buying_power > equity on this margin account — verify current values via `mcp alpaca get_account_info`)
+intraday with ZERO overnight exposure. PROPOSED aggression levers (all RISK-PATH → board + Gro + GAI +
+masked-loss gate, Open Question Protocol; NOT yet decided or built): F1 risk basis 1%→2% (the already-retained
+ceiling `DAYTRADE_PER_TRADE_RISK_EQUITY_PCT`); `DAYTRADE_TRACK_A_EQUITY_CEILING_PCT` 0.60→higher (deploy more
+of the margin BP intraday since flat-by-close; bounded by `MAX_GROSS_EXPOSURE_RATIO=2.5`, the maintenance
+cushion, and the main-bot BP reserve); optionally `DAYTRADE_TRACK_A_PER_TRADE_BP_PCT` 0.20→higher; re-examine
+`DAYTRADE_TIER_KILL_EQUITY_PCT=0.04` (must stay < the 7% account kill) as size grows. Board convening in
+progress; consolidated rec + exact knob values to come. (3) P&L-card tier display rename (intraday→core/swing; daytrade=true same-day);
 (4) forward-build: fetch prior close for FULLY-closed held-over symbols so the kill measure need not degrade
 to the equity fallback on a full swing/QHM exit (masked-loss seat known-limit; never-mask today, just
 reverts to the more-sensitive measure that day).
