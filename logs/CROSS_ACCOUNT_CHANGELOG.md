@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-19]` Core MTF replay evidence: reconstructed completed-bar VWAP, premarket high, and 12–1 momentum for all 11 parent short entries; AVGO’s losing Sep-04 short entered with +41.80% 12–1 momentum. Research only; no trading behavior changed. — docs/core-mtf-short-replay-evidence — handoff.md, logs/core_mtf_short_replay_intake_2026-09-19.md
+
 - `[2026-09-19]` Core MTF short replay intake: reconciled 30-day short cohort and documented a P0 completed-bar/repainting defect in the live signal path. Research only; no trading behavior changed. — docs/core-mtf-short-replay-intake — handoff.md, logs/core_mtf_short_replay_intake_2026-09-19.md
 
 - `[2026-09-13]` FINDING (open, held for Mon 09-15 open): RTH DAY-stop backstop not re-arming for intraday overnight positions — AAPL/EWY/RIVN had NO exchange stop during 09-12 RTH (software stop only). Bounded gap; root-cause + fix Monday. — logs/tb_audit_log.md
