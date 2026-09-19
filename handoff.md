@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-18 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-19 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-18, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-19, interactive Rafael present) — pick up here
+
+**SLACK META-AUDIT FIX — PR #336 merged → OCI `3a64074` (NON-RTH cron; effective at the next 16:35 PT
+meta-audit run).** Makes the meta-audit Slack cards accurate (BOT CONTEXT now describes the real 3-tier
+design so the LLMs stop mislabeling day-tier/MRI/stop_promotion/inverse-ETF events) and replaces the
+full-report dump with a compact digest. Full problem → fix → gate → day-tier callout → follow-ups, with all
+evidence, in `logs/tb_audit_log.md` (2026-09-19). NEXT (Rafael forward request): hairpin-with-size — SIZE
+INTO tight-stop setups instead of skipping them; needs the Feature Design Protocol + board (risk-path:
+sizing) before code. verify: `gh pr view 336 --json state,mergeCommit`.
+
+_(prior 2026-09-18 — day-tier hairpin fix, still live:)_
 
 **DAY-TIER HAIRPIN-STOP FIX — SHIPPED + LIVE (PR #330 → main+OCI `bdfdbb3`, services RESTARTED + verified
 in the deployed venv). RISK-PATH but NARROWS the envelope (1% cap replaces the prior 2%).** The day tier
