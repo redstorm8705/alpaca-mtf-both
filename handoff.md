@@ -10,6 +10,8 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-09-19, interactive Rafael present) — pick up here
 
+**CORE MTF SHORT REPLAY INTAKE — RESEARCH ONLY, NOT SHIPPED.** Terminology is now unambiguous in new work: **Day Tier** is same-session day trading; **Core MTF** is the legacy-`intraday` higher-timeframe strategy that may carry overnight. Broker FIFO for 2026-08-20..2026-09-19: Core MTF shorts 9 closed lots, 0 wins / 9 losses, -$80.49; Day Tier shorts are separate (4 lots, -$7.81). P0 source finding: `data/fetcher.fetch_bars()` requests through now and returns the current last row unfiltered; Core MTF entry/exit scoring and weekly bias consume `iloc[-1]` / latest weekly close. Regular-session decisions can therefore use a forming bar. **QUARANTINED — DO NOT SHIP:** any correction or new Core MTF short rule is risk-path until full BGGN + mechanical/adversarial/cold/exact-preship gates pass. Exact evidence and next sequence: `logs/core_mtf_short_replay_intake_2026-09-19.md`. NEXT: produce the point-in-time decision/fill/FIFO replay dataset, then test a completed-bar adapter and short-specific overnight-range/VWAP admission candidates with next-available fills and costs.
+
 **SLACK META-AUDIT FIX — PR #336 merged → OCI `3a64074` (NON-RTH cron; effective at the next 16:35 PT
 meta-audit run).** Makes the meta-audit Slack cards accurate (BOT CONTEXT now describes the real 3-tier
 design so the LLMs stop mislabeling day-tier/MRI/stop_promotion/inverse-ETF events) and replaces the
