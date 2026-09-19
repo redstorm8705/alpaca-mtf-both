@@ -1,0 +1,53 @@
+Nightly Gemini Audit — 2026-09-18
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `execution.stop_protection` | [NFLX] STOP-PROTECT: placed MISSING buy stop x2 @ $75.27 (DAY) — order 28d1562b-2668-4433-aa05-325c8872178f | The log indicates a "MISSING" stop was placed, but the `execution.stop_protection` module reports `broker-held 0` and `placed 1`. This indicates a failure to verify the stop's existence on the broker side, leaving the position potentially naked if the order submission failed or was rejected by Alpaca.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[ANOMALY-3] TQI degradation**: The log shows `[ANOMALY-3] TQI degradation: last-5-trade avg=25.4/100 < 30` occurring repeatedly (19:45:44, 19:53:05, 19:59:33). This indicates a systemic failure in the strategy's ability to maintain its target quality index, suggesting the current exit discipline or stop placement logic is consistently underperforming.
+* **FIFO Orphan**: `execution.portfolio_tracker` reports `FIFO orphan: closing fill for NVDA has no prior lot`. This indicates a mismatch between the broker's reported fills and the internal ledger, which is a recurring issue in the `portfolio_tracker`.
+* **Entry Blocked**: `execution.entry_logic` reports `market closed (after-hours gate) — skipping all entries` at 20:00:25. This is correct behavior, but the frequency of these logs during the final cycle suggests the bot is attempting to process entries too close to the hard-coded close.
+
+### PERFORMANCE AUDIT
+* **P&L Sign Correctness**: The `NVDA` short trade (entry 219.12, exit 220.15) resulted in a realized P&L of -3.09. This is correct (short loss).
+* **Stop Rate Analysis**: The bot is hitting stops frequently. In the last 7 days, 5 out of 15 recorded events were `stop_hit` or `exit` (protective_stop). This high stop-hit rate (33%) relative to the win rate (33.1% all-time) suggests the current `INTRADAY_STOP_ATR_MULT` (1.0) is too tight for the current market volatility, causing the bot to be "stopped out" before the confluence-based thesis can play out.
+* **R:R Analysis**: The `QCOM` trade (entry 179.55, target 198.28) shows a target of ~10.4% gain. The stop was 170.56 (~5% loss). This aligns with the 1:2 R:R target. However, the bot is failing to reach these targets due to the stop-hit frequency noted above.
+
+### TRADE INTEGRITY
+* **NVDA Orphan**: The `NVDA` short trade (entry 219.12, exit 220.15) is logged as an orphan in the `portfolio_tracker`. This indicates the `day_trade_manager` or `broker` module failed to properly register the entry lot, causing the exit to be unmatched. This is a recurring issue with the `daytrade` tier.
+
+### MODIFIED FILE FINDINGS
+* **execution/day_trade_manager.py**: The `_bounded_entry_qty` function uses `min(risk_pct_basis, risk_pct_ceiling)` to determine the active risk basis. While this is a safety improvement, the logic relies on `risk_basis` (SOD equity). If the SOD equity is not updated correctly or is stale, the sizing will be incorrect. The function lacks a check to ensure `risk_basis` is not zero or negative before division, which could lead to a `ZeroDivisionError` if the equity feed fails.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H1**: FIXED (PDT deleted)
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+* **P5-H5**: FIXED
+* **P5-M1**: UNTOUCHED
+* **P5-M2**: UNTOUCHED
+* **P5-M3**: UNTOUCHED
+* **P5-L1**: UNTOUCHED
+* **P5-L2**: UNTOUCHED
+* **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/stop_protection.py | Stop verification failure | The `stop_protection` module logs a "MISSING" stop but reports it as "placed". If the order ID `28d1562b-2668-4433-aa05-325c8872178f` is not confirmed by the broker, the position remains unprotected.**
+* **EXECUTION BUG | MEDIUM | execution/portfolio_tracker.py | FIFO orphan handling | The tracker fails to reconcile closing fills for the `daytrade` tier, leading to orphan logs and potential P&L drift.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate**: Audit the `execution.stop_protection` logic to ensure that "MISSING" stops trigger an immediate `close_position` or `flatten` if the broker does not confirm the order within 1 cycle.
+2. **High**: Investigate the `portfolio_tracker` FIFO orphan issue; the `daytrade` tier is consistently failing to link entry and exit lots.
+3. **Medium**: Increase `INTRADAY_STOP_ATR_MULT` from 1.0 to 1.2 to reduce the frequency of stop-outs caused by market noise, given the current high stop-hit rate.
+4. **Medium**: Add a zero-check for `stop_distance` and `risk_basis` in `execution/day_trade_manager.py` to prevent potential runtime crashes.
