@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 
 _BAR_ENDPOINT = "https://data.alpaca.markets/v2/stocks/bars"
 _SCHEMA_V = 1
+_MAX_PAGES = 1_000
 
 
 @dataclass(frozen=True)
@@ -66,8 +67,10 @@ def fetch_stock_bars(
         raise ValueError("Alpaca historical-data credentials are required")
     fetch = request_fn or _read_response
     page_token: str | None = None
+    seen_tokens: set[str] = set()
+    seen_bars: set[tuple[str, str]] = set()
     bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
-    while True:
+    for _page_number in range(_MAX_PAGES):
         params = {**query.as_query(), "limit": "10000"}
         if page_token:
             params["page_token"] = page_token
@@ -87,15 +90,29 @@ def fetch_stock_bars(
         for symbol, bars in raw_bars.items():
             if not isinstance(symbol, str) or not isinstance(bars, list):
                 raise ValueError("Alpaca response has malformed symbol bars")
-            bars_by_symbol.setdefault(symbol.upper(), []).extend(bars)
+            normalized_symbol = symbol.upper()
+            for bar in bars:
+                timestamp = _bar_timestamp(bar)
+                key = (normalized_symbol, timestamp)
+                if key in seen_bars:
+                    raise ValueError(
+                        f"duplicate bar returned for {normalized_symbol} {timestamp}"
+                    )
+                seen_bars.add(key)
+                bars_by_symbol.setdefault(normalized_symbol, []).append(bar)
         next_token = payload.get("next_page_token")
         if next_token is None:
             break
         if not isinstance(next_token, str) or not next_token:
             raise ValueError("Alpaca response has invalid next_page_token")
+        if next_token in seen_tokens:
+            raise ValueError("Alpaca response repeated next_page_token")
+        seen_tokens.add(next_token)
         page_token = next_token
+    else:
+        raise ValueError("Alpaca response exceeded maximum page count")
     return {
-        symbol: sorted(bars, key=lambda bar: str(bar.get("t", "")))
+        symbol: sorted(bars, key=_bar_timestamp)
         for symbol, bars in sorted(bars_by_symbol.items())
     }
 
@@ -110,13 +127,26 @@ def write_snapshot(
     """Atomically write a content-hashed replay input artifact."""
     if fetched_at.tzinfo is None:
         raise ValueError("fetched_at must be timezone-aware")
+    requested_symbols = sorted(symbol.strip().upper() for symbol in query.symbols)
+    returned_symbols = sorted(bars_by_symbol)
+    missing_symbols = sorted(set(requested_symbols) - set(returned_symbols))
+    if missing_symbols:
+        raise ValueError(
+            f"Alpaca response omitted requested symbols: {missing_symbols}"
+        )
     raw_bars = json.dumps(
         bars_by_symbol, sort_keys=True, separators=(",", ":")
     ).encode()
     artifact = {
         "schema_v": _SCHEMA_V,
         "kind": "alpaca_stock_bars_snapshot",
+        "market_data_kind": "aggregated_ohlcv_bars",
+        "execution_evidence": "not_bid_ask_or_quote_data",
+        "fill_claims_permitted": False,
         "query": query.as_query(),
+        "requested_symbols": requested_symbols,
+        "returned_symbols": returned_symbols,
+        "missing_symbols": missing_symbols,
         "fetched_at_utc": fetched_at.astimezone(timezone.utc).isoformat(),
         "bar_data_sha256": hashlib.sha256(raw_bars).hexdigest(),
         "bar_count": sum(len(bars) for bars in bars_by_symbol.values()),
@@ -133,6 +163,21 @@ def write_snapshot(
 def _read_response(request: Request) -> bytes:
     with urlopen(request, timeout=45) as response:  # noqa: S310 -- fixed HTTPS host
         return response.read()
+
+
+def _bar_timestamp(bar: Any) -> str:
+    if not isinstance(bar, dict):
+        raise ValueError("Alpaca response contains a non-object bar")
+    timestamp = bar.get("t")
+    if not isinstance(timestamp, str) or not timestamp:
+        raise ValueError("Alpaca response bar has no timestamp")
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Alpaca response bar has invalid timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("Alpaca response bar timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _parse_timestamp(value: str) -> datetime:
