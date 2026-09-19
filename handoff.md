@@ -51,19 +51,10 @@ CI preship PASS. Live verify (OCI, 2026-09-17): `_intraday_trading_pnl -> −$3.
 verify: `gh pr view 327 --json state`; `ssh mtf-bot 'git rev-parse --short HEAD; grep -c _intraday_trading_pnl execution/risk_manager.py'`.
 
 **NEXT (queued, Rafael's requests):** (1) ✅ DONE 2026-09-18 — day-tier hairpin-stop fix SHIPPED (PR #330,
-see ⏩ block above). (2) **ACTIVE — RAISE DAY-TIER AGGRESSION / USE MORE MARGIN** (Rafael directive
-2026-09-18: "more aggressive, use margin since it's a day-trade flat by close"). Grounding facts (evidence):
-the tier sizes off Alpaca `buying_power` — NOT cash — (`execution/day_trade_manager.py::place_entry` reads
-`acct.buying_power`; `strategy/day_tier_sizing.py` budgets `bp × DAYTRADE_TRACK_A_PER_TRADE_BP_PCT`) and
-force-flats before the close (`config.DAYTRADE_FORCE_FLAT_MINUTES=20`), so it already trades on available
-margin (buying_power > equity on this margin account — verify current values via `mcp alpaca get_account_info`)
-intraday with ZERO overnight exposure. PROPOSED aggression levers (all RISK-PATH → board + Gro + GAI +
-masked-loss gate, Open Question Protocol; NOT yet decided or built): F1 risk basis 1%→2% (the already-retained
-ceiling `DAYTRADE_PER_TRADE_RISK_EQUITY_PCT`); `DAYTRADE_TRACK_A_EQUITY_CEILING_PCT` 0.60→higher (deploy more
-of the margin BP intraday since flat-by-close; bounded by `MAX_GROSS_EXPOSURE_RATIO=2.5`, the maintenance
-cushion, and the main-bot BP reserve); optionally `DAYTRADE_TRACK_A_PER_TRADE_BP_PCT` 0.20→higher; re-examine
-`DAYTRADE_TIER_KILL_EQUITY_PCT=0.04` (must stay < the 7% account kill) as size grows. Board convening in
-progress; consolidated rec + exact knob values to come. (3) P&L-card tier display rename (intraday→core/swing; daytrade=true same-day);
+see ⏩ block above). (2) Day-tier aggression / "use more margin" (Rafael option B): see PR #332 and the
+`logs/tb_audit_log.md` 2026-09-18 aggression entry for the status, exact knob values, guardrail logic, the
+board + Gro + GAI gate, and the live-verification outputs.
+(3) P&L-card tier display rename (intraday→core/swing; daytrade=true same-day);
 (4) forward-build: fetch prior close for FULLY-closed held-over symbols so the kill measure need not degrade
 to the equity fallback on a full swing/QHM exit (masked-loss seat known-limit; never-mask today, just
 reverts to the more-sensitive measure that day).
