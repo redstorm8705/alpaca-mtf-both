@@ -1,6 +1,14 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-09-19 — Core MTF broker-order provenance foundation merged (`research/core_mtf_alpaca_order_snapshot.py`, PR #347 `76274aa`)
+
+- **Scope:** research-only, GET-only Alpaca paper order-history snapshot for the Core MTF short replay program. It does not import the trading path, submit/cancel/replace orders, change a signal, or deploy to OCI. Its artifact explicitly sets `ledger_event_identity_claims_permitted=false`: a nearby broker order is not proof that a free-text ledger row owns it.
+- **Board catch and correction:** Board initially REJECTED because an artifact could claim full-history provenance without recording its retrieval path. The final implementation fail-closes on any nonempty zero-new-ID page, unordered provider pages, and a non-backward overlap cursor. It validates the actual Alpaca `submitted_at` descending contract (a live probe disproved the initial `created_at` assumption), deduplicates immutable order IDs, and records endpoint/query/cursor field/page size/count/raw rows/unique rows/overlap duplicates and explicit submitted-time coverage.
+- **Live read-only evidence:** 2,797 unique orders from 2,802 raw rows over six pages, five overlap duplicates, observed submitted coverage 2026-04-06..2026-09-19; artifact order-data SHA-256 `cbc278237dbbf886c12f4019ca96b89d94f15fd45cc96ca086ff2bd24688148e`. This establishes retrieval provenance only, not complete account-inception proof nor ledger ownership.
+- **Gate:** Board final PASS after the partial-page no-progress test was corrected (first page size 2; second page size 1 duplicate-only); Groq APPROVE; Google AI APPROVE; NVIDIA APPROVE; static `py_compile`, ruff E/W/F/B, `git diff --check`; CI preship PASS. Local pytest unavailable, so unit-test execution remains CI-owned; test logic reviewed by Board. No RTH/risk-path scope.
+
+---
 ## 2026-09-18 — Day-tier AGGRESSION build SHIPPED (`config.py` + `execution/day_trade_manager.py`, #332 `2ff0948` → main → OCI `141ab94`)
 
 - **CEO-approved (option B) day-tier aggression — RISK-PATH (size-increasing), within the UNCHANGED safety envelope (7% account kill).** Rafael directive 2026-09-18: "more aggressive, use margin since it's a day-trade flat by close." The tier already sizes off buying_power and is flat-by-close (zero overnight risk); the throttle was the 0.60× aggregate gross ceiling (binds before the risk target on the tiny account).
