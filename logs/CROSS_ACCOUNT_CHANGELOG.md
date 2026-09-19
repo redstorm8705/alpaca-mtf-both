@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-19 15:05 PT]` Core MTF exit evidence merged: exact parent/order identity is now required for VERIFIED; historical text/quantity matches remain ledger-correlated only (5 full, 2 partial, 4 unmatched). Board, Groq, Google AI, NVIDIA, and preship passed. — PR #345 / `94bc402` — research/core_mtf_observed_exits.py
+
 - `[2026-09-19 14:56 PT]` Core MTF replay research foundation merged: SHA-bound/UTC-normalized entry extraction plus a content-hashed Alpaca bar snapshot adapter; Board, Groq, Google AI, NVIDIA, and preship passed. Research-only, no OCI deployment or trading behavior change. — PRs #340–#343 / `7785895` — research/core_mtf_point_in_time_replay.py, research/core_mtf_replay_events.py, research/core_mtf_alpaca_bar_snapshot.py
 
 - `[2026-09-19]` Core MTF replay evidence: reconstructed completed-bar VWAP, premarket high, and 12–1 momentum for all 11 parent short entries; AVGO’s losing Sep-04 short entered with +41.80% 12–1 momentum. Research only; no trading behavior changed. — docs/core-mtf-short-replay-evidence — handoff.md, logs/core_mtf_short_replay_intake_2026-09-19.md
