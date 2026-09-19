@@ -35,6 +35,26 @@ The Core MTF 9 lots correspond to five parent entries: MARA (2026-08-06), TSLA (
 
 The required correction is a single explicit completed-bar adapter: all indicators/regime inputs use only a bar whose close was already known, while execution pricing comes from an explicitly separate live quote. This touches entries and exits, so it is a risk-path change requiring the full BGGN and mechanical gate before shipping.
 
+## Parent-entry replay evidence
+
+The “11 shorts” refers to eleven Core MTF parent short entries in `trade_events.jsonl`, including trades outside the 30-day realized-FIFO window and two positions that remained open. The table reconstructs each entry with raw Alpaca bars fully complete before the recorded event timestamp. `VWAP Δ` is the reconstructed session VWAP difference.
+
+| Symbol | Entry date | Completed 15m price | VWAP Δ | Premarket high | 12–1 momentum |
+|---|---|---:|---:|---:|---:|
+| SMCI | Jul 29 | $26.00 | -3.720% | $28.64 | -38.36% |
+| SMCI | Jul 31 | $27.82 | -0.920% | $28.84 | -42.33% |
+| MARA | Aug 6 | $10.90 | -0.897% | $11.35 | -24.54% |
+| RBLX | Aug 11 | $36.77 | +0.014% | $37.36 | -48.46% |
+| COIN | Aug 14 | $149.44 | -0.303% | $153.49 | -60.54% |
+| TSLA | Aug 20 | $343.42 | +0.056% | $351.78 | -3.74% |
+| MARA | Sep 1 | $10.18 | -1.416% | $10.81 | -24.19% |
+| AVGO | Sep 4 | $355.73 | -0.201% | $362.75 | **+41.80%** |
+| UBER | Sep 8 | $72.97 | -0.718% | $76.76 | -15.80% |
+| UBER | Sep 15 | $71.86 | +0.113% | $72.49 | -17.95% |
+| NFLX | Sep 18 | $71.73 | +0.363% | $75.73 | -93.40% |
+
+AVGO is the clear first exclusion candidate: it entered with strongly positive 12–1 momentum, while the existing additive score still admitted it. This does not justify an untested static threshold. The candidate is a dynamic, completed-bar admission rule that requires coherent higher-timeframe downside structure, followed by a short-specific trigger around VWAP and the premarket range.
+
 ## Next sequence
 
 1. Export Core MTF short decision stacks, completed-bar features, broker fills, exits, and FIFO outcomes; keep open trades separate.
