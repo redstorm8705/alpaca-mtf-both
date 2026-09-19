@@ -55,7 +55,6 @@ import json
 import os
 import re
 import sys
-import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -105,6 +104,10 @@ _MIN_FILLS_FOR_DIRECTIVES = 20     # N < this → observe only, NO parameter dir
 # clamp are backstops so a future volume spike can never re-break the Groq leg.
 _META_TELEMETRY_EVENT_TYPES = frozenset({
     "delta_shadow", "mri_refresh", "halt_eval", "breadth_refresh",
+    # drift_detected = position-reconciliation telemetry (tracker vs broker;
+    # price/size=0), NOT a trade. Rendering it made the auditor read nearby
+    # entries as "opened during a series of DRIFT_DETECTED events" (false verdict).
+    "drift_detected",
 })
 _META_MAX_EVENTS = 500             # backstop cap (most-recent) after telemetry filter
 # Groq free tier ("on_demand") caps gpt-oss-120b at 8,000 tokens/MINUTE (TPM), counting
@@ -804,11 +807,32 @@ def _format_meta_audit_body(
     parts: list[str] = []
 
     # ── Bot context ───────────────────────────────────────────────────────
+    # These are FACTS about how the bot is designed — judge each trade against
+    # them, not against assumptions. Every line below corrects a specific false
+    # verdict the meta-audit has produced (STRESSED-MRI "should have blocked",
+    # day-tier score=0 "missed MIN_SCORE", stop_promotion "chasing", inverse-ETF
+    # long "sign-flip", "opened during drift", PDT violations).
     parts += [
-        "=== BOT CONTEXT ===",
-        "alpaca-mtf-bot: 12-point MTF confluence scoring on Alpaca paper account (~$2,800 equity).",
-        "Entry gate: SPY 5-min bar-over-bar (sole gate). MRI adjusts size floor + MIN_SCORE.",
-        "Params: MIN_SCORE=10/12 | KELLY_FRACTION=0.25 | MAX_RISK=4%/trade | PDT max 3 day trades.",
+        "=== BOT CONTEXT (how the bot is DESIGNED to behave — judge trades against this) ===",
+        "alpaca-mtf-bot runs THREE independent tiers on one small paper account (aggressive growth phase, ~$2.5K):",
+        "  1) INTRADAY MTF confluence — 12-point score; the SPY 5-min bar-over-bar is the intraday DIRECTIONAL",
+        "     gate; entry requires score >= MIN_SCORE (10/12). Trades BOTH long AND short on a dynamic scanner",
+        "     universe. These entries carry a real score (10-12) and trade_mode='intraday'.",
+        "  2) DAY tier (Track A) — entries are GEX FADE/RIDE triggered, NOT confluence-scored, so they log",
+        "     score=0 and tier='daytrade' by design. score=0 + tier='daytrade' is a valid day-tier entry, NOT a",
+        "     miss of the MIN_SCORE gate (that gate applies only to tier 1).",
+        "  3) QHM / Forever-6 — multi-week / quarterly buy-and-hold; not intraday-scored.",
+        "MRI (macro risk index) is BACKGROUND-ONLY (architecture invariant): it only nudges the size floor and",
+        "  the MIN_SCORE floor; it does NOT hard-block entries. An entry during ELEVATED / STRESSED MRI is by",
+        "  design, so 'MRI was STRESSED' alone is not evidence of a gate failure.",
+        "Event meanings: 'stop_promotion' = the protective GTC stop being RATCHETED toward/into profit on a",
+        "  favorable move (trail activation, or re-submit after a partial) — it LOCKS gains; it is not price-",
+        "  chasing. 'drift_detected' = position-reconciliation telemetry (tracker vs broker; price/size=0) — it",
+        "  is not a trade and not an entry signal. 'exit' / 'stop_hit' carry the authoritative signed 'pnl'+'reason'.",
+        "Direction & inverse ETFs: the bot trades long AND short, so direction='short' is intentional. The",
+        "  universe includes inverse ETFs (e.g. SQQQ, SOXS) and leveraged-long ETFs (TQQQ, NVDL, TSLL); a LONG",
+        "  in an inverse ETF is a BEARISH position (its price moves opposite the underlying), not a sign error.",
+        "PDT is abolished (SEC permanent rule change) — there is no day-trade-count cap to enforce.",
         "",
     ]
 
@@ -876,13 +900,21 @@ def _format_meta_audit_body(
             f"=== TRADE EVENTS — PAST {_TRADE_EVENTS_DAYS_BACK} DAYS "
             f"(showing {len(_life_events)} of {_n_life_total} trade-lifecycle events; "
             f"{_n_telemetry} telemetry rows excluded: "
-            f"delta_shadow/mri_refresh/halt_eval/breadth_refresh) ==="
+            f"delta_shadow/mri_refresh/halt_eval/breadth_refresh/drift_detected) ==="
         ]
         for ev in _life_events:
             sym = ev.get("symbol", "?")
             evt = ev.get("event", "?")
             ts = ev.get("ts", "?")
             line = f"[{ts}] {evt.upper()} {sym}"
+            # tier + direction disambiguate day-tier (GEX, score=0) from intraday
+            # (confluence, score 10-12) and long from short — without these the
+            # auditor misreads score=0 day-tier entries and inverse-ETF longs.
+            tier = ev.get("tier") or ev.get("trade_mode")
+            if tier:
+                line += f" | tier={tier}"
+            if ev.get("direction"):
+                line += f" | dir={ev['direction']}"
             if ev.get("score") is not None:
                 line += f" | score={ev['score']}"
             if ev.get("mri_level"):
@@ -891,8 +923,11 @@ def _format_meta_audit_body(
                 line += f" | price=${ev['price']:.2f}"
             if ev.get("size") is not None:
                 line += f" | qty={ev['size']}"
-            if ev.get("pdt_used") is not None:
-                line += f" | pdt={ev['pdt_used']}"
+            # authoritative outcome on exits/stops — kills the auditor's "≈-5%" guessing
+            if ev.get("pnl") is not None:
+                line += f" | pnl=${ev['pnl']:.2f}"
+            if ev.get("reason"):
+                line += f" | reason={ev['reason']}"
             parts.append(line)
             # Inline chart proxy for entry events
             if evt == "entry" and sym in chart_proxies:
@@ -951,7 +986,13 @@ def _format_meta_audit_body(
 
     # ── Score + MRI distributions ─────────────────────────────────────────
     if stats["score_distribution"]:
-        parts += ["=== SCORE DISTRIBUTION AT ENTRY ===", "  " + str(stats["score_distribution"]), ""]
+        parts += [
+            "=== SCORE DISTRIBUTION AT ENTRY ===",
+            "  " + str(stats["score_distribution"]),
+            "  (score=0 entries are day-tier GEX trades — not confluence-scored; exclude them from any",
+            "   MIN_SCORE analysis. Real intraday scores are 10-12.)",
+            "",
+        ]
     if stats["mri_distribution"]:
         parts += ["=== MRI LEVEL AT ENTRY ===", "  " + str(stats["mri_distribution"]), ""]
 
@@ -1092,28 +1133,6 @@ def _build_gai_prompt(ctx: dict) -> str:
 
 
 # ── Slack post (meta-audit results) ──────────────────────────────────────────
-_TABLE_SEP_CHARS = frozenset("|:- ")
-
-
-def _is_markdown_table_row(line: str) -> bool:
-    """Return True for a conventional GitHub-Markdown table row."""
-    stripped = line.strip()
-    return "|" in stripped and (
-        stripped.startswith("|") or stripped.endswith("|") or stripped.count("|") >= 2
-    )
-
-
-def _is_markdown_table_separator(line: str) -> bool:
-    """Return True for a GitHub-Markdown table separator row."""
-    stripped = line.strip()
-    return bool(stripped) and "|" in stripped and set(stripped) <= _TABLE_SEP_CHARS
-
-
-def _table_cells(line: str) -> list[str]:
-    """Return non-empty table cells without their surrounding pipes."""
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
-
-
 def _slackify_report_line(line: str) -> str:
     """Translate the small GitHub-Markdown subset emitted by the audit models."""
     stripped = line.strip()
@@ -1128,73 +1147,58 @@ def _slackify_report_line(line: str) -> str:
     return stripped
 
 
-def _wrap_slack_line(line: str, width: int = 42) -> list[str]:
-    """Wrap one report line for phone reading while preserving all text."""
-    if not line:
-        return [""]
-    # URLs, identifiers and a single unbroken word cannot be made shorter without
-    # losing information.  Slack may wrap those itself; normal prose is bounded.
-    return textwrap.wrap(
-        line, width=width, break_long_words=False, break_on_hyphens=False,
-    ) or [line]
+def _extract_final_verdict(text: str | None) -> str:
+    """Return the section-5 FINAL VERDICT as 'PASS|WARN|FAIL — <rationale>'.
 
-
-def _render_meta_report_text(report: str) -> str:
-    """Render a complete model report as phone-readable Slack mrkdwn.
-
-    GitHub tables are verticalized rather than flattened into long pipe rows.  No
-    cell or prose line is removed; section-size splitting happens separately.
+    '' if no verdict token is found. Prefers the token that LEADS the verdict line
+    (the instructed 'PASS/WARN/FAIL — one-sentence rationale' contract) so a hedged
+    sentence that merely mentions another token ('did not FAIL; overall PASS')
+    cannot mislabel the card; only falls back to first-in-window when there is no
+    leading token. Rationale = the verdict window, markdown-stripped and
+    whitespace-collapsed, truncated for a phone card.
     """
-    lines = str(report or "").splitlines()
-    output: list[str] = []
-    i = 0
-    while i < len(lines):
-        if (i + 1 < len(lines)
-                and _is_markdown_table_row(lines[i])
-                and _is_markdown_table_separator(lines[i + 1])):
-            headers = _table_cells(lines[i])
-            i += 2
-            while i < len(lines) and _is_markdown_table_row(lines[i]):
-                cells = _table_cells(lines[i])
-                for index, value in enumerate(cells):
-                    header = headers[index] if index < len(headers) else "Additional detail"
-                    label = _slackify_report_line(header).strip("*")
-                    value = _slackify_report_line(value)
-                    for wrapped in _wrap_slack_line(f"*{label}* {value}"):
-                        output.append(wrapped)
-                output.append("")
-                i += 1
-            continue
-        line = _slackify_report_line(lines[i])
-        output.extend(_wrap_slack_line(line))
-        i += 1
-    return "\n".join(output).strip()
+    if not text:
+        return ""
+    m = re.search(r"FINAL VERDICT\**\s*[:\-–—]?\s*(.{0,280})", text, re.IGNORECASE | re.DOTALL)
+    window = m.group(1) if m else text
+    lead = re.match(r"[\s*_:\-–—]*(PASS|WARN|FAIL)\b", window, re.IGNORECASE)
+    v = lead or re.search(r"\b(PASS|WARN|FAIL)\b", window)
+    if not v:
+        return ""
+    rationale = " ".join(_slackify_report_line(window).split())
+    rationale = re.sub(
+        r"^[*_\s]*(PASS|WARN|FAIL)[*_\s:\-–—.]*", "", rationale, flags=re.IGNORECASE
+    ).strip()
+    rationale = rationale[:200].rstrip()
+    return v.group(1).upper() + (f" — {rationale}" if rationale else "")
 
 
-def _chunk_slack_sections(text: str, limit: int = 2900) -> list[str]:
-    """Split complete report text on line boundaries under Slack's section limit."""
-    chunks: list[str] = []
-    current = ""
-    for line in text.splitlines():
-        if len(line) > limit:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.extend(line[pos:pos + limit] for pos in range(0, len(line), limit))
-            continue
-        candidate = f"{current}\n{line}" if current else line
-        if current and len(candidate) > limit:
-            chunks.append(current)
-            current = line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
+def _extract_directives(text: str | None, limit: int = 3) -> list[str]:
+    """Return up to `limit` section-4 '[DIRECTIVE-N] ...' lines (markdown-stripped).
+
+    Falls back to a one-line 'blocked' note when the model reported the
+    insufficient-sample guardrail. [] when neither is present.
+    """
+    if not text:
+        return []
+    out: list[str] = []
+    for m in re.finditer(r"\[DIRECTIVE-\d+\][^\n]*", text):
+        out.append(" ".join(_slackify_report_line(m.group(0)).split())[:220])
+        if len(out) >= limit:
+            break
+    if not out and re.search(r"DIRECTIVES BLOCKED", text, re.IGNORECASE):
+        out.append("Directives blocked — insufficient trade sample this window.")
+    return out
 
 
-def _meta_report_blocks(result: dict, label: str) -> list[dict]:
-    """Build complete, readable Block Kit sections for one audit provider."""
+def _meta_report_blocks(result: dict, label: str, report_url: str | None = None) -> list[dict]:
+    """Build ONE compact, phone-readable Slack section for a provider.
+
+    The full trade-by-trade report is persisted (logs/ai_audit_meta_*.json + the
+    gist/board endpoint); Slack gets the ACTIONABLE digest — final verdict, the
+    top directives, and the code-finding count — never the wall-of-text dump that
+    previously flooded the channel.
+    """
     text = result.get("text")
     if not text:
         error = " ".join(str(result.get("error") or "unknown error").split())
@@ -1205,14 +1209,35 @@ def _meta_report_blocks(result: dict, label: str) -> list[dict]:
             error = "unavailable (free-tier quota/credits exhausted)"
         return [{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"*{label}:* ❌ {error[:120]}"}}]
-    rendered = _render_meta_report_text(text)
-    blocks = [{"type": "section", "text": {"type": "mrkdwn",
-               "text": f"*{label} — full report*"}}]
-    blocks.extend(
-        {"type": "section", "text": {"type": "mrkdwn", "text": chunk}}
-        for chunk in _chunk_slack_sections(rendered) if chunk.strip()
-    )
-    return blocks
+
+    verdict = _extract_final_verdict(text)
+    directives = _extract_directives(text)
+    findings = _parse_json_findings(text)
+
+    lines: list[str] = [f"*{label}* — {verdict or 'verdict not parsed (see full report)'}"]
+    if directives:
+        lines.append("*Directives:*")
+        lines.extend(f"  • {d}" for d in directives)
+    if findings:
+        lines.append(f"*Code findings ({len(findings)}):*")
+        for f in findings[:2]:
+            fp = str(f.get("file", "?"))
+            fd = " ".join(str(f.get("finding", "")).split())[:140]
+            lines.append(f"  • `{fp}` — {fd}")
+        if len(findings) > 2:
+            lines.append(f"  • …and {len(findings) - 2} more (see full report)")
+    if not directives and not findings:
+        lines.append("_No directives or code findings this run._")
+    if report_url:
+        lines.append(f"Full report: {report_url}")
+
+    text_block = "\n".join(lines)
+    # Slack's section hard limit is 3000 chars. The digest is far smaller, but
+    # clamp defensively so a pathological verdict/finding string can never 400
+    # the whole post (which would drop every provider's card, not just this one).
+    if len(text_block) > 2900:
+        text_block = text_block[:2895] + "…"
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": text_block}}]
 
 
 def _post_slack_summary(
@@ -1244,9 +1269,9 @@ def _post_slack_summary(
                     f"Run {now_pt.strftime('%I:%M %p PT')}"}},
         {"type": "divider"},
     ]
-    blocks += _meta_report_blocks(gro_result, "Groq")
+    blocks += _meta_report_blocks(gro_result, "Groq", report_url=_GIST_RAW_URL)
     blocks.append({"type": "divider"})
-    blocks += _meta_report_blocks(gai_result, "Google AI Studio")
+    blocks += _meta_report_blocks(gai_result, "Google AI Studio", report_url=_GIST_RAW_URL)
     fallback = (f"Auto AI {mode_label.title()} — {ts} — "
                 f"Gro {'ok' if gro_ok else 'err'} / GAI {'ok' if gai_ok else 'err'}")
 
