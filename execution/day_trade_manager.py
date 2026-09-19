@@ -262,8 +262,13 @@ def _pending_entry_gross(open_orders: list, positions_by_symbol: dict) -> tuple[
 def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float, equity: float,
                        open_trades: dict, positions_by_symbol: dict, buying_power: float,
                        maintenance_margin: float, maintenance_rate: float,
-                       open_orders: list, risk_equity: float | None = None) -> tuple[int, str]:
-    """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed."""
+                       open_orders: list, risk_equity: float | None = None,
+                       symbol: str = "") -> tuple[int, str]:
+    """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed.
+
+    `symbol` selects the DEEP-LIQUIDITY carve-out (aggression guardrail 2026-09-18): a deep-liquidity
+    (Mag-7) name may use the full DAYTRADE_TRACK_A_EQUITY_CEILING_PCT; a non-deep (thin) name keeps the
+    base ceiling AND a per-name notional cap. An unknown/empty symbol is treated as NON-deep (conservative)."""
     try:
         risk_basis = min(equity, float(risk_equity)) if risk_equity is not None else equity
         values = (order_price, stop_price, equity, buying_power, maintenance_margin, maintenance_rate, risk_basis)
@@ -276,14 +281,24 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
 
         reserve = float(_cfg("DAYTRADE_MAIN_BOT_BP_RESERVE_USD", 1200.0))
         cushion = float(_cfg("DAYTRADE_MAINT_CUSHION_USD", 650.0))
-        day_pct = float(_cfg("DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # PROV:daytier-bp-2026-09-08
+        day_pct = float(_cfg("DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # FULL ceiling (deep-liquidity)
         global_ratio = float(_cfg("MAX_GROSS_EXPOSURE_RATIO", 2.5))
-        # Part B (hairpin fix 2026-09-18): RISK is the sizing BASIS. Active basis = 1% of SOD equity
-        # (F1), clamped to the RETAINED 2% hard ceiling (DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) so the
-        # active basis can never exceed it. Both PROV:daytier-hairpin-2026-09-18.
+        # DEEP-LIQUIDITY CARVE-OUT (aggression guardrail 2026-09-18): the raised full ceiling applies ONLY
+        # to deep-liquidity (Mag-7) names; a NON-deep (thin) name keeps the base ceiling and (below) a
+        # per-name notional cap — its forced-close market fill is 2-3% off and the entry spread-gate does
+        # NOT cover the exit liquidation. Unknown/empty symbol → treated NON-deep (conservative).
+        base_ceiling = float(_cfg("DAYTRADE_TRACK_A_BASE_CEILING_PCT", 0.60))
+        deep_set = set(_cfg("DAYTRADE_DEEP_LIQUIDITY_SYMBOLS", []) or [])
+        is_deep = bool(symbol) and symbol in deep_set
+        eff_ceiling = day_pct if is_deep else min(day_pct, base_ceiling)
+        # PER-SINGLE-NAME GROSS SUB-CAP (aggression guardrail): bounds a single name's per-entry notional
+        # so a single-name intraday gap-through stays inside the account kill at the raised ceiling.
+        single_name_pct = float(_cfg("DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT", 0.60))
+        # Part B (hairpin fix 2026-09-18): RISK is the sizing BASIS. Active basis = the F1 basis, clamped
+        # to the RETAINED 2% hard ceiling (DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) so it can never exceed it.
         risk_pct_basis = float(_cfg("DAYTRADE_PER_TRADE_RISK_BASIS_PCT", 0.01))
         risk_pct_ceiling = float(_cfg("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT", 0.02))
-        if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, global_ratio, risk_pct_basis, risk_pct_ceiling)):
+        if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, base_ceiling, eff_ceiling, single_name_pct, global_ratio, risk_pct_basis, risk_pct_ceiling)):
             return 0, "invalid configured risk limit — fail closed"
         risk_pct = min(risk_pct_basis, risk_pct_ceiling)  # active basis, never above the retained ceiling
 
@@ -295,13 +310,22 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
 
         rooms = {
             "global_gross": equity * global_ratio - account_gross - pending_all,
-            "day_gross": equity * day_pct - day_gross - pending_day,
+            "day_gross": equity * eff_ceiling - day_gross - pending_day,  # deep→full ceiling; thin→base
             "buying_power": buying_power - reserve,
             # Pending entries have no posted maintenance yet. Charge them at a conservative 100%
             # until they resolve so a concurrent main-book order cannot consume the cushion between
             # this snapshot and our submit.
             "maintenance": (equity - maintenance_margin - cushion - pending_all) / maintenance_rate,
         }
+        if not is_deep:
+            # THIN-NAME PER-NAME NOTIONAL CAP: bound a non-deep name's per-entry notional to its
+            # wide-spread liquidation cost (same-symbol re-entry is blocked upstream, so this is a fresh
+            # per-entry cap). Deep names are unconstrained here (governed by the full ceiling above).
+            rooms["thin_name"] = float(_cfg("DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD", 1000.0))
+        # PER-SINGLE-NAME GROSS SUB-CAP (applies to ALL names, deep + thin): no single name's per-entry
+        # notional may exceed single_name_pct × equity, so a single-name gap-through stays inside the
+        # account kill even at the raised 1.0× aggregate ceiling (the aggregate is reached by ≥2 names).
+        rooms["single_name"] = single_name_pct * equity
         stop_distance = abs(order_price - stop_price)
         if stop_distance <= 0 or not math.isfinite(stop_distance):
             return 0, "invalid stop distance — fail closed"
@@ -942,6 +966,20 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.info("[%s] day-tier entry skipped — day-tier position/order already active", symbol)
             return False
 
+        # CONCURRENCY CAP (aggression guardrail 2026-09-18): bound concurrent day-tier positions so
+        # MAX_CONCURRENT × per-trade-risk <= the tier kill (self-bounding correlated tail; validate_config
+        # asserts it). Count DISTINCT active day-tier symbols (open log ∪ same-day non-terminal state);
+        # this symbol is NOT among them (same-symbol re-entry was blocked just above). Skip if at the cap.
+        _active_syms = {str(t.get("symbol") or "") for t in open_trades.values() if t.get("symbol")}
+        _active_syms |= {str(v.get("symbol") or "") for k, v in state.items()
+                         if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") and _state_blocks(v)}
+        _active_syms.discard(symbol)
+        _max_conc = int(_cfg("DAYTRADE_MAX_CONCURRENT_POSITIONS", 3))
+        if len(_active_syms) >= _max_conc:
+            logger.info("[%s] day-tier entry skipped — concurrency cap %d reached (%d active: %s)",
+                        symbol, _max_conc, len(_active_syms), sorted(_active_syms))
+            return False
+
         # Structural stop FIRST (never enter a position we can't protect — B2 precondition).
         stop_px = _compute_stop_price(trigger, direction, entry_ref)
         if stop_px is None:
@@ -1009,7 +1047,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
 
         qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
                                       buying_power, maintenance_margin, maintenance_rate, open_orders,
-                                      risk_equity=day_start_equity)
+                                      risk_equity=day_start_equity, symbol=symbol)
         if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False

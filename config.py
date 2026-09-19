@@ -813,11 +813,16 @@ DAYTRADE_MAINT_CUSHION_USD  = 650.0  # minimum equity−maintenance_margin dolla
 # explicit main-bot BP reserve (both processes draw from the same current buying-power pool),
 # (d) a re-based tier kill. PROV — structural starting values, no day-tier P&L history yet; recalibrate.
 DAYTRADE_TRACK_A_PER_TRADE_BP_PCT   = 0.20    # PROV:daytier-bp-2026-09-08 — per-trade Track-A budget = this × buying_power × conviction
-DAYTRADE_TRACK_A_EQUITY_CEILING_PCT = 0.60    # PROV:daytier-bp-2026-09-08 — aggregate Track-A gross ≤ this × EQUITY (binds the gap tail)
+DAYTRADE_TRACK_A_EQUITY_CEILING_PCT = 1.00    # PROV:daytier-aggression-2026-09-18 — FULL aggregate Track-A gross ceiling
+                                              # (× EQUITY) for DEEP-LIQUIDITY (Mag-7) names; raised 0.60→1.00 to deploy full
+                                              # equity intraday on margin (flat-by-close → no overnight risk). NON-deep names
+                                              # keep DAYTRADE_TRACK_A_BASE_CEILING_PCT. Worst correlated Mag-7 gap ≈2% = half
+                                              # the −5% tier kill at 1.0×; stage higher only on live tail data (board).
 DAYTRADE_MAIN_BOT_BP_RESERVE_USD    = 1200.0  # PROV — buying power reserved for the MAIN bot (day-tier = residual claimant)
-DAYTRADE_TIER_KILL_EQUITY_PCT       = 0.04    # PROV:daytier-bp-2026-09-08 — tier force-flat + halt at −4% of EQUITY (re-based from the
-                                              # −25%×tier-budget ≈ −$94 basis, a ~1.4% move = noise once positions are
-                                              # BP-sized). Account-terms kill; MUST stay < MAX_DAILY_LOSS_PCT (paper 7%).
+DAYTRADE_TIER_KILL_EQUITY_PCT       = 0.05    # PROV:daytier-aggression-2026-09-18 — tier force-flat + halt at −5% of EQUITY
+                                              # (raised 4%→5% with the size increase; still < the 7% account kill, keeps a 2%
+                                              # overshoot buffer for gap-through slippage). Account-terms kill; MUST stay <
+                                              # MAX_DAILY_LOSS_PCT (paper 7%). (orig basis: −25%×tier-budget ≈ −$94, ~1.4% move.)
 DAYTRADE_PER_TRADE_RISK_EQUITY_PCT  = 0.02    # PROV:daytier-bp-2026-09-08 — stop-distance loss per new trade ≤2% of SOD equity
 
 # MIN-1-SHARE FLOOR kill flag (Rafael CEO directive 2026-09-15; strategy/day_tier_sizing.py, PR #319).
@@ -872,7 +877,10 @@ DAYTRADE_FILL_POLL_MAX       = 8      # max fill-confirm polls before treating t
 #   the basis), NOT an automatic size amplifier (Rule E: a size increase never auto-flips). MUST stay in
 #   (0, DAYTRADE_PER_TRADE_RISK_EQUITY_PCT] — validate_config REJECTS 0.0 or > ceiling, so this is not a
 #   kill knob; the tier kill is DAYTRADE_ENABLED=False (flip + restart).
-DAYTRADE_PER_TRADE_RISK_BASIS_PCT = 0.01  # PROV:daytier-hairpin-2026-09-18 — ACTIVE per-trade risk basis (1% start; 2% ceiling retained; ramp board-gated)
+DAYTRADE_PER_TRADE_RISK_BASIS_PCT = 0.015 # PROV:daytier-aggression-2026-09-18 — ACTIVE per-trade risk basis 1.5% (raised
+                                          # 1%→1.5%, Rafael "go further" + board/Gro/GAI; still <= the 2% retained ceiling
+                                          # DAYTRADE_PER_TRADE_RISK_EQUITY_PCT). SELF-BOUNDED with the concurrency cap:
+                                          # DAYTRADE_MAX_CONCURRENT_POSITIONS × this <= DAYTRADE_TIER_KILL_EQUITY_PCT.
 # F2 — min-stop distance = max(k×ATR(5m), spread_mult×spread). k=1.5 from Harris's noise-band
 #   derivation (a stop inside ~1.5×ATR(5m) is inside normal 5-min noise). The spread backstop keeps the
 #   floor from collapsing to ~0 on a thin/quiet tape where ATR≈0 (the seat's critical catch — without
@@ -886,6 +894,33 @@ DAYTRADE_STOP_SPREAD_SANITY_PCT = 0.02  # PROV:daytier-hairpin-2026-09-18 — a 
                                         # broken/crossed/stale → NOT a usable room reference → SKIP (fail-closed). Mirrors
                                         # the board-blessed GEX_SPOT_SPREAD_SANITY_PCT=0.02: >200bps on a liquid day-tier
                                         # name is a broken quote by microstructure, not a fitted threshold.
+
+# ─── DAY-TIER AGGRESSION GUARDRAILS (2026-09-18, Rafael "go further" + board + Gro + GAI) ──────────
+# These MUST ship WITH the ceiling/risk increase above (board: non-optional). Two cold board seats
+# converged: the raised gross ceiling is safe ONLY where the book can liquidate it, and the correlated
+# tail must be self-bounded. RISK-PATH.
+#   1. CONCURRENCY CAP — bound the number of concurrent day-tier positions so
+#      MAX_CONCURRENT × PER_TRADE_RISK_BASIS <= TIER_KILL (self-bounding: even if all stop out together,
+#      the loss equals the pre-committed floor). 3 × 1.5% = 4.5% < the 5% tier kill (validate_config asserts).
+DAYTRADE_MAX_CONCURRENT_POSITIONS   = 3       # PROV:daytier-aggression-2026-09-18 — max concurrent open day-tier positions
+#   2. DEEP-LIQUIDITY CARVE-OUT — the raised 1.0× ceiling applies ONLY to deep-liquidity (Mag-7) names;
+#      non-deep names keep the BASE 0.60× aggregate ceiling. Thin names (DRAM/EWY) market-fill 2-3% off
+#      on the forced flat-by-close (the entry spread-gate does NOT cover the exit liquidation), so the
+#      extra gross must route to names the book can actually take. Mag-7 = the 7 deep names in the universe.
+DAYTRADE_DEEP_LIQUIDITY_SYMBOLS     = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]
+DAYTRADE_TRACK_A_BASE_CEILING_PCT   = 0.60    # PROV:daytier-aggression-2026-09-18 — aggregate ceiling for NON-deep names (unchanged from pre-aggression)
+#   3. THIN-NAME PER-NAME NOTIONAL CAP — a non-deep name's per-entry notional is capped to its
+#      wide-spread liquidation cost, so a forced-close market fill on the thinnest tape stays bounded.
+#      ~$1,000 keeps a wide-spread (~2.8% EWY) round-trip liquidation within ~1 per-trade-risk unit; PROV
+#      starting value tied to the observed flicker spread, recalibrate from live fills.
+DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD = 1000.0  # PROV:daytier-aggression-2026-09-18 — max per-entry notional for a NON-deep (thin) name
+#   4. PER-SINGLE-NAME GROSS SUB-CAP — no single day-tier name may exceed this fraction of EQUITY per
+#      entry, so a single-name intraday GAP-THROUGH stays inside the account kill even at the raised 1.0×
+#      aggregate ceiling (0.60 × a 10% halt-reopen gap = 6% < the 7% account kill). The self-bounding
+#      concurrency invariant bounds the ORDINARY correlated stop-out; THIS bounds the single-name gap tail
+#      (masked-loss seat residual). The aggregate 1.0× is still reached by DIVERSIFYING across ≥2 deep
+#      names (board intent: grow via more names, not per-name concentration), bounded by the concurrency cap.
+DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.60  # PROV:daytier-aggression-2026-09-18 — max single-name per-entry notional (× EQUITY)
 
 
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
@@ -1068,6 +1103,37 @@ def validate_config():
         )
     if not (0 < DAYTRADE_STOP_SPREAD_SANITY_PCT < 1):
         errors.append(f"DAYTRADE_STOP_SPREAD_SANITY_PCT ({DAYTRADE_STOP_SPREAD_SANITY_PCT}) must be between 0 and 1")
+
+    # Day-tier aggression guardrails (2026-09-18, risk-path). Fail CLOSED on a mis-set.
+    if not (isinstance(DAYTRADE_MAX_CONCURRENT_POSITIONS, int) and DAYTRADE_MAX_CONCURRENT_POSITIONS >= 1):
+        errors.append(f"DAYTRADE_MAX_CONCURRENT_POSITIONS ({DAYTRADE_MAX_CONCURRENT_POSITIONS}) must be an int >= 1")
+    # SELF-BOUNDING correlated-tail invariant: even if every concurrent position stops out together, the
+    # summed ordinary-stop loss must not exceed the tier kill (the risk seat's key guardrail).
+    if isinstance(DAYTRADE_MAX_CONCURRENT_POSITIONS, int):
+        _dt_max_conc_risk = DAYTRADE_MAX_CONCURRENT_POSITIONS * DAYTRADE_PER_TRADE_RISK_BASIS_PCT
+        if _dt_max_conc_risk > DAYTRADE_TIER_KILL_EQUITY_PCT + 1e-9:
+            errors.append(
+                f"Day-tier correlated-tail unbounded: MAX_CONCURRENT ({DAYTRADE_MAX_CONCURRENT_POSITIONS}) × "
+                f"RISK_BASIS ({DAYTRADE_PER_TRADE_RISK_BASIS_PCT}) = {_dt_max_conc_risk:.4f} > TIER_KILL "
+                f"({DAYTRADE_TIER_KILL_EQUITY_PCT}) — a full correlated stop-out would breach the tier kill"
+            )
+    if not (0 < DAYTRADE_TRACK_A_BASE_CEILING_PCT <= DAYTRADE_TRACK_A_EQUITY_CEILING_PCT):
+        errors.append(
+            f"DAYTRADE_TRACK_A_BASE_CEILING_PCT ({DAYTRADE_TRACK_A_BASE_CEILING_PCT}) must be in "
+            f"(0, DAYTRADE_TRACK_A_EQUITY_CEILING_PCT={DAYTRADE_TRACK_A_EQUITY_CEILING_PCT}] — the non-deep "
+            f"base ceiling can never exceed the full deep-liquidity ceiling"
+        )
+    if not (isinstance(DAYTRADE_DEEP_LIQUIDITY_SYMBOLS, list) and DAYTRADE_DEEP_LIQUIDITY_SYMBOLS
+            and all(isinstance(s, str) and s for s in DAYTRADE_DEEP_LIQUIDITY_SYMBOLS)):
+        errors.append("DAYTRADE_DEEP_LIQUIDITY_SYMBOLS must be a non-empty list of ticker strings")
+    if not (DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD > 0):
+        errors.append(f"DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD ({DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD}) must be > 0")
+    if not (0 < DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT <= DAYTRADE_TRACK_A_EQUITY_CEILING_PCT):
+        errors.append(
+            f"DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT ({DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT}) must be in "
+            f"(0, DAYTRADE_TRACK_A_EQUITY_CEILING_PCT={DAYTRADE_TRACK_A_EQUITY_CEILING_PCT}] — a single "
+            f"name can never exceed the aggregate ceiling"
+        )
 
     # Log results
     for w in warnings:
