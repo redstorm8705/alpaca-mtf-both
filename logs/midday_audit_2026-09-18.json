@@ -1,0 +1,155 @@
+{
+  "audit_date": "2026-09-18",
+  "run_ts": "2026-09-18T10:30:01.673989-07:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "NFLX",
+        "ts": "2026-09-18 08:55:05",
+        "score": 11,
+        "mri": "STRESSED",
+        "price": 71.64,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "META",
+      "NVDA",
+      "NFLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "STRESSED": 23,
+      "ELEVATED": 6,
+      "NORMAL": 2
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 76,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-18 16:15:32,996 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-18 16:15:32,998 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-18 16:15:41,063 | WARNING  | execution.entry_logic | [CRWD] COUNTER-TREND GATE [short]: 1-month return +17.96% opposes the trade on a structur",
+      "2026-09-18 16:15:43,013 | WARNING  | kelly | Kelly [short_intraday]: NEGATIVE EXPECTANCY \u2014 kelly_full=-0.707 (WR=17.6%, avg_win=0.49R, avg_loss=0.53R,",
+      "2026-09-18 16:20:14,794 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-2 to intraday; prot"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -5.440000000000026,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -2.720000000000013,
+    "best": {
+      "symbol": "META",
+      "pnl": -2.3500000000000227,
+      "entry_price": 674.89,
+      "exit_price": 672.54,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 672.61,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": -3.0900000000000034,
+      "entry_price": 219.12,
+      "exit_price": 220.15,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 220.11,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "META",
+        "pnl": -2.3500000000000227,
+        "entry_price": 674.89,
+        "exit_price": 672.54,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 672.61,
+        "target": 0.0
+      },
+      {
+        "symbol": "NVDA",
+        "pnl": -3.0900000000000034,
+        "entry_price": 219.12,
+        "exit_price": 220.15,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 220.11,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "NFLX",
+        "side": "short",
+        "qty": 2.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "UBER"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 5,
+    "symbols": [
+      "META",
+      "NFLX",
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 1,
+        "sell": 0
+      },
+      "NFLX": {
+        "buy": 0,
+        "sell": 0
+      },
+      "META": {
+        "buy": 1,
+        "sell": 1
+      }
+    }
+  }
+}
