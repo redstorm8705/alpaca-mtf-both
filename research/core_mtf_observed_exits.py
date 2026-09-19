@@ -1,8 +1,8 @@
 """Conservatively reconcile Core MTF short parents to observed ledger exits.
 
-This research-only module reports a full exit as verified only when its
-terminal ledger event explicitly embeds the parent entry price and closes the
-logged quantity. Same-symbol proximity alone is deliberately insufficient.
+This research-only module reports ledger correlation without overstating it as
+strategy ownership. Exact verification requires an explicit parent/order ID;
+same-symbol price and quantity text alone remains only ledger correlation.
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ class ObservedExitLink:
     exit_quantity: float | None
     exit_event: str | None
     exit_reason: str | None
+    evidence_basis: tuple[str, ...]
+    identity_kind: str | None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -74,16 +76,23 @@ def reconcile_observed_exits(
                     exit_quantity=None,
                     exit_event=None,
                     exit_reason=None,
+                    evidence_basis=(),
+                    identity_kind=None,
                 )
             )
             continue
-        line_number, event, event_time, price, quantity = matching_exit
-        status = "verified" if quantity == entry_qty else "partial_verified"
-        reason = (
-            "terminal_reason_entry_and_quantity_match"
-            if status == "verified"
-            else "terminal_reason_entry_partial_quantity_match"
-        )
+        line_number, event, event_time, price, quantity, identity_kind = matching_exit
+        is_full = quantity == entry_qty
+        if identity_kind is not None:
+            status = "verified" if is_full else "partial_verified"
+            reason = "identity_backed_terminal_exit"
+        else:
+            status = "ledger_correlated" if is_full else "partial_ledger_correlated"
+            reason = "terminal_reason_entry_quantity_correlation"
+        basis = ["symbol", "time_window", "short_direction", "entry_price_reason"]
+        basis.append("full_quantity" if is_full else "partial_quantity")
+        if identity_kind is not None:
+            basis.append(identity_kind)
         links.append(
             ObservedExitLink(
                 entry_source_line=candidate.source_line,
@@ -97,6 +106,8 @@ def reconcile_observed_exits(
                 exit_quantity=quantity,
                 exit_event=str(event.get("event")),
                 exit_reason=str(event.get("reason") or ""),
+                evidence_basis=tuple(basis),
+                identity_kind=identity_kind,
             )
         )
     return tuple(links)
@@ -134,13 +145,18 @@ def _observed_exit(
     candidate: CoreMTFShortEvent,
     entry_qty: float | None,
     next_entry_time: datetime | None,
-) -> tuple[int, dict[str, Any], datetime, float, float] | None:
+) -> tuple[int, dict[str, Any], datetime, float, float, str | None] | None:
     if entry_qty is None:
         return None
     for line_number, event in rows.items():
         if event.get("symbol") != candidate.symbol:
             continue
         if event.get("event") not in _TERMINAL_EVENTS:
+            continue
+        if event.get("direction") != "short":
+            continue
+        event_mode = event.get("trade_mode")
+        if event_mode is not None and event_mode != "intraday":
             continue
         event_time = _time(event.get("ts"))
         price = _positive(event.get("price"))
@@ -155,7 +171,23 @@ def _observed_exit(
             continue
         if not _reason_matches_entry(event.get("reason"), candidate.logged_entry_price):
             continue
-        return line_number, event, event_time, price, quantity
+        return line_number, event, event_time, price, quantity, _identity_kind(
+            rows.get(candidate.source_line), event
+        )
+    return None
+
+
+def _identity_kind(
+    entry: dict[str, Any] | None, exit_event: dict[str, Any]
+) -> str | None:
+    if not entry:
+        return None
+    for entry_key in ("client_order_id", "order_id"):
+        value = entry.get(entry_key)
+        if not isinstance(value, str) or not value:
+            continue
+        if exit_event.get("parent_order_id") == value:
+            return f"parent_order_id:{entry_key}"
     return None
 
 

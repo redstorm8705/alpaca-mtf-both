@@ -22,13 +22,14 @@ def _candidate(line=1, symbol="TEST", price=100):
     )
 
 
-def test_links_only_explicit_entry_price_and_quantity_match(tmp_path):
+def test_labels_explicit_entry_price_and_quantity_as_ledger_correlation(tmp_path):
     rows = [
         {"ts": "2026-09-01T15:00:00+00:00", "size": 2},
         {
             "ts": "2026-09-02T15:00:00+00:00",
             "event": "stop_hit",
             "symbol": "TEST",
+            "direction": "short",
             "price": 106,
             "size": 2,
             "reason": "overnight breach | entry=$100.00",
@@ -39,9 +40,10 @@ def test_links_only_explicit_entry_price_and_quantity_match(tmp_path):
 
     links = reconcile_observed_exits(ledger, [_candidate()])
 
-    assert links[0].status == "verified"
+    assert links[0].status == "ledger_correlated"
     assert links[0].exit_source_line == 2
     assert links[0].exit_price == 106
+    assert links[0].identity_kind is None
 
 
 def test_does_not_promote_proximity_or_wrong_quantity_to_verified(tmp_path):
@@ -59,6 +61,7 @@ def test_does_not_promote_proximity_or_wrong_quantity_to_verified(tmp_path):
             "ts": "2026-09-02T16:00:00+00:00",
             "event": "stop_hit",
             "symbol": "TEST",
+            "direction": "short",
             "price": 106,
             "size": 3,
             "reason": "entry=$100.00",
@@ -79,6 +82,7 @@ def test_labels_explicit_partial_exit_without_claiming_full_reconciliation(tmp_p
             "ts": "2026-09-02T15:00:00+00:00",
             "event": "stop_hit",
             "symbol": "TEST",
+            "direction": "short",
             "price": 106,
             "size": 1,
             "reason": "overnight breach | entry=$100.00",
@@ -89,8 +93,66 @@ def test_labels_explicit_partial_exit_without_claiming_full_reconciliation(tmp_p
 
     links = reconcile_observed_exits(ledger, [_candidate()])
 
-    assert links[0].status == "partial_verified"
-    assert links[0].reason == "terminal_reason_entry_partial_quantity_match"
+    assert links[0].status == "partial_ledger_correlated"
+    assert links[0].reason == "terminal_reason_entry_quantity_correlation"
+
+
+def test_rejects_day_tier_and_opposite_side_collision(tmp_path):
+    rows = [
+        {"ts": "2026-09-01T15:00:00+00:00", "size": 1},
+        {
+            "ts": "2026-09-02T15:00:00+00:00",
+            "event": "exit",
+            "symbol": "TEST",
+            "direction": "short",
+            "trade_mode": "day_trade",
+            "price": 99,
+            "size": 1,
+            "reason": "entry=$100.00",
+        },
+        {
+            "ts": "2026-09-02T16:00:00+00:00",
+            "event": "exit",
+            "symbol": "TEST",
+            "direction": "long",
+            "price": 99,
+            "size": 1,
+            "reason": "entry=$100.00",
+        },
+    ]
+    ledger = tmp_path / "events.jsonl"
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    links = reconcile_observed_exits(ledger, [_candidate()])
+
+    assert links[0].status == "unmatched"
+
+
+def test_parent_order_id_is_required_for_verified_ownership(tmp_path):
+    rows = [
+        {
+            "ts": "2026-09-01T15:00:00+00:00",
+            "size": 1,
+            "client_order_id": "parent-1",
+        },
+        {
+            "ts": "2026-09-02T15:00:00+00:00",
+            "event": "stop_hit",
+            "symbol": "TEST",
+            "direction": "short",
+            "price": 106,
+            "size": 1,
+            "reason": "entry=$100.00",
+            "parent_order_id": "parent-1",
+        },
+    ]
+    ledger = tmp_path / "events.jsonl"
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    links = reconcile_observed_exits(ledger, [_candidate()])
+
+    assert links[0].status == "verified"
+    assert links[0].identity_kind == "parent_order_id:client_order_id"
 
 
 def test_next_same_symbol_entry_bounds_the_match_window(tmp_path):
