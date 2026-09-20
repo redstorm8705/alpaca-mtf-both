@@ -8,7 +8,26 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-19, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-20, interactive Rafael present) — pick up here
+
+**This session's work, detail, and verification live in `logs/tb_audit_log.md` (2026-09-20 entries)** and
+the design records `logs/design_records/edge_discovery_2026-09-19.md` +
+`logs/design_records/bggn_resilience_2026-09-20.md`. Topics: edge-discovery Step 1 per-trade record layer
+(PR #356), the BGGN-resilience design, and the QHM memo→execution gap. Read those for the facts + verify
+commands — this block is only the pointer + the next-action plan.
+
+**⏩ EXACT NEXT ACTION:** build the BGGN-RESILIENCE enforcement per
+`logs/design_records/bggn_resilience_2026-09-20.md` — Gro auto-chunk on 8k-TPM overflow + NVIDIA model
+ladder + fail-safe floor in `.claude/preship/preship_audit.py`, plus the standing rule into CLAUDE.md.
+Run the board+Gro+GAI design pass on D1–D3 in that record first (Open Question Protocol), then the gated build.
+
+**THEN (queued):** (1) edge-discovery Step 1 Increment 2 — wire the builders into the live emit
+(trade_id every tier, intraday emit, MAE/MFE water-marks; RTH-hotspot → masked-loss seat) per
+`edge_discovery_2026-09-19.md`; (2) QHM memo→execution wiring + 2-Slack-card consolidation + full memo in
+Slack (design pass owed); (3) intraday conviction-upsize; leveraged-ETF universe. Day-tier sizing/leverage
+size-up stays PAUSED until the edge is measured. Deploy note: OCI may need `git pull --rebase` (report-cron drift).
+
+## ⏩ (2026-09-19, prior — Core MTF thread)
 
 **CORE MTF SHORT REPLAY FOUNDATION — RESEARCH ONLY; NO LIVE/PAPER BEHAVIOR CHANGE.** Terminology is fixed for new work: **Day Tier** is same-session day trading; **Core MTF** is the legacy-`intraday` higher-timeframe strategy that may carry overnight. Broker FIFO for 2026-08-20..2026-09-19: Core MTF shorts 9 closed lots, 0 wins / 9 losses, -$80.49; Day Tier shorts are separate (4 lots, -$7.81). P0 source finding remains quarantined: `data/fetcher.fetch_bars()` requests through now and returns the current last row unfiltered; Core MTF entry/exit scoring and weekly bias consume `iloc[-1]` / latest weekly close, so a regular-session decision can use a forming bar. No live correction or new Core MTF short rule is approved until the full BGGN + mechanical/adversarial/cold/exact-preship path passes.
 
