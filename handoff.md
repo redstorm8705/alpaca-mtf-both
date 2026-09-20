@@ -10,22 +10,25 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-09-20, interactive Rafael present) — pick up here
 
-**This session's work, detail, and verification live in `logs/tb_audit_log.md` (2026-09-20 entries)** and
-the design records `logs/design_records/edge_discovery_2026-09-19.md` +
-`logs/design_records/bggn_resilience_2026-09-20.md`. Topics: edge-discovery Step 1 per-trade record layer
-(PR #356), the BGGN-resilience design, and the QHM memo→execution gap. Read those for the facts + verify
-commands — this block is only the pointer + the next-action plan.
+**This session's work, detail, and verify commands live in `logs/tb_audit_log.md` (2026-09-20 entries)**
+and the design records `logs/design_records/edge_discovery_2026-09-19.md` +
+`logs/design_records/bggn_resilience_2026-09-20.md`. SHIPPED this session: edge-discovery Step 1 per-trade
+record layer (PR #356), and BGGN-resilience gate hardening — Gro auto-chunk on TPM overflow + NVIDIA model
+ladder (PR #360). Verify: `gh pr view 356 --json state` → MERGED, `gh pr view 360 --json state` → MERGED;
+`ssh mtf-bot 'grep -c _gro_chunked /home/ubuntu/mtf-bot/.claude/preship/preship_audit.py'` → ≥1. This block
+is only the pointer + the next-action plan.
 
-**⏩ EXACT NEXT ACTION:** build the BGGN-RESILIENCE enforcement per
-`logs/design_records/bggn_resilience_2026-09-20.md` — Gro auto-chunk on 8k-TPM overflow + NVIDIA model
-ladder + fail-safe floor in `.claude/preship/preship_audit.py`, plus the standing rule into CLAUDE.md.
-Run the board+Gro+GAI design pass on D1–D3 in that record first (Open Question Protocol), then the gated build.
+**⏩ EXACT NEXT ACTION:** edge-discovery Step 1 Increment 2 — wire the record builders into the LIVE emit
+per `logs/design_records/edge_discovery_2026-09-19.md`: mint a trade_id every tier, emit the intraday
+entry/exit record, add MAE/MFE water-marks to the exit path, and log gated-out (rejected) signals. Touches
+the RTH hotspots (`portfolio_tracker` / `entry_logic` / `day_trade_manager` / `regime_state`) → masked-loss
+seat + full board gate. COORDINATE with the parallel Core MTF thread (block below): EXTEND the PR #356 shared
+trade-record schema, do NOT create a competing tag format.
 
-**THEN (queued):** (1) edge-discovery Step 1 Increment 2 — wire the builders into the live emit
-(trade_id every tier, intraday emit, MAE/MFE water-marks; RTH-hotspot → masked-loss seat) per
-`edge_discovery_2026-09-19.md`; (2) QHM memo→execution wiring + 2-Slack-card consolidation + full memo in
-Slack (design pass owed); (3) intraday conviction-upsize; leveraged-ETF universe. Day-tier sizing/leverage
-size-up stays PAUSED until the edge is measured. Deploy note: OCI may need `git pull --rebase` (report-cron drift).
+**THEN (queued):** (1) QHM memo→execution wiring + 2-Slack-card consolidation + full memo in Slack (design
+pass owed — touches what the bot buys); (2) intraday conviction-upsize; (3) leveraged-ETF universe. Do NOT
+ship day-tier sizing/leverage size-up until the edge is measured. See the `logs/tb_audit_log.md` 2026-09-20
+entries for deploy notes and the NVIDIA-substitute status.
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76

@@ -10367,3 +10367,30 @@ Directive: "standing rule for all gates when BGGN inputs time out / don't respon
   PR #358 merged as `b3e7357`; CI preship PASS. OCI synced via `git pull --rebase` (the report
   cron's one local report commit was retained), module compile/import PASS, and `mtf-bot.service`
   remained active. Research module only; no service restart required.
+
+---
+
+## 2026-09-20 — BGGN RESILIENCE: Gro auto-chunk + NVIDIA model ladder (SHIPPED + PROVEN)
+
+**PR #360 → main `94c2d76`; deployed to OCI (tooling only, no service restart).** Rafael directive
+2026-09-20 ("standing rule for BGGN timeouts; stop settling for the first rejection; when the NVIDIA
+fallback fails, try another model"). Design: `logs/design_records/bggn_resilience_2026-09-20.md`.
+File: `.claude/preship/preship_audit.py` (gate tooling — never runs in the live trade loop).
+
+- `_gro_chunked`: on Gro 8k-TPM overflow, split the diff on GIT-HUNK boundaries (never mid-hunk),
+  audit each chunk with a REAL Gro call, combine worst-verdict-wins (INDETERMINATE chunk RAISES →
+  substitute/waive, never a silent pass), 62s backoff on the per-MINUTE TPM 429. Real Gro verdict on
+  any diff size instead of a forced `--waive-gro`.
+- `_nvidia`: single pinned model → verdict-aware MODEL LADDER (advances on failure/mute, HONORS a
+  real verdict, never shops past a REJECT). Bounded per-model timeout via new `_curl` `timeout`.
+- Gro except path chunks-first then substitutes; `audit_file` exposes `_diff_body`/`_ctx_suffix`
+  (single-shot prompt byte-identical).
+
+**Dogfood PROOF:** the preship self-audit of THIS diff hit Gro TPM-overflow → chunked (git-hunk) →
+`gro=APPROVE gai=APPROVE` (two 62s backoffs auto-handled). An earlier line-based split FALSE-REJECTED
+an in-place fn rewrite (chunk saw the removal without the re-add); hunk-split fixed it (structural +
+live confirmation). Gate: cold-2nd PASS (2 rounds — caught the hunk-split fix) + Gro+GAI preship
+APPROVE on the exact diff; statics clean. **NVIDIA endpoint currently 410/404 for this account — an
+OPTIONAL fallback (Rafael 2026-09-20), NOT a blocker; Gro-chunk + GAI-ladder are the primary
+resilience.** Follow-up (low-pri, optional): re-provision NVIDIA NIM model access if the backstop is
+wanted.
