@@ -17,8 +17,10 @@ from alpaca.trading.requests import (
     StopOrderRequest,
     GetOrdersRequest,
     LimitOrderRequest,
+    TakeProfitRequest,
+    StopLossRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, OrderClass
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +557,106 @@ def submit_limit_order(
                 time.sleep(1)
             else:
                 logger.error(f"[{symbol}] submit_limit_order failed after 3 attempts: {e}")
+                return None
+    return None  # exhausted retries without exception path firing
+
+
+def submit_oco_exit(
+    symbol: str,
+    qty: int,
+    position_side: str,        # "long" or "short" — the side of the OPEN position being protected
+    take_profit_price: float,
+    stop_price: float,
+    tier: str = "daytrade",    # owning strategy tier — tags the client_order_id
+) -> object:
+    """Submit a broker-native OCO (One-Cancels-Other) exit pair for an ALREADY-OPEN position: a
+    take-profit LIMIT leg + a protective STOP-MARKET leg, linked so that when either fills the
+    broker auto-cancels the sibling. This harvests the target AND protects the downside atomically
+    — closing the day-tier v1 gap (a naked stop with no target → winners rode back to the stop or
+    EOD, capturing nothing) WITHOUT the double-fill risk a separate naked target would create.
+
+    Submitted AFTER the entry fill is confirmed, so `qty` = the ACTUAL filled quantity. (A bracket
+    ENTRY pre-sizes its exit legs to the REQUESTED qty and mis-sizes on a partial fill; the day
+    tier's marketable-limit entry can partially fill and cancels its own remainder, so a post-fill
+    OCO sized to the real fill is the correct, safer fit — and it leaves the battle-tested entry
+    path unchanged.)
+
+    The stop leg is a MARKET stop (StopLossRequest with stop_price only) — a guaranteed exit, never
+    a stop-limit that can gap through. TIF=DAY (the tier is intraday-flat). Exit side = SELL for a
+    long position, BUY for a short.
+
+    Geometry REQUIRED: long → stop < take_profit; short → take_profit < stop (and each on the
+    correct side of the live price, validated by Alpaca at submit). An inverted geometry is
+    rejected here with None so the CALLER falls back to a plain protective stop — never a naked
+    target, never an unprotected position.
+
+    Returns the order object (its `.legs` carry the two child leg order-ids, which the caller
+    records for explicit tracking/cancel — Alpaca-generated child legs do NOT carry the DT- tier
+    client_order_id, so they can only be found by explicit id, not via tier_of_coid), or None on
+    any failure (caller then falls back to submit_day_stop_order).
+    """
+    if qty <= 0:
+        logger.warning(f"[{symbol}] OCO exit rejected: qty={qty}")
+        return None
+    if not (0 < take_profit_price < 99_999) or not (0 < stop_price < 99_999):
+        logger.warning(f"[{symbol}] OCO exit rejected: bad tp={take_profit_price} / stop={stop_price}")
+        return None
+    _tp   = round(take_profit_price, 2)
+    _stop = round(stop_price, 2)
+    if position_side == "long":
+        exit_side, _side_str, geom_ok = OrderSide.SELL, "sell", _stop < _tp
+    elif position_side == "short":
+        exit_side, _side_str, geom_ok = OrderSide.BUY, "buy", _tp < _stop
+    else:
+        logger.warning(f"[{symbol}] OCO exit rejected: bad position_side {position_side!r}")
+        return None
+    if not geom_ok:
+        logger.warning(
+            f"[{symbol}] OCO exit rejected: invalid geometry for {position_side} "
+            f"(tp={_tp}, stop={_stop}) — caller falls back to a plain stop"
+        )
+        return None
+
+    client   = _get_trading_client()
+    _idem_id = _make_idem_id(tier, symbol, _side_str)   # tier-tagged, reused across retries
+    order_data = LimitOrderRequest(
+        symbol=symbol,
+        qty=qty,
+        side=exit_side,
+        limit_price=_tp,                               # top-level limit = the take-profit leg
+        time_in_force=TimeInForce.DAY,
+        order_class=OrderClass.OCO,
+        take_profit=TakeProfitRequest(limit_price=_tp),
+        stop_loss=StopLossRequest(stop_price=_stop),   # stop_price only = protective MARKET stop
+        client_order_id=_idem_id,
+    )
+
+    for _attempt in range(3):
+        try:
+            order = client.submit_order(order_data)
+            logger.info(
+                f"[{symbol}] OCO EXIT {_side_str.upper()} {qty} (TP ${_tp:.2f} / STOP ${_stop:.2f}) "
+                f"for {position_side} | Order ID: {order.id}"  # type: ignore[union-attr]
+            )
+            return order
+        except Exception as e:
+            err = str(e)
+            if "40910000" in err or "duplicate client order" in err.lower():
+                logger.warning(
+                    f"[{symbol}] Duplicate client_order_id on OCO retry "
+                    f"(attempt {_attempt + 1}) — order may already be live. idem_id={_idem_id}"
+                )
+                return None
+            if not _is_retryable(err):
+                logger.error(f"[{symbol}] submit_oco_exit failed (non-retryable): {e}")
+                return None
+            if _attempt < 2:
+                logger.warning(
+                    f"[{symbol}] submit_oco_exit attempt {_attempt + 1}/3 failed (retryable): {e} — retrying in 1s"
+                )
+                time.sleep(1)
+            else:
+                logger.error(f"[{symbol}] submit_oco_exit failed after 3 attempts: {e}")
                 return None
     return None  # exhausted retries without exception path firing
 
