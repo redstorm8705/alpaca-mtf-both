@@ -10310,3 +10310,23 @@ unguarded (pre-existing pattern, no new exposure).
 **HONEST LIMIT:** DEPLOYED-status pending merge+OCI pull; the take-profit harvest has NOT executed on a live paper trade — it takes effect on the next day-tier trade that reaches its target. Not "proven live" until then.
 
 **Non-blocking carry-forwards:** (1) degenerate OCO-with-empty-legs would label a rare winner "protective_stop" (P&L still booked correctly, no mask) — contradicts the verified 0.43.3 shape; (2) a flatten racing the async leg-cancel defers one 2-min tick (recoverable, next tick's cancel is idempotent); (3) `_has_live_daytrade_stop` broad id-match relies on Alpaca RESIZING (not cancelling) the OCO sibling on a partial fill (verified at source) — a monitoring assumption, reconcile-bounded.
+
+---
+
+## 2026-09-20 — EDGE-DISCOVERY STEP 1: tier-agnostic per-trade record (SHIPPED + DEPLOYED + EXERCISED)
+
+**PR #356 → main `49b0b9c`.** Design: `logs/design_records/edge_discovery_2026-09-19.md` (BGGN 5/5). Increment 1 (measurement foundation; additive/offline, NOT wired into any live trading path).
+
+- `trade_logger.py` (+245): pure builders `make_entry_record`/`make_exit_record`/`make_trade_record`/`make_components` + R-math `compute_planned_R`/`compute_realized_R`/`compute_mae_mfe_R` (side-robust: None on unknown side) + triple-barrier `outcome_from_reason` (barrier-derived, P&L-sign-independent) + `_f`. REQUIRED_*_FIELDS/ENTRY_NONNULL_FIELDS. Confidence Layer-0 = score/score_max.
+- `research/trade_record_reducer.py` (NEW, offline read-only, no execution imports): replays `trade_events.jsonl` (intraday, FIFO-by-symbol) + `day_tier_events.jsonl` (trade_id/decision_id join) → `logs/trade_records.jsonl`, one row per CLOSED trade. Frozen weights snapshot (deterministic backfill). Ran on OCI: 90,205 intraday + 44 day-tier events → 49 records.
+- `tests/test_trade_record_invariant.py` (NEW, 34 tests): D1 numpy-bool serialization guard, R-math long/short, FIFO, orphan-exit, never-mask correction, partial-not-double-counted, daytrade-rows-skipped.
+
+**FIRST MEASURED EDGE:** day-tier 0/6 wins avg −0.94R; intraday 8/43 (19%) avg −0.27R; **0 profit-target exits across all 49 trades** (both tiers only stop/time out).
+
+**Gate (risk-adjacent — trade_logger is in the RTH import chain):** cold-2nd PASS + P&L/data-integrity board seat APPROVE, BOTH on the final code. Seat REJECTed the first cut and caught 2 REAL P&L defects (verified at source, not counter-prompted): **RC — intraday partial DOUBLE-COUNT** (portfolio_tracker exit `pnl` is already `_total_pnl` = remaining leg + all partials; reducer re-added partials → a −$1 loss read as +$4) and **RC — cross-tier CONTAMINATION** (day-tier trades dual-written to shared `trade_events.jsonl` with `data_source=daytrade`; unfiltered intraday reducer ingested them as phantom $0 rows, MASKING day-tier losses + FIFO cross-pairing). Both fixed + regression-tested. statics clean (py_compile/ruff E,W,F,B/mypy). trade_logger Gro+GAI APPROVE; reducer+tests GAI APPROVE / Gro WAIVED (8k-TPM). Markers (cold2/adversarial/logexempt/preship) on all 3, bound to staged sha.
+
+## 2026-09-20 — BGGN RESILIENCE (Rafael directive; DESIGN captured, enforcement queued)
+
+Directive: "standing rule for all gates when BGGN inputs time out / don't respond — stop settling for the first rejection, find a solution; when the NVIDIA fallback fails, try another model." Design record `logs/design_records/bggn_resilience_2026-09-20.md`. Solution: Gro **auto-chunk on 8k-TPM overflow** (real verdict on big diffs), Gro-substitute **NVIDIA model LADDER** (not one model), GAI model ladder (exists), bounded timeouts, recorded (never silent) unavailability, and a **fail-safe floor: board-majority + ≥1 external voice APPROVE; a risk-path diff BLOCKS if both external voices are down.** Enforcement (`preship_audit.py` chunk+ladder) + CLAUDE.md rule = the next gated build (board+Gro+GAI design pass on D1–D3 first).
+
+**Confirmed (Rafael-flagged) — QHM memo→execution GAP:** `scripts/qhm_thesis.py` research memo (GE/UBER/NFLX) has NO code path to execution; the bot only enters `data/state/quarterly_holds_config.json` `picks` (NVDA/GOOGL/GE/GEV/LLY; Q3-2026, stale) via `main.py:777` `add_candidate`. Wiring + 2-card consolidation + full-memo-in-Slack = design pass owed.
