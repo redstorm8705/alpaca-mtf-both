@@ -1,6 +1,13 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-09-19 — Core MTF fail-closed OHLCV replay merged (`research/core_mtf_simulated_replay.py`, PR #351 `1dd30c4`)
+
+- **Scope:** research-only wrapper around the pure completed-bar lifecycle kernel. Validates content-hashed aggregated OHLCV inputs, explicit no-fill evidence, explicit horizon/cost, and writes a source-bound simulation artifact atomically. No OCI deployment or live behavior change.
+- **Board correction:** initial overlap handling only quarantined the earlier parent, inventing independent capital/lifecycle for later same-symbol parents. Final code quarantines both. The authoritative 240-hour diagnostic is **seven complete simulated OHLCV lifecycle outcomes and four overlap-unevaluable candidates** (both SMCI and both UBER parents); the superseded 9/2 count is invalid.
+- **Gate:** Board REJECT→PASS after symmetric overlap, finite-cost, execution-evidence, atomic-write, and wrapper-test corrections. Groq, Google AI, NVIDIA APPROVE; py_compile/ruff/diff check and CI preship PASS. Execution claims remain prohibited.
+
+---
 ## 2026-09-19 — Core MTF bounded broker-order correlation merged (`research/core_mtf_broker_entry_correlation.py`, PR #349 `3e4d63b`)
 
 - **Scope/result:** source-hashed, research-only temporal correspondence between 11 logged Core MTF parents and the read-only broker-order artifact. Result: **nine full and two partial uniquely time-correlated legacy sell orders; zero confirmed Core MTF short-parent mappings.** No OCI deployment or trading-path change.
