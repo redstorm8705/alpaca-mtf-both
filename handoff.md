@@ -27,6 +27,29 @@ Run the board+Gro+GAI design pass on D1–D3 in that record first (Open Question
 Slack (design pass owed); (3) intraday conviction-upsize; leveraged-ETF universe. Day-tier sizing/leverage
 size-up stays PAUSED until the edge is measured. Deploy note: OCI may need `git pull --rebase` (report-cron drift).
 
+**CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
+research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
+broker-exact entry parents (48 long, 28 short) from the 2,797-order snapshot and proves that 0/52
+legacy event-ledger entry rows have the exact ownership schema. It never infers identity by symbol,
+time, price, quantity, or FIFO and makes no exit, outcome, or P&L claim. Two cold-review rejection
+rounds fixed status/quantity contradictions, inverted fill timestamps, conflicting aliases, Decimal
+quantity drift, and terminal zero-fill handling; final gates were Board + Groq + Google AI + NVIDIA
++ cold PASS, 60 tests, CI green. OCI was updated with `git pull --rebase` because the report cron had
+one local report commit; module import/compile passed and `mtf-bot.service` remained active. **Fold-in
+note:** PR #356 now supplies the shared trade-record schema; do not create a competing tag format.
+The next Core MTF identity build must extend that record through the board-required lifecycle journal
+and replace its documented FIFO-by-symbol reducer path with exact lifecycle/order IDs.
+Verify the intake counts and proof result: `jq '{accounting,ledger_source}'
+/Users/rafaeldeleon/Documents/Codex/2026-09-09/are/work/core_mtf_canonical_entries_2026-09-20.json`
+→ `broker_exact_entries_admitted=76`, `entry_rows_considered=52`, `schema_proven_rows=0`.
+Verify merge + CI: `gh pr view 358 --json state,mergeCommit,statusCheckRollup` → `MERGED`,
+merge OID `b3e7357…`, `preship=SUCCESS`. Verify OCI: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot &&
+git log --oneline --all --grep="canonical Core MTF" -1; systemctl is-active mtf-bot.service'`
+→ `b3e7357 Merge pull request #358…` and `active`. Verify the earlier trial ledger merge:
+`gh pr view 354 --json state,mergeCommit` → `MERGED`. The complete rejection/fix and BGGN record is
+the `2026-09-20 — Core MTF canonical April-forward entry intake` section of
+`logs/tb_audit_log.md`.
+
 ## ⏩ (2026-09-19, prior — Core MTF thread)
 
 **CORE MTF SHORT REPLAY FOUNDATION — RESEARCH ONLY; NO LIVE/PAPER BEHAVIOR CHANGE.** Terminology is fixed for new work: **Day Tier** is same-session day trading; **Core MTF** is the legacy-`intraday` higher-timeframe strategy that may carry overnight. Broker FIFO for 2026-08-20..2026-09-19: Core MTF shorts 9 closed lots, 0 wins / 9 losses, -$80.49; Day Tier shorts are separate (4 lots, -$7.81). P0 source finding remains quarantined: `data/fetcher.fetch_bars()` requests through now and returns the current last row unfiltered; Core MTF entry/exit scoring and weekly bias consume `iloc[-1]` / latest weekly close, so a regular-session decision can use a forming bar. No live correction or new Core MTF short rule is approved until the full BGGN + mechanical/adversarial/cold/exact-preship path passes.
@@ -41,7 +64,7 @@ size-up stays PAUSED until the edge is measured. Deploy note: OCI may need `git 
 
 **FAIL-CLOSED OHLCV REPLAY — PR #351 MERGED TO MAIN, NOT DEPLOYED TO OCI.** `research/core_mtf_simulated_replay.py` binds simulations to the hashed aggregated-OHLCV snapshot, preserves its `not_bid_ask_or_quote_data` limitation, and sets `execution_claims_permitted=false`. It requires an explicit horizon and finite cost, uses next-bar-open and adverse-stop-first assumptions, rejects invalid/tampered/fill-capable inputs, and quarantines **both** parents in a same-symbol overlap. The authoritative 240-hour diagnostic is seven complete simulated OHLCV lifecycle outcomes and four overlap-unevaluable candidates (both SMCI and both UBER parents). It is not broker fills, realized P&L, or execution-quality evidence. Board, Groq, Google AI, NVIDIA, and CI passed.
 
-**NEXT — build the trial ledger and walk-forward evidence.** Do not convert temporal correspondence or any simulated OHLCV result into realized-performance claims. The bounded order correlation confirms intent is unknown; only explicit identifiers can become identity-backed. Test each admission family with a declared trial count, costs, horizon, frequency, and regime split; then return to BGGN with the exact Core MTF admission/exit diff. Exact intake and evidence: `logs/core_mtf_short_replay_intake_2026-09-19.md`.
+**NEXT — build the broader point-in-time decision universe and walk-forward evidence.** The trial ledger and the broker-exact 76-entry parent intake are now merged. Do not convert temporal correspondence or any simulated OHLCV result into realized-performance claims. Executed entries alone omit rejected/no-trade candidates, so every admission family still needs the complete decision universe, declared trial count, costs, horizon, frequency, regime split, purged walk-forward, and deflated-Sharpe accounting before any threshold change. Exact intake and evidence: `logs/core_mtf_short_replay_intake_2026-09-19.md`.
 
 **REPLAY EVIDENCE ADDED (2026-09-19).** The formerly ambiguous “11 shorts” is reconciled: eleven parent Core MTF short-entry events, distinct from nine closed FIFO lots in the 30-day P&L window. Completed-bar reconstruction found AVGO’s Sep-04 short had +41.80% 12–1 momentum; the additive score allowed it anyway. Full 11-entry table is now in `logs/core_mtf_short_replay_intake_2026-09-19.md`. This identifies the first testable candidate admission defect, but no threshold or strategy change is approved or shipped.
 
