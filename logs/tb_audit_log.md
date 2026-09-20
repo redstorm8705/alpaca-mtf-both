@@ -10310,7 +10310,6 @@ unguarded (pre-existing pattern, no new exposure).
 **HONEST LIMIT:** DEPLOYED-status pending merge+OCI pull; the take-profit harvest has NOT executed on a live paper trade — it takes effect on the next day-tier trade that reaches its target. Not "proven live" until then.
 
 **Non-blocking carry-forwards:** (1) degenerate OCO-with-empty-legs would label a rare winner "protective_stop" (P&L still booked correctly, no mask) — contradicts the verified 0.43.3 shape; (2) a flatten racing the async leg-cancel defers one 2-min tick (recoverable, next tick's cancel is idempotent); (3) `_has_live_daytrade_stop` broad id-match relies on Alpaca RESIZING (not cancelling) the OCO sibling on a partial fill (verified at source) — a monitoring assumption, reconcile-bounded.
-
 ---
 
 ## 2026-09-20 — EDGE-DISCOVERY STEP 1: tier-agnostic per-trade record (SHIPPED + DEPLOYED + EXERCISED)
@@ -10330,3 +10329,39 @@ unguarded (pre-existing pattern, no new exposure).
 Directive: "standing rule for all gates when BGGN inputs time out / don't respond — stop settling for the first rejection, find a solution; when the NVIDIA fallback fails, try another model." Design record `logs/design_records/bggn_resilience_2026-09-20.md`. Solution: Gro **auto-chunk on 8k-TPM overflow** (real verdict on big diffs), Gro-substitute **NVIDIA model LADDER** (not one model), GAI model ladder (exists), bounded timeouts, recorded (never silent) unavailability, and a **fail-safe floor: board-majority + ≥1 external voice APPROVE; a risk-path diff BLOCKS if both external voices are down.** Enforcement (`preship_audit.py` chunk+ladder) + CLAUDE.md rule = the next gated build (board+Gro+GAI design pass on D1–D3 first).
 
 **Confirmed (Rafael-flagged) — QHM memo→execution GAP:** `scripts/qhm_thesis.py` research memo (GE/UBER/NFLX) has NO code path to execution; the bot only enters `data/state/quarterly_holds_config.json` `picks` (NVDA/GOOGL/GE/GEV/LLY; Q3-2026, stale) via `main.py:777` `add_candidate`. Wiring + 2-card consolidation + full-memo-in-Slack = design pass owed.
+
+---
+
+## 2026-09-20 — Core MTF canonical April-forward entry intake (pre-implementation)
+
+- Scope: research-only source-bound extraction from the immutable Alpaca order snapshot plus
+  an optional event-ledger ownership check. No execution imports, broker calls, P&L, or live path.
+- Root cause: existing April-forward history is broker-exact, while the July-start event ledger
+  lacks a universal parent ID; symbol/time/FIFO matching can cross tiers and cannot establish
+  ownership.
+- 10-point and RC-1..RC-8 audit: recorded in
+  `logs/design_records/core_mtf_canonical_entry_intake_2026-09-20.md` before implementation.
+- Board: PASS with exact-ID-only intake, complete rejection accounting, source hashes, partial-fill
+  preservation, and explicit prohibition on execution/outcome claims. Executed entries alone are
+  insufficient for strategy selection; the full point-in-time decision universe remains queued.
+- First cold review: FAIL. It found four concrete defects missed by the first model pass: arbitrary
+  status/quantity combinations, `filled_at` preceding `submitted_at`, contradictory ledger aliases,
+  and binary-float quantity drift. All four were corrected before ship; quantities now use exact
+  decimal strings and each failure mode has an adversarial test.
+- Revised exact diff: Board contract satisfied; Groq APPROVE; Google AI Studio APPROVE; NVIDIA
+  APPROVE. Verification: 55 focused Core MTF research tests pass; py_compile, Ruff E/W/F/B, mypy
+  unreachable checks, `git diff --check`, and the real 2,797-order/90,203-ledger-row run pass. The
+  real artifact admits 76 broker-exact entries (48 long, 28 short), proves zero legacy ledger rows,
+  and makes no lifecycle/outcome/P&L claim.
+- Second cold review: FAIL on valid terminal zero-fill orders aborting the whole intake. Corrected:
+  canceled/expired/done-for-day/replaced zero-fill parents are counted as exclusions before fill
+  timestamp/price validation; impossible `filled`/`partially_filled` zero-fill states still fail
+  closed. Final cold re-review: PASS at staged index tree
+  `c7934caa02e6d7e504afb4ff5911acfdd5d99d29`.
+- Final exact diff: 60 focused tests pass; py_compile, Ruff E/W/F/B, mypy, real-artifact run, and
+  `git diff --check` pass. Groq PASS; Google AI Studio PASS. NVIDIA's first reply was an
+  unparseable bare reject; its follow-up alleged that an unrelated extra JSON field should fail,
+  which contradicts the provider-record contract and produced no wrong result. Counter-prompted
+  with that evidence, NVIDIA APPROVE. Board + Groq + Google AI + NVIDIA + cold gate are aligned.
+- Exact-byte cold/adversarial and Groq/Google preship markers: PASS; repository preship gate: PASS.
+  Merge and OCI research-file sync: PENDING.
