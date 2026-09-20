@@ -704,6 +704,68 @@ def _resolve_pending_exit(target: dict) -> bool:
 
 
 # ── flatten (scoped, B1) ─────────────────────────────────────────────────────────────────────
+def _oco_leg_ids(oco) -> "tuple[str, str, str]":
+    """Extract (stop_order_id, take_profit_order_id, oco_parent_id) from a submitted Alpaca OCO order.
+
+    Alpaca OCO shape (VERIFIED — docs.alpaca.markets/us/docs/orders-at-alpaca, OCO section: "the
+    take-profit order shows up as the PARENT order while the stop-loss order appears as a CHILD
+    order" in `.legs`). So the PARENT id IS the take-profit order id (unless a limit leg is ever
+    explicitly returned), and the STOP id is the child leg. A missing leg falls back to the parent
+    id so reconcile/flatten still have a usable id (fail-closed → halt+page, never a masked/naked
+    exit) rather than an empty string. Never raises.
+
+    Getting this right is load-bearing: it is what lets the reconcile heal poll the REAL take-profit
+    fill and book a harvested WINNER as take_profit. Recording an empty tp id (the pre-fix bug) made
+    every TP-harvested winner halt the tier instead of booking the win."""
+    oco_id = str(getattr(oco, "id", "") or "")
+    tp_id = stop_id = ""
+    try:
+        for _leg in (getattr(oco, "legs", None) or []):
+            _lt = str(getattr(_leg, "order_type", None) or getattr(_leg, "type", "") or "").lower()
+            _lid = str(getattr(_leg, "id", "") or "")
+            if not _lid:
+                continue
+            if "stop" in _lt:
+                stop_id = _lid
+            elif "limit" in _lt:
+                tp_id = _lid
+    except Exception:  # noqa: BLE001 — malformed legs → parent-id fallbacks below (fail-closed)
+        pass
+    if not tp_id:
+        tp_id = oco_id      # the OCO PARENT is the take-profit order
+    if not stop_id:
+        stop_id = oco_id    # degenerate fallback (legs missing) — reconcile/heal fail closed
+    return stop_id, tp_id, oco_id
+
+
+def _cancel_daytrade_exit_legs(symbol: str) -> None:
+    """Cancel the day-tier's recorded OCO exit legs (take-profit + protective stop) for `symbol`
+    by EXPLICIT order id. Alpaca OCO child legs do NOT carry the DT- tier client_order_id, so the
+    tier-scoped cancel_open_orders_for_symbol(only_tier='daytrade') cannot reach them (tier_of_coid
+    → None → fail-toward-inaction leaves them alone). An uncancelled OCO STOP leg holds the qty and
+    would block a flatten's market reduce, and its sibling could fill after the flatten. Cancelling
+    any leg of an OCO auto-cancels its sibling; we cancel every recorded id (oco parent + both legs)
+    defensively. cancel_order is idempotent (already-resolved → True). Never raises."""
+    from execution import broker
+    try:
+        st = _load_state()
+    except Exception:  # noqa: BLE001
+        return
+    ids: set = set()
+    for k, v in st.items():
+        if not (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol):
+            continue
+        for _f in ("oco_order_id", "stop_order_id", "tp_order_id"):
+            _id = str(v.get(_f) or "")
+            if _id:
+                ids.add(_id)
+    for _id in ids:
+        try:
+            broker.cancel_order(_id)
+        except Exception:  # noqa: BLE001 — best-effort; the flatten's own recovery handles a residual hold
+            pass
+
+
 def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: float = 0.0,
                      trade_id: str = "", order_id_hint: str = "", reason: str = "flatten") -> bool:
     """Close ONLY the day-tier's own `qty` shares of `symbol` (B1). position_side is the day-tier's
@@ -755,6 +817,11 @@ def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: 
             # cumulative broker fill before a later tick considers another close.
             return False
         # Cancel our OWN resting orders (the protective stop) so the market reduce isn't blocked.
+        # Two cancels: (1) the recorded OCO exit legs by EXPLICIT id (child legs lack the DT- coid,
+        # so the tier-scoped cancel below cannot reach them — an uncancelled OCO stop leg would hold
+        # the qty and block this reduce); (2) the tier-scoped cancel for the plain-stop fallback path
+        # (a DT-coid day stop) and any other DT-tagged resting order.
+        _cancel_daytrade_exit_legs(symbol)
         try:
             broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")
         except Exception as e:  # noqa: BLE001
@@ -840,9 +907,16 @@ def _flatten_targets() -> dict:
                                     "entry_price": float(v.get("fill_px") or v.get("stop_px") or 0.0),
                                     "trade_id": str(v.get("coid") or ""),
                                     "order_id": str(v.get("order_id") or ""),
-                                    "stop_order_id": str(v.get("stop_order_id") or "")}
-                elif sym and sym in targets and not targets[sym].get("stop_order_id"):
-                    targets[sym]["stop_order_id"] = str(v.get("stop_order_id") or "")
+                                    "stop_order_id": str(v.get("stop_order_id") or ""),
+                                    "tp_order_id": str(v.get("tp_order_id") or "")}
+                elif sym and sym in targets:
+                    # Enrich the log-sourced target with the state's recorded exit-leg ids so the
+                    # reconcile HEAL can book a TP-harvested WINNER (take_profit) even if the
+                    # best-effort target_placed event write failed (cold-2nd nit #1 / masked-loss A).
+                    if not targets[sym].get("stop_order_id"):
+                        targets[sym]["stop_order_id"] = str(v.get("stop_order_id") or "")
+                    if not targets[sym].get("tp_order_id"):
+                        targets[sym]["tp_order_id"] = str(v.get("tp_order_id") or "")
     except Exception as e:  # noqa: BLE001
         logger.warning("flatten targets: state read failed: %s", e)
     return targets
@@ -1141,44 +1215,93 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         state[key].update(state="filled", fill_qty=filled_qty_i, fill_px=fill_px)
         _save_state(state)
 
-        # B2: place the protective stop, VERIFY it is live (trust the accepted submit return),
-        # RETRY DAYTRADE_STOP_RETRIES more times — CANCELLING the prior stop before each retry so at
-        # most one stop ever rests (cold-2nd/reliability duplicate-stop) — then (only if still not
-        # live) scoped-flatten. Each submit is guarded so a transient raise becomes a retry, not a
-        # naked ride (cold-2nd Threat 1).
+        # B2 (bracket-exit build): place a broker-native OCO exit pair (take-profit LIMIT +
+        # protective MARKET stop, one-cancels-other) sized to the ACTUAL filled qty, so the tier
+        # HARVESTS the target instead of only stopping out / EOD-flatting (the v1 gap: it computed
+        # the pin but never placed an order to take it). If the OCO can't be placed for any reason,
+        # FALL BACK to the plain protective stop (today's verified path) — degrade to stop-only,
+        # NEVER to no protection.
         stop_side = "sell" if direction == "long" else "buy"
-        retries = int(_cfg("DAYTRADE_STOP_RETRIES", 2))
-        wait = float(_cfg("DAYTRADE_STOP_RETRY_WAIT_S", 1.0))
-        for attempt in range(retries + 1):
-            if attempt > 0:
-                try:
-                    broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")  # clear a prior stop
-                except Exception:
-                    pass
+        # Take-profit: FADE → the GEX pin (trigger['target'], already validated profit-side by
+        # _compute_stop_price which aborts a loss-side fade). RIDE → target is None, so use an
+        # R-multiple of the actual entry→stop distance on the profit side (DAYTRADE_RIDE_TARGET_R).
+        _stop_dist = abs(fill_px - stop_px)
+        _tp_raw = trigger.get("target")
+        tp_px: "float | None" = None
+        if _tp_raw is not None:
             try:
-                stop_obj = broker.submit_day_stop_order(symbol, filled_qty_i, stop_side, stop_px, tier="daytrade")
-            except Exception as e:  # noqa: BLE001 — a transient submit raise is a RETRY, not a naked ride
-                logger.warning("[%s] day-tier stop submit raised (attempt %d): %s", symbol, attempt + 1, e)
-                stop_obj = None
-            if _stop_is_live(stop_obj):
-                # Mark protected BEFORE logging so a log call can never leave protected=False and
-                # trigger a false-flatten of a genuinely-live stop (cold-2nd T5).
-                state[key].update(state="protected", stop_order_id=str(getattr(stop_obj, "id", "")))
-                _save_state(state)
-                protected = True
-                day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=str(getattr(stop_obj, "id", "")),
-                                                stop_price=stop_px)
-                logger.info("[%s] day-tier PROTECTED: %d sh @ fill %.2f, stop %.2f (attempt %d)",
-                            symbol, filled_qty_i, fill_px, stop_px, attempt + 1)
-                break
-            if attempt < retries:
-                logger.warning("[%s] day-tier stop not confirmed (attempt %d/%d) — retrying in %.1fs",
-                               symbol, attempt + 1, retries + 1, wait)
-                time.sleep(wait)
+                _t = float(_tp_raw)
+                tp_px = _t if (math.isfinite(_t) and _t > 0) else None
+            except (TypeError, ValueError):
+                tp_px = None
+        elif _stop_dist > 0:
+            _ride_r = float(_cfg("DAYTRADE_RIDE_TARGET_R", 2.0))
+            tp_px = (fill_px + _ride_r * _stop_dist) if direction == "long" else (fill_px - _ride_r * _stop_dist)
+
+        oco = None
+        if tp_px is not None and _stop_dist > 0:
+            try:
+                oco = broker.submit_oco_exit(symbol, filled_qty_i, direction, tp_px, stop_px, tier="daytrade")
+            except Exception as e:  # noqa: BLE001 — a transient raise falls through to the plain-stop fallback
+                logger.warning("[%s] day-tier OCO exit raised: %s — falling back to a plain stop", symbol, e)
+                oco = None
+        if oco is not None and getattr(oco, "id", None):
+            # Record the exit-leg order-ids explicitly — Alpaca OCO child legs do NOT carry the DT-
+            # coid, so reconcile/flatten track & cancel them by id, not via tier_of_coid. The OCO
+            # PARENT is the take-profit; the STOP is the child leg (see _oco_leg_ids).
+            stop_leg_id, tp_leg_id, _oco_id = _oco_leg_ids(oco)
+            _tp_num = float(tp_px) if tp_px is not None else 0.0  # oco is set only when tp_px is not None
+            # Mark protected BEFORE logging (a log raise must never leave protected=False and trigger
+            # a false-flatten of a genuinely-live OCO — cold-2nd T5).
+            state[key].update(state="protected", stop_order_id=stop_leg_id,
+                              tp_order_id=tp_leg_id, oco_order_id=_oco_id)
+            _save_state(state)
+            protected = True
+            day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=(stop_leg_id or _oco_id),
+                                            stop_price=stop_px)
+            try:
+                day_tier_logger.log_target_placed(entry_coid, symbol, tp_order_id=tp_leg_id,
+                                                  target_price=round(_tp_num, 2))
+            except Exception:  # noqa: BLE001 — target logging is best-effort; protection gates safety
+                pass
+            logger.info("[%s] day-tier PROTECTED (OCO): %d sh @ fill %.2f, stop %.2f, target %.2f",
+                        symbol, filled_qty_i, fill_px, stop_px, _tp_num)
 
         if not protected:
-            _page(f"[{symbol}] day-tier stop UNCONFIRMED after {retries + 1} attempts — flattening the "
-                  f"{filled_qty_i}-sh day-tier position to avoid a naked ride.")
+            # OCO unavailable/rejected/inverted-geometry → fall back to the plain protective stop
+            # (verified v1 path: submit, VERIFY live, retry cancelling the prior stop each time, else
+            # flatten). No harvest, but the position is never left naked (cold-2nd Threat 1).
+            logger.info("[%s] day-tier OCO exit unavailable — falling back to a plain protective stop", symbol)
+            retries = int(_cfg("DAYTRADE_STOP_RETRIES", 2))
+            wait = float(_cfg("DAYTRADE_STOP_RETRY_WAIT_S", 1.0))
+            for attempt in range(retries + 1):
+                if attempt > 0:
+                    try:
+                        broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")  # clear a prior stop
+                    except Exception:
+                        pass
+                try:
+                    stop_obj = broker.submit_day_stop_order(symbol, filled_qty_i, stop_side, stop_px, tier="daytrade")
+                except Exception as e:  # noqa: BLE001 — a transient submit raise is a RETRY, not a naked ride
+                    logger.warning("[%s] day-tier stop submit raised (attempt %d): %s", symbol, attempt + 1, e)
+                    stop_obj = None
+                if _stop_is_live(stop_obj):
+                    state[key].update(state="protected", stop_order_id=str(getattr(stop_obj, "id", "")))
+                    _save_state(state)
+                    protected = True
+                    day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=str(getattr(stop_obj, "id", "")),
+                                                    stop_price=stop_px)
+                    logger.info("[%s] day-tier PROTECTED (plain stop): %d sh @ fill %.2f, stop %.2f (attempt %d)",
+                                symbol, filled_qty_i, fill_px, stop_px, attempt + 1)
+                    break
+                if attempt < retries:
+                    logger.warning("[%s] day-tier stop not confirmed (attempt %d/%d) — retrying in %.1fs",
+                                   symbol, attempt + 1, retries + 1, wait)
+                    time.sleep(wait)
+
+        if not protected:
+            _page(f"[{symbol}] day-tier protection UNCONFIRMED (OCO + plain-stop fallback both failed) — "
+                  f"flattening the {filled_qty_i}-sh day-tier position to avoid a naked ride.")
             flat_ok = flatten_position(symbol, filled_qty_i, direction, entry_price=fill_px,
                                        trade_id=entry_coid, order_id_hint=entry_order_id,
                                        reason="stop_unconfirmed_flatten")
@@ -1353,10 +1476,14 @@ def tier_kill_check(equity: float, day_start_equity: float | None = None) -> boo
 
 # ── per-tick reconcile (the board-named go-live gate for the cron runner) ────────────────────────
 def _has_live_daytrade_stop(symbol: str) -> "bool | None":
-    """True if a live DT-tagged STOP order rests on `symbol`; False if none rests; None if the order
+    """True if live day-tier downside protection rests on `symbol`; False if none; None if the order
     book is UNREADABLE (the caller treats None as 'cannot confirm' — fail-safe: never flatten a
-    possibly-protected position on a transient read failure). A resting DT ENTRY (limit) order is not
-    a stop and does NOT count."""
+    possibly-protected position on a transient read failure). Recognizes BOTH protection forms:
+      (a) a DT-tagged STOP order — the plain-stop fallback path (coid parses to 'daytrade'); and
+      (b) an OCO exit leg whose order id matches a recorded OCO/stop id in the state file — the OCO
+          harvest path (Alpaca child legs do NOT carry the DT- coid, so they are matched by id; an
+          OCO is both-or-neither, so any live leg means the protective stop leg is live).
+    A resting DT ENTRY (limit) order is not protection and does NOT count."""
     from execution import broker
     from execution.ownership_guard import tier_of_coid
     try:
@@ -1365,13 +1492,28 @@ def _has_live_daytrade_stop(symbol: str) -> "bool | None":
         return None
     if orders is None:
         return None
+    # Recorded OCO leg / parent ids for this symbol (matched by id — the OCO legs lack the DT- coid).
+    recorded_ids: set = set()
+    try:
+        st = _load_state()
+        for k, v in st.items():
+            if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol:
+                for _f in ("stop_order_id", "oco_order_id", "tp_order_id"):
+                    _id = str(v.get(_f) or "")
+                    if _id:
+                        recorded_ids.add(_id)
+    except Exception:  # noqa: BLE001 — state unreadable → fall back to coid-only detection below
+        recorded_ids = set()
     for o in orders:
         try:
+            oid = str(getattr(o, "id", "") or "")
+            if oid and oid in recorded_ids:
+                return True  # (b) a live recorded OCO leg = active protection
             if tier_of_coid(getattr(o, "client_order_id", None)) != "daytrade":
                 continue
             otype = str(getattr(o, "order_type", None) or getattr(o, "type", "") or "").lower()
             if "stop" in otype:
-                return True
+                return True  # (a) DT-tagged plain stop
         except Exception:
             continue
     return False
@@ -1425,18 +1567,42 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
         return None
     if any(e.get("event") == "exit_fill" for e in events):
         return True
-    stop_ids = [str(e.get("stop_order_id") or "") for e in events if e.get("event") == "stop_placed"]
-    state_stop_id = str(target.get("stop_order_id") or "")
-    if state_stop_id:
-        stop_ids.append(state_stop_id)
+    # Exit-leg candidates: (order_id, exit_reason). Stop legs → "protective_stop"; OCO take-profit
+    # legs → "take_profit". With OCO a WINNER harvests via the TP leg and the stop auto-cancels, so
+    # the heal MUST poll the TP leg too — else a TP-closed winner is misrecorded as unresolved (and
+    # its P&L never booked). TP-leg ids come from the durable 'target_placed' events (reliable even
+    # when the reconcile target dict lacks them).
+    stop_cands: list = []
+    tp_cands: list = []
+    for e in events:
+        if e.get("event") == "stop_placed":
+            _sid = str(e.get("stop_order_id") or "")
+            if _sid:
+                stop_cands.append((_sid, "protective_stop"))
+        elif e.get("event") == "target_placed":
+            _tid = str(e.get("tp_order_id") or "")
+            if _tid:
+                tp_cands.append((_tid, "take_profit"))
+    _state_stop = str(target.get("stop_order_id") or "")
+    if _state_stop:
+        stop_cands.append((_state_stop, "protective_stop"))
+    _state_tp = str(target.get("tp_order_id") or "")
+    if _state_tp:
+        tp_cands.append((_state_tp, "take_profit"))
     expected = int(target.get("qty") or 0)
     if expected < 1:
         return None
-    if not stop_ids:
+    # STOPS FIRST (loss-preferring, masked-loss seat): if a broker OCO ever fills BOTH legs (sibling-
+    # cancel loses a fast-market race), book the LOSS, never the gain. Most-recent within each class.
+    # TP legs are polled only after every stop shows no fill — so a normal TP-harvest (the stop leg
+    # auto-cancelled → 0 fill) still books take_profit.
+    ordered = list(reversed(stop_cands)) + list(reversed(tp_cands))
+    ordered = [(i, r) for i, r in ordered if i]
+    if not ordered:
         return False
     any_readable = False
     any_unreadable = False
-    for stop_id in reversed([s for s in stop_ids if s]):
+    for stop_id, _reason in ordered:
         order_readable, qty, price = _confirmed_order_fill(stop_id, expected)
         any_readable = any_readable or order_readable
         any_unreadable = any_unreadable or not order_readable
@@ -1458,7 +1624,7 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
                 return None
             if partial_qty + 1e-9 < expected:
                 if _record_partial_exit(target, stop_id, partial_qty, price, price,
-                                        "protective_stop_partial"):
+                                        f"{_reason}_partial"):
                     return False
                 return None
             entry = abs(float(target.get("entry_price") or 0.0))
@@ -1468,17 +1634,17 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
             realized = round((price - entry) * expected if side == "long" else (entry - price) * expected, 2)
             if not day_tier_logger.log_exit_fill(
                 trade_id, str(target.get("symbol") or ""), order_id=stop_id,
-                exit_reason="protective_stop", fill_price=price, fill_qty=float(expected),
+                exit_reason=_reason, fill_price=price, fill_qty=float(expected),
                 market_price_at_exit=price, realized_pnl=realized,
             ):
                 return None
             try:
                 trade_logger.log_event("exit", symbol=str(target.get("symbol") or ""), price=price,
                                        size=expected, data_source="daytrade", tier="daytrade",
-                                       exit_reason="protective_stop", trade_id=trade_id,
+                                       exit_reason=_reason, trade_id=trade_id,
                                        realized_pnl=realized)
             except Exception as e:  # noqa: BLE001
-                logger.warning("[%s] protective-stop trade_logger write failed: %s", target.get("symbol"), e)
+                logger.warning("[%s] day-tier exit trade_logger write failed: %s", target.get("symbol"), e)
             return True
         if qty + 1e-9 < expected or price <= 0:
             continue
@@ -1489,13 +1655,13 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
         realized = round((price - entry) * expected if side == "long" else (entry - price) * expected, 2)
         if not day_tier_logger.log_exit_fill(
             trade_id, str(target.get("symbol") or ""), order_id=stop_id,
-            exit_reason="protective_stop", fill_price=price, fill_qty=float(expected),
+            exit_reason=_reason, fill_price=price, fill_qty=float(expected),
             market_price_at_exit=price, realized_pnl=realized,
         ):
             return None
         trade_logger.log_event("exit", symbol=str(target.get("symbol") or ""), price=price,
                                size=expected, data_source="daytrade", tier="daytrade",
-                               exit_reason="protective_stop", trade_id=trade_id,
+                               exit_reason=_reason, trade_id=trade_id,
                                realized_pnl=realized)
         return True
     return False if any_readable and not any_unreadable else None

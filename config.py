@@ -850,6 +850,9 @@ DAYTRADE_STOP_RETRIES        = 2      # retry an UNCONFIRMED protective stop thi
 DAYTRADE_STOP_RETRY_WAIT_S   = 1.0    # backoff (s) between stop-placement retries
 DAYTRADE_ENTRY_SLIPPAGE_PCT  = 0.002  # PROV:daytier-v2-2026-08-29  marketable-limit crosses the quote by this frac (caps worst fill vs a naked market order)
 DAYTRADE_STOP_BUFFER_PCT     = 0.001  # PROV:daytier-v2-2026-08-29  buffer beyond the broken wall for a RIDE stop
+DAYTRADE_RIDE_TARGET_R       = 2.0    # PROV:daytier-bracket-2026-09-19 — RIDE take-profit = entry ± this × (entry→stop
+                                      # distance), profit-side. FADE uses the GEX pin as the target; RIDE has no pin, so
+                                      # its OCO harvest leg targets an R-multiple of risk (board exec-seat: ride runner ≥2:1).
 DAYTRADE_FILL_POLL_S         = 1.0    # poll interval (s) when confirming an entry fill
 DAYTRADE_FILL_POLL_MAX       = 8      # max fill-confirm polls before treating the entry as unfilled (cancel + skip)
 

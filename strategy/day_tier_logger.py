@@ -244,6 +244,15 @@ def log_stop_placed(trade_id: str, symbol: str, *, stop_order_id: str, stop_pric
 
 
 @_guard
+def log_target_placed(trade_id: str, symbol: str, *, tp_order_id: str, target_price: float) -> bool:
+    """Log that a take-profit (OCO harvest) leg is live on the position (audit + the reconcile
+    heal-join so a broker-filled TP is recorded as a take_profit exit, not misattributed)."""
+    rec = _base("target_placed", trade_id, symbol)
+    rec.update(tp_order_id=tp_order_id, target_price=round(float(target_price), 4))
+    return _durable_append([rec])
+
+
+@_guard
 def log_price_samples(samples: list[dict]) -> bool:
     """(2) Price PATH while open — one price_sample per OPEN trade per 30-min tick, batched into a
     SINGLE fsync (data-integrity seat). Each item must carry: trade_id, symbol, seq, market_price,
