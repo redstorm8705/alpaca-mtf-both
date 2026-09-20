@@ -1,6 +1,13 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-09-19 — Core MTF bounded broker-order correlation merged (`research/core_mtf_broker_entry_correlation.py`, PR #349 `3e4d63b`)
+
+- **Scope/result:** source-hashed, research-only temporal correspondence between 11 logged Core MTF parents and the read-only broker-order artifact. Result: **nine full and two partial uniquely time-correlated legacy sell orders; zero confirmed Core MTF short-parent mappings.** No OCI deployment or trading-path change.
+- **Board correction:** an `IN-…-sell` COID proves only legacy tier/symbol/side; it can be a short entry, long exit, or protective sell stop. The final module therefore labels results `unique_temporal_legacy_sell_order`, requires `entry_intent_proven=false`, exposes type/limit/stop/status/quantities and full/partial/none/unknown fill completeness, and validates expected snapshot kind, GET-only access, identity prohibition, and order-data hash. A nearby sell-stop test is mandatory and confirms intent remains unknown.
+- **Gate:** Board initial REJECT → final PASS after de-asserting entry intent; Groq/Google AI/NVIDIA APPROVE; py_compile + ruff E/W/F/B + diff check and CI preship PASS. Research evidence is replay context only; do not use it for outcome attribution.
+
+---
 ## 2026-09-19 — Core MTF broker-order provenance foundation merged (`research/core_mtf_alpaca_order_snapshot.py`, PR #347 `76274aa`)
 
 - **Scope:** research-only, GET-only Alpaca paper order-history snapshot for the Core MTF short replay program. It does not import the trading path, submit/cancel/replace orders, change a signal, or deploy to OCI. Its artifact explicitly sets `ledger_event_identity_claims_permitted=false`: a nearby broker order is not proof that a free-text ledger row owns it.

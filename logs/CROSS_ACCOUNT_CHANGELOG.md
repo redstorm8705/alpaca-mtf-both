@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-19 15:35 PT]` Core MTF bounded broker-order correlation merged: 9 full and 2 partial uniquely time-correlated legacy sell orders, but zero confirmed short-parent mappings; intent remains explicitly unknown. BGGN and CI passed; research-only. — PR #349 / `3e4d63b` — research/core_mtf_broker_entry_correlation.py
+
 - `[2026-09-19 15:20 PT]` Core MTF broker-order research foundation merged: a read-only, hashed Alpaca order-history snapshot records retrieval provenance and forbids ledger-event identity claims; Board, Groq, Google AI, NVIDIA, and CI passed. No OCI deployment or trading behavior change. — PR #347 / `76274aa` — research/core_mtf_alpaca_order_snapshot.py
 
 - `[2026-09-19 15:05 PT]` Core MTF exit evidence merged: exact parent/order identity is now required for VERIFIED; historical text/quantity matches remain ledger-correlated only (5 full, 2 partial, 4 unmatched). Board, Groq, Google AI, NVIDIA, and preship passed. — PR #345 / `94bc402` — research/core_mtf_observed_exits.py
