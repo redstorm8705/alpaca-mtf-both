@@ -1,6 +1,28 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-09-19 — Core MTF fail-closed OHLCV replay merged (`research/core_mtf_simulated_replay.py`, PR #351 `1dd30c4`)
+
+- **Scope:** research-only wrapper around the pure completed-bar lifecycle kernel. Validates content-hashed aggregated OHLCV inputs, explicit no-fill evidence, explicit horizon/cost, and writes a source-bound simulation artifact atomically. No OCI deployment or live behavior change.
+- **Board correction:** initial overlap handling only quarantined the earlier parent, inventing independent capital/lifecycle for later same-symbol parents. Final code quarantines both. The authoritative 240-hour diagnostic is **seven complete simulated OHLCV lifecycle outcomes and four overlap-unevaluable candidates** (both SMCI and both UBER parents); the superseded 9/2 count is invalid.
+- **Gate:** Board REJECT→PASS after symmetric overlap, finite-cost, execution-evidence, atomic-write, and wrapper-test corrections. Groq, Google AI, NVIDIA APPROVE; py_compile/ruff/diff check and CI preship PASS. Execution claims remain prohibited.
+
+---
+## 2026-09-19 — Core MTF bounded broker-order correlation merged (`research/core_mtf_broker_entry_correlation.py`, PR #349 `3e4d63b`)
+
+- **Scope/result:** source-hashed, research-only temporal correspondence between 11 logged Core MTF parents and the read-only broker-order artifact. Result: **nine full and two partial uniquely time-correlated legacy sell orders; zero confirmed Core MTF short-parent mappings.** No OCI deployment or trading-path change.
+- **Board correction:** an `IN-…-sell` COID proves only legacy tier/symbol/side; it can be a short entry, long exit, or protective sell stop. The final module therefore labels results `unique_temporal_legacy_sell_order`, requires `entry_intent_proven=false`, exposes type/limit/stop/status/quantities and full/partial/none/unknown fill completeness, and validates expected snapshot kind, GET-only access, identity prohibition, and order-data hash. A nearby sell-stop test is mandatory and confirms intent remains unknown.
+- **Gate:** Board initial REJECT → final PASS after de-asserting entry intent; Groq/Google AI/NVIDIA APPROVE; py_compile + ruff E/W/F/B + diff check and CI preship PASS. Research evidence is replay context only; do not use it for outcome attribution.
+
+---
+## 2026-09-19 — Core MTF broker-order provenance foundation merged (`research/core_mtf_alpaca_order_snapshot.py`, PR #347 `76274aa`)
+
+- **Scope:** research-only, GET-only Alpaca paper order-history snapshot for the Core MTF short replay program. It does not import the trading path, submit/cancel/replace orders, change a signal, or deploy to OCI. Its artifact explicitly sets `ledger_event_identity_claims_permitted=false`: a nearby broker order is not proof that a free-text ledger row owns it.
+- **Board catch and correction:** Board initially REJECTED because an artifact could claim full-history provenance without recording its retrieval path. The final implementation fail-closes on any nonempty zero-new-ID page, unordered provider pages, and a non-backward overlap cursor. It validates the actual Alpaca `submitted_at` descending contract (a live probe disproved the initial `created_at` assumption), deduplicates immutable order IDs, and records endpoint/query/cursor field/page size/count/raw rows/unique rows/overlap duplicates and explicit submitted-time coverage.
+- **Live read-only evidence:** 2,797 unique orders from 2,802 raw rows over six pages, five overlap duplicates, observed submitted coverage 2026-04-06..2026-09-19; artifact order-data SHA-256 `cbc278237dbbf886c12f4019ca96b89d94f15fd45cc96ca086ff2bd24688148e`. This establishes retrieval provenance only, not complete account-inception proof nor ledger ownership.
+- **Gate:** Board final PASS after the partial-page no-progress test was corrected (first page size 2; second page size 1 duplicate-only); Groq APPROVE; Google AI APPROVE; NVIDIA APPROVE; static `py_compile`, ruff E/W/F/B, `git diff --check`; CI preship PASS. Local pytest unavailable, so unit-test execution remains CI-owned; test logic reviewed by Board. No RTH/risk-path scope.
+
+---
 ## 2026-09-18 — Day-tier AGGRESSION build SHIPPED (`config.py` + `execution/day_trade_manager.py`, #332 `2ff0948` → main → OCI `141ab94`)
 
 - **CEO-approved (option B) day-tier aggression — RISK-PATH (size-increasing), within the UNCHANGED safety envelope (7% account kill).** Rafael directive 2026-09-18: "more aggressive, use margin since it's a day-trade flat by close." The tier already sizes off buying_power and is flat-by-close (zero overnight risk); the throttle was the 0.60× aggregate gross ceiling (binds before the risk target on the tiny account).

@@ -8,6 +8,16 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-19 16:00 PT]` Core MTF fail-closed OHLCV replay merged: source-bound simulation quarantines both same-symbol overlap parents and forbids execution claims; Board, Groq, Google AI, NVIDIA, and CI passed. — PR #351 / `1dd30c4` — research/core_mtf_simulated_replay.py
+
+- `[2026-09-19 15:35 PT]` Core MTF bounded broker-order correlation merged: 9 full and 2 partial uniquely time-correlated legacy sell orders, but zero confirmed short-parent mappings; intent remains explicitly unknown. BGGN and CI passed; research-only. — PR #349 / `3e4d63b` — research/core_mtf_broker_entry_correlation.py
+
+- `[2026-09-19 15:20 PT]` Core MTF broker-order research foundation merged: a read-only, hashed Alpaca order-history snapshot records retrieval provenance and forbids ledger-event identity claims; Board, Groq, Google AI, NVIDIA, and CI passed. No OCI deployment or trading behavior change. — PR #347 / `76274aa` — research/core_mtf_alpaca_order_snapshot.py
+
+- `[2026-09-19 15:05 PT]` Core MTF exit evidence merged: exact parent/order identity is now required for VERIFIED; historical text/quantity matches remain ledger-correlated only (5 full, 2 partial, 4 unmatched). Board, Groq, Google AI, NVIDIA, and preship passed. — PR #345 / `94bc402` — research/core_mtf_observed_exits.py
+
+- `[2026-09-19 14:56 PT]` Core MTF replay research foundation merged: SHA-bound/UTC-normalized entry extraction plus a content-hashed Alpaca bar snapshot adapter; Board, Groq, Google AI, NVIDIA, and preship passed. Research-only, no OCI deployment or trading behavior change. — PRs #340–#343 / `7785895` — research/core_mtf_point_in_time_replay.py, research/core_mtf_replay_events.py, research/core_mtf_alpaca_bar_snapshot.py
+
 - `[2026-09-19]` Core MTF replay evidence: reconstructed completed-bar VWAP, premarket high, and 12–1 momentum for all 11 parent short entries; AVGO’s losing Sep-04 short entered with +41.80% 12–1 momentum. Research only; no trading behavior changed. — docs/core-mtf-short-replay-evidence — handoff.md, logs/core_mtf_short_replay_intake_2026-09-19.md
 
 - `[2026-09-19]` Core MTF short replay intake: reconciled 30-day short cohort and documented a P0 completed-bar/repainting defect in the live signal path. Research only; no trading behavior changed. — docs/core-mtf-short-replay-intake — handoff.md, logs/core_mtf_short_replay_intake_2026-09-19.md
