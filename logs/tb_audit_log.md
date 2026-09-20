@@ -10364,4 +10364,6 @@ Directive: "standing rule for all gates when BGGN inputs time out / don't respon
   which contradicts the provider-record contract and produced no wrong result. Counter-prompted
   with that evidence, NVIDIA APPROVE. Board + Groq + Google AI + NVIDIA + cold gate are aligned.
 - Exact-byte cold/adversarial and Groq/Google preship markers: PASS; repository preship gate: PASS.
-  Merge and OCI research-file sync: PENDING.
+  PR #358 merged as `b3e7357`; CI preship PASS. OCI synced via `git pull --rebase` (the report
+  cron's one local report commit was retained), module compile/import PASS, and `mtf-bot.service`
+  remained active. Research module only; no service restart required.
