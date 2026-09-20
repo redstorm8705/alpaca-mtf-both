@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-20 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-19 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,28 +8,8 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-20, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-19, interactive Rafael present) — pick up here
 
-**DAY-TIER OCO TAKE-PROFIT EXIT — gate-cleared, MERGING (branch feat/day-tier-exit-targets-sizing, commit
-35033f1).** The day tier was stop-only (it computed the GEX pin but never placed an order to harvest it → 6/6
-losses, winners gave it all back). Adds a broker-native OCO exit (take-profit LIMIT + protective MARKET stop,
-one-cancels-other) placed AFTER the confirmed fill, sized to the ACTUAL fill: FADE targets the pin, RIDE targets
-DAYTRADE_RIDE_TARGET_R(2)×risk; falls back to a plain stop if the OCO can't be placed (never naked); reconcile
-heal books a TP-harvested winner as `take_profit` (stops-first so a broker double-fill books the loss). Files:
-broker.py `submit_oco_exit`, day_trade_manager.py (`place_entry` + `_oco_leg_ids` + `_cancel_daytrade_exit_legs`
-+ reconcile/heal), config.py `DAYTRADE_RIDE_TARGET_R`, day_tier_logger.py `log_target_placed`,
-tests/test_day_tier_bracket_exit.py (17 tests). Gate: statics py3.10+3.14; 17/17 on OCI; cold-2nd PASS;
-execution seat APPROVE (round-1 REJECT resolved — Alpaca OCO PARENT=take-profit / STOP=child leg, verified at
-source); masked-loss seat APPROVE; GAI+Gro APPROVE. **DEPLOYED-status pending merge+OCI pull; UNEXERCISED until a
-live day-tier trade reaches its target.** Detail: `logs/tb_audit_log.md` 2026-09-20 + `logs/design_records/
-growth_engine_regime_2026-09-19.md` §ADDENDUM A1. NEXT after this ships (all BGGN-designed, `logs/design_records/
-edge_discovery_2026-09-19.md`): **Step 1 = tier-agnostic per-trade recording + confidence field** (the measured-
-edge foundation — the 12-pt confluence is one collinear trend factor ×5; the research engines exist but are
-starved of per-factor+labeled data), then intraday conviction-upsize, leveraged-ETF universe (Q2), confluence-
-sharpness re-eval (Q1). PAUSED: day-tier sizing/leverage size-up (don't amplify an unmeasured edge).
-verify: `gh pr view --json state`; `ssh mtf-bot "grep -c submit_oco_exit execution/broker.py"` (expect 1 after deploy).
-
-_(parallel research thread, still open — Core MTF short replay:)_
 **CORE MTF SHORT REPLAY INTAKE — RESEARCH ONLY, NOT SHIPPED.** Terminology is now unambiguous in new work: **Day Tier** is same-session day trading; **Core MTF** is the legacy-`intraday` higher-timeframe strategy that may carry overnight. Broker FIFO for 2026-08-20..2026-09-19: Core MTF shorts 9 closed lots, 0 wins / 9 losses, -$80.49; Day Tier shorts are separate (4 lots, -$7.81). P0 source finding: `data/fetcher.fetch_bars()` requests through now and returns the current last row unfiltered; Core MTF entry/exit scoring and weekly bias consume `iloc[-1]` / latest weekly close. Regular-session decisions can therefore use a forming bar. **QUARANTINED — DO NOT SHIP:** any correction or new Core MTF short rule is risk-path until full BGGN + mechanical/adversarial/cold/exact-preship gates pass. Exact evidence and next sequence: `logs/core_mtf_short_replay_intake_2026-09-19.md`. NEXT: produce the point-in-time decision/fill/FIFO replay dataset, then test a completed-bar adapter and short-specific overnight-range/VWAP admission candidates with next-available fills and costs.
 
 **REPLAY EVIDENCE ADDED (2026-09-19).** The formerly ambiguous “11 shorts” is reconciled: eleven parent Core MTF short-entry events, distinct from nine closed FIFO lots in the 30-day P&L window. Completed-bar reconstruction found AVGO’s Sep-04 short had +41.80% 12–1 momentum; the additive score allowed it anyway. Full 11-entry table is now in `logs/core_mtf_short_replay_intake_2026-09-19.md`. This identifies the first testable candidate admission defect, but no threshold or strategy change is approved or shipped.
