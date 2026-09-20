@@ -155,8 +155,13 @@ def _load_env():
         pass
     return keys
 
-def _curl(url, headers, body_dict, key):
-    # curl transport (macOS urllib hits SSL CERTIFICATE_VERIFY_FAILED).
+def _curl(url, headers, body_dict, key, timeout=120):
+    # curl transport (macOS urllib hits SSL CERTIFICATE_VERIFY_FAILED). `timeout` bounds a SINGLE
+    # call so one mute/slow model cannot hang indefinitely; the NVIDIA ladder passes a shorter 70s
+    # per-model timeout so a bad model is abandoned quickly. NOTE the aggregate is NOT 120s: the
+    # ladder can run up to ~70s x N models and _sub/_gsub retry the whole ladder once, so the
+    # substitute path is bounded but can take a few minutes — acceptable for a ship-gate tool that
+    # never runs in the live trade loop (an unhandled hang there only delays/fails a ship, closed).
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(body_dict, f)
@@ -166,7 +171,7 @@ def _curl(url, headers, body_dict, key):
         for h in headers:
             cmd += ["-H", h]
         cmd += ["--data-binary", f"@{path}"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
     finally:
         os.unlink(path)
     r = json.loads(out)
@@ -193,6 +198,95 @@ def _gro(prompt, key):
     if "choices" not in r:
         raise RuntimeError(str(r).replace(key, "***")[:200])
     return r["choices"][0]["message"]["content"]
+
+def _gro_chunked(head, diff_body, ctx_suffix, key):
+    # Gro TPM-RESILIENCE (Rafael 2026-09-20 — "stop settling for the first rejection; find a
+    # solution"). Groq's free tier caps a SINGLE request at 8k TPM, so a large diff overflows
+    # ("Request too large") outright and the old path fell straight to the substitute. Instead,
+    # SPLIT the diff into token-bounded chunks, audit EACH with a real Gro call, and COMBINE
+    # worst-verdict-wins: any chunk REJECT => the change REJECTs (return that chunk's rejection so
+    # the caller surfaces the real defect); all chunks APPROVE => APPROVE. A chunk that stays
+    # INDETERMINATE after a reminder RAISES, so the caller falls to the substitute/waive rather than
+    # silently passing. Yields a genuine Gro verdict on a diff of ANY size. The returned text carries
+    # exactly one `VERDICT:` line so the caller's _verdict() parses it unchanged.
+    # KNOWN DEGRADED MODE (cold-2nd 2026-09-20): a defect whose two halves land in SEPARATE chunks
+    # can look benign in each chunk -> all-APPROVE (chunking fails toward APPROVE only in this narrow
+    # cross-chunk case). MITIGATED: GAI (the required second voice) audits the WHOLE diff single-shot
+    # (Gemini's large input budget does not overflow where Gro's 8k TPM does), so a cross-chunk defect
+    # is still caught by GAI. Only if GAI is ALSO on its substitute does this mitigation weaken.
+    BUDGET = 18000  # chars for head + one chunk + ctx (~4.5k tokens; safely under 8k TPM w/ 2048 reserve)
+    room = max(3000, BUDGET - len(head) - len(ctx_suffix))
+    # Split on git HUNK boundaries ("@@ ..."), NEVER mid-hunk, so a coherent change stays whole. A
+    # function rewritten in place emits its removal (-) and re-addition (+) as ONE hunk; the earlier
+    # line-based split cut that hunk across chunks, so a chunk saw the removal WITHOUT the re-addition
+    # and FALSE-REJECTED ("_nvidia removed, no replacement" — dogfood 2026-09-20). Keeping each hunk
+    # intact eliminates that class. The pre-hunk file header (diff --git / index / --- / +++) is
+    # prepended to EVERY chunk so each chunk is a self-describing diff.
+    lines = diff_body.splitlines(keepends=True)
+    header, hunks, cur_hunk = [], [], None
+    for ln in lines:
+        if ln.startswith("@@"):
+            if cur_hunk is not None:
+                hunks.append(cur_hunk)
+            cur_hunk = ln
+        elif cur_hunk is None:
+            header.append(ln)          # pre-hunk file header lines
+        else:
+            cur_hunk += ln
+    if cur_hunk is not None:
+        hunks.append(cur_hunk)
+    hdr = "".join(header)
+    if not hunks:                      # no @@ markers (e.g. the "(no change ...)" placeholder)
+        chunks = [diff_body]
+    else:
+        hroom = max(2000, room - len(hdr))
+        chunks, cur = [], ""
+        for h in hunks:
+            if cur and len(cur) + len(h) > hroom:   # never split a hunk; flush the group first
+                chunks.append(hdr + cur)
+                cur = ""
+            cur += h
+        if cur:
+            chunks.append(hdr + cur)
+        if not chunks:
+            chunks = [hdr + diff_body]
+    n = len(chunks)
+
+    def _gro_rl(p):
+        # Groq's 8k TPM is PER-MINUTE, so consecutive chunk calls exhaust the budget and get a 429
+        # "rate limit ... tokens per minute". That is NOT a per-request overflow and NOT a reject —
+        # wait for the minute to roll and retry (up to 2×). This is what makes multi-chunk auditing
+        # actually work within the free cap (Rafael 2026-09-20: "find a solution", not settle).
+        for attempt in range(3):
+            try:
+                return _gro(p, key)
+            except Exception as e:
+                m = str(e).lower()
+                rl = ("rate limit" in m or "rate-limit" in m or ("tokens per minute" in m and "used" in m)
+                      or "429" in m)
+                if rl and attempt < 2:
+                    sys.stderr.write(f"[preship] Gro per-minute TPM hit on a chunk — waiting 62s "
+                                     f"(attempt {attempt + 1}/2).\n")
+                    time.sleep(62)
+                    continue
+                raise
+
+    for i, ch in enumerate(chunks, 1):
+        marker = (f"(CHUNK {i} of {n} of a larger staged diff — audit ONLY this chunk's changed "
+                  f"lines for a defect INTRODUCED here; the other chunks are audited separately. "
+                  f"APPROVE this chunk if IT introduces no defect.)\n")
+        cprompt = head + marker + ch + ctx_suffix
+        txt = _gro_rl(cprompt)
+        v = _verdict(txt)
+        if v == "INDETERMINATE":
+            txt = _gro_rl(cprompt + "\n\nREMINDER: end with exactly ONE line beginning "
+                          "`VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`.")
+            v = _verdict(txt)
+        if v == "REJECT":
+            return f"Gro chunked audit ({n} chunks): chunk {i} REJECTED.\n{txt}"
+        if v != "APPROVE":
+            raise RuntimeError(f"Gro chunk {i}/{n} INDETERMINATE after reminder — cannot combine")
+    return f"Gro chunked audit: all {n} chunk(s) APPROVE.\nVERDICT: APPROVE"
 
 def _gai(prompt, key, paid_key=""):
     # Free key is used BY DEFAULT (the free tier is a DAILY quota that RESETS — do not permanently
@@ -266,36 +360,61 @@ def _gai(prompt, key, paid_key=""):
             pass
     raise last
 
+# OPTION-C SUBSTITUTE reviewer MODEL LADDER (Rafael-authorized 2026-08-24; laddered 2026-09-20).
+# Stands in for GAI or Gro ONLY when that voice is genuinely DOWN (outage/quota/TPM-overflow) so a
+# single-provider failure never blocks EVERY ship. Members VERIFIED LIVE via the
+# integrate.api.nvidia.com/v1/models probe (2026-09-20) — diverse lineages (Meta / Mistral /
+# NVIDIA-tuned-Llama), each a strong INSTRUCT (not a reasoning) model that lands a single clean
+# `VERDICT:` line. RE-PINNED history: meta/llama-3.1-70b-instruct RETIRED (410, 2026-08-26);
+# nemotron-3-super is live but a REASONING model → INDETERMINATE (excluded). llama-3.2-90b-vision-
+# instruct stays FIRST (proven). LADDERED per Rafael 2026-09-20 ("when the fallback doesn't work,
+# try another model — it offers more than one; stop settling for the first rejection"): a single
+# pinned model that timed out or went mute forced a hard fail + manual --waive-gro (2026-09-20).
+_NVIDIA_LADDER = (
+    "meta/llama-3.2-90b-vision-instruct",      # proven clean-VERDICT (the prior single pin)
+    "mistralai/mistral-large-2-instruct",      # strong general instruct, diverse (Mistral) lineage
+    "nvidia/llama-3.1-nemotron-70b-instruct",  # 70b INSTRUCT (NOT the reasoning nemotron-3-super)
+)
+_NVIDIA_PER_MODEL_TIMEOUT = 70  # bounded per model so trying the whole ladder stays reasonable
+_LAST_NVIDIA_MODEL = ""         # which ladder model actually answered (recorded in the marker)
+
+
 def _nvidia(prompt, key):
-    # OPTION-C SUBSTITUTE reviewer (Rafael-authorized 2026-08-24). Stands in for GAI ONLY when
-    # GAI is genuinely DOWN (free quota exhausted; paid NOT attempted unless GEMINI_ALLOW_PAID is
-    # explicitly set — default-deny) so a single-provider outage never blocks EVERY ship.
-    # NVIDIA-hosted meta/llama-3.2-90b-vision-instruct — a diverse lineage (Meta) from Gro
-    # (OpenAI-family gpt-oss). RE-PINNED 2026-08-28: the prior meta/llama-3.1-70b-instruct was
-    # RETIRED (integrate.api.nvidia.com 410 Gone, EOL 2026-08-26). Candidates verified via the
-    # /v1/models probe: nemotron-3-super IS live but is a REASONING model that emits a long analysis
-    # and never lands a single clean VERDICT line on the large real gate prompt → INDETERMINATE
-    # (CI run 33217210058). llama-3.2-90b-vision-instruct is the Meta-lineage successor and returns
-    # exactly ONE clean `VERDICT:` line (the property the parser requires; a substitute REJECT is
-    # counter-promptable, an INDETERMINATE is a hard fail). It NEVER runs when GAI answers (healthy
-    # GAI keeps the Gro+GAI 2-voice rigor); engaged ONLY on a GAI *outage*, NEVER on a GAI *REJECT*.
-    # The marker records the substitution so any ship reviewed this way is auditable after the fact.
-    r = _curl(
-        "https://integrate.api.nvidia.com/v1/chat/completions",
-        [f"Authorization: Bearer {key}", "Content-Type: application/json"],
-        {"model": "meta/llama-3.2-90b-vision-instruct", "temperature": 0.2, "max_tokens": 2048,
-         "messages": [
-            {"role": "system",
-             "content": "You are a Senior Staff engineer auditing a diff before it ships "
-                        "to a live trading bot. Concrete, no hedging. REJECT only for a "
-                        "concrete failing input (input -> wrong output/crash) in the CHANGED "
-                        "lines, and QUOTE the exact offending line; a theoretical 'could' is a "
-                        "NIT, not a REJECT."},
-            {"role": "user", "content": prompt}]},
-        key)
-    if "choices" not in r:
-        raise RuntimeError(str(r).replace(key, "***")[:200])
-    return r["choices"][0]["message"]["content"]
+    # Try each ladder model in turn. A transport failure (timeout / 4xx / 5xx / no-choices) OR an
+    # INDETERMINATE response (no single clean VERDICT line — e.g. a mute/reasoning model) advances
+    # to the NEXT model. A model that returns a USABLE verdict (APPROVE or REJECT) is HONORED and
+    # returned — the ladder shops past a BROKEN or MUTE model, NEVER past a genuine REJECT
+    # (reviewer-shopping for an APPROVE is forbidden by the anti-bias rules). Raises only if the
+    # WHOLE ladder yields no usable verdict — the caller then fails closed / --waive path.
+    global _LAST_NVIDIA_MODEL
+    last_err = None
+    for model in _NVIDIA_LADDER:
+        try:
+            r = _curl(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                [f"Authorization: Bearer {key}", "Content-Type: application/json"],
+                {"model": model, "temperature": 0.2, "max_tokens": 2048, "messages": [
+                    {"role": "system",
+                     "content": "You are a Senior Staff engineer auditing a diff before it ships "
+                                "to a live trading bot. Concrete, no hedging. REJECT only for a "
+                                "concrete failing input (input -> wrong output/crash) in the CHANGED "
+                                "lines, and QUOTE the exact offending line; a theoretical 'could' is a "
+                                "NIT, not a REJECT."},
+                    {"role": "user", "content": prompt}]},
+                key, timeout=_NVIDIA_PER_MODEL_TIMEOUT)
+            if "choices" not in r:
+                last_err = RuntimeError(f"{model}: {str(r).replace(key, '***')[:160]}")
+                continue
+            txt = r["choices"][0]["message"]["content"]
+            if _verdict(txt) == "INDETERMINATE":
+                last_err = RuntimeError(f"{model}: no clean single VERDICT line")
+                continue  # mute / reasoning model — try the next
+            _LAST_NVIDIA_MODEL = model
+            return txt  # a usable verdict (APPROVE or REJECT) — honor it, never shop past it
+        except Exception as e:
+            last_err = e  # timeout / transport error — advance to the next model
+            continue
+    raise last_err if last_err else RuntimeError("all NVIDIA ladder models failed")
 
 
 def _verdict(text):
@@ -395,8 +514,8 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     _uctx = "-U0" if relpath in GATED_CLAIM_FILES else "-U15"
     ok_d, diff, _ = _git(["diff", "--cached", base, _uctx, "--", relpath])
     _head = CLAIM_PROMPT_HEAD if relpath in GATED_CLAIM_FILES else PROMPT_HEAD
-    prompt = _head + (diff if diff.strip()
-                      else f"(no change vs {base} for {relpath})")
+    _diff_body = diff if diff.strip() else f"(no change vs {base} for {relpath})"
+    prompt = _head + _diff_body
     # REVIEWER-CONTEXT block (Rafael mandate 2026-08-02): PROACTIVELY pre-load the
     # diff-specific facts a diff-only view CANNOT show — what a referenced constant
     # MEANS, the threading model, a cross-file helper/caller/guard, the runtime
@@ -406,19 +525,23 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     # false-REJECTed a correct config diff). A few hundred tokens of facts up front is
     # far cheaper than a counter-prompt round after. Injected as GROUND TRUTH so the
     # reviewer cannot REJECT on an assumption these facts contradict.
+    # Build the context/evidence SUFFIX separately so the Gro TPM-overflow chunker can re-attach
+    # the SAME ground-truth to every chunk's prompt (each chunk must carry full context).
+    _ctx_suffix = ""
     if context.strip():
-        prompt += ("\n\n--- REVIEWER CONTEXT (author-supplied FACTS about code OUTSIDE "
-                   "this diff — treat as GROUND TRUTH; do NOT REJECT on an assumption "
-                   "that contradicts a fact stated here) ---\n" + context.strip())
+        _ctx_suffix += ("\n\n--- REVIEWER CONTEXT (author-supplied FACTS about code OUTSIDE "
+                        "this diff — treat as GROUND TRUTH; do NOT REJECT on an assumption "
+                        "that contradicts a fact stated here) ---\n" + context.strip())
     # DISAGREEMENT PROTOCOL counter-prompt path (Rafael mandate 2026-07-19): a reject
     # on a false premise (e.g. a defect claim about a helper the -U30 diff can't
     # show) is resolved by SHOWING the reviewer the refuting evidence, never by a
     # blind re-roll. Pass it via --evidence.
     if evidence.strip():
-        prompt += ("\n\n--- COUNTER-PROMPT EVIDENCE (a prior reject rested on a "
-                   "premise this refutes; weigh it before re-verdicting; if it "
-                   "resolves your stated concern, APPROVE) ---\n"
-                   + evidence.strip())
+        _ctx_suffix += ("\n\n--- COUNTER-PROMPT EVIDENCE (a prior reject rested on a "
+                        "premise this refutes; weigh it before re-verdicting; if it "
+                        "resolves your stated concern, APPROVE) ---\n"
+                        + evidence.strip())
+    prompt += _ctx_suffix
 
     _reminder = ("\n\nREMINDER: exactly ONE line may BEGIN with `VERDICT:` — your single final "
                  "decision `VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`. Do NOT start any "
@@ -451,13 +574,13 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                 time.sleep(3)
                 return _nvidia(p, nk)
         try:
-            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA llama-3.2-90b).\n")
+            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA model ladder).\n")
             gai_txt = _sub(prompt + _reminder)
             gai_v = _verdict(gai_txt)
             if gai_v == "INDETERMINATE":
                 gai_txt = _sub(prompt + _reminder)
                 gai_v = _verdict(gai_txt)
-            gai_substituted = "NVIDIA_llama-3.2-90b"
+            gai_substituted = f"NVIDIA_{_LAST_NVIDIA_MODEL}"
         except Exception as e2:
             return False, f"{relpath}: GAI down ({e}) AND option-C substitute failed after retry ({e2}) — fail-closed, no marker"
     _gai_label = f"substitute {gai_substituted}" if gai_substituted else "GAI"
@@ -479,35 +602,54 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                 gro_txt = _gro(prompt + _reminder, keys.get("GROQ_API_KEY", ""))
                 gro_v = _verdict(gro_txt)
         except Exception as e:
-            # OPTION-C SYMMETRY (Rafael 2026-08-28: "NVIDIA is always keyed and ready — use it
-            # as a backup in situations exactly like this"). Gro's free tier has a HARD 8k-TPM
-            # PER-REQUEST cap a large diff can exceed outright ("Request too large"), plus a
-            # per-minute budget that rate-limits under load — a Gro OUTAGE, not a REJECT (a
-            # reject returns a verdict, not an exception). Engage the SAME option-C NVIDIA
-            # substitute the GAI path uses, instead of hard-failing to a manual --waive-gro.
-            # Reached ONLY on a Gro *outage* exception, never a *REJECT*. No NVIDIA key => the
-            # old --waive-gro path.
-            nk = keys.get("NVIDIA_API_KEY", "")
-            if not nk:
-                return False, (f"{relpath}: Gro audit failed ({e}) and no NVIDIA substitute "
-                               "key. Re-run with --waive-gro only if Rafael authorizes.")
-            def _gsub(p):
+            # Gro's free tier has a HARD 8k-TPM PER-REQUEST cap a large diff can exceed outright
+            # ("Request too large"), plus a per-minute budget that rate-limits under load — a Gro
+            # OUTAGE, not a REJECT (a reject returns a verdict, not an exception).
+            # STEP 1 (Rafael 2026-09-20 — "stop settling"): if this is a TPM/size overflow, get a
+            # REAL Gro verdict by CHUNKING the diff, BEFORE falling to any substitute.
+            _em = str(e).lower()
+            _tpm = ("request too large" in _em or "tokens per minute" in _em or " tpm" in _em
+                    or "8000" in _em or "413" in _em or "too large" in _em)
+            gro_v = None
+            if _tpm:
                 try:
-                    return _nvidia(p, nk)
-                except Exception:
-                    time.sleep(3)
-                    return _nvidia(p, nk)
-            try:
-                sys.stderr.write(f"[preship] Gro down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA llama-3.2-90b).\n")
-                gro_txt = _gsub(prompt + _reminder)
-                gro_v = _verdict(gro_txt)
-                if gro_v == "INDETERMINATE":
+                    sys.stderr.write("[preship] Gro TPM-overflow — chunking the diff for a REAL Gro "
+                                     "verdict (not settling for the substitute).\n")
+                    gro_txt = _gro_chunked(_head, _diff_body, _ctx_suffix, keys.get("GROQ_API_KEY", ""))
+                    gro_v = _verdict(gro_txt)
+                    if gro_v not in ("APPROVE", "REJECT"):
+                        gro_v = None  # indeterminate chunk -> fall to substitute below
+                except Exception as _ce:
+                    sys.stderr.write(f"[preship] Gro chunked audit failed ({str(_ce)[:80]}) — "
+                                     "falling to option-C substitute.\n")
+                    gro_v = None
+            if gro_v is None:
+                # STEP 2 — OPTION-C SYMMETRY (Rafael 2026-08-28): engage the NVIDIA model-ladder
+                # substitute the GAI path uses, instead of hard-failing to a manual --waive-gro.
+                # Reached ONLY on a Gro *outage* (or a chunked audit that could not land a verdict),
+                # never a *REJECT*. No NVIDIA key => the old --waive-gro path.
+                nk = keys.get("NVIDIA_API_KEY", "")
+                if not nk:
+                    return False, (f"{relpath}: Gro audit failed ({e}) and no NVIDIA substitute "
+                                   "key. Re-run with --waive-gro only if Rafael authorizes.")
+                def _gsub(p):
+                    try:
+                        return _nvidia(p, nk)
+                    except Exception:
+                        time.sleep(3)
+                        return _nvidia(p, nk)
+                try:
+                    sys.stderr.write(f"[preship] Gro down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA model ladder).\n")
                     gro_txt = _gsub(prompt + _reminder)
                     gro_v = _verdict(gro_txt)
-                gro_substituted = "NVIDIA_llama-3.2-90b"
-            except Exception as e2:
-                return False, (f"{relpath}: Gro down ({e}) AND option-C substitute failed after "
-                               f"retry ({e2}). Re-run with --waive-gro only if Rafael authorizes.")
+                    if gro_v == "INDETERMINATE":
+                        gro_txt = _gsub(prompt + _reminder)
+                        gro_v = _verdict(gro_txt)
+                    gro_substituted = f"NVIDIA_{_LAST_NVIDIA_MODEL}"
+                except Exception as e2:
+                    return False, (f"{relpath}: Gro down ({e}), chunked audit did not land a verdict, "
+                                   f"AND option-C substitute failed ({e2}). Re-run with --waive-gro "
+                                   "only if Rafael authorizes.")
         _gro_lbl = f"substitute {gro_substituted}" if gro_substituted else "Gro"
         if gro_v == "INDETERMINATE":
             return False, (f"{relpath}: {_gro_lbl} INDETERMINATE — no parseable VERDICT line after a "
