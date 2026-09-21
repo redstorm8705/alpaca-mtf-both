@@ -10438,3 +10438,53 @@ ladder `gemini-3.1-flash-lite`->…, with gai_health.py canary). Only the CLAUDE
 read, NOT live I/O on the trading thread) on the intraday entry event; 1c — intraday MAE/MFE water-marks
 (per-cycle min/max in exit_logic + reducer pass-through); then day-tier symmetric emit + gated-out signal
 logging.
+
+## 2026-09-21 — edge-discovery Step 1 Increment 2, Piece 1b-i (regime on the SWING-TIER entry) — SHIPPED
+
+**What:** Every SWING-TIER entry record (the 12-pt confluence bot: `portfolio_tracker.record_entry` +
+`promote_pending_to_active`) is now tagged with the daily REGIME, read fail-safe from the cron-refreshed
+`logs/regime_state.json`. New `_read_regime_snapshot()` + `_regime_age_seconds()` (both never raise on the
+trading thread). Entry event carries `regime` (vol-composite label) + `regime_detail` + `regime_ts` +
+`regime_age_sec`. `research/trade_record_reducer.py` folds them into the record (offline). Tests:
+`LiveEmitRegime` (drives the real record_entry), never-crash helper test, time-deterministic age test,
+writer↔reader contract test.
+
+**Dynamic-not-static (Rafael mandate this session):** `regime_detail` records the RAW numeric signals
+(realized_vol, vix_term_ratio, spy_vs_50sma_pct, variance_ratio, hurst, macro_composite_score,
+macro_confidence) + per-component freshness — NOT just the static-threshold labels — so a future
+rolling-empirical recalibration can re-stratify these trades FROM THE RECORD ALONE (regime_state.py's own
+note: a threshold can't be re-derived from the labels it produced). `regime_age_sec = now − ledger.ts`
+makes a stale/cron-dead ledger VISIBLY old; NO static staleness threshold (research age-filters).
+
+**The adversarial devil's-advocate gate caught + we fixed mid-review (per Rafael's directive that the
+adversarial gate must poke real future-state/static holes):**
+- FRESH-WASHING: `_read_regime_snapshot` originally checked file existence + JSON shape but not AGE, so a
+  dead regime cron would tag trades with a days-old regime (any_stale=False set at write time) as if
+  current. FIX: record `regime_age_sec`.
+- STATIC-LABEL ENTRENCHMENT (F1): recording only the label froze the current thresholds. FIX: capture the
+  raw signals. Plus F4 contract test. F2 (day-tier regime tag) + F5 (regime cron into version control) are
+  logged follow-ups.
+
+**Safety:** Pure additive observability logging. NOT risk-path — no P&L/sizing/gate/order/kill code read or
+altered (masked-loss seat verified byte-for-byte; the LIVE sizing regime is a SEPARATE `run_cycle`
+`regime.get_regime()→size_mult` object that does NOT read this ledger; regime is written-only, consumed only
+by the offline reducer + event log). Fail-safe UNKNOWN. VERIFIED NO-CRASH by execution on OCI py3.10 for
+naive/garbage/Z/None/non-string ts.
+
+**Gate:** statics clean (py_compile / ruff E,W,F,B / mypy) · 46/46 tests · board 3/3 (masked-loss/P&L +
+reliability + cold-2nd PASS) · Gro APPROVE · GAI APPROVE · adversarial devil's-advocate PASS · FINAL preship
+Gro+GAI APPROVE on the staged sha (all 3 files). Two false-premise external rejects (GAI "crash on naive
+ts", Gro "test fails in 2024") were REFUTED by execution on py3.10 + the strengthened tests, not by blind
+re-roll (disagreement protocol). RC on portfolio_tracker touched lines: RC-1 tz-aware (datetime.now(utc))
+PASS, RC-3 no new bare-except PASS.
+
+**Deploy:** PR #365 → main; OCI `git pull --rebase` (report-cron drift) + restart mtf-bot/mtf-writer/mtf-http
+(portfolio_tracker is on the run_cycle path). HONESTY: deployed, UNEXERCISED until the next live swing entry.
+
+**NEXT:** (1) `intraday`→`swing` code-token relabel across the reducer + `scripts/pnl_snapshot.py` ownership
+taxonomy + `core_mtf` research + ownership-ledger coid tags (dedicated verified diff — do NOT half-do it,
+two taxonomies + live tags); (2) Piece 1b-ii — raw continuous indicators (RSI/EMA-spread/MACD-hist/VWAP-dev)
+surfaced from `strategy/confluence.py` (Option A — the prepared dfs are NOT in scope at entry_logic.py:1640,
+so confluence must return the raw values it currently discards) → entry_logic → reducer; (3) Piece 1c —
+intraday MAE/MFE water-marks; (4) CLAUDE.md §Gro/GAI-DIRECT-API dead model-ID example curls (Groq
+llama-3.3-70b / gemini-2.5-flash) → live IDs.
