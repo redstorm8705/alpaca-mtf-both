@@ -39,6 +39,82 @@ except ImportError:
 TRADE_LOG_FILE     = _ROOT / "trade_log.json"
 
 _DRIFT_ALERT_FILE       = _ROOT / "logs" / "last_drift_alert.json"
+# edge-discovery Inc 2 Piece 1b: the daily regime ledger (written by the regime_state Phase-1
+# cron, 16:12 ET post-close, atomic tmp->replace). Read to tag each SWING-TIER entry record with
+# the prevailing regime. Slow-moving DAILY signal — the ts + any_stale ride alongside the label so
+# research can age/stale-filter it and it is never presented as a fresh regime.
+_REGIME_LEDGER          = _ROOT / "logs" / "regime_state.json"
+
+
+def _regime_age_seconds(iso_ts) -> "float | None":
+    """Whole seconds since the ledger's `ts`. Records the ACTUAL freshness so a cron-dead / stale
+    ledger is VISIBLY old on the record (never fresh-washed): the file's own `any_stale` flag only
+    reflects component staleness AT WRITE TIME, not that the cron later stopped and the file went
+    stale. No static staleness THRESHOLD is applied — the ledger cadence is daily post-close and
+    weekends/holidays make a fixed cutoff wrong, so research age-filters the raw value (per the
+    no-static-regimes rule). None if unparseable. Never raises."""
+    if not iso_ts:
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        _p = _dt.fromisoformat(str(iso_ts))
+        if _p.tzinfo is None:
+            _p = _p.replace(tzinfo=_tz.utc)
+        return round(max(0.0, (_dt.now(_tz.utc) - _p).total_seconds()), 1)
+    except Exception:
+        return None
+
+
+def _read_regime_snapshot() -> tuple:
+    """Read the cached daily regime ledger for tagging a swing-tier entry record.
+    Returns (label:str, detail:dict, ts:str|None, age_sec:float|None). Fail-safe: any missing/
+    malformed input -> ("UNKNOWN", {}, None, None). NEVER raises — runs on the run_cycle trading
+    thread. Cheap local read; the ledger is atomic-written (tmp->replace) by the cron so there is
+    no torn-read risk. The label is the vol composite (fallback vol regime); the full summary (incl.
+    any_stale) rides in `detail`, and age_sec (now - ts) records the real freshness so a stale /
+    cron-dead regime is visibly old and can never be fresh-washed."""
+    try:
+        if not _REGIME_LEDGER.exists():
+            return "UNKNOWN", {}, None, None
+        _d = json.loads(_REGIME_LEDGER.read_text())
+        if not isinstance(_d, dict):
+            return "UNKNOWN", {}, None, None
+        _summ = _d.get("summary")
+        _summ = _summ if isinstance(_summ, dict) else {}
+        _label = _summ.get("vol_composite") or _summ.get("vol_regime") or "UNKNOWN"
+        # F1 (adversarial devil's-advocate): record the RAW numeric signals, not just the
+        # static-threshold LABELS, so a future rolling-empirical recalibration can re-stratify
+        # these trades FROM THE RECORD ALONE — per strategy/regime_state.py's own note, "a
+        # threshold cannot be re-derived from the labels it produced." Mirrors the raw set that
+        # regime_state._history_record writes to the sidecar regime_history.jsonl, pulled here
+        # from the FULL ledger's vol/market_mr/macro component dicts. F3: per-component freshness
+        # (vol/macro/mr_fresh + any_stale from the summary) travels with the label so a
+        # write-time-stale component is legible, not just cron-death (regime_age_sec). Each field
+        # is a plain .get() defaulting to None — a partial/UNKNOWN ledger still yields a valid dict.
+        _vol = _d.get("vol")
+        _vol = _vol if isinstance(_vol, dict) else {}
+        _mr = _d.get("market_mr")
+        _mr = _mr if isinstance(_mr, dict) else {}
+        _mac = _d.get("macro")
+        _mac = _mac if isinstance(_mac, dict) else {}
+        _detail = {
+            **_summ,
+            "realized_vol":          _vol.get("realized_vol"),
+            "vix_term_ratio":        _vol.get("vix_term_ratio"),
+            "spy_vs_50sma_pct":      _vol.get("spy_vs_50sma_pct"),
+            "variance_ratio":        _mr.get("variance_ratio"),
+            "hurst":                 _mr.get("hurst"),
+            "macro_composite_score": _mac.get("composite_score"),
+            "macro_confidence":      _mac.get("confidence"),
+            "vol_fresh":             bool(_vol.get("fresh")),
+            "macro_fresh":           bool(_mac.get("fresh")),
+            "mr_fresh":              bool(_mr.get("fresh")),
+        }
+        _ts = _d.get("ts")
+        return str(_label), _detail, _ts, _regime_age_seconds(_ts)
+    except Exception as _re:
+        logger.debug("regime snapshot read failed (non-critical): %s", _re)
+        return "UNKNOWN", {}, None, None
 
 
 def _load_drift_alert_date() -> str:
@@ -1434,9 +1510,15 @@ class PortfolioTracker:
         logger.info(
             f"[{symbol}] Entry recorded: {direction} {qty} @ ${entry_price:.2f}"
         )
+        # Inc 2 Piece 1b: tag the SWING-TIER entry with the prevailing daily regime (cached ledger
+        # read; fail-safe UNKNOWN). label + full summary + ts so research can stratify by regime and
+        # age/stale-filter it. Cheap local read; helper never raises on the trading thread.
+        _regime_label, _regime_detail, _regime_ts, _regime_age = _read_regime_snapshot()
         _log_event(
             "entry", symbol=symbol, price=entry_price, size=qty, score=score,
             trade_id=_trade_id,
+            regime=_regime_label, regime_detail=_regime_detail, regime_ts=_regime_ts,
+            regime_age_sec=_regime_age,
             mri_level=mri_level, data_source=data_source,
             direction=direction, stop=round(stop, 2), target=round(target, 2),
             trade_mode=trade_mode,
@@ -1449,7 +1531,9 @@ class PortfolioTracker:
             # BOTH explicit kwargs above, so drop them from extra_log — a future caller that
             # forwarded either would otherwise raise a duplicate-kwarg TypeError HERE (before
             # _log_event's try/except) on the run_cycle trading thread.
-            **{k: v for k, v in extra_log.items() if k not in ("score_16pt", "trade_id")},
+            **{k: v for k, v in extra_log.items()
+               if k not in ("score_16pt", "trade_id", "regime", "regime_detail",
+                            "regime_ts", "regime_age_sec")},
         )
 
     def set_gtc_stop_order_id(self, symbol: str, order_id: str):
@@ -1564,10 +1648,15 @@ class PortfolioTracker:
             )
             return
         try:
+            _pp_regime, _pp_regime_detail, _pp_regime_ts, _pp_regime_age = _read_regime_snapshot()
             _log_event(
                 "entry",
                 symbol      = symbol,
                 trade_id    = t.get("trade_id"),
+                regime         = _pp_regime,
+                regime_detail  = _pp_regime_detail,
+                regime_ts      = _pp_regime_ts,
+                regime_age_sec = _pp_regime_age,
                 score       = t.get("score", 0),
                 mri_level   = mri_level,
                 price       = fill_price,
