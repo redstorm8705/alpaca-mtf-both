@@ -651,19 +651,19 @@ source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env
 curl https://api.groq.com/openai/v1/chat/completions \
   -H "Authorization: Bearer $GROQ_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"llama-3.3-70b-versatile","messages":[{"role":"system","content":"<GRO_PERSONA>"},{"role":"user","content":"<PROMPT>"}],"max_tokens":4096}'
+  -d '{"model":"openai/gpt-oss-120b","messages":[{"role":"system","content":"<GRO_PERSONA>"},{"role":"user","content":"<PROMPT>"}],"max_completion_tokens":8192}'
 ```
-- Model: `llama-3.3-70b-versatile` (OpenAI-compatible endpoint)
+- Model: `openai/gpt-oss-120b` (OpenAI-compatible endpoint). **CANONICAL SOURCE = `.claude/preship/preship_audit.py`** — copy the live model id from there, not from here; it self-heals the churn. `llama-3.3-70b-versatile` is **DEAD** (Groq 404, verified 2026-09-20). gpt-oss reasoning models use `max_completion_tokens`, NOT `max_tokens`.
 - Gro role framing: *"You are a Senior Staff Engineer at an HFT firm with direct ownership of execution engines and P&L attribution systems. Treat this as a P0 incident review. Be concrete and technical — no hedging."*
 
 **Gemini (GAI):**
 ```bash
 source /Users/rafaeldeleon/Desktop/alpaca-mtf-bot_FINAL/.env
-curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
+curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=$GEMINI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"contents":[{"parts":[{"text":"<GAI_PERSONA>\n\n<PROMPT>"}]}],"generationConfig":{"maxOutputTokens":8192}}'
+  -d '{"contents":[{"parts":[{"text":"<GAI_PERSONA>\n\n<PROMPT>"}]}],"generationConfig":{"maxOutputTokens":8192,"thinkingConfig":{"thinkingBudget":0}}}'
 ```
-- Model: `gemini-2.5-flash` (NOT gemini-1.5-pro-latest → 404; NOT gemini-2.5-pro → MAX_TOKENS at 4096)
+- Model: use the CURRENT id from `.claude/preship/preship_audit.py`'s `_GAI_LADDER` (it self-heals the churn — the canonical source). `gemini-2.5-flash` is **DEAD for new keys** (verified 2026-09-20); the live ladder is `gemini-3.1-flash-lite` (pinned) → `gemini-3.7-flash` → `gemini-3-flash-preview` → `gemini-flash-latest`. **`thinkingConfig.thinkingBudget:0` is MANDATORY** — these are thinking models; without it the hidden reasoning eats the whole `maxOutputTokens` budget and returns HTTP 200 with no verdict text.
 - `maxOutputTokens: 8192` is mandatory — flash hits STOP at ~7031 chars (complete response); 4096 truncates mid-answer
 - GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
 
