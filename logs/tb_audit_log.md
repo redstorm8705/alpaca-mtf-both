@@ -10488,3 +10488,53 @@ surfaced from `strategy/confluence.py` (Option A — the prepared dfs are NOT in
 so confluence must return the raw values it currently discards) → entry_logic → reducer; (3) Piece 1c —
 intraday MAE/MFE water-marks; (4) CLAUDE.md §Gro/GAI-DIRECT-API dead model-ID example curls (Groq
 llama-3.3-70b / gemini-2.5-flash) → live IDs.
+
+## 2026-09-21 — edge-discovery Step 1 Increment 2, Piece 1b-ii (RAW indicators on the swing-tier record) — SHIPPED
+
+**What:** Each SWING-TIER signal is now tagged with the RAW continuous entry-TF indicator values —
+RSI, EMA13/30 spread (signed %), MACD histograms (std+fast), SIGNED VWAP deviation — plus an
+`ind_params` parameterization stamp (ema 13/30, rsi_period, macd settings, feat_version=1). The 12-pt
+score records only BOOLEAN conditions; these RAW values are what a future rolling-empirical recalibration
+needs (a boolean can't be un-thresholded). **Route B**: a fail-safe `_entry_indicators(entry_df)` helper
+in `strategy/signal_generator.py` (reuses the tested get_rsi/ma/macd/vwap_summary helpers), tagged onto
+long_r/short_r in run_scan Phase 3 beside the EXISTING tsmom enrichment, AFTER scoring/sort/dedup —
+`strategy/confluence.py`'s score functions are BYTE-IDENTICAL. `execution/entry_logic.py` forwards one
+additive kwarg `indicators_raw=sig.get("indicators")` on record_entry; `research/trade_record_reducer.py`
+folds it into the record's indicators dict (offline).
+
+**Why Route B (not confluence):** signal_generator.run_scan already holds the prepared entry_df (used for
+16pt, then freed) and is where tsmom is tagged; adding the raw indicators there mirrors the existing
+enrichment pattern and leaves the scoring ENGINE untouched — lower risk than editing score_long/short_signal.
+(entry_logic.py:1640 has only a 2-bar price df + daily ATR df in scope, so Option B-at-emit was infeasible.)
+
+**Dynamic-not-static + the adversarial gate earning its keep (Rafael mandate):** the devil's-advocate
+adversarial pass CAUGHT — and we FIXED before shipping — the one unrecoverable static loss: `vwap_dev_pct`
+was sign-stripped (the summary helper returns abs()), so a future recalibration of the asymmetric VWAP
+factor would be permanently blind to above/below-VWAP. Fixed: compute it SIGNED from raw vwap+price. Also
+folded in GAI's real points (NaN->None coercion via math.isfinite, which also scrubs inf; an ind_params
+parameterization stamp) after refuting GAI's false-premise "ZeroDivisionError" REJECT at source (0.0 is
+falsy in Python + the whole helper is try/except-guarded). Should-consider follow-ups (recoverable from
+the event log, NOT blocking): (F2) capture the entry timeframe (15M vs 4H) in the reduced record; (F3)
+capture daily raw values for full score attribution; (F5) 4H-VWAP is low-signal for the swing tier.
+
+**Safety:** Pure additive observability logging. NOT risk-path — the `indicators`/`indicators_raw` field is
+WRITTEN-ONLY (masked-loss seat verified the whole sizing chain — dollar_cap/Kelly/TSMOM/VOTE caps — reads
+sig.get("tsmom_vol_mult")/vol_ratio/sigma_20d, NEVER "indicators"; the scalar score-sort + symbol-dedup
+mean adding a key can't change WHICH signals fire). `_entry_indicators` is fully try/except -> {} (a
+snapshot miss never drops a signal). No P&L/gate/score/kill touched; confluence byte-identical.
+
+**Gate (final signed-vwap bytes):** statics clean (py_compile / ruff E,W,F,B / mypy) · 51/51 tests on OCI
+py3.10 · board (masked-loss/P&L + reliability + cold-2nd PASS, incl. a FRESH cold-2nd on the exact staged
+bytes) · Gro APPROVE · GAI APPROVE (counter-prompted off a false-premise reject) · adversarial devil's-
+advocate PASS · FINAL preship Gro+GAI APPROVE. A no_static_scan false-positive on the round(...,4) storage
+precision was resolved with a `# PROV:feat-units-4dp` tag (structural units/precision, not a threshold).
+The preship prompt-bias Self-QA gate also fired once (my --context said "Gro+GAI approve") — corrected to
+neutral facts, exactly as designed.
+
+**Deploy:** PR #368 -> main; OCI git pull + restart mtf-bot/mtf-writer/mtf-http (signal_generator +
+entry_logic are on the run_cycle scan path). HONESTY: deployed, UNEXERCISED until the next live swing entry.
+
+**NEXT (queue):** (1) `intraday`->`swing` code-token relabel (DEFERRED to Rafael — live-P&L-ownership
+migration + display-split fork; two taxonomies + live coid tags); (2) Piece 1c — swing-tier MAE/MFE
+water-marks (exit-path min/max tracking); (3) day-tier regime tag (adversarial F2 of 1b-i); (4) 1b-ii
+follow-ups F2/F3/F5; (5) CLAUDE.md dead model-ID example curls.
