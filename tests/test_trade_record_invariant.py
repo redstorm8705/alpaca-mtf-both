@@ -367,5 +367,72 @@ class ReducerReconciliation(unittest.TestCase):
         self.assertEqual(len(recs), stats["closed"])
 
 
+class LiveEmitTradeId(unittest.TestCase):
+    """Inc 2 (Piece 1a) enforcement: the LIVE intraday emit path stamps a matching trade_id on
+    the entry AND the exit event. Its absence is the exact class that let the 7-day entry-drop
+    hide (no join key => a dropped entry looked like an orphan exit, silently). Drives the REAL
+    PortfolioTracker.record_entry -> record_exit with a mocked logger + an isolated trade_log."""
+
+    def _drive(self, exit_reason):
+        import tempfile
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        captured = []
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(PT, "TRADE_LOG_FILE", Path(d) / "trade_log.json"), \
+                 mock.patch.object(PT, "_log_event",
+                                   lambda event, **kw: captured.append({"event": event, **kw})):
+                tr = PT.PortfolioTracker()
+                tr.record_entry("AAPL", "long", 3, 100.0, 95.0, 110.0, "intraday", 9)
+                tr.record_exit("AAPL", 110.0, reason=exit_reason)
+        return captured
+
+    def test_entry_and_exit_share_a_nonempty_trade_id(self):
+        captured = self._drive("take_profit")
+        entries = [e for e in captured if e["event"] == "entry"]
+        exits   = [e for e in captured if e["event"] in ("exit", "stop_hit")]
+        self.assertEqual(len(entries), 1, "exactly one entry event must be emitted")
+        self.assertEqual(len(exits), 1, "exactly one exit event must be emitted")
+        self.assertTrue(entries[0].get("trade_id"), "entry event must carry a non-empty trade_id")
+        self.assertEqual(entries[0]["trade_id"], exits[0]["trade_id"],
+                         "exit event trade_id must match the entry event's")
+        self.assertTrue(entries[0]["trade_id"].startswith("INTRA-AAPL-"))
+
+    def test_stop_exit_also_carries_the_trade_id(self):
+        # a stop-reason exit routes to the stop_hit event type; it must still carry the id
+        captured = self._drive("hard_stop")
+        exits = [e for e in captured if e["event"] == "stop_hit"]
+        self.assertEqual(len(exits), 1)
+        self.assertTrue(exits[0].get("trade_id"))
+
+
+class ReducerUsesRealTradeId(unittest.TestCase):
+    """Inc 2 (Piece 1a): the reducer records the REAL minted trade_id when the event carries one,
+    and falls back to the synthesized symbol+ts id for legacy rows (unchanged FIFO pairing)."""
+
+    def test_real_trade_id_preferred(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0,
+             "target": 110.0, "trade_id": "INTRA-AAPL-2026-09-01T07:00:00.123456-07:00"},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit", "direction": "long",
+             "trade_id": "INTRA-AAPL-2026-09-01T07:00:00.123456-07:00"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["trade_id"], "INTRA-AAPL-2026-09-01T07:00:00.123456-07:00")
+
+    def test_legacy_rows_fall_back_to_synthesized(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit", "direction": "long"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(recs[0]["trade_id"], "INTRA-AAPL-2026-09-01T07:00:00-07:00")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

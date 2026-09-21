@@ -141,6 +141,7 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                 "mri_level":   ev.get("mri_level", "UNKNOWN"),
                 "conditions":  ev.get("conditions") or {},
                 "ts_entry":    ev.get("ts"),
+                "trade_id":    ev.get("trade_id"),   # Inc 2: real minted id when present; None for legacy
                 "indicators":  {k: ev[k] for k in (
                     "tsmom_12m", "tsmom_6m", "tsmom_ewma_vol", "tsmom_vol_mult",
                     "tsmom_direction", "score_16pt") if k in ev},
@@ -173,7 +174,9 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
             reason = ev.get("reason") or et
             realized = _num(ev.get("pnl"))          # ALREADY the trade total (leg + all partials); honest None if absent
             entry_rec = make_entry_record(
-                trade_id=f"INTRA-{sym}-{lot.get('ts_entry')}",
+                # Inc 2: prefer the real minted id (deterministic cross-log join key); fall
+                # back to the synthesized symbol+ts id for legacy rows that predate the mint.
+                trade_id=lot.get("trade_id") or f"INTRA-{sym}-{lot.get('ts_entry')}",
                 tier="intraday", symbol=sym, side=lot["side"],
                 entry_price=lot["entry_price"], stop_price=lot["stop"],
                 target_price=lot["target"], qty=lot["qty"],

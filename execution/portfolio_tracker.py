@@ -400,6 +400,7 @@ class PortfolioTracker:
                 score=_trade.get("score", 0),
                 mri_level=_trade.get("mri_level", "NORMAL"),
                 data_source=fill_source,
+                trade_id=_trade.get("trade_id"),   # Inc 2: cross-log join key (None for legacy)
                 original_exit_price=_original_exit_px,
                 corrected_exit_price=exit_price,
                 original_pnl=_original_pnl,
@@ -1391,8 +1392,16 @@ class PortfolioTracker:
                 f"duplicate-status guard."
             )
             return
+        # edge-discovery Step 1 Inc 2 (design: logs/design_records/edge_discovery_2026-09-19.md):
+        # mint a stable per-trade join key at entry. PURE IDENTITY string — no P&L, no sizing,
+        # no gate, no order path. Matches the reducer's INTRA-{sym}-{ts} synthesized scheme so
+        # the live id and the backfilled id are the same shape. entry_time is computed ONCE and
+        # reused for both the dict field and the id so the two can never diverge.
+        _entry_time = datetime.now(_PT).isoformat()
+        _trade_id   = f"INTRA-{symbol}-{_entry_time}"
         self.open_trades[symbol] = {
             "symbol":                 symbol,
+            "trade_id":               _trade_id,
             "direction":              direction,
             "qty":                    qty,
             "qty_remaining":          qty,
@@ -1407,7 +1416,7 @@ class PortfolioTracker:
             "score_16pt":             score_16pt,
             "atr_value":              atr_value,
             "partial_exited":         False,
-            "entry_time":             datetime.now(_PT).isoformat(),
+            "entry_time":             _entry_time,
             "status":                 "open",
             "reversal_scan_count":    0,
             "reversal_confirm_count": 0,
@@ -1427,6 +1436,7 @@ class PortfolioTracker:
         )
         _log_event(
             "entry", symbol=symbol, price=entry_price, size=qty, score=score,
+            trade_id=_trade_id,
             mri_level=mri_level, data_source=data_source,
             direction=direction, stop=round(stop, 2), target=round(target, 2),
             trade_mode=trade_mode,
@@ -1435,9 +1445,11 @@ class PortfolioTracker:
             # inception logged without it, leaving the 16pt-vs-outcome validation
             # dataset empty at trade level while Layer 9 traded on the score.
             score_16pt=score_16pt,
-            # GAI R1 guard: if a future caller also passes score_16pt inside
-            # extra_log, drop it there — prevents duplicate-kwarg TypeError.
-            **{k: v for k, v in extra_log.items() if k != "score_16pt"},
+            # GAI R1 guard (Inc 2 cold-2nd + board consensus): score_16pt AND trade_id are
+            # BOTH explicit kwargs above, so drop them from extra_log — a future caller that
+            # forwarded either would otherwise raise a duplicate-kwarg TypeError HERE (before
+            # _log_event's try/except) on the run_cycle trading thread.
+            **{k: v for k, v in extra_log.items() if k not in ("score_16pt", "trade_id")},
         )
 
     def set_gtc_stop_order_id(self, symbol: str, order_id: str):
@@ -1536,6 +1548,9 @@ class PortfolioTracker:
         t["status"]      = "open"
         t["entry_price"] = fill_price
         t["entry_time"]  = datetime.now(_PT).isoformat()
+        # Inc 2: mint the join key on the overnight-fill entry path too, so an overnight
+        # limit fill produces the same identified record as a same-day intraday entry.
+        t["trade_id"]    = f"INTRA-{symbol}-{t['entry_time']}"
         self.traded_today.add(symbol)
         self._save_log()
         logger.info(
@@ -1552,6 +1567,7 @@ class PortfolioTracker:
             _log_event(
                 "entry",
                 symbol      = symbol,
+                trade_id    = t.get("trade_id"),
                 score       = t.get("score", 0),
                 mri_level   = mri_level,
                 price       = fill_price,
@@ -1912,6 +1928,9 @@ class PortfolioTracker:
             size=qty, score=trade.get("score", 0),
             pnl=_total_pnl, reason=reason, direction=direction,
             mri_level=mri_level,   # BUG-E2E-4: pass through caller-supplied MRI level
+            # Inc 2: same id the entry event carried; None for a legacy pre-Inc2 position
+            # (restored from disk without a trade_id) — the reducer then falls back to FIFO.
+            trade_id=trade.get("trade_id"),
         )
         # Return _total_pnl (remaining close + all partial tranches) — not pnl alone.
         # Every caller feeds this into risk.register_close() → daily_pnl → kill switch.
