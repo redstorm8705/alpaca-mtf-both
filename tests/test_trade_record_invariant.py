@@ -509,8 +509,12 @@ class LiveEmitRegime(unittest.TestCase):
         # (2) Definitely-unparseable inputs fail-safe to None.
         for bad in ("garbage!!!", "", None, 12345, "2026-13-99T99:99:99"):
             self.assertIsNone(PT._regime_age_seconds(bad), f"expected None for {bad!r}")
-        # (3) Parseable timestamps (naive or offset) return a non-negative float — no crash.
-        for ok in ("2026-09-18T16:12:00", "2026-09-18 16:12:00", "2026-09-18T13:12:04.1-07:00"):
+        # (3) Parseable timestamps return a non-negative float — no crash. Uses the REAL ledger
+        #     format (6-digit microseconds + offset, as regime_state.py writes via isoformat()) and
+        #     plain no-fraction forms. NOT a 1-digit fraction: py3.10 (the OCI deploy target)
+        #     rejects "..04.1" while py3.11+ accepts it — a 1-digit fraction is not a real input and
+        #     the code correctly fail-safes it to None, so it belongs only in the no-crash loop above.
+        for ok in ("2026-09-18T16:12:00", "2026-09-18 16:12:00", "2026-09-18T13:12:04.116843-07:00"):
             v = PT._regime_age_seconds(ok)
             self.assertIsInstance(v, float, f"expected float for {ok!r}")
             self.assertGreaterEqual(v, 0.0)
