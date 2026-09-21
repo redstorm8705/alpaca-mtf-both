@@ -571,6 +571,73 @@ def calculate_score_16pt(
     }
 
 
+def _entry_indicators(entry_df) -> dict:
+    """RAW continuous entry-TF indicator snapshot for the per-trade record (edge-discovery Inc 2
+    Piece 1b-ii). The 12-pt score records only BOOLEAN conditions; this captures the underlying RAW
+    values (RSI, EMA13/30 spread, MACD histograms, VWAP deviation) so a future rolling-empirical
+    recalibration can re-derive thresholds from the record — a boolean cannot be un-thresholded.
+    Reuses the tested indicator summary helpers; all values coerced to plain float/None (JSON-safe).
+    Fail-safe -> {} (NEVER raises — runs inside the scan; a snapshot failure must never drop a signal)."""
+    try:
+        if entry_df is None or len(entry_df) < 1:
+            return {}
+        from indicators.rsi import get_rsi_summary
+        from indicators.moving_averages import get_ma_summary
+        from indicators.macd import get_macd_summary
+        from indicators.vwap import get_vwap_summary
+
+        import math
+
+        def _f(x):
+            # None/NaN/inf/non-numeric -> None. A NaN or inf would emit non-spec json and pollute the
+            # record; math.isfinite is False for both. (GAI NaN + cold-2nd/adversarial inf review.)
+            try:
+                if x is None:
+                    return None
+                v = float(x)
+                return round(v, 4) if math.isfinite(v) else None
+            except (TypeError, ValueError):
+                return None
+
+        _rsi = get_rsi_summary(entry_df) or {}
+        _ma  = get_ma_summary(entry_df) or {}
+        _mac = get_macd_summary(entry_df) or {}
+        _vw  = get_vwap_summary(entry_df) or {}
+        _ema_f, _ema_s, _px = _f(_ma.get("ema_13")), _f(_ma.get("ema_30")), _f(_ma.get("price"))
+        # PROV:feat-units-4dp — ×100 (pct units) + round(...,4) (json storage precision) are plumbing on a computed FEATURE, not a calibrated threshold (no_static_scan)
+        _spread_pct = (round((_ema_f - _ema_s) / _px * 100, 4)
+                       if (_ema_f is not None and _ema_s is not None and _px) else None)
+        # SIGNED VWAP deviation (+ = price above VWAP). get_vwap_summary.pct_from_vwap is abs() —
+        # sign-stripped — and the score's VWAP factor is asymmetric, so the sign is UNRECOVERABLE
+        # once written. Compute it signed here from the raw vwap + price (adversarial finding 1).
+        _vwap = _f(_vw.get("vwap"))
+        _vwpx = _f(_vw.get("price"))
+        _vwap_dev = (round((_vwpx - _vwap) / _vwap * 100, 4)
+                     if (_vwpx is not None and _vwap) else None)
+        return {
+            "rsi":            _f(_rsi.get("rsi")),
+            "ema_fast":       _ema_f,
+            "ema_slow":       _ema_s,
+            "ema_spread_pct": _spread_pct,
+            "macd_hist_std":  _f(_mac.get("std_histogram")),
+            "macd_hist_fast": _f(_mac.get("fast_histogram")),
+            "vwap":           _vwap,
+            "vwap_dev_pct":   _vwap_dev,   # SIGNED (+ above / - below VWAP)
+            # Parameterization that produced these values — so a future window change does not make
+            # historical records incomparable (dynamic-not-static; Gro+GAI 1b-ii). Fail-safe .get().
+            "ind_params": {
+                "feat_version": 1,
+                "ema": f"{config.EMA_FAST}/{config.EMA_SLOW}",
+                "rsi_period": getattr(config, "RSI_PERIOD", None),
+                "macd_std": f"{config.MACD_STANDARD.get('fast')}/{config.MACD_STANDARD.get('slow')}/{config.MACD_STANDARD.get('signal')}",
+                "macd_fast": f"{config.MACD_FAST.get('fast')}/{config.MACD_FAST.get('slow')}/{config.MACD_FAST.get('signal')}",
+            },
+        }
+    except Exception as _ind_e:
+        logger.debug("entry indicators snapshot failed (non-critical): %s", _ind_e)
+        return {}
+
+
 def run_scan(
     trade_mode: str = config.TradeMode.INTRADAY,
     max_workers: int = 2,
@@ -775,6 +842,14 @@ def run_scan(
             _sig_r["ewma_vol_60d"]    = _ms.get("ewma_vol_60d")
             _sig_r["tsmom_vol_mult"]  = _ms.get("tsmom_vol_mult")
             _sig_r["tsmom_direction"] = _ms.get("tsmom_direction")
+
+        # ── Raw entry-TF indicator snapshot → signal dicts (edge-discovery Inc 2 Piece 1b-ii) ──
+        # Direction-INDEPENDENT raw values (the same snapshot for long & short); the 12-pt score
+        # records only the thresholded booleans. entry_df is still alive here (freed below after
+        # 16pt scoring). Fail-safe {} inside the helper — a snapshot miss never drops the signal.
+        _entry_ind = _entry_indicators(entry_df)
+        long_r["indicators"]  = _entry_ind
+        short_r["indicators"] = _entry_ind
 
         # ── MEAN-REVERSION emission (item 2 diff 3c — INERT while MR_ENABLED=False) ──────────
         # Detect ONCE here on the live 200-bar daily_df (entry_logic's ~24-bar window can't
