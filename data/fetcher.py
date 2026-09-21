@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.data.enums import Adjustment, DataFeed
 import config
 _ET = ZoneInfo("America/New_York")  # tz-aware; prevents naive/aware comparison errors
 
@@ -266,6 +267,92 @@ def fetch_bars(
             return pd.DataFrame()
 
     logger.warning(f"[{symbol}/{timeframe}] All retries exhausted")
+    return pd.DataFrame()
+
+
+def fetch_bars_window(
+    symbol: str, timeframe: str, start: datetime, end: datetime
+) -> pd.DataFrame:
+    """
+    Fetch OHLCV bars for an EXPLICIT historical [start, end] window (UTC-indexed).
+
+    Unlike fetch_bars (which fetches the most-recent num_bars via
+    start=now-days_back then .tail), this returns the FULL bar set inside a
+    caller-supplied window — needed by the offline research reducer
+    (research/trade_record_reducer.py) to reconstruct a closed trade's MAE/MFE
+    over its exact [ts_entry, ts_exit] span. Same GLOBAL rate gate (_rate_gate)
+    + 5x backoff as fetch_bars; honest-empty DataFrame on any error/miss (never
+    raises into the caller). No TTL cache — windowed one-shot historical fetches
+    do not dedupe the way recent-bar fetches do.
+
+    start/end MUST be timezone-aware (the caller converts trade timestamps to UTC
+    first); a naive datetime is rejected -> empty DataFrame, so a tz bug can never
+    silently fetch the wrong session hour. Not called by any RTH/run_cycle path —
+    offline research only.
+
+    feed + adjustment are pinned EXPLICITLY (not left to the account-tier server
+    default): feed=SIP gives the fullest RTH + extended-hours coverage (so an overnight
+    swing hold's gap / pre-market extreme is captured — verified entitled on this
+    account), and adjustment=RAW keeps bars on the SAME unadjusted basis as the raw
+    logged entry/exit fills (a mid-hold split then shows as a discontinuity the caller's
+    split guard nulls, rather than a silent basis mismatch). If SIP is ever un-entitled,
+    the request errors -> honest-empty here -> null MAE/MFE upstream (visible in the
+    null audit), never a silent downgrade to a sparser feed.
+    """
+    if timeframe not in TF_MAP:
+        logger.warning(
+            "[%s] fetch_bars_window: unknown timeframe '%s'", symbol, timeframe)
+        return pd.DataFrame()
+    if start is None or end is None or start.tzinfo is None or end.tzinfo is None:
+        logger.warning("[%s] fetch_bars_window: start/end must be tz-aware", symbol)
+        return pd.DataFrame()
+    if end <= start:
+        return pd.DataFrame()
+
+    for attempt in range(5):
+        try:
+            _rate_gate()  # global min-interval (shared scanner/main-bot quota)
+            client = get_client()
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TF_MAP[timeframe],
+                start=start,
+                end=end,
+                feed=DataFeed.SIP,          # explicit: fullest RTH + ext-hours coverage
+                adjustment=Adjustment.RAW,  # explicit: raw basis, matches logged fills
+            )
+            bars = client.get_stock_bars(request)
+            df   = bars.df
+
+            if df.empty:
+                return pd.DataFrame()
+
+            if isinstance(df.index, pd.MultiIndex):
+                df = df.xs(symbol, level="symbol")
+            return df[["open", "high", "low", "close", "volume"]]
+
+        except Exception as e:
+            err = str(e).lower()
+            if any(x in err for x in _RETRYABLE_ERR_SIGNALS):
+                _is_rl = any(x in err for x in _RATE_LIMIT_SIGNALS)
+                if _is_rl:
+                    wait = min(3 * (2 ** attempt), 20)   # 3s, 6s, 12s, 20s, 20s
+                    _reason = "Rate limit"
+                else:
+                    wait = min(2 * (2 ** attempt), 8)    # 2s, 4s, 8s, 8s, 8s
+                    _reason = "Transient error"
+                logger.warning(
+                    "[%s] %s [%s] — waiting %ss (attempt %d/5) [window fetch]",
+                    symbol, _reason, type(e).__name__, wait, attempt + 1,
+                )
+                time.sleep(wait)
+                continue
+            logger.warning(
+                f"[{symbol}] fetch_bars_window error [{type(e).__name__}]: {e}"
+            )
+            return pd.DataFrame()
+
+    logger.warning(f"[{symbol}/{timeframe}] fetch_bars_window: all retries exhausted")
     return pd.DataFrame()
 
 

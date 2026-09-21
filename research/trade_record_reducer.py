@@ -9,10 +9,18 @@ and starved — they need one labeled row PER CLOSED TRADE, tier-agnostic, with 
 component decomposition + realized R-multiple + (where available) MAE/MFE. The tiers log
 ASYMMETRICALLY today, so nothing is measurable across tiers. This reducer normalizes them.
 
-Reads (READ-ONLY, offline — no execution imports, writes logs/ only, RTH block removed):
-  - logs/trade_events.jsonl     (INTRADAY tier; NO trade_id yet -> joined by symbol + FIFO time order)
+Reads (READ-ONLY, offline; writes logs/ only; RTH block removed):
+  - logs/trade_events.jsonl     (INTRADAY/swing tier; NO trade_id yet -> joined by symbol + FIFO time order)
   - logs/day_tier_events.jsonl  (DAY tier; trade_id-keyed; price_samples -> MAE/MFE; decision-joined
                                  via entry_fill.decision_id == decision.decision_id)
+  - 1-min T1 bars via data.fetcher.fetch_bars_window (a READ-ONLY DATA import, NOT an execution
+    import — the only Alpaca client lives in data/fetcher.py) to reconstruct the SWING tier's MAE/MFE
+    over each closed trade's [ts_entry, ts_exit] span. This is the ONLY network dependency; it is
+    fully fail-safe (any miss -> honest null MAE/MFE, never a fabricated 0.0) and skippable with
+    --no-bars. The swing tier has no live price_sample stream (unlike the day tier), and a live
+    5-min water-mark would be blind to the overnight gap (the bot restarts nightly) and un-backfillable
+    — bar reconstruction is accurate to 1-min and backfills the full closed-trade history on run 1
+    (board 3/3 + Gro, 2026-09-21; design record edge_discovery_2026-09-19.md).
 Writes:
   - logs/trade_records.jsonl    (ONE row per closed trade, tier-tagged; DERIVED => safe to delete +
                                  regenerate; BACKFILLS the existing day-tier history)
@@ -28,7 +36,14 @@ import json
 import os
 import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Event ts in this system are PT-aware ISO strings (trade_logger.PT). Used ONLY as a
+# defensive fallback when a legacy ts is tz-NAIVE — a naive ts is assumed PT before
+# converting to UTC, never compared naive against the UTC-indexed bar frame.
+_PT = ZoneInfo("America/Los_Angeles")
 
 # Anchor to repo root (parent of research/) so `import trade_logger` works whether this is run as
 # `python3 -m research.trade_record_reducer` or `python3 research/trade_record_reducer.py`.
@@ -103,18 +118,137 @@ def _by_ts(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: r.get("ts") or "")
 
 
+# ── SWING-TIER MAE/MFE reconstruction from 1-min T1 bars (Inc 2 Piece 1c) ──────────────────────
+# The swing tier logs NO per-observation price stream (unlike the day tier's price_sample path), so
+# MAE/MFE are reconstructed OFFLINE from 1-min bars over each closed trade's [ts_entry, ts_exit].
+# Board 3/3 + Gro (2026-09-21) chose this over a live 5-min water-mark: the live path would be blind
+# to the overnight gap (the bot restarts nightly), un-backfillable, and would mutate two RTH hotspots
+# with a per-scan fsync — bar reconstruction is 1-min accurate, backfills all history, and never
+# touches the trading thread. compute_mae_mfe_R (trade_logger) orients the raw min/max by side.
+
+# One config.TF_1M bar spans 60s. _MAE_BOUNDARY_SECS MUST equal the fetched bar's span — if the
+# reconstruction timeframe ever changes from config.TF_1M, update this with it (the interior filter
+# drops exactly the two partial boundary bars of this width).
+_MAE_BOUNDARY_SECS = 60      # PROV:bar-1min-secs
+# Split / corporate-action / glitch guard: an interior bar beyond [0.5x, 2.0x] the entry fill is a
+# >=2:1 (reverse) split or a bad datum (raw bars vs a raw entry that predates a mid-hold split),
+# which would FABRICATE a huge multi-R excursion on a populated row. A real large-cap (S&P500/NDX100)
+# hold never halves or doubles within the position -> emit honest null instead of a fabricated fat
+# tail. Same data-integrity class as the RC-4 +/-50% fill-price sanity band.
+_MAE_SPLIT_LO_MULT = 0.5     # PROV:split-sanity-band
+_MAE_SPLIT_HI_MULT = 2.0     # PROV:split-sanity-band
+
+
+def _parse_utc(ts):
+    """Parse an ISO ts (PT-aware in this system) to a tz-aware UTC datetime, or None.
+    Defensive: a tz-NAIVE legacy ts is assumed PT (the house display zone) BEFORE converting,
+    so a naive value is never compared against the UTC-indexed bar frame (the board's tz trap)."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_PT)
+    return dt.astimezone(timezone.utc)
+
+
+def _reconstruct_mae_mfe(symbol, entry_price, exit_price, ts_entry, ts_exit, *, bar_fetch=None):
+    """Reconstruct (min_price, max_price) over a CLOSED swing trade's [ts_entry, ts_exit] span from
+    1-min T1 bars. Returns raw prices; trade_logger.compute_mae_mfe_R orients them into mae_R/mfe_R
+    by side. The WHOLE body is fail-safe -> (None, None): a parse/fetch/tz failure yields an honest
+    null (recorded as 'unknown'), NEVER aborts the reduce and NEVER fabricates a 0.0.
+
+    Correctness (board 3/3 acceptance gates + adversarial gate + live-probed conventions, 2026-09-21):
+      - TZ: event ts are PT-aware; Alpaca 1-min bars are UTC-indexed with bar_ts = START-of-bar
+        (probed on OCI). Both endpoints normalized to UTC (via the zone object -> DST-safe) and
+        compared aware-to-aware against the UTC index.
+      - BOUNDARY bars: a 1-min bar's OHLC aggregates the whole minute, so the bars straddling
+        ts_entry/ts_exit carry pre-entry / post-exit prints. Keep ONLY bars fully inside the span:
+        bar_ts >= entry_utc AND bar_ts <= exit_utc - one_bar. min/max are SEEDED with the actual
+        entry & exit fills so the band contains the realized endpoints (keeps the invariant).
+      - HONEST NULL over a fabricated value: a fetch miss/empty, OR an EMPTY interior (a hold too short
+        to contain a full bar, or all-boundary), is UNMEASURABLE at bar granularity -> (None, None).
+        We do NOT fall back to a seed-only band, because for a long winner that yields mae_R=0.0 — a
+        FABRICATED "the stop was never threatened", the single most dangerous input to stop calibration.
+      - SPLIT/GLITCH: an interior bar beyond [0.5x, 2.0x] the entry fill is a >=2:1 split or bad datum
+        (raw bars vs a raw pre-split entry) -> honest null, never a fabricated multi-R fat tail.
+      - COVERAGE: fetch_bars_window pins feed=SIP + adjustment=RAW; SIP returns ~100% of RTH minutes
+        AND extended-hours bars for the S&P500/NDX100 universe (probed on OCI: AAPL 391 RTH incl 229
+        pre-market; IEX also 390), so an overnight swing hold's gap / pre-market extreme IS captured.
+
+    bar_fetch is injectable (tests pass a stub / main() passes --no-bars); default lazily imports the
+    real fetcher so this module imports cleanly where the Alpaca SDK is absent (local/CI)."""
+    try:
+        e = _num(entry_price)
+        x = _num(exit_price)
+        u0 = _parse_utc(ts_entry)
+        u1 = _parse_utc(ts_exit)
+        if e is None or e <= 0 or u0 is None or u1 is None or u1 <= u0:
+            return None, None
+
+        fetch = bar_fetch
+        if fetch is None:
+            import config
+            from data.fetcher import fetch_bars_window
+
+            def fetch(sym, s, en):
+                return fetch_bars_window(sym, config.TF_1M, s, en)
+
+        df = fetch(symbol, u0, u1)
+        if df is None or len(df) == 0:
+            return None, None  # fetch miss / no bars -> honest null (never a seed-only guess)
+
+        # INTERIOR bars only (drop the two boundary minutes). df.index is a tz-aware UTC DatetimeIndex
+        # (verified at source) -> aware-to-aware comparison; a tz-naive index would raise here and be
+        # caught by the outer guard -> (None, None). An EMPTY interior is unmeasurable -> honest null
+        # (NOT a seed-only 0.0 fabrication).
+        cutoff = u1 - timedelta(seconds=_MAE_BOUNDARY_SECS)
+        interior = df[(df.index >= u0) & (df.index <= cutoff)]
+        if len(interior) == 0:
+            return None, None
+        ilo = _num(interior["low"].min())
+        ihi = _num(interior["high"].max())
+        if ilo is None or ihi is None:
+            return None, None
+
+        # Split / corp-action / glitch guard -> honest null (see _MAE_SPLIT_*_MULT).
+        if ilo < _MAE_SPLIT_LO_MULT * e or ihi > _MAE_SPLIT_HI_MULT * e:
+            return None, None
+
+        # Seed with the actual entry & exit fills (the band must contain the realized endpoints ->
+        # keeps -mae_R <= realized_R <= mfe_R), then fold in the interior extremes.
+        lo = min(e, x, ilo) if x is not None else min(e, ilo)
+        hi = max(e, x, ihi) if x is not None else max(e, ihi)
+        return round(lo, 4), round(hi, 4)  # PROV:feat-units-4dp
+    except Exception:
+        return None, None
+
+
 # ── INTRADAY: symbol + FIFO time-order join (no trade_id in the current schema) ────────────────
 
-def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
+def reduce_intraday(rows: list[dict], mae_mfe_fn=None) -> tuple[list[dict], dict]:
     """Join intraday entry -> exit/stop_hit per symbol in FIFO time order. partial_exit accumulates
     onto the oldest open lot; exit_pnl_correction rewrites the matching closed row's P&L (never mask
-    a loss — the correction IS the true fill). Returns (records, stats)."""
+    a loss — the correction IS the true fill). Returns (records, stats).
+
+    mae_mfe_fn(symbol, entry_price, exit_price, ts_entry, ts_exit) -> (min_px, max_px) reconstructs
+    the swing-tier MAE/MFE (Inc 2 Piece 1c). DEFAULT is a null stub (this library function stays PURE
+    / offline / network-free, so it is deterministic and the ReducerIntraday tests need no network);
+    main() opts INTO the real 1-min-bar reconstruction (_reconstruct_mae_mfe) explicitly, and tests
+    inject their own stub. Whatever is passed is fail-safe (never raises), so a miss just yields
+    honest-null MAE/MFE on that row — a signal is never dropped for a bar-fetch failure."""
+    if mae_mfe_fn is None:
+        def mae_mfe_fn(*_a, **_k):
+            return None, None
     open_lots: dict[str, list[dict]] = defaultdict(list)   # symbol -> FIFO list of open entry dicts
     last_closed: dict[str, dict] = {}                       # symbol -> most-recent emitted closed row
     records: list[dict] = []
     stats = {"entries": 0, "closed": 0, "orphan_exits": 0, "partials": 0, "orphan_partials": 0,
              "corrections": 0, "correction_unmatched": 0, "daytrade_skipped": 0,
-             "orphan_wins": 0, "orphan_losses": 0, "orphan_pnl_sum": 0.0}
+             "orphan_wins": 0, "orphan_losses": 0, "orphan_pnl_sum": 0.0,
+             "mae_populated": 0, "mae_null": 0}
 
     for ev in _by_ts(rows):
         # TIER ISOLATION: day-tier trades are dual-written to this shared file by
@@ -194,11 +328,25 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                 weights_version=_INTRADAY_WEIGHTS_VERSION, model_version="score_raw",
                 ts_entry=lot["ts_entry"],
             )
+            # Inc 2 Piece 1c: reconstruct swing-tier MAE/MFE from 1-min bars over [ts_entry, ts_exit].
+            # Fail-safe (never raises) -> honest-null min/max on any miss; compute_mae_mfe_R orients
+            # the raw prices by side. A miss NEVER drops the row (the trade still records, mae/mfe null).
+            try:
+                _min_px, _max_px = mae_mfe_fn(
+                    sym, lot["entry_price"], ev.get("price"), lot["ts_entry"], ev.get("ts"))
+            except Exception:
+                # Defense-in-depth: the real reconstruction is already internally fail-safe, but a
+                # future/injected non-fail-safe fn must still never abort the reduce or drop this row.
+                _min_px = _max_px = None
+            if _min_px is not None and _max_px is not None:
+                stats["mae_populated"] += 1
+            else:
+                stats["mae_null"] += 1
             exit_rec = make_exit_record(
                 trade_id=entry_rec["trade_id"], tier="intraday", symbol=sym,
                 side=lot["side"], entry_price=lot["entry_price"], stop_price=lot["stop"],
                 exit_price=ev.get("price"), qty=lot["qty"], realized_pnl=realized,
-                exit_reason=reason, ts_exit=ev.get("ts"),
+                exit_reason=reason, min_price=_min_px, max_price=_max_px, ts_exit=ev.get("ts"),
             )
             row = make_trade_record(entry_rec, exit_rec)
             records.append(row)
@@ -234,6 +382,16 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                     crow["realized_R"] = compute_realized_R(
                         crow.get("entry_price"), crow.get("stop_price"),
                         corrected_px, crow.get("side"))
+                    # Piece 1c: the corrected exit is a REAL point on the price path, so the
+                    # MAE/MFE excursion band (seeded on the ORIGINAL exit) must contain it —
+                    # else realized_R could fall just outside [-mae_R, mfe_R] on a corrected row.
+                    # Re-widen to include the corrected realized_R; leave a null (bar-miss) null.
+                    _rr = crow.get("realized_R")
+                    if _rr is not None:
+                        if crow.get("mfe_R") is not None:
+                            crow["mfe_R"] = round(max(crow["mfe_R"], _rr, 0.0), 4)  # PROV:feat-units-4dp
+                        if crow.get("mae_R") is not None:
+                            crow["mae_R"] = round(max(crow["mae_R"], -_rr, 0.0), 4)  # PROV:feat-units-4dp
                 except (TypeError, ValueError):
                     pass
             crow["pnl_corrected"] = True
@@ -387,18 +545,51 @@ def _summary(records: list[dict]) -> str:
     return "\n".join(lines) if lines else "  (no closed trades)"
 
 
+def _mae_null_audit(records: list[dict]) -> str:
+    """Selection-bias guard for the swing-tier MAE/MFE bar reconstruction (board 3/3, 2026-09-21).
+    A null mae_R comes from a bar-fetch MISS (halt / delist / data outage), and those cluster on
+    exactly the fat-tail ADVERSE trades (LdP) — so silently dropping nulls from calibration would
+    truncate the adverse tail and re-introduce a too-tight-stop bias through the back door. Report
+    the null set's realized_R vs the populated set so any such skew is auditable, never assumed away."""
+    intr = [r for r in records if r.get("tier") == "intraday"]
+
+    def _rstats(rows: list[dict]) -> str:
+        rs = [r["realized_R"] for r in rows if isinstance(r.get("realized_R"), (int, float))]
+        if not rs:
+            return "n=0"
+        wins = sum(1 for v in rs if v > 0)
+        return f"n={len(rs)} avgR={round(sum(rs) / len(rs), 3)} win={wins}/{len(rs)}"
+
+    null_set = [r for r in intr if r.get("mae_R") is None]
+    pop_set = [r for r in intr if r.get("mae_R") is not None]
+    return (
+        f"  swing MAE/MFE: populated={len(pop_set)} null={len(null_set)}\n"
+        f"    populated realized_R: {_rstats(pop_set)}\n"
+        f"    null      realized_R: {_rstats(null_set)}  "
+        f"(if the null set skews to losses, a halt/delist fetch-miss is truncating the adverse "
+        f"tail — widen the fetch before trusting stop calibration)"
+    )
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Reduce trade lifecycle logs to one row per closed trade.")
     ap.add_argument("--events", default=str(_INTRADAY_EVENTS), help="intraday trade_events.jsonl")
     ap.add_argument("--day-tier", default=str(_DAYTIER_EVENTS), help="day_tier_events.jsonl")
     ap.add_argument("--out", default=str(_OUT), help="output trade_records.jsonl")
     ap.add_argument("--dry-run", action="store_true", help="print summary, do not write")
+    ap.add_argument("--no-bars", action="store_true",
+                    help="skip the swing-tier MAE/MFE 1-min-bar reconstruction (no network; "
+                         "mae_R/mfe_R come out null). Use for a fast offline structural run.")
     args = ap.parse_args(argv)
 
     intr_rows, intr_skipped = _read_jsonl(Path(args.events))
     day_rows, day_skipped = _read_jsonl(Path(args.day_tier))
 
-    intr_recs, intr_stats = reduce_intraday(intr_rows)
+    # main() opts INTO the real 1-min-bar reconstruction (the library default is a null stub so the
+    # function stays pure/network-free for tests). --no-bars keeps it null for a fast offline run.
+    # Fail-safe either way — a miss is honest-null MAE/MFE, never a dropped row.
+    _mae_fn = (lambda *a, **k: (None, None)) if args.no_bars else _reconstruct_mae_mfe
+    intr_recs, intr_stats = reduce_intraday(intr_rows, mae_mfe_fn=_mae_fn)
     day_recs, day_stats = reduce_day_tier(day_rows)
     records = sorted(intr_recs + day_recs, key=lambda r: r.get("ts_entry") or "")
 
@@ -413,6 +604,8 @@ def main(argv=None) -> int:
     print(f"  intraday orphan exits excluded: {intr_stats.get('orphan_exits', 0)} "
           f"(wins={ow} losses={ol} pnl_sum=${round(intr_stats.get('orphan_pnl_sum', 0.0), 2)}) "
           f"| daytrade rows skipped from shared file: {intr_stats.get('daytrade_skipped', 0)}")
+    # Swing-tier MAE/MFE bar-reconstruction coverage + null selection-bias audit (Piece 1c).
+    print(_mae_null_audit(records))
 
     if not args.dry_run:
         _atomic_write_jsonl(Path(args.out), records)
