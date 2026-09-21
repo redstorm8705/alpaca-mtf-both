@@ -10538,3 +10538,83 @@ entry_logic are on the run_cycle scan path). HONESTY: deployed, UNEXERCISED unti
 migration + display-split fork; two taxonomies + live coid tags); (2) Piece 1c — swing-tier MAE/MFE
 water-marks (exit-path min/max tracking); (3) day-tier regime tag (adversarial F2 of 1b-i); (4) 1b-ii
 follow-ups F2/F3/F5; (5) CLAUDE.md dead model-ID example curls.
+
+## 2026-09-21 — edge-discovery Step 1 Increment 2, Piece 1c (swing-tier MAE/MFE) — DESIGN ALIGNED (building)
+
+**Fork resolved (Open Question Protocol, board 3/3 unanimous + Gro; GAI transient-503, mandatory at final diff):**
+The design record (edge_discovery_2026-09-19.md:18/37) literally said "add water-mark tracking to the exit
+path" (= Option A, live 5-min min/max persisted to trade_log.json). The board OVERRODE that in favor of
+**Option B — reducer reconstructs MAE/MFE from 1-min T1 bars OFFLINE** — and the override is unanimous
+(Gro=B, LdP-validation seat=B, reliability/McKinney seat=B).
+
+WHY B beats the design record's literal A (all verified at source this session):
+- A is STRUCTURALLY BLIND to the overnight gap for the SWING tier: the bot restarts nightly, no scan fires
+  16:00→09:30 ET, and an overnight hold's true MAE usually lives in that gap. LdP seat's failing input:
+  true MAE 1.60R, A reports 0.40R (4× under-measurement, in the dangerous stops-too-tight direction).
+- A mutates TWO RTH hotspots + adds a per-scan os.fsync on the run_cycle thread (reliability seat: same
+  starvation class a prior cold-2nd already blocked) — to populate a WRITTEN-ONLY field feeding no decision.
+- A CANNOT backfill: 0 of the starved 3 months get MAE/MFE. B backfills ALL closed trades on its first run
+  (directly attacks the "starved-of-data" diagnosis). B is also DERIVED⇒rebuildable (the reducer's contract);
+  A's water-mark is a write-once, unregenerable side effect.
+- B touches ONLY research/trade_record_reducer.py (offline) + one additive data/fetcher.py window-fetch; NOT
+  risk-path (no size/frequency/concurrency; the fetch never runs on the run_cycle thread).
+
+TWO MANDATORY acceptance-gate fixes both seats named (verified at source):
+1. TIMEZONE: event ts are PT-aware (trade_logger.py:37 PT=America/Los_Angeles; datetime.now(PT)); Alpaca 1-min
+   bars are UTC-indexed with bar_ts=START-of-interval (probed live on OCI 2026-09-21, AAPL 2026-09-16 open).
+   -> convert both ts to UTC via the ZONE OBJECT (not a hardcoded -07:00; a DST-crossing backfill would shift
+   an hour), compare aware-to-aware.
+2. BOUNDARY-BAR contamination: clipping the bar SET doesn't clip WITHIN a bar. Keep ONLY bars fully inside:
+   bar_ts >= ts_entry_utc AND bar_ts <= ts_exit_utc-60s (drops the two partial boundary bars whose OHLC
+   includes pre-entry/post-exit prints). SEED min/max with the actual entry_price & exit_price (bounded,
+   conservative-direction). LdP failing input this fixes: entry 10:30:45, boundary-bar low $99.40 printed
+   10:30:05 (pre-entry) -> naive gives mae 0.60R vs 0.00R true.
+Plus: (3) extend _summary's existing orphan-skew audit with a null-mae_R SELECTION-BIAS report (null set's
+realized_R vs populated) — halt/delist nulls correlate with fat-tail adverse trades (LdP). (4) update the
+reducer's "no execution imports/offline" docstring — B adds a read-only DATA import of data/fetcher.py.
+
+VERIFIED-AT-SOURCE record builders: trade_logger.compute_mae_mfe_R(entry,stop,min,max,side) orients by side +
+clamps>=0; make_exit_record(min_price=,max_price=) already flows them (day-tier path already uses this,
+reducer:346-352). So the intraday path only needs to PASS raw min/max.
+
+BUILD (3 files, additive): data/fetcher.py fetch_bars_window(sym,tf,start,end) [RTH import chain -> Gro/GAI
+gate]; research/trade_record_reducer.py _reconstruct_mae_mfe + reduce_intraday wiring (mae_mfe_fn injectable
+for tests) + null-audit + docstring; tests/test_trade_record_invariant.py. Deferred follow-ups logged:
+(F-1c-a) standardize DAY-tier MAE/MFE onto bar-reconstruction too (today it uses live price_samples = A-style
+coarse; cross-tier method artifact for pooled MAE — level UP, don't degrade swing); (F-1c-b) disk-cache the
+fetched historical windows to data/cache/ for reproducible weekly re-runs (immutable historical bars).
+
+### Piece 1c — adversarial devil's-advocate gate result (2026-09-21)
+Cold-2nd: PASS (interior filter/invariant/fail-safe/regression all traced clean; 3 LOW/INFO nits).
+Adversarial (hostile, future-state + static-assumption hunt) surfaced 2 SHIP-BLOCKERs + follow-ups; each
+was VERIFIED AT SOURCE before acting (not relayed on the agent's assumption):
+- #1 "sparse IEX -> partial-bar under-measurement (silent wrong-populated)" — REFUTED empirically: the
+  default feed returns 390/390 RTH bars (AAPL, probed on OCI) for the S&P500/NDX100 universe.
+- #3 "IEX overnight-blind -> the design's central justification only half-delivered" — REFUTED: the feed
+  ALSO returns extended-hours bars (229 pre-market bars 04:00-09:30 ET), so an overnight swing hold's
+  gap/pre-market extreme IS captured. B's overnight fix is delivered, not half-delivered.
+- #2 "split/corp-action inside a backfilled window fabricates a multi-R excursion on a POPULATED row"
+  (adjustment default = raw; entry_price is a raw fill) — VALID -> FIXED: a split/glitch sanity band
+  (interior bar outside [0.5x, 2.0x] entry -> honest null), same class as the RC-4 +/-50% fill band.
+- #4b "sub-2min seed-only fabricates mae_R=0.0, violating the module's never-fabricate-0.0 contract" —
+  VALID -> FIXED: removed the seed-only short-circuit; an EMPTY interior is now honest null, never a
+  seed-only 0.0. (Also resolves cold-2nd T1 + the #7 finest-data static assumption.)
+- #6 "_MAE_BOUNDARY_SECS=60 hardcoded, decoupled from the fetch TF" -> documented the coupling to
+  config.TF_1M (a runtime derive from the TimeFrame is a follow-up).
+Re-verified after fixes: 66/66 tests on OCI py3.10; real data 44/44 populated, 0 nulls, 0 invariant
+violations (the guards are defensive-only in this window). A FRESH cold-2nd runs on the changed logic.
+
+DEFERRED FOLLOW-UPS (tracked, honest — NOT ship-blocking):
+- (F-1c-c) DETERMINISM/re-runnability (#5): reconstruction is network-dependent + uncached, so a
+  transient fetch failure flips a row populated->null between runs. Historical settled bars are stable,
+  so freeze the OUTPUT file for an analysis run; a trade_id-keyed bar/result cache (freeze once computed)
+  is the durable fix (subsumes F-1c-b).
+- (F-1c-d) CORRECTION PHANTOM (#8): _reconstruct seeds on the ORIGINAL exit; the correction branch only
+  WIDENS, so a mis-logged-HIGH original exit leaves a phantom-favorable seed. Rare (needs a correction
+  AND a high mis-log). Proper fix: re-reconstruct with the corrected exit as seed.
+- (F-1c-e) odd-ratio splits <2:1 (e.g. 3:2 -> 0.67x) are below the 0.5x/2.0x band; the corp-action
+  endpoint is the exhaustive fix (the band catches all >=2:1 splits, the common case).
+- (F-1c-f) pagination (#9): a multi-week window reserves ONE rate slot but get_stock_bars auto-paginates
+  N HTTP calls — offline-only, low stakes; page+gate explicitly for big backfills.
+- (F-1c-g) naive-ts (#10): a tz-naive legacy ts is assumed PT; emit null-with-reason instead of guessing.
+- (F-1c-a) standardize DAY-tier MAE/MFE onto bar-reconstruction too (cross-tier method parity).
