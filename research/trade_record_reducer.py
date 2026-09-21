@@ -146,6 +146,8 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                 "indicators":  {**{k: ev[k] for k in (
                     "tsmom_12m", "tsmom_6m", "tsmom_ewma_vol", "tsmom_vol_mult",
                     "tsmom_direction", "score_16pt") if k in ev},
+                    # Inc 2 Piece 1b-ii: raw continuous entry-TF indicators (rsi/ema/macd/vwap)
+                    **(ev["indicators_raw"] if isinstance(ev.get("indicators_raw"), dict) else {}),
                     # Inc 2 Piece 1b: regime freshness/detail for age-filtering in research
                     **({"regime_ts": ev["regime_ts"]} if "regime_ts" in ev else {}),
                     **({"regime_age_sec": ev["regime_age_sec"]} if "regime_age_sec" in ev else {}),

@@ -598,5 +598,110 @@ class ReducerCapturesRegime(unittest.TestCase):
         self.assertEqual(recs[0]["regime"], "UNKNOWN")
 
 
+class EntryIndicatorsRaw(unittest.TestCase):
+    """Inc 2 Piece 1b-ii: signal_generator._entry_indicators lifts RAW continuous entry-TF values
+    (RSI, EMA spread, MACD histograms, VWAP deviation) fail-safe; the reducer folds them into the
+    per-trade record's indicators dict."""
+
+    def test_helper_extracts_raw_values(self):
+        import pandas as pd
+        try:
+            from strategy.signal_generator import _entry_indicators
+        except Exception as _imp:  # signal_generator pulls the alpaca SDK — absent off the deploy target
+            self.skipTest(f"signal_generator import unavailable ({_imp})")
+        import config
+        # Build a small prepared-style df carrying exactly the columns the summary helpers read.
+        _lbl_std = config.MACD_STANDARD["label"]
+        _lbl_fast = config.MACD_FAST["label"]
+        df = pd.DataFrame({
+            "high": [10.0, 11.0], "low": [9.0, 10.0], "close": [9.5, 10.5], "volume": [1000, 1200],
+            "rsi": [48.0, 55.0],
+            f"ema_{config.EMA_FAST}": [10.1, 10.4], f"ema_{config.EMA_SLOW}": [10.0, 10.2],
+            f"sma_{config.SMA_20}": [10.0, 10.1], f"sma_{config.SMA_150}": [9.0, 9.1],
+            f"sma_{config.SMA_200}": [8.0, 8.1], f"sma_{config.SMA_325}": [7.0, 7.1],
+            f"{_lbl_std}_histogram": [0.05, 0.12], f"{_lbl_fast}_histogram": [-0.02, 0.03],
+            "vwap": [10.3, 10.4],
+        })
+        ind = _entry_indicators(df)
+        self.assertAlmostEqual(ind["rsi"], 55.0)
+        self.assertAlmostEqual(ind["ema_fast"], 10.4)
+        self.assertAlmostEqual(ind["ema_slow"], 10.2)
+        self.assertIsNotNone(ind["ema_spread_pct"])           # (10.4-10.2)/10.5*100
+        self.assertAlmostEqual(ind["macd_hist_std"], 0.12)
+        self.assertAlmostEqual(ind["macd_hist_fast"], 0.03)
+        self.assertAlmostEqual(ind["vwap"], 10.4)
+        self.assertIsNotNone(ind["vwap_dev_pct"])
+        self.assertIn("ind_params", ind)           # parameterization recorded (dynamic-not-static)
+        self.assertIn("ema", ind["ind_params"])
+        self.assertEqual(ind["ind_params"]["feat_version"], 1)
+        # SIGNED vwap deviation: price 10.5 vs vwap 10.4 -> positive (above VWAP)
+        self.assertGreater(ind["vwap_dev_pct"], 0)
+        json.dumps(ind, allow_nan=False)  # strict: no NaN/inf leaks (would be non-spec JSON)
+
+    def test_helper_nan_becomes_none(self):
+        import pandas as pd
+        import numpy as np
+        try:
+            from strategy.signal_generator import _entry_indicators
+        except Exception as _imp:
+            self.skipTest(f"signal_generator import unavailable ({_imp})")
+        import config
+        _lbl_std = config.MACD_STANDARD["label"]
+        _lbl_fast = config.MACD_FAST["label"]
+        df = pd.DataFrame({
+            "high": [10.0], "low": [9.0], "close": [9.5], "volume": [1000],
+            "rsi": [np.nan],
+            f"ema_{config.EMA_FAST}": [np.nan], f"ema_{config.EMA_SLOW}": [np.nan],
+            f"sma_{config.SMA_20}": [np.nan], f"sma_{config.SMA_150}": [np.nan],
+            f"sma_{config.SMA_200}": [np.nan], f"sma_{config.SMA_325}": [np.nan],
+            f"{_lbl_std}_histogram": [np.nan], f"{_lbl_fast}_histogram": [np.nan],
+            "vwap": [np.nan],
+        })
+        ind = _entry_indicators(df)
+        self.assertIsNone(ind["rsi"])
+        self.assertIsNone(ind["ema_spread_pct"])
+        json.dumps(ind, allow_nan=False)  # must not raise — no NaN in the record
+
+    def test_helper_failsafe_on_none_and_missing(self):
+        try:
+            from strategy.signal_generator import _entry_indicators
+        except Exception as _imp:
+            self.skipTest(f"signal_generator import unavailable ({_imp})")
+        import pandas as pd
+        self.assertEqual(_entry_indicators(None), {})
+        # df with no indicator columns -> helper still returns a dict of Nones, never raises
+        ind = _entry_indicators(pd.DataFrame({"close": [1.0]}))
+        self.assertIsInstance(ind, dict)
+        json.dumps(ind)
+
+    def test_reducer_folds_indicators_raw(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0,
+             "target": 110.0, "trade_id": "INTRA-AAPL-y",
+             "indicators_raw": {"rsi": 55.0, "ema_spread_pct": 0.4, "macd_hist_std": 0.12,
+                                "vwap_dev_pct": 0.3}},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit",
+             "direction": "long", "trade_id": "INTRA-AAPL-y"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(len(recs), 1)
+        self.assertAlmostEqual(recs[0]["indicators"]["rsi"], 55.0)
+        self.assertAlmostEqual(recs[0]["indicators"]["ema_spread_pct"], 0.4)
+        self.assertAlmostEqual(recs[0]["indicators"]["macd_hist_std"], 0.12)
+
+    def test_reducer_no_indicators_raw_is_fine(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit", "direction": "long"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(len(recs), 1)
+        self.assertNotIn("rsi", recs[0]["indicators"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

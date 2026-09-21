@@ -1663,6 +1663,9 @@ def execute_entries(
                     # IC/ICIR individually (not just the total score). sig IS long_r/short_r, which
                     # carries "conditions"; this was the only missing link (per-factor never logged).
                     conditions=sig.get("conditions"),
+                    # Inc 2 Piece 1b-ii: RAW continuous entry-TF indicators (RSI/EMA-spread/MACD-hist/
+                    # VWAP-dev) for threshold recalibration — forwarded to the trade_events entry event.
+                    indicators_raw=sig.get("indicators"),
                     **_mr_log_extra,
                     **_gex_log_extra,   # forward GEX-at-entry regime for outcome-pairing calibration
                 )
