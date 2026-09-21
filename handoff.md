@@ -13,16 +13,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 **This session's work, detail, and verify commands live in `logs/tb_audit_log.md` (2026-09-20 entries)**
 and the design records `logs/design_records/edge_discovery_2026-09-19.md` +
 `logs/design_records/bggn_resilience_2026-09-20.md`. SHIPPED this session: edge-discovery Step 1 per-trade
-record layer (PR #356), and BGGN-resilience gate hardening — Gro auto-chunk on TPM overflow + NVIDIA model
-ladder (PR #360). Verify: `gh pr view 356 --json state` → MERGED, `gh pr view 360 --json state` → MERGED;
-`ssh mtf-bot 'grep -c _gro_chunked /home/ubuntu/mtf-bot/.claude/preship/preship_audit.py'` → ≥1. This block
-is only the pointer + the next-action plan.
+record layer (PR #356), BGGN-resilience gate hardening — Gro auto-chunk on TPM overflow + NVIDIA model
+ladder (PR #360), and edge-discovery Inc 2 **Piece 1a** — mints a `trade_id` on the intraday entry/exit
+events (PR #362 → main `9af3d01`/`fdc5b64`, OCI deployed+restarted). Verify: `gh pr view 356/360/362
+--json state` → MERGED; `ssh mtf-bot 'grep -c trade_id= /home/ubuntu/mtf-bot/execution/portfolio_tracker.py'`
+→ ≥1; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_trade_record_invariant 2>&1 | tail -1'`
+→ OK (38). Full detail/rationale: `logs/tb_audit_log.md` 2026-09-20 Piece-1a entry. This block is only the
+pointer + the next-action plan.
 
-**⏩ EXACT NEXT ACTION:** edge-discovery Step 1 Increment 2 — wire the record builders into the LIVE emit
-per `logs/design_records/edge_discovery_2026-09-19.md`: mint a trade_id every tier, emit the intraday
-entry/exit record, add MAE/MFE water-marks to the exit path, and log gated-out (rejected) signals. Touches
-the RTH hotspots (`portfolio_tracker` / `entry_logic` / `day_trade_manager` / `regime_state`) → masked-loss
-seat + full board gate. COORDINATE with the parallel Core MTF thread (block below): EXTEND the PR #356 shared
+**⏩ EXACT NEXT ACTION:** edge-discovery Step 1 Increment 2 **Piece 1b** — add continuous `indicators`
++ `regime` to the intraday ENTRY event; THEN Piece 1c — intraday MAE/MFE water-marks. Design, the
+regime-source I/O note, and the exact approach are in the `logs/tb_audit_log.md` 2026-09-20 Piece-1a entry
++ `logs/design_records/edge_discovery_2026-09-19.md`. Both touch RTH hotspots → masked-loss seat + full
+board gate. COORDINATE with the parallel Core MTF thread (block below): EXTEND the PR #356 shared
 trade-record schema, do NOT create a competing tag format.
 
 **THEN (queued):** (1) QHM memo→execution wiring + 2-Slack-card consolidation + full memo in Slack (design
