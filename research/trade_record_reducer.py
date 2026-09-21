@@ -142,9 +142,14 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                 "conditions":  ev.get("conditions") or {},
                 "ts_entry":    ev.get("ts"),
                 "trade_id":    ev.get("trade_id"),   # Inc 2: real minted id when present; None for legacy
-                "indicators":  {k: ev[k] for k in (
+                "regime":      ev.get("regime"),     # Inc 2 Piece 1b: swing-tier daily regime label
+                "indicators":  {**{k: ev[k] for k in (
                     "tsmom_12m", "tsmom_6m", "tsmom_ewma_vol", "tsmom_vol_mult",
                     "tsmom_direction", "score_16pt") if k in ev},
+                    # Inc 2 Piece 1b: regime freshness/detail for age-filtering in research
+                    **({"regime_ts": ev["regime_ts"]} if "regime_ts" in ev else {}),
+                    **({"regime_age_sec": ev["regime_age_sec"]} if "regime_age_sec" in ev else {}),
+                    **({"regime_detail": ev["regime_detail"]} if "regime_detail" in ev else {})},
             })
 
         elif et == "partial_exit":
@@ -183,6 +188,7 @@ def reduce_intraday(rows: list[dict]) -> tuple[list[dict], dict]:
                 score_raw=lot["score"], score_max=12,
                 components=make_components(lot["conditions"], _INTRADAY_WEIGHTS_2026_09),
                 indicators=lot["indicators"], mri_level=lot["mri_level"],
+                regime=lot.get("regime") or "UNKNOWN",   # Inc 2 Piece 1b
                 weights_version=_INTRADAY_WEIGHTS_VERSION, model_version="score_raw",
                 ts_entry=lot["ts_entry"],
             )

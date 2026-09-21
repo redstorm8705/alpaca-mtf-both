@@ -434,5 +434,165 @@ class ReducerUsesRealTradeId(unittest.TestCase):
         self.assertEqual(recs[0]["trade_id"], "INTRA-AAPL-2026-09-01T07:00:00-07:00")
 
 
+class LiveEmitRegime(unittest.TestCase):
+    """Inc 2 Piece 1b: the swing-tier entry event carries the daily regime label + detail + ts,
+    and the reader helper fail-safes to UNKNOWN on a missing/malformed ledger (never raises on the
+    trading thread; never fresh-washes a stale/absent regime)."""
+
+    def test_entry_event_carries_regime(self):
+        import tempfile
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        captured = []
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(PT, "TRADE_LOG_FILE", Path(d) / "trade_log.json"), \
+                 mock.patch.object(PT, "_log_event",
+                                   lambda event, **kw: captured.append({"event": event, **kw})), \
+                 mock.patch.object(PT, "_read_regime_snapshot",
+                                   lambda: ("BULL", {"vol_composite": "BULL", "any_stale": True},
+                                            "2026-09-18T13:12:04-07:00", 123.4)):
+                tr = PT.PortfolioTracker()
+                tr.record_entry("AAPL", "long", 3, 100.0, 95.0, 110.0, "intraday", 9)
+        entry = [e for e in captured if e["event"] == "entry"][0]
+        self.assertEqual(entry["regime"], "BULL")
+        self.assertEqual(entry["regime_detail"]["vol_composite"], "BULL")
+        self.assertEqual(entry["regime_ts"], "2026-09-18T13:12:04-07:00")
+        self.assertEqual(entry["regime_age_sec"], 123.4)
+
+    def test_regime_snapshot_failsafe_unknown_on_missing(self):
+        import tempfile
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(PT, "_REGIME_LEDGER", Path(d) / "nope.json"):
+                label, detail, ts, age = PT._read_regime_snapshot()
+        self.assertEqual(label, "UNKNOWN")
+        self.assertEqual(detail, {})
+        self.assertIsNone(ts)
+        self.assertIsNone(age)
+
+    def test_regime_snapshot_reads_real_ledger(self):
+        import json as _j
+        import tempfile
+        from datetime import datetime as _dt, timedelta as _timedelta, timezone as _tz
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        # Deterministic regardless of wall clock: a ledger stamped 2 days BEFORE now must read
+        # back as ~2 days old (fresh-wash guard — a stale ledger is visibly old, never age 0).
+        _ts = (_dt.now(_tz.utc) - _timedelta(days=2)).isoformat()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "regime_state.json"
+            p.write_text(_j.dumps({"ts": _ts,
+                                   "summary": {"vol_composite": "BULL", "vol_regime": "normal",
+                                               "any_stale": False}}))
+            with mock.patch.object(PT, "_REGIME_LEDGER", p):
+                label, detail, ts, age = PT._read_regime_snapshot()
+        self.assertEqual(label, "BULL")
+        self.assertEqual(detail.get("vol_composite"), "BULL")
+        self.assertEqual(ts, _ts)
+        self.assertIsNotNone(age)
+        self.assertGreater(age, 1.9 * 86400)   # visibly ~2 days old
+        self.assertLess(age, 2.1 * 86400)
+
+    def test_regime_age_helper_never_crashes(self):
+        # Devil's-advocate hardening: the age helper must never raise on the trading thread and
+        # must fail-safe to None on anything unparseable (naive ts, Z-suffix, garbage, None,
+        # non-string). A parseable ts returns a non-negative float. Verified on OCI py3.10.
+        import execution.portfolio_tracker as PT
+        # (1) NEVER raises for ANY input — the only hard guarantee (result is None or float).
+        #     "...Z" is version-dependent (py3.10 -> None, py3.11+ -> float) so it is only checked
+        #     here for no-crash, never asserted to a specific value.
+        for anything in ("garbage!!!", "", None, 12345, "2026-13-99T99:99:99",
+                         "2026-09-18T16:12:00Z", "2026-09-18T16:12:00", [], {}):
+            r = PT._regime_age_seconds(anything)
+            self.assertTrue(r is None or isinstance(r, float), f"bad return for {anything!r}: {r!r}")
+        # (2) Definitely-unparseable inputs fail-safe to None.
+        for bad in ("garbage!!!", "", None, 12345, "2026-13-99T99:99:99"):
+            self.assertIsNone(PT._regime_age_seconds(bad), f"expected None for {bad!r}")
+        # (3) Parseable timestamps (naive or offset) return a non-negative float — no crash.
+        for ok in ("2026-09-18T16:12:00", "2026-09-18 16:12:00", "2026-09-18T13:12:04.1-07:00"):
+            v = PT._regime_age_seconds(ok)
+            self.assertIsInstance(v, float, f"expected float for {ok!r}")
+            self.assertGreaterEqual(v, 0.0)
+
+    def test_regime_snapshot_malformed_is_unknown(self):
+        import tempfile
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "regime_state.json"
+            p.write_text("not json {{{")
+            with mock.patch.object(PT, "_REGIME_LEDGER", p):
+                label, detail, ts, age = PT._read_regime_snapshot()
+        self.assertEqual(label, "UNKNOWN")
+
+    def test_read_snapshot_extracts_raw_signals_full_ledger(self):
+        # F1/F4 CONTRACT: this fixture mirrors strategy.regime_state.compute_regime_state() output
+        # (regime_state.py compute_regime_state -> {ts, vol{...}, macro{...}, market_mr{...},
+        # summary{...}}). If that schema is renamed, update BOTH _read_regime_snapshot AND this
+        # fixture. Asserts the reader lifts the RAW numeric signals (not just labels) so the record
+        # is dynamic-recalibration-ready without a sidecar join.
+        import json as _j
+        import tempfile
+        from unittest import mock
+        import execution.portfolio_tracker as PT
+        state = {
+            "ts": "2026-09-18T13:12:04.116843-07:00",
+            "vol": {"fresh": True, "regime": "normal", "realized_vol": 14.2,
+                    "composite": "BULL", "vix_term_ratio": 0.93, "spy_vs_50sma_pct": 2.1},
+            "macro": {"fresh": False, "label": "UNKNOWN", "composite_score": None, "confidence": None},
+            "market_mr": {"fresh": True, "mean_reverting": True, "variance_ratio": 0.78, "hurst": 0.41},
+            "summary": {"vol_regime": "normal", "vol_composite": "BULL", "macro_label": "UNKNOWN",
+                        "market_mean_reverting": True, "any_stale": True},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "regime_state.json"
+            p.write_text(_j.dumps(state))
+            with mock.patch.object(PT, "_REGIME_LEDGER", p):
+                label, detail, ts, age = PT._read_regime_snapshot()
+        self.assertEqual(label, "BULL")
+        # summary labels preserved
+        self.assertEqual(detail["vol_composite"], "BULL")
+        self.assertTrue(detail["any_stale"])
+        # RAW signals lifted from the component dicts (the F1 point)
+        self.assertEqual(detail["realized_vol"], 14.2)
+        self.assertEqual(detail["vix_term_ratio"], 0.93)
+        self.assertEqual(detail["variance_ratio"], 0.78)
+        self.assertEqual(detail["hurst"], 0.41)
+        # per-component freshness (the F3 write-time-staleness signal)
+        self.assertTrue(detail["vol_fresh"])
+        self.assertFalse(detail["macro_fresh"])
+        self.assertTrue(detail["mr_fresh"])
+
+
+class ReducerCapturesRegime(unittest.TestCase):
+    def test_regime_on_record(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0,
+             "target": 110.0, "trade_id": "INTRA-AAPL-x", "regime": "BULL",
+             "regime_ts": "2026-08-31T13:12:00-07:00",
+             "regime_detail": {"vol_composite": "BULL", "any_stale": False}},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit",
+             "direction": "long", "trade_id": "INTRA-AAPL-x"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["regime"], "BULL")
+        self.assertEqual(recs[0]["indicators"]["regime_ts"], "2026-08-31T13:12:00-07:00")
+        self.assertEqual(recs[0]["indicators"]["regime_detail"]["vol_composite"], "BULL")
+
+    def test_legacy_row_without_regime_is_unknown(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 1, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T08:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 1, "pnl": 10.0, "reason": "take_profit", "direction": "long"},
+        ]
+        recs, _ = R.reduce_intraday(evs)
+        self.assertEqual(recs[0]["regime"], "UNKNOWN")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
