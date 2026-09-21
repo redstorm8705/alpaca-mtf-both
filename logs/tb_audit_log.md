@@ -10394,3 +10394,47 @@ APPROVE on the exact diff; statics clean. **NVIDIA endpoint currently 410/404 fo
 OPTIONAL fallback (Rafael 2026-09-20), NOT a blocker; Gro-chunk + GAI-ladder are the primary
 resilience.** Follow-up (low-pri, optional): re-provision NVIDIA NIM model access if the backstop is
 wanted.
+
+## 2026-09-20 — edge-discovery Step 1 Increment 2, Piece 1a (trade_id keystone) — SHIPPED
+
+**What:** Minted a real per-trade join key `trade_id` on the LIVE intraday trade lifecycle events
+(entry / overnight-fill / exit / stop_hit / pnl-correction) in `execution/portfolio_tracker.py`, made
+`research/trade_record_reducer.py` prefer it over the synthesized `INTRA-{sym}-{ts}` id (FIFO pairing
+unchanged), and added a live-path enforcing test (`tests/test_trade_record_invariant.py`:
+`LiveEmitTradeId` drives the REAL record_entry->record_exit and asserts the entry and exit events
+emit the SAME non-empty id; `ReducerUsesRealTradeId`).
+
+**Why:** Intraday trades carried no join key; the reducer guessed entry->exit by symbol+FIFO. That
+"no join key" gap is the class that let a 7-day silent entry-drop hide (a dropped entry looked like
+an orphan exit). A real id makes the join deterministic and the reconciliation invariant ("every
+exit's id has a matching entry") checkable. This is the measurement fuel the ic_engine/deflated_sharpe
+research modules were starved of.
+
+**Safety:** Pure additive IDENTITY string. NOT risk-path — no P&L/sizing/gate/order/kill-switch math
+touched (masked-loss/P&L seat verified byte-for-byte; `_total_pnl` and record_exit's return unchanged;
+`trade_id` had 0 prior occurrences => no key collision; written-only, read only by the offline reducer
++ event log). Legacy positions restored from disk log `trade_id=None`, handled everywhere. A cold-2nd
++ board consensus NIT was applied: record_entry's entry-event `_log_event` now drops BOTH `score_16pt`
+AND `trade_id` from `**extra_log` so a future caller forwarding either cannot raise a duplicate-kwarg
+TypeError on the trading thread.
+
+**Gate:** statics clean (py_compile / ruff E,W,F,B / mypy --warn-unreachable) · 38/38 tests ·
+board 3/3 APPROVE (masked-loss/P&L + reliability + cold-2nd PASS) · Gro APPROVE · GAI APPROVE ·
+FINAL preship Gro+GAI APPROVE on staged sha (all 3 files) · fresh cold-2nd + adversarial PASS on
+shipped bytes. RC classes on portfolio_tracker touched lines: RC-1 tz-aware (datetime.now(_PT)) PASS,
+RC-3 no new bare-except PASS, RC-5 n/a (no new file write), RC-6 n/a.
+
+**Deploy:** PR feat/edge-discovery-step1-inc2-trade-id -> main; OCI `git pull --ff-only` + restart
+mtf-bot/mtf-writer/mtf-http (portfolio_tracker is imported by the run_cycle path). reducer + test are
+offline (no restart impact on their own). HONESTY: deployed, UNEXERCISED until the next live intraday
+entry mints an id.
+
+**Side finding (logged, low-pri):** CLAUDE.md's Gro/GAI DIRECT API PROTOCOL example curls pin DEAD
+model IDs (`llama-3.3-70b-versatile` Groq 404; `gemini-2.5-flash` blocked for new users). The ENFORCED
+preship tooling is already healthy (preship_audit.py uses `openai/gpt-oss-120b` + a self-healing Gemini
+ladder `gemini-3.1-flash-lite`->…, with gai_health.py canary). Only the CLAUDE.md doc examples are stale.
+
+**Next (Increment 2 remaining pieces):** 1b — continuous indicators + regime (cached regime_state.json
+read, NOT live I/O on the trading thread) on the intraday entry event; 1c — intraday MAE/MFE water-marks
+(per-cycle min/max in exit_logic + reducer pass-through); then day-tier symmetric emit + gated-out signal
+logging.
