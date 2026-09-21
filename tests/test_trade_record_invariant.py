@@ -15,6 +15,7 @@ Guards the measurement contract:
 import json
 import sys
 import unittest
+from datetime import timezone
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np  # noqa: E402  research engines already depend on numpy
+import pandas as pd  # noqa: E402  reducer bar-reconstruction (Piece 1c) uses DataFrame bars
 
 from trade_logger import (  # noqa: E402
     ENTRY_NONNULL_FIELDS,
@@ -701,6 +703,182 @@ class EntryIndicatorsRaw(unittest.TestCase):
         recs, _ = R.reduce_intraday(evs)
         self.assertEqual(len(recs), 1)
         self.assertNotIn("rsi", recs[0]["indicators"])
+
+
+def _bars(rows):
+    """Build a UTC-indexed OHLCV DataFrame (matches data.fetcher's return shape) from
+    (utc_iso, low, high) tuples — the bar_fetch stub for the reconstruction tests."""
+    idx = pd.to_datetime([r[0] for r in rows], utc=True)
+    return pd.DataFrame(
+        {"open": [r[1] for r in rows], "high": [r[2] for r in rows],
+         "low": [r[1] for r in rows], "close": [r[2] for r in rows],
+         "volume": [1 for _ in rows]},
+        index=idx,
+    )
+
+
+class SwingMaeMfeReconstruction(unittest.TestCase):
+    """Inc 2 Piece 1c — offline 1-min-bar reconstruction of swing-tier MAE/MFE. tz-correct
+    (PT event ts vs UTC bars), boundary-bar drop + entry/exit seed, honest-null on miss, fail-safe.
+    bar_fetch is injected so NO network is touched (board 3/3 + Gro, 2026-09-21)."""
+
+    def test_parse_utc_pt_to_utc(self):
+        dt = R._parse_utc("2026-07-15T09:35:00-07:00")   # 09:35 PDT == 16:35 UTC
+        self.assertEqual(dt.tzinfo, timezone.utc)
+        self.assertEqual((dt.hour, dt.minute), (16, 35))
+
+    def test_parse_utc_naive_assumed_pt(self):
+        dt = R._parse_utc("2026-07-15T09:35:00")         # naive -> assumed PT -> 16:35 UTC
+        self.assertEqual((dt.hour, dt.minute), (16, 35))
+
+    def test_parse_utc_bad_is_none(self):
+        self.assertIsNone(R._parse_utc("not-a-date"))
+        self.assertIsNone(R._parse_utc(None))
+
+    def test_boundary_bars_dropped_and_seed_used(self):
+        # Board's failing input: long entry 10:30:45 ET (14:30:45 UTC), exit 10:45:30 ET (14:45:30 UTC).
+        # The 14:30 bar STARTS before entry and its $99.40 low printed pre-entry -> must NOT count.
+        # The 14:45 bar ENDS after exit ($98.00 low is post-exit) -> must NOT count. Interior lows
+        # 99.90/99.95; seed = entry 100.0 / exit 100.2. Expect min=99.90 (not 99.40, not 98.00), max=101.20.
+        entry_ts = "2026-07-15T07:30:45-07:00"
+        exit_ts = "2026-07-15T07:45:30-07:00"
+        rows = [
+            ("2026-07-15T14:30:00Z", 99.40, 100.10),   # boundary (start < entry) -> DROP
+            ("2026-07-15T14:31:00Z", 99.90, 100.50),   # interior
+            ("2026-07-15T14:40:00Z", 99.95, 101.20),   # interior (max)
+            ("2026-07-15T14:45:00Z", 98.00, 100.30),   # boundary (end > exit) -> DROP
+        ]
+        got = R._reconstruct_mae_mfe("X", 100.0, 100.2, entry_ts, exit_ts,
+                                     bar_fetch=lambda *a, **k: _bars(rows))
+        self.assertAlmostEqual(got[0], 99.90, places=4)
+        self.assertAlmostEqual(got[1], 101.20, places=4)
+
+    def test_sub_bar_hold_empty_interior_is_null(self):
+        # A hold too short to contain a full interior bar -> UNMEASURABLE -> honest null, NOT a
+        # seed-only 0.0 (which would fabricate "the stop was never threatened"). Window 07:30:30->
+        # 07:31:15 (45s): cutoff = u1-60s < u0, so NO interior bar can survive regardless of the fetch.
+        got = R._reconstruct_mae_mfe("X", 100.0, 100.5,
+                                     "2026-07-15T07:30:30-07:00", "2026-07-15T07:31:15-07:00",
+                                     bar_fetch=lambda *a, **k: _bars([("2026-07-15T14:31:00Z", 99.9, 100.6)]))
+        self.assertEqual(got, (None, None))
+
+    def test_split_in_window_is_null(self):
+        # An interior bar at ~0.3x the entry fill (a >2:1 split, or a raw-vs-adjusted glitch) would
+        # FABRICATE a huge MAE -> honest null instead. entry 100, interior low 30 (< 0.5 x 100).
+        rows = [
+            ("2026-07-15T14:32:00Z", 30.0, 31.0),   # split-side bar -> triggers the guard
+            ("2026-07-15T14:40:00Z", 30.5, 31.5),
+        ]
+        got = R._reconstruct_mae_mfe("X", 100.0, 30.5,
+                                     "2026-07-15T07:30:00-07:00", "2026-07-15T08:00:00-07:00",
+                                     bar_fetch=lambda *a, **k: _bars(rows))
+        self.assertEqual(got, (None, None))
+
+    def test_empty_fetch_is_honest_null(self):
+        # >=2min window but the fetch returns nothing (halt/delist/outage) -> honest null, NOT a
+        # fabricated under-stated excursion from the seed alone.
+        got = R._reconstruct_mae_mfe("X", 100.0, 100.2,
+                                     "2026-07-15T07:30:00-07:00", "2026-07-15T08:00:00-07:00",
+                                     bar_fetch=lambda *a, **k: _bars([]))
+        self.assertEqual(got, (None, None))
+
+    def test_failsafe_on_raising_fetch(self):
+        def _boom(*a, **k):
+            raise RuntimeError("network down")
+
+        got = R._reconstruct_mae_mfe("X", 100.0, 100.2,
+                                     "2026-07-15T07:30:00-07:00", "2026-07-15T08:00:00-07:00",
+                                     bar_fetch=_boom)
+        self.assertEqual(got, (None, None))       # whole body try/except -> null, never raises
+
+    def test_bad_ts_is_null(self):
+        self.assertEqual(R._reconstruct_mae_mfe("X", 100.0, 100.2, "bad", "also-bad"), (None, None))
+
+    def test_reduce_intraday_wires_mae_into_record(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 3, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T09:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 3, "pnl": 30.0, "reason": "take_profit", "direction": "long"},
+        ]
+        # Stub min=92,max=112; long risk=|100-95|=5 -> mae_R=(100-92)/5=1.6, mfe_R=(112-100)/5=2.4.
+        recs, stats = R.reduce_intraday(evs, mae_mfe_fn=lambda *a, **k: (92.0, 112.0))
+        self.assertEqual(len(recs), 1)
+        self.assertAlmostEqual(recs[0]["mae_R"], 1.6, places=4)
+        self.assertAlmostEqual(recs[0]["mfe_R"], 2.4, places=4)
+        self.assertEqual(stats["mae_populated"], 1)
+        self.assertEqual(stats["mae_null"], 0)
+
+    def test_reduce_intraday_null_mae_when_stub_returns_none(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 3, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T09:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 3, "pnl": 30.0, "reason": "take_profit", "direction": "long"},
+        ]
+        recs, stats = R.reduce_intraday(evs, mae_mfe_fn=lambda *a, **k: (None, None))
+        self.assertIsNone(recs[0]["mae_R"])
+        self.assertIsNone(recs[0]["mfe_R"])
+        self.assertEqual(stats["mae_null"], 1)
+
+    def test_reduce_intraday_survives_raising_mae_fn(self):
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 3, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T09:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 3, "pnl": 30.0, "reason": "take_profit", "direction": "long"},
+        ]
+
+        def _boom(*a, **k):
+            raise RuntimeError("bad fn")
+
+        recs, stats = R.reduce_intraday(evs, mae_mfe_fn=_boom)   # must NOT crash the reduce
+        self.assertEqual(len(recs), 1)
+        self.assertIsNone(recs[0]["mae_R"])
+        self.assertEqual(stats["mae_null"], 1)
+
+    def test_default_reduce_intraday_is_network_free(self):
+        # The library default must stay PURE (null stub) — no network, deterministic, mae null.
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 3, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T09:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 3, "pnl": 30.0, "reason": "take_profit", "direction": "long"},
+        ]
+        recs, _ = R.reduce_intraday(evs)   # no mae_mfe_fn -> null stub, no import of data.fetcher
+        self.assertIsNone(recs[0]["mae_R"])
+
+    def test_mae_null_audit_reports_both_sets(self):
+        rows = [
+            {"tier": "intraday", "mae_R": 1.0, "realized_R": 2.0},
+            {"tier": "intraday", "mae_R": None, "realized_R": -1.0},
+            {"tier": "daytrade", "mae_R": None, "realized_R": 0.5},   # excluded from the intraday audit
+        ]
+        s = R._mae_null_audit(rows)
+        self.assertIn("populated=1", s)
+        self.assertIn("null=1", s)
+
+    def test_correction_rewidens_excursion_band(self):
+        # A P&L correction rewrites exit_price/realized_R AFTER MAE/MFE were seeded on the ORIGINAL
+        # exit. The corrected exit is a real point on the path, so the band must contain it — else
+        # realized_R falls outside [-mae_R, mfe_R]. entry 100/stop 95 (risk 5); stub band (98,112)
+        # -> mae_R 0.4 / mfe_R 2.4; correction to exit 115 -> realized_R 3.0 (> 2.4) -> mfe_R re-widens.
+        evs = [
+            {"ts": "2026-09-01T07:00:00-07:00", "event": "entry", "symbol": "AAPL",
+             "price": 100.0, "size": 3, "score": 9, "direction": "long", "stop": 95.0, "target": 110.0},
+            {"ts": "2026-09-01T09:00:00-07:00", "event": "exit", "symbol": "AAPL",
+             "price": 110.0, "size": 3, "pnl": 30.0, "reason": "take_profit", "direction": "long"},
+            {"ts": "2026-09-01T09:00:10-07:00", "event": "exit_pnl_correction", "symbol": "AAPL",
+             "corrected_exit_price": 115.0, "corrected_pnl": 45.0},
+        ]
+        recs, _ = R.reduce_intraday(evs, mae_mfe_fn=lambda *a, **k: (98.0, 112.0))
+        row = recs[0]
+        self.assertAlmostEqual(row["realized_R"], 3.0, places=4)
+        self.assertAlmostEqual(row["mfe_R"], 3.0, places=4)          # re-widened from 2.4 to 3.0
+        self.assertAlmostEqual(row["mae_R"], 0.4, places=4)          # unchanged (favorable correction)
+        # invariant now holds on the corrected row
+        self.assertGreaterEqual(row["realized_R"], -row["mae_R"])
+        self.assertLessEqual(row["realized_R"], row["mfe_R"])
 
 
 if __name__ == "__main__":
