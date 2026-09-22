@@ -1,0 +1,45 @@
+Midday Gemini Audit — 2026-09-21
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+(Session shows severe execution logic failures regarding stop-loss calculation/direction and entry filtering, resulting in a 0% win rate and systematic P&L degradation.)
+
+### PERFORMANCE AUDIT
+- **P&L Sign Inversion (NFLX):** entry $71.64 → exit $73.20 ($-3.12). This was a **Long** entry (score 11/12, MRI=STRESSED). An exit at a higher price ($73.20 > $71.64) should result in a profit, but a loss of $-3.12 was recorded.
+- **Stop-Loss Logic Failure (NFLX):** For a Long entry at $71.64, the stop was set at $75.27 (above entry) and targets were set below entry (T1=$69.75). The bot used **Short** risk parameters for a **Long** trade, causing an immediate "stop_hit" as the price was already "below" the inverted stop.
+- **Score/Outcome Correlation:** Negative. The highest score entries (NFLX 11/12, MARA 10/12) resulted in the worst outcomes or immediate exits, while 0/12 score entries (AMZN, MSFT) were allowed to execute.
+- **Stop-Hit Rate:** 25% (1/4), but the "stop" was logically inverted, making the metric meaningless for strategy evaluation.
+
+### ENTRY QUALITY
+- **Severe Logic Gap (AMZN/MSFT):** Both symbols were entered with a **score of 0/12**. This violates `MIN_LONG_SCORE = 8`. 
+- **MRI Contradiction:** MARA and NFLX were entered while `MRI=STRESSED`. While flagged, the bot's `Dynamic MIN_SCORE` logic (log 17:27:46.566) claims to filter based on MRI, yet these entries proceeded.
+- **Directional Conflict:** AMZN Long signal was explicitly "filtered by weekly bias (BEARISH)" at 17:27:46.455, yet CLOSED TRADE DETAILS shows an AMZN trade occurred.
+
+### EXIT QUALITY
+- **Inverted Levels:** NFLX exit was triggered by a "stop_hit" because the stop ($75.27) was placed on the wrong side of the entry ($71.64) for a Long position.
+- **Unknown Levels:** AMZN and MSFT exits are marked "levels=unknown," suggesting the trades were initiated without a valid risk bracket.
+
+### MRI ALIGNMENT
+- **Failure:** The bot entered MARA and NFLX during `MRI=STRESSED` conditions. Although the log shows `Dynamic MIN_SCORE` was raised to 10/12 to compensate for market conditions, the execution of 0/12 score trades (AMZN/MSFT) proves the entry filter is being bypassed or is non-functional.
+
+### LOG ANOMALIES
+- **FIFO Orphans:** "FIFO orphan: closing fill for AMZN/MSFT has no prior lot" (17:28:33.689). This confirms the bot is exiting positions it has no internal record of opening, likely due to the D1 missing-entry-event bug.
+- **P&L Drift:** A drift of $-8.04 between Alpaca ($-11.16) and tracker ($-3.12) indicates the bot is blind to a significant portion of its realized losses.
+- **Size Calculation Failure:** AMD entry was skipped because `Size 0sh < 2-share minimum`. The dollar_cap was $87.54, but the price was $606.35. The bot is attempting to trade high-nominal stocks on a $2.5K account with aggressive volatility scaling, resulting in "Size 0" deadlocks.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | Risk Parameter Inversion** | NFLX Long trade used Short stop/target logic (Stop > Entry, Target < Entry).
+- **EXECUTION BUG | HIGH | Entry Filter Bypass** | AMZN and MSFT entered with 0/12 score despite `MIN_LONG_SCORE = 8`.
+- **EXECUTION BUG | HIGH | Weekly Bias Bypass** | AMZN Long executed despite log stating "filtered by weekly bias (BEARISH)".
+- **INFRASTRUCTURE | MEDIUM | EOD P&L Drift** | $8.04 discrepancy between Alpaca ground truth and internal ledger suggests the bot is making sizing decisions based on stale/wrong capital data.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION:** Audit `entry_logic.py` and `confluence.py` to determine why 0/12 score signals are bypassing the `MIN_SCORE` gate and why weekly bias filters are logged but not enforced.
+2. **EXECUTION:** Fix the risk-bracket constructor to ensure `stop_price` is always `< entry_price` for Longs and `> entry_price` for Shorts.
+3. **ALPHA:** Implement a price-floor check in sizing logic; if `account_balance` / `price` < `MIN_SHARES`, the ticker should be blacklisted for the session to prevent "Size 0" log spam and cycle waste.
