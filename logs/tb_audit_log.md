@@ -10618,3 +10618,56 @@ DEFERRED FOLLOW-UPS (tracked, honest — NOT ship-blocking):
   N HTTP calls — offline-only, low stakes; page+gate explicitly for big backfills.
 - (F-1c-g) naive-ts (#10): a tz-naive legacy ts is assumed PT; emit null-with-reason instead of guessing.
 - (F-1c-a) standardize DAY-tier MAE/MFE onto bar-reconstruction too (cross-tier method parity).
+
+## 2026-09-21 — Day-tier Track B Increment 1: momentum entry trigger — SHIPPED (signal only)
+
+**Trigger:** Rafael "META moved today and the bot didn't trade it — build it." Root-caused AT SOURCE: the
+day-tier is LIVE (DAYTRADE_ENABLED=True, run_day_tier.py every 2 min, places real orders) but Track A only
+— a GEX-wall MEAN-REVERSION strategy (fade a failed wall sweep / ride a close-through). A directional gap
+is not a wall setup, so it correctly WAITed on META. (Owned 3 in-session errors from insufficient search:
+NFLX "$73 anomaly" = a real split; day-tier "inert shadow" = actually LIVE (stale docstrings); momentum
+"doesn't exist" = a retired Movers bot + Track B scaffolding + momentum indicators DO exist.) The design
+record §7 already chose day-tier Track B (dynamic-mover momentum) as the path; the retired standalone
+Movers bot is legacy (its raw TP5%/SL1% gap-buy is the negative-base-rate chase §0 rejected).
+
+**Decision (board seat Simons/Harris + Gro + GAI, unanimous Option A):** build Track B — a PARALLEL
+momentum path, NOT extending the GEX RIDE (pin-fade and momentum are opposite-sign, "can't blend into one
+score"; blending would corrupt the shuffled-GEX-label control test). Design record:
+logs/design_records/day_tier_track_b_momentum_2026-09-21.md (registered via record_design).
+
+**Inc 1 (this ship): the momentum TRIGGER** — strategy/day_tier_momentum_trigger.py (277L) +
+tests/test_day_tier_momentum_trigger.py (24 cases). A PURE fail-safe signal: ENTER only on a
+volume-confirmed, non-over-extended BREAK-AND-HOLD of a TRADEABLE opening-range level on the gap side
+(buffered break confirmed by a subsequent hold bar; current-held-episode anchor so an early shakeout does
+not poison a later clean break; VWAP hard filter fail-closed; rolling-median volume; deep-wick-flush
+reject; extension guard; DRIVE/PULLBACK, old-break-no-retest->WAIT). Every threshold INSTRUMENT-SCALED
+(floored/capped vs price) — the adversarial's root finding was fixed-fraction-of-OR-range with no floor/cap.
+
+**NOT risk-path** — no live caller (grep-confirmed nothing imports it; places no order, sizes nothing). By
+the Rule E definition it cannot change size/frequency/concurrency. So Inc 1's gate = statics + cold-2nd +
+adversarial + Gro/GAI preship (NO masked-loss board until it is wired). HONESTY: SIGNAL ONLY — deployed,
+UNEXERCISED (no order fires until Inc 2).
+
+**Gate (PR #372):** statics clean (py_compile/ruff/mypy/no_static_scan) · 24/24 tests OCI py3.10 + local ·
+cold-2nd PASS (fresh, final bytes) · adversarial PASS (proved the applied fixes strictly-tightening —
+cannot add a spurious ENTER) · Gro+GAI preship APPROVE (Gro's initial TPM-overflow FAIL was infra, not a
+reject; a trimmed-context retry landed a real gro=APPROVE). THREE adversarial hardening rounds took it from
+a naive spike-chaser to a confirmed-continuation signal.
+
+**NEXT — Inc 2 (RISK-PATH, full masked-loss board):** wire the trigger into run_day_tier.py as a parallel
+Track-B path — the mover-screen dynamic universe (routing gate §7: options-liquidity -> A, else the
+pre-registered mover screen gap%/RVOL>=3-5x/price/float/spread), HALT-SURVIVABLE + CASH-ONLY sizing
+(§7b.6: B=20%-of-B sub-kill, no margin, marketable-limits-never-market), routed through the existing
+place_entry (concurrency cap 3, tier coid tags, OCO), + a pre-flight sim. Deferred-to-Inc-2 (adversarial):
+frame from-open self-check, clock-time cutoff, ET-session VWAP reset, latest-bar-vs-episode volume,
+PULLBACK-label refinement. Inc 3: §7b.4 hedge-fund-grade red-day audit.
+
+**TOOLING FOLLOW-UP:** the preship NVIDIA option-C substitute 404'd (nvidia/llama-3.1-nemotron-70b-instruct
+retired for the account) — the substitute ladder needs a live-model refresh (a fix-the-control item).
+
+**ALSO OWED (from the trading-integrity investigation, not yet shipped):** the post-market audit prompt
+produces FALSE ALARMS (verified at source 2026-09-21) — it applies swing-tier gates (MIN_LONG_SCORE=8,
+weekly-bias) to DAY-TIER trades (scored by conviction, score=0) and misreads trade DIRECTION (called AMZN
+short a "Long", NFLX short a "Long with inverted params"). Fix the Gemini audit prompt to be tier-aware +
+direction-aware. Plus: stale "INERT/trades nothing" docstrings across the LIVE day-tier modules; the
+redundant run_day_tier_shadow.py cron alongside the live runner; AMZN/MSFT FIFO-orphan EOD drift.
