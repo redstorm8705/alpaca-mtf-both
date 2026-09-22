@@ -1,0 +1,188 @@
+{
+  "audit_date": "2026-09-21",
+  "run_ts": "2026-09-21T10:30:02.059706-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 3,
+    "partial_count": 1,
+    "stop_hit_count": 1,
+    "stop_hit_rate": 0.25,
+    "flagged_entries": [
+      {
+        "symbol": "MARA",
+        "ts": "2026-09-14 09:12:20",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 11.53,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      },
+      {
+        "symbol": "NFLX",
+        "ts": "2026-09-18 08:55:05",
+        "score": 11,
+        "mri": "STRESSED",
+        "price": 71.64,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "AMZN",
+      "MSFT",
+      "MARA",
+      "NFLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "NORMAL": 31
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 172,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-21 16:20:44,536 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for AMZN has no prior lot and no tracker record \u2014 fill un",
+      "2026-09-21 16:20:44,536 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for MSFT has no prior lot and no tracker record \u2014 fill un",
+      "2026-09-21 16:20:50,022 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-11.16 tracker=$-3.12 drift=$-8.04",
+      "2026-09-21 16:26:09,434 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AMD] confirm_gate=9 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 | M",
+      "2026-09-21 16:26:09,434 | WARNING  | strategy.run_cycle | [ANOMALY-2] [PLTR] confirm_gate=11 scans but no entry \u2014 risk.open_positions=2 vs tracker=2 |"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 4,
+    "wins": 0,
+    "losses": 4,
+    "total_pnl": -6.269999999999953,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -1.5674999999999883,
+    "best": {
+      "symbol": "MARA",
+      "pnl": 0.0,
+      "entry_price": 11.53,
+      "exit_price": 11.53,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 9.79,
+      "target": 16.05
+    },
+    "worst": {
+      "symbol": "NFLX",
+      "pnl": -3.1200000000000045,
+      "entry_price": 71.64,
+      "exit_price": 73.2,
+      "size": 2.0,
+      "exit_event": "stop_hit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 75.27,
+      "target": 62.21
+    },
+    "trades": [
+      {
+        "symbol": "MARA",
+        "pnl": 0.0,
+        "entry_price": 11.53,
+        "exit_price": 11.53,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 9.79,
+        "target": 16.05
+      },
+      {
+        "symbol": "NFLX",
+        "pnl": -3.1200000000000045,
+        "entry_price": 71.64,
+        "exit_price": 73.2,
+        "size": 2.0,
+        "exit_event": "stop_hit",
+        "score": 11,
+        "mri_level": "STRESSED",
+        "stop": 75.27,
+        "target": 62.21
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -2.5199999999999534,
+        "entry_price": 254.446,
+        "exit_price": 254.95,
+        "size": 5.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 254.94,
+        "target": 0.0
+      },
+      {
+        "symbol": "MSFT",
+        "pnl": -0.6299999999999955,
+        "entry_price": 495.77,
+        "exit_price": 495.14,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 495.38,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "GOOGL",
+      "LLY",
+      "MARA",
+      "UBER"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 9,
+    "symbols": [
+      "AMZN",
+      "MARA",
+      "MSFT",
+      "NFLX"
+    ],
+    "by_symbol": {
+      "NFLX": {
+        "buy": 2,
+        "sell": 0
+      },
+      "MSFT": {
+        "buy": 1,
+        "sell": 1
+      },
+      "AMZN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "MARA": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

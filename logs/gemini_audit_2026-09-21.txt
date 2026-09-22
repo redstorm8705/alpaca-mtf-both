@@ -1,0 +1,47 @@
+Nightly Gemini Audit — 2026-09-21
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['data/fetcher.py', 'strategy/signal_generator.py', 'execution/portfolio_tracker.py', 'execution/entry_logic.py', 'research/trade_record_reducer.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/stop_protection.py | `[INTC] STOP-PROTECT: placed MISSING sell stop` | INTC (Order 94ff97d6-6fa8-4b78-9d5c-65cdc7e3b603) — The system detected a missing stop and attempted to place it, but the log indicates this is a recurring failure to maintain the stop-protection invariant for active positions.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[ANOMALY-2]**: Multiple tickers (QQQ, NET, DDOG, SOXL, SPY, RBLX) show `confirm_gate` scans exceeding the threshold (e.g., QQQ 13 scans) without entry, despite `risk.open_positions=5` being well below `MAX_OPEN_POSITIONS=20`. This indicates a logic block in `execution.entry_logic` that is failing to trigger entries when conditions are met.
+* **[ANOMALY-3]**: `TQI degradation` (last-5-trade avg=26.0/100 < 30) indicates a significant drop in trade quality, suggesting the current entry/exit discipline is failing to capture the intended edge.
+* **[FIFO orphan]**: Repeated `FIFO orphan` warnings for AMZN and MSFT indicate that the `portfolio_tracker` is failing to match closing fills to existing lots, leading to P&L drift and potential ledger corruption.
+
+### PERFORMANCE AUDIT
+* **P&L Sign Check**: The `NFLX` short trade (entry 71.64, exit 73.20) resulted in a loss of -3.12. This is mathematically correct (short position, price rose).
+* **Stop Rate**: The bot is hitting stops frequently (e.g., NFLX, QCOM, SOXS, AAPL, HOOD). The high frequency of `overnight_atr_buffer_exit` suggests the overnight risk management logic is too tight for the current volatility regime.
+* **R:R Analysis**: The bot is failing to reach T1/T2 targets, with most trades exiting via `stop_hit` or `protective_stop`. The profit factor of 0.79 confirms the strategy is currently net-negative.
+
+### TRADE INTEGRITY
+* **Recording Bug**: The `FIFO orphan` warnings for AMZN and MSFT in the logs (19:39:29, 19:46:07, 20:00:11) confirm that the `portfolio_tracker` is not correctly associating fills with open positions. This is a critical failure in trade accounting.
+* **P&L Drift**: The EOD P&L drift of $-8.04 is significant. While the system claims this "self-heals," the persistence of these orphans suggests the tracker is fundamentally losing state.
+
+### MODIFIED FILE FINDINGS
+* **execution/portfolio_tracker.py**: The `_load_log` function logic for restoring open trades is fragile. The reliance on `entry_time` for matching is prone to failure if the Alpaca fill timestamp differs slightly from the internal log timestamp.
+* **execution/entry_logic.py**: The `execute_entries` function contains a hard-coded check for `is_market_open()`. If this returns `False` due to a transient API error, the entire entry cycle is skipped, which explains the `ANOMALY-2` entries.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED (Still present in `strategy/signal_generator.py`).
+* **P5-C2**: UNTOUCHED (Still present in `run_movers.py`).
+* **P5-H3**: WORSENED (Orphaned fills are now causing P&L drift).
+* **P5-M1**: TRIGGERED (Watchdog logs suggest restart loops).
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | HIGH | execution/entry_logic.py | Entry gate failure | The `execute_entries` function is failing to enter positions despite `confirm_gate` being satisfied, likely due to the `is_market_open()` check failing or misinterpreting the RTH state.**
+* **EXECUTION BUG | HIGH | execution/portfolio_tracker.py | FIFO Orphan state | The tracker is failing to reconcile fills, leading to P&L drift and potential double-counting of positions.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate Audit of `execution/entry_logic.py`**: Investigate why `confirm_gate` is satisfied but entries are not placed. Remove the dependency on `is_market_open()` for the entry gate if it is causing false-negative blocks.
+2. **Fix `portfolio_tracker` Orphan Logic**: The FIFO matching logic must be hardened to handle fill timestamps that do not perfectly align with entry timestamps.
+3. **Review Overnight Stop Logic**: The `overnight_atr_buffer_exit` is triggering too frequently; consider widening the buffer or adjusting the ATR multiplier for overnight holds.
+4. **Resolve P5-C2**: Fix the `ImportError` in `run_movers.py` to restore the premarket scanner functionality.
+5. **Address Watchdog Loops**: Investigate the `os.execv` restart logic to ensure the lockfile is cleared before the process restarts.
