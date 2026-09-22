@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-19 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-22 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,30 +8,30 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-20, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-22, interactive Rafael present) — pick up here
 
-**This session's work, detail, and verify commands live in `logs/tb_audit_log.md` (2026-09-20 entries)**
-and the design records `logs/design_records/edge_discovery_2026-09-19.md` +
-`logs/design_records/bggn_resilience_2026-09-20.md`. SHIPPED this session: edge-discovery Step 1 per-trade
-record layer (PR #356), BGGN-resilience gate hardening — Gro auto-chunk on TPM overflow + NVIDIA model
-ladder (PR #360), and edge-discovery Inc 2 **Piece 1a** — mints a `trade_id` on the intraday entry/exit
-events (PR #362 → main `9af3d01`/`fdc5b64`, OCI deployed+restarted). Verify: `gh pr view 356/360/362
---json state` → MERGED; `ssh mtf-bot 'grep -c trade_id= /home/ubuntu/mtf-bot/execution/portfolio_tracker.py'`
-→ ≥1; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_trade_record_invariant 2>&1 | tail -1'`
-→ OK (38). Full detail/rationale: `logs/tb_audit_log.md` 2026-09-20 Piece-1a entry. This block is only the
-pointer + the next-action plan.
+**SHIPPED this session (2026-09-22):** day-tier **Track B Inc 2 Part 1** — the pure mover-screen +
+from-open frame builder + momentum→place_entry adapter (`strategy/day_tier_track_b.py` + tests, PR #374).
+No live caller yet (Part 2 wires it). Gate: 26 tests, cold-2nd PASS, adversarial zero-blocking, Gro+GAI
+APPROVE. **Verify:** `gh pr view 374 --json state`→MERGED; OCI `cd /home/ubuntu/mtf-bot &&
+venv/bin/python3 -m unittest tests.test_day_tier_track_b 2>&1 | tail -1`→`OK (26)`; no live caller:
+`grep -rl day_tier_track_b --include=*.py . | grep -vE 'strategy/day_tier_track_b.py|tests/'`→empty. Full
+detail + Part-2 contracts + the sub-kill fork: `logs/tb_audit_log.md` 2026-09-22 entry + design record
+`logs/design_records/day_tier_track_b_inc2_2026-09-22.md`.
 
-**⏩ EXACT NEXT ACTION:** edge-discovery Step 1 Increment 2 **Piece 1b** — add continuous `indicators`
-+ `regime` to the intraday ENTRY event; THEN Piece 1c — intraday MAE/MFE water-marks. Design, the
-regime-source I/O note, and the exact approach are in the `logs/tb_audit_log.md` 2026-09-20 Piece-1a entry
-+ `logs/design_records/edge_discovery_2026-09-19.md`. Both touch RTH hotspots → masked-loss seat + full
-board gate. COORDINATE with the parallel Core MTF thread (block below): EXTEND the PR #356 shared
-trade-record schema, do NOT create a competing tag format.
+**⏩ EXACT NEXT ACTION:** day-tier **Track B Inc 2 Part 2** (RISK-PATH — Rafael directive "ship Inc 2,
+then move to audit-prompt false alarms"): wire the Part-1 helpers into `run_day_tier.py` behind
+`DAYTRADE_TRACK_B_ENABLED` (order: `build_session_frame` → `screen_mover` → momentum trigger →
+`momentum_to_entry` → `compute_day_tier_size(track=B)` → `place_entry`), flip the flag on, extend
+`scripts/day_tier_preflight.py` with a Track-B pass, and resolve the **B sub-kill fork** (Option A vs B —
+see the tb_audit 2026-09-22 entry). The Part-2 hard contracts (RAW-basis `prior_close`, verified-frame-fed
+screen, LULD halt signal, min-only confirm, API-budget) + the fork are all in that tb_audit entry +
+design record. FULL masked-loss board + Gro + GAI + cold-2nd + pre-flight sim before ship.
 
-**THEN (queued):** (1) QHM memo→execution wiring + 2-Slack-card consolidation + full memo in Slack (design
-pass owed — touches what the bot buys); (2) intraday conviction-upsize; (3) leveraged-ETF universe. Do NOT
-ship day-tier sizing/leverage size-up until the edge is measured. See the `logs/tb_audit_log.md` 2026-09-20
-entries for deploy notes and the NVIDIA-substitute status.
+**THEN (Rafael-stated sequence):** once Track B Inc 2 is LIVE → **audit-prompt false alarms** — make the
+Gemini post-market audit tier-aware + direction-aware (Rafael's stated next item; scope when picked up).
+Also queued: (1) QHM memo→execution wiring; (2) intraday conviction-upsize; (3) leveraged-ETF universe.
+Do NOT ship day-tier size-up until the edge is measured.
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
