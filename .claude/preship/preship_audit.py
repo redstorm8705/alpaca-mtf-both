@@ -199,6 +199,26 @@ def _gro(prompt, key):
         raise RuntimeError(str(r).replace(key, "***")[:200])
     return r["choices"][0]["message"]["content"]
 
+def _split_pure_add_hunk(hunk, limit):
+    """Split ONE git hunk that contains NO removed ('-') lines into line-boundary pieces of at most
+    ~`limit` chars, each prefixed with the hunk's own '@@' header line. Returns [hunk] unchanged if
+    the hunk has any '-' line (a remove/re-add pair must never be separated), has no body, or
+    already fits. A single line longer than `limit` becomes its own piece (never dropped)."""
+    lines = hunk.splitlines(keepends=True)
+    if len(hunk) <= limit or len(lines) < 2 or any(ln.startswith("-") for ln in lines[1:]):
+        return [hunk]
+    at, body = lines[0], lines[1:]
+    pieces, cur = [], ""
+    for ln in body:
+        if cur and len(at) + len(cur) + len(ln) > limit:
+            pieces.append(at + cur)
+            cur = ""
+        cur += ln
+    if cur:
+        pieces.append(at + cur)
+    return pieces or [hunk]
+
+
 def _gro_chunked(head, diff_body, ctx_suffix, key):
     # Gro TPM-RESILIENCE (Rafael 2026-09-20 — "stop settling for the first rejection; find a
     # solution"). Groq's free tier caps a SINGLE request at 8k TPM, so a large diff overflows
@@ -240,6 +260,16 @@ def _gro_chunked(head, diff_body, ctx_suffix, key):
         chunks = [diff_body]
     else:
         hroom = max(2000, room - len(hdr))
+        # NEW-FILE / PURE-INSERTION HUNKS (2026-09-23): a brand-new file is ONE hunk, and the
+        # never-split-a-hunk rule above left any new file larger than ~one chunk permanently
+        # un-auditable by Gro ("Request too large" on the single chunk -> no real Gro verdict).
+        # The never-split rule exists for hunks that REMOVE and RE-ADD lines (a split could show
+        # the removal without its re-addition); a hunk with NO '-' lines has no such pairing, so
+        # it is split at LINE boundaries into pieces that each fit, each carrying the hunk's own
+        # '@@' header. Hunks with any '-' line stay intact (unchanged behavior). Same known
+        # degraded mode as any chunking: a defect spanning two pieces can look benign in each —
+        # mitigated because GAI audits the WHOLE diff single-shot.
+        hunks = [p for h in hunks for p in (_split_pure_add_hunk(h, hroom) if len(h) > hroom else [h])]
         chunks, cur = [], ""
         for h in hunks:
             if cur and len(cur) + len(h) > hroom:   # never split a hunk; flush the group first
