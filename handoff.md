@@ -22,20 +22,14 @@ venv/bin/python3 scripts/day_tier_preflight.py --asof 2026-09-21T10:05' | grep ^
 (budget cap blocks a $715 share). Detail: `logs/tb_audit_log.md` 2026-09-23 entries + design record
 `logs/design_records/day_tier_track_b_inc2_2026-09-22.md`.
 
-**⏩ EXACT NEXT ACTION:** the **audit-alert false alarms** item (Rafael 2026-09-23). Two cold board seats
-(observability + masked-loss) returned a converged order, recorded in tb_audit (verify: `grep -c "Audit-alert false
-alarms: board (2 cold seats) converged" logs/tb_audit_log.md`→1); NEXT = Gro + GAI on the same fork, then bring
-Rafael the package.
-Converged order (see tb_audit 2026-09-23): (1) STOP MASKING — `logs/audit_suppressions.jsonl`
-POSITION_COUNT_DRIFT is `false_alarm` (verify: `ssh mtf-bot "grep -c POSITION_COUNT_DRIFT
-/home/ubuntu/mtf-bot/logs/audit_suppressions.jsonl"`→1) → reclassify `acknowledged` + widen
-`_NEVER_SUPPRESS_TOKENS`; (2) root-cause the GOOGL FIFO orphan + count drift (trade-path, own gate) — both are logged on OCI,
-verify: `ssh mtf-bot 'grep -c "FIFO orphan: closing fill for GOOGL has no prior lot"
-/home/ubuntu/mtf-bot/logs/mtf_bot.log; grep -c "POSITION COUNT DRIFT" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`38`,`126`
-(2026-09-23 count; root cause NOT yet known);
-(3) the intraday software-stop-only window as its own board design item; (4) broker-ground-truth block
-built from order history; (5) live bot context; (6) per-tier sample guardrails; (7) role rebalance; (8) new
-suppressions last.
+**⏩ EXACT NEXT ACTION:** the **audit-alert false alarms** item (Rafael 2026-09-23) — board (2 cold seats) + Gro + GAI
+are ALIGNED after 2 rounds (verify: `grep -c "Audit-alert false alarms: Gro + GAI on the fork (2 rounds) → ALIGNED"
+logs/tb_audit_log.md`→1; the plan is in that entry). NEXT = bring Rafael the one-page package, then build increment 1
+(item 1 un-mask count drift / FIFO orphan + item 4 broker-ground-truth block) through the full gate.
+Masking fact behind item 1 — verify: `ssh mtf-bot "grep -c POSITION_COUNT_DRIFT
+/home/ubuntu/mtf-bot/logs/audit_suppressions.jsonl"`→1; the GOOGL orphan + drift lines — verify: `ssh mtf-bot 'grep -c
+"FIFO orphan: closing fill for GOOGL has no prior lot" /home/ubuntu/mtf-bot/logs/mtf_bot.log; grep -c "POSITION COUNT
+DRIFT" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`38`,`126` (2026-09-23 count; root cause NOT yet known).
 
 **THEN:** Track-B sub-kill fast-follow (after B's first labeled trades); QHM memo→execution; intraday
 conviction-upsize; leveraged-ETF universe. Do NOT ship day-tier size-up until the edge is measured.

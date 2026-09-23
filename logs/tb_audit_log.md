@@ -10798,3 +10798,21 @@ CONVERGED ORDER: 1) stop masking (drift → acknowledged + magnitude/co-occurren
 naked kinds NAKED-NOW / SOFTWARE-ONLY-BY-DESIGN / SOFTWARE-ONLY+CYCLE-GAP); 5) live bot context (source shown,
 UNRESOLVED on failure); 6) per-tier guardrails that block only LOOSENING directives, impact numbers computed or
 [UNSUPPORTED]; 7) drop "assume the best", keep skeptic evidence-bound; 8) new suppressions last, expiring.
+
+### 2026-09-23 (cont.) — Audit-alert false alarms: Gro + GAI on the fork (2 rounds) → ALIGNED
+Same prompt to both (bias-gate clean; GAI via gemini-3.1-flash-lite — 3.7-flash/3-flash-preview/flash-latest were
+429 quota, 2.5-flash 404, probed per-model). R1: Gro 1 MODIFY(escalation rule) 2 A 3 REJECT 4 A 5 MODIFY(UNRESOLVED on
+read fail) 6 A 7 A 8 A; GAI 1-3 A, 4 MODIFY(ground truth = broker open-stop orders vs positions, computed in code not by
+the LLM), 5-8 A, order 4-first. R2 counter-prompt (Gro's item-3 scenario assumed a tight stop at entry; the candidate is a
+wide disaster-only stop, and a stalled bot has NO exit until the ~15:50 ET sweep): Gro 3 → MODIFY (design item must
+REQUIRE a broker stop at entry or a stall watchdog); GAI rejects Gro's R1 objection; both accept ship order 1+4 first.
+ALIGNED PLAN: inc-1 = item 1 (drift → acknowledged + escalation on magnitude/FIFO-orphan co-occurrence; orphan + drift
+tokens never-suppress) + item 4 (broker ground truth from order history, code-computed classes, REJECTED/cancel-rejected
+stops counted, full pagination, truncated/failed read → UNKNOWN, cycle-gap/last-check_exits staleness → STALL);
+inc-2 = 5 (live config context, UNRESOLVED on fail) + 6 (per-tier guardrails, loosening/disable gated, impact numbers
+computed or [UNSUPPORTED]) + 7 (drop "assume the best"; keep 2 reviewers, disagreement → "manual review" — GAI MODIFY) +
+8 (suppression expiry + reason); separate gated items: 2 (FIFO orphan root cause, all tiers not just GOOGL) and 3
+(intraday broker-stop design, must cover a stalled bot). VERIFIED AT SOURCE: directives never auto-execute
+(autonomous_patch_generator 2026-09-22: 7 directives → "7 risk-path→human, 0 auto-patched").
+NEW FOLLOW-UP: autonomous_review.py Groq 413 Payload Too Large every run (93 lines in autonomous_review_cron.log) →
+nightly Gro review of pending patches never completes (same class as the preship chunker fix, PR #377).
