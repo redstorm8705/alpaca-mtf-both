@@ -10760,3 +10760,41 @@ so "disable the daytrade tier" passes on 2 day-tier losses, with invented ROI nu
 Recurring flags that ARE real (OCI mtf_bot.log): "impossible negative protected replay NVDA/GOOGL qhm=-2" ×245;
 "FIFO orphan: closing fill for GOOGL has no prior lot" + CRITICAL "POSITION COUNT DRIFT" 06:00 PT 2026-09-23; the
 pre-close sweep placing "MISSING" DAY stops daily (NFLX 9/18; INTC/AAPL/PLTR 9/21; SOFI 9/22) — root cause TBD.
+
+### 2026-09-23 (cont.) — SHIPPED: Track B Inc 2 Part 2 (PR #378 → b3fa877) + preship chunker fix (PR #377 → d505020)
+DEPLOY: OCI `git pull --ff-only` → DEPLOY_OK, mtf-bot/mtf-writer/mtf-http/nginx active, HEALTH OK, HEAD b3fa877.
+POST-DEPLOY VERIFY (OCI, deployed venv): validate_config OK (TRACK_B_ENABLED=True); tests OK (live module + helpers);
+preflight replay 2026-09-22T10:15 → 0/15 would enter (quiet day, MU +3.4% gap but 2.0x RVOL); replay 2026-09-21T10:05
+→ META mover (+7.4%, 6.7x) → momentum ENTER → size_ok=False ($129.60 budget < 1 share @ $715) — full data→trigger→
+sizing path exercised on production. STATUS: deployed, UNEXERCISED (no Track-B order yet).
+PRESHIP HISTORY (honest): run 1 FAILED CLOSED on all 10 files (Gemini 503 capacity + NVIDIA substitute ladder failing:
+nvidia/llama-3.1-nemotron-70b-instruct 404 = retired; llama-3.2-90b timeouts); run 2 with Gemini back: 8/10 PASS, then
+day_tier_track_b.py PASS on retry; the new 600-line test file could not get a Gro verdict because _gro_chunked never
+split a hunk and a new file is ONE hunk → fixed at the gate (PR #377: split pure-insertion hunks; tests + mutation-
+verified; cold-2nd PASS; Gro+GAI APPROVE; CI PASS) → test file PASS. CI on #378 caught a ruff E501 I introduced in a
+board-round-2 docstring edit without re-running ruff on that file (fixed d1fefa6, AST-identical, fresh cold-2nd PASS);
+CI external audit then failed closed twice on Gemini 429 per-minute quota (0 REJECT) before passing.
+FOLLOW-UPS: (a) NVIDIA substitute ladder has a retired model (404) and times out → the option-C fallback is not
+working; (b) 6 stale + 9 polluted day-tier tests (task spawned); (c) alpaca data client has no per-request timeout.
+
+### 2026-09-23 — Audit-alert false alarms: board (2 cold seats) converged — Gro + GAI next
+Observability seat (Majors/Kim) + masked-loss seat (Taleb/Thorp), independently, same core order. VERIFIED AT SOURCE:
+- SOFI 9/22 "CATASTROPHIC naked": Core-bot intraday entries get a broker GTC stop ONLY if entry ≥15:30 ET
+  (execution/entry_logic.py ~1680-1716); intraday = SOFTWARE stop via check_exits each ~5.5-6 min; the pre-close
+  sweep (strategy/run_cycle.py ~1726-1728) places a broker DAY stop. SOFI entered 12:53 ET, first broker stop 15:50 ET
+  (Alpaca order history). So "naked" = by design, but a REAL tail exists (bot outage / cycle gap → no broker-side stop).
+- stop_protection.py "broker-held" in the sweep summary = orders rejected because protection already rests (NOT "stops
+  held") — the auditor misread "broker-held 0" as "no stop".
+- logs/audit_suppressions.jsonl marks POSITION_COUNT_DRIFT as false_alarm → dropped from the card; risk.open_positions
+  gates MAX_OPEN_POSITIONS (risk_manager.py:555); drift line ×125 in mtf_bot.log, co-occurring with "FIFO orphan:
+  closing fill for GOOGL has no prior lot" (possible unbooked P&L). An existing suppression may be MASKING a real fault.
+- _NEVER_SUPPRESS_TOKENS = ("pnl_unreconciled",) only.
+- meta-audit BOT CONTEXT hardcodes MIN_SCORE 10/12 (paper=8), no Track B; directive guardrail counts all-tier fills;
+  Groq "assume the worst" / GAI "assume the best".
+CONVERGED ORDER: 1) stop masking (drift → acknowledged + magnitude/co-occurrence rule; widen _NEVER_SUPPRESS_TOKENS);
+2) root-cause FIFO orphan + count drift (trade-path, own gate) separate from the qhm=-2 reattribution noise;
+3) intraday software-stop-only window → own board design item (disaster-only wide broker stop preferred by risk seat);
+4) broker-ground-truth block from ORDER HISTORY (per-position broker-unprotected minutes; UNKNOWN on failed read;
+naked kinds NAKED-NOW / SOFTWARE-ONLY-BY-DESIGN / SOFTWARE-ONLY+CYCLE-GAP); 5) live bot context (source shown,
+UNRESOLVED on failure); 6) per-tier guardrails that block only LOOSENING directives, impact numbers computed or
+[UNSUPPORTED]; 7) drop "assume the best", keep skeptic evidence-bound; 8) new suppressions last, expiring.
