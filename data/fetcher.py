@@ -290,11 +290,11 @@ def fetch_bars_window(
     first); a naive datetime is rejected -> empty DataFrame, so a tz bug can never
     silently fetch the wrong session hour. RTH CALLERS (Track B Inc 2, 2026-09-22):
     the day-tier Track-B runner (run_day_tier.py, via strategy.day_tier_track_b
-    .build_session_frame + the split-adjusted daily context) calls this during RTH. It rate-gates
-    through this PROCESS's _rate_gate (the runner is its own process — the gate is not
-    shared with the main bot) and has no TTL cache, so each windowed fetch is a fresh
-    call; the runner bounds the load (Track-B time window + a per-day daily-context
-    cache). Otherwise: offline research (the MAE/MFE reducer).
+    .build_session_frame + the split-adjusted daily context) calls this during RTH.
+    It rate-gates through this PROCESS's _rate_gate (the runner is its own process —
+    the gate is not shared with the main bot) and has no TTL cache, so each windowed
+    fetch is a fresh call; the runner bounds the load (Track-B time window + a per-day
+    daily-context cache). Otherwise: offline research (the MAE/MFE reducer).
 
     feed + adjustment are pinned EXPLICITLY (not left to the account-tier server
     default). adjustment=RAW keeps bars on the SAME unadjusted basis as the raw logged
