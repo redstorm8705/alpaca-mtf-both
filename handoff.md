@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-22 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-23 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,30 +8,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-22, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-23, interactive Rafael present) — pick up here
 
-**SHIPPED this session (2026-09-22):** day-tier **Track B Inc 2 Part 1** — the pure mover-screen +
-from-open frame builder + momentum→place_entry adapter (`strategy/day_tier_track_b.py` + tests, PR #374).
-No live caller yet (Part 2 wires it). Gate: 26 tests, cold-2nd PASS, adversarial zero-blocking, Gro+GAI
-APPROVE. **Verify:** `gh pr view 374 --json state`→MERGED; OCI `cd /home/ubuntu/mtf-bot &&
-venv/bin/python3 -m unittest tests.test_day_tier_track_b 2>&1 | tail -1`→`OK (26)`; no live caller:
-`grep -rl day_tier_track_b --include=*.py . | grep -vE 'strategy/day_tier_track_b.py|tests/'`→empty. Full
-detail + Part-2 contracts + the sub-kill fork: `logs/tb_audit_log.md` 2026-09-22 entry + design record
+**SHIPPED 2026-09-23:** day-tier **Track B Inc 2 Part 2** — Track B wired LIVE behind
+`DAYTRADE_TRACK_B_ENABLED=True` (PR #378, merge commit `b3fa877`, deployed to OCI) — verify:
+`gh pr view 378 --json state,mergeCommit`→`MERGED`/`b3fa877…`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log
+--oneline -1'`→`b3fa877 Merge pull request #378…`; `ssh mtf-bot 'systemctl is-active mtf-bot mtf-writer mtf-http
+nginx'`→`active` ×4; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -n "^DAYTRADE_TRACK_B_ENABLED" config.py'`→`= True`.
+Also PR #377 (preship Gro chunker splits new-file hunks) — verify: `gh pr view 377 --json state`→`MERGED`.
+Status: **deployed, unexercised** — verify no Track-B fill yet: `ssh mtf-bot 'grep -c "\"track\": \"B\""
+/home/ubuntu/mtf-bot/logs/day_tier_events.jsonl'`→`0`. Replay check: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot &&
+venv/bin/python3 scripts/day_tier_preflight.py --asof 2026-09-21T10:05' | grep ^META`→`ENTER … size_ok=False`
+(budget cap blocks a $715 share). Detail: `logs/tb_audit_log.md` 2026-09-23 entries + design record
 `logs/design_records/day_tier_track_b_inc2_2026-09-22.md`.
 
-**⏩ EXACT NEXT ACTION:** day-tier **Track B Inc 2 Part 2** (RISK-PATH — Rafael directive "ship Inc 2,
-then move to audit-prompt false alarms"): wire the Part-1 helpers into `run_day_tier.py` behind
-`DAYTRADE_TRACK_B_ENABLED` (order: `build_session_frame` → `screen_mover` → momentum trigger →
-`momentum_to_entry` → `compute_day_tier_size(track=B)` → `place_entry`), flip the flag on, extend
-`scripts/day_tier_preflight.py` with a Track-B pass, and resolve the **B sub-kill fork** (Option A vs B —
-see the tb_audit 2026-09-22 entry). The Part-2 hard contracts (RAW-basis `prior_close`, verified-frame-fed
-screen, LULD halt signal, min-only confirm, API-budget) + the fork are all in that tb_audit entry +
-design record. FULL masked-loss board + Gro + GAI + cold-2nd + pre-flight sim before ship.
+**⏩ EXACT NEXT ACTION:** the **audit-alert false alarms** item (Rafael 2026-09-23) — board (2 cold seats) + Gro + GAI
+are ALIGNED after 2 rounds (verify: `grep -c "Audit-alert false alarms: Gro + GAI on the fork (2 rounds) → ALIGNED"
+logs/tb_audit_log.md`→1; the plan is in that entry). NEXT = bring Rafael the one-page package, then build increment 1
+(item 1 un-mask count drift / FIFO orphan + item 4 broker-ground-truth block) through the full gate.
+Masking fact behind item 1 — verify: `ssh mtf-bot "grep -c POSITION_COUNT_DRIFT
+/home/ubuntu/mtf-bot/logs/audit_suppressions.jsonl"`→1; the GOOGL orphan + drift lines — verify: `ssh mtf-bot 'grep -c
+"FIFO orphan: closing fill for GOOGL has no prior lot" /home/ubuntu/mtf-bot/logs/mtf_bot.log; grep -c "POSITION COUNT
+DRIFT" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`38`,`126` (2026-09-23 count; root cause NOT yet known).
 
-**THEN (Rafael-stated sequence):** once Track B Inc 2 is LIVE → **audit-prompt false alarms** — make the
-Gemini post-market audit tier-aware + direction-aware (Rafael's stated next item; scope when picked up).
-Also queued: (1) QHM memo→execution wiring; (2) intraday conviction-upsize; (3) leveraged-ETF universe.
-Do NOT ship day-tier size-up until the edge is measured.
+**THEN:** Track-B sub-kill fast-follow (after B's first labeled trades); QHM memo→execution; intraday
+conviction-upsize; leveraged-ETF universe. Do NOT ship day-tier size-up until the edge is measured.
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
