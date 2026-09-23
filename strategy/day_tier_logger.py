@@ -219,10 +219,16 @@ def log_decision(decision_id: str, symbol: str, decision: dict | None = None,
 def log_entry_fill(trade_id: str, symbol: str, *, order_id: str, decision_id: str, side: str,
                    requested_limit: float, fill_price: float, fill_qty: float,
                    market_price_at_fill: float, equity_at_entry: float,
-                   budget: float, notional: float) -> bool:
+                   budget: float, notional: float, track: str = "A") -> bool:
     """(1) Price snapshot at ENTRY execution — the fill price AND the market price at that instant
     (Rafael's amended spec). order_id + decision_id persisted for the offline coid<->order_id and
-    decision joins."""
+    decision joins.
+
+    `track` ("A" GEX-core / "B" movers) is the per-track attribution stamp (Track B Inc 2 Part 2,
+    SPLIT decision 2026-09-22). ADDITIVE: existing Track-A callers omit it and default "A", so every
+    pre-stamp / untagged entry reads as Track A; readers use .get(). It is the labeled realized+
+    unrealized P&L stream the DEFERRED per-track B sub-kill trigger (the fast-follow) will be
+    validated against — this Part-2 ship RECORDS it; it drives no live kill yet."""
     rec = _base("entry_fill", trade_id, symbol)
     rec.update(
         order_id=order_id, decision_id=decision_id, side=side,
@@ -231,6 +237,7 @@ def log_entry_fill(trade_id: str, symbol: str, *, order_id: str, decision_id: st
         market_price_at_fill=round(float(market_price_at_fill), 4),
         equity_at_entry=round(float(equity_at_entry), 2),
         budget=round(float(budget), 2), notional=round(float(notional), 2),
+        track=("B" if str(track).upper() == "B" else "A"),
     )
     return _durable_append([rec])
 
@@ -374,6 +381,7 @@ def open_trades_from_log() -> dict[str, dict]:
                 "entry_ts": ev.get("ts"),
                 "order_id": ev.get("order_id"),
                 "decision_id": ev.get("decision_id"),
+                "track": ev.get("track", "A"),  # per-track attribution (pre-stamp entries default "A")
             }
         elif et == "exit_fill":
             exited.add(tid)

@@ -271,7 +271,8 @@ def fetch_bars(
 
 
 def fetch_bars_window(
-    symbol: str, timeframe: str, start: datetime, end: datetime
+    symbol: str, timeframe: str, start: datetime, end: datetime, feed: str = "sip",
+    adjustment: str = "raw",
 ) -> pd.DataFrame:
     """
     Fetch OHLCV bars for an EXPLICIT historical [start, end] window (UTC-indexed).
@@ -287,21 +288,49 @@ def fetch_bars_window(
 
     start/end MUST be timezone-aware (the caller converts trade timestamps to UTC
     first); a naive datetime is rejected -> empty DataFrame, so a tz bug can never
-    silently fetch the wrong session hour. Not called by any RTH/run_cycle path —
-    offline research only.
+    silently fetch the wrong session hour. RTH CALLERS (Track B Inc 2, 2026-09-22):
+    the day-tier Track-B runner (run_day_tier.py, via strategy.day_tier_track_b
+    .build_session_frame + the split-adjusted daily context) calls this during RTH. It rate-gates
+    through this PROCESS's _rate_gate (the runner is its own process — the gate is not
+    shared with the main bot) and has no TTL cache, so each windowed fetch is a fresh
+    call; the runner bounds the load (Track-B time window + a per-day daily-context
+    cache). Otherwise: offline research (the MAE/MFE reducer).
 
     feed + adjustment are pinned EXPLICITLY (not left to the account-tier server
-    default): feed=SIP gives the fullest RTH + extended-hours coverage (so an overnight
-    swing hold's gap / pre-market extreme is captured — verified entitled on this
-    account), and adjustment=RAW keeps bars on the SAME unadjusted basis as the raw
-    logged entry/exit fills (a mid-hold split then shows as a discontinuity the caller's
-    split guard nulls, rather than a silent basis mismatch). If SIP is ever un-entitled,
-    the request errors -> honest-empty here -> null MAE/MFE upstream (visible in the
-    null audit), never a silent downgrade to a sparser feed.
+    default). adjustment=RAW keeps bars on the SAME unadjusted basis as the raw logged
+    entry/exit fills (a mid-hold split then shows as a discontinuity the caller's split
+    guard nulls, rather than a silent basis mismatch). `feed` (default "sip"):
+      * "sip" — the fullest consolidated RTH + extended-hours coverage (the research
+        default — an overnight hold's gap / pre-market extreme is captured). ENTITLEMENT
+        LIMIT (verified on this account 2026-09-23 via a live probe): the data plan
+        does NOT permit SIP bars from the most recent ~15 minutes — a window whose
+        `end` is within that span returns 403 "subscription does not permit querying
+        recent SIP data" -> honest-empty here. SIP = SETTLED history only.
+      * "iex" — the IEX-exchange feed, which the plan serves in REAL TIME. Required
+        for any RTH caller that needs the current session's bars up to `now`
+        (Track B). Its volume is IEX-only (~2-5% of consolidated), so any ratio
+        built on it must use an IEX-basis denominator too.
+    `adjustment` (default "raw"): "raw" or "split" (split-adjusted prices AND volumes —
+    for a multi-day window whose ratios must not straddle a split on mixed bases).
+    An unknown feed/adjustment string -> honest-empty (never a silent fallback).
+    If a feed is ever un-entitled, the request errors -> honest-empty -> the caller
+    fails safe (null MAE/MFE upstream / Track-B symbol skipped), never a silent
+    downgrade.
     """
     if timeframe not in TF_MAP:
         logger.warning(
             "[%s] fetch_bars_window: unknown timeframe '%s'", symbol, timeframe)
+        return pd.DataFrame()
+    _feeds = {"sip": DataFeed.SIP, "iex": DataFeed.IEX}
+    _feed = _feeds.get(str(feed).strip().lower())
+    if _feed is None:
+        logger.warning("[%s] fetch_bars_window: unknown feed '%s'", symbol, feed)
+        return pd.DataFrame()
+    _adjs = {"raw": Adjustment.RAW, "split": Adjustment.SPLIT}
+    _adj = _adjs.get(str(adjustment).strip().lower())
+    if _adj is None:
+        logger.warning(
+            "[%s] fetch_bars_window: unknown adjustment '%s'", symbol, adjustment)
         return pd.DataFrame()
     if start is None or end is None or start.tzinfo is None or end.tzinfo is None:
         logger.warning("[%s] fetch_bars_window: start/end must be tz-aware", symbol)
@@ -318,8 +347,8 @@ def fetch_bars_window(
                 timeframe=TF_MAP[timeframe],
                 start=start,
                 end=end,
-                feed=DataFeed.SIP,          # explicit: fullest RTH + ext-hours coverage
-                adjustment=Adjustment.RAW,  # explicit: raw basis, matches logged fills
+                feed=_feed,                 # explicit: SIP (settled) / IEX (real time)
+                adjustment=_adj,            # explicit: RAW (default) or SPLIT
             )
             bars = client.get_stock_bars(request)
             df   = bars.df

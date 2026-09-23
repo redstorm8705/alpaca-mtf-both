@@ -1,6 +1,6 @@
 # ruff: noqa: E501
 """
-strategy/day_tier_track_b.py — Day-Tier TRACK B universe + wiring adapters (PURE; INERT — no live caller).
+strategy/day_tier_track_b.py — Day-Tier TRACK B universe + wiring adapters (PURE helpers; wired LIVE by run_day_tier.py — Inc 2 Part 2).
 
 Track B is the day-tier's DYNAMIC-MOVER momentum path (design records
 logs/design_records/day_tier_v2_design_2026-08-29.md §7/§7b/§7c,
@@ -8,8 +8,9 @@ logs/design_records/day_tier_track_b_momentum_2026-09-21.md, and the Increment-2
 logs/design_records/day_tier_track_b_inc2_2026-09-22.md). Increment 1 shipped the pure momentum TRIGGER
 (strategy/day_tier_momentum_trigger.py). This module is the Increment-2 PART 1: the three pure, fail-safe,
 unit-tested helpers the live runner (Increment-2 Part 2, run_day_tier.py) needs to feed that trigger and
-route its output — WITHOUT any order primitive of its own. It is INERT: no live caller wires it yet, it
-orders nothing, and it mutates no state (committed INERT per this project's lost-engine lesson).
+route its output — WITHOUT any order primitive of its own. The helpers order nothing and mutate no state;
+the live runner (run_day_tier.py, Inc 2 Part 2, behind config.DAYTRADE_TRACK_B_ENABLED) routes an ENTER to
+execution.day_trade_manager.place_entry, which owns every order + risk guard.
 
 THE THREE HELPERS:
   1. screen_mover()        — the PRE-REGISTERED mover SCREEN (§7.63). On a fixed liquid candidate list
@@ -30,13 +31,17 @@ THE THREE HELPERS:
                              level -- the natural momentum invalidation), `mode` carried through
                              (DRIVE/PULLBACK), conviction from track_b_conviction (shorts smaller, §7c-d).
 
-PURE / INERT / FAIL-SAFE: every function returns a value (never raises into a caller); a bad or missing
-input degrades to "not a mover" / None / a non-ENTER trigger. Sizing, the order, the live book fetch, the
-account/tier/B sub-kill, and the frame's precise clock-time cutoff are the Increment-2 PART 2 RISK-PATH
-increment (run_day_tier.py + tier_kill_check), gated separately with the full masked-loss board.
+PURE / FAIL-SAFE: every function returns a value (never raises into a caller); a bad or missing
+input degrades to "not a mover" / None / a non-ENTER trigger. Sizing, the order, the live book fetch and the
+Track-B exposure cap live in run_day_tier.py + execution/day_trade_manager.py (Inc 2 Part 2). NOT yet built: the
+per-track B sub-kill (DAYTRADE_TRACK_B_KILL_PCT is STAGED — a later increment) and any precise clock-time cutoff
+(the only time limits are track_b_in_window's coarse gate and the trigger's bar-count cutoff).
 
-Data tier: T1 intraday 5m bars via data.fetcher.fetch_bars_window (the runner supplies prior_close +
-avg_daily_volume from a T1 daily fetch). All thresholds PROV-tagged (INERT signal — drive no live trade).
+Data tier: T1 intraday 5m bars via data.fetcher.fetch_bars_window(feed="iex") — the IEX feed, because this
+account's data plan serves SIP only for SETTLED history (a SIP window ending within the last ~15 min returns
+403 "subscription does not permit querying recent SIP data" — verified live 2026-09-23), while IEX is served
+in real time. The runner supplies prior_close (settled SIP daily close) + avg_daily_volume (IEX daily volume,
+the SAME basis as this frame's volume) from T1 daily fetches. All thresholds PROV-tagged.
 """
 from __future__ import annotations
 
@@ -51,8 +56,8 @@ logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
-# DERIVATION PLAN (PROV:daytier-track-b-screen) — every threshold is a PROVISIONAL v1 starting value on an
-# INERT screen (no live trade). Track B's design (§7, §7c, LdP selection-bias guard) requires deriving them
+# DERIVATION PLAN (PROV:daytier-track-b-screen) — every threshold is a PROVISIONAL v1 starting value on the
+# live screen (wired 2026-09-23; Track-B size stays budget-capped). Track B's design (§7, §7c, LdP selection-bias guard) requires deriving them
 # from the pooled "gap that BROKE-AND-HELD a level" setup outcomes once live, and NEVER tuning them on live
 # P&L. Until that data exists these are documented starting values.
 _MIN_GAP_PCT = 0.02          # PROV:daytier-track-b-screen — a real intraday mover has gapped/moved >= 2% off prior close
@@ -64,10 +69,12 @@ _RTH_OPEN_MIN = 9 * 60 + 30  # 09:30 ET session open (minutes since midnight ET)
 _RTH_CLOSE_MIN = 16 * 60     # 16:00 ET session close
 _RTH_SESSION_MIN = _RTH_CLOSE_MIN - _RTH_OPEN_MIN  # 390 min full session (RVOL session-fraction denominator)
 _BAR_SECONDS = 300           # 5-min bars — contiguity spacing (a larger gap = a halt)
-_STALE_FRAME_S = 2 * _BAR_SECONDS  # PROV:daytier-track-b-screen — newest bar older than this vs now = a halt/feed-stall -> skip (never trade a stale/halted name)
+_STALE_FRAME_S = _BAR_SECONDS + 120  # PROV:daytier-track-b-screen — newest COMPLETED bar ENDED more than one bar + 2 min
+                                     # (publication lag) before now = a missing completed bar = a halt/feed-stall -> skip
+                                     # (data seat R2: an end-based 2-bar bound let a name halted ~11 min through)
 
 # Track B conviction (PROV:daytier-track-b-screen) — DRIVE vs PULLBACK base, shorts scaled SMALLER (§7c-d
-# "shorts run smaller/tighter"). Conviction only ever SHRINKS the (already small, cash-only) Track-B budget
+# "shorts run smaller/tighter"). Conviction only ever SHRINKS the (already small, exposure-capped) Track-B budget
 # in compute_day_tier_size (min-only) — it never up-sizes. Derived from realized per-mode/side expectancy once live.
 _CONVICTION_DRIVE = 0.5      # PROV:daytier-track-b-screen — a fresh drive (no retest yet)
 _CONVICTION_PULLBACK = 0.6  # PROV:daytier-track-b-screen — a retest that held (higher-quality continuation)
@@ -102,6 +109,29 @@ def track_b_universe() -> list:
         return list(_DEFAULT_TRACK_B_UNIVERSE)
 
 
+def track_b_in_window(now_et: "datetime | None" = None) -> bool:
+    """True iff `now` is inside the only window where the momentum trigger CAN fire, so the runner skips the
+    per-symbol frame/daily fetches (API load) when an ENTER is impossible. DERIVED from the trigger's own bar
+    bounds (never a free-standing clock constant): the trigger needs >= _MIN_FRAME_BARS 5m bars from the open
+    and WAITs past _SESSION_CUTOFF_BARS bars. Bounds are inclusive and one bar of slack wide on each side (a
+    conservative margin; frames are completed-bars-only, so the first EVALUABLE tick is ~09:55 and the 09:50-09:54
+    ticks only cost fetches):
+      lower = (_MIN_FRAME_BARS - 1) bars after 09:30 ET   (09:50 ET with 5 bars),
+      upper = (_SESSION_CUTOFF_BARS + 1) bars after 09:30 ET (11:05 ET with 18 bars).
+    Pure efficiency gate — outside it every symbol would WAIT anyway. Never raises; an error -> False
+    (skip Track B this tick = no new entry, the safe direction)."""
+    try:
+        from strategy.day_tier_momentum_trigger import _SESSION_CUTOFF_BARS
+        n = _now_et(now_et)
+        elapsed = (n.hour * 60 + n.minute) - _RTH_OPEN_MIN
+        lower = (_MIN_FRAME_BARS - 1) * (_BAR_SECONDS // 60)
+        upper = (int(_SESSION_CUTOFF_BARS) + 1) * (_BAR_SECONDS // 60)
+        return lower <= elapsed <= upper
+    except Exception as _e:  # noqa: BLE001 — a window check must never raise into the runner
+        logger.warning("day-tier TRACK-B window check errored (skip Track B this tick): %s", _e)
+        return False
+
+
 def _f(x):
     """float(x) or None — NaN / +-inf -> None. Never raises."""
     try:
@@ -128,7 +158,7 @@ def _now_et(now_et: "datetime | None" = None) -> datetime:
 
 def track_b_conviction(mode: str, direction: str) -> float:
     """PROV conviction for a Track-B ENTER, in [0,1]. DRIVE/PULLBACK base, shorts scaled smaller (§7c-d).
-    Only ever SHRINKS the cash budget (compute_day_tier_size is min-only). Never raises."""
+    Only ever SHRINKS the Track-B budget (compute_day_tier_size is min-only). Never raises."""
     try:
         base = _CONVICTION_PULLBACK if str(mode).upper() == "PULLBACK" else _CONVICTION_DRIVE
         if str(direction).lower() == "short":
@@ -148,12 +178,17 @@ def screen_mover(symbol: str, intraday_5m, prior_close, avg_daily_volume,
                           and 'volume' column; the LAST close is today's current price, sum of 'volume' is
                           today's RTH volume so far.
       prior_close       : yesterday's daily close (runner supplies from a T1 daily fetch). Gap basis.
-                          CONTRACT: MUST be on the SAME RAW/unadjusted basis as intraday_5m (build_session_frame
-                          fetches RAW bars). An ADJUSTED prior_close on a split / large-dividend day produces a
-                          basis-artifact "gap" (a 2:1 split reads as -50%) — Part 2 MUST pin the daily fetch to
-                          RAW (adversarial B2). The _MAX_GAP_PCT cap catches only >=~2.5:1 splits; the momentum
-                          trigger (RAW, from-open) is the backstop that declines a non-move.
+                          CONTRACT: MUST be on TODAY's share basis — i.e. SPLIT-ADJUSTED. The frame is today's
+                          RAW bars, which are already post-split on an ex-date; a RAW prior_close is PRE-split,
+                          so a 2:1 split would read as a -50% "gap" (corrected 2026-09-23 by the data-integrity
+                          seat — the earlier contract text had this backwards). Split adjustment rescales history
+                          onto today's basis, so the runner fetches the daily context with adjustment="split"
+                          (prices AND volumes). The _MAX_GAP_PCT cap remains a backstop for >=~2.5:1 splits.
       avg_daily_volume  : trailing average DAILY volume (e.g. 20-day; runner supplies). RVOL denominator basis.
+                          CONTRACT: MUST be on the SAME FEED basis as intraday_5m's volume (build_session_frame
+                          fetches IEX, whose volume is ~2-5% of consolidated) — a consolidated/SIP denominator
+                          against an IEX numerator would read every name as ~0.03x RVOL and nothing would ever
+                          qualify (Part 2: the runner fetches the ADV from IEX daily bars).
       now_et            : current ET time (session-fraction elapsed for RVOL); defaults to datetime.now(ET).
 
     Returns {"symbol","is_mover":bool,"gap_direction":"up"/"down"/"none","gap_pct":float,"rvol":float,
@@ -224,7 +259,7 @@ def screen_mover(symbol: str, intraday_5m, prior_close, avg_daily_volume,
 
         result["is_mover"] = True
         result["reason"] = (f"MOVER {result['gap_direction']}: gap {gap:+.1%}, RVOL {rvol:.1f}x, "
-                            f"price ${price:.2f} — screen PASS (Inc 2 Part 1 pure; no order)")
+                            f"price ${price:.2f} — screen PASS (pure screen; the runner routes any ENTER)")
         logger.info("[%s] day-tier TRACK-B SCREEN: %s", symbol, result["reason"])
         return result
     except Exception as _e:  # a pure screen must NEVER raise into a caller
@@ -236,13 +271,18 @@ def screen_mover(symbol: str, intraday_5m, prior_close, avg_daily_volume,
 
 def build_session_frame(symbol: str, now_et: "datetime | None" = None):
     """Today's RTH 5m frame FROM the 09:30 ET open (the momentum trigger's INPUT CONTRACT). Fetches via
-    data.fetcher.fetch_bars_window(SIP, RAW) over [today 09:30 ET, now], then VERIFIES:
+    data.fetcher.fetch_bars_window(feed="iex", RAW) over [today 09:30 ET, now] — IEX because it is the only
+    feed this data plan serves in REAL TIME (a SIP window ending at `now` is rejected -> empty -> this would
+    return None on every live tick; verified 2026-09-23). IEX 5m bars were contiguous for all 15 pre-
+    registered names over the 2 probed sessions (a small sample — monitor live). Then VERIFIES:
       * bar 0's timestamp == today's 09:30 ET open (DST-aware) — else the OR window / VWAP reset misalign;
-      * the 5m sequence is CONTIGUOUS (no missing bar) — a gap = a HALT -> skip (never trade a halted name);
+      * the 5m sequence is CONTIGUOUS (no missing bar) — a gap = a multi-bar HALT -> skip. LIMIT: a short
+        LULD pause (< ~7 min) can leave contiguous partial bars and pass; the marketable limit + small size bound it;
       * >= _MIN_FRAME_BARS usable bars.
     Returns the RTH-only DataFrame (UTC-indexed, [open,high,low,close,volume]) or None on any failure/halt.
-    A T1 read only + FAIL-SAFE: never raises. NOTE: no live caller yet (INERT) — Part 2 wires it, counts its
-    fetch against the runner API budget, and enforces the precise clock-time cutoff.
+    A T1 read only + FAIL-SAFE: never raises. NOTE: the live runner (Inc 2 Part 2) calls it only inside
+    track_b_in_window (a coarse, minute-granular gate) and only while the per-tick API/time budgets allow; there is
+    NO precise clock-time cutoff beyond that gate and the trigger's bar-count cutoff.
     """
     try:
         import pandas as pd
@@ -254,11 +294,27 @@ def build_session_frame(symbol: str, now_et: "datetime | None" = None):
         open_et = n.replace(hour=9, minute=30, second=0, microsecond=0)
         if n <= open_et:  # pre-open / bad clock — no session frame yet
             return None
-        df = fetch_bars_window(symbol, config.TF_5M, open_et, n)
+        df = fetch_bars_window(symbol, config.TF_5M, open_et, n, feed="iex")  # real-time feed (see docstring)
         if df is None or getattr(df, "empty", True) or len(df) < _MIN_FRAME_BARS:
             return None
         idx = df.index
         if not isinstance(idx, pd.DatetimeIndex):
+            return None
+        # COMPLETED BARS ONLY (board data + risk seats 2026-09-23): drop any bar whose END (start + 5m) is after
+        # `now`. A still-forming bar would let a half-built bar "confirm" a hold (and its partial volume fail the
+        # volume check), and a historical --asof replay would otherwise see up to 5 min of the future. This also
+        # makes the live FRAME match the Rule-C replay's bar convention (RVOL elapsed-time and fill timing still differ).
+        try:
+            _ends = idx + pd.Timedelta(seconds=_BAR_SECONDS)
+            _now_ts = pd.Timestamp(n)
+            if idx.tz is None:
+                _now_ts = _now_ts.tz_convert("UTC").tz_localize(None)
+            df = df[_ends <= _now_ts]
+            idx = df.index
+        except Exception as _ce:  # noqa: BLE001 — cannot prove bars are complete -> skip (fail-safe)
+            logger.warning("[%s] day-tier TRACK-B frame: completed-bar filter errored (skip): %s", symbol, _ce)
+            return None
+        if len(df) < _MIN_FRAME_BARS:
             return None
         # RTH-only: drop any bar outside [09:30, 16:00) ET (SIP can include ext-hours if the window widens).
         try:
@@ -287,13 +343,14 @@ def build_session_frame(symbol: str, now_et: "datetime | None" = None):
         # catch a name that halted mid-session and is STILL halted now — it returns a contiguous but STALE
         # frame whose newest bar predates `now` by many minutes, which the momentum trigger would read as a
         # live break-and-hold and enter into a halted name (the reopen-gap tail §7b guards against). Require
-        # the newest bar to be recent vs now. (Alpaca bar ts = the bar's START; a fresh forming bar has
-        # age ~0-5min; a multi-bar halt grows it unbounded.)
+        # the newest COMPLETED bar to be recent vs now, measured from the bar's END (Alpaca bar ts = the START;
+        # frames are completed-bars-only, so a healthy frame's newest bar ended 0-5 min ago plus publication
+        # lag; a multi-bar halt grows the age unbounded).
         try:
             _last = df.index[-1]
             if getattr(df.index, "tz", None) is None:  # naive-safe like the RTH-mask / first-bar handling above
                 _last = _last.tz_localize("UTC")
-            age_s = (n - _last.to_pydatetime()).total_seconds()
+            age_s = (n - _last.to_pydatetime()).total_seconds() - _BAR_SECONDS
         except Exception as _fe:  # noqa: BLE001 — LOG + skip THIS symbol; never let a silent raise shut Track B down
             logger.warning("[%s] day-tier TRACK-B frame: freshness check errored (skip): %s", symbol, _fe)
             return None

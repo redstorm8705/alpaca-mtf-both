@@ -263,12 +263,25 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
                        open_trades: dict, positions_by_symbol: dict, buying_power: float,
                        maintenance_margin: float, maintenance_rate: float,
                        open_orders: list, risk_equity: float | None = None,
-                       symbol: str = "") -> tuple[int, str]:
+                       symbol: str = "", track: str = "A",
+                       track_budget: float | None = None,
+                       extra_b_lots: dict | None = None) -> tuple[int, str]:
     """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed.
 
     `symbol` selects the DEEP-LIQUIDITY carve-out (aggression guardrail 2026-09-18): a deep-liquidity
     (Mag-7) name may use the full DAYTRADE_TRACK_A_EQUITY_CEILING_PCT; a non-deep (thin) name keeps the
-    base ceiling AND a per-name notional cap. An unknown/empty symbol is treated as NON-deep (conservative)."""
+    base ceiling AND a per-name notional cap. An unknown/empty symbol is treated as NON-deep (conservative).
+
+    `track` "B" + DAYTRADE_TRACK_B_CASH_ONLY (default ON) applies the Track-B BUDGET CAP (min()-only):
+    (1) at most `requested_qty` — compute_day_tier_size's budget share count — so the Part-B risk-basis
+    sizing (which deliberately does NOT cap at requested_qty for Track A) can never up-size a Track-B mover;
+    and (2) open Track-B notional + this entry at the ORDER price <= `track_budget` (the whole Track-B
+    budget, not per entry). A missing/invalid track_budget fails CLOSED (0). `extra_b_lots` adds day-tier
+    lots known ONLY to the state file (a failed log write / the submit→log crash window) to the Track-B sum
+    — the Track-B budget only; Track A's caps are unchanged. This bounds Track-B EXPOSURE
+    (halt-reopen gap containment, design §7b.6); it does not change how the account funds it — a Track-B
+    short, or a buy while the account's cash is negative, is still margin-financed. Any track other than
+    "B" is Track A (unchanged)."""
     try:
         risk_basis = min(equity, float(risk_equity)) if risk_equity is not None else equity
         values = (order_price, stop_price, equity, buying_power, maintenance_margin, maintenance_rate, risk_basis)
@@ -342,10 +355,48 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         notional_room = min(rooms.values())
         notional_qty = math.floor(max(0.0, notional_room) / order_price)
         safe_qty = max(0, min(int(risk_qty), int(notional_qty)))
+        # TRACK-B EXPOSURE CAP (Track B Inc 2 Part 2, 2026-09-23; flag DAYTRADE_TRACK_B_CASH_ONLY). Track B's
+        # notional is bounded by its small equity-slice budget (§7b.6 — a halted mover can reopen far through
+        # its stop), never a risk-sized position. It bounds EXPOSURE, not funding: a B short / a buy on a
+        # negative-cash account is still margin-financed. requested_qty IS the budget's share count
+        # (compute_day_tier_size(track="B"): floor(equity × alloc × B-share × conviction / px), min-1-share
+        # floored only when the budget affords one whole share). min() only — it can shrink, never grow, the
+        # wired qty.
+        cash_note = ""
+        # Only an explicit False disables the cap: None/0/""/"False" all keep it ON (fail-safe — risk seat nit).
+        if str(track or "A").strip().upper() == "B" and _cfg("DAYTRADE_TRACK_B_CASH_ONLY", True) is not False:
+            try:
+                b_budget = float(track_budget) if track_budget is not None else float("nan")
+            except (TypeError, ValueError):
+                b_budget = float("nan")
+            if not (math.isfinite(b_budget) and b_budget > 0):
+                return 0, "track-B budget unavailable — fail closed"
+            # Open Track-B notional = own recorded qty × live price (entry/stop price fallback), over the durable
+            # log's open set PLUS any state-only lot (extra_b_lots) — over-counting a stale record is the
+            # fail-closed direction (risk seat R2).
+            open_b = 0.0
+            for t in list(open_trades.values()) + list((extra_b_lots or {}).values()):
+                if str(t.get("track") or "A").upper() != "B":
+                    continue
+                q = abs(float(t.get("fill_qty") or 0.0))
+                pos = positions_by_symbol.get(t.get("symbol"))
+                px = abs(float(getattr(pos, "current_price", 0.0) or 0.0)) if pos is not None else 0.0
+                if not (math.isfinite(px) and px > 0):
+                    px = abs(float(t.get("entry_price") or 0.0))
+                if not (math.isfinite(q) and math.isfinite(px)):
+                    return 0, "open track-B notional unreadable — fail closed"
+                open_b += q * px
+            b_room_qty = math.floor(max(0.0, b_budget - open_b) / order_price)
+            b_cap = max(0, min(int(requested_qty), int(b_room_qty)))
+            cash_note = (f"; track-B budget cap: requested {int(requested_qty)}sh, open-B ${open_b:.2f} of "
+                         f"${b_budget:.2f} → room {b_room_qty}sh")
+            if b_cap < safe_qty:
+                cash_note += f" → wired {safe_qty}→{b_cap}sh"
+                safe_qty = b_cap
         why = (f"requested {requested_qty} → risk-basis {risk_qty}sh "
                f"(risk {risk_pct:.2%}×${risk_basis:.0f}/stop ${stop_distance:.4f}) → wired {safe_qty}; rooms="
                + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items())
-               + f"; notional cap={notional_qty}sh")
+               + f"; notional cap={notional_qty}sh" + cash_note)
         return safe_qty, why
     except Exception as e:
         return 0, f"entry-cap error (fail-closed): {e!r}"
@@ -974,8 +1025,8 @@ def _mint_coid(symbol: str, direction: str) -> str:
 
 def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 bar_id: str, equity: float, decision_id: str = "") -> bool:
-    """Place ONE day-tier Track-A entry with a confirmed protective stop. Idempotent per
-    (symbol, bar_id). Returns True on a filled+protected entry, False otherwise. NEVER raises into
+    """Place ONE day-tier entry (Track A, or Track B when size["track"]=="B" — exposure-capped at wire time)
+    with a confirmed protective stop. Idempotent per (symbol, bar_id). Returns True on a filled+protected entry, False otherwise. NEVER raises into
     the caller (the runner). No-op when DAYTRADE_ENABLED is False."""
     if not _enabled():
         return False
@@ -1119,9 +1170,35 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                             "(no cross-tier netting)", symbol, getattr(existing, "side", "?"), direction)
                 return False
 
+        # Per-track attribution (Track B Inc 2 Part 2): the size dict carries compute_day_tier_size's track.
+        # Anything other than "B" (incl. a missing key on a legacy caller) is Track A — unchanged behavior.
+        # Either dict marking "B" routes to the Track-B cap (defense in depth — risk seat nit).
+        _track = "B" if "B" in (str(size.get("track") or "").strip().upper(),
+                                str((decision or {}).get("track") or "").strip().upper()) else "A"
+        # State-only lots (non-terminal, same-day, with NO entry_fill in the durable log at all — a failed log
+        # write or the submit→log crash window) must still count against the Track-B budget (risk seat R2). A
+        # lot whose entry_fill IS logged is either open (counted via open_trades) or already EXITED (a
+        # "protected" state record never transitions after its stop/target fills) — never counted here (cold-2nd
+        # R1). If the log cannot be read, every same-day non-terminal record counts (fail-closed over-count).
+        _logged = {str(t.get("trade_id") or "") for t in open_trades.values()}
+        try:
+            _evs, _evs_ok = day_tier_logger.read_events_checked()
+        except Exception:  # noqa: BLE001 — unreadable -> over-count (fail closed)
+            _evs, _evs_ok = [], False
+        if _evs_ok:
+            _logged |= {str(e.get("trade_id") or "") for e in _evs if e.get("event") == "entry_fill"}
+        _state_only = {
+            k: {"symbol": v.get("symbol"), "track": v.get("track") or "A",
+                "fill_qty": v.get("fill_qty") or v.get("qty") or 0,
+                "entry_price": v.get("fill_px") or v.get("stop_px") or 0.0}
+            for k, v in state.items()
+            if k.startswith("entry::") and isinstance(v, dict) and _state_blocks(v)
+            and str(v.get("coid") or "") not in _logged
+        }
         qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
                                       buying_power, maintenance_margin, maintenance_rate, open_orders,
-                                      risk_equity=day_start_equity, symbol=symbol)
+                                      risk_equity=day_start_equity, symbol=symbol, track=_track,
+                                      track_budget=size.get("budget"), extra_b_lots=_state_only)
         if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False
@@ -1133,7 +1210,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # write does not persist (Finding C: a swallowed write let the same ENTER re-fire → double).
         coid = _mint_coid(symbol, direction)
         state[key] = {"bar_id": bar_id, "coid": coid, "state": "submitting", "symbol": symbol,
-                      "side": direction, "ts": datetime.now(PT).isoformat(), "qty": qty, "stop_px": stop_px}
+                      "side": direction, "ts": datetime.now(PT).isoformat(), "qty": qty, "stop_px": stop_px,
+                      "track": _track}
         if not _save_state(state):
             _page(f"[{symbol}] day-tier entry ABORTED — could not persist the idempotency record "
                   f"(B3). Not submitting (a re-fire could double the position).")
@@ -1208,7 +1286,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                        side=direction, requested_limit=limit_px, fill_price=fill_px,
                                        fill_qty=float(filled_qty_i), market_price_at_fill=mkt_at_fill,
                                        equity_at_entry=live_equity, budget=float(size.get("budget") or 0.0),
-                                       notional=round(filled_qty_i * fill_px, 2))
+                                       notional=round(filled_qty_i * fill_px, 2), track=_track)
         trade_logger.log_event("entry", symbol=symbol, price=fill_px, size=filled_qty_i,
                                data_source="daytrade", tier="daytrade", direction=direction,
                                trade_id=entry_coid, stop=stop_px)

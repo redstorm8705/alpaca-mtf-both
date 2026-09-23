@@ -757,10 +757,18 @@ OWNERSHIP_GUARD_ENFORCE = False
 # (allocation), §7 (cadence + flat-by-close). Flip to True ONLY after the live
 # order module clears the full board + Gro + GAI + masked-loss gate (risk-path).
 DAYTRADE_ENABLED            = True    # LIVE (paper) 2026-09-02, Rafael-approved go-live — the 2-min runner
-                                     # (run_day_tier.py, */2 RTH cron) places Track-A orders; Track B stays OFF.
+                                     # (run_day_tier.py, */2 RTH cron) places Track-A orders (+ Track B when its flag is on).
                                      # Kill switch: flip to False + restart. Armed only under --profile paper
                                      # (validate_config fails-closed under the 3% live/default profile).
-DAYTRADE_TRACK_B_ENABLED    = False   # Track B (dynamic movers) OFF day-1 (board + Gro + GAI unanimous) — Track A only
+DAYTRADE_TRACK_B_ENABLED    = True    # Track B (dynamic movers) LIVE — Rafael go-live 2026-09-22 (board SPLIT decision).
+                                     # The momentum-mover tier; evaluated only ~09:50-11:05 ET (the trigger's window) and
+                                     # BUDGET-CAPPED (DAYTRADE_TRACK_B_CASH_ONLY), one entry per symbol per day. Kill switch: flip False (the
+                                     # runner is a fresh process every tick — takes effect on the next */2 tick).
+# Pre-registered liquid mover candidate list (PROV:daytier-track-b-screen) — the FIXED list IS the float /
+# micro-cap / liquidity guard (no market-wide gainers feed). Read by strategy/day_tier_track_b.track_b_universe().
+# To DISABLE Track B use DAYTRADE_TRACK_B_ENABLED=False, NOT an empty list (an empty list falls back to the module default).
+DAYTRADE_TRACK_B_UNIVERSE = ["NVDA", "TSLA", "META", "AMD", "AMZN", "AAPL", "MSFT", "GOOGL",
+                             "AVGO", "NFLX", "MU", "COIN", "PLTR", "SMCI", "UBER"]
 
 # Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
 # _DAYTRADE_UNDERLYINGS (per-symbol GEX already live). Leveraged trackers
@@ -777,22 +785,36 @@ DAYTRADE_UNIVERSE = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA",
 # EWY's overnight KOSPI-gap risk does NOT reach this tier).
 
 # Allocation (§7b.6): the tier gets DAYTRADE_ALLOC_PCT of equity, split Track A /
-# Track B. Track B is CASH-ONLY (no margin) + one-way fungible (A may borrow B's
-# idle budget on a strong-A/no-mover day; B may NEVER borrow A's). Track A sizes
-# off BUYING POWER (account trades ~4x margin); Track B off settled CASH.
+# Track B. Track B is EXPOSURE-CAPPED at its budget (see DAYTRADE_TRACK_B_CASH_ONLY — it
+# bounds notional, not funding) + one-way fungible (A may borrow B's idle budget on a
+# strong-A/no-mover day; B may NEVER borrow A's). Track A sizes off BUYING POWER (account
+# trades ~4x margin); Track B off an equity-slice budget (not a settled-cash read).
 # PROV:daytier-v2-2026-08-29 — the allocation split + kill percentages below are board-policy
 # capital budgets for a NEW tier with ZERO trade history (design record §3, §7b.6). There is no
 # day-tier data to derive them from yet; §7b.6 flags them explicitly as STARTING values to be
 # recalibrated from live P&L (roadmap: scale alloc 15%→25% as Track B validates). Structural, not fitted.
 DAYTRADE_ALLOC_PCT          = 0.15   # PROV:daytier-v2-2026-08-29  15% of equity to the whole day-tier (start; scale to 0.25 as B validates)
 DAYTRADE_TRACK_A_PCT        = 0.65   # PROV:daytier-v2-2026-08-29  Track A share of the tier allocation
-DAYTRADE_TRACK_B_PCT        = 0.35   # PROV:daytier-v2-2026-08-29  Track B share (cash-only)
-DAYTRADE_TRACK_B_CASH_ONLY  = True   # HARD: Track B never uses margin (halt-reopen gap containment)
+DAYTRADE_TRACK_B_PCT        = 0.35   # PROV:daytier-v2-2026-08-29  Track B share (an exposure budget — see DAYTRADE_TRACK_B_CASH_ONLY)
+DAYTRADE_TRACK_B_CASH_ONLY  = True   # HARD Track-B EXPOSURE cap (halt-reopen gap containment), ENFORCED at wire time by
+                                     # day_trade_manager._bounded_entry_qty: a Track-B entry is capped at its budget share
+                                     # count AND open Track-B notional stays <= the Track-B budget (equity × 15% × 35%,
+                                     # strategy/day_tier_sizing module constants); the risk-basis upsize is Track A only.
+                                     # HONEST SCOPE: this caps EXPOSURE, not funding — a Track-B short, or a buy while the
+                                     # account's cash is negative, is still margin-financed. Only an explicit False disables
+                                     # it (a board-gated risk-path switch — never flip casually).
 
 # Kills (§3, §7b.6) — nested: track sub-kills sum < tier kill < account 7% kill.
 DAYTRADE_TIER_KILL_PCT      = 0.25   # PROV:daytier-v2-2026-08-29  flatten + halt the whole day-tier at −25% of tier allocated capital
 DAYTRADE_TRACK_A_KILL_PCT   = 0.25   # PROV:daytier-v2-2026-08-29  Track A sub-kill: −25% of A's budget
-DAYTRADE_TRACK_B_KILL_PCT   = 0.20   # PROV:daytier-v2-2026-08-29  Track B sub-kill: −20% of B's budget (tighter — unvalidated + halt tail)
+DAYTRADE_TRACK_B_KILL_PCT   = 0.20   # PROV:daytier-v2-2026-08-29  Track B sub-kill: −20% of B's budget (tighter — unvalidated + halt tail).
+                                     # STAGED (SPLIT decision 2026-09-22, board 2-0), NOT a lie: this constant is declared +
+                                     # design-nested (validate_config's sub-kill nesting check still asserts the nesting sum < tier kill), but
+                                     # the LIVE per-track trigger is the FAST-FOLLOW increment. Track B ships live FIRST under the
+                                     # shared −5% tier kill (DAYTRADE_TIER_KILL_EQUITY_PCT) + the Track-B budget cap (open B
+                                     # notional ≤ equity×ALLOC×B-share ≈ 5.25% of equity) + the shared 3-concurrency cap + the 7% account
+                                     # kill; the −20%-of-B trigger is then wired in tier_kill_check and VALIDATED against B's first
+                                     # real labeled P&L (per-track stamp shipped this increment) — never blind kill code on B's day 1.
 
 # Cadence + flat-by-close (§7 CADENCE; §5d/§7b overnight-safety).
 DAYTRADE_SCAN_INTERVAL_MIN  = 2      # fast EXECUTION-loop cadence (min); the SIGNAL stays on 15/30m bar-close

@@ -17,7 +17,7 @@ Frame convention (matches the Inc-1 test): UTC-indexed 5m bars; 13:30 UTC == 09:
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,9 +31,10 @@ from strategy import day_tier_track_b as B  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 _NOW = datetime(2026, 9, 21, 10, 30, tzinfo=ET)  # 60 min into the session (frac = 60/390 ≈ 0.1538)
-# For the frame tests: an 8-bar 09:30-open frame ends at 10:05 EDT, so a "now" ~2 min later keeps the
-# newest bar inside the end-of-frame freshness window (B1). A far-later now is the stale/halt case.
-_FRAME_NOW = datetime(2026, 9, 21, 10, 7, tzinfo=ET)
+# For the frame tests: an 8-bar 09:30-open frame's last bar STARTS 10:05 and ENDS 10:10 EDT; frames are
+# completed-bars-only, so "now" = 10:11 keeps all 8 bars and the newest bar's end inside the freshness window
+# (B1). A far-later now is the stale/halt case.
+_FRAME_NOW = datetime(2026, 9, 21, 10, 11, tzinfo=ET)
 
 
 def _frame(closes, vols, start="2026-09-21 13:30"):
@@ -219,6 +220,72 @@ class SessionFrame(unittest.TestCase):
     def test_pre_open_returns_none(self):
         pre = datetime(2026, 9, 21, 9, 0, tzinfo=ET)  # before the open
         self.assertIsNone(B.build_session_frame("NVDA", now_et=pre))
+
+    def test_staleness_boundary_one_missing_bar_rejected(self):
+        # Data seat R2: last bar STARTS 10:05 (ends 10:10); at 10:19:30 the 10:10 bar is missing (a halt) ->
+        # age from end = 570 s > 420 s -> reject. At 10:12 (10:10 bar possibly not yet published) -> 120 s -> accept.
+        self._ret = self._utc(8)
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=datetime(2026, 9, 21, 10, 19, 30, tzinfo=ET)))
+        self.assertIsNotNone(B.build_session_frame("NVDA", now_et=datetime(2026, 9, 21, 10, 12, tzinfo=ET)))
+        # Just inside / just outside the one-bar + 120 s publication-lag bound (bar end 10:10 + 420 s = 10:17).
+        self.assertIsNotNone(B.build_session_frame("NVDA", now_et=datetime(2026, 9, 21, 10, 17, tzinfo=ET)))
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=datetime(2026, 9, 21, 10, 17, 1, tzinfo=ET)))
+
+    def test_forming_bar_is_dropped(self):
+        # At 10:07 the 10:05 bar is still forming (ends 10:10) -> dropped; 7 completed bars remain (board 2026-09-23).
+        self._ret = self._utc(8)
+        df = B.build_session_frame("NVDA", now_et=datetime(2026, 9, 21, 10, 7, tzinfo=ET))
+        self.assertIsNotNone(df)
+        self.assertEqual(len(df), 7)
+        self.assertEqual(df.index[-1], pd.Timestamp("2026-09-21 14:00", tz="UTC"))
+
+    def test_fetch_uses_realtime_iex_feed(self):
+        # Part 2 (2026-09-23): the plan rejects a SIP window ending at `now` (recent-SIP 403 -> empty), so the
+        # live frame MUST request the real-time IEX feed, RAW, over [09:30 ET, now].
+        seen = {}
+
+        def _capture(symbol, tf, start, end, **kw):
+            seen.update(symbol=symbol, start=start, end=end, **kw)
+            return self._utc(8)
+        self._fake.fetch_bars_window = _capture
+        self.assertIsNotNone(B.build_session_frame("NVDA", now_et=_FRAME_NOW))
+        self.assertEqual(seen.get("feed"), "iex")
+        self.assertEqual((seen["start"].hour, seen["start"].minute), (9, 30))
+        self.assertEqual(seen["end"], _FRAME_NOW)
+
+
+# ── track_b_in_window (the runner's fetch gate) ──────────────────────────────
+class Window(unittest.TestCase):
+    def _at(self, h, m, tz=ET):
+        return datetime(2026, 9, 21, h, m, tzinfo=tz)
+
+    def test_bounds_derived_from_trigger_bar_limits(self):
+        # lower = (_MIN_FRAME_BARS-1)=4 bars -> 09:50; upper = (_SESSION_CUTOFF_BARS+1)=19 bars -> 11:05 (inclusive)
+        self.assertFalse(B.track_b_in_window(self._at(9, 49)))
+        self.assertTrue(B.track_b_in_window(self._at(9, 50)))
+        self.assertTrue(B.track_b_in_window(self._at(10, 30)))
+        self.assertTrue(B.track_b_in_window(self._at(11, 5)))
+        self.assertFalse(B.track_b_in_window(self._at(11, 6)))
+        self.assertFalse(B.track_b_in_window(self._at(15, 0)))
+
+    def test_non_et_clock_is_converted_not_read_raw(self):
+        # 14:00 UTC == 10:00 EDT -> inside; a raw read (14:00) would wrongly fall outside.
+        self.assertTrue(B.track_b_in_window(datetime(2026, 9, 21, 14, 0, tzinfo=ZoneInfo("UTC"))))
+        # 07:30 PDT == 10:30 EDT -> inside.
+        self.assertTrue(B.track_b_in_window(datetime(2026, 9, 21, 7, 30, tzinfo=ZoneInfo("America/Los_Angeles"))))
+
+    def test_naive_clock_is_treated_as_et(self):
+        self.assertTrue(B.track_b_in_window(datetime(2026, 9, 21, 10, 0)))
+        self.assertFalse(B.track_b_in_window(datetime(2026, 9, 21, 12, 0)))
+
+    def test_window_covers_every_bar_count_the_trigger_accepts(self):
+        # Every tick at which the frame can hold 5..18 bars (either bar-publication convention) is inside.
+        from strategy.day_tier_momentum_trigger import _MIN_BARS, _SESSION_CUTOFF_BARS
+        for bars in range(_MIN_BARS, _SESSION_CUTOFF_BARS + 1):
+            for lag_bars in (0, 1):  # 0 = forming bar included; 1 = completed bars only
+                mins = (bars - 1 + lag_bars) * 5  # minutes after 09:30 when the frame first has `bars` bars
+                t = datetime(2026, 9, 21, 9, 30, tzinfo=ET) + timedelta(minutes=mins)
+                self.assertTrue(B.track_b_in_window(t), f"{bars} bars (lag {lag_bars}) at {t:%H:%M} must be inside")
 
 
 if __name__ == "__main__":
