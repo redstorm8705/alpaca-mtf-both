@@ -10682,3 +10682,81 @@ weekly-bias) to DAY-TIER trades (scored by conviction, score=0) and misreads tra
 short a "Long", NFLX short a "Long with inverted params"). Fix the Gemini audit prompt to be tier-aware +
 direction-aware. Plus: stale "INERT/trades nothing" docstrings across the LIVE day-tier modules; the
 redundant run_day_tier_shadow.py cron alongside the live runner; AMZN/MSFT FIFO-orphan EOD drift.
+
+---
+## 2026-09-23 — Day-tier TRACK B Inc 2 PART 2 (live wiring, RISK-PATH) — Step 1-2 audit (fresh account)
+
+Context: continued from the other account (usage limit). Its staged Part-2 draft (worktree
+day-tier-hairpin-stop-f21eca, uncommitted) was ported as a DRAFT ONLY; per C-1/C-7 every gate re-run from Step 1.
+Rafael's decision on the sub-kill fork: OPTION B / SPLIT ("ship it live now") — Track B live under the existing
+envelope + the `track` stamp; the per-track B sub-kill trigger is the validated fast-follow.
+
+**STEP 1 — FULL READ (this session, Read tool, every line):** run_day_tier.py 399 · data/fetcher.py 423 ·
+strategy/day_tier_track_b.py 381 · strategy/day_tier_momentum_trigger.py 277 · strategy/day_tier_sizing.py 184 ·
+execution/day_trade_manager.py 1828 (7 chunks) · strategy/day_tier_logger.py 409 · scripts/day_tier_preflight.py 304 ·
+config.py 1168 (4 chunks) · tests/test_day_tier_track_b.py 225 · tests/test_day_tier_gross_cap.py 331 ·
+tests/test_day_tier_bracket_exit.py 254.
+
+**TWO SHIP-BLOCKING DEFECTS FOUND IN THE DRAFT (both verified at source):**
+1. DEAD DATA PATH — fetch_bars_window pinned feed=SIP; the plan rejects SIP windows ending in the last ~15 min.
+   Live probe on OCI 2026-09-23 02:28 ET: end=now → 0 rows + APIError "subscription does not permit querying
+   recent SIP data"; end=now-16m → 192 rows. build_session_frame would return None every RTH tick → Track B
+   never trades. FIX: explicit feed param (default sip), frame on feed="iex" (real time); daily context =
+   settled SIP prior_close + IEX ADV (same basis as the IEX frame volume — IEX = 1.9-5.0% of consolidated,
+   measured); once-per-day data/cache file.
+2. MARGIN UPSIZE (safety defect) — _bounded_entry_qty returns min(risk_qty, notional_qty); requested_qty is a
+   validity check only (day_trade_manager.py ~341-344). A Track-B entry would wire at 1.5%-risk size up to the
+   $1,000 thin-name cap on margin; DAYTRADE_TRACK_B_CASH_ONLY=True was referenced by NO code (grep). FIX:
+   track param; Track B (flag default True) → safe_qty = min(safe_qty, requested_qty), min-only.
+Also: track_b_in_window (derived from the trigger's bar bounds) gates the fetches; preflight Track-A sim drift
+fixed (symbol=sym was omitted); preflight --asof replay; config comments corrected (risk basis 1.5%, not ~1%).
+
+**STEP 2 — 10-POINT AUDIT (changed files):**
+1 Static: py_compile + mypy --warn-unreachable + ruff E,W,F,B clean on all 7 source files (local py3.14) +
+  py_compile on OCI py3.10 clean (it CAUGHT a >20-nested-`with` SyntaxError in the new test → ExitStack).
+2 Trade path: IEX frame → settled daily ctx → screen → momentum trigger → adapter → size(track B) →
+  place_entry (idempotency/co-hold/opposite-side/concurrency/min-stop/wire-cap incl. the NEW B cash cap) →
+  OCO stop + 2R → reconcile / EOD force-flat / shared −5% tier kill. Track stamp on entry_fill + state.
+3 Adversarial: window edges 09:49/09:50/11:05/11:06; non-ET + naive clocks; empty/None/raising fetch →
+  (None,None)/skip; stale-day cache ignored; replay never writes the live cache; cash flag False/"False"/
+  missing; track None/"b"/"Z"; wide stop → 0 (cap never up-sizes).
+4 Full read: done (above).
+5 Cross-refs: compute_day_tier_size returns "track" (sizing.py:82-88); place_entry reads size["track"];
+  _bounded_entry_qty callers = place_entry + preflight (both pass track/symbol); fetch_bars_window callers =
+  research/trade_record_reducer (default sip, unchanged) + Track B (iex/sip explicit).
+6 Conflicting directions: Track A/B share symbols (7 overlap); place_entry blocks same-symbol re-entry +
+  opposite-side co-hold; bar_id idempotency is per (symbol, bar) so A acting first blocks B that bar. OK.
+7 Redundancy: none added; stale INERT docstrings in day_tier_track_b.py updated.
+8 State persistence: new cache file atomic tmp→replace under data/cache (approved), _ROOT-anchored; state
+  record gains "track" (additive).
+9 Data tier: T1 Alpaca Data via data/fetcher.py only; feed named explicitly; no yfinance; no raw requests.
+10 TZ/logging: all new datetimes ET-aware; durable entry_fill gains track; decision log already carries it.
+
+**RC-1..RC-8 (changed files):** RC-1 PASS (datetime.now(ET) only) · RC-2 PASS (_ROOT-anchored) · RC-3 FOUND 2 in
+the new code (track_b_in_window silent `return False`; daily-ctx cache `pass`) → FIXED (both log) · RC-4 N/A PASS ·
+RC-5 PASS (cache tmp→replace) · RC-6 PASS (DataFeed.IEX + daily columns verified by live probe) · RC-7 PASS (cap
+is min(); place_entry skips qty<1) · RC-8 N/A PASS.
+
+**TESTS (OCI py3.10):** new tests/test_day_tier_track_b_live.py 18/18 OK alone; tests/test_day_tier_track_b.py
+31/31 (26 prior + 5 new). Suite vs BASELINE (unchanged main): identical 6 failures + 9 errors pre-existing
+(stale sizing expectations + alpaca stub pollution from test_day_tier_shadow.py) — spawned as a separate task;
+no new failure. **RULE-C SIM:** 40 sessions, 17 trades, mean +0.19R (t 0.65, unproven), 4/17 affordable at the
+cash cap → +$1.39 — see the design record. NEXT: Step 3 board (masked-loss + execution/reliability + data seats).
+
+### 2026-09-23 (cont.) — Track B Part 2 gates + next-item scoping
+GATES on the final staged bytes: board 3 seats × 4 rounds (every required change applied; data seat APPROVE R3; risk+exec
+R4 items MUTATION-VERIFIED) · cold-2nd PASS (full diff) + fresh PASS on every later revision (5 revisions; each FAIL was
+a real test-strength or wording overclaim, fixed and mutation-verified — 14+ mutations) · adversarial PASS (C6 wording
+corrected: Track A code path unchanged except a log read; Track A behavior shares cap/gross/kill/tick with B by design) ·
+new module 49/49, helpers 33/33 (OCI py3.10) · Rule-C replay re-run on FINAL code identical (run_at 11:07 ET).
+PRESHIP: Gemini returned 503 "high demand" on ALL 4 ladder models for the large diff prompt (measured directly; a tiny
+canary prompt succeeded on gemini-3-flash-preview at the same time → capacity spike, not a dead-model config bug);
+preship_audit engaged the option-C NVIDIA substitute. Plan: re-run a genuine GAI pass when capacity returns.
+NEXT ITEM (Rafael: audit false alarms, Slack) — full reads done: nightly_audit.py 930, auto_ai_audit.py 1725.
+Verified root causes: (1) neither audit gets BROKER ground truth (positions vs live stop coverage) → "naked / stop
+verification failure" is inferred from log lines (SOFI 2026-09-22: stop @ $18.36 was live at Alpaca); (2) meta-audit
+BOT CONTEXT stale (says MIN_SCORE 10/12; paper profile is 8; no Track B); (3) directive guardrail counts ALL-tier fills,
+so "disable the daytrade tier" passes on 2 day-tier losses, with invented ROI numbers; (4) Groq role = "assume the worst".
+Recurring flags that ARE real (OCI mtf_bot.log): "impossible negative protected replay NVDA/GOOGL qhm=-2" ×245;
+"FIFO orphan: closing fill for GOOGL has no prior lot" + CRITICAL "POSITION COUNT DRIFT" 06:00 PT 2026-09-23; the
+pre-close sweep placing "MISSING" DAY stops daily (NFLX 9/18; INTC/AAPL/PLTR 9/21; SOFI 9/22) — root cause TBD.

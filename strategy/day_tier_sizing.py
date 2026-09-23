@@ -14,7 +14,7 @@ and fully unit-testable (equity + buying_power are passed IN).
 THE SIZING (min()-ONLY — the conservative posture, never a max/upsize):
   Track A: track_budget = min(buying_power × DAYTRADE_TRACK_A_PER_TRADE_BP_PCT,
                               equity × DAYTRADE_TRACK_A_EQUITY_CEILING_PCT)
-  Track B: track_budget = equity × DAYTIER_ALLOC_PCT × TRACK_B_SHARE        (CASH-only; unchanged)
+  Track B: track_budget = equity × DAYTIER_ALLOC_PCT × TRACK_B_SHARE        (an EXPOSURE budget, not a cash read)
   target        = track_budget × conviction                       (conviction ∈ [0,1] scales within budget)
   notional      = min(target, track_budget)                       (never exceed the track's own budget)
   shares        = floor(notional / entry_ref)                     (RC-7: whole-share floor; 0 = can't afford → skip)
@@ -31,7 +31,8 @@ flat-by-close; a missing/non-positive/non-finite BP → size 0 (fail-CLOSED — 
 which would mask the failure and resurrect the old ~$243 equity cap). This function is the PER-TRADE
 budget ONLY; the AGGREGATE Track-A gross cap, the main-bot BP reserve, and the maintenance cushion are
 enforced at WIRE-TIME in day_trade_manager._bounded_entry_qty (board + Gro + GAI + masked-loss seat
-2026-09-08; design logs/design_records/day_tier_bp_sizing_2026-09-08.md). Track B is cash-only.
+2026-09-08; design logs/design_records/day_tier_bp_sizing_2026-09-08.md). Track B's open notional is capped at
+this budget at wire time (an exposure cap — a B short / negative-cash buy is still margin-financed).
 
 WHAT IS NOT HERE (deferred to the wired Layer C, on purpose): the account-level GROSS-notional cap
 across concurrent positions (needs the live book), the ~$650 maintenance-cushion guard, the per-tier
@@ -57,7 +58,7 @@ logger = logging.getLogger(__name__)
 # against realized per-track expectancy + the A/B P&L correlation watch-flag (§7b.6) before scaling.
 _DAYTIER_ALLOC_PCT = 0.15   # PROV:daytier-sizing — whole day-tier slice of equity (§7b.6 start)
 _TRACK_A_SHARE = 0.65       # PROV:daytier-sizing — Track A (GEX-core) share of the tier budget
-_TRACK_B_SHARE = 0.35       # PROV:daytier-sizing — Track B (movers) share; cash-only
+_TRACK_B_SHARE = 0.35       # PROV:daytier-sizing — Track B (movers) share; an exposure budget (capped at wire time)
 
 
 def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying_power=None, track: str = "A") -> dict:
@@ -70,7 +71,7 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
       equity       : account equity (passed IN — no broker call here; the caller fetches it live).
       buying_power : account buying power (Track A budget basis; passed IN). None/≤0/non-finite on
                      Track A → size 0, size_ok False (fail-CLOSED, no equity fallback). Ignored on Track B.
-      track        : "A" (GEX-core, sizes off buying power) or "B" (movers, cash-only).
+      track        : "A" (GEX-core, sizes off buying power) or "B" (movers, exposure-capped budget).
 
     Returns:
       {"symbol", "shares": int, "notional", "budget", "track", "cash_only": bool,
@@ -124,7 +125,9 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
             equity_ceiling_pct = float(getattr(config, "DAYTRADE_TRACK_A_EQUITY_CEILING_PCT", 0.60))  # PROV:daytier-bp-2026-09-08
             track_budget = min(bp * per_trade_pct, eq * equity_ceiling_pct)
         else:
-            # Track B stays CASH-ONLY (settled-cash proxy = equity slice) — unchanged; B is OFF day-1.
+            # Track B: a budget of an equity slice (NOT a settled-cash read). The wire-time cap in
+            # day_trade_manager._bounded_entry_qty holds open Track-B notional <= this budget; a Track-B short or a
+            # buy on a negative-cash account is still margin-financed (the cap bounds exposure, not funding).
             track_budget = eq * _DAYTIER_ALLOC_PCT * _TRACK_B_SHARE
         result["budget"] = round(track_budget, 2)
 
@@ -159,7 +162,7 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
             result["reason"] = (
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
                 f"= ${target_notional:.2f} → {result['shares']} sh @ ${px:.2f} "
-                f"(${result['notional']:.2f}{', cash-only' if result['cash_only'] else ''}){_floor_note} "
+                f"(${result['notional']:.2f}{', B exposure-capped' if result['cash_only'] else ''}){_floor_note} "
                 f"— per-trade budget; aggregate gross cap + main-bot reserve + cushion enforced at wire-time"
             )
         elif track_budget >= px and not floor_enabled:
