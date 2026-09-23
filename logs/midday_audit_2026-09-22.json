@@ -1,0 +1,141 @@
+{
+  "audit_date": "2026-09-22",
+  "run_ts": "2026-09-22T10:30:01.438916-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "UBER",
+        "ts": "2026-09-15 11:23:23",
+        "score": 11,
+        "mri": "STRESSED",
+        "price": 71.74,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "SOFI",
+      "UBER"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "NORMAL": 31
+    },
+    "last_score": 10,
+    "last_level": "NORMAL"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 84,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-22 16:18:57,679 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-22 16:18:57,681 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-22 16:19:17,047 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-22 16:19:17,049 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-22 16:19:57,662 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$1.21 tracker=$-0.12 drift=$+1.33"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -0.12000000000000455,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -0.12000000000000455,
+    "best": {
+      "symbol": "UBER",
+      "pnl": -0.12000000000000455,
+      "entry_price": 71.74,
+      "exit_price": 71.8,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 75.45,
+      "target": 62.07
+    },
+    "worst": {
+      "symbol": "UBER",
+      "pnl": -0.12000000000000455,
+      "entry_price": 71.74,
+      "exit_price": 71.8,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 11,
+      "mri_level": "STRESSED",
+      "stop": 75.45,
+      "target": 62.07
+    },
+    "trades": [
+      {
+        "symbol": "UBER",
+        "pnl": -0.12000000000000455,
+        "entry_price": 71.74,
+        "exit_price": 71.8,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 11,
+        "mri_level": "STRESSED",
+        "stop": 75.45,
+        "target": 62.07
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "SOFI",
+        "side": "short",
+        "qty": 4.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "AAPL",
+      "GEV",
+      "INTC",
+      "LLY",
+      "MARA",
+      "PLTR"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "GOOGL",
+      "SOFI",
+      "UBER"
+    ],
+    "by_symbol": {
+      "SOFI": {
+        "buy": 0,
+        "sell": 0
+      },
+      "GOOGL": {
+        "buy": 0,
+        "sell": 1
+      },
+      "UBER": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
