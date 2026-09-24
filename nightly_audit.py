@@ -313,7 +313,7 @@ def _build_config_constants_block() -> str:
 
 
 def _build_prompt(log_lines: str, trade_events: str, eod: str,
-                  modified_files: dict[str, str]) -> str:
+                  modified_files: dict[str, str], ground_truth: str = "") -> str:
     files_section = ""
     if modified_files:
         for path, content in modified_files.items():
@@ -386,6 +386,36 @@ Remember: cite all fields for one trade from ONE record (same "ts"), never mix r
 ## EOD SNAPSHOT
 ```json
 {eod}
+```
+
+---
+
+## BROKER GROUND TRUTH — STOP COVERAGE (computed by code from Alpaca order + fill history)
+This is the ONLY valid source for whether a position was protected. Never infer "naked" /
+"unprotected" / "no stop" from log text. Classes: COVERED (a broker stop covered the full qty);
+SOFTWARE-ONLY-BY-DESIGN (core intraday position, software stop while the bot loop ran — this is the
+design: core entries before 15:30 ET get no broker stop until the pre-close sweep); BROKER-STOP-LAPSED
+(a core holding lost the broker stop it should have); SOFTWARE-ONLY+CYCLE-GAP (bot loop stalled while
+the position had no broker stop); NAKED (no broker stop and nothing protecting it in software);
+UNKNOWN (could not be verified — say UNKNOWN, never "protected" or "naked").
+Log wording that is NOT a naked position: the pre-close sweep line "STOP-PROTECT: placed MISSING …
+stop" means the sweep PLACED the broker stop for a software-protected core position; the summary
+field "broker-held N" counts placements the broker REFUSED because a protective order already held
+the qty (i.e. protected) — "broker-held 0" does NOT mean "no stops".
+STOP COVERAGE IS OWNED BY CODE: every NAKED / BROKER-STOP-LAPSED / CYCLE-GAP / UNKNOWN symbol below is
+already posted on the Slack card by code. Do NOT write any naked / unprotected / no-stop / missing-stop
+item in CATASTROPHIC ALERT or NEW BUGS FOUND for a symbol this block classes COVERED or
+SOFTWARE-ONLY-BY-DESIGN, and do not repeat NAKED / CYCLE-GAP / LAPSED symbols either — code already
+posts them. If this block is UNKNOWN (or unavailable), write "stop coverage UNKNOWN" under LOG
+ANOMALIES; you may ALSO report a naked position in CATASTROPHIC ALERT, but ONLY when the bot's own log
+explicitly states it (e.g. "unprotected", a stop placement/resubmit "FAILED") — quote that exact log
+line and tag the item "broker-unverified". A bot self-report of a stop failure (e.g. "resubmit
+FAILED", "unprotected") for a symbol classed COVERED or SOFTWARE-ONLY-BY-DESIGN goes in NEW BUGS as a
+code-path defect, quoting the line. A suspected CODE defect in stop handling (a path that could leave
+a position unprotected in future) is a NEW BUGS item describing the code path, not a claim that a
+position was naked.
+```
+{ground_truth or "(broker ground truth not available — stop coverage UNVERIFIED: report UNKNOWN; a naked position may be reported only when the bot's own log states it, quoted and tagged broker-unverified)"}
 ```
 
 ---
@@ -467,7 +497,9 @@ findings — this report feeds an unattended overnight review pipeline.
 List ONLY items meeting the CATASTROPHIC bar below, or write "None — no
 catastrophic conditions detected." One line each: file/function | exact
 failure condition | impacted symbol/trade if applicable.
-  CATASTROPHIC = position left naked (no stop), silent trading halt, P&L
+  CATASTROPHIC = a naked position per the BROKER GROUND TRUTH rules above (on an OK
+  day never inferred from log text; on an UNKNOWN day only a quoted bot self-report,
+  tagged broker-unverified), silent trading halt, P&L
   corruption affecting live risk decisions (NOTE: a pre-heal `pnl_drift` /
   "reconciliation mismatch" is NOT this — it has no reader in any live-risk/
   sizing/kill path; only `pnl_unreconciled=true` is a genuine reconciliation
@@ -621,7 +653,9 @@ def _load_suppressions() -> list[dict]:
 # visible symptom is a `pnl_drift` number). Keyword-on-line suppression is a blunt
 # instrument; this makes silently dropping a genuine reconciliation alarm structurally
 # impossible. Fails toward visibility (a protected line stays real/unfiltered).
-_NEVER_SUPPRESS_TOKENS = ("pnl_unreconciled",)
+# "fifo orphan" (2026-09-24, audit-alert false-alarms increment 1): a closing fill with no matched
+# opening lot is possibly-unbooked P&L — it may be surfaced, never muted.
+_NEVER_SUPPRESS_TOKENS = ("pnl_unreconciled", "fifo orphan")
 
 
 def _match_directive(line: str, sup: list[dict]) -> dict | None:
@@ -722,6 +756,49 @@ def _apply_suppressions(report: str, verdict: str) -> tuple[str, str, int, int]:
         adjusted = "WARN"
 
     return filtered, adjusted, n_suppressed, n_ack
+
+
+GT_COMPLIANCE_FILE = LOGS_DIR / "gt_compliance.jsonl"
+
+
+def _record_gt_compliance(violations: list, gt_ok: bool) -> int:
+    """Append today's compliance result (one line per run) and return how many of the last 5
+    recorded sessions had a violation. Only runs where the ground truth was OK are recorded.
+    Never raises (returns 0 on any error) — it is a counter, not a control on the card."""
+    try:
+        rows: list[dict] = []
+        if GT_COMPLIANCE_FILE.exists():
+            for ln in GT_COMPLIANCE_FILE.read_text(errors="replace").splitlines():
+                try:
+                    rows.append(json.loads(ln))
+                except json.JSONDecodeError:
+                    continue
+        if gt_ok:
+            row = {"date": AUDIT_DATE, "violations": list(violations)}
+            with open(GT_COMPLIANCE_FILE, "a") as fh:
+                fh.write(json.dumps(row) + "\n")
+            rows.append(row)
+        last: dict[str, bool] = {}
+        for r in rows:
+            if isinstance(r, dict):          # skip a malformed non-object line, never zero the count
+                last[str(r.get("date"))] = bool(r.get("violations"))
+        recent = sorted(last)[-5:]
+        return sum(1 for d in recent if last[d])
+    except Exception as e:
+        logger.warning("GT compliance record failed: %s", e)
+        return 0
+
+
+def _escalate_card_verdict(verdict: str, gt_findings: list[dict]) -> str:
+    """Deterministic broker ground-truth escalation — it can only RAISE the card verdict: a
+    critical alarm (NAKED / CYCLE-GAP position) fails the card even if the LLM missed it; a high
+    alarm (long lapse, stall, UNKNOWN) makes a PASS/UNKNOWN at least WARN; a low one (a short,
+    resolved lapse) is listed on the card but does not change the verdict."""
+    if any(f.get("severity") == "critical" for f in gt_findings):
+        return "FAIL"
+    if any(f.get("severity") == "high" for f in gt_findings) and verdict in ("PASS", "UNKNOWN"):
+        return "WARN"
+    return verdict
 
 
 def _build_slack_summary(report: str, verdict: str, modified_count: int) -> str:
@@ -839,19 +916,55 @@ def main():
     logger.info(f"  {len(modified_files)} file(s) modified in last 24h: "
                 + ", ".join(modified_files.keys()) if modified_files else "  (none)")
 
+    # Broker ground truth (stop coverage, computed by code from Alpaca order + fill history) —
+    # the ONLY source the audit may use for "naked". Never raises; UNKNOWN on any failure.
+    # It only ADDS deterministic findings / escalates the card verdict; it never removes or
+    # downgrades an LLM finding (board masked-loss seat + cold-2nd, 2026-09-24: prose-parsing
+    # downgrades were repeatedly shown to be able to hide a real catastrophic claim).
+    logger.info("Collecting broker ground truth (stop coverage)...")
+    gt: dict = {"status": "UNKNOWN", "reason": "not collected", "positions": {}}
+    gt_block = ""
+    gt_findings: list[dict] = []
+    gt_lows = ""
+    try:
+        from reporting import broker_ground_truth as _bgt
+        gt = _bgt.collect(datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"))
+        gt_block = _bgt.render(gt)
+        gt_findings, gt_lows = _bgt.card_alarms(gt)
+    except Exception as _gt_e:
+        logger.warning("broker ground truth unavailable (%s) — stop coverage UNVERIFIED", _gt_e)
+        gt = {"status": "UNKNOWN", "reason": str(_gt_e)[:200], "positions": {}}  # clear nothing
+        gt_block = ""
+        gt_findings = [{"severity": "high", "title": "Broker stop coverage UNKNOWN — ground truth failed",
+                        "detail": str(_gt_e)[:200]}]
+    logger.info("Broker ground truth: %s | alarms: %d", gt.get("status"), len(gt_findings))
+
     logger.info("Building prompt...")
-    prompt = _build_prompt(log_lines, trade_log, eod, modified_files)
+    prompt = _build_prompt(log_lines, trade_log, eod, modified_files, gt_block)
 
     logger.info(f"Calling Gemini ({GEMINI_MODEL})...")
     report = _call_gemini(prompt)
 
     verdict = _extract_verdict(report)
+    # Detect-only compliance count for the "stop coverage is owned by code" prompt rule.
+    gt_violations: list = []
+    try:
+        from reporting.broker_ground_truth import naked_claims_on_cleared
+        gt_violations = naked_claims_on_cleared(report, gt)
+    except Exception as _cmp_e:
+        logger.warning("GT compliance check failed: %s", _cmp_e)
+    recent_violation_days = _record_gt_compliance(gt_violations, gt.get("status") == "OK")
+    if gt_violations:
+        logger.warning("GT_COMPLIANCE: LLM naked claim on COVERED/BY-DESIGN symbol(s) %s "
+                       "(%d of the last 5 sessions)", gt_violations, recent_violation_days)
     # Deterministic signal-to-noise post-filter (curated lifecycle) — the report
     # FILE keeps the ORIGINAL verdict (audit trail); the CARD consumes the adjusted view.
     filtered_report, card_verdict_adj, n_sup, n_ack = _apply_suppressions(report, verdict)
+    card_verdict_adj = _escalate_card_verdict(card_verdict_adj, gt_findings)
     if n_sup or n_ack or card_verdict_adj != verdict:
-        logger.info("suppressions: %d false-alarm removed, %d acknowledged; verdict %s → %s",
-                    n_sup, n_ack, verdict, card_verdict_adj)
+        logger.info("post-filter: %d false-alarm removed, %d acknowledged; broker ground truth "
+                    "%s with %d alarm(s); verdict %s → %s", n_sup, n_ack, gt.get("status"),
+                    len(gt_findings), verdict, card_verdict_adj)
     logger.info(f"Verdict: {verdict} (card: {card_verdict_adj})")
 
     # ── Write full report ────────────────────────────────────────────────────
@@ -861,7 +974,12 @@ def main():
     _tmp_report = report_path.with_suffix(".txt.tmp")
     _sup_note = (f"\n\n{'='*80}\nSUPPRESSION POST-FILTER: {n_sup} false-alarm removed, "
                  f"{n_ack} acknowledged | card verdict {verdict} → {card_verdict_adj} "
-                 f"(see logs/audit_suppressions.jsonl)\n") if (n_sup or n_ack) else ""
+                 f"(see logs/audit_suppressions.jsonl; ground-truth escalation)\n"
+                 ) if (n_sup or n_ack or card_verdict_adj != verdict) else ""
+    _sup_note += f"\n{'='*80}\n{gt_block or 'BROKER GROUND TRUTH: unavailable'}\n"
+    if gt_violations:
+        _sup_note += (f"GT_COMPLIANCE: LLM naked claim on COVERED/BY-DESIGN symbol(s) {gt_violations} "
+                      f"— {recent_violation_days} of the last 5 sessions (reversal criterion: >= 2)\n")
     _tmp_report.write_text(
         f"Nightly Gemini Audit — {AUDIT_DATE}\n"
         f"Model: {GEMINI_MODEL} | Verdict: {verdict}\n"
@@ -888,12 +1006,30 @@ def main():
         except (json.JSONDecodeError, TypeError):
             eod_dict = {}  # "(No EOD snapshot found)" etc. → mismatch-free empty card
         pnl = build_pnl_fields("nightly", eod_dict)
-        findings = findings_from_report(filtered_report)
+        # Deterministic broker ground-truth alarms first (never LLM-derived), then the LLM's.
+        findings = gt_findings + findings_from_report(filtered_report)
         dist = [f"✅ full report — logs/gemini_audit_{AUDIT_DATE}.txt",
                 f"✅ modified files audited — {len(modified_files)}"]
         if n_sup or n_ack:
             dist.append(f"⏭️ {n_sup} false-alarm suppressed · {n_ack} acknowledged "
                         f"(logs/audit_suppressions.jsonl)")
+        _gtp = gt.get("positions") or {}
+        dist.append(f"🛡️ broker stop check: {gt.get('status')} · {len(_gtp)} positions · "
+                    f"{len(gt_findings)} alarm(s)")
+        if gt_lows:
+            dist.append(f"🛡️ minor stop lapses (resolved): {gt_lows[:300]}")
+        if gt_violations:
+            dist.append(f"⚠️ audit AI called {', '.join(gt_violations)} naked against broker data "
+                        f"— {recent_violation_days} of last 5 sessions (revisit at 2)")
+        elif gt.get("status") == "OK":
+            dist.append(f"🤖 audit-AI stop-rule violations: {recent_violation_days} of last 5 "
+                        "sessions (revisit at 2)")
+        if _gtp:
+            try:
+                from reporting.broker_ground_truth import checked_summary
+                dist.append(f"🛡️ checked: {checked_summary(gt)}")
+            except Exception as _cs_e:
+                logger.warning("checked_summary failed: %s", _cs_e)
         card_verdict = card_verdict_adj if card_verdict_adj != "UNKNOWN" else "WARN"
         payload = render_card("nightly", AUDIT_DATE, card_verdict, pnl,
                               findings, dist_footer=dist)
@@ -908,6 +1044,12 @@ def main():
     if not sent:
         # Text fallback also consumes the filtered/adjusted view for consistency.
         slack_body = _build_slack_summary(filtered_report, card_verdict_adj, len(modified_files))
+        if gt_lows:
+            slack_body = f"_minor stop lapses (resolved): {gt_lows[:300]}_\n\n" + slack_body
+        if gt_findings:
+            slack_body = ("*BROKER STOP CHECK*\n" + "\n".join(
+                f"  {f['severity'].upper()}: {f['title']} — {f['detail']}" for f in gt_findings)
+                + "\n\n" + slack_body)
         slack_emoji = {
             "PASS": ":white_check_mark:",
             "WARN": ":warning:",
