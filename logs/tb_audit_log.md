@@ -10816,3 +10816,51 @@ computed or [UNSUPPORTED]) + 7 (drop "assume the best"; keep 2 reviewers, disagr
 (autonomous_patch_generator 2026-09-22: 7 directives → "7 risk-path→human, 0 auto-patched").
 NEW FOLLOW-UP: autonomous_review.py Groq 413 Payload Too Large every run (93 lines in autonomous_review_cron.log) →
 nightly Gro review of pending patches never completes (same class as the preship chunker fix, PR #377).
+
+### 2026-09-24 — Audit-alert inc 1: broker ground truth → nightly_audit (Rafael APPROVED P1+P2 2026-09-23)
+FULL READ: nightly_audit.py 930 lines (4 chunks); reporting/pnl_ledger.py 1-300 (helpers used); scripts/audit_slack.py
+findings_from_report/render_card/validate; stop_protection.py 520-560; main.py 940-1110 ([CYCLE] line).
+PREMISE CORRECTION (before code, told Rafael): POSITION_COUNT_DRIFT is startup-only (40/40 last lines in the same
+minute as an mtf-bot start; `risk.open_positions=0 vs tracker=N`) → its false_alarm status is CORRECT, NOT reclassified.
+FIFO orphans are not GOOGL-only (AMZN too) and were never suppressed → "fifo orphan" added to _NEVER_SUPPRESS_TOKENS.
+10-POINT: (1) ruff E,W,F,B + mypy --warn-unreachable + py_compile clean on 4 files; (2) path: cron 16:05 ET →
+collect() (read-only T1 REST) → prompt block → post-filter → card; no trade-path code; (3) adversarial: read failure /
+truncated pages / unparseable time / unreadable log → UNKNOWN; no session → NO_SESSION; partial-qty stop = uncovered;
+flips/intra-session holdings per-holding owner; (4) full read done; (5) callers: only nightly_audit.main (grep; graph
+stale → manual); (6) no conflicting writers (no state written); (7) no dead code added; (8) no state files; report
+write unchanged (tmp→replace); (9) T1 Alpaca paper REST via pnl_ledger._get_json, no SDK client, no yfinance;
+(10) displayed times ET (market-structure windows) inside the audit report, card footer unchanged PT.
+RC-1 PASS (aware datetimes) · RC-2 PASS (BOT_LOG anchored __file__) · RC-3 PASS (collect logs + returns UNKNOWN; main
+logs) · RC-4 n/a · RC-5 n/a (no new writes) · RC-6 PASS (fields verified on live payloads: created_at/filled_at/
+canceled_at/expired_at/replaced_at, legs, activities transaction_time/order_id) · RC-7 n/a · RC-8 n/a.
+RULE-C SIM (production data): 15 sessions 09-02..09-23 → alarms only on verified real events: 09-18 UBER lapse 3.5h
+(breakeven-push resubmit FAILED, log "2 shares unprotected"), 09-15 AAPL/HOOD (exit cancel→fill 7m), 09-11 GEV (QHM
+stop cancelled 12:03→13:07), 09-03 MARA 5m, 09-02 META day stop 10:02. Replayed real reports: 09-21 FAIL→WARN,
+09-22 FAIL→WARN, 09-18 FAIL kept (the LLM flagged by-design NFLX and MISSED the real UBER lapse), 09-15 WARN.
+BUGS FOUND IN MY OWN DRAFT (fixed before review): 45-day lookback falsely NAKED'd GE (stop created 07-27) → full
+history; OCO leg submitted_at → created_at; owner-at-open missed carried core (GTC cancelled pre-open) → 24h owner
+window; per-symbol owner → per-holding; minute sampling → exact interval sweep; symbol-less clear could clear a claim
+about a non-held symbol → known_symbols guard.
+TESTS: 31 (OCI py3.10) + 14 mutations caught. NEW FOLLOW-UPS: (a) when Gemini fails the card still says "WARN — no
+action needed" (pre-existing); (b) SIGTERM "BOT SHUTDOWN" CRITICAL fires on the scheduled 02:00 ET restart + deploy
+restarts; (c) midday_audit.py + auto_ai_audit.py need the same ground-truth wiring (midday posted a false "NAKED AMZN"
+2026-09-23: OCO stop resting 12:56-15:30 ET); (d) the UBER-type failed stop resubmit is a real trade-path defect
+(lifecycle.py BE push) → own gated item.
+REVIEW ROUNDS (2026-09-24): board observability seat (Majors/Kim) + masked-loss seat (Taleb/Thorp) + a FRESH cold-2nd
+on every revision. r1-r4 let code DOWNGRADE LLM "naked" findings when broker data contradicted them; each fresh cold-2nd
+found new reachable inputs where the prose-parsing downgrade hid a real catastrophic claim (merged findings, mixed
+claims, indent/"none"-line grouping, symbol-less future-defect reports, declared-count bypass). r5 REMOVED all
+downgrading (_apply_suppressions byte-identical to production): ground truth = prompt context ("STOP COVERAGE IS OWNED
+BY CODE") + ADD-only deterministic alarms that can only RAISE the card verdict. r6: masked-loss R5 (UNKNOWN-day prompt
+must still allow quoted bot self-reports — "never a naked claim" would have silenced 09-18 UBER on a broker outage),
+N12 (entries >= 15:30 need GTC at entry), detect-only compliance counter logs/gt_compliance.jsonl (observability
+required: code counts the reversal criterion), lows to footer (render_card collapses >2 lows → would hide LLM lows),
+fill-race guard. r7: carried owner = stops alive overnight (stale expired core stop relabelled a QHM hold as core →
+false BY-DESIGN), window_end separate from session close (midday prerequisite), malformed-row skip.
+FINAL: cold-2nd r7 PASS; observability APPROVE (r3) → APPROVE-WITH-CHANGES (r5, both applied in r6); masked-loss
+APPROVE (r3) → APPROVE-WITH-CHANGES (r5, applied in r6). 58 tests (OCI py3.10). 15-session re-scan on r7 identical:
+alarms only on verified real events (09-18 UBER, 09-15 AAPL/HOOD, 09-11 GEV + 43-min stall, 09-03 MARA, 09-02 META).
+FOLLOW-UPS (tracked): N1 nightly passes the ET date to collect() while AUDIT_DATE is PT — a MANUAL rerun 21:00-24:00 PT
+gets NO_SESSION (cron 16:05 ET unaffected); F6 forever-hold positions would read NAKED if FOREVER6_ENABLED is turned
+on; midday_audit.py (false "NAKED AMZN" 09-23 = OCO legs not fetched, no by-design notion; read_bot_log_tail treats
+UTC log timestamps as PT → "last 4h" is ~11h); meta-audit wiring; nightly/midday exit code returns the LLM verdict.
