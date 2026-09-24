@@ -352,6 +352,20 @@ class TestRenderAndCollect(unittest.TestCase):
         self.assertEqual(bgt.checked_summary(gt), "GE covered")
         self.assertIn("no trading session", bgt.render({"status": "NO_SESSION", "session": "x"}))
 
+    def test_user_facing_times_are_pt(self):
+        # CLAUDE.md §8: every user-facing time in PT (classification stays ET internally)
+        orders = [stop("q1", "GEV", "sell", 1, iso(10, 0, day=1), iso(12, 3), coid="QH-GEV-s-1"),
+                  stop("q2", "GEV", "sell", 1, iso(13, 7), None, coid="QH-GEV-s-2", status="new")]
+        cyc = [c for c in cycles() if not (datetime(2026, 9, 22, 12, 30, tzinfo=ET)
+                                           < c < datetime(2026, 9, 22, 13, 30, tzinfo=ET))]
+        res = run(orders, [], {"GEV": 1.0}, cyc=cyc)
+        gt = dict(ok(res), session="2026-09-22", window_pt="06:30-13:00")
+        self.assertEqual(res["positions"]["GEV"]["uncovered_windows_pt"], ["09:03-10:07"])
+        txt = bgt.render(gt) + " ".join(a["detail"] for a in bgt.alarm_findings(gt))
+        self.assertIn("09:03-10:07", txt)
+        self.assertIn("RTH 06:30-13:00 PT", txt)
+        self.assertNotIn(" ET", txt)
+
     def test_not_ok_status_is_one_high_alarm(self):
         gt = {"status": "UNKNOWN", "reason": "boom", "positions": {}}
         self.assertEqual([a["severity"] for a in bgt.alarm_findings(gt)], ["high"])
