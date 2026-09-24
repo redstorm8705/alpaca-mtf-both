@@ -42,6 +42,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
+PT = ZoneInfo("America/Los_Angeles")   # every user-facing time is PT (CLAUDE.md §8); ET is internal
 UTC = ZoneInfo("UTC")
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -322,10 +323,14 @@ def classify(open_dt: datetime, close_dt: datetime, orders: list, fills: list,
             "uncovered_at_close": uncovered_at_close,
             "uncovered_windows_et": [f"{s.astimezone(ET):%H:%M}-{e.astimezone(ET):%H:%M}"
                                      for s, e in stretches],
+            "uncovered_windows_pt": [f"{s.astimezone(PT):%H:%M}-{e.astimezone(PT):%H:%M}"
+                                     for s, e in stretches],
             "rejected_stop_orders": rejected,
         }
     return {"positions": out,
             "cycle_log": "OK" if gaps is not None else "UNKNOWN",
+            "cycle_gaps_pt": [f"{a.astimezone(PT):%H:%M}-{b.astimezone(PT):%H:%M}"
+                              for a, b in (gaps or [])],
             "cycle_gaps_et": [f"{a.astimezone(ET):%H:%M}-{b.astimezone(ET):%H:%M}"
                               for a, b in (gaps or [])]}
 
@@ -464,7 +469,8 @@ def collect(day: str, now: datetime | None = None) -> dict:
         orders = _fetch_orders(open_dt, end_dt)
         cyc = read_cycle_times(since=open_dt - timedelta(hours=1))
         res = classify(open_dt, close_dt, orders, fills, positions_now, cyc, window_end=end_dt)
-        res.update(status="OK", session=day, window_et=f"{open_dt:%H:%M}-{end_dt:%H:%M}")
+        res.update(status="OK", session=day, window_et=f"{open_dt:%H:%M}-{end_dt:%H:%M}",
+                   window_pt=f"{open_dt.astimezone(PT):%H:%M}-{end_dt.astimezone(PT):%H:%M}")
         return res
     except Exception as e:   # the audit must still post; say UNKNOWN loudly instead
         logger.warning("broker_ground_truth: collect(%s) failed — UNKNOWN: %s", day, e)
@@ -483,14 +489,14 @@ def render(gt: dict) -> str:
                 "UNKNOWN and never assert 'protected'. A naked position may be reported ONLY when "
                 "the bot's own log states it (e.g. 'unprotected', a stop resubmit 'FAILED') — "
                 "quote that line and tag it broker-unverified.")
-    lines = [f"BROKER GROUND TRUTH ({gt['session']}, RTH {gt.get('window_et', '')} ET) — computed "
+    lines = [f"BROKER GROUND TRUTH ({gt['session']}, RTH {gt.get('window_pt', '')} PT) — computed "
              f"by code from Alpaca order + fill history. Bot cycle log: {gt.get('cycle_log')}; "
              f"cycle gaps > {_CYCLE_GAP_MIN:.0f} min: "
-             f"{', '.join(gt.get('cycle_gaps_et') or []) or 'none'}"]
+             f"{', '.join(gt.get('cycle_gaps_pt') or []) or 'none'} (times PT)"]
     if not gt.get("positions"):
         lines.append("  (no positions held during the session)")
     for sym, p in gt["positions"].items():
-        w = ", ".join(p["uncovered_windows_et"][:4]) or "-"
+        w = ", ".join(p.get("uncovered_windows_pt", [])[:4]) or "-"
         lines.append(f"  {sym:6} {p['class']:24} owners={'/'.join(p['owners']) or '?'} "
                      f"exposed={p['exposed_min']}m no-broker-stop={p['uncovered_min']}m [{w}] "
                      f"rejected_stop_orders={p['rejected_stop_orders']}")
@@ -520,8 +526,8 @@ def alarm_findings(gt: dict) -> list:
     if gt.get("cycle_gaps_et"):
         out.append({"severity": "high",
                     "title": f"Bot loop stalled > {_CYCLE_GAP_MIN:.0f} min (broker ground truth)",
-                    "detail": ("no [CYCLE] line during " + ", ".join(gt["cycle_gaps_et"][:4])
-                               + " ET — software stops were not evaluated")})
+                    "detail": ("no [CYCLE] line during " + ", ".join(gt.get("cycle_gaps_pt", [])[:4])
+                               + " PT — software stops were not evaluated")})
     for sym, p in (gt.get("positions") or {}).items():
         if p["class"] not in ALARM_CLASSES:
             continue
@@ -540,7 +546,7 @@ def alarm_findings(gt: dict) -> list:
                     "title": f"{sym} {p['class']} (broker ground truth){still}",
                     "detail": (f"{sym}: no broker stop for {p['uncovered_min']}m of "
                                f"{p['exposed_min']}m held{lapsed} "
-                               f"({', '.join(p['uncovered_windows_et'][:3])} ET); owners "
+                               f"({', '.join(p.get('uncovered_windows_pt', [])[:3])} PT); owners "
                                f"{'/'.join(p['owners'])}")})
     return out
 
