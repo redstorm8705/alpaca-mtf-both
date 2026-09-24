@@ -10864,3 +10864,9 @@ FOLLOW-UPS (tracked): N1 nightly passes the ET date to collect() while AUDIT_DAT
 gets NO_SESSION (cron 16:05 ET unaffected); F6 forever-hold positions would read NAKED if FOREVER6_ENABLED is turned
 on; midday_audit.py (false "NAKED AMZN" 09-23 = OCO legs not fetched, no by-design notion; read_bot_log_tail treats
 UTC log timestamps as PT → "last 4h" is ~11h); meta-audit wiring; nightly/midday exit code returns the LLM verdict.
+
+### 2026-09-24 (cont.) — SHIPPED: audit-alert inc 1 (PR #381 → 516a5f2), OCI pulled (DEPLOY_OK, tests OK on OCI)
+Preview on OCI for session 2026-09-24: 8 positions — 3 COVERED (GEV/LLY qhm, GOOGL day), 5 core SOFTWARE-ONLY-BY-DESIGN
+(09:30-09:40 opening window), 0 alarms. Preship: Gemini free quota exhausted most of the day (A/B sim spent it);
+Rafael authorized a one-time GAI exception but it was NOT used — real Gro+GAI APPROVE landed on all 4 files (two Gro
+false-premise rejects from split-diff chunks resolved by counter-evidence, logs/audit_gt_preship_evidence.md).

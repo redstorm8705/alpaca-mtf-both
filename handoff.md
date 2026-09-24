@@ -8,7 +8,7 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-23, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-24, interactive Rafael present) — pick up here
 
 **SHIPPED 2026-09-23:** day-tier **Track B Inc 2 Part 2** — Track B wired LIVE behind
 `DAYTRADE_TRACK_B_ENABLED=True` (PR #378, merge commit `b3fa877`, deployed to OCI) — verify:
@@ -22,14 +22,21 @@ venv/bin/python3 scripts/day_tier_preflight.py --asof 2026-09-21T10:05' | grep ^
 (budget cap blocks a $715 share). Detail: `logs/tb_audit_log.md` 2026-09-23 entries + design record
 `logs/design_records/day_tier_track_b_inc2_2026-09-22.md`.
 
-**⏩ EXACT NEXT ACTION:** the **audit-alert false alarms** item (Rafael 2026-09-23) — board (2 cold seats) + Gro + GAI
-are ALIGNED after 2 rounds (verify: `grep -c "Audit-alert false alarms: Gro + GAI on the fork (2 rounds) → ALIGNED"
-logs/tb_audit_log.md`→1; the plan is in that entry). NEXT = bring Rafael the one-page package, then build increment 1
-(item 1 un-mask count drift / FIFO orphan + item 4 broker-ground-truth block) through the full gate.
-Masking fact behind item 1 — verify: `ssh mtf-bot "grep -c POSITION_COUNT_DRIFT
-/home/ubuntu/mtf-bot/logs/audit_suppressions.jsonl"`→1; the GOOGL orphan + drift lines — verify: `ssh mtf-bot 'grep -c
-"FIFO orphan: closing fill for GOOGL has no prior lot" /home/ubuntu/mtf-bot/logs/mtf_bot.log; grep -c "POSITION COUNT
-DRIFT" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`38`,`126` (2026-09-23 count; root cause NOT yet known).
+**SHIPPED 2026-09-24:** audit-alert false alarms **increment 1** — nightly broker stop-coverage ground truth
+(Rafael APPROVED Proposal 1 + 2, 2026-09-23). PR #381 → main `516a5f2`, pulled on OCI (cron script, no restart) —
+verify: `gh pr view 381 --json state,mergeCommit`→`MERGED`/`516a5f2…`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git
+log --oneline -1'`→`516a5f2 Merge pull request #381…`. Status: **deployed, unexercised** until the next 16:05 ET
+nightly — verify: `ssh mtf-bot 'grep -c "Broker ground truth:" /home/ubuntu/mtf-bot/logs/nightly_audit_cron.log'`→`0`
+as of 2026-09-24 (no run of the new code yet). Design, gates, reversal criterion: `logs/tb_audit_log.md` 2026-09-24
+entries + `logs/design_records/audit_broker_ground_truth_2026-09-24.md`.
+
+**⏩ EXACT NEXT ACTION:** audit-alert **increment 2 = `midday_audit.py`** (its own full patch sequence): the 09-23
+midday "NAKED AMZN" was false — verify: `ssh mtf-bot "grep -c AMZN /home/ubuntu/mtf-bot/logs/midday_audit_2026-09-23.json"`
+→≥1 (stop_coverage.naked lists AMZN); why it was false — verify: `grep -c 'NAKED AMZN" 09-23 = OCO legs not fetched' logs/tb_audit_log.md`→1. Root cause (read in
+full 2026-09-24): `_fetch_open_orders` omits `nested=true` (OCO stop legs unseen) — verify: `grep -n
+'status=open&limit=500")' midday_audit.py`→ the call has no `nested=true` — + no by-design notion. Plan: reuse `broker_ground_truth.collect(day, now)` (supports a
+mid-session window). THEN meta-audit (Proposal 2 items 5-8). Tracked follow-ups are listed in tb_audit — verify:
+`grep -c "FOLLOW-UPS (tracked): N1 nightly passes the ET date" logs/tb_audit_log.md`→1.
 
 **THEN:** Track-B sub-kill fast-follow (after B's first labeled trades); QHM memo→execution; intraday
 conviction-upsize; leveraged-ETF universe. Do NOT ship day-tier size-up until the edge is measured.
