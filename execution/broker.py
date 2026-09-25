@@ -1243,6 +1243,9 @@ def replace_stop_order(
     venue, the replacement is rejected — so a success here does NOT prove the position is still
     open (the caller's external-close detection owns that case).
 
+    The replacement keeps the replaced order's tier prefix in its client_order_id (IN-/DT-/QH-/F6-)
+    so tier attribution survives the move.
+
     `qty` (optional, whole shares) re-sizes the stop in the same request — used before a partial
     close so exactly the sold shares are released while the rest stay protected. None leaves the
     quantity unchanged.
@@ -1264,8 +1267,23 @@ def replace_stop_order(
         return None
     from alpaca.trading.requests import ReplaceOrderRequest
     client = _get_trading_client()
-    req = (ReplaceOrderRequest(stop_price=round(stop_price, 2)) if qty is None
-           else ReplaceOrderRequest(stop_price=round(stop_price, 2), qty=int(qty)))
+    # KEEP THE OWNER TAG: Alpaca gives the replacement a NEW client_order_id, auto-generated
+    # (untagged) unless one is sent. Tier attribution (ownership_guard.tier_of_coid, the IN-/DT-/
+    # QH-/F6- prefix) drives P&L attribution, tier-aware cancels and the broker ground-truth owner,
+    # so the replacement is given a fresh id with the SAME tier prefix as the order it replaces.
+    # An untagged/unreadable old order gets none (Alpaca generates one, as before this helper).
+    _fields: dict = {"stop_price": round(stop_price, 2)}
+    if qty is not None:
+        _fields["qty"] = int(qty)
+    _prior = get_order(order_id)
+    if _prior is not None:
+        from execution.ownership_guard import tier_of_coid
+        _tier = tier_of_coid(getattr(_prior, "client_order_id", None))
+        _side = getattr(_prior, "side", "")
+        _side_s = str(getattr(_side, "value", _side)).lower()
+        if _tier and _side_s in ("buy", "sell"):
+            _fields["client_order_id"] = _make_idem_id(_tier, symbol, _side_s)
+    req = ReplaceOrderRequest(**_fields)
     try:
         new_order = client.replace_order_by_id(order_id, req)
         logger.info(

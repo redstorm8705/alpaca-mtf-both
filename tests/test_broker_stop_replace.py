@@ -19,9 +19,10 @@ class FakeClient:
         self.replace_applies = True      # on raise: did the replace happen anyway (lost reply)?
         self.cancel_to = "canceled"      # status an accepted cancel moves the order to
 
-    def add(self, oid, status="new", stop_price=100.0, qty="5", replaced_by=None):
+    def add(self, oid, status="new", stop_price=100.0, qty="5", replaced_by=None,
+            coid="IN-UBER-s-1700000000000-abcd1234", side="sell"):
         self.orders[oid] = SimpleNamespace(id=oid, status=status, stop_price=stop_price, qty=qty,
-                                           replaced_by=replaced_by)
+                                           replaced_by=replaced_by, client_order_id=coid, side=side)
         return self.orders[oid]
 
     def get_order_by_id(self, oid):
@@ -36,7 +37,8 @@ class FakeClient:
                           "replaced", "canceled", "filled", "expired", "rejected"):
             raise RuntimeError("422 order cannot be replaced in status " + old.status)
         new_id = oid + "-r"
-        new = self.add(new_id, stop_price=req.stop_price, qty=str(req.qty) if req.qty else old.qty)
+        new = self.add(new_id, stop_price=req.stop_price, qty=str(req.qty) if req.qty else old.qty,
+                       coid=req.client_order_id or "auto-generated-untagged", side=old.side)
         if self.replace_raises is not None:
             if self.replace_applies:
                 old.status, old.replaced_by = "replaced", new_id
@@ -74,6 +76,20 @@ class TestReplace(Base):
         self.assertEqual(self.fake.orders["A"].status, "replaced")
         self.assertEqual(self.fake.cancel_calls, [])
         self.assertIsNone(self.fake.replace_calls[0][1].qty)
+
+    def test_replacement_keeps_the_tier_prefix(self):
+        from execution.ownership_guard import tier_of_coid
+        for coid, tier in (("IN-UBER-s-1-a", "intraday"), ("DT-UBER-b-1-a", "daytrade"), ("QH-UBER-s-1-a", "qhm")):
+            self.fake.orders.clear()
+            self.fake.add("A", coid=coid, side="buy" if tier == "daytrade" else "sell")
+            new = broker.replace_stop_order("UBER", "A", 99.0)
+            self.assertEqual(tier_of_coid(new.client_order_id), tier)
+            self.assertNotEqual(new.client_order_id, coid)      # fresh id, same tier
+
+    def test_untagged_or_unreadable_prior_sends_no_client_order_id(self):
+        self.fake.add("A", coid="legacy-untagged")
+        broker.replace_stop_order("UBER", "A", 99.0)
+        self.assertIsNone(self.fake.replace_calls[-1][1].client_order_id)
 
     def test_qty_resize_sent_with_price(self):
         self.fake.add("A", qty="5")
