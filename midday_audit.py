@@ -9,14 +9,14 @@ Reads today's trade_events.jsonl + last 4h of bot.log. Flags:
   - Watchdog restart events (hang indicator)
 Posts a structured Slack summary. No execution imports. Read-only.
 
-Schedule: 1:15 PM PT weekdays (after RTH close at 1:00 PM PT).
-  crontab entry:  15 13 * * 1-5 cd /path/to/bot && /usr/local/bin/python3.10 midday_audit.py
-  launchd:        StartCalendarInterval Hour=13 Minute=15
+Schedule: 13:30 ET weekdays = 10:30 PT, MID-SESSION (OCI crontab via scripts/cron_tz_wrapper.py 13:30).
+Stop coverage comes from reporting/broker_ground_truth.py (Alpaca order + fill history), never log text.
 """
 
 import os
 import sys
 import json
+import re
 import ssl
 import logging
 import importlib
@@ -32,6 +32,7 @@ load_dotenv()
 
 PT = ZoneInfo("America/Los_Angeles")
 ET = ZoneInfo("America/New_York")
+UTC = ZoneInfo("UTC")
 _now = datetime.now(PT)
 
 logging.basicConfig(
@@ -128,13 +129,15 @@ def read_bot_log_tail(hours: int = 4) -> list[str]:
     """Return log lines from the last `hours` hours. Cap at 2000 lines."""
     if not BOT_LOG.exists():
         return []
-    cutoff = datetime.now(PT) - timedelta(hours=hours)
+    # mtf_bot.log timestamps are UTC (OCI host clock; verified 2026-09-24) — compare in UTC. The prior
+    # PT cutoff against UTC stamps widened "the last 4h" to ~11h (pulled in the prior evening).
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     lines = []
     with open(BOT_LOG, errors="replace") as f:
         for line in f:
             lines.append(line.rstrip())
-    # Filter to lines at or after cutoff (log timestamps are naive PT local time)
+    # Filter to lines at or after cutoff (log timestamps are UTC, compared as strings)
     result = []
     for line in reversed(lines):
         ts_prefix = line[:19]
@@ -585,27 +588,11 @@ def _build_config_constants_block() -> str:
 
 def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
                          pnl_anal: dict, log_lines: list[str],
-                         stop_cov: dict, fills_sum: dict) -> str:
-    # Live stop coverage (fail-safe: UNVERIFIED must never read as all-clear).
-    if not stop_cov.get("verified", False):
-        stop_str = ("⚠️ STOP COVERAGE UNVERIFIED — could not fetch live positions and/or open "
-                    "orders. Do NOT assume positions are protected; treat as WARN needing manual "
-                    "verification, never as clean.")
-    else:
-        _naked = stop_cov.get("naked", [])
-        _under = stop_cov.get("undercovered", [])
-        _prot  = stop_cov.get("protected", [])
-        if _naked:
-            _n = ", ".join(f"{x['symbol']}({x['side']}, {x['qty']:g}sh)" for x in _naked)
-            stop_str = (f"🔴 NAKED POSITION(S) — {len(_naked)}: {_n}. A live position with NO "
-                        "protective stop order is a CATASTROPHIC condition (position left naked). "
-                        "This MUST appear in the CATASTROPHIC ALERT section.")
-        elif _under:
-            _u = ", ".join(f"{x['symbol']}(pos {x['pos_qty']:g}sh > stop {x['stop_qty']:g}sh)" for x in _under)
-            stop_str = (f"🟡 UNDER-COVERED — {len(_under)}: {_u}. Stop order qty is below the "
-                        "position qty (partial naked exposure) — HIGH.")
-        else:
-            stop_str = f"✅ All {len(_prot)} open position(s) have a matching protective stop."
+                         gt_block: str, fills_sum: dict) -> str:
+    # Stop coverage = broker ground truth computed by code (reporting/broker_ground_truth.py).
+    stop_str = gt_block or ("BROKER GROUND TRUTH: unavailable — stop coverage UNVERIFIED: report "
+                            "UNKNOWN; a naked position may be reported only when the bot's own log "
+                            "states it, quoted and tagged broker-unverified.")
 
     # Alpaca fills — ground truth (entry-EVENT log is degraded, D1).
     if not fills_sum.get("available", False):
@@ -698,8 +685,22 @@ Avg win: ${pnl_anal.get('avg_win', 0):.2f} | Avg loss: ${pnl_anal.get('avg_loss'
 
 ---
 
-## LIVE STOP COVERAGE (deterministic — fetched live from Alpaca at report-build time)
+## LIVE STOP COVERAGE — BROKER GROUND TRUTH (computed by code from Alpaca order + fill history)
+This is the ONLY valid source for whether a position is protected. Never infer "naked" / "no stop" from
+log text. Classes: COVERED (a broker stop covers the full qty); SOFTWARE-ONLY-BY-DESIGN (core intraday
+position protected by the bot's software stop — by design until the pre-close sweep at ~12:45-12:52 PT,
+which has NOT run yet at this midday check, so this is LIVE software-only exposure); BROKER-STOP-LAPSED;
+SOFTWARE-ONLY+CYCLE-GAP (bot loop stalled); NAKED (nothing protecting it); UNKNOWN (unverified).
+STOP COVERAGE IS OWNED BY CODE: every alarm below is already posted on the card by code. Do NOT write a
+naked / no-stop claim for a symbol classed COVERED or SOFTWARE-ONLY-BY-DESIGN, and do not repeat NAKED /
+LAPSED / CYCLE-GAP symbols. EXCEPTION (live exposure mid-session): a bot self-report of a stop or exit
+FAILURE on a symbol still held (e.g. "unprotected", "FAILED", "Set manual stop") DOES belong in
+CATASTROPHIC ALERT — quote the exact log line. If the block is UNKNOWN, write "stop coverage UNKNOWN"
+under LOG ANOMALIES; a naked position may be reported only when the bot's own log states it, quoted
+and tagged broker-unverified.
+```
 {stop_str}
+```
 
 ## ALPACA FILLS TODAY — GROUND TRUTH (use INSTEAD of entry-event counts)
 {fills_str}
@@ -712,7 +713,8 @@ the bot DID trade. This is the KNOWN D1 symptom — do NOT flag "0 entries / $0 
 (or exits without matching entries) as a trade-accounting failure or P&L corruption. Use ALPACA
 FILLS above as the ground truth for what the bot actually traded; the authoritative same-day P&L is
 the ledger / live mark-to-market, NOT this matched-pair engine. (The genuinely CATASTROPHIC P&L
-condition is a NAKED POSITION — see LIVE STOP COVERAGE — not a matched-pair under-count.)
+condition is a position LIVE STOP COVERAGE classes NAKED, or a quoted bot self-report of a stop/exit
+failure — not a matched-pair under-count.)
 
 ---
 
@@ -803,7 +805,9 @@ overnight review pipeline.
 ### CATASTROPHIC ALERT: [count]
 List ONLY items meeting this bar, or write "None — no catastrophic conditions
 detected." One line each: exact failure condition | impacted symbol/trade.
-  CATASTROPHIC = position left naked (no stop), silent trading halt, P&L
+  CATASTROPHIC = a naked position per the LIVE STOP COVERAGE rules above (never
+  inferred from log text), a quoted bot self-report of a stop/exit failure on a
+  held symbol, silent trading halt, P&L
   corruption affecting live risk decisions, kill switch triggered but not
   respected.
 
@@ -931,9 +935,11 @@ def _alpaca_get(path: str) -> "list | None":
         return None
 
 
-def _fetch_open_orders() -> "list | None":
-    """Open orders (status=open). None on failure → stop-coverage UNVERIFIED."""
-    return _alpaca_get("/v2/orders?status=open&limit=500")
+def _fetch_open_orders_nested() -> "list | None":
+    """Open orders WITH their legs (nested=true) — day-tier OCO stops are legs of a limit parent;
+    the prior un-nested read never saw them (false "NAKED AMZN" 09-23, "NAKED GOOGL" 09-24).
+    Used only for the degraded fallback when the broker ground truth is UNKNOWN."""
+    return _alpaca_get("/v2/orders?status=open&limit=500&nested=true")
 
 
 def _fetch_today_fills() -> "list | None":
@@ -942,51 +948,231 @@ def _fetch_today_fills() -> "list | None":
     return _alpaca_get(f"/v2/account/activities/FILL?date={AUDIT_DATE_ET}")
 
 
-def check_naked_stops(positions: "list | None", orders: "list | None") -> dict:
-    """Cross-check every open position against open protective stop orders.
-
-    A long position needs a SELL stop; a short needs a BUY stop (verified live
-    2026-07-27: UBER short → buy-stop). order_type ∈ _STOP_ORDER_TYPES. Also
-    checks qty coverage: a stop whose qty is below the position qty is partial
-    (under-covered). Returns
-    {"verified": bool, "naked": [...], "undercovered": [...], "protected": [...]}.
-
-    FAIL-SAFE — NEVER mask a naked position: if positions OR orders could not be
-    fetched, verified=False and the caller renders "stop coverage UNVERIFIED",
-    never a false all-clear. A naked position is the CATASTROPHIC bar itself."""
+def snapshot_uncovered(positions: "list | None", orders: "list | None") -> "list | None":
+    """DEGRADED fallback (ground truth UNKNOWN): symbols held right now with no same-side resting stop
+    covering the full qty, counting OCO/bracket legs. Cannot tell core-by-design from day-tier, so the
+    caller reports these as HIGH (never critical, never cleared). None if either read failed."""
     if positions is None or orders is None:
-        return {"verified": False, "naked": [], "undercovered": [], "protected": []}
-    naked: list[dict] = []
-    undercovered: list[dict] = []
-    protected: list[str] = []
+        return None
+    flat: list = []
+    for o in orders:
+        flat.append(o)
+        flat.extend(o.get("legs") or [])
+    out = []
     for p in positions:
         sym = p.get("symbol", "?")
-        pside = p.get("side", "long")
         try:
-            pos_qty = abs(float(p.get("qty") or 0))
+            qty = abs(float(p.get("qty") or 0))
         except (TypeError, ValueError):
-            pos_qty = 0.0
-        need = "sell" if pside == "long" else "buy"
-        stops = [o for o in orders
-                 if o.get("symbol") == sym
-                 and o.get("order_type") in _STOP_ORDER_TYPES
-                 and o.get("side") == need]
-        if not stops:
-            naked.append({"symbol": sym, "side": pside, "qty": pos_qty})
+            qty = 0.0
+        need = "sell" if p.get("side", "long") == "long" else "buy"
+        held = 0.0
+        for o in flat:
+            if (o.get("symbol") == sym and o.get("side") == need
+                    and (o.get("type") or o.get("order_type")) in _STOP_ORDER_TYPES):
+                try:
+                    held += abs(float(o.get("qty") or 0))
+                except (TypeError, ValueError):
+                    continue
+        if qty > 0 and held + 1e-9 < qty:
+            out.append({"symbol": sym, "side": p.get("side", "long"), "qty": qty, "stop_qty": held})
+    return out
+
+
+GT_RETRIES = 3            # mid-session the bot trades every ~5 min: a fill racing the snapshot is likely
+GT_RETRY_SLEEP_S = 30
+
+
+def collect_ground_truth() -> dict:
+    """broker_ground_truth.collect(today ET, now) with retries on UNKNOWN (e.g. "fills changed during
+    the snapshot"). Never raises: returns the last UNKNOWN result if every attempt fails."""
+    import time as _time
+    gt: dict = {"status": "UNKNOWN", "reason": "not collected", "positions": {}}
+    try:
+        from reporting import broker_ground_truth as _bgt
+    except Exception as e:
+        return {"status": "UNKNOWN", "reason": f"module import failed: {e}", "positions": {}}
+    for attempt in range(1, GT_RETRIES + 1):
+        now = datetime.now(ET)
+        gt = _bgt.collect(now.strftime("%Y-%m-%d"), now=now)
+        if gt.get("status") != "UNKNOWN":
+            return gt
+        logger.warning("broker ground truth UNKNOWN (attempt %d/%d): %s", attempt, GT_RETRIES,
+                       gt.get("reason"))
+        if attempt < GT_RETRIES:
+            _time.sleep(GT_RETRY_SLEEP_S)
+    return gt
+
+
+TRADE_LOG = BASE_DIR / "trade_log.json"
+# A bot SELF-REPORT of a stop/exit failure: WARNING/ERROR/CRITICAL level, a stop/exit/close/protection word
+# AND a failure word (board masked-loss seat: plain "failed" also matched entry-side lines such as
+# "Short skipped — live shorting pre-flight failed", which is not a stop failure on a held position).
+_LEVEL_RE = re.compile(r"\|\s*(WARNING|ERROR|CRITICAL)\s*\|")
+_STOPWORD_RE = re.compile(r"stop|exit|close|protect", re.I)
+_FAILWORD_RE = re.compile(r"fail|unprotected|naked", re.I)
+# Entry-side lines that happen to contain both word classes ("… entry blocked (fail-closed)",
+# "PRICE SANITY FAIL vs prior close — skipping entry") are not stop/exit failures (adversarial N1).
+# NOT "skipping entry" alone: "#12c exit order submission failed — skipping entry" IS a failed exit
+# on a still-held position (cold-2nd r6).
+_NOT_EXIT_RE = re.compile(r"fail-closed|entry blocked|price sanity", re.I)
+
+
+def _read_open_trades() -> "dict | None":
+    """{symbol: open-trade record} from the core tracker's trade_log.json (software stop lives in
+    `stop` / `trail_stop`). None if unreadable — the caller then says effectiveness is UNKNOWN."""
+    try:
+        d = json.loads(TRADE_LOG.read_text())
+        return {str(t["symbol"]): t for t in (d.get("open") or [])
+                if isinstance(t, dict) and t.get("symbol")}
+    except Exception as e:
+        logger.warning("trade_log.json unreadable (%s) — software-stop effectiveness UNKNOWN", e)
+        return None
+
+
+def scan_self_reports(since: dict, log_path: "Path | None" = None) -> dict:
+    """{symbol: [matching log lines]} — an UNCAPPED pass over mtf_bot.log (the tail reader keeps only
+    2,000 lines, but a 4h RTH window is ~5,500 lines on production). `since` = {symbol: aware UTC
+    datetime}: only lines stamped at/after it (the holding's entry) count. Log stamps are UTC."""
+    out: dict = {s: [] for s in since}
+    if not since:
+        return out
+    tags = {f"[{s}]": s for s in since}
+    floor = min(since.values()).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(log_path or BOT_LOG, errors="replace") as fh:
+            for line in fh:
+                if line[:19] < floor or "[" not in line:
+                    continue
+                for tag, sym in tags.items():
+                    if (tag in line and line[:19] >= since[sym].strftime("%Y-%m-%d %H:%M:%S")
+                            and _LEVEL_RE.search(line) and _STOPWORD_RE.search(line)
+                            and _FAILWORD_RE.search(line) and not _NOT_EXIT_RE.search(line)):
+                        out[sym].append(line.rstrip())
+    except OSError as e:
+        logger.warning("bot log unreadable for the self-report scan (%s)", e)
+    return out
+
+
+def _entry_utc(trade: "dict | None", fallback: datetime) -> datetime:
+    """Aware UTC entry time of a tracker record, else `fallback` (the session open)."""
+    try:
+        t = datetime.fromisoformat(str((trade or {}).get("entry_time")))
+        return (t if t.tzinfo else t.replace(tzinfo=PT)).astimezone(UTC)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def held_symbols(gt: dict, positions: "list | None") -> set:
+    """Symbols to check as held right now: the live positions read (when it succeeded) UNION the
+    ground truth's own `uncovered_at_close` symbols. The ground truth's window ends at its own (later)
+    snapshot, so `uncovered_at_close` means held at that moment with no full resting broker stop. The
+    union matters: positions are read BEFORE the ground truth (which may retry for ~1 min), so a fill in
+    between is only in the ground truth — the live read may only ADD symbols, never filter one out
+    (cold-2nd r2: read failed ⇒ checks silenced; r3: read stale ⇒ a new fill silenced)."""
+    from_gt = {s for s, i in (gt.get("positions") or {}).items() if i.get("uncovered_at_close")}
+    return from_gt | {p.get("symbol") for p in positions or []}
+
+
+def software_stop_findings(gt: dict, positions: "list | None", open_trades: "dict | None",
+                           self_reports: dict) -> tuple[list[dict], list[str]]:
+    """Mid-session, SOFTWARE-ONLY-BY-DESIGN means LIVE exposure protected only by the bot's software
+    stop — the loop running does not prove that stop is honoured (board masked-loss seat M1). For each
+    such position still held: (a) a bot self-report of a stop/exit failure on the symbol since its entry
+    (see scan_self_reports) → CRITICAL; (b) the live mark already beyond the tracker's stop → CRITICAL
+    if the tracker itself recorded the breach (stop_breached), else HIGH (it may be between cycles).
+    Returns (findings, symbols whose effectiveness could not be checked)."""
+    findings: list[dict] = []
+    unknown: list[str] = []
+    if gt.get("status") != "OK":
+        return findings, unknown
+    marks = {}
+    for p in positions or []:
+        try:
+            marks[p.get("symbol")] = float(p.get("current_price"))
+        except (TypeError, ValueError):
             continue
-        covered = 0.0
-        for o in stops:
-            try:
-                covered += abs(float(o.get("qty") or 0))
-            except (TypeError, ValueError):
+    held = held_symbols(gt, positions)
+    for sym, info in (gt.get("positions") or {}).items():
+        if info.get("class") != "SOFTWARE-ONLY-BY-DESIGN" or sym not in held:
+            continue
+        hits = self_reports.get(sym) or []
+        uncovered_now = bool(info.get("uncovered_at_close"))
+        if hits:
+            # CRITICAL only when the ground truth shows NO resting broker stop at the check moment; a
+            # failure the bot later repaired (a broker stop IS resting now) stays visible as HIGH
+            # (adversarial B1: SNOW 2026-08-10 — repaired overnight failure raised a false CRITICAL).
+            findings.append({"severity": "critical" if uncovered_now else "high",
+                             "title": (f"{sym}: bot reported a stop/exit failure — held with no broker stop"
+                                       if uncovered_now else
+                                       f"{sym}: bot reported a stop/exit failure today — broker stop resting at the check"),
+                             "detail": hits[-1][:200]})
+            if uncovered_now:
                 continue
-        if pos_qty > 0 and covered + 1e-9 < pos_qty:
-            undercovered.append({"symbol": sym, "side": pside,
-                                 "pos_qty": pos_qty, "stop_qty": covered})
-        else:
-            protected.append(sym)
-    return {"verified": True, "naked": naked,
-            "undercovered": undercovered, "protected": protected}
+            # HIGH (a broker stop rests): still run the mark check — it may be CRITICAL on its own
+            # (tracker-recorded breach); a self-report must never LOWER the alarm (cold-2nd r6).
+        t = (open_trades or {}).get(sym)
+        if not t:
+            unknown.append(sym)
+            continue
+        try:
+            stops = [float(x) for x in (t.get("stop"), t.get("trail_stop")) if x is not None]
+        except (TypeError, ValueError):
+            stops = []
+        if not stops or sym not in marks:
+            unknown.append(sym)
+            continue
+        long_ = str(t.get("direction", "long")).lower() == "long"
+        eff = max(stops) if long_ else min(stops)
+        mark = marks[sym]
+        through = mark < eff if long_ else mark > eff
+        if through:
+            sev = "critical" if t.get("stop_breached") else "high"
+            findings.append({"severity": sev,
+                             "title": f"{sym}: price beyond the software stop, still held",
+                             "detail": (f"{'long' if long_ else 'short'}: mark {mark:.2f} vs software stop "
+                                        f"{eff:.2f}; "
+                                        + ("no broker stop at the check" if uncovered_now
+                                           else "a broker stop is resting at the check")
+                                        + ("; tracker recorded the breach" if t.get("stop_breached") else ""))})
+    return findings, unknown
+
+
+def uncovered_now_findings(gt: dict, positions: "list | None") -> list[dict]:
+    """Mid-session a position still UNCOVERED at the check moment but within the 2-min tolerance is
+    classed COVERED by the ground truth (its held-into-close rule only fires at the session close).
+    Board masked-loss seat R1: never let that clear silently — HIGH "re-check", CRITICAL if a stop order
+    for it was REJECTED and it is not a core-only holding (nothing protects it in software)."""
+    if gt.get("status") != "OK":
+        return []
+    held = held_symbols(gt, positions)
+    out = []
+    for sym, p in (gt.get("positions") or {}).items():
+        cls = p.get("class")
+        # BY-DESIGN whose owners include a non-core tier: an earlier core round trip (software stop by
+        # design) can class the symbol BY-DESIGN while a later day-tier holding sits uncovered within the
+        # 2-min tolerance (cold-2nd r4) — nothing protects that holding in software.
+        mixed_design = cls == "SOFTWARE-ONLY-BY-DESIGN" and p.get("owners") != ["core"]
+        if (cls != "COVERED" and not mixed_design) or not p.get("uncovered_at_close") or sym not in held:
+            continue
+        rejected = int(p.get("rejected_stop_orders") or 0)
+        crit = rejected > 0 and p.get("owners") != ["core"]
+        out.append({"severity": "critical" if crit else "high",
+                    "title": f"{sym} uncovered right now (within fill latency) — re-check",
+                    "detail": (f"{sym}: no resting broker stop at the check moment"
+                               + (f"; {rejected} stop order(s) REJECTED" if rejected else "")
+                               + f"; owners {'/'.join(p.get('owners') or [])}")})
+    return out
+
+
+def escalate_card_verdict(verdict: str, gt_alarms: list[dict]) -> str:
+    """Broker ground-truth alarms can only RAISE the card verdict: critical → FAIL; high lifts
+    PASS/UNKNOWN to WARN; low (or none) changes nothing."""
+    if any(f.get("severity") == "critical" for f in gt_alarms):
+        return "FAIL"
+    if any(f.get("severity") == "high" for f in gt_alarms) and verdict in ("PASS", "UNKNOWN"):
+        return "WARN"
+    return verdict
 
 
 def summarise_fills(fills: "list | None") -> dict:
@@ -1023,17 +1209,68 @@ def main() -> None:
 
     # ── Live state (fetched once, reused for prompt + card) ──────────────────
     positions     = _fetch_live_positions()
-    open_orders   = _fetch_open_orders()
     today_fills   = _fetch_today_fills()
-    stop_cov      = check_naked_stops(positions, open_orders)
     fills_sum     = summarise_fills(today_fills)
+
+    # Stop coverage = BROKER GROUND TRUTH (Alpaca order + fill history, computed by code). It only
+    # ADDS findings and can only RAISE the card verdict — it never removes/lowers an LLM finding.
+    gt = collect_ground_truth()
+    gt_block = ""
+    gt_alarms: list[dict] = []
+    gt_lows = ""
+    gt_checked = ""
+    try:
+        from reporting import broker_ground_truth as _bgt
+        gt_block = _bgt.render(gt)
+        gt_alarms, gt_lows = _bgt.card_alarms(gt)
+        if gt.get("status") == "OK":
+            gt_checked = _bgt.checked_summary(gt)
+    except Exception as _gt_e:
+        logger.warning("broker ground truth render failed (%s) — stop coverage UNVERIFIED", _gt_e)
+        gt = {"status": "UNKNOWN", "reason": str(_gt_e)[:200], "positions": {}}
+        gt_alarms = [{"severity": "high", "title": "Broker stop coverage UNKNOWN — ground truth failed",
+                      "detail": str(_gt_e)[:200]}]
+    if gt.get("status") == "UNKNOWN":
+        # DEGRADED fallback: name every held symbol with no resting stop right now (legs counted).
+        # HIGH, never critical (cannot tell core-by-design from day-tier), never cleared.
+        _unc = snapshot_uncovered(positions, _fetch_open_orders_nested())
+        if _unc is None:
+            gt_alarms.append({"severity": "high",
+                              "title": "Degraded stop snapshot ALSO failed — positions/open orders unreadable",
+                              "detail": "no stop coverage could be verified this run; check Alpaca directly"})
+        for u in _unc or []:
+            gt_alarms.append({"severity": "high",
+                              "title": f"{u['symbol']} uncovered right now — owner/design unverified",
+                              "detail": (f"{u['symbol']}: {u['side']} {u['qty']:g}sh, resting stop covers "
+                                         f"{u['stop_qty']:g}sh (broker history unreadable)")})
+    open_trades = _read_open_trades()
+    _held = held_symbols(gt, positions)
+    if positions is None and gt.get("status") == "OK":
+        gt_alarms.append({"severity": "high",
+                          "title": "Live positions unreadable — held set taken from broker ground truth",
+                          "detail": ("software-stop mark checks NOT run; self-report and uncovered-now "
+                                     "checks use the ground truth's own positions snapshot")})
+    _session_open_utc = datetime.now(ET).replace(hour=9, minute=30, second=0, microsecond=0).astimezone(UTC)
+    # Floor at TODAY's session open: a carried position's entry may be days old, and a stop failure
+    # from a prior evening that was since repaired is not today's exposure (adversarial B1).
+    _since = {sym: max(_entry_utc((open_trades or {}).get(sym), _session_open_utc), _session_open_utc)
+              for sym, p in (gt.get("positions") or {}).items()
+              if p.get("class") == "SOFTWARE-ONLY-BY-DESIGN" and sym in _held}
+    self_reports = scan_self_reports(_since)
+    sw_alarms, sw_unknown = software_stop_findings(gt, positions, open_trades, self_reports)
+    _rank = {"critical": 0, "high": 1}
+    gt_alarms = sorted(sw_alarms + uncovered_now_findings(gt, positions) + gt_alarms,
+                       key=lambda f: _rank.get(str(f.get("severity")), 2))
+    if gt_block and _held:
+        gt_block += ("\nHeld right now (live positions + ground-truth uncovered-now): " if positions is not None
+                     else "\nHeld right now with no broker stop (ground truth; live read failed): ") + ", ".join(sorted(str(h) for h in _held))
 
     logger.info(
         f"Parsed {len(events)} events | "
         f"{entry_anal['entry_count']} entries | "
         f"{entry_anal['stop_hit_count']} stops | "
         f"{len(entry_anal['flagged_entries'])} flagged | "
-        f"stops verified={stop_cov['verified']} naked={len(stop_cov['naked'])} | "
+        f"broker stop check={gt.get('status')} alarms={len(gt_alarms)} | "
         f"alpaca fills={fills_sum['n_fills']}"
     )
 
@@ -1046,7 +1283,8 @@ def main() -> None:
         "log_analysis":   log_anal,
         "postmortem":     postmortem,
         "pnl_analysis":   pnl_anal,
-        "stop_coverage":  stop_cov,
+        "stop_coverage":  dict(gt, schema="broker_ground_truth_v1",
+                               alarms=gt_alarms, software_stop_unverified=sw_unknown),
         "alpaca_fills":   fills_sum,
     }
     _tmp = REPORT_PATH.with_suffix(".json.tmp")
@@ -1061,8 +1299,8 @@ def main() -> None:
     high_stops   = entry_anal["stop_hit_rate"] >= STOP_HIT_WARN and entry_anal["entry_count"] > 0
     has_errors   = log_anal["error_count"] > 0
     session_loss = pnl_anal["total_pnl"] < -50   # flag sessions with significant realized loss
-    has_naked    = bool(stop_cov["naked"])                       # live position with no stop → top severity
-    stop_concern = (not stop_cov["verified"]) or bool(stop_cov["undercovered"])  # unverified/partial → review
+    has_naked    = any(f.get("severity") == "critical" for f in gt_alarms)   # ground-truth critical
+    stop_concern = any(f.get("severity") == "high" for f in gt_alarms)       # ground-truth high → review
 
     if has_naked or has_watchdog or (has_flagged and high_stops) or session_loss:
         emoji = ":rotating_light:"
@@ -1077,12 +1315,23 @@ def main() -> None:
     # ── Gemini adversarial review (report file always written) ───────────────
     gemini_report = ""
     gemini_verdict = "UNKNOWN"
+    gt_violations: list = []
     if GEMINI_API_KEY:
         logger.info("Running Gemini decision quality review...")
         gemini_prompt  = _build_gemini_prompt(entry_anal, mri_anal, log_anal,
-                                              pnl_anal, log_lines, stop_cov, fills_sum)
+                                              pnl_anal, log_lines, gt_block, fills_sum)
         gemini_report  = _call_gemini(gemini_prompt)
         gemini_verdict = _extract_verdict(gemini_report)
+        # Detect-only: did the LLM still call a COVERED / BY-DESIGN symbol naked? (log + footer only)
+        try:
+            from reporting.broker_ground_truth import naked_claims_on_cleared
+            # a quoted self-report for a BY-DESIGN symbol is PERMITTED by the midday prompt — not a violation
+            gt_violations = [v for v in naked_claims_on_cleared(gemini_report, gt)
+                             if not self_reports.get(v)]
+        except Exception as _cmp_e:
+            logger.warning("GT compliance check failed: %s", _cmp_e)
+        if gt_violations:
+            logger.warning("GT_COMPLIANCE (midday): LLM naked claim on COVERED/BY-DESIGN %s", gt_violations)
 
         GEMINI_REPORT.write_text(
             f"Midday Gemini Audit — {AUDIT_DATE}\n"
@@ -1119,24 +1368,12 @@ def main() -> None:
         for wl in log_anal["watchdog_lines"]:
             findings.insert(0, {"severity": "high", "title": "Watchdog restart",
                                 "detail": wl[:200]})
-        # Live stop-coverage findings (deterministic, code-computed). Naked = the
-        # CATASTROPHIC bar → critical, pinned to the top. Fail-safe: unverified
-        # renders as a HIGH "could not verify", never a silent all-clear.
-        if not stop_cov["verified"]:
-            findings.insert(0, {"severity": "high", "title": "Stop coverage UNVERIFIED",
-                                "detail": "Could not fetch live positions and/or open orders — "
-                                          "position protection NOT confirmed this run."})
-        else:
-            for u in stop_cov["undercovered"]:
-                findings.insert(0, {"severity": "high", "title": f"Under-covered stop — {u['symbol']}",
-                                    "detail": f"{u['side']} {u['pos_qty']:g}sh but stop covers only "
-                                              f"{u['stop_qty']:g}sh (partial naked exposure)."})
-            for n in stop_cov["naked"]:
-                findings.insert(0, {"severity": "critical", "title": f"NAKED POSITION — {n['symbol']}",
-                                    "detail": f"{n['side']} {n['qty']:g}sh with NO protective stop "
-                                              "order live at broker. Position left naked."})
+        # Broker ground-truth findings (deterministic, code-computed) go FIRST; they only ADD to the
+        # LLM's findings and can only RAISE the verdict (critical → FAIL; high lifts PASS/UNKNOWN).
+        findings = list(gt_alarms) + findings
         card_verdict = gemini_verdict if gemini_verdict != "UNKNOWN" else {
             "CLEAN": "PASS", "REVIEW": "WARN", "ACTION REQUIRED": "FAIL"}[severity]
+        card_verdict = escalate_card_verdict(card_verdict, gt_alarms)
         mri_close = mri_anal.get("last_level", "?")
         context_line = (
             f"{entry_anal['entry_count']} entries · {entry_anal['exit_count']} exits · "
@@ -1146,6 +1383,18 @@ def main() -> None:
         dist = [f"✅ analysis — logs/{REPORT_PATH.name}"]
         if gemini_report:
             dist.append(f"✅ Gemini review — logs/{GEMINI_REPORT.name}")
+        _gtp = gt.get("positions") or {}
+        dist.append(f"🛡️ broker stop check: {gt.get('status')} · {len(_gtp)} positions · "
+                    f"{len(gt_alarms)} alarm(s) · checked through "
+                    f"{str(gt.get('window_pt', '')).split('-')[-1] or '?'} PT")
+        if gt_checked:
+            dist.append(f"🛡️ checked: {gt_checked}")
+        if gt_lows:
+            dist.append(f"🛡️ minor stop lapses (resolved): {gt_lows[:300]}")
+        if sw_unknown:
+            dist.append(f"⚠️ software-stop effectiveness UNKNOWN (no tracker stop): {', '.join(sw_unknown)}")
+        if gt_violations:
+            dist.append(f"⚠️ audit AI called {', '.join(gt_violations)} naked against broker data")
         payload = render_card("midday", AUDIT_DATE, card_verdict, pnl, findings,
                               dist_footer=dist, context_line=context_line)
         ok, reason = validate_no_pnl_rewrite(payload, pnl["injected_numbers"])
@@ -1162,6 +1411,10 @@ def main() -> None:
         title = f"{_audit_label} [{severity}] — {AUDIT_DATE} PT"
         body  = build_slack_body(entry_anal, mri_anal, log_anal, pnl_anal,
                                  postmortem=postmortem)
+        if gt_alarms:
+            body = ("*BROKER STOP CHECK*\n" + "\n".join(
+                f"  {f['severity'].upper()}: {f['title']} — {f['detail']}" for f in gt_alarms)
+                + "\n\n" + body)
         _slack(title, body, emoji=emoji)
         if gemini_report:
             gemini_emoji = {
