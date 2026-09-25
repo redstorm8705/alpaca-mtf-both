@@ -23,7 +23,7 @@ snapshot on an unknown calendar, which is skipped (it is indistinguishable from 
 
 WHAT IT POSTS (fixed compact Block Kit card — Rafael 2026-09-07):
   - "Overall" headline: account day P&L = equity − last_equity (exactly Alpaca's day number) + %.
-  - One line PER TIER, always all four (Intraday / QHM / F6 / Day-Trade): today's UNREALIZED P&L =
+  - One line PER TIER, always all four (Swing / QHM / F6 / Day-Trade): today's UNREALIZED P&L =
         this tier's ownership-split of each open position's unrealized_intraday_pl (today's MTM move).
     No per-position ticker breakdown, no "Unrealized by tier" header, no empty-tier "flat" collapse —
     every tier renders on its own line so a tier's P&L can never be hidden.
@@ -67,11 +67,14 @@ from scripts import audit_slack                   # Block Kit post_to_slack
 PT = ZoneInfo("America/Los_Angeles")
 _ET = ZoneInfo("America/New_York")               # Alpaca's calendar / market date is ET
 _TIERS = ("intraday", "qhm", "forever6", "daytrade")
-_TIER_LABEL = {"intraday": "Intraday", "qhm": "QHM", "forever6": "Forever-6", "daytrade": "Day-Trade"}
+# DISPLAY labels only. "intraday" stays the internal tier key (client_order_id prefix IN-, ownership
+# ledger, trade_mode) — renaming it would break attribution. Rafael 2026-09-25: the term "intraday" is
+# retired in everything a person reads; the core confluence tier holds multi-day, so it shows as "Swing".
+_TIER_LABEL = {"intraday": "Swing", "qhm": "QHM", "forever6": "Forever-6", "daytrade": "Day-Trade"}
 # Compact labels for the UNREALIZED snapshot card only (Rafael 2026-09-07 wants "F6"); the realized
 # card keeps _TIER_LABEL's "Forever-6" untouched. The account-total headline is "Overall" (not "Day")
 # so it reads distinctly from the "Day-Trade" tier (Rafael 2026-09-07).
-_SNAP_LABEL = {"intraday": "Intraday", "qhm": "QHM", "forever6": "F6", "daytrade": "Day-Trade"}
+_SNAP_LABEL = {"intraday": "Swing", "qhm": "QHM", "forever6": "F6", "daytrade": "Day-Trade"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("pnl_snapshot")
@@ -185,7 +188,7 @@ def _tier_rows(tier_vals: dict, pos_lines: dict, empty_word: str) -> list:
     ONE close renders on a single line ("*QHM* · GEV −$14.99") — no redundant separate tier-total,
     since it equals the lone position (the double-print Rafael flagged). A tier with MULTIPLE closes
     leads with the tier total, then the inline positions. Tiers with nothing collapse into one dim
-    line ("Intraday / Forever-6 / Day-Trade — no closes")."""
+    line ("Swing / Forever-6 / Day-Trade — no closes")."""
     rows: list = []
     flat: list = []
     for t in _TIERS:
@@ -208,7 +211,7 @@ def build_card(s: dict) -> dict:
 
     Layout — nothing else:
         *Overall*   <account day P&L>   (<pct>)    ← Alpaca's exact day number (equity − last_equity)
-        Intraday   <today unrealized>
+        Swing      <today unrealized>
         QHM        <today unrealized>
         F6         <today unrealized>
         Day-Trade  <today unrealized>

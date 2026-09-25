@@ -117,9 +117,21 @@ class TestUnrealizedCard(unittest.TestCase):
         self.assertNotIn("AVGO", body)                    # no per-position names
         self.assertNotIn("flat", body)                    # no empty-tier collapse
         # "Overall" headline (distinct from the "Day-Trade" tier), then all four tiers, one per line
-        for lbl in ("Overall", "Intraday", "QHM", "F6", "Day-Trade"):
+        for lbl in ("Overall", "Swing", "QHM", "F6", "Day-Trade"):
             self.assertIn(lbl, body)
+        self.assertNotIn("Intraday", body)                # retired term (Rafael 2026-09-25)
         self.assertEqual(body.count("\n"), 4)             # Overall + 4 tiers = 5 lines
+
+    def test_realized_card_uses_swing_label(self):
+        s = {"tier_realized": {"intraday": 5.0, "qhm": 0.0, "forever6": 0.0, "daytrade": 0.0},
+             "pos_lines": {"intraday": [("AAPL", 5.0)], "qhm": [], "forever6": [], "daytrade": []},
+             "total_realized": 5.0, "unattributed": 0.0}
+        for close_mode in (True, False):
+            body = ps.build_realized_card(s, close_mode=close_mode)["blocks"][1]["text"]["text"]
+            self.assertIn("*Swing* · AAPL", body)
+            self.assertNotIn("Intraday", body)
+        s["pos_lines"]["intraday"] = []
+        self.assertIn("Swing / QHM", ps.build_realized_card(s)["blocks"][1]["text"]["text"])
 
     def test_other_only_when_material(self):
         self.assertNotIn("Other", ps.build_card(self._snap(0.10))["blocks"][1]["text"]["text"])
@@ -157,6 +169,7 @@ class TestTradingDayGuard(unittest.TestCase):
                 _sink.append(1)
                 return 0
             with patch.object(ps, "_is_trading_day_today", lambda _tv=tv: _tv), \
+                 patch.object(ps.sys, "argv", ["pnl_snapshot.py", "--unrealized"]), \
                  patch.object(ps, "compute_snapshot", lambda: s), \
                  patch.object(ps, "_post", _rec):
                 self.assertEqual(ps.main(), 0)
@@ -174,6 +187,7 @@ class TestTradingDayGuard(unittest.TestCase):
         def _boom(*a, **k):
             raise AssertionError("posted a flat card on an unknown-calendar day")
         with patch.object(ps, "_is_trading_day_today", lambda: None), \
+             patch.object(ps.sys, "argv", ["pnl_snapshot.py", "--unrealized"]), \
              patch.object(ps, "compute_snapshot", lambda: flat), \
              patch.object(ps, "_post", _boom):
             self.assertEqual(ps.main(), 0)
