@@ -1,0 +1,137 @@
+{
+  "audit_date": "2026-09-24",
+  "run_ts": "2026-09-24T10:30:01.731266-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "MARA",
+        "ts": "2026-09-14 09:12:20",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 11.53,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "GOOGL",
+      "MARA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 31,
+    "levels": {
+      "ELEVATED": 14,
+      "STRESSED": 17
+    },
+    "last_score": 41,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 61,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-24 16:20:48,388 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto",
+      "2026-09-24 16:21:25,099 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-24 16:21:25,102 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-24 16:21:53,472 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-24 16:21:53,474 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 6.800000000000004,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 6.800000000000004,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "MARA",
+      "pnl": 6.800000000000004,
+      "entry_price": 11.53,
+      "exit_price": 13.23,
+      "size": 4.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 9.79,
+      "target": 16.05
+    },
+    "worst": {
+      "symbol": "MARA",
+      "pnl": 6.800000000000004,
+      "entry_price": 11.53,
+      "exit_price": 13.23,
+      "size": 4.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 9.79,
+      "target": 16.05
+    },
+    "trades": [
+      {
+        "symbol": "MARA",
+        "pnl": 6.800000000000004,
+        "entry_price": 11.53,
+        "exit_price": 13.23,
+        "size": 4.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 9.79,
+        "target": 16.05
+      }
+    ]
+  },
+  "stop_coverage": {
+    "verified": true,
+    "naked": [
+      {
+        "symbol": "GOOGL",
+        "side": "short",
+        "qty": 3.0
+      }
+    ],
+    "undercovered": [],
+    "protected": [
+      "GEV",
+      "INTC",
+      "LLY",
+      "NFLX",
+      "PLTR",
+      "SOFI"
+    ]
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 3,
+    "symbols": [
+      "GOOGL",
+      "MARA"
+    ],
+    "by_symbol": {
+      "MARA": {
+        "buy": 0,
+        "sell": 1
+      },
+      "GOOGL": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}
