@@ -10870,3 +10870,28 @@ Preview on OCI for session 2026-09-24: 8 positions — 3 COVERED (GEV/LLY qhm, G
 (09:30-09:40 opening window), 0 alarms. Preship: Gemini free quota exhausted most of the day (A/B sim spent it);
 Rafael authorized a one-time GAI exception but it was NOT used — real Gro+GAI APPROVE landed on all 4 files (two Gro
 false-premise rejects from split-diff chunks resolved by counter-evidence, logs/audit_gt_preship_evidence.md).
+
+### 2026-09-24 — Audit-alert inc 2: midday_audit.py (10-point audit; board convened on the design)
+FULL READ: midday_audit.py 1,189 lines (5 chunks). FINDINGS (verified at source): F1 check_naked_stops uses
+/v2/orders?status=open WITHOUT nested=true (L936) → day-tier OCO stop legs unseen: midday stop_coverage.naked = AMZN
+(09-23) and GOOGL (09-24); broker ground truth classes both COVERED. F2 no by-design notion (core entries have no
+broker stop until the pre-close sweep; 09-22 midday naked=1 = SOFI core entry). F3 read_bot_log_tail compares a naive
+PT cutoff with UTC log stamps (last log line 21:40:15 when UTC 21:56) → "last 4h" is ~11h. F4 prompt makes "naked"
+CATASTROPHIC from its own check.
+10-POINT: (1) statics pending on the draft; (2) cron 13:30 ET → events/log analysis → live positions/orders → Gemini →
+card; read-only, no trade path; (3) edge cases: positions/orders fetch None → UNVERIFIED (existing), trade_events
+empty; (4) full read done; (5) callers: cron only (scripts do not import midday_audit); (6) no conflicting writers;
+(7) dead code after D1: check_naked_stops/_fetch_open_orders; (8) report JSON tmp→replace (existing); GEMINI_REPORT
+write_text (non-critical); (9) T1 Alpaca REST raw urllib (read-only, allowed for audit scripts); (10) timestamps: F3.
+RC-1 FAIL (F3: naive PT string vs UTC log) · RC-2 PASS (__file__-anchored) · RC-3 PASS · RC-4/7/8 n/a · RC-5 PASS ·
+RC-6 FAIL (F1: nested legs not requested).
+
+### 2026-09-24 — midday GT inc 2: cold-2nd r2 FAIL → r3 fix
+- **FAIL (confirmed by probe):** `_fetch_live_positions()`→None while `collect_ground_truth()` OK ⇒ `software_stop_findings` / `uncovered_now_findings` / self-report scan all skipped every symbol ⇒ `alarms: []` (SOFI self-reported "may be naked" + GOOGL uncovered-now w/ rejected stop silenced). Regression vs removed `check_naked_stops` (which showed HIGH UNVERIFIED). Masked-loss class.
+- **r3 fix:** `held_symbols(gt, positions)` — live positions when readable, else GT symbols with `uncovered_at_close` (window ends now ⇒ held with no broker stop at check moment); software-stop check gates on held, no-mark → `software_stop_unverified`; HIGH "Live positions unreadable" alarm; tests `TestPositionsReadFailed` (89/89 OK on OCI py3.10 across the 3 GT suites). Fresh cold-2nd r3 pending.
+- Full diagnosis-only bot audit (A–J) written: `logs/design_records/bot_audit_2026-09-24.md`.
+- **cold-2nd r3 FAIL (probe-confirmed):** live positions read BEFORE the GT collect (which retries ~1 min on a mid-snapshot fill) ⇒ a GOOGL day-tier fill with REJECTED stop landing between the reads was filtered out by `sym not in held` (card PASS). **r4 fix:** `held_symbols` = GT `uncovered_at_close` ∪ live read (live may only add). 90/90 OK on OCI. Fresh cold-2nd r4 pending.
+- **cold-2nd r4 FAIL (probe):** core round trip earlier same day ⇒ symbol classed BY-DESIGN (owners core+day) ⇒ later day-tier holding with REJECTED stop silenced. **r5 fix:** uncovered_now also covers BY-DESIGN with non-core owners. 91/91 OK OCI.
+- **adversarial FAIL B1 (replayed SNOW 2026-08-10):** self-report scan floored at the entry day ⇒ a repaired prior-evening AH stop failure raised a false CRITICAL on a position with a resting broker stop. **r6 fix:** scan floor = max(entry, today's open); self-report CRITICAL only when GT shows no resting stop at the check (else HIGH, never silent); entry-side 'fail-closed'/'skipping entry' lines excluded; detail wording by coverage. 94/94 OK OCI.
+- **r6 FAIL (cold-2nd + adversarial, both):** B1 a HIGH self-report 'continue' skipped the mark check that is CRITICAL on a tracker-recorded breach (self-report LOWERED the alarm); B2 'skipping entry' exclusion dropped the real '#12c exit order submission failed — skipping entry' line (META 2026-08-31). **r7 fix:** mark check still runs after a HIGH self-report; exclusion narrowed to fail-closed|entry blocked|price sanity; tests for both. 95/95 OK OCI.
+- **r7 cold-2nd FAIL (test file only; production logic PASS):** TestSelfReportFloor main() took the Block Kit path and POSTED a real card via the worktree .env webhook (one spurious midday card with a fabricated SNOW position, from the reviewer's local run; OCI test runs had no webhook). **r8:** module-wide setUpModule guard blocks ma.SLACK_WEBHOOK and audit_slack.post_to_slack in every test; verified locally with the real webhook present (no post).

@@ -69,3 +69,12 @@ Size/frequency/concurrency delta: 0/0/0 (alerting only).
 Production prompt: false "SOFI naked" CATASTROPHIC in 1 of 1 completed runs (FAIL). New prompt: 0 of 2 completed
 runs (WARN, "None — no catastrophic conditions"). Planned 5 runs per prompt did NOT complete (Gemini free-tier daily
 quota 429 + 503 capacity) — partial evidence; the compliance counter measures it live from the first nightly run.
+
+## Increment 2 — midday_audit.py (board observability + masked-loss seats, 2026-09-24)
+Midday runs 13:30 ET MID-session: stop coverage from broker_ground_truth.collect(today, now) with retries (a fill
+racing the snapshot is likely mid-session); degraded fallback on UNKNOWN names every held symbol with no resting stop
+(OCO legs counted) at HIGH; software-stop effectiveness check for live BY-DESIGN positions (bot self-report
+"unprotected"/"FAILED" → CRITICAL; mark beyond the tracker stop → HIGH, CRITICAL if the tracker recorded the breach);
+prompt: stop coverage owned by code, but a live self-reported stop/exit failure belongs in CATASTROPHIC; card alarms
+only ADD / RAISE the verdict; read_bot_log_tail compares in UTC. Resolved-earlier NAKED stretches stay critical
+(masked-loss seat); the card title/detail shows the window. Tests: tests/test_midday_audit_ground_truth.py.
