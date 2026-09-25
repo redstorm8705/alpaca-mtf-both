@@ -1,0 +1,52 @@
+Nightly Gemini Audit — 2026-09-24
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'run_day_tier.py', 'scripts/day_tier_preflight.py', 'data/fetcher.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_sizing.py', 'strategy/day_tier_track_b.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+1. execution.ownership_guard | `sync_ledger` reattributed impossible negative protected replay (NVDA/GOOGL) | NVDA, GOOGL
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **Ownership Guard Drift:** `execution.ownership_guard` reports "reattributed impossible negative protected replay" for NVDA and GOOGL. This indicates a critical mismatch between the ledger's protected-tier state and the broker's actual holdings.
+* **Ledger Drift:** `execution.ownership_guard` reports a drift of 3.0 shares for GOOGL, explicitly stating "sells frozen there." This is a critical failure in the ownership guard mechanism that prevents the bot from managing its positions correctly.
+* **FIFO Orphan:** `execution.portfolio_tracker` reports a "FIFO orphan" for GOOGL, indicating a closing fill occurred without a corresponding entry lot in the tracker. This confirms the ledger/tracker state is corrupted for this symbol.
+* **Rule 1 Lockout:** The bot correctly identified the premarket red lockout (9/12 movers red ≥2%), but the logs show repeated attempts to enter long positions (NVDA, PLTR, AMD, etc.) despite the critical lockout, indicating the strategy cycle is not effectively pruning the entry list before the `entry_logic` gate.
+
+### PERFORMANCE AUDIT
+* **P&L Integrity:** The `EOD P&L DRIFT` of $-11.28 is significant. While the provenance header notes this is pre-heal telemetry, the presence of "FIFO orphan" and "impossible negative protected replay" logs suggests this drift is not just a timing artifact but a result of ledger corruption.
+* **Stop-Hit Analysis:** The `stop_protection` logs show "protected 4" but "broker-held 0" and "placed 0." This indicates the bot believes it has 4 protected positions, but the broker-side stop management is failing to synchronize or place the necessary orders.
+* **R:R Analysis:** The bot is failing to capture its edge. The `all_time_stats` show a profit factor of 0.79 and a negative Sharpe ratio (-1.207), indicating the strategy is currently net-negative.
+
+### TRADE INTEGRITY
+* **GOOGL Corruption:** The `GOOGL` trade is in a state of failure. It was exited via `qhm_stop_out` on 2026-09-22, yet the ledger is still attempting to reconcile fills for it on 2026-09-24, leading to the "FIFO orphan" and "drift" warnings.
+* **P&L Recording:** The `pnl_today` of $-2.54 is inconsistent with the `alpaca_pnl` of $-7.88 and `tracker_pnl` of $3.40. The ledger is failing to reconcile the actual broker fills with the internal tracker.
+
+### MODIFIED FILE FINDINGS
+* **run_day_tier.py:** The `_track_b_daily_context` function relies on `_read_daily_ctx_file` and `_write_daily_ctx_file`. The logic for atomic replacement using `os.replace` is correct, but the error handling for `_prev_session_date` is "fail-closed," which is appropriate for risk, but the lack of a retry mechanism for the calendar API means a single transient network error will cause the bot to skip Track B for the entire session.
+* **strategy/day_tier_sizing.py:** The `compute_day_tier_size` function correctly implements the "min-1-share floor" as requested, but the logic `if shares < 1 and track_budget >= px and floor_enabled: shares = 1` creates a potential for over-sizing if the `track_budget` is very close to `px` and the subsequent `_bounded_entry_qty` (which runs at wire-time) is not called with the exact same parameters.
+
+### P5 STATUS
+* **P5-C1:** UNTOUCHED
+* **P5-C2:** UNTOUCHED
+* **P5-H2:** TRIGGERED (Fill price crosstalk/drift evident in GOOGL/NVDA ledger errors)
+* **P5-H3:** TRIGGERED (Orphan GTC/ledger drift)
+* **P5-H4:** UNTOUCHED
+* **P5-M1:** UNTOUCHED
+* **P5-M2:** UNTOUCHED
+* **P5-M3:** UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution.ownership_guard | Ledger/Broker state desync | The ownership guard is failing to reconcile protected tiers, leading to "impossible negative" states and frozen sell orders.**
+* **EXECUTION BUG | HIGH | execution.portfolio_tracker | FIFO orphan handling | The tracker is failing to match closing fills to entry lots, leading to P&L drift and ledger corruption.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **IMMEDIATE:** Halt the bot and perform a manual ledger reconciliation for `GOOGL` and `NVDA`. The "impossible negative" state indicates the bot is attempting to manage positions it does not own or has already closed.
+2. **CRITICAL:** Investigate the `execution.ownership_guard` sync logic. The drift of 3.0 shares for `GOOGL` is preventing sell orders, which is a direct risk to capital.
+3. **HIGH:** Review the `run_day_tier.py` Track-B calendar resolution. The "fail-closed" logic is safe, but the lack of persistence for calendar failures is causing unnecessary skips.
+4. **MEDIUM:** Address the `P5-C2` (run_movers.py ImportError) to ensure the premarket scan is functional.
+5. **MEDIUM:** Implement a more robust check in `strategy.run_cycle` to ensure that `Rule 1` (Premarket Red Lockout) actually prevents the `entry_logic` from attempting to place orders, rather than just logging the block.
