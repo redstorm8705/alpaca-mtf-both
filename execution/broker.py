@@ -1218,6 +1218,177 @@ def submit_day_stop_order(
         return None
 
 
+_REPLACED_STATUS = "replaced"
+
+
+def _status_str(order) -> str:
+    _st = getattr(order, "status", "")
+    return str(getattr(_st, "value", _st)).lower()
+
+
+def replace_stop_order(
+    symbol: str,
+    order_id: str,
+    stop_price: float,
+    qty: "int | None" = None,
+) -> object:
+    """Move a live protective stop IN PLACE (Alpaca PATCH /v2/orders/{order_id}) — the P0 fix for
+    the cancel-then-resubmit race (UBER 2026-09-18: cancel is async, the resubmit hit 40310000,
+    the position sat 204 min with no broker stop). The old stop stays live until Alpaca swaps it,
+    so there is never a moment with no stop.
+
+    Per the Alpaca API reference: success returns the NEW order (new id); the old order goes to
+    status "replaced" (replaced_by = new id). An order in accepted / pending_new / pending_cancel /
+    pending_replace cannot be replaced. If the old order fills before the replacement reaches the
+    venue, the replacement is rejected — so a success here does NOT prove the position is still
+    open (the caller's external-close detection owns that case).
+
+    The replacement keeps the replaced order's tier prefix in its client_order_id (IN-/DT-/QH-/F6-)
+    so tier attribution survives the move.
+
+    `qty` (optional, whole shares) re-sizes the stop in the same request — used before a partial
+    close so exactly the sold shares are released while the rest stay protected. None leaves the
+    quantity unchanged.
+
+    NEVER cancels anything and has no sleep of its own (the alpaca-py SDK itself retries 429/504
+    with sleeps and sets no HTTP timeout — true of every broker call). Returns the new order on
+    success; None on failure — the old order is untouched, so the position keeps its old stop.
+    Lost-reply recovery: when the PATCH raises, the old order is read back; if it is "replaced",
+    the order now in force is adopted ONLY when it carries exactly the requested stop price (and
+    qty, when given) and is still live — a stale id replaced EARLIER at another price is never
+    reported as a successful move (cold-2nd: that would set a breakeven flag the broker lacks)."""
+    if (not order_id or not isinstance(stop_price, (int, float)) or not math.isfinite(stop_price)
+            or stop_price <= 0
+            or (qty is not None and (not isinstance(qty, (int, float)) or not math.isfinite(qty)
+                                     or not float(qty).is_integer() or qty < 1))):
+        logger.warning(
+            f"[{symbol}] stop replace skipped: order_id={order_id!r} stop=${stop_price} qty={qty}"
+        )
+        return None
+    from alpaca.trading.requests import ReplaceOrderRequest
+    client = _get_trading_client()
+    # KEEP THE OWNER TAG: Alpaca gives the replacement a NEW client_order_id, auto-generated
+    # (untagged) unless one is sent. Tier attribution (ownership_guard.tier_of_coid, the IN-/DT-/
+    # QH-/F6- prefix) drives P&L attribution, tier-aware cancels and the broker ground-truth owner,
+    # so the replacement is given a fresh id with the SAME tier prefix as the order it replaces.
+    # An untagged/unreadable old order gets none (Alpaca generates one, as before this helper).
+    _fields: dict = {"stop_price": round(stop_price, 2)}
+    if qty is not None:
+        _fields["qty"] = int(qty)
+    _prior = get_order(order_id)
+    if _prior is not None:
+        from execution.ownership_guard import tier_of_coid
+        _tier = tier_of_coid(getattr(_prior, "client_order_id", None))
+        _side = getattr(_prior, "side", "")
+        _side_s = str(getattr(_side, "value", _side)).lower()
+        if _tier and _side_s in ("buy", "sell"):
+            _fields["client_order_id"] = _make_idem_id(_tier, symbol, _side_s)
+    req = ReplaceOrderRequest(**_fields)
+    try:
+        new_order = client.replace_order_by_id(order_id, req)
+        logger.info(
+            f"[{symbol}] STOP REPLACED in place: {order_id} → {getattr(new_order, 'id', '?')} "
+            f"@ ${stop_price:.2f}" + (f" qty {qty}" if qty is not None else "")
+        )
+        return new_order
+    except Exception as e:
+        old = get_order(order_id)
+        if old is not None and _status_str(old) == _REPLACED_STATUS:
+            _new, _new_id = resolve_live_order(order_id)
+            if (_new is not None and _new_id != order_id
+                    and _matches_request(_new, stop_price, qty)
+                    and _status_str(_new) not in _TERMINAL_STOP_STATUSES
+                    and _status_str(_new) != _REPLACED_STATUS):
+                logger.warning(
+                    f"[{symbol}] stop replace raised ({e}) but {order_id} is already REPLACED — "
+                    f"adopting the order now in force {_new_id} (lost-reply recovery)."
+                )
+                return _new
+        logger.error(
+            f"[{symbol}] stop replace FAILED for {order_id} @ ${stop_price:.2f}: {e} — old stop "
+            f"left in place (status={_status_str(old) if old is not None else 'unknown'})."
+        )
+        return None
+
+
+_TERMINAL_STOP_STATUSES = frozenset(("canceled", "filled", "expired", "done_for_day", "rejected"))
+# Statuses in which a cancel request is rejected or already in flight — do not send one, wait.
+# NOT "accepted"/"pending_new": those CAN be cancelled, and overnight GTC stops sit in "accepted"
+# for hours (adversarial review, production 2026-09-18 06:00:14).
+_NO_CANCEL_STATUSES = frozenset(("pending_replace", "pending_cancel"))
+
+
+def _matches_request(order, stop_price: float, qty: "int | None") -> bool:
+    """True when `order` carries exactly the requested stop price (and qty, when given)."""
+    _sp = getattr(order, "stop_price", None)
+    _q = getattr(order, "qty", None)
+    try:
+        if _sp is None or round(float(_sp), 2) != round(float(stop_price), 2):
+            return False
+        if qty is not None and (_q is None or int(float(_q)) != int(qty)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def resolve_live_order(order_id: str, max_hops: int = 5):
+    """Follow an order's replaced_by chain to the order that is in force now. Returns
+    (order, id) for the last order in the chain, or (None, order_id) if the first read fails.
+    A stop that was moved in place leaves its old id at status "replaced"; every status check
+    must follow the chain or it will treat a live, moved stop as gone (board masked-loss seat)."""
+    oid = order_id
+    order = get_order(oid) if oid else None
+    hops = 0
+    while order is not None and _status_str(order) == _REPLACED_STATUS and hops < max_hops:
+        nxt = getattr(order, "replaced_by", None)
+        if not nxt:
+            break
+        nxt_order = get_order(str(nxt))
+        if nxt_order is None:
+            break
+        oid, order, hops = str(nxt), nxt_order, hops + 1
+    return order, oid
+
+
+def cancel_stop_confirmed(symbol: str, order_id: str, max_wait_s: float = 2.0) -> bool:
+    """Cancel a protective stop and return True ONLY when the broker confirms it is no longer in
+    force (terminal status: canceled / filled / expired / done_for_day / rejected). Follows the
+    replaced_by chain first, so the stop actually live is the one cancelled. While the order is
+    in pending_replace / pending_cancel (cancel rejected or already in flight), waits up to
+    `max_wait_s` in 0.25 s steps (total can exceed it by one step plus the reads). The cancel is
+    sent once per live order, then only polled. Returns False (stop may still be in force — caller must NOT clear its id or assume
+    the shares are free) on any unconfirmed outcome. Replaces the old reading of HTTP 422 as
+    success, which is also what Alpaca returns for a not-cancelable pending_replace order."""
+    order, live_id = resolve_live_order(order_id)
+    if order is None:
+        logger.warning(f"[{symbol}] stop cancel: cannot read order {order_id} — NOT confirmed.")
+        return False
+    deadline = time.monotonic() + max(0.0, max_wait_s)
+    cancel_sent: set = set()
+    while True:
+        st = _status_str(order)
+        if st in _TERMINAL_STOP_STATUSES:
+            logger.info(f"[{symbol}] stop {live_id} confirmed not in force (status={st}).")
+            return True
+        if (st not in _NO_CANCEL_STATUSES and st != _REPLACED_STATUS
+                and live_id not in cancel_sent):
+            cancel_order(live_id)          # sent once per live order; then only polled
+            cancel_sent.add(live_id)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+        order, live_id = resolve_live_order(live_id)
+        if order is None:
+            break
+    logger.error(
+        f"[{symbol}] stop cancel NOT confirmed for {live_id} "
+        f"(last status={_status_str(order) if order is not None else 'unreadable'}) — "
+        f"treat the stop as still in force."
+    )
+    return False
+
+
 def cancel_order(order_id: str) -> bool:
     """
     Cancel a specific order by ID.
