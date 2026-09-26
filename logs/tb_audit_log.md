@@ -11071,3 +11071,46 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 **Follow-ups (non-blocking):**
 - (a) Overnight VIX-spike awareness is removed, so stops are now tighter, not wider. A size-aware design (for example, re-sizing or flattening on a VIX regime jump) is a roadmap item.
 - (b) Add a `_shift_sized_levels` floor for a sub-cent `stop_distance` (unrealistic at a real ATR).
+
+## 2026-09-26 — P0-4a risk controls fail closed (branch feat/p04a-fail-closed)
+**Full reads:**
+- `execution/risk_manager.py`: 1287 lines (L1-700 and L830-1287 this pass; L696-830 earlier in session).
+- `strategy/run_cycle.py`: kill block and entries halt, full file read earlier in session.
+
+**Findings (verified at source + prod log):**
+- (a) `get_portfolio_value()` at the top of `run_cycle` was unguarded. An Alpaca account-read error aborted the WHOLE cycle, including exits, stops and reconcile. The prod log shows 36 such tracebacks at `run_cycle` L230 (4 episodes: 2026-07-24, 2026-08-05, 2026-08-22, 2026-09-23; 35 off-hours, 1 during RTH — 2026-08-05 13:57 ET, phase=midday).
+- (b) `check_gross_exposure_for_order` allowed the entry when its own evaluation raised (fail-open, audit D4).
+- The day-tier kill paths are already fail-closed (`run_day_tier` account kill, `tier_kill_check`). Verified, no change.
+
+**Fix:**
+- (a) The account read and kill evaluation are each in try/except. A failure keeps the last known equity and sets `_control_fault`, which blocks NEW entries for that cycle via the existing entries-only flag. Exits still run.
+  - The kill alert fires only on a real trip, not on a fault.
+  - A fault is logged at ERROR, not paged, so an off-hours maintenance window does not page every cycle.
+- (b) On an exception the gross cap returns False (block) instead of True.
+
+**Risk-path screen:** only blocks entries, so size, frequency and concurrency can only go DOWN. This is not a widening.
+
+**10-point audit:**
+- (1) Statics are clean.
+- (2) Exits are unaffected. Entries are blocked on a fault.
+- (3) `get_portfolio_value` raising, `check_kill_switch` raising, or both → entries blocked and the cycle continues.
+- (5) The premarket `write_scan_html(get_portfolio_value())` call is already try-guarded.
+- (6) Kill state `risk.killed` is unchanged. A fault never latches the kill.
+- (10) Log text updated.
+
+**RC checks:** RC-1 through RC-8 PASS. RC-3: every except logs.
+
+**Tests:**
+- `tests/test_p04a_fail_closed.py`: 4 tests (behavioural gross cap). They fail on the old code.
+- `tests/test_run_cycle_kill_switch_exits.py`: now 8 tests, adding the structural account-read and kill-eval fail-closed checks.
+**Gate (P0-4a):**
+- Cold-2nd: PASS, and a second fresh cold-2nd PASS after adding the page.
+- Masked-loss seat: APPROVE. Its sustained-fault page nit was adopted: one page at 3 consecutive RTH faulted cycles.
+- Gro + GAI preship: APPROVE on all 4 files.
+- Adversarial: FAIL on claim wording only. My log claim cited 2 dates and "all off-hours"; the actual record is 4 episodes, one of them in RTH. Corrected here and in the ship claims. The code mechanism was verified.
+
+**Honest limit:** the run_cycle fault tests are structural (AST), not an executed replay.
+
+**Follow-ups:**
+- The page streak is in-memory, so it resets on a restart.
+- The page threshold is a static 3.

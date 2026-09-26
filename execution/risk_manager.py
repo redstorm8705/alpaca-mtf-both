@@ -610,9 +610,9 @@ class RiskManager:
         sum(|open position notional|) above config.MAX_GROSS_EXPOSURE_RATIO × equity.
 
         Notional is summed from the tracker's non-closed open_trades. A malformed single
-        row is skipped. On a total read error this FAILS OPEN (returns True) — the
-        buying-power pre-flight above is the hard, fail-closed account-level guard, so this
-        governor never needs to halt the whole book on a tracker glitch.
+        row is skipped. On an unexpected error this FAILS CLOSED (returns False — P0-4a,
+        2026-09-26): a limit that cannot be evaluated blocks the entry; it only ever blocks a
+        NEW entry, never an exit.
         """
         try:
             new_notional = float(shares) * float(entry_price)
@@ -644,10 +644,9 @@ class RiskManager:
             return True
         except Exception as e:  # RC-3
             logger.warning(
-                "gross-exposure check error (%s) — allowing entry (BP pre-flight is the hard guard).",
-                e,
+                "gross-exposure check error (%s) — blocking entry (fail-closed).", e,
             )
-            return True
+            return False
 
     def calculate_position_size(
         self,

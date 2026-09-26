@@ -73,6 +73,12 @@ if TYPE_CHECKING:
 
 ET = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
+
+# P0-4a: consecutive RTH cycles whose account read / kill evaluation failed (entries blocked).
+# Pages ONCE per episode at _CONTROL_FAULT_PAGE_AFTER so a sustained fault is not silent; resets
+# on the first clean cycle. Off-hours faults (Alpaca maintenance windows) never page.
+_control_fault_streak = 0
+_CONTROL_FAULT_PAGE_AFTER = 3
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # RC-2: this file lives in strategy/; root is one level up
 
 # ── SPY 52w-high persistence — ATH fail-open fix (board + Gro + GAI, 2026-07-01) ──
@@ -227,22 +233,52 @@ def run_cycle(
             logger.warning(f"Startup reconcile check failed (non-fatal): {_sr_e}")
 
     # ── Kill switch check ────────────────────────────────────────────────────────────────────────────
-    portfolio_value = get_portfolio_value()
-    risk.update_portfolio_value(portfolio_value)
+    # P0-4a (2026-09-26): the account read and the kill evaluation FAIL CLOSED. An exception here
+    # used to abort the whole cycle — exits, stops and reconcile included (36 aborts in the prod
+    # log, all on Alpaca account-read errors). Now a failure keeps the last known equity, blocks
+    # NEW ENTRIES for this cycle, and lets every exit/protection path below run.
+    _control_fault = ""
+    try:
+        portfolio_value = get_portfolio_value()
+        risk.update_portfolio_value(portfolio_value)
+    except Exception as _pv_err:
+        portfolio_value = risk.portfolio_value
+        _control_fault = f"account read failed ({_pv_err!r})"
+    try:
+        _kill_tripped = bool(risk.check_kill_switch())
+    except Exception as _ks_err:
+        _kill_tripped = False
+        _control_fault = _control_fault or f"kill-switch evaluation failed ({_ks_err!r})"
 
     # P0 (audit 2026-09-24): the kill switch blocks NEW ENTRIES only. It used to `return` here,
     # which also skipped every exit, stop, protection-sweep and reconcile path below — a tripped
     # book was left unmanaged exactly when it was losing. Exits keep running; each entry path
     # (execute_entries, QHM entries, overnight entries, F6 starter) is blocked via this flag.
-    _kill_block_entries = bool(risk.check_kill_switch())
+    _kill_block_entries = _kill_tripped or bool(_control_fault)
+    global _control_fault_streak
+    if not _control_fault:
+        _control_fault_streak = 0
     if _kill_block_entries:
-        logger.critical("Kill switch active — no new entries this session (exits still managed).")
-        if not _main._kill_switch_alerted:
-            _main._kill_switch_alerted = True
-            _ks_pnl = getattr(risk, "daily_pnl", 0.0)
-            _ks_pct = getattr(config, "MAX_DAILY_LOSS_PCT", 0.05)
-            alert_kill_switch(daily_pnl=_ks_pnl, limit_pct=_ks_pct,
-                              portfolio=portfolio_value)
+        if _control_fault:
+            logger.error(f"{_control_fault} — no new entries this cycle (fail-closed); "
+                         f"exits still managed.")
+            try:
+                from execution.risk_manager import _in_rth_now
+                if _in_rth_now():
+                    _control_fault_streak += 1
+                    if _control_fault_streak == _CONTROL_FAULT_PAGE_AFTER:
+                        send_slack(f":warning: New entries blocked for {_control_fault_streak} "
+                                   f"cycles in a row: {_control_fault}. Exits are still managed.")
+            except Exception as _cf_page_err:
+                logger.error(f"control-fault page failed: {_cf_page_err}")
+        if _kill_tripped:
+            logger.critical("Kill switch active — no new entries this session (exits still managed).")
+            if not _main._kill_switch_alerted:
+                _main._kill_switch_alerted = True
+                _ks_pnl = getattr(risk, "daily_pnl", 0.0)
+                _ks_pct = getattr(config, "MAX_DAILY_LOSS_PCT", 0.05)  # PROV:kill-switch-alert-display-fallback (config.MAX_DAILY_LOSS_PCT is the fixed 7% outer bound; this default only labels the alert)
+                alert_kill_switch(daily_pnl=_ks_pnl, limit_pct=_ks_pct,
+                                  portfolio=portfolio_value)
 
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.
@@ -1868,7 +1904,7 @@ def run_cycle(
         logger.critical(
             "⛔ %s — no new entries this cycle (existing positions managed "
             "normally; no liquidation).",
-            "KILL SWITCH" if _kill_block_entries else "HALT",
+            ("KILL SWITCH" if _kill_tripped else "CONTROL FAULT") if _kill_block_entries else "HALT",
         )
         _touch_cycle_ts()
         return

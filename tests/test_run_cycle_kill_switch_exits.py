@@ -51,7 +51,58 @@ class KillSwitchKeepsExits(unittest.TestCase):
         ]
         self.assertEqual(len(assigns), 1, "flag must be assigned exactly once")
         self.flag_line = assigns[0].lineno
-        self.assertIn("check_kill_switch", ast.unparse(assigns[0].value))
+        # P0-4a: the flag is the kill result OR a control fault (fail-closed)
+        self.assertTrue(
+            {"_kill_tripped", "_control_fault"} <= _names(assigns[0].value)
+        )
+
+    def _try_wrapping(self, attr: str) -> ast.Try:
+        for n in ast.walk(self.fn):
+            if isinstance(n, ast.Try):
+                body_calls = [
+                    c
+                    for b in n.body
+                    for c in ast.walk(b)
+                    if isinstance(c, ast.Call)
+                    and (
+                        (isinstance(c.func, ast.Attribute) and c.func.attr == attr)
+                        or (isinstance(c.func, ast.Name) and c.func.id == attr)
+                    )
+                ]
+                if body_calls:
+                    return n
+        raise AssertionError(f"{attr} is not inside a try")
+
+    def test_kill_evaluation_fails_closed(self):
+        t = self._try_wrapping("check_kill_switch")
+        self.assertLess(t.lineno, self.flag_line)
+        handler_names = {x for h in t.handlers for x in _names(h)}
+        self.assertIn("_control_fault", handler_names)
+
+    def test_sustained_fault_pages_once_in_rth(self):
+        src = ast.unparse(self.fn)
+        self.assertIn("_control_fault_streak = 0", src)
+        self.assertIn("if _in_rth_now():", src)
+        self.assertIn("_control_fault_streak == _CONTROL_FAULT_PAGE_AFTER", src)
+        mod = ast.parse(SRC)
+        consts = {
+            t.id: n.value.value
+            for n in mod.body
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+            for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+        self.assertEqual(consts.get("_CONTROL_FAULT_PAGE_AFTER"), 3)
+
+    def test_account_read_fails_closed(self):
+        t = self._try_wrapping("get_portfolio_value")
+        self.assertLess(t.lineno, self.flag_line)
+        handler_names = {x for h in t.handlers for x in _names(h)}
+        self.assertIn("_control_fault", handler_names)
+        self.assertFalse(
+            any(isinstance(r, ast.Return) for h in t.handlers for r in ast.walk(h)),
+            "an account-read failure must not end the cycle",
+        )
 
     def test_kill_branch_does_not_return(self):
         ifs = [
