@@ -37,11 +37,28 @@ Behaviour check (placement, cover, scope) — verify: `ssh mtf-bot 'cd /home/ubu
 Deployed — verify: `ssh mtf-bot 'systemctl is-active mtf-bot'`→`active` and the `git log` line above. Status: **deployed, unexercised** (market closed) —
 verify: `ssh mtf-bot 'grep -c "cycle-check scope" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
 
-**⏩ EXACT NEXT ACTION:** P0-5 one stop for sizing + enforcement. The post-fill recompute drops the H2 scalar
-(`execution/entry_logic.py` — verify: `grep -n "atr_mult_override" execution/entry_logic.py`), and the
-after-hours GTC re-applies VIX widening (verify: `grep -c "_vix_mult_gtc" strategy/run_cycle.py`).
-Gro and GAI chose 1A (shift sized distances to the fill) + 2A (remove the second widening); the board
-seats are pending. (Plan item — not built.)
+**SHIPPED 2026-09-26 — P0-5 one stop (PR #399) + P0-4a fail-closed controls (PR #400)** — details in `logs/tb_audit_log.md`.
+Verify: `gh pr view 399 --json state`→`MERGED`; `gh pr view 400 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`b30adfd Merge pull request #400…`;
+post-fill shift present: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def _shift_sized_levels" execution/entry_logic.py'`→`1`;
+after-hours VIX re-widening removed: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_vix_mult_gtc" strategy/run_cycle.py'`→`0`;
+fail-closed account read: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_control_fault_streak" strategy/run_cycle.py'`→`6`;
+tests: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_p04a_fail_closed tests.test_p05_one_stop 2>&1 | tail -1'`→`OK`.
+Status: **deployed, unexercised** — verify: `ssh mtf-bot 'grep -c "account read failed\|Stop/target shifted to fill" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**⏩ EXACT NEXT ACTION:** P0-4b approval package for Rafael (risk-path — board + Gro + GAI first): a book-wide gross cap
+(core + day tier + QHM), enforcement of `MAX_OVERNIGHT_EXPOSURE_PCT`, and dynamic daily/drawdown limits (spec:
+`logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md` Q2; July–Sept equity replay required first) —
+verify: `grep -c "MAX_OVERNIGHT_EXPOSURE_PCT" config.py`→`1`.
+Then the P1 queue:
+- Open bug (found 2026-09-14, not fixed): `strategy/volatility_regime.py` writes VIX OR SPY realized vol into one
+  `realized_vol` field. Verify: `grep -c "field-mixing" logs/tb_audit_log.md`→`2`.
+- Codex audit items 5–10 (Rafael 2026-09-26): per-setup calibrated models replacing the static confluence total; exits learned
+  from MFE/MAE paths; an account-wide allocator; execution-quality capture; restart state restore; evidence-preserving reports.
+  Item 9's premise was checked: the 5 restarts on 9/26 up to 12:10 UTC were the nightly cron (07:05) and 4 deploys; the
+  memory watchdog's restart ledger does not exist. Verify: `ssh mtf-bot 'journalctl -u mtf-bot --since "2026-09-26 00:00" --until "2026-09-26 12:10" --no-pager | grep -c "Started MTF Bot"'`→`5`;
+  `ssh mtf-bot 'ls /home/ubuntu/mtf-bot/logs/offhours_restarts.log'`→`No such file or directory`.
+  The rebuild-from-zero half is still unverified.
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
