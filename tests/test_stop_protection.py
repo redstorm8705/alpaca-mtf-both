@@ -537,7 +537,7 @@ class PageThrottle(unittest.TestCase):
         self.assertTrue(page.called, "a blind-spot loop error must page on first occurrence")
 
     # ── PRE-WIRE-BLOCKER-2: ONE account-wide get_open_orders fetch, sliced per symbol ──
-    def _run_multi(self, *, open_trades, account_orders, positions, submit=None):
+    def _run_multi(self, *, open_trades, account_orders, positions, submit=None, only_symbols=None):
         tracker = _Tracker(dict(open_trades))
         goo = mock.Mock(return_value=account_orders)     # account-wide (no-arg) orders fetch
         # account-wide POSITIONS fetch: build the list from the per-symbol dict, tagging each
@@ -561,7 +561,8 @@ class PageThrottle(unittest.TestCase):
              mock.patch.object(sp, "_qhm_symbols", mock.Mock(return_value=set())), \
              mock.patch.object(sp, "_forever6_symbols", mock.Mock(return_value=set())), \
              mock.patch.object(sp, "_page", page):
-            summary = sp.reconcile_protection(tracker, _Risk(), session="rth", place=True)
+            summary = sp.reconcile_protection(tracker, _Risk(), session="rth", place=True,
+                                              only_symbols=only_symbols)
         return summary, goo, gop, sday, page
 
     @staticmethod
@@ -615,5 +616,81 @@ class PageThrottle(unittest.TestCase):
         self.assertEqual(len(s["already_protected"]), 0)
 
 
+class BrokerStopScope(unittest.TestCase):
+    """P0-3 (2026-09-26): the every-cycle RTH check covers only positions the design says must
+    already hold a broker stop; entry-day software-stop positions wait for the pre-close sweep."""
+
+    def setUp(self):
+        sp._recent_placements.clear()
+        sp._skip_streak.clear()
+        sp._unknown_page_streak.clear()
+        sp._page_throttle.clear()
+
+    def test_scope_rule(self):
+        trades = {
+            "CARRY": {"overnight": True},
+            "DAYID": {"rth_day_stop_order_id": "d1"},
+            "GTCID": {"gtc_stop_order_id": "g1"},
+            "LEGACY": {"_gtc_stop_order_id": "g2"},
+            "ENTRYDAY": {"overnight": False, "rth_day_stop_order_id": None, "gtc_stop_order_id": ""},
+            "BARE": {},
+            "BAD": "not-a-dict",
+        }
+        self.assertEqual(sp.broker_stop_scope(trades), {"CARRY", "DAYID", "GTCID", "LEGACY"})
+        self.assertEqual(sp.broker_stop_scope({}), set())
+        self.assertEqual(sp.broker_stop_scope(None), set())
+
+    def _multi(self, **kw):
+        return PageThrottle._run_multi(self, **kw)
+
+    _osym = PageThrottle.__dict__["_osym"]  # the staticmethod object
+
+    def test_only_scoped_symbols_get_a_stop(self):
+        trades = {"AAA": _trade(), "BBB": _trade()}
+        pos = {s: _position("long", 3, 110.0) for s in trades}
+        s, goo, gop, sday, page = self._multi(open_trades=trades, account_orders=[], positions=pos,
+                                              only_symbols={"BBB"})
+        self.assertEqual([p[0] for p in s["placed"]], ["BBB"])
+        self.assertEqual(s["not_in_scope"], ["AAA"])
+        sday.assert_called_once()
+        self.assertEqual(sday.call_args.kwargs["symbol"], "BBB")
+        page.assert_not_called()
+
+    def test_none_scope_keeps_full_sweep(self):
+        trades = {"AAA": _trade(), "BBB": _trade()}
+        pos = {s: _position("long", 3, 110.0) for s in trades}
+        s, *_ = self._multi(open_trades=trades, account_orders=[], positions=pos, only_symbols=None)
+        self.assertEqual(sorted(p[0] for p in s["placed"]), ["AAA", "BBB"])
+        self.assertEqual(s["not_in_scope"], [])
+
+    def test_empty_scope_places_nothing(self):
+        trades = {"AAA": _trade()}
+        s, _, _, sday, page = self._multi(open_trades=trades, account_orders=[],
+                                          positions={"AAA": _position("long", 3, 110.0)},
+                                          only_symbols=set())
+        sday.assert_not_called()
+        page.assert_not_called()
+        self.assertEqual(s["not_in_scope"], ["AAA"])
+
+    def test_out_of_scope_state_not_pruned(self):
+        sp._page_throttle[("AAA", "over-covered")] = 1.0
+        sp._recent_placements[("AAA", "sell", 9500)] = 1.0
+        trades = {"AAA": _trade(), "BBB": _trade()}
+        pos = {s: _position("long", 3, 110.0) for s in trades}
+        self._multi(open_trades=trades, account_orders=[], positions=pos, only_symbols={"BBB"})
+        self.assertIn(("AAA", "over-covered"), sp._page_throttle)
+        self.assertIn(("AAA", "sell", 9500), sp._recent_placements)
+
+    def test_scoped_protected_and_breached_paths_unchanged(self):
+        trades = {"AAA": _trade(stop=95.0), "BBB": _trade(stop=95.0)}
+        orders = [self._osym("AAA", qty=3)]
+        pos = {"AAA": _position("long", 3, 110.0), "BBB": _position("long", 3, 90.0)}
+        s, _, _, sday, _ = self._multi(open_trades=trades, account_orders=orders, positions=pos,
+                                       only_symbols={"AAA", "BBB"})
+        self.assertEqual([p[0] for p in s["already_protected"]], ["AAA"])
+        self.assertEqual([c[0] for c in s["covered"]], ["BBB"])
+        sday.assert_not_called()
+
+
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
