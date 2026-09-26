@@ -46,7 +46,7 @@ fail-closed account read: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_con
 tests: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_p04a_fail_closed tests.test_p05_one_stop 2>&1 | tail -1'`→`OK`.
 Status: **deployed, unexercised** — verify: `ssh mtf-bot 'grep -c "account read failed\|Stop/target shifted to fill" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
 
-**⏩ EXACT NEXT ACTION:** P0-4b — Rafael REJECTED D3+D4 (paper account; 7% daily kill only), D2 = swing-only (QHM/F6 excluded), D1 re-aligned to swing+day tier minus QHM/F6 (Gro/GAI/board A; verify: `grep -c "D1 scope re-aligned" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`) — D1+D2 awaiting his approval (verify: `grep -c "Rafael decision (2026-09-26)" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`). Then build the mechanical paper-account preamble for BGGN prompts (CLAUDE.md "THIS IS A PAPER TRADING ACCOUNT"). Original scope: a book-wide gross cap
+**⏩ EXACT NEXT ACTION:** (1) F6 go-live readiness — Rafael wants F6 ON (verify: `grep -c "Rafael decision, round 2" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`). (2) P0-4b D2 swing-only overnight gap cap, awaiting Rafael approval (verify: `grep -c "D2 build awaits Rafael" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`). D1 = no change, per Rafael (verify: `grep -c "D1: NO CHANGE" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`).
 (core + day tier + QHM), enforcement of `MAX_OVERNIGHT_EXPOSURE_PCT`, and dynamic daily/drawdown limits (spec:
 `logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md` Q2; July–Sept equity replay required first) —
 verify: `grep -c "MAX_OVERNIGHT_EXPOSURE_PCT" config.py`→`1`.

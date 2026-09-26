@@ -76,3 +76,13 @@ Rejected options:
 Remaining P0-4b scope for Rafael's approval:
 - D1 (A).
 - D2: a dynamic overnight cap on swing positions only (QHM/F6 excluded).
+
+## Rafael decision, round 2 (2026-09-26)
+- **D1: NO CHANGE.** Each tier keeps its own rules. The swing gross cap stays swing-only, which is today's code (`check_gross_exposure_for_order` sums the swing tracker only). The day tier keeps its own caps. QHM and F6 are excluded.
+- **D2:** gap-risk tracking is for SWING positions only. A QHM gap-down should trigger the buy-the-dip evaluation instead.
+  - That already exists: the QHM dip-add is LIVE (`_DIP_ADD_ENABLED=True`).
+  - It has two rungs: Rung A at ≤ −2% below cost average and Rung B at ≤ −5%.
+  - Limits: max 3 per quarter, at least 2 days apart, no adds within 7 days of earnings, stop adding below first-entry −15%.
+  - It is evaluated every RTH cycle. It last fired on 2026-07-29 (NVDA rung B).
+  - D2 build awaits Rafael's explicit approval.
+- **F6:** Rafael wants it turned ON. A readiness audit is in progress. Blockers recorded in `tb_audit_log.md`: same-pass ledger-drift resync, the shared-lot ring-fence question, ETF wind-down detection, `OWNERSHIP_GUARD_ENFORCE=False`, and F6 positions reading NAKED in the audits.
