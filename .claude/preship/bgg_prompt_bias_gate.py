@@ -77,6 +77,26 @@ _NEUTRAL_VERDICT_OFFERS = [
 ]
 
 
+# PAPER-ACCOUNT FRAME requirement (Rafael mandate 2026-09-26, CLAUDE.md "THIS IS A PAPER TRADING
+# ACCOUNT"): a board-seat / design-fork prompt that asks for a RECOMMENDATION must carry the account's
+# purpose, or the seat reasons from generic capital-preservation practice (the P0-4b drawdown-halt
+# miss). Cold code-review prompts (diff correctness) are not design prompts and are not required to.
+_DESIGN_CONTEXT = [
+    r"\bboard\b[\s:\-]{0,3}(\w+[\s\-]){0,2}(seats?|reviews?|votes?)\b",
+    r"\b(design|decision)\s+forks?\b",
+]
+_FRAME_TOKENS = (r"\bpaper\b", r"\$?25\s?k\b|\$?25,000")
+
+
+def missing_paper_frame(prompt: str) -> bool:
+    """True when a board/design prompt lacks the paper-account frame (needs BOTH 'paper' and the
+    $25K goal)."""
+    low = prompt.lower()
+    if not any(re.search(p, low) for p in _DESIGN_CONTEXT):
+        return False
+    return not all(re.search(t, low) for t in _FRAME_TOKENS)
+
+
 def find_bias(text: str, patterns) -> list:
     """Return the leading phrases in a prompt (lowercased scan) for the given pattern set. Neutral
     both-sided verdict offers are blanked first so a fair 'approve or reject' ask is not flagged."""
@@ -136,6 +156,14 @@ def main() -> None:
             hits = find_bias(prompt, list(_SHIP_PATTERNS) + _SOLICIT_PATTERNS)
             if hits:
                 _block("board/reviewer prompt", hits)
+        if missing_paper_frame(prompt):
+            sys.stderr.write(
+                "BGG PAPER-FRAME GATE (blocking, board/design prompt): this board-seat / design-fork "
+                "prompt does not state the account's purpose. Add the frame from CLAUDE.md 'THIS IS A "
+                "PAPER TRADING ACCOUNT' (paper account, $2.5K -> $25K goal, data collection + edge "
+                "evaluation first, 7% daily kill switch the only daily brake) and retry.\n"
+            )
+            sys.exit(2)
     sys.exit(0)
 
 
