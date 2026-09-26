@@ -11115,3 +11115,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - The page streak is in-memory, so it resets on a restart.
 - The page threshold is a static 3.
 - P0-5 (#399, 99e7b4e) and P0-4a (#400, b30adfd) deployed to OCI (DEPLOY_OK). CLAUDE.md default-role rule added (Rafael 2026-09-26).
+- P0-4b: July–Sept replay done; BGGN 4/4 aligned on D1–D4 (design record p04b_limits_replay_2026-09-26.md). Awaiting Rafael approval.
