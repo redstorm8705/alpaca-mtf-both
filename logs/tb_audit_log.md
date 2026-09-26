@@ -10923,3 +10923,36 @@ Stop MOVES that still cancel-then-resubmit (verified):
 Out of scope (exits, not moves): full-close paths cancel stops before close_position (hard stop/target/signal/overnight buffer/trail-hit close).
 Statics baseline clean (py_compile/ruff E,W,F,B/mypy). RC-1 PASS · RC-2 PASS · RC-3 PASS · RC-4 PASS (fills via _fetch_actual_fill_price) · RC-5 PASS (tracker atomic save) · RC-6 CHECK (Order.status/replaced_by via broker helpers) · RC-7 PASS (qty≥1 guards) · RC-8 n/a.
 - 2026-09-26 P0 inc 3 exit_logic: SELF-AUDIT before review found + fixed 7 own defects (rounding churn, wait-fail not escalated, final-tranche re-protect missing, oversized new stop w/o self-heal, BE path helper, final-tranche restore adding stops to software-only positions, sync retry not restoring qty). 20 new tests; full suite 532 on OCI: no new failures vs main (test-pollution import errors pre-existing, task filed).
+
+## 2026-09-26 — P0 #1 kill switch keeps managing exits — strategy/run_cycle.py (branch feat/killswitch-keeps-exits)
+Full read complete: 2185 lines in 8 chunks — strategy/run_cycle.py.
+**Finding (audit P0-1, verified at source):** `if risk.check_kill_switch(): ... _touch_cycle_ts(); return` at the top of run_cycle
+skipped EVERY downstream path while tripped: premarket GTC reconcile, closed-market AH GTC stop submission + cover-on-breach +
+`_check_exits_extended_hours`, `_submit_rth_day_stops`, opening-window partials/exits, RTH check_partial_exits / QHM weekly check /
+MRI BE push / check_exits / fill recon / pre-close `reconcile_protection` / drift detector+corrector. A tripped book was unmanaged.
+**Fix:** flag `_kill_block_entries` (alert-once kept); no return. Entry paths gated: entries-only return (existing HALT return, sits
+before QHM `maybe_enter_positions`, `run_scan`, `execute_entries`), `_overnight_entry_check` (also self-gated, Gate 2), F6 starter
+(`maybe_start_accumulation` skipped; F6 trims = exits still run). `execute_entries` also self-gates via `can_open_position`.
+**10-pt:** (1) py_compile/ruff/mypy clean. (2) trade path: exits unchanged, entries still blocked on every path. (3) adversarial: flag
+True in premarket/closed/opening/EOD branches → those branches contain no entry calls (verified: only entry call sites are L867
+overnight, L890 F6 starter, L1892 QHM, L1934 run_scan→L2024 execute_entries). (4) full read done. (5) callers: run_cycle called by
+main loop only; alert_kill_switch signature unchanged. (6) no conflicting state: `risk.killed` remains sole kill state; flag is local.
+(7) no dead code added. (8) no I/O change. (9) no data calls added. (10) log text PT-neutral; no new trade events.
+RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buffer change in the diff).
+**Risk-path screen (Rule E):** size 0 / frequency 0 / concurrency 0 — entries remain blocked; change only restores exit management.
+**Self-audit:** double CRITICAL log per RTH cycle while tripped (kill line + entries-halt line) — accepted, informational.
+**Tests:** tests/test_run_cycle_kill_switch_exits.py (6, AST structural guard; all 6 FAIL on the pre-change source).
+**Gate (P0 #1):**
+- Cold-2nd: PASS.
+- Masked-loss seat (Thorp/Taleb lens): APPROVE. No exit path adds exposure; the F6 trims only sell.
+- Log evidence: 182 matching lines in `mtf_bot.log`.
+- Gro + GAI preship: APPROVE / APPROVE.
+- Adversarial: the mechanism holds, but two claims needed correcting before ship:
+  - 112 of the 182 lines come from the documented 09-16/17 false trip (fixed in 96861b5).
+  - The status wording should read "staged, then deployed-unexercised".
+
+**Notes carried forward (non-blocking):**
+- Tripped cycles now run the full exit pipeline. A normal cycle can already take up to about 649s, against the 720s RTH watchdog. That latency risk existed before and now applies to tripped cycles too.
+- `_reconcile_pending_overnight_orders` now runs while tripped. It only promotes or cancels orders that were already placed, so it never opens anything new.
+- Two CRITICAL log lines fire per RTH cycle while tripped.
+- Self-audit miss (P0 #1): I did not run ruff with the CI 88-col limit on the new test file, so CI failed on E501. The fix was a formatting-only rewrap; a fresh cold-2nd review PASSED and confirmed the assertions are byte-identical; Gro+GAI APPROVE.

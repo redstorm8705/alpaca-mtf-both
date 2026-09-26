@@ -230,16 +230,19 @@ def run_cycle(
     portfolio_value = get_portfolio_value()
     risk.update_portfolio_value(portfolio_value)
 
-    if risk.check_kill_switch():
-        logger.critical("Kill switch active — no new entries this session.")
+    # P0 (audit 2026-09-24): the kill switch blocks NEW ENTRIES only. It used to `return` here,
+    # which also skipped every exit, stop, protection-sweep and reconcile path below — a tripped
+    # book was left unmanaged exactly when it was losing. Exits keep running; each entry path
+    # (execute_entries, QHM entries, overnight entries, F6 starter) is blocked via this flag.
+    _kill_block_entries = bool(risk.check_kill_switch())
+    if _kill_block_entries:
+        logger.critical("Kill switch active — no new entries this session (exits still managed).")
         if not _main._kill_switch_alerted:
             _main._kill_switch_alerted = True
             _ks_pnl = getattr(risk, "daily_pnl", 0.0)
             _ks_pct = getattr(config, "MAX_DAILY_LOSS_PCT", 0.05)
             alert_kill_switch(daily_pnl=_ks_pnl, limit_pct=_ks_pct,
                               portfolio=portfolio_value)
-        _touch_cycle_ts()
-        return
 
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.
@@ -863,10 +866,11 @@ def run_cycle(
         except Exception as _ehe:
             logger.warning(f"EH exit check failed: {_ehe}")
         # Overnight entry check — Phase 1 dry-run (8 PM – midnight ET only)
-        try:
-            _main._overnight_entry_check(tracker, risk, kelly, calendar)
-        except Exception as _oe:
-            logger.warning(f"Overnight entry check failed: {_oe}")
+        if not _kill_block_entries:
+            try:
+                _main._overnight_entry_check(tracker, risk, kelly, calendar)
+            except Exception as _oe:
+                logger.warning(f"Overnight entry check failed: {_oe}")
         # ── F6 Forever-6 STARTER — after-close accumulation on a market-wide dip (DARK) ──
         # Increment 1c: evaluate once we're past the close (_is_ah window). The manager enforces
         # per-day + per-month idempotency (durable state), the live catalyst screen, and cash-only
@@ -885,7 +889,9 @@ def run_cycle(
                     _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
                     _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
                     _f6_mgr     = ForeverHoldManager(_f6_bk)
-                    _f6_plan    = _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix)
+                    # Kill switch blocks the starter (a new buy); the trims below are exits and still run.
+                    _f6_plan    = ({} if _kill_block_entries
+                                   else _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix))
                     if _f6_plan.get("plan"):
                         _f6_res = _f6_mgr.execute_starter(_f6_plan["plan"], _f6_plan["budget"])
                         logger.warning(
@@ -1876,10 +1882,11 @@ def run_cycle(
     # confirmed exchange-level halt is exactly the situation where QHM entries should also
     # wait. No liquidation in either case — the actual close-all reflex stays
     # user-shutdown-only (see events/handlers.py:safe_close_all).
-    if _news_halt_block_entries or _venue_halt_block_entries:
+    if _news_halt_block_entries or _venue_halt_block_entries or _kill_block_entries:
         logger.critical(
-            "⛔ HALT — no new entries this cycle (existing positions managed "
-            "normally; no liquidation)."
+            "⛔ %s — no new entries this cycle (existing positions managed "
+            "normally; no liquidation).",
+            "KILL SWITCH" if _kill_block_entries else "HALT",
         )
         _touch_cycle_ts()
         return
