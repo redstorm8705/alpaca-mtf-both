@@ -46,7 +46,7 @@ fail-closed account read: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_con
 tests: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_p04a_fail_closed tests.test_p05_one_stop 2>&1 | tail -1'`→`OK`.
 Status: **deployed, unexercised** — verify: `ssh mtf-bot 'grep -c "account read failed\|Stop/target shifted to fill" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
 
-**⏩ EXACT NEXT ACTION:** P0-4b approval package for Rafael (risk-path — board + Gro + GAI first): a book-wide gross cap
+**⏩ EXACT NEXT ACTION:** P0-4b — BGGN aligned 4/4, AWAITING RAFAEL APPROVAL (decisions D1–D4 in `logs/design_records/p04b_limits_replay_2026-09-26.md`; verify: `grep -c "BGGN alignment" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`). Scope: a book-wide gross cap
 (core + day tier + QHM), enforcement of `MAX_OVERNIGHT_EXPOSURE_PCT`, and dynamic daily/drawdown limits (spec:
 `logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md` Q2; July–Sept equity replay required first) —
 verify: `grep -c "MAX_OVERNIGHT_EXPOSURE_PCT" config.py`→`1`.
