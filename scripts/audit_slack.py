@@ -8,8 +8,8 @@ Design locked 2026-07-01 (board + Rafael approval):
     AND a Critical finding exists, a one-line "🔴 CRITICAL: <name>" banner is
     prepended above the performance block (act-now beats look-at-numbers only when
     something is actually broken). [Wroblewski + Majors]
-  - 3-level severity only (🔴 Critical / 🟡 High / ✓ Low). No 🚨-spam.
-  - Low items shown inline only if <=2; otherwise collapsed to a count line. [N=2]
+  - 3-level severity only (🔴 Critical / 🟡 High / ✓ Low). No 🚨-spam. Low items are NOT shown on
+    the card (not actionable; logged + kept in the report files — Rafael 2026-09-25).
   - P&L is COMPUTED BY CODE from the authoritative Alpaca-FIFO source and INJECTED
     directly into the card. The audit LLM never restates a number; a deterministic
     validator (validate_no_pnl_rewrite) confirms no rogue dollar figure slipped in.
@@ -26,9 +26,11 @@ Design locked 2026-07-01 (board + Rafael approval):
     "clean"); a genuine ledger-flagged pnl_unreconciled → "reconciliation unresolved".
     (masked-loss + reliability seats: a self-check delta must never read as a real loss,
     and an unhealed file must never render as reconciled.)
-  - Footer: per-destination distribution confirmation (git / directives / Master
-    Brain), ✅ on success, ❌ on failure. [Majors confirm-delivery; Kim system-of-
-    record; Schneier durable audit trail]
+  - ACTIONABLE-ONLY (Rafael 2026-09-25: "actionable info only"; the report path is not a Slack
+    link, so it is not shown). The card carries the P&L block, the verdict and the critical/high
+    findings. Footer lines from callers are shown ONLY when they flag something to act on
+    (prefix ⚠️ / 🚨 / ❌ / 🔴); every other footer line and all low-severity findings are logged
+    (this module's logger → the cron log) and remain in the saved report files, not on the card.
 
 This module renders + posts only. Distribution wiring (git push / directives append
 / Master Brain) is provided by build_distribution_footer() consumers.
@@ -36,6 +38,7 @@ This module renders + posts only. Distribution wiring (git push / directives app
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import ssl
@@ -48,7 +51,12 @@ try:
 except Exception:
     _SSL_CTX = ssl.create_default_context()
 
-_LOW_INLINE_MAX = 2           # show Low items inline only if <= this many (board N=2)
+logger = logging.getLogger(__name__)
+
+# Footer lines shown on the card only if they start with one of these (they flag something to act
+# on). Everything else is logged, not displayed (Rafael 2026-09-25). The bare U+26A0 "⚠" matches
+# with or without the U+FE0F variation selector, so a warning line can never be hidden by encoding.
+_ACTIONABLE_PREFIXES = ("\u26a0", "🚨", "❌", "🔴")
 
 _SEV = {"critical": "🔴", "high": "🟡", "low": "✓"}
 
@@ -96,10 +104,9 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
             {"type": "mrkdwn", "text": f"*Closed today*\n{closed}"},
         ]
         if healed:
-            source = "Source: *Alpaca FIFO* (settled) · reconciled (healed)"
+            source = "Alpaca FIFO · reconciled"
         else:
-            source = ("Source: *Alpaca intraday* · _provisional — authoritative realized "
-                      "P&L finalizes in tonight's 8:30pm ET reconciliation heal_")
+            source = "Alpaca FIFO · _provisional until the 5:30 PM PT reconcile_"
     else:  # midday — REALIZED P&L SO FAR THIS SESSION (Rafael 2026-09-14: "see what has happened
            # so far this session" — not unrealized MTM, which now lives in the weekly recap).
         n_open = len(positions or [])
@@ -119,8 +126,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
                 {"type": "mrkdwn", "text": f"*Realized P&L (so far)*\n{_dollar(realized_today)}"},
                 {"type": "mrkdwn", "text": f"*Open positions*\n{n_open}"},
             ]
-            source = ("Source: *Alpaca FIFO* · _realized closed-trade P&L so far today · "
-                      "unrealized is in the weekly recap_")
+            source = "Alpaca FIFO · realized so far today"
         else:                                            # realized compute unavailable → fall back to MTM, labeled
             upl = 0.0
             for p in (positions or []):
@@ -133,8 +139,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
                 {"type": "mrkdwn", "text": f"*Unrealized P&L* _(realized-so-far unavailable)_\n{_dollar(upl)}"},
                 {"type": "mrkdwn", "text": f"*Open positions*\n{n_open}"},
             ]
-            source = ("Source: *Alpaca mark-to-market* · _fallback — realized-so-far compute "
-                      "unavailable this run_")
+            source = "Alpaca mark-to-market · _realized unavailable this run_"
 
     lifetime_fields = []
     if stats:
@@ -334,7 +339,7 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
 
     # PERFORMANCE FIRST
     blocks.append({"type": "section",
-                   "text": {"type": "mrkdwn", "text": f"*📊 Today — {date_str}*"},
+                   "text": {"type": "mrkdwn", "text": "*📊 Today*"},
                    "fields": pnl["today"]})
     blocks.append({"type": "context",
                    "elements": [{"type": "mrkdwn", "text": pnl["source_note"]}]})
@@ -344,12 +349,16 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
                        "fields": pnl["lifetime"]})
     blocks.append({"type": "divider"})
 
-    # VERDICT
-    v_emoji = {"PASS": "✅", "WARN": "🟡", "FAIL": "🔴"}.get(verdict.upper(), "•")
+    # VERDICT — one line, stated as what to do. A FAIL with nothing parsed to act on still says
+    # FAIL (never softened) and points at the log.
     n_act = len(crits) + len(highs)
-    tail = f"{n_act} item(s) to act on" if n_act else "no action needed"
-    blocks.append({"type": "section", "text": {"type": "mrkdwn",
-        "text": f"*Verdict: {v_emoji} {verdict.upper()}* — {tail}"}})
+    if n_act:
+        v_line = f"{'🔴' if crits else '🟡'} {n_act} to act on"
+    elif verdict.upper() == "FAIL":
+        v_line = "🔴 FAIL — check the audit log"
+    else:
+        v_line = "✅ Nothing to act on"
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{v_line}*"}})
     if context_line:
         blocks.append({"type": "context",
                        "elements": [{"type": "mrkdwn", "text": context_line}]})
@@ -361,23 +370,17 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
     for f in highs:
         blocks.append({"type": "section", "text": {"type": "mrkdwn",
             "text": f"*🟡 High*\n{_finding_line(f)}"}})
-    if lows:
-        if len(lows) <= _LOW_INLINE_MAX:
-            body = "\n".join(f"• {f.get('detail') or f.get('title')}" for f in lows)
-            blocks.append({"type": "section",
-                           "text": {"type": "mrkdwn", "text": f"*✓ Low*\n{body}"}})
-        else:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                "text": f"*✓ Low*\n{len(lows)} low-severity housekeeping items — see full report"}})
+    for f in lows:                                  # not actionable → logged only
+        logger.info("audit card (%s %s) low finding not shown: %s", mode, date_str,
+                    f.get("detail") or f.get("title"))
 
-    # DISTRIBUTION FOOTER
-    if dist_footer:
-        blocks.append({"type": "divider"})
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-            "text": "*📌 Logged & distributed*\n" + "\n".join(dist_footer)}})
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-        "text": "P&L computed by code from Alpaca FIFO (LLM never restates numbers) · "
-                "full narrative in the linked report"}]})
+    # FOOTER — actionable lines only; the rest is logged.
+    shown = [str(x) for x in (dist_footer or []) if str(x).lstrip().startswith(_ACTIONABLE_PREFIXES)]
+    for x in dist_footer or []:
+        if str(x) not in shown:
+            logger.info("audit card (%s %s) footer line not shown: %s", mode, date_str, x)
+    if shown:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(shown)}})
 
     fallback = (f"{label}{mode_word} Audit {date_str} — {verdict.upper()} — "
                 f"{len(crits)} critical, {len(highs)} high, {len(lows)} low")
