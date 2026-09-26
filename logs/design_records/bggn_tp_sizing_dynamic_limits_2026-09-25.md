@@ -87,3 +87,9 @@ All three approve the dynamic form (5/5). Each limit can only REDUCE exposure, n
 5. **P1:** score rebuild (closed bars, meta-labeling).
 6. **P1:** dynamic limits (a)–(c) after the equity replay.
 7. **Size-up:** only after the Q1 gate is met.
+
+## Decision (Rafael, 2026-09-25)
+Core swing strategy: **keep taking new entries and collect data** while entries are rebuilt (not paused).
+Exits and stop protection unchanged. Size-up stays gated per Q1.
+Process directive (same message): run a full self-audit of my own diff before sending it to any reviewer;
+reviewers should not be the ones finding my defects.
