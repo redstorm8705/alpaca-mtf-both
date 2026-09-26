@@ -27,8 +27,21 @@ Behaviour check — verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/py
 Status: **deployed, unexercised** — verify deployed: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`955d440 Merge pull request #395…`;
 unexercised: `ssh mtf-bot 'grep -c "exits still managed" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
 
-**⏩ EXACT NEXT ACTION:** P0-3 position-integrity check every RTH cycle (spec: `logs/design_records/bot_audit_2026-09-24.md`
-section F) — verify: `grep -c "P0-3" logs/design_records/bot_audit_2026-09-24.md`. (Plan item — not built.)
+**SHIPPED 2026-09-26 — P0-3 every-cycle broker-stop check (PR #397):** carried positions and
+positions with a stored broker stop id are now checked every RTH cycle. A missing stop is placed; a
+breached level is covered at the actual fill. Entry-day software-stop positions still wait for the
+pre-close sweep. Verify: `gh pr view 397 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`717e83e Merge pull request #397…`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def broker_stop_scope" execution/stop_protection.py'`→`1`.
+Behaviour check (placement, cover, scope) — verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_stop_protection 2>&1 | tail -1'`→`OK`.
+Deployed — verify: `ssh mtf-bot 'systemctl is-active mtf-bot'`→`active` and the `git log` line above. Status: **deployed, unexercised** (market closed) —
+verify: `ssh mtf-bot 'grep -c "cycle-check scope" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**⏩ EXACT NEXT ACTION:** P0-5 one stop for sizing + enforcement. The post-fill recompute drops the H2 scalar
+(`execution/entry_logic.py` — verify: `grep -n "atr_mult_override" execution/entry_logic.py`), and the
+after-hours GTC re-applies VIX widening (verify: `grep -c "_vix_mult_gtc" strategy/run_cycle.py`).
+Gro and GAI chose 1A (shift sized distances to the fill) + 2A (remove the second widening); the board
+seats are pending. (Plan item — not built.)
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76

@@ -11023,6 +11023,7 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Day-tier positions are outside the core tracker, so they are not covered by this reconciler (same as before).
 - `pending_replace` is included in `status=open` per Alpaca's documented semantics [hypothesis — not live-probed].
 - Add a `_move_stops`↔reconcile race integration test.
+- P0-3 shipped: PR #397 merged 717e83e, deployed to OCI (DEPLOY_OK). All 4 services active.
 
 ## 2026-09-26 — P0-5 one stop for sizing + enforcement (branch feat/p05-one-stop)
 **Full reads:**
