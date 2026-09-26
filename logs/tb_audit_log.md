@@ -10956,3 +10956,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - `_reconcile_pending_overnight_orders` now runs while tripped. It only promotes or cancels orders that were already placed, so it never opens anything new.
 - Two CRITICAL log lines fire per RTH cycle while tripped.
 - Self-audit miss (P0 #1): I did not run ruff with the CI 88-col limit on the new test file, so CI failed on E501. The fix was a formatting-only rewrap; a fresh cold-2nd review PASSED and confirmed the assertions are byte-identical; Gro+GAI APPROVE.
+- P0-1 spec fork (should breakeven/trailing moves be suppressed while tripped?): Gro A, GAI A, masked-loss seat APPROVE, so tightening keeps running. Design record addendum written. PR #395 merged 955d440 and deployed to OCI (DEPLOY_OK).

@@ -20,10 +20,15 @@ Status: **deployed, unexercised** (market closed since the deploy) — verify: `
 `gh pr view 391 --json state`→`MERGED`. Decision (Rafael): core swing keeps entering + collecting data — verify:
 `grep -c "keep taking new entries" logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md`→`1`.
 
-**⏩ EXACT NEXT ACTION:** P0 — kill switch must keep managing exits: in `strategy/run_cycle.py` the kill-switch branch
-`return`s (L241) before the check_exits calls (L987, L1694) — verify: `sed -n 232,241p strategy/run_cycle.py` and
-`grep -n "check_exits(" strategy/run_cycle.py`. (Plan item — not built.)
-Full ranked list: `logs/design_records/bot_audit_2026-09-24.md` section F — verify: `grep -c "P0-1" logs/design_records/bot_audit_2026-09-24.md`→`4`.
+**SHIPPED 2026-09-26 — P0-1 kill switch blocks entries only (PR #395):** exits, stop moves/placement and
+reconciliation keep running while tripped — verify: `gh pr view 395 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c _kill_block_entries strategy/run_cycle.py'`→`6`.
+Behaviour check — verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_run_cycle_kill_switch_exits 2>&1 | tail -1'`→`OK`.
+Status: **deployed, unexercised** — verify deployed: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`955d440 Merge pull request #395…`;
+unexercised: `ssh mtf-bot 'grep -c "exits still managed" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**⏩ EXACT NEXT ACTION:** P0-3 position-integrity check every RTH cycle (spec: `logs/design_records/bot_audit_2026-09-24.md`
+section F) — verify: `grep -c "P0-3" logs/design_records/bot_audit_2026-09-24.md`. (Plan item — not built.)
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
