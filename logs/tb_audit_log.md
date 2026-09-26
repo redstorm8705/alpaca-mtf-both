@@ -10911,3 +10911,15 @@ RC-1 PASS · RC-2 PASS · RC-3 PASS · RC-4 n/a (no exit recorded here) · RC-5 
 - 2026-09-25 SELF-FOUND (broker, PR #388 held): Alpaca's replace gives the new order an auto-generated (untagged) client_order_id unless sent (API reference) → every moved stop would lose its IN-/DT-/QH- owner tag (breaks tier attribution + ground-truth owners). Fix: replace_stop_order sends a fresh id with the SAME tier prefix (read from the prior order). Tests added; 116 OK on OCI.
 - 2026-09-25 lifecycle r3 (SELF-AUDIT before review, per Rafael): found + fixed a loosening path — with be_broker_pending set, a retry could pull a trail-ratcheted broker stop back down to breakeven (and random-offset retries could drift a moved stop down cents). Added NEVER-LOOSEN guard: a live stop already at/beyond target is left alone and counts as done. Tests: already-above, pending-after-trail, short mirror. 130 OK OCI.
 - 2026-09-25 DECISION (Rafael): core swing keeps entering + collecting data (no pause). PROCESS (Rafael): self-audit own diff before any review.
+
+### 2026-09-26 — P0 stop-replace increment 3: execution/exit_logic.py 10-point audit
+Full read complete: 2343 lines in 8 chunks (direct Read; an Explore read returned a summary and was rejected).
+Stop MOVES that still cancel-then-resubmit (verified):
+- Trail ratchet L407-594: cancel (get_order confirm on failure) → sleep 0.2s → poll qty_available ≤2s → resubmit DAY/GTC (default allow_cancel_blocking=True → cancel-all + one retry). DAY resubmit failure = logger.warning only.
+- BE promotion 0C L1502-1549: cancel_order result ignored → id cleared → submit_day_stop_order (default fallback); failure = logger.error only.
+- Profit tranche partial L708-981: cancel stops → partial_close → poll → resubmit for remainder; DAY failure = logger.error only.
+- Trail-phase partial L317-359: cancels stops, partial closes, sets new trail — NO stop re-submission for the remainder (remainder broker-unprotected until the trail price next moves).
+- Partial-close failure L1027-1036: first failure → cancel_open_orders_for_symbol (ALL orders incl. the protective stop) → remainder broker-unprotected until next cycle.
+Out of scope (exits, not moves): full-close paths cancel stops before close_position (hard stop/target/signal/overnight buffer/trail-hit close).
+Statics baseline clean (py_compile/ruff E,W,F,B/mypy). RC-1 PASS · RC-2 PASS · RC-3 PASS · RC-4 PASS (fills via _fetch_actual_fill_price) · RC-5 PASS (tracker atomic save) · RC-6 CHECK (Order.status/replaced_by via broker helpers) · RC-7 PASS (qty≥1 guards) · RC-8 n/a.
+- 2026-09-26 P0 inc 3 exit_logic: SELF-AUDIT before review found + fixed 7 own defects (rounding churn, wait-fail not escalated, final-tranche re-protect missing, oversized new stop w/o self-heal, BE path helper, final-tranche restore adding stops to software-only positions, sync retry not restoring qty). 20 new tests; full suite 532 on OCI: no new failures vs main (test-pollution import errors pre-existing, task filed).
