@@ -14,7 +14,7 @@ By exit reason:
 | **Overnight early exit (`overnight_atr_buffer_exit`)** | 32 | $343 | $10.71 |
 | Day-tier protective stop | 9 | $216 | $24 |
 
-The overnight early exit is the **largest identified leak**:
+The overnight early exit looked like the largest leak by the hindsight measure — SEE CORRECTION BELOW (it is net protective):
 - Rule: from 10:00 ET, a position 0.25–0.65 ATR below entry for 9 scans (~45 min) is closed. That is before the 1.25×ATR hard stop (`exit_logic.py` ~L1225-1370, `param_engine.get_be_buffer_mult`).
 - Average exit was about −0.45R.
 - 87.5% of these exits drifted favourably afterwards.
@@ -47,3 +47,28 @@ The P&L of +$16.31 and W/L 9/9 are arithmetically correct but not tier-correct.
   - "Other" (131) is uncategorised reasons: `external_close`, `overnight_atr_buffer_exit`, `safe_close_all`.
   - "Intraday hold 22h21m" trusts a stale overnight flag instead of dates.
   - Max DD $918.93 is from corrupted pnl; Alpaca's real max drawdown is $535.34.
+
+## CORRECTION — counterfactual replay of the overnight early exit (2026-09-26)
+**Sample:** 31 trades since 2026-06-01, all replayable. The alternative is to hold until the stored hard stop, the target, or 10 trading days (mark at close), with gap-through filled at the open.
+
+| | Actual (rule as-is) | Held instead |
+|---|---|---|
+| Total P&L | **−$283.81** | **−$457.33** |
+| Winners | 0 of 31 | 5 of 31 |
+| Hit the full hard stop | — | 17 |
+| Reached target | — | 0 |
+| 10-day time exit | — | 14 |
+| Worst single trade | — | −$56.50 (PANW) |
+
+**The rule is net PROTECTIVE:** it saved $173.52. The earlier hindsight "largest leak" label was WRONG. That +3-day best-price measure ignores that 55% of these trades went on to hit the full stop.
+
+**Sensitivities (not fully replayed; hypothesis only):**
+- Delaying the rule to 11:00 ET would affect 11 of 31.
+- Doubling the buffer would have suppressed 24 of 31 at the exit moment.
+
+**Implication:** the problem is the ENTRIES (0 of 31 reached target), not this exit. That supports the score-rebuild priority (P1) and not loosening the exit.
+
+**Assumptions:**
+- Stop checked before target within a shared bar.
+- Targets for RIVN/HOOD on 7/24 estimated at 2:1.
+- The TQQQ stop is flagged unreliable.
