@@ -1,0 +1,17 @@
+Nightly Gemini Audit — 2026-09-25
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+Modified files: ['nightly_audit.py', 'midday_audit.py', 'scripts/pnl_snapshot.py', 'reporting/broker_ground_truth.py']
+================================================================================
+
+(Gemini API error — all models failed: all Gemini ladder models failed (last: HTTP 503))
+================================================================================
+BROKER GROUND TRUTH (2026-09-25, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=day exposed=16m no-broker-stop=0m [08:10-08:10, 08:26-08:26] rejected_stop_orders=0
+  EWY    COVERED                  owners=day exposed=191m no-broker-stop=0m [09:28-09:28, 12:40-12:40] rejected_stop_orders=1
+  GEV    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  INTC   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:39] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:39] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:39] rejected_stop_orders=0
+  SOFI   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:39] rejected_stop_orders=0
+  SPY    SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=156m no-broker-stop=144m [10:23-12:48] rejected_stop_orders=0
