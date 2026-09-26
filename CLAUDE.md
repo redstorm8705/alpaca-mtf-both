@@ -89,6 +89,8 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 **Never suggest stopping (Rafael mandate 2026-07-09):** Do NOT tell Rafael to stop, pause, checkpoint, or "pick this up with fresh context," and do NOT recommend ending the session or ask "keep going or pause?". When he says continue/proceed, execute the next step and keep driving. A session that produced a lot of design/scoping is NOT a reason to wrap — find the highest-value thing that can be SHIPPED correctly through the gate this session and ship it. Manage context by offloading reads to subagents and writing durable docs, never by asking to stop. Only stop when Rafael says so.
 
+**CEO-level updates only (Rafael mandate 2026-09-26):** Rafael is the CEO — report at MAJOR milestones and checkpoints only: something shipped (what it changes, in plain English), a blocker or a decision that needs him, and the completed-work summary. Do NOT narrate process: reviewer rounds, a reviewer's false claim and the counter-prompt, test pass counts, marker/CI/merge mechanics, retries. Those live in `logs/tb_audit_log.md`, not in chat. The completed-work summary is sufficient. (The gates still run in full — this changes what is reported, not what is done.)
+
 ---
 
 ## PROFITABLE > PERFECT — NORTH-STAR GUIDING PRINCIPLE (Rafael mandate 2026-07-26)
