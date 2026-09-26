@@ -57,3 +57,11 @@ Voices: board sizing seat (Thorp/Taleb), board portfolio seat (Dalio/López de P
 - **D4:** adopt L = clamp(min(4.2%, 2σ₂₀, CVaR95), 2%, 5.6%) as specified. It blocks entries only, and caught 5 of 5 real losses with 0 false trips.
 
 **Routing:** risk-path (Rule E), so this needs Rafael's approval. Build order after approval: D1 → D4 → D3 → D2. Each ships as its own gated diff.
+
+## Rafael decision (2026-09-26)
+- **D3 (drawdown throttle): REJECTED.**
+- **D4 (early daily entry stop): REJECTED.**
+- Rationale: this is a paper account, and data collection is the #1 goal. The 7% daily kill switch stays the only brake, to be revisited at real-money conversion.
+- **D2 (overnight cap):** applies to SWING positions only. QHM and Forever-6 are excluded as intentional buy-and-hold positions, averaged on directional conviction.
+- **D1 (book-wide gross cap):** awaiting Rafael's confirmation of scope. The open question is whether QHM and F6 are also excluded from it.
+- New CLAUDE.md rule: "THIS IS A PAPER TRADING ACCOUNT".

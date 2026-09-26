@@ -95,6 +95,33 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 
 ---
 
+## THIS IS A PAPER TRADING ACCOUNT — THE FRAME FOR EVERY DECISION (Rafael mandate 2026-09-26)
+
+**Every recommendation, design, board/Gro/GAI prompt, and line of risk logic starts from this frame:**
+- This is a **PAPER** account. The goal is **$2.5K → $25K**.
+- Until real money, the #1 objective is **DATA COLLECTION AND EDGE EVALUATION**. The bot trades **every day**.
+- The **only daily risk brake is the 7% daily kill switch**, which halts NEW ENTRIES only.
+- **No** multi-day drawdown halts and **no** early "stop entering today" loss limits; revisit both at the real-money conversion.
+- Any NEW limit that would stop the bot trading for extended periods to protect paper capital must justify itself against the data-collection goal and needs Rafael's approval.
+- Existing structural entry gates are unchanged (score floor, sector and correlation caps, exposure caps, Architecture Invariants #9–#11).
+- **Buy-and-hold tiers are excluded from the SWING exposure limits (e.g. the P0-4b overnight cap).** They are bought on purpose and averaged up or down on directional conviction.
+  - QHM is the quarterly-hold tier, `execution/quarterly_hold_manager.py`.
+  - Forever-6 (F6) is the never-sell accumulation tier: `execution/forever_hold_manager.py`, `config.FOREVER6_*`.
+  - This scopes NEW swing limits only. It does not change Architecture Invariants #10/#11, which change only by board vote.
+
+**How to apply:**
+- Every BGGN prompt opens with this frame. A conservative ruling must justify itself against data collection and the $25K goal, not against capital preservation.
+- Weeds-level options that do not move data collection, edge evaluation, or the $25K goal are not brought to Rafael. Lead with the forest, not the trees.
+
+**Unchanged (the safety envelope, not a brake on trading):**
+- stops on every position;
+- never-mask-a-loss;
+- `paper=True`;
+- the data-source tiers;
+- the full code-correctness gate.
+
+**Why:** On 2026-09-26 a 4/4-aligned proposal recommended a 15% drawdown throttle and an early daily entry stop. Both would have stopped the bot collecting data on a paper account. Rafael rejected both and said, "we're missing the forest from the trees." The reviewers had reasoned from generic risk practice instead of this account's purpose.
+
 ## PROFITABLE > PERFECT — NORTH-STAR GUIDING PRINCIPLE (Rafael mandate 2026-07-26)
 
 This is a paper-money account in an aggressive growth phase ($2.5K → $25K). The governing bias
