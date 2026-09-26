@@ -647,47 +647,12 @@ def run_cycle(
                             )
                 except Exception as _gpe:
                     logger.warning(f"[{_gsym}] AH GTC: price fetch failed — using ATR stop. {_gpe}")
-                # VIX-adjusted overnight GTC stop widening — mirrors risk_manager.py RTH logic.
-                # Only widens when stop is at a loss vs entry; skips breakeven/profit stops.
-                _gstop_at_be     = (_gstop_price == _gentry)
-                _gstop_in_profit = ((_gdir == "long"  and _gstop_price > _gentry) or
-                                    (_gdir == "short" and _gstop_price < _gentry))
-                if not _gstop_at_be and not _gstop_in_profit:
-                    try:
-                        import yfinance as _yf_gtc  # type: ignore[import-untyped]
-                        _vix_gtc = float(
-                            _yf_gtc.Ticker("^VIX").fast_info.get("lastPrice") or
-                            _yf_gtc.Ticker("^VIX").history(period="1d")["Close"].iloc[-1]
-                        )
-                        # AWP audit fix (2026-06-28): this block's own comment
-                        # claims parity with risk_manager.py's RTH VIX-widening
-                        # logic, but risk_manager.py switched from this exact
-                        # discrete step function to a continuous curve on
-                        # 2026-06-24 (commit 7e5c983, board 4-0 + Gro + GAI) —
-                        # this AH mirror was never updated, so the parity claim
-                        # was false (e.g. VIX=27 got 1.5x here vs ~1.7x RTH).
-                        # Restored to the same formula. Board (BoD tie-break
-                        # 4-0 after a 2-2 domain split) + Gro + GAI all
-                        # independently confirmed this as a genuine bug
-                        # requiring a fix, not an intentional design choice.
-                        _vix_mult_gtc = min(
-                            1.0 + max(0.0, _vix_gtc - 20.0) * 0.1, 2.0
-                        )
-                        if _vix_mult_gtc > 1.0:
-                            _gdist_gtc   = abs(_gentry - _gstop_price)
-                            _gstop_price = (
-                                round(_gentry - _gdist_gtc * _vix_mult_gtc, 2) if _gdir == "long"
-                                else round(_gentry + _gdist_gtc * _vix_mult_gtc, 2)
-                            )
-                            logger.info(
-                                f"[{_gsym}] AH GTC: VIX={_vix_gtc:.1f} → stop widened "
-                                f"{_vix_mult_gtc:.1f}x to ${_gstop_price:.2f}"
-                            )
-                    except Exception as _vix_gtc_err:
-                        logger.warning(
-                            f"[{_gsym}] AH GTC: VIX fetch failed — ATR stop unchanged. "
-                            f"{_vix_gtc_err}"
-                        )
+                # P0-5 (2026-09-26, board 2/2 + Gro + GAI, option 2A): NO second VIX widening here.
+                # The stored stop (trail_stop or stop) already carries the entry-time H2/VIX widening
+                # the position was SIZED on; re-multiplying its distance by the current VIX curve
+                # (removed) doubled it (VIX 30: 2.0x sized -> 4.0x overnight) and could even widen a
+                # loss-side trail stop. The overnight GTC rests at the stored level, or breakeven per
+                # the 0.5R rule above — never wider than the sized risk.
                 # Fix B (Apr 14 2026): Verify Alpaca holds this position before submitting
                 # the AH GTC stop.  If the position was closed during RTH but the tracker
                 # wasn't updated in-cycle, the AH loop would fire a phantom stop order

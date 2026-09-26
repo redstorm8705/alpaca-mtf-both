@@ -11023,3 +11023,50 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Day-tier positions are outside the core tracker, so they are not covered by this reconciler (same as before).
 - `pending_replace` is included in `status=open` per Alpaca's documented semantics [hypothesis — not live-probed].
 - Add a `_move_stops`↔reconcile race integration test.
+
+## 2026-09-26 — P0-5 one stop for sizing + enforcement (branch feat/p05-one-stop)
+**Full reads:**
+- `execution/entry_logic.py`: 2022 lines in 3 chunks.
+- `strategy/run_cycle.py`: AH GTC block (full file read earlier this session).
+- `risk_manager.get_stop_and_target`: L696-830.
+
+**Findings (verified at source + prod log):**
+- (a) The post-fill recompute (`entry_logic` ~L1561) called `get_stop_and_target(fill_price, ...)` WITHOUT `atr_mult_override`, so the H2 scalar was replaced by the VIX curve. The enforced stop distance differed from the sized `stop_distance`. The prod log has 19 "Stop/target recalculated from fill".
+- (b) The AH GTC block (`run_cycle` ~L650) re-multiplied the stored stop's distance from entry by the current VIX curve. The stored stop already included the entry-time H2/VIX widening, so the widening was applied twice (VIX 30 → 4.0x). It also applied to loss-side trail stops. The prod log has 10 "AH GTC: VIX=… stop widened" (e.g. SMCI 2026-07-30).
+
+**Fork:** Q1 1A (shift the sized distances to the fill) and Q2 2A (remove the second widening). Vote 4/4: board sizing seat, board execution seat, Gro, GAI. Execution seat caveat adopted: the news adjustment is NOT re-applied.
+
+**Fix:**
+- New `_shift_sized_levels()` helper, called on a >0.05% fill gap. The stop rounds toward the fill, so it is never wider than sized. It returns None on degenerate input and keeps the pre-fill levels, with a warning.
+- Removed the AH VIX re-widening block, including its yfinance import.
+
+**Risk-path screen:**
+- Size 0 / frequency 0 / concurrency 0.
+- Stops only move to the sized distance (1A) or tighter than before (2A).
+- 1A can make a stop WIDER than today's recompute when H2 > VIX curve, but never wider than the risk the shares were sized on.
+
+**10-pt audit:**
+- (1) Statics are clean.
+- (2) Trade path: enforced stop == sized stop distance. The overnight GTC rests at the stored level or breakeven.
+- (3) Degenerate input: the helper returns None.
+- (5) Callers: the helper has one call site. `get_stop_and_target` now has only the pre-sizing call.
+- (6) `risk_manager` is unchanged.
+- (7) The dead VIX block is removed.
+- (9) The yfinance ^VIX T4 call is removed from the AH GTC block.
+- (10) Log text updated.
+
+**RC checks:** RC-1 through RC-8 PASS. RC-7: no sizing change.
+
+**Tests:** `tests/test_p05_one_stop.py`, 8 tests. They pass on the new code and error on the old code.
+**Gate (P0-5):**
+- Cold-2nd: PASS.
+- Masked-loss seat: APPROVE.
+- Gro + GAI preship: APPROVE on all 3 files.
+- Adversarial: PASS.
+  - Measured NET 2026-07-24: sized stop distance $26.25 vs enforced $17.50 via the old recompute.
+  - SMCI 2026-07-29/30: a double widening was confirmed.
+  - `exit_logic` trail/BE and `stop_protection._intended_stop` do not re-derive a stop from a formula, so no third instance exists.
+
+**Follow-ups (non-blocking):**
+- (a) Overnight VIX-spike awareness is removed, so stops are now tighter, not wider. A size-aware design (for example, re-sizing or flattening on a VIX regime jump) is a roadmap item.
+- (b) Add a `_shift_sized_levels` floor for a sub-cent `stop_distance` (unrealistic at a real ATR).

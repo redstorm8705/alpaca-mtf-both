@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -270,6 +271,27 @@ def _check_portfolio_correlation(
             return True
         logger.debug("[%s] correlation gate: rho=%.2f with %s (threshold=%.2f)", symbol, rho, open_sym, threshold)
     return False
+
+
+def _shift_sized_levels(direction: str, fill_price: float, entry_price: float,
+                        stop_distance: float, target: float) -> "tuple[float, float] | None":
+    """P0-5 (2026-09-26, board 2/2 + Gro + GAI, option 1A): move the SIZED stop/target distances
+    from the pre-fill estimate to the actual fill. The share count was sized on stop_distance (the
+    final H2/VIX-widened, news-adjusted distance), so enforcing the same distance keeps the enforced
+    risk equal to the sized risk. The stop rounds to the cent TOWARD the fill (never wider than
+    sized). Returns None (caller keeps the pre-fill levels) on a non-positive input or result."""
+    if stop_distance <= 0 or fill_price <= 0 or entry_price <= 0 or direction not in ("long", "short"):
+        return None
+    tgt_dist = abs(target - entry_price)
+    if direction == "long":
+        new_stop   = math.ceil(round((fill_price - stop_distance) * 100, 6)) / 100
+        new_target = round(fill_price + tgt_dist, 2)
+    else:
+        new_stop   = math.floor(round((fill_price + stop_distance) * 100, 6)) / 100
+        new_target = round(fill_price - tgt_dist, 2)
+    if new_stop <= 0 or new_target <= 0:
+        return None
+    return new_stop, new_target
 
 
 def execute_entries(
@@ -1558,19 +1580,28 @@ def execute_entries(
                             f"(estimate ${entry_price:.2f}, gap={gap_pct:.2f}%, "
                             f"attempt {_fp_attempt + 1}/3)"
                         )
-                        # Recalculate stop/target from actual fill if gap is material (>0.05%)
+                        # P0-5 (2026-09-26, board 2/2 + Gro + GAI, option 1A): on a material fill
+                        # gap (>0.05%) SHIFT the sized distances to the fill instead of recomputing.
+                        # `stop_distance` is the final (H2/VIX-widened, news-adjusted) distance the
+                        # share count was sized on; a recompute dropped the H2 scalar and so enforced
+                        # a different risk than was sized. The news adjustment is already inside
+                        # stop_distance — it is NOT applied again. The stop is rounded toward the fill
+                        # (never wider than sized).
                         if gap_pct > 0.05:
-                            stop, target = risk.get_stop_and_target(
-                                fill_price, direction, trade_mode,
-                                atr_value=atr_value, symbol=symbol,
-                                rvol_20d=rvol_20d, vix=vix,
-                                spy_ath_dist_pct=_spy_ath_pct,
-                            )
-                            stop = risk.get_news_adjusted_stop(stop, fill_price, direction, news_size_mult)
-                            logger.info(
-                                f"[{symbol}] Stop/target recalculated from fill: "
-                                f"stop=${stop:.2f} target=${target:.2f}"
-                            )
+                            _shifted = _shift_sized_levels(direction, fill_price, entry_price,
+                                                           stop_distance, target)
+                            if _shifted is not None:
+                                stop, target = _shifted
+                                logger.info(
+                                    f"[{symbol}] Stop/target shifted to fill (sized distances kept): "
+                                    f"stop=${stop:.2f} target=${target:.2f} "
+                                    f"(stop dist ${stop_distance:.2f})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[{symbol}] Could not shift stop/target to fill ${fill_price:.2f} — "
+                                    f"keeping pre-fill levels stop=${stop:.2f} target=${target:.2f}."
+                                )
                         break  # got a valid fill — stop polling
                 else:
                     logger.warning(
