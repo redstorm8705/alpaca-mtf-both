@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-25 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-26 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,30 +8,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-25, interactive Rafael present) — pick up here
+## ⏩ LATEST (2026-09-26, interactive Rafael present) — pick up here
 
-**SHIPPED 2026-09-25:** (1) midday audit stop coverage from broker ground truth — replaces the un-nested
-open-orders check that produced the false 09-23/09-24 "NAKED" alarms (PR #386; replays of those days give no alarm; old check removed — verify: `ssh mtf-bot 'cd
-/home/ubuntu/mtf-bot && grep -c "def check_naked_stops" midday_audit.py'`→`0`) — verify: `gh pr view 386 --json state`→`MERGED`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot &&
-grep -c "def held_symbols" midday_audit.py'`→`1`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`9afc48c Merge
-pull request #386…`. Status: **deployed,
-unexercised** until the next 13:30 ET midday run — verify: `ssh mtf-bot 'grep -c "broker stop check=" /home/ubuntu/mtf-bot/logs/midday_audit_cron.log'`→`0` as of 2026-09-25 pre-market (no run of the new code yet).
-(2) hourly Slack P&L card labels the core tier "Swing" (Rafael retired the word "intraday" in user-facing text;
-internal tier key unchanged) — PR #385 — verify: `gh pr view 385 --json state`→`MERGED`; `ssh mtf-bot 'cd
-/home/ubuntu/mtf-bot && grep -c "\"intraday\": \"Swing\"" scripts/pnl_snapshot.py'`→`2`.
-Review history + follow-ups: `logs/tb_audit_log.md` 2026-09-24/25 entries.
+**SHIPPED 2026-09-25/26 — P0 stop race (Rafael approved):** the MRI breakeven push and the exit_logic
+stop moves (trail ratchet, break-even promotion, tranche + trail-phase partials) now use Alpaca replace — verify:
+`grep -c replace_stop_order execution/lifecycle.py`→`3`, `grep -c cancel_order execution/lifecycle.py`→`0`. Broker helpers PR #388, MRI breakeven push PR #389, exit_logic moves PR #392 — verify:
+`gh pr view 392 --json state`→`MERGED`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`bc6feec Merge pull
+request #392…`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def _move_stops" execution/exit_logic.py'`→`1`.
+Status: **deployed, unexercised** (market closed since the deploy) — verify: `ssh mtf-bot 'grep -c "moved in place"
+/home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26. Also PR #391 (Slack audit card actionable-only) — verify:
+`gh pr view 391 --json state`→`MERGED`. Decision (Rafael): core swing keeps entering + collecting data — verify:
+`grep -c "keep taking new entries" logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md`→`1`.
 
-**DESIGN RECORDS (docs only, nothing enabled):** bot audit `logs/design_records/bot_audit_2026-09-24.md` and the
-take-profit / sizing / risk-limit / stop-race record `logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md` —
-verify: `git ls-files logs/design_records | grep -c "bot_audit_2026-09-24\|bggn_tp_sizing"`→`2`.
-
-**⏩ EXACT NEXT ACTION:** P0 — stop replacement via Alpaca replace (PATCH) + cancel-status state machine + per-cycle
-stop-coverage invariant (risk-path; full patch sequence; files `execution/lifecycle.py`, `execution/broker.py`) — this
-is a PLAN, not built. Why: the BE-push resubmit failure only logs — verify: `grep -c "Set manual stop in Alpaca"
-execution/lifecycle.py`→`1`; plan source — verify: `grep -c "PATCH /v2/orders" logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md`→`1`.
-THEN P0 kill switch keeps managing exits (`strategy/run_cycle.py`); audit-prompt tier briefing (meta-audit
-`auto_ai_audit.py`, nightly, midday — day tier is test-and-learn on its own indicators); remaining user-facing
-"intraday" strings (alerts.py tier tag, risk_manager kill message, run_cycle size log, audit_slack source line).
+**⏩ EXACT NEXT ACTION:** P0 — kill switch must keep managing exits: in `strategy/run_cycle.py` the kill-switch branch
+`return`s (L241) before the check_exits calls (L987, L1694) — verify: `sed -n 232,241p strategy/run_cycle.py` and
+`grep -n "check_exits(" strategy/run_cycle.py`. (Plan item — not built.)
+Full ranked list: `logs/design_records/bot_audit_2026-09-24.md` section F — verify: `grep -c "P0-1" logs/design_records/bot_audit_2026-09-24.md`→`4`.
 
 **CHATGPT/CODEX PARALLEL COMPLETION (signed 2026-09-20 12:39 PT):** PR #358 merged the
 research-only canonical April-forward Core MTF entry intake. The real source-bound run admits 76
