@@ -276,12 +276,32 @@ def _recently_placed(symbol: str, side: str, stop_px: float, now_mono: float) ->
     return ts is not None and (now_mono - ts) < _PLACEMENT_TTL_SEC
 
 
+# Stored broker-stop id fields on a tracker trade (DAY, GTC, legacy GTC). A position with any of
+# these set has held a broker stop, so a missing stop is a lapse, not the entry-day design.
+_BROKER_STOP_ID_KEYS = ("rth_day_stop_order_id", "gtc_stop_order_id", "_gtc_stop_order_id")
+
+
+def broker_stop_scope(open_trades: dict) -> set:
+    """Symbols the design says must ALREADY hold a broker stop during RTH (P0-3, board 2/2 + Gro +
+    GAI option B, 2026-09-26): carried overnight positions, or any position with a stored broker
+    stop id. Entry-day core positions protected by the software stop are NOT in scope — the full
+    pre-close sweep covers them. Never raises (a malformed trade is simply out of scope)."""
+    scope = set()
+    for sym, t in (open_trades or {}).items():
+        if not isinstance(t, dict):
+            continue
+        if t.get("overnight") or any(t.get(k) for k in _BROKER_STOP_ID_KEYS):
+            scope.add(sym)
+    return scope
+
+
 def reconcile_protection(
     tracker,
     risk=None,
     *,
     session: str,
     place: bool = True,
+    only_symbols: set | None = None,
 ) -> dict:
     """Ensure every open intraday position has a live protective stop — the single enforcer.
 
@@ -294,6 +314,10 @@ def reconcile_protection(
       risk    : RiskManager | None (register_close on a cover)
       session : "rth" | "ah" | "premarket" | "closed" — selects DAY vs GTC stop tif
       place   : when False, DETECT + report only (shadow mode) — submits nothing
+      only_symbols : when given, evaluate ONLY these tracker symbols (the every-cycle RTH check
+                     passes the positions the design says must hold a broker stop — carried
+                     overnight or with a stored broker stop id; entry-day software-stop positions
+                     wait for the full pre-close sweep). None = every tracker position.
     """
     summary: dict = {
         "session": session,
@@ -310,6 +334,7 @@ def reconcile_protection(
         # rate of this bucket IS the measurement of get_open_orders visibility lag — the exact
         # evidence the shadow-mode run needs before placement is enabled anywhere.
         "broker_held": [],
+        "not_in_scope": [],  # skipped by only_symbols (not evaluated this sweep)
     }
     if session not in _VALID_SESSIONS:
         # Unknown session → default to GTC (a stop that lasts too long is far safer than one
@@ -376,7 +401,10 @@ def reconcile_protection(
     open_symbols = set()
 
     for symbol, trade in list(getattr(tracker, "open_trades", {}).items()):
-        open_symbols.add(symbol)
+        open_symbols.add(symbol)   # before the scope filter: keeps its guard/throttle state
+        if only_symbols is not None and symbol not in only_symbols:
+            summary["not_in_scope"].append(symbol)
+            continue
         try:
             if str(trade.get("status", "")).lower() not in ("open", ""):
                 continue
@@ -620,8 +648,9 @@ def reconcile_protection(
     # `if _n_act:`, so a fully-healthy sweep left NO trace — making "wired and everything is
     # protected" indistinguishable from "silently not wired at all". For a module that spent
     # weeks deployed-but-inert, that is the one state we cannot afford to be unable to observe.
-    logger.info("STOP-PROTECT [%s]: protected %d | broker-held %d | placed %d | covered %d | "
+    logger.info("STOP-PROTECT [%s%s]: protected %d | broker-held %d | placed %d | covered %d | "
                 "paged %d | skipped %d | qhm-excl %d | f6-excl %d | @ %s ET", session,
+                "" if only_symbols is None else f" scoped, {len(summary['not_in_scope'])} out of scope",
                 len(summary["already_protected"]), len(summary["broker_held"]),
                 len(summary["placed"]), len(summary["covered"]), len(summary["paged"]),
                 len(summary["skipped"]), len(summary["excluded_qhm"]),

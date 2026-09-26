@@ -10957,3 +10957,69 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Two CRITICAL log lines fire per RTH cycle while tripped.
 - Self-audit miss (P0 #1): I did not run ruff with the CI 88-col limit on the new test file, so CI failed on E501. The fix was a formatting-only rewrap; a fresh cold-2nd review PASSED and confirmed the assertions are byte-identical; Gro+GAI APPROVE.
 - P0-1 spec fork (should breakeven/trailing moves be suppressed while tripped?): Gro A, GAI A, masked-loss seat APPROVE, so tightening keeps running. Design record addendum written. PR #395 merged 955d440 and deployed to OCI (DEPLOY_OK).
+
+## 2026-09-26 — P0-3 every-cycle broker-stop check (branch feat/p03-cycle-stop-coverage)
+**Full reads:**
+- `execution/stop_protection.py`: 676 lines, in 2 chunks.
+- `tests/test_stop_protection.py`: 619 lines, in 3 chunks.
+- `strategy/run_cycle.py`: 2185 lines, read earlier this session and re-verified around the sweep block.
+- Also read `gtc_manager.submit_rth_day_stops` and `exit_logic._move_stops`.
+
+**Finding (verified at source + prod log):**
+- `reconcile_protection` ran only in the final 15 min before close.
+- The prod log since 2026-07-19 shows 38 fires and 19 "placed MISSING".
+- A carried position whose broker stop lapses mid-day (UBER short, about 204 min) had no broker stop until the sweep.
+- Design record (`broker_ground_truth` header): entry-day core positions are software-stop BY DESIGN until the sweep.
+
+**Fork (A all / B designated / C page-only):** B, 4/4. Board execution seat B, board reliability seat B, Gro B, GAI B.
+
+**Fix:**
+- `broker_stop_scope(open_trades)` returns carried-overnight positions plus any with a stored broker stop id.
+- `reconcile_protection(..., only_symbols=)` takes a scoped set. Out-of-scope symbols are counted and their guard/throttle state is kept.
+- `run_cycle` calls it every RTH cycle before the pre-close window, after `check_exits` and fill recon.
+- The full pre-close sweep is unchanged.
+
+**10-pt audit:**
+- (1) Statics are clean on all 3 files.
+- (2) Trade path: only places protective DAY stops or covers breached-naked positions. Never cancels. Size/frequency/concurrency are all 0.
+- (3) Adversarial cases:
+  - API None fails safe, as before.
+  - An empty scope makes no call.
+  - A malformed trade is out of scope.
+- (4) Full reads done.
+- (5) The only caller is `run_cycle`. The new kwarg defaults to None, so the pre-close call is unchanged.
+- (6) Same-cycle duplicate with `gtc_manager` or `exit_logic` stops:
+  - Alpaca rejects a second reducing stop with 40310000 on BOTH sides. Prod evidence: UBER short 2026-09-18, "insufficient qty available… held_for_orders 2".
+  - With `allow_cancel_blocking=False` this maps to `PROTECTION_ALREADY_HELD`, so no double stop is placed.
+- (7) No dead code.
+- (8) No new I/O. The existing `rth_day_stop_order_id` write-back is reused.
+- (9) T1 via `broker` only.
+- (10) The heartbeat line now shows the cycle-check counts.
+
+**RC checks:**
+- RC-1 through RC-3, RC-5, RC-7 and RC-8: PASS.
+- RC-4: PASS. A cover books the actual fill, as before.
+- RC-6: PASS, no new fields.
+
+**Self-audit notes:**
+- A stale stored GTC id plus a newly placed DAY id triggers exit_logic's existing one-time "two stops stored" warning. This is informative, so I left it.
+- Two extra account-wide REST fetches per RTH cycle, and only when the scope is non-empty.
+
+**Tests:** 6 new tests in `tests/test_stop_protection.py` (`BrokerStopScope`); 52/52 pass.
+**Gate (P0-3):**
+- Cold-2nd: PASS.
+- Masked-loss seat: APPROVE.
+- Log evidence: 19 "placed MISSING" in `mtf_bot.log`.
+- Gro + GAI preship: APPROVE on all 3 files.
+- Adversarial: PASS, with the claim corrections below.
+
+**Corrected claims:**
+- UBER 2026-09-18 had no broker stop for 204 min (14:05 → 17:29 UTC). A coincidental restart closed the gap by re-running `submit_rth_day_stops`. Without that restart, it would have stayed unprotected until the ~19:45 UTC pre-close sweep, about 5.5 h.
+- That incident's specific cause (cancel-then-resubmit) was fixed by PR #388/#389/#392. P0-3 is defense-in-depth for any other lapse.
+- The UBER log line proves only that Alpaca returns 40310000 for a second reducing stop on a SHORT. It does not prove the ALREADY_HELD mapping. That mapping is the `allow_cancel_blocking=False` → `broker._hold_state` code path, verified by code read, not by prod evidence.
+
+**Follow-ups (non-blocking, pre-existing):**
+- `get_open_orders` fetches only one 50-order page. It is now called every RTH cycle whenever the scope is non-empty.
+- Day-tier positions are outside the core tracker, so they are not covered by this reconciler (same as before).
+- `pending_replace` is included in `status=open` per Alpaca's documented semantics [hypothesis — not live-probed].
+- Add a `_move_stops`↔reconcile race integration test.

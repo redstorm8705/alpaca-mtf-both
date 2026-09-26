@@ -1741,7 +1741,24 @@ def run_cycle(
         elif _pc_mins_to_close <= 0:
             _pc_state = "passed"
         else:
-            _pc_state = "not-yet"
+            # P0-3 (board 2/2 + Gro + GAI, option B, 2026-09-26): before the full pre-close
+            # sweep, check EVERY cycle the positions the design says must already hold a broker
+            # stop — carried overnight, or with a stored broker stop id (so a gap is a lapse).
+            # Entry-day software-stop positions are left to the full sweep above. Same additive,
+            # never-cancel reconciler; runs after check_exits + fill recon like the sweep.
+            from execution.stop_protection import broker_stop_scope, reconcile_protection
+            _p03_scope = broker_stop_scope(tracker.open_trades)
+            if _p03_scope:
+                _p03_sum = reconcile_protection(tracker, risk, session="rth", place=True,
+                                                only_symbols=_p03_scope)
+                _pc_state = (
+                    f"not-yet; cycle-check scope={len(_p03_scope)}: "
+                    f"protected={len(_p03_sum['already_protected'])} "
+                    f"placed={len(_p03_sum['placed'])} covered={len(_p03_sum['covered'])} "
+                    f"paged={len(_p03_sum['paged'])} skipped={len(_p03_sum['skipped'])}"
+                )
+            else:
+                _pc_state = "not-yet; cycle-check scope=0"
         logger.info(
             "PRECLOSE-SWEEP: %s (%.1f min to real close)",
             _pc_state, _pc_mins_to_close if _pc_mins_to_close is not None else -1.0,
