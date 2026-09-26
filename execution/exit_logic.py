@@ -32,13 +32,18 @@ from alerts import alert_exit, alert_partial, alert_stop_breach, alert_gtc_faile
 from data.alpaca_data import get_latest_trade
 from data.fetcher import fetch_bars
 from execution.broker import (
+    PROTECTION_ALREADY_HELD,
+    PROTECTION_UNKNOWN,
     cancel_order,
-    cancel_open_orders_for_symbol,
+    cancel_stop_confirmed,
     close_position,
+    get_open_orders,
     get_open_position,
     get_order,
     get_trading_client,
     partial_close_position,
+    replace_stop_order,
+    resolve_live_order,
     submit_day_stop_order,
     submit_gtc_stop_order,
     submit_limit_order,
@@ -64,6 +69,203 @@ if TYPE_CHECKING:
 
 ET = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
+
+
+# ─── STOP MOVES IN PLACE (P0 2026-09-25, increment 3) ───────────────────────
+# A stop is MOVED (price) or RESIZED (qty) with one Alpaca replace — never cancel-then-resubmit
+# (UBER 2026-09-18: the cancel is async, the resubmit hit 40310000, 204 min with no broker stop).
+# Design record: logs/design_records/p0_stop_replace_2026-09-25.md.
+_STOP_KEYS = ("rth_day_stop_order_id", "gtc_stop_order_id")
+_STOP_TERMINAL = frozenset(("canceled", "expired", "done_for_day", "rejected"))
+_STOP_NOT_YET = frozenset(("pending_replace", "pending_cancel", "pending_new", "accepted"))
+_STOP_REPLACEABLE = frozenset(("new", "held", "partially_filled"))
+_both_stops_warned: set = set()   # symbols already paged for the DAY+GTC anomaly (this process)
+
+
+def _order_status(order) -> str:
+    _s = getattr(order, "status", "")
+    return str(getattr(_s, "value", _s)).lower()
+
+
+def _move_stops(symbol: str, trade: dict, tracker, new_px: "float | None",
+                qty: "int | None", direction: str) -> str:
+    """Move (new_px) and/or resize (qty) every stored live protective stop IN PLACE.
+    new_px None keeps each stop's price; qty None keeps its size. A price move never LOOSENS a
+    stop already at/beyond new_px. Returns:
+      "moved"   every live stored stop now carries the request (or already did)
+      "none"    no stop in force for this trade (none stored, or all stored ids terminal)
+      "filled"  a stored stop has FILLED — the position is closing; the exit path books it
+      "retry"   a stop cannot be replaced right now (pending_*/accepted) or the replace was
+                refused — the OLD stop is still in force; try again next cycle
+      "unknown" a stored stop could not be read / ended in an unexpected status — protection
+                unverified (never reported as protected)
+    Never cancels. Saves the tracker after any id change."""
+    stored = [(k, str(trade.get(k))) for k in _STOP_KEYS if trade.get(k)]
+    if not stored:
+        return "none"
+    if len(stored) == 2 and symbol not in _both_stops_warned:
+        # design record item #12: a DAY and a GTC stop both stored is an anomaly — page once
+        _both_stops_warned.add(symbol)
+        logger.error(f"[{symbol}] ANOMALY: both a DAY and a GTC stop id are stored — each live one is "
+                     f"moved; reconcile which should exist.")
+        try:
+            from alerts import send_slack
+            send_slack(f":warning: [{symbol}] two broker stops stored (DAY + GTC) — both kept in sync; "
+                       f"check Alpaca for a duplicate stop.")
+        except Exception as _bw_e:
+            logger.error(f"[{symbol}] both-stops anomaly alert failed: {_bw_e}")
+    live = []
+    changed = False
+    for key, oid in stored:
+        order, live_id = resolve_live_order(oid)
+        if order is None:
+            return "unknown"
+        st = _order_status(order)
+        if st == "filled":
+            return "filled"
+        if st in _STOP_TERMINAL:
+            logger.warning(f"[{symbol}] stored {key} {live_id} is {st} — not in force; cleared.")
+            trade[key] = None
+            changed = True
+            continue
+        if st in _STOP_NOT_YET:
+            return "retry"
+        if st not in _STOP_REPLACEABLE:
+            return "unknown"
+        if trade.get(key) != live_id:
+            trade[key] = live_id          # the order actually in force (replaced_by followed)
+            changed = True
+        live.append((key, live_id, order))
+    if not live:
+        if changed:
+            tracker._save_log()
+        return "none"
+    result = "moved"
+    for key, live_id, order in live:
+        try:
+            cur_px = float(getattr(order, "stop_price", None) or 0.0)
+            cur_qty = int(float(getattr(order, "qty", None) or 0))
+        except (TypeError, ValueError):
+            cur_px, cur_qty = 0.0, 0
+        px = round(cur_px if new_px is None else new_px, 2)
+        if new_px is not None and cur_px > 0 and (
+                (direction == "long" and cur_px >= new_px) or (direction == "short" and cur_px <= new_px)):
+            px = cur_px                   # never loosen — keep the tighter live price
+        if px <= 0:
+            result = "unknown"
+            break
+        if px == cur_px and (qty is None or qty == cur_qty):
+            continue                      # already carries the request
+        new = replace_stop_order(symbol, live_id, px, qty=qty)
+        if new is None:
+            result = "retry"
+            break
+        trade[key] = str(getattr(new, "id", ""))
+        trade["broker_stop_px"] = px
+        changed = True
+    if changed:
+        tracker._save_log()
+    return result
+
+
+def _capped_qty(symbol: str, trade: dict, direction: str) -> "int | None":
+    """This trade's remaining shares, capped by the live Alpaca position on the SAME side (never
+    another tier's co-held lot). None when the position cannot be read or is on the other side."""
+    try:
+        tier_q = int(float(trade.get("qty_remaining", trade.get("qty", 0)) or 0))
+    except (TypeError, ValueError):
+        return None
+    try:
+        pos = get_open_position(symbol)
+    except Exception:
+        return None
+    if pos is None:
+        return 0
+    try:
+        _pq = float(pos.qty)
+    except (TypeError, ValueError):
+        return None
+    _pside = str(getattr(getattr(pos, "side", ""), "value", getattr(pos, "side", ""))).lower()
+    if (_pside or ("short" if _pq < 0 else "long")) != direction:
+        return None
+    return min(tier_q, int(abs(_pq)))
+
+
+def _wait_shares_free(symbol: str, want: int, max_wait_s: float = 2.0) -> bool:
+    """After a stop RESIZE, Alpaca holds the larger of the old/new order until the replace
+    completes. Poll qty_available (bounded, 0.25 s steps) until `want` shares are free, so the
+    partial close never hits 40310000 (whose broker fallback would cancel ALL orders, the stop
+    included). True when free; False on timeout / unreadable / position gone."""
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        try:
+            pos = get_open_position(symbol)
+        except Exception as _e:
+            logger.warning(f"[{symbol}] shares-free check failed: {_e}")
+            return False
+        if pos is None:
+            return False
+        _qa = getattr(pos, "qty_available", None)
+        if _qa is None:
+            return False
+        try:
+            avail = int(float(_qa))
+        except (TypeError, ValueError):
+            return False
+        if abs(avail) >= want:
+            return True
+        if time.monotonic() >= deadline:
+            logger.warning(f"[{symbol}] only {avail} share(s) free after {max_wait_s}s (want {want}).")
+            return False
+        time.sleep(0.25)
+
+
+def _submit_new_stop(symbol: str, trade: dict, tracker, px: float, qty: int, direction: str,
+                     mri, stop_type: str, force_day: bool = False) -> bool:
+    """No stop in force for this trade → place one WITHOUT the broker's cancel-blocking fallback
+    (never cancels another order). DAY intraday / GTC overnight (force_day → always DAY). Size is
+    min(this trade's shares, the live position on the SAME side) — a co-held lot of another tier
+    is never swept in, and an oversized stop is never sent (the no-cancel path has no qty
+    self-heal). True when a stop is in place, a live reducing stop already holds the shares
+    (PROTECTION_ALREADY_HELD), or no position is left to protect."""
+    qty = int(qty)
+    try:
+        pos = get_open_position(symbol)
+    except Exception as _pe:
+        pos = None
+        logger.warning(f"[{symbol}] stop sizing: position read failed ({_pe}) — using tracker qty {qty}")
+    else:
+        if pos is None:
+            return True                   # nothing left to protect — the exit path owns it
+        try:
+            _pq = float(pos.qty)
+            _pside = str(getattr(getattr(pos, "side", ""), "value", getattr(pos, "side", ""))).lower()
+            if (_pside or ("short" if _pq < 0 else "long")) == direction:
+                qty = min(qty, int(abs(_pq)))
+        except (TypeError, ValueError):
+            pass
+    if qty < 1:
+        return True
+    side = "sell" if direction == "long" else "buy"
+    overnight = bool(trade.get("overnight")) and not force_day
+    submit = submit_gtc_stop_order if overnight else submit_day_stop_order
+    order = submit(symbol=symbol, qty=qty, side=side, stop_price=px, allow_cancel_blocking=False)
+    if order is PROTECTION_ALREADY_HELD:
+        logger.warning(f"[{symbol}] stop not placed — a live reducing stop already holds the shares.")
+        return True
+    if order is PROTECTION_UNKNOWN or order is None:
+        return False
+    oid = str(getattr(order, "id", ""))
+    if overnight:
+        tracker.set_gtc_stop_order_id(symbol, oid)
+    else:
+        trade["rth_day_stop_order_id"] = oid
+        tracker._save_log()
+    trade["broker_stop_px"] = px
+    _log_trade_event("stop_promotion", symbol=symbol, price=px, size=qty,
+                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
+                     data_source="alpaca_data", stop_type=stop_type)
+    return True
 
 
 # ─── TRADE QUALITY INDEX ─────────────────────────────────────────────────────
@@ -322,14 +524,16 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                         if qty_rem > 1 else 0
                     )
                     if _qty_to_adv >= 1:
-                        for _skey in ("rth_day_stop_order_id", "gtc_stop_order_id"):
-                            _soid = trade.get(_skey)
-                            if _soid:
-                                cancel_order(_soid)
-                                trade[_skey] = None
-                        time.sleep(0.1)
+                        # P0 inc 3: SHRINK the broker stop to the shares that remain instead of
+                        # cancelling it — the remainder stays protected through the partial.
+                        _tph_pre = _move_stops(symbol, trade, tracker, None, qty_rem - _qty_to_adv, direction)
+                        _tph_shrunk = _tph_pre == "moved" and any(trade.get(k) for k in _STOP_KEYS)
+                        _tph_ok = False
                         _tph_ts = time.time()
-                        _tph_ok = partial_close_position(symbol, _qty_to_adv)
+                        if _tph_pre in ("moved", "none") and (
+                                not _tph_shrunk or _wait_shares_free(symbol, _qty_to_adv)):
+                            _tph_ts = time.time()
+                            _tph_ok = partial_close_position(symbol, _qty_to_adv)
                         if _tph_ok:
                             _tph_fill = _fetch_actual_fill_price(
                                 symbol, trade, poll_secs=0.3, submitted_after=_tph_ts
@@ -350,6 +554,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                             )
                             trade["trail_stop"] = _new_ph_trail
                             tracker._save_log()
+                            # Re-protect the remainder at the new trail (previously NOT re-placed).
+                            _tph_rp = _move_stops(symbol, trade, tracker, _new_ph_trail, None, direction)
+                            if _tph_rp == "none" and trade["qty_remaining"] >= 1:
+                                if not _submit_new_stop(symbol, trade, tracker, _new_ph_trail,
+                                                        trade["qty_remaining"], direction, mri, "trail_phase"):
+                                    trade["_stop_sync_pending"] = True
+                            elif _tph_rp in ("retry", "unknown"):
+                                trade["_stop_sync_pending"] = True
                             logger.info(
                                 f"[{symbol}] Trail phase {_trail_phase} hit @ ${current_price:.2f} "
                                 f"— partial {_qty_to_adv}sh @ ${_tph_fill:.2f} P&L ${_tph_pnl:.2f}, "
@@ -359,9 +571,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                             continue
                         else:
                             logger.warning(
-                                f"[{symbol}] Trail phase {_trail_phase} partial close FAILED "
-                                f"({_qty_to_adv}sh) — falling through to full close. "
-                                f"GTC stop already cancelled. Verify Alpaca."
+                                f"[{symbol}] Trail phase {_trail_phase} partial close not done "
+                                f"({_qty_to_adv}sh, stop resize={_tph_pre}) — falling through to full close."
                             )
                 logger.info(
                     f"[{symbol}] Trail stop hit @ ${current_price:.2f} "
@@ -404,194 +615,45 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 )
                 continue
 
-            # Not hit — ratchet if trail price moved.
+            # Not hit — ratchet if trail price moved (or an earlier broker move is still pending).
             _old_trail_px = trail_stop
             tracker.update_trail_stop(symbol, new_trail)
             _cur_trail_px = trade.get("trail_stop")
 
-            if _cur_trail_px != _old_trail_px and _cur_trail_px is not None:
-                # Robust cancel block (ported from partial exit CRITICAL-1 fix).
-                _tr_cancel_ok = True
-                for _skey in ("rth_day_stop_order_id", "gtc_stop_order_id"):
-                    _soid = trade.get(_skey)
-                    if _soid:
-                        if not cancel_order(_soid):
-                            try:
-                                _ord_status = get_order(_soid)
-                                _gone = _ord_status is None or getattr(
-                                    _ord_status, "status", ""
-                                ) in ("canceled", "filled", "expired", "done_for_day")
-                            except Exception as _ve:
-                                logger.error(
-                                    f"[{symbol}] Cannot verify {_skey} {_soid} status "
-                                    f"after cancel failure — {_ve}. Skipping trail resubmit."
-                                )
-                                _tr_cancel_ok = False
-                                break
-                            if _gone:
-                                logger.warning(
-                                    f"[{symbol}] cancel_order({_soid}) returned False "
-                                    f"but order confirmed gone. Clearing ID."
-                                )
-                                trade[_skey] = None
-                            else:
-                                logger.error(
-                                    f"[{symbol}] {_skey} {_soid} still live after "
-                                    f"cancel failure — skipping trail ratchet resubmit."
-                                )
-                                _tr_cancel_ok = False
-                                break
-                        else:
-                            trade[_skey] = None
-                            logger.info(
-                                f"[{symbol}] {_skey} {_soid} cancelled for trail ratchet."
-                            )
-                if not _tr_cancel_ok:
-                    continue
-
-                time.sleep(0.2)  # allow cancel propagation before resubmit
-
-                _qty_left = trade.get("qty_remaining", trade.get("qty", 0))
-                _stop_side = "sell" if direction == "long" else "buy"
-                if _qty_left >= 1:
-                    # Poll for held_for_orders to clear (ported from partial exit logic).
-                    _tr_avail = 0
-                    _tr_submit = True
-                    _pos_tr = None
-                    for _thp in range(5):  # max 2.0s wall-clock (4 × 0.5s sleeps)
-                        _pos_tr = get_open_position(symbol)
-                        if _pos_tr is None:
-                            _tr_submit = False
-                            break
-                        _tr_qty_avail = getattr(_pos_tr, "qty_available", None)
-                        if _tr_qty_avail is None:
-                            _tr_submit = False
-                            break
-                        _tr_avail = int(float(_tr_qty_avail))
-                        if _tr_avail >= _qty_left:
-                            break
-                        logger.debug(
-                            "[%s] trail ratchet held_for_orders poll %d/5: avail=%d want=%d",
-                            symbol, _thp + 1, _tr_avail, _qty_left,
-                        )
-                        if _thp < 4:
-                            time.sleep(0.5)
+            if _cur_trail_px is not None and (
+                    _cur_trail_px != _old_trail_px or trade.get("_stop_sync_pending")):
+                # P0 inc 3: move the broker stop IN PLACE (never cancel-then-resubmit).
+                _qty_left = int(trade.get("qty_remaining", trade.get("qty", 0)) or 0)
+                _res = _move_stops(symbol, trade, tracker, _cur_trail_px, None, direction)
+                if _res == "moved":
+                    trade.pop("_stop_sync_pending", None)
+                    _log_trade_event(
+                        "stop_promotion", symbol=symbol, price=_cur_trail_px,
+                        size=_qty_left, score=trade.get("score", 0),
+                        mri_level=mri.level() if mri else "NORMAL",
+                        data_source="alpaca_data", stop_type="trail_ratchet_replace",
+                    )
+                    logger.info(f"[{symbol}] Trail ratchet → broker stop moved in place to ${_cur_trail_px:.2f}")
+                elif _res == "none" and _qty_left >= 1:
+                    if _submit_new_stop(symbol, trade, tracker, _cur_trail_px, _qty_left, direction,
+                                        mri, "trail_ratchet_new"):
+                        trade.pop("_stop_sync_pending", None)
                     else:
-                        logger.warning(
-                            "[%s] trail ratchet held_for_orders not released after 2.5s "
-                            "(avail=%d want=%d) — submitting anyway",
-                            symbol, _tr_avail, _qty_left,
-                        )
-                        try:
-                            alert_gtc_failed(
-                                symbol=symbol, side=_stop_side, stop_px=_cur_trail_px,
-                                reason=(
-                                    f"trail ratchet held_for_orders persisted >2.5s "
-                                    f"(avail={_tr_avail} want={_qty_left})"
-                                ),
-                            )
-                        except Exception as _tr_hf_e:
-                            logger.error(
-                                "[%s] trail ratchet held_for_orders alert failed: %s",
-                                symbol, _tr_hf_e,
-                            )
-
-                    # Alpaca qty clamp (downward only — upward mismatch = stale bot state).
-                    if _tr_submit and _pos_tr is not None:
-                        _tr_alpaca_qty = int(float(getattr(_pos_tr, "qty", 0)))
-                        if _tr_alpaca_qty < _qty_left:
-                            logger.error(
-                                "[%s] trail ratchet qty mismatch: bot=%d Alpaca=%d — clamping",
-                                symbol, _qty_left, _tr_alpaca_qty,
-                            )
-                            _qty_left = _tr_alpaca_qty
-                            trade["qty_remaining"] = _qty_left
-                            tracker._save_log()
-                        elif _tr_alpaca_qty > _qty_left:
-                            logger.warning(
-                                "[%s] trail ratchet qty mismatch: bot=%d Alpaca=%d (Alpaca higher)"
-                                " — not clamping",
-                                symbol, _qty_left, _tr_alpaca_qty,
-                            )
-                        if _qty_left < 1:
-                            _tr_submit = False
-                            logger.info(
-                                "[%s] trail ratchet: Alpaca qty clamped to 0 "
-                                "— skipping stop resubmit (position effectively closed)",
-                                symbol,
-                            )
-
-                    # BVR-1 core fix: GTC/DAY mutual exclusion.
-                    # overnight=True → GTC stop (persists through close).
-                    # overnight=False → DAY stop (expires at close).
-                    # datetime.now(ET).hour >= 16 is dead code during RTH (BoD ruling).
-                    if _tr_submit:
+                        trade["_stop_sync_pending"] = True
+                        logger.warning(f"[{symbol}] Trail ratchet: new broker stop @ ${_cur_trail_px:.2f} "
+                                       f"not placed — software trail still enforced; retry next scan.")
                         if trade.get("overnight"):
-                            logger.debug(
-                                "[%s] trail ratchet overnight=True → GTC stop", symbol
-                            )
-                            _tr_gtc = submit_gtc_stop_order(
-                                symbol=symbol, qty=_qty_left,
-                                side=_stop_side, stop_price=_cur_trail_px,
-                            )
-                            if _tr_gtc:
-                                tracker.set_gtc_stop_order_id(symbol, str(_tr_gtc.id))  # type: ignore[attr-defined]
-                                _log_trade_event(
-                                    "stop_promotion", symbol=symbol, price=_cur_trail_px,
-                                    size=_qty_left, score=trade.get("score", 0),
-                                    mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data",
-                                    stop_type="trail_ratchet_gtc",
-                                )
-                                logger.info(
-                                    f"[{symbol}] Trail ratchet → GTC stop updated: "
-                                    f"{_qty_left}sh @ ${_cur_trail_px:.2f} | {_tr_gtc.id}"  # type: ignore[attr-defined]
-                                )
-                            else:
-                                logger.critical(
-                                    f"[{symbol}] Trail ratchet GTC resubmit FAILED — "
-                                    f"overnight {_qty_left}sh has no exchange-level stop."
-                                )
-                                try:
-                                    alert_gtc_failed(
-                                        symbol=symbol, side=_stop_side,
-                                        stop_px=_cur_trail_px,
-                                        reason=(
-                                            "trail ratchet GTC resubmit failed "
-                                            "— overnight position unprotected"
-                                        ),
-                                    )
-                                except Exception as _tga_e:
-                                    logger.error(
-                                        f"[{symbol}] Trail ratchet GTC orphan alert failed: {_tga_e}"
-                                    )
-                        else:
-                            logger.debug(
-                                "[%s] trail ratchet overnight=False → DAY stop", symbol
-                            )
-                            _tr_ord = submit_day_stop_order(
-                                symbol=symbol, qty=_qty_left,
-                                side=_stop_side, stop_price=_cur_trail_px,
-                            )
-                            if _tr_ord:
-                                trade["rth_day_stop_order_id"] = str(_tr_ord.id)  # type: ignore[attr-defined]
-                                tracker._save_log()  # persist DAY stop ID immediately (Data Integrity Item 5)
-                                _log_trade_event(
-                                    "stop_promotion", symbol=symbol, price=_cur_trail_px,
-                                    size=_qty_left, score=trade.get("score", 0),
-                                    mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data",
-                                    stop_type="trail_ratchet_day",
-                                )
-                                logger.info(
-                                    f"[{symbol}] Trail ratchet → DAY stop updated: "
-                                    f"{_qty_left}sh @ ${_cur_trail_px:.2f} | {_tr_ord.id}"  # type: ignore[attr-defined]
-                                )
-                            else:
-                                logger.warning(
-                                    f"[{symbol}] Trail ratchet DAY stop re-submit FAILED "
-                                    f"— {_qty_left}sh unprotected at exchange level."
-                                )
+                            try:
+                                alert_gtc_failed(symbol=symbol, side="sell" if direction == "long" else "buy",
+                                                 stop_px=_cur_trail_px,
+                                                 reason="trail ratchet GTC stop not placed — overnight position")
+                            except Exception as _tga_e:
+                                logger.error(f"[{symbol}] Trail ratchet GTC alert failed: {_tga_e}")
+                elif _res in ("retry", "unknown"):
+                    trade["_stop_sync_pending"] = True
+                    logger.warning(f"[{symbol}] Trail ratchet: broker stop not moved ({_res}) — old stop "
+                                   f"kept; retry next scan.")
+                tracker._save_log()
             # Trail stop active but not hit — fall through to tranche check below
 
         # ── Skip if partial exits disabled or no target to compute levels ─────
@@ -705,55 +767,41 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 tracker._save_log()
                 break
 
-            # CRITICAL-1 fix: cancel any live DAY/GTC stop before partial close.
-            # Alpaca holds shares for open stop orders (held_for_orders) and returns
-            # 40310000 if a second sell order tries to move those same shares.
-            # Cancel the stop first, close the partial, then re-protect the remainder.
-            _gtc_cancel_ok = True
-            for _skey in ("rth_day_stop_order_id", "gtc_stop_order_id"):
-                _soid = trade.get(_skey)
-                if _soid:
-                    if not cancel_order(_soid):
-                        try:
-                            _ord_status = get_order(_soid)
-                            _gone = _ord_status is None or getattr(
-                                _ord_status, "status", ""
-                            ) in ("canceled", "filled", "expired", "done_for_day")
-                        except Exception as _ve:
-                            logger.error(
-                                f"[{symbol}] Cannot verify {_skey} {_soid} status "
-                                f"after cancel failure — {_ve}. "
-                                f"Failing closed to avoid naked position."
-                            )
-                            _gtc_cancel_ok = False
-                            break
-                        if _gone:
-                            logger.warning(
-                                f"[{symbol}] cancel_order({_soid}) returned False "
-                                f"but order confirmed gone "
-                                f"({getattr(_ord_status, 'status', 'None')}). "
-                                f"Clearing ID."
-                            )
+            # P0 inc 3 (replaces the CRITICAL-1 cancel): SHRINK the broker stop to the shares that
+            # will remain, so the tranche's shares are freed while the rest stay protected
+            # throughout. Final tranche (nothing remains) → the stop is cancelled and CONFIRMED gone.
+            _rem_after = qty_rem - qty_to_cls
+            _shrunk = False
+            _pc_blocked = False
+            _fin_cancelled = False
+            if _rem_after >= 1:
+                _pre = _move_stops(symbol, trade, tracker, None, _rem_after, direction)
+                if _pre in ("filled", "retry", "unknown"):
+                    logger.warning(f"[{symbol}] T{t_idx + 1} partial deferred — broker stop not resized "
+                                   f"({_pre}); old stop kept.")
+                    break
+                _shrunk = _pre == "moved" and any(trade.get(k) for k in _STOP_KEYS)
+                if _shrunk and not _wait_shares_free(symbol, qty_to_cls):
+                    _pc_blocked = True        # handled by the failure path below (restore + escalate)
+            else:
+                _fin_ok = True
+                for _skey in _STOP_KEYS:
+                    _soid = trade.get(_skey)
+                    if _soid:
+                        if cancel_stop_confirmed(symbol, str(_soid)):
                             trade[_skey] = None
+                            _fin_cancelled = True
                         else:
-                            logger.error(
-                                f"[{symbol}] {_skey} {_soid} still live after "
-                                f"cancel failure — skipping tranche to avoid "
-                                f"40310000 / naked position."
-                            )
-                            _gtc_cancel_ok = False
+                            _fin_ok = False
                             break
-                    else:
-                        trade[_skey] = None
-                        logger.info(
-                            f"[{symbol}] {_skey} {_soid} cancelled before "
-                            f"partial close."
-                        )
-            if not _gtc_cancel_ok:
-                break
+                if not _fin_ok:
+                    if _fin_cancelled:
+                        trade["_stop_sync_pending"] = True    # one stop gone, one not — reconcile next cycle
+                    logger.warning(f"[{symbol}] final tranche deferred — stop cancel not confirmed.")
+                    break
 
             _pc_ts = time.time()
-            success = partial_close_position(symbol, qty_to_cls)
+            success = (not _pc_blocked) and partial_close_position(symbol, qty_to_cls)
             if success:
                 # FIX: Fetch actual fill price for partial close to ensure P&L accuracy
                 fill_price = _fetch_actual_fill_price(symbol, trade, poll_secs=0.3, submitted_after=_pc_ts)
@@ -803,13 +851,9 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     )
                     tracker.update_trail_stop(symbol, trail_stop)
 
-                # Re-protect remaining shares after partial fill.
-                # GAI Q9: DAY and GTC stops lock the same shares — submit only one.
-                # If overnight → GTC only (persists through close).
-                # If intraday → DAY only (expires at close).
-                # Submitting both causes DAY to lock qty_available=0 so GTC always fails.
-                # DS audit finding: never fall back to qty_orig — stale after restart.
-                # If qty_remaining is missing, query Alpaca directly.
+                # Re-protect remaining shares: move the (already resized) stop IN PLACE to the new
+                # level; place one only if none is in force. Never cancel-then-resubmit (P0 inc 3).
+                # DS audit finding kept: never fall back to qty_orig — recover from Alpaca if missing.
                 _new_rem = trade.get("qty_remaining")
                 if _new_rem is None:
                     _pos_fallback = get_open_position(symbol)
@@ -821,164 +865,55 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                             "[%s] qty_remaining missing after partial — recovered from Alpaca: %d",
                             symbol, _new_rem,
                         )
-                    else:
-                        logger.warning(
-                            "[%s] qty_remaining missing and Alpaca confirms position closed"
-                            " — skipping stop re-submission",
-                            symbol,
-                        )
                 _stop_px = trade.get("trail_stop") or trade.get("stop")
                 if _stop_px and _new_rem >= 1:
-                    # Poll for held_for_orders to clear after cancel + partial fill.
-                    # Cancel propagation and fill settlement leave shares held;
-                    # immediate stop submission fails with error 40310000.
-                    # _submit_stop=False only when position closed or qty_available missing.
-                    _avail = 0
-                    _submit_stop = True
-                    for _hp in range(5):  # max 2.5s wall-clock
-                        _pos_hf = get_open_position(symbol)
-                        if _pos_hf is None:
-                            _submit_stop = False  # position closed concurrently — skip stop
-                            break
-                        _qty_avail = getattr(_pos_hf, "qty_available", None)
-                        if _qty_avail is None:
-                            logger.warning(
-                                "[%s] Position missing qty_available field — skipping stop",
-                                symbol,
-                            )
-                            _submit_stop = False  # unknown state — skip to avoid 40310000
-                            break
-                        _avail = int(float(_qty_avail))
-                        if _avail >= _new_rem:
-                            break  # poll cleared — proceed with submit
-                        logger.debug(
-                            "[%s] held_for_orders poll %d/5: avail=%d want=%d",
-                            symbol, _hp + 1, _avail, _new_rem,
+                    _rp = _move_stops(symbol, trade, tracker, _stop_px, None, direction)
+                    if _rp == "moved":
+                        trade.pop("_stop_sync_pending", None)
+                        _log_trade_event(
+                            "stop_promotion", symbol=symbol, price=_stop_px, size=_new_rem,
+                            score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
+                            data_source="alpaca_data",
+                            stop_type="breakeven_replace" if t_idx == 0 else "trail_replace",
                         )
-                        if _hp < 4:
-                            time.sleep(0.5)
-                    else:
-                        # Loop exhausted without clearing — submit anyway per board decision.
-                        logger.warning(
-                            "[%s] held_for_orders not released after 2.5s "
-                            "(avail=%d want=%d) — submitting stop anyway",
-                            symbol, _avail, _new_rem,
-                        )
+                        logger.info(f"[{symbol}] broker stop moved in place after T{t_idx + 1} partial: "
+                                    f"{_new_rem}sh @ ${_stop_px:.2f}")
+                    elif _rp == "none":
                         try:
-                            alert_gtc_failed(
-                                symbol=symbol,
-                                side="sell" if direction == "long" else "buy",
-                                stop_px=_stop_px,
-                                reason=(
-                                    f"held_for_orders persisted >2.5s "
-                                    f"(avail={_avail} want={_new_rem})"
-                                ),
-                            )
-                        except Exception as _hf_alert_e:
-                            logger.error(
-                                "[%s] held_for_orders alert failed: %s",
-                                symbol, _hf_alert_e,
-                            )
-                        # _submit_stop remains True — submit despite timeout
-
-                    # Clamp _new_rem to Alpaca actual qty — prevents requesting > existing_qty
-                    # when trade state is stale after a restart (DS audit: root cause of PANW failure).
-                    if _submit_stop and _pos_hf is not None:
-                        _alpaca_qty = int(float(getattr(_pos_hf, "qty", 0)))
-                        if _alpaca_qty < _new_rem:
-                            # Alpaca has fewer shares than bot tracks — clamp downward.
-                            # Root cause of PANW failure: stale qty_remaining after restart.
-                            logger.error(
-                                "[%s] qty mismatch: bot=%d Alpaca=%d — clamping to Alpaca value",
-                                symbol, _new_rem, _alpaca_qty,
-                            )
-                            _new_rem = _alpaca_qty
-                            trade["qty_remaining"] = _new_rem
-                            tracker._save_log()
-                        elif _alpaca_qty > _new_rem:
-                            # Alpaca shows more shares than bot tracks — possible reconciliation
-                            # error; do not clamp upward as bot state is authoritative for tranches.
-                            logger.warning(
-                                "[%s] qty mismatch: bot=%d Alpaca=%d (Alpaca higher) "
-                                "— not clamping; possible reconciliation error",
-                                symbol, _new_rem, _alpaca_qty,
-                            )
-                        if _new_rem < 1:
-                            _submit_stop = False
-                            logger.info(
-                                "[%s] Alpaca confirms position fully closed — skipping stop re-submission",
-                                symbol,
-                            )
-
-                    _stop_side = "sell" if direction == "long" else "buy"
-                    if _submit_stop:
-                        if trade.get("overnight"):
-                            # Overnight: GTC stop persists through close.
-                            _new_gtc = submit_gtc_stop_order(
-                                symbol=symbol, qty=_new_rem,
-                                side=_stop_side, stop_price=_stop_px,
-                            )
-                            if _new_gtc:
-                                tracker.set_gtc_stop_order_id(symbol, str(_new_gtc.id))  # type: ignore[attr-defined]
-                                _log_trade_event(
-                                    "stop_promotion", symbol=symbol, price=_stop_px, size=_new_rem,
-                                    score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data",
-                                    stop_type="gtc_resubmit_after_partial",
-                                )
-                                logger.info(
-                                    f"[{symbol}] GTC stop re-submitted after T{t_idx + 1} partial: "
-                                    f"{_new_rem}sh @ ${_stop_px:.2f} | order {_new_gtc.id}"  # type: ignore[attr-defined]
-                                )
-                            else:
-                                logger.critical(
-                                    f"[{symbol}] GTC stop FAILED to re-submit after T{t_idx + 1} partial "
-                                    f"— overnight position {_new_rem}sh has NO exchange-level stop. "
-                                    f"Manual action required."
-                                )
+                            _pos_q = get_open_position(symbol)
+                            if _pos_q is not None and int(float(_pos_q.qty)) < _new_rem:
+                                logger.error("[%s] qty mismatch: bot=%d Alpaca=%s — clamping to Alpaca value",
+                                             symbol, _new_rem, _pos_q.qty)
+                                _new_rem = abs(int(float(_pos_q.qty)))
+                                trade["qty_remaining"] = _new_rem
+                                tracker._save_log()
+                        except Exception as _pq_e:
+                            logger.warning(f"[{symbol}] post-partial position read failed: {_pq_e}")
+                        if _new_rem >= 1 and not _submit_new_stop(
+                                symbol, trade, tracker, _stop_px, _new_rem, direction, mri,
+                                "breakeven" if t_idx == 0 else "trail"):
+                            trade["_stop_sync_pending"] = True
+                            if trade.get("overnight"):
+                                logger.critical(f"[{symbol}] GTC stop NOT placed after T{t_idx + 1} partial — "
+                                                f"overnight {_new_rem}sh without a broker stop.")
                                 _log_trade_event(
                                     "gtc_stop_orphaned", symbol=symbol, price=0.0, size=_new_rem,
                                     score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data",
-                                    stop_price=_stop_px,
+                                    data_source="alpaca_data", stop_price=_stop_px,
                                 )
                                 try:
-                                    alert_gtc_failed(
-                                        symbol=symbol, side=_stop_side, stop_px=_stop_px,
-                                        reason=f"re-submit failed after T{t_idx + 1} partial — overnight position unprotected",
-                                    )
+                                    alert_gtc_failed(symbol=symbol, side="sell" if direction == "long" else "buy",
+                                                     stop_px=_stop_px,
+                                                     reason=f"stop not placed after T{t_idx + 1} partial — overnight position")
                                 except Exception as _gtc_alert_e:
                                     logger.error(f"[{symbol}] GTC orphan alert failed: {_gtc_alert_e}")
-                        else:
-                            # Intraday: DAY stop expires at close.
-                            _new_day_ord = submit_day_stop_order(
-                                symbol=symbol, qty=_new_rem,
-                                side=_stop_side, stop_price=_stop_px,
-                            )
-                            if _new_day_ord:
-                                trade["rth_day_stop_order_id"] = str(_new_day_ord.id)  # type: ignore[attr-defined]
-                                tracker._save_log()  # persist DAY stop ID immediately (Data Integrity Item 5)
-                                _log_trade_event(
-                                    "stop_promotion", symbol=symbol, price=_stop_px, size=_new_rem,
-                                    score=trade.get("score", 0), mri_level=mri.level() if mri else "NORMAL",
-                                    data_source="alpaca_data",
-                                    stop_type="breakeven" if t_idx == 0 else "trail",
-                                )
-                                logger.info(
-                                    f"[{symbol}] DAY stop re-submitted after T{t_idx + 1} partial: "
-                                    f"{_new_rem} shares @ ${_stop_px:.2f} | order {_new_day_ord.id}"  # type: ignore[attr-defined]
-                                )
                             else:
-                                logger.error(
-                                    f"[{symbol}] DAY stop re-submission FAILED after T{t_idx + 1} partial "
-                                    f"— {_new_rem} shares unprotected. Set manual stop in Alpaca."
-                                )
-                    else:
-                        logger.warning(
-                            "[%s] Skipping stop re-submission — position closed or "
-                            "qty_available unavailable (avail=%d want=%d).",
-                            symbol, _avail, _new_rem,
-                        )
+                                logger.error(f"[{symbol}] DAY stop not placed after T{t_idx + 1} partial — "
+                                             f"software stop enforced; retry next cycle.")
+                    elif _rp in ("retry", "unknown"):
+                        trade["_stop_sync_pending"] = True
+                        logger.warning(f"[{symbol}] broker stop not moved after T{t_idx + 1} partial ({_rp}) — "
+                                       f"it still covers the remaining shares at its old level; retry next cycle.")
 
                 # C-13: Report partial P&L to kill switch so tranche losses
                 # count toward daily loss limit — not just final close P&L.
@@ -1017,20 +952,49 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     trade["qty_remaining"] = qty_rem
                 tranche_lvl = t_idx + 1
             else:
-                # Partial close failed — track consecutive failures and alert
+                # Partial close failed (or its shares never freed) — restore the resized stop to the
+                # full position FIRST (P0 inc 3: never leave the tranche's shares without a broker stop).
+                if _rem_after < 1 and _fin_cancelled and not any(trade.get(k) for k in _STOP_KEYS):
+                    _fin_px = trade.get("trail_stop") or trade.get("stop")
+                    if _fin_px and not _submit_new_stop(symbol, trade, tracker, _fin_px, qty_rem,
+                                                        direction, mri, "final_tranche_restore"):
+                        trade["_stop_sync_pending"] = True
+                        logger.critical(f"[{symbol}] final tranche failed and the stop was not re-placed — "
+                                        f"{qty_rem} share(s) without a broker stop; retry next cycle.")
+                if _shrunk:
+                    _back = _move_stops(symbol, trade, tracker, None, qty_rem, direction)
+                    if _back != "moved":
+                        trade["_stop_sync_pending"] = True
+                        logger.critical(f"[{symbol}] partial failed and stop not restored to {qty_rem} "
+                                        f"({_back}) — {qty_to_cls} share(s) may lack a broker stop.")
+                        try:
+                            from alerts import send_slack
+                            send_slack(f":rotating_light: [{symbol}] broker stop covers only {_rem_after} of "
+                                       f"{qty_rem} shares after a failed partial — the bot retries next cycle; "
+                                       f"check Alpaca if this repeats.")
+                        except Exception as _rs_e:
+                            logger.error(f"[{symbol}] stop-restore alert failed: {_rs_e}")
                 _partial_fail_counts[symbol] = _partial_fail_counts.get(symbol, 0) + 1
                 _fail_count = _partial_fail_counts[symbol]
                 logger.error(
                     f"[{symbol}] Partial close FAILED (consecutive={_fail_count}) — "
-                    f"position may be locked by a held GTC order. Check Alpaca."
+                    f"position may be locked by a held order. Check Alpaca."
                 )
                 if _fail_count == 1:
-                    # Fix 4 / BUG-W1: auto-cancel all blocking open orders on first failure.
+                    # Fix 4 / BUG-W1, narrowed (P0 inc 3): cancel blocking NON-STOP open orders only —
+                    # the protective stop is never cancelled here (the blanket cancel left the
+                    # position without a broker stop until the next cycle).
                     try:
-                        _n_cancelled = cancel_open_orders_for_symbol(symbol)
+                        _n_cancelled = 0
+                        for _bo in get_open_orders(symbol) or []:
+                            _bt = getattr(_bo, "type", "")
+                            if "stop" in str(getattr(_bt, "value", _bt)).lower():
+                                continue
+                            if cancel_order(str(_bo.id)):
+                                _n_cancelled += 1
                         logger.warning(
-                            f"[{symbol}] Auto-cancelled {_n_cancelled} blocking order(s) "
-                            f"(held_for_orders fix) — partial close will retry next cycle."
+                            f"[{symbol}] Auto-cancelled {_n_cancelled} blocking non-stop order(s) "
+                            f"— partial close will retry next cycle."
                         )
                     except Exception as _coe:
                         logger.error(f"[{symbol}] Auto-cancel blocking orders failed: {_coe}")
@@ -1040,7 +1004,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                         send_slack(
                             f":rotating_light: *POSITION MANAGEMENT BLOCKED* :rotating_light:\n"
                             f"*{symbol}* partial close has failed *{_fail_count} consecutive times*.\n"
-                            f"Position is likely locked by a held GTC order on Alpaca.\n"
+                            f"Position is likely locked by a held order on Alpaca.\n"
                             f"*Manual action required* — check Alpaca orders for held_for_orders."
                         )
                     except Exception as _pfa:
@@ -1225,6 +1189,24 @@ def check_exits(
                     "— using 15M bar close $%.2f for stop/reversal checks",
                     symbol, type(_e).__name__, _e, current_price,
                 )
+
+        # ── Stop-sync retry (P0 inc 3): an earlier in-place stop move that could not complete is
+        # retried every cycle until the broker stop matches the software stop (never loosened).
+        if trade.get("_stop_sync_pending"):
+            _sync_px = trade.get("trail_stop") or trade.get("stop")
+            _sync_qty = int(trade.get("qty_remaining", trade.get("qty", 0)) or 0)
+            # also re-size to this trade's shares (restores a stop left short after a failed partial)
+            _sync_cap = _capped_qty(symbol, trade, direction)
+            if _sync_px and _sync_cap != 0:
+                _sync = _move_stops(symbol, trade, tracker, _sync_px,
+                                    _sync_cap if _sync_cap is not None and _sync_cap >= 1 else None, direction)
+                if _sync == "moved" or (_sync == "none" and _sync_qty >= 1 and _submit_new_stop(
+                        symbol, trade, tracker, _sync_px, _sync_qty, direction, None, "stop_sync_retry")):
+                    trade.pop("_stop_sync_pending", None)
+                    tracker._save_log()
+                    logger.info(f"[{symbol}] stop sync complete @ ${_sync_px:.2f}")
+                elif _sync == "filled":
+                    trade.pop("_stop_sync_pending", None)
 
         # ── 0. Overnight breakeven exit (Item 1: multi-scan gate) ───────────
         _is_prior_session = (
@@ -1521,31 +1503,20 @@ def check_exits(
                     f"{_be_r:.2f}R above entry ${_be_entry:.2f} — "
                     f"stop raised to entry ${_be_entry:.2f}."
                 )
-                _be_oid = trade.get("rth_day_stop_order_id")
-                if _be_oid:
-                    cancel_order(_be_oid)
-                    trade["rth_day_stop_order_id"] = None
-                _be_rem = int(trade.get("qty_remaining", trade.get("qty", 0)))
-                if _be_rem >= 1:
-                    _be_stop_px = _be_entry
-                    _be_side = "sell" if direction == "long" else "buy"
-                    _be_ord  = submit_day_stop_order(
-                        symbol=symbol, qty=_be_rem,
-                        side=_be_side, stop_price=_be_stop_px,
-                    )
-                    if _be_ord:
-                        trade["rth_day_stop_order_id"] = str(_be_ord.id)  # type: ignore[attr-defined]
-                        logger.info(
-                            f"[{symbol}] BE DAY stop submitted: "
-                            f"{_be_side.upper()} {_be_rem} @ ${_be_stop_px:.2f} | "
-                            f"order {_be_ord.id}"  # type: ignore[attr-defined]
-                        )
-                    else:
-                        logger.error(
-                            f"[{symbol}] BE DAY stop submit FAILED — "
-                            f"{_be_rem} shares unprotected above entry. "
-                            f"Set manual stop in Alpaca."
-                        )
+                # P0 inc 3: move the broker stop IN PLACE to entry (never cancel-then-resubmit).
+                _be_rem = int(trade.get("qty_remaining", trade.get("qty", 0)) or 0)
+                _be_res = _move_stops(symbol, trade, tracker, _be_entry, None, direction)
+                if _be_res == "moved":
+                    logger.info(f"[{symbol}] BE stop moved in place to ${_be_entry:.2f}")
+                elif _be_res == "none" and _be_rem >= 1:
+                    if not _submit_new_stop(symbol, trade, tracker, _be_entry, _be_rem, direction,
+                                            None, "breakeven_promotion", force_day=True):
+                        trade["_stop_sync_pending"] = True
+                        logger.error(f"[{symbol}] BE DAY stop not placed — software stop at entry "
+                                     f"enforced; retry next cycle.")
+                elif _be_res in ("retry", "unknown"):
+                    trade["_stop_sync_pending"] = True
+                    logger.warning(f"[{symbol}] BE stop not moved ({_be_res}) — old stop kept; retry next cycle.")
                 tracker._save_log()
 
         # ── 1. Hard stop enforcement (B4: 3-scan noise filter) ──────────────
