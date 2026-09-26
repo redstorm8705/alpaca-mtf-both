@@ -429,15 +429,41 @@ class TestCardAlarms(unittest.TestCase):
         self.assertEqual([a["severity"] for a in loud[:3]], ["critical"] * 3)
         self.assertTrue(loud[-1]["title"].startswith("+5 more"))
 
-    def test_card_keeps_llm_lows_inline(self):
+    def test_card_is_actionable_only(self):
+        # Rafael 2026-09-25: the card shows only what to act on; lows + routine footer lines are
+        # logged, not displayed; a ground-truth alarm (high/critical) is always shown.
         from scripts.audit_slack import render_card
-        _loud, low = bgt.card_alarms(self._gt({"MARA": bgt.CLASS_LAPSED}))
-        llm = [{"severity": "low", "title": "a", "detail": "tiny log typo"},
-               {"severity": "low", "title": "b", "detail": "stale comment"}]
+        loud, low = bgt.card_alarms(self._gt({"MARA": bgt.CLASS_LAPSED, "GE": bgt.CLASS_NAKED}))
+        llm = [{"severity": "low", "title": "a", "detail": "tiny log typo"}]
         pnl = {"today": [], "source_note": "", "lifetime": [], "injected_numbers": []}
-        card = render_card("nightly", "2026-09-22", "PASS", pnl, _loud + llm)
-        self.assertIn("tiny log typo", str(card["blocks"]))
+        footer = ["✅ full report — logs/x.txt", "🛡️ broker stop check: OK", "⚠️ audit AI called GE naked"]
+        with self.assertLogs("scripts.audit_slack", level="INFO") as logs:
+            card = render_card("nightly", "2026-09-22", "WARN", pnl, loud + llm, dist_footer=footer)
+        text = str(card["blocks"])
+        self.assertIn("GE", text)                          # the alarm is on the card
+        self.assertIn("to act on", text)
+        self.assertNotIn("tiny log typo", text)            # low → log only
+        self.assertNotIn("full report", text)
+        self.assertNotIn("broker stop check", text)
+        self.assertIn("⚠️ audit AI called GE naked", text)  # actionable footer line kept
+        self.assertTrue(any("tiny log typo" in m for m in logs.output))
+        self.assertTrue(any("full report" in m for m in logs.output))
         self.assertIn("MARA", low)
+
+    def test_warning_prefix_matches_with_or_without_variation_selector(self):
+        from scripts.audit_slack import render_card
+        pnl = {"today": [], "source_note": "", "lifetime": [], "injected_numbers": []}
+        for line in ("\u26a0\ufe0f check X", "\u26a0 check Y"):
+            text = str(render_card("nightly", "2026-09-22", "WARN", pnl, [], dist_footer=[line])["blocks"])
+            self.assertIn(line, text)
+
+    def test_card_with_nothing_to_act_on_says_so(self):
+        from scripts.audit_slack import render_card
+        pnl = {"today": [], "source_note": "", "lifetime": [], "injected_numbers": []}
+        text = str(render_card("nightly", "2026-09-22", "WARN", pnl, [], dist_footer=["✅ x"])["blocks"])
+        self.assertIn("Nothing to act on", text)
+        fail = str(render_card("nightly", "2026-09-22", "FAIL", pnl, [])["blocks"])
+        self.assertIn("FAIL", fail)                         # a FAIL is never softened
 
 
 class TestFetchPaging(unittest.TestCase):
