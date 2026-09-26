@@ -10955,3 +10955,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Tripped cycles now run the full exit pipeline. A normal cycle can already take up to about 649s, against the 720s RTH watchdog. That latency risk existed before and now applies to tripped cycles too.
 - `_reconcile_pending_overnight_orders` now runs while tripped. It only promotes or cancels orders that were already placed, so it never opens anything new.
 - Two CRITICAL log lines fire per RTH cycle while tripped.
+- Self-audit miss (P0 #1): I did not run ruff with the CI 88-col limit on the new test file, so CI failed on E501. The fix was a formatting-only rewrap; a fresh cold-2nd review PASSED and confirmed the assertions are byte-identical; Gro+GAI APPROVE.
