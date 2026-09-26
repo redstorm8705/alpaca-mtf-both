@@ -65,3 +65,14 @@ Voices: board sizing seat (Thorp/Taleb), board portfolio seat (Dalio/López de P
 - **D2 (overnight cap):** applies to SWING positions only. QHM and Forever-6 are excluded as intentional buy-and-hold positions, averaged on directional conviction.
 - **D1 (book-wide gross cap):** awaiting Rafael's confirmation of scope. The open question is whether QHM and F6 are also excluded from it.
 - New CLAUDE.md rule: "THIS IS A PAPER TRADING ACCOUNT".
+
+## D1 scope re-aligned under the paper-account frame (2026-09-26) — Gro A, GAI A, board seat A
+The swing gross cap (2.5× equity) counts **swing + day-tier positions read live from Alpaca, minus QHM and Forever-6 shares**.
+
+Rejected options:
+- **B (swing-only):** blind to the day tier's exposure on the same account.
+- **C (everything):** a conviction add to QHM would block unrelated swing entries.
+
+Remaining P0-4b scope for Rafael's approval:
+- D1 (A).
+- D2: a dynamic overnight cap on swing positions only (QHM/F6 excluded).
