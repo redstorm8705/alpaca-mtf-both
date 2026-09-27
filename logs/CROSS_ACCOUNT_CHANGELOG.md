@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-26 17:58 PT]` **ChatGPT/Codex:** fixed Day Tier actual-fill exit geometry and fail-closed reducer recovery; removed the false weekly “dollars left on table” aggregate; full BGG + CI passed and OCI deploy verified. — PR #411 / `42a6246` — execution/day_trade_manager.py, weekly_postmortem.py, tests, design record
+
 - `[2026-09-20 12:39 PT]` **ChatGPT/Codex:** canonical April-forward Core MTF intake merged and synced to OCI: 76 broker-exact entry parents (48 long, 28 short), 0/52 legacy ledger rows with exact ownership proof; no exit/P&L claims. Two cold-reject rounds fixed five integrity defects; Board+Groq+Google AI+NVIDIA+cold+CI passed. — PR #358 / `b3e7357` — research/core_mtf_canonical_entries.py, tests/test_core_mtf_canonical_entries.py
 
 - `[2026-09-19 16:00 PT]` Core MTF fail-closed OHLCV replay merged: source-bound simulation quarantines both same-symbol overlap parents and forbids execution claims; Board, Groq, Google AI, NVIDIA, and CI passed. — PR #351 / `1dd30c4` — research/core_mtf_simulated_replay.py
