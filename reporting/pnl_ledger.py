@@ -32,12 +32,14 @@ import os
 import re
 import ssl
 import json
+import math
 import time
 import logging
 import urllib.request
 import urllib.error
 from collections import defaultdict, deque
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -137,7 +139,7 @@ def _get_json(url: str, tries: int = 8):
     raise RuntimeError(f"Alpaca GET failed after {tries} tries: {last_err}")
 
 
-def fetch_all_fills() -> list[dict]:
+def fetch_all_fills(strict: bool = False) -> list[dict]:
     """
     All FILL activities from account inception, chronological ascending.
     Rate-safe pagination via after_id with inter-page sleep + 429 backoff.
@@ -156,14 +158,25 @@ def fetch_all_fills() -> list[dict]:
         if page_token:
             url += f"&page_token={page_token}"
         batch = _get_json(url)
-        if not isinstance(batch, list) or not batch:
+        if not isinstance(batch, list):
+            if strict:
+                raise RuntimeError("fill history returned a non-list page")
+            break
+        if not batch:
             break
         fills.extend(batch)
         _pages += 1
         if len(batch) < 100:
             break
         page_token = batch[-1].get("id")
+        if not page_token:
+            if strict:
+                raise RuntimeError("fill history page has no advancing page_token")
+            break
         time.sleep(0.5)
+    if _pages >= _max_pages:
+        if strict:
+            raise RuntimeError("fill history exceeded pagination safety limit")
     fills.sort(key=lambda f: (f.get("transaction_time", ""), f.get("id", "")))
     return fills
 
@@ -182,7 +195,7 @@ def _bump_iso_ms(ts: str) -> str | None:
     return _t.isoformat().replace("+00:00", "Z")
 
 
-def fetch_all_orders() -> list[dict]:
+def fetch_all_orders(strict: bool = False) -> list[dict]:
     """
     All orders from account inception (status=all), for the ownership tier-attribution
     JOIN. Alpaca FILL activities do NOT carry client_order_id — only order_id — but the
@@ -214,6 +227,8 @@ def fetch_all_orders() -> list[dict]:
             # (that would silently truncate the history). Surface and stop.
             logger.critical("fetch_all_orders: non-list response at until=%s — order "
                             "history may be INCOMPLETE: %r", until, str(batch)[:200])
+            if strict:
+                raise RuntimeError("order history returned a non-list page")
             break
         if not batch:
             break  # genuine end of data
@@ -229,15 +244,22 @@ def fetch_all_orders() -> list[dict]:
         if not _next:
             logger.critical("fetch_all_orders: unparseable boundary created_at %r — "
                             "stopping; order history may be INCOMPLETE", _oldest)
+            if strict:
+                raise RuntimeError("order history has an unparseable pagination boundary")
             break
         if not _new:
             # Full page but ZERO new after dedup → >500 orders share one identical
             # created_at; a timestamp cursor cannot advance past it. Surface, don't drop.
             logger.critical("fetch_all_orders: full page, 0 new at until=%s — >500 "
                             "orders at one timestamp; history may be INCOMPLETE", until)
+            if strict:
+                raise RuntimeError("order history cursor cannot advance across timestamp tie group")
             break
         until = _next
         time.sleep(0.3)
+    if _pages >= _max_pages:
+        if strict:
+            raise RuntimeError("order history exceeded pagination safety limit")
     return orders
 
 
@@ -295,7 +317,14 @@ def fetch_net_deposits() -> float:
 
 
 # ── Core: stateless full-history FIFO ─────────────────────────────────────────
-def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
+def _tier_from_coid(client_order_id: object) -> str | None:
+    """Parse an exact entry-order tier tag without importing the execution path."""
+    prefix = str(client_order_id or "").split("-", 1)[0]
+    return {"IN": "intraday", "QH": "qhm", "F6": "forever6", "DT": "daytrade"}.get(prefix)
+
+
+def compute_realized(fills: list[dict], qhm_symbols: set | None = None,
+                     coid_map: dict | None = None) -> dict:
     """
     Pure chronological FIFO over ALL fills. No symbol+side heuristic, no state.
 
@@ -309,28 +338,52 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
                          data gap) — FLAGGED, contribute $0, never fabricated
     """
     qhm_symbols = qhm_symbols or set()
-    lots: dict[str, deque] = defaultdict(deque)  # sym -> deque[(qty, price, side, t)]
+    # qty, price, side, entry time, exact entry tier, entry order id
+    lots: dict[str, deque] = defaultdict(deque)
     round_trips: list[dict] = []
     unmatched: list[dict] = []
+    missing_order_joins: list[dict] = []
+    missing_close_identities: list[dict] = []
+    missing_close_identity_keys: set[tuple] = set()
     per_day: dict[str, float] = defaultdict(float)
     per_day_intraday: dict[str, float] = defaultdict(float)
     per_day_qhm: dict[str, float] = defaultdict(float)
     seq_counter: dict[tuple, int] = defaultdict(int)
 
-    def _close(sym, want_side, qty, price, t, day):
+    def _entry_tier(sym: str, order_id: str, t: str) -> str:
+        if coid_map is None:
+            return "qhm" if sym in qhm_symbols else "intraday"
+        if order_id not in coid_map:
+            missing_order_joins.append({
+                "symbol": sym, "order_id": order_id, "time": t,
+            })
+            return "join_missing"
+        return _tier_from_coid(coid_map.get(order_id)) or "unattributed"
+
+    def _close(sym, want_side, qty, price, t, day, close_order_id, close_fill_id):
         """Match `qty` shares against open lots of `want_side`; realize P&L."""
         nonlocal round_trips
         dq = lots[sym]
         rem = qty
-        realized_here = 0.0
+        if rem > 0 and dq and dq[0][2] == want_side and not close_fill_id and not close_order_id:
+            identity_key = (sym, t, want_side)
+            if identity_key not in missing_close_identity_keys:
+                missing_close_identity_keys.add(identity_key)
+                missing_close_identities.append({
+                    "symbol": sym, "time": t, "side": want_side,
+                })
         while rem > 0 and dq and dq[0][2] == want_side:
-            lqty, lprice, lside, lt = dq[0]
+            lqty, lprice, lside, lt, ltier, lorder = dq[0]
             take = min(lqty, rem)
             if want_side == "long":
                 pnl = (price - lprice) * take           # long: exit - entry
             else:
                 pnl = (lprice - price) * take           # short: entry - exit
-            realized_here += pnl
+            per_day[day] += pnl
+            if ltier == "qhm":
+                per_day_qhm[day] += pnl
+            else:
+                per_day_intraday[day] += pnl
             seq_counter[(day, sym)] += 1
             round_trips.append({
                 "id": f"{day}-{sym}-{seq_counter[(day, sym)]:03d}",
@@ -343,12 +396,16 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
                 "pnl": round(pnl, 2),
                 "entry_time": lt,
                 "exit_time": t,
-                "is_qhm": sym in qhm_symbols,
+                "entry_order_id": lorder,
+                "exit_order_id": close_order_id,
+                "exit_fill_id": close_fill_id,
+                "tier": ltier,
+                "is_qhm": ltier == "qhm",
             })
             if lqty == take:
                 dq.popleft()
             else:
-                dq[0] = (lqty - take, lprice, lside, lt)
+                dq[0] = (lqty - take, lprice, lside, lt, ltier, lorder)
             rem -= take
         if rem > 0:
             # No open lot of the needed side -> pre-inception lot or data gap.
@@ -356,45 +413,76 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
                 "date": day, "symbol": sym, "close_side": want_side,
                 "qty": rem, "price": round(price, 4), "time": t,
             })
-        if realized_here:
-            per_day[day] += realized_here
-            if sym in qhm_symbols:
-                per_day_qhm[day] += realized_here
-            else:
-                per_day_intraday[day] += realized_here
         return rem
 
     for f in fills:
         sym = f.get("symbol", "")
         side = f.get("side", "")
         try:
-            qty = int(float(f.get("qty", 0)))
+            raw_qty = Decimal(str(f.get("qty", 0)))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(f"malformed fill quantity is unsupported: {f.get('qty')!r}") from exc
+        if not raw_qty.is_finite():
+            raise ValueError(f"non-finite fill quantity is unsupported: {raw_qty}")
+        if raw_qty != raw_qty.to_integral_value():
+            raise ValueError(
+                f"fractional fill quantity is unsupported by FIFO ledger: {raw_qty}"
+            )
+        qty = int(raw_qty)
+        try:
             price = float(f.get("price", 0.0))
-        except (TypeError, ValueError):
-            continue
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"malformed fill price is unsupported: {f.get('price')!r}") from exc
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"invalid fill price is unsupported: {price}")
         t = f.get("transaction_time", "")
         day = _pt_date(t)   # PT calendar date (matches eod_{PT-date}.json — see _pt_date)
         if not sym or qty <= 0 or not day:
             continue
+        order_id = str(f.get("order_id") or "")
+        fill_id = str(f.get("id") or "")
+        close_order_id = order_id
+        close_fill_id = fill_id
         dq = lots[sym]
-        net = sum(q * (1 if sd == "long" else -1) for q, _p, sd, _t in dq)
+        net = sum(q * (1 if sd == "long" else -1) for q, _p, sd, _t, _tier, _oid in dq)
 
         if side in ("buy", "buy_to_cover"):
             if net < 0:                       # cover short first
-                leftover = _close(sym, "short", qty, price, t, day)
+                leftover = _close(
+                    sym, "short", qty, price, t, day, close_order_id, close_fill_id)
                 if leftover > 0:
-                    dq.append((leftover, price, "long", t))
+                    dq.append((leftover, price, "long", t,
+                               _entry_tier(sym, order_id, t), order_id))
             else:
-                dq.append((qty, price, "long", t))
+                dq.append((qty, price, "long", t,
+                           _entry_tier(sym, order_id, t), order_id))
         elif side in ("sell", "sell_short"):
             if net > 0:                       # close long first
-                leftover = _close(sym, "long", qty, price, t, day)
+                leftover = _close(
+                    sym, "long", qty, price, t, day, close_order_id, close_fill_id)
                 if leftover > 0:
-                    dq.append((leftover, price, "short", t))
+                    dq.append((leftover, price, "short", t,
+                               _entry_tier(sym, order_id, t), order_id))
             else:
-                dq.append((qty, price, "short", t))
+                dq.append((qty, price, "short", t,
+                           _entry_tier(sym, order_id, t), order_id))
 
     open_lots = {s: [list(x) for x in dq] for s, dq in lots.items() if dq}
+
+    # Mark whether each entry lifecycle is fully closed. A realized partial is real cash P&L, but
+    # it is not a completed trade and must not inflate trade count or win rate.
+    remaining_by_entry: dict[tuple, int] = defaultdict(int)
+    for _sym, _dq in lots.items():
+        for _qty, _px, _side, _time, _tier, _order_id in _dq:
+            _identity = _order_id or _time
+            remaining_by_entry[(_sym, _identity, _side, _tier)] += int(_qty)
+    for _r in round_trips:
+        _identity = _r.get("entry_order_id") or _r["entry_time"]
+        _key = (_r["symbol"], _identity, _r["direction"],
+                _r.get("tier", "unattributed"))
+        _remaining = remaining_by_entry.get(_key, 0)
+        _r["lifecycle_complete"] = _remaining == 0
+        _r["remaining_qty"] = _remaining
 
     # ENTRY-LEVEL trade stats (partials merged per position entry) — the AUTHORITATIVE
     # win rate + trade count for the dashboard (board 4-0 + Gro + GAI, Rafael-approved A,
@@ -404,7 +492,9 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
     # entry lot; a re-entry at a different time is a distinct trade.
     _entry_pnl: dict = defaultdict(float)
     for _r in round_trips:
-        _entry_pnl[(_r["symbol"], _r["entry_time"])] += _r["pnl"]
+        if _r.get("lifecycle_complete"):
+            _identity = _r.get("entry_order_id") or _r["entry_time"]
+            _entry_pnl[(_r["symbol"], _identity)] += _r["pnl"]
     _n_entry = len(_entry_pnl)
     _entry_wins = sum(1 for _v in _entry_pnl.values() if _v > 0)
 
@@ -419,6 +509,8 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None) -> dict:
         "total_trades": _n_entry,
         "win_rate": round(_entry_wins / _n_entry * 100, 1) if _n_entry else 0.0,
         "unmatched_closes": unmatched,
+        "missing_order_joins": missing_order_joins,
+        "missing_close_identities": missing_close_identities,
         "open_lots": open_lots,
     }
 
@@ -467,18 +559,21 @@ def _get_qhm_symbols() -> set:
 
 def build_ledger(assumed_initial_capital: float = 2500.0) -> dict:
     """Full authoritative ledger from live Alpaca data. Read-only."""
-    fills = fetch_all_fills()
+    fills = fetch_all_fills(strict=True)
+    orders = fetch_all_orders(strict=True)
     acct = fetch_account()
     positions = fetch_positions()
     equity = float(acct.get("equity", 0.0) or 0.0)
     net_deposits = fetch_net_deposits() or assumed_initial_capital
 
-    realized = compute_realized(fills, qhm_symbols=_get_qhm_symbols())
+    realized = compute_realized(
+        fills, qhm_symbols=_get_qhm_symbols(), coid_map=build_coid_map(orders))
     unrealized = compute_unrealized(positions)
     inv = check_invariant(realized["lifetime"], unrealized, equity, net_deposits)
 
     return {
         "fills_count": len(fills),
+        "orders_count": len(orders),
         "earliest_fill": fills[0].get("transaction_time") if fills else None,
         "equity": equity,
         "net_deposits": net_deposits,

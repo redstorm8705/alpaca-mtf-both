@@ -25,12 +25,9 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from reporting.metrics import (
-    _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
+    _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
-from reporting.report_figures import build_report_figures, reconcile
-# Strategy Edge Report (All-Time) lives on monthly now (Rafael 2026-07-05) —
-# imported from weekly_review, not duplicated.
-from weekly_review import _load_trade_log, _strategy_validation_html
+from reporting.report_figures import ReportFigures, build_report_figures, reconcile
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
@@ -62,6 +59,97 @@ _MECH_EXITS = frozenset({
     "overnight_atr_buffer_exit", "safe_close_all", "external_close",
     "pm_exit", "forced_exit", "breakeven_exit",
 })
+
+_EDGE_TIER_LABELS = {
+    "intraday": "Core MTF",
+    "daytrade": "Day Tier",
+    "qhm": "QHM",
+    "forever6": "Forever-6",
+    "unattributed": "Unattributed",
+}
+
+
+def _strategy_edge_html(figures: ReportFigures) -> tuple[str, dict]:
+    """Render one internally consistent Strategy Edge Report from one Alpaca snapshot."""
+    if not figures.available:
+        return "", {}
+    if figures.unmatched_closes:
+        count = len(figures.unmatched_closes)
+        return (
+            '<div class="edge-integrity-error"><b>Strategy Edge unavailable — incomplete '
+            f'broker history.</b> {count} closing fill(s) could not be matched to an opening '
+            'fill. P&amp;L, trade counts, win rate, and tier metrics are withheld until the '
+            'history reconciles.</div>',
+            {},
+        )
+    if figures.missing_order_joins:
+        count = len(figures.missing_order_joins)
+        return (
+            '<div class="edge-integrity-error"><b>Strategy Edge unavailable — incomplete '
+            f'order attribution.</b> {count} opening fill(s) have no matching broker order. '
+            'P&amp;L, trade counts, win rate, and tier metrics are withheld until the '
+            'fills-to-orders join reconciles.</div>',
+            {},
+        )
+    if figures.missing_close_identities:
+        count = len(figures.missing_close_identities)
+        return (
+            '<div class="edge-integrity-error"><b>Strategy Edge unavailable — incomplete '
+            f'close-fill identity.</b> {count} realized closing fill(s) have neither a broker '
+            'activity ID nor order ID. Drawdown and execution ordering are withheld until '
+            'the history reconciles.</div>',
+            {},
+        )
+    edge = figures.strategy_edge_stats()
+    overall = edge["overall"]
+
+    def _money(value) -> str:
+        return "—" if value is None else f"{'+' if value >= 0 else ''}${value:,.2f}"
+
+    def _pct(value) -> str:
+        return "—" if value is None else f"{value:.1f}%"
+
+    def _pf(value) -> str:
+        return "—" if value is None else f"{value:.2f}×"
+
+    rows = []
+    for tier, label in _EDGE_TIER_LABELS.items():
+        s = edge["by_tier"][tier]
+        rows.append(
+            "<tr>"
+            f"<td>{label}</td><td>{s['completed_trades']}</td>"
+            f"<td>{_pct(s['win_rate'])}</td><td>{_pf(s['profit_factor'])}</td>"
+            f"<td>{_money(s['avg_win'])}</td><td>{_money(s['avg_loss'])}</td>"
+            f"<td>{_money(s['realized_pnl'])}</td></tr>"
+        )
+    same_hold = overall["avg_same_day_hold_minutes"]
+    multi_hold = overall["avg_multi_day_hold_days"]
+    caveat = (
+        f"{overall['partial_open_lifecycles']} entry lifecycle(s) have realized partial exits "
+        f"but remain open ({_money(overall['partial_open_realized_pnl'])} realized). Their cash P&amp;L "
+        "is included above; they are excluded from completed-trade count, win rate, and profit factor."
+        if overall["partial_open_lifecycles"] else
+        "No partially exited open lifecycle is being counted as a completed trade."
+    )
+    body = (
+        '<div class="edge-kpis">'
+        f'<div><b>{_money(overall["realized_pnl"])}</b><small>Realized P&amp;L</small></div>'
+        f'<div><b>{overall["completed_trades"]}</b><small>Completed trades</small></div>'
+        f'<div><b>{_pct(overall["win_rate"])}</b><small>Win rate</small></div>'
+        f'<div><b>{_pf(overall["profit_factor"])}</b><small>Profit factor</small></div>'
+        f'<div><b>{_money(-overall["max_realized_drawdown"])}</b><small>Max realized drawdown</small></div>'
+        f'<div><b>{str(same_hold) + "m" if same_hold is not None else "—"}</b><small>Avg same-day hold</small></div>'
+        f'<div><b>{str(multi_hold) + "d" if multi_hold is not None else "—"}</b><small>Avg multi-day hold</small></div>'
+        '</div>'
+        '<table class="edge-table"><thead><tr><th>Entry tier</th><th>Completed</th><th>WR</th>'
+        '<th>PF</th><th>Avg win</th><th>Avg loss</th><th>Realized</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
+        f'<div class="edge-note">{caveat}</div>'
+        '<div class="edge-note">Source: one live Alpaca fills+orders FIFO snapshot. Tier is the '
+        'entry order client ID; untagged legacy entries remain Unattributed. Score/setup and exit-reason '
+        'panels are withheld until they carry exact lifecycle IDs.</div>'
+    )
+    return body, overall
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -513,38 +601,53 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         "transition:transform .15s}"
         ".edge-details[open] .edge-caret{transform:rotate(180deg)}"
         ".edge-body{padding:0 18px 18px}"
+        ".edge-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px}"
+        f".edge-kpis>div{{background:{BG_ELEVATED};border-radius:{RADIUS_MD}px;padding:10px}}"
+        f".edge-kpis b{{display:block;color:{TEXT_PRIMARY};font-size:{FS_BODY}px}}"
+        f".edge-kpis small{{display:block;color:{TEXT_MUTED};font-size:{FS_TINY}px;margin-top:3px}}"
+        ".edge-table{width:100%;border-collapse:collapse;font-size:12px}"
+        f".edge-table th,.edge-table td{{padding:8px;border-bottom:1px solid {BORDER_LIGHT};text-align:right}}"
+        ".edge-table th:first-child,.edge-table td:first-child{text-align:left}"
+        f".edge-table th{{color:{TEXT_MUTED};font-size:{FS_TINY}px;text-transform:uppercase}}"
+        f".edge-note{{color:{TEXT_MUTED};font-size:{FS_TINY}px;margin-top:10px;line-height:1.45}}"
     )
 
     # Strategy Edge Report (All-Time) — COLLAPSED dropdown (Rafael 2026-07-06,
     # board + Gro + GAI). Summary line shows the four headline metrics
     # (P&L / Win Rate / Profit Factor / Trades); full breakdown behind the expand.
     try:
-        _tl = _load_trade_log()
-        _closed = _tl.get("closed", [])
-        _n_closed = len(_closed)
-        _edge_body = _strategy_validation_html(_tl, lifetime_pnl=_lt_pnl)
+        _edge_body, _edge_stats = _strategy_edge_html(figures)
     except Exception as _edge_err:
         logger.warning("monthly Strategy Edge Report failed: %s", _edge_err)
-        _edge_body, _n_closed, _closed = "", 0, []
-    if _edge_body:
-        # All-time profit factor from closed-trade P&L (matches edge-report math).
-        _epnls = [_day_pnl(t) for t in _closed]
-        _gw = sum(p for p in _epnls if p > 0)
-        _gl = abs(sum(p for p in _epnls if p < 0))
-        _pf_all = (_gw / _gl) if _gl > 0 else 0.0
-        _pf_all_str = f"{_pf_all:.2f}×" if _gl > 0 else "—"
-        _pnl_sum_c = STATUS_POSITIVE if _lt_pnl >= 0 else STATUS_NEGATIVE
-        _wr_sum_c = _wr_color(_lt_wr)
-        _pf_sum_c = _pf_color(_pf_all) if _gl > 0 else TEXT_MUTED
+        _edge_body, _edge_stats = "", {}
+    if _edge_body and not _edge_stats:
+        _edge_report = (
+            '<details class="edge-details">'
+            '<summary class="edge-summary">'
+            '<span class="edge-title">Strategy Edge Report — Unavailable</span>'
+            '<span class="edge-caret">▾</span>'
+            '</summary>'
+            f'<div class="edge-body">{_edge_body}</div>'
+            '</details>'
+        )
+    elif _edge_body:
+        _edge_pnl = float(_edge_stats["realized_pnl"])
+        _edge_wr = _edge_stats["win_rate"]
+        _edge_pf = _edge_stats["profit_factor"]
+        _edge_n = int(_edge_stats["completed_trades"])
+        _pf_all_str = f"{_edge_pf:.2f}×" if _edge_pf is not None else "—"
+        _pnl_sum_c = STATUS_POSITIVE if _edge_pnl >= 0 else STATUS_NEGATIVE
+        _wr_sum_c = _wr_color(float(_edge_wr or 0.0))
+        _pf_sum_c = _pf_color(float(_edge_pf or 0.0)) if _edge_pf is not None else TEXT_MUTED
         _summary = (
             '<span class="edge-sum">'
-            f'<span style="color:{_pnl_sum_c}">{_lt_sign}${_lt_pnl:,.2f}</span>'
+            f'<span style="color:{_pnl_sum_c}">{"+" if _edge_pnl >= 0 else ""}${_edge_pnl:,.2f}</span>'
             '<span class="edge-dot">·</span>'
-            f'<span style="color:{_wr_sum_c}">{_lt_wr:.0f}% WR</span>'
+            f'<span style="color:{_wr_sum_c}">{float(_edge_wr or 0.0):.0f}% WR</span>'
             '<span class="edge-dot">·</span>'
             f'<span style="color:{_pf_sum_c}">PF {_pf_all_str}</span>'
             '<span class="edge-dot">·</span>'
-            f'<span style="color:{TEXT_SECONDARY}">{_n_closed} trades</span>'
+            f'<span style="color:{TEXT_SECONDARY}">{_edge_n} completed</span>'
             '</span>'
         )
         _caveat = (
@@ -552,8 +655,8 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
             'background:rgba(255,214,10,.10);border:1px solid rgba(255,214,10,.3);'
             'border-radius:6px;padding:8px 14px;margin-bottom:10px">'
             f'&#9888; n&lt;100 — not yet statistically significant '
-            f'(n={_n_closed} closed trades)</div>'
-        ) if _n_closed < 100 else ""
+            f'(n={_edge_n} completed trades)</div>'
+        ) if _edge_n < 100 else ""
         _edge_report = (
             '<details class="edge-details">'
             '<summary class="edge-summary">'
