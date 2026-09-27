@@ -11136,3 +11136,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - F6 trigger backtest 2020-2025: proposed rule fires 19 times vs 2 for the current rule (the current rule misses crashes: 0 fires in Mar 2020). Three spec gaps fixed. Lock+size BGGN aligned (dedicated Kelly key; no up-front size-up).
 - Handoff: restored the Claude-thread pick-up block (dropped by the parallel Codex rewrite in PR #412) beneath the Codex block. Weekly post-mortem is partly fixed by Codex #411.
 - F6 step 0 exists (ledger_sync cron). Found a blocking issue: the protected-symbol guard freezes all sells whenever the ledger is stale. Design B+A+D recorded as step 0b.
+- Exit-system redesign aligned. Realistic replay on 85 trades: adding the trail is worth about $100-165. The break-even (0C) claim is corrected.

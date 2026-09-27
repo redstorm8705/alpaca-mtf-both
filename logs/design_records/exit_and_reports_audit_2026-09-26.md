@@ -183,3 +183,36 @@ Rafael's intent: take profit sooner AND use more size.
 1. The 4-events-per-month cap blocked the worst day of the crash (2020-03-16, −10.8%, VIX 82.7). → Tier C bypasses the monthly count cap, bounded by cash only.
 2. An intraday-low-only fire on a positive close had no tier (2022-01-24). → Tier by the WORSE of the close return and the intraday low, and require a negative close.
 3. The rule misses grinding bear-market drops without a VIX spike (2022-09-13). → Accepted: Rafael wants crash-like only.
+
+## CORRECTION + exit-system redesign (2026-09-26)
+**Correction.** An independent break-even move ALREADY exists (`exit_logic` "0C", ~L1484-1520): at ≥0.5R the stop goes to entry and a broker DAY stop is placed. The study's "only after T1" claim was wrong.
+
+**What is actually missing, and why (answers to Rafael's questions):**
+- **No trail until the T1 partial (~0.83R).** The design assumed trades reach T1, but the median MFE is 0.15R. This was never measured.
+- **Exits share the 5-min scan loop.** The cycle is median 92 s (p90 147 s), so each position is checked about every 6.5 min. Nobody chose this cadence for exits; it is a side effect.
+- **The software stop needs 3 scans** on distinct 15-min bars. No recorded rationale for 3 was found. It applies to same-day swing entries, which have no broker stop until the 15:45 sweep. Prod log: 39 breach-monitoring warnings, 8 confirmed stops.
+
+**Realistic replay.**
+- Scope: 85 core swing round trips since 2026-07-01, 5-min bars, price observed at bar close only. The broker stop fills at the stop or the gap open. The current rules are modelled with the 3-scan confirm.
+- Results:
+
+| Rule | Total P&L | Win rate |
+|---|---|---|
+| Actual | −$468.93 | 20% |
+| Current rules (modelled) | −$415.12 | 31% |
+| Arm at 0.5R (existing) + trail 0.5×ATR | −$313.84 | 47% |
+| Arm at 0.3×ATR + trail 0.5×ATR | −$249.38 | 40% |
+| Arm at 0.5×ATR + trail 0.5×ATR | −$314.07 | 51% |
+| Wider trails (0.75–1.0×ATR) | −$354…−$520 | — |
+
+- **Read:** the arm point is roughly fine. The missing piece is the TRAIL, which is worth about $100–165 over 85 trades (~25–40%).
+- No variant is profitable. Entries and targets remain the main problem.
+- **Caveats:** 9-cell in-sample grid; the VIX≥30 override was not modelled; the earlier 47-trade study used a narrower filter.
+- The stale doc was also found: config uses `INTRADAY_STOP_ATR_MULT=1.20`, while CLAUDE.md says 1.25.
+
+**Redesign (Gro, GAI and the board execution seat converge):**
+1. **Trail from arm.** At the earlier of 0.5R or 0.5×ATR MFE, the stop goes to entry, then trails 0.5×ATR behind the best observed price. The trail is tighten-only, and a max/min guard stops the partial-exit and trail writers from moving it backwards. The arm point and trail are logged per trade so k and m can adapt per stock later.
+2. **A broker stop on every swing position from entry.** It is placed beyond the larger of (a) the recent-noise 90th-percentile true range and (b) the entry stop. It is time-of-day aware and uses the existing VIX curve. This removes the 3-scan and cadence gaps for the stop itself.
+3. **A fast exit loop.** A separate cron process following the `run_day_tier.py` pattern: flock singleton, ~30–60 s cadence, one multi-symbol snapshot call, shared rate gate and tracker lock, tighten-only moves, no entries.
+
+**Rollout:** 1 → 2 → 3, each gated. The front-loaded replay above stands in for a post-ship shadow (CLAUDE.md Rule B).
