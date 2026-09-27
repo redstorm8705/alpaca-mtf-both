@@ -11133,3 +11133,5 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - CORRECTION: overnight early-exit replay (31 trades) shows the rule is net protective (-$283.81 actual vs -$457.33 held). The earlier hindsight "largest leak" framing was wrong and has been corrected in the design record.
 - Rafael 2026-09-26: F6 live with SHARED symbols (supersedes the exclusive-B alignment); profit-lock study + entry rebuild prioritized.
 - Profit-lock study: T1-gated breakeven/trail never arms (median MFE 0.15R vs T1 ~0.83R). An MFE-armed 0.5xATR lock plus 0.5xATR trail replays -$202.6 -> -$37.5 (in-sample). F6 shared plan BGGN-reviewed.
+- F6 trigger backtest 2020-2025: proposed rule fires 19 times vs 2 for the current rule (the current rule misses crashes: 0 fires in Mar 2020). Three spec gaps fixed. Lock+size BGGN aligned (dedicated Kelly key; no up-front size-up).
+- Handoff: restored the Claude-thread pick-up block (dropped by the parallel Codex rewrite in PR #412) beneath the Codex block. Weekly post-mortem is partly fixed by Codex #411.
