@@ -30,6 +30,7 @@ Priority levels (ntfy):
 """
 
 import os
+import sys
 import time
 import json
 import logging
@@ -99,6 +100,26 @@ _JARGON = (
 )
 
 
+def _under_test() -> bool:
+    """True when this process is a test run. Outbound Slack/ntfy is then suppressed at the
+    network chokepoints below, so a test that drives alerting code can never page the
+    operator (2026-09-27: day-tier tests sent 5 fake 'UBER fill INVALIDATED' pages).
+    Signals: MTF_TEST_MODE=1 (set by tests/__init__.py and tests/conftest.py), pytest
+    loaded, or a test-runner entry point (`python -m unittest`, pytest, test_*.py).
+    None of these occurs in a production process (main.py, live_data_writer.py, crons)."""
+    if os.getenv("MTF_TEST_MODE") == "1" or "pytest" in sys.modules:
+        return True
+    argv0 = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    return "unittest" in argv0 or "pytest" in argv0 or argv0.startswith("test_")
+
+
+def _suppressed(kind: str, text: object) -> bool:
+    if not _under_test():
+        return False
+    logger.info(f"[ALERT suppressed — test run] {kind}: {str(text)[:120]}")
+    return True
+
+
 def _sanitize(text: object) -> str:
     """De-jargon an outbound Slack string. NEVER raises — returns a sendable string on any input.
 
@@ -140,7 +161,7 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 def _ntfy(title: str, body: str, priority: int = 3, tags: list | None = None) -> bool:
     """POST to ntfy.sh. Returns True on success."""
-    if not _NTFY_TOPIC:
+    if not _NTFY_TOPIC or _suppressed("ntfy", title):
         return False
     url = f"{_NTFY_BASE}/{_NTFY_TOPIC}"
     headers: dict[str, str] = {
@@ -201,6 +222,8 @@ def _post_slack_text(text: str) -> bool:
     unfurl_links/unfurl_media are disabled so a URL in the body (e.g. a billing
     or docs link inside an error string) never balloons into a large preview
     card — the #1 source of channel noise (Rafael 2026-08-26)."""
+    if _suppressed("slack", text):
+        return False
     try:
         req = urllib.request.Request(
             _SLACK_WEBHOOK,
@@ -222,6 +245,8 @@ def _post_slack_payload(payload: dict) -> bool:
 
     unfurl_links/unfurl_media default OFF (merged so a caller key still wins) to kill large link
     preview cards — the same channel-noise fix as _post_slack_text (Rafael 2026-08-26)."""
+    if _suppressed("slack", (payload or {}).get("text", "")):
+        return False
     try:
         body = {"unfurl_links": False, "unfurl_media": False, **(payload or {})}
         req = urllib.request.Request(
