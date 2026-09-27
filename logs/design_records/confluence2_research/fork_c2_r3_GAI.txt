@@ -1,0 +1,26 @@
+### ROUND 3: Confluence 2.0 Decisions
+
+#### Decision 1: Swing Entry Gate
+**Recommendation: Option B (Maintain SPY 5-min gate for all tiers).**
+While the swing tier relies on 4H/Daily levels, forcing an overlay with the SPY 5-min gate enforces systemic discipline. It prevents the swing tier from entering into a localized or broad market "cliff" during the swing entry hour.
+*   **Failure Scenario (Option A):** Without the SPY gate, the swing tier enters a high-conviction breakout on a 4H chart at 10:00 AM, failing to see that SPY is flashing a 5-minute distribution pattern or a failed breakout of its own. The position suffers a "gap-fill" or "flash-dump" due to macro correlation, resulting in a full stop-out despite the individual asset's technical setup appearing valid.
+
+#### Decision 2: Point-in-Time (PIT) Universe
+**Recommendation: Option A (Build versioned constituent CSV).**
+Data collection is the #1 priority. Survivorship bias is the "silent killer" of edge evaluation; if you backtest using today’s winners, your win rate will be statistically fraudulent. You must account for the tickers that dropped out of the indices due to bankruptcy or acquisition (e.g., FRC, SIVB) to understand the *actual* historical performance of your strategy.
+*   **Failure Scenario (Option B):** You apply a "survivorship haircut" to results, but the haircut is a heuristic, not a mathematical derivative. Your strategy appears to have a 65% win rate in testing. In live trading, you realize the strategy relies on momentum in volatile growth stocks; since your backtest excluded the "duds" that dragged down index performance in real-time, your actual live performance is 40% lower than modeled, leading to a loss of the $2.5K bankroll before the edge is properly identified.
+
+#### Decision 3: Day-Tier Universe
+**Recommendation: Option C (Fixed list, filtered by Relative Volume).**
+This is the optimal bridge between data integrity and edge exploitation. You maintain the consistency of trading a controlled, familiar universe (which aids in code debugging and behavioral analysis) while ensuring you are only participating in assets that possess the requisite volatility (RVOL) to make the ORB strategy profitable.
+*   **Failure Scenario (Option B):** Moving to an "in-play" selection from the entire liquid pool introduces "system drift." Because you are trading different stocks daily based on dynamic RVOL scanners, you lose the ability to refine the entry/exit execution code for specific asset behaviors (e.g., the way TSLA trends vs. the way AMD fades). You end up with a high frequency of "noise" trades in tickers that meet RVOL criteria but lack the structural setup you’ve modeled, causing the 7% kill switch to trigger prematurely on high-volatility, low-follow-through assets.
+
+***
+
+**Summary Table for Board Review:**
+
+| Decision | Recommendation | Logic |
+| :--- | :--- | :--- |
+| **1. Swing Gate** | **Option B** | Macro-correlation protection; prevents entry into systemic head-fakes. |
+| **2. Universe** | **Option A** | Eliminates survivorship bias; provides "ground truth" for historical edge. |
+| **3. Day Tier** | **Option C** | Balances liquidity requirements with code-behavior consistency. |

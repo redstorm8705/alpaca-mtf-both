@@ -1,0 +1,13 @@
+ROUND 3 — three open decisions in the Confluence 2.0 design (PAPER account $2.5K -> $25K; data collection #1; trades daily; 7% daily kill switch on new entries; no shadow/log-only periods). For each, give a recommendation and the concrete failure scenario of the option you reject. Under 700 words.
+
+FACTS VERIFIED TODAY:
+- Alpaca SIP daily bars exist for delisted tickers (TWTR bars through its last trading day 2022-10-27; SIVB and FRC bars present for Oct 2022). Alpaca has no historical index-membership list.
+- Alpaca native 4-hour bars are anchored at 08:00/12:00/16:00 ET (the first bar mixes 08:00-09:30 pre-market with RTH). RTH-only 4H bars must be built from 1H bars.
+- Architecture Invariant #1 today: "SPY 5-min bar-over-bar is the SOLE entry gate" (changes only by board vote).
+- The day tier currently trades a fixed ~10-name universe; the ORB literature's edge (Zarattini/Barbon/Aziz) is conditional on selecting "stocks in play" daily by relative volume, and one replication found net-of-cost edge near zero.
+
+DECISION 1 — Swing entry gate. The swing tier moves to daily/weekly bars with 4H timing. The CEO's preferred trigger is a break of a meaningful level (e.g. 52-week high or base top), a back-test, and a hold, on closed RTH-built 4H bars with volume confirmation. Option A: amend Invariant #1 so the swing tier's entry gate is that closed-4H level-break (SPY 5-min gate stays for the day tier only). Option B: keep SPY 5-min bar-over-bar as an additional mandatory gate on swing entries.
+
+DECISION 2 — Point-in-time universe for the historical lab. Option A: build historical S&P 500 / Nasdaq-100 membership from free public constituent-change tables (e.g. Wikipedia change logs) saved once to a versioned CSV, then pull Alpaca bars for every member including delisted ones. Option B: use today's universe only and apply a documented survivorship haircut to backtest results.
+
+DECISION 3 — Day-tier universe. Option A: keep the fixed ~10 names. Option B: select daily "stocks in play" by first-5/15-minute relative volume from a liquid pool (this changes which names trade and can change trade frequency, so it is a risk-path change needing board review before live). Option C: fixed 10 names but rank them daily by relative volume and trade only the in-play subset.

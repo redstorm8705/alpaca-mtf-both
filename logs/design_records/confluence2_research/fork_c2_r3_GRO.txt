@@ -1,0 +1,67 @@
+**Quick‑take summary**
+
+| Decision | Recommended option | Why it wins for a paper‑only, data‑collection mission |
+|----------|-------------------|--------------------------------------------------------|
+| 1 – Swing entry gate | **A – amend Invariant #1** (use the closed‑RTH 4 h level‑break as the sole swing gate) | Keeps the architecture simple, eliminates a hard‑to‑validate 5‑min overlay, and respects the “single gate per tier” invariant that the team has already locked in. |
+| 2 – Historical universe | **A – build a version‑controlled constituent list** (public change logs → CSV, pull every ticker including delisted) | Guarantees a clean survivorship‑free back‑test, essential for edge evaluation. A survivorship‑adjusted shortcut would hide draw‑down regimes and bias performance. |
+| 3 – Day‑tier universe | **C – fixed‑10 list with daily relative‑volume ranking** (trade only the in‑play subset) | Preserves the board‑approved static universe while still letting the data‑collection engine capture the effect of volume‑driven selection, without introducing a new risk‑path that would require a formal board review. |
+
+Below are the concrete arguments and the “worst‑case failure” that would unfold if the opposite option were chosen.
+
+---
+
+## Decision 1 – Swing entry gate
+
+### Recommendation: **Option A – amend Invariant #1**  
+Replace the “SPY 5‑min bar‑over‑bar” gate for the swing tier with a **single closed‑RTH‑built 4 h level‑break** (52‑wk high, base‑top, etc.) plus volume confirmation. The day‑tier continues to use the 5‑min gate.
+
+#### Rationale
+1. **Architectural purity** – Invariant #1 was created precisely to avoid “gate creep”. Adding a second, asynchronous gate for swing trades creates a hidden dependency: a swing entry could be blocked by a day‑tier 5‑min signal that never fires, causing missed trades and confusing performance attribution.  
+2. **Data integrity** – The 4 h RTH‑only bars are already built from 1 h slices; they are deterministic, timestamp‑aligned, and free from pre‑market contamination. Using them directly eliminates the need to re‑synchronize two disparate time‑bases.  
+3. **Edge isolation** – The swing edge hypothesis (break of a meaningful level + volume) can be measured cleanly when the only entry filter is that break. Adding a 5‑min overlay would conflate two unrelated signals, making it impossible to tell whether the edge comes from the level‑break or from a coincidental 5‑min pattern.  
+4. **Operational safety** – The 7 % kill‑switch only halts *new entries*; if we kept the 5‑min gate, a swing signal could be repeatedly throttled by the daily kill‑switch, biasing the dataset toward low‑vol periods. The pure 4 h gate sidesteps that interference.
+
+#### Failure scenario for **Option B** (keep 5‑min gate)
+- **Missed swing entries**: On a day when SPY’s 5‑min bar‑over‑bar pattern fails (e.g., a sideways market), the swing tier never sees a signal even though the 4 h level‑break occurs. The back‑test records a “no‑trade” day, artificially inflating the win‑rate because only the cleanest setups survive.  
+- **Signal‑latency mismatch**: The 5‑min gate evaluates *intraday* data, while the 4 h level‑break is only known at the close of the 4 h bar (≈ 16:00 ET). The two windows rarely line up, producing a “race condition” where the swing tier either enters a position **hours after** the breakout, exposing it to adverse price decay that the original edge never accounted for.  
+- **Debug nightmare**: When performance drifts, engineers must untangle whether the fault lies in the 4 h breakout logic, the 5‑min filter, or the interaction with the daily kill‑switch. The added complexity delays data collection and edge validation, violating the primary mission.
+
+---
+
+## Decision 2 – Point‑in‑time historical universe
+
+### Recommendation: **Option A – build a version‑controlled constituent list**  
+Scrape publicly available change‑log tables (e.g., Wikipedia “List of S&P 500 constituents” revisions, Nasdaq‑100 quarterly updates), store each snapshot as a dated CSV in the repo, and pull **all tickers** (including delisted) for the back‑test period.
+
+#### Rationale
+1. **Survivorship bias elimination** – The only way to know whether an edge truly survives periods of churn is to *include* the dead stocks. A survivorship haircut applied after the fact merely scales results; it cannot reconstruct the draw‑downs that would have occurred when those stocks were removed from the universe.  
+2. **Reproducibility** – A CSV checked into version control gives a deterministic mapping from date → universe. Anyone can rerun the back‑test and obtain identical results, a non‑negotiable requirement for auditability.  
+3. **Future‑proofing** – When the system graduates to live money, the same constituent‑loader can be used to keep the live universe up‑to‑date, reducing operational risk.  
+4. **Cost‑free** – All data sources are free; the one‑time engineering effort (≈ 2 days) is far cheaper than the hidden cost of a biased edge that later collapses in production.
+
+#### Failure scenario for **Option B** (use today’s universe + survivorship haircut)
+- **Hidden tail risk**: Suppose a large‑cap constituent is removed after a prolonged decline (e.g., a biotech that crashes and is delisted). The back‑test using today’s universe never sees that crash, and the survivorship haircut merely inflates the volatility estimate. When the strategy later trades a live replacement, the model underestimates draw‑down risk, leading to frequent stop‑loss hits and a breach of the 7 % daily kill‑switch.  
+- **Mis‑estimated turnover**: The “haircut” approach assumes a static turnover rate, but actual constituent churn is irregular (clusters around quarter‑ends). The back‑test will mis‑report turnover costs, causing the paper‑account to over‑state net‑of‑cost performance and waste the data‑collection budget on a false edge.  
+- **Audit failure**: A regulator‑style audit (or internal risk review) will flag the survivorship‑adjusted methodology as non‑transparent, forcing a re‑run of the entire back‑test, eroding confidence in the data set that the team has been building for weeks.
+
+---
+
+## Decision 3 – Day‑tier universe
+
+### Recommendation: **Option C – fixed‑10 list with daily relative‑volume ranking**  
+Keep the board‑approved static list of ~10 tickers, but each morning rank them by the first 5‑minute (or 15‑minute) relative volume. Trade **only** those that pass a pre‑set volume‑threshold (e.g., top 3 of the 10).  
+
+#### Rationale
+1. **Board compliance** – The fixed list respects the existing governance decision; adding or removing symbols would require a formal vote, which we want to avoid in a paper‑only phase.  
+2. **Controlled risk path** – The only change is a *filter* on the existing set, not a change in the set itself. This does **not** alter the statistical distribution of the universe, preserving comparability with prior data.  
+3. **Edge‑capture** – Volume‑driven selection is the core of the ORB literature. By ranking the fixed list daily, we let the data‑collection engine evaluate whether “in‑play” filtering adds any incremental Sharpe without exposing the bot to the combinatorial explosion of a fully dynamic universe.  
+4. **Kill‑switch safety** – Because the universe size is bounded, the maximum number of new entries per day is capped, keeping the 7 % daily kill‑switch from being overwhelmed.
+
+#### Failure scenario for **Option A** (keep the fixed 10 names unchanged)
+- **Stale signal** – Some of the 10 names may sit idle for weeks (low volume, low volatility). The bot will generate *no* trades, leading to sparse data and an inability to evaluate daily‑tier edge. The performance curve will be dominated by a few outliers, making statistical inference meaningless.  
+- **Misleading risk metrics** – With very few trades, the daily‑kill‑switch will never be triggered, giving a false sense of safety while the underlying edge remains untested.
+
+#### Failure scenario for **Option B** (fully dynamic “stocks in play” pool)
+- **New risk‑path** – The universe could expand from 10 to 50+ symbols on a high‑volume day, raising the *maximum* number of concurrent entries dramatically. The 7 % kill‑switch would start rejecting entries en masse, biasing the dataset toward low‑volume days and breaking the “trades every day” collection goal.  
+- **Governance breach** – Changing the universe without a board vote violates the architecture invariant that any universe change is a formal decision point. This opens the team to audit findings and possibly halts the project pending a review.  
+- **Data heterogeneity** – A dynamic pool mixes stocks with wildly different tick sizes, liquidity profiles,

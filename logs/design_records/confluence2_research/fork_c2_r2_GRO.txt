@@ -1,0 +1,40 @@
+**Quick‑fire answers to the eight reviewer points**
+
+| # | Issue | Verdict & Corrected Specification |
+|---|-------|------------------------------------|
+|1| **MOM12‑MOM1** uses “12‑month return percentile × 1‑month *forward* return percentile.” | **Yes – look‑ahead.** The forward‑return percentile can only be computed after the 1‑month horizon has elapsed, so it is not available at order‑generation time. The point‑in‑time definition must use *historical* 1‑month **backward‑looking** return: <br>**MOM12‑MOM1(t) = PctRank( R₁₂ₘ(t) ) × PctRank( R₁ₘ(t) )** where R₁₂ₘ(t) is the realised 12‑month return ending at *t* and R₁ₘ(t) is the realised 1‑month return ending at *t*. |
+|2| **VIX regime rule** reads “VIX3M / VIX > 1.2 → bear.” | The ratio >1 indicates **contango**, i.e. normal calm markets. The intended stress signal is **backwardation** (VIX > VIX3M). The corrected rule: <br>**if ( VIX / VIX3M > 1.2 ) → bear regime** (or a more conservative threshold ≈1.1 to capture early stress). |
+|3| **Liquidity filter**: ADTV > 1 % of market cap. For AAPL this is ~\$35 B/day, far above realistic volume. | The filter is far too strict. A practical, market‑neutral rule is: <br>**ADTV ≥ 0.5 % of market cap *and* ADTV ≥ \$5 B** (or ADTV ≥ 2 M shares for equities under \$10 B cap). This retains mega‑caps while still excluding illiquid micro‑caps. |
+|4| **Ship order** conflicts with CEO’s “no shadow” policy until the account reaches \$25 K. | **Re‑stated ship order** (paper‑only, no shadow phase): <br>1. **Unit‑test & static analysis** – 100 % code coverage, lint, type‑check. <br>2. **Back‑test** the *entire* feature set on the most recent 12‑month rolling window, enforce the acceptance criteria (see #6). <br>3. **Board sign‑off** on size, frequency and concurrency parameters (no “sample‑count” wait). <br>4. **Deploy live** on the paper account with the 7 % daily entry‑kill switch as the sole daily brake. <br>5. **Post‑deployment monitoring** – immediate alert if any risk‑path exceeds board limits. |
+|5| **Drift rule** “PSI > 0.2 → halt bot” conflicts with “trade every day.” | Replace hard halt with a **fallback hierarchy**: <br>1. **Primary model** runs while PSI ≤ 0.2. <br>2. If PSI > 0.2, **switch to the last‑validated model** (the version that passed the acceptance test on the most recent out‑of‑sample window). <br>3. If the fallback also exceeds PSI > 0.2, **revert to a simple baseline** – e.g., equal‑weight long‑only of the day‑tier top‑3 by 1‑month momentum, constrained by the 7 % kill switch. <br>4. Log the drift event, send a Slack/Email alert, and continue trading under the fallback. |
+|6| **Acceptance test** uses “Deflated Sharpe Ratio hurdle of 2.0”. DSR is a probability, not a Sharpe. | Correct test (Bailey‑Lopez de Prado): <br>• **Deflated Sharpe Ratio (DSR) ≥ 0.8** (i.e. 80 % probability that the true Sharpe > 0). <br>• **Probability of Back‑test Over‑fit (PBO) ≤ 0.05** (5 % ceiling). <br>• **Minimum out‑of‑sample trades**: ≥ 300 distinct entry events (≈ 1‑month of daily trading for a 10‑name universe). <br>All three must be satisfied before any new feature ships. |
+|7| **Data plan**: Alpaca T‑1 OHLCV for equities/ETFs, yfinance only for VIX‑related series, no paid data. | **Survivorship bias handling:** <br>• Pull the **full list of constituents** for each index/ETF *as of the trade date* from a free source (e.g., Nasdaq/NYSE listings snapshots). <br>• When back‑testing, **exclude symbols that were not present** on the given date (or treat them as missing). <br>• For equities, **use Alpaca’s “delisted” flag** to drop symbols after their delisting date. <br>**Residual bias:** <br>• **Delisting/exit‑price bias** – Alpaca does not provide the exact delisting price; using the last available price can over‑state returns. <br>• **Corporate actions** (splits, dividends) are only partially adjusted in free feeds; small bias in total‑return calculations remains. <br>• **Latency bias** – T‑1 data is one‑day stale; the model will be trained on data that would not have been available in real‑time, slightly inflating performance. Mitigate by **adding a one‑day lag** to all features during back‑test. |
+|8| **Day‑tier 15‑min layer** depends on swing‑tier 4‑h flag and swing score. | **No.** The day‑tier is a *distinct* universe with its own risk budget and signal set. Coupling its intra‑day entry logic to the swing‑tier score creates unwanted cross‑tier leakage and can block day‑tier opportunities when the swing tier is dormant. The 15‑min layer should **use only day‑tier signals** (e.g., 15‑min momentum, order‑flow imbalance, micro‑regime flags). The swing‑tier flag may be consulted *only* for portfolio‑wide exposure limits, not for per‑ticket entry decisions. |
+
+---
+
+## (c) Decision model with only a few hundred labeled samples  
+
+1. **Model choice** – Use a **gradient‑boosted tree** (e.g., LightGBM) with **categorical handling** and **early‑stopping**. Trees work well with limited data and can capture non‑linear interactions without heavy regularisation.  
+2. **Feature engineering** – Limit to ~30 high‑information features: 4‑h momentum, 1‑d volatility, VIX regime, liquidity bucket, sector dummies, and a few macro‑factors (interest‑rate curve, EUR/USD).  
+3. **Training strategy** – Apply **nested time‑series cross‑validation** (rolling windows of 6‑month train / 1‑month validation) to maximise the effective sample size while preserving temporal ordering.  
+4. **Label definition** – Binary: “next‑day 2‑%‑of‑capital profit” vs. “not”. Use the **7 % kill‑switch** to discard any sample where the projected position size would exceed the daily entry limit.  
+5. **Regularisation** – Set `max_depth=6`, `min_child_samples=10`, `feature_fraction=0.8`, `bagging_fraction=0.8`. This reduces over‑fit risk given the few hundred points.  
+6. **Calibration** – After training, fit a **Platt scaling** on the validation set to map raw scores to calibrated probabilities; use these probabilities for risk‑adjusted position sizing.  
+
+---
+
+## (d) Regime layer  
+
+* **Regime definition** – Three regimes: *Calm* (VIX/VIX3M ≤ 1.1), *Normal* (1.1 < ratio ≤ 1.3), *Stress* (ratio > 1.3).  
+* **Feature set per regime** – In *Calm* allow higher leverage (up to 2× capital) and include mean‑reversion signals; in *Normal* stick to baseline momentum; in *Stress* restrict to ultra‑liquid names, reduce max position size to 0.5 % of capital, and turn off any beta‑exposure > 0.3.  
+* **Implementation** – Regime flag is computed **once per day at market open** from the previous day’s close VIX values; it gates the size‑adjustment multiplier and the allowed signal list for that day.  
+
+---
+
+## (e) Daily + weekend retrain loop  
+
+1. **Friday night (UTC 22:00)** – Pull the latest full‑day data (Alpaca OHLCV + macro).  
+2. **Saturday** – Run **feature update** (re‑compute rolling percentiles, regime flags).  
+3. **Sunday** – Execute **model retrain** using the rolling‑window scheme (last 12 months). Save the model if it meets the acceptance test (DSR ≥ 0.8, PBO ≤ 5 %).  
+4. **Monday 08:30

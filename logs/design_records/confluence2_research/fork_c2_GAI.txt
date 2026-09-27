@@ -1,0 +1,54 @@
+This design moves from "static confluence" to a "regime-aware probabilistic" framework. The low Spearman correlation (0.02) confirms your current features suffer from **multicollinearity**—they measure the same trend, giving a false sense of security.
+
+### (a) SWING Feature Set (Daily/Weekly/4H)
+Drop all 12 current points. Replace with features measuring distinct alpha sources:
+1.  **Residual Momentum (Blitz/Huij):** Return of stock minus sector/market return (20d, 60d, 250d).
+2.  **52-Week High Proximity (George-Hwang):** Current Price / 52-week High (continuous).
+3.  **Frog-in-the-Pan (Da):** Cumulative log returns with low daily volatility (price "creeping" up vs. "gapping").
+4.  **IV Skew / Put-Call Signal (Cremers-Weinbaum):** Measure option market sentiment relative to underlying price.
+5.  **Industry Relative Strength:** Rank of sector momentum vs. universe.
+6.  **Kaufman Efficiency Ratio (ER):** Measures "trendiness" vs. "noise" (20d).
+
+### (b) DAY-TIER (15-min)
+Shift to **Relative Volume (RVOL) + GEX pinning**.
+*   **Setup:** Stocks in top 5% of RVOL (3-month baseline) during the first 60 minutes.
+*   **Trigger:** Expansion from 15-min opening range + GEX (Gamma Exposure) proximity. If positive GEX, prioritize breakouts; if negative GEX, prioritize mean-reversion around VWAP.
+
+### (c) Decision Engine: Meta-Labeling
+Avoid "Fixed Scores."
+*   **Model:** Use a **Random Forest meta-labeler** (easier to interpret than GBM for small data).
+*   **Target:** Binary classification (Triple-Barrier: Profit target = 2x Volatility, Stop Loss = 1x Volatility, Time limit = 10 bars).
+*   **Execution:** The primary model predicts *direction*; the meta-labeler predicts *probability of success*. If Prob(Success) < 0.60, no entry.
+
+### (d) Regime Layer
+Use a **2-State HMM (Hidden Markov Model)**:
+*   **Inputs:** VIX level + VIX/VIX3M term structure + Breadth (TraderMonty index).
+*   **Conditioning:** 
+    *   *Regime 0 (Low Vol/Risk-On):* Long-only, focus on Momentum/52-week highs.
+    *   *Regime 1 (High Vol/Risk-Off):* Neutralize, shift to mean-reversion/protective puts or cash. 
+*   **Impact:** The meta-labeler coefficients are re-weighted based on the HMM state.
+
+### (e) Retrain Loop
+*   **Daily:** Update HMM state and meta-labeler coefficients (incremental fit).
+*   **Weekend:** Full re-run of universe.
+*   **Validation:** Use **Purged K-Fold Cross-Validation**.
+*   **Drift Monitor:** **Population Stability Index (PSI)** on input features. If PSI > 0.2, trigger "Stale Model" alert; halt bot.
+*   **Acceptance:** Backtest must exceed a **Deflated Sharpe Ratio (DSR)** hurdle of 2.0. If validation fails, revert to previous "Gold" model state (version control via Git).
+
+### (f) Historical Lab Data
+*   **Universe:** S&P 500 + Liquid Tech (NASDAQ 100).
+*   **Survivorship:** Must use a static "current" list + backfilled history to avoid look-ahead. Since FMP is limited, pull 10 years of OHLCV from Alpaca (or Yahoo Finance/yfinance for breadth) and map symbols to historical membership lists (CRSP if available; if not, use `polygon.io` historical snapshots if your budget allows).
+
+### (g) Ship Order
+1.  **Phase 1 (Non-Risk Path):** Run the new feature set in "Shadow Mode" alongside the old one. Log scores. No impact on size/frequency.
+2.  **Phase 2 (Risk-Path):** Integrate meta-labeler sizing. **Board Review Required.**
+3.  **Phase 3:** HMM Regime-switching implementation. **Board Review Required.**
+
+### (h) Biggest Failure Mode: "The Noise-Fitting Trap"
+**Failure:** Fitting 6-12 features to only 46 trade outcomes (overfitting).
+**Prevention:** 
+*   Use **feature selection** (Permutation Importance) to prune features that don't add to the Information Coefficient (IC).
+*   If the model complexity > sample size/10, aggressively regularize.
+*   *Alternative rejected:* Deep Learning/RNN. *Why?* Requires massive data to converge. With limited labels, a simpler tree-based model is more robust against "hallucinated" patterns.
+
+**Uncertainty Flag:** The 4-hour timing layer is the "middle ground" of volatility. It is susceptible to "choppy drift." Expect high noise in this timeframe during sideways market regimes.
