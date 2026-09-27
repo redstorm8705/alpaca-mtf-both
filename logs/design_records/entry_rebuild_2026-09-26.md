@@ -187,3 +187,45 @@ Verified at source:
 - The new score's entry floor is calibrated in the lab replay to give AT LEAST today's trade count; a lower count is a defect to fix, not an acceptable outcome.
 - An INCREASE in trade frequency is welcome but is risk-path under Rule E (frequency), so it goes through the board gate once at ship. That is a review, not a sample-count wait, and the board may not reject it on "fewer trades is safer" grounds (paper frame).
 - Every other size, stop and kill-switch limit is unchanged (per-trade risk cap, Kelly caps, gross and overnight caps, the 7% daily kill switch).
+
+## Lab step 1 — point-in-time universe builder (2026-09-27)
+**Sources, verified by fetch 2026-09-27:**
+- **Candidate change lists:** Wikipedia "Historical components of the S&P 500" (409 rows, 1976→2026-09-21; 244 since 2016) and "Historical components of the Nasdaq-100" (227 rows, 2007→2026-09-14; 117 since 2016).
+  - The S&P table cites mostly S&P's own documents (spglobal.com / spice-indices.com / spindices.com / press.spglobal.com links).
+- **S&P primary verification:**
+  - press.spglobal.com pages fetch directly.
+  - spglobal.com announcement PDFs return 403 to automated fetches, so the Internet Archive's raw copy (the `id_` URL) of the SAME S&P document is used and parsed with pypdf. Example: March 12, 2021 release, NXPI replaces FLS.
+- **Nasdaq primary verification:**
+  - globenewswire.com Nasdaq releases, with nasdaq.com press releases as the fallback.
+  - Current Nasdaq-100 constituents come from Nasdaq's own list API (101 securities on 2026-09-24).
+- **Current S&P 500 constituents:** the Wikipedia current list, cross-checked against the SPY fund's published holdings.
+
+**Method:**
+- Walk membership BACKWARD from the current list through each dated change to 2016-01-01.
+- Each change gets one status:
+  - VERIFIED_PRIMARY: a primary document was fetched, and the added and removed tickers or names were found in it;
+  - PRIMARY_UNREACHABLE;
+  - SECONDARY_ONLY;
+  - NO_SOURCE.
+- Nothing unverified is silently accepted. Counts are reported, and any unresolved change is listed for a second pass that searches press.spglobal.com and globenewswire.
+
+**Pitfalls handled:**
+- dual share classes (GOOG/GOOGL, FOX/FOXA, NWS/NWSA) keyed by ticker;
+- ticker renames (e.g. FB→META) are not membership changes;
+- effective date vs announcement date: the effective date is used.
+
+**Output and code:**
+- Output goes to `logs/lab/universe/`: the change ledger CSV with status and source URL, and membership intervals CSV.
+- The fetch cache lives in `data/cache/pit/`.
+- Code is a research tool, `research/pit_universe.py`, never imported by the bot.
+- Lab-only dependencies (pypdf, lxml) go in `requirements-lab.txt`, NOT the bot's `requirements.txt`, so the production environment is untouched.
+
+**Lab step 1 — as built (2026-09-27, Rafael approved):**
+- **Window:** 10 years back from today (2016-09-27 → 2026-09-27).
+- **S&P primary verification:** cited documents where fetchable, plus S&P DJI press-site releases in the 30 days before each change, with a strict S&P-500-passage match. The Internet Archive route is opt-in only: it rate-blocked us.
+- **Rafael decision:** anything not verified against a primary document is accepted on the Wikipedia table and marked in the `note` column.
+- **Result, S&P 500:** 186 of 214 changes verified against S&P's own releases, 28 from Wikipedia, 4 ticker renames.
+- **Result, Nasdaq-100:** 107 changes, all from Wikipedia.
+- 0 contradictions; 505 / 104 members on the start date.
+- **Renames:** dated, from Alpaca corporate actions via `data/alpaca_data.get_name_changes` (read-only, no trading-path caller).
+- **Reviews:** 4 cold/adversarial rounds, final PASS.

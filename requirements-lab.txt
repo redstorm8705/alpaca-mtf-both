@@ -1,0 +1,6 @@
+# Lab-only dependencies (research/, the Confluence 2.0 entry lab). NOT installed in
+# the bot's production venv; the bot uses requirements.txt.
+pandas
+requests
+lxml
+pypdf
