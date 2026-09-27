@@ -72,3 +72,9 @@ The P&L of +$16.31 and W/L 9/9 are arithmetically correct but not tier-correct.
 - Stop checked before target within a shared bar.
 - Targets for RIVN/HOOD on 7/24 estimated at 2:1.
 - The TQQQ stop is flagged unreliable.
+
+## Rafael direction (2026-09-26)
+1. **Profit lock.** Balance letting runners run against never turning a winner into a loser. Rafael asked: "if a trade is up X% relative to the stock's size, the stop should be there."
+   - An MFE / profit-lock study is running. It replays dynamic lock-to-breakeven and trail rules defined in ATR units.
+   - It also asks why the existing break-even and trail logic has not prevented winners turning into losers.
+2. **Entries (the confirmed root problem).** The swing entry strategy, and to a lesser extent QHM entries, must be rebuilt and optimized dynamically. This is the score rebuild, now the top strategic priority after the safety P0s.
