@@ -78,3 +78,46 @@ The P&L of +$16.31 and W/L 9/9 are arithmetically correct but not tier-correct.
    - An MFE / profit-lock study is running. It replays dynamic lock-to-breakeven and trail rules defined in ATR units.
    - It also asks why the existing break-even and trail logic has not prevented winners turning into losers.
 2. **Entries (the confirmed root problem).** The swing entry strategy, and to a lesser extent QHM entries, must be rebuilt and optimized dynamically. This is the score rebuild, now the top strategic priority after the safety P0s.
+
+## Profit-lock / MFE study (2026-09-26)
+**Sample:** 47 closed core swing round trips since 2026-07-01 (Alpaca fills, IEX 5-min bars).
+
+**Distances:**
+
+| | Median | IQR |
+|---|---|---|
+| Target distance | 16.1% (2.08R, 3.94×ATR) | 10.7–27.0% |
+| Best price reached (MFE) | 1.29% (0.15R, 0.36×ATR) | 0.31–4.49% |
+
+**Actual results:**
+- 9 winners and 38 losers (19% win rate), total −$202.6.
+- Losers that were up at some point: 12 reached ≥0.25R, 9 reached ≥0.5R, 4 reached ≥0.75R, and 1 reached ≥1R.
+
+**Why the existing protection never arms:**
+- Breakeven and the trail are armed ONLY after the T1 partial exit (`exit_logic.py` ~L827-839).
+- T1 sits at 40% of a ~2.1R target, about 0.83R or 1.6×ATR (`TRANCHE_FRACS`, ~L441).
+- The median MFE is 0.15R, so the protection almost never arms.
+- The MRI breakeven push is regime-gated and does not respond to the trade's own MFE.
+
+**Replay of dynamic locks** (stop fills at the stop or at a gap open):
+
+| Rule | Total P&L | Win rate |
+|---|---|---|
+| Actual | −$202.6 | 19% |
+| Breakeven at MFE ≥ 0.5×ATR, then trail 0.5×ATR below the best price | −$37.5 | 43% |
+| Same, ≥ 0.75×ATR | −$40.7 | — |
+| Same, ≥ 0.3×ATR | −$47.7 | — |
+| R-based variant | −$65.5 | — |
+| Wide trails (1.0–1.5×ATR) | about −$150 | — |
+
+- ATR-based rules beat R-based ones.
+- No rule makes the sample positive. The entries and targets remain the root problem: targets are about 12× the typical MFE.
+
+**Caveats:**
+- N=47 with 9 winners, so the 0.5×ATR peak is in-sample. Treat it as a direction, not a tuned constant.
+- ATR was recomputed independently. P&L is per share.
+
+**Recommendation (pending BGGN):**
+- Add an MFE-armed dynamic profit lock, separate from the tranche ladder. Arm at k×ATR and trail m×ATR, with k and m derived from the rolling MFE distribution. Fallback: k=0.5, m=0.5 in ATR units.
+- It only ever tightens a stop. It never loosens one.
+- Pair it with the dynamic target (P1 #5) and the entry rebuild.
