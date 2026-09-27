@@ -11137,3 +11137,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Handoff: restored the Claude-thread pick-up block (dropped by the parallel Codex rewrite in PR #412) beneath the Codex block. Weekly post-mortem is partly fixed by Codex #411.
 - F6 step 0 exists (ledger_sync cron). Found a blocking issue: the protected-symbol guard freezes all sells whenever the ledger is stale. Design B+A+D recorded as step 0b.
 - Exit-system redesign aligned. Realistic replay on 85 trades: adding the trail is worth about $100-165. The break-even (0C) claim is corrected.
+- CLAUDE.md no-shadow rule (Rafael 2026-09-26). Review: FAIL (conflict with tracker / Rule E; loose carve-out), fixed, then PASS.
