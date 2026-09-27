@@ -624,14 +624,14 @@ def _build_wtp_table(
     """
     full_header = (
         "| Symbol | Dir | Entry$ | Exit$ | P&L | Exit Reason | Score | MRI | "
-        "Earnings | TQI | Hold | R-Mult | Stage | Wkly Close | Δ Exit→Wkly |\n"
+        "Earnings | TQI | Hold | R-Mult | Stage | Fri Close | Δ/share Exit→Fri* |\n"
         "|--------|-----|--------|-------|-----|-------------|-------|-----|"
         "----------|-----|------|--------|-------|------------|-------------|\n"
     )
     full_rows  = []
     slack_rows: list[tuple] = []    # (pnl_sort_key, monospace row) — sorted worst→best for the Slack post
     total_pnl  = 0.0
-    agg_missed = 0.0
+    positive_friday_diagnostics = 0
 
     for t in trades:
         sym    = t["symbol"]
@@ -655,7 +655,7 @@ def _build_wtp_table(
             delta = (wkly - exit_) if dir_ == "long" else (exit_ - wkly)
             delta_s = (f"+${delta:.2f}" if delta >= 0 else f"-${abs(delta):.2f}")
             if delta > 0:
-                agg_missed += delta * size
+                positive_friday_diagnostics += 1
 
         stage  = _compute_weinstein_stage(weekly_closes.get(sym, []))
         entry_s = f"${entry:.2f}"  if isinstance(entry, (int, float)) else "?"
@@ -683,12 +683,13 @@ def _build_wtp_table(
         # Mobile-friendly monospace row per trade. Drops the ambiguous long/short arrow (dir_s) that
         # read as a win/loss marker next to P&L; an empty exit-reason renders as "—" (not a dangling
         # "· ·"); rows are sorted worst→best on return so the biggest loss sits on top. The full 15-col
-        # table (with direction) stays in the .md report + Gemini prompt. "(vs wk X)" = Exit→weekly-close
-        # delta (positive = the bot exited early / left money on the table; direction already baked in).
+        # table (with direction) stays in the .md report + Gemini prompt. This is deliberately a
+        # PER-SHARE Friday diagnostic, not dollars "left on the table": these rows mix horizons,
+        # partial lots and positions whose runners remained open, so summing it creates a false total.
         _rsn = rsn_s or "—"
         _sk  = pnl if pnl is not None else float("inf")   # unmatched (P&L '?') sort last
         slack_rows.append(
-            (_sk, f"{sym:<5} {pnl_s:>8}  {_rsn:<12} {stage:<8} (vs wk {delta_s})")
+            (_sk, f"{sym:<5} {pnl_s:>8}  {_rsn:<12} {stage:<8} (Fri Δ/sh {delta_s})")
         )
 
     stats = {
@@ -697,7 +698,7 @@ def _build_wtp_table(
         "winners":      sum(1 for t in trades if (t.get("pnl") or 0) > 0),
         "losers":       sum(1 for t in trades if (t.get("pnl") or 0) < 0),
         "earnings_cnt": sum(1 for t in trades if t.get("_earn")),
-        "agg_missed":   round(agg_missed, 2),
+        "positive_friday_diagnostics": positive_friday_diagnostics,
         # rows whose OPENING fill predates the 90-day lookback → entry/P&L unknown ('?'),
         # excluded from total_pnl. Surfaced so the total is never silently understated.
         "unmatched":    sum(1 for t in trades if t.get("_unmatched")),
@@ -727,7 +728,7 @@ Week reviewed: {week_str}
 Total P&L: {pnl_sign}${stats['total_pnl']} | Trades: {stats['count']} |
 Winners: {stats['winners']} | Losers: {stats['losers']} |
 Earnings-adjacent entries: {stats['earnings_cnt']} |
-Aggregate missed directional move (Δ Exit→Wkly): ${stats['agg_missed']}
+Positive Friday per-share diagnostics: {stats['positive_friday_diagnostics']}
 
 ═══════════════════════════════════════════
 WEEKLY TRADE POST-MORTEM (WTP) TABLE
@@ -746,8 +747,13 @@ Column definitions:
   R-Mult           — P&L per share / initial stop risk (positive = profit)
   Stage            — Weinstein Stage from 20-week SMA (2=advance, 3=top, 4=decline)
   Wkly Close       — Friday closing price (where stock ended the week)
-  Δ Exit→Wkly      — Additional directional move available after exit
-                     Positive = bot left money on the table; negative = exit saved from loss
+  Δ/share Exit→Fri — Per-share directional difference between the exit and Friday close.
+                     DIAGNOSTIC ONLY: it is not quantity-adjusted opportunity cost and must not be
+                     summed. Rows can mix same-day and multi-day horizons, partial exits, and open
+                     runners. A positive value does not prove the exit was wrong.
+
+Missing fields shown as '?' are UNKNOWN, never zero. Do not infer a failed score gate from missing
+metadata. Do not compare strategy quality across rows unless their tier and horizon are proven.
 
 ═══════════════════════════════════════════
 TRADE DETAIL (raw)
@@ -758,19 +764,19 @@ TRADE DETAIL (raw)
 YOUR TASK — adversarial performance audit
 ═══════════════════════════════════════════
 1. PATTERN ANALYSIS (3–5 bullets)
-   Which exit mechanisms caused the most aggregate Δ this week?
+   Which exit mechanisms deserve replay based on repeated positive per-share Friday diagnostics?
    Are earnings-adjacent entries concentrated in a specific direction or stage?
    Any MRI/Score combinations that consistently underperformed?
 
-2. SYSTEMIC FINDINGS (ranked by dollar impact, minimum 3)
-   For each: [mechanism] → [observable failure] → [dollar cost this week]
+2. SYSTEMIC FINDINGS (ranked by strength of evidence, minimum 3)
+   For each: [mechanism] → [observable failure] → [evidence]. Do not invent dollar opportunity cost.
 
 3. EXECUTION QUALITY SCORE (1–10)
    Grade execution separately from signal quality. Two-sentence justification.
 
 4. DS/GAI AUDIT PREP (paste-ready)
    Top 3 code changes with:
-   [PRIORITY] File: function_name() — Change: description — Impact: $X est.
+   [PRIORITY] File: function_name() — Change: description — Evidence and required validation.
 
 5. ONE-SENTENCE VERDICT
    Signal problem, execution problem, or both?
@@ -858,7 +864,7 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
         + f":bar_chart: *Weekly Post-Mortem — {week_str}*\n"
         f"P&L (Alpaca-FIFO): `{_pnl_disp}`  ·  "
         f"W/L `{stats['winners']}/{stats['losers']}`  ·  "
-        f"left on table `${stats['agg_missed']}`{_earn_seg}{_unm}\n"
+        f"Fri-positive diagnostics `{stats['positive_friday_diagnostics']}`{_earn_seg}{_unm}\n"
         f"{_rows}"
         f"_Full 15-col table + Gemini analysis: `logs/{report_path.name}`_"
     )
@@ -963,9 +969,12 @@ def main() -> None:
            if stats.get("unmatched") else ""),
         f"- **Trades:** {stats['count']} ({stats['winners']}W / {stats['losers']}L)",
         f"- **Earnings-adjacent entries:** {stats['earnings_cnt']}",
-        f"- **Aggregate missed directional move (Δ Exit→Wkly):** `${stats['agg_missed']}`",
+        (f"- **Friday comparison:** {stats['positive_friday_diagnostics']} positive per-share diagnostic(s); "
+         "not summed into dollars because the rows mix horizons, partial exits, and retained runners."),
         "",
         "## Trade Overview (full)",
+        ("_* Δ/share Exit→Fri is a per-share diagnostic only. It is not quantity-adjusted dollars "
+         "left on the table, and a positive value does not by itself prove an exit error._"),
         full_table,
         "",
         "---",

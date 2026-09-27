@@ -99,6 +99,102 @@ class OcoGeometry(unittest.TestCase):
         self.assertEqual(captured["req"].side, OrderSide.BUY)  # short exit = buy
 
 
+class PostFillGeometry(unittest.TestCase):
+    """The actual fill, rather than the signal reference, governs whether the setup survived."""
+
+    def test_valid_long_and_short(self):
+        self.assertEqual(dtm._post_fill_exit_geometry("long", 100, 95, 110),
+                         (True, "post-fill exit geometry valid"))
+        self.assertEqual(dtm._post_fill_exit_geometry("short", 100, 105, 90),
+                         (True, "post-fill exit geometry valid"))
+
+    def test_aapl_shape_target_crossed_by_short_fill(self):
+        ok, why = dtm._post_fill_exit_geometry("short", 338.29, 338.92, 338.76)
+        self.assertFalse(ok)
+        self.assertIn("target", why)
+
+    def test_meta_shape_stop_crossed_by_short_fill(self):
+        ok, why = dtm._post_fill_exit_geometry("short", 756.71, 750.13, 746.50)
+        self.assertFalse(ok)
+        self.assertIn("stop", why)
+
+    def test_invalid_numeric_input_fails_closed(self):
+        for bad in (float("nan"), float("inf"), 0, -1, "x"):
+            self.assertFalse(dtm._post_fill_exit_geometry("long", bad, 95, 110)[0])
+
+    def test_ambiguous_emergency_stop_submit_is_never_blindly_retried(self):
+        submit = mock.Mock(side_effect=TimeoutError("reply lost after possible acceptance"))
+        with mock.patch.object(broker, "submit_day_stop_order", submit):
+            self.assertEqual(dtm._submit_verified_plain_stop("SPY", 2, "long", 95.0),
+                             ("unknown", None))
+        submit.assert_called_once_with(
+            "SPY", 2, "sell", 95.0, tier="daytrade", allow_cancel_blocking=False
+        )
+
+    def test_broker_wrapper_none_is_ambiguous_not_absent(self):
+        # submit_day_stop_order catches transport errors internally and returns None. None can be a
+        # lost acknowledgement, so the manager must never follow it with a market reducer.
+        with mock.patch.object(broker, "submit_day_stop_order", return_value=None):
+            self.assertEqual(dtm._submit_verified_plain_stop("SPY", 2, "long", 95.0),
+                             ("unknown", None))
+
+    def test_filled_stop_without_exact_fill_is_unreadable(self):
+        order = SimpleNamespace(status="filled", filled_qty=None, filled_avg_price=None)
+        with mock.patch.object(broker, "get_order", return_value=order):
+            self.assertEqual(dtm._confirmed_order_fill("ST", 2), (False, 0.0, 0.0))
+
+    def test_terminal_partial_stop_without_price_is_never_zero_fill(self):
+        for status in ("canceled", "expired", "rejected", "done_for_day"):
+            with self.subTest(status=status):
+                order = SimpleNamespace(status=status, filled_qty="1", filled_avg_price=None)
+                with mock.patch.object(broker, "get_order", return_value=order):
+                    self.assertEqual(dtm._confirmed_order_fill("ST", 2), (False, 0.0, 0.0))
+
+    def test_terminal_stop_with_malformed_qty_is_unreadable(self):
+        order = SimpleNamespace(status="canceled", filled_qty="unknown", filled_avg_price=None)
+        with mock.patch.object(broker, "get_order", return_value=order):
+            self.assertEqual(dtm._confirmed_order_fill("ST", 2), (False, 0.0, 0.0))
+
+
+class InvalidGeometryReconcile(unittest.TestCase):
+    def test_flat_position_with_live_stale_stop_never_terminalizes(self):
+        target = {
+            "symbol": "AAPL", "side": "short", "qty": 1, "entry_price": 338.29,
+            "trade_id": "DT-AAPL-x", "order_id": "ENTRY", "stop_order_id": "STALE",
+            "geometry_error": "short target crossed fill",
+        }
+        mark = mock.Mock()
+        halt = mock.Mock()
+        cancel = mock.Mock(return_value=False)
+        heal = mock.Mock(return_value=True)
+        with mock.patch.object(dtm, "_enabled", return_value=True), \
+             mock.patch.object(dtm, "_flatten_targets", return_value={"AAPL": target}), \
+             mock.patch.object(dtm, "_load_state", return_value={}), \
+             mock.patch.object(broker, "get_open_position", return_value=None), \
+             mock.patch.object(dtm, "_has_live_daytrade_stop", return_value=True), \
+             mock.patch.object(dtm, "_cancel_recorded_exit_legs_confirmed", cancel), \
+             mock.patch.object(dtm, "_record_confirmed_stop_exit", heal), \
+             mock.patch.object(dtm, "_mark_symbol_flattened", mark), \
+             mock.patch.object(dtm, "_halt_unresolved_exit", halt):
+            result = dtm.reconcile_open_state()
+        self.assertEqual(result["cleared"], 0)
+        cancel.assert_called_once_with("AAPL")
+        heal.assert_not_called()
+        mark.assert_not_called()
+        halt.assert_called_once()
+
+    def test_cancel_request_without_terminal_confirmation_is_not_clearance(self):
+        state = {"entry::AAPL::x": {
+            "symbol": "AAPL", "state": "filled", "stop_order_id": "STALE",
+        }}
+        live = SimpleNamespace(id="STALE", status="accepted", order_type="stop")
+        with mock.patch.object(dtm, "_load_state", return_value=state), \
+             mock.patch.object(broker, "get_order", return_value=live), \
+             mock.patch.object(broker, "cancel_stop_confirmed", return_value=False) as cancel:
+            self.assertIs(dtm._cancel_recorded_exit_legs_confirmed("AAPL"), False)
+        cancel.assert_called_once_with("AAPL", "STALE")
+
+
 class OcoLegIds(unittest.TestCase):
     """The OCO PARENT is the take-profit; the STOP is the child leg. _oco_leg_ids must return the
     parent id as the TP id — the pre-fix bug left tp_id empty, which halted every harvested winner."""
@@ -163,6 +259,26 @@ class HasLiveDaytradeStop(unittest.TestCase):
 
 
 class TakeProfitHeal(unittest.TestCase):
+    def test_already_accounted_partial_fill_does_not_close_residual(self):
+        from strategy import day_tier_logger
+        import trade_logger
+        events = [
+            {"event": "entry_fill", "trade_id": "T1"},
+            {"event": "stop_placed", "stop_order_id": "OLD_STOP"},
+            {"event": "partial_exit_fill", "order_id": "OLD_STOP", "fill_qty": 1},
+        ]
+        # State ownership is already reduced to the one-share residual. The old stop's cumulative
+        # one-share fill is fully accounted and must not be replayed as a new residual exit.
+        target = {"trade_id": "T1", "symbol": "SPY", "side": "long",
+                  "entry_price": 100.0, "qty": 1, "stop_order_id": "OLD_STOP"}
+        with mock.patch.object(day_tier_logger, "read_events_checked", return_value=(events, True)), \
+             mock.patch.object(dtm, "_confirmed_order_fill", return_value=(True, 1.0, 96.0)), \
+             mock.patch.object(day_tier_logger, "log_exit_fill") as log_exit, \
+             mock.patch.object(trade_logger, "log_event") as trade_exit:
+            self.assertIs(dtm._record_confirmed_stop_exit(target), False)
+        log_exit.assert_not_called()
+        trade_exit.assert_not_called()
+
     def test_tp_fill_recorded_as_take_profit(self):
         from strategy import day_tier_logger
         import trade_logger
