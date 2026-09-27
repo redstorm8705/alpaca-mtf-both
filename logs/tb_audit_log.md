@@ -11135,3 +11135,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Profit-lock study: T1-gated breakeven/trail never arms (median MFE 0.15R vs T1 ~0.83R). An MFE-armed 0.5xATR lock plus 0.5xATR trail replays -$202.6 -> -$37.5 (in-sample). F6 shared plan BGGN-reviewed.
 - F6 trigger backtest 2020-2025: proposed rule fires 19 times vs 2 for the current rule (the current rule misses crashes: 0 fires in Mar 2020). Three spec gaps fixed. Lock+size BGGN aligned (dedicated Kelly key; no up-front size-up).
 - Handoff: restored the Claude-thread pick-up block (dropped by the parallel Codex rewrite in PR #412) beneath the Codex block. Weekly post-mortem is partly fixed by Codex #411.
+- F6 step 0 exists (ledger_sync cron). Found a blocking issue: the protected-symbol guard freezes all sells whenever the ledger is stale. Design B+A+D recorded as step 0b.
