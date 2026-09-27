@@ -43,6 +43,58 @@ reducer, durable entry+exit rows, and no stale stop. On the next weekly report, 
 approved from this item unless live evidence exposes a new failure.
 
 
+## ⏩ (2026-09-26, Claude interactive — safety P0s / F6 / exits thread) — pick up here for this thread
+
+**SHIPPED 2026-09-25/26 — P0 stop race (Rafael approved):** the MRI breakeven push and the exit_logic
+stop moves (trail ratchet, break-even promotion, tranche + trail-phase partials) now use Alpaca replace — verify:
+`grep -c replace_stop_order execution/lifecycle.py`→`3`, `grep -c cancel_order execution/lifecycle.py`→`0`. Broker helpers PR #388, MRI breakeven push PR #389, exit_logic moves PR #392 — verify:
+`gh pr view 392 --json state`→`MERGED`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`bc6feec Merge pull
+request #392…`; `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def _move_stops" execution/exit_logic.py'`→`1`.
+Status: **deployed, unexercised** (market closed since the deploy) — verify: `ssh mtf-bot 'grep -c "moved in place"
+/home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26. Also PR #391 (Slack audit card actionable-only) — verify:
+`gh pr view 391 --json state`→`MERGED`. Decision (Rafael): core swing keeps entering + collecting data — verify:
+`grep -c "keep taking new entries" logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md`→`1`.
+
+**SHIPPED 2026-09-26 — P0-1 kill switch blocks entries only (PR #395):** exits, stop moves/placement and
+reconciliation keep running while tripped — verify: `gh pr view 395 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c _kill_block_entries strategy/run_cycle.py'`→`6`.
+Behaviour check — verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_run_cycle_kill_switch_exits 2>&1 | tail -1'`→`OK`.
+Status: **deployed, unexercised** — verify deployed: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`955d440 Merge pull request #395…`;
+unexercised: `ssh mtf-bot 'grep -c "exits still managed" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**SHIPPED 2026-09-26 — P0-3 every-cycle broker-stop check (PR #397):** carried positions and
+positions with a stored broker stop id are now checked every RTH cycle. A missing stop is placed; a
+breached level is covered at the actual fill. Entry-day software-stop positions still wait for the
+pre-close sweep. Verify: `gh pr view 397 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`717e83e Merge pull request #397…`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def broker_stop_scope" execution/stop_protection.py'`→`1`.
+Behaviour check (placement, cover, scope) — verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_stop_protection 2>&1 | tail -1'`→`OK`.
+Deployed — verify: `ssh mtf-bot 'systemctl is-active mtf-bot'`→`active` and the `git log` line above. Status: **deployed, unexercised** (market closed) —
+verify: `ssh mtf-bot 'grep -c "cycle-check scope" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**SHIPPED 2026-09-26 — P0-5 one stop (PR #399) + P0-4a fail-closed controls (PR #400)** — details in `logs/tb_audit_log.md`.
+Verify: `gh pr view 399 --json state`→`MERGED`; `gh pr view 400 --json state`→`MERGED`;
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`→`b30adfd Merge pull request #400…`;
+post-fill shift present: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "def _shift_sized_levels" execution/entry_logic.py'`→`1`;
+after-hours VIX re-widening removed: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_vix_mult_gtc" strategy/run_cycle.py'`→`0`;
+fail-closed account read: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "_control_fault_streak" strategy/run_cycle.py'`→`6`;
+tests: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && venv/bin/python3 -m unittest tests.test_p04a_fail_closed tests.test_p05_one_stop 2>&1 | tail -1'`→`OK`.
+Status: **deployed, unexercised** — verify: `ssh mtf-bot 'grep -c "account read failed\|Stop/target shifted to fill" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`→`0` as of 2026-09-26.
+
+**⏩ EXACT NEXT ACTION:** (1) overnight early exit replayed on 31 trades: actual −$283.81 vs held −$457.33, so the rule stays (verify: `grep "| Total P&L" logs/design_records/exit_and_reports_audit_2026-09-26.md`→`| Total P&L | **−$283.81** | **−$457.33** |`); (2) Strategy Edge Report rebuild on one Alpaca source; weekly post-mortem partly fixed by Codex PR #411 (the "left on table" label is now a per-share diagnostic — verify: `ssh mtf-bot "grep -c 'Fri-positive diagnostics' /home/ubuntu/mtf-bot/weekly_postmortem.py"`→`1`); tier separation and partial-exit handling still open; (3) F6 go-live with SHARED symbols — 13-step BGGN-reviewed plan (verify: `grep -c "Shared-symbol build plan" logs/design_records/f6_golive_2026-09-26.md`→`1`), next: step 0 shadow reconciliation; F6 crash trigger backtested + fixed (verify: `grep -c "F6 trigger backtest 2020" logs/design_records/exit_and_reports_audit_2026-09-26.md`→`1`); (3b) profit-lock: MFE-armed dynamic lock recommended (replay −$202.6 → −$37.5; verify: `grep -c "Profit-lock / MFE study" logs/design_records/exit_and_reports_audit_2026-09-26.md`→`1`) + entry (score) rebuild, top strategic priority (verify: `grep -c "Rafael direction (2026-09-26)" logs/design_records/exit_and_reports_audit_2026-09-26.md`→`1`); (4) P0-4b D2 awaiting Rafael (verify: `grep -c "D2 build awaits Rafael" logs/design_records/p04b_limits_replay_2026-09-26.md`→`1`).
+(core + day tier + QHM), enforcement of `MAX_OVERNIGHT_EXPOSURE_PCT`, and dynamic daily/drawdown limits (spec:
+`logs/design_records/bggn_tp_sizing_dynamic_limits_2026-09-25.md` Q2; July–Sept equity replay required first) —
+verify: `grep -c "MAX_OVERNIGHT_EXPOSURE_PCT" config.py`→`1`.
+Then the P1 queue:
+- Open bug (found 2026-09-14, not fixed): `strategy/volatility_regime.py` writes VIX OR SPY realized vol into one
+  `realized_vol` field. Verify: `grep -c "field-mixing" logs/tb_audit_log.md`→`2`.
+- Codex audit items 5–10 (Rafael 2026-09-26): per-setup calibrated models replacing the static confluence total; exits learned
+  from MFE/MAE paths; an account-wide allocator; execution-quality capture; restart state restore; evidence-preserving reports.
+  Item 9's premise was checked: the 5 restarts on 9/26 up to 12:10 UTC were the nightly cron (07:05) and 4 deploys; the
+  memory watchdog's restart ledger does not exist. Verify: `ssh mtf-bot 'journalctl -u mtf-bot --since "2026-09-26 00:00" --until "2026-09-26 12:10" --no-pager | grep -c "Started MTF Bot"'`→`5`;
+  `ssh mtf-bot 'ls /home/ubuntu/mtf-bot/logs/offhours_restarts.log'`→`No such file or directory`.
+  The rebuild-from-zero half is still unverified.
+
 ## ⏩ (2026-09-19, prior — Core MTF thread)
 
 **CORE MTF SHORT REPLAY FOUNDATION — RESEARCH ONLY; NO LIVE/PAPER BEHAVIOR CHANGE.** Terminology is fixed for new work: **Day Tier** is same-session day trading; **Core MTF** is the legacy-`intraday` higher-timeframe strategy that may carry overnight. Broker FIFO for 2026-08-20..2026-09-19: Core MTF shorts 9 closed lots, 0 wins / 9 losses, -$80.49; Day Tier shorts are separate (4 lots, -$7.81). P0 source finding remains quarantined: `data/fetcher.fetch_bars()` requests through now and returns the current last row unfiltered; Core MTF entry/exit scoring and weekly bias consume `iloc[-1]` / latest weekly close, so a regular-session decision can use a forming bar. No live correction or new Core MTF short rule is approved until the full BGGN + mechanical/adversarial/cold/exact-preship path passes.

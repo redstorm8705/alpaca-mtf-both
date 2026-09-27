@@ -121,3 +121,65 @@ The P&L of +$16.31 and W/L 9/9 are arithmetically correct but not tier-correct.
 - Add an MFE-armed dynamic profit lock, separate from the tranche ladder. Arm at k×ATR and trail m×ATR, with k and m derived from the rolling MFE distribution. Fallback: k=0.5, m=0.5 in ATR units.
 - It only ever tightens a stop. It never loosens one.
 - Pair it with the dynamic target (P1 #5) and the entry rebuild.
+
+## BGGN on profit lock + size (2026-09-26) — Gro, GAI and board sizing seat converge
+Rafael's intent: take profit sooner AND use more size.
+- **ATR is already per stock.** Each stock's own 14 daily bars are measured before entry (`data/premarket.calculate_atr` → % of price × entry price). TSLA's lock distance is therefore wider in $ than AAPL's automatically.
+
+**Design:**
+
+(a) **The lock.**
+- Move to breakeven at 0.5×ATR MFE, then trail 0.5×ATR behind the best price.
+- It is independent of the tranche ladder and only ever tightens a stop.
+- Per-stock adaptation: log each symbol's MFE distribution now. Let the multiplier drift (bounded 0.4–0.6×ATR) only once a symbol has ≥30 of its own trades. The Kelly warm-up gate works the same way.
+
+(b) **Size.**
+- Book lock-era trades to their OWN Kelly key, mirroring the mean-reversion key. The lock changes the payoff distribution.
+- Size then rises AUTOMATICALLY as the rolling out-of-sample Kelly for that key turns positive.
+- At n<30, or while the edge is negative, the existing `KELLY_MIN_RISK_PCT` floor (0.75%) keeps trades and data flowing.
+- There is no hand-added "lock bonus".
+- Rejected: an up-front size-up now. The median trade reaches only 0.15R, so most losers still hit the full pre-lock stop on the bigger share count.
+
+(c) **Guardrails (unchanged):** `KELLY_MAX_RISK_PCT` 4.5% per-trade re-clamp, and the 7% daily kill switch.
+
+## BGGN on the F6 activation trigger (2026-09-26) — Gro, GAI and board macro seat converge; backtest in progress
+**Current rule:** SPY close ≤ −max(2%, 0.15×VIX)%, spot VIX only, flat 20% of cash per event.
+
+**Proposed rule:**
+- **Gate:** the SPY drop (existing formula, or an intraday low ≤ −3.5%) AND VIX confirmation. VIX confirmation is VIX ≥ 1.3× its 20-day average OR VIX/VIX3M > 1 (term inversion).
+- **Ladder:**
+
+| Tier | Condition | Cash deployed | Names |
+|---|---|---|---|
+| A | SPY −2% to −4% | 10% | 2 |
+| B | SPY −4% to −7%, with inversion | 20% | 3 |
+| C | ≤ −7% in a day, or ≤ −10% over 3 days, with VIX > 35 | 30% | all |
+
+- **Name selection:** prefer names down the most relative to SPY, and rotate buckets.
+- **Anti-overtrade:** 4 events per month, $200 cash floor, and a 5-day cooldown after a Tier A event only.
+- **Status:** historical fire rates are UNVERIFIED. A 2020–2025 backtest is running.
+
+## F6 trigger backtest 2020-01-01 → 2026-09-25 (SPY SIP daily from Alpaca; VIX/VIX3M daily from yfinance; OCI `/tmp/f6_backtest.py`)
+**Fires per year:**
+
+| | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | Total |
+|---|---|---|---|---|---|---|---|
+| Proposed | 10 | 0 | 3 | 0 | 1 | 5 | 19 |
+| Current | 0 | 0 | 1 | 0 | 0 | 1 | 2 |
+
+- Calm years: zero fires under both rules.
+
+**The current rule breaks exactly in crashes.** Its threshold, max(2%, 0.15×VIX), rises with VIX:
+- It fired **zero** times in Feb–Mar 2020. On 2020-03-16 (−10.8%) its threshold was −12.4%.
+- It missed 5 Aug 2024.
+- It caught only 1 of 4 April 2025 crash days.
+
+**Forward returns after proposed fires:**
+- Mid/late-Mar 2020, Apr 2020, Aug 2024 and Apr 2025 fires mostly returned +12% to +27% over the next 60 days.
+- Early Feb–Mar 2020 fires were down 12–31% after 20 days, because the crash was still unfolding. Laddering sends more cash to the deeper tiers later.
+- 2022 fires were flat.
+
+**Spec gaps found → fixes:**
+1. The 4-events-per-month cap blocked the worst day of the crash (2020-03-16, −10.8%, VIX 82.7). → Tier C bypasses the monthly count cap, bounded by cash only.
+2. An intraday-low-only fire on a positive close had no tier (2022-01-24). → Tier by the WORSE of the close return and the intraday low, and require a negative close.
+3. The rule misses grinding bear-market drops without a VIX spike (2022-09-13). → Accepted: Rafael wants crash-like only.
