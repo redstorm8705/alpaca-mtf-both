@@ -11175,3 +11175,4 @@ E0 review rounds: cold-2nd r1 PASS; adversarial r1 FAIL (ClosedBars alias bypass
 **Ship/deploy:** PR #429 merged as `aebc8d182e448f3556380520724f37227ec63ec3`; OCI fast-forwarded to that exact commit, services `mtf-bot`, `mtf-writer`, `mtf-http`, and `nginx` all active; `DEPLOY_OK` and `LIVE_VALIDATION_OK`.
 
 **Next:** after Claude ships Confluence 2.0, audit its edge tracking against this lifecycle contract. Preserve exact IDs and fail-closed semantics; do not create a parallel score/edge truth source.
+- 2026-09-27 lab step 2 (lab_bars + fetch_bars_window asof): final preship GAI APPROVE; Gro WAIVED — Groq daily token limit exhausted (TPD 200k) and NVIDIA substitute 404; applied the standing Rafael rule (2026-07-07) Gro-unavailable -> board majority + GAI APPROVE. One reject ('date not imported') refuted with evidence (line 21 import, ruff F821 clean). Follow-up: NVIDIA substitute model id is dead.
