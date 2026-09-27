@@ -1,0 +1,27 @@
+**1. REPLACEMENT – AGREE**  
+The procedure is fully deterministic, data‑driven and respects the “no‑paper‑only” rule. All thresholds (IC‑t ≥ 3.0, DSR ≥ 0.9, PBO ≤ 0.05, Spearman ≤ 0.6) are quantifiable and can be evaluated each weekend without human discretion. The “decayed‑feature‑survival‑until‑replacement” rule guarantees that the bench never goes empty, eliminating the need for a defensive‑mode fallback that would otherwise violate the daily‑kill‑switch‑only constraint.  
+
+**2. WINDOW – AGREE**  
+The rolling 250‑day window with the regime‑state and draw‑down requirements guarantees sufficient diversity for the HMM‑based regime detection. Computing IC per‑regime and requiring sign‑agreement on ≥ 2 of 3 horizons prevents over‑fitting to a single horizon. The 60‑day half‑life for live weighting is a standard choice that balances responsiveness and variance. The re‑validation triggers (50/100/150/200 live trades) give a hard stop on stale signals without adding any extra daily kill‑switch.
+
+**3. RATES – AGREE**  
+All rate‑related features are generated algorithmically and fed through the same bench‑selection pipeline as any other candidate. No hard multipliers are hard‑coded; the beta‑interaction term is learned from data, satisfying the “no hand‑set 1.25x/0.75x” rule. The fallback to sector‑median beta when history is short is deterministic and bounded, so the model never falls back to an ad‑hoc rule‑set.
+
+**4. DRIVER ATTRIBUTION – AGREE**  
+The ridge‑regression attribution framework is purely explanatory; it never blocks orders. The “uncertain” flag only affects the UI, not execution, keeping the kill‑switch as the sole daily brake. All factor definitions are fixed, and the validation step for “stock aligned with the top driver” mirrors the bench‑scoring pipeline, so no extra discretionary halts are introduced.
+
+---
+
+### NITS (non‑blocking theoretical concerns)
+
+| # | Issue | Why it matters | Suggested mitigation (light‑weight) |
+|---|-------|----------------|-------------------------------------|
+| 1 | **Feature‑decay floor at 0** – a truly dead feature can linger indefinitely, consuming a slot and potentially crowding out a better candidate if the replacement never reaches the high IC‑t threshold. | Could cause a “dead‑slot” for many weeks, delaying portfolio improvement. | Add a hard‑expire rule (e.g., if IC‑t < 1.0 for 8 consecutive windows, force removal). |
+| 2 | **Spearman ≤ 0.6 orthogonalization** – pairwise correlation may miss higher‑order collinearity (e.g., three features each < 0.6 but jointly explain the same variance). | Residual IC could be overstated, leading to redundant slots. | Periodically run a variance‑inflation factor (VIF) check on the incumbent set. |
+| 3 | **Regime detection window** – requiring ≥ 2 HMM regimes and a ≥ 10 % drawdown can force the window to expand far beyond 250 days in long‑bull markets, diluting the relevance of recent data. | Stale IC estimates may be used for weighting. | Cap the maximum window extension (e.g., 350 days) and fallback to a “single‑regime” mode with a penalty on IC‑t. |
+| 4 | **Rate‑beta OLS on 60 d** – in thinly‑traded stocks the 60‑day beta estimate can be noisy, and the sector‑median fallback may introduce a lag if the sector itself is rotating. | May inject systematic bias into the bench ranking for small‑cap stocks. | Apply a shrinkage estimator (e.g., James‑Stein) to the beta before feeding it into the bench. |
+| 5 | **Attribution R² < 0.15 trigger** – 10 consecutive sessions of low R² is a relatively short horizon; transient market regime changes could repeatedly fire the “uncertain” flag, cluttering the UI and confusing operators. | UI fatigue could lead traders to ignore the flag altogether. | Require a minimum of 15 sessions or a moving‑average R² before flagging. |
+| 6 | **Live‑trade sanity‑check on label sign** – using the 46 live labels only as a sign check assumes those labels are unbiased; any systematic lag or mis‑classification propagates to the feature gating. | May inadvertently prune a genuinely profitable feature that merely disagrees on sign due to label delay. | Add a tolerance band (e.g., allow opposite sign on ≤ 1 of the 3 horizons) before rejecting. |
+| 7 | **No size caps or fallback halts** – while the spec forbids defensive caps, the 7 % daily kill‑switch only stops new entries; existing positions can still breach risk limits if a feature’s weight spikes. | Potential for a single large‑weight feature to blow the daily loss budget before the kill‑switch triggers. | Enforce a per‑position max‑notional‑size (e.g., 5 % of capital) as a hard portfolio‑level rule, not a “defensive mode”. |
+
+All four items satisfy the hard constraints of the paper‑trading environment and the single daily brake policy. The NITs above are minor refinements that improve robustness without violating any of the stated rules.

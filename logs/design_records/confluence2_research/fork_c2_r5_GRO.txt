@@ -1,0 +1,108 @@
+**Executive Summary**  
+The paper‑trading bot must stay “feature‑rich” while never letting a decayed signal shrink the model. Below is a concrete, end‑to‑end design that satisfies the four CEO requests, ties directly into the existing swing‑tier pipeline and respects the 7 % daily‑kill‑switch. All numbers are hard‑coded; any change will be driven by the same validation logic that adds/replaces features, so the system remains self‑maintaining.
+
+---
+
+## 1. Feature‑Decay → Automatic Replacement  
+
+### 1.1 Candidate Bench  
+| Source | Assets | Frequency | Typical Indicator Types |
+|--------|--------|-----------|--------------------------|
+| **Macro‑Data** | FMP Treasury curve, Fed Funds, CPI, Unemployment, PMI, ISM, Euro‑Dollar Index | Daily (end‑of‑day) | Yield‑slope, term‑premium, surprise‑vs‑forecast, delta‑momentum |
+| **Rate‑Sensitivities** | 10Y, 2Y, 5Y, 30Y, 2s10s spread | Daily | Beta to yields (regression), rolling correlation, convexity |
+| **Market‑Breadth** | Adv/Dec, NYSE‑TRIN, CBOE Put‑Call, VIX/VIX3M, High‑Low‑Vol ratio | Daily | Z‑score, change‑rate, regime‑mask |
+| **Sector‑Style** | Sector ETFs, style factors (value, momentum, quality, low‑beta) | Daily | Relative strength, cross‑sectional IC |
+| **Alternative Data** | News‑sentiment (headline polarity), Google‑Trends “recession”, Oil‑Inventory, USO flow | Daily | Sentiment score, anomaly‑z‑score |
+| **Derived** | Existing 8 swing features + any new engineered feature that passes the pipeline | Daily | – |
+
+All candidates are pre‑computed at **close** and stored in a feature‑warehouse (Parquet, keyed by ticker/date). The bench contains **≈ 150** distinct time‑series (≈ 30 macro, 20 rate‑beta, 30 breadth, 30 sector/style, 40 alt‑data).  
+
+### 1.2 Decay Detection  
+A feature is declared “decayed” when **any** of the following holds for the **last N\_decay** days (see §2 for N\_decay):  
+
+| Condition | Threshold |
+|-----------|-----------|
+| Exponential‑weighted IC (λ = 0.94) < **0.02** (floor = 0) |  |
+| Rolling‑IC variance > **4×** historic variance (unstable) |  |
+| Pair‑wise Pearson ρ with any other active feature > **0.85** (redundancy) |  |
+| Daily‑size contribution (size × weight) < **0.5 %** of total notional for 5 consecutive days |  |
+
+If a feature meets **any** condition it is flagged “candidate‑for‑removal”.
+
+### 1.3 Replacement Pipeline  
+
+1. **Screen** the bench for **inactive** features (not already in the active set) that pass a **minimum IC filter**: 30‑day EW‑IC ≥ 0.02 *and* 60‑day EW‑IC ≥ 0.01.  
+2. **Rank** the screened list by **IC‑to‑IC‑ratio**:  
+
+   \[
+   \text{Score}_i = \frac{\text{IC}_{i,30}}{\max(\text{IC}_{j,30})} \times
+   \bigl(1 - \max_{k\in\mathcal{A}} \rho_{i,k}\bigr)
+   \]
+
+   where \(\mathcal{A}\) = current active set. This penalises redundancy.  
+
+3. **Top‑K (K=5)** candidates go to **validation** (see §2).  
+
+4. **Selection** – the first candidate that clears validation becomes the replacement; it is added to the active set **immediately** (next trading day) and the decayed feature is retired.
+
+### 1.4 Minimum Active‑Feature Count & Redundancy Guard  
+* **Floor** = 8 (the original swing tier count). The system never drops below 8; if a decay occurs and **no candidate passes validation**, the decayed feature is **re‑enabled** for an additional 10‑day grace period while the pipeline searches again. If after three grace cycles (30 days) no replacement is found, the system **flags a “feature‑starvation” alert** and disables the decay rule for that slot until a new viable candidate appears.  
+
+* **Redundancy limit**: when adding a new feature, enforce \(\max_{k\in\mathcal{A}} \rho_{i,k} < 0.70\). If the top‑ranked candidate exceeds this, the next ranked is tried; if none satisfy, the decay flag is cleared (see above).  
+
+---
+
+## 2. Evaluation Window & Adaptive Decay  
+
+### 2.1 Baseline Window  
+* **IC‑estimation window** = 60 calendar days (≈ 45 trading days).  
+* **EW‑IC decay smoothing factor** λ = 0.94 (≈ 15‑day half‑life).  
+
+A feature must have **≥ 30 labeled observations** (trades) in the window to produce a statistically meaningful IC (95 %‑CI ≈ ± 0.05 at 30 samples).  
+
+### 2.2 Dynamic Adaptation  
+
+| Market State | Adjustment |
+|--------------|------------|
+| **High‑vol regime** (SPY 20‑day realized vol > 15 %) | Extend IC window to **90 days** (more samples, smoother IC). |
+| **Low‑vol regime** (realized vol < 10 %) | Shrink to **45 days** (faster detection). |
+| **Regime‑conditional IC** – if an HMM regime assigns > 70 % probability to “trend‑strong” state, **weight** the IC by regime confidence (IC\* = IC × γ, γ = 1.2). Conversely, “uncertain” regime γ = 0.8. |
+
+### 2.3 Promotion Thresholds  
+
+* **IC‑pass**: EW‑IC ≥ **0.03** for at least **2 out of the last 3** overlapping windows (e.g., 60‑day, 45‑day, 30‑day).  
+* **Label‑count**: ≥ 25 closed swing trades *or* ≥ 150 historical labels (from back‑test universe) within the same window.  
+* **Multi‑horizon agreement**: the candidate must be **positive** (IC > 0) on **both** the 5‑day and 20‑day label horizons.  
+
+If a candidate fails any of the three criteria it is discarded from the K‑list; the next candidate is evaluated.  
+
+### 2.4 Rationale  
+
+* **60 days** balances statistical power (≥ 30 labels) with responsiveness to regime shifts.  
+* **Dynamic stretch/shrink** protects against over‑reacting in choppy markets while still catching genuine decay in trending markets.  
+* **Multi‑horizon** ensures the feature is not horizon‑specific (e.g., a 5‑day momentum spike that disappears at 20‑days).  
+
+---
+
+## 3. Bond‑Yield‑Based Features  
+
+### 3.1 Market‑Level Regime Signals  
+
+| Feature | Definition | Look‑back | Update Frequency |
+|---------|------------|-----------|-------------------|
+| **10Y‑Momentum** | Δ10Y% = (10Y\_close – 10Y\_close‑5d) / 10Y\_close‑5d | 5 d | Daily EOD |
+| **2s10s Slope** | (10Y – 2Y) / 10Y | 1 d | Daily |
+| **Yield‑Speed** | (Δ10Y% – Δ2Y%) / Δt (t = 1 d) | 1 d | Daily |
+| **Real‑Rate Proxy** | 10Y – CPI‑YoY | 30 d | Daily (CPI released monthly; forward‑fill) |
+| **Term‑Premium Surprise** | (10Y – expected 10Y from Fed FOMC forecast) | 1 d | Daily (FOMC data) |
+
+*Each market‑level series is **z‑scored** over a 90‑day rolling window and fed into the HMM as an observation vector (alongside SPY returns, VIX, breadth). The regime‑posterior directly **scales** all feature weights: in a “high‑yield‑rise” regime (10Y‑Momentum > 0.5 σ) the weight of all **rate‑beta** stock features is multiplied by **1.25**; in a “yield‑fall” regime the factor is **0.75**.*
+
+### 3.2 Stock‑Level Sensitivities  
+
+For each tradable ticker \(i\):
+
+1. **Yield‑Beta (β\_i)** – OLS regression over the last **120 trading days**:  
+
+   \[
+   r_{i,t}= \

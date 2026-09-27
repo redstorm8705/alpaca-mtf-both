@@ -11142,3 +11142,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Entry rebuild diagnosis and plan (E0-E3) aligned across BGGN (design record entry_rebuild_2026-09-26.md). Shadow suggestions rejected.
 - Rafael: Confluence 2.0 by exhaustive research; swing moves to higher timeframes; 15-min layer to day tier; closed bars; daily retrain.
 - 2026-09-27 Confluence 2.0 BGGN design aligned (board 4/4 + Gro + GAI, 4 rounds); research catalogs + reviewer transcripts in logs/design_records/confluence2_research/; next E0 closed-bar gate.
+- 2026-09-27 Confluence 2.0 additions aligned (replacement-never-empty, 250-750d lab window, rates, market-driver indicator, swing drops SPY 5-min gate, primary-source universe); board 2 seats + Gro + GAI AGREE after r7.

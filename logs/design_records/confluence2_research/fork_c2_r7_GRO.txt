@@ -1,0 +1,15 @@
+**AGREE**
+
+**Why the amendment fixes the original flaw**
+
+1. **No forward‑looking delay** – The window still draws exclusively from existing historical bars; extending it never “waits for a crash.” By capping the backward look‑back at 750 trading days the algorithm never reaches beyond the data already stored (2016‑present), so every decision is made on material that is already in the lab.
+
+2. **Regime detection remains possible** – Even in a prolonged melt‑up, the 750‑day cap guarantees that the window will eventually include at least two distinct market states (e.g., pre‑COVID vs. post‑COVID, 2022 bear vs. 2025 tariff‑drop). If only one regime is present, the system logs “single‑regime evidence” and proceeds rather than stalling.
+
+3. **Recent data dominates** – The 250‑day half‑life weighting inside the window ensures that the freshest 250 days have ~50 % of the total weight, sharply attenuating older regime‑specific noise. This prevents the window from being “anchored on stale regime data.”
+
+4. **Live responsiveness is preserved** – The separate 60‑day half‑life exponential weighting applied to daily live IC updates guarantees that the live model adapts quickly to any emerging shift, independent of the static lab window.
+
+5. **Safety envelope intact** – All positions still carry stop‑losses; the 7 % daily kill‑switch still applies only to new entries. The amendment does not alter any risk‑management code paths.
+
+**Conclusion:** The proposed amendment eliminates the “wait‑for‑crash” deadlock while retaining the original intent of robust regime‑aware weighting. No concrete input can be shown that would cause the system to defer a decision or use only obsolete data under these rules. Hence the change is acceptable.

@@ -1,0 +1,11 @@
+**AGREE.**
+
+The amendment resolves the "waiting for a crash" fallacy by anchoring the window in deep historical data rather than forward-looking expectations, while the 250-day half-life ensures the "single-regime" bias is suppressed by recency. The 60-day live IC prevents stale regime data from overriding current volatility.
+
+**Concrete Failing Input -> Wrong Outcome:**
+
+*   **Input:** The "750-day window" contains only the post-2022 recovery (steady low-volatility grind). The agent detects a "Single-Regime" state (as per the amendment). 
+*   **The Flaw:** If the market enters a *structural regime shift* (e.g., a transition from a decade of disinflationary growth to a structural inflationary regime), the 750-day window is mathematically incapable of identifying the new volatility profile. 
+*   **The Outcome:** The bot ignores the structural shift because the 60-day IC is too short-term to capture the trend change, and the 750-day window is dominated by the previous regime's characteristics. The bot treats a new, high-volatility structural regime as "noise" within the historical sample, failing to tighten stops when it should, potentially triggering the 7% kill-switch repeatedly during the transition. 
+
+The amendment cures the "wait-time" bug but exposes the system to **Regime Lag** during macro-structural pivots. Data collection must explicitly flag "Regime Transition" periods as an independent variable to prevent the bot from over-trusting historical distributions that no longer exist.

@@ -1,0 +1,22 @@
+### Judgements
+
+**1. REPLACEMENT: AGREE.**
+The rigorous MDA/PBO/DSR filter prevents overfitting by ensuring incremental informational value. The "CEO escalation" clause effectively solves the "bench empty" problem by turning an automated system into a manual pivot point, preventing forced low-quality trading.
+
+**2. WINDOW: OBJECT.**
+*   **Failing Scenario:** A "calm" 250-day period with no 10% drawdown (e.g., a melt-up).
+*   **Outcome:** The system enters a state of "infinite wait" for a crash before updating the lab clock. If the window never extends, the model relies on stale, outdated regime data, rendering the 60-day EWMA (which is responsive) useless because the feature selection layer remains anchored in a regime that may have shifted structurally.
+
+**3. RATES: AGREE.**
+Treating `rate_beta` as a first-class feature candidate rather than a hand-coded multiplier correctly pushes the logic into the IC/orthogonalization engine. This eliminates the risk of "static bias" where a manual multiplier is applied correctly in one regime but becomes a performance drag in another.
+
+**4. DRIVER ATTRIBUTION: AGREE.**
+The constraint that attribution is purely a "dashboard/explainer" unless it passes the rigorous bench-candidate validation ensures that the bot doesn't "hallucinate" cause-effect relationships to justify trades.
+
+***
+
+### NITS
+*   **Item 1 (Replacement):** With a 0.6 Spearman correlation ceiling, you risk an "incumbent lock." If two highly predictive features are correlated at 0.61, the better one stays, but you lose the potential benefits of feature ensemble variance reduction. Consider a feature-grouping approach.
+*   **Item 2 (Window):** The 50/100/150/200-trade re-validation triggers may be too infrequent given the high velocity of daily trading. You might hit a regime shift at 120 trades and run on obsolete validation stats for 30 days. Consider a rolling "check-sum" of live vs. lab performance.
+*   **Item 3 (Rates):** Regarding `rate_beta` sector-median fallback: A low-liquidity/high-volatility small-cap stock might be assigned a "defensive" sector median beta that completely misses the idiosyncratic impact of a rate shock on its specific capital structure. Ensure the sector-median fallback is weighted by the confidence interval of the OLS.
+*   **Item 4 (Attribution):** R^2 < 0.15 is a standard noise threshold, but ensure the "Attribution Uncertain" display triggers a specific flag in your logs so that, during post-mortem, you can distinguish between "Bot was uncertain" and "Bot made a trade that failed despite high attribution."

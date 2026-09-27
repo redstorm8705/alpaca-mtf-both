@@ -1,0 +1,8 @@
+COUNTER-PROMPT on item 2 (WINDOW) of the Confluence 2.0 additions (PAPER account $2.5K -> $25K; data collection #1; trades daily; 7% daily kill switch is the only brake). You objected: in a calm melt-up with no 10% drawdown in the trailing 250 days, the window "waits for a crash" and anchors on stale regime data.
+
+Facts relevant to that scenario:
+- The window is evaluated in the historical lab, which already holds Alpaca daily bars from 2016 onward. Extending the window means reaching BACKWARD into existing history (2018 Q4, 2020 Covid, 2022 bear, Apr 2025 tariff drop all exist), never waiting for a future drawdown. No decision is ever deferred.
+- Proposed amendment: the backward extension is capped at 750 trading days (~3 years); inside the window, observations are weighted with a 250-day half-life so recent data dominates; if even 750 days lacks two regime states, decide on the 750-day window and log "single-regime evidence".
+- The daily live weights are separate: an exponentially weighted IC with a 60-trading-day half-life, updated every day, so live weighting stays responsive regardless of the lab window.
+
+With that amendment, answer AGREE or OBJECT with a concrete failing input -> wrong outcome. Under 250 words.
