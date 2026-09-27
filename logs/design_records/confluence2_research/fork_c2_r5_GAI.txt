@@ -1,0 +1,52 @@
+This framework treats the bot as a research entity first, a capital allocator second. Given the $2.5K base and the goal of 10x growth, we prioritize **signal signal-to-noise ratio (SNR)** over "optimism bias."
+
+### 1. Feature Lifecycle & Replacement Mechanism
+To prevent "feature atrophy," we enforce a strict 8-feature mandatory structure.
+
+*   **The Bench:** You must maintain a "Shadow Pool" of 20+ features (technical, macro, microstructure) calculated in parallel to the active 8.
+*   **The Replacement Protocol:** Every weekend, calculate the **Information Coefficient (IC) decay rate** for all 8 active features. Any feature with a 20-day rolling IC < 0.02 (the "noise floor") is flagged for "Retirement."
+*   **Selection & Validation:** A replacement candidate must pass:
+    1.  **DSR (Deflated Sharpe Ratio) > 2.0** on the historical lab (2016+).
+    2.  **Orthogonality Check:** Variance Inflation Factor (VIF) < 3.0 vs. the 7 remaining incumbents.
+    3.  **Minimum Count:** If < 8 features meet these, the bot enters **"Defensive Mode,"** capping position sizes at 50% of the standard max until a new candidate passes a 10-day paper-trading "Verification Buffer."
+*   **Failure Scenario:** If the Bench is empty, the bot halts all new entries. *Alternative rejected:* Just averaging features. *Why:* It masks degradation and creates a "zombie" model.
+
+### 2. Evaluation Window & Adaptation
+One week is indeed noise. A feature’s validity should be judged on **60 trading days**—roughly one earnings quarter.
+
+*   **The Recommendation:** Use a **Regime-Conditional IC.** Evaluate features only when the HMM regime matches the current one (e.g., "High-Vol/Hawkish"). 
+*   **Adaptive Window:** Use a **Dynamic Bayesian Updating** approach. The weight of a feature is not just its average IC, but its *posterior probability of providing an edge* given the last 60 days of labels. 
+*   **Minimum Labels:** A feature requires at least 30 closed trades in the specific regime to be considered "Validated." 
+*   **Reasoning:** Markets rotate leadership; a "Momentum" feature should not be nuked just because the market is chopping sideways for a month, provided its IC remains positive in "trending" regimes.
+
+### 3. Bond Yields & Macro Integration
+Rates are the "gravity" of your portfolio.
+
+*   **Market-Level (Regime):** The **Real Yield Proxy** (10Y Yield minus 10Y TIPS implied inflation expectation). *Definition:* 20-day ROC of this proxy. *Use:* If the 20-day change exceeds 2 standard deviations, the HMM shifts to "Tightened Liquidity" regime, forcing a 0.75x size multiplier.
+*   **Stock-Level (Sensitivity):** **10Y-Beta.** Calculate daily as `cov(stock_returns, 10Y_yield_changes) / var(10Y_yield_changes)` over a 63-day rolling window.
+*   **Integration:**
+    *   **Scoring:** Incorporate `(1 - abs(10Y-Beta)) * Sentiment` as a modifier. Stocks that are *de-coupled* from rate spikes (low absolute beta) gain rank in "High Rate" regimes.
+    *   **Curve Slope (2s10s):** If the curve steepens rapidly (> 10bps/week), the bot automatically decreases exposure to IWM (Small Caps) and increases to SPY (Core) to mitigate credit-risk sensitivity.
+
+### 4. The "Market Attribution Engine" (MAE)
+This is your "Why" engine. It prevents overfitting by forcing the bot to explain returns through exogenous factors.
+
+*   **Attribution Method:** **Rolling Multi-Factor Attribution (Ridge Regression).**
+    *   *Equation:* $R_{spy} = \alpha + \beta_1(\Delta Yield_{10y}) + \beta_2(\Delta DXY) + \beta_3(\Delta Vol) + \beta_4(\Delta Oil) + \dots + \epsilon$
+    *   *Calculation:* Run daily for 1-day, 5-day, 21-day, and 63-day windows.
+*   **Output:** The "Top Driver" is the factor with the highest $| \beta \times \Delta Factor |$. 
+*   **Integration:**
+    *   **Dashboard:** Displays the "Attribution Tree" (e.g., "This week's -2.1% SPY return: 60% Rates, 30% Vol, 10% Residual").
+    *   **Actionable Logic:** If the "Residual" (unexplained return) exceeds 40% of total variance, the MAE flags the market as **"Macro-Disconnected."** 
+    *   **Fail-Safe:** In a "Macro-Disconnected" state, the bot ignores the MAE for sizing and reverts to raw price-action signals (the swing tier features).
+*   **Validation:** Backtest the MAE by comparing it to consensus Bloomberg/Reuters headlines for the same periods. If the MAE’s "Top Driver" matches the professional consensus < 30% of the time, the factor weights are re-normalized to the 10-year historical covariance matrix.
+
+### Summary Table for Implementation
+| Component | Metric | Threshold / Frequency |
+| :--- | :--- | :--- |
+| **Feature Maintenance** | IC Decay | Retire if < 0.02 (rolling 20-day) |
+| **Evaluation Window** | Regime-Conditional | 60 days + 30 closed trades |
+| **Rate Features** | 10Y-Beta | < 0.3 Beta = Safe Harbor; > 0.8 = Vol-sensitive |
+| **MAE Strategy** | Residual | Halt if > 40% unexplained variance |
+
+**Uncertainty Flag:** The 10Y-Beta is inherently unstable during "liquidity events." The bot may perceive a stock as "safe" right until the moment it cascades due to margin calls. Recommend adding a "Volatility/Volume Spike" check—if realized vol exceeds 3x its 20-day moving average, ignore the beta and treat the stock as "High Risk/Reduce Size" regardless of its rate-sensitivity.

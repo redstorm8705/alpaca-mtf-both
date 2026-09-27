@@ -123,3 +123,61 @@
 - (c) The entry-rate bound for the "selectivity-only" path (the risk seat suggests ≤20%).
 
 **⏩ Next:** E0 closed-bar gate (full patch sequence).
+
+## Confluence 2.0 — additions from Rafael (2026-09-27), BGGN-aligned
+Rafael's direction:
+- decayed indicators must always be replaced;
+- one week is too short to judge a feature;
+- add bond yields;
+- add a "why is the market moving" indicator for the day, week, month and quarter;
+- the SPY 5-min bar does not predict 2–20 day holds;
+- the index-change reference source is approved, with primary sources required.
+
+Alignment: board seats LdP+Tulchinsky and Shaw+PTJ+Dalio; Gro and GAI both AGREE on items 1–4. GAI objected to the window, then withdrew the objection after counter-prompt round r7. Transcripts: `confluence2_research/fork_c2_r5..r7*`.
+
+Verified at source:
+- The FMP free tier has the daily Treasury curve and monthly CPI back to 2016.
+- FMP has no free dollar index, so the UUP ETF (Alpaca T1) is the dollar proxy.
+- The 10Y yield rose 4.96% → 5.18% from Sep 22 to Sep 24, 2026.
+- The macro risk index has no Treasury-yield input.
+
+1. **Replacement — a slot is never emptied.**
+   - Structure: 8 active swing slots (floor 8).
+   - The bench:
+     - the remaining evidence-ranked research candidates: put-call/IV-RV, high-volume premium, TSMOM, BAB, idiosyncratic-vol filter, overnight/intraday decomposition, short-term reversal timing, the rates features, dispersion;
+     - second, Qlib/101-alpha candidates;
+     - refilled by a standing quarterly research sweep.
+   - Weekend selection runs in the lab:
+     - orthogonalize each candidate against the incumbents, then rank by incremental IC of the residual;
+     - MDA on the meta-model confirms;
+     - reject if |Spearman| > 0.6 against any incumbent;
+     - promote only if t ≥ 3.0, DSR ≥ 0.9 and PBO ≤ 0.05.
+   - A decayed feature keeps its own IC weight (floored at 0) until its replacement passes. A slot unreplaced for 4 weekend cycles escalates to Rafael.
+   - Rejected: forced low-quality fills, size caps or halts when the bench is empty, paper-verification buffers.
+2. **Judging window.** Decay and promotion are decided on the lab clock.
+   - Trailing 250 trading days containing at least 2 HMM regime states and at least one ≥10% drawdown. Otherwise the window extends BACKWARD into existing history, capped at 750 days, with a 250-day recency half-life; if still one regime, decide on 750 days and log it.
+   - IC is computed per regime: a feature that works in only one regime is regime-gated, not pruned.
+   - Sign must agree on at least 2 of the 5/10/20-day horizons.
+   - Live daily weights use an EW-IC with a 60-trading-day half-life.
+   - Live labels serve as a sign sanity check and trigger full re-validation at 50/100/150/200 trades.
+   - A regime-transition flag is recorded as a regime-layer input (GAI).
+3. **Rates.**
+   - **Regime component** (can only dampen size; unknown → neutral):
+     - rate velocity = the 5-day change in the 10Y, z-scored against its trailing 252 days;
+     - the 2s10s level percentile and its 20-day change;
+     - real rate = 10Y minus CPI YoY.
+   - **Stock level:** a 60-day OLS beta to daily 10Y changes, shrunk toward the sector median (Gro/GAI nit), entered as a bench candidate and as a rate-regime interaction.
+   - No hand-set multipliers.
+4. **Market-driver indicator.**
+   - Method: ridge regression of SPY returns on dVIX, d10Y, d2s10s, UUP, USO, the HYG-LQD spread, the QQQ-IWM spread, sector dispersion and breadth.
+   - Windows: day 20 days, week 60, month 252, quarter 504.
+   - Output: contribution = beta × move, a residual share, and the top-3 drivers.
+   - Event tags come from the FMP economic/earnings calendars, with the matching headline attached from the news pipeline.
+   - OOS R² < 0.15 for 10 sessions → the output reads "attribution uncertain" (display only; trading continues, and the flag is logged).
+   - "Stock aligned with the top driver" is lab-tested as a bench candidate. If it fails, the indicator runs as the dashboard/decision-log explainer with that limitation stated.
+5. **Swing gate.** Rafael: the SPY 5-min bar does not predict 2–20 day holds, so it is dropped for the swing tier and kept for the day tier. The Architecture Invariant #1 wording is amended when the swing-gate code ships (Rafael decision, all six voices aligned).
+6. **Point-in-time universe (Rafael approved).**
+   - Build it from index-change tables, but verify every add and delete against the PRIMARY announcements: S&P Dow Jones Indices press releases (press.spglobal.com, reachable) and Nasdaq's own announcements.
+   - Where a primary source can't be found, the change is flagged as unverified in the CSV, never silently accepted.
+
+**Still open for Rafael:** the entry-rate bound for the selectivity-only path (the risk seat suggests ≤20%).
