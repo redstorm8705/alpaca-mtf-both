@@ -11158,3 +11158,20 @@ Fork (board McKinney+Harris, Gro, GAI — all Option B): additive drop_forming_b
 E0 review rounds: cold-2nd r1 PASS; adversarial r1 FAIL (ClosedBars alias bypass of AST lint) → detectors resolve aliases/getattr + self-test; self-check found repo scan vacuous under .claude/ worktree path → repo-relative + >50-file assert; r2 FAIL (dataclasses.replace bypass) → ClosedBars.__post_init__ self-validation; r3 FAIL (in-place mutation of cb.df) → private _frame + copy-on-read; r4 FAIL (TTL cache served a bar captured while forming as closed after its period ended) → fetch_bars stamps attrs["fetched_at"], fetch_closed_bars judges closed at min(now, fetched_at), fails closed if missing; r5 PASS. 19 tests pass locally and on OCI (py3.10, full copy of main); attrs compatibility probed on OCI pandas 2.3.3 (concat/rolling/ewm/resample/deepcopy OK; no repo code reads attrs or serialises frames). Follow-ups: fetch_bars cache-miss returns the cached object itself (pre-existing aliasing); horizon_state._drop_partial unconditional drop; signal_generator weekly bias reads the partial week (retires with old score).
 - 2026-09-27 E0 closed-bar gate shipped PR #424 (b6a6d3a), OCI deployed + restarted, health OK, tests OK on OCI; deployed, unexercised. Next: point-in-time universe for the lab.
 - 2026-09-27 Slack test-page guard shipped PR #426 (0 test sends, was 12); lab step 1 point-in-time universe shipped PR #427 (S&P 186/214 verified vs S&P DJI, rest Wikipedia per Rafael; NDX Wikipedia; 0 contradictions). Follow-up: 34 pre-existing test failures on main under discover (incl. day-tier OCO geometry after 2b8e3e5).
+
+
+## 2026-09-27 — Strategy Edge broker-ledger rebuild (ChatGPT/Codex signed)
+
+**Scope:** reporting/evaluation framework only. No Confluence 2.0, entry, exit, sizing, threshold, risk-limit, or broker-mutation code changed. Claude owns the Confluence 2.0 integration decision.
+
+**Defect corrected:** the card mixed Alpaca FIFO headline figures with close-leg rows and corrupted tracker metadata. It could disagree on trade count/win rate and report stale hold/drawdown data. PR #429 makes one Alpaca fills+orders snapshot authoritative, preserves entry-tier ownership, groups by entry-order lifecycle, separates realized partial cash from completed outcomes, and aggregates drawdown by broker close activity. Metadata without exact lifecycle identity is withheld.
+
+**Adversarial rounds:** REJECTS caught unmatched-history and fractional-fill false-zero output; FIFO-leg drawdown inflation; missing fills-to-orders joins; unavailable-card crash; missing close-fill identity; non-finite/non-positive and malformed price/quantity acceptance; and implicit closure-bound close IDs. All were fixed with fail-closed paths and regressions. Final Board and adversarial verdicts PASS on the rebased tree.
+
+**BGGN/mechanical:** Groq + Google AI Studio APPROVE `reporting/pnl_ledger.py` and `reporting/report_figures.py`. Google AI Studio APPROVE `monthly_review.py` and its tests; Groq is recorded WAIVED on those two files because its daily token quota was exhausted after approving the core accounting modules. NVIDIA was bypassed per Rafael's standing direction. Preship gate and GitHub CI PASS.
+
+**Validation:** 16 new Strategy Edge tests + 9 report-coherence checks PASS locally and on OCI Python 3.10; py_compile, ruff E/W/F/B, mypy, and diff check PASS. Live read-only ledger: 416 realized legs, 213 completed entry-order lifecycles, 3 partial-open lifecycles, +$71.05 realized, $2.04 invariant drift, and zero unmatched/missing-join/missing-close-ID integrity gaps. Live monthly HTML rendered 13,237 bytes.
+
+**Ship/deploy:** PR #429 merged as `aebc8d182e448f3556380520724f37227ec63ec3`; OCI fast-forwarded to that exact commit, services `mtf-bot`, `mtf-writer`, `mtf-http`, and `nginx` all active; `DEPLOY_OK` and `LIVE_VALIDATION_OK`.
+
+**Next:** after Claude ships Confluence 2.0, audit its edge tracking against this lifecycle contract. Preserve exact IDs and fail-closed semantics; do not create a parallel score/edge truth source.
