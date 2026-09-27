@@ -66,6 +66,8 @@ class ReportFigures:
     unrealized: float = 0.0
     invariant: dict = field(default_factory=dict)         # ledger's equity reconciliation (realized+unrealized vs equity-deposits)
     unmatched_closes: list = field(default_factory=list)  # closes with no prior lot — real cash, $0 in round_trips (surfaced, never fabricated)
+    missing_order_joins: list = field(default_factory=list)  # entry fills absent from order history; tier attribution is incomplete
+    missing_close_identities: list = field(default_factory=list)  # realized close fills lacking both activity and order IDs
     _by_exit_date: dict = field(default_factory=dict)      # exit_date -> [round_trips]  (built once)
 
     # ── GRID / accounting layer — attributed by the closing FILL date ──────────────────────
@@ -152,6 +154,100 @@ class ReportFigures:
             "win_rate": (wins / total * 100.0) if total else 0.0,
         }
 
+    def strategy_edge_stats(self) -> dict:
+        """Lifecycle-level strategy evidence from this one Alpaca FIFO snapshot.
+
+        Realized P&L includes every closed leg. Trade count, win rate, payoff, and profit factor
+        include only fully closed entry lifecycles, so a profitable partial cannot masquerade as a
+        winning completed trade while the residual remains open.
+        """
+        groups: dict[tuple, dict] = {}
+        for r in self.round_trips:
+            identity = r.get("entry_order_id") or r.get("entry_time")
+            key = (r.get("symbol"), identity, r.get("direction"),
+                   r.get("tier", "unattributed"))
+            g = groups.setdefault(key, {
+                "symbol": r.get("symbol"), "entry_time": r.get("entry_time"),
+                "entry_order_id": r.get("entry_order_id", ""),
+                "direction": r.get("direction"), "tier": r.get("tier", "unattributed"),
+                "pnl": 0.0, "exit_time": "", "complete": True,
+            })
+            g["pnl"] += float(r.get("pnl", 0.0))
+            g["exit_time"] = max(str(g["exit_time"] or ""), str(r.get("exit_time") or ""))
+            g["complete"] = bool(g["complete"] and r.get("lifecycle_complete", True))
+
+        completed = [g for g in groups.values() if g["complete"]]
+        partial_open = [g for g in groups.values() if not g["complete"]]
+
+        def _stats(rows: list, realized: float) -> dict:
+            pnls = [float(x["pnl"]) for x in rows]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p < 0]
+            gross_w = sum(wins)
+            gross_l = abs(sum(losses))
+            return {
+                "realized_pnl": round(realized, 2),
+                "completed_trades": len(rows),
+                "wins": len(wins),
+                "win_rate": round(len(wins) / len(rows) * 100.0, 1) if rows else None,
+                "profit_factor": round(gross_w / gross_l, 2) if gross_l > 0 else None,
+                "avg_win": round(gross_w / len(wins), 2) if wins else None,
+                "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
+            }
+
+        tiers = ("intraday", "daytrade", "qhm", "forever6", "unattributed")
+        by_tier = {}
+        for tier in tiers:
+            tier_rows = [g for g in completed if g["tier"] == tier]
+            tier_realized = sum(float(r.get("pnl", 0.0)) for r in self.round_trips
+                                if r.get("tier", "unattributed") == tier)
+            by_tier[tier] = _stats(tier_rows, tier_realized)
+
+        # Cash-path drawdown uses atomic broker close fills. One sell can match several
+        # FIFO lots; those legs share one execution and must be summed before measuring
+        # the cash path, otherwise lot ordering fabricates an intra-fill drawdown.
+        by_exit_fill: dict[tuple, float] = defaultdict(float)
+        for r in self.round_trips:
+            exit_key = r.get("exit_fill_id") or (
+                r.get("exit_order_id"), r.get("exit_time"))
+            by_exit_fill[exit_key] += float(r.get("pnl", 0.0))
+        cash = peak = max_dd = 0.0
+        exit_time_by_key = {
+            (r.get("exit_fill_id") or (r.get("exit_order_id"), r.get("exit_time"))):
+            str(r.get("exit_time") or "") for r in self.round_trips
+        }
+        for _atomic_key, pnl in sorted(
+                by_exit_fill.items(), key=lambda item: exit_time_by_key[item[0]]):
+            cash += pnl
+            peak = max(peak, cash)
+            max_dd = max(max_dd, peak - cash)
+
+        same_day_minutes: list[float] = []
+        multi_day_days: list[int] = []
+        for g in completed:
+            try:
+                en = datetime.fromisoformat(str(g["entry_time"]).replace("Z", "+00:00"))
+                ex = datetime.fromisoformat(str(g["exit_time"]).replace("Z", "+00:00"))
+                if en.date() == ex.date():
+                    same_day_minutes.append(max(0.0, (ex - en).total_seconds() / 60.0))
+                else:
+                    multi_day_days.append(max(1, (ex.date() - en.date()).days))
+            except (TypeError, ValueError):
+                continue
+
+        overall = _stats(completed, self.lifetime_realized())
+        overall.update({
+            "partial_open_lifecycles": len(partial_open),
+            "partial_open_realized_pnl": round(sum(float(x["pnl"]) for x in partial_open), 2),
+            "max_realized_drawdown": round(max_dd, 2),
+            "avg_same_day_hold_minutes": (
+                round(sum(same_day_minutes) / len(same_day_minutes)) if same_day_minutes else None),
+            "avg_multi_day_hold_days": (
+                round(sum(multi_day_days) / len(multi_day_days), 1) if multi_day_days else None),
+        })
+        return {"overall": overall, "by_tier": by_tier, "completed": completed,
+                "partial_open": partial_open}
+
 
 def reconcile(headline_total: float, day_cell_values: list, tol: float = 0.01) -> tuple[bool, float]:
     """Page-coherence invariant: the headline must equal the sum of the day-cells it is built
@@ -196,5 +292,7 @@ def build_report_figures() -> ReportFigures:
         unrealized=float(led.get("unrealized") or 0.0),
         invariant=led.get("invariant") or {},
         unmatched_closes=led.get("unmatched_closes") or [],
+        missing_order_joins=led.get("missing_order_joins") or [],
+        missing_close_identities=led.get("missing_close_identities") or [],
         _by_exit_date=dict(by_exit),
     )
