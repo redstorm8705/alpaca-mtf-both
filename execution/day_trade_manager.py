@@ -83,7 +83,7 @@ _HALT_KEY = "_tier_halted_date"   # data-blind fail-closed halt; protected posit
 # Terminal entry-record states pruned after _STATE_TTL_DAYS (reliability: unbounded-growth leak +
 # rising fsync cost on the hot path). Non-terminal states are NEVER pruned (they gate re-entry).
 _TERMINAL_STATES = frozenset({"protected", "flattened_no_stop", "flatten_failed",
-                              "submit_failed", "unfilled_cancelled"})
+                              "flattened_invalid_geometry", "submit_failed", "unfilled_cancelled"})
 _STATE_TTL_DAYS = 3
 
 
@@ -460,6 +460,38 @@ def _compute_stop_price(trigger: dict, direction: str, entry_px: float) -> float
         return None
 
 
+def _post_fill_exit_geometry(direction: str, fill_px: float, stop_px: float,
+                             target_px: "float | None") -> tuple[bool, str]:
+    """Validate exit geometry against the actual fill instead of the older signal reference.
+
+    A marketable limit can fill through the structural stop or target. In that case the original
+    setup no longer exists and an OCO leg would be inverted or immediately marketable. The caller
+    must flatten the new lot rather than retain an invalid trade behind a stop-only fallback.
+    """
+    try:
+        fill = float(fill_px)
+        stop = float(stop_px)
+        target = float(target_px) if target_px is not None else None
+        values = (fill, stop) if target is None else (fill, stop, target)
+        if not all(math.isfinite(v) and v > 0 for v in values):
+            return False, "post-fill geometry contains a non-finite/non-positive price"
+        if direction == "long":
+            if not stop < fill:
+                return False, f"long stop {stop:.4f} is not below fill {fill:.4f}"
+            if target is not None and not fill < target:
+                return False, f"long target {target:.4f} is not above fill {fill:.4f}"
+        elif direction == "short":
+            if not fill < stop:
+                return False, f"short stop {stop:.4f} is not above fill {fill:.4f}"
+            if target is not None and not target < fill:
+                return False, f"short target {target:.4f} is not below fill {fill:.4f}"
+        else:
+            return False, f"unknown direction {direction!r}"
+        return True, "post-fill exit geometry valid"
+    except (TypeError, ValueError) as e:
+        return False, f"post-fill geometry unreadable: {e!r}"
+
+
 # ── min-stop-distance gate (hairpin fix Part A — 2026-09-18, board + Gro + GAI + masked-loss) ─────
 def _robust_atr_5m(symbol: str) -> "float | None":
     """Robust 5-min ATR in DOLLARS = the MEDIAN true range over the last DAYTRADE_ATR_PERIOD bars
@@ -620,18 +652,28 @@ def _confirmed_order_fill(order_id: str, expected_qty: int) -> tuple[bool, float
         order = broker.get_order(order_id)
         if order is not None:
             readable = True
+            status = _enum_text(getattr(order, "status", None))
+            zero_terminal = ("canceled", "expired", "rejected", "done_for_day")
             try:
                 qty = float(getattr(order, "filled_qty", 0) or 0)
                 price = float(getattr(order, "filled_avg_price", 0) or 0)
-                if math.isfinite(qty) and math.isfinite(price) and qty > 0 and price > 0:
+                numeric = math.isfinite(qty) and math.isfinite(price) and qty >= 0 and price >= 0
+                exact_fill = numeric and qty > 0 and price > 0
+                if exact_fill:
                     latest = (qty, price)
                     if qty + 1e-9 >= expected_qty:
                         return True, *latest
-                status = _enum_text(getattr(order, "status", None))
-                if status in ("canceled", "expired", "rejected", "done_for_day"):
+                # Every terminal order with a possible positive fill requires exact cumulative qty
+                # AND price. Only an explicitly numeric qty=0 proves a zero-fill cancellation.
+                if status == "filled" and not exact_fill:
+                    return False, 0.0, 0.0
+                if status in zero_terminal and not (exact_fill or (numeric and qty == 0)):
+                    return False, 0.0, 0.0
+                if status in zero_terminal:
                     return True, *latest
             except (TypeError, ValueError):
-                pass
+                if status == "filled" or status in zero_terminal:
+                    return False, 0.0, 0.0
         if i < polls - 1:
             time.sleep(wait)
     return readable, *latest
@@ -647,6 +689,62 @@ def _stop_is_live(order_obj) -> bool:
     if order_obj is None or order_obj is broker.PROTECTION_ALREADY_HELD or order_obj is broker.PROTECTION_UNKNOWN:
         return False
     return bool(getattr(order_obj, "id", None))
+
+
+def _submit_verified_plain_stop(symbol: str, qty: int, direction: str, stop_px: float):
+    """Submit one scoped emergency stop and return ``(status, order)``.
+
+    ``status`` is ``live`` only for a broker-acknowledged order, ``absent`` only for an explicit
+    no-order result, and ``unknown`` when acceptance may have happened but cannot be proved.
+
+    Deliberately one attempt: an exception can be a lost acknowledgement after broker acceptance.
+    Retrying with a new client-order id could create two full-quantity stops that later reverse the
+    account. The caller halts/reconciles an ambiguous result instead.
+    """
+    from execution import broker
+    stop_side = "sell" if direction == "long" else "buy"
+    try:
+        stop_obj = broker.submit_day_stop_order(
+            symbol, qty, stop_side, stop_px, tier="daytrade", allow_cancel_blocking=False)
+    except Exception as e:  # noqa: BLE001 — ambiguous accept: never retry with a fresh id
+        logger.warning("[%s] emergency stop submit raised (no blind retry): %s", symbol, e)
+        return "unknown", None
+    if _stop_is_live(stop_obj):
+        return "live", stop_obj
+    if (stop_obj is None or stop_obj is broker.PROTECTION_ALREADY_HELD
+            or stop_obj is broker.PROTECTION_UNKNOWN):
+        return "unknown", None
+    return "unknown", None
+
+
+def _live_net_covers_owned(symbol: str, direction: str, qty: int) -> bool:
+    """Prove a stop for `qty` reduces the live net; false on any ambiguity."""
+    if qty < 1:
+        return False
+    try:
+        from execution import broker
+        pos = broker.get_open_position(symbol)
+        if pos is None:
+            return False
+        net_is_long = getattr(pos, "side", None) == "long"
+        net_qty = abs(int(float(getattr(pos, "qty", 0) or 0)))
+        return net_is_long == (direction == "long") and net_qty >= qty
+    except Exception:  # noqa: BLE001 — an exposure-increasing stop is worse than a failed restore
+        return False
+
+
+def _durable_exit_recorded(trade_id: str) -> bool:
+    """True only when the day-tier journal contains a complete exit for this exact trade."""
+    if not trade_id:
+        return False
+    try:
+        from strategy import day_tier_logger
+        events, readable = day_tier_logger.read_events_checked(trade_id)
+        return bool(readable
+                    and any(e.get("event") == "entry_fill" for e in events)
+                    and any(e.get("event") == "exit_fill" for e in events))
+    except Exception:  # noqa: BLE001 — unreadable journal can never prove a terminal exit
+        return False
 
 
 def _record_partial_exit(target: dict, order_id: str, fill_qty: int, fill_price: float,
@@ -817,6 +915,55 @@ def _cancel_daytrade_exit_legs(symbol: str) -> None:
             pass
 
 
+def _cancel_recorded_exit_legs_confirmed(symbol: str) -> "bool | None":
+    """Cancel recorded Day Tier exit legs and prove every one terminal.
+
+    True means every readable recorded id is terminal; False means at least one remains live or
+    pending; None means an id/order is unreadable. A successful cancel request alone is never proof.
+    """
+    from execution import broker
+    try:
+        state = _load_state()
+    except Exception:  # noqa: BLE001
+        return None
+    ids: set = set()
+    for k, v in state.items():
+        if not (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol):
+            continue
+        for field in ("oco_order_id", "stop_order_id", "tp_order_id"):
+            order_id = str(v.get(field) or "")
+            if order_id:
+                ids.add(order_id)
+    terminal = {"filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"}
+    unresolved = False
+    for order_id in ids:
+        try:
+            order = broker.get_order(order_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if order is None:
+            return None
+        status = _enum_text(getattr(order, "status", None))
+        if status in terminal:
+            continue
+        order_type = _enum_text(
+            getattr(order, "order_type", None) or getattr(order, "type", None))
+        if "stop" in order_type:
+            if not broker.cancel_stop_confirmed(symbol, order_id):
+                unresolved = True
+            continue
+        try:
+            broker.cancel_order(order_id)
+            reread = broker.get_order(order_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if reread is None:
+            return None
+        if _enum_text(getattr(reread, "status", None)) not in terminal:
+            unresolved = True
+    return not unresolved
+
+
 def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: float = 0.0,
                      trade_id: str = "", order_id_hint: str = "", reason: str = "flatten") -> bool:
     """Close ONLY the day-tier's own `qty` shares of `symbol` (B1). position_side is the day-tier's
@@ -959,7 +1106,9 @@ def _flatten_targets() -> dict:
                                     "trade_id": str(v.get("coid") or ""),
                                     "order_id": str(v.get("order_id") or ""),
                                     "stop_order_id": str(v.get("stop_order_id") or ""),
-                                    "tp_order_id": str(v.get("tp_order_id") or "")}
+                                    "tp_order_id": str(v.get("tp_order_id") or ""),
+                                    "oco_order_id": str(v.get("oco_order_id") or ""),
+                                    "geometry_error": str(v.get("geometry_error") or "")}
                 elif sym and sym in targets:
                     # Enrich the log-sourced target with the state's recorded exit-leg ids so the
                     # reconcile HEAL can book a TP-harvested WINNER (take_profit) even if the
@@ -968,6 +1117,10 @@ def _flatten_targets() -> dict:
                         targets[sym]["stop_order_id"] = str(v.get("stop_order_id") or "")
                     if not targets[sym].get("tp_order_id"):
                         targets[sym]["tp_order_id"] = str(v.get("tp_order_id") or "")
+                    if not targets[sym].get("oco_order_id"):
+                        targets[sym]["oco_order_id"] = str(v.get("oco_order_id") or "")
+                    if not targets[sym].get("geometry_error"):
+                        targets[sym]["geometry_error"] = str(v.get("geometry_error") or "")
     except Exception as e:  # noqa: BLE001
         logger.warning("flatten targets: state read failed: %s", e)
     return targets
@@ -1293,16 +1446,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         state[key].update(state="filled", fill_qty=filled_qty_i, fill_px=fill_px)
         _save_state(state)
 
-        # B2 (bracket-exit build): place a broker-native OCO exit pair (take-profit LIMIT +
-        # protective MARKET stop, one-cancels-other) sized to the ACTUAL filled qty, so the tier
-        # HARVESTS the target instead of only stopping out / EOD-flatting (the v1 gap: it computed
-        # the pin but never placed an order to take it). If the OCO can't be placed for any reason,
-        # FALL BACK to the plain protective stop (today's verified path) — degrade to stop-only,
-        # NEVER to no protection.
-        stop_side = "sell" if direction == "long" else "buy"
-        # Take-profit: FADE → the GEX pin (trigger['target'], already validated profit-side by
-        # _compute_stop_price which aborts a loss-side fade). RIDE → target is None, so use an
-        # R-multiple of the actual entry→stop distance on the profit side (DAYTRADE_RIDE_TARGET_R).
+        # Rebuild the intended target from the ACTUAL fill, then validate both exit legs around
+        # that fill. META/AAPL on 2026-09-23 proved that valid pre-submit geometry can become
+        # inverted after execution. Once crossed, flatten with an explicit reason: never submit an
+        # immediately-marketable bracket and never keep an invalid thesis behind a plain stop.
         _stop_dist = abs(fill_px - stop_px)
         _tp_raw = trigger.get("target")
         tp_px: "float | None" = None
@@ -1316,6 +1463,183 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             _ride_r = float(_cfg("DAYTRADE_RIDE_TARGET_R", 2.0))
             tp_px = (fill_px + _ride_r * _stop_dist) if direction == "long" else (fill_px - _ride_r * _stop_dist)
 
+        geometry_ok, geometry_reason = _post_fill_exit_geometry(direction, fill_px, stop_px, tp_px)
+        if not geometry_ok:
+            _page(f"[{symbol}] day-tier fill INVALIDATED the setup: {geometry_reason}. "
+                  f"Flattening {filled_qty_i} sh; no exit bracket will be submitted.")
+            # A crossed target can still have a valid loss-side stop. Confirm that stop before the
+            # scoped close begins. flatten_position cancels owned exits immediately before its
+            # market reduce; if that close is unresolved, restoration below runs only when no live
+            # pending-close order can race the stop and reverse the account.
+            stop_geometry_ok, _ = _post_fill_exit_geometry(direction, fill_px, stop_px, None)
+            emergency_stop = None
+            if stop_geometry_ok:
+                emergency_status, emergency_stop = _submit_verified_plain_stop(
+                    symbol, filled_qty_i, direction, stop_px)
+                if emergency_status == "unknown":
+                    fresh = _load_state()
+                    candidate = fresh.get(key)
+                    rec = candidate if isinstance(candidate, dict) else dict(state[key])
+                    rec["state"] = "filled"
+                    rec["geometry_error"] = geometry_reason
+                    fresh[key] = rec
+                    _save_state(fresh)
+                    _halt_unresolved_exit(
+                        symbol,
+                        "Emergency-stop submission outcome is unknown; no second reducer or market "
+                        "close will be submitted until broker reconciliation proves the order state.",
+                    )
+                    return False
+                if emergency_status == "live" and emergency_stop is not None:
+                    emergency_id = str(getattr(emergency_stop, "id", "") or "")
+                    # Bind the stop before flatten_position attempts cancellation. Explicit state
+                    # identity lets recovery distinguish a still-live first stop from an absent
+                    # stop; it must never submit a duplicate on an unproven cancel.
+                    state[key]["stop_order_id"] = emergency_id
+                    _save_state(state)
+                    day_tier_logger.log_stop_placed(
+                        entry_coid, symbol,
+                        stop_order_id=emergency_id,
+                        stop_price=stop_px,
+                    )
+                    # Never overlap this full-qty stop with the market close. A submitted cancel is
+                    # insufficient: pending_cancel can still fill and both reducers can reverse the
+                    # account. Proceed only after the broker proves the stop terminal.
+                    if not broker.cancel_stop_confirmed(symbol, emergency_id):
+                        fresh = _load_state()
+                        candidate = fresh.get(key)
+                        rec = candidate if isinstance(candidate, dict) else dict(state[key])
+                        rec["state"] = "filled"
+                        rec["geometry_error"] = geometry_reason
+                        fresh[key] = rec
+                        _save_state(fresh)
+                        _halt_unresolved_exit(
+                            symbol,
+                            "Invalid-geometry emergency stop cancellation is unconfirmed; "
+                            "scoped close deferred to prevent two full-quantity reducers.",
+                        )
+                        return False
+                    stop_readable, stop_filled, _ = _confirmed_order_fill(
+                        emergency_id, filled_qty_i)
+                    if not stop_readable:
+                        _halt_unresolved_exit(
+                            symbol,
+                            "Emergency stop is terminal but its fill quantity is unreadable; "
+                            "no replacement stop or scoped close will be submitted until the exact "
+                            "cumulative fill is recovered.",
+                        )
+                        return False
+                    if stop_filled > 0:
+                        target = {"trade_id": entry_coid, "symbol": symbol, "side": direction,
+                                  "entry_price": fill_px, "qty": filled_qty_i,
+                                  "stop_order_id": emergency_id}
+                        if _record_confirmed_stop_exit(target) and _durable_exit_recorded(entry_coid):
+                            fresh = _load_state()
+                            candidate = fresh.get(key)
+                            rec = candidate if isinstance(candidate, dict) else dict(state[key])
+                            rec["state"] = "flattened_invalid_geometry"
+                            rec["geometry_error"] = geometry_reason
+                            fresh[key] = rec
+                            _save_state(fresh)
+                        else:
+                            # A terminal stop can partially fill. The recorder reduces the durable
+                            # owned qty; protect only that proven residual, and only if the live net
+                            # still has our side/qty. Never turn a restore into an increasing order.
+                            fresh = _load_state()
+                            candidate = fresh.get(key)
+                            rec = candidate if isinstance(candidate, dict) else dict(state[key])
+                            journal_remaining = abs(int(float(
+                                rec.get("fill_qty") or rec.get("qty") or filled_qty_i)))
+                            # Broker-confirmed cumulative fill is an independent upper bound. If
+                            # partial journaling failed, stale state must never let a replacement
+                            # stop consume same-side shares belonging to another tier.
+                            confirmed_remaining = max(
+                                0, filled_qty_i - int(math.floor(stop_filled)))
+                            remaining = min(journal_remaining, confirmed_remaining)
+                            residual_status, residual_stop = ("absent", None)
+                            if _live_net_covers_owned(symbol, direction, remaining):
+                                residual_status, residual_stop = _submit_verified_plain_stop(
+                                    symbol, remaining, direction, stop_px)
+                            if residual_status == "live" and residual_stop is not None:
+                                residual_id = str(getattr(residual_stop, "id", "") or "")
+                                rec["stop_order_id"] = residual_id
+                                day_tier_logger.log_stop_placed(
+                                    entry_coid, symbol, stop_order_id=residual_id,
+                                    stop_price=stop_px)
+                            rec["state"] = "filled"
+                            rec["geometry_error"] = geometry_reason
+                            fresh[key] = rec
+                            _save_state(fresh)
+                            _halt_unresolved_exit(
+                                symbol,
+                                "Emergency stop filled but the exact exit is incomplete; residual "
+                                f"protection={residual_status}.",
+                            )
+                        return False
+                    state[key]["stop_order_id"] = ""
+                    _save_state(state)
+            flat_ok = flatten_position(symbol, filled_qty_i, direction, entry_price=fill_px,
+                                       trade_id=entry_coid, order_id_hint=entry_order_id,
+                                       reason="fill_invalidated_setup")
+            # True can also mean the position endpoint said "already absent". Only the exact
+            # trade's durable exit_fill proves a terminal, booked close.
+            exit_proven = flat_ok and _durable_exit_recorded(entry_coid)
+            if exit_proven:
+                # A close plus a surviving reduce-only stop can reverse the account later. Retry
+                # explicit cancellation, then require a readable proof that no DT stop remains.
+                _cancel_daytrade_exit_legs(symbol)
+            stop_state = _has_live_daytrade_stop(symbol)
+            fresh = _load_state()  # flatten may have persisted partial/pending-close fields
+            candidate = fresh.get(key)
+            rec = candidate if isinstance(candidate, dict) else dict(state[key])
+            remaining_qty = abs(int(float(rec.get("fill_qty") or rec.get("qty") or filled_qty_i)))
+            rec["geometry_error"] = geometry_reason
+            if exit_proven and stop_state is False:
+                rec["state"] = "flattened_invalid_geometry"
+                fresh[key] = rec
+                _save_state(fresh)
+                return False
+
+            pending_close = str(rec.get("pending_exit_order_id") or "")
+            restored_status, restored = ("absent", None)
+            if (stop_geometry_ok and remaining_qty >= 1 and not pending_close
+                    and stop_state is False
+                    and _live_net_covers_owned(symbol, direction, remaining_qty)):
+                restored_status, restored = _submit_verified_plain_stop(
+                    symbol, remaining_qty, direction, stop_px)
+                if restored_status == "live" and restored is not None:
+                    restored_id = str(getattr(restored, "id", "") or "")
+                    day_tier_logger.log_stop_placed(
+                        entry_coid, symbol, stop_order_id=restored_id, stop_price=stop_px)
+                    rec["stop_order_id"] = restored_id
+            # Stay nonterminal so reconcile_open_state owns the next attempt. Halt all new Day Tier
+            # entries until exact exit ownership/P&L is recovered.
+            rec["state"] = "filled"
+            fresh[key] = rec
+            _save_state(fresh)
+            protection = "restored stop" if restored_status == "live" else (
+                "pending close order" if pending_close else (
+                    "original stop still live" if stop_state is True else
+                    "stop state UNKNOWN" if stop_state is None else
+                    "stop submission UNKNOWN" if restored_status == "unknown" else
+                    "NO CONFIRMED PROTECTION"))
+            _halt_unresolved_exit(
+                symbol,
+                f"Invalid post-fill geometry close is unresolved ({protection}); exact exit fill "
+                "must be recovered before entries resume.",
+            )
+            return False
+
+        # B2 (bracket-exit build): place a broker-native OCO exit pair (take-profit LIMIT +
+        # protective MARKET stop, one-cancels-other) sized to the ACTUAL filled qty, so the tier
+        # HARVESTS the target instead of only stopping out / EOD-flatting (the v1 gap: it computed
+        # the pin but never placed an order to take it). If the OCO can't be placed for any reason,
+        # FALL BACK to the plain protective stop (today's verified path) — degrade to stop-only,
+        # NEVER to no protection.
+        stop_side = "sell" if direction == "long" else "buy"
+        # Take-profit: FADE → the GEX pin (trigger['target'], already validated profit-side by
+        # _compute_stop_price which aborts a loss-side fade). RIDE → target is None, so use an
+        # R-multiple of the actual entry→stop distance on the profit side (DAYTRADE_RIDE_TARGET_R).
         oco = None
         if tp_px is not None and _stop_dist > 0:
             try:
@@ -1724,24 +2048,9 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] day-tier exit trade_logger write failed: %s", target.get("symbol"), e)
             return True
-        if qty + 1e-9 < expected or price <= 0:
-            continue
-        entry = abs(float(target.get("entry_price") or 0.0))
-        side = str(target.get("side") or "long")
-        if not (math.isfinite(entry) and entry > 0):
-            return None
-        realized = round((price - entry) * expected if side == "long" else (entry - price) * expected, 2)
-        if not day_tier_logger.log_exit_fill(
-            trade_id, str(target.get("symbol") or ""), order_id=stop_id,
-            exit_reason=_reason, fill_price=price, fill_qty=float(expected),
-            market_price_at_exit=price, realized_pnl=realized,
-        ):
-            return None
-        trade_logger.log_event("exit", symbol=str(target.get("symbol") or ""), price=price,
-                               size=expected, data_source="daytrade", tier="daytrade",
-                               exit_reason=_reason, trade_id=trade_id,
-                               realized_pnl=realized)
-        return True
+        # qty is cumulative. When delta==0 this exact fill is already journaled; it cannot close
+        # the current residual merely because the old cumulative qty equals/exceeds residual qty.
+        continue
     return False if any_readable and not any_unreadable else None
 
 
@@ -1849,6 +2158,26 @@ def reconcile_open_state() -> dict:
                 if sym in submitted:
                     _page(f"[{sym}] day-tier reconcile: 'submitted' order filled {want} but position "
                           f"absent (endpoint lag) — NOT retiring; next tick reconciles.")
+                elif tgt.get("geometry_error"):
+                    # A journaled market close can coexist with a stale emergency stop after a
+                    # cancel failure. Never terminalize while that reducer is live or unreadable.
+                    cleared = _cancel_recorded_exit_legs_confirmed(sym)
+                    stale_stop = _has_live_daytrade_stop(sym)
+                    if cleared is not True or stale_stop is not False:
+                        summary["unreadable"] += 1
+                        _halt_unresolved_exit(
+                            sym,
+                            "Position is flat after invalid geometry but a recorded exit order is "
+                            "still live or unreadable; terminalization awaits confirmed cancellation.",
+                        )
+                    elif _durable_exit_recorded(str(tgt.get("trade_id") or "")):
+                        summary["cleared"] += 1
+                        _mark_symbol_flattened(sym)
+                    else:
+                        _halt_unresolved_exit(
+                            sym,
+                            "Position is flat after invalid geometry but the exact durable exit is missing.",
+                        )
                 elif _record_confirmed_stop_exit(tgt):
                     summary["cleared"] += 1
                     _mark_symbol_flattened(sym)

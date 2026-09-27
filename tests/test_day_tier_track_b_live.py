@@ -116,8 +116,13 @@ class TrackBBudgetCap(unittest.TestCase):
 class PlaceEntryTrackThreading(unittest.TestCase):
     """place_entry: Track B submits the budget-capped qty and stamps track B; Track A's code path unchanged."""
 
-    def _run(self, track, decision_track=None, state=None, open_log=None, events=None, events_ok=True):
+    def _run(self, track, decision_track=None, state=None, open_log=None, events=None, events_ok=True,
+             *, fill_price=70.1, trigger_override=None, flatten_ok=True, exit_recorded=None,
+             stop_state=False, pending_close=False, emergency_cancelled=True,
+             emergency_fill_qty=0.0, emergency_readable=True, live_net_covers=True,
+             emergency_submit_status="live"):
         state = {} if state is None else state
+        self.last_state = state
         submitted: dict = {}
         logged: dict = {}
         acct = SimpleNamespace(buying_power="4000", equity="2500", last_equity="2500", maintenance_margin="0",
@@ -132,16 +137,42 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             return True
 
         def _final_fill(_oid):
-            return float(submitted.get("qty", 0)), 70.1
+            return float(submitted.get("qty", 0)), fill_price
 
         pos = SimpleNamespace(symbol="UBER", current_price=70.0, qty=1, side="long", avg_entry_price=70.0)
         oco = SimpleNamespace(id="TP1", legs=[SimpleNamespace(id="ST1", order_type="stop", type="stop")])
+        oco_submit = mock.Mock(return_value=oco)
+        self.last_oco_submit = oco_submit
         trigger = {"trigger": "ENTER", "direction": "long", "mode": "DRIVE", "entry_ref": 70.0,
                    "target": None, "wall_ref": 69.0}
+        if trigger_override:
+            trigger.update(trigger_override)
         size = {"size_ok": True, "shares": 1, "budget": 131.25}
         if track is not None:
             size["track"] = track
 
+        def _flatten(*_args, **_kwargs):
+            if pending_close:
+                rec = next(v for k, v in state.items() if k.startswith("entry::"))
+                rec["pending_exit_order_id"] = "PENDING_CLOSE"
+            return flatten_ok
+
+        def _record_emergency_stop(_target):
+            if emergency_fill_qty > 0:
+                rec = next(v for k, v in state.items() if k.startswith("entry::"))
+                owned = int(float(rec.get("fill_qty") or rec.get("qty") or 0))
+                rec["fill_qty"] = max(0, owned - int(emergency_fill_qty))
+            return False
+
+        flattened = mock.Mock(side_effect=_flatten)
+        self.last_flatten = flattened
+        emergency_obj = SimpleNamespace(id="EMERGENCY_STOP") if emergency_submit_status == "live" else None
+        emergency_stop = mock.Mock(return_value=(emergency_submit_status, emergency_obj))
+        self.last_emergency_stop = emergency_stop
+        halt = mock.Mock()
+        self.last_halt = halt
+        cancel_confirmed = mock.Mock(return_value=emergency_cancelled)
+        self.last_cancel_confirmed = cancel_confirmed
         patches = [
             mock.patch.object(dtm, "_enabled", return_value=True),
             mock.patch.object(dtm, "_load_state", side_effect=lambda: state),
@@ -164,7 +195,20 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             mock.patch.object(broker, "submit_limit_order", side_effect=_submit_limit),
             mock.patch.object(broker, "cancel_open_orders_for_symbol", return_value=0),
             mock.patch.object(broker, "get_open_position", return_value=pos),
-            mock.patch.object(broker, "submit_oco_exit", return_value=oco),
+            mock.patch.object(broker, "submit_oco_exit", oco_submit),
+            mock.patch.object(dtm, "flatten_position", flattened),
+            mock.patch.object(dtm, "_submit_verified_plain_stop", emergency_stop),
+            mock.patch.object(dtm, "_durable_exit_recorded",
+                              return_value=(flatten_ok if exit_recorded is None else exit_recorded)),
+            mock.patch.object(dtm, "_halt_unresolved_exit", halt),
+            mock.patch.object(dtm, "_has_live_daytrade_stop", return_value=stop_state),
+            mock.patch.object(dtm, "_cancel_daytrade_exit_legs", return_value=None),
+            mock.patch.object(broker, "cancel_stop_confirmed", cancel_confirmed),
+            mock.patch.object(dtm, "_confirmed_order_fill",
+                              return_value=(emergency_readable, emergency_fill_qty, 338.92)),
+            mock.patch.object(dtm, "_record_confirmed_stop_exit",
+                              side_effect=_record_emergency_stop),
+            mock.patch.object(dtm, "_live_net_covers_owned", return_value=live_net_covers),
         ]
         with ExitStack() as stack:  # >20 nested `with` items is a SyntaxError on the OCI py3.10 target
             for p in patches:
@@ -180,6 +224,130 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertEqual(qty, 1)            # the budget share count, NOT the ~14-sh risk size
         self.assertEqual(log_track, "B")
         self.assertEqual(state_track, "B")
+
+    def test_actual_fill_crossing_short_target_flattens_without_oco(self):
+        # Mirrors the 2026-09-23 AAPL failure: signal geometry was valid at entry_ref=339, but the
+        # short filled below its 338.76 target. The newly filled setup must close immediately.
+        ok, _, _, _ = self._run(
+            "A", fill_price=338.29,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertFalse(ok)
+        self.last_flatten.assert_called_once()
+        self.assertEqual(self.last_flatten.call_args.kwargs["reason"], "fill_invalidated_setup")
+        self.assertEqual(self.last_emergency_stop.call_count, 1)  # valid stop before flatten
+        self.last_oco_submit.assert_not_called()
+
+    def test_failed_invalid_geometry_flatten_remains_reconcilable(self):
+        self._run(
+            "A", fill_price=338.29, flatten_ok=False,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        rec = next(v for k, v in self.last_state.items() if k.startswith("entry::"))
+        self.assertEqual(rec["state"], "filled")  # _flatten_targets will retry it next tick
+        self.assertIn("short target", rec["geometry_error"])
+        self.assertEqual(self.last_emergency_stop.call_count, 2)  # before close + restored after failure
+        self.last_halt.assert_called_once()
+
+    def test_absent_position_without_durable_exit_never_terminalizes(self):
+        # flatten_position can return True for an already-absent position. Without an exact
+        # exit_fill that is unresolved ownership/P&L, not a successful close.
+        self._run(
+            "A", fill_price=338.29, flatten_ok=True, exit_recorded=False,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        rec = next(v for k, v in self.last_state.items() if k.startswith("entry::"))
+        self.assertEqual(rec["state"], "filled")
+        self.last_halt.assert_called_once()
+
+    def test_stop_crossed_fills_flatten_without_submitting_invalid_emergency_stop(self):
+        cases = [
+            (340.0, {"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                     "target": 338.76, "wall_ref": None}),
+            (98.5, {"direction": "long", "mode": "FADE", "entry_ref": 100.0,
+                    "target": 101.0, "wall_ref": None}),
+        ]
+        for fill, trigger in cases:
+            with self.subTest(direction=trigger["direction"]):
+                self._run("A", fill_price=fill, flatten_ok=False, trigger_override=trigger)
+                self.last_flatten.assert_called_once()
+                self.last_emergency_stop.assert_not_called()
+                self.last_oco_submit.assert_not_called()
+                self.last_halt.assert_called_once()
+
+    def test_live_first_emergency_stop_prevents_duplicate_restore(self):
+        self._run(
+            "A", fill_price=338.29, flatten_ok=False, stop_state=True,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertEqual(self.last_emergency_stop.call_count, 1)
+        self.last_oco_submit.assert_not_called()
+
+    def test_unconfirmed_emergency_stop_cancel_defers_market_close(self):
+        self._run(
+            "A", fill_price=338.29, emergency_cancelled=False,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.last_cancel_confirmed.assert_called_once_with("UBER", "EMERGENCY_STOP")
+        self.last_flatten.assert_not_called()
+        self.last_oco_submit.assert_not_called()
+        self.last_halt.assert_called_once()
+
+    def test_ambiguous_emergency_stop_submit_never_adds_market_reducer(self):
+        self._run(
+            "A", fill_price=338.29, emergency_submit_status="unknown",
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.last_emergency_stop.assert_called_once()
+        self.last_cancel_confirmed.assert_not_called()
+        self.last_flatten.assert_not_called()
+        self.last_halt.assert_called_once()
+
+    def test_unreadable_terminal_stop_fill_never_creates_second_reducer(self):
+        self._run(
+            "A", fill_price=338.29, emergency_readable=False,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertEqual(self.last_emergency_stop.call_count, 1)
+        self.last_flatten.assert_not_called()
+        self.last_halt.assert_called_once()
+
+    def test_pending_close_prevents_reverse_capable_stop_restore(self):
+        self._run(
+            "A", fill_price=338.29, flatten_ok=False, pending_close=True,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertEqual(self.last_emergency_stop.call_count, 1)  # pre-close only; no competing restore
+        self.last_halt.assert_called_once()
+
+    def test_partial_emergency_stop_fill_protects_only_proven_residual(self):
+        state = {}
+        self._run(
+            "A", state=state, fill_price=338.29, emergency_fill_qty=1.0,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertEqual(self.last_emergency_stop.call_count, 2)
+        self.assertEqual(self.last_emergency_stop.call_args.args[1], 1)
+        self.last_flatten.assert_not_called()
+        self.last_halt.assert_called_once()
+
+    def test_restore_is_suppressed_when_live_net_no_longer_reduces(self):
+        self._run(
+            "A", fill_price=338.29, flatten_ok=False, live_net_covers=False,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertEqual(self.last_emergency_stop.call_count, 1)  # pre-close only
+        self.last_halt.assert_called_once()
 
     def test_state_only_b_lot_consumes_budget_through_place_entry(self):
         # Risk seat R3: a same-day FILLED Track-B NFLX lot whose log write failed (not in open_trades_from_log)
