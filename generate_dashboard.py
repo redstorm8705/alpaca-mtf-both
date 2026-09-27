@@ -19,10 +19,15 @@ import os
 import sys
 import json
 import logging
+import math
+from html import escape
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from reporting.metrics import compute_lifetime_stats, _net_deposits
+from reporting.html_ui import (
+    PRIMARY_NAV_CSS, TIER_COLORS, TIER_LABELS, primary_nav, tier_badges,
+)
 from ui_tokens import LIVE_CLOCK_HTML
 
 # Load .env explicitly so API keys are available whether this module is
@@ -100,6 +105,54 @@ def _load_market_news():
 
 def _load_gex_snapshot():
     return _load_json(LOG_DIR / "gex_snapshot.json", {})
+
+
+def _load_edge_snapshot() -> dict:
+    data = _load_json(LOG_DIR / "strategy_edge_snapshot.json", {})
+    if not isinstance(data, dict) or data.get("schema") != 1 or data.get("integrity_ok") is not True:
+        return {}
+    try:
+        generated = datetime.fromisoformat(str(data["generated_at_utc"]).replace("Z", "+00:00"))
+        age = datetime.now(ZoneInfo("UTC")) - generated
+        if age.total_seconds() < 0 or age > timedelta(hours=36):
+            return {}
+        overall = data["overall"]
+        by_tier = data["by_tier"]
+        if not isinstance(overall, dict) or not isinstance(by_tier, dict):
+            return {}
+        def _valid_metrics(metrics: dict) -> bool:
+            if not isinstance(metrics, dict):
+                return False
+            completed = float(metrics.get("completed_trades", 0))
+            realized = float(metrics.get("realized_pnl", 0))
+            win_rate = metrics.get("win_rate")
+            profit_factor = metrics.get("profit_factor")
+            return (
+                math.isfinite(completed) and completed >= 0 and completed.is_integer()
+                and math.isfinite(realized)
+                and (win_rate is None or (
+                    math.isfinite(float(win_rate)) and 0 <= float(win_rate) <= 100
+                ))
+                and (profit_factor is None or (
+                    math.isfinite(float(profit_factor)) and float(profit_factor) >= 0
+                ))
+            )
+        if not _valid_metrics(overall):
+            return {}
+        if any(
+            tier not in TIER_LABELS or not _valid_metrics(metrics)
+            for tier, metrics in by_tier.items()
+        ):
+            return {}
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return {}
+    return data
+
+
+def _load_ownership_positions() -> dict:
+    data = _load_json(ROOT / "data" / "state" / "ownership_ledger.json", {})
+    positions = data.get("positions", {}) if isinstance(data, dict) else {}
+    return positions if isinstance(positions, dict) else {}
 
 
 def _compute_spy_levels() -> dict:
@@ -336,6 +389,8 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 
     open_pos = alpaca.get("positions",[])
     orders   = alpaca.get("orders",[])
+    edge_snapshot = _load_edge_snapshot()
+    ownership_positions = _load_ownership_positions()
 
     # All-time P&L — Alpaca authoritative via compute_lifetime_stats(equity=equity).
     # Pass equity already fetched above so we skip the second Alpaca API call.
@@ -359,8 +414,11 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     # Last-resort fallback (only if compute_lifetime_stats raised → _lt={}) uses the
     # SAME net_deposits basis — never the old equity-2500 hardcode.
     all_pnl    = _lt.get("total_pnl", round(float(equity) - _net_deposits(), 2))
-    all_wr     = _lt.get("win_rate", 0.0)
-    all_trades = _lt.get("total_trades", 0)
+    _edge_overall = edge_snapshot.get("overall", {})
+    all_wr     = _edge_overall.get("win_rate")
+    all_trades = _edge_overall.get("completed_trades")
+    all_pf     = _edge_overall.get("profit_factor")
+    all_realized = _edge_overall.get("realized_pnl")
 
     # NOTE: this module NO LONGER writes lifetime_pnl_cache.json (board 4-0 + Gro + GAI,
     # 2026-07-10). reporting.pnl_ledger.heal_history is now the SOLE authoritative writer
@@ -539,6 +597,31 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 
     # Build open positions rows
     pos_rows = ""
+    _open_tier_symbols: dict[str, set[str]] = {k: set() for k in TIER_LABELS}
+    _open_tier_qty: dict[str, float] = {k: 0.0 for k in TIER_LABELS}
+
+    def _exact_position_tiers(symbol: str, net_qty: float) -> list[tuple[str, float]]:
+        rec = ownership_positions.get(symbol)
+        if not isinstance(rec, dict):
+            return []
+        tiers = rec.get("tiers")
+        if not isinstance(tiers, dict):
+            return []
+        try:
+            ledger_net = float(rec.get("alpaca_net_qty", 0.0) or 0.0)
+            drift = float(rec.get("drift", 0.0) or 0.0)
+            rows = [
+                (tier, float((tiers.get(tier) or {}).get("qty", 0.0) or 0.0))
+                for tier in ("intraday", "daytrade", "qhm", "forever6")
+            ]
+        except (TypeError, ValueError):
+            return []
+        if abs(ledger_net - net_qty) > 1e-6 or abs(drift) > 1e-6:
+            return []
+        active = [(tier, qty) for tier, qty in rows if abs(qty) > 1e-9]
+        if abs(sum(qty for _tier, qty in active) - net_qty) > 1e-6:
+            return []
+        return active
     # Overnight-held breakeven soft-exit transparency (Rafael 2026-07-13): the visible GTC
     # stop is the catastrophe backstop, but an OVERNIGHT-HELD non-QHM position actually exits
     # at ~entry−0.5×ATR (the "overnight breakeven buffer" in exit_logic) once it breaches for
@@ -569,6 +652,13 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             tl_open = {t["symbol"]: t for t in trade_log.get("open",[])} if isinstance(trade_log.get("open"), list) else {}
             td = tl_open.get(sym, {})
             _is_qhm = sym in _qhm_syms
+            _tier_rows = _exact_position_tiers(sym, float(p["qty"]))
+            if not _tier_rows:
+                _tier_rows = [("unattributed", float(p["qty"]))]
+            for _tier, _tier_qty in _tier_rows:
+                _open_tier_symbols.setdefault(_tier, set()).add(sym)
+                _open_tier_qty[_tier] = _open_tier_qty.get(_tier, 0.0) + abs(_tier_qty)
+            _tier_html = tier_badges(_tier_rows)
             # QHM/Forever-6 holds keep their protective stop in quarterly_holds.json (stop_price),
             # NOT in trade_log["open"] — so read it there, else a real live stop renders as "—".
             _stop_val = td.get("stop")
@@ -608,6 +698,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             pos_rows += f"""
             <tr>
               <td style="color:#e2e4ee;font-weight:700">{sym} {overnight}</td>
+              <td>{_tier_html}</td>
               <td style="color:{'#30d158' if side=='LONG' else '#ff3b30'}">{side}</td>
               <td>{qty}</td>
               <td>${price:.2f}</td>
@@ -618,7 +709,34 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
               <td style="color:#b8bdd4">{score_str}</td>
             </tr>"""
     else:
-        pos_rows = '<tr><td colspan="9" style="color:#3a5068;text-align:center;padding:20px">No open positions</td></tr>'
+        pos_rows = '<tr><td colspan="10" style="color:#3a5068;text-align:center;padding:20px">No open positions</td></tr>'
+
+    _tier_cards = []
+    _edge_by_tier = edge_snapshot.get("by_tier", {})
+    for _tier in ("intraday", "daytrade", "qhm", "forever6", "unattributed"):
+        _hist = _edge_by_tier.get(_tier, {}) if isinstance(_edge_by_tier, dict) else {}
+        _rpnl = _hist.get("realized_pnl")
+        _rpnl_s = "—" if _rpnl is None else f"{'+' if _rpnl >= 0 else ''}${_rpnl:,.2f}"
+        _rpnl_c = "#8a94ae" if _rpnl is None else ("#30d158" if _rpnl >= 0 else "#ff3b30")
+        _wr = _hist.get("win_rate")
+        _wr_s = "—" if _wr is None else f"{_wr:.1f}% WR"
+        _n = int(_hist.get("completed_trades") or 0)
+        _open_n = len(_open_tier_symbols.get(_tier, set()))
+        _color = TIER_COLORS[_tier]
+        _tier_cards.append(
+            f'<div class="tier-card" style="border-top-color:{_color}">'
+            f'<div class="tier-name" style="color:{_color}">{TIER_LABELS[_tier]}</div>'
+            f'<div class="tier-open">{_open_n} open <span>· {_open_tier_qty.get(_tier, 0):g} sh</span></div>'
+            f'<div class="tier-history"><b style="color:{_rpnl_c}">{_rpnl_s}</b>'
+            f'<span>{_n} completed · {_wr_s}</span></div></div>'
+        )
+    _edge_asof = escape(str(edge_snapshot.get("generated_pt", "not yet generated")))
+    tier_state_html = (
+        '<section class="tier-section"><div class="tier-section-head">'
+        '<div><b>Strategy tiers</b><span>Current ownership + broker-ledger history</span></div>'
+        f'<small>edge snapshot {str(_edge_asof)}</small></div>'
+        f'<div class="tier-grid">{"".join(_tier_cards)}</div></section>'
+    )
 
     order_rows = ""
     if orders:
@@ -762,6 +880,17 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
 .risk-CAUTION{{background:rgba(255,214,10,.1);color:#ffd60a;border:1px solid rgba(255,214,10,.25)}}
 .risk-MONITOR{{background:rgba(99,102,128,.15);color:#8e92ad;border:1px solid rgba(99,102,128,.3)}}
 .risk-mkt{{background:rgba(10,132,255,.08);color:#6aabf7;border:1px solid rgba(10,132,255,.2)}}
+.tier-section{{padding:14px 24px 16px;border-bottom:1px solid var(--border);background:var(--bg)}}
+.tier-section-head{{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px}}
+.tier-section-head b{{font-size:13px}}.tier-section-head span{{font-size:10px;color:var(--muted);margin-left:8px}}
+.tier-section-head small{{font-size:9px;color:var(--muted)}}
+.tier-grid{{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px}}
+.tier-card{{background:var(--surface);border:1px solid var(--border);border-top:2px solid;border-radius:8px;padding:10px 12px}}
+.tier-name{{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}}
+.tier-open{{font-size:16px;font-weight:750;margin-top:4px}}.tier-open span{{font-size:10px;color:var(--muted);font-weight:500}}
+.tier-history{{display:flex;justify-content:space-between;gap:6px;margin-top:5px;font-size:10px}}.tier-history span{{color:var(--muted)}}
+.tier-badge{{display:inline-block;padding:2px 6px;border:1px solid;border-radius:4px;font-size:9px;font-weight:700;white-space:nowrap}}
+{PRIMARY_NAV_CSS}
 @media(max-width:768px){{
   .kpi-grid{{grid-template-columns:repeat(2,1fr)!important;padding:10px!important;gap:8px}}
   .kpi{{padding:10px 12px}}
@@ -777,6 +906,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   th{{padding:6px 8px!important;font-size:9px!important;white-space:nowrap}}
   td{{padding:7px 8px!important;font-size:11px!important;white-space:nowrap}}
   .mob-nav{{display:flex!important}}
+  .tier-grid{{grid-template-columns:repeat(2,1fr)}}
 }}
 .mob-nav{{display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;
   background:var(--surface);border-top:1px solid var(--border);padding:8px 0}}
@@ -788,6 +918,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
 
 <header>
   <div class="logo">MTF Bot <span>COMMAND CENTER</span></div>
+  {primary_nav("dashboard")}
   <div class="hdr-right">
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
       <span style="font-size:12px;color:var(--text)">{LIVE_CLOCK_HTML}</span>
@@ -813,9 +944,9 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <div class="kpi-sub">Buying power: ${bp:,.2f}</div>
   </div>
   <div class="kpi">
-    <div class="kpi-lbl">All-Time P&L</div>
+    <div class="kpi-lbl">Account P&amp;L</div>
     <div class="kpi-val" style="color:{_col(all_pnl)}">{_pnl_str(all_pnl)}</div>
-    <div class="kpi-sub">{all_trades} trades · {all_wr:.0f}% win rate</div>
+    <div class="kpi-sub">equity − deposits · includes open P&amp;L</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">Realized P&L (today)</div>
@@ -828,9 +959,9 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <div class="kpi-sub">{len(orders)} order(s) · BP: ${bp:,.0f}</div>
   </div>
   <div class="kpi">
-    <div class="kpi-lbl">Win Rate (all-time)</div>
-    <div class="kpi-val" style="color:{_col(all_wr - 50)}">{all_wr:.0f}%</div>
-    <div class="kpi-sub">{all_trades} closed trades · KS limit: ${-ks_limit:,.2f}</div>
+    <div class="kpi-lbl">Completed Edge</div>
+    <div class="kpi-val" style="color:{_col((all_wr or 0) - 50)}">{'—' if all_wr is None else f'{all_wr:.1f}%'}</div>
+    <div class="kpi-sub">{'edge snapshot unavailable' if all_trades is None else f'{all_trades} lifecycles · PF {all_pf:.2f}× · realized {all_realized:+.2f}' if all_pf is not None and all_realized is not None else f'{all_trades} lifecycles'}</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">SPY Regime / MRI</div>
@@ -842,6 +973,8 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   </div>
 {spy_levels_card}
 </div>
+
+{tier_state_html}
 
 <!-- Kill switch bar -->
 <div class="ks-bar-wrap">
@@ -863,7 +996,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     </div>
     <table>
       <thead><tr>
-        <th>Symbol</th><th>Side</th><th>Qty</th><th>Current Price</th><th>Entry Price</th>
+        <th>Symbol</th><th>Tier</th><th>Side</th><th>Qty</th><th>Current Price</th><th>Entry Price</th>
         <th>Float P&L</th><th>Stop</th><th>Target</th><th>Score</th>
       </tr></thead>
       <tbody>{pos_rows}</tbody>
@@ -889,6 +1022,8 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     <div class="links">
       <a class="link-btn" href="scan_results.html">→ Scan Results (Live)</a>
       <a class="link-btn" href="weekly_review.html">→ Weekly Review</a>
+      <a class="link-btn" href="monthly_review.html">→ Monthly Review</a>
+      <a class="link-btn" href="options.html">→ Options Recommendations</a>
       <a class="link-btn" href="logs/{_last_week_fname}">→ Last Week Report</a>
     </div>
 
