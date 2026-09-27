@@ -17,7 +17,8 @@ import time
 import logging
 import threading
 import pandas as pd
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -232,6 +233,9 @@ def fetch_bars(
             if isinstance(df.index, pd.MultiIndex):
                 df = df.xs(symbol, level="symbol")
             result = df[["open", "high", "low", "close", "volume"]].tail(n_bars)
+            # Capture time travels with the frame (and its cached copies) so
+            # fetch_closed_bars can judge "closed" against when the data was taken.
+            result.attrs["fetched_at"] = datetime.now(_ET)
             if len(result) < n_bars:
                 logger.debug(
                     "[%s/%s] Requested %d bars, got %d",
@@ -383,6 +387,145 @@ def fetch_bars_window(
 
     logger.warning(f"[{symbol}/{timeframe}] fetch_bars_window: all retries exhausted")
     return pd.DataFrame()
+
+
+# ─── Closed-bar gate (E0, Confluence 2.0; board + Gro + GAI 2026-09-27) ───────────────
+# Alpaca returns the CURRENT, still-forming period as the last row of every bar
+# request (a mid-month 1Month bar, today's 1Day bar during the session, the 15Min
+# bar in progress). fetch_bars() keeps that row on purpose: the exit/stop/entry
+# price checks read its close as the LIVE price. Signal/feature code must never
+# see it, so it reads bars ONLY through fetch_closed_bars(), which drops every
+# row whose period has not ended yet.
+# Bar timestamps are period STARTS. Verified against Alpaca 2026-09-27: 1Day bars
+# are regular-session only (the 2025-11-28 half-day bar = the 12:59 ET minute bar;
+# the 13:00 auction and after-hours prints are excluded); 1Week bars are stamped
+# Monday 00:00 ET (also in holiday weeks); 1Month bars are stamped the 1st 00:00 ET.
+# A daily/weekly/monthly bar is treated as closed at 16:00 ET of its last weekday.
+# On a half-day (13:00 close) that withholds an already-finished bar until 16:00:
+# it errs only toward "not yet closed", never toward admitting a forming bar.
+_SESSION_CLOSE_HOUR_ET = 16  # PROV:regular-session-close-16:00-ET
+
+_INTRADAY_DURATIONS: dict = {
+    config.TF_1M:  timedelta(minutes=1),
+    config.TF_5M:  timedelta(minutes=5),
+    config.TF_15M: timedelta(minutes=15),
+    config.TF_30M: timedelta(minutes=30),
+    config.TF_1H:  timedelta(hours=1),
+    config.TF_4H:  timedelta(hours=4),
+    config.TF_12H: timedelta(hours=12),
+}
+_SESSION_TFS = (config.TF_DAILY, config.TF_WEEKLY, config.TF_MONTHLY)
+
+
+def _last_weekday_of_month(d: date) -> date:
+    first_next = (d.replace(day=28) + timedelta(days=4)).replace(day=1)
+    last = first_next - timedelta(days=1)
+    while last.weekday() >= 5:
+        last -= timedelta(days=1)
+    return last
+
+
+def _bar_end(start: datetime, timeframe: str) -> datetime:
+    """When the bar that STARTS at `start` is complete (tz-aware)."""
+    if timeframe in _INTRADAY_DURATIONS:
+        return start + _INTRADAY_DURATIONS[timeframe]
+    d = start.astimezone(_ET).date()
+    if timeframe == config.TF_WEEKLY:
+        d = d + timedelta(days=max(0, 4 - d.weekday()))   # Friday of that week
+    elif timeframe == config.TF_MONTHLY:
+        d = _last_weekday_of_month(d)
+    return datetime(d.year, d.month, d.day, _SESSION_CLOSE_HOUR_ET, tzinfo=_ET)
+
+
+def drop_forming_bars(
+    df: pd.DataFrame | None, timeframe: str, now: datetime | None = None
+) -> pd.DataFrame:
+    """Return only the rows of `df` whose bar period has ENDED by `now`.
+
+    Fails closed: an unknown timeframe, a naive `now`, or an index that is not a
+    tz-aware DatetimeIndex returns an EMPTY frame (the caller then has no signal),
+    never the unfiltered frame.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if timeframe not in _INTRADAY_DURATIONS and timeframe not in _SESSION_TFS:
+        logger.warning(
+            "drop_forming_bars: unknown timeframe '%s' — returning empty", timeframe)
+        return pd.DataFrame()
+    idx = df.index
+    if not isinstance(idx, pd.DatetimeIndex) or idx.tz is None:
+        logger.warning(
+            "drop_forming_bars: index is not tz-aware datetimes — returning empty")
+        return pd.DataFrame()
+    now = now if now is not None else datetime.now(_ET)
+    if now.tzinfo is None:
+        logger.warning("drop_forming_bars: `now` must be tz-aware — returning empty")
+        return pd.DataFrame()
+    keep = [_bar_end(ts.to_pydatetime(), timeframe) <= now for ts in idx]
+    return df[keep]
+
+
+@dataclass(frozen=True)
+class ClosedBars:
+    """Completed OHLCV bars only. Build it with fetch_closed_bars(); Confluence 2.0
+    feature code accepts this type, never a raw DataFrame from fetch_bars().
+
+    Guarantees: every construction route (direct call, alias, dataclasses.replace)
+    re-validates in __post_init__ that each row had closed by `as_of`; the frame is
+    stored privately and `.df` returns a fresh COPY on every read, so mutating what a
+    caller receives (e.g. `cb.df.loc[t] = ...`) can never change the stored bars.
+    """
+    symbol: str
+    timeframe: str
+    as_of: datetime
+    _frame: pd.DataFrame = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self.as_of is None or self.as_of.tzinfo is None:
+            raise ValueError("ClosedBars.as_of must be a tz-aware datetime")
+        if not isinstance(self._frame, pd.DataFrame):
+            raise ValueError("ClosedBars frame must be a DataFrame")
+        if not self._frame.empty and len(
+            drop_forming_bars(self._frame, self.timeframe, self.as_of)
+        ) != len(self._frame):
+            raise ValueError(
+                f"ClosedBars[{self.symbol}/{self.timeframe}] contains bars that had "
+                f"not closed by {self.as_of.isoformat()}")
+        object.__setattr__(self, "_frame", self._frame.copy())  # break caller alias
+
+    @property
+    def df(self) -> pd.DataFrame:
+        return self._frame.copy()
+
+
+def fetch_closed_bars(
+    symbol: str, timeframe: str, num_bars: int | None = None,
+    now: datetime | None = None,
+) -> ClosedBars:
+    """The most recent `num_bars` COMPLETED bars (T1 Alpaca, via fetch_bars' rate gate
+    and TTL cache). Fetches one extra bar so dropping the forming bar still leaves
+    `num_bars`. Empty frame on any fetch error (fetch_bars contract).
+
+    "Closed" is judged at the frame's CAPTURE time (attrs["fetched_at"], set by
+    fetch_bars and carried by its cached copies), not only at `now`: a bar that was
+    still forming when the data was taken holds partial prices even if its period
+    has ended since, so it is excluded until a fresh fetch. A non-empty frame with no
+    capture time fails closed (empty)."""
+    n = num_bars or config.BARS_TO_FETCH.get(timeframe, 300)
+    now = now if now is not None else datetime.now(_ET)
+    raw = fetch_bars(symbol, timeframe, num_bars=n + 1)
+    cutoff = now
+    if not raw.empty:
+        fetched_at = raw.attrs.get("fetched_at")
+        if not isinstance(fetched_at, datetime) or fetched_at.tzinfo is None:
+            logger.warning(
+                "[%s/%s] fetch_closed_bars: no capture time on frame — empty",
+                symbol, timeframe)
+            raw = pd.DataFrame()
+        else:
+            cutoff = min(now, fetched_at)
+    closed = drop_forming_bars(raw, timeframe, cutoff).tail(n)
+    return ClosedBars(symbol=symbol, timeframe=timeframe, as_of=cutoff, _frame=closed)
 
 
 def fetch_multi_timeframe(symbol: str, mode: str = "intraday") -> dict:
