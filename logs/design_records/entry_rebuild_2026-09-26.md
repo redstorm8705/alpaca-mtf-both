@@ -181,3 +181,9 @@ Verified at source:
    - Where a primary source can't be found, the change is flagged as unverified in the CSV, never silently accepted.
 
 **Still open for Rafael:** the entry-rate bound for the selectivity-only path (the risk seat suggests ≤20%).
+
+## Rafael decision (2026-09-27) — trade count
+"Would prefer more trades than less trades... Anything that causes less trades is not ideal."
+- The new score's entry floor is calibrated in the lab replay to give AT LEAST today's trade count; a lower count is a defect to fix, not an acceptable outcome.
+- An INCREASE in trade frequency is welcome but is risk-path under Rule E (frequency), so it goes through the board gate once at ship. That is a review, not a sample-count wait, and the board may not reject it on "fewer trades is safer" grounds (paper frame).
+- Every other size, stop and kill-switch limit is unchanged (per-trade risk cap, Kelly caps, gross and overnight caps, the 7% daily kill switch).
