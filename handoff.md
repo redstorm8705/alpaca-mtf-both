@@ -8,39 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-26, ChatGPT/Codex signed) — pick up here
+## ⏩ LATEST (2026-09-27, ChatGPT/Codex signed) — pick up here
 
-**SHIPPED + DEPLOYED:** Day Tier post-fill exit-geometry and weekly-report truth fix — PR #411,
-merge `42a6246`, live on OCI `137.131.51.250`. The manager now rebuilds and validates stop/target
-geometry against the actual fill; an invalid setup cannot submit an inverted OCO. Recovery fails
-closed on lost stop acknowledgements, terminal partial fills without exact quantity/price, previously
-journaled cumulative fills, and stale exit orders. A trade becomes terminal only after exact durable
-entry+exit evidence and broker-confirmed exit-order clearance. Weekly reporting no longer calls the
-quantity-multiplied exit→Friday comparison “dollars left on the table”; it is a per-share diagnostic.
+**SHIPPED + DEPLOYED:** Strategy Edge reporting-truth foundation — PR #429, merge `aebc8d1`, live on OCI `137.131.51.250`. This is an independent accounting/evaluation framework for Claude's Confluence 2.0 work; it does **not** change entries, exits, thresholds, sizing, or broker behavior. One Alpaca fills+orders snapshot now drives the entire card, carries entry-tier ownership through FIFO, groups entry fills by broker order lifecycle, includes partial-exit cash without calling an open residual a completed trade, and measures drawdown by atomic close fill.
 
-**Gate and evidence record:** see the signed `2026-09-26 — Day Tier post-fill geometry` entry in
-`logs/tb_audit_log.md`. It records the independent review verdicts, exact validation set, live-log
-match count, merge, deployment marker, and post-deploy service state.
+**Fail-closed contract:** the Strategy Edge card publishes no metrics when fill history has unmatched closes, an opening fill cannot join to its broker order, a realized close lacks both activity and order identity, or fill quantity/price data are malformed/non-finite/unsupported. Score/setup and exit-reason panels remain withheld until Confluence 2.0 supplies exact lifecycle IDs; do not add a symbol/time heuristic join.
 
-**Verify:** `gh pr view 411 --json state,mergeCommit,statusCheckRollup` must show `MERGED`, merge
-OID `42a624648dc278eef714d45b6d0d3a01b09ecf4d`, and successful preship. `ssh -i
-~/.ssh/mtf_bot_oracle ubuntu@137.131.51.250 'cd /home/ubuntu/mtf-bot && git rev-parse HEAD &&
-systemctl is-active mtf-bot mtf-writer mtf-http'`
-must show that same OID and three `active` lines. `ssh mtf-bot 'cd /home/ubuntu/mtf-bot &&
-venv/bin/python3 -m unittest tests.test_day_tier_bracket_exit tests.test_day_tier_track_b_live
-tests.test_weekly_postmortem_truth'` must end with `Ran 92 tests` and `OK`.
-`ssh mtf-bot "grep -Ec '2026-09-23.*(AAPL|META)' /home/ubuntu/mtf-bot/logs/day_tier_events.jsonl"`
-must print `11`. `ssh mtf-bot "cd /home/ubuntu/mtf-bot && grep -n 'Fri-positive diagnostics'
-weekly_postmortem.py && ! grep -n 'left on table' weekly_postmortem.py"` proves the deployed report
-generator uses the diagnostic label and no longer emits the old opportunity-cost phrase.
-`grep -A8 '2026-09-26 — Day Tier post-fill geometry' logs/tb_audit_log.md` shows the signed
-Board/mechanical/BGG audit record; the `gh pr view` command above independently verifies the CI result.
+**Live evidence:** 416 realized FIFO legs resolve to 213 completed entry-order lifecycles plus 3 partial-open lifecycles; realized P&L +$71.05; invariant drift $2.04; 0 unmatched closes, 0 missing order joins, 0 missing close identities. OCI ran 16 new regressions + 9 existing coherence checks, rendered a 13,237-byte monthly page, and all four services were active (`LIVE_VALIDATION_OK`). Board/adversarial reviews passed; Groq+GAI approved the two core accounting modules; GAI approved renderer/tests and Groq was explicitly waived there after its daily quota exhausted. CI passed.
 
-**⏩ EXACT NEXT ACTION:** treat the execution fix as **deployed, unexercised** until a new live Day Tier
-fill traverses it. On the next invalid post-fill geometry event, verify: no inverted OCO, no duplicate
-reducer, durable entry+exit rows, and no stale stop. On the next weekly report, verify Slack shows
-`Fri-positive diagnostics` with no aggregate opportunity-cost dollar claim. No further code change is
-approved from this item unless live evidence exposes a new failure.
+**⏩ EXACT NEXT ACTION:** Claude decides which lifecycle/edge interfaces Confluence 2.0 consumes. Audit the Confluence 2.0 integration after it ships: require exact lifecycle IDs, retain this fail-closed source contract, and reject duplicated/competing edge calculations. Keep this framework reporting-only unless a separately approved design changes that scope. Verify with `gh pr view 429 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'` (expected merge `aebc8d182e448f3556380520724f37227ec63ec3` and four active lines).
 
 
 ## ⏩ (2026-09-26, Claude interactive — safety P0s / F6 / exits thread) — pick up here for this thread
