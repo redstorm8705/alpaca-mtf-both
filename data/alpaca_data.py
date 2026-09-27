@@ -23,7 +23,7 @@ _alpaca_402_stale = False
 
 
 def is_alpaca_data_stale() -> bool:
-    """Returns True if the last Alpaca Data call received a 402 subscription-tier error."""
+    """True if the last Alpaca Data call received a 402 subscription-tier error."""
     return _alpaca_402_stale
 
 
@@ -79,8 +79,8 @@ def get_latest_quote(symbol: str) -> dict | None:
             # P2-ALPACA-402: flag stale state; warn only on first occurrence
             if not _alpaca_402_stale:
                 logger.warning(
-                    f"[{symbol}] get_latest_quote: 402 — real-time data requires paid plan. "
-                    f"Marking alpaca data as stale."
+                    f"[{symbol}] get_latest_quote: 402 — real-time data requires "
+                    f"paid plan. Marking alpaca data as stale."
                 )
             _alpaca_402_stale = True
         else:
@@ -140,8 +140,9 @@ def get_latest_trade(symbol: str) -> float | None:
             # 1–5 min stale during fast-moving markets.
             if not _alpaca_402_stale:
                 logger.warning(
-                    f"[{symbol}] get_latest_trade: 402 — real-time data requires paid plan. "
-                    f"Falling back to bar close price (may be stale). Marking alpaca data as stale."
+                    f"[{symbol}] get_latest_trade: 402 — real-time data requires "
+                    f"paid plan. Falling back to bar close price (may be stale). "
+                    f"Marking alpaca data as stale."
                 )
             _alpaca_402_stale = True
         else:
@@ -149,3 +150,56 @@ def get_latest_trade(symbol: str) -> float | None:
     except Exception as e:
         logger.debug(f"[{symbol}] get_latest_trade failed: {e}")
     return None
+
+
+_CA_TIMEOUT = 20.0  # seconds — offline/lab lookup, not on the trading path
+_CA_PAGE_LIMIT = 1000
+_CA_MAX_PAGES = 200  # safety cap: a repeating next_page_token cannot loop forever
+
+
+def get_name_changes(start: str, end: str, symbols: list | None = None) -> list | None:
+    """Ticker/name changes from Alpaca's corporate-actions data (T1).
+
+    Endpoint: GET /v1/corporate-actions?types=name_change&start=&end=[&symbols=]
+    `symbols` matches either the old or the new ticker. Returns a list of dicts
+    {old_symbol, new_symbol, process_date (YYYY-MM-DD)} across all pages, or None
+    on ANY failure — never a partial list, so a caller cannot mistake a failed
+    lookup for "no renames". Used by the research lab (point-in-time universe);
+    no trading-path caller.
+    """
+    params: dict = {"types": "name_change", "start": start, "end": end,
+                    "limit": _CA_PAGE_LIMIT}
+    if symbols:
+        params["symbols"] = ",".join(symbols)
+    out: list = []
+    try:
+        for _page in range(_CA_MAX_PAGES):
+            resp = None
+            for _attempt in range(3):
+                resp = requests.get(f"{_BASE}/v1/corporate-actions", params=params,
+                                    headers=_headers(), timeout=_CA_TIMEOUT)
+                if resp.status_code != 429:
+                    break
+                time.sleep(2 ** _attempt)
+            if resp is None or resp.status_code != 200:
+                logger.warning("get_name_changes: HTTP %s",
+                               getattr(resp, "status_code", None))
+                return None
+            body = resp.json()
+            for nc in (body.get("corporate_actions") or {}).get("name_changes") or []:
+                old, new, when = (nc.get("old_symbol"), nc.get("new_symbol"),
+                                  nc.get("process_date"))
+                if old and new and when:
+                    out.append({"old_symbol": str(old).upper(),
+                                "new_symbol": str(new).upper(),
+                                "process_date": str(when)})
+            token = body.get("next_page_token")
+            if not token:
+                return out
+            params["page_token"] = token
+        logger.warning("get_name_changes: more than %d pages — returning None",
+                       _CA_MAX_PAGES)
+        return None
+    except Exception as e:
+        logger.warning("get_name_changes failed: %s", e)
+        return None
