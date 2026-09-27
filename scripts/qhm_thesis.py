@@ -88,8 +88,6 @@ _DIP_VS50_MAX = 3.0      # within +3% of the 50d MA (not extended)
 _DIP_OFFHIGH_MAX = -4.0  # >=4% off the 20d high
 _EARN_LOOKAHEAD_DAYS = 55  # "next month" + runway
 _SHORTLIST_N = 10          # enrich + board this many top dips
-_MAX_BOARD_BLOCKS = 6      # cap on Slack "Board read" section blocks (exec summary is 2-3 picks) —
-                           # bounds output so a verbose/malformed board response can't flood Slack
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: float = _TIMEOUT):
@@ -351,9 +349,13 @@ def _dip_glyph(m: dict) -> str:
 
 
 def build_slack(today: str, ranked: list[dict], holds: list[dict], equity: float | None,
-                board_gro: bool, board_gai: bool) -> tuple[list, str]:
-    """Return (blocks, fallback). SLK-compliant: header -> headline -> divider -> candidates ->
-    holds refresh -> footer. send_slack_blocks chunks at <=45 blocks."""
+                board_gro: bool, board_gai: bool, memo: str = "") -> tuple[list, str]:
+    """Return (blocks, fallback): a headline, then the ENTIRE memo rendered for Slack.
+
+    Rafael 2026-09-27 (repeated ask): the full report must be readable IN Slack — nothing trimmed,
+    and no pointer to a server file he cannot open. memo_to_blocks carries every line of the memo;
+    tests/test_qhm_thesis_slack_full.py fails the build if any memo content is missing from the
+    blocks or a file reference appears. send_slack_blocks posts <=45 blocks per message, in order."""
     n = len(ranked)
     top = ranked[0]["sym"] if ranked else "—"
     fallback = f"🔬 QHM Thesis {today} · {n} dip candidate(s) · top {top}"
@@ -362,80 +364,131 @@ def build_slack(today: str, ranked: list[dict], holds: list[dict], equity: float
     blocks: list = [_hdr(f"QHM Weekly Thesis · {today}")]
     eq_str = f"${equity:,.0f}" if equity else "—"
     board_str = "Gro+GAI" if (board_gro and board_gai) else ("Gro" if board_gro else ("GAI" if board_gai else "⚠️ none"))
-    blocks.append(_ctx(f"Equity {eq_str} · {n} dip-into-earnings candidate(s) · board: {board_str} · DRAFT for review"))
+    over = [h["sym"] for h in holds if h.get("over_cap")]
+    head = f"Equity {eq_str} · {n} dip-into-earnings candidate(s) · board: {board_str} · DRAFT for review"
+    if over:
+        head += f" · ⚠️ over cap: {', '.join(over)}"
+    blocks.append(_ctx(head))
     blocks.append(_DIV)
-    blocks.append(_sec("*Buy-the-dip candidates* (into an earnings catalyst, ranked by dip depth)"))
-    for r in ranked[:12]:
-        m = r["m"]
-        g = _dip_glyph(m)
-        # SLK05: one idea per short line (~30-40 chars), glyph-led, bold only the scannable value.
-        line1 = f"{g} *{r['sym']}*  *{m.get('off20h','?')}%* off high"
-        line2 = f"earn {r.get('earn','?')} · RSI {m.get('rsi','?')}"
-        line3 = f"vs50 {m.get('vs50','?')}% · {r.get('grade','?')}"
-        blocks.append(_sec(f"{line1}\n{line2}\n{line3}"))
-        ctx = f"last ${m.get('last','?')}"
-        if r.get("dr_count"):
-            _top = ", ".join(r.get("dr_holders", [])[:3])
-            ctx += f" · 13F {r['dr_count']} funds" + (f" ({_top})" if _top else "")
-        if r.get("sector"):
-            ctx += f" · {r['sector']}"
-        blocks.append(_ctx(ctx))
-    if holds:
-        blocks.append(_DIV)
-        blocks.append(_sec("*Current holds — thesis + cap check*"))
-        for h in holds:
-            cap_flag = " · ⚠️ OVER CAP" if h.get("over_cap") else ""
-            blocks.append(_sec(f"• *{h['sym']}* {h.get('pct_eq','?')}% of equity{cap_flag}\n{h.get('dip','')}"))
+    blocks.extend(memo_to_blocks(memo))
     blocks.append(_DIV)
-    blocks.append(_sec("*Board read* — top picks (draft; full thesis in the memo)"))
-    blocks.extend(_board_read_blocks(ranked))
-    blocks.append(_DIV)
-    blocks.append(_ctx(f"Full memo: logs/quarterly_holds_research_{today}.md · "
-                       f"{datetime.now(PT).strftime('%b %d · %I:%M %p PT')} · cap {int(_QHM_AGG_CAP_PCT*100)}% agg / {int(_QHM_NAME_CAP_PCT*100)}% name"))
+    blocks.append(_ctx(f"{datetime.now(PT).strftime('%b %d · %I:%M %p PT')} · cap "
+                       f"{int(_QHM_AGG_CAP_PCT*100)}% agg / {int(_QHM_NAME_CAP_PCT*100)}% name"))
     return blocks, fallback
 
 
-def _board_read_blocks(ranked: list[dict]) -> list:
-    """The board EXECUTIVE SUMMARY as SEPARATE readable section blocks — one per pick/bullet — so it
-    is never a truncated inline wall (Rafael 2026-09-13: 'sent in parts, not inline, readable').
-    Falls back to a single 'pending' note when no board verdict is available."""
-    summary = ""
-    for r in ranked:
-        v = r.get("board_verdict")
-        if v:
-            summary = v.strip()
-            break
-    if not summary:
-        return [_sec("_Board section pending (LLM voices unavailable this run) — see memo._")]
-    parts: list[str] = []
-    cur: list[str] = []
-    for ln in summary.splitlines():
-        if re.match(r"^\s*[-*•]\s+", ln) and cur:   # a new bullet begins a new readable part
-            parts.append("\n".join(cur).strip())
-            cur = [ln]
+_SLACK_SECTION_MAX = 2800  # under Slack's 3000-char section limit
+
+
+def _md_inline(line: str) -> str:
+    """Markdown inline -> Slack mrkdwn: **bold** -> *bold* (SLK04)."""
+    return re.sub(r"\*\*(.+?)\*\*", r"*\1*", line)
+
+
+def _cells(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _is_table_separator(line: str) -> bool:
+    """A markdown table separator row such as '|---|:--:|' — dashes/colons in pipe-delimited
+    cells. A bare '---' (a horizontal rule) is NOT a separator."""
+    t = line.strip()
+    return "|" in t and bool(re.fullmatch(r"\|?(\s*:?-{2,}:?\s*\|)*\s*:?-{2,}:?\s*\|?", t))
+
+
+def _memo_lines_for_slack(memo: str) -> list[str]:
+    """Memo markdown -> Slack-readable lines. Headings become bold lines, tables become one record
+    per row (first cell bold, then 'column: value' lines), bullets become '•'. Nothing is dropped
+    except pure markdown syntax (table separator rows, '---' rules) and the first column's
+    label (e.g. 'Sym' / 'Ticker'): each record already leads with the ticker (Rafael 2026-09-27)."""
+    out: list[str] = []
+    lines = (memo or "").splitlines()
+    i = 0
+    while i < len(lines):
+        ln = lines[i].rstrip()
+        s = ln.strip()
+        if s.startswith("# ") and not s.startswith("## "):
+            out.append(f"*{_md_inline(s[2:]).strip('*')}*")   # title line (kept in full)
+            i += 1
+            continue
+        if s.startswith("_Generated "):
+            out.append(_md_inline(s))
+            i += 1
+            continue
+        if re.fullmatch(r"-{3,}|\*{3,}|_{3,}", s):
+            i += 1
+            continue                                   # horizontal rule
+        m = re.match(r"^#{2,6}\s+(.*)$", s)
+        if m:
+            out.append("")
+            out.append(f"*{_md_inline(m.group(1)).strip('*')}*")
+            i += 1
+            continue
+        if s.startswith("|") and i + 1 < len(lines) and _is_table_separator(lines[i + 1]):
+            header = _cells(s)
+            i += 2
+            rows = 0
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                if _is_table_separator(lines[i]):   # a stray extra separator row: syntax only
+                    i += 1
+                    continue
+                rows += 1
+                cells = _cells(lines[i])
+                out.append("")
+                lead = f"*{_md_inline(cells[0]).strip('*')}*" if cells and cells[0] else "—"
+                out.append(lead)  # the ticker/name leads; its column label adds nothing (Rafael)
+                for k, h in enumerate(header[1:], 1):  # every label, even for a short row
+                    v = cells[k] if k < len(cells) else ""
+                    if h or v:
+                        out.append(f"{_md_inline(h)}: {_md_inline(v) if v else '—'}")
+                for v in cells[len(header):]:          # a row with more cells than headers
+                    if v:
+                        out.append(_md_inline(v))
+                i += 1
+            if rows == 0:  # header + separator but no rows: keep the column labels
+                out.append(" · ".join(_md_inline(c) for c in header if c))
+            continue
+        if s.startswith("|") and s.endswith("|") and len(s) > 1:
+            # a table row with no separator row (e.g. an LLM reply cut off mid-table):
+            # show the cells as plain values, never raw pipes
+            out.append(" · ".join(_md_inline(c) for c in _cells(s) if c))
+            i += 1
+            continue
+        b = re.match(r"^(\s*)[-*]\s+(.*)$", ln)
+        if b:
+            out.append(f"{b.group(1)}• {_md_inline(b.group(2))}")
         else:
-            cur.append(ln)
-    if cur:
-        parts.append("\n".join(cur).strip())
-    parts = [p for p in parts if p]
-    if not parts:                                    # no bullets found → render as one part
-        parts = [summary]
-    # Bound the block count (Gro preship 2026-09-13): at most _MAX_BOARD_BLOCKS section blocks, each
-    # within the _sec 2900-char limit. A verbose/malformed board response is capped, never flooded
-    # into Slack; the full thesis always lives in the memo. (send_slack_blocks also chunks at <=45,
-    # so this is defense-in-depth against message spam, not a crash guard.)
-    out: list = []
-    truncated = False
-    for p in parts:
-        if len(out) >= _MAX_BOARD_BLOCKS:
-            truncated = True
-            break
-        out.append(_sec(p[:2800]))
-        if len(p) > 2800:
-            truncated = True
-    if truncated:
-        out.append(_ctx("…board read trimmed for Slack — full thesis in the memo."))
+            out.append(_md_inline(ln))
+        i += 1
     return out
+
+
+def _split_long(line: str, limit: int) -> list[str]:
+    parts: list[str] = []
+    while len(line) > limit:
+        cut = line.rfind(" ", 0, limit)
+        cut = cut if cut > limit // 2 else limit
+        parts.append(line[:cut])
+        line = line[cut:].lstrip()
+    parts.append(line)
+    return parts
+
+
+def memo_to_blocks(memo: str) -> list:
+    """The ENTIRE memo as ordered Slack section blocks, packed on line boundaries under the section
+    limit; an over-long single line is split at a space. Lossless for content."""
+    blocks: list = []
+    cur = ""
+    for ln in _memo_lines_for_slack(memo):
+        for piece in _split_long(ln, _SLACK_SECTION_MAX):
+            if cur and len(cur) + 1 + len(piece) > _SLACK_SECTION_MAX:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": cur}})
+                cur = piece
+            else:
+                cur = f"{cur}\n{piece}" if cur else piece
+    if cur.strip():
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": cur}})
+    return [b for b in blocks if b["text"]["text"].strip()]
 
 
 # ── Board (Gro + GAI, 4-lens) ──────────────────────────────────────────────────────────────────
@@ -492,14 +545,6 @@ def _board_prompt(ranked: list[dict], holds: list[dict], equity: float | None) -
     return "\n".join(lines)
 
 
-def _extract_section(text: str | None, header: str) -> str | None:
-    """Pull one '## HEADER' section body out of a board LLM response (for the Slack exec-summary). None if absent."""
-    if not text:
-        return None
-    m = re.search(rf"##\s*{re.escape(header)}\s*\n(.+?)(?:\n##\s|\Z)", text, re.S | re.I)
-    return m.group(1).strip() if m else None
-
-
 def run_board(ranked: list[dict], holds: list[dict], equity: float | None) -> tuple[str | None, str | None]:
     prompt = _board_prompt(ranked, holds, equity)
     gro = _gro(prompt, _GRO_SYS)
@@ -517,7 +562,8 @@ def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float 
              f"{('$'+format(equity, ',.0f')) if equity else '—'} · DRAFT for in-session review_",
              ""]
     if pend:
-        lines += [f"> ⚠️ Pending approvals awaiting Rafael: {', '.join(pend)} — read-only note, NOT applied here.", ""]
+        lines += [f"> ⚠️ {len(pend)} older pending-approval package(s) from earlier sessions are still "
+                  "unreviewed (read-only note, NOT applied here).", ""]
     lines += [
         "## Methodology",
         "- **Universe:** config.WATCHLIST + a curated S&P-500 candidate set (semis / AI-infra / defense / "
@@ -638,9 +684,6 @@ def main() -> int:
     gro, gai = (None, None)
     if ranked:
         gro, gai = run_board(ranked, holds_rows, equity)
-    if gro and ranked:
-        exec_sum = _extract_section(gro, "EXECUTIVE SUMMARY")
-        ranked[0]["board_verdict"] = (exec_sum or gro.strip().split("\n\n")[0])[:6000]
 
     # 6) memo (atomic) + Slack
     memo = build_memo(today, ranked, holds_rows, equity, gro, gai)
@@ -654,7 +697,7 @@ def main() -> int:
     except Exception as e:
         logger.error("qhm_thesis: memo write failed: %s", e)
 
-    blocks, fallback = build_slack(today, ranked, holds_rows, equity, bool(gro), bool(gai))
+    blocks, fallback = build_slack(today, ranked, holds_rows, equity, bool(gro), bool(gai), memo)
     if dry:
         logger.info("qhm_thesis: dry-run — Slack NOT sent. fallback=%s | %d blocks", fallback, len(blocks))
         return 0
