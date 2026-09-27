@@ -104,6 +104,11 @@ The wrap-up skill is Rafael's call, not Claude's. Never auto-trigger it at the e
 - **No** multi-day drawdown halts and **no** early "stop entering today" loss limits; revisit both at the real-money conversion.
 - Any NEW limit that would stop the bot trading for extended periods to protect paper capital must justify itself against the data-collection goal and needs Rafael's approval.
 - Existing structural entry gates are unchanged (score floor, sector and correlation caps, exposure caps, Architecture Invariants #9–#11).
+- **No shadow logs or shadow periods (Rafael mandate 2026-09-26).** A change that clears its front-loaded replay and the full gate ships LIVE. Reject any "shadow first", "log-only", "shadow-mode" or "observe for N weeks" proposal from any reviewer, board seat, Gro, GAI or Claude itself. Revisit shadow logs and capital preservation only at $25K.
+  - **What still counts as a shadow:** computing a feature whose output is NOT acted on while it "collects samples". The SHADOW STRATEGY TRACKER entries (`delta_shadow`, `VOLSHADOW`, `score_16pt`) count. Each goes live after its front-loaded replay and the gate, or is removed.
+  - **What is not a shadow:** logging WHY live code did what it actually did (decision stacks, a live trade's peak and trail).
+  - **Supersedes:** the SHADOW STRATEGY TRACKER sample-count revisit triggers, and Rule E's "logging-only / pinned until staged" wording.
+  - **Unchanged:** risk-path amplifiers (Rule E: size, frequency, concurrency) still pass the board gate before going live. That is a gate, not a sample-count wait.
 - **Buy-and-hold tiers are excluded from the SWING exposure limits (e.g. the P0-4b overnight cap).** They are bought on purpose and averaged up or down on directional conviction.
   - QHM is the quarterly-hold tier, `execution/quarterly_hold_manager.py`.
   - Forever-6 (F6) is the never-sell accumulation tier: `execution/forever_hold_manager.py`, `config.FOREVER6_*`.
@@ -1482,6 +1487,8 @@ scan this log first alongside the open items list.
 ---
 
 ### SHADOW STRATEGY TRACKER — revisit each every session (Rafael mandate 2026-07-06)
+
+> **SUPERSEDED 2026-09-26 (Rafael):** no shadow periods until $25K. The entries below either go LIVE after a front-loaded replay and the gate, or are removed. The sample-count triggers no longer apply. See "THIS IS A PAPER TRADING ACCOUNT".
 
 **Every shadow signal is logged-but-not-live until it earns its weight. Check this table each session; when a revisit trigger is met, run the analysis and bring the flip to the board.** A shadow that is never revisited is wasted data.
 
