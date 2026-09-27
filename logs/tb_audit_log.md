@@ -1,6 +1,16 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-09-26 — Day Tier post-fill geometry + weekly truth fix SHIPPED (ChatGPT/Codex)
+
+- **Observed defect:** 2026-09-23 fills could cross precomputed exit geometry (AAPL short filled below its target; META short filled beyond its stop). A bracket derived before execution could therefore become inverted or immediately marketable after the real fill. The weekly report also multiplied a per-share exit→Friday comparison by quantity and presented the mixed-horizon result as attributable “dollars left on the table.”
+- **Fix:** validate `stop < fill < target` for longs and `target < fill < stop` for shorts after the exact fill. Invalid geometry never submits OCO. Emergency recovery distinguishes live/unknown outcomes, never blind-retries ambiguous acknowledgements, requires exact cumulative quantity+price for terminal partial fills, accounts only unjournaled fill deltas, and requires confirmed cancellation of recorded exit legs before terminal state. Reporting retains only a clearly labeled per-share Friday diagnostic and preserves unknown prices as unknown.
+- **Adversarial rounds:** rejected and fixed lost-ack duplicate reducers; canceled-stop unreadable-fill naked state; stale stop after flat reversal risk; terminal partial missing-price misclassification; same-side cross-tier residual overreach; and cumulative partial-fill replay. Final Board, masked-loss, and mechanical verdicts PASS.
+- **BGGN:** Groq APPROVE; Google AI Studio APPROVE; NVIDIA waived per Rafael’s standing instruction that it is backup-only. Cold-2nd and adversarial markers PASS on exact staged bytes. Live-log evidence marker found 11 AAPL/META events in OCI `day_tier_events.jsonl` for 2026-09-23.
+- **Validation/ship:** 92 focused tests passed locally and on OCI Python 3.10; mypy, ruff E/W/F/B, py_compile, diff-check, repository preship, CI passed. PR #411 merged as `42a6246`; OCI fast-forward deploy emitted `DEPLOY_OK:42a6246`; `mtf-bot`, `mtf-writer`, `mtf-http` active. Runtime status remains **deployed, unexercised** until a new market fill traverses the changed branch.
+
+---
+
 ## 2026-09-22 — Day-tier TRACK B Inc 2 **Part 1** shipped (`strategy/day_tier_track_b.py` + tests, PR #374 → main → OCI, INERT)
 
 - **Scope:** first half of wiring the day-tier Track B (dynamic-mover momentum) path live. PURE + INERT — no live caller (only the test imports it), orders nothing, mutates no state. Deployed-unexercised; Part 2 makes it trade. Design: `logs/design_records/day_tier_track_b_inc2_2026-09-22.md`.
