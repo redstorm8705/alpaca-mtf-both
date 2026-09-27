@@ -229,3 +229,12 @@ Verified at source:
 - 0 contradictions; 505 / 104 members on the start date.
 - **Renames:** dated, from Alpaca corporate actions via `data/alpaca_data.get_name_changes` (read-only, no trading-path caller).
 - **Reviews:** 4 cold/adversarial rounds, final PASS.
+
+## Lab step 2 — daily bar history (2026-09-27, Rafael approved)
+- **Tool:** `research/lab_bars.py` (offline, lab venv). It gives every membership interval in `logs/lab/universe/*_membership.csv` one fetch, plus 24 market-context ETFs.
+- **Data:** split-adjusted daily SIP bars from T1 `data.fetcher.fetch_bars_window`, using Alpaca's point-in-time mapping. `asof` is the interval end, or none for current members.
+- **Storage:** `data/cache/lab/bars/1Day/<TICKER|TICKER@end>.csv.gz`, with a manifest at `logs/lab/bars_manifest.json`.
+- **Pace:** 20 req/min, because the live bot uses up to 175 of the account's 200.
+- **Limit:** Alpaca SIP history starts 2016-01-04, so 252-day features begin about 2017-01.
+- **Live trial:** TWTR, SIVB, META (Facebook prices in 2016), BKNG and SPY all correct.
+- **Reviews:** cold review round 1 FAILED on reused-ticker merging and was fixed with one job per interval; round 2 PASS.

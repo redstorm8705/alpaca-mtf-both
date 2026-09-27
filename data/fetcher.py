@@ -276,7 +276,7 @@ def fetch_bars(
 
 def fetch_bars_window(
     symbol: str, timeframe: str, start: datetime, end: datetime, feed: str = "sip",
-    adjustment: str = "raw",
+    adjustment: str = "raw", asof: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV bars for an EXPLICIT historical [start, end] window (UTC-indexed).
@@ -320,6 +320,10 @@ def fetch_bars_window(
     If a feed is ever un-entitled, the request errors -> honest-empty -> the caller
     fails safe (null MAE/MFE upstream / Track-B symbol skipped), never a silent
     downgrade.
+    `asof` (optional, "YYYY-MM-DD"): Alpaca's point-in-time symbol mapping — the
+    security that held `symbol` on that date (tickers are renamed and reused, e.g.
+    META was an ETF until 2022-01-31). Omitted by default, so existing callers are
+    unchanged; a malformed value -> honest-empty. Used by the research lab.
     """
     if timeframe not in TF_MAP:
         logger.warning(
@@ -341,6 +345,17 @@ def fetch_bars_window(
         return pd.DataFrame()
     if end <= start:
         return pd.DataFrame()
+    _extra: dict = {}
+    if asof is not None:
+        try:
+            date.fromisoformat(str(asof))
+        except ValueError:
+            logger.warning("[%s] fetch_bars_window: bad asof '%s'", symbol, asof)
+            return pd.DataFrame()
+        if len(str(asof)) != 10:
+            logger.warning("[%s] fetch_bars_window: bad asof '%s'", symbol, asof)
+            return pd.DataFrame()
+        _extra["asof"] = str(asof)
 
     for attempt in range(5):
         try:
@@ -353,6 +368,7 @@ def fetch_bars_window(
                 end=end,
                 feed=_feed,                 # explicit: SIP (settled) / IEX (real time)
                 adjustment=_adj,            # explicit: RAW (default) or SPLIT
+                **_extra,                   # asof only when the caller supplied it
             )
             bars = client.get_stock_bars(request)
             df   = bars.df

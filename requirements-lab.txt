@@ -4,3 +4,4 @@ pandas
 requests
 lxml
 pypdf
+alpaca-py==0.43.3
