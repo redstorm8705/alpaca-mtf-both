@@ -1,0 +1,46 @@
+### 1-8: Technical Corrections
+
+**(1) MOM12-MOM1:** Yes, that is a classic **look-ahead bias** (peeking into the future). **Correct Definition:** The classic momentum factor is $MOM_{12-1}$, which is the return from month $t-12$ to month $t-1$. It excludes the most recent month to avoid short-term reversal effects.
+
+**(2) VIX Ratio:** Yes, it is inverted. **Correct Rule:** Stress (backwardation) exists when the front-month VIX is higher than the 3-month VIX. Rule: `VIX / VIX3M > 1.0` = Bear Regime.
+
+**(3) Liquidity Filter:** Your math is correct; 1% of market cap is too restrictive for mega-caps. **Corrected Filter:** Use an absolute liquidity floor (e.g., $10M ADV) combined with a relative filter: `ADV > 0.05% of Market Cap`. This captures liquid large-caps while filtering illiquid micro-caps.
+
+**(4) Ship Order:** Per CEO mandate: (i) Historical Replay (Out-of-Sample backtest) $\to$ (ii) Peer Review Gate $\to$ (iii) Board Review for risk-path parameters $\to$ (iv) **Immediate Live Execution.** No log-only/shadow phases allowed.
+
+**(5) Drift Handling:** If $PSI > 0.2$, the model is statistically unstable. Do not halt trading; **Fallback to a Baseline:** Use a "Mean-Reversion/Trend-Follower Hybrid" based on simple 200-day moving average positioning (Beta-neutral). Keep the bot active but revert the alpha engine to a "safe-haven" weight.
+
+**(6) Acceptance Test:** The DSR is a probability ($P$-value). **Correct Test:** $DSR > 0.95$ (Confidence level), $PBO < 0.05$ (Probability of Backtest Overfitting), minimum 150 independent trades in Out-of-Sample.
+
+**(7) Data Bias:** Alpaca provides survivorship-bias-free data for listed symbols. **Residual Bias:** Delisted stocks are purged from the historical universe, leading to "Success Bias." You must accept this limit but log all trade entries to ensure the bot is never trading "ghosts" that weren't available in real-time.
+
+**(8) Dependency:** **No.** The day tier must be independent. Tightly coupling a 15-min layer to a 4-hour swing score creates a feedback loop that destroys diversification. Let the day tier have its own signal-processing chain.
+
+***
+
+### (c) Decision Model (Low Label Count)
+With a few hundred labels, a complex neural net will overfit instantly. Use a **Regularized Linear Model (ElasticNet)** or a **Random Forest with max_depth=3**. These models act as high-bias/low-variance anchors that prevent the bot from "chasing noise" in the limited data.
+
+### (d) Regime Layer
+Implement a **Hidden Markov Model (HMM)** with two states: *Quiet/Contango* and *Stress/Backwardation*. Use `VIX/VIX3M` and `High-Low Range` as features. The Regime Layer should act as a multiplier on the position size of the day-tier:
+*   State 0 (Quiet): 1.0x sizing.
+*   State 1 (Stress): 0.25x sizing + Hedge (inverse ETFs or Cash).
+
+### (e) Daily + Weekend Retrain Loop
+*   **Daily:** Re-calculate mean/volatility features; update the regime state. Do **not** retrain weights daily to avoid "signal jitter."
+*   **Weekend:** Perform a walk-forward validation check. If the model performance in the past 5 days drifts significantly from the expected distribution (using a Kolmogorov-Smirnov test), trigger a model reset to the last validated baseline.
+
+### (f) Lab Data
+You are using Alpaca (T1) and yfinance (T2).
+*   **Constraint:** Normalize all prices to split/dividend-adjusted close.
+*   **Action:** If a symbol exists in yfinance but not Alpaca’s daily price history, it is excluded (avoids data mismatch). Residual bias is primarily "index composition bias"—you will only be trading stocks that *remain* in the indices.
+
+### (g) Ship Order
+1.  **Backtest:** 10-year historical replay (Out-of-Sample).
+2.  **Gate:** Review DSR, PBO, and Max Drawdown against the $25K goal constraint.
+3.  **Board Review:** Validate risk-path parameters (max position size, frequency).
+4.  **Deploy:** Live execution during market open.
+5.  **Monitoring:** Monitor the 7% kill switch daily; if triggered, analyze log, reset model to baseline, resume next morning.
+
+### (h) Biggest Failure Mode: "The Feedback Loop"
+The biggest failure mode is **Parameter Over-Optimization.** Because you trade every day, the bot will eventually attempt to "learn" the idiosyncratic noise of the last 48 hours. By strictly separating the Day Tier from the Swing Tier and forcing a baseline fallback when the model drifts ($PSI > 0.2$), you insulate the account from a catastrophic "model breakdown." If the bot ever stops making logical decisions, the fallback baseline ensures you are trading an "okay" strategy rather than a "broken" one.

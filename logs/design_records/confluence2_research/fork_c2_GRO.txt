@@ -1,0 +1,59 @@
+**Confluence 2.0 – “Paper‑Trader” Architecture**  
+*Goal: turn a $2.5 k paper account into a $25 k data‑collection engine while never allowing the daily‑kill‑switch (7 % equity loss) to be breached.*  
+All code will run on a single‑core Python 3.10 ARM VM, no GPU, no external‑API latency (use cached daily‑close files).  
+Below each sub‑question is answered with a **hard recommendation** (ship / do‑not‑ship) followed by the exact implementation details that satisfy the CEO’s five directives.
+
+---
+
+## (a) SWING FEATURE SET (daily / weekly / 4‑hour timing)
+
+| # | Feature (name) | Definition (closed‑bar only) | Look‑back | Source | Why it replaces the old 12‑point set |
+|---|----------------|------------------------------|----------|--------|--------------------------------------|
+| 1 | **MOM12‑MOM1** (cross‑sectional momentum) | Rank‑based percentile of **12‑month total return** (price‑only) across the universe, then compute the **1‑month forward‑return percentile** of the same stock. Use the product of the two percentiles as the signal. | 252 trading days (12 m) + 21 days (1 m) | Alpaca daily close | Collapses the 9 “trend‑same‑thing” indicators (SMA/EMA/ MACD/ RSI / VWAP) into a single, research‑backed momentum metric. |
+| 2 | **52W‑HiDist** | Distance of today’s close to the 52‑week high, expressed as a **percent of range** (Close‑Low52W / (High52W‑Low52W)). | 252 days | Alpaca daily OHLCV | Captures George‑Hwang “high‑proximity” edge; replaces “near‑VWAP” and “price vs 150/200‑day SMA”. |
+| 3 | **IV‑Skew** | (IV‑call – IV‑put) / IV‑ATM using the **mid‑IV** from the option chain for the nearest‑expiry at‑the‑money strike. | 1 day (same‑day chain) | Alpaca option chain (computed locally) | Directly injects the option‑skew premium that research shows is predictive of short‑term reversals. |
+| 4 | **ResiMom** (idiosyncratic momentum) | Regression of daily returns on the first‑principal‑component of sector returns (using the last 60 days). The residual series is then ranked over the past 20 days; the current residual rank is the feature. | 60 d sector PCA + 20 d residual rank | Alpaca daily close + sector map (static CSV) | Provides the “idiosyncratic momentum” component that was missing from the old set. |
+| 5 | **Vol‑Regime** | Realised 20‑day volatility **z‑score** (σ_t / mean(σ_20) – 1). | 20 d | Alpaca intraday (aggregated to daily) | Supplies the regime‑aware volatility flag for scaling (see §d). |
+| 6 | **Fundamental‑Score** | Composite of (a) **PE‑ratio** (price / trailing‑12‑month EPS) and (b) **SUE** (standardised unexpected earnings) from FMP; each Z‑scored and averaged. | 12 m fundamental data (static per quarter) | FMP free tier (250 calls/day) | Brings PEAD into the swing tier without relying on decayed SUE alone. |
+| 7 | **Breadth‑Bias** | Net‑advantage of the **TraderMonty breadth CSV** over the last 10 days (advancing‑issues – declining‑issues) divided by total issues, Z‑scored. | 10 d | TraderMonty CSV (downloaded nightly) | A cheap, regime‑sensitive macro filter that replaces the “EMA13>EMA30” redundancy. |
+| 8 | **4‑Hour Timing Offset** | Binary flag: **1** if the 4‑hour bar that *closes* within the same trading day shows a **positive 4‑hour return** (i.e., Close_4h > Open_4h). | 4 h (last 4‑h bar of the day) | Alpaca 1‑hour intraday aggregated to 4 h | This is the *timing* layer required by the CEO – it does **not** affect the swing score itself, only whether a new entry is allowed that day. |
+| 9 | **Sector‑Relative Strength** | Rank of the stock’s **weekly return** vs the median return of its GICS sector over the same week. | 5 d (weekly) | Alpaca daily close + sector map | Replaces the “EMA30/13” double‑count – gives a true *relative* strength measure. |
+|10| **Liquidity‑Filter** | Average daily dollar volume (ADV) over the last 30 days > $5 M AND > 1 % of market‑cap. | 30 d | Alpaca daily volume | Guarantees we can enter/exit without excessive slippage – a safety envelope requirement. |
+
+### What is **dropped / merged** from the original 12‑point confluence?
+
+| Dropped | Reason |
+|--------|--------|
+| SMA150/200, EMA13, EMA30 | All three are redundant proxies for long‑term trend; MOM12‑MOM1 already captures the same information with a proven edge. |
+| MACD cross | Same as EMA‑trend; removed to reduce over‑counting. |
+| RSI range (30‑70) | Momentum‑based features already subsume overbought/oversold; RSI adds noise. |
+| VWAP proximity | Replaced by 52W‑HiDist (a more robust range‑based signal). |
+| 12‑1 momentum (intraday) | Intraday momentum belongs in the DAY‑tier; swing tier must be closed‑bar only. |
+| “related trend checks” (any duplicate) | Consolidated into MOM12‑MOM1 and Sector‑Relative Strength. |
+
+**Result:** 10 features → 6‑12 active (we keep all 10 because each is orthogonal per the correlation matrix we measured on the training set). The final swing **confluence score** is the **IC‑weighted sum** of these features (see §c).
+
+---
+
+## (b) DAY‑TIER 15‑min Layer (intraday)
+
+The day‑tier runs **only when the 4‑hour timing flag (Feature 8) = 1** and the swing score exceeds the entry threshold (see §c). It supplies a *refinement* to the entry price and an optional “add‑on” position (max 25 % of the swing allocation).
+
+| # | Feature / Setup | Definition (closed 15‑min bar) | Look‑back |
+|---|----------------|--------------------------------|----------|
+| D1 | **Opening‑Range Breakout (ORB)** | High‑low of the first 30 min (bars 0‑1). Enter long if price > high\_30, short if price < low\_30. | 30 min |
+| D2 | **RVOL‑Filter** | Relative volume = vol_15 / median(vol_15) of the previous 20 bars. Accept entry only if RVOL > 2.0. | 20 bars |
+| D3 | **Momentum‑Flip** | Compare 15‑min return of the most recent completed bar vs the return of the bar 3 bars earlier. Require sign flip (i.e., down → up) and magnitude > 0.2 % for long. | 4 bars |
+| D4 | **VIX‑Term‑Structure** | If VIX3M / VIX > 1.2 → *bear* regime, disable long ORB; if < 0.8 → *bull* regime, disable short ORB. | Daily (yfinance) |
+| D5 | **GEX‑Pinning** (optional, cheap proxy) | Compute net change in open interest for calls minus puts at the nearest ATM strike (use option chain). If ΔGEX > 0 → bias long, else short. | 1 day |
+| D6 | **Time‑of‑Day Decay** | Do not open new positions after 13:30 ET (U‑shaped volatility). This is a hard kill‑switch for the day‑tier. | Calendar time |
+
+**Entry flow:**  
+
+1. Swing score > **T_swing** (see §c).  
+2. 4‑h timing flag = 1.  
+3. Day‑tier features evaluated on the *first* completed 15‑min bar after the 4‑h bar close (i.e., at 13:00 ET).  
+4. If **D1‑D3** all pass and the VIX‑term condition (D4) aligns, we place a **limit order** at the breakout high/low plus 0.1 % slippage buffer.  
+5. Position size = 25 % of the swing‑allocation (max 4.5 % of equity per trade).  
+
+If any day‑tier condition fails, we **skip** the intraday

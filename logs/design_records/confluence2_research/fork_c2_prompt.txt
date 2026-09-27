@@ -1,0 +1,27 @@
+DESIGN QUESTION — Confluence 2.0: the entry-signal system for a PAPER trading bot growing $2.5K -> $25K. Data collection and edge evaluation are the #1 objective; the bot trades every day; the only daily brake is a 7% kill switch on new entries. No shadow/log-only rollouts: a change that clears a front-loaded replay + the review gate ships live.
+
+CURRENT STATE (measured):
+- Entry score = 12-point confluence (floor 8): price vs 150/200-day SMA, EMA13>EMA30, MACD cross, RSI in range, near VWAP, 12-1 momentum, plus related trend checks. 9 of the 12 points measure the same trend in correlated ways. On 46 closed swing trades, score vs outcome Spearman = 0.02 (no measurable edge).
+- The "swing" tier actually scores on 15-min / 1-hour / 1-day bars, and indicators read the still-forming bar (iloc[-1]).
+- Data available: Alpaca daily/intraday OHLCV (IEX feed on the free plan) + option chains (indicative, no greeks; OI from contract object, gamma computed locally); FMP free tier (fundamentals, earnings calendar, 250 calls/day); VIX/VIX3M via yfinance; TraderMonty breadth CSVs; existing news pipeline. No analyst-revision or short-interest feed. Python 3.10 on an ARM VM, no GPU.
+- Sizing: quarter-Kelly with per-trade risk cap 4.5% of equity. Any change that raises size, entry frequency, or concurrency (including a new score that feeds the conviction->size map) is a risk-path change that needs a board review before it goes live.
+
+CEO DIRECTIVES (binding): (1) Swing tier moves to daily + weekly bars with 4-hour for timing; the 15-min layer moves to the day-trading tier. (2) Closed bars only, everywhere. (3) The model retrains DAILY and on weekends, constantly optimizing. (4) Published backtests are leads only; every candidate is re-tested in our own lab (point-in-time universe, closed bars, purged walk-forward CV, Deflated Sharpe / PBO) before shipping. (5) Professional-grade, dynamic, regime-aware — not static thresholds.
+
+RESEARCH FINDINGS (5 tracks, cited sources):
+- Strongest swing evidence: cross-sectional momentum 3-12m (Jegadeesh-Titman), 52-week-high proximity (George-Hwang), residual/idiosyncratic momentum (Blitz-Huij-Martens), frog-in-the-pan continuity (Da-Gurun-Warachka), industry/sector relative-strength momentum, PEAD (simple numeric SUE has decayed; text/attention variants still show edge), high-volume return premium (Gervais-Kaniel-Mingelgrin), options IV skew and IV-RV / put-call signals (Xing-Zhang-Zhao; Cremers-Weinbaum). Momentum crashes after high-vol bear rebounds (Daniel-Moskowitz); vol-managed scaling (Moreira-Muir) beat static in only ~53/103 portfolios in a replication.
+- Practitioner methods: CAN SLIM backtests positive but live funds underperformed; Weinstein Stage-2 edge vanishes after survivorship correction (2026 SSRN); Minervini VCP / Qullamaggie / pocket pivots have no independent quant backtest; Connors RSI(2) mean reversion replicates (~64% win OOS).
+- ML/open source: Qlib Alpha158 KBAR/RSV/CORR features, WorldQuant 101 range-position, Kaufman efficiency ratio, TTM squeeze; triple-barrier labels + meta-labeling (Lopez de Prado); FinBERT on existing news. Time-series foundation models (Chronos/TimesFM) roughly tie a random walk on single stocks. 33/42 public Freqtrade strategies lost money on re-test.
+- Regime + weighting: VIX/VIX3M term structure, realized-vol regime, 2-3 state HMM probability, breadth; exponentially-weighted rolling IC weights; regime-conditioned blending; meta-model P(win | features, regime) feeding sizing; purged+embargoed walk-forward, CPCV later; DSR, PBO, t-stat hurdle 3.0 for new features; Brier/ECE + PSI/KS drift monitors; prune only after sustained IC decay.
+- Day tier (15-min layer): intraday momentum first-30-min -> last-30-min (Gao et al.), ORB on stocks-in-play with RVOL filter (Zarattini et al.; one replication reports net-of-cost edge near zero), large-cap intraday mean reversion stronger with VIX, U-shaped time-of-day vol, GEX pinning/amplification.
+
+QUESTION: Design Confluence 2.0 concretely. Answer each:
+(a) SWING feature set (daily/weekly/4H): which 6-12 features, exact definitions and lookbacks, and which of today's 12 points are dropped/merged;
+(b) DAY-TIER 15-min layer: which features/setups;
+(c) how features combine into a decision — fixed score vs learned model (logistic/GBM/meta-label) vs IC-weighted blend — given only a few hundred labels, and what the label is (horizon, triple-barrier params);
+(d) regime layer: inputs and how it conditions weights/thresholds;
+(e) the daily + weekend retrain loop: what refits daily vs weekend, validation protocol, acceptance thresholds, what happens if a retrain fails validation, drift monitors, and how to avoid overfitting to recent data;
+(f) historical data to build the lab (years, universe, survivorship handling with our free sources);
+(g) ship order: what goes live first, and which pieces are risk-path under the definition above;
+(h) the biggest way this design could fail and how the design prevents it.
+Give concrete recommendations and the failure scenario for any alternative you reject. Flag uncertainty explicitly.
