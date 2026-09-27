@@ -41,3 +41,16 @@
 
 ## Rejected
 - GAI's "3-day shadow mode" and the board's "champion/challenger shadow". Both violate the no-shadow rule. Promotion is decided on the out-of-sample offline result plus the gate.
+
+## Rafael directives (2026-09-26, later) — supersede parts of the plan above
+1. **Confluence 2.0 by exhaustive research.** AI agents research free public sources:
+   - academic/industry quant work (SSRN, arXiv, AQR, Alpha Architect, Quantpedia, Robeco);
+   - open-source ML/algo (Hugging Face, Microsoft Qlib alpha libraries, WorldQuant 101 Alphas, Kaggle, Freqtrade/QuantConnect);
+   - professional swing methods (relative-strength ratings, stage analysis, VCP/trend template, anchored VWAP, volume profile, breadth, sector rotation).
+
+   Each candidate is catalogued with its formula, timeframe, data needs, evidence quality (out-of-sample? replicated? post-publication decay?) and citation. The effort is comprehensive, with no shortcuts; a full usage window is acceptable.
+2. **Published backtests are leads only.** Every shortlisted candidate is re-tested in our entry lab: point-in-time universe, closed bars, purged walk-forward CV, Deflated Sharpe/PBO. No ship on published or in-sample results.
+3. **Dynamic system.** The BGGN designs a system from the evidence, with regime-adaptive weights and features pruned on decay.
+4. **Swing moves to HIGHER timeframes.** Daily and weekly, with 4-hour for timing (`SWING_TFS` in `data/fetcher.py:46` is currently unused). The 15-minute layer moves into the DAY-TRADING tier and is optimized there.
+5. **Closed bars only, everywhere.**
+6. **Retrain DAILY and on weekends** (replaces "weekly").
