@@ -42,11 +42,13 @@ import hashlib
 import logging
 import argparse
 import subprocess
+from html import escape
 import numpy as np
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from reporting.html_ui import PRIMARY_NAV_CSS, primary_nav
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -1903,6 +1905,39 @@ def _rejections_section(rejections: list) -> str:
 </details>"""
 
 
+def _primary_action_card(rec: dict | None, label: str, accent: str) -> str:
+    """Promote one already-qualified recommendation without discarding alternatives."""
+    if not rec:
+        return (
+            f'<div class="action-card empty" style="border-top-color:{accent}">'
+            f'<div class="action-eyebrow" style="color:{accent}">{label}</div>'
+            '<div class="action-title">No actionable setup</div>'
+            '<div class="action-meta">The full candidate and rejection lists remain below.</div></div>'
+        )
+    direction = str(rec.get("direction") or "").lower()
+    if direction not in {"call", "put"}:
+        return _primary_action_card(None, label, accent)
+    action = "BUY CALL" if direction == "call" else "BUY PUT"
+    arrow = "↑" if direction == "call" else "↓"
+    symbol = escape(str(rec.get("symbol", "—")))
+    strike = rec.get("strike")
+    expiry = escape(str(rec.get("expiry", "—")))
+    premium = rec.get("premium_mid")
+    score = int(rec.get("score") or 0)
+    cost_pct = rec.get("cost_pct")
+    bas = "—" if cost_pct is None else f"{float(cost_pct):.0%} spread"
+    premium_s = "—" if premium is None else f"${float(premium):.2f} mid"
+    strike_s = "—" if strike is None else f"${float(strike):g}"
+    return (
+        f'<div class="action-card" style="border-top-color:{accent}">'
+        f'<div class="action-eyebrow" style="color:{accent}">{label} · primary qualified setup</div>'
+        f'<div class="action-title"><span>{action} {arrow}</span> {symbol} {expiry} {strike_s}</div>'
+        f'<div class="action-meta">{score}/12 · {premium_s} · {bas} · risk is premium paid</div>'
+        '<div class="action-note">One action is promoted for clarity. Every other qualified setup '
+        'remains below as an alternative, not an instruction to take both directions.</div></div>'
+    )
+
+
 def generate_html(data: dict) -> str:
     weekly_recs = data["recommendations"]
     dte_recs    = data.get("recs_0dte", [])
@@ -1936,6 +1971,16 @@ def generate_html(data: dict) -> str:
     _rest_recs   = [r for r in dte_recs if r["symbol"] not in _anchor_syms]
     index_anchor = _build_index_anchor(_anchor_recs)
     dte_table    = _build_rec_table(_rest_recs, id_offset=1000)
+    _weekly_primary = weekly_recs[0] if weekly_recs else None
+    _dte_primary = dte_recs[0] if dte_recs else None
+    primary_actions = (
+        '<section class="action-deck">'
+        f'{_primary_action_card(_weekly_primary, "Weekly", "#00e5ff")}'
+        f'{_primary_action_card(_dte_primary, "0DTE", "#ff9f0a")}'
+        '<div class="horizon-note">Weekly and 0DTE are separate time-horizon decisions. '
+        'A primary card in each column does not mean take both trades.</div>'
+        '</section>'
+    )
 
     # (Retired 2026-07-13) The cross-strategy conflict note + SPY-alignment banner were
     # premium-selling-specific (weekly BUY vs 0DTE SELL). 0DTE is now directional LONG
@@ -2017,6 +2062,17 @@ def generate_html(data: dict) -> str:
     .s-lbl{{font-size:10px;color:#8a94ae;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}}
     .s-val{{font-size:22px;font-weight:700}}
     .s-sub{{font-size:11px;color:#8a94ae;margin-top:2px}}
+    .action-deck{{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 20px;
+      background:#090b14;border-bottom:1px solid #252847}}
+    .action-card{{background:#13162a;border:1px solid #252847;border-top:3px solid;
+      border-radius:8px;padding:13px 15px;min-width:0}}
+    .action-card.empty{{opacity:.75}}
+    .action-eyebrow{{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}}
+    .action-title{{font-size:18px;font-weight:750;margin-top:5px;color:#e8ecff}}
+    .action-title span{{font-size:12px;color:#fff;background:#303656;border-radius:5px;padding:3px 6px}}
+    .action-meta{{font-size:11px;color:#b8bdd4;margin-top:6px}}
+    .action-note{{font-size:10px;color:#8a94ae;margin-top:7px;line-height:1.45}}
+    .horizon-note{{grid-column:1/-1;font-size:10px;color:#ffd60a;text-align:center}}
     .event-banner{{background:rgba(255,214,10,.10);border:1px solid rgba(255,214,10,.3);padding:10px 20px;font-size:12px}}
     .event-banner ul{{margin-top:5px;padding-left:18px;color:#ffd60a}}
     .section-hdr{{padding:10px 20px 6px;font-size:10px;font-weight:600;color:#8a94ae;
@@ -2083,6 +2139,7 @@ def generate_html(data: dict) -> str:
     .score-bar-wrap{{flex:1;height:4px;background:#161a28;border-radius:2px;display:inline-block;width:60px;vertical-align:middle;margin-right:4px}}
     .score-bar{{height:100%;border-radius:2px}}
     .score-label{{font-size:11px;font-weight:700;vertical-align:middle}}
+    {PRIMARY_NAV_CSS}
     @media(max-width:768px){{
       .stat-bar{{flex-wrap:wrap}}
       .stat-tile{{flex:1 1 calc(50% - 1px);min-width:0}}
@@ -2092,6 +2149,7 @@ def generate_html(data: dict) -> str:
       .content{{padding:10px 12px}}
       .legend-row{{gap:10px}}
       .cols{{grid-template-columns:1fr}}
+      .action-deck{{grid-template-columns:1fr;padding:10px 12px}}
       .col{{border-right:none;border-bottom:1px solid #252847}}
     }}
   </style>
@@ -2100,6 +2158,7 @@ def generate_html(data: dict) -> str:
 
 <header class="opt-hdr">
   <div class="logo">Options Scanner <span>MTF CONFLUENCE</span></div>
+  {primary_nav("options")}
   <div class="hdr-right">
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
       <span style="font-size:12px;color:#e8ecff;font-variant-numeric:tabular-nums" id="freshClock">—</span>
@@ -2127,13 +2186,14 @@ def generate_html(data: dict) -> str:
 {_event_banner(events)}
 {_align_banner}
 {_conflict_note}
+{primary_actions}
 
 <!-- ── TWO-COLUMN: 0DTE directional (LEFT) | Weekly directional (RIGHT) ─────── -->
 <div class="cols">
 
   <div class="col zd">
     <div class="colhead">
-      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional · {len(dte_recs)}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. <b>Pick ONE per name</b> — the two rows are alternatives, not a combined trade. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium. SPY/QQQ + Mag 7.</span></details></span>
+      <span class="ch-t"><span style="color:#ff9f0a">⚡</span> 0DTE directional · {len(dte_recs)}<details class="xpl"><summary>ⓘ</summary><span class="xpl-pop"><b>You BUY the option</b> — a call for an up-move OR a put for a down-move. Each ticker has one model-selected direction. The primary card is the clearest qualified setup; rows below are alternatives. Long 0DTE premium is <b>speculative</b> (fast theta decay, often expires worthless); risk capped at premium. SPY/QQQ + Mag 7.</span></details></span>
       <span class="ch-s"><b style="color:#ff3b30">⏰ hard close 3:45 ET</b> · entry 10:05–10:20 ET</span>
     </div>
     {index_anchor}

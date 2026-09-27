@@ -26,6 +26,7 @@ from reporting.metrics import (
     _day_pnl, _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
 from reporting.report_figures import build_report_figures, reconcile
+from reporting.html_ui import PRIMARY_NAV_CSS, primary_nav, tier_performance_table
 from gai_client import GAI_MODEL_LADDER  # single source of truth for the live Gemini model ladder
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)  # noqa: E501
 
@@ -1409,18 +1410,21 @@ def build_html(  # noqa: E501
             for e in _spy_evts
         )
 
-    # Lifetime stats — Alpaca-sourced via compute_lifetime_stats() which calls
-    # Alpaca /v2/account directly (equity - $2,500 initial). EOD file sums are
-    # not used for total_pnl — they had a falsy 0.0 bug that understated P&L.
+    # Keep account equity and completed strategy lifecycles visibly separate.
     _lt       = compute_lifetime_stats()
-    _lt_total = _lt["total_trades"]
-    _lt_wins  = _lt["wins"]
-    _lt_wr    = round(_lt["win_rate"]) if _lt_total else None
     _lt_pnl   = _lt["total_pnl"]
+    _edge_ok = bool(
+        figures is not None and getattr(figures, "available", False)
+        and not figures.unmatched_closes and not figures.missing_order_joins
+        and not figures.missing_close_identities
+    )
+    _edge = figures.strategy_edge_stats().get("overall", {}) if _edge_ok else {}
+    _lt_total = _edge.get("completed_trades")
+    _lt_wr    = _edge.get("win_rate")
     _lt_wr_col = ("#30d158" if (_lt_wr or 0) >= 60 else "#ffd60a" if (_lt_wr or 0) >= 40 else "#ff3b30") if _lt_wr is not None else "#636680"  # noqa: E501
     _lt_pnl_col = "#30d158" if _lt_pnl > 0 else ("#ff3b30" if _lt_pnl < 0 else "#636680")  # noqa: E501
     _lt_wr_str  = f"{_lt_wr}%" if _lt_wr is not None else "—"
-    _lt_pnl_str = (("+" if _lt_pnl >= 0 else "") + f"${_lt_pnl:.2f}") if _lt_total else "—"  # noqa: E501
+    _lt_pnl_str = (("+" if _lt_pnl >= 0 else "") + f"${_lt_pnl:.2f}")
 
     # H-3: Build week trades early so we can compute weekly (not lifetime) overnight WR
     _all_week_trades = []
@@ -1448,12 +1452,12 @@ def build_html(  # noqa: E501
   <div class="stat"><div class="stat-lbl">Weekly Win Rate</div>
     <div class="stat-val">{_sv(stats.get("wr"), "{}%")}</div></div>
   <div class="stat" style="border:1px solid #30d15830;background:#0d1f12">
-    <div class="stat-lbl" style="color:#30d158">Lifetime Win Rate</div>
+    <div class="stat-lbl" style="color:#30d158">Completed Edge</div>
     <div class="stat-val" style="color:{_lt_wr_col}">{_lt_wr_str}</div>
-    <div style="font-size:10px;color:#636680;margin-top:4px">{_lt_total} trades</div>
+    <div style="font-size:10px;color:#636680;margin-top:4px">{'snapshot unavailable' if _lt_total is None else f'{_lt_total} lifecycles'}</div>
   </div>
   <div class="stat" style="border:1px solid #30d15830;background:#0d1f12">
-    <div class="stat-lbl" style="color:#30d158">Lifetime P&amp;L</div>
+    <div class="stat-lbl" style="color:#30d158">Account P&amp;L</div>
     <div class="stat-val" style="color:{_lt_pnl_col};font-size:18px">{_lt_pnl_str}</div>
   </div>
   <div class="stat"><div class="stat-lbl">Avg Score</div>
@@ -1689,7 +1693,7 @@ def build_html(  # noqa: E501
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="60">
 <title>Weekly Review · {wk_lbl}</title>
-<style>{CSS}</style>
+<style>{CSS}\n{PRIMARY_NAV_CSS}\n.tier-performance{{width:100%;border-collapse:collapse;margin-top:12px}}.tier-performance th,.tier-performance td{{padding:8px;border-bottom:1px solid #252847;text-align:right}}.tier-performance th:first-child,.tier-performance td:first-child{{text-align:left}}.tier-dot{{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px}}</style>
 </head>
 <body>
 
@@ -1698,6 +1702,7 @@ def build_html(  # noqa: E501
     <div class="title">Weekly Review</div>
     <div class="sub">{wk_lbl}</div>
   </div>
+  {primary_nav("weekly", "../" if is_archive else "")}
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
     {nav_html}
     {back_link}
@@ -1712,6 +1717,8 @@ def build_html(  # noqa: E501
 {headline_html}
 
 {stats_html}
+
+{tier_performance_table(figures.strategy_edge_stats()) if _edge_ok else ""}
 
 <div class="days-grid" style="margin-top:20px">
 {day_tiles}

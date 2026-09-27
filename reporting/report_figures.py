@@ -37,11 +37,15 @@ logs/design_records/report_single_source_of_truth_2026-08-20.md
 from __future__ import annotations
 
 import logging
+import json
+import os
 import uuid
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,7 @@ PT = ZoneInfo("America/Los_Angeles")
 
 # Fallback basis before the ledger reports real net_deposits (paper account start equity).
 _INITIAL_PAPER_EQUITY = 2500.0
+_EDGE_SNAPSHOT = Path(__file__).resolve().parent.parent / "logs" / "strategy_edge_snapshot.json"
 
 
 @dataclass
@@ -282,7 +287,7 @@ def build_report_figures() -> ReportFigures:
     for r in rts:
         by_exit[str(r.get("exit_date", ""))].append(r)
 
-    return ReportFigures(
+    figures = ReportFigures(
         available=True,
         version=uuid.uuid4().hex[:12],
         ts_pt=ts,
@@ -296,3 +301,44 @@ def build_report_figures() -> ReportFigures:
         missing_close_identities=led.get("missing_close_identities") or [],
         _by_exit_date=dict(by_exit),
     )
+    _write_strategy_edge_snapshot(figures)
+    return figures
+
+
+def _write_strategy_edge_snapshot(figures: ReportFigures) -> None:
+    """Persist the safe display summary for fast pages such as the 30-second dashboard.
+
+    The dashboard must not refetch thousands of historical orders every 30 seconds. This cache is
+    written only after the canonical ledger succeeds and carries its own generation time and
+    integrity state. A write failure never changes the in-memory report result.
+    """
+    try:
+        edge = figures.strategy_edge_stats()
+        payload = {
+            "schema": 1,
+            "generated_at_utc": datetime.now(ZoneInfo("UTC")).isoformat(),
+            "generated_pt": figures.ts_pt,
+            "version": figures.version,
+            "integrity_ok": not (
+                figures.unmatched_closes
+                or figures.missing_order_joins
+                or figures.missing_close_identities
+            ),
+            "unmatched_closes": len(figures.unmatched_closes),
+            "missing_order_joins": len(figures.missing_order_joins),
+            "missing_close_identities": len(figures.missing_close_identities),
+            "overall": edge["overall"],
+            "by_tier": edge["by_tier"],
+        }
+        _EDGE_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=_EDGE_SNAPSHOT.parent,
+            prefix=f".{_EDGE_SNAPSHOT.name}.", suffix=".tmp", delete=False,
+        ) as fh:
+            tmp = Path(fh.name)
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, _EDGE_SNAPSHOT)
+    except Exception as exc:
+        logger.warning("strategy edge snapshot write failed: %s", exc)

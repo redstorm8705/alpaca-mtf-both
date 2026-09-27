@@ -28,6 +28,7 @@ from reporting.metrics import (
     _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
 from reporting.report_figures import ReportFigures, build_report_figures, reconcile
+from reporting.html_ui import PRIMARY_NAV_CSS, primary_nav
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
@@ -468,7 +469,8 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
     month_label = date(year, month, 1).strftime("%B %Y")
     updated     = now_pt.strftime("%Y-%m-%d %I:%M %p PT")
 
-    # Lifetime P&L banner — Alpaca-sourced via compute_lifetime_stats()
+    # Account P&L is equity minus starting capital. Lifecycle performance is rendered
+    # separately by Strategy Edge so account deposits/marks cannot impersonate trades.
     # (equity - $2,500 initial, same code path as dashboard and weekly review)
     _raw_cache = _load_lifetime_pnl()
     _lt_data   = _raw_cache if _raw_cache is not None else compute_lifetime_stats()
@@ -485,10 +487,10 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
     _lt_sign   = "+" if _lt_pnl >= 0 else ""
     _lt_banner = (
         f'<div class="lt-banner">'
-        f'<div><div class="lt-label">Lifetime P&amp;L (All-Time)</div>'
+        f'<div><div class="lt-label">Account P&amp;L (All-Time)</div>'
         f'<div class="lt-val" style="color:{_lt_pnl_c}">{_lt_sign}${_lt_pnl:,.2f}</div>'
         f'<div class="lt-sub">From $2,500.00 initial &nbsp;·&nbsp;'
-        f' {_lt_trades} closed trades &nbsp;·&nbsp; {_lt_wr:.0f}% win rate</div></div>'
+        f' current equity versus $2,500 starting capital</div></div>'
         f'</div>'
     ) if _lt_data else ""
 
@@ -622,7 +624,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
         _edge_body, _edge_stats = "", {}
     if _edge_body and not _edge_stats:
         _edge_report = (
-            '<details class="edge-details">'
+            '<details class="edge-details" open>'
             '<summary class="edge-summary">'
             '<span class="edge-title">Strategy Edge Report — Unavailable</span>'
             '<span class="edge-caret">▾</span>'
@@ -658,9 +660,9 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
             f'(n={_edge_n} completed trades)</div>'
         ) if _edge_n < 100 else ""
         _edge_report = (
-            '<details class="edge-details">'
+            '<details class="edge-details" open>'
             '<summary class="edge-summary">'
-            '<span class="edge-title">Strategy Edge Report — All-Time</span>'
+            '<span class="edge-title">Performance by Entry Tier — All-Time</span>'
             f'{_summary}<span class="edge-caret">▾</span>'
             '</summary>'
             f'<div class="edge-body">{_caveat}{_edge_body}</div>'
@@ -676,7 +678,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="refresh" content="60">
   <title>Monthly Review — {month_label}</title>
-  <style>{css}</style>
+  <style>{css}\n{PRIMARY_NAV_CSS}</style>
 </head>
 <body>
 <div class="header">
@@ -684,6 +686,7 @@ def _build_html(year: int, month: int, is_archive: bool) -> str:
     <h1>Monthly Review — {month_label}</h1>
     <div class="header-sub">Updated {updated} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}</div>
   </div>
+  {primary_nav("monthly", "../" if is_archive else "")}
   <div>
     {back}
     <div class="nav-row">

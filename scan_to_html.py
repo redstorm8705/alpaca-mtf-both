@@ -13,6 +13,7 @@ import sys
 import time
 import argparse
 from ui_tokens import LIVE_CLOCK_HTML  # live-clock rule (2026-07-06)
+from reporting.html_ui import PRIMARY_NAV_CSS, primary_nav
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -2616,11 +2617,11 @@ def write_html(data):
 <meta http-equiv="refresh" content="{refresh}">
 <script>setTimeout(function(){{location.reload(true);}},{refresh}000);</script>
 <title>MTF Scanner · {pt_time}</title>
-<style>{CSS}</style>
+<style>{CSS}\n{PRIMARY_NAV_CSS}</style>
 </head>
 <body>
 
-<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 20px;
+<div class="scanner-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:13px 20px;
   background:#161920;border-bottom:1px solid #161a28;position:sticky;top:0;z-index:10">
   <div style="display:flex;align-items:center;gap:16px">
     <div>
@@ -2628,6 +2629,7 @@ def write_html(data):
       <span style="font-size:11px;color:#b8bdd4;margin-left:10px">{len(results)} tickers{pv_str} · ranked by score · {pt_time} &nbsp;·&nbsp; {LIVE_CLOCK_HTML}</span>
     </div>
   </div>
+  {primary_nav("scanner")}
   <div style="display:flex;align-items:center;gap:16px">
     <span id="signals-toggle" class="sig-toggle" onclick="togSignals()" title="Hide UNTIERED names (no active horizon tier). Click to show all.">Signals only: ON</span>
     <a href="options.html" style="font-size:11px;font-weight:600;color:#b8bdd4;text-decoration:none;
