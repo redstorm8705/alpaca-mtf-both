@@ -11139,3 +11139,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - Exit-system redesign aligned. Realistic replay on 85 trades: adding the trail is worth about $100-165. The break-even (0C) claim is corrected.
 - CLAUDE.md no-shadow rule (Rafael 2026-09-26). Review: FAIL (conflict with tracker / Rule E; loose carve-out), fixed, then PASS.
 - Rafael: re-entry stop at the re-entry price, with a break/back-test/hold trigger. Sequencing: entry rebuild first, exits after.
+- Entry rebuild diagnosis and plan (E0-E3) aligned across BGGN (design record entry_rebuild_2026-09-26.md). Shadow suggestions rejected.
