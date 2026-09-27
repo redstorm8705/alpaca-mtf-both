@@ -216,3 +216,10 @@ Rafael's intent: take profit sooner AND use more size.
 3. **A fast exit loop.** A separate cron process following the `run_day_tier.py` pattern: flock singleton, ~30–60 s cadence, one multi-symbol snapshot call, shared rate gate and tracker lock, tighten-only moves, no entries.
 
 **Rollout:** 1 → 2 → 3, each gated. The front-loaded replay above stands in for a post-ship shadow (CLAUDE.md Rule B).
+
+## Rafael decisions (2026-09-26, later)
+1. **Structure-aware trail after +0.5×.** Trail below real support (VWAP, fast MAs, swing lows, higher-timeframe flipped levels) with a volatility buffer. Tighten-only, never below entry once armed.
+2. **Continuation re-entry.** Trigger: a break above a meaningful level (usually the high of day), a back-test of that level, and a hold. The re-entry stop sits AT THE RE-ENTRY PRICE.
+   - Rafael wants the BGGN's analysis, with a senior-engineer recommendation, when the exit work resumes.
+   - The re-entry cooldown (`execution/reentry_cooldown.py`) blocks this today and must allow it.
+3. **SEQUENCING:** the entry problem is NOT solved. The trade lifecycle is rebuilt starting with ENTRIES, fully shipped. Exits (trail, re-entry, broker-stop-from-entry, fast loop) resume after that.
