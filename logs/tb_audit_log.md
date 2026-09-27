@@ -11122,3 +11122,4 @@ RC-1..RC-8: PASS (no datetime/path/except/record_exit/write/API-field/sizing/buf
 - 2026-09-26: exit study + post-mortem/edge-report audits + F6 readiness recorded (design records exit_and_reports_audit / f6_golive). Overnight early-exit replay running.
 - CORRECTION: overnight early-exit replay (31 trades) shows the rule is net protective (-$283.81 actual vs -$457.33 held). The earlier hindsight "largest leak" framing was wrong and has been corrected in the design record.
 - Rafael 2026-09-26: F6 live with SHARED symbols (supersedes the exclusive-B alignment); profit-lock study + entry rebuild prioritized.
+- Profit-lock study: T1-gated breakeven/trail never arms (median MFE 0.15R vs T1 ~0.83R). An MFE-armed 0.5xATR lock plus 0.5xATR trail replays -$202.6 -> -$37.5 (in-sample). F6 shared plan BGGN-reviewed.
