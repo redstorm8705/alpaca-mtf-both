@@ -79,3 +79,13 @@ count); rounds 2–3 found an ordering leak and a trim→re-buy leak; round 4 de
 Follow-ups (nits, not blocking): N1 absent baseline file re-records today's qty (copy the file on any box migration);
 N2 raise a failed ratchet save to CRITICAL; N3 pending unfilled QHM orders are not in the aggregate (pre-existing);
 dip-add runs before the kill-switch return in run_cycle (pre-existing; board question).
+
+## Increment 2 — tranches 2-3 actually run (2026-09-28, Claude-signed)
+Defect (code trace): tranche-1 fill -> `_compute_and_submit_stop` sets state ACTIVE; `maybe_enter_positions` only handles
+PENDING_ENTRY/AWAITING_FILL, so tranches 2-3 never run and every new hold stays at its tranche-1 size (1 share today).
+2a (tidy-first, behavior-preserving): extract the Option C block of `_maybe_dip_add` into
+`_stop_safe_add(pos, add_qty, live_price, label) -> filled`; log/alert text identical for label "dip-add". Characterization
+tests: tests/test_qhm_stop_safe_add.py (market closed, cancel fails, stop fired during cancel, add fails, full fill,
+partial fill, stop resubmit failure -> PENDING_STOP_REPLACE + alert).
+2b (risk-path): ACTIVE holds with tranches_filled < 3 run the due tranche via `_stop_safe_add` (Day-3 reconfirm, 40%/20%
+caps, fail closed), no dip-add on the same symbol in the same cycle. Tests: tests/test_qhm_tranche_adds.py.
