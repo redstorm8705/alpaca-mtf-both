@@ -379,3 +379,25 @@ rule their weights collapse to 0, so the IC-weighted slot score would trade at r
 shrink, post-hoc filters tuned to the spent 2017–2018 holdout; citations "Dijkstra 2020" and "Corcos & Avellaneda 2021" flagged
 as likely non-existent.
 **Next:** harness v2 → data fetch (off-hours) → pre-registered event families (long + short) → 4-hour trigger test.
+
+## Lab step 5 — harness v2 + event families: PRE-REGISTRATION (2026-09-28, Claude-signed, written BEFORE any run)
+Tool: `research/c2_lab_v2.py` (offline; lab steps 1–2 data; reuses lab-3 loader with one-column-per-stock).
+**Fills/costs:** entry next open; stop/target checked from the entry day; if a later session OPENS beyond the stop (or target)
+the fill is that open (gap-aware); same-bar stop+target → stop first; cost = 10 bps + 0.02 × ATR% round trip (spread-aware).
+**Baseline (exact, not sampled):** for each event, the mean R of ALL eligible names on the same day, same direction and same
+ATR% decile (characteristic-matched random expectation). Metric = excess R = event R − that mean.
+**Significance:** daily excess series (mean excess of events entered that day); Newey-West t with lag = horizon; DSR on the
+daily series vs the expected max of the family's effective trial count (eigenvalue effective-N of the variants' daily-series
+correlation), σ_SR measured within the family; PBO by CSCV over 16 half-year blocks within each family. Every run is appended
+to a trial ledger (`logs/lab/c2/trial_ledger.jsonl`).
+**Families (fixed parameters, no tuning):**
+- LONG-MR: L1 close > SMA200 & RSI(2) < 10 (T5, already seen 2017–2026 → its confirmation is deferred to an unseen universe);
+  L2 close > SMA200 & 3 consecutive down closes; L3 21-day return in the bottom 2% of the universe & close > SMA200.
+- LONG-BRK: B1 break → back-test → hold of the 252-day high (daily; the 4-hour version follows once 30-min data lands).
+- SHORT-MR: S1 close < SMA200 & RSI(2) > 90; S2 close > SMA200 & RSI(2) > 95 & close > SMA20 + 3 × ATR (stretched-move fade);
+  S3 5-day return in the top 2% of the universe & no gap ≥ 3 × ATR in the last 5 days (no-news proxy).
+**Labels (tier-matched):** MR families 5 and 10 sessions (stop 1.5 ATR, target 2.5 ATR); BRK 20 sessions.
+**Pass (per variant):** Newey-West t ≥ 3.0 on daily excess; DSR ≥ 0.9; family PBO ≤ 0.05; mean excess > 0 in ≥ 6 of 8 years
+(2019–2026); for shorts ALSO absolute mean R > 0 after costs; ≥ 1.2 events/day for the family set; AND the Mag-7 slice
+(AAPL MSFT NVDA AMZN GOOGL META TSLA) mean excess > 0. Also reported: per-regime (SPY above/below SMA200 × SPY 20-day realized
+vol tercile) excess. Nothing ships from this step; a pass goes to the board + Rafael.
