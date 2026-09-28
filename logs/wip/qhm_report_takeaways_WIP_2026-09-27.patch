@@ -1,0 +1,2016 @@
+diff --git a/data/alpaca_data.py b/data/alpaca_data.py
+index 25af52e..0160206 100644
+--- a/data/alpaca_data.py
++++ b/data/alpaca_data.py
+@@ -203,3 +203,129 @@ def get_name_changes(start: str, end: str, symbols: list | None = None) -> list
+     except Exception as e:
+         logger.warning("get_name_changes failed: %s", e)
+         return None
++
++
++_NEWS_TIMEOUT = 15.0  # seconds — research/report use, not on the trading path
++
++
++def get_news(symbol: str, days: int = 30, limit: int = 5) -> list | None:
++    """Recent news headlines for one symbol from Alpaca's news API (T1, same key).
++
++    Endpoint: GET /v1beta1/news?symbols=&start=&limit=&sort=desc
++    Returns up to `limit` dicts {headline, summary, source, created_at (UTC ISO)},
++    newest first, or None on any failure (so a caller can say "news unavailable"
++    rather than "no news"). Used by the QHM research report; no trading-path caller.
++    """
++    from datetime import datetime, timedelta, timezone
++
++    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
++        "%Y-%m-%dT%H:%M:%SZ")
++    params = {"symbols": symbol, "start": start, "limit": max(1, min(int(limit), 50)),
++              "sort": "desc", "include_content": "false"}
++    try:
++        resp = None
++        for _attempt in range(3):
++            resp = requests.get(f"{_BASE}/v1beta1/news", params=params,
++                                headers=_headers(), timeout=_NEWS_TIMEOUT)
++            if resp.status_code != 429:
++                break
++            time.sleep(2 ** _attempt)
++        if resp is None or resp.status_code != 200:
++            logger.warning("get_news(%s): HTTP %s", symbol,
++                           getattr(resp, "status_code", None))
++            return None
++        out: list = []
++        for n in (resp.json().get("news") or [])[:limit]:
++            head = str(n.get("headline") or "").strip()
++            if not head:
++                continue
++            out.append({"headline": head,
++                        "summary": str(n.get("summary") or "").strip(),
++                        "source": str(n.get("source") or "").strip(),
++                        "created_at": str(n.get("created_at") or "")})
++        return out
++    except Exception as e:
++        logger.warning("get_news(%s) failed: %s", symbol, e)
++        return None
++
++
++def get_latest_trades(symbols: list) -> dict | None:
++    """Latest trade price for many symbols in one request per 100 (T1).
++
++    Endpoint: GET /v2/stocks/trades/latest?symbols=
++    Returns {SYMBOL: price} (symbols with no trade are simply absent), or None on
++    ANY failure so a caller cannot mistake a failed lookup for "no prices". Used by
++    the QHM research report (peer valuation); no trading-path caller.
++    """
++    syms = [str(s).upper() for s in dict.fromkeys(symbols) if s]
++    out: dict = {}
++    try:
++        for i in range(0, len(syms), 100):
++            resp = None
++            for _attempt in range(3):
++                resp = requests.get(f"{_BASE}/v2/stocks/trades/latest",
++                                    params={"symbols": ",".join(syms[i:i + 100])},
++                                    headers=_headers(), timeout=_NEWS_TIMEOUT)
++                if resp.status_code != 429:
++                    break
++                time.sleep(2 ** _attempt)
++            if resp is None or resp.status_code != 200:
++                logger.warning("get_latest_trades: HTTP %s",
++                               getattr(resp, "status_code", None))
++                return None
++            for sym, t in (resp.json().get("trades") or {}).items():
++                p = t.get("p") if isinstance(t, dict) else None
++                if isinstance(p, (int, float)) and p > 0:
++                    out[str(sym).upper()] = float(p)
++        return out
++    except Exception as e:
++        logger.warning("get_latest_trades failed: %s", e)
++        return None
++
++
++def get_split_dates(symbols: list, start: str, end: str) -> dict | None:
++    """Stock split dates (forward and reverse) per symbol from Alpaca corporate
++    actions (T1). Returns {SYMBOL: [YYYY-MM-DD, ...]} (symbols without a split are
++    absent), or None on ANY failure so a caller never mistakes a failed lookup for
++    "no splits". Used by the QHM research report to withhold a P/E whose earnings
++    per share may predate a split; no trading-path caller.
++    """
++    syms = [str(s).upper() for s in dict.fromkeys(symbols) if s]
++    out: dict = {}
++    try:
++        for i in range(0, len(syms), 50):
++            params: dict = {"types": "forward_split,reverse_split",
++                            "symbols": ",".join(syms[i:i + 50]),
++                            "start": start, "end": end, "limit": _CA_PAGE_LIMIT}
++            for _page in range(_CA_MAX_PAGES):
++                resp = None
++                for _attempt in range(3):
++                    resp = requests.get(f"{_BASE}/v1/corporate-actions", params=params,
++                                        headers=_headers(), timeout=_CA_TIMEOUT)
++                    if resp.status_code != 429:
++                        break
++                    time.sleep(2 ** _attempt)
++                if resp is None or resp.status_code != 200:
++                    logger.warning("get_split_dates: HTTP %s",
++                                   getattr(resp, "status_code", None))
++                    return None
++                body = resp.json()
++                ca = body.get("corporate_actions") or {}
++                for kind in ("forward_splits", "reverse_splits"):
++                    for s in ca.get(kind) or []:
++                        sym = s.get("symbol")
++                        when = s.get("ex_date") or s.get("process_date")
++                        if sym and when:
++                            out.setdefault(str(sym).upper(), []).append(str(when)[:10])
++                token = body.get("next_page_token")
++                if not token:
++                    break
++                params["page_token"] = token
++            else:
++                logger.warning("get_split_dates: more than %d pages — returning None",
++                               _CA_MAX_PAGES)
++                return None
++        return out
++    except Exception as e:
++        logger.warning("get_split_dates failed: %s", e)
++        return None
+diff --git a/data/edgar_client.py b/data/edgar_client.py
+new file mode 100644
+index 0000000..2d3d656
+--- /dev/null
++++ b/data/edgar_client.py
+@@ -0,0 +1,488 @@
++"""
++data/edgar_client.py
++SEC EDGAR XBRL client: reported company fundamentals from the companies' own
++10-Q/10-K filings (data.sec.gov companyfacts).
++
++Data tier: T2 (fundamentals). Board data seats (McKinney / Katsuyama / Harris) and
++GAI approved it 2026-09-27 for research use (the QHM thesis memo, the Confluence
++2.0 lab); the live trading path never calls it. FMP's free plan returns "premium"
++for these statements.
++
++SEC rules: a descriptive User-Agent with a contact email (EDGAR_CONTACT_EMAIL in
++.env, never hard-coded; no email -> no request, None returned) and at most 10
++requests/second. Cache: data/cache/edgar/ JSON files, 7-day TTL (filings change
++quarterly), atomic writes.
++
++Figures are REPORTED values. A missing concept returns None and the report shows
++"not reported", never an estimate. Quarterly filings report cash flows
++year-to-date and Q4 is rarely reported on its own, so quarter and trailing-12-month
++values are derived from the filed periods (quarter_value / ttm_value). Amended
++filings: for a given period the most recently filed value wins.
++"""
++
++import json
++import logging
++import os
++import time
++import urllib.request
++from datetime import date, timedelta
++from pathlib import Path
++
++logger = logging.getLogger(__name__)
++
++_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
++_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
++_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
++# Every filer's diluted EPS for one calendar-aligned fiscal year, in one request.
++_EPS_FRAME_URL = (
++    "https://data.sec.gov/api/xbrl/frames/us-gaap/EarningsPerShareDiluted/"
++    "USD-per-shares/CY{year}.json"
++)
++_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache" / "edgar"
++_TTL_S = 7 * 24 * 3600
++_SIC_TTL_S = 30 * 24 * 3600  # industry codes rarely change
++_SIC_MAP = _CACHE_DIR / "sic_map.json"
++_FRAME_MIN_FILERS = 1000  # a year still being filed has only a partial frame
++_MIN_GAP_S = 0.15  # SEC allows 10 req/s; stay well under
++_TIMEOUT = 20.0
++_last_req = 0.0
++
++# Concept fallbacks (XBRL tags vary by filer and changed with ASC 606 ~2018).
++CONCEPTS = {
++    "revenue": [
++        "RevenuesNetOfInterestExpense",  # banks / lenders: total net revenue
++        "RevenueFromContractWithCustomerExcludingAssessedTax",
++        "Revenues",
++        "SalesRevenueNet",
++        "RevenueFromContractWithCustomerIncludingAssessedTax",
++    ],
++    "gross_profit": ["GrossProfit"],
++    "operating_income": ["OperatingIncomeLoss"],
++    "net_income": [
++        "NetIncomeLoss",
++        "ProfitLoss",
++        "NetIncomeLossAvailableToCommonStockholdersBasic",
++    ],
++    "eps_diluted": ["EarningsPerShareDiluted"],
++    "op_cash_flow": [
++        "NetCashProvidedByUsedInOperatingActivities",
++        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
++    ],
++    "capex": [
++        "PaymentsToAcquirePropertyPlantAndEquipment",
++        "PaymentsToAcquireProductiveAssets",
++    ],
++}
++
++
++def _user_agent() -> str | None:
++    email = os.getenv("EDGAR_CONTACT_EMAIL", "").strip()
++    return f"alpaca-mtf-bot research {email}" if email else None
++
++
++def _get_json(url: str, cache_name: str | None) -> dict | list | None:
++    """Cached GET. Fresh cache (<7 days) is returned without a request; otherwise one
++    paced request with the SEC User-Agent. cache_name None = do not cache the raw
++    response. None on any failure or without a contact."""
++    global _last_req
++    path = _CACHE_DIR / cache_name if cache_name else None
++    try:
++        if path and path.exists() and time.time() - path.stat().st_mtime < _TTL_S:
++            return json.loads(path.read_text())
++    except (OSError, ValueError) as e:
++        logger.warning("edgar cache read failed (%s): %s", cache_name, e)
++    ua = _user_agent()
++    if not ua:
++        logger.warning(
++            "EDGAR_CONTACT_EMAIL not set — SEC request skipped (%s)", cache_name
++        )
++        return None
++    wait = _MIN_GAP_S - (time.monotonic() - _last_req)
++    if wait > 0:
++        time.sleep(wait)
++    _last_req = time.monotonic()
++    try:
++        req = urllib.request.Request(
++            url, headers={"User-Agent": ua, "Accept-Encoding": "identity"}
++        )
++        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
++            raw = r.read()
++        data = json.loads(raw.decode())
++    except Exception as e:
++        logger.warning("edgar fetch failed (%s): %s", url, e)
++        return None
++    if path is None:
++        return data
++    try:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        tmp = path.with_suffix(".tmp")
++        tmp.write_bytes(raw)
++        tmp.replace(path)
++    except OSError as e:
++        logger.warning("edgar cache write failed (%s): %s", cache_name, e)
++    return data
++
++
++def ticker_ciks() -> dict:
++    """{TICKER: CIK} for every SEC-listed ticker, in SEC's spelling ('BRK-B').
++    {} when unavailable."""
++    data = _get_json(_TICKERS_URL, "company_tickers.json")
++    out: dict = {}
++    if not isinstance(data, dict):
++        return out
++    for row in data.values():
++        if not isinstance(row, dict):
++            continue
++        try:
++            out.setdefault(str(row["ticker"]).upper(), int(row["cik_str"]))
++        except (KeyError, TypeError, ValueError):
++            continue
++    return out
++
++
++def cik_for(ticker: str) -> int | None:
++    """SEC CIK for a ticker ('BRK.B' -> SEC's 'BRK-B'). None if unknown."""
++    return ticker_ciks().get(ticker.strip().upper().replace(".", "-"))
++
++
++def sic_codes(ciks: list) -> dict:
++    """{CIK: 4-digit SEC industry (SIC) code} from each filer's submissions record.
++    Only the code is kept (data/cache/edgar/sic_map.json, 30-day TTL, atomic write);
++    a failed lookup is not cached and the CIK is simply absent from the result."""
++    try:
++        cache = json.loads(_SIC_MAP.read_text()) if _SIC_MAP.exists() else {}
++        if not isinstance(cache, dict):
++            cache = {}
++    except (OSError, ValueError) as e:
++        logger.warning("edgar sic cache read failed: %s", e)
++        cache = {}
++    now = time.time()
++    out: dict = {}
++    changed = False
++    for cik in ciks:
++        ent = cache.get(str(cik))
++        if isinstance(ent, dict) and now - float(ent.get("t", 0)) < _SIC_TTL_S:
++            if ent.get("sic"):
++                out[cik] = str(ent["sic"])
++            continue
++        data = _get_json(_SUBMISSIONS_URL.format(cik=int(cik)), None)
++        if not isinstance(data, dict):
++            continue
++        sic = str(data.get("sic") or "").strip()
++        cache[str(cik)] = {"sic": sic, "t": now}
++        changed = True
++        if sic:
++            out[cik] = sic
++    if changed:
++        try:
++            _SIC_MAP.parent.mkdir(parents=True, exist_ok=True)
++            tmp = _SIC_MAP.with_suffix(".tmp")
++            tmp.write_text(json.dumps(cache))
++            tmp.replace(_SIC_MAP)
++        except OSError as e:
++            logger.warning("edgar sic cache write failed: %s", e)
++    return out
++
++
++def annual_eps(year: int) -> dict:
++    """{CIK: diluted EPS} for every filer's fiscal year aligned to calendar `year`
++    (SEC frames). {} when unavailable."""
++    data = _get_json(_EPS_FRAME_URL.format(year=year), f"frame_eps_CY{year}.json")
++    out: dict = {}
++    rows = data.get("data") if isinstance(data, dict) else None
++    for r in rows or []:
++        try:
++            out[int(r["cik"])] = float(r["val"])
++        except (KeyError, TypeError, ValueError):
++            continue
++    return out
++
++
++def latest_annual_eps(today: date, ciks: list | None = None,
++                      min_coverage: float = 0.8) -> tuple:
++    """(year, {CIK: diluted EPS}) for the most recent calendar year whose frame is
++    substantially filed; (None, {}) otherwise. With `ciks` (e.g. the S&P 500), the
++    frame must cover at least `min_coverage` of them; without, at least
++    _FRAME_MIN_FILERS companies."""
++    for year in (today.year - 1, today.year - 2):
++        m = annual_eps(year)
++        if ciks:
++            ok = sum(1 for c in ciks if c in m) >= min_coverage * len(ciks)
++        else:
++            ok = len(m) >= _FRAME_MIN_FILERS
++        if ok:
++            return year, m
++    return None, {}
++
++
++def company_facts(ticker: str) -> dict | None:
++    cik = cik_for(ticker)
++    if cik is None:
++        return None
++    data = _get_json(_FACTS_URL.format(cik=cik), f"facts_{cik:010d}.json")
++    return data if isinstance(data, dict) else None
++
++
++# ── pure period math (unit-tested) ──────────────────────────────────────────────────
++
++
++def _d(s: str) -> date:
++    return date.fromisoformat(s)
++
++
++def rows_for(facts: dict, key: str) -> list[dict]:
++    """Deduplicated filed rows {start, end, val, filed} for the first concept in
++    CONCEPTS[key] that has data (preferring the concept whose data is most recent).
++    For the same (start, end) period the most recently filed value wins (amendments)."""
++    gaap = (facts or {}).get("facts", {}).get("us-gaap", {})
++    best: list[dict] = []
++    best_end = ""
++    for concept in CONCEPTS.get(key, []):
++        units = gaap.get(concept, {}).get("units", {})
++        vals = units.get("USD") or units.get("USD/shares") or []
++        by_period: dict = {}
++        for r in vals:
++            if r.get("form") not in ("10-Q", "10-K", "10-Q/A", "10-K/A"):
++                continue
++            if "end" not in r or "val" not in r:
++                continue
++            k = (r.get("start"), r["end"])
++            if k not in by_period or str(r.get("filed", "")) > str(
++                by_period[k].get("filed", "")
++            ):
++                by_period[k] = r
++        rows = sorted(
++            by_period.values(), key=lambda r: (r["end"], r.get("start") or "")
++        )
++        last = rows[-1]["end"] if rows else ""
++        if last > best_end:
++            best, best_end = rows, last
++        elif key == "revenue" and rows and last == best_end and best:
++            # Several revenue tags for the same latest period (e.g. a bank files
++            # contract revenue as one component of total revenue): keep the total,
++            # i.e. the larger latest-quarter-scale value.
++            ref = (best[-1].get("start"), best[-1]["end"])
++            mine = next((r for r in rows if (r.get("start"), r["end"]) == ref), None)
++            if mine is not None and abs(float(mine["val"])) > abs(
++                float(best[-1]["val"])
++            ):
++                best = rows
++    return best
++
++
++def _days(r: dict) -> int | None:
++    if not r.get("start"):
++        return None
++    return (_d(r["end"]) - _d(r["start"])).days
++
++
++def _near(a: date, b: date, tol: int = 10) -> bool:
++    return abs((a - b).days) <= tol
++
++
++def quarter_value(rows: list[dict], end: str) -> float | None:
++    """The 3-month value for the quarter ending `end`: a reported ~quarter-length row,
++    else derived as YTD(end) − YTD(prior quarter end) with the same start (this is how
++    Q4 = FY − 9 months and year-to-date cash flows become quarters)."""
++    e = _d(end)
++    for r in rows:
++        dd = _days(r)
++        if r["end"] == end and dd is not None and 80 <= dd <= 100:
++            return float(r["val"])
++    ytd = [r for r in rows if r["end"] == end and (_days(r) or 0) > 100]
++    for cur in sorted(ytd, key=lambda r: -(_days(r) or 0)):
++        prev_end = e - timedelta(days=91)
++        for p in rows:
++            if (
++                p.get("start") == cur.get("start")
++                and p["end"] != end
++                and _near(_d(p["end"]), prev_end, 12)
++            ):
++                return float(cur["val"]) - float(p["val"])
++    # Q4 from a full-year row minus three reported quarters of the same fiscal year.
++    for fy in ytd:
++        dd = _days(fy)
++        if dd is None or not 350 <= dd <= 380:
++            continue
++        s0 = _d(fy["start"])
++        qs = [
++            r
++            for r in rows
++            if r.get("start")
++            and 80 <= (_days(r) or 0) <= 100
++            and s0 <= _d(r["start"])
++            and _d(r["end"]) < e
++        ]
++        if len(qs) == 3:
++            return float(fy["val"]) - sum(float(r["val"]) for r in qs)
++    return None
++
++
++def reported_quarter(rows: list[dict], end: str) -> float | None:
++    """A quarter value only when filed as a ~3-month row (no derivation). Used for
++    per-share figures, which are not additive across periods (share counts change)."""
++    for r in rows:
++        dd = _days(r)
++        if r["end"] == end and dd is not None and 80 <= dd <= 100:
++            return float(r["val"])
++    return None
++
++
++def ttm_value(rows: list[dict], end: str) -> float | None:
++    """Trailing-12-month value ending `end`: a reported ~annual row; else last full
++    fiscal year + current YTD − prior-year same YTD; else the sum of four quarters."""
++    e = _d(end)
++    for r in rows:
++        dd = _days(r)
++        if r["end"] == end and dd is not None and 350 <= dd <= 380:
++            return float(r["val"])
++    cur = max(
++        (r for r in rows if r["end"] == end and r.get("start")),
++        key=lambda r: _days(r) or 0,
++        default=None,
++    )
++    if cur is not None:
++        s = _d(cur["start"])
++        fy = next(
++            (
++                r
++                for r in rows
++                if r.get("start")
++                and _near(_d(r["end"]), s - timedelta(days=1), 5)
++                and 350 <= (_days(r) or 0) <= 380
++            ),
++            None,
++        )
++        prior = next(
++            (
++                r
++                for r in rows
++                if r.get("start")
++                and _near(_d(r["end"]), e - timedelta(days=365), 10)
++                and _near(_d(r["start"]), s - timedelta(days=365), 10)
++            ),
++            None,
++        )
++        if fy is not None and prior is not None:
++            return float(fy["val"]) + float(cur["val"]) - float(prior["val"])
++    total = 0.0
++    q_end = e
++    ends = sorted({r["end"] for r in rows}, reverse=True)
++    for _ in range(4):
++        match = next((x for x in ends if _near(_d(x), q_end, 10)), None)
++        if match is None:
++            return None
++        v = quarter_value(rows, match)
++        if v is None:
++            return None
++        total += v
++        q_end = _d(match) - timedelta(days=91)
++    return total
++
++
++def _year_ago_end(rows: list[dict], end: str) -> str | None:
++    target = _d(end) - timedelta(days=365)
++    return next((r["end"] for r in rows if _near(_d(r["end"]), target, 10)), None)
++
++
++def summarize(facts: dict) -> dict:
++    """Reported fundamentals for the latest filed quarter. Missing items are None."""
++    out: dict = {}
++    rev = rows_for(facts, "revenue")
++    if not rev and not rows_for(facts, "net_income"):
++        return out
++    ni_rows = rows_for(facts, "net_income")
++    anchor = (
++        rev
++        if (rev and (not ni_rows or rev[-1]["end"] >= ni_rows[-1]["end"]))
++        else ni_rows
++    )
++    end = anchor[-1]["end"]
++    out["period_end"] = end
++    out["filed"] = max(
++        (str(r.get("filed", "")) for r in anchor if r["end"] == end), default=""
++    )
++    series = {k: rows_for(facts, k) for k in CONCEPTS}
++    q = {
++        k: quarter_value(v, end) if v else None
++        for k, v in series.items()
++        if k != "eps_diluted"  # per-share: only reported quarters (below)
++    }
++    t = {
++        k: ttm_value(v, end) if v else None
++        for k, v in series.items()
++        if k != "eps_diluted"
++    }
++    ago = _year_ago_end(rev, end) if rev else None
++    rev_ago = quarter_value(rev, ago) if (rev and ago) else None
++    eps_rows = series["eps_diluted"]
++    eps_ago_end = _year_ago_end(eps_rows, end) if eps_rows else None
++    eps_ago = reported_quarter(eps_rows, eps_ago_end) if eps_ago_end else None
++    eps_q = reported_quarter(eps_rows, end) if eps_rows else None
++    # Trailing-12-month diluted EPS: the filed annual figure, else the filed periods
++    # combined the same way as the other TTM figures (the usual TTM-EPS convention).
++    eps_ttm = ttm_value(eps_rows, end) if eps_rows else None
++    # End of the latest full fiscal year with a filed EPS: a split after it means the
++    # annual figure inside eps_ttm may still be on the pre-split share count.
++    fy_end = max(
++        (r["end"] for r in eps_rows if 350 <= (_days(r) or 0) <= 380), default=None
++    )
++    out.update(
++        {
++            "revenue_q": q["revenue"],
++            "revenue_ttm": t["revenue"],
++            "revenue_yoy_pct": _pct(q["revenue"], rev_ago),
++            "gross_margin_pct": _ratio(q["gross_profit"], q["revenue"]),
++            "op_margin_pct": _ratio(q["operating_income"], q["revenue"]),
++            "net_income_q": q["net_income"],
++            "net_income_ttm": t["net_income"],
++            "eps_q": eps_q,
++            "eps_yoy_pct": _pct(eps_q, eps_ago),
++            "eps_ttm": eps_ttm,
++            "eps_fy_end": fy_end,
++            "op_cash_flow_ttm": t["op_cash_flow"],
++            "capex_ttm": t["capex"],
++        }
++    )
++    if t["op_cash_flow"] is not None and t["capex"] is not None:
++        out["fcf_ttm"] = t["op_cash_flow"] - t["capex"]
++    shares = (
++        facts.get("facts", {})
++        .get("dei", {})
++        .get("EntityCommonStockSharesOutstanding", {})
++        .get("units", {})
++        .get("shares", [])
++    )
++    if shares:
++        # A single, current company-wide count only. Multi-class issuers file one row
++        # per class (classes can differ in economics, e.g. Berkshire A vs B), and some
++        # filers' dei counts are years stale: in either case leave shares_out unset so
++        # the report says valuation is not available rather than showing a wrong one.
++        latest = max(shares, key=lambda r: (r.get("end", ""), str(r.get("filed", ""))))
++        same = [
++            r
++            for r in shares
++            if r.get("end") == latest.get("end") and r.get("accn") == latest.get("accn")
++        ]
++        fresh = abs((_d(latest["end"]) - _d(end)).days) <= 200
++        if len(same) == 1 and fresh:
++            out["shares_out"] = float(latest["val"])
++    return out
++
++
++def _pct(cur: float | None, ago: float | None) -> float | None:
++    if cur is None or ago is None or ago == 0:
++        return None
++    return round((cur / ago - 1.0) * 100.0 * (1 if ago > 0 else -1), 1)
++
++
++def _ratio(num: float | None, den: float | None) -> float | None:
++    if num is None or den is None or den == 0:
++        return None
++    return round(num / den * 100.0, 1)
++
++
++def fundamentals(ticker: str) -> dict:
++    """summarize(company_facts(ticker)); {} when unavailable."""
++    facts = company_facts(ticker)
++    return summarize(facts) if facts else {}
+diff --git a/scripts/qhm_thesis.py b/scripts/qhm_thesis.py
+index 830b761..13967cd 100644
+--- a/scripts/qhm_thesis.py
++++ b/scripts/qhm_thesis.py
+@@ -20,7 +20,7 @@ elements; OCI has no WebSearch/Claude-subagents, so those become HTTP fetches +
+   - REAL named-superinvestor 13F      Dataroma stock page (fetched holders, e.g. Buffett/Tepper/Coleman;
+                                       an uncovered name shows 'none tracked' — NEVER fabricated, Rafael 2026-09-06)
+   - 4-lens board thesis               Gro + GAI (AB/BoD/TB/Execution) → EXEC SUMMARY (2-3 picks) + PER-CANDIDATE
+-                                      (LLM-SYNTHESIZED earnings read, tailwind, thesis, risk) + BOARD VOTE
++                                      (reported SEC fundamentals, news, thesis, risk) + BOARD VOTE
+                                       (stops / intraday coexistence / entry-timing) + CURRENT-HOLDS refresh
+   - QHM cap check (aggregate 40% / per-name 20% — aligned to the ENFORCED code cap #273; WARNING/sizing only,
+     never an auto-trim; grandfathered over-cap holds are flagged, not sold — Rafael 2026-09-05)
+@@ -32,14 +32,16 @@ Usage: python3 scripts/qhm_thesis.py [--dry-run]   (--dry-run: build memo, skip
+ """
+ from __future__ import annotations
+ 
++import csv
+ import json
+ import logging
+ import os
+ import re
++import statistics
+ import sys
+ import urllib.parse
+ import urllib.request
+-from datetime import datetime, timedelta, timezone
++from datetime import date, datetime, timedelta, timezone
+ from pathlib import Path
+ from zoneinfo import ZoneInfo
+ 
+@@ -88,6 +90,15 @@ _DIP_VS50_MAX = 3.0      # within +3% of the 50d MA (not extended)
+ _DIP_OFFHIGH_MAX = -4.0  # >=4% off the 20d high
+ _EARN_LOOKAHEAD_DAYS = 55  # "next month" + runway
+ _SHORTLIST_N = 10          # enrich + board this many top dips
++# Valuation is always quoted on the CLASS A share (Rafael 2026-09-27): the class-A ticker's
++# price over the company's diluted EPS (SEC EPS is per common share, the same for GOOG/GOOGL).
++_CLASS_A = {"GOOG": "GOOGL", "BRK.B": "BRK.A", "FOX": "FOXA", "NWS": "NWSA"}
++_PEER_MIN = 3          # fewer same-industry S&P 500 peers than this -> no peer comparison
++_PEERS_SHOWN = 6       # peer tickers named in the report line
++_CHEAP_PCT = -20.0     # P/E this far below the peer median reads "cheap vs peers"
++_RICH_PCT = 20.0       # ... this far above reads "expensive vs peers"
++# Current S&P 500 members (research/pit_universe.py output, refreshed with the lab universe).
++_SP500_MEMBERS = _ROOT / "logs" / "lab" / "universe" / "sp500_membership.csv"
+ 
+ 
+ def _http_json(url: str, headers: dict | None = None, timeout: float = _TIMEOUT):
+@@ -159,8 +170,8 @@ def _dip_metrics(symbol: str) -> dict:
+     kid, sec = os.getenv("ALPACA_API_KEY", ""), os.getenv("ALPACA_SECRET_KEY", "")
+     if not kid or not sec:
+         return {}
+-    start = (datetime.now(timezone.utc) - timedelta(days=95)).strftime("%Y-%m-%d")
+-    q = urllib.parse.urlencode({"timeframe": "1Day", "start": start, "limit": 70, "adjustment": "split", "feed": "iex"})
++    start = (datetime.now(timezone.utc) - timedelta(days=375)).strftime("%Y-%m-%d")
++    q = urllib.parse.urlencode({"timeframe": "1Day", "start": start, "limit": 300, "adjustment": "split", "feed": "iex"})
+     data = _http_json(f"{_ALPACA_DATA}/{symbol}/bars?{q}",
+                       headers={"APCA-API-KEY-ID": kid, "APCA-API-SECRET-KEY": sec})
+     bars = (data.get("bars") if isinstance(data, dict) else None) or []   # non-dict (e.g. a list) -> []
+@@ -174,7 +185,13 @@ def _dip_metrics(symbol: str) -> dict:
+     sma50 = sum(closes[-50:]) / min(50, len(closes))
+     sma20 = sum(closes[-20:]) / 20
+     high20 = max(highs[-20:])
++    lows = [b["l"] for b in bars if isinstance(b, dict) and isinstance(b.get("l"), (int, float))]
++    high52 = max(highs[-252:])
++    low52 = min(lows[-252:]) if lows else None
+     return {
++        "high52": round(high52, 2),
++        "low52": round(low52, 2) if low52 is not None else None,
++        "off52h": round((last / high52 - 1) * 100, 1),
+         "last": round(last, 2),
+         "vs50": round((last / sma50 - 1) * 100, 1),
+         "vs20": round((last / sma20 - 1) * 100, 1),
+@@ -275,26 +292,25 @@ def _current_holds() -> list[str]:
+         return []
+ 
+ 
+-def _positions() -> dict[str, float]:
+-    """{SYMBOL: market_value} from Alpaca paper positions (read-only GET). {} on any failure —
+-    used only to compute %-of-equity for the QHM cap WARNING (never trades)."""
++def _positions() -> dict[str, dict]:
++    """{SYMBOL: {qty, avg_entry, price, market_value, upl, upl_pct}} from Alpaca paper positions
++    (read-only GET). {} on any failure — used for the report's position + cap lines (never trades)."""
+     kid, sec = os.getenv("ALPACA_API_KEY", ""), os.getenv("ALPACA_SECRET_KEY", "")
+     if not kid or not sec:
+         return {}
+     data = _http_json("https://paper-api.alpaca.markets/v2/positions",
+                       headers={"APCA-API-KEY-ID": kid, "APCA-API-SECRET-KEY": sec})
+-    out: dict[str, float] = {}
++    out: dict[str, dict] = {}
+     if isinstance(data, list):
+         for p in data:
+             if not isinstance(p, dict):   # a non-dict list element (malformed response) must not
+                 continue                  # reach p.get() — same never-crash guard as _dip_metrics
+             s = (p.get("symbol") or "").upper()
+-            mv = p.get("market_value")
+-            if mv is None:
+-                continue
+             try:
+-                out[s] = float(mv)
+-            except (TypeError, ValueError):
++                out[s] = {"qty": float(p["qty"]), "avg_entry": float(p["avg_entry_price"]),
++                          "price": float(p["current_price"]), "market_value": float(p["market_value"]),
++                          "upl": float(p["unrealized_pl"]), "upl_pct": float(p["unrealized_plpc"]) * 100.0}
++            except (KeyError, TypeError, ValueError):
+                 continue
+     return out
+ 
+@@ -506,28 +522,71 @@ _GRO_SYS = (
+     "that name's list. Adding ANY fund not in the list (even a plausible one from your own memory) is a "
+     "HALLUCINATION and a hard review failure. If a name lists NONE, write 'none tracked'. Do NOT 'correct' or "
+     "supplement the list.\n"
+-    "Any earnings-call read must be labeled LLM-SYNTHESIZED (from your training knowledge + the analyst grade), "
+-    "NOT quoted as a live transcript.\n"
++    "FIGURES HARD RULE (Rafael): use ONLY the reported numbers given for each name (SEC-filed quarter and "
++    "trailing-12-month figures, valuation, 52-week range, dated headlines). If a figure is marked 'not reported', "
++    "say so — NEVER estimate, recall from memory, or invent guidance, margins or growth rates.\n"
+     "Return EXACTLY these sections, with these exact headers:\n"
+     "## EXECUTIVE SUMMARY\n(the 2-3 STRONGEST buys — 2 or 3, not more — one-line thesis each)\n"
+-    "## PER-CANDIDATE\n(for EACH pick: Sector | last-earnings read [LLM-SYNTHESIZED: guidance direction / margin / "
+-    "TAM] | structural tailwind | 13F corroboration [name the notable holders, ONLY verbatim from that name's "
+-    "EXHAUSTIVE fetched list] | thesis | key risk | holding window [enter post-earnings, hold to the day "
+-    "before next earnings])\n"
++    "## PER-CANDIDATE\n(for EACH pick: Sector | fundamentals [growth, margins, cash flow and valuation, quoting "
++    "ONLY the reported figures given] | what the recent headlines imply | 13F corroboration [name the notable "
++    "holders, ONLY verbatim from that name's EXHAUSTIVE fetched list] | thesis | key risk | holding window "
++    "[enter post-earnings, hold to the day before next earnings])\n"
+     "## BOARD VOTE\n"
+     "AB: R:R + Kelly %-equity per pick. BoD: is the edge alpha or beta; regime/tail risk over the hold. "
+     "TB: integration with the intraday bot — should the bot AVOID intraday trades on a hold symbol; stop criteria. "
+     "Execution: entry timing (immediately post-earnings vs wait 1-2 confirmation days); stop-loss design (hard -15% "
+     "vs true quarterly hold); coexistence with the intraday book.\n"
+-    "## CURRENT HOLDS\n(ADD/HOLD/TRIM/EXIT per hold — flag-only; NEVER auto-trim; grandfathered over-cap holds are "
+-    "HELD per Rafael, not sold)."
++    "## CURRENT HOLDS\n(ADD/HOLD/TRIM/EXIT per hold with the reason, using its position P&L, fundamentals and "
++    "headlines — flag-only; NEVER auto-trim; grandfathered over-cap holds are HELD per Rafael, not sold; where "
++    "capital is needed for a new buy, say which hold is the best source and what selling it frees).\n"
++    "## CAPITAL PLAN\n(given equity, cash, buying power and the caps: how to fund the picks — which hold, if "
++    "any, to sell or trim, and the dollars involved; the decision stays with Rafael)."
+ )
+ 
+ 
+-def _board_prompt(ranked: list[dict], holds: list[dict], equity: float | None) -> str:
+-    eq = f"${equity:,.0f}" if equity else "~$2,500"
+-    lines = [f"ACCOUNT: PAPER, CURRENT equity {eq} (~4x margin buying power). GOAL grow to $25,000 — $25k is the "
+-             f"TARGET, NOT the current balance. Size every recommendation against the CURRENT {eq}.",
++def position_line(h: dict) -> str:
++    """One hold's position facts from Alpaca (or why there is none)."""
++    p = h.get("pos")
++    if not p:
++        return "no live Alpaca position (listed in QHM state only)"
++    flag = " — OVER the 20% per-name cap" if h.get("over_cap") else ""
++    return (f"{p['qty']:g} sh @ ${p['avg_entry']:,.2f} entry, now ${p['price']:,.2f}; "
++            f"P&L {p['upl']:+,.2f} ({p['upl_pct']:+.1f}%); value ${p['market_value']:,.0f} = "
++            f"{h.get('pct_eq', '?')}% of equity{flag}")
++
++
++def capital_lines(account: dict, holds: list[dict]) -> list[str]:
++    """Capital picture: equity/cash/buying power, QHM total vs the aggregate cap, per-name
++    excess over the per-name cap, and what selling each live hold would free."""
++    eq = account.get("equity")
++    lines = [f"- Equity {_money(eq) if eq else 'unavailable'}; cash {_money(account.get('cash')) if 'cash' in account else 'unavailable'}; "
++             f"buying power {_money(account.get('buying_power')) if 'buying_power' in account else 'unavailable'}"]
++    live = [h for h in holds if h.get("pos")]
++    if eq and eq > 0 and live:
++        total = sum(h["pos"]["market_value"] for h in live)
++        agg = total / eq * 100.0
++        lines.append(f"- QHM holds total {_money(total)} = {agg:.0f}% of equity "
++                     f"(aggregate cap {int(_QHM_AGG_CAP_PCT * 100)}%)")
++        for h in live:
++            p = h["pos"]
++            excess = p["market_value"] - _QHM_NAME_CAP_PCT * eq
++            over = f"; {_money(excess)} above the per-name cap" if excess > 0 else ""
++            lines.append(f"- Selling all of {h['sym']} would free {_money(p['market_value'])} "
++                         f"(P&L {p['upl']:+,.2f}, {p['upl_pct']:+.1f}%){over}")
++    return lines
++
++
++def _board_prompt(ranked: list[dict], holds: list[dict], equity: float | None,
++                  account: dict | None = None, gross: float | None = None) -> str:
++    eq = f"${equity:,.0f}" if equity else "unavailable"
++    acct = account or {}
++    cash = _money(acct["cash"]) if "cash" in acct else "unavailable"
++    bp = _money(acct["buying_power"]) if "buying_power" in acct else "unavailable"
++    gross_s = _money(gross) if gross is not None else "unavailable"
++    lines = [f"ACCOUNT (live Alpaca figures — use ONLY these, never estimate others): PAPER, equity {eq}, "
++             f"cash {cash}, buying power {bp}, total market value of ALL open positions {gross_s}. GOAL grow "
++             f"to $25,000 — $25k is the TARGET, NOT the current balance. Size every recommendation against "
++             f"the CURRENT equity.",
+              "",
+              "CANDIDATES (buy-the-dip-into-earnings; dip metrics + analyst grade + earnings date + REAL 13F holders). "
+              "The 13F list per name is EXHAUSTIVE and fetched — cite only those exact names, never add a fund:"]
+@@ -537,16 +596,24 @@ def _board_prompt(ranked: list[dict], holds: list[dict], equity: float | None) -
+         lines.append(f"- {r['sym']} ({r.get('sector','')}): earn {r.get('earn','?')}, off-high {m.get('off20h')}%, "
+                      f"vs50 {m.get('vs50')}%, RSI {m.get('rsi')}, grade {r.get('grade','?')}; "
+                      f"13F superinvestors [EXHAUSTIVE, {r.get('dr_count') or '?'}]: {drh}")
+-    lines.append("\nCurrent holds (do NOT auto-trim; flag over-cap only): " +
+-                 (", ".join(f"{h['sym']} {h.get('pct_eq','?')}%eq" for h in holds) or "none"))
++        lines += name_lines(r)
++        lines += news_lines(r.get("news"))
++    lines.append("\nCURRENT HOLDS (do NOT auto-trim; flag over-cap only):")
++    for h in holds or []:
++        lines.append(f"- {h['sym']}: {position_line(h)}")
++        lines += name_lines(h)
++        lines += news_lines(h.get("news"))
++    if not holds:
++        lines.append("- none")
+     lines.append(f"\nQHM caps: aggregate {int(_QHM_AGG_CAP_PCT*100)}% of equity, per-name {int(_QHM_NAME_CAP_PCT*100)}% "
+                  "(WARNING/sizing only; grandfathered over-cap holds are HELD, not trimmed). Produce the sections "
+                  "defined in the system prompt. Be concrete; cite the metrics and only the listed 13F holders.")
+     return "\n".join(lines)
+ 
+ 
+-def run_board(ranked: list[dict], holds: list[dict], equity: float | None) -> tuple[str | None, str | None]:
+-    prompt = _board_prompt(ranked, holds, equity)
++def run_board(ranked: list[dict], holds: list[dict], equity: float | None,
++              account: dict | None = None, gross: float | None = None) -> tuple[str | None, str | None]:
++    prompt = _board_prompt(ranked, holds, equity, account, gross)
+     gro = _gro(prompt, _GRO_SYS)
+     gai = _gai(_GRO_SYS + "\n\n" + prompt)
+     return gro, gai
+@@ -554,7 +621,8 @@ def run_board(ranked: list[dict], holds: list[dict], equity: float | None) -> tu
+ 
+ # ── Memo ───────────────────────────────────────────────────────────────────────────────────────
+ def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float | None,
+-               gro: str | None, gai: str | None) -> str:
++               gro: str | None, gai: str | None, account: dict | None = None,
++               peer_note: str = "") -> str:
+     pend = _pending_approvals()
+     agg, name = int(_QHM_AGG_CAP_PCT * 100), int(_QHM_NAME_CAP_PCT * 100)
+     lines = [f"# QHM Weekly Thesis — {today} (buy-the-dip into earnings)",
+@@ -570,9 +638,13 @@ def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float
+         "energy-transition / healthcare) + current QHM holds; leveraged/inverse ETFs excluded.",
+         f"- **Screen:** Alpaca IEX daily bars → dip-into-earnings (within +{_DIP_VS50_MAX:.0f}% of the 50d MA AND "
+         f"≥{abs(_DIP_OFFHIGH_MAX):.0f}% off the 20d high), gated on an FMP earnings date in the next ~{_EARN_LOOKAHEAD_DAYS}d.",
+-        "- **Enrichment:** FMP analyst grade; **Dataroma real named-superinvestor 13F holders** (fetched — an "
+-        "uncovered name shows 'none tracked', NEVER fabricated). "
+-        "Earnings-call reads are **LLM-SYNTHESIZED** (transcripts are FMP-premium-blocked), never quoted as live.",
++        "- **Enrichment:** each name's business, valuation and news as plain-English takeaways, built from "
++        "its own SEC filings (never estimated). P/E uses the class A share price over diluted EPS and is "
++        "compared with the median of S&P 500 companies in the same SEC industry group, on the last full "
++        "year's filed earnings; news is a 1-2 sentence summary of the last 3 weeks' Alpaca headlines "
++        "(checked so it adds no figures of its own); FMP analyst grade; **Dataroma real "
++        "named-superinvestor 13F holders** (fetched — an uncovered name shows 'none tracked', NEVER fabricated).",
++        f"- **Peer data:** {peer_note or 'not computed this run.'}",
+         "- **Board:** Gro + GAI, each running the 4 lenses (AB / BoD / TB / Execution) — DRAFT for human review.",
+         "- **Holding window:** enter post-earnings, hold to the day before the next earnings print.",
+         "",
+@@ -586,15 +658,24 @@ def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float
+         drcell = f"{drc} funds: {drh}" if drc else drh
+         lines.append(f"| {r['sym']} | {r.get('sector','')} | {r.get('earn','?')} | {m.get('last','?')} | "
+                      f"{m.get('vs50','?')}% | {m.get('off20h','?')}% | {m.get('rsi','?')} | {r.get('grade','?')} | {drcell} |")
+-    lines += ["", "## Board thesis — Gro (AB / BoD / TB / Execution)", gro or "_Gro unavailable this run._",
++    lines += ["", "## Candidates — key takeaways"]
++    for r in ranked:
++        lines.append(f"- **{r['sym']}**" + (f" ({r['sector']})" if r.get("sector") else ""))
++        lines += name_lines(r)
++    lines += ["", "## Capital"] + capital_lines(account or ({"equity": equity} if equity else {}), holds)
++    lines += ["", "> **Board sections below are model-written** (Gro / GAI) from the checked figures above. "
++              "Any number in them that does not appear in the takeaways, the screen table or the Capital "
++              "section is unverified — rely on those sections for figures.",
++              "", "## Board thesis — Gro (AB / BoD / TB / Execution)", gro or "_Gro unavailable this run._",
+               "", "## Board thesis — GAI (cross-check)", gai or "_GAI unavailable this run._",
+               "", "> **13F note:** holder names are really-fetched from Dataroma (the candidate table is the complete "
+               "set per name); the board cites from that fetched list. Any fund NOT in the table is unverified — "
+               "disregard it.",
+-              "", "## Current holds — thesis refresh + cap check"]
++              "", "## Current holds — key takeaways"]
+     for h in holds:
+         flag = " **⚠️ OVER PER-NAME CAP**" if h.get("over_cap") else ""
+-        lines.append(f"- **{h['sym']}** — {h.get('pct_eq','?')}% of equity{flag}. {h.get('dip','')}")
++        lines.append(f"- **{h['sym']}**{flag}: {position_line(h)}. {h.get('dip','')}")
++        lines += name_lines(h)
+     lines += ["", "## Next steps",
+               "- Rafael + Claude finalize the 2-3 picks in-session (this is a draft).",
+               f"- New QHM buys are Kelly-right-sized within the caps (agg {agg}% / per-name {name}%).",
+@@ -606,28 +687,407 @@ def build_memo(today: str, ranked: list[dict], holds: list[dict], equity: float
+ 
+ 
+ # ── main ─────────────────────────────────────────────────────────────────────────────────────
+-def _equity() -> float | None:
++def _account() -> dict:
++    """{equity, cash, buying_power} floats from the Alpaca paper account (read-only). Missing
++    or unparseable fields are left out; {} on any failure."""
+     kid, sec = os.getenv("ALPACA_API_KEY", ""), os.getenv("ALPACA_SECRET_KEY", "")
+     if not kid or not sec:
+-        return None
++        return {}
+     data = _http_json("https://paper-api.alpaca.markets/v2/account",
+                       headers={"APCA-API-KEY-ID": kid, "APCA-API-SECRET-KEY": sec})
+-    val = data.get("equity") if isinstance(data, dict) else None   # non-dict (e.g. a list) -> None
+-    if val is None:
+-        return None
++    out: dict = {}
++    if isinstance(data, dict):
++        for k in ("equity", "cash", "buying_power"):
++            try:
++                out[k] = float(data[k])
++            except (KeyError, TypeError, ValueError):
++                continue
++    return out
++
++
++def _equity() -> float | None:
++    return _account().get("equity")
++
++
++# ── Reported fundamentals + news (T2 SEC EDGAR / T1 Alpaca news; each fail-safe) ─────────────
++def _fundamentals(sym: str) -> dict:
+     try:
+-        return float(val)
+-    except (TypeError, ValueError):
++        from data.edgar_client import fundamentals
++        return fundamentals(sym)
++    except Exception as e:
++        logger.warning("fundamentals failed for %s: %s", sym, e)
++        return {}
++
++
++def _news(sym: str) -> list | None:
++    try:
++        from data.alpaca_data import get_news
++        return get_news(sym, days=21, limit=5)
++    except Exception as e:
++        logger.warning("news failed for %s: %s", sym, e)
+         return None
+ 
+ 
++def _money(v: float | None) -> str:
++    if v is None:
++        return "not reported"
++    a = abs(v)
++    sign = "-" if v < 0 else ""
++    if a >= 1e9:
++        return f"{sign}${a / 1e9:,.2f}B"
++    if a >= 1e6:
++        return f"{sign}${a / 1e6:,.0f}M"
++    return f"{sign}${a:,.0f}"
++
++
++def _pct_str(v: float | None) -> str:
++    return "not reported" if v is None else f"{v:+.1f}%"
++
++
++def _valuation(f: dict, price: float | None) -> dict:
++    """Market cap from SEC shares outstanding x price; P/E, P/S and FCF yield on TTM."""
++    sh = f.get("shares_out")
++    if not sh or not price:
++        return {}
++    mcap = sh * price
++    out = {"mcap": mcap}
++    ni, rev, fcf = f.get("net_income_ttm"), f.get("revenue_ttm"), f.get("fcf_ttm")
++    if ni and ni > 0:
++        out["pe"] = mcap / ni
++    if rev and rev > 0:
++        out["ps"] = mcap / rev
++    if fcf is not None:
++        out["fcf_yield"] = fcf / mcap * 100.0
++    return out
++
++
++def fundamentals_takeaway(f: dict, sic: str = "") -> str:
++    """The business in plain English from the filed figures: a verdict, then growth,
++    profit, per-share earnings trend and cash — each with its number. `sic` is the SEC
++    industry code: for finance companies (6xxx) free cash flow is left out, because a
++    lender's operating cash flow counts the loans it makes as cash going out."""
++    if not f:
++        return "No SEC filing data is available for this company."
++    bits: list[str] = []
++    good = known = 0
++    yoy, rq = f.get("revenue_yoy_pct"), f.get("revenue_q")
++    if yoy is not None:
++        known += 1
++        good += yoy >= 5
++        word = ("growing fast" if yoy >= 20 else "growing" if yoy >= 5
++                else "roughly flat" if yoy > -5 else "shrinking")
++        last_q = f", {_money(rq)} last quarter" if rq is not None else ""
++        bits.append(f"sales are {word} ({yoy:+.0f}% from a year ago{last_q})")
++    elif rq is not None:
++        bits.append(f"sales were {_money(rq)} last quarter (no year-ago figure filed)")
++    ni = f.get("net_income_ttm")
++    if ni is not None:
++        known += 1
++        if ni > 0:
++            good += 1
++            om = f.get("op_margin_pct")
++            margin = f", {om:.0f}% operating margin last quarter" if om is not None else ""
++            bits.append(f"it is profitable ({_money(ni)} net income over the last 12 months{margin})")
++        else:
++            bits.append(f"it is losing money ({_money(ni)} net income over the last 12 months)")
++    ey = f.get("eps_yoy_pct")
++    if ey is not None and abs(ey) >= 10:
++        caveat = (" — a jump that large usually includes one-time items, so check before relying on it"
++                  if ey >= 100 else "")
++        bits.append(f"earnings per share are {'up' if ey > 0 else 'down'} {abs(ey):.0f}% from a year ago{caveat}")
++    fcf = None if sic.startswith("6") else f.get("fcf_ttm")
++    if fcf is not None:
++        known += 1
++        if fcf > 0:
++            good += 1
++            bits.append(f"it generates cash ({_money(fcf)} free cash flow over 12 months)")
++        else:
++            bits.append(f"it is burning cash ({_money(fcf)} free cash flow over 12 months)")
++    if not bits:
++        return "The filings don't report enough to judge the business."
++    if known == 0:
++        verdict = "Limited data"
++    elif good == known:
++        verdict = "Strong"
++    elif good == 0:
++        verdict = "Weak"
++    elif good / known >= 0.6:
++        verdict = "Mostly healthy"
++    else:
++        verdict = "Mixed"
++    return (f"{verdict}: " + "; ".join(bits)
++            + f" (latest filing: quarter ended {f.get('period_end', '?')}).")
++
++
++def peer_comp(sym: str, sic: dict, eps: dict, price: dict, members: list,
++              withheld: frozenset = frozenset()) -> dict:
++    """P/E vs same-industry S&P 500 peers on one earnings basis (the last full fiscal
++    year, SEC-filed). All maps are keyed by class-A ticker. Peers share the company's
++    4-digit SEC industry code, widening once to 3 digits, until >= _PEER_MIN peers have
++    a positive EPS and a price (never wider: 2-digit groups mix unrelated businesses).
++    `withheld` = tickers whose annual EPS may predate a stock split (excluded).
++    Returns {} without an industry code; 'peers' is [] when too few peers exist.
++    'status' says why the company's own P/E is missing, if it is."""
++    sym = _CLASS_A.get(sym, sym)
++    own = sic.get(sym, "")
++    if len(own) < 3:
++        return {}
++    out: dict = {"sic": own, "peers": []}
++    e, p = eps.get(sym), price.get(sym)
++    if sym in withheld:
++        out["status"] = "split"
++    elif e is None:
++        out["status"] = "no_eps"
++    elif e <= 0:
++        out["status"] = "loss"
++    elif not p:
++        out["status"] = "no_price"
++    else:
++        out["status"] = "ok"
++    for digits in (4, 3):
++        prefix = own[:digits]
++        peers = []
++        for t in members:
++            t = _CLASS_A.get(t, t)
++            if (t == sym or t in withheld or len(sic.get(t, "")) < digits
++                    or sic[t][:digits] != prefix):
++                continue
++            pe_, pp = eps.get(t), price.get(t)
++            if pe_ is not None and pe_ > 0 and pp:
++                peers.append((t, pp / pe_))
++        peers = sorted(set(peers), key=lambda x: x[1])
++        if len(peers) >= _PEER_MIN:
++            out.update(peers=peers, digits=digits,
++                       median=statistics.median(v for _, v in peers))
++            if out["status"] == "ok" and e and p:
++                out["pe"] = p / e
++                out["vs_peers_pct"] = (out["pe"] / out["median"] - 1.0) * 100.0
++            return out
++    return out
++
++
++def _range_line(m: dict) -> str | None:
++    """Where the last close sits in its 52-week range (same bars, same share class)."""
++    last, hi, lo = m.get("last"), m.get("high52"), m.get("low52")
++    if not (last and hi and lo):
++        return None
++    below = (1 - last / hi) * 100
++    above = (last / lo - 1) * 100
++    top = "at its 52-week high" if below <= 0.5 else f"{below:.0f}% below its 52-week high"
++    bottom = "at its 52-week low" if above <= 0.5 else f"{above:.0f}% above its low"
++    return f"{top} (${hi:,.2f}) and {bottom} (${lo:,.2f})"
++
++
++def valuation_takeaway(sym: str, price: float | None, f: dict, peer: dict,
++                       year: int | None, m: dict, splits: list | None = None) -> str:
++    """Valuation in plain English: cheap / in line / expensive vs peers (class-A price,
++    last full year's earnings), the 12-month P/E, market value and the 52-week range.
++    `splits` = the company's recent split dates (None = the lookup failed): a P/E is
++    withheld whenever a split may have left the earnings on the old share count."""
++    cls = _CLASS_A.get(sym, sym)
++    who = f" (class A, {cls})" if cls != sym else ""
++    parts: list[str] = []
++    peers = peer.get("peers") or []
++    names = ", ".join(t for t, _ in peers[:_PEERS_SHOWN]) + (", …" if len(peers) > _PEERS_SHOWN else "")
++    where = ("the same SEC industry" if peer.get("digits") == 4
++             else "a related SEC industry group")
++    group = f"{len(peers)} S&P 500 peers in {where} ({names})"
++    yr = str(year) if year else "last year"
++    status = peer.get("status")
++    if peer.get("pe") is not None:
++        diff = peer["vs_peers_pct"]
++        label = ("Cheap vs peers" if diff <= _CHEAP_PCT else
++                 "Expensive vs peers" if diff >= _RICH_PCT else "In line with peers")
++        gap = ("about the same as them" if abs(diff) < 1
++               else f"{abs(diff):.0f}% {'below' if diff < 0 else 'above'} them")
++        parts.append(f"{label}: at ${price:,.2f}{who} it trades at {peer['pe']:.1f}× its {yr} earnings vs "
++                     f"a median {peer['median']:.1f}× for {group} — {gap}")
++    elif peers:
++        why = {"loss": f"it lost money in {yr}",
++               "split": f"a stock split since its {yr} results means the filed earnings per share "
++                        f"may not match today's share count",
++               "no_price": "no current price was available this run",
++               }.get(str(status), f"its SEC data has no {yr} diluted earnings per share")
++        parts.append(f"No P/E: {why}; {group} trade at a median {peer['median']:.1f}× earnings")
++    elif peer:
++        parts.append("No peer comparison: fewer than 3 profitable S&P 500 companies share its SEC "
++                     "industry group")
++    else:
++        parts.append("No peer comparison available this run")
++    eps_ttm = f.get("eps_ttm")
++    fy_end = f.get("eps_fy_end")
++    recent = (datetime.now(ET).date() - timedelta(days=460)).isoformat()
++    split_risk = splits is None or any(d > (fy_end or recent) for d in splits)
++    if eps_ttm is not None and eps_ttm > 0 and price and not split_risk:
++        parts.append(f"on the last 12 months of earnings it's {price / eps_ttm:.1f}×")
++    v = _valuation(f, price)
++    if v.get("mcap"):
++        parts.append(f"market value {_money(v['mcap'])}")
++    rng = _range_line(m)
++    if rng:
++        parts.append(rng)
++    return "; ".join(parts) + "."
++
++
++_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
++_NUM_WORDS = re.compile(
++    r"\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|"
++    r"fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|half|"
++    r"doubled?|tripled?|quadrupled?|halved)\b", re.IGNORECASE)
++
++
++def _numbers(text: str) -> set:
++    return ({n.replace(",", "") for n in _NUM_RE.findall(text or "")}
++            | {w.lower() for w in _NUM_WORDS.findall(text or "")})
++
++
++def news_summary_ok(summary: str, news: list) -> bool:
++    """Accept a model-written news summary only if it is short and every figure in it —
++    digits or number words — appears in the headlines/summaries it was written from.
++    Dates are deliberately NOT part of the source: their digits would admit invented
++    figures ("fell 24%" against a headline dated the 24th)."""
++    src = " ".join(f"{n.get('headline', '')} {n.get('summary', '')}" for n in news)
++    return 0 < len(summary) <= 400 and _numbers(summary) <= _numbers(src)
++
++
++def _json_object(raw: str | None) -> dict:
++    if not raw:
++        return {}
++    a, b = raw.find("{"), raw.rfind("}")
++    if a < 0 or b <= a:
++        return {}
++    try:
++        d = json.loads(raw[a:b + 1])
++    except ValueError:
++        return {}
++    return d if isinstance(d, dict) else {}
++
++
++def summarize_news(news_by_sym: dict) -> dict:
++    """{SYM: 1-2 sentence summary} written by GAI from each name's own headlines, one
++    call for all names. A summary that fails news_summary_ok is dropped (the report
++    then shows the latest headline instead)."""
++    items = {s: n for s, n in news_by_sym.items() if n}
++    if not items:
++        return {}
++    lines = ["Summarize the recent news for each stock ticker below in 1-2 plain-English sentences "
++             "for a busy CEO: what happened and why it matters for the stock. Use ONLY facts stated "
++             "in that ticker's own headlines and summaries; do not add numbers, dates, names or "
++             'opinions that are not in them. Reply with JSON only: {"TICKER": "summary", ...}', ""]
++    for s, n in items.items():
++        lines.append(f"{s}:")
++        lines += [f"- {x['headline']}. {str(x.get('summary') or '')[:300]}" for x in n]
++    got = _json_object(_gai("\n".join(lines)))
++    out: dict = {}
++    for s, n in items.items():
++        txt = got.get(s)
++        if isinstance(txt, str):
++            txt = " ".join(txt.split())
++            if news_summary_ok(txt, n):
++                out[s] = txt
++    return out
++
++
++def news_takeaway(news: list | None, summary: str | None) -> str:
++    if news is None:
++        return "News unavailable this run."
++    if not news:
++        return "No news in the last 3 weeks."
++    latest = str(news[0].get("created_at", ""))[:10]
++    if summary:
++        return f"{summary} (from {len(news)} headline{'s' if len(news) != 1 else ''}, latest {latest})"
++    return f"Latest headline ({latest}): {news[0]['headline']}."
++
++
++def name_lines(r: dict) -> list[str]:
++    """The three CEO takeaways for one name (candidate or hold)."""
++    val = valuation_takeaway(r["sym"], r.get("px"), r.get("fund") or {}, r.get("peer") or {},
++                             r.get("peer_year"), r.get("m") or {}, r.get("splits"))
++    return [f"  - Business: {fundamentals_takeaway(r.get('fund') or {}, (r.get('peer') or {}).get('sic', ''))}",
++            f"  - Valuation: {val}",
++            f"  - News: {news_takeaway(r.get('news'), r.get('news_sum'))}"]
++
++
++def _sp500_now() -> tuple[list[str], str | None]:
++    """(current S&P 500 tickers, list date YYYY-MM-DD) from the membership file (rows
++    with no end date). ([], None) if unavailable."""
++    try:
++        with _SP500_MEMBERS.open() as fh:
++            rows = list(csv.DictReader(fh))
++        asof = datetime.fromtimestamp(_SP500_MEMBERS.stat().st_mtime, PT).strftime("%Y-%m-%d")
++    except (OSError, csv.Error) as e:
++        logger.warning("S&P 500 membership unavailable (%s) — no peer comparison", e)
++        return [], None
++    return sorted({(r.get("ticker") or "").strip().upper() for r in rows
++                   if (r.get("ticker") or "").strip() and not (r.get("end") or "").strip()}), asof
++
++
++def enrich_valuation(rows: list[dict]) -> str:
++    """Set px (class-A price), peer, peer_year and splits on each row; return a one-line
++    note on the peer data for the methodology section. Fail-safe: when any source is
++    unavailable the peer comparison and the P/Es are left out and the report says so."""
++    for r in rows:
++        r.setdefault("px", (r.get("m") or {}).get("last"))
++        r["peer"], r["splits"] = {}, None
++    names = [_CLASS_A.get(r["sym"], r["sym"]) for r in rows]
++    try:
++        from data import alpaca_data
++        from data import edgar_client as ec
++        tickers, asof = _sp500_now()
++        members = sorted({_CLASS_A.get(t, t) for t in tickers})
++        if not members:
++            return "Peer comparison unavailable this run (no S&P 500 membership list)."
++        tick = ec.ticker_ciks()
++        ciks = {t: tick[t.replace(".", "-")] for t in set(members) | set(names)
++                if t.replace(".", "-") in tick}
++        today = datetime.now(ET).date()
++        year, frame = ec.latest_annual_eps(today, [ciks[t] for t in members if t in ciks])
++        sics = ec.sic_codes(sorted(set(ciks.values())))
++        sic = {t: sics[c] for t, c in ciks.items() if c in sics}
++        eps = {t: frame[c] for t, c in ciks.items() if c in frame}
++        fams = {sic[n][:3] for n in names if n in sic}
++        want = sorted(set(names) | {t for t in members if sic.get(t, "")[:3] in fams
++                                    and eps.get(t, 0) > 0})
++        price = alpaca_data.get_latest_trades(want)
++        since = min(date(year, 1, 1) if year else today, today - timedelta(days=460))
++        splits = alpaca_data.get_split_dates(want, since.isoformat(), today.isoformat())
++    except Exception as e:
++        logger.warning("peer valuation unavailable: %s", e)
++        return "Peer comparison unavailable this run (data error)."
++    if price is None or year is None or splits is None:
++        logger.warning("peer valuation unavailable: prices=%s year=%s splits=%s",
++                       price is not None, year, splits is not None)
++        return "Peer comparison unavailable this run (price, earnings or split data missing)."
++    # an annual EPS filed before a later split is on the old share count: withhold it
++    cutoff = f"{year + 1}-01-31"
++    withheld = frozenset(t for t, ds in splits.items() if any(d > cutoff for d in ds))
++    for r, n in zip(rows, names, strict=True):
++        if price.get(n):
++            r["px"] = price[n]
++        r["peer_year"] = year
++        r["splits"] = splits.get(n, [])
++        r["peer"] = peer_comp(n, sic, eps, price, members, withheld)
++    return (f"Peers: S&P 500 members as of {asof}, grouped by SEC industry code; P/E on {year} "
++            f"diluted EPS from SEC filings and the latest Alpaca price.")
++
++
++def news_lines(news: list | None) -> list[str]:
++    if news is None:
++        return ["  - News: unavailable this run"]
++    if not news:
++        return ["  - News: no headlines in the last 3 weeks"]
++    return [f"  - News {str(n.get('created_at', ''))[:10]} ({n.get('source') or '?'}): {n['headline']}"
++            for n in news]
++
++
+ def main() -> int:
+     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+     dry = "--dry-run" in sys.argv
+     today = datetime.now(PT).strftime("%Y-%m-%d")
+     logger.info("qhm_thesis start (%s)%s", today, " [dry-run]" if dry else "")
+ 
+-    equity = _equity()
++    account = _account()
++    equity = account.get("equity")
+     holds_syms = _current_holds()
+     universe = _universe()
+ 
+@@ -660,6 +1120,8 @@ def main() -> int:
+         dr = _dataroma_13f(r["sym"])                        # REAL named superinvestor holders (fetched)
+         r["dr_count"] = dr.get("count")
+         r["dr_holders"] = dr.get("holders") or []
++        r["fund"] = _fundamentals(r["sym"])                 # SEC-filed figures (T2)
++        r["news"] = _news(r["sym"])                         # dated headlines (T1)
+ 
+     # 4) current holds refresh rows (dip metrics + REAL per-name cap check).
+     # pct_eq = market_value / equity from Alpaca positions; over_cap flags the per-name cap (20%, enforced #273).
+@@ -668,9 +1130,12 @@ def main() -> int:
+     holds_rows: list[dict] = []
+     for sym in holds_syms:
+         m = _dip_metrics(sym)
+-        row: dict = {"sym": sym,
+-                     "dip": (f"dip {m.get('off20h')}% off high, RSI {m.get('rsi')}" if m else "no price data")}
+-        mv = posmap.get(sym)
++        row: dict = {"sym": sym, "m": m or {},
++                     "dip": (f"dip {m.get('off20h')}% off high, RSI {m.get('rsi')}" if m else "no price data"),
++                     "fund": _fundamentals(sym), "news": _news(sym)}
++        pos = posmap.get(sym)
++        row["pos"] = pos
++        mv = pos["market_value"] if pos else None
+         if mv is not None and equity and equity > 0:
+             pe = mv / equity * 100.0
+             row["pct_eq"] = f"{pe:.0f}"
+@@ -680,13 +1145,20 @@ def main() -> int:
+             row["over_cap"] = False   # no market value → cannot assert over-cap (avoid a false alarm)
+         holds_rows.append(row)
+ 
++    # 4b) class-A valuation vs peers + 1-2 sentence news summaries (each fail-safe)
++    peer_note = enrich_valuation(ranked + holds_rows)
++    sums = summarize_news({r["sym"]: r.get("news") for r in ranked + holds_rows})
++    for r in ranked + holds_rows:
++        r["news_sum"] = sums.get(r["sym"])
++
+     # 5) board (Gro + GAI) on the shortlist + holds
+     gro, gai = (None, None)
+     if ranked:
+-        gro, gai = run_board(ranked, holds_rows, equity)
++        gross = sum(p["market_value"] for p in posmap.values()) if posmap else None
++        gro, gai = run_board(ranked, holds_rows, equity, account, gross)
+ 
+     # 6) memo (atomic) + Slack
+-    memo = build_memo(today, ranked, holds_rows, equity, gro, gai)
++    memo = build_memo(today, ranked, holds_rows, equity, gro, gai, account, peer_note)
+     out_path = _ROOT / "logs" / f"quarterly_holds_research_{today}.md"
+     try:
+         out_path.parent.mkdir(parents=True, exist_ok=True)
+diff --git a/tests/test_edgar_client.py b/tests/test_edgar_client.py
+new file mode 100644
+index 0000000..7e41f30
+--- /dev/null
++++ b/tests/test_edgar_client.py
+@@ -0,0 +1,176 @@
++"""data/edgar_client.py — period math, concept choice, share count, no-contact guard.
++No network: synthetic companyfacts."""
++
++import sys
++import unittest
++from pathlib import Path
++from unittest import mock
++
++_ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(_ROOT))
++
++from data import edgar_client as ec  # noqa: E402
++
++
++def row(start, end, val, filed="2026-08-01", form="10-Q", accn="a1"):
++    return {
++        "start": start,
++        "end": end,
++        "val": val,
++        "filed": filed,
++        "form": form,
++        "accn": accn,
++    }
++
++
++def facts(**concepts):
++    return {
++        "facts": {"us-gaap": {k: {"units": {"USD": v}} for k, v in concepts.items()}}
++    }
++
++
++# A calendar-year filer: quarters for Q1-Q3, the 10-K gives only the full year;
++# cash flow is year-to-date in the 10-Qs.
++REV = [
++    row("2025-01-01", "2025-03-31", 100),
++    row("2025-04-01", "2025-06-30", 110),
++    row("2025-07-01", "2025-09-30", 120),
++    row("2025-01-01", "2025-12-31", 460, form="10-K"),  # Q4 = 460-330 = 130
++    row("2026-01-01", "2026-03-31", 140),
++    row("2026-04-01", "2026-06-30", 150),
++]
++OCF = [
++    row("2025-01-01", "2025-03-31", 10),
++    row("2025-01-01", "2025-06-30", 25),
++    row("2025-01-01", "2025-09-30", 40),
++    row("2025-01-01", "2025-12-31", 60, form="10-K"),
++    row("2026-01-01", "2026-03-31", 20),
++    row("2026-01-01", "2026-06-30", 45),
++]
++
++
++class PeriodMath(unittest.TestCase):
++    def test_reported_quarter(self):
++        rows = ec.rows_for(facts(Revenues=REV), "revenue")
++        self.assertEqual(ec.quarter_value(rows, "2026-06-30"), 150)
++
++    def test_q4_derived_from_full_year(self):
++        rows = ec.rows_for(facts(Revenues=REV), "revenue")
++        self.assertEqual(ec.quarter_value(rows, "2025-12-31"), 130)  # 460 - 330
++        rows9 = ec.rows_for(
++            facts(Revenues=REV + [row("2025-01-01", "2025-09-30", 330)]), "revenue"
++        )
++        self.assertEqual(ec.quarter_value(rows9, "2025-12-31"), 130)  # FY - 9M YTD
++        partial = [r for r in rows if r["end"] != "2025-09-30"]
++        self.assertIsNone(ec.quarter_value(partial, "2025-12-31"))  # can't derive
++
++    def test_ytd_cash_flow_quarter_and_ttm(self):
++        rows = ec.rows_for(
++            facts(NetCashProvidedByUsedInOperatingActivities=OCF), "op_cash_flow"
++        )
++        self.assertEqual(ec.quarter_value(rows, "2026-06-30"), 25)  # 45 - 20
++        self.assertEqual(ec.ttm_value(rows, "2026-06-30"), 80)  # 60 + 45 - 25
++
++    def test_ttm_reported_annual(self):
++        rows = ec.rows_for(facts(Revenues=REV), "revenue")
++        self.assertEqual(ec.ttm_value(rows, "2025-12-31"), 460)
++
++    def test_amendment_latest_filed_wins(self):
++        amended = REV + [
++            row("2026-04-01", "2026-06-30", 155, filed="2026-09-01", form="10-Q/A")
++        ]
++        rows = ec.rows_for(facts(Revenues=amended), "revenue")
++        self.assertEqual(ec.quarter_value(rows, "2026-06-30"), 155)
++
++
++class PerShareNotDerived(unittest.TestCase):
++    def test_eps_only_when_reported_as_a_quarter(self):
++        eps = [
++            row("2026-01-01", "2026-03-31", 1.0),
++            row("2026-01-01", "2026-06-30", 2.5),
++        ]
++        f = {
++            "facts": {
++                "us-gaap": {
++                    "Revenues": {"units": {"USD": REV}},
++                    "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
++                }
++            }
++        }
++        s = ec.summarize(f)
++        self.assertIsNone(
++            s["eps_q"]
++        )  # 6-month YTD minus Q1 is NOT a reported quarter EPS
++
++
++class ConceptChoice(unittest.TestCase):
++    def test_most_recent_concept_wins(self):
++        old = [row("2017-01-01", "2017-03-31", 5)]
++        rows = ec.rows_for(facts(SalesRevenueNet=old, Revenues=REV), "revenue")
++        self.assertEqual(rows[-1]["end"], "2026-06-30")
++
++    def test_bank_total_revenue_preferred_over_component(self):
++        part = [row("2026-04-01", "2026-06-30", 15)]
++        total = [row("2026-04-01", "2026-06-30", 122)]
++        f = facts(
++            RevenueFromContractWithCustomerExcludingAssessedTax=part,
++            RevenuesNetOfInterestExpense=total,
++        )
++        self.assertEqual(ec.rows_for(f, "revenue")[-1]["val"], 122)
++
++    def test_missing_concept_is_empty(self):
++        self.assertEqual(ec.rows_for(facts(Revenues=REV), "capex"), [])
++
++
++class Summary(unittest.TestCase):
++    def _f(self, shares):
++        f = facts(
++            Revenues=REV,
++            NetIncomeLoss=[
++                row("2026-04-01", "2026-06-30", 30),
++                row("2025-04-01", "2025-06-30", 20),
++            ],
++        )
++        f["facts"]["dei"] = {
++            "EntityCommonStockSharesOutstanding": {"units": {"shares": shares}}
++        }
++        return f
++
++    def test_yoy_and_single_class_shares(self):
++        s = ec.summarize(
++            self._f(
++                [{"end": "2026-07-31", "val": 1000, "accn": "x", "filed": "2026-08-01"}]
++            )
++        )
++        self.assertEqual(s["period_end"], "2026-06-30")
++        self.assertEqual(s["revenue_q"], 150)
++        self.assertAlmostEqual(s["revenue_yoy_pct"], 36.4)  # 150 vs 110
++        self.assertEqual(s["shares_out"], 1000)
++        self.assertIsNone(s["gross_margin_pct"])  # not filed -> None
++
++    def test_multi_class_or_stale_shares_not_used(self):
++        two = [
++            {"end": "2026-07-31", "val": 10, "accn": "x", "filed": "2026-08-01"},
++            {"end": "2026-07-31", "val": 900, "accn": "x", "filed": "2026-08-01"},
++        ]
++        self.assertNotIn("shares_out", ec.summarize(self._f(two)))
++        stale = [
++            {"end": "2011-04-29", "val": 941481, "accn": "y", "filed": "2011-05-01"}
++        ]
++        self.assertNotIn("shares_out", ec.summarize(self._f(stale)))
++
++
++class NoContactNoRequest(unittest.TestCase):
++    def test_missing_email_skips_network(self):
++        with (
++            mock.patch.dict("os.environ", {"EDGAR_CONTACT_EMAIL": ""}),
++            mock.patch.object(ec, "_CACHE_DIR", Path("/nonexistent-edgar-cache")),
++            mock.patch.object(
++                ec.urllib.request, "urlopen", side_effect=AssertionError("network used")
++            ),
++        ):
++            self.assertIsNone(ec._get_json("https://data.sec.gov/x", "x.json"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_qhm_report_content.py b/tests/test_qhm_report_content.py
+new file mode 100644
+index 0000000..43b06ba
+--- /dev/null
++++ b/tests/test_qhm_report_content.py
+@@ -0,0 +1,128 @@
++"""QHM thesis report content: position / capital / fundamentals / news lines, and
++alpaca_data.get_news. No network (requests mocked)."""
++
++import sys
++import unittest
++from pathlib import Path
++from unittest import mock
++
++_ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(_ROOT))
++sys.path.insert(0, str(_ROOT / "scripts"))
++
++import qhm_thesis as qt  # noqa: E402
++from data import alpaca_data  # noqa: E402
++
++GEV_POS = {
++    "qty": 1.0,
++    "avg_entry": 920.68,
++    "price": 957.63,
++    "market_value": 957.63,
++    "upl": 36.95,
++    "upl_pct": 4.01,
++}
++
++
++class PositionAndCapital(unittest.TestCase):
++    def test_position_line_live_and_state_only(self):
++        live = qt.position_line({"pos": GEV_POS, "pct_eq": "38", "over_cap": True})
++        self.assertIn("1 sh @ $920.68", live)
++        self.assertIn("P&L +36.95 (+4.0%)", live)
++        self.assertIn("OVER the 20% per-name cap", live)
++        self.assertIn("no live Alpaca position", qt.position_line({"pos": None}))
++
++    def test_capital_lines(self):
++        holds = [{"sym": "GEV", "pos": GEV_POS}, {"sym": "GE", "pos": None}]
++        lines = qt.capital_lines(
++            {"equity": 2541.0, "cash": 100.0, "buying_power": 5000.0}, holds
++        )
++        text = "\n".join(lines)
++        self.assertIn("Equity $2,541", text)
++        self.assertIn("QHM holds total $958 = 38% of equity", text)
++        self.assertIn("Selling all of GEV would free $958 (P&L +36.95, +4.0%)", text)
++        self.assertIn("above the per-name cap", text)  # 957.63 > 20% of 2541
++        self.assertNotIn("Selling all of GE ", text)  # no live position
++
++    def test_capital_lines_without_account(self):
++        self.assertIn("unavailable", qt.capital_lines({}, [])[0])
++
++
++class FundamentalsAndNews(unittest.TestCase):
++    F = {
++        "period_end": "2026-06-30",
++        "filed": "2026-07-22",
++        "revenue_q": 11.1e9,
++        "revenue_yoy_pct": 21.9,
++        "net_income_q": 6.68e8,
++        "eps_q": 2.47,
++        "eps_yoy_pct": 32.8,
++        "gross_margin_pct": None,
++        "op_margin_pct": 5.9,
++        "revenue_ttm": 41.37e9,
++        "net_income_ttm": 9.53e9,
++        "op_cash_flow_ttm": 14.14e9,
++        "capex_ttm": 1.7e9,
++        "fcf_ttm": 12.44e9,
++        "shares_out": 266e6,
++    }
++
++    def test_news_lines(self):
++        self.assertIn("unavailable", qt.news_lines(None)[0])
++        self.assertIn("no headlines", qt.news_lines([])[0])
++        n = [
++            {
++                "headline": "GE Vernova wins order",
++                "source": "benzinga",
++                "created_at": "2026-09-23T16:32:02Z",
++            }
++        ]
++        self.assertEqual(
++            qt.news_lines(n), ["  - News 2026-09-23 (benzinga): GE Vernova wins order"]
++        )
++
++
++def _resp(status, body=None):
++    r = mock.Mock()
++    r.status_code = status
++    r.json.return_value = body or {}
++    return r
++
++
++class GetNews(unittest.TestCase):
++    def test_parses_and_limits(self):
++        body = {
++            "news": [
++                {
++                    "headline": f"h{k}",
++                    "summary": "s",
++                    "source": "b",
++                    "created_at": "2026-09-2{k}T00:00:00Z",
++                }
++                for k in range(5)
++            ]
++        }
++        with mock.patch.object(
++            alpaca_data.requests, "get", return_value=_resp(200, body)
++        ) as g:
++            out = alpaca_data.get_news("GEV", days=21, limit=3)
++        self.assertEqual([n["headline"] for n in out], ["h0", "h1", "h2"])
++        self.assertEqual(g.call_args.kwargs["params"]["symbols"], "GEV")
++
++    def test_failure_is_none_not_empty(self):
++        with mock.patch.object(alpaca_data.requests, "get", return_value=_resp(500)):
++            self.assertIsNone(alpaca_data.get_news("GEV"))
++        with mock.patch.object(alpaca_data.requests, "get", side_effect=OSError("x")):
++            self.assertIsNone(alpaca_data.get_news("GEV"))
++
++    def test_blank_headlines_skipped(self):
++        body = {"news": [{"headline": " "}, {"headline": "real", "created_at": ""}]}
++        with mock.patch.object(
++            alpaca_data.requests, "get", return_value=_resp(200, body)
++        ):
++            self.assertEqual(
++                [n["headline"] for n in alpaca_data.get_news("X")], ["real"]
++            )
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_qhm_takeaways.py b/tests/test_qhm_takeaways.py
+new file mode 100644
+index 0000000..2b1aa30
+--- /dev/null
++++ b/tests/test_qhm_takeaways.py
+@@ -0,0 +1,327 @@
++# ruff: noqa: E501
++"""QHM thesis report: plain-English takeaways, class-A P/E vs peers, news summaries,
++and the data helpers behind them. No network (every source mocked)."""
++
++import sys
++import tempfile
++import unittest
++from datetime import date
++from pathlib import Path
++from unittest import mock
++
++_ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(_ROOT))
++sys.path.insert(0, str(_ROOT / "scripts"))
++
++import qhm_thesis as qt  # noqa: E402
++from data import alpaca_data  # noqa: E402
++from data import edgar_client as ec  # noqa: E402
++
++F = {
++    "period_end": "2026-06-30",
++    "revenue_q": 12.65e9,
++    "revenue_yoy_pct": 18.2,
++    "net_income_ttm": 9.5e9,
++    "op_margin_pct": 11.4,
++    "eps_yoy_pct": 35.0,
++    "fcf_ttm": 8.1e9,
++    "eps_ttm": 4.56,
++}
++
++
++class FundamentalsTakeaway(unittest.TestCase):
++    def test_strong(self):
++        t = qt.fundamentals_takeaway(F)
++        self.assertTrue(t.startswith("Strong: sales are growing (+18% from a year ago, $12.65B"))
++        self.assertIn("it is profitable ($9.50B net income over the last 12 months, 11% operating margin", t)
++        self.assertIn("earnings per share are up 35%", t)
++        self.assertIn("it generates cash ($8.10B free cash flow", t)
++        self.assertIn("quarter ended 2026-06-30", t)
++
++    def test_weak_and_mixed(self):
++        weak = {"revenue_yoy_pct": -12.0, "net_income_ttm": -3e8, "fcf_ttm": -1e8}
++        self.assertTrue(qt.fundamentals_takeaway(weak).startswith("Weak: sales are shrinking"))
++        mixed = {"revenue_yoy_pct": 2.0, "net_income_ttm": -3e8, "fcf_ttm": 5e8}
++        self.assertTrue(qt.fundamentals_takeaway(mixed).startswith("Mixed:"))
++        mostly = {"revenue_yoy_pct": 30.0, "net_income_ttm": 1e9, "fcf_ttm": -5e8}
++        self.assertTrue(qt.fundamentals_takeaway(mostly).startswith("Mostly healthy:"))
++
++    def test_lender_cash_flow_skipped_and_big_eps_caveat(self):
++        lender = qt.fundamentals_takeaway({**F, "fcf_ttm": -8.8e9}, sic="6199")
++        self.assertNotIn("cash", lender.split("net income")[1])
++        self.assertTrue(lender.startswith("Strong:"))  # judged on growth + profit only
++        self.assertIn("burning cash", qt.fundamentals_takeaway({**F, "fcf_ttm": -8.8e9}, sic="7389"))
++        big = qt.fundamentals_takeaway({**F, "eps_yoy_pct": 294.0})
++        self.assertIn("up 294% from a year ago — a jump that large usually includes one-time items", big)
++        self.assertNotIn("one-time", qt.fundamentals_takeaway(F))
++
++    def test_small_eps_change_not_mentioned_and_empty(self):
++        self.assertNotIn("per share", qt.fundamentals_takeaway({**F, "eps_yoy_pct": 4.0}))
++        self.assertIn("No SEC filing data", qt.fundamentals_takeaway({}))
++        self.assertIn("don't report enough", qt.fundamentals_takeaway({"period_end": "x"}))
++
++
++SIC = {"UBER": "7389", "V": "7389", "MA": "7389", "PYPL": "7389", "ACN": "7380",
++       "GOOGL": "7370", "META": "7370", "MSFT": "7372", "ORCL": "7372"}
++EPS = {"UBER": 4.73, "V": 10.0, "MA": 15.0, "PYPL": 4.0, "ACN": 12.0,
++       "GOOGL": 10.81, "META": 25.0, "MSFT": 13.0, "ORCL": -1.0}
++PX = {"UBER": 69.60, "V": 300.0, "MA": 540.0, "PYPL": 60.0, "ACN": 240.0,
++      "GOOGL": 343.85, "META": 700.0, "MSFT": 500.0, "ORCL": 200.0}
++MEMBERS = sorted(SIC) + ["GOOG"]
++
++
++class PeerComp(unittest.TestCase):
++    def test_same_four_digit_industry(self):
++        p = qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS)
++        self.assertEqual(p["digits"], 4)
++        self.assertEqual([t for t, _ in p["peers"]], ["PYPL", "V", "MA"])  # 15, 30, 36
++        self.assertAlmostEqual(p["median"], 30.0)
++        self.assertAlmostEqual(p["pe"], 69.60 / 4.73)
++        self.assertLess(p["vs_peers_pct"], -20)
++
++    def test_widens_to_three_digits_only(self):
++        # GOOGL: 7370 has only META at 4 digits -> 3 digits (737x): META, MSFT (ORCL has a
++        # loss) -> still < 3 -> never widens to 2 digits (unrelated businesses): no peers.
++        p = qt.peer_comp("GOOG", SIC, EPS, PX, MEMBERS)
++        self.assertEqual(p["peers"], [])
++        self.assertEqual(p["status"], "ok")
++        sic = dict(SIC, NOW="7372")
++        p = qt.peer_comp("GOOG", sic, dict(EPS, NOW=5.0), dict(PX, NOW=800.0), MEMBERS + ["NOW"])
++        self.assertEqual(p["digits"], 3)
++        names = [t for t, _ in p["peers"]]
++        self.assertEqual(sorted(names), ["META", "MSFT", "NOW"])
++        self.assertNotIn("GOOGL", names)   # its own other-class listing is not its peer
++        self.assertAlmostEqual(p["pe"], 343.85 / 10.81)  # class-A price
++
++    def test_split_withheld_and_status(self):
++        p = qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS, frozenset({"V"}))
++        self.assertNotIn("V", [t for t, _ in p["peers"]])
++        own = qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS + ["X1"], frozenset({"UBER"}))
++        self.assertEqual(own["status"], "split")
++        self.assertNotIn("pe", own)
++        nop = qt.peer_comp("UBER", SIC, EPS, {k: v for k, v in PX.items() if k != "UBER"}, MEMBERS)
++        self.assertEqual(nop["status"], "no_price")
++
++    def test_no_industry_or_too_few_peers(self):
++        self.assertEqual(qt.peer_comp("ZZZ", SIC, EPS, PX, MEMBERS), {})
++        self.assertEqual(qt.peer_comp("UBER", {"UBER": "73"}, EPS, PX, MEMBERS), {})
++        lone = qt.peer_comp("UBER", {"UBER": "9999", "V": "1000"}, EPS, PX, ["UBER", "V"])
++        self.assertEqual(lone["peers"], [])
++        self.assertNotIn("median", lone)
++
++    def test_loss_maker_has_no_pe(self):
++        p = qt.peer_comp("ORCL", SIC, EPS, PX, MEMBERS)
++        self.assertNotIn("pe", p)
++        self.assertEqual(p["status"], "loss")
++
++
++class ValuationTakeaway(unittest.TestCase):
++    M = {"last": 69.60, "high52": 97.71, "low52": 59.33}
++
++    def test_cheap_vs_peers_line(self):
++        peer = qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS)
++        t = qt.valuation_takeaway("UBER", 69.60, {**F, "eps_fy_end": "2025-12-31"}, peer, 2025, self.M, [])
++        self.assertTrue(t.startswith("Cheap vs peers: at $69.60 it trades at 14.7× its 2025 earnings"))
++        self.assertIn("median 30.0× for 3 S&P 500 peers in the same SEC industry (PYPL, V, MA)", t)
++        self.assertIn("51% below them", t)
++        self.assertIn("on the last 12 months of earnings it's 15.3×", t)
++        self.assertIn("29% below its 52-week high ($97.71) and 17% above its low ($59.33)", t)
++
++    def test_ttm_withheld_on_split_or_unknown_splits(self):
++        peer = qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS)
++        f = {**F, "eps_fy_end": "2025-12-31"}
++        ok = qt.valuation_takeaway("UBER", 69.60, f, peer, 2025, self.M, ["2025-06-01"])
++        self.assertIn("last 12 months", ok)                # split before the fiscal year end
++        after = qt.valuation_takeaway("UBER", 69.60, f, peer, 2025, self.M, ["2026-03-02"])
++        self.assertNotIn("last 12 months", after)          # split after it: withheld
++        self.assertNotIn("last 12 months", qt.valuation_takeaway("UBER", 69.60, f, peer, 2025, self.M, None))
++
++    def test_range_line_direction_and_basis(self):
++        self.assertIn("at its 52-week high ($99.00)", qt._range_line({"last": 100.0, "high52": 99.0, "low52": 50.0}))
++        self.assertIn("50% below its 52-week high ($200.00) and 100% above its low ($50.00)",
++                      qt._range_line({"last": 100.0, "high52": 200.0, "low52": 50.0}))
++        # uses the bars' own close, never the (possibly other-class) price argument
++        t = qt.valuation_takeaway("BRK.B", 700000.0, {}, {}, 2025, {"last": 480.0, "high52": 500.0, "low52": 400.0}, [])
++        self.assertIn("4% below its 52-week high ($500.00)", t)
++
++    def test_class_a_label_and_expensive(self):
++        peer = {"peers": [("A", 10.0), ("B", 12.0), ("C", 14.0)], "median": 12.0,
++                "pe": 20.0, "vs_peers_pct": 66.7, "eps": 1.0}
++        t = qt.valuation_takeaway("GOOG", 343.85, {}, peer, 2025, {})
++        self.assertTrue(t.startswith("Expensive vs peers: at $343.85 (class A, GOOGL)"))
++
++    def test_about_the_same(self):
++        peer = {"peers": [("A", 10.0), ("B", 12.0), ("C", 14.0)], "median": 12.0,
++                "pe": 12.05, "vs_peers_pct": 0.4, "eps": 1.0}
++        self.assertIn("— about the same as them", qt.valuation_takeaway("X", 12.05, {}, peer, 2025, {}))
++
++    def test_fallback_wordings(self):
++        base = {"peers": [("A", 10.0), ("B", 12.0), ("C", 14.0)], "median": 12.0, "digits": 4}
++        for status, text in (("loss", "No P/E: it lost money in 2025"),
++                             ("split", "No P/E: a stock split since its 2025 results"),
++                             ("no_price", "No P/E: no current price was available this run"),
++                             ("no_eps", "No P/E: its SEC data has no 2025 diluted earnings per share")):
++            self.assertTrue(qt.valuation_takeaway("X", 5.0, {}, dict(base, status=status), 2025, {}).startswith(text), status)
++        few = {"sic": "9999", "peers": []}
++        self.assertIn("fewer than 3", qt.valuation_takeaway("X", 5.0, {}, few, 2025, {}))
++        self.assertIn("No peer comparison available", qt.valuation_takeaway("X", 5.0, {}, {}, None, {}))
++
++
++NEWS = [{"headline": "Uber raises 2026 bookings outlook to $190 billion", "summary": "",
++         "created_at": "2026-09-24T12:00:00Z"},
++        {"headline": "Uber expands robotaxi deal", "summary": "Adds 3 cities",
++         "created_at": "2026-09-20T12:00:00Z"}]
++
++
++class NewsSummary(unittest.TestCase):
++    def test_validator(self):
++        self.assertTrue(qt.news_summary_ok("Uber raised its 2026 bookings outlook to $190 billion and added 3 robotaxi cities.", NEWS))
++        self.assertFalse(qt.news_summary_ok("Uber stock rose 12% on the news.", NEWS))  # 12 not in source
++        self.assertFalse(qt.news_summary_ok("Uber shares fell 24% after the deal.", NEWS))  # date digits don't count
++        self.assertFalse(qt.news_summary_ok("Uber shares doubled.", NEWS))
++        self.assertFalse(qt.news_summary_ok("Bookings rose forty percent.", NEWS))
++        self.assertFalse(qt.news_summary_ok("", NEWS))
++        self.assertFalse(qt.news_summary_ok("x" * 401, NEWS))
++
++    def test_summarize_keeps_valid_drops_invented(self):
++        reply = '```json\n{"UBER": "Uber lifted its 2026 outlook and expanded robotaxis.", "SOFI": "SoFi jumped 40%."}\n```'
++        with mock.patch.object(qt, "_gai", return_value=reply) as g:
++            out = qt.summarize_news({"UBER": NEWS, "SOFI": [{"headline": "SoFi news", "created_at": ""}], "NFLX": [], "X": None})
++        self.assertEqual(out, {"UBER": "Uber lifted its 2026 outlook and expanded robotaxis."})
++        self.assertEqual(g.call_count, 1)
++        with mock.patch.object(qt, "_gai", return_value=None):
++            self.assertEqual(qt.summarize_news({"UBER": NEWS}), {})
++        with mock.patch.object(qt, "_gai", side_effect=AssertionError("no call")):
++            self.assertEqual(qt.summarize_news({"NFLX": [], "X": None}), {})
++
++    def test_news_takeaway(self):
++        self.assertEqual(qt.news_takeaway(None, None), "News unavailable this run.")
++        self.assertEqual(qt.news_takeaway([], None), "No news in the last 3 weeks.")
++        self.assertEqual(qt.news_takeaway(NEWS, "Summary."), "Summary. (from 2 headlines, latest 2026-09-24)")
++        self.assertEqual(qt.news_takeaway(NEWS, None),
++                         "Latest headline (2026-09-24): Uber raises 2026 bookings outlook to $190 billion.")
++
++
++class MemoUsesTakeaways(unittest.TestCase):
++    def test_memo_sections(self):
++        r = {"sym": "UBER", "m": {"last": 69.6}, "fund": F, "news": NEWS, "news_sum": "S.",
++             "px": 69.6, "peer": qt.peer_comp("UBER", SIC, EPS, PX, MEMBERS), "peer_year": 2025}
++        with mock.patch.object(qt, "_pending_approvals", return_value=[]):
++            memo = qt.build_memo("2026-09-27", [r], [dict(r, pos=None)], 2541.0, None, None, {})
++        self.assertIn("## Candidates — key takeaways", memo)
++        self.assertIn("## Current holds — key takeaways", memo)
++        self.assertEqual(memo.count("  - Business: Strong:"), 2)
++        self.assertEqual(memo.count("  - Valuation: Cheap vs peers"), 2)
++        self.assertIn("Board sections below are model-written", memo)
++        self.assertEqual(memo.count("  - News: S. (from 2 headlines"), 2)
++        self.assertNotIn("Trailing 12 months:", memo)  # raw data dump is gone from the report
++
++
++def _resp(status, body=None):
++    r = mock.Mock()
++    r.status_code = status
++    r.json.return_value = body or {}
++    return r
++
++
++class LatestTrades(unittest.TestCase):
++    def test_parses_batches_and_skips_bad(self):
++        body = {"trades": {"UBER": {"p": 69.6}, "BAD": {"p": None}, "ZERO": {"p": 0}}}
++        with mock.patch.object(alpaca_data.requests, "get", return_value=_resp(200, body)) as g:
++            out = alpaca_data.get_latest_trades([f"S{i}" for i in range(150)] + ["UBER"])
++        self.assertEqual(out, {"UBER": 69.6})
++        self.assertEqual(g.call_count, 2)  # 151 symbols -> 100 + 51
++        self.assertEqual(len(g.call_args_list[0].kwargs["params"]["symbols"].split(",")), 100)
++
++    def test_failure_is_none(self):
++        with mock.patch.object(alpaca_data.requests, "get", return_value=_resp(500)):
++            self.assertIsNone(alpaca_data.get_latest_trades(["UBER"]))
++        with mock.patch.object(alpaca_data.requests, "get", side_effect=OSError("x")):
++            self.assertIsNone(alpaca_data.get_latest_trades(["UBER"]))
++
++
++class EdgarPeers(unittest.TestCase):
++    def test_sic_codes_cache_and_failures(self):
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "sic_map.json"
++            calls = []
++
++            def fake(url, cache_name):
++                calls.append(url)
++                self.assertIsNone(cache_name)   # raw submissions are never cached
++                return None if "0000000002" in url else {"sic": "7389"}
++
++            with mock.patch.object(ec, "_SIC_MAP", path), mock.patch.object(ec, "_get_json", side_effect=fake):
++                self.assertEqual(ec.sic_codes([1, 2]), {1: "7389"})
++                self.assertEqual(ec.sic_codes([1, 2]), {1: "7389"})
++            self.assertEqual(len(calls), 3)  # 1 cached after the first run; failed 2 retried
++
++    def test_latest_annual_eps_skips_partial_year(self):
++        full = {"data": [{"cik": i, "val": 1.0} for i in range(ec._FRAME_MIN_FILERS)]}
++        partial = {"data": [{"cik": 1, "val": 2.0}]}
++        with mock.patch.object(ec, "_get_json", side_effect=lambda url, n: partial if "CY2025" in url else full):
++            year, m = ec.latest_annual_eps(date(2026, 2, 1))
++        self.assertEqual(year, 2024)
++        self.assertEqual(len(m), ec._FRAME_MIN_FILERS)
++        with mock.patch.object(ec, "_get_json", return_value=None):
++            self.assertEqual(ec.latest_annual_eps(date(2026, 2, 1)), (None, {}))
++
++    def test_ticker_ciks_and_cik_for(self):
++        data = {"0": {"ticker": "BRK-B", "cik_str": 1067983}, "1": {"ticker": "x"}}
++        with mock.patch.object(ec, "_get_json", return_value=data):
++            self.assertEqual(ec.cik_for("brk.b"), 1067983)
++            self.assertIsNone(ec.cik_for("NOPE"))
++
++
++if __name__ == "__main__":
++    unittest.main()
++
++
++class EnrichValuation(unittest.TestCase):
++    ROWS = [{"sym": "UBER", "m": {"last": 69.0}}]
++
++    def _run(self, price, splits, year=2025):
++        with mock.patch.object(qt, "_sp500_now", return_value=(MEMBERS, "2026-09-27")), \
++                mock.patch.object(ec, "ticker_ciks", return_value={t: i for i, t in enumerate(sorted(SIC))}), \
++                mock.patch.object(ec, "latest_annual_eps", return_value=(year, {i: EPS[t] for i, t in enumerate(sorted(SIC))})), \
++                mock.patch.object(ec, "sic_codes", return_value={i: SIC[t] for i, t in enumerate(sorted(SIC))}), \
++                mock.patch.object(alpaca_data, "get_latest_trades", return_value=price), \
++                mock.patch.object(alpaca_data, "get_split_dates", return_value=splits):
++            rows = [dict(r) for r in self.ROWS]
++            note = qt.enrich_valuation(rows)
++        return rows[0], note
++
++    def test_outage_never_blames_the_industry(self):
++        for price, splits, year in ((None, {}, 2025), (PX, None, 2025), (PX, {}, None)):
++            r, note = self._run(price, splits, year)
++            self.assertEqual(r["peer"], {})
++            self.assertIn("unavailable", note)
++            self.assertIn("No peer comparison available this run", qt.name_lines(r)[1])
++
++    def test_normal_and_split_withholding(self):
++        r, note = self._run(PX, {})
++        self.assertEqual(r["px"], 69.60)
++        self.assertEqual(r["peer"]["status"], "ok")
++        self.assertIn("as of 2026-09-27", note)
++        r, _ = self._run(PX, {"UBER": ["2026-05-01"]})
++        self.assertEqual(r["peer"]["status"], "split")
++        self.assertEqual(r["splits"], ["2026-05-01"])
++
++
++class SplitDates(unittest.TestCase):
++    def test_parses_both_kinds_and_failure(self):
++        body = {"corporate_actions": {"forward_splits": [{"symbol": "NFLX", "ex_date": "2025-11-17"}],
++                                      "reverse_splits": [{"symbol": "X", "process_date": "2026-01-05"}]}}
++        with mock.patch.object(alpaca_data.requests, "get", return_value=_resp(200, body)):
++            self.assertEqual(alpaca_data.get_split_dates(["NFLX", "X"], "2025-01-01", "2026-09-27"),
++                             {"NFLX": ["2025-11-17"], "X": ["2026-01-05"]})
++        with mock.patch.object(alpaca_data.requests, "get", return_value=_resp(500)):
++            self.assertIsNone(alpaca_data.get_split_dates(["NFLX"], "2025-01-01", "2026-09-27"))
++
++
++class FrameCoverage(unittest.TestCase):
++    def test_requires_member_coverage(self):
++        thin = {"data": [{"cik": 1, "val": 1.0}]}
++        full = {"data": [{"cik": c, "val": 1.0} for c in (1, 2, 3, 4, 5)]}
++        with mock.patch.object(ec, "_get_json", side_effect=lambda url, n: thin if "CY2025" in url else full):
++            self.assertEqual(ec.latest_annual_eps(date(2026, 2, 1), [1, 2, 3, 4, 5])[0], 2024)
