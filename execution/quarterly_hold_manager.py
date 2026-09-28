@@ -74,8 +74,19 @@ _HARD_FLOOR_PCT = 0.15  # 15% hard floor from entry (ATR or floor, whichever is 
 # existing hold (grandfathered over-cap LLY/GEV stay). A new-entry tranche that would breach is
 # BLOCKED; a dip-add is CLAMPED to remaining room (partial) and skipped if room < 1 share. The
 # gate FAILS CLOSED (blocks) when equity or any held position's live price cannot be read.
-_QHM_AGG_CAP_PCT = 0.40       # aggregate: total QHM market value <= 40% of account equity
-_QHM_PER_NAME_CAP_PCT = 0.20  # hard per-name ceiling: any single QHM name <= 20% of equity
+_QHM_AGG_CAP_PCT = 0.40       # aggregate NEW-MONEY budget: QHM market value <= 40% of equity, EXCLUDING grandfathered holds
+_QHM_PER_NAME_CAP_PCT = 0.20  # hard per-name ceiling: any single QHM name <= 20% of equity (applies to every hold)
+# NEW-MONEY BUDGET (Rafael APPROVED 2026-09-27: "new buys get their own budget so LLY's grandfathered size no
+# longer blocks them; the 20% per-stock limit still applies; LLY is never auto-trimmed"). A hold is GRANDFATHERED
+# when it already held shares from an entry dated BEFORE the cap took effect (commit 350d905, 2026-09-06) — today
+# LLY (entry 2026-08-24) and GEV (entry 2026-08-19). Exemption is PER SHARE: the shares such a hold had when the
+# budget was introduced are recorded ONCE in their own state file (not a HoldPosition field, so an older build can
+# still load quarterly_holds.json after a rollback) and excluded from the aggregate; any share added later counts
+# as new money for every buy. The per-name 20% ceiling applies to the whole position, which blocks adds to LLY/GEV
+# while they are over it. Eligibility is derived from each hold's own entry_day. If the baseline file is present
+# but unreadable, NO shares are exempt (every share counts → buys are blocked, the conservative direction).
+_QHM_CAP_EFFECTIVE_DATE = "2026-09-06"
+_GRANDFATHER_STATE_PATH = _ROOT / "data" / "state" / "qhm_grandfathered.json"
 
 # Entry schedule — board-approved S48b
 _TRANCHE_FRACTIONS = [1 / 3, 1 / 3, 1 / 3]
@@ -516,6 +527,10 @@ class QuarterlyHoldManager:
                 HoldState.PENDING_EARNINGS,
             ):
                 _quarterly_hold_symbols.add(sym)
+
+        # NEW-MONEY BUDGET: record, once, the pre-cap share count of every grandfathered hold. Safe to
+        # take today's qty: the cap (2026-09-06) has blocked every add to these over-cap holds since then.
+        self._gf_shares: dict[str, int] = self._init_grandfathered_baseline()
 
         if dry_run:
             _run_beck_tests(self)
@@ -1828,11 +1843,11 @@ class QuarterlyHoldManager:
             if add_qty > _cap_room:
                 if _cap_room < 1:
                     logger.info(
-                        "QHM dip-add: %s at/over QHM cap (agg 40%%/name 20%%) — skip add",
+                        "QHM dip-add: %s at/over QHM cap (new-money agg 40%%/name 20%%) — skip add",
                         pos.symbol)
                     return
                 logger.info(
-                    "QHM dip-add: %s clamped %d→%d sh by QHM cap (agg 40%%/name 20%%)",
+                    "QHM dip-add: %s clamped %d→%d sh by QHM cap (new-money agg 40%%/name 20%%)",
                     pos.symbol, add_qty, _cap_room)
                 add_qty = _cap_room
 
@@ -2866,7 +2881,7 @@ class QuarterlyHoldManager:
             if qty > _room:
                 logger.info(
                     "QuarterlyHoldManager: %s tranche %d — would breach QHM cap "
-                    "(agg 40%%/name 20%%): need %d sh, room %d — entry BLOCKED",
+                    "(new-money agg 40%%/name 20%%): need %d sh, room %d — entry BLOCKED",
                     pos.symbol, pos.tranche, qty, _room)
                 return False
 
@@ -3237,9 +3252,88 @@ class QuarterlyHoldManager:
                 pos.symbol, e,
             )
 
-    def _qhm_total_notional(self) -> Optional[float]:
-        """Total live market value of ALL QHM holds (every position with qty_filled > 0),
-        priced live. FAIL-CLOSED for the exposure cap: returns None if ANY held position's
+    @staticmethod
+    def _is_grandfathered(pos: "HoldPosition") -> bool:
+        """True iff the hold held shares from an entry dated BEFORE the cap took effect
+        (_QHM_CAP_EFFECTIVE_DATE). No shares, no entry_day or an unparseable entry_day -> NOT
+        grandfathered (counted as new money: the conservative direction)."""
+        if not (pos.qty_filled and pos.qty_filled > 0 and pos.entry_day):
+            return False
+        try:
+            return date.fromisoformat(str(pos.entry_day)[:10]) < date.fromisoformat(_QHM_CAP_EFFECTIVE_DATE)
+        except ValueError:
+            return False
+
+    def _init_grandfathered_baseline(self) -> dict[str, int]:
+        """Load the recorded pre-cap share baseline; record any grandfathered hold not yet in it
+        (never overwrite an existing entry). Absent file -> start from {}. Present-but-unreadable
+        file -> return {} WITHOUT writing (no exemptions: every share counts, buys blocked) + CRITICAL."""
+        base: dict[str, int] = {}
+        if _GRANDFATHER_STATE_PATH.exists():
+            try:
+                raw = json.loads(_GRANDFATHER_STATE_PATH.read_text())
+                base = {str(k): int(v) for k, v in raw.items()}
+            except Exception as e:  # RC-3: corrupt -> no exemptions, never rewritten blind
+                logger.critical(
+                    "QHM new-money budget: %s unreadable (%s) — NO grandfathered exemptions this run "
+                    "(all QHM shares count against the 40%% budget). Restore the file.",
+                    _GRANDFATHER_STATE_PATH, e)
+                return {}
+        changed = False
+        for sym, pos in self._positions.items():
+            if (sym not in base and pos.state != HoldState.CLOSED
+                    and self._is_grandfathered(pos)):
+                base[sym] = int(pos.qty_filled or 0)
+                changed = True
+        if changed:
+            self._save_grandfathered_baseline(base)
+            logger.info("QHM new-money budget: recorded grandfathered baseline %s", base)
+        return base
+
+    def _save_grandfathered_baseline(self, base: dict[str, int]) -> None:
+        """Atomic tmp->fsync->replace (RC-5). A failed save only means the same values are
+        recorded/ratcheted again next time (the in-memory copy is already correct)."""
+        if self.dry_run:
+            return
+        try:
+            _GRANDFATHER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _GRANDFATHER_STATE_PATH.with_suffix(".tmp")
+            with open(tmp, "w") as f:
+                json.dump(base, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(_GRANDFATHER_STATE_PATH)
+        except Exception as e:  # RC-3
+            logger.warning("QHM new-money budget: baseline save failed: %s", e)
+
+    def _grandfathered_shares(self, pos: "HoldPosition") -> int:
+        """Shares of this hold exempt from the new-money budget: its recorded pre-cap share count,
+        never more than it holds now (a trim/stop-out shrinks the exemption, an add never grows it).
+        Only holds that are still pre-cap entries qualify (a closed-and-re-entered name does not)."""
+        if not self._is_grandfathered(pos):
+            return 0
+        _gf = getattr(self, "_gf_shares", None)
+        if not _gf:
+            return 0
+        gq = _gf.get(pos.symbol, 0)
+        if not gq or gq <= 0:
+            return 0
+        held = int(pos.qty_filled)
+        if held < gq:
+            # ONE-WAY RATCHET: the exemption only ever shrinks to the lowest share count seen, so a
+            # share sold (trim / stop / manual) and bought back later counts as NEW money (risk seat
+            # 2026-09-28). Persisted so a restart cannot restore the old, larger exemption.
+            _gf[pos.symbol] = max(held, 0)
+            self._save_grandfathered_baseline(_gf)
+            logger.info("QHM new-money budget: %s grandfathered exemption ratcheted %d -> %d",
+                        pos.symbol, gq, max(held, 0))
+            return max(held, 0)
+        return int(gq)
+
+    def _qhm_total_notional(self, exclude_grandfathered: bool = False) -> Optional[float]:
+        """Total live market value of QHM holds (every position with qty_filled > 0; with
+        exclude_grandfathered=True only the pre-cap grandfathered SHARES are left out — the NEW-MONEY
+        budget basis), priced live. FAIL-CLOSED for the exposure cap: returns None if ANY counted held position's
         live price cannot be read, so the cap caller BLOCKS rather than under-counting
         exposure and letting a breach through. Distinct from _get_quarterly_notional_excl,
         which excludes self, filters by state, and treats an unreadable price as 0 (safe for
@@ -3248,7 +3342,10 @@ class QuarterlyHoldManager:
         of its state label (closes the roadmap-flagged state-filter gap)."""
         total = 0.0
         for sym, pos in self._positions.items():
-            if not pos.qty_filled or pos.qty_filled <= 0:
+            if not pos.qty_filled or pos.qty_filled <= 0 or pos.state == HoldState.CLOSED:
+                continue   # CLOSED keeps a stale qty_filled after an external close — it holds nothing
+            counted = pos.qty_filled - (self._grandfathered_shares(pos) if exclude_grandfathered else 0)
+            if counted <= 0:
                 continue
             p = self._get_live_price(sym)
             if not p or p <= 0:
@@ -3256,12 +3353,13 @@ class QuarterlyHoldManager:
                     "QHM cap: live price unavailable for held %s — fail-closed (blocking add)",
                     sym)
                 return None
-            total += p * pos.qty_filled
+            total += p * counted
         return total
 
     def _qhm_cap_room_shares(self, symbol: str, live_price: float, equity: float) -> Optional[int]:
         """Max additional whole shares of `symbol` allowed before hitting the LOWER of the
-        aggregate 40% cap and the per-name 20% ceiling (Rafael 2026-09-06). Returns:
+        aggregate 40% NEW-MONEY budget (grandfathered holds excluded — Rafael 2026-09-27) and the
+        per-name 20% ceiling (Rafael 2026-09-06). Returns:
           None -> FAIL-CLOSED, caller must BLOCK (equity<=0, live_price<=0, or aggregate
                   notional unreadable);
           0    -> no room (already at/over a cap);
@@ -3270,10 +3368,12 @@ class QuarterlyHoldManager:
         caller must apply this BEFORE any max(int(x),1) zero-share re-inflation)."""
         if equity <= 0 or not live_price or live_price <= 0:
             return None
-        total = self._qhm_total_notional()
+        pos = self._positions.get(symbol)
+        # Every buy is new money, measured against the new-money book (only the pre-cap grandfathered
+        # SHARES are excluded — added shares always count, so nothing leaks, whatever the buy order).
+        total = self._qhm_total_notional(exclude_grandfathered=True)
         if total is None:
             return None
-        pos = self._positions.get(symbol)
         cur_sym = (live_price * pos.qty_filled) if (pos and pos.qty_filled and pos.qty_filled > 0) else 0.0
         agg_room = _QHM_AGG_CAP_PCT * equity - total          # aggregate headroom ($)
         name_room = _QHM_PER_NAME_CAP_PCT * equity - cur_sym  # per-name headroom ($)
