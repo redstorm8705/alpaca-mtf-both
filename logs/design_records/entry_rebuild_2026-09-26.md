@@ -305,7 +305,7 @@ Rafael (2026-09-27): a swing trade is decided by the signal that TRIGGERS the en
 Tool: `research/c2_trigger_lab.py` (offline; same data, universe, eligibility, costs, and R labels as lab step 3).
 
 **Triggers (all on CLOSED daily bars; decision at close t, entry at open t+1; one open trade per stock):**
-- **T1 breakout → back-test → hold (Rafael's preferred)**: level L = highest high of the prior 252 sessions (excl. day t).
+- **T1 breakout → back-test → hold (Rafael's starting-point suggestion)**: level L = highest high of the prior 252 sessions (excl. day t).
   Breakout = a close above L. Then within the next 1–10 sessions: a low ≤ L + 0.25·ATR14 AND a close ≥ L (the hold) → trigger.
   Variants: T1 (no volume filter), T1v (breakout-day volume ≥ 1.5 × 50-day average).
 - **T2 base breakout (Darvas / VCP / NR family)**: prior-20-session range ÷ ATR14 in the bottom 20% of its own 252-session
@@ -328,3 +328,54 @@ the matched-random yearly mean in ≥ 6 of 8 years (2019–2026); (3) Deflated S
 label × cost run in this step; (4) PBO ≤ 0.05 by CSCV over the variant × year matrix; (5) ≥ 1.2 triggers/day across the
 universe (today's swing entry rate). A trigger that passes becomes the Confluence 2.0 swing entry candidate and goes to the
 board + Gro + GAI (risk-path: entry frequency). If none passes, that is reported plainly and nothing ships.
+
+### Lab step 4 — result v1 (2026-09-27 night, Claude-signed; PRE-REVIEW — cold-2nd/adversarial pending)
+Out of sample 2019–2026, 42 variant × label × cost runs. **Under the pre-registered pass rule, nothing passes** (PBO = 0.29 over
+the full variant matrix, above the 0.05 ceiling; every DSR ≈ 0.00).
+- **T1 breakout → back-test → hold (Rafael's starting-point suggestion, not a directive): no edge.** 20d: −0.010R vs matched random +0.007 (band −0.013…+0.032),
+  beats random in 3/8 years; with volume (T1v) −0.008 vs +0.025, 3/8.
+- **T2/T3/T4 base and Stage-2 breakouts: no edge** (all at or below matched random; T2 60d below the random 5th pct).
+- **Shorts T1s/T2s: lose, at or below random.** T6 (1-month reversal) fires only 0.3–0.4/day here (2 names/day minus cooldown
+  and eligibility) and is inside the random band.
+- **T5 pullback in an uptrend (close > 200-day SMA, RSI(2) < 10) is the one signal above the matched-random 95th percentile on
+  EVERY label and cost:** 20d +0.081 vs +0.050 (band 0.039–0.060), 6/8 years; 60d +0.142 vs +0.113 (…0.137), 6/8; 5d +0.035 vs
+  +0.012 (…0.019), 7/8; spread-aware cost 20d +0.067 vs +0.037, 6/8. Fires 8.5/day across the universe. It fails the DSR and
+  PBO legs of the pre-set rule. `[hypothesis — unverified]` the DSR leg is mis-specified: trials_sr_std (0.10) is the Sharpe
+  dispersion across long AND short families, whose Sharpes differ structurally (not by noise), which inflates the expected-max
+  benchmark; this choice was not pre-registered, so the result stands as FAIL and is not re-scored.
+- **Confirmatory holdout (pre-registered here, before running):** T5 has no fitted parameters and 2017–2018 were never part of
+  the test period, so T5 is re-run on 2017-01 → 2018-12 only, same labels/costs/matched-random. Pass = mean R above the
+  matched-random 95th percentile on the 20d/c10 label AND beats the matched-random yearly mean in both 2017 and 2018.
+- **Holdout 2017–2018 result: T5 FAILS the pre-registered confirmatory test** on the primary 20d/c10 label: +0.054R vs
+  matched random +0.049 (band 0.030–0.072) — not above the 95th pct; beats random in both years only marginally (2017 +0.224
+  vs +0.222; 2018 −0.132 vs −0.141). On the 60d label it is above the band (+0.197 vs +0.141, band …0.185; both years), and
+  at 5d it is below random. So the 2019–2026 T5 edge does not confirm on the primary label.
+- **Rafael correction (2026-09-27):** break → back-test → hold was a starting-point suggestion; the BGGN leads what the swing
+  strategy should be, from the evidence, with unlimited research resources. Next: BGGN strategy session on labs 3–4.
+
+## Confluence 2.0 swing design UPDATE — APPROVED by Rafael 2026-09-28 (Claude-signed)
+**Alignment:** board 4/4 cold seats (LdP+Tulchinsky, Asness+J&T+Weinstein, Thorp+Taleb, Harris+Kyle+McKinney) + GAI APPROVE;
+Gro skipped (Groq quota/packet size — Rafael: "skip groq if it can't handle the packets"). Inputs: labs 3–4 above + a fresh
+Gro/GAI derivation that the board reviewed against the aligned design.
+
+**Why:** the 5 historically-testable slot features have ~zero cross-sectional IC (|t| ≤ 1.74); under the design's own IC-floor
+rule their weights collapse to 0, so the IC-weighted slot score would trade at random. Today's score proxy is also null.
+
+**Approved changes:**
+1. **Event-first swing.** Pre-registered entry setups ("primary events") decide side and timing, longs AND shorts:
+   pullback-in-uptrend (T5, leading candidate; must pass a holdout it has never seen), break → back-test → hold on true RTH
+   4-hour bars, mean-reversion shorts of extended moves (untested), plus further catalog setups. Each must beat matched random.
+2. **8 slots stay** (monitored/replaced as designed) but become inputs to the meta-label P(win) that SIZES each event
+   (within existing Kelly/gross caps), not a ranking score.
+3. **Lab harness v2 before any new run:** gap-aware stop fills (fill at the open when price gaps through), spread-aware cost
+   by default, metric = excess R over a characteristic-matched random baseline, DSR on a daily excess-P&L series with an
+   effective trial count (clustered), PBO per family, a global trial ledger, per-regime IC, tier-matched outcome labels.
+4. **Data:** RTH 4-hour bars are built from 30-minute SIP bars (verified: Alpaca's 09:00 ET 1-hour bar includes pre-market —
+   AAPL 2026-09-24: 68,559 + 3,203,928 = 3,272,487 shares). Fetch 30-minute (swing trigger) and 1-minute (day-trade tier)
+   history outside market hours, paced so the live bot is never slowed.
+5. **Validation scope (Rafael 2026-09-28):** 10-year point-in-time universe for power and ≥2 regimes, recent year weighted
+   most; every setup ALSO must hold on the Mag-7 slice before it trades Mag-7 names live. Each tier tested on its own horizon.
+**Rejected (board):** drawdown halts, move-to-cash brakes, a short ban, win-rate / ad-hoc Sharpe pass bars, the top-50 universe
+shrink, post-hoc filters tuned to the spent 2017–2018 holdout; citations "Dijkstra 2020" and "Corcos & Avellaneda 2021" flagged
+as likely non-existent.
+**Next:** harness v2 → data fetch (off-hours) → pre-registered event families (long + short) → 4-hour trigger test.
