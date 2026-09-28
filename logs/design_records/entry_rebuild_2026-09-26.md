@@ -238,3 +238,93 @@ Verified at source:
 - **Limit:** Alpaca SIP history starts 2016-01-04, so 252-day features begin about 2017-01.
 - **Live trial:** TWTR, SIVB, META (Facebook prices in 2016), BKNG and SPY all correct.
 - **Reviews:** cold review round 1 FAILED on reused-ticker merging and was fixed with one job per interval; round 2 PASS.
+
+## Lab step 3 — swing-feature walk-forward (2026-09-27, Claude-signed)
+- **Tool:** `research/c2_swing_lab.py` (offline; reads lab steps 1–2 only; writes `logs/lab/c2/`).
+- **Test:** the six daily/weekly features available historically (52-week-high proximity, residual 12-1 momentum vs a
+  dynamically-assigned sector ETF, frog-in-the-pan continuity, sector RS, weekly EMA13/30 trend, signed efficiency ratio),
+  cross-sectionally ranked each day over the point-in-time S&P 500 + NDX universe (price ≥ $5, 20-day median dollar
+  volume ≥ $20M). PEAD/SUE and IV skew have no free 10-year history and are not in this test.
+- **Label:** next-open entry, stop 1.5 ATR, target 2.5 ATR, 20-session vertical exit, stop-first on same-bar hits,
+  10 bps round-trip cost, outcome in R.
+- **Comparison:** equal-weight and IC-weighted composites vs a random pick from the same universe and a daily proxy
+  of today's 12-point score; top-k per day (k = 1–3; today's live rate is ~1.2 swing entries/day, 39 long + 13 short
+  since 2026-07-29), 20-session per-ticker cooldown; walk-forward by calendar year from 2019, weights fit only on
+  prior years with a 25-session purge+embargo gap.
+- **Ship rule:** a composite ships only if it beats both baselines out of sample, per year, and passes DSR against
+  every variant tried. If it does not, that is reported and nothing ships.
+
+### Lab step 3 — result (2026-09-27 evening, Claude-signed; round 3 after two cold-2nd FAILs + adversarial corrections): NO out-of-sample edge in the selection features; C2 swing score does NOT ship
+Scope note (Rafael, 2026-09-27): this tests only the RANKING half of the swing design (which names to watch), entering
+every top pick at the next open. The ENTRY TRIGGER half (break of a meaningful level → back-test → hold, with volume) is
+NOT tested here; that is lab step 4, an event test of the track-C setups. The 20/60-day horizons are only the outcome
+window, not a strategy choice.
+
+Method: out-of-sample 2019–2026-09, ~503 eligible names/day (median; one column per stock per day), walk-forward by year, purge
++ embargo = horizon + 5 sessions, 10 bps round-trip cost, per-stock cooldown = horizon. Frog-in-the-pan multiplies residual
+momentum (long: smooth winners; short: smooth losers). IC weights fit on cost-free R. Random = 100 draws from the same
+eligible universe with the same cooldown (per-year random means: 20 separate draws). Module docstring's
+"25-day purge" text is stale; the code uses horizon + 5. Fixes vs round 1: cost-tiebreak IC artifact, cooldown binding, duplicate
+columns, standalone FIP, horizon-scaled purge, 20→100 random draws.
+
+Mean R per trade (R = amount risked), longs:
+
+| Horizon / picks per day | C2 equal | C2 IC-weighted | today's-score proxy | random (5th–95th pct) | 1-month reversal control |
+|---|---|---|---|---|---|
+| 20d (1.5/2.5 ATR), 1/day | +0.009 | +0.071 | +0.066 | +0.065 (0.027–0.110) | +0.054 |
+| 20d, 2/day | +0.034 | +0.043 | +0.058 | +0.067 (0.042–0.092) | +0.076 |
+| 20d, 3/day | +0.015 | +0.048 | +0.048 | +0.067 (0.046–0.090) | +0.087 |
+| 60d (2/4 ATR), 1/day | +0.113 | +0.115 | +0.100 | +0.126 (0.074–0.176) | +0.130 |
+| 60d, 2/day | +0.116 | +0.119 | +0.107 | +0.129 (0.096–0.165) | +0.174 |
+| 60d, 3/day | +0.126 | +0.138 | +0.115 | +0.128 (0.102–0.152) | +0.165 |
+
+- **Selection features: no edge (long side).** No long C2 cell is above the random 95th percentile; all three 20-day C2
+  equal-weight cells are BELOW the 5th (1/day +0.009 vs 0.027; 2/day +0.034 vs 0.042; 3/day +0.015 vs 0.046). On the short
+  side 3 of 12 C2 cells lose LESS than random's 95th pct (20d 1/day IC-weighted −0.081 vs −0.087; 60d 2/day equal −0.136 and
+  IC-weighted −0.130 vs −0.139), but every one still loses money and short-side ICs are ≈0 — not tradeable. Against random in each year, C2 beats the random yearly mean
+  in 1–5 of 8 years depending on the cell (e.g. 20d 3/day IC-weighted 1/8, 60d 2/day equal 5/8). Whole-cross-section rank IC
+  on cost-free labels (long side, mean of yearly means): hi52 −0.006/−0.014, residual momentum×FIP +0.006/+0.005,
+  sector RS −0.014/−0.017, weekly trend −0.007/−0.010, efficiency ratio −0.011/−0.014 (20d/60d). Yearly ICs: |t| ≤ 1.74, mixed signs — null, not anti-predictive.
+- **Today's-score proxy: no edge** (IC −0.008/−0.013; ~93 names/day (median) tie at 6/6, so it is effectively a trend filter).
+- **Shorts: every method loses after costs** (20d −0.081 to −0.152R/trade, 60d −0.130 to −0.219R; random −0.118/−0.167;
+  no borrow cost modelled, which would only deepen the losses).
+- **Lead, not a result:** the 1-month reversal CONTROL (buy the worst 21-day performers) is above the random 95th pct in
+  2 of 6 long cells (60d 2/day +0.174 vs 0.165; 60d 3/day +0.165 vs 0.152) and beats the random yearly mean in 7 of 8
+  years at 60d 2/day (misses 2024: +0.05 vs +0.15), 6/8 at 60d 3/day and 20d 3/day. It was a sanity control, not a
+  pre-registered hypothesis. Caveats from the adversarial review: reversal picks are higher-volatility (ATR 3.6–4.9% vs 2.8%),
+  so a flat 10 bps cost flatters them; they lose about twice as many labels to data ending mid-trade. Its proper test
+  needs a spread-aware cost, delisting handling and DSR against every variant.
+- `[hypothesis — unverified]` random longs earn +0.07R (20d) / +0.13R (60d) from market drift; a stop/target structure
+  cannot create expectancy on its own.
+- Power: trades overlap in time, so the naive SE (~0.029R at n≈1,935) understates uncertainty; the cross-section IC is
+  the stronger null evidence.
+- Results: `logs/lab/c2/c2_swing_lab_results_{h20,h60}.json` (local lab output, gitignored).
+
+## Lab step 4 — entry-trigger event test: PRE-REGISTRATION (2026-09-27, Claude-signed, written BEFORE any run)
+Rafael (2026-09-27): a swing trade is decided by the signal that TRIGGERS the entry, not by ranking; test the triggers.
+Tool: `research/c2_trigger_lab.py` (offline; same data, universe, eligibility, costs, and R labels as lab step 3).
+
+**Triggers (all on CLOSED daily bars; decision at close t, entry at open t+1; one open trade per stock):**
+- **T1 breakout → back-test → hold (Rafael's preferred)**: level L = highest high of the prior 252 sessions (excl. day t).
+  Breakout = a close above L. Then within the next 1–10 sessions: a low ≤ L + 0.25·ATR14 AND a close ≥ L (the hold) → trigger.
+  Variants: T1 (no volume filter), T1v (breakout-day volume ≥ 1.5 × 50-day average).
+- **T2 base breakout (Darvas / VCP / NR family)**: prior-20-session range ÷ ATR14 in the bottom 20% of its own 252-session
+  history (contraction) and today's close > the prior 20-session high. Variants: T2, T2v (volume ≥ 1.5×).
+- **T3 base breakout → back-test → hold**: T2's breakout, then T1's back-test/hold rule against the base top.
+- **T4 Stage-2 style**: close > prior 130-session high, volume ≥ 2 × 50-day average, 30-week SMA rising over 4 weeks.
+- **T5 pullback in uptrend (Connors)**: close > SMA200 and RSI(2) < 10.
+- **T6 1-month reversal (lab-3 lead)**: the 2 names/day with the worst 21-day return (same as lab 3's control).
+- **Shorts, mirrored**: T1s (52-week-low breakdown → back-test from below → fail), T2s (base breakdown).
+
+**Labels:** primary 20 sessions, stop 1.5 ATR / target 2.5 ATR; secondary 60 sessions, 2 / 4 ATR; T5 also 5 sessions,
+1.5 / 2.5 ATR (its published holding period). Cost: 10 bps round trip, plus a sensitivity run at 10 bps + 0.02 × ATR%
+(spread-aware, penalizes volatile names). Stop-first on same-bar hits.
+
+**Baseline:** for each trigger, 100 matched random draws: on every trigger day, the same number of names drawn at random from
+that day's eligible universe, same cooldown and same label.
+
+**Pass rule (all required, pre-set):** (1) mean R above the matched-random 95th percentile on the primary label; (2) beats
+the matched-random yearly mean in ≥ 6 of 8 years (2019–2026); (3) Deflated Sharpe ≥ 0.9 with n_trials = every variant ×
+label × cost run in this step; (4) PBO ≤ 0.05 by CSCV over the variant × year matrix; (5) ≥ 1.2 triggers/day across the
+universe (today's swing entry rate). A trigger that passes becomes the Confluence 2.0 swing entry candidate and goes to the
+board + Gro + GAI (risk-path: entry frequency). If none passes, that is reported plainly and nothing ships.
