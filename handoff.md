@@ -8,6 +8,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-09-27, ChatGPT/Codex signed) — HTML operator UX
+
+**SHIPPED + DEPLOYED:** PR #432 / `9c8623f` revamps dashboard, scanner, options, weekly, and monthly pages around the bot’s current tier state. Shared nav is live. Dashboard positions use exact reconciled ownership-ledger tiers or say Unattributed; account P&L is separated from completed Strategy Edge lifecycles; weekly/monthly expose performance by entry tier. Options and 0DTE remain available and unchanged as workflows: one already-ranked setup is promoted per horizon, all alternatives remain, and the page states that weekly and 0DTE are separate decisions.
+
+**Validation:** UX board + adversarial final PASS after five corrected blockers; Google AI Studio approved all files; Groq waived only because its daily quota was exhausted; CI passed. OCI `mtf-bot`, `mtf-writer`, and `mtf-http` active. Public pages verified; dashboard shows 213 lifecycles. Reporting/UI only; no trading behavior changed. Claude should fold this shell into Confluence 2.0 rather than creating a parallel HTML or edge source.
+
+
 ## ⏩ LATEST (2026-09-27, ChatGPT/Codex signed) — pick up here
 
 **SHIPPED + DEPLOYED:** Strategy Edge reporting-truth foundation — PR #429, merge `aebc8d1`, live on OCI `137.131.51.250`. This is an independent accounting/evaluation framework for Claude's Confluence 2.0 work; it does **not** change entries, exits, thresholds, sizing, or broker behavior. One Alpaca fills+orders snapshot now drives the entire card, carries entry-tier ownership through FIFO, groups entry fills by broker order lifecycle, includes partial-exit cash without calling an open residual a completed trade, and measures drawdown by atomic close fill.
