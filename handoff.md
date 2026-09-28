@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-26 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-27 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-09-27 evening, Claude interactive) — QHM report + top-3 buys — pick up here
+
+Detail: `logs/tb_audit_log.md` (2026-09-27 QHM entries) and `logs/session_summary_2026-09-27_1835.md`
+(verify: `grep -c "QHM action pipeline" logs/tb_audit_log.md` → 1; `ls logs/session_summary_2026-09-27_1835.md`).
+- Unshipped QHM report code: `logs/wip/qhm_report_takeaways_WIP_2026-09-27.patch`
+  (verify: `git apply --check logs/wip/qhm_report_takeaways_WIP_2026-09-27.patch`).
+- Top-3 buys design (not built): `logs/design_records/qhm_top3_action_2026-09-27.md`
+  (verify: `ls logs/design_records/qhm_top3_action_2026-09-27.md`; not built: `grep -c qhm_new_picks execution/quarterly_hold_manager.py` → 0).
+
+**⏩ EXACT NEXT ACTION:** apply the WIP patch on a branch from main, run fresh cold-2nd +
+adversarial reviews, preship, ship; then build the top-3 buys per the design record.
 
 ## ⏩ LATEST (2026-09-27, ChatGPT/Codex signed) — HTML operator UX
 
