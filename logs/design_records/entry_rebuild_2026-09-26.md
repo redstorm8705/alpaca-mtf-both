@@ -401,3 +401,18 @@ to a trial ledger (`logs/lab/c2/trial_ledger.jsonl`).
 (2019–2026); for shorts ALSO absolute mean R > 0 after costs; ≥ 1.2 events/day for the family set; AND the Mag-7 slice
 (AAPL MSFT NVDA AMZN GOOGL META TSLA) mean excess > 0. Also reported: per-regime (SPY above/below SMA200 × SPY 20-day realized
 vol tercile) excess. Nothing ships from this step; a pass goes to the board + Rafael.
+
+### Lab step 5 — result (2026-09-28, Claude-signed; cold+adversarial review PASS on the harness)
+Out of sample 2019–2026, gap-aware fills, spread-aware cost, exact matched baseline. **No pre-registered variant passes**
+(every Newey-West t < 3.0; family PBO LONG-MR 0.72, SHORT-MR 0.77). Mean excess R per trade vs the matched baseline:
+- LONG-MR (pullbacks in uptrends): L1 RSI(2)<10 +0.021 (5d) / +0.027 (10d, t 1.88, 6/8 yrs); L2 three down closes +0.014 /
+  +0.018; L3 21-day bottom 2% +0.011 / +0.008. **Mag-7 slice is positive for all LONG-MR variants (+0.10 to +0.15R, n 358–475
+  for L1/L2)** but the reviewer's Mag-7-own-baseline check gives incremental t ≤ 1.06 — not significant.
+- LONG-BRK B1 (daily break → back-test → hold): −0.026, 3/8 yrs.
+- SHORT-MR: S1 +0.023/+0.034 excess but absolute R −0.048/−0.086 (loses money); S2 stretched fade and S3 5-day top-2%
+  both ≈ 0 excess and lose money; Mag-7 excess negative for all shorts.
+- Reviewer notes carried forward: family PBO ≤ 0.05 is near-unsatisfiable when variants are near-duplicates (h5/h10 of one
+  event) — the next pre-registration should use one primary horizon per event; report day-weighted and trade-weighted means.
+**Reading:** the pullback-in-uptrend family is the only consistent positive, strongest on Mag-7, but not statistically
+established on daily bars. Next: the 4-hour trigger tests (30-minute data) and meta-labeling the pullback family with the slot
+features, one primary horizon per event.
