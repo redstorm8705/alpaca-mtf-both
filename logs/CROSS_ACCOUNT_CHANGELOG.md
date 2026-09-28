@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-27 17:05 PT]` **ChatGPT/Codex:** revamped all five generated HTML operator pages around current tier truth; preserved weekly/0DTE recommendations, added one clear primary action per horizon, exact ownership labels, and account-vs-lifecycle reporting. BGGN/UX/adversarial/CI passed; live pages and three OCI services verified. — PR #432 / `9c8623f` — dashboard/scanner/options/weekly/monthly generators, shared HTML UI, tests
+
 - `[2026-09-27 12:10 PT]` **ChatGPT/Codex:** rebuilt Strategy Edge as a fail-closed, broker-authoritative lifecycle report for Confluence 2.0 to consume; no trading behavior changed. Board/adversarial/BGG gates, CI, OCI tests, live ledger render, and service health passed. — PR #429 / `aebc8d1` — reporting/pnl_ledger.py, reporting/report_figures.py, monthly_review.py, tests, design record
 
 - `[2026-09-26 17:58 PT]` **ChatGPT/Codex:** fixed Day Tier actual-fill exit geometry and fail-closed reducer recovery; removed the false weekly “dollars left on table” aggregate; full BGG + CI passed and OCI deploy verified. — PR #411 / `42a6246` — execution/day_trade_manager.py, weekly_postmortem.py, tests, design record

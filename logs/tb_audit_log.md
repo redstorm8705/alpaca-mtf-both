@@ -11177,3 +11177,12 @@ E0 review rounds: cold-2nd r1 PASS; adversarial r1 FAIL (ClosedBars alias bypass
 **Next:** after Claude ships Confluence 2.0, audit its edge tracking against this lifecycle contract. Preserve exact IDs and fail-closed semantics; do not create a parallel score/edge truth source.
 - 2026-09-27 lab step 2 (lab_bars + fetch_bars_window asof): final preship GAI APPROVE; Gro WAIVED — Groq daily token limit exhausted (TPD 200k) and NVIDIA substitute 404; applied the standing Rafael rule (2026-07-07) Gro-unavailable -> board majority + GAI APPROVE. One reject ('date not imported') refuted with evidence (line 21 import, ruff F821 clean). Follow-up: NVIDIA substitute model id is dead.
 - 2026-09-27 QHM full-report-in-Slack fix: final preship GAI APPROVE; Gro WAIVED on scripts/qhm_thesis.py (Groq TPD exhausted, NVIDIA substitute 404) per standing Rafael rule 2026-07-07; Gro approved the test file and design record.
+
+
+## 2026-09-27 — HTML current-state UX (ChatGPT/Codex signed)
+
+PR #432 / `9c8623f` makes the five operator pages one coherent console. The dashboard shows exact ownership-ledger tiers and a freshness/integrity-gated Strategy Edge snapshot; weekly/monthly distinguish account equity from completed broker lifecycles and expose performance by entry tier; scanner/options/weekly/monthly/dashboard share navigation. Weekly and 0DTE workflows remain intact. Options promotes one already-ranked setup per horizon and explicitly says the horizons are separate decisions.
+
+Board UX and adversarial reviews initially rejected five issues: mobile scanner overflow; weekly integrity bypass; stale/unvalidated dashboard cache; guessed QHM ownership; and malformed/unsafe options fields. All were fixed and the final reviews passed. 47 targeted tests + 18 subtests, py_compile, ruff E/W/F/B, diff check, and GitHub preship passed. Google AI Studio approved every code/test file. Groq was explicitly waived after exhausting its daily quota; NVIDIA fallback was unavailable and remains backup-only per Rafael.
+
+OCI `137.131.51.250` fast-forwarded to `9c8623f`; `mtf-bot`, `mtf-writer`, and `mtf-http` are active. All five public pages render the shared nav; dashboard displays Strategy tiers and 213 completed lifecycles. The separate `mtf-writer` required a restart because it had the old dashboard module resident. No signal, sizing, entry, exit, risk, or broker behavior changed.
