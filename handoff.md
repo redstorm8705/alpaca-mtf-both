@@ -8,6 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-09-28, Claude-signed) — Confluence 2.0 swing — pick up here
+
+Rafael APPROVED the C2 swing design update (event-first entries, slots feed the sizing model, lab harness v2, 30-min/1-min
+history, Mag-7 check). Record: `logs/design_records/entry_rebuild_2026-09-26.md` §"Confluence 2.0 swing design UPDATE"
+(verify: `grep -c "APPROVED by Rafael 2026-09-28" logs/design_records/entry_rebuild_2026-09-26.md` → 1).
+Lab step 3 (ranking features: no edge) is PR #436 (verify: `gh pr view 436 --json state`).
+**⏩ EXACT NEXT ACTION:** build lab harness v2 (`research/`), then fetch 30-min/1-min history off-hours, then run the
+pre-registered long + short event families.
+
 ## ⏩ LATEST (2026-09-27 evening, Claude interactive) — QHM report + top-3 buys — pick up here
 
 Detail: `logs/tb_audit_log.md` (2026-09-27 QHM entries) and `logs/session_summary_2026-09-27_1835.md`
