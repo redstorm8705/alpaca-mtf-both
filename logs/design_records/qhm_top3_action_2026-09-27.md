@@ -60,3 +60,22 @@ cold board + masked-loss seat + Gro + GAI on the diff, Rafael approval given 202
 Expected effect: ~3 new QHM positions per week at ~10% of equity each, bounded by 40% new-money
 aggregate. Reversal criterion: new-pick fills show negative average return after 8 weeks, or any
 naked-position incident in the stop-safe add path.
+
+## Increment 1 — new-money budget (2026-09-28, Claude-signed)
+Live evidence (OCI mtf_bot.log 2026-09-28, every RTH cycle): "NVDA/GOOGL/GE tranche 1 — would breach QHM cap (agg 40%/name
+20%): need 1 sh, room 0 — entry BLOCKED". Cause: `_qhm_cap_room_shares` counts grandfathered LLY (2 sh, ~$2,367 ≈ 93% of
+equity) and GEV (1 sh, ~$953) in the 40% aggregate, so aggregate room is negative. Fix (approved scope above): the aggregate
+counts only NON-grandfathered holds; grandfathered = holds with shares whose entry_day predates the cap (2026-09-06; LLY
+2026-08-24, GEV 2026-08-19) — derived from each hold's own entry date, not a symbol list. The 20% per-name ceiling still
+applies to every hold (blocks any add to LLY/GEV while over it); nothing is auto-trimmed; fail-closed behaviour unchanged.
+Risk-path (Rule E: allows buys where today there are none) → cold board incl. masked-loss seat + Gro + GAI on the diff.
+Sizing note: tranche size is unchanged — `available_equity = equity − other QHM notional` still subtracts LLY/GEV, so each
+tranche floors to 1 share (RC-7) today (NVDA ~$231, GOOGL ~$341, GE ~$318).
+Files: execution/quarterly_hold_manager.py, tests/test_qhm_new_money_budget.py.
+Review history (Claude-signed): board execution seat APPROVE-WITH-CHANGES (non-blocking: surface a rejected-order reason
+distinct from "cap blocked"); risk seat round 1 required per-share accounting (shares added to a grandfathered name must
+count); rounds 2–3 found an ordering leak and a trim→re-buy leak; round 4 design = per-share baseline in its own file
+(data/state/qhm_grandfathered.json, rollback-safe), one-way ratchet down, CLOSED records not counted → cold+risk PASS.
+Follow-ups (nits, not blocking): N1 absent baseline file re-records today's qty (copy the file on any box migration);
+N2 raise a failed ratchet save to CRITICAL; N3 pending unfilled QHM orders are not in the aggregate (pre-existing);
+dip-add runs before the kill-switch return in run_cycle (pre-existing; board question).
