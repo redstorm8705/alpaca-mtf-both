@@ -416,3 +416,17 @@ Out of sample 2019–2026, gap-aware fills, spread-aware cost, exact matched bas
 **Reading:** the pullback-in-uptrend family is the only consistent positive, strongest on Mag-7, but not statistically
 established on daily bars. Next: the 4-hour trigger tests (30-minute data) and meta-labeling the pullback family with the slot
 features, one primary horizon per event.
+
+## Lab step 6 — meta-label on the pullback family: PRE-REGISTRATION (2026-09-28, Claude-signed, written BEFORE any run)
+Tool: `research/c2_metalabel_lab.py` (offline; reuses lab-5 labels/baseline and lab-3 features).
+**Primary events:** L1 (close > SMA200 & RSI(2) < 10) and L2 (close > SMA200 & 3 down closes); ONE primary label each:
+10 sessions, stop 1.5 ATR / target 2.5 ATR, gap-aware fills, spread-aware cost (lab-5 harness). Longs only.
+**Meta inputs (exactly 5, fixed):** 52-week-high proximity, residual momentum × frog-in-the-pan, sector RS, RSI(2) depth,
+distance to SMA200 in ATR — each as its cross-sectional percentile rank that day.
+**Model:** L2 logistic regression (C = 1.0, standardized inputs), target = R > 0. Walk-forward by calendar year 2019–2026:
+fit on all prior years' events with a 15-session purge before the test year; predict P(win) for the test year.
+**Evaluation (out of sample):** (a) Brier score vs the base-rate Brier; (b) top tercile of P(win) within each test year:
+mean excess R over the lab-5 matched baseline, Newey-West t (lag 10) on its daily excess series, years positive;
+(c) P-weighted vs equal-weight excess; (d) Mag-7 slice of the top tercile.
+**Pass (per event):** Brier < base-rate Brier; top-tercile excess > 0 with NW t ≥ 3.0 and ≥ 6 of 8 years positive; DSR ≥ 0.9
+against 2 trials (L1, L2); Mag-7 top-tercile excess > 0. A pass goes to the board + Rafael; nothing ships from this step.

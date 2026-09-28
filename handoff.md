@@ -8,14 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-09-28, Claude-signed) — Confluence 2.0 swing — pick up here
+## ⏩ LATEST (2026-09-28 PM, Claude-signed) — C2 lab + QHM new-money budget — pick up here
 
-Rafael APPROVED the C2 swing design update (event-first entries, slots feed the sizing model, lab harness v2, 30-min/1-min
-history, Mag-7 check). Record: `logs/design_records/entry_rebuild_2026-09-26.md` §"Confluence 2.0 swing design UPDATE"
-(verify: `grep -c "APPROVED by Rafael 2026-09-28" logs/design_records/entry_rebuild_2026-09-26.md` → 1).
-Lab step 3 (ranking features: no edge) is PR #436 (verify: `gh pr view 436 --json state`).
-**⏩ EXACT NEXT ACTION:** build lab harness v2 (`research/`), then fetch 30-min/1-min history off-hours, then run the
-pre-registered long + short event families.
+**SHIPPED + DEPLOYED (deployed, unexercised):** PR #437 — QHM new-money budget (pre-cap LLY shares no longer block new
+quarterly-hold buys; baseline file `data/state/qhm_grandfathered.json` = {"LLY": 2}). NVDA/GOOGL/GE can buy 1 share each
+from the next 10:05 ET window (verify: `ssh mtf-bot 'grep -c "tranche 1/3 submitted" /home/ubuntu/mtf-bot/logs/mtf_bot.log'`).
+GEV sold manually by Rafael 2026-09-28 (ledger heal operator-confirmed).
+**C2 swing (Rafael approved design update 2026-09-28):** labs 3–5 — no pre-registered setup passes; pullback-in-uptrend
+is the only consistent positive (best t 1.88; strongest on Mag-7). Record: `logs/design_records/entry_rebuild_2026-09-26.md`.
+**⏩ EXACT NEXT ACTION:** run lab step 6 (meta-label on the pullback family, pre-registered) → 4-hour trigger test once the
+30-min history download finishes (`research/lab_intraday_bars.py`, not yet committed — GAI marker pending) → QHM increment 2
+(tranches 2–3 never run after tranche 1: `_compute_and_submit_stop` sets ACTIVE).
 
 ## ⏩ LATEST (2026-09-27 evening, Claude interactive) — QHM report + top-3 buys — pick up here
 
