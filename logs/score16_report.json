@@ -1,14 +1,14 @@
 {
-  "generated": "2026-09-25 01:20 PM PT",
-  "shadow_days_archived": 48,
-  "shadow_rows": 1838,
-  "direction_agreement_rate": 0.895,
-  "would_differ_rate": 0.3667,
+  "generated": "2026-09-28 01:20 PM PT",
+  "shadow_days_archived": 49,
+  "shadow_rows": 1878,
+  "direction_agreement_rate": 0.8951,
+  "would_differ_rate": 0.3685,
   "trades_by_score_16pt": {
     "10": {
-      "n": 21,
+      "n": 22,
       "wins": 3,
-      "pnl": -145.16
+      "pnl": -152.3
     },
     "11": {
       "n": 31,
@@ -16,9 +16,9 @@
       "pnl": -196.57
     },
     "12": {
-      "n": 28,
-      "wins": 9,
-      "pnl": -252.79
+      "n": 29,
+      "wins": 10,
+      "pnl": -250.57
     },
     "13": {
       "n": 18,
@@ -58,9 +58,9 @@
       "pnl": 57.78
     },
     "10": {
-      "n": 64,
-      "wins": 18,
-      "pnl": -368.04
+      "n": 66,
+      "wins": 19,
+      "pnl": -372.96
     },
     "11": {
       "n": 21,

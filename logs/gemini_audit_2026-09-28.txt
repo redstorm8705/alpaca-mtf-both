@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-09-28
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['scripts/qhm_thesis.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+*   `execution.ownership_guard` | `sync_ledger` reattributed negative protected replay for GOOGL/NVDA | `GOOGL` and `NVDA` (QHM tranche 1)
+*   `execution.portfolio_tracker` | `FIFO orphan` detected for `AMZN` | `AMZN` (fill unmatched)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **[CRITICAL]** `execution.entry_logic` | `RULE 1 — PREMARKET RED LOCKOUT` triggered repeatedly.
+*   **[WARNING]** `execution.portfolio_tracker` | `FIFO orphan: closing fill for AMZN has no prior lot and no tracker record` — This indicates a breakdown in the order-to-ledger reconciliation chain.
+*   **[WARNING]** `execution.ownership_guard` | `reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday` — This confirms a state corruption in the QHM ledger where the bot believes it holds negative shares in a long-only tier.
+*   **[WARNING]** `news_monitor` | `Middle East Tensions` and `Senate Probe` alerts triggered; while these are informational, the bot's reaction to these in the context of the `AMZN` orphan fill suggests potential instability in the execution state machine.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign/Recording**: The `AMZN` trade on 2026-09-28 (12:16:14) resulted in an orphan fill. The `realized_pnl` for the `AMZN` exit at 12:40:09 is recorded as -1.8, but the `FIFO orphan` warning suggests the tracker is not correctly mapping the entry to the exit.
+*   **Stop Rate**: The bot is currently hitting stops at a high frequency (e.g., `INTC`, `SPY`, `AMZN`, `EWY` all stopped out). The `TQI degradation` (28.4/100) confirms the exit discipline is failing to capture the intended R-multiple.
+*   **Score Correlation**: High-score entries (e.g., `SOFI` score 10/12) are being blocked by sector correlation or Rule 1, while lower-score day-trades are failing. The strategy is currently failing to execute on its high-conviction signals.
+
+### TRADE INTEGRITY
+*   **Orphan Fills**: The `AMZN` trade on 2026-09-28 is a clear recording bug. The system logged an entry at 12:16:14 and an exit at 12:40:09, but the `portfolio_tracker` failed to link them, resulting in an "orphan" status.
+*   **Negative Ledger State**: The `ownership_guard` warning regarding `GOOGL` and `NVDA` (qhm=-2) indicates that the `QuarterlyHoldManager` is attempting to manage positions that the ledger does not correctly recognize as owned, leading to "impossible" negative values.
+
+### MODIFIED FILE FINDINGS
+*   **`scripts/qhm_thesis.py`**:
+    *   **Bug**: The `_http_json` function uses `urllib.request.urlopen` without a robust retry mechanism for 403/429 errors, which are common with FMP/Alpaca APIs.
+    *   **Bug**: The `_dataroma_13f` function uses a hardcoded `User-Agent`. If Dataroma updates their anti-bot headers, this will fail silently (returning `{}`), which the code treats as "not tracked" rather than "fetch failed."
+    *   **Logic Error**: The `_universe` function explicitly skips `SPY`, `QQQ`, and `SMH`. While these are ETFs, they are often used as liquidity benchmarks in thesis research. Excluding them prevents the LLM from providing a macro-contextual comparison for the dip candidates.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: FIXED (PDT logic removed)
+*   **P5-H2**: TRIGGERED (Fill price crosstalk/orphan fills observed in `AMZN`)
+*   **P5-H3**: TRIGGERED (Orphan GTC path confirmed)
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | `execution.ownership_guard` | Negative ledger state for QHM | The system allows `qhm` tiers to reach negative values during replay, which should be impossible for long-only holdings.**
+*   **INFRASTRUCTURE | HIGH | `execution.portfolio_tracker` | FIFO orphan reconciliation failure | The tracker fails to link fills to entries, causing P&L drift and orphan warnings.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Ledger Reconciliation**: Manually verify the `AMZN` and `GOOGL` positions in the Alpaca dashboard vs. the `data/state/quarterly_holds.json` file to clear the negative ledger state.
+2.  **Audit `ownership_guard`**: Investigate why `sync_ledger` allows negative values for `qhm` tiers; implement a hard floor at 0 for all long-only tiers.
+3.  **Fix `portfolio_tracker`**: The `FIFO orphan` error indicates the tracker is losing track of `trade_id` mappings. Add a fallback to the `fill_reconciler` to attempt a match by `symbol` + `timestamp` if the `trade_id` lookup fails.
+4.  **Update `qhm_thesis.py`**: Add a retry decorator to `_http_json` to handle transient network/API errors.
+5.  **Review Exit Discipline**: The `TQI degradation` warning and high stop-hit rate suggest the `INTRADAY_STOP_ATR_MULT` (1.2) may be too tight for the current volatility regime. Consider widening to 1.5 until TQI recovers.
+================================================================================
+BROKER GROUND TRUTH (2026-09-28, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AMZN   COVERED                  owners=day exposed=230m no-broker-stop=0m [06:48-06:48, 12:16-12:16, 12:40-12:40] rejected_stop_orders=0
+  EWY    COVERED                  owners=day exposed=232m no-broker-stop=0m [08:48-08:48, 12:40-12:40] rejected_stop_orders=1
+  GEV    NAKED                    owners=qhm exposed=229m no-broker-stop=229m [06:30-10:18] rejected_stop_orders=0
+  INTC   NAKED                    owners=other exposed=10m no-broker-stop=10m [06:30-06:40] rejected_stop_orders=1
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:40] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:40] rejected_stop_orders=0
+  SOFI   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=10m [06:30-06:40] rejected_stop_orders=0
+  SPY    SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=10m no-broker-stop=10m [06:30-06:40] rejected_stop_orders=0
