@@ -948,6 +948,18 @@ DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD = 1000.0  # PROV:daytier-aggression-2026-09-
 DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.60  # PROV:daytier-aggression-2026-09-18 — max single-name per-entry notional (× EQUITY)
 
 
+# ─── SHARED LIVE TIER-CAPITAL ALLOCATOR (paper; increasing orders only) ───
+# Signed: ChatGPT/Codex, 2026-09-27.
+TIER_CAPITAL_ALLOCATOR_ENABLED = True
+TIER_CAPITAL_CASH_FLOOR_USD = 200.0  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_MAINT_FLOOR_USD = 650.0  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_DAYTRADE_TARGET_PCT = 0.40  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_SWING_TARGET_PCT = 0.20  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_QHM_TARGET_PCT = 0.30  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_FOREVER6_TARGET_PCT = 0.10  # PROV:live-tier-capital-allocator-2026-09-27
+TIER_CAPITAL_ACCOUNT_GROSS_NORMAL = 1.25  # PROV:live-tier-capital-allocator-2026-09-27
+
+
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 
 def validate_config():
@@ -1159,6 +1171,27 @@ def validate_config():
             f"(0, DAYTRADE_TRACK_A_EQUITY_CEILING_PCT={DAYTRADE_TRACK_A_EQUITY_CEILING_PCT}] — a single "
             f"name can never exceed the aggregate ceiling"
         )
+
+    _capital_targets = (
+        TIER_CAPITAL_DAYTRADE_TARGET_PCT, TIER_CAPITAL_SWING_TARGET_PCT,
+        TIER_CAPITAL_QHM_TARGET_PCT, TIER_CAPITAL_FOREVER6_TARGET_PCT,
+    )
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and 0 <= v <= 1 for v in _capital_targets):
+        errors.append("tier-capital targets must be finite fractions in [0, 1]")
+    elif abs(sum(_capital_targets) - 1.0) > 1e-9:  # PROV:live-tier-capital-allocator-2026-09-27
+        errors.append("tier-capital normal targets must sum exactly to 1.0")
+    import math as _math
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and _math.isfinite(v) and v >= 0
+               for v in (TIER_CAPITAL_CASH_FLOOR_USD,
+                         TIER_CAPITAL_MAINT_FLOOR_USD)):
+        errors.append("tier-capital cash/maintenance floors must be non-negative")
+    if not (isinstance(TIER_CAPITAL_ACCOUNT_GROSS_NORMAL, (int, float))
+            and not isinstance(TIER_CAPITAL_ACCOUNT_GROSS_NORMAL, bool)
+            and _math.isfinite(TIER_CAPITAL_ACCOUNT_GROSS_NORMAL)
+            and 1.0 <= TIER_CAPITAL_ACCOUNT_GROSS_NORMAL <= 1.40):  # PROV:live-tier-capital-allocator-2026-09-27
+        errors.append("normal tier-capital gross multiplier must be finite in [1.0, 1.40]")
 
     # Log results
     for w in warnings:

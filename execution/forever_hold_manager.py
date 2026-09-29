@@ -270,12 +270,32 @@ class ForeverHoldManager:
                 skipped.append({**p, "skip": "budget/floor exhausted"})
                 continue
             # CASH-ONLY 1-share market buy, tier-tagged "forever6" (never-sell attribution).
+            # Signed: ChatGPT/Codex, 2026-09-27.
+            from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+            _capital = live_admit("forever6", "forever6", sym, "buy", 1, px_reserve,
+                                  stop_price=px * 0.01)
+            if not _capital.approved:
+                skipped.append({**p, "skip": f"allocator: {_capital.reason}"})
+                continue
             try:
-                order = _bk.submit_market_order(sym, 1, "buy", tier="forever6")
+                order = _bk.submit_market_order(
+                    sym, 1, "buy", tier="forever6",
+                    client_order_id=live_order_id(_capital.lease),
+                )
+                if order is None:
+                    order = live_release(_capital.lease, "submit_none")
+                else:
+                    live_bind(_capital.lease, order)
             except Exception as e:
-                logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed)", sym, e)
-                skipped.extend({**q, "skip": "stopped after broker exception"} for q in plan[i + 1:])
-                break
+                order = live_release(_capital.lease, "submit_none")
+                if order is None:
+                    logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed)", sym, e)
+                    skipped.extend({**q, "skip": "stopped after broker exception"} for q in plan[i + 1:])
+                    break
+                logger.warning(
+                    "[F6] BUY response failed for %s but exact client ID recovered order %s",
+                    sym, getattr(order, "id", "unknown"),
+                )
             if order is None:
                 # broker returned None → NOT a confirmed order. Never-mask: do not count it placed,
                 # and do NOT keep placing (a systemic fault would repeat down the plan).
