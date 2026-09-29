@@ -8,6 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
+
+**SHIPPED + DEPLOYED:** PR #442 / merge `d1148a9` installs the shared live entry-capital allocator across Swing, Day Trade, QHM, and F6. Baseline targets are Day Trade 40%, Swing 20%, QHM 30%, F6 10%; regime evidence can reduce risk and verified crash activation can expand F6. Cash, maintenance, account-gross, per-tier, lease, and exact-order recovery guards fail closed. Exits, stop management, and cancels remain outside the admission gate. Claude's Confluence 2.0 stays the edge/score source; this component owns wire-time capital admission only.
+
+**Gate:** Board PASS; two mechanical reviews PASS on the shipped tree; Google AI Studio APPROVE, including an evidence-based disagreement resolution proving QHM recovery polling is deadline-bounded and prevents a longer naked-stop window; GitHub preship PASS. Groq was waived once under Rafael's explicit 2026-09-29 authorization; Nvidia was bypassed as optional backup. 130 focused tests pass.
+
+**OCI:** `137.131.51.250` is at `d1148a9`; `mtf-bot`, `mtf-writer`, and `mtf-http` are active; allocator import/config compile pass. Existing untracked research/report files were preserved. Status is **deployed, unexercised** until the next eligible entry.
+
+**⏩ EXACT NEXT ACTION:** observe the first live admission/denial and lease recovery events, then have Claude audit Confluence 2.0 integration against the allocator boundary. Do not add a parallel allocator or duplicate edge source.
+
 ## ⏩ LATEST (2026-09-28 evening, Claude-signed) — QHM tranches 2-3 + C2 lab 7 — pick up here
 
 **SHIPPED + DEPLOYED:** PR #438 (behavior-preserving extraction of the QHM stop-safe add; OCI 3d461d0)
