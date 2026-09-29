@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-09-29 08:27 PT]` **ChatGPT/Codex:** shipped and deployed the shared live tier-capital allocator with dynamic regime limits and fail-closed wire-time admission across Swing, Day Trade, QHM, and F6. Board/mechanical/GAI/CI passed; Groq received Rafael’s one-time waiver; services and live config verified. — PR #442 / `d1148a9` — allocator, four entry integrations, broker recovery, QHM safety, tests, design record
+
 - `[2026-09-27 17:05 PT]` **ChatGPT/Codex:** revamped all five generated HTML operator pages around current tier truth; preserved weekly/0DTE recommendations, added one clear primary action per horizon, exact ownership labels, and account-vs-lifecycle reporting. BGGN/UX/adversarial/CI passed; live pages and three OCI services verified. — PR #432 / `9c8623f` — dashboard/scanner/options/weekly/monthly generators, shared HTML UI, tests
 
 - `[2026-09-27 12:10 PT]` **ChatGPT/Codex:** rebuilt Strategy Edge as a fail-closed, broker-authoritative lifecycle report for Confluence 2.0 to consume; no trading behavior changed. Board/adversarial/BGG gates, CI, OCI tests, live ledger render, and service health passed. — PR #429 / `aebc8d1` — reporting/pnl_ledger.py, reporting/report_figures.py, monthly_review.py, tests, design record

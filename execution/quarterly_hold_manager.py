@@ -341,6 +341,12 @@ class HoldPosition:
     last_dip_add_date: Optional[str] = None    # YYYY-MM-DD of last dip-add (spacing)
     dip_add_quarter_tag: Optional[str] = None  # "YYYY-Qn" the counter resets on
     last_lock_date: Optional[str] = None       # YYYY-MM-DD of last trailing-lock stop-raise (idempotency)
+    ambiguous_add_client_order_id: Optional[str] = None  # exact recovery after unknown dip-add submit
+    ambiguous_add_baseline_qty: Optional[int] = None
+    stop_recovery_requires_qty_proof: bool = False
+    stop_recovery_canceled_order_id: Optional[str] = None
+    stop_recovery_baseline_qty: Optional[int] = None
+    stop_recovery_add_submitted: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -398,9 +404,10 @@ class OrderDispatcher:
         side: str,
         limit_price: float,
         extended_hours: bool = False,
+        client_order_id: str | None = None,
     ) -> object:
         return broker.submit_limit_order(
-            symbol, qty, side, limit_price, extended_hours, tier="qhm")
+            symbol, qty, side, limit_price, extended_hours, tier="qhm", client_order_id=client_order_id)
 
     def submit_gtc_stop(
         self,
@@ -1224,8 +1231,278 @@ class QuarterlyHoldManager:
         pos = self._positions.get(symbol)
         if not pos or pos.state != HoldState.PENDING_STOP_REPLACE:
             return False
-        if self.dry_run or pos.stop_price <= 0 or pos.qty_filled <= 0:
+        if self.dry_run or pos.stop_price <= 0:
             return False
+        if (pos.stop_recovery_requires_qty_proof
+                or pos.stop_recovery_canceled_order_id is not None):
+            from execution.broker import get_order as _get_canceled_stop
+
+            _canceled_id = pos.stop_recovery_canceled_order_id
+            _baseline_qty = pos.stop_recovery_baseline_qty
+            if not _canceled_id or _baseline_qty is None or _baseline_qty < 0:
+                logger.critical(
+                    "QuarterlyHoldManager: %s missing canceled-stop recovery evidence",
+                    pos.symbol,
+                )
+                return False
+            _canceled = _get_canceled_stop(_canceled_id)
+            _status = str(getattr(_canceled, "status", "") or "").lower()
+            if _canceled is None or _status not in {
+                "filled", "canceled", "cancelled", "rejected", "expired"
+            }:
+                logger.critical(
+                    "QuarterlyHoldManager: %s canceled stop %s is not terminal/readable",
+                    pos.symbol, _canceled_id,
+                )
+                return False
+            try:
+                _stop_filled = int(float(getattr(_canceled, "filled_qty", 0) or 0))
+            except (TypeError, ValueError):
+                return False
+            if _stop_filled < 0 or _stop_filled > _baseline_qty:
+                return False
+            _survivor_qty = _baseline_qty - _stop_filled
+            if _survivor_qty <= 0:
+                pos.qty_filled = 0
+                pos.qty_total = 0
+                pos.stop_recovery_requires_qty_proof = False
+                pos.stop_recovery_canceled_order_id = None
+                pos.stop_recovery_baseline_qty = None
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                return False
+            _verified_recovery_qty = self._strict_resync_qty(
+                pos, _survivor_qty, _baseline_qty
+            )
+            if _verified_recovery_qty is None or _verified_recovery_qty <= 0:
+                logger.critical(
+                    "QuarterlyHoldManager: %s exact QHM quantity proof unavailable; "
+                    "keeping PENDING_STOP_REPLACE",
+                    pos.symbol,
+                )
+                return False
+            if not pos.stop_recovery_add_submitted:
+                # The pre-cancel record was durable, but the add was never submitted.
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+        # An ambiguous dip-add may have filled after the last position snapshot.
+        # Resolve its deterministic client ID and cancel any open remainder before
+        # trusting qty_filled or declaring the existing stop complete protection.
+        if pos.ambiguous_add_client_order_id:
+            from execution.broker import (
+                cancel_order as _cancel_ambiguous,
+                get_order as _get_ambiguous_order,
+                get_order_by_client_order_id as _get_ambiguous,
+            )
+            _amb = _get_ambiguous(pos.ambiguous_add_client_order_id)
+            if _amb is None:
+                logger.critical(
+                    "QuarterlyHoldManager: %s ambiguous dip-add %s still unreadable; "
+                    "keeping PENDING_STOP_REPLACE",
+                    pos.symbol, pos.ambiguous_add_client_order_id,
+                )
+                return False
+            _amb_status = str(getattr(_amb, "status", "") or "").lower()
+            _amb_terminal = {
+                "filled", "canceled", "cancelled", "rejected", "expired"
+            }
+            # Fail closed on every nonterminal/unknown broker status, including
+            # open, held, and pending_replace: cancel the possible remainder and
+            # prove terminal state before sizing the final protective stop.
+            if _amb_status not in _amb_terminal:
+                if not _cancel_ambiguous(str(getattr(_amb, "id", "") or "")):
+                    logger.critical(
+                        "QuarterlyHoldManager: %s ambiguous dip-add remainder could not "
+                        "be cancelled; keeping PENDING_STOP_REPLACE", pos.symbol,
+                    )
+                    return False
+                import time as _amb_time
+                _amb_deadline = _amb_time.monotonic() + 5.0
+                while _amb_time.monotonic() < _amb_deadline:
+                    _terminal = _get_ambiguous_order(str(getattr(_amb, "id", "") or ""))
+                    _terminal_status = str(
+                        getattr(_terminal, "status", "") or ""
+                    ).lower()
+                    if _terminal_status in _amb_terminal:
+                        _amb = _terminal
+                        break
+                    _amb_time.sleep(0.5)
+                else:
+                    logger.critical(
+                        "QuarterlyHoldManager: %s ambiguous dip-add cancel did not "
+                        "reach terminal state; keeping PENDING_STOP_REPLACE", pos.symbol,
+                    )
+                    return False
+            try:
+                _amb_filled = int(float(getattr(_amb, "filled_qty", 0) or 0))
+            except (TypeError, ValueError):
+                return False
+            _baseline = pos.ambiguous_add_baseline_qty
+            if _baseline is None:
+                return False
+            _expected_owner_qty = _baseline + _amb_filled
+            _provisional_id = str(pos.stop_order_id or "")
+            _stop_before = None
+            _stop_before_filled = 0
+            if _provisional_id:
+                _stop_before = _get_ambiguous_order(_provisional_id)
+                if _stop_before is None:
+                    return False
+                try:
+                    _stop_before_filled = int(float(
+                        getattr(_stop_before, "filled_qty", 0) or 0
+                    ))
+                except (TypeError, ValueError):
+                    return False
+                if _stop_before_filled < 0:
+                    return False
+            _pre_cancel_owner_qty = max(
+                _expected_owner_qty - _stop_before_filled, 0
+            )
+            _pre_cancel_qty = self._strict_resync_qty(
+                pos, _pre_cancel_owner_qty, _baseline
+            )
+            if _pre_cancel_qty is None:
+                logger.critical(
+                    "QuarterlyHoldManager: %s ambiguous dip-add broker qty unreadable; "
+                    "retaining provisional stop and recovery metadata", pos.symbol,
+                )
+                return False
+            _cover = self._live_covering_qhm_stop(pos, _pre_cancel_qty)
+            if _cover is not None:
+                _cover_coid = pos.ambiguous_add_client_order_id
+                pos.stop_order_id = getattr(_cover, "id", pos.stop_order_id)
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+                pos.state = HoldState.ACTIVE
+                pos.updated_at = self._now_et().isoformat()
+                if self._save_state():
+                    return True
+                pos.ambiguous_add_client_order_id = _cover_coid
+                pos.ambiguous_add_baseline_qty = _baseline
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                return False
+            # Cancel the provisional stop before the final strict quantity read.
+            # cancel_order may report success when that stop filled concurrently;
+            # the post-cancel broker snapshot is therefore the only sizing truth.
+            _stop_fill_delta = 0
+            if _provisional_id and _stop_before is not None:
+                _stop_status = str(
+                    getattr(_stop_before, "status", "") or ""
+                ).lower()
+                if (_stop_status not in _amb_terminal
+                        and not _cancel_ambiguous(_provisional_id)):
+                    return False
+                import time as _stop_time
+                _stop_deadline = _stop_time.monotonic() + 5.0
+                _stop_terminal = _stop_before
+                while _stop_time.monotonic() < _stop_deadline:
+                    _candidate = _get_ambiguous_order(_provisional_id)
+                    _candidate_status = str(
+                        getattr(_candidate, "status", "") or ""
+                    ).lower()
+                    if _candidate_status in _amb_terminal:
+                        _stop_terminal = _candidate
+                        break
+                    _stop_time.sleep(0.5)
+                else:
+                    return False
+                try:
+                    _stop_after_filled = int(float(
+                        getattr(_stop_terminal, "filled_qty", 0) or 0
+                    ))
+                except (TypeError, ValueError):
+                    return False
+                if _stop_after_filled < _stop_before_filled:
+                    return False
+                # The persisted baseline predates this provisional stop, so every
+                # cumulative fill on it reduces surviving QHM ownership, including
+                # fills that occurred before this recovery cycle began.
+                _stop_fill_delta = _stop_after_filled
+                pos.stop_order_id = None
+            if _stop_fill_delta:
+                _baseline = max(_baseline - _stop_fill_delta, 0)
+                pos.ambiguous_add_baseline_qty = _baseline
+                pos.updated_at = self._now_et().isoformat()
+                if not self._save_state():
+                    self._alert(
+                        ":rotating_light: QHM %s could not persist provisional-stop "
+                        "fills during recovery; remains PENDING without inferred qty."
+                        % pos.symbol
+                    )
+                    return False
+            _surviving_owner_qty = _baseline + _amb_filled
+            _actual_qty = self._strict_resync_qty(
+                pos, _surviving_owner_qty, _baseline
+            )
+            if _actual_qty is None:
+                logger.critical(
+                    "QuarterlyHoldManager: %s ambiguous dip-add has no fresh post-cancel "
+                    "position proof; keeping recovery metadata and pending state", pos.symbol,
+                )
+                try:
+                    _fallback = (
+                        self._dispatcher.submit_gtc_stop(
+                            self.broker, pos.symbol, _surviving_owner_qty,
+                            "sell" if pos.direction == "long" else "buy",
+                            pos.stop_price,
+                        )
+                        if _surviving_owner_qty > 0 else None
+                    )
+                except Exception:
+                    _fallback = None
+                if _fallback is not None and hasattr(_fallback, "id"):
+                    pos.stop_order_id = _fallback.id
+                self._save_state()
+                self._alert(
+                    ":rotating_light: QHM %s ambiguous dip-add post-cancel quantity "
+                    "is unreadable — conservative stop attempted; recovery remains pending."
+                    % pos.symbol
+                )
+                return False
+            if _actual_qty <= 0:
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                return False
+            try:
+                _final_stop = self._dispatcher.submit_gtc_stop(
+                    self.broker, pos.symbol, _actual_qty,
+                    "sell" if pos.direction == "long" else "buy", pos.stop_price,
+                )
+            except Exception:
+                _final_stop = None
+            if not (_final_stop is not None and hasattr(_final_stop, "id")):
+                logger.critical(
+                    "QuarterlyHoldManager: %s final stop submit failed after ambiguous "
+                    "dip-add recovery; keeping recovery metadata", pos.symbol,
+                )
+                self._save_state()
+                self._alert(
+                    ":rotating_light: QHM %s ambiguous dip-add recovery has NO confirmed "
+                    "protective stop — immediate operator review required." % pos.symbol
+                )
+                return False
+            _resolved_coid = pos.ambiguous_add_client_order_id
+            pos.stop_order_id = _final_stop.id
+            pos.ambiguous_add_client_order_id = None
+            pos.ambiguous_add_baseline_qty = None
+            pos.state = HoldState.ACTIVE
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                pos.ambiguous_add_client_order_id = _resolved_coid
+                pos.ambiguous_add_baseline_qty = _baseline
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                logger.critical(
+                    "QuarterlyHoldManager: %s recovered stop is live but ACTIVE state "
+                    "did not persist; process will retry broker reconciliation", pos.symbol,
+                )
+                return False
+            return True
+        if pos.qty_filled <= 0:
+            return False
+
         # B2 self-heal (2026-07-02, board+Gro+GAI): if the REGISTERED stop is in
         # fact still resting on Alpaca (we got here via an adoption false-negative,
         # not a genuinely missing stop), RE-ADOPT it instead of submitting a
@@ -1257,9 +1534,27 @@ class QuarterlyHoldManager:
             )
             if order and hasattr(order, "id"):
                 pos.stop_order_id = order.id
+                _proof_id = pos.stop_recovery_canceled_order_id
+                _proof_baseline = pos.stop_recovery_baseline_qty
+                _proof_add_submitted = pos.stop_recovery_add_submitted
+                pos.stop_recovery_requires_qty_proof = False
+                pos.stop_recovery_canceled_order_id = None
+                pos.stop_recovery_baseline_qty = None
+                pos.stop_recovery_add_submitted = False
                 pos.state = HoldState.ACTIVE
                 pos.updated_at = self._now_et().isoformat()  # RC-1
-                self._save_state()
+                if not self._save_state():
+                    pos.stop_recovery_requires_qty_proof = True
+                    pos.stop_recovery_canceled_order_id = _proof_id
+                    pos.stop_recovery_baseline_qty = _proof_baseline
+                    pos.stop_recovery_add_submitted = _proof_add_submitted
+                    pos.state = HoldState.PENDING_STOP_REPLACE
+                    logger.critical(
+                        "QuarterlyHoldManager: %s replacement stop is live but "
+                        "recovery-state clear did not persist",
+                        pos.symbol,
+                    )
+                    return False
                 logger.info(
                     "QuarterlyHoldManager: %s GTC stop resubmitted → %s @ $%.2f",
                     pos.symbol, order.id, pos.stop_price,
@@ -1284,6 +1579,22 @@ class QuarterlyHoldManager:
                 "QuarterlyHoldManager: stop resubmit failed for %s: %s", pos.symbol, e
             )
             return False
+
+    def _arm_ambiguous_add_recovery(
+        self, pos: HoldPosition, client_order_id: Optional[str]
+    ) -> bool:
+        """Durably arm exact-ID recovery before a dip-add can remove its stop."""
+        prior_state = pos.state
+        pos.ambiguous_add_client_order_id = client_order_id
+        pos.ambiguous_add_baseline_qty = pos.qty_filled
+        pos.state = HoldState.PENDING_STOP_REPLACE
+        pos.updated_at = self._now_et().isoformat()
+        if self._save_state():
+            return True
+        pos.ambiguous_add_client_order_id = None
+        pos.ambiguous_add_baseline_qty = None
+        pos.state = prior_state
+        return False
 
     def _reconcile_pending_exit(
         self, pos: HoldPosition, result: ReconcileResult
@@ -1892,11 +2203,7 @@ class QuarterlyHoldManager:
 
     def _stop_safe_add(self, pos: HoldPosition, add_qty: int, live_price: float,
                        label: str = "dip-add", raise_stop_to: Optional[float] = None) -> int:
-        """Stop-safe add of `add_qty` shares to an ACTIVE hold (board + Gro + GAI unanimous 2026-07-13, "Option C"):
-        RTH only; cancel the resting stop -> marketable-limit add -> poll <=15s -> resync -> resubmit the stop for the
-        ACTUAL held qty (never naked: a resting stop OR PENDING_STOP_REPLACE + alert on every branch). Returns the
-        filled share count (0 when deferred/aborted). Exceptions propagate to the caller. Extracted verbatim from
-        _maybe_dip_add (behavior-preserving); `label` only changes log/alert wording."""
+        """Allocator-gated, idempotent stop-safe QHM add with exact recovery."""
         # ── OPTION C: stop-safe add (board + Gro + GAI unanimous 2026-07-13) ──
         # A QHM position holds a resting GTC sell-stop; Alpaca blocks a same-symbol
         # BUY (wash-trade). So, RTH-only: cancel the stop -> marketable-limit add ->
@@ -1907,22 +2214,55 @@ class QuarterlyHoldManager:
         from execution.broker import (
             cancel_order as _cancel_order,
             get_order as _get_order,
+            get_order_by_client_order_id as _get_order_by_client_id,
             is_market_open as _is_market_open,
         )
         import time as _time
         try:
             if not _is_market_open():
-                logger.info("QHM %s: %s market closed — defer", label, pos.symbol)
+                logger.info("QHM dip-add: %s market closed — defer", pos.symbol)
                 return 0
         except Exception as _clk_e:
-            logger.warning("QHM %s: %s clock check failed (%s) — defer",
-                           label, pos.symbol, _clk_e)
+            logger.warning("QHM dip-add: %s clock check failed (%s) — defer",
+                           pos.symbol, _clk_e)
             return 0
 
         _stop_side = "sell" if pos.direction == "long" else "buy"
         _orig_qty = pos.qty_filled
         _stop_id = pos.stop_order_id
         limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
+        # Capital admission precedes stop cancellation.  A denied add leaves the
+        # existing protective stop untouched and cannot create a naked window.
+        from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+        _gf_notional = self._grandfathered_notional_for_allocator()
+        if _gf_notional is None:
+            logger.warning("QHM dip-add: %s grandfather notional unreadable — block", pos.symbol)
+            return 0
+        _capital = live_admit("qhm", "qhm", pos.symbol,
+                              "buy" if pos.direction == "long" else "sell_short", add_qty, limit_price,
+                              stop_price=pos.stop_price, exempt_existing_notional=_gf_notional)
+        if not _capital.approved:
+            logger.warning("QHM dip-add: %s allocator blocked: %s", pos.symbol, _capital.reason)
+            return 0
+        _add_coid = live_order_id(_capital.lease)
+        # Persist exact recovery identity BEFORE cancelling the protective stop.
+        # A failed write leaves the old stop intact and aborts submission.
+        _pre_add_state = pos.state
+        pos.stop_recovery_requires_qty_proof = bool(_stop_id)
+        pos.stop_recovery_canceled_order_id = str(_stop_id) if _stop_id else None
+        pos.stop_recovery_baseline_qty = _orig_qty if _stop_id else None
+        pos.stop_recovery_add_submitted = False
+        if not self._arm_ambiguous_add_recovery(pos, _add_coid):
+            pos.stop_recovery_requires_qty_proof = False
+            pos.stop_recovery_canceled_order_id = None
+            pos.stop_recovery_baseline_qty = None
+            pos.stop_recovery_add_submitted = False
+            live_release(_capital.lease, "qhm_recovery_state_unpersisted")
+            self._alert(
+                ":rotating_light: QHM %s dip-add aborted — recovery identity "
+                "could not be persisted; original stop remains live." % pos.symbol
+            )
+            return 0
 
         def _restore_or_pending(_qty: int, _reason: str) -> None:
             # Resting stop for _qty, else PENDING_STOP_REPLACE + alert. Never naked.
@@ -1932,11 +2272,17 @@ class QuarterlyHoldManager:
                     _r = self._dispatcher.submit_gtc_stop(
                         self.broker, pos.symbol, _qty, _stop_side, pos.stop_price)
             except Exception as _rse:
-                logger.critical("QHM %s: %s stop resubmit threw: %s",
-                                label, pos.symbol, _rse)
+                logger.critical("QHM dip-add: %s stop resubmit threw: %s",
+                                pos.symbol, _rse)
             if _r is not None and hasattr(_r, "id"):
                 pos.stop_order_id = _r.id
-                pos.state = HoldState.ACTIVE
+                # While an add outcome is recoverable/ambiguous, a provisional
+                # stop must never be persisted as fully ACTIVE protection.
+                pos.state = (
+                    HoldState.PENDING_STOP_REPLACE
+                    if pos.ambiguous_add_client_order_id
+                    else HoldState.ACTIVE
+                )
                 pos.updated_at = self._now_et().isoformat()
                 self._save_state()
                 return
@@ -1947,19 +2293,28 @@ class QuarterlyHoldManager:
             pos.state = HoldState.PENDING_STOP_REPLACE
             pos.updated_at = self._now_et().isoformat()
             self._save_state()
-            logger.critical("QHM %s: %s %s — PENDING_STOP_REPLACE",
-                            label, pos.symbol, _reason)
+            logger.critical("QHM dip-add: %s %s — PENDING_STOP_REPLACE",
+                            pos.symbol, _reason)
             try:
-                self._alert(":rotating_light: QHM %s %s %s — stop pending "
-                            "resubmit" % (pos.symbol, label, _reason))
+                self._alert(":rotating_light: QHM %s dip-add %s — stop pending "
+                            "resubmit" % (pos.symbol, _reason))
             except Exception:
                 pass
 
         # Branch 0 — cancel the resting stop. Cancel failure => abort, stop intact.
         if _stop_id:
             if not _cancel_order(str(_stop_id)):
-                logger.warning("QHM %s: %s stop cancel failed — abort "
-                               "(stop intact)", label, pos.symbol)
+                logger.warning("QHM dip-add: %s stop cancel failed — abort "
+                               "(stop intact)", pos.symbol)
+                live_release(_capital.lease, "stop_cancel_failed")
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+                pos.stop_recovery_requires_qty_proof = False
+                pos.stop_recovery_canceled_order_id = None
+                pos.stop_recovery_baseline_qty = None
+                pos.stop_recovery_add_submitted = False
+                pos.state = _pre_add_state
+                self._save_state()
                 return 0
             pos.stop_order_id = None
             # Finding #1 (cold-2nd): cancel_order maps "already filled" -> ok, so
@@ -1969,11 +2324,37 @@ class QuarterlyHoldManager:
             try:
                 _pn = self.broker.get_position(pos.symbol)
                 _held = int(float(getattr(_pn, "qty", 0) or 0)) if _pn else 0
-            except Exception:
-                _held = _orig_qty  # unknown -> assume unchanged (do not over-react)
+            except Exception as _position_error:
+                # The stop is already cancelled. Unknown broker truth must never be
+                # converted into permission to submit a fresh add: the stop may have
+                # filled during cancellation. Release the unused lease and persist
+                # an exact-quantity recovery requirement for the next stop cycle.
+                live_release(_capital.lease, "post_cancel_position_unreadable")
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+                # The stale pre-cancel quantity is not safe for a replacement stop:
+                # a concurrent fill may have reduced QHM while another tier still
+                # owns shares in the broker-net position. Wait for exact owner proof.
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                pos.stop_recovery_requires_qty_proof = True
+                pos.stop_recovery_canceled_order_id = str(_stop_id)
+                pos.stop_recovery_baseline_qty = _orig_qty
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+                logger.critical(
+                    "QHM %s: %s position unreadable after stop cancel (%s) — add blocked",
+                    label, pos.symbol, _position_error,
+                )
+                self._alert(
+                    ":rotating_light: QHM %s %s blocked after stop cancellation — "
+                    "position unreadable; exact protection recovery pending."
+                    % (pos.symbol, label)
+                )
+                return 0
             if _held < _orig_qty:
-                logger.warning("QHM %s: %s reduced %d->%d during stop cancel "
-                               "(stop likely fired) — abort add", label, pos.symbol,
+                live_release(_capital.lease, "stop_filled_before_add_submit")
+                logger.warning("QHM dip-add: %s reduced %d->%d during stop cancel "
+                               "(stop likely fired) — abort add", pos.symbol,
                                _orig_qty, _held)
                 if _held >= 1:
                     try:
@@ -1981,20 +2362,74 @@ class QuarterlyHoldManager:
                     except Exception:
                         pass
                     _restore_or_pending(pos.qty_filled, "stop-fired-during-cancel")
+                pos.ambiguous_add_client_order_id = None
+                pos.ambiguous_add_baseline_qty = None
+                if _held >= 1 and bool(getattr(pos, "stop_order_id", None)):
+                    pos.state = HoldState.ACTIVE
+                self._save_state()
                 # _held == 0: flat — no stop needed; external-close cleans up.
                 return 0
+
+        # Persist that the deterministic add may become live before crossing the
+        # broker boundary. A failed write leaves the canceled-stop proof durable
+        # with add_submitted=False, so recovery cannot wait on a nonexistent add.
+        pos.stop_recovery_add_submitted = True
+        if not self._save_state():
+            pos.stop_recovery_add_submitted = False
+            pos.state = HoldState.PENDING_STOP_REPLACE
+            live_release(_capital.lease, "qhm_pre_submit_state_unpersisted")
+            _restore_or_pending(_orig_qty, "qhm-pre-submit-state-unpersisted")
+            self._alert(
+                ":rotating_light: QHM %s %s add blocked — pre-submit recovery "
+                "state did not persist." % (pos.symbol, label)
+            )
+            return 0
 
         # Submit the marketable-limit add (0.1% over live => crosses, fills fast).
         try:
             _add = self._dispatcher.submit_limit(
                 self.broker, pos.symbol, add_qty,
-                "buy" if pos.direction == "long" else "sell_short", limit_price)
+                "buy" if pos.direction == "long" else "sell_short", limit_price,
+                client_order_id=_add_coid)
+            if _add is None:
+                _add = live_release(_capital.lease, "submit_none")
+            else:
+                live_bind(_capital.lease, _add)
         except Exception as _ae:
-            logger.warning("QHM %s: %s add threw (%s)", label, pos.symbol, _ae)
+            # The dispatcher may have reached Alpaca before raising. Keep the
+            # deterministic pre-submit lease so reconciliation can prove the
+            # order absent or account for its fill; releasing here could fund
+            # a second order against capital already consumed by the first.
+            logger.critical("QHM dip-add: %s add outcome unknown (%s) — "
+                            "preserving allocator reservation", pos.symbol, _ae)
             _add = None
+        # None/exception is not proof of rejection: Alpaca may have accepted the
+        # deterministic client ID before the transport failed. Recover it before
+        # deciding how many shares the replacement stop must protect.
+        if _add is None and _add_coid:
+            for _recover_attempt in range(3):
+                _add = _get_order_by_client_id(_add_coid)
+                if _add is not None:
+                    live_bind(_capital.lease, _add)
+                    break
+                if _recover_attempt < 2:
+                    _time.sleep(1)
         if not (_add is not None and hasattr(_add, "id")):
-            # Branch 1 — add failed after the cancel: restore the ORIGINAL stop now.
-            _restore_or_pending(_orig_qty, "add-failed")
+            # Broker outcome remains unknown. Protect the currently verified
+            # holding, but keep an explicit pending state so later cycles recover
+            # the exact client ID, cancel any remainder, resync, and resize again.
+            _protect_qty = self._strict_resync_qty(pos, _orig_qty, _orig_qty)
+            if _protect_qty is None:
+                _protect_qty = _orig_qty
+            _restore_or_pending(_protect_qty, "ambiguous-add-current-qty")
+            pos.state = HoldState.PENDING_STOP_REPLACE
+            pos.updated_at = self._now_et().isoformat()
+            self._save_state()
+            self._alert(
+                ":rotating_light: QHM %s dip-add outcome AMBIGUOUS — current "
+                "position protected where verifiable; exact order recovery pending."
+                % pos.symbol
+            )
             return 0
 
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
@@ -2016,40 +2451,109 @@ class QuarterlyHoldManager:
         # Branch 2 — not fully filled: cancel the add (partials keep filled shares).
         if _filled < add_qty:
             try:
-                _add_cancelled = _cancel_order(str(_add.id))
+                _cancelled = _cancel_order(str(_add.id))
             except Exception:
-                _add_cancelled = False
-            try:  # the final fill count (shares can fill between the last poll and the cancel)
-                _of = _get_order(str(_add.id))
-                _filled = max(_filled, int(float(getattr(_of, "filled_qty", 0) or 0)))
-            except Exception:
-                pass
-            if not _add_cancelled:
-                # The unfilled remainder may still be live; if it fills later those shares sit
-                # outside the stop until the next resync/re-stop. Surface it.
-                logger.critical("QHM %s: %s add remainder cancel FAILED (order %s) — may still fill",
-                                label, pos.symbol, _add.id)
+                _cancelled = False
+            if not _cancelled:
+                _known_owner_qty = self._strict_resync_qty(
+                    pos, _orig_qty + _filled, _orig_qty
+                )
+                _restore_or_pending(
+                    _known_owner_qty if _known_owner_qty is not None else _orig_qty,
+                    "add-cancel-unconfirmed",
+                )
+                self._alert(
+                    ":rotating_light: QHM %s dip-add remainder cancellation failed — "
+                    "recovery remains pending." % pos.symbol
+                )
+                return 0
+            _cancel_deadline = _time.monotonic() + 5.0
+            _terminal_confirmed = False
+            while _time.monotonic() < _cancel_deadline:
                 try:
-                    self._alert(":warning: QHM %s %s add remainder cancel failed — order %s may still "
-                                "fill outside the stop" % (pos.symbol, label, _add.id))
+                    _terminal_order = _get_order(str(_add.id))
+                    _terminal_status = str(
+                        getattr(_terminal_order, "status", "") or ""
+                    ).lower()
+                    _filled = int(float(
+                        getattr(_terminal_order, "filled_qty", _filled) or 0
+                    ))
+                    if _terminal_status in (
+                        "filled", "canceled", "cancelled", "rejected", "expired"
+                    ):
+                        _terminal_confirmed = True
+                        break
                 except Exception:
                     pass
+                _time.sleep(0.5)
+            if not _terminal_confirmed:
+                _known_owner_qty = self._strict_resync_qty(
+                    pos, _orig_qty + _filled, _orig_qty
+                )
+                _restore_or_pending(
+                    _known_owner_qty if _known_owner_qty is not None else _orig_qty,
+                    "add-cancel-not-terminal",
+                )
+                self._alert(
+                    ":rotating_light: QHM %s dip-add remainder did not confirm "
+                    "terminal — exact recovery remains pending." % pos.symbol
+                )
+                return 0
         # Resync to Alpaca truth (full/partial/no fill), resubmit the stop for the
         # ACTUAL held qty. Branch 3 (resubmit fails) => PENDING inside the helper.
-        try:
-            self._resync_from_alpaca(pos)
-        except Exception:
-            pass
-        # Tranche adds (risk seat 2026-09-28): once shares filled, the re-placed stop may move UP to the
-        # design stop for the new average — never down, never at/above the add price.
-        if (raise_stop_to is not None and (pos.qty_filled > _orig_qty or _filled >= 1)
-                and pos.stop_price < raise_stop_to < live_price * 0.98):
-            logger.info("QHM %s: %s stop raised $%.2f -> $%.2f for the new average",
-                        label, pos.symbol, pos.stop_price, raise_stop_to)
+        _actual_after_add = self._strict_resync_qty(
+            pos, _orig_qty + _filled, _orig_qty
+        )
+        if _actual_after_add is None:
+            # The exact add order's cumulative fill is QHM-owned even when the
+            # account/owner resync is unavailable. Protect at least that proven
+            # baseline without claiming unrelated broker-net shares.
+            _restore_or_pending(
+                max(pos.qty_filled, _orig_qty + _filled),
+                "post-add-qty-unreadable",
+            )
+            self._alert(
+                ":rotating_light: QHM %s dip-add quantity unreadable after submit — "
+                "provisional stop placed where possible; exact recovery remains pending."
+                % pos.symbol
+            )
+            return _filled
+        # Tranche adds may raise protection to the design stop for the new average.
+        # Never loosen the prior stop and never place it close enough to cross the add.
+        if (
+            raise_stop_to is not None
+            and _actual_after_add > _orig_qty
+            and pos.stop_price < raise_stop_to < live_price * 0.98
+        ):
+            logger.info(
+                "QHM %s: %s stop raised $%.2f -> $%.2f for the new average",
+                label, pos.symbol, pos.stop_price, raise_stop_to,
+            )
             pos.stop_price = raise_stop_to
-        # a failed resync must not leave filled shares outside the stop: cover at least orig + filled
-        # (a stop for more than is held is rejected -> PENDING_STOP_REPLACE + alert, never silent)
-        _restore_or_pending(max(pos.qty_filled, _orig_qty + _filled), "post-add stop resubmit")
+        _restore_or_pending(_actual_after_add, "post-add stop resubmit")
+        if pos.stop_order_id:
+            _proof_id = pos.stop_recovery_canceled_order_id
+            _proof_baseline = pos.stop_recovery_baseline_qty
+            _proof_add_submitted = pos.stop_recovery_add_submitted
+            pos.ambiguous_add_client_order_id = None
+            pos.ambiguous_add_baseline_qty = None
+            pos.stop_recovery_requires_qty_proof = False
+            pos.stop_recovery_canceled_order_id = None
+            pos.stop_recovery_baseline_qty = None
+            pos.stop_recovery_add_submitted = False
+            pos.state = HoldState.ACTIVE
+            if not self._save_state():
+                pos.stop_recovery_requires_qty_proof = bool(_proof_id)
+                pos.stop_recovery_canceled_order_id = _proof_id
+                pos.stop_recovery_baseline_qty = _proof_baseline
+                pos.stop_recovery_add_submitted = _proof_add_submitted
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                logger.critical(
+                    "QHM %s: %s final stop is live but recovery clear did not persist",
+                    label, pos.symbol,
+                )
+                return 0
+
         return _filled
 
     # -----------------------------------------------------------------------
@@ -2948,11 +3452,26 @@ class QuarterlyHoldManager:
             # Limit price: 0.1% above current (fills quickly on liquid large-caps)
             limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
 
+            from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+            _gf_notional = self._grandfathered_notional_for_allocator()
+            if _gf_notional is None:
+                logger.warning("QuarterlyHoldManager: %s grandfather notional unreadable — block", pos.symbol)
+                return False
+            _capital = live_admit("qhm", "qhm", pos.symbol,
+                                  "buy" if pos.direction == "long" else "sell_short", qty, limit_price,
+                                  stop_price=pos.stop_price, exempt_existing_notional=_gf_notional)
+            if not _capital.approved:
+                logger.info("QuarterlyHoldManager: %s allocator blocked tranche: %s", pos.symbol, _capital.reason)
+                return False
             order = self._dispatcher.submit_limit(
                 self.broker, pos.symbol, qty,
                 "buy" if pos.direction == "long" else "sell_short",
-                limit_price,
+                limit_price, client_order_id=live_order_id(_capital.lease),
             )
+            if order is None:
+                order = live_release(_capital.lease, "submit_none")
+            else:
+                live_bind(_capital.lease, order)
 
             if order and hasattr(order, "id"):
                 pos.entry_order_id = order.id
@@ -3389,7 +3908,7 @@ class QuarterlyHoldManager:
                 self.state_path, e,
             )
 
-    def _save_state(self) -> None:
+    def _save_state(self) -> bool:
         """Atomic write with os.fsync — RC-5 compliant (board S48b requirement)."""
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3400,8 +3919,10 @@ class QuarterlyHoldManager:
                 f.flush()
                 os.fsync(f.fileno())  # RC-5: board-required fsync
             tmp_path.replace(self.state_path)  # RC-5: POSIX atomic replace
+            return True
         except Exception as e:  # RC-3
             logger.warning("QuarterlyHoldManager: state save failed: %s", e)
+            return False
 
     # -----------------------------------------------------------------------
     # Utility helpers
@@ -3532,6 +4053,103 @@ class QuarterlyHoldManager:
                         pos.symbol, gq, max(held, 0))
             return max(held, 0)
         return int(gq)
+
+    def _grandfathered_notional_for_allocator(self) -> Optional[float]:
+        """Live value of CEO-approved pre-cap QHM shares; None fails new buys closed."""
+        total = 0.0
+        for pos in self._positions.values():
+            shares = self._grandfathered_shares(pos)
+            if shares <= 0:
+                continue
+            price = self._get_live_price(pos.symbol)
+            if price is None or price <= 0:
+                return None
+            total += shares * price
+        return total
+
+    def _strict_resync_qty(
+        self,
+        pos: HoldPosition,
+        owner_qty_hint: Optional[int] = None,
+        baseline_owner_qty: Optional[int] = None,
+    ) -> Optional[int]:
+        """Refresh QHM-owned qty without converting another tier's shares into QHM."""
+        if self.dry_run:
+            return None
+        try:
+            alpaca_pos = self.broker.get_position(pos.symbol)
+            if alpaca_pos is None:
+                return None
+            raw_qty = int(float(getattr(alpaca_pos, "qty", 0)))
+            side = str(
+                getattr(getattr(alpaca_pos, "side", ""), "value", None)
+                or getattr(alpaca_pos, "side", "")
+            ).lower()
+            if raw_qty <= 0 or side not in ("long", "position_side.long"):
+                logger.critical(
+                    "QuarterlyHoldManager: %s strict qty rejected side=%r qty=%r",
+                    pos.symbol, side, raw_qty,
+                )
+                return None
+            from execution.ownership_guard import load_ledger, tier_qty
+            ledger_qty_raw = tier_qty(load_ledger(), pos.symbol, "qhm")
+            ledger_qty = int(float(ledger_qty_raw))
+            if ledger_qty <= 0:
+                return None
+            if owner_qty_hint is not None:
+                # Exact QH-tagged order fills plus the durably persisted pre-submit
+                # baseline are owner proof while the asynchronous ledger catches up.
+                if (baseline_owner_qty is None
+                        or ledger_qty not in (baseline_owner_qty, owner_qty_hint)):
+                    logger.critical(
+                        "QuarterlyHoldManager: %s expected QHM owner qty %d from "
+                        "baseline %s but ledger proves %d; keeping recovery pending",
+                        pos.symbol, owner_qty_hint, baseline_owner_qty, ledger_qty,
+                    )
+                    return None
+                live_qty = owner_qty_hint
+            else:
+                live_qty = ledger_qty
+            if live_qty > raw_qty:
+                return None
+        except Exception as exc:  # broker/SDK transports raise several runtime types
+            logger.critical(
+                "QuarterlyHoldManager: strict broker qty read failed for %s: %s",
+                pos.symbol, exc,
+            )
+            return None
+        pos.qty_filled = live_qty
+        pos.qty_total = live_qty
+        pos.updated_at = self._now_et().isoformat()
+        return live_qty
+
+    def _live_covering_qhm_stop(self, pos: HoldPosition, qty: int):
+        """Return a confirmed live QHM reducing stop covering qty, else None."""
+        book = self._get_open_orders()
+        if book is None:
+            return None
+        wanted_side = "sell" if pos.direction == "long" else "buy"
+        for order in book:
+            order_symbol = str(getattr(order, "symbol", "") or "").upper()
+            side = str(getattr(getattr(order, "side", ""), "value", None)
+                       or getattr(order, "side", "")).lower()
+            order_type = str(getattr(getattr(order, "type", ""), "value", None)
+                             or getattr(order, "type", "")).lower()
+            status = str(getattr(order, "status", "") or "").lower()
+            coid = str(getattr(order, "client_order_id", "") or "")
+            try:
+                order_qty = int(float(getattr(order, "qty", 0) or 0))
+                filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            remaining_qty = order_qty - filled_qty
+            if (0 <= filled_qty <= order_qty
+                    and order_symbol == pos.symbol.upper()
+                    and side.endswith(wanted_side) and "stop" in order_type
+                    and status in {"new", "accepted"} and filled_qty == 0
+                    and coid.startswith("QH-") and remaining_qty == qty):
+                return order
+        return None
 
     def _qhm_total_notional(self, exclude_grandfathered: bool = False) -> Optional[float]:
         """Total live market value of QHM holds (every position with qty_filled > 0; with

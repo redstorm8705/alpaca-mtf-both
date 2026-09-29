@@ -1391,7 +1391,19 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         order_side = "buy" if direction == "long" else "sell"
         day_tier_logger.log_decision(decision_id or coid, symbol, decision=decision, trigger=trigger,
                                      size=size, trade_id=coid)
-        order = broker.submit_limit_order(symbol, qty, order_side, limit_px, tier="daytrade")
+        from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+        _capital = live_admit("daytrade", "daytrade", symbol, order_side, qty, limit_px, stop_price=stop_px)
+        if not _capital.approved:
+            logger.warning("[%s] day-tier entry skipped — allocator: %s", symbol, _capital.reason)
+            return False
+        order = broker.submit_limit_order(
+            symbol, qty, order_side, limit_px, tier="daytrade",
+            client_order_id=live_order_id(_capital.lease),
+        )
+        if order is None:
+            order = live_release(_capital.lease, "submit_none")
+        elif not live_bind(_capital.lease, order):
+            logger.critical("[%s] allocator bind failed after submit; preserving durable reservation", symbol)
         if order is None or not getattr(order, "id", None):
             state[key]["state"] = "submit_failed"
             _save_state(state)

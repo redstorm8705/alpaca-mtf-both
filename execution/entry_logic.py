@@ -1562,7 +1562,26 @@ def execute_entries(
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
         side = "buy" if direction == "long" else "sell"
-        order = submit_market_order(symbol=symbol, qty=shares, side=side)
+        from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+        # Reserve an upper gross-notional buffer for either direction and a separate
+        # lower short-sale price for honest stop-risk measurement.
+        _capital_price_bound = entry_price * 1.01  # PROV:live-tier-capital-allocator-2026-09-27
+        _execution_limit = entry_price * (1.01 if side == "buy" else 0.99)  # PROV:live-tier-capital-allocator-2026-09-27
+        _capital = live_admit("swing", "intraday", symbol, side, shares,
+                              _capital_price_bound, stop_price=stop,
+                              risk_price_bound=_execution_limit)
+        if not _capital.approved:
+            logger.info(f"[{symbol}] allocator blocked Swing entry: {_capital.reason}")
+            _rc8_clear_buffers(symbol, "tier-capital")
+            continue
+        order = submit_market_order(
+            symbol=symbol, qty=shares, side=side, tier="intraday",
+            client_order_id=live_order_id(_capital.lease),
+        )
+        if order is None:
+            order = live_release(_capital.lease, "submit_none")
+        else:
+            live_bind(_capital.lease, order)
 
         if order:
             # P5-H2: Fetch actual fill price — retry up to 3x at 1s intervals.
@@ -2038,10 +2057,19 @@ def _overnight_entry_check(
 
     # After 8 PM ET the AH session is closed — submit plain DAY limit (queues for pre-mkt)
     _use_extended = _mins < _main._OVERNIGHT_ENTRY_START   # True only if before 8 PM (edge case)
+    from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+    _capital = live_admit("swing", "intraday", symbol, side, shares, limit_price, stop_price=stop, overnight=True)
+    if not _capital.approved:
+        logger.info(f"{_log} {symbol}: allocator blocked Swing overnight entry: {_capital.reason}")
+        return
     order = submit_limit_order(
         symbol=symbol, qty=shares, side=side,
-        limit_price=limit_price, extended_hours=_use_extended,
+        limit_price=limit_price, extended_hours=_use_extended, tier="intraday", client_order_id=live_order_id(_capital.lease),
     )
+    if order is None:
+        order = live_release(_capital.lease, "submit_none")
+    else:
+        live_bind(_capital.lease, order)
     if order:
         tracker.record_pending_entry(
             symbol=symbol, order_id=str(order.id),  # type: ignore[attr-defined]

@@ -36,7 +36,7 @@ def _mgr(pos, price=235.0, room=10, fill=None, broker=None):
     m.broker = broker or Broker()
     m._positions = {pos.symbol: pos}
     m._thesis_config = {}
-    m._save_state = lambda: None  # type: ignore[method-assign]
+    m._save_state = lambda: True  # type: ignore[method-assign]
     m.alerts = []
     m._alert = m.alerts.append  # type: ignore[method-assign]
     m._get_live_price = lambda s: price  # type: ignore[method-assign]
@@ -54,6 +54,37 @@ def _mgr(pos, price=235.0, room=10, fill=None, broker=None):
         return got
     m._stop_safe_add = _ssa  # type: ignore[method-assign]
     return m
+
+
+def _prepare_real_helper(m):
+    """Supply the durable-recovery collaborators now required by the live helper."""
+    m._grandfathered_notional_for_allocator = lambda: 0.0
+    m._now_et = lambda: NOW
+
+    def _arm(p, client_id):
+        p.ambiguous_add_client_order_id = client_id
+        p.ambiguous_add_baseline_qty = p.qty_filled
+        return True
+
+    def _strict(p, *_args):
+        try:
+            m._resync_from_alpaca(p)
+        except Exception:
+            return None
+        return p.qty_filled
+
+    m._arm_ambiguous_add_recovery = _arm
+    m._strict_resync_qty = _strict
+
+
+def _fake_allocator_module():
+    lease = SimpleNamespace(id="lease-1")
+    return SimpleNamespace(
+        live_admit=lambda *_a, **_kw: SimpleNamespace(approved=True, lease=lease),
+        live_bind=lambda *_a, **_kw: True,
+        live_release=lambda *_a, **_kw: True,
+        live_order_id=lambda _lease: "QH-NVDA-test",
+    )
 
 
 class TrancheAdds(unittest.TestCase):
@@ -261,9 +292,10 @@ def _helper_run(pos, fill_qty, raise_to, add_ok=True):
     from unittest import mock
     m = _mgr(pos)
     del m._stop_safe_add
+    _prepare_real_helper(m)
     stops = []
     m._dispatcher = SimpleNamespace(
-        submit_limit=lambda *a: SimpleNamespace(id="add-1") if add_ok else None,
+        submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1") if add_ok else None,
         submit_gtc_stop=lambda b, s, q, side, px: stops.append((q, px)) or SimpleNamespace(id="stop-2"))
     m.broker.get_position = lambda s: SimpleNamespace(qty=pos.qty_filled)
 
@@ -271,9 +303,11 @@ def _helper_run(pos, fill_qty, raise_to, add_ok=True):
         p.qty_filled += fill_qty
     m._resync_from_alpaca = _resync  # type: ignore[method-assign]
     fake = SimpleNamespace(is_market_open=lambda: True, cancel_order=lambda oid: True,
-                           get_order=lambda oid: SimpleNamespace(status="filled" if fill_qty else "new", filled_qty=fill_qty))
+                           get_order=lambda oid: SimpleNamespace(status="filled" if fill_qty else "new", filled_qty=fill_qty),
+                           get_order_by_client_order_id=lambda _coid: None)
     clock = iter(range(1000))
-    with mock.patch.dict(sys.modules, {"execution.broker": fake}), mock.patch("time.sleep"), \
+    with mock.patch.dict(sys.modules, {"execution.broker": fake,
+                                      "execution.tier_capital_allocator": _fake_allocator_module()}), mock.patch("time.sleep"), \
             mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
         m._stop_safe_add(pos, 1, 235.0, "tranche-2", raise_stop_to=raise_to)
     return stops
@@ -312,9 +346,10 @@ class LateFillAndFailedResync(unittest.TestCase):
         pos = _pos(qty_filled=1)
         m = _mgr(pos)
         del m._stop_safe_add
+        _prepare_real_helper(m)
         stops = []
         m._dispatcher = SimpleNamespace(
-            submit_limit=lambda *a: SimpleNamespace(id="add-1"),
+            submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1"),
             submit_gtc_stop=lambda b, s, q, side, px: stops.append(q) or SimpleNamespace(id="stop-2"))
         m.broker.get_position = lambda s: SimpleNamespace(qty=1)
 
@@ -323,9 +358,11 @@ class LateFillAndFailedResync(unittest.TestCase):
         m._resync_from_alpaca = _resync_fails  # type: ignore[method-assign]
         reads = iter([SimpleNamespace(status="new", filled_qty=0)] * 14 + [SimpleNamespace(status="filled", filled_qty=1)] * 5)
         fake = SimpleNamespace(is_market_open=lambda: True, cancel_order=lambda oid: True,
-                               get_order=lambda oid: next(reads))
+                               get_order=lambda oid: next(reads),
+                               get_order_by_client_order_id=lambda _coid: None)
         clock = iter(range(1000))
-        with mock.patch.dict(sys.modules, {"execution.broker": fake}), mock.patch("time.sleep"), \
+        with mock.patch.dict(sys.modules, {"execution.broker": fake,
+                                          "execution.tier_capital_allocator": _fake_allocator_module()}), mock.patch("time.sleep"), \
                 mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
             got = m._stop_safe_add(pos, 1, 235.0, "tranche-2")
         self.assertEqual(got, 1)
@@ -339,21 +376,24 @@ class RemainderCancelFailure(unittest.TestCase):
         pos = _pos(qty_filled=2)
         m = _mgr(pos)
         del m._stop_safe_add  # use the real helper
+        _prepare_real_helper(m)
         m._dispatcher = SimpleNamespace(
-            submit_limit=lambda *a: SimpleNamespace(id="add-1"),
+            submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1"),
             submit_gtc_stop=lambda *a: SimpleNamespace(id="stop-2"))
         m.broker.get_position = lambda s: SimpleNamespace(qty=2)
         m._resync_from_alpaca = lambda p: None  # type: ignore[method-assign]
         fake = SimpleNamespace(is_market_open=lambda: True, get_order=lambda oid: SimpleNamespace(status="new", filled_qty=0),
-                               cancel_order=lambda oid: oid == "stop-1")
+                               cancel_order=lambda oid: oid == "stop-1",
+                               get_order_by_client_order_id=lambda _coid: None)
         clock = iter(range(1000))
-        with mock.patch.dict(sys.modules, {"execution.broker": fake}), mock.patch("time.sleep"), \
+        with mock.patch.dict(sys.modules, {"execution.broker": fake,
+                                          "execution.tier_capital_allocator": _fake_allocator_module()}), mock.patch("time.sleep"), \
                 mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
             got = m._stop_safe_add(pos, 1, 235.0, "tranche-2")
         self.assertEqual(got, 0)
         self.assertEqual(pos.stop_order_id, "stop-2")
         self.assertEqual(len(m.alerts), 1)
-        self.assertIn("add remainder cancel failed", m.alerts[0])
+        self.assertIn("remainder cancellation failed", m.alerts[0])
 
 
 if __name__ == "__main__":

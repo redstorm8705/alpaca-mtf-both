@@ -328,6 +328,19 @@ def _hold_state(symbol: str, side: str, qty: float) -> str:
         return _HOLD_UNKNOWN
 
 
+def get_order_by_client_order_id(client_order_id: str):
+    """Exact idempotency recovery for an ambiguous submit response. Returns None only
+    when Alpaca confirms no such order or the lookup itself is unavailable."""
+    if not client_order_id:
+        return None
+    try:
+        client = _get_trading_client()
+        return client.get_order_by_client_id(client_order_id)
+    except Exception as e:
+        logger.warning("client-order lookup failed for %s: %s", client_order_id, e)
+        return None
+
+
 def get_order(order_id: str):
     """
     Fetch a specific order by ID.
@@ -412,6 +425,7 @@ def submit_market_order(
     qty: int,
     side: str,          # "buy" or "sell"
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
+    client_order_id: str | None = None,
 ) -> object:
     """
     Submit a plain market order with retry (max 3 attempts, 1s / 2s / 4s backoff).
@@ -428,7 +442,7 @@ def submit_market_order(
     last_error = None
     # Tier-tagged idempotency key, generated once — reused on every retry so Alpaca
     # deduplicates double-fires caused by network timeouts hitting the retry loop.
-    _idem_id   = _make_idem_id(tier, symbol, side)
+    _idem_id   = client_order_id or _make_idem_id(tier, symbol, side)
 
     for attempt in range(3):
         try:
@@ -489,6 +503,7 @@ def submit_limit_order(
     limit_price: float,
     extended_hours: bool = False,
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
+    client_order_id: str | None = None,
 ) -> object:
     """
     Submit a DAY limit order. Used for overnight swing entries.
@@ -509,7 +524,7 @@ def submit_limit_order(
     # _is_retryable() (used below) explicitly includes "timeout" and
     # "connection" as retryable, so this is a genuinely reachable
     # ambiguous-success scenario, not theoretical. Now tier-tagged.
-    _idem_id   = _make_idem_id(tier, symbol, side)
+    _idem_id   = client_order_id or _make_idem_id(tier, symbol, side)
 
     order_data = LimitOrderRequest(
         symbol=symbol,
