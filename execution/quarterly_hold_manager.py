@@ -3013,33 +3013,19 @@ class QuarterlyHoldManager:
             _t_day, _t_n = _tries.get(pos.symbol, ("", 0))
             if _t_day == today_str and _t_n >= _TRANCHE_MAX_TRIES_PER_DAY:
                 return False
-            # No tranche while the earnings-trim window is open (it may be selling this name) — the
-            # owed tranche runs after the print. pos.earnings_gate_date is only set once a hold is already
-            # PENDING_EARNINGS, so read the calendar. Uses the per-symbol FMP call (history + next date),
-            # not the 14-day week cache: a missing symbol there only means "no print within 14 days".
-            # One call per symbol per day, failures included (FMP free tier: 250 calls/day). Fail closed: get_earnings_dates
-            # returns [] on any fetch failure and every listed stock has history, so [] means unknown.
-            _today = self._now_et().date()
-            _ecache: dict[str, tuple[str, list]] = self.__dict__.setdefault("_tranche_earnings", {})
-            _hit = _ecache.get(pos.symbol)
-            if _hit is not None and _hit[0] == today_str:
-                _all = _hit[1]
-            else:
-                try:
-                    from data.fmp_client import get_earnings_dates
-                    _all = list(get_earnings_dates(pos.symbol))
-                except Exception as _er_e:
-                    logger.warning("QHM tranche-%d: %s earnings lookup failed (%s) — skip", _tr, pos.symbol,
-                                   _er_e)
-                    return False
-                _ecache[pos.symbol] = (today_str, _all)  # an empty answer is also held for the day
-            if not _all:
-                logger.warning("QHM tranche-%d: %s earnings calendar empty (unknown) — skip", _tr, pos.symbol)
+            # Adds run INTO earnings (Rafael 2026-09-28: no pre-earnings blackout). One guard only: if the
+            # earnings profit-take has already reduced (or is reducing) this name for the current print,
+            # do not buy the shares back. Fail closed if that state file is unreadable.
+            try:
+                _ts = dict(self._load_earnings_trim_state().get(pos.symbol, {}))
+            except Exception as _ts_e:
+                logger.warning("QHM tranche-%d: %s earnings-trim state unreadable (%s) — skip", _tr,
+                               pos.symbol, _ts_e)
                 return False
-            _up = sorted(d for d in _all if d >= _today)
-            if _up and (_up[0] - _today).days <= _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS:
-                logger.info("QHM tranche-%d: %s earnings %s within %d days — tranche waits", _tr,
-                            pos.symbol, _up[0], _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS)
+            _gd = str(_ts.get("gate_date") or "")
+            if (_gd >= today_str and (_ts.get("tier1") in ("reserved", "done")
+                                      or _ts.get("tier2") in ("reserved", "done"))):
+                logger.info("QHM tranche-%d: %s trimmed for the %s print — no re-add", _tr, pos.symbol, _gd)
                 return False
 
             equity = self._get_account_equity()

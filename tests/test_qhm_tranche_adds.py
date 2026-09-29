@@ -10,23 +10,7 @@ from types import SimpleNamespace
 from execution import quarterly_hold_manager as qm
 
 NOW = datetime(2026, 10, 1, 10, 30, tzinfo=qm.ET)  # entry 2026-09-29 -> Day 3
-EARNINGS: dict = {}  # symbol -> list of dates served by the fake data.fmp_client
-_patch = None
-
-
-def setUpModule():
-    import sys
-    from unittest import mock
-    global _patch
-    from datetime import date
-    # default: a past print only (no upcoming earnings within the window)
-    fake = SimpleNamespace(get_earnings_dates=lambda sym: EARNINGS.get(sym, [date(2026, 7, 30)]))
-    _patch = mock.patch.dict(sys.modules, {"data.fmp_client": fake})
-    _patch.start()
-
-
-def tearDownModule():
-    _patch.stop()
+TRIM: dict = {}  # served by the stubbed _load_earnings_trim_state
 
 
 def _pos(**kw):
@@ -61,6 +45,7 @@ def _mgr(pos, price=235.0, room=10, fill=None, broker=None):
     m.calls = []
 
     m._design_stop_price = lambda sym, avg: None  # type: ignore[method-assign]
+    m._load_earnings_trim_state = lambda: TRIM  # type: ignore[method-assign]
 
     def _ssa(p, qty, px, label, raise_stop_to=None):
         m.calls.append((p.symbol, qty, label))
@@ -140,66 +125,51 @@ class TrancheAdds(unittest.TestCase):
         self.assertEqual(m.maybe_enter_positions(), [])
         self.assertEqual(m.calls, [])
 
-    def test_earnings_window_skips(self):
-        from datetime import date
+    def test_adds_into_earnings_no_blackout(self):
+        # nothing in the add path looks at the earnings calendar any more (Rafael 2026-09-28)
+        pos = _pos(earnings_gate_date="2026-10-03")
+        m = _mgr(pos)
+        self.assertEqual(m.maybe_enter_positions(), ["NVDA"])
+
+    def test_no_re_add_after_trim_for_this_print(self):
         pos = _pos()
         m = _mgr(pos)
-        EARNINGS["NVDA"] = [date(2026, 10, 20)]  # 19 days out: inside the 21-day trim window
+        TRIM["NVDA"] = {"gate_date": "2026-10-20", "tier1": "done"}
         try:
             self.assertEqual(m.maybe_enter_positions(), [])
             self.assertEqual(m.calls, [])
-            EARNINGS["NVDA"] = [date(2026, 10, 25), date(2026, 9, 1)]  # 24 days out: clear
-            m._tranche_earnings.clear()  # the lookup is cached per day
+        finally:
+            TRIM.clear()
+
+    def test_trim_for_a_past_print_does_not_block(self):
+        pos = _pos()
+        m = _mgr(pos)
+        TRIM["NVDA"] = {"gate_date": "2026-08-26", "tier1": "done", "tier2": "done"}
+        try:
             self.assertEqual(m.maybe_enter_positions(), ["NVDA"])
         finally:
-            EARNINGS.clear()
+            TRIM.clear()
 
-    def test_earnings_lookup_error_fails_closed(self):
-        import sys
-        from unittest import mock
+    def test_unreadable_trim_state_fails_closed(self):
         pos = _pos()
         m = _mgr(pos)
 
-        def _boom(sym):
-            raise RuntimeError("fmp down")
-        with mock.patch.dict(sys.modules, {"data.fmp_client": SimpleNamespace(get_earnings_dates=_boom)}):
-            self.assertEqual(m.maybe_enter_positions(), [])
+        def _boom():
+            raise qm._EarningsTrimStateUnreadable("corrupt")
+        m._load_earnings_trim_state = _boom  # type: ignore[method-assign]
+        self.assertEqual(m.maybe_enter_positions(), [])
         self.assertEqual(m.calls, [])
 
-    def test_earnings_lookup_once_per_symbol_per_day(self):
-        import sys
-        from datetime import date
-        from unittest import mock
-        pos = _pos()
-        m = _mgr(pos, fill=0)  # no fill, so the name is retried each cycle
-        calls = []
-        fake = SimpleNamespace(get_earnings_dates=lambda sym: calls.append(sym) or [date(2026, 7, 30)])
-        with mock.patch.dict(sys.modules, {"data.fmp_client": fake}):
-            for _ in range(3):
-                m.maybe_enter_positions()
-        self.assertEqual(calls, ["NVDA"])
-
-    def test_failed_lookup_held_for_the_day(self):
-        import sys
-        from unittest import mock
-        pos = _pos()
-        m = _mgr(pos)
-        calls = []
-        fake = SimpleNamespace(get_earnings_dates=lambda sym: calls.append(sym) or [])
-        with mock.patch.dict(sys.modules, {"data.fmp_client": fake}):
-            m.maybe_enter_positions()
-            m.maybe_enter_positions()
-        self.assertEqual((calls, m.calls), (["NVDA"], []))
-
-    def test_empty_earnings_calendar_fails_closed(self):
-        pos = _pos()
-        m = _mgr(pos)
-        EARNINGS["NVDA"] = []
+    def test_skipped_names_do_not_use_the_cycle_budget(self):
+        m = _mgr(_pos())
+        m._positions["GOOGL"] = _pos(symbol="GOOGL")
+        m._positions["GE"] = _pos(symbol="GE")
+        TRIM.update({"NVDA": {"gate_date": "2026-10-20", "tier1": "reserved"},
+                     "GOOGL": {"gate_date": "2026-10-28", "tier2": "done"}})
         try:
-            self.assertEqual(m.maybe_enter_positions(), [])
-            self.assertEqual(m.calls, [])
+            self.assertEqual(m.maybe_enter_positions(), ["GE"])
         finally:
-            EARNINGS.clear()
+            TRIM.clear()
 
     def test_within_one_percent_of_stop_skips(self):
         pos = _pos(stop_price=233.0, tranche1_price=233.0)
@@ -213,17 +183,6 @@ class TrancheAdds(unittest.TestCase):
         for _ in range(5):
             m.maybe_enter_positions()
         self.assertEqual(len(m.calls), qm._TRANCHE_MAX_TRIES_PER_DAY)
-
-    def test_skipped_names_do_not_use_the_cycle_budget(self):
-        from datetime import date
-        m = _mgr(_pos())
-        m._positions["GOOGL"] = _pos(symbol="GOOGL")
-        m._positions["GE"] = _pos(symbol="GE")
-        EARNINGS.update({"NVDA": [date(2026, 10, 15)], "GOOGL": [date(2026, 10, 15)]})  # both blocked
-        try:
-            self.assertEqual(m.maybe_enter_positions(), ["GE"])
-        finally:
-            EARNINGS.clear()
 
     def test_at_most_two_adds_per_cycle(self):
         m = _mgr(_pos())
