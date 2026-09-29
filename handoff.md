@@ -8,6 +8,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-09-28 evening, Claude-signed) — QHM tranches 2-3 + C2 lab 7 — pick up here
+
+**SHIPPED + DEPLOYED:** PR #438 (behavior-preserving extraction of the QHM stop-safe add; OCI 3d461d0)
+(verify: `git log --oneline -1 3d461d0`; `grep -c "def _stop_safe_add" execution/quarterly_hold_manager.py` → 1).
+**SHIPPED + DEPLOYED (deployed, unexercised):** PR #439 (OCI cc97cc4) — quarterly holds now buy tranches 2-3 (they never ran;
+LLY stuck at tranche 2 since 08-24)
+(verify: `git log --oneline -1 cc97cc4`; `ssh mtf-bot 'cd ~/mtf-bot && git log --oneline -1'` → cc97cc4;
+`grep -c "def _add_tranche_active" execution/quarterly_hold_manager.py` → 1). Rafael 2026-09-28: adds run INTO earnings (no pre-earnings blackout); only guard = no
+re-add after the earnings profit-take trimmed the name for the current print (verify: `grep -c "def test_adds_into_earnings_no_blackout\|def test_no_re_add_after_trim_for_this_print" tests/test_qhm_tranche_adds.py` → 2;
+`python3 -m unittest tests.test_qhm_tranche_adds` → OK). Design: `logs/design_records/qhm_top3_action_2026-09-27.md`.
+**⏩ EXACT NEXT ACTION:** watch the 10:05 ET window: `ssh mtf-bot 'grep -E "tranche 1/3 submitted|QHM TRANCHE OK|QHM tranche-" /home/ubuntu/mtf-bot/logs/mtf_bot.log | tail'`.
+Then: full 30-min download finishes → full lab-7 run (`research/c2_4h_lab.py`, scratch worktree branch
+`claude/c2-lab6`, uncommitted with lab 6) → cold review → report. Details: `logs/tb_audit_log.md` 2026-09-28 lines.
+
 ## ⏩ LATEST (2026-09-28 PM, Claude-signed) — C2 lab + QHM new-money budget — pick up here
 
 **SHIPPED + DEPLOYED (deployed, unexercised):** PR #437 — QHM new-money budget (pre-cap LLY shares no longer block new
