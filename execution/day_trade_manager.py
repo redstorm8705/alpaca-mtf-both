@@ -585,6 +585,23 @@ def _min_stop_room_ok(symbol: str, direction: str, entry_px: float, stop_px: flo
         # This also makes a mis-set spread_mult=0 safe when ATR happens to be 0 (Gro NIT-D).
         if not (min_stop > 0):
             return False, "min-stop gate: no measurable room floor (ATR≈0 and spread≈0) — skip (fail-closed)"
+        # LIVE-PRICE ROOM (2026-09-29): the caller passes the marketable-LIMIT price, which sits
+        # slippage-% on the favorable side of the stale bar reference, so the entry→stop distance above
+        # is inflated by ~the slippage allowance. The fill happens at the live touch we trade into
+        # (short sells the bid, long buys the ask). NVDA 2026-09-29: stop 230.29, limit 229.50, bid
+        # ~230.28 → the old check saw $0.79 of room; the live room was ~$0.01 and the fill (230.30)
+        # crossed the stop. Measure room from the live touch too and use the SMALLER distance; a stop
+        # the live touch has already reached is no trade at all.
+        if direction == "short":
+            live_ref, live_dist = bid, float(stop_px) - bid
+        elif direction == "long":
+            live_ref, live_dist = ask, ask - float(stop_px)
+        else:
+            return False, f"min-stop gate: unknown direction {direction!r} — skip (fail-closed)"
+        if not (math.isfinite(live_dist) and live_dist > 0):
+            return False, (f"min-stop gate: stop ${float(stop_px):.4f} already reached by the live "
+                           f"{'bid' if direction == 'short' else 'ask'} ${live_ref:.4f} — NO ROOM, skip")
+        stop_distance = min(stop_distance, live_dist)
         if stop_distance + 1e-9 < min_stop:
             return False, (f"min-stop gate: stop_distance ${stop_distance:.4f} < required ${min_stop:.4f} "
                            f"(max of {k}×ATR ${atr_floor:.4f}, {spread_mult}×spread ${spread_mult * spread:.4f}) "
