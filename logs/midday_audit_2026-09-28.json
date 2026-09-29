@@ -1,0 +1,332 @@
+{
+  "audit_date": "2026-09-28",
+  "run_ts": "2026-09-28T10:30:01.746802-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 4,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [
+      {
+        "symbol": "SPY",
+        "ts": "2026-09-25 10:23:42",
+        "score": 10,
+        "mri": "STRESSED",
+        "price": 771.11,
+        "source": "alpaca_data",
+        "flags": [
+          "MRI=STRESSED at entry"
+        ]
+      }
+    ],
+    "entry_symbols": [
+      "AMZN",
+      "EWY",
+      "SPY",
+      "INTC"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "ELEVATED": 29
+    },
+    "last_score": 22,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 82,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-28 16:11:42,640 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-28 16:11:42,644 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-28 16:11:50,446 | WARNING  | execution.entry_logic | [UBER] Sector correlation BLOCKED: already holding SOFI in sector 'fintech' \u2014 skipping to",
+      "2026-09-28 16:11:51,364 | WARNING  | execution.entry_logic | [RBLX] COUNTER-TREND GATE [short]: 1-month return +13.26% opposes the trade on a structur",
+      "2026-09-28 16:12:06,893 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -10.549999999999983,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -3.516666666666661,
+    "best": {
+      "symbol": "SPY",
+      "pnl": 0.0,
+      "entry_price": 771.11,
+      "exit_price": 771.11,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "STRESSED",
+      "stop": 767.78,
+      "target": 779.65
+    },
+    "worst": {
+      "symbol": "INTC",
+      "pnl": -6.719999999999999,
+      "entry_price": 121.6,
+      "exit_price": 118.24,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 10,
+      "mri_level": "NORMAL",
+      "stop": 104.53,
+      "target": 157.34
+    },
+    "trades": [
+      {
+        "symbol": "INTC",
+        "pnl": -6.719999999999999,
+        "entry_price": 121.6,
+        "exit_price": 118.24,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "NORMAL",
+        "stop": 104.53,
+        "target": 157.34
+      },
+      {
+        "symbol": "SPY",
+        "pnl": 0.0,
+        "entry_price": 771.11,
+        "exit_price": 771.11,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 10,
+        "mri_level": "STRESSED",
+        "stop": 767.78,
+        "target": 779.65
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": -3.829999999999984,
+        "entry_price": 245.83,
+        "exit_price": 247.745,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 247.75,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AMZN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 206,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:48-09:48"
+        ],
+        "uncovered_windows_pt": [
+          "06:48-06:48"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "EWY": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 102,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "11:48-11:48"
+        ],
+        "uncovered_windows_pt": [
+          "08:48-08:48"
+        ],
+        "rejected_stop_orders": 1
+      },
+      "GEV": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 229,
+        "uncovered_min": 229,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-13:18"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-10:18"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "INTC": {
+        "class": "NAKED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 10,
+        "uncovered_min": 10,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:40"
+        ],
+        "rejected_stop_orders": 1
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NFLX": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 10,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 10,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "SOFI": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 10,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "SPY": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 10,
+        "uncovered_min": 10,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:40"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-09-28",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "GEV NAKED (broker ground truth)",
+        "detail": "GEV: no broker stop for 229m of 229m held (06:30-10:18 PT); owners qhm"
+      },
+      {
+        "severity": "critical",
+        "title": "INTC NAKED (broker ground truth)",
+        "detail": "INTC: no broker stop for 10m of 10m held (06:30-06:40 PT); owners other"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 9,
+    "symbols": [
+      "AMZN",
+      "EWY",
+      "GEV",
+      "INTC",
+      "SPY"
+    ],
+    "by_symbol": {
+      "GEV": {
+        "buy": 0,
+        "sell": 1
+      },
+      "AMZN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "EWY": {
+        "buy": 0,
+        "sell": 0
+      },
+      "SPY": {
+        "buy": 0,
+        "sell": 2
+      },
+      "INTC": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

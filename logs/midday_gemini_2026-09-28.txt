@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-09-28
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+- NAKED position: GEV (229m exposure, no-broker-stop) | GEV
+- NAKED position: INTC (10m exposure, no-broker-stop) | INTC
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **INTC**: Entry $121.60, Exit $118.24. P&L $-6.72. Calculation: $118.24 - $121.60 = -$3.36 per share. The reported P&L of $-6.72 implies a 2-share position. The P&L sign is correct for a long entry.
+- **SPY**: Entry $771.11, Exit $771.11. P&L $0.00. This is a breakeven exit.
+- **AMZN**: Entry $245.83, Exit $247.75. P&L $-3.83. Calculation: $247.75 - $245.83 = +$1.92 per share. The reported P&L of $-3.83 indicates a short position (Entry $245.83 - Exit $247.75 = -$1.92 per share). The P&L sign is correct for a short entry.
+- **Correlation**: The AMZN trade had a score of 0/12 and resulted in a loss, which is consistent with the low score. However, the bot's win rate is 0% across 3 closed trades, suggesting a significant disconnect between the scoring model and current market conditions.
+
+### ENTRY QUALITY
+- **Rule 1 Violation**: The bot correctly identified the "PREMARKET RED LOCKOUT" (14/16 movers red) and blocked all long entries at 17:29:21 PT.
+- **MRI Stressed**: The SPY entry on 2026-09-25 occurred while the MRI was STRESSED, which is a high-risk condition.
+
+### EXIT QUALITY
+- The bot is currently holding 5 positions (EWY, LLY, NFLX, PLTR, SOFI). Given the high MRI (ELEVATED) and the "PREMARKET RED LOCKOUT" active, the lack of aggressive risk reduction on these holdings is a concern.
+
+### MRI ALIGNMENT
+- The MRI is consistently reporting "ELEVATED" (22/100). The bot is correctly applying a size floor (0.85x) and filtering signals, but the persistence of the "ELEVATED" state suggests the strategy is operating in a regime where its current edge is neutralized.
+
+### LOG ANOMALIES
+- `[ANOMALY-3] TQI degradation`: Last-5-trade average is 28.4/100, which is below the threshold of 30.
+- `macro_risk_index`: Multiple warnings regarding stale cache and failed FMP lookups (VIX, JPY).
+- `execution.quarterly_hold_manager`: Multiple entries blocked due to QHM caps (NVDA, GOOGL, GE).
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | NAKED Position Exposure | GEV and INTC are listed as NAKED in the Broker Ground Truth. The bot failed to establish or maintain a broker-side stop for these positions.**
+- **INFRASTRUCTURE | MEDIUM | Stale MRI Data | The `macro_risk_index` reported a cache age of 41282s, forcing a fallback to a static VIX value, which degrades the accuracy of the risk-adjusted sizing.**
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediate manual intervention required to place protective stops on GEV and INTC or close the positions, as they are currently NAKED.
+2. **INFRASTRUCTURE**: Investigate `macro_risk_index` cache refresh logic to prevent stale data (41282s age) from impacting risk-adjusted sizing.
+3. **ALPHA**: Review the scoring model parameters; the 0% win rate on closed trades despite high-score entries (e.g., INTC 10/12) indicates a potential failure in the confluence scoring logic during the current "ELEVATED" MRI regime.
