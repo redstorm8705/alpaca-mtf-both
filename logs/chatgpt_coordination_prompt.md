@@ -38,3 +38,8 @@ leave it implicit.
 **Net effect:** the Claude account can `git pull` → read `handoff.md` → read
 `logs/CROSS_ACCOUNT_CHANGELOG.md` → skim the PRs, and have a complete, quick-to-review picture of
 everything you changed — in under a minute.
+
+
+## 2026-09-29 — Live tier-capital allocator (ChatGPT/Codex signed)
+
+PR #442 / merge `d1148a9` is live on OCI `137.131.51.250`. It owns wire-time capital admission for increasing orders across Swing, Day Trade, QHM, and F6. Targets are 40/20/30/10 respectively, with dynamic regime reductions and verified-crash F6 expansion. Claude's Confluence 2.0 owns edge/scoring; do not duplicate either boundary. Board and mechanical gates passed; Google AI Studio approved after the QHM bounded-poll disagreement was resolved with exposure evidence; GitHub preship passed. Groq was waived once by Rafael; Nvidia bypassed. Status: deployed, unexercised.
