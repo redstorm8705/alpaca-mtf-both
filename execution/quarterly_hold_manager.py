@@ -91,6 +91,9 @@ _GRANDFATHER_STATE_PATH = _ROOT / "data" / "state" / "qhm_grandfathered.json"
 # Entry schedule — board-approved S48b
 _TRANCHE_FRACTIONS = [1 / 3, 1 / 3, 1 / 3]
 _TRANCHE_DAYS = [1, 3, 5]            # calendar trading days since entry_day
+_TRANCHE_MAX_TRIES_PER_DAY = 3        # stop-safe tranche add attempts per symbol per day (each cancels the stop)
+_TRANCHE_MAX_ADDS_PER_CYCLE = 2       # bounds the trading-thread block (each add can poll ~17s)
+_TRANCHE_MIN_STOP_MARGIN = 0.01       # never add within 1% of the resting stop
 
 # Timing — Harris/Brandt: liquidity settled
 _ENTRY_START_HOUR_ET = 10
@@ -531,6 +534,8 @@ class QuarterlyHoldManager:
         # NEW-MONEY BUDGET: record, once, the pre-cap share count of every grandfathered hold. Safe to
         # take today's qty: the cap (2026-09-06) has blocked every add to these over-cap holds since then.
         self._gf_shares: dict[str, int] = self._init_grandfathered_baseline()
+        self._tranche_add_day: dict[str, str] = {}  # symbol -> ET date of its last tranche add
+        self._tranche_cycle_attempts = 0
 
         if dry_run:
             _run_beck_tests(self)
@@ -850,11 +855,29 @@ class QuarterlyHoldManager:
         """
         entered: list[str] = []
         today_str = self._now_et().strftime("%Y-%m-%d")  # RC-1
+        self._tranche_cycle_attempts = 0  # stop-safe tranche adds attempted this call
 
         for symbol, pos in list(self._positions.items()):
-            if pos.state not in (HoldState.PENDING_ENTRY, HoldState.AWAITING_FILL):
+            if pos.state not in (HoldState.PENDING_ENTRY, HoldState.AWAITING_FILL,
+                                 HoldState.ACTIVE):
                 continue
             try:
+                if pos.state == HoldState.ACTIVE:
+                    # TRANCHES 2-3 (2026-09-28): a tranche-1 fill places the stop and sets ACTIVE, so
+                    # the PENDING_ENTRY/AWAITING_FILL branches below never ran tranches 2-3. ACTIVE
+                    # holds with tranches still owed buy them via the stop-safe add.
+                    if (1 <= pos.tranches_filled < len(_TRANCHE_FRACTIONS)
+                            and pos.tranche == pos.tranches_filled + 1
+                            and self._is_tranche_due(pos, today_str)):
+                        if pos.tranche1_price > 0 and not self._passes_day3_reconfirm(symbol, pos):
+                            logger.info(
+                                "QuarterlyHoldManager: %s Day-3 re-confirm FAIL — "
+                                "skipping tranche %d", symbol, pos.tranche)
+                            continue
+                        if self._add_tranche_active(pos, today_str):
+                            entered.append(symbol)
+                    continue
+
                 if not self._is_tranche_due(pos, today_str):
                     continue
 
@@ -883,7 +906,10 @@ class QuarterlyHoldManager:
                 elif pos.state == HoldState.AWAITING_FILL:
                     # Check if previous tranche filled; if so advance
                     filled = self._check_fill_and_advance(pos)
-                    if filled and pos.tranche <= len(_TRANCHE_DAYS):
+                    # A tranche-1 fill leaves the hold ACTIVE (stop resting) or PENDING_STOP_REPLACE;
+                    # later tranches go through _add_tranche_active, never a plain limit order here.
+                    if (filled and pos.state == HoldState.AWAITING_FILL
+                            and pos.tranche <= len(_TRANCHE_DAYS)):
                         if not self._is_tranche_due(pos, today_str):
                             continue
                         if pos.tranche > 1 and pos.tranche1_price > 0:
@@ -1865,7 +1891,7 @@ class QuarterlyHoldManager:
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
 
     def _stop_safe_add(self, pos: HoldPosition, add_qty: int, live_price: float,
-                       label: str = "dip-add") -> int:
+                       label: str = "dip-add", raise_stop_to: Optional[float] = None) -> int:
         """Stop-safe add of `add_qty` shares to an ACTIVE hold (board + Gro + GAI unanimous 2026-07-13, "Option C"):
         RTH only; cancel the resting stop -> marketable-limit add -> poll <=15s -> resync -> resubmit the stop for the
         ACTUAL held qty (never naked: a resting stop OR PENDING_STOP_REPLACE + alert on every branch). Returns the
@@ -1990,16 +2016,40 @@ class QuarterlyHoldManager:
         # Branch 2 — not fully filled: cancel the add (partials keep filled shares).
         if _filled < add_qty:
             try:
-                _cancel_order(str(_add.id))
+                _add_cancelled = _cancel_order(str(_add.id))
+            except Exception:
+                _add_cancelled = False
+            try:  # the final fill count (shares can fill between the last poll and the cancel)
+                _of = _get_order(str(_add.id))
+                _filled = max(_filled, int(float(getattr(_of, "filled_qty", 0) or 0)))
             except Exception:
                 pass
+            if not _add_cancelled:
+                # The unfilled remainder may still be live; if it fills later those shares sit
+                # outside the stop until the next resync/re-stop. Surface it.
+                logger.critical("QHM %s: %s add remainder cancel FAILED (order %s) — may still fill",
+                                label, pos.symbol, _add.id)
+                try:
+                    self._alert(":warning: QHM %s %s add remainder cancel failed — order %s may still "
+                                "fill outside the stop" % (pos.symbol, label, _add.id))
+                except Exception:
+                    pass
         # Resync to Alpaca truth (full/partial/no fill), resubmit the stop for the
         # ACTUAL held qty. Branch 3 (resubmit fails) => PENDING inside the helper.
         try:
             self._resync_from_alpaca(pos)
         except Exception:
             pass
-        _restore_or_pending(pos.qty_filled, "post-add stop resubmit")
+        # Tranche adds (risk seat 2026-09-28): once shares filled, the re-placed stop may move UP to the
+        # design stop for the new average — never down, never at/above the add price.
+        if (raise_stop_to is not None and (pos.qty_filled > _orig_qty or _filled >= 1)
+                and pos.stop_price < raise_stop_to < live_price * 0.98):
+            logger.info("QHM %s: %s stop raised $%.2f -> $%.2f for the new average",
+                        label, pos.symbol, pos.stop_price, raise_stop_to)
+            pos.stop_price = raise_stop_to
+        # a failed resync must not leave filled shares outside the stop: cover at least orig + filled
+        # (a stop for more than is held is rejected -> PENDING_STOP_REPLACE + alert, never silent)
+        _restore_or_pending(max(pos.qty_filled, _orig_qty + _filled), "post-add stop resubmit")
         return _filled
 
     # -----------------------------------------------------------------------
@@ -2933,6 +2983,149 @@ class QuarterlyHoldManager:
                 pos.symbol, pos.tranche, e,
             )
             return False
+
+    def _add_tranche_active(self, pos: HoldPosition, today_str: str) -> bool:
+        """Buy tranche 2 or 3 for an ACTIVE hold (stop resting) via the stop-safe add. Sizing matches
+        _submit_tranche (tranche fraction of target weight on equity net of other QHM notional, RC-7 floor);
+        the new-money 40% / per-name 20% cap blocks all-or-nothing like a new entry; RegT buying power
+        must cover it. Every check runs BEFORE the stop is cancelled. The tranche advances on any fill
+        (a partial is not chased). Returns True when shares filled."""
+        if self.dry_run:
+            return False
+        try:
+            _tr = pos.tranche
+            if pos.direction != "long":
+                logger.info("QHM tranche-%d: %s is %s — stop-safe add supports longs only, skip",
+                            _tr, pos.symbol, pos.direction)
+                return False
+            if not pos.stop_order_id or pos.stop_price <= 0 or pos.qty_filled <= 0:
+                logger.warning("QHM tranche-%d: %s has no resting stop / shares — skip", _tr, pos.symbol)
+                return False
+            if pos.last_dip_add_date == today_str:
+                logger.info("QHM tranche-%d: %s dip-added today — defer tranche", _tr, pos.symbol)
+                return False
+            # at most one tranche per symbol per day, so an overdue hold keeps the day spacing
+            # (in-memory: a restart can allow one more the same day; the cap still bounds it)
+            _tday: dict[str, str] = self.__dict__.setdefault("_tranche_add_day", {})
+            if _tday.get(pos.symbol) == today_str:
+                return False
+            _tries: dict[str, tuple[str, int]] = self.__dict__.setdefault("_tranche_tries", {})
+            _t_day, _t_n = _tries.get(pos.symbol, ("", 0))
+            if _t_day == today_str and _t_n >= _TRANCHE_MAX_TRIES_PER_DAY:
+                return False
+            # Adds run INTO earnings (Rafael 2026-09-28: no pre-earnings blackout). One guard only: if the
+            # earnings profit-take has already reduced (or is reducing) this name for the current print,
+            # do not buy the shares back. Fail closed if that state file is unreadable.
+            try:
+                _ts = dict(self._load_earnings_trim_state().get(pos.symbol, {}))
+            except Exception as _ts_e:
+                logger.warning("QHM tranche-%d: %s earnings-trim state unreadable (%s) — skip", _tr,
+                               pos.symbol, _ts_e)
+                return False
+            _gd = str(_ts.get("gate_date") or "")
+            if (_gd >= today_str and (_ts.get("tier1") in ("reserved", "done")
+                                      or _ts.get("tier2") in ("reserved", "done"))):
+                logger.info("QHM tranche-%d: %s trimmed for the %s print — no re-add", _tr, pos.symbol, _gd)
+                return False
+
+            equity = self._get_account_equity()
+            if equity <= 0:
+                logger.warning("QHM tranche-%d: %s equity unavailable — skip", _tr, pos.symbol)
+                return False
+            live_price = self._get_live_price(pos.symbol)
+            if not live_price or live_price <= 0:
+                logger.warning("QHM tranche-%d: %s no live price — skip", _tr, pos.symbol)
+                return False
+            if live_price < pos.stop_price * (1 + _TRANCHE_MIN_STOP_MARGIN):
+                logger.warning("QHM tranche-%d: %s $%.2f within %.0f%% of stop $%.2f — skip", _tr, pos.symbol,
+                               live_price, _TRANCHE_MIN_STOP_MARGIN * 100, pos.stop_price)
+                return False
+
+            available_equity = max(equity - self._get_quarterly_notional_excl(pos.symbol), 0.0)
+            target_notional = available_equity * pos.target_equity_pct * _TRANCHE_FRACTIONS[_tr - 1]
+            qty = max(int(target_notional / live_price), 1)  # RC-7
+
+            _room = self._qhm_cap_room_shares(pos.symbol, live_price, equity)
+            if _room is None:
+                logger.warning("QHM tranche-%d: %s QHM cap check unavailable — fail-closed, BLOCKED",
+                               _tr, pos.symbol)
+                return False
+            if qty > _room:
+                logger.info("QHM tranche-%d: %s would breach QHM cap (new-money agg 40%%/name 20%%): "
+                            "need %d sh, room %d — BLOCKED", _tr, pos.symbol, qty, _room)
+                return False
+
+            try:
+                _acct = self.broker.get_account()
+                _regt_bp = float(getattr(_acct, "regt_buying_power", None)
+                                 or getattr(_acct, "buying_power", 0) or 0)
+            except Exception as _bp_e:
+                logger.warning("QHM tranche-%d: %s BP read failed (%s) — skip", _tr, pos.symbol, _bp_e)
+                return False
+            if qty * live_price > _regt_bp:
+                logger.warning("QHM tranche-%d: %s unaffordable ($%.0f > RegT BP $%.0f) — skip",
+                               _tr, pos.symbol, qty * live_price, _regt_bp)
+                return False
+
+            # metered on the expensive step only (stop cancel + <=17s poll), so cheap skips on other
+            # names can never use up the per-cycle budget
+            _cyc = int(self.__dict__.get("_tranche_cycle_attempts", 0))
+            if _cyc >= _TRANCHE_MAX_ADDS_PER_CYCLE:
+                return False
+            self._tranche_cycle_attempts = _cyc + 1
+            _tries[pos.symbol] = (today_str, (_t_n if _t_day == today_str else 0) + 1)
+            _orig = pos.qty_filled
+            # design stop for the projected average (full fill); applied only on a fill, only upward
+            _proj_avg = ((pos.avg_entry_price * _orig + live_price * qty) / (_orig + qty)
+                         if pos.avg_entry_price > 0 else live_price)
+            _new_stop = self._design_stop_price(pos.symbol, _proj_avg)
+            _filled = self._stop_safe_add(pos, qty, live_price, "tranche-%d" % _tr,
+                                          raise_stop_to=_new_stop)
+            # Alpaca truth after the helper's resync; the poll count covers a failed resync.
+            _got = max(pos.qty_filled - _orig, _filled)
+            if _got < 1:
+                return False
+            pos.tranches_filled += 1
+            pos.tranche += 1
+            _tday[pos.symbol] = today_str
+            pos.updated_at = self._now_et().isoformat()  # RC-1
+            self._save_state()
+            logger.warning("QHM TRANCHE OK: %s tranche %d/%d +%d sh (asked %d) — %d sh held, stop $%.2f",
+                           pos.symbol, _tr, len(_TRANCHE_FRACTIONS), _got, qty, pos.qty_filled,
+                           pos.stop_price)
+            try:
+                self._alert("QHM: %s tranche %d/%d filled +%d sh — %d sh held, stop $%.2f" % (
+                    pos.symbol, _tr, len(_TRANCHE_FRACTIONS), _got, pos.qty_filled, pos.stop_price))
+            except Exception as _al_e:  # RC-3
+                logger.warning("QHM tranche alert failed for %s: %s", pos.symbol, _al_e)
+            return True
+        except Exception as e:  # RC-3
+            logger.warning("QHM tranche-%d error for %s: %s", pos.tranche, pos.symbol, e)
+            return False
+
+    def _design_stop_price(self, symbol: str, avg: float) -> Optional[float]:
+        """The _compute_and_submit_stop formula for a given average: max(avg - 2.5 x 14-week ATR,
+        avg x (1 - 15%)), rounded. None when it cannot be computed (the caller then keeps the old stop)."""
+        if avg <= 0:
+            return None
+        try:
+            from data.fetcher import fetch_bars
+            import config as _cfg
+            bars = fetch_bars(symbol, getattr(_cfg, "TF_WEEKLY", "1Week"), num_bars=_ATR_BARS + 5)
+            floor_stop = avg * (1 - _HARD_FLOOR_PCT)
+            if bars is None or bars.empty or len(bars) < _ATR_PERIOD_WEEKS + 1:
+                return round(floor_stop, 2)
+            trs = []
+            for i in range(1, len(bars)):
+                h = float(bars.iloc[i]["high"])
+                lo = float(bars.iloc[i]["low"])
+                pc = float(bars.iloc[i - 1]["close"])
+                trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+            atr = sum(trs[-_ATR_PERIOD_WEEKS:]) / _ATR_PERIOD_WEEKS
+            return round(max(avg - atr * _ATR_MULT, floor_stop), 2)
+        except Exception as e:  # RC-3
+            logger.warning("QHM design stop for %s unavailable: %s", symbol, e)
+            return None
 
     def _check_fill_and_advance(self, pos: HoldPosition) -> bool:
         """Check Alpaca position for fill confirmation. Advance state if filled."""

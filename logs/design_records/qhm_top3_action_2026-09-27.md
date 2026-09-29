@@ -89,3 +89,16 @@ tests: tests/test_qhm_stop_safe_add.py (market closed, cancel fails, stop fired 
 partial fill, stop resubmit failure -> PENDING_STOP_REPLACE + alert).
 2b (risk-path): ACTIVE holds with tranches_filled < 3 run the due tranche via `_stop_safe_add` (Day-3 reconfirm, 40%/20%
 caps, fail closed), no dip-add on the same symbol in the same cycle. Tests: tests/test_qhm_tranche_adds.py.
+2b review history (Claude-signed): risk seat APPROVE-WITH-CHANGES -> stop may only move UP after a tranche fill (tranche-1
+formula on the new average, 2% below live), earnings check must truly fail closed (empty calendar = unknown); execution seat
+APPROVE-WITH-CHANGES -> real earnings blackout (21-day trim window; pos.earnings_gate_date is never set on ACTIVE holds),
+per-cycle limit (2) metered on the stop-safe add only, 3 tries/symbol/day, no add within 1% of the stop, final fill read
+after the remainder cancel + stop covers orig + filled; one tranche/symbol/day. Follow-ups: stop-qty vs held-qty
+reconcile in run_weekly_check; dip-add's dead earnings_gate_date check (separate tidy diff).
+Rafael decision 2026-09-28 (supersedes the 21-day blackout above): tranche adds run INTO earnings. No pre-earnings blackout;
+the only earnings guard is "no re-add after the earnings profit-take trimmed this name for the current print" (fail closed on
+an unreadable trim-state file). Scaling/reducing into the print when up stays with the earnings profit-take.
+Below-cost adds into earnings run through dip-add: its 7-day pre-earnings no-add check reads pos.earnings_gate_date, which is
+never set on ACTIVE holds, so it never fires — consistent with Rafael's decision. The earlier follow-up to "fix" that check is
+DROPPED (it would re-create a blackout). Risk-seat follow-up (visibility, not a limit): Slack alert when 2+ full-size holds
+report in the same week.
