@@ -1,0 +1,1872 @@
+diff --git a/config.py b/config.py
+index 84d13bc..0d7521b 100644
+--- a/config.py
++++ b/config.py
+@@ -960,6 +960,27 @@ TIER_CAPITAL_FOREVER6_TARGET_PCT = 0.10  # PROV:live-tier-capital-allocator-2026
+ TIER_CAPITAL_ACCOUNT_GROSS_NORMAL = 1.25  # PROV:live-tier-capital-allocator-2026-09-27
+ 
+ 
++# ─── C2 SWING TIER: MEGACAP 55-DAY BREAKOUT (execution/swing_breakout_manager.py) ───
++# Signed: Claude (interactive, 2026-09-29). Design: logs/design_records/c2_swing_breakout_tier_2026-09-29.md.
++# Replaces NEW 12-point swing entries (live since 2026-04-06: -$126.00 over 154 trades, PF 0.89). Long only.
++# Every entry is admitted by the tier capital allocator's "swing" budget (shared with the 12-point path).
++SWING_BREAKOUT_ENABLED = True       # kill switch: False → no NEW breakout entries; held lots keep stops + managed exits
++SWING12_NEW_ENTRIES_ENABLED = False  # False → no NEW 12-point swing entries; open 12-point positions keep their exits
++SWING_BREAKOUT_TOP_N = 10           # PROV:c2-breakout-2026-09-29 — lab 8c universe: top-10 by 60-day median $ volume
++SWING_BREAKOUT_SLOT_PCT = 0.20      # PROV:c2-breakout-2026-09-29 — one slot = 20% of equity (board risk seat)
++SWING_BREAKOUT_MAX_SLOTS = 4        # PROV:c2-breakout-2026-09-29 — at most 4 concurrent breakout lots
++SWING_BREAKOUT_MIN1_MAX_PCT = 0.25  # PROV:c2-breakout-2026-09-29 — 1-share floor: a name whose one share exceeds the slot
++                                    # may enter as 1 share if that share <= 25% of equity (and the 2% stop-risk cap holds)
++SWING_BREAKOUT_BUDGET_PCT = 0.80    # PROV:c2-breakout-2026-09-29 — tier notional <= min(80%, 100% − other notional)
++SWING_BREAKOUT_STOP_ATR = 2.5       # PROV:c2-breakout-2026-09-29 — GTC stop at fill − 2.5 × ATR(14, daily) (lab 8c)
++SWING_BREAKOUT_MAX_RISK_PCT = 0.02  # PROV:c2-breakout-2026-09-29 — per-lot loss at the stop <= 2% of equity (own cap:
++                                    # the paper profile sets MAX_PORTFOLIO_RISK_PCT to 4%, which this tier must not inherit)
++SWING_BREAKOUT_MAX_HOLD = 30        # PROV:c2-breakout-2026-09-29 — time exit on the 30th session held (lab 8c)
++SWING_BREAKOUT_LIMIT_SLIP_PCT = 0.002  # marketable-limit cross vs the ask (caps the worst entry fill)
++SWING_BREAKOUT_FILL_WAIT_S = 15     # seconds to wait for the entry fill before cancelling the remainder
++SWING_BREAKOUT_EXIT_MINUTES = 10    # trend-break / time exits run in the last N minutes before the real close
++
++
+ # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
+ 
+ def validate_config():
+diff --git a/execution/entry_logic.py b/execution/entry_logic.py
+index 9ad29b2..ede306c 100644
+--- a/execution/entry_logic.py
++++ b/execution/entry_logic.py
+@@ -798,6 +798,16 @@ def execute_entries(
+             logger.info(f"[{symbol}] Already has Alpaca position — skipping.")
+             continue
+ 
++        # C2 swing tier (2026-09-29, Claude-signed): NEW 12-point swing entries are off while
++        # SWING12_NEW_ENTRIES_ENABLED is False — the megacap breakout tier (execution/
++        # swing_breakout_manager.py) takes the swing budget. Placed AFTER the #12c opposite-signal
++        # exit and the position checks, so open 12-point positions keep every exit path.
++        # The mean-reversion path (MR_ENABLED, its own strategy) is not a 12-point entry and is exempt.
++        if not _is_mr and not getattr(config, "SWING12_NEW_ENTRIES_ENABLED", True):
++            logger.info(f"[{symbol}] 12-point new entries disabled (SWING12_NEW_ENTRIES_ENABLED=False) — skip")
++            _rc8_clear_buffers(symbol, "swing12-off")
++            continue
++
+         # ── Re-entry cooldown (2026-08-01, BGG) ──────────────────────────────
+         # NEW ENTRIES ONLY. Placed AFTER the is_in_trade/#12c block AND the Alpaca-position
+         # check, so it can NEVER block a #12c defensive exit of an existing OPPOSITE position
+@@ -1900,6 +1910,11 @@ def _overnight_entry_check(
+     if risk.check_kill_switch():
+         return
+ 
++    # Gate 2b: 12-point new entries disabled (C2 swing tier, 2026-09-29) — no overnight 12-point entries
++    if not getattr(config, "SWING12_NEW_ENTRIES_ENABLED", True):
++        logger.debug(f"{_log} 12-point new entries disabled (SWING12_NEW_ENTRIES_ENABLED=False) — skip")
++        return
++
+     # Gate 3: Max 1 overnight entry — already have one pending or active?
+     pending = tracker.get_pending_overnight_entries()
+     if pending:
+diff --git a/execution/orphan_manager.py b/execution/orphan_manager.py
+index 689c239..45f2e7d 100644
+--- a/execution/orphan_manager.py
++++ b/execution/orphan_manager.py
+@@ -965,6 +965,23 @@ def _get_daytrade_syms() -> set:
+         return set()
+ 
+ 
++def _get_breakout_syms() -> set:
++    """Symbols the C2 swing-breakout tier currently HOLDS, from the tier's own
++    state file (data/state/swing_breakout.json, open lots). Its lots carry the
++    swing owner tag ("intraday") but live outside tracker.open_trades, so
++    without this exclusion a restart would adopt them as intraday orphans
++    (handed to check_exits, a second stop placed). get_breakout_symbols fails
++    CLOSED on an unreadable state file (last good set, else the configured pool);
++    the empty set here covers only an import failure."""
++    try:
++        from execution.swing_breakout_manager import get_breakout_symbols
++        return get_breakout_symbols()
++    except Exception as _bse:
++        logger.warning(
++            "orphan_manager: breakout-symbols state lookup failed: %s", _bse)
++        return set()
++
++
+ def reconcile_positions(
+     tracker: "PortfolioTracker",
+     risk: "Optional[RiskManager]" = None,
+@@ -1025,7 +1042,7 @@ def reconcile_positions(
+     # day-tier: DT-tagged, tracked outside tracker.open_trades — excluded from adoption
+     orphans = (
+         (alpaca_symbols - tracker_symbols) - _get_qhm_syms() - _get_forever6_syms()
+-        - _get_daytrade_syms()
++        - _get_daytrade_syms() - _get_breakout_syms()
+     )
+ 
+     # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
+diff --git a/strategy/run_cycle.py b/strategy/run_cycle.py
+index 9b240d1..d7368ff 100644
+--- a/strategy/run_cycle.py
++++ b/strategy/run_cycle.py
+@@ -866,6 +866,13 @@ def run_cycle(
+             _main._check_exits_extended_hours(tracker, risk, kelly)
+         except Exception as _ehe:
+             logger.warning(f"EH exit check failed: {_ehe}")
++        # C2 swing breakout tier: after-hours reconcile (re-places a stop on any lot flagged unprotected, books
++        # a stop fill); the near-close exits never fire here (the window is before the close).
++        try:
++            from execution.swing_breakout_manager import MANAGER as _breakout_ah
++            _breakout_ah.run_exit_check()
++        except Exception as _bo_ah_e:
++            logger.warning("Swing breakout after-hours reconcile failed: %s", _bo_ah_e)
+         # Overnight entry check — Phase 1 dry-run (8 PM – midnight ET only)
+         if not _kill_block_entries:
+             try:
+@@ -1693,6 +1700,17 @@ def run_cycle(
+         except Exception as _qhm_wk_e:
+             logger.warning("QHM run_weekly_check failed: %s", _qhm_wk_e)
+ 
++    # ── C2 swing breakout tier: stop-fill reconcile every cycle + near-close trend/time exits ──
++    # EXITS — placed before the kill/halt return so they always run (design record
++    # logs/design_records/c2_swing_breakout_tier_2026-09-29.md). Runs even with the tier disabled (held lots keep exits).
++    try:
++        from execution.swing_breakout_manager import MANAGER as _breakout
++        _bo_closed = _breakout.run_exit_check()   # call-time clock: the near-close window is checked when it runs
++        if _bo_closed:
++            logger.info("Swing breakout exits: %s", _bo_closed)
++    except Exception as _bo_x_e:
++        logger.warning("Swing breakout exit check failed: %s", _bo_x_e)
++
+     # ── T3: MRI STRESSED+ breakeven push ─────────────────────────────────────
+     if mri and mri.level() in ("STRESSED", "HIGH", "CRITICAL") and tracker.open_trades:
+         _apply_mri_breakeven_push(tracker, mri)
+@@ -1780,10 +1798,12 @@ def run_cycle(
+         from execution.drift_detector import detect_and_emit_drift
+         from execution.broker import get_open_positions, get_open_orders
+         from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+-        from execution.orphan_manager import _get_forever6_syms, _get_daytrade_syms
++        from execution.orphan_manager import _get_forever6_syms, _get_daytrade_syms, _get_breakout_syms
+         # day-tier positions are DT-tagged + outside tracker.open_trades → they read as phantom_broker
+         # drift every cycle; exclude them so the day-tier does not flood the drift feed once live.
+-        _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms() | _get_daytrade_syms()
++        # Breakout-tier lots (swing owner tag, own state file, not in the tracker) are excluded for the same reason.
++        _drift_exclude = (set(get_quarterly_hold_symbols()) | _get_forever6_syms() | _get_daytrade_syms()
++                          | _get_breakout_syms())
+         _drift_records = detect_and_emit_drift(
+             tracker, _drift_exclude,
+             log_event=_log_trade_event, send_slack=send_slack,
+@@ -1807,7 +1827,8 @@ def run_cycle(
+         from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_dc
+         from execution.orphan_manager import _get_forever6_syms as _f6_dc
+         from execution.orphan_manager import _get_daytrade_syms as _dt_dc
+-        _dc_exclude = set(_qhs_dc()) | _f6_dc() | _dt_dc()
++        from execution.orphan_manager import _get_breakout_syms as _bo_dc
++        _dc_exclude = set(_qhs_dc()) | _f6_dc() | _dt_dc() | _bo_dc()
+ 
+         def _heal_phantom(_sym, _trade):
+             # REAL fill or None — the anti-fabrication guard. None => the corrector drops NOTHING.
+@@ -1918,6 +1939,16 @@ def run_cycle(
+         except Exception as _qhm_entry_e:
+             logger.warning("QHM maybe_enter_positions failed: %s", _qhm_entry_e)
+ 
++    # ── C2 swing breakout tier: once-per-day entries (after the kill/halt return, like QHM; the swing
++    # tier does not use the SPY 5-min gate — Rafael 2026-09-27). No-op unless SWING_BREAKOUT_ENABLED.
++    try:
++        from execution.swing_breakout_manager import MANAGER as _breakout_e
++        _bo_entered = _breakout_e.run_entries(now)
++        if _bo_entered:
++            logger.info("Swing breakout entries: %s", _bo_entered)
++    except Exception as _bo_e_e:
++        logger.warning("Swing breakout entries failed: %s", _bo_e_e)
++
+     # ── EXTREME: block all new entries ────────────────────────────────────────
+     if _main._spy_event_type == "EXTREME":
+         logger.critical(
+diff --git a/execution/swing_breakout_manager.py b/execution/swing_breakout_manager.py
+new file mode 100644
+index 0000000..2b5581a
+--- /dev/null
++++ b/execution/swing_breakout_manager.py
+@@ -0,0 +1,970 @@
++# ruff: noqa: E501  — dense rationale comments run long (project convention)
++"""
++execution/swing_breakout_manager.py — Confluence 2.0 swing tier: megacap 55-day breakout (RISK-PATH).
++
++Design record: logs/design_records/c2_swing_breakout_tier_2026-09-29.md (evidence: labs 3-9 in
++logs/design_records/entry_rebuild_2026-09-26.md; live since 2026-04-06 the 12-point swing lost -$126.00).
++
++WHAT IT TRADES (long only, one lot per symbol):
++  Universe  = the SWING_BREAKOUT_TOP_N names of SWING_BREAKOUT_POOL with the highest 60-day median dollar
++              volume, ranked each day on CLOSED daily bars (T1 Alpaca via data.fetcher.fetch_closed_bars).
++  Entry     = the last closed daily bar closes above the highest close of the prior 55 sessions AND above its
++              200-day SMA → a marketable DAY limit at the next session (first cycle >= 10:05 ET).
++  Protection= a GTC sell stop at fill − 2.5 × ATR(14, daily) placed immediately after the fill; if it cannot be
++              placed after 3 tries the lot is flattened. Every cycle _reconcile repairs ANY held lot to "open with a
++              resting stop for min(lot qty, broker long qty)": a stop cancelled/expired/rejected by anyone, never
++              placed, or lost to a restart is re-placed (paged, retried each cycle); a stop is never placed on
++              shares the broker does not show (no accidental short); a lot missing at the broker is booked closed.
++  Exit      = in the last 10 minutes before the real close: live price below the lowest low of the prior 20 completed sessions, or the 30th
++              session held (entry day = session 1). Exit = cancel the stop (confirmed) then close ONLY this tier's
++              quantity (broker.partial_close_position(tier=TIER)) — never a whole-symbol close.
++
++SIZING (board risk seat 2026-09-29): SWING_BREAKOUT_MAX_SLOTS slots × SWING_BREAKOUT_SLOT_PCT of equity,
++  whole shares (a 1-share floor up to SWING_BREAKOUT_MIN1_MAX_PCT of equity when one share exceeds the slot);
++  the per-trade risk at the stop is capped at SWING_BREAKOUT_MAX_RISK_PCT of equity; the tier's
++  overnight notional is capped at min(SWING_BREAKOUT_BUDGET_PCT, 100% − every other position's notional)
++  (Architecture Invariant #11: overnight exposure <= 100% of equity). No room → skip + log (never shrink).
++
++ISOLATION: a symbol that already has ANY Alpaca position or open order, or that is a quarterly-hold name,
++  is skipped (no co-holds, no wash-trade collisions with another tier's resting sell stop). Orders carry the
++  swing owner tag ("intraday"; the allocator lease's IN- client_order_id); this tier's own lots are identified
++  by its state file (orphan/drift exclusion reads get_breakout_symbols()).
++CAPITAL: every entry is admitted by execution.tier_capital_allocator.live_admit("swing", ...) before submit;
++  a denial is a logged skip. Entries are admitted with overnight=False (the same as entry_logic's RTH swing
++  path): the allocator's overnight flag caps TOTAL account gross — QHM and Forever-6 included — at 40%, and
++  Rafael excluded those buy-and-hold tiers from swing exposure limits (CLAUDE.md, 2026-09-26). This tier's own
++  overnight bound is the min(BUDGET_PCT, 100% − other notional) sizing cap above (Invariant #11).
++
++LOGGING: every entry, skip and exit writes its decision stack to trade_events.jsonl (Rule D).
++FAIL-SAFE: SWING_BREAKOUT_ENABLED False → no new entries; lots already held keep their stops and managed exits. Any error in one symbol aborts THAT
++  symbol only and never raises into run_cycle.
++"""
++from __future__ import annotations
++
++import json
++import logging
++import math
++import os
++import time
++from datetime import datetime
++from pathlib import Path
++from typing import Any, Optional
++from zoneinfo import ZoneInfo
++
++import config
++
++logger = logging.getLogger(__name__)
++
++ET = ZoneInfo("America/New_York")
++PT = ZoneInfo("America/Los_Angeles")
++# Ownership: breakout lots ARE the swing tier (Rafael 2026-09-27: the swing tier's entries), so they carry the
++# swing owner tag "intraday" (IN- client_order_id) and draw from the live tier capital allocator's "swing"
++# budget — the same path as execution/entry_logic.py. A separate ledger tier would break the allocator's
++# four-tier reconciliation (tier_capital_allocator._ledger_tier_gross) and block every tier's entries.
++TIER = "intraday"
++ALLOC_TIER = "swing"
++_STATE = Path(__file__).resolve().parent.parent / "data" / "state" / "swing_breakout.json"
++
++# Lot statuses that may still hold shares at the broker: counted as this tier's (slots, notional, orphan/drift
++# exclusion) so no other system adopts or closes them. Only "open" lots are actively managed.
++_ENTRY_PENDING = ("submitting", "submitted", "submit_unknown", "entry_unverified")
++_HOLDING = ("open", "exit_unverified") + _ENTRY_PENDING
++_ENTRY_START_MIN = 10 * 60 + 5     # first entry cycle: 10:05 ET — after run_cycle's 09:30-10:00 opening return
++                                   # and after the QHM entry hook's own >= 10:05 gate (QHM picks go first)
++_PAGE_EVERY_S = 1800               # repeat an unresolved-lot page at most every 30 minutes
++
++_DEFAULT_POOL = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "NFLX", "AMD",
++                 "ORCL", "PLTR", "MU", "COIN", "JPM", "V", "MA", "LLY", "UNH", "XOM", "COST", "WMT",
++                 "CRM", "INTC", "SMCI", "ADBE", "QCOM", "UBER", "MSTR", "BAC"]
++
++
++def _cfg(name: str, default: Any) -> Any:
++    return getattr(config, name, default)
++
++
++def enabled() -> bool:
++    return bool(_cfg("SWING_BREAKOUT_ENABLED", False))
++
++
++# ── pure decision functions (unit-tested) ───────────────────────────────────────────────────────
++def median_dollar_volume(df, window: int = 60) -> Optional[float]:
++    """60-day median of close × volume on closed daily bars; None when fewer than 40 bars."""
++    try:
++        if df is None or len(df) < 40:
++            return None
++        dv = (df["close"].astype(float) * df["volume"].astype(float)).tail(window)
++        v = float(dv.median())
++        return v if math.isfinite(v) and v > 0 else None
++    except Exception:
++        return None
++
++
++def rank_universe(bars: dict, top_n: int) -> list[str]:
++    """Top `top_n` symbols by 60-day median dollar volume (ties broken by symbol for determinism)."""
++    scored = [(v, s) for s, df in bars.items() if (v := median_dollar_volume(df)) is not None]
++    scored.sort(key=lambda x: (-x[0], x[1]))
++    return [s for _, s in scored[:top_n]]
++
++
++def atr14(df) -> Optional[float]:
++    """Simple 14-day average true range on closed daily bars (the lab's base.atr definition)."""
++    try:
++        if df is None or len(df) < 15:
++            return None
++        h, lo, c = (df[k].astype(float).to_numpy() for k in ("high", "low", "close"))
++        trs = [max(h[i] - lo[i], abs(h[i] - c[i - 1]), abs(lo[i] - c[i - 1])) for i in range(len(c) - 14, len(c))]
++        a = sum(trs) / 14.0
++        return a if math.isfinite(a) and a > 0 else None
++    except Exception:
++        return None
++
++
++def breakout_signal(df, lookback: int = 55) -> Optional[dict]:
++    """The lab-8c rule on the LAST closed bar: close > highest close of the prior `lookback` sessions and
++    close > SMA(200). Returns {close, prior_high, sma200, atr} or None (also None on insufficient data)."""
++    try:
++        if df is None or len(df) < max(200, lookback + 1):
++            return None
++        c = df["close"].astype(float)
++        last = float(c.iloc[-1])
++        prior_high = float(c.iloc[-(lookback + 1):-1].max())
++        sma200 = float(c.tail(200).mean())
++        a = atr14(df)
++        if a is None or not all(math.isfinite(x) for x in (last, prior_high, sma200)):
++            return None
++        if last > prior_high and last > sma200:
++            return {"close": last, "prior_high": prior_high, "sma200": sma200, "atr": a}
++        return None
++    except Exception:
++        return None
++
++
++def prior_low(df, n: int = 20) -> Optional[float]:
++    """Lowest low of the last `n` COMPLETED sessions (the exit reference checked against the live price)."""
++    try:
++        if df is None or len(df) < n:
++            return None
++        v = float(df["low"].astype(float).tail(n).min())
++        return v if math.isfinite(v) and v > 0 else None
++    except Exception:
++        return None
++
++
++def sessions_held(df, entry_date: str) -> Optional[int]:
++    """Sessions held INCLUDING today (entry day = 1): completed sessions on/after the entry date, plus today.
++    `df` holds completed daily bars only, so today's session is added explicitly."""
++    try:
++        idx = [str(t)[:10] for t in df.index]
++        return sum(1 for d in idx if d >= entry_date) + 1
++    except Exception:
++        return None
++
++
++def exit_reason(live_price: float, lo20: Optional[float], held: Optional[int], max_hold: int) -> Optional[str]:
++    """'trend_break' when the live price is below the prior 20-session low; 'time' on the max_hold-th session;
++    None otherwise. Unknown inputs never force an exit (the GTC stop still protects the lot)."""
++    if lo20 is not None and math.isfinite(live_price) and live_price > 0 and live_price < lo20:
++        return "trend_break"
++    if held is not None and held >= max_hold:
++        return "time"
++    return None
++
++
++def size_order(equity: float, price: float, atr: float, other_notional: float, tier_notional: float) -> tuple[int, str]:
++    """Whole shares for one slot. Every bound is a floor; any bad input → 0 (skip)."""
++    try:
++        if not all(math.isfinite(x) for x in (equity, price, atr, other_notional, tier_notional)):
++            return 0, "non-finite sizing input"
++        if equity <= 0 or price <= 0 or atr <= 0:
++            return 0, "non-positive sizing input"
++        slot = float(_cfg("SWING_BREAKOUT_SLOT_PCT", 0.20)) * equity
++        budget = min(float(_cfg("SWING_BREAKOUT_BUDGET_PCT", 0.80)) * equity, equity - other_notional) - tier_notional
++        risk_cap = float(_cfg("SWING_BREAKOUT_MAX_RISK_PCT", 0.02)) * equity
++        stop_dist = float(_cfg("SWING_BREAKOUT_STOP_ATR", 2.5)) * atr
++        q_slot = math.floor(min(slot, budget) / price) if budget > 0 else 0
++        q_risk = math.floor(risk_cap / stop_dist)
++        qty = max(0, min(q_slot, q_risk))
++        floor_note = ""
++        if qty == 0 and q_risk >= 1:
++            # MIN-1-SHARE floor (BGGN 2026-09-29, risk seat + Gro + GAI): a name whose ONE share exceeds the slot
++            # may still enter as 1 share when that share is <= min(SWING_BREAKOUT_MIN1_MAX_PCT × equity, budget
++            # room) — the loss at the stop stays <= the risk cap (q_risk >= 1). Keeps high-priced megacaps in the
++            # traded universe (no selection bias vs the backtest); the allocator still admits or denies it.
++            one_cap = min(float(_cfg("SWING_BREAKOUT_MIN1_MAX_PCT", 0.25)) * equity, budget)
++            if price <= one_cap:
++                qty = 1
++                floor_note = f", 1-share floor (≤ ${one_cap:.0f})"
++        why = (f"slot ${slot:.0f}, budget room ${budget:.0f} (tier ${tier_notional:.0f}, other ${other_notional:.0f}), "
++               f"risk cap ${risk_cap:.0f} / stop ${stop_dist:.2f} → slot {q_slot} sh, risk {q_risk} sh → {qty} sh{floor_note}")
++        return int(qty), why
++    except Exception as e:
++        return 0, f"sizing error: {e!r}"
++
++
++# ── state (atomic) ──────────────────────────────────────────────────────────────────────────────
++def _load_state() -> dict:
++    try:
++        if _STATE.exists():
++            d = json.loads(_STATE.read_text())
++            if isinstance(d, dict):
++                d.setdefault("positions", {})
++                return d
++            raise ValueError("state is not a dict")
++    except Exception as e:
++        # Unreadable state must NOT look like "no positions" (that would re-enter and orphan stops):
++        # raise so the caller skips the cycle.
++        raise RuntimeError(f"swing_breakout state unreadable: {e}") from e
++    return {"positions": {}}
++
++
++def _save_state(state: dict) -> bool:
++    try:
++        os.makedirs(_STATE.parent, exist_ok=True)
++        tmp = _STATE.with_suffix(f".tmp{os.getpid()}")
++        with open(tmp, "w", encoding="utf-8") as f:
++            json.dump(state, f, indent=1, default=str)
++            f.flush()
++            os.fsync(f.fileno())
++        os.replace(tmp, _STATE)
++        return True
++    except Exception as e:
++        logger.error("swing_breakout state write FAILED: %s", e)
++        return False
++
++
++_last_good_symbols: frozenset = frozenset()
++
++
++def get_breakout_symbols() -> set:
++    """Symbols this tier currently holds or may hold (for orphan/drift exclusion). On an unreadable state file
++    returns the LAST GOOD set (never empty-on-error, which would let a restart adopt this tier's lots)."""
++    global _last_good_symbols
++    try:
++        syms = frozenset(s for s, p in _load_state().get("positions", {}).items() if p.get("status") in _HOLDING)
++        _last_good_symbols = syms
++        return set(syms)
++    except Exception as e:
++        # FAIL CLOSED (as QHM does): last good set, else the whole configured pool (over-protective — a restart
++        # must never adopt this tier's lots as intraday orphans because its own state file is unreadable)
++        fallback = set(_last_good_symbols) or set(_cfg("SWING_BREAKOUT_POOL", _DEFAULT_POOL) or _DEFAULT_POOL)
++        logger.critical("swing_breakout: state unreadable (%s) — excluding %d symbol(s) from orphan adoption", e, len(fallback))
++        return fallback
++
++
++def _page(msg: str) -> None:
++    logger.critical(msg)
++    try:
++        from alerts import send_slack
++        send_slack("🚨 SWING-BREAKOUT ALERT\n" + msg)
++    except Exception as e:  # pragma: no cover
++        logger.error("swing_breakout: page send failed: %s", e)
++
++
++def _page_throttled(rec: dict, msg: str) -> None:
++    """Page for an unresolved lot at most every _PAGE_EVERY_S (the throttle timestamp lives in the lot record,
++    which the caller saves)."""
++    now = time.time()
++    if now - float(rec.get("last_page_ts") or 0.0) >= _PAGE_EVERY_S:
++        rec["last_page_ts"] = now
++        _page(msg)
++    else:
++        logger.critical(msg)
++
++
++def _log(event: str, symbol: str, **kw) -> None:
++    try:
++        import trade_logger
++        trade_logger.log_event(event, symbol=symbol, data_source="alpaca_data", tier=TIER,
++                               setup="c2_breakout_55d", **kw)
++    except Exception as e:
++        logger.warning("[%s] swing_breakout trade_logger write failed: %s", symbol, e)
++
++
++_TERMINAL = ("filled", "canceled", "cancelled", "rejected", "expired", "done_for_day")
++
++
++def _is_terminal(status: Any) -> bool:
++    """True for a final order status. 'partially_filled' is NOT terminal (it also ends in 'filled')."""
++    st = str(status or "").lower().split(".")[-1]
++    return st in _TERMINAL
++
++
++class SwingBreakoutManager:
++    """Owns the breakout tier's lots. All methods are called from run_cycle (single-threaded)."""
++
++    def __init__(self, dry_run: bool = False) -> None:
++        self.dry_run = dry_run
++
++    # ── data ──────────────────────────────────────────────────────────────────
++    @staticmethod
++    def _bars(symbol: str):
++        from data.fetcher import fetch_closed_bars
++        return fetch_closed_bars(symbol, getattr(config, "TF_DAILY", "1Day"), num_bars=260).df
++
++    # ── order / position reads (None = UNREADABLE, never "zero") ─────────────
++    @staticmethod
++    def _read_order(order_id: str) -> Optional[tuple[int, float, bool]]:
++        """(filled_qty, avg_price, is_terminal) from one order read; None when the order is UNREADABLE — never
++        read an unreadable order as "zero filled" (that would orphan a filled lot or mask a stop fill)."""
++        from execution import broker
++        if not order_id:
++            return None
++        try:
++            o = broker.get_order(order_id)
++            if o is None:
++                return None
++            return (int(float(getattr(o, "filled_qty", 0) or 0)), float(getattr(o, "filled_avg_price", 0) or 0),
++                    _is_terminal(getattr(o, "status", "")))
++        except Exception as e:
++            logger.warning("swing_breakout: order %s unreadable: %s", order_id, e)
++            return None
++
++    def _final_fill(self, order_id: str) -> Optional[tuple[int, float]]:
++        r = self._read_order(order_id)
++        return None if r is None else (r[0], r[1])
++
++    @staticmethod
++    def _broker_qty(symbol: str) -> Optional[int]:
++        """Long shares held at the broker for `symbol` (0 = no position); None when unreadable."""
++        from execution import broker
++        try:
++            pos = broker.get_open_position(symbol)
++            return 0 if pos is None else max(int(float(getattr(pos, "qty", 0) or 0)), 0)
++        except Exception as e:
++            logger.warning("[%s] swing_breakout: position unreadable: %s", symbol, e)
++            return None
++
++    def _await_fill(self, order_id: str) -> tuple[int, float]:
++        """Poll until terminal or SWING_BREAKOUT_FILL_WAIT_S; keeps the HIGHEST fill seen (an unreadable read
++        never lowers it). Always reads at least once."""
++        deadline = time.monotonic() + float(_cfg("SWING_BREAKOUT_FILL_WAIT_S", 15.0))
++        filled, px = 0, 0.0
++        while True:
++            r = self._read_order(order_id)
++            if r is not None:
++                if r[0] >= filled:
++                    filled, px = r[0], (r[1] or px)
++                if r[2]:
++                    break
++            if time.monotonic() >= deadline:
++                break
++            time.sleep(1.0)
++        return filled, px
++
++    def _settle(self, order_id: str, wait_s: float = 3.0) -> Optional[tuple[int, float, bool]]:
++        """Bring an order to a FINAL status before its fill count is trusted: read it; if still working, cancel it
++        and poll (0.25 s) up to wait_s for a terminal status. A fill that lands while the cancel is pending is
++        therefore counted. Returns the last read (terminal flag False = still working), or None if unreadable."""
++        from execution import broker
++        r = self._read_order(order_id)
++        if r is not None and r[2]:
++            return r
++        try:
++            broker.cancel_order(order_id)      # also when the first read failed: every caller wants it dead
++        except Exception as e:
++            logger.warning("swing_breakout: cancel of %s failed: %s", order_id, e)
++        deadline = time.monotonic() + wait_s
++        while time.monotonic() < deadline:
++            time.sleep(0.25)
++            r2 = self._read_order(order_id)
++            if r2 is not None:
++                r = r2
++                if r2[2]:
++                    break
++        return r
++
++    # ── entries ───────────────────────────────────────────────────────────────
++    def run_entries(self, now: Optional[datetime] = None) -> list[str]:
++        """Once per ET day, from 10:05 ET: evaluate the universe on the prior closed bar and enter."""
++        if not enabled() or self.dry_run:
++            return []
++        now = now or datetime.now(ET)
++        if now.hour * 60 + now.minute < _ENTRY_START_MIN:
++            return []
++        today = now.strftime("%Y-%m-%d")
++        try:
++            state = _load_state()
++        except RuntimeError as e:
++            _page(f"entries skipped — {e}")
++            return []
++        if state.get("last_entry_scan") == today:
++            return []
++        # latch FIRST so an exception mid-scan never re-fires entries later the same day
++        state["last_entry_scan"] = today
++        if not _save_state(state):
++            _page("entries skipped — could not persist the daily latch (fail-closed)")
++            return []
++        from execution import broker
++        from execution.quarterly_hold_manager import get_quarterly_hold_symbols
++        entered: list[str] = []
++        pool = list(_cfg("SWING_BREAKOUT_POOL", _DEFAULT_POOL) or _DEFAULT_POOL)
++        bars = {}
++        for s in pool:
++            try:
++                df = self._bars(s)
++                if df is not None and not df.empty:
++                    bars[s] = df
++            except Exception as e:
++                logger.warning("[%s] swing_breakout bars fetch failed: %s", s, e)
++        if not bars:
++            # a total data outage must not burn the day: un-latch so the next cycle retries
++            state["last_entry_scan"] = None
++            _save_state(state)
++            logger.warning("swing_breakout: no daily bars for any pool symbol — entries retry next cycle")
++            return []
++        universe = rank_universe(bars, int(_cfg("SWING_BREAKOUT_TOP_N", 10)))
++        _log("signal", "", note="breakout universe", universe=universe, pool_n=len(pool), bars_n=len(bars))
++        try:
++            positions = broker.get_open_positions() or []
++            open_orders = broker.get_open_orders()
++            acct = broker.get_account()
++            equity = float(getattr(acct, "equity", 0.0) or 0.0)
++            buying_power = float(getattr(acct, "buying_power", 0.0) or 0.0)
++        except Exception as e:
++            _page(f"entries skipped — live book unreadable (fail-closed): {e!r}")
++            return []
++        if open_orders is None:
++            _page("entries skipped — open orders unreadable (fail-closed)")
++            return []
++        held_syms = {getattr(p, "symbol", None) for p in positions}
++        order_syms = {getattr(o, "symbol", None) for o in open_orders}
++        mine = {s for s, p in state["positions"].items() if p.get("status") in _HOLDING}
++        added = 0.0
++        try:
++            qhm = set(get_quarterly_hold_symbols())
++        except Exception as e:
++            logger.warning("swing_breakout: QHM symbols unreadable (%s) — entries retry next cycle (fail-closed)", e)
++            state["last_entry_scan"] = None
++            _save_state(state)
++            return []
++        try:
++            # QHM's configured picks, INCLUDING ones still pending entry: QHM may buy them later, and a co-held
++            # symbol would collide on the wash-trade rule and on whole-symbol stop accounting
++            from execution.quarterly_hold_manager import _configured_qhm_symbols
++            qhm |= set(_configured_qhm_symbols())
++        except Exception as e:
++            logger.warning("swing_breakout: QHM configured picks unreadable: %s", e)
++        for s in universe:
++            if len({x for x, p in state["positions"].items() if p.get("status") in _HOLDING}) >= int(_cfg("SWING_BREAKOUT_MAX_SLOTS", 4)):
++                _log("skip", s, reason="all slots full")
++                continue
++            sig = breakout_signal(bars.get(s))
++            if sig is None:
++                continue
++            if s in mine or s in held_syms or s in order_syms or s in qhm:
++                _log("skip", s, reason="symbol already held/ordered/QHM", signal=sig)
++                continue
++            try:
++                if self._enter(s, sig, state, positions, equity, buying_power, today, added):
++                    entered.append(s)
++                    r = state["positions"].get(s) or {}
++                    added += float(r.get("qty") or 0) * float(r.get("entry_px") or 0)
++            except Exception as e:
++                _page(f"[{s}] entry raised (symbol aborted): {e!r}")
++        return entered
++
++    def _enter(self, symbol: str, sig: dict, state: dict, positions: list, equity: float,
++               buying_power: float, today: str, added_notional: float = 0.0) -> bool:
++        from data.alpaca_data import get_latest_quote
++        from execution import broker
++        q = get_latest_quote(symbol)
++        if not isinstance(q, dict) or not (0 < float(q.get("bid") or 0) <= float(q.get("ask") or 0)):
++            _log("skip", symbol, reason="quote unreadable", signal=sig)
++            return False
++        ask = float(q["ask"])
++        mine_notional = 0.0
++        other_notional = 0.0
++        tier_syms = {s for s, p in state["positions"].items() if p.get("status") in _HOLDING}
++        for p in positions:
++            mv = abs(float(getattr(p, "market_value", 0.0) or 0.0))
++            if getattr(p, "symbol", None) in tier_syms:
++                mine_notional += mv
++            else:
++                other_notional += mv
++        # positions is the start-of-scan snapshot: lots entered earlier in THIS scan are added explicitly
++        mine_notional += added_notional
++        buying_power -= added_notional
++        qty, why = size_order(equity, ask, sig["atr"], other_notional, mine_notional)
++        if qty < 1:
++            _log("skip", symbol, reason="no size", sizing=why, signal=sig)
++            return False
++        limit = round(ask * (1 + float(_cfg("SWING_BREAKOUT_LIMIT_SLIP_PCT", 0.002))), 2)
++        if buying_power < qty * limit * 1.10:
++            _log("skip", symbol, reason="buying power", bp=buying_power, sizing=why, signal=sig)
++            return False
++        stop_px = round(ask - float(_cfg("SWING_BREAKOUT_STOP_ATR", 2.5)) * sig["atr"], 2)
++        from execution.tier_capital_allocator import live_admit, live_bind, live_order_id, live_release
++        capital = live_admit("swing", TIER, symbol, "buy", int(qty), limit,
++                             stop_price=stop_px, risk_price_bound=limit)
++        if not capital.approved:
++            _log("skip", symbol, reason=f"allocator: {capital.reason}", sizing=why, signal=sig)
++            return False
++        coid = live_order_id(capital.lease) or ""
++        rec: dict[str, Any] = {"status": "submitting", "entry_date": today, "coid": coid, "qty": 0, "signal": sig,
++               "sizing": why, "limit": limit, "req_qty": int(qty), "ts": datetime.now(PT).isoformat()}
++        state["positions"][symbol] = rec
++        if not _save_state(state):
++            live_release(capital.lease, "state_write_failed")
++            state["positions"].pop(symbol, None)
++            _page(f"[{symbol}] entry ABORTED — could not persist the pre-submit record")
++            return False
++        order = broker.submit_limit_order(symbol, qty, "buy", limit, tier=TIER, client_order_id=coid or None)
++        if order is None:
++            order = live_release(capital.lease, "submit_none")   # recovers an ambiguous submit by client id
++        else:
++            live_bind(capital.lease, order)
++        if order is None or not getattr(order, "id", None):
++            # ambiguous: the order may be live at Alpaca. Kept as a HELD status; _reconcile resolves it by client id.
++            rec["status"] = "submit_unknown"
++            _page_throttled(rec, f"[{symbol}] breakout entry submit AMBIGUOUS — resolving by client id each cycle")
++            _save_state(state)
++            return False
++        rec["entry_order_id"] = str(getattr(order, "id", ""))
++        rec["status"] = "submitted"
++        _save_state(state)
++        self._await_fill(rec["entry_order_id"])
++        self._resolve_entry(symbol, rec, state)
++        if rec.get("status") != "open":
++            return False
++        for _ in range(2):                                   # 3 stop attempts in total (one inside _resolve_entry)
++            if rec.get("status") != "open" or not rec.get("unprotected"):
++                break                                        # protected, or already closed by _reprotect
++            time.sleep(1.0)
++            self._reprotect(symbol, rec, state, int(rec.get("qty") or 0))
++        if rec.get("status") != "open":
++            return False
++        if rec.get("unprotected"):
++            _page(f"[{symbol}] breakout stop NOT placed after 3 tries — flattening the {rec.get('qty')}-sh lot")
++            self._close_lot(symbol, rec, state, "stop_unconfirmed_flatten")
++            return False
++        logger.info("[%s] breakout ENTERED %s sh @ %.2f, GTC stop %.2f", symbol, rec.get("qty"),
++                    float(rec.get("entry_px") or 0), float(rec.get("stop_px") or 0))
++        return True
++
++    def _resolve_entry(self, symbol: str, rec: dict, state: dict) -> None:
++        """Drive an in-flight entry (submitting / submitted / submit_unknown / entry_unverified — also after a
++        restart) to a final answer: settle the order (cancel any working remainder, count late fills), then
++        either promote the filled qty to "open" with a stop, or mark it unfilled. Unresolvable → stays held
++        (excluded from orphan adoption) and paged."""
++        from execution import broker
++        oid = str(rec.get("entry_order_id") or "")
++        if not oid and rec.get("coid"):
++            try:
++                o = broker.get_order_by_client_order_id(rec["coid"])
++            except Exception as e:
++                logger.warning("[%s] breakout client-id lookup failed: %s", symbol, e)
++                o = None
++            if o is not None and getattr(o, "id", None):
++                oid = str(getattr(o, "id", ""))
++                rec["entry_order_id"] = oid
++                _save_state(state)
++        r = self._settle(oid) if oid else None
++        if r is None:
++            # no readable order: decide from the broker. This symbol had NO position or order when entry began,
++            # so shares held now are this lot's. Held 0 with no open order for it → the entry never happened.
++            held = self._broker_qty(symbol)
++            try:
++                orders = broker.get_open_orders(symbol)
++            except Exception as e:
++                logger.warning("[%s] breakout open-orders read failed: %s", symbol, e)
++                orders = None
++            if held == 0 and orders is not None and not any(
++                    str(getattr(o, "side", "")).lower().endswith("buy") for o in orders):
++                rec["status"] = "unfilled"
++                _save_state(state)
++                _log("skip", symbol, reason="entry not placed/filled (no order, no position)", signal=rec.get("signal"))
++                return
++            buy_working = orders is None or any(str(getattr(o, "side", "")).lower().endswith("buy") for o in orders)
++            if held is None or held == 0 or buy_working:
++                # never promote while a buy may still be filling (later fills would sit outside the lot's stop)
++                rec["status"] = "entry_unverified"
++                _page_throttled(rec, f"[{symbol}] breakout entry UNVERIFIED — order unreadable, position "
++                                     f"{'unreadable' if held is None else ('flat' if held == 0 else f'{held} sh')}"
++                                     f"{' with a working/unknown buy' if buy_working else ''}; retrying each cycle")
++                _save_state(state)
++                return
++            # at most what this entry asked for: any excess belongs to another tier that bought meanwhile
++            filled, px, terminal = min(held, int(rec.get("req_qty") or held)), 0.0, True
++        else:
++            filled, px, terminal = r
++        if not terminal:
++            rec["status"] = "submitted"          # cancel still pending: re-settled next cycle
++            _page_throttled(rec, f"[{symbol}] breakout entry order {oid} still working after cancel — re-checking each cycle")
++            _save_state(state)
++            return
++        if filled < 1:
++            rec["status"] = "unfilled"
++            _save_state(state)
++            _log("skip", symbol, reason="entry not filled", limit=rec.get("limit"), sizing=rec.get("sizing"),
++                 signal=rec.get("signal"))
++            return
++        sig = rec.get("signal") or {}
++        if px <= 0:
++            px = float(rec.get("limit") or sig.get("close") or 0.0)   # estimate for the stop anchor only
++            rec["entry_px_estimated"] = True
++        stop_px = round(px - float(_cfg("SWING_BREAKOUT_STOP_ATR", 2.5)) * float(sig.get("atr") or 0.0), 2)
++        rec.update(status="open", qty=int(filled), entry_px=px, stop_px=stop_px, stop_order_id="")
++        _save_state(state)
++        _log("entry", symbol, price=px, size=int(filled), direction="long", stop=stop_px,
++             limit=rec.get("limit"), sizing=rec.get("sizing"), signal=sig, trade_id=rec.get("coid"),
++             entry_px_estimated=bool(rec.get("entry_px_estimated")))
++        self._reprotect(symbol, rec, state, int(filled))
++
++    # ── protection ────────────────────────────────────────────────────────────
++    def _reprotect(self, symbol: str, rec: dict, state: dict, want_qty: int, depth: int = 0) -> bool:
++        """Place a fresh GTC stop for min(want_qty, the broker's long qty) — never on shares the broker does not
++        show (a sell stop with nothing behind it could open a short). Broker shows 0 → the lot is booked gone.
++        Unreadable broker / failed stop → the lot stays "open" flagged unprotected, paged (throttled) and retried
++        every cycle. A price already through the stop → the lot is closed instead (depth guard: once)."""
++        from execution import broker
++        if rec.get("status") == "closed":
++            return False
++        held = self._broker_qty(symbol)
++        if held is None:
++            rec.update(unprotected=True, stop_order_id="")
++            _page_throttled(rec, f"[{symbol}] breakout lot UNPROTECTED — position unreadable, stop not placed; retrying each cycle")
++            _save_state(state)
++            return False
++        qty = min(max(int(want_qty), 0), held)
++        if qty < 1:
++            self._book_gone(symbol, rec, state)
++            return False
++        if qty < int(want_qty):
++            # shares this lot expected are not at the broker and were never booked: flag the P&L as unknown
++            rec["partial_pnl_unknown"] = True
++            _page(f"[{symbol}] breakout lot expected {want_qty} sh but the broker holds {held} — protecting {qty}; "
++                  f"{int(want_qty) - qty} sh unaccounted (P&L marked unknown); check fills")
++        stop_px = float(rec.get("stop_px") or 0.0)
++        o: Any = None
++        if stop_px > 0:
++            try:
++                o = broker.submit_gtc_stop_order(symbol, qty, "sell", stop_px, tier=TIER, allow_cancel_blocking=False)
++            except Exception as e:
++                logger.warning("[%s] breakout stop submit raised: %s", symbol, e)
++                o = None
++        held_sentinel = getattr(broker, "PROTECTION_ALREADY_HELD", None)
++        if o is not None and held_sentinel is not None and o is held_sentinel:
++            # a stable live reducing order already holds these shares (typically this lot's own stop that a read
++            # could not see) — protected; nothing cancelled. The next cycle re-checks.
++            rec.update(status="open", qty=qty, unprotected=False, stop_order_id=self._find_resting_stop(symbol, qty))
++            _save_state(state)
++            logger.info("[%s] breakout stop not placed: shares already held by a live reducing order (%s)",
++                        symbol, rec["stop_order_id"] or "id not found")
++            return True
++        if o is not None and getattr(o, "id", None):
++            rec.update(status="open", qty=qty, unprotected=False, stop_order_id=str(getattr(o, "id", "")))
++            _save_state(state)
++            logger.info("[%s] breakout lot protected: %d sh, GTC stop %.2f", symbol, qty, stop_px)
++            return True
++        unknown_sentinel = getattr(broker, "PROTECTION_UNKNOWN", None)
++        if o is not None and unknown_sentinel is not None and o is unknown_sentinel:
++            # the order book is unreadable: protection status UNKNOWN (not proven missing) — never close on it
++            rec.update(status="open", qty=qty, unprotected=True, stop_order_id="")
++            _page_throttled(rec, f"[{symbol}] breakout lot protection UNKNOWN (order book unreadable) — re-checking each cycle")
++            _save_state(state)
++            return False
++        # failure (None / no id / no stop price)
++        if depth == 0 and self._market_open() and self._price_through_stop(symbol, stop_px):
++            # regular hours only: after hours a market close only queues for the open (and would be cancelled)
++            _page_throttled(rec, f"[{symbol}] breakout stop could not be placed and the price is already through "
++                                 f"${stop_px:.2f} — closing the lot")
++            rec.update(status="open", qty=qty, unprotected=True, stop_order_id="")
++            _save_state(state)
++            self._close_lot(symbol, rec, state, "stop_breached_unprotected", _depth=1)
++            return False
++        rec.update(status="open", qty=qty, unprotected=True, stop_order_id="")
++        _page_throttled(rec, f"[{symbol}] breakout lot of {qty} sh is UNPROTECTED — GTC stop placement failed; retrying each cycle")
++        _save_state(state)
++        return False
++
++    @staticmethod
++    def _find_resting_stop(symbol: str, qty: int) -> str:
++        """Id of a live SELL stop for exactly `qty` shares of `symbol` with this tier's owner tag, else ""."""
++        from execution import broker
++        try:
++            for o in broker.get_open_orders(symbol) or []:
++                if (str(getattr(o, "side", "")).lower().endswith("sell")
++                        and "stop" in str(getattr(o, "order_type", getattr(o, "type", ""))).lower()
++                        and int(float(getattr(o, "qty", 0) or 0)) == int(qty)
++                        and str(getattr(o, "client_order_id", "") or "").startswith("IN-")):
++                    return str(getattr(o, "id", "") or "")
++        except Exception as e:
++            logger.warning("[%s] breakout resting-stop lookup failed: %s", symbol, e)
++        return ""
++
++    @staticmethod
++    def _market_open() -> bool:
++        """Alpaca clock is_open; False when unreadable (then no market close is attempted — the lot stays
++        flagged unprotected, paged and retried)."""
++        try:
++            from execution import broker
++            return bool(broker.get_clock().get("is_open"))
++        except Exception as e:
++            logger.warning("swing_breakout: clock read failed (%s) — treating the market as closed", e)
++            return False
++
++    @staticmethod
++    def _price_through_stop(symbol: str, stop_px: float) -> bool:
++        try:
++            from data.alpaca_data import get_latest_quote
++            q = get_latest_quote(symbol)
++            bid = float(q.get("bid") or 0) if isinstance(q, dict) else 0.0
++            return stop_px > 0 and 0 < bid <= stop_px
++        except Exception as e:
++            logger.warning("[%s] breakout quote read failed: %s", symbol, e)
++            return False
++
++    # ── exits ─────────────────────────────────────────────────────────────────
++    def run_exit_check(self, now: Optional[datetime] = None) -> list[str]:
++        """Every cycle: reconcile every held lot. Near the real close: trend-break / max-hold exits, latched per
++        lot per day only once DECIDED (a deferred/unconfirmed exit retries on the next cycle).
++        Runs even when SWING_BREAKOUT_ENABLED is False: the flag stops NEW entries only, and lots already held
++        keep their managed exits (a no-op when the state file holds no lots)."""
++        if self.dry_run:
++            return []
++        try:
++            state = _load_state()
++        except RuntimeError as e:
++            _page(f"exit check skipped — {e}")
++            return []
++        self._reconcile(state)
++        now = now or datetime.now(ET)          # call-time clock by default (the hook runs mid-cycle)
++        if not self._near_close(now):
++            return []
++        today = now.strftime("%Y-%m-%d")
++        from data.alpaca_data import get_latest_quote
++        closed: list[str] = []
++        for s, rec in list(state["positions"].items()):
++            if rec.get("status") != "open" or rec.get("exit_checked") == today:
++                continue
++            try:
++                df = self._bars(s)
++                q = get_latest_quote(s)
++                live = (float(q["bid"]) + float(q["ask"])) / 2.0 if isinstance(q, dict) and q.get("bid") and q.get("ask") else float("nan")
++                lo20 = prior_low(df, 20)
++                held = sessions_held(df, str(rec.get("entry_date")))
++                why = exit_reason(live, lo20, held, int(_cfg("SWING_BREAKOUT_MAX_HOLD", 30)))
++                if why is None:
++                    if math.isfinite(live) and lo20 is not None and held is not None:
++                        rec["exit_checked"] = today      # decided: hold (unknown inputs retry next cycle)
++                        _save_state(state)
++                    continue
++                if self._close_lot(s, rec, state, why, live=live, lo20=lo20, held=held):
++                    closed.append(s)
++            except Exception as e:
++                _page(f"[{s}] exit check raised (lot kept, GTC stop still rests): {e!r}")
++        return closed
++
++    @staticmethod
++    def _near_close(now: datetime) -> bool:
++        """Within SWING_BREAKOUT_EXIT_MINUTES of the REAL close (Alpaca clock next_close — half-day aware);
++        falls back to 15:50 ET when the clock is unreadable."""
++        mins = float(_cfg("SWING_BREAKOUT_EXIT_MINUTES", 10))
++        try:
++            from execution import broker
++            nc = broker.get_clock().get("next_close")
++            if nc is not None:
++                left = (nc - now).total_seconds() / 60.0
++                return 0 < left <= mins
++        except Exception as e:
++            logger.warning("swing_breakout: clock read failed (%s) — 15:50 ET fallback", e)
++        return 16 * 60 - mins <= now.hour * 60 + now.minute < 16 * 60
++
++    def _close_lot(self, symbol: str, rec: dict, state: dict, reason: str, _depth: int = 0, **ctx) -> bool:
++        """Cancel this tier's stop (confirmed), book any stop fill, then close ONLY this tier's remaining qty and
++        settle the close order to a final status. Unconfirmed → book what sold, re-protect what the broker still
++        holds. Never a whole-symbol close; never a stop on shares that are not held."""
++        from execution import broker
++        if rec.get("status") == "closed":
++            return True                          # already closed and booked — never sell or book it again
++        stop_id = str(rec.get("stop_order_id") or "")
++        if stop_id and not broker.cancel_stop_confirmed(symbol, stop_id):
++            _page(f"[{symbol}] breakout exit ({reason}) deferred — stop cancel not confirmed; GTC stop still protects the lot")
++            return False
++        if stop_id:
++            final = self._final_fill(stop_id)
++            if final is None:
++                # the stop is confirmed cancelled but its fill is unreadable: never sell blind (a fired stop plus
++                # a close would short the name). _reconcile resolves it next cycle.
++                rec["status"] = "exit_unverified"
++                _page_throttled(rec, f"[{symbol}] breakout exit ({reason}) HALTED — stop cancelled but its fill is "
++                                     f"unreadable; the lot may be UNPROTECTED — resolving each cycle")
++                _save_state(state)
++                return False
++            filled, px = final
++            qty = int(rec.get("qty") or 0)
++            if filled >= qty > 0 and px > 0:   # the stop fired during the cancel
++                self._book_exit(symbol, rec, state, "protective_stop", px, filled)
++                return True
++            if 0 < filled < qty:
++                self._book_partial(symbol, rec, state, px, filled, "protective_stop_partial", clear_key="stop_order_id")
++            rec["stop_order_id"] = ""           # cancelled and fully accounted
++            _save_state(state)
++        qty = int(rec.get("qty") or 0)
++        if qty < 1:
++            rec["status"] = "closed"
++            _save_state(state)
++            return True
++        order = broker.partial_close_position(symbol, qty, tier=TIER, _return_order=True)
++        # True = the broker found no position to close; False/None = submit failed. Neither carries an order:
++        # _reprotect below checks the broker's actual long qty before any stop is placed.
++        oid = str(getattr(order, "id", "") or "") if order not in (None, False, True) else ""
++        filled, px = 0, 0.0
++        if oid:
++            rec["close_order_id"] = oid
++            _save_state(state)
++            filled, px = self._await_fill(oid)
++            if not (filled >= qty and px > 0):
++                r = self._settle(oid)
++                if r is None or not r[2]:
++                    rec["status"] = "exit_unverified"
++                    _page_throttled(rec, f"[{symbol}] breakout close ({reason}) order {oid} unreadable/still working — "
++                                         f"resolving each cycle")
++                    _save_state(state)
++                    return False
++                filled, px = max(filled, r[0]), (r[1] or px)
++            if filled >= qty and px > 0:
++                self._book_exit(symbol, rec, state, reason, px, filled, **ctx)
++                return True
++            if 0 < filled < qty and px > 0:
++                self._book_partial(symbol, rec, state, px, filled, f"{reason}_partial", clear_key="close_order_id")
++            rec["close_order_id"] = ""
++            _save_state(state)
++        _page_throttled(rec, f"[{symbol}] breakout close ({reason}) UNCONFIRMED ({filled}/{qty}) — re-protecting the remainder")
++        self._reprotect(symbol, rec, state, int(rec.get("qty") or 0), depth=_depth + 1)
++        return False
++
++    def _book_partial(self, symbol: str, rec: dict, state: dict, px: float, filled: int, reason: str,
++                      clear_key: str = "") -> None:
++        """Book a PARTIAL sale of this lot: its P&L is added to the lot's running realized P&L (so the final
++        exit never books only the remainder) and the lot's qty shrinks by what sold. `clear_key` (the order-id
++        field that produced the fill) is cleared in the SAME save, so a crash can never re-book the leg."""
++        entry = float(rec.get("entry_px") or 0.0)
++        pnl = round((px - entry) * filled, 2) if entry > 0 and px > 0 else None
++        if pnl is not None:
++            rec["partial_pnl"] = round(float(rec.get("partial_pnl") or 0.0) + pnl, 2)
++        else:
++            rec["partial_pnl_unknown"] = True
++        rec["qty"] = max(int(rec.get("qty") or 0) - int(filled), 0)
++        if clear_key:
++            rec[clear_key] = ""
++        _save_state(state)
++        _log("partial_exit", symbol, price=px, size=int(filled), exit_reason=reason, realized_pnl=pnl,
++             trade_id=rec.get("coid"), entry_px_estimated=bool(rec.get("entry_px_estimated")))
++
++    def _book_exit(self, symbol: str, rec: dict, state: dict, reason: str, px: float, qty: int, **ctx) -> None:
++        """Final exit. realized_pnl = this fill's P&L + every partial booked earlier (None if any part is unknown)."""
++        entry = float(rec.get("entry_px") or 0.0)
++        leg = round((px - entry) * qty, 2) if entry > 0 and px > 0 else None
++        pnl = (None if leg is None or rec.get("partial_pnl_unknown")
++               else round(leg + float(rec.get("partial_pnl") or 0.0), 2))
++        rec.update(status="closed", exit_px=px, exit_reason=reason, exit_date=datetime.now(ET).strftime("%Y-%m-%d"),
++                   realized_pnl=pnl, stop_order_id="", close_order_id="", unprotected=False)
++        _save_state(state)
++        _log("exit", symbol, price=px, size=int(qty), exit_reason=reason, realized_pnl=pnl,
++             entry_px_estimated=bool(rec.get("entry_px_estimated")),
++             trade_id=rec.get("coid"), **{k: v for k, v in ctx.items() if v is not None})
++        logger.info("[%s] breakout EXIT %s %d sh @ %.2f (P&L %s)", symbol, reason, qty, px, pnl)
++
++    def _book_gone(self, symbol: str, rec: dict, state: dict) -> None:
++        """The broker shows no position for this lot. Cancel any resting stop first (a sell stop on a flat
++        symbol could open a short); if that stop turns out to have filled, book it as the protective stop."""
++        from execution import broker
++        stop_id = str(rec.get("stop_order_id") or "")
++        if stop_id:
++            if not broker.cancel_stop_confirmed(symbol, stop_id):
++                _page_throttled(rec, f"[{symbol}] breakout lot gone at the broker but its stop {stop_id} could not be "
++                                     f"confirmed cancelled — a resting sell stop on a flat symbol; retrying each cycle")
++                _save_state(state)
++                return
++            final = self._final_fill(stop_id)
++            qty = int(rec.get("qty") or 0)
++            if final is not None and final[0] >= qty > 0 and final[1] > 0:
++                self._book_exit(symbol, rec, state, "protective_stop", final[1], final[0])
++                return
++        _page(f"[{symbol}] breakout lot of {rec.get('qty')} sh is GONE at the broker without a stop fill — "
++              f"booked as an unverified external close (P&L unknown); check fills")
++        rec.update(status="closed", exit_reason="external_close_unverified", realized_pnl=None, stop_order_id="",
++                   close_order_id="", unprotected=False, exit_date=datetime.now(ET).strftime("%Y-%m-%d"))
++        _save_state(state)
++        _log("exit", symbol, price=None, size=int(rec.get("qty") or 0), exit_reason="external_close_unverified",
++             realized_pnl=None, trade_id=rec.get("coid"), entry_px_estimated=bool(rec.get("entry_px_estimated")))
++
++    # ── reconcile (every cycle) ───────────────────────────────────────────────
++    def _reconcile(self, state: dict) -> None:
++        """Bring every held lot to a known state: resolve in-flight entries and unverified exits; for open lots
++        book a filled stop, book a partial fill, RE-PROTECT a lot whose stop is gone (cancelled/expired/rejected
++        by anyone, never placed, lost to a restart) and book a lot missing at the broker."""
++        for s, rec in list(state["positions"].items()):
++            try:
++                st = rec.get("status")
++                if st in _ENTRY_PENDING:
++                    self._resolve_entry(s, rec, state)
++                    continue
++                if st == "exit_unverified":
++                    self._resolve_exit_unverified(s, rec, state)
++                    continue
++                if st != "open":
++                    continue
++                qty = int(rec.get("qty") or 0)
++                stop_id = str(rec.get("stop_order_id") or "")
++                if not stop_id or rec.get("unprotected"):
++                    self._reprotect(s, rec, state, qty)
++                    continue
++                r = self._read_order(stop_id)
++                if r is None:
++                    continue                       # unreadable this cycle: no action (stop presumed resting)
++                filled, px, terminal = r
++                if filled >= qty > 0 and px > 0:
++                    self._book_exit(s, rec, state, "protective_stop", px, filled)
++                    continue
++                if terminal:
++                    # the stop ended without covering the lot (cancelled by another path, expired, rejected)
++                    if 0 < filled < qty and px > 0:
++                        self._book_partial(s, rec, state, px, filled, "protective_stop_partial", clear_key="stop_order_id")
++                    rec["stop_order_id"] = ""
++                    _page_throttled(rec, f"[{s}] breakout stop {stop_id} ENDED with {filled}/{qty} filled — re-protecting")
++                    self._reprotect(s, rec, state, int(rec.get("qty") or 0))
++                    continue
++                if 0 < filled < qty and not rec.get("partial_stop_paged"):
++                    # a resting stop that partly filled still covers the rest; flag once for review
++                    rec["partial_stop_paged"] = True
++                    _save_state(state)
++                    _page(f"[{s}] breakout stop PARTIALLY filled ({filled}/{qty}) — remainder still stopped; review")
++                if self._broker_qty(s) == 0:
++                    self._book_gone(s, rec, state)
++            except Exception as e:
++                logger.warning("[%s] breakout reconcile failed (no action this cycle): %s", s, e)
++
++    def _resolve_exit_unverified(self, symbol: str, rec: dict, state: dict) -> None:
++        """An exit whose stop fill or close fill could not be read: once BOTH are readable and final, book what
++        sold (full or partial), then re-protect whatever the broker still holds and return the lot to "open"."""
++        qty = int(rec.get("qty") or 0)
++        for key, label in (("stop_order_id", "protective_stop"), ("close_order_id", "close")):
++            oid = str(rec.get(key) or "")
++            if not oid:
++                continue
++            r = self._settle(oid)
++            if r is None or not r[2]:
++                return                                   # still unreadable / working: retry next cycle
++            filled, px, _ = r
++            qty = int(rec.get("qty") or 0)
++            if filled >= qty > 0 and px > 0:
++                self._book_exit(symbol, rec, state, label, px, filled)
++                return
++            if 0 < filled < qty and px > 0:
++                self._book_partial(symbol, rec, state, px, filled, f"{label}_partial", clear_key=key)
++            rec[key] = ""
++            _save_state(state)
++        if self._reprotect(symbol, rec, state, int(rec.get("qty") or 0), depth=1):
++            _page(f"[{symbol}] breakout lot re-protected ({rec.get('qty')} sh, GTC stop {rec.get('stop_px')}) after an unverified exit")
++
++    def status(self) -> dict:
++        try:
++            return _load_state()
++        except Exception as e:
++            return {"error": repr(e)}
++
++
++# One manager per process (run_cycle is single-threaded; the manager holds no per-cycle state in memory).
++MANAGER = SwingBreakoutManager()
+diff --git a/tests/test_swing_breakout_manager.py b/tests/test_swing_breakout_manager.py
+new file mode 100644
+index 0000000..ca58e2e
+--- /dev/null
++++ b/tests/test_swing_breakout_manager.py
+@@ -0,0 +1,621 @@
++# ruff: noqa: E501
++"""C2 swing breakout tier (2026-09-29): decision functions + order lifecycle with a fake broker."""
++import contextlib
++import importlib
++import sys
++import tempfile
++import unittest
++from datetime import datetime
++from pathlib import Path
++from types import SimpleNamespace
++from unittest import mock
++
++import numpy as np
++import pandas as pd
++
++from execution import swing_breakout_manager as sb
++
++
++def _bars(closes, vol=1e6, start="2025-01-02"):
++    idx = pd.bdate_range(start, periods=len(closes))
++    c = np.asarray(closes, dtype=float)
++    return pd.DataFrame({"open": c, "high": c * 1.01, "low": c * 0.99, "close": c, "volume": vol}, index=idx)
++
++
++def _breakout_df(n=260):
++    closes = list(np.linspace(100, 120, n - 1)) + [125.0]   # last close above the prior 55-day high and SMA200
++    return _bars(closes)
++
++
++@contextlib.contextmanager
++def _mods(fakes):
++    """Install fake modules in sys.modules AND as attributes on their parent packages: `from execution import
++    broker` reads the package attribute first, which another test may have set to a different fake."""
++    with contextlib.ExitStack() as stack:
++        stack.enter_context(mock.patch.dict(sys.modules, fakes))
++        for name, mod in fakes.items():
++            parent, _, child = name.rpartition(".")
++            if parent:
++                stack.enter_context(mock.patch.object(importlib.import_module(parent), child, mod, create=True))
++        yield
++
++
++class Decisions(unittest.TestCase):
++    def test_signal_fires_on_new_55d_high_above_sma200(self):
++        sig = sb.breakout_signal(_breakout_df())
++        self.assertIsNotNone(sig)
++        self.assertEqual(sig["close"], 125.0)
++        self.assertGreater(sig["atr"], 0)
++
++    def test_no_signal_when_not_a_new_high(self):
++        closes = list(np.linspace(100, 130, 259)) + [120.0]
++        self.assertIsNone(sb.breakout_signal(_bars(closes)))
++
++    def test_no_signal_below_sma200(self):
++        closes = list(np.linspace(200, 100, 200)) + [95.0] * 55 + [99.0]  # new 55d high but far below SMA200
++        self.assertIsNone(sb.breakout_signal(_bars(closes)))
++
++    def test_insufficient_history(self):
++        self.assertIsNone(sb.breakout_signal(_bars([100.0] * 150)))
++
++    def test_rank_by_dollar_volume(self):
++        bars = {"A": _bars([10.0] * 60, vol=1e6), "B": _bars([100.0] * 60, vol=1e6), "C": _bars([50.0] * 60, vol=1e6)}
++        self.assertEqual(sb.rank_universe(bars, 2), ["B", "C"])
++
++    def test_exit_rules(self):
++        self.assertEqual(sb.exit_reason(99.0, 100.0, 5, 30), "trend_break")
++        self.assertEqual(sb.exit_reason(101.0, 100.0, 30, 30), "time")
++        self.assertIsNone(sb.exit_reason(101.0, 100.0, 29, 30))
++        self.assertIsNone(sb.exit_reason(float("nan"), 100.0, 3, 30))   # unknown price never forces an exit
++        self.assertIsNone(sb.exit_reason(99.0, None, None, 30))
++
++    def test_sessions_held_counts_entry_day_as_one(self):
++        df = _bars([100.0] * 10, start="2026-09-14")    # completed sessions 09-14 .. 09-25
++        self.assertEqual(sb.sessions_held(df, "2026-09-24"), 3)   # 09-24, 09-25 completed + today
++
++    def test_size_order_bounds(self):
++        with mock.patch.object(sb.config, "SWING_BREAKOUT_MAX_RISK_PCT", 0.02, create=True):
++            q, _ = sb.size_order(2500.0, 230.0, 5.0, 0.0, 0.0)          # slot $500 → 2 sh; risk $50/$12.5 → 4
++            self.assertEqual(q, 2)
++            q, _ = sb.size_order(2500.0, 230.0, 5.0, 2400.0, 0.0)       # others use 96% → room $100 → 0
++            self.assertEqual(q, 0)
++            q, _ = sb.size_order(2500.0, 100.0, 20.0, 0.0, 0.0)         # risk cap: $50 / $50 → 1 sh
++            self.assertEqual(q, 1)
++            q, _ = sb.size_order(2500.0, 100.0, 1.0, 0.0, 1900.0)       # tier already $1,900 of $2,000 → 1 sh
++            self.assertEqual(q, 1)
++            q, _ = sb.size_order(float("nan"), 100.0, 1.0, 0.0, 0.0)
++            self.assertEqual(q, 0)
++            q, why = sb.size_order(2520.0, 511.0, 9.5, 0.0, 0.0)       # MSFT: 1 share > $504 slot → floor → 1 sh
++            self.assertEqual(q, 1)
++            self.assertIn("1-share floor", why)
++            q, _ = sb.size_order(2520.0, 640.0, 9.5, 0.0, 0.0)         # one share > 25% of equity ($630) → 0
++            self.assertEqual(q, 0)
++            q, _ = sb.size_order(2520.0, 600.0, 21.0, 0.0, 0.0)        # 2.5×ATR $52.5 > $50.4 risk cap → 0
++            self.assertEqual(q, 0)
++            q, _ = sb.size_order(2520.0, 511.0, 9.5, 0.0, 2000.0)      # budget room $16 → no floor → 0
++            self.assertEqual(q, 0)
++
++
++class FakeBroker:
++    def __init__(self, fill=True, stop_ok=True, positions=None):
++        self.fill, self.stop_ok = fill, stop_ok
++        self.positions = positions or []
++        self.orders, self.stops, self.closes, self.cancels = {}, [], [], []
++
++    def get_open_positions(self):
++        return self.positions
++
++    def get_open_orders(self, symbol=None):
++        return []
++
++
++    def get_account(self):
++        return SimpleNamespace(equity=2500.0, buying_power=10000.0)
++
++    def submit_limit_order(self, sym, qty, side, limit, tier="intraday", client_order_id=None):
++        o = SimpleNamespace(id=f"ord-{sym}", status="filled" if self.fill else "new",
++                            filled_qty=qty if self.fill else 0, filled_avg_price=limit if self.fill else 0)
++        self.orders[o.id] = o
++        return o
++
++    def get_order(self, oid):
++        return self.orders.get(oid, SimpleNamespace(status="new", filled_qty=0, filled_avg_price=0))
++
++    def cancel_order(self, oid):
++        self.cancels.append(oid)
++        o = self.orders.get(oid)
++        if o is not None and o.status not in ("filled", "canceled"):
++            o.status = "canceled"                            # a cancel takes effect (terminal) at once
++        return True
++
++    def get_order_by_client_order_id(self, coid):
++        return None
++
++    def submit_gtc_stop_order(self, sym, qty, side, px, tier="intraday", allow_cancel_blocking=True):
++        self.stops.append((sym, qty, side, px, tier))
++        if not self.stop_ok:
++            return None
++        o = SimpleNamespace(id=f"stop-{sym}", status="new", filled_qty=0, filled_avg_price=0)
++        self.orders[o.id] = o
++        return o
++
++    def cancel_stop_confirmed(self, sym, oid):
++        self.cancels.append(oid)
++        return True
++
++    def partial_close_position(self, sym, qty, tier="intraday", _return_order=False):
++        self.closes.append((sym, qty, tier))
++        o = SimpleNamespace(id=f"close-{sym}", status="filled", filled_qty=qty, filled_avg_price=130.0)
++        self.orders[o.id] = o
++        return o
++
++    def get_open_position(self, sym):
++        # shares bought through this fake for `sym`; a lot seeded directly into state (exit tests) holds 2
++        bought = sum(int(o.filled_qty) for k, o in self.orders.items() if k == f"ord-{sym}")
++        return SimpleNamespace(qty=bought or 2)
++
++    market_open = None                              # None → clock raises (15:50 ET fallback); True/False → is_open
++
++    def get_clock(self):
++        if self.market_open is None:
++            raise RuntimeError("no clock in tests")   # exercises the 15:50 ET fallback
++        return {"is_open": self.market_open, "next_close": None}
++
++
++class Lifecycle(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.p = mock.patch.object(sb, "_STATE", Path(self.tmp.name) / "sb.json")
++        self.p.start()
++        self.logs = []
++        self.p2 = mock.patch.object(sb, "_log", lambda ev, sym, **kw: self.logs.append((ev, sym, kw)))
++        self.p2.start()
++        self.p3 = mock.patch.object(sb, "_page", lambda m: self.logs.append(("page", "", {"m": m})))
++        self.p3.start()
++        self.cfg = mock.patch.multiple(sb.config, SWING_BREAKOUT_ENABLED=True, SWING_BREAKOUT_POOL=["AAA", "BBB"],
++                                       SWING_BREAKOUT_TOP_N=10, SWING_BREAKOUT_FILL_WAIT_S=0.0,
++                                       SWING_BREAKOUT_MAX_RISK_PCT=0.02, create=True)
++        self.cfg.start()
++        self.admits = []
++        self.alloc_ok = True
++
++        def _admit(tier, owner, sym, side, qty, px, **kw):
++            self.admits.append((tier, owner, sym, side, qty, kw.get("stop_price")))
++            lease = SimpleNamespace(client_order_id=f"IN-{sym}-lease") if self.alloc_ok else None
++            return SimpleNamespace(approved=self.alloc_ok, reason="ok" if self.alloc_ok else "tier capital cap", lease=lease)
++        self.alloc = SimpleNamespace(live_admit=_admit, live_order_id=lambda lease: lease.client_order_id if lease else None,
++                                     live_bind=lambda lease, order: True, live_release=lambda lease, reason: None)
++
++    def tearDown(self):
++        for p in (self.cfg, self.p3, self.p2, self.p):
++            p.stop()
++        self.tmp.cleanup()
++
++    def _run_entries(self, broker, bars):
++        fakes = {"execution.broker": broker,
++                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 124.9, "ask": 125.0}),
++                 "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
++                 "execution.tier_capital_allocator": self.alloc}
++        m = sb.SwingBreakoutManager()
++        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: bars[s])), \
++                mock.patch("time.sleep"):
++            return m, m.run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET))
++
++    def test_entry_places_protective_stop(self):
++        b = FakeBroker()
++        m, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, ["AAA"])
++        st = sb._load_state()["positions"]["AAA"]
++        self.assertEqual(st["status"], "open")
++        self.assertEqual(len(b.stops), 1)
++        sym, qty, side, px, tier = b.stops[0]
++        self.assertEqual((sym, side, tier), ("AAA", "sell", "intraday"))
++        self.assertEqual(self.admits[0][:4], ("swing", "intraday", "AAA", "buy"))
++        self.assertLess(px, st["entry_px"])
++        self.assertEqual(qty, st["qty"])
++
++    def test_once_per_day_latch(self):
++        b = FakeBroker()
++        bars = {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}
++        self._run_entries(b, bars)
++        _, got = self._run_entries(b, bars)
++        self.assertEqual(got, [])
++
++    def test_existing_position_is_skipped(self):
++        b = FakeBroker(positions=[SimpleNamespace(symbol="AAA", market_value=300.0)])
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, [])
++        self.assertTrue(any(ev == "skip" and s == "AAA" for ev, s, _ in self.logs))
++
++    def test_stop_failure_flattens(self):
++        b = FakeBroker(stop_ok=False)
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, [])
++        self.assertEqual(b.closes[0][0], "AAA")
++        self.assertEqual(b.closes[0][2], "intraday")
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["status"], "closed")
++
++    def test_allocator_denial_is_a_logged_skip(self):
++        b = FakeBroker()
++        self.alloc_ok = False
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, [])
++        self.assertEqual(b.orders, {})
++        self.assertTrue(any(ev == "skip" and "allocator" in kw.get("reason", "") for ev, _, kw in self.logs))
++
++    def test_unfilled_entry_records_nothing_open(self):
++        b = FakeBroker(fill=False)
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, [])
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["status"], "unfilled")
++        self.assertEqual(b.stops, [])
++
++    def test_exit_trend_break_closes_own_qty(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_px": 110.0,
++                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "BO-x"}}})
++        b = FakeBroker()
++        df = _bars([130.0] * 30, start="2026-08-17")          # prior 20-day low = 128.7
++        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2})}
++        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), \
++                mock.patch("time.sleep"):
++            got = sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 15, 52, tzinfo=sb.ET))
++        self.assertEqual(got, ["AAA"])
++        self.assertEqual(b.closes, [("AAA", 2, "intraday")])
++        self.assertIn("stop-AAA", b.cancels)
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["exit_reason"], "trend_break")
++
++    def test_partial_stop_fill_closes_only_remainder(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 3, "entry_px": 125.0, "stop_px": 110.0,
++                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "BO-x"}}})
++        b = FakeBroker()
++        b.orders["stop-AAA"] = SimpleNamespace(id="stop-AAA", status="canceled", filled_qty=1, filled_avg_price=110.0)
++        st = sb._load_state()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "trend_break")
++        self.assertEqual(b.closes, [("AAA", 2, "intraday")])
++
++    def test_before_1550_only_reconciles(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_order_id": "stop-AAA",
++                                             "entry_date": "2026-09-20"}}})
++        b = FakeBroker()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            got = sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
++        self.assertEqual((got, b.closes), ([], []))
++
++    def test_stop_fill_is_booked_by_reconcile(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_order_id": "stop-AAA",
++                                             "entry_date": "2026-09-20"}}})
++        b = FakeBroker()
++        b.orders["stop-AAA"] = SimpleNamespace(id="stop-AAA", status="filled", filled_qty=2, filled_avg_price=111.0)
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
++        rec = sb._load_state()["positions"]["AAA"]
++        self.assertEqual((rec["status"], rec["exit_reason"], rec["realized_pnl"]), ("closed", "protective_stop", -28.0))
++
++    def test_half_day_close_uses_clock(self):
++        from datetime import timedelta
++        now = datetime(2026, 11, 27, 12, 52, tzinfo=sb.ET)
++        clock = SimpleNamespace(get_clock=lambda: {"next_close": datetime(2026, 11, 27, 13, 0, tzinfo=sb.ET)})
++        with _mods({"execution.broker": clock}):
++            self.assertTrue(sb.SwingBreakoutManager._near_close(now))
++            self.assertFalse(sb.SwingBreakoutManager._near_close(now - timedelta(minutes=30)))
++
++    def test_disabled_is_inert(self):
++        with mock.patch.object(sb.config, "SWING_BREAKOUT_ENABLED", False):
++            self.assertEqual(sb.SwingBreakoutManager().run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET)), [])
++
++    def test_unreadable_state_blocks_entries(self):
++        sb._STATE.write_text("{not json")
++        self.assertEqual(sb.SwingBreakoutManager().run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET)), [])
++        self.assertTrue(any(ev == "page" for ev, _, _ in self.logs))
++
++    # ── self-audit fixes (2026-09-29) ─────────────────────────────────────────
++    def test_partially_filled_is_not_terminal(self):
++        self.assertFalse(sb._is_terminal("partially_filled"))
++        self.assertFalse(sb._is_terminal("OrderStatus.PARTIALLY_FILLED"))
++        self.assertTrue(sb._is_terminal("OrderStatus.FILLED"))
++        self.assertTrue(sb._is_terminal("canceled"))
++
++    def test_unreadable_entry_order_falls_back_to_position(self):
++        b = FakeBroker()
++        b.get_order = lambda oid: None                        # order unreadable after the fill
++        b.get_open_position = lambda sym: SimpleNamespace(qty=3)
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, ["AAA"])
++        rec = sb._load_state()["positions"]["AAA"]
++        self.assertEqual((rec["status"], rec["qty"]), ("open", 3))
++        self.assertEqual(b.stops[0][1], 3)
++
++    def test_unreadable_entry_order_and_position_is_unverified(self):
++        b = FakeBroker()
++        b.get_order = lambda oid: None
++
++        def _raise(sym):
++            raise RuntimeError("api down")
++        b.get_open_position = _raise
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, [])
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["status"], "entry_unverified")
++        self.assertEqual(b.stops, [])
++        self.assertIn("AAA", sb.get_breakout_symbols())       # still excluded from orphan adoption
++        self.assertTrue(any(ev == "page" for ev, _, _ in self.logs))
++
++    def test_same_scan_second_entry_sees_first_lot(self):
++        b = FakeBroker()
++        with mock.patch.multiple(sb.config, SWING_BREAKOUT_BUDGET_PCT=0.20, create=True):
++            _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _breakout_df()})
++        self.assertEqual(len(got), 1)                          # the 20% budget is used by the first lot
++        self.assertTrue(any(ev == "skip" and kw.get("reason") == "no size" for ev, _, kw in self.logs))
++
++    def test_unreadable_stop_fill_halts_exit_then_reprotects(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_px": 110.0,
++                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "IN-x"}}})
++        b = FakeBroker()
++        real_get = b.get_order
++        b.get_order = lambda oid: None
++        st = sb._load_state()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            ok = sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "trend_break")
++        self.assertFalse(ok)
++        self.assertEqual(b.closes, [])                         # never sells blind
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["status"], "exit_unverified")
++        b.get_order = real_get
++        b.orders["stop-AAA"] = SimpleNamespace(id="stop-AAA", status="canceled", filled_qty=0, filled_avg_price=0)
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
++        rec = sb._load_state()["positions"]["AAA"]
++        self.assertEqual((rec["status"], rec["qty"]), ("open", 2))
++        self.assertEqual(b.stops[-1][:3], ("AAA", 2, "sell"))
++
++    def test_working_close_is_cancelled_before_restop(self):
++        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 3, "entry_px": 125.0, "stop_px": 110.0,
++                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "IN-x"}}})
++        b = FakeBroker()
++
++        def _pc(sym, qty, tier="intraday", _return_order=False):
++            b.closes.append((sym, qty, tier))
++            o = SimpleNamespace(id="close-AAA", status="partially_filled", filled_qty=1, filled_avg_price=120.0)
++            b.orders[o.id] = o
++            return o
++        b.partial_close_position = _pc
++        st = sb._load_state()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            ok = sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "trend_break")
++        self.assertFalse(ok)
++        self.assertIn("close-AAA", b.cancels)                  # working close cancelled first
++        self.assertEqual(b.stops[-1][:2], ("AAA", 2))          # re-stop covers only the unsold 2 shares
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["qty"], 2)
++
++    # ── board / cold-2nd findings (2026-09-29) ────────────────────────────────
++    def _lot(self, **kw):
++        rec = {"status": "open", "qty": 2, "entry_px": 125.0, "stop_px": 110.0, "stop_order_id": "stop-AAA",
++               "entry_date": "2026-09-20", "coid": "IN-x", "signal": {"close": 125.0, "atr": 5.0}}
++        rec.update(kw)
++        sb._save_state({"positions": {"AAA": rec}})
++
++    def _reconcile(self, b, quote=None):
++        fakes = {"execution.broker": b,
++                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: quote or {"bid": 120.0, "ask": 120.2})}
++        with _mods(fakes), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
++        return sb._load_state()["positions"]["AAA"]
++
++    def test_externally_cancelled_stop_is_replaced(self):
++        self._lot()
++        b = FakeBroker()
++        b.orders["stop-AAA"] = SimpleNamespace(id="stop-AAA", status="canceled", filled_qty=0, filled_avg_price=0)
++        rec = self._reconcile(b)
++        self.assertEqual(b.stops[-1][:4], ("AAA", 2, "sell", 110.0))
++        self.assertEqual((rec["status"], rec["stop_order_id"], rec["unprotected"]), ("open", "stop-AAA", False))
++
++    def test_lot_without_stop_id_is_protected(self):            # restart between "open" and the stop save
++        self._lot(stop_order_id="")
++        b = FakeBroker()
++        rec = self._reconcile(b)
++        self.assertEqual(len(b.stops), 1)
++        self.assertEqual(rec["stop_order_id"], "stop-AAA")
++
++    def test_failed_restop_flags_unprotected_and_retries(self):
++        self._lot(stop_order_id="")
++        b = FakeBroker(stop_ok=False)
++        rec = self._reconcile(b)
++        self.assertTrue(rec["unprotected"])
++        self.assertTrue(any(ev == "page" and "UNPROTECTED" in kw["m"] for ev, _, kw in self.logs))
++        b.stop_ok = True
++        rec = self._reconcile(b)                                  # next cycle retries
++        self.assertFalse(rec["unprotected"])
++        self.assertEqual(rec["stop_order_id"], "stop-AAA")
++
++    def test_failed_restop_with_price_through_stop_closes(self):
++        self._lot(stop_order_id="")
++        b = FakeBroker(stop_ok=False)
++        b.market_open = True
++        rec = self._reconcile(b, quote={"bid": 105.0, "ask": 105.2})
++        self.assertEqual(b.closes, [("AAA", 2, "intraday")])
++        self.assertEqual(rec["exit_reason"], "stop_breached_unprotected")
++
++    def test_after_hours_breach_does_not_close(self):
++        self._lot(stop_order_id="")
++        b = FakeBroker(stop_ok=False)
++        b.market_open = False
++        rec = self._reconcile(b, quote={"bid": 105.0, "ask": 105.2})
++        self.assertEqual(b.closes, [])
++        self.assertEqual((rec["status"], rec["unprotected"]), ("open", True))
++
++    def test_close_with_no_position_places_no_stop(self):
++        self._lot()
++        b = FakeBroker()
++        b.partial_close_position = lambda sym, qty, tier="intraday", _return_order=False: True
++        b.get_open_position = lambda sym: None
++        st = sb._load_state()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "trend_break")
++        self.assertEqual(b.stops, [])
++        rec = sb._load_state()["positions"]["AAA"]
++        self.assertEqual((rec["status"], rec["exit_reason"]), ("closed", "external_close_unverified"))
++
++    def test_partial_stop_then_close_books_full_pnl(self):
++        self._lot(qty=3)
++        b = FakeBroker()
++        b.orders["stop-AAA"] = SimpleNamespace(id="stop-AAA", status="canceled", filled_qty=1, filled_avg_price=110.0)
++        st = sb._load_state()
++        with _mods({"execution.broker": b}), mock.patch("time.sleep"):
++            sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "trend_break")
++        rec = sb._load_state()["positions"]["AAA"]
++        self.assertEqual(rec["realized_pnl"], -15.0 + 2 * 5.0)   # 1 @ 110 (-15) + 2 @ 130 (+10)
++        self.assertTrue(any(ev == "partial_exit" and kw["realized_pnl"] == -15.0 for ev, _, kw in self.logs))
++
++    def test_restart_mid_entry_promotes_filled_order(self):
++        self._lot(status="submitted", qty=0, entry_order_id="ord-AAA", stop_order_id="", entry_px=0, stop_px=0,
++                  limit=125.25)
++        b = FakeBroker()
++        b.orders["ord-AAA"] = SimpleNamespace(id="ord-AAA", status="filled", filled_qty=3, filled_avg_price=125.1)
++        rec = self._reconcile(b)
++        self.assertEqual((rec["status"], rec["qty"], rec["entry_px"]), ("open", 3, 125.1))
++        self.assertEqual(b.stops[-1][:2], ("AAA", 3))
++        self.assertAlmostEqual(b.stops[-1][3], round(125.1 - 2.5 * 5.0, 2))
++
++    def test_ambiguous_submit_resolved_by_client_id(self):
++        self._lot(status="submit_unknown", qty=0, stop_order_id="", entry_px=0, stop_px=0, limit=125.25)
++        b = FakeBroker()
++        o = SimpleNamespace(id="ord-AAA", status="filled", filled_qty=2, filled_avg_price=125.0)
++        b.orders["ord-AAA"] = o
++        b.get_order_by_client_order_id = lambda coid: o
++        rec = self._reconcile(b)
++        self.assertEqual((rec["status"], rec["qty"]), ("open", 2))
++        self.assertIn("AAA", sb.get_breakout_symbols())
++
++    def test_ambiguous_submit_that_never_happened_is_released(self):
++        self._lot(status="submit_unknown", qty=0, stop_order_id="", entry_px=0, stop_px=0)
++        b = FakeBroker()
++        b.get_open_position = lambda sym: None
++        rec = self._reconcile(b)
++        self.assertEqual(rec["status"], "unfilled")
++        self.assertNotIn("AAA", sb.get_breakout_symbols())
++
++    def test_fill_during_cancel_is_counted(self):
++        b = FakeBroker(fill=False)
++
++        def _cancel(oid):                                     # the order fills while the cancel is pending
++            b.cancels.append(oid)
++            o = b.orders.get(oid)
++            if o is not None and oid.startswith("ord-"):
++                o.status, o.filled_qty, o.filled_avg_price = "filled", 4, 125.2
++            return True
++        b.cancel_order = _cancel
++        _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
++        self.assertEqual(got, ["AAA"])
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["qty"], 4)
++        self.assertEqual(b.stops[-1][1], 4)
++
++    def test_gone_lot_cancels_its_resting_stop(self):
++        self._lot()
++        b = FakeBroker()
++        b.get_open_position = lambda sym: None
++        rec = self._reconcile(b)
++        self.assertIn("stop-AAA", b.cancels)
++        self.assertEqual(rec["exit_reason"], "external_close_unverified")
++
++    def test_deferred_exit_retries_next_cycle(self):
++        self._lot()
++        b = FakeBroker()
++        b.cancel_stop_confirmed = lambda sym, oid: False       # 15:50: stop cancel not confirmed → deferred
++        df = _bars([130.0] * 30, start="2026-08-17")
++        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2})}
++        m = sb.SwingBreakoutManager()
++        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), mock.patch("time.sleep"):
++            self.assertEqual(m.run_exit_check(datetime(2026, 9, 30, 15, 51, tzinfo=sb.ET)), [])
++            b.cancel_stop_confirmed = lambda sym, oid: True
++            self.assertEqual(m.run_exit_check(datetime(2026, 9, 30, 15, 56, tzinfo=sb.ET)), ["AAA"])
++
++    def test_no_entries_before_1005(self):
++        b = FakeBroker()
++        fakes = {"execution.broker": b}
++        with _mods(fakes):
++            self.assertEqual(sb.SwingBreakoutManager().run_entries(datetime(2026, 9, 30, 10, 0, tzinfo=sb.ET)), [])
++        self.assertEqual(b.orders, {})
++
++    def test_state_unreadable_keeps_last_good_symbols(self):
++        self._lot()
++        self.assertEqual(sb.get_breakout_symbols(), {"AAA"})
++        sb._STATE.write_text("{broken")
++        self.assertEqual(sb.get_breakout_symbols(), {"AAA"})
++
++    # ── round-2 findings (2026-09-29) ─────────────────────────────────────────
++    def test_entry_stop_fail_with_breach_books_once(self):     # risk-seat probe P5 / cold-2nd R2-1
++        b = FakeBroker(stop_ok=False)
++        b.market_open = True
++        state = {"n": 0}
++        real_close = b.partial_close_position
++
++        def _pc(sym, qty, tier="intraday", _return_order=False):
++            if state["n"]:
++                return True                                    # position already flat
++            state["n"] += 1
++            o = real_close(sym, qty, tier, _return_order)
++            o.filled_avg_price = 100.0                          # sold through the stop
++            return o
++        b.partial_close_position = _pc
++        flat = {"v": False}
++        orig_pos = b.get_open_position
++        b.get_open_position = lambda sym: None if flat["v"] else orig_pos(sym)
++        quotes = iter([{"bid": 124.9, "ask": 125.0}] + [{"bid": 99.0, "ask": 99.2}] * 20)
++        fakes = {"execution.broker": b,
++                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: next(quotes)),
++                 "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
++                 "execution.tier_capital_allocator": self.alloc}
++        m = sb.SwingBreakoutManager()
++
++        def _book_exit_then_flat(*a, **k):
++            flat["v"] = True
++            return real_book(*a, **k)
++        real_book = m._book_exit
++        m._book_exit = _book_exit_then_flat
++        bars = {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}
++        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: bars[s])), \
++                mock.patch("time.sleep"):
++            got = m.run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET))
++        rec = sb._load_state()["positions"]["AAA"]
++        exits = [kw for ev, _, kw in self.logs if ev == "exit"]
++        self.assertEqual(got, [])
++        self.assertEqual(len(exits), 1)                          # booked exactly once
++        self.assertEqual(rec["exit_reason"], "stop_breached_unprotected")
++        self.assertIsNotNone(rec["realized_pnl"])
++        self.assertLess(rec["realized_pnl"], 0)
++        self.assertEqual(len(b.closes), 1)
++
++    def test_unreadable_order_with_working_buy_is_not_promoted(self):
++        self._lot(status="submitted", qty=0, entry_order_id="ord-AAA", stop_order_id="", entry_px=0, stop_px=0,
++                  req_qty=100)
++        b = FakeBroker()
++        b.get_order = lambda oid: None
++        b.get_open_position = lambda sym: SimpleNamespace(qty=40)
++        b.get_open_orders = lambda symbol=None: [SimpleNamespace(symbol="AAA", side="buy")]
++        rec = self._reconcile(b)
++        self.assertEqual(rec["status"], "entry_unverified")
++        self.assertEqual(b.stops, [])
++        self.assertIn("ord-AAA", b.cancels)                      # _settle cancels even when the read failed
++
++    def test_unreadable_order_promotes_at_most_requested_qty(self):
++        self._lot(status="submitted", qty=0, entry_order_id="ord-AAA", stop_order_id="", entry_px=0, stop_px=0,
++                  req_qty=4, limit=125.25)
++        b = FakeBroker()
++        b.get_order = lambda oid: None
++        b.get_open_position = lambda sym: SimpleNamespace(qty=7)  # 3 extra shares belong to another tier
++        rec = self._reconcile(b)
++        self.assertEqual((rec["status"], rec["qty"]), ("open", 4))
++        self.assertEqual(b.stops[-1][1], 4)
++        self.assertTrue(rec["entry_px_estimated"])
++
++    def test_closed_lot_is_never_closed_again(self):
++        self._lot(status="closed", realized_pnl=-20.0, exit_reason="trend_break")
++        b = FakeBroker()
++        st = sb._load_state()
++        with _mods({"execution.broker": b}):
++            self.assertTrue(sb.SwingBreakoutManager()._close_lot("AAA", st["positions"]["AAA"], st, "time"))
++        self.assertEqual(b.closes, [])
++        self.assertEqual(sb._load_state()["positions"]["AAA"]["realized_pnl"], -20.0)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/logs/design_records/c2_swing_breakout_tier_2026-09-29.md b/logs/design_records/c2_swing_breakout_tier_2026-09-29.md
+new file mode 100644
+index 0000000..2fb94d6
+--- /dev/null
++++ b/logs/design_records/c2_swing_breakout_tier_2026-09-29.md
+@@ -0,0 +1,83 @@
++# Confluence 2.0 swing tier — megacap breakout (design record, 2026-09-29, Claude-signed)
++
++## Evidence
++- Live since 2026-04-06 (fills, FIFO): 12-point swing -$126.00 / 154 trades (PF 0.89; shorts -$123.98, PF 0.66);
++  QHM +$196.98 inferred (PF 3.83). Record: logs/design_records/entry_rebuild_2026-09-26.md (labs 3-9).
++- Lab 8c (corrected, true beta): point-in-time top-10 dollar volume, 55-day closing-high breakout above the 200-day SMA,
++  exit on a close below the prior 20-day low or 30 sessions, 2.5 ATR stop: +2.6%/trade absolute, +1.26% beta-adjusted,
++  t 2.18 (daily-portfolio t 0.94). Mostly high-beta megacap exposure in rising markets plus positive skew.
++- Lab 9 (post-hoc top-20, review pending): heavy-volume gap-up through the 60-day high, 20-session hold: +2.6%/trade,
++  +1.23% beta-adjusted, t 3.2, 10/11 years. Breakdown shorts lose in every slice.
++
++## Build (BGGN: board risk + execution seats APPROVE-WITH-CHANGES; GAI APPROVE-WITH-CHANGES; Gro no valid objection)
++- New self-contained tier `execution/swing_breakout_manager.py` (template: quarterly_hold_manager.py): own state file
++  data/state/swing_breakout.json (atomic), own client_order_id tag, GTC protective stop per lot, quantity-bounded exits
++  (never close_position(symbol)); symbols held by QHM or F6 are skipped.
++- Universe: top-10 (breakout) / top-20 (gap, if its review passes) by 60-day median dollar volume among current
++  S&P 500 + Nasdaq-100 members, from Alpaca T1 daily bars (closed bars only).
++- Entry: once per day on the closed daily bar; order at the next session open; long only; no swing shorts.
++- Exit: close below the prior 20-day low (checked ~15:50 ET on the live price; logged vs the official close) or 30 sessions;
++  GTC stop at entry - 2.5 x ATR(14).
++- Sizing (risk seat, corrected for the unenforced 40% constant): 4 fixed slots x 20% of equity, whole shares; the 2%
++  risk-at-stop rule stays as a ceiling; tier budget = min(80%, 100% - QHM - F6 - other swing overnight notional)
++  (Architecture Invariant #11); skip + log when no room; bypass the run_cycle overnight size multiplier; keep gross 2.5x
++  and the buying-power pre-flight.
++- Stop NEW 12-point swing entries (both sides); open positions keep their exits.
++- Every entry/skip/exit emits its decision stack to trade_events.jsonl.
++- Rule E: risk-path (new entries) -> full gate: cold board + masked-loss seat, cold-2nd, Gro + GAI, Rafael approval.
++- Follow-up (separate diff): remove or wire the dead MAX_OVERNIGHT_EXPOSURE_PCT and the stale entry_logic.py:1497 comment.
++
++## As built (2026-09-29, Claude-signed) — supersedes the Build section where they differ
++- Ownership: lots carry the swing owner tag "intraday" (allocator lease IN- client_order_id), NOT a new tag. A new
++  ledger tier would break tier_capital_allocator._ledger_tier_gross (the four ledger tiers must sum to the broker
++  net) and block every tier's entries. This tier's lots are identified by data/state/swing_breakout.json;
++  orphan_manager and run_cycle's drift checks exclude get_breakout_symbols().
++- Capital: every entry is admitted by live_admit("swing", "intraday", ...) — the same budget the 12-point swing
++  path used. With TIER_CAPITAL_SWING_TARGET_PCT=0.20 × gross 1.25 the swing budget is ~25% of equity, so only ONE
++  20% slot fits today; slots 2-4 are denied "tier capital cap" (logged skip). Raising that budget is a separate
++  allocator decision (targets must sum to 1.0) — Rafael's.
++- overnight=False on admit (same as entry_logic's RTH swing path): the allocator's overnight flag caps TOTAL
++  account gross (QHM + F6 included) at 40% of equity, and Rafael excluded the buy-and-hold tiers from swing
++  exposure limits (2026-09-26). The tier's own overnight bound is its sizing cap min(80%, 100% − other notional).
++- Universe: a fixed 30-name megacap pool (SWING_BREAKOUT_POOL / module default), ranked daily to the top 10 by
++  60-day median dollar volume. Not the full S&P 500 + Nasdaq-100 (too many daily-bar calls per cycle).
++- Entry timing: once per ET day from 10:05 ET (module gate; after run_cycle's 09:30-10:00 opening return and
++  QHM's own >= 10:05 entry hook), on the prior closed daily bar; marketable DAY limit at ask + 0.2%, 15 s fill wait,
++  remainder cancelled and SETTLED (polled to a final status, so a fill during the cancel is counted). A total
++  daily-bar outage un-latches the day so the next cycle retries. QHM's configured picks (incl. pending entries)
++  are skipped, not only its held names.
++- 12-point: SWING12_NEW_ENTRIES_ENABLED=False blocks NEW entries in execute_entries (after the #12c opposite-signal
++  exit and the position checks, mean-reversion exempt) and in _overnight_entry_check. Open 12-point positions
++  keep every exit path.
++- Protection invariant (after BGGN round 1 — risk seat, execution seat and cold-2nd all found recovery gaps):
++  every cycle `_reconcile` drives each held lot to "open with a resting stop for min(lot qty, broker long qty)".
++  * A stop cancelled/expired/rejected by ANYONE (a corporate action, QHM's stray-sell sweep, another tier's
++    40310000 blanket cancel), never placed, or lost to a restart is re-placed and paged.
++  * Re-stops use allow_cancel_blocking=False (never blanket-cancel another tier's orders; no 63 s poll) and
++    route the broker sentinels by identity. A failed re-stop flags the lot `unprotected`, pages (throttled to
++    30 min) and retries every cycle; if the price is already through the stop, the lot is closed instead.
++  * A stop is NEVER placed on shares the broker does not show (no accidental short). Broker flat → the lot's
++    resting stop is cancelled first, then the lot is booked as an unverified external close (P&L None).
++  * In-flight entries (submitting / submitted / submit_unknown / entry_unverified, incl. after a restart) are
++    resolved by order id or client order id: settle → promote the filled qty to "open" + stop, or mark unfilled.
++    They count as HELD (slots, notional, orphan/drift exclusion) until resolved.
++  * Unreadable orders are never read as zero-filled; an exit whose stop or close fill is unreadable becomes
++    `exit_unverified` (never sells blind) and is resolved when readable.
++  * Partial fills (stop or close) are booked as partial_exit events with realized P&L, and the final exit's
++    realized_pnl sums every leg (None if any leg is unknown). Estimated entry prices are flagged on every event.
++  * get_breakout_symbols() returns the last good set on an unreadable state file (never empty-on-error).
++  * Near-close exits latch per lot only once decided; a deferred exit retries on the next cycle.
++- Per-lot risk cap: SWING_BREAKOUT_MAX_RISK_PCT = 2% (own constant; the paper profile's MAX_PORTFOLIO_RISK_PCT is 4%).
++- Disclosed residual risks (not fixed in this diff):
++  * No earnings filter: a 30-session hold crosses an earnings date about half the time; a gap can jump the stop.
++    Worst case ~ slot 20% × a 25% gap ≈ 5% of equity per lot (bounded; the 7% kill only stops new entries).
++  * Trading-thread time: the entry scan (30 daily-bar fetches + ~20 s per entry) and near-close exits run on the
++    run_cycle thread; realistically 35-50 s on an entry day with one slot. Main-bot lots keep their exchange stops.
++  * The tier's own close (partial_close_position tier "intraday") can, on a 40310000, blanket-cancel orders on the
++    symbol, including a co-holding day-tier stop (existing broker behaviour for non-daytrade tiers).
++- Kill switch: SWING_BREAKOUT_ENABLED=False stops NEW entries only; held lots keep their GTC stops and managed exits.
++- Hook placement (strategy/run_cycle.py): exits run after the QHM weekly check and before the kill/halt return, so
++  they run every RTH cycle up to the 16:00 EOD return (the 15:50/15:55 cycles land in the 10-minute window). Not on
++  a calendar BLACKOUT day (that return comes first) — the GTC stop still protects the lot. Entries run after the
++  QHM entry hook: after the kill/halt return, but BEFORE the SPY "EXTREME" block, like QHM (the swing tier does
++  not use the SPY 5-minute gate — Rafael 2026-09-27).

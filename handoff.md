@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-27 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-09-30 (Claude interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,41 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-09-30 08:40 PT, Claude-signed) — P0: allocator blocks ALL entries — pick up here
+
+**P0 (verified on OCI by read-only probes):** since the tier-capital allocator (#442) went live on 2026-09-29, it
+denies every new entry from every tier. Today it denied day-tier MSFT, AMZN and TSLA, with zero entries so far.
+Exits, stops and kills are unaffected. There are two independent causes:
+1. `_parse_order`/`_snapshot`/`live_release` read `str(enum)`. On OCI's py3.10 that gives `'OrderStatus.NEW'`, so
+   every order and position reads as malformed ("broker snapshot unreadable: ValueError").
+   Fix = `_enum_text()` reads `.value`; saved as `logs/pending_patches/allocator_enum_fix_2026-09-29.patch`.
+   It is NOT gated or committed yet. A probe with the patch confirmed the snapshot then reads OK.
+2. The ownership ledger holds net-zero crossed rows on flat symbols: AMZN intraday +12 / daytrade −12, META +1/−1,
+   MSFT −1/+1. `_ledger_tier_gross` treats these as drift, so every tier is denied.
+   Root cause (AMZN verified): the day tier's OCO exit legs carry Alpaca-generated untagged client order ids, and
+   the ledger sync attributes untagged fills to intraday.
+
+**Decision pending with Rafael:** Option B = flip `TIER_CAPITAL_ALLOCATOR_ENABLED=False`, which restores the
+pre-9/29 behaviour (every tier's own caps + the 7% kill still apply). Then ship fix 1, fix the ledger OCO-leg
+attribution and heal the 3 rows, and re-enable only after an OCI probe shows admissions succeeding.
+Gro and GAI both chose B (no risk widening vs the pre-9/29 state). The board risk seat could not answer
+(weekly usage limit).
+
+**Shipped 2026-09-29:** PR #443, the day-tier stop room measured from the live price (ends the false "fill
+INVALIDATED" alerts). Deployed at OCI `7cac5d9`.
+
+**C2 swing breakout tier:** built, NOT committed.
+- Code: branch `claude/c2-swing-breakout-build` (worktree `quarterly-hold-automation-2b6498`); full diff saved as
+  `logs/pending_patches/c2_swing_breakout_2026-09-29.patch`.
+- Board risk + execution seats APPROVE and cold-2nd PASS (round 3).
+- Two later edits have had NO fresh cold-2nd yet: the after-hours breach guard, and the 1-share floor
+  (`SWING_BREAKOUT_MIN1_MAX_PCT=0.25`, chosen by board + Gro + GAI).
+- Still to run: cold-2nd on those edits, Gro+GAI preship, then Rafael approval.
+- It depends on the allocator working.
+
+**⏩ EXACT NEXT ACTION:** get Rafael's decision on Option B. Then (a) gate + ship fix 1, (b) build the ledger
+OCO-attribution fix + heal, (c) finish the breakout tier's gate.
 
 ## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
 
