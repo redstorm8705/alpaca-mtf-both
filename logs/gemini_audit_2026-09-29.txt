@@ -1,0 +1,69 @@
+Nightly Gemini Audit — 2026-09-29
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['config.py', 'execution/tier_capital_allocator.py', 'execution/broker.py', 'execution/entry_logic.py', 'execution/forever_hold_manager.py', 'execution/day_trade_manager.py', 'execution/quarterly_hold_manager.py', 'research/c2_trigger_lab.py', 'research/c2_lab_v2.py', 'research/c2_swing_lab.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there are persistent anomalies in the `[ANOMALY-2]` and `[ANOMALY-3]` logs, and the `DRAM` symbol is consistently failing to enter due to missing daily data, indicating a potential data-feed or configuration gap.
+
+### LOG ANOMALIES
+*   **[ANOMALY-2] [ADBE]**: The log consistently reports `confirm_gate=3 scans but no entry — risk.open_positions=3 vs tracker=3`. This suggests a synchronization mismatch between the `risk` module and the `portfolio_tracker` that is preventing entry for `ADBE` despite the strategy signaling.
+*   **[ANOMALY-3] [TQI degradation]**: `last-5-trade avg=28.4/100 < 30`. This is a recurring warning indicating that the Trade Quality Index is below the threshold, suggesting that exit discipline or stop placement is underperforming.
+*   **[DRAM] No daily data**: The confluence scanner repeatedly logs `[DRAM] No daily data — long/short entry blocked (fail-closed)`. This is a persistent data-feed issue for this specific ticker.
+*   **Ledger Sync Latency**: `ledger_sync wall-time 14.8s` (and 14.7s) is high. While not catastrophic, it indicates the ledger sync is approaching the cycle time limit, which could lead to stale state if the sync duration increases.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `NVDA` trades sampled in the EOD snapshot (`2026-09-29T13:56:20.120997Z` etc.) show small P&L values (-0.01, -0.03, 0.02, 0.02). These are consistent with the entry/exit prices provided.
+*   **Stop/Target**: The `UBER` entry attempt (`score=10/12`) was blocked by sector correlation with `SOFI`. This demonstrates that the correlation gate is functioning as intended.
+*   **Score Correlation**: The strategy continues to prioritize `SNOW` (12/12) and `CRM` (10/12), which aligns with the scoring logic.
+*   **R:R Analysis**: The bot is maintaining its discipline by blocking entries when sector correlation or risk thresholds are breached, which is a positive sign for long-term profit factor, despite the current low win rate.
+
+### TRADE INTEGRITY
+*   **No issues found**: The `pnl_today` is 0.0, and the `pnl_drift` in the self-check telemetry is negligible. The ledger sync appears to be handling the fills correctly.
+
+### MODIFIED FILE FINDINGS
+*   **execution/tier_capital_allocator.py**: The logic for `_reconcile_locked` correctly handles terminal statuses. However, the `_evaluate` function relies on `req.regime_evidence.get("verified")`. If the regime evidence is not passed correctly from the strategy, the allocator will fail-closed. This is a robust design, but ensure the strategy layer is consistently populating this field.
+*   **execution/broker.py**: The `_ProtectionSentinel` implementation is robust. The `_hold_state` function correctly distinguishes between `STABLE` protection and `NO_COVER` scenarios, which prevents false-positive alerts.
+*   **execution/entry_logic.py**: The `_check_portfolio_correlation` function is correctly implemented with a fail-closed approach.
+*   **execution/forever_hold_manager.py**: The `_write_sync_degraded` function uses `os.fsync()` and atomic replacement, which is the correct pattern for durable state management.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/entry_logic.py | Correlation gate uses 20-day lookback for daily correlation | The correlation gate uses a fixed 20-day lookback (`_check_portfolio_correlation`). If the market regime shifts rapidly, this lookback may be too slow to detect emerging correlations between symbols, potentially leading to over-exposure in a single sector.**
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PASS** (The `RC4_RECONCILE_WINDOW_MINUTES` fix in `config.py` is correctly implemented and the ledger sync is successfully reconciling fills).
+
+### RECOMMENDED ACTIONS
+1.  **Investigate ADBE Anomaly**: Debug the `risk.open_positions` vs `tracker` mismatch for `ADBE` to resolve the entry block.
+2.  **DRAM Data Feed**: Verify if `DRAM` is correctly included in the `fetch_bars` universe or if the ticker symbol has changed/delisted.
+3.  **Correlation Lookback**: Consider making the correlation lookback in `execution/entry_logic.py` dynamic based on the current `MRI` regime (e.g., shorter lookback during `STRESSED` regimes).
+4.  **Ledger Sync Optimization**: Monitor the `ledger_sync` wall-time; if it continues to exceed 15s, consider optimizing the `ledger_loader` to reduce I/O overhead.
+
+================================================================================
+SUPPRESSION POST-FILTER: 0 false-alarm removed, 0 acknowledged | card verdict WARN → FAIL (see logs/audit_suppressions.jsonl; ground-truth escalation)
+
+================================================================================
+BROKER GROUND TRUTH (2026-09-29, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     NAKED                    owners=qhm exposed=350m no-broker-stop=7m [07:10-07:16] rejected_stop_orders=0
+  GOOGL  NAKED                    owners=qhm exposed=350m no-broker-stop=7m [07:10-07:16] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  NVDA   NAKED                    owners=day/qhm exposed=350m no-broker-stop=7m [06:56-06:56, 07:10-07:16] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  SOFI   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
