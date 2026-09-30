@@ -1,0 +1,258 @@
+{
+  "audit_date": "2026-09-29",
+  "run_ts": "2026-09-29T10:30:02.333178-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NVDA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "STRESSED": 2,
+      "ELEVATED": 27
+    },
+    "last_score": 28,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 66,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-09-29 16:10:38,945 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-29 16:10:38,948 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-29 16:11:01,492 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-09-29 16:11:01,495 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-09-29 16:17:30,484 | WARNING  | strategy.run_cycle | [ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30 \u2014 review exit discipline and sto"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "NVDA",
+      "pnl": 0.0,
+      "entry_price": 230.3,
+      "exit_price": 230.3,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 230.29,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": 0.0,
+      "entry_price": 230.3,
+      "exit_price": 230.3,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 230.29,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "NVDA",
+        "pnl": 0.0,
+        "entry_price": 230.3,
+        "exit_price": 230.3,
+        "size": 6.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 230.29,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "GE": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 200,
+        "uncovered_min": 7,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:10-10:16"
+        ],
+        "uncovered_windows_pt": [
+          "07:10-07:16"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 200,
+        "uncovered_min": 7,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:10-10:16"
+        ],
+        "uncovered_windows_pt": [
+          "07:10-07:16"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NFLX": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "day",
+          "qhm"
+        ],
+        "exposed_min": 200,
+        "uncovered_min": 7,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:56-09:56",
+          "10:10-10:16"
+        ],
+        "uncovered_windows_pt": [
+          "06:56-06:56",
+          "07:10-07:16"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "SOFI": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:36"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-09-29",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "GE NAKED (broker ground truth)",
+        "detail": "GE: no broker stop for 7m of 200m held (07:10-07:16 PT); owners qhm"
+      },
+      {
+        "severity": "critical",
+        "title": "GOOGL NAKED (broker ground truth)",
+        "detail": "GOOGL: no broker stop for 7m of 200m held (07:10-07:16 PT); owners qhm"
+      },
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth)",
+        "detail": "NVDA: no broker stop for 7m of 200m held (06:56-06:56, 07:10-07:16 PT); owners day/qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 8,
+    "symbols": [
+      "GE",
+      "GOOGL",
+      "NVDA"
+    ],
+    "by_symbol": {
+      "GE": {
+        "buy": 1,
+        "sell": 0
+      },
+      "GOOGL": {
+        "buy": 1,
+        "sell": 0
+      },
+      "NVDA": {
+        "buy": 5,
+        "sell": 0
+      }
+    }
+  }
+}
