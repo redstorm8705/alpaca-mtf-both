@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-09-30
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The SOFI trade (1B/0S) shows an entry of $17.24 and an exit of $15.86. As this was a short entry (implied by the exit price being lower than the entry price for a profit of +$1.38), the P&L calculation is correct.
+*   **Score Correlation**: The SOFI trade had a score of 10/12, which aligns with the bot's high-conviction criteria.
+*   **Stop Analysis**: The stop was set at $18.36. The trade was closed at $15.86, well before the stop was hit. The performance is consistent with the strategy's target-seeking behavior.
+
+### ENTRY QUALITY
+*   **Sector Correlation**: The bot correctly identified and blocked entries for SNOW and DDOG due to sector correlation with the existing PLTR position (software sector). This demonstrates effective risk management.
+*   **ORB Gate**: The bot correctly applied the ORB (Opening Range Breakout) gate, blocking entries for UBER, SOFI, and NFLX because the SPY price was above the required breakdown level.
+
+### EXIT QUALITY
+*   **No issues**: The partial exit on SOFI was executed successfully. No evidence of "holding winners too long" or "cutting losers too slowly" in the provided data.
+
+### MRI ALIGNMENT
+*   **Regime**: The MRI session distribution is 100% ELEVATED (29/29 samples). The bot correctly adjusted the dynamic `MIN_SCORE` to 9/12 to account for the elevated market regime, filtering out 11 signals.
+
+### LOG ANOMALIES
+*   **EOD P&L DRIFT**: `EOD P&L DRIFT: Alpaca=$1.19 tracker=$2.66 drift=$-1.47`. While the bot notes this in the logs, a drift of $1.47 on a $2.5K account is non-trivial and suggests a discrepancy between the `portfolio_tracker` and the Alpaca API fill reporting.
+*   **TQI Degradation**: `[ANOMALY-3] TQI degradation: last-5-trade avg=28.4/100 < 30`. This indicates a systematic decline in trade quality that warrants monitoring.
+
+### NEW BUGS / CONCERNS
+*   **INFRASTRUCTURE | MEDIUM | EOD P&L Drift | The discrepancy between the tracker ($2.66) and Alpaca ($1.19) exceeds the expected margin of error for a paper account, potentially indicating a failure in the FIFO lot-matching logic.**
+*   **ALPHA ISSUE | LOW | TQI Degradation | The TQI (Trade Quality Index) has dropped below the threshold of 30. This suggests that while the bot is profitable, the quality of entries is trending downward.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **INFRASTRUCTURE**: Investigate the `portfolio_tracker` FIFO logic to determine why the EOD P&L drift is $1.47; ensure that partial fills are being correctly reconciled against the Alpaca API.
+2.  **ALPHA**: Review the `strategy.scoring` module to identify why the TQI has fallen below 30; check if the current market regime (ELEVATED) is causing the bot to take lower-quality signals despite the dynamic score adjustment.
+3.  **EXECUTION**: Monitor the `DRAM` ticker; the logs show "No daily data" warnings, which are causing entries to be blocked. Ensure the data provider is correctly feeding daily OHLCV for this symbol.
