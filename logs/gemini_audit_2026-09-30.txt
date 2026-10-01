@@ -1,0 +1,15 @@
+Nightly Gemini Audit — 2026-09-30
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+Modified files: []
+================================================================================
+
+(Gemini API error — all models failed: all Gemini ladder models failed (last: HTTP 503))
+================================================================================
+BROKER GROUND TRUTH (2026-09-30, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=5m [06:30-06:35] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=5m [06:30-06:35] rejected_stop_orders=0
+  SOFI   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=5m [06:30-06:35, 10:18-10:18] rejected_stop_orders=0
