@@ -1,0 +1,8 @@
+Midday Gemini Audit — 2026-10-01
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The session is technically "clean" in terms of execution (no failed stops, no naked positions), but the bot is currently in a state of "Analysis Paralysis" due to high macro stress and TQI degradation. While no money was
