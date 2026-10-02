@@ -15,11 +15,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 ("broker snapshot unreadable: ValueError") and zero entries were made. Pre-9/29 admission, stops, exits and the
 7% kill are unchanged. Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "TIER_CAPITAL_ALLOCATOR_ENABLED = False" config.py'` → 1.
 
-**⏩ EXACT NEXT ACTION (before re-enabling):** (1) ship the enum fix — saved patch on branch
-`claude/handoff-2026-09-29-allocator` (PR #446) at `logs/pending_patches/allocator_enum_fix_2026-09-29.patch`;
-also log the ValueError MESSAGE in `_snapshot()` (today only the type is logged); (2) fix the ledger's untagged
-day-tier OCO-leg attribution and heal the crossed rows (AMZN/META/MSFT per 9/30 probe); (3) add a flag-off test;
-(4) re-enable only after a read-only OCI probe shows admissions. Detail: `logs/tb_audit_log.md` 2026-10-02.
+**Enum fix SHIPPED (dormant):** PR #451 / OCI `6947381` (verify: `grep -c "def _enum_text" execution/tier_capital_allocator.py` → 1).
+A read-only prod probe with it: snapshot OK, regime evidence OK (normal, verified).
+
+**⏩ EXACT NEXT ACTION (re-enable still blocked by 2 items, both shown by the 10-02 prod probe):**
+(1) ledger crossed rows: MSFT intraday −1/daytrade +1, AMZN +12/−12, META +1/−1 → `_ledger_tier_gross` returns None for
+every tier. Fix the ledger's untagged day-tier OCO-leg attribution + heal the rows (full read of ownership_guard/ledger_sync first).
+(2) conformance to CLAUDE.md "QHM/F6 excluded from swing exposure limits": the allocator's account-gross cap (1.25× equity)
+and overnight cap (0.40× equity) count QHM holdings (LLY 2 sh ≈ $2.28K) — prod gross $3,429 vs cap $3,051, so every
+swing/day entry would be denied on "account gross cap". Risk-path design → board + Gro + GAI before code.
+Re-enable only after a read-only OCI probe of `_evaluate` approves a sample swing and day entry.
 
 ## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
 
