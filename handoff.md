@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-09-27 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-02 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-02 09:40 PT, Claude-signed) — allocator DISABLED, entries restored — pick up here
+
+**SHIPPED + DEPLOYED (deployed, unexercised):** PR #449 / OCI `f7e86fb` sets `TIER_CAPITAL_ALLOCATOR_ENABLED=False`
+(Rafael approved Option B). Since 9/29 the allocator denied every swing and day-tier entry it evaluated
+("broker snapshot unreadable: ValueError") and zero entries were made. Pre-9/29 admission, stops, exits and the
+7% kill are unchanged. Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "TIER_CAPITAL_ALLOCATOR_ENABLED = False" config.py'` → 1.
+
+**⏩ EXACT NEXT ACTION (before re-enabling):** (1) ship the enum fix — saved patch on branch
+`claude/handoff-2026-09-29-allocator` (PR #446) at `logs/pending_patches/allocator_enum_fix_2026-09-29.patch`;
+also log the ValueError MESSAGE in `_snapshot()` (today only the type is logged); (2) fix the ledger's untagged
+day-tier OCO-leg attribution and heal the crossed rows (AMZN/META/MSFT per 9/30 probe); (3) add a flag-off test;
+(4) re-enable only after a read-only OCI probe shows admissions. Detail: `logs/tb_audit_log.md` 2026-10-02.
 
 ## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
 
