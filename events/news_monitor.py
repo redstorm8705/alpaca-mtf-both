@@ -110,9 +110,9 @@ KEYWORDS_HALT = {
 # CAUTION: notable headlines — displayed prominently in dashboard, zero size impact
 KEYWORDS_CAUTION = {
     # War / geopolitical — important context, market reaction is what matters
-    "iran", "airstrike", "air strike", "bombing", "hormuz",
+    "iran", "iranian", "airstrike", "air strike", "bombing", "hormuz",
     "strait of hormuz", "escalation", "retaliation", "invasion",
-    "russia", "ukraine", "nato", "north korea",
+    "russia", "russian", "ukraine", "ukrainian", "nato", "north korea", "north korean",
     # Oil / energy — watch for SPY confirmation
     "crude oil", "oil shock", "oil prices surge", "oil prices fall",
     "wti", "brent crude", "refinery attack", "pipeline attack",
@@ -147,12 +147,12 @@ KEYWORDS_MONITOR = {
 
 # GEO_CONFLICT: armed conflict, military strikes, territory, terror, cyber-infra
 GEO_CONFLICT_KEYWORDS = {
-    "iran", "airstrike", "air strike", "bombing", "hormuz",
+    "iran", "iranian", "airstrike", "air strike", "bombing", "hormuz",
     "strait of hormuz", "retaliation", "invasion", "warplane",
     "naval blockade", "military strike", "armed conflict",
     "declared war", "wartime", "terror attack", "terrorist attack",
-    "cyber attack", "infrastructure attack", "north korea", "ukraine",
-    "russia", "nato",
+    "cyber attack", "infrastructure attack", "north korea", "north korean", "ukraine",
+    "ukrainian", "russia", "russian", "nato",
 }
 
 # GEO_ENERGY: supply disruption, oil shock, energy crisis
@@ -197,6 +197,58 @@ MACRO_RISK_KEYWORDS = (
 )
 
 MACRO_RISK_THRESHOLD = 3   # 3+ CAUTION macro alerts in 24h → macro risk state active
+
+# ── Word-boundary keyword matcher (2026-08-21 fix) ────────────────────────────
+# ROOT FIX: keyword matching was raw substring (`k in text`), so "iran" matched
+# "Smriti Irani" (a surname), "nato" matched "Senators" (a hockey headline), and
+# "ppi" matched "shipping" — generating false macro alerts that fed MRI and cut
+# position size. VERIFIED logged instances in logs/mtf_bot.log (2026-04-15): the
+# hockey story "Senators sign forward Blake Montgomery" fired a CAUTION macro alert
+# via "nato" (17 occurrences); "Hormuz shipping constraints" added a spurious "ppi".
+# (Corrected 2026-08-24: an earlier draft of this comment cited "yen"/"Yellen",
+# "svb"/"observe", "boj"/"majority" — none are substrings, so they never matched;
+# and a "~76%/94%" MRI-refresh stat that has no in-repo computation was dropped —
+# the concrete logged instances above are the evidence.)
+# These compiled patterns match each keyword only as a whole token: "iran" matches
+# "Iran" / "Iran-backed" / "Iran's" (hyphen & apostrophe are boundaries) but NOT
+# "Irani". An optional regular-plural suffix `(?:e?s)?` is allowed before the
+# boundary so common plural headline forms ("rate cuts", "bank failures",
+# "defaults", "airstrikes") still match, while "Irani"/"congressional" stay
+# rejected (their next char is a letter, not s/es). Adjectival inflections
+# ("iranian"/"russian"/"ukrainian") are added to the sets above — a plural suffix
+# cannot derive them from the noun. NOTE: whole-word proper nouns are NOT
+# disambiguated — "Congress" in "India's Congress party" still matches "congress"
+# (a semantic/NER problem, out of scope for a token-boundary fix). One regex per
+# set, compiled once at import (sets frozen thereafter), so matching stays cheap.
+def _compile_kw(keywords: set) -> "re.Pattern[str]":
+    # longest-first so multi-word phrases win the alternation; alnum boundary both
+    # ends; `(?:e?s)?` tolerates a regular plural (e.g. "rate cut" → "rate cuts").
+    if not keywords:
+        # Empty set → never-match sentinel (fail-SAFE). An empty alternation `(?:)` matches the
+        # EMPTY STRING at any punctuation boundary, so `.search()` would fire on almost every real
+        # (punctuated) headline and mislabel every MRI event type. A future edit that empties a set
+        # must make that domain go SILENT (match nothing), never match-everything. `(?!)` never matches.
+        return re.compile(r"(?!)")
+    ordered = sorted(keywords, key=len, reverse=True)
+    return re.compile(
+        r"(?<![a-z0-9])(?:" + "|".join(re.escape(k) for k in ordered) + r")(?:e?s)?(?![a-z0-9])"
+    )
+
+_RE_HALT           = _compile_kw(KEYWORDS_HALT)
+_RE_CAUTION        = _compile_kw(KEYWORDS_CAUTION)
+_RE_MONITOR        = _compile_kw(KEYWORDS_MONITOR)
+_RE_MACRO_RISK     = _compile_kw(MACRO_RISK_KEYWORDS)
+_RE_GEO_CONFLICT   = _compile_kw(GEO_CONFLICT_KEYWORDS)
+_RE_GEO_ENERGY     = _compile_kw(GEO_ENERGY_KEYWORDS)
+_RE_MACRO_MONETARY = _compile_kw(MACRO_MONETARY_KEYWORDS)
+_RE_MACRO_CREDIT   = _compile_kw(MACRO_CREDIT_KEYWORDS)
+_RE_MACRO_FX       = _compile_kw(MACRO_FX_KEYWORDS)
+_RE_MACRO_SYSTEMIC = _compile_kw(MACRO_SYSTEMIC_KEYWORDS)
+
+
+def _kw_hits(text_lower: str, pattern: "re.Pattern[str]") -> list:
+    """Return de-duplicated whole-word keyword hits in already-lowercased text."""
+    return list(dict.fromkeys(pattern.findall(text_lower)))
 
 # ── Finnhub event type mapping ────────────────────────────────────────────────
 FINNHUB_EVENT_MAP = {
@@ -446,9 +498,10 @@ class NewsMonitor:
           MONITOR → 1.0  (logged only)
         """
         lower = text.lower()
-        found_halt    = [k for k in KEYWORDS_HALT    if k in lower]
-        found_caution = [k for k in KEYWORDS_CAUTION if k in lower]
-        found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
+        # Word-boundary match (2026-08-21): "iran" no longer matches "Irani" etc.
+        found_halt    = _kw_hits(lower, _RE_HALT)
+        found_caution = _kw_hits(lower, _RE_CAUTION)
+        found_monitor = _kw_hits(lower, _RE_MONITOR)
 
         if found_halt:
             return "HALT",    found_halt[:3],    1.0   # display only — no size penalty (Build F)
@@ -1631,8 +1684,7 @@ class NewsMonitor:
         # expanded to 9-domain taxonomy; bare "war" removed (Finding 7 fix).
         for _alert in new_alerts:
             _ahl = _alert.headline.lower()
-            if _alert.risk_level in ("CAUTION", "HALT") and \
-               any(_mk in _ahl for _mk in MACRO_RISK_KEYWORDS):
+            if _alert.risk_level in ("CAUTION", "HALT") and _RE_MACRO_RISK.search(_ahl):
                 self._macro_risk_window[_content_hash(_alert.headline)] = now
 
        # Purge window entries older than 24 hours
@@ -1735,17 +1787,18 @@ class NewsMonitor:
             _alerts_snapshot = list(self._active_alerts)
         for alert in reversed(_alerts_snapshot):
             hl = alert.headline.lower()
-            if any(kw in hl for kw in MACRO_SYSTEMIC_KEYWORDS):
+            # Word-boundary match (2026-08-21): no substring false-positives
+            if _RE_MACRO_SYSTEMIC.search(hl):
                 return "MACRO_SYSTEMIC"
-            if any(kw in hl for kw in GEO_CONFLICT_KEYWORDS):
+            if _RE_GEO_CONFLICT.search(hl):
                 return "GEO_CONFLICT"
-            if any(kw in hl for kw in GEO_ENERGY_KEYWORDS):
+            if _RE_GEO_ENERGY.search(hl):
                 return "GEO_ENERGY"
-            if any(kw in hl for kw in MACRO_CREDIT_KEYWORDS):
+            if _RE_MACRO_CREDIT.search(hl):
                 return "MACRO_CREDIT"
-            if any(kw in hl for kw in MACRO_FX_KEYWORDS):
+            if _RE_MACRO_FX.search(hl):
                 return "MACRO_FX"
-            if any(kw in hl for kw in MACRO_MONETARY_KEYWORDS):
+            if _RE_MACRO_MONETARY.search(hl):
                 return "MACRO_MONETARY"
 
         # Fallback: macro risk state active but no matching active alert
