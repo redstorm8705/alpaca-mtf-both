@@ -1,0 +1,60 @@
+Nightly Gemini Audit — 2026-10-01
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring anomaly in the `strategy.run_cycle` logic regarding position tracking and entry gating.
+
+### LOG ANOMALIES
+*   **[ANOMALY-2] [SOFI]**: The log repeatedly reports `confirm_gate=20 scans but no entry — risk.open_positions=2 vs tracker=2`. This indicates a persistent mismatch or a logic loop where the strategy identifies a valid entry but the `confirm_gate` or risk manager is blocking it despite `MAX_OPEN_POSITIONS=20` not being reached.
+*   **QHM BLOCKED**: Multiple entries for `NVDA`, `GOOGL`, and `GEV` were blocked by `QuarterlyHoldManager` due to `new-money agg 40%/name 20%` caps. While this is intended behavior, the frequency of these blocks during high-score cycles suggests the QHM constraints may be overly restrictive for the current portfolio size.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `SOFI` trade (ID: `INTRA-SOFI-2026-09-22T09:53:52.339580-07:00`) shows a `pnl` of 4.0 and `pnl_remaining` of 1.34. The `_pnl_selfcheck_telemetry` confirms a drift of -0.19, which is within expected bounds for pre-heal reconciliation.
+*   **Score Correlation**: The bot is consistently identifying high-score setups (e.g., `NET` at 12/12, `PLTR`/`AMD` at 10/12), but the `ANOMALY-2` log suggests these are not being executed. The win rate (33.5%) and profit factor (0.8) indicate the strategy is currently struggling to capture its edge, likely due to the high frequency of blocked entries.
+
+### TRADE INTEGRITY
+*   No recording bugs found in the provided JSON. All `pnl` signs align with the `direction` (short/long) and `entry`/`exit` prices.
+
+### MODIFIED FILE FINDINGS
+*   No source files modified in the last 24h.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: OBSOLETE
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **CATEGORY**: EXECUTION BUG | **SEVERITY**: MEDIUM | **file**: `strategy/run_cycle` | **description**: The `confirm_gate` logic is failing to reconcile `risk.open_positions` with the `tracker` state, causing valid high-score signals to be suppressed. | **exact failure condition**: `risk.open_positions` equals `tracker` count, yet `confirm_gate` blocks entry, preventing the bot from scaling into available slots under `MAX_OPEN_POSITIONS`.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `ANOMALY-2`**: Audit the `confirm_gate` logic in `strategy.run_cycle` to determine why it is blocking entries when `risk.open_positions` is well below `MAX_OPEN_POSITIONS`.
+2.  **Review QHM Constraints**: Evaluate if the `new-money agg 40%/name 20%` caps are too tight given the current $2.5K account size, as they are preventing the execution of high-score signals.
+3.  **P5-C2 Remediation**: Address the `ImportError` in `run_movers.py` to restore premarket scanning capabilities.
+4.  **P5-M3 Cleanup**: Implement a pruning mechanism for `score_comparison` JSON to prevent unbounded memory/file growth.
+================================================================================
+BROKER GROUND TRUTH (2026-10-01, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  SOFI   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=236m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
