@@ -142,6 +142,54 @@ class AllocatorTests(unittest.TestCase):
         self.assertFalse(decision.approved)
         self.assertEqual(decision.reason, "tier capital cap")
 
+    def test_alpaca_str_enum_fields_parse_by_value(self):
+        # alpaca-py returns (str, Enum) members; str() of one is
+        # "PositionSide.LONG", not "long". Before the 2026-10-02 fix this
+        # denied every entry as "broker snapshot unreadable".
+        from enum import Enum
+
+        class PositionSide(str, Enum):
+            LONG = "long"
+            SHORT = "short"
+
+        class OrderSide(str, Enum):
+            BUY = "buy"
+            SELL = "sell"
+
+        class OrderStatus(str, Enum):
+            NEW = "new"
+
+        self.assertNotIn(str(PositionSide.LONG).lower(), {"long", "short"})
+        self.broker.positions = [
+            SimpleNamespace(symbol="AAPL", qty=2, side=PositionSide.LONG,
+                            current_price=100, market_value=200),
+            SimpleNamespace(symbol="NFLX", qty=-1, side=PositionSide.SHORT,
+                            current_price=50, market_value=-50),
+        ]
+        self.broker.orders = [
+            SimpleNamespace(id="s1", status=OrderStatus.NEW, symbol="AAPL",
+                            side=OrderSide.SELL, qty=2, filled_qty=0,
+                            limit_price=None, stop_price=90),
+            SimpleNamespace(id="s2", status=OrderStatus.NEW, symbol="NFLX",
+                            side=OrderSide.BUY, qty=1, filled_qty=0,
+                            limit_price=None, stop_price=55),
+        ]
+        self.ledger = _ledger(AAPL={"intraday": 2}, NFLX={"intraday": -1})
+        decision = self.alloc.admit_entry(self.req())
+        self.assertTrue(decision.approved, decision.reason)
+
+    def test_snapshot_denial_names_the_failed_check(self):
+        self.broker.positions = [
+            SimpleNamespace(symbol="AAPL", qty=2, side="sideways",
+                            current_price=100, market_value=200)
+        ]
+        decision = self.alloc.admit_entry(self.req())
+        self.assertFalse(decision.approved)
+        self.assertEqual(
+            decision.reason,
+            "broker snapshot unreadable: ValueError: malformed position",
+        )
+
     def test_qhm_cash_only_and_cash_floor(self):
         denied = self.alloc.admit_entry(self.req("qhm", side="sell_short"))
         self.assertFalse(denied.approved)

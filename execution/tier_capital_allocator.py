@@ -44,6 +44,14 @@ _OPEN_STATUSES = frozenset(
     }
 )
 _TERMINAL_STATUSES = frozenset({"filled", "canceled", "expired", "rejected"})
+
+
+def _enum_text(value: Any) -> str:
+    """Wire text of a broker field. alpaca-py returns str-Enums (OrderStatus, OrderSide, PositionSide) and
+    str() of one is its NAME ("OrderStatus.NEW" on Python 3.10), not its value ("new") — which made every
+    order and position read as malformed and denied every entry (Claude hotfix 2026-09-29). Plain strings
+    (tests, other adapters) pass through unchanged."""
+    return str(getattr(value, "value", value) or "")
 _DEFAULT_TARGETS = {
     "normal": {
         "daytrade": 0.40,
@@ -275,7 +283,7 @@ class TierCapitalAllocator:
                 except Exception:
                     raw_order = None
                 if raw_order is not None:
-                    status = str(getattr(raw_order, "status", "") or "").lower()
+                    status = _enum_text(getattr(raw_order, "status", "")).lower()
                     filled = float(getattr(raw_order, "filled_qty", 0) or 0)
                     oid = str(getattr(raw_order, "id", "") or "")
                     if (
@@ -520,7 +528,7 @@ class TierCapitalAllocator:
                 sym = str(getattr(p, "symbol", "") or "").upper()
                 px = float(getattr(p, "current_price", 0) or 0)
                 qty = float(getattr(p, "qty", 0) or 0)
-                side = str(getattr(p, "side", "") or "").lower()
+                side = _enum_text(getattr(p, "side", "")).lower()
                 if (
                     not sym
                     or not math.isfinite(px)
@@ -567,16 +575,17 @@ class TierCapitalAllocator:
             ).hexdigest()
             return payload, ""
         except Exception as exc:
-            return None, f"broker snapshot unreadable: {type(exc).__name__}"
+            # Name WHICH check failed (e.g. "malformed position"); the bare type hid the 9/29 enum defect.
+            return None, f"broker snapshot unreadable: {type(exc).__name__}: {str(exc)[:120]}"
 
     @staticmethod
     def _parse_order(
         order: Any, signed_qty: dict[str, float], position_prices: dict[str, float]
     ) -> dict:
         oid = str(getattr(order, "id", "") or "")
-        status = str(getattr(order, "status", "") or "").lower()
+        status = _enum_text(getattr(order, "status", "")).lower()
         sym = str(getattr(order, "symbol", "") or "").upper()
-        side = str(getattr(order, "side", "") or "").lower()
+        side = _enum_text(getattr(order, "side", "")).lower()
         qty = float(getattr(order, "qty", 0) or 0)
         filled = float(getattr(order, "filled_qty", 0.0) or 0.0)
         price = (
@@ -946,7 +955,7 @@ def live_release(lease: Lease | None, reason: str) -> Any | None:
                 lease.client_order_id
             )
             if order is not None:
-                status = str(getattr(order, "status", "") or "").lower()
+                status = _enum_text(getattr(order, "status", "")).lower()
                 filled = float(getattr(order, "filled_qty", 0) or 0)
                 oid = getattr(order, "id", None)
                 # A terminal order can still own a real partial fill. Return every
