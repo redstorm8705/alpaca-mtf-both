@@ -950,7 +950,10 @@ DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.60  # PROV:daytier-aggression-2026-09-
 
 # ─── SHARED LIVE TIER-CAPITAL ALLOCATOR (paper; increasing orders only) ───
 # Signed: ChatGPT/Codex, 2026-09-27.
-TIER_CAPITAL_ALLOCATOR_ENABLED = True
+# DISABLED 2026-10-02 (Rafael approved Option B; Claude-signed): the live snapshot read str(enum)
+# ('positionside.long') as malformed and denied every entry from every tier since 2026-09-29.
+# Re-enable only after the enum fix + ledger crossed-row fix ship and an OCI probe shows admissions.
+TIER_CAPITAL_ALLOCATOR_ENABLED = False
 TIER_CAPITAL_CASH_FLOOR_USD = 200.0  # PROV:live-tier-capital-allocator-2026-09-27
 TIER_CAPITAL_MAINT_FLOOR_USD = 650.0  # PROV:live-tier-capital-allocator-2026-09-27
 TIER_CAPITAL_DAYTRADE_TARGET_PCT = 0.40  # PROV:live-tier-capital-allocator-2026-09-27
