@@ -18,13 +18,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 **Enum fix SHIPPED (dormant):** PR #451 / OCI `6947381` (verify: `grep -c "def _enum_text" execution/tier_capital_allocator.py` → 1).
 A read-only prod probe with it: snapshot OK, regime evidence OK (normal, verified).
 
-**⏩ EXACT NEXT ACTION (re-enable still blocked by 2 items, both shown by the 10-02 prod probe):**
-(1) ledger crossed rows: MSFT intraday −1/daytrade +1, AMZN +12/−12, META +1/−1 → `_ledger_tier_gross` returns None for
-every tier. Fix the ledger's untagged day-tier OCO-leg attribution + heal the rows (full read of ownership_guard/ledger_sync first).
-(2) conformance to CLAUDE.md "QHM/F6 excluded from swing exposure limits": the allocator's account-gross cap (1.25× equity)
-and overnight cap (0.40× equity) count QHM holdings (LLY 2 sh ≈ $2.28K) — prod gross $3,429 vs cap $3,051, so every
-swing/day entry would be denied on "account gross cap". Risk-path design → board + Gro + GAI before code.
-Re-enable only after a read-only OCI probe of `_evaluate` approves a sample swing and day entry.
+**Ledger crossed rows FIXED + LIVE:** PR #453 / OCI `3681502` — OCO legs inherit their parent's tier (nested order
+fetch). Manual sync 10-02 17:06 PT: 12 legs re-attributed, AMZN/META/MSFT flat, drift 0, QHM unchanged; the allocator
+now reads every tier (verify: `ssh mtf-bot 'grep -c "attributed to their parent" /home/ubuntu/mtf-bot/logs/ledger_sync_cron.log'` ≥ 1).
+Non-blocking follow-ups (board/cold-2nd nits): QHM-parent OCO test, None-parent test, warn if nested view yields 0 legs.
+
+**⏩ EXACT NEXT ACTION (one blocker left before re-enabling the allocator):** conformance to CLAUDE.md "QHM/F6 excluded
+from swing exposure limits" — the allocator's account-gross cap (1.25× equity) and overnight cap (0.40× equity) count
+QHM holdings; 10-02 prod: gross $3,430 vs cap $3,052, so every swing/day entry would be denied. Risk-path design →
+board + Gro + GAI before code. Then re-enable only after a read-only OCI probe of `_evaluate` approves a sample swing and day entry.
 
 ## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
 
