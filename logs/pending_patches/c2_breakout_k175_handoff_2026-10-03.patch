@@ -1,0 +1,24 @@
+diff --git a/handoff.md b/handoff.md
+index 3f933fb..dbe34de 100644
+--- a/handoff.md
++++ b/handoff.md
+@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
+ > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
+ > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+ 
++## ⏩ LATEST (2026-10-03, Claude-signed) — C2 breakout tier rebuilt on K = 1.75: built + board-gated, NOT shipped — pick up here
++
++Branch `claude/c2-breakout-k175` = the 9/29 C2 breakout patch + the Option C budget room (verify:
++`git log --oneline origin/claude/c2-breakout-k175 -3`; `grep -c "SWING_BREAKOUT_TOTAL_OVERNIGHT_K" config.py` → 1 on the branch).
++Room = min(80%, 100% − other swing/day, 1.75× − other swing/day − HELD QHM/F6) × equity − tier notional; block-only.
++2026-10-02 book → room ≈ $842 (2 slots of ~$488 fit). Also: the entry record now mints its own tagged client order id
++when the allocator is off (it is, in prod), and F6 names are skipped once F6 is on. Invariant #11 text amended in CLAUDE.md
++on the branch. Board: risk seat (round 1 APPROVE-WITH-CHANGES → fix applied), masked-loss seat APPROVE, cold-2nd PASS
++(round 1); round-2 verdicts in `logs/tb_audit_log.md`. 51 unit tests pass; full suite unchanged vs main (42 env failures both).
++**Not done here (no API keys in the cloud container):** Gro + GAI audit of the exact diff, preship markers.
++**⏩ EXACT NEXT ACTION:** on the Mac: `git fetch && git checkout claude/c2-breakout-k175` → `preship_audit.py` Gro+GAI on the
++7-file diff → record cold-2nd/adversarial/log-evidence markers → bring Rafael the one-page package (APPROVE = ship + OCI pull + restart).
++
+ ## ⏩ LATEST (2026-10-02 evening, Claude-signed) — C2 breakout tier: budget fork AWAITING RAFAEL — pick up here
+ 
+ The built C2 megacap breakout tier (patch `logs/pending_patches/c2_swing_breakout_2026-09-29.patch` on branch
