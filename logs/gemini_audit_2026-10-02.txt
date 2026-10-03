@@ -1,0 +1,60 @@
+Nightly Gemini Audit — 2026-10-02
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there are recurring warnings regarding data availability and potential logic gaps in the entry/exit flow.
+
+### LOG ANOMALIES
+*   **[DRAM] Data Availability:** Recurring `WARNING | confluence | [DRAM] No daily data — long/short entry blocked (fail-closed)`. This indicates a persistent failure to fetch or process daily data for the symbol `DRAM`, causing the bot to fail-closed repeatedly.
+*   **[Ledger Sync] Latency:** `WARNING | ledger_sync | wall-time 14.0s/15.1s (fills=708 orders=3001)`. The ledger sync is approaching the threshold of concern. While not currently failing, the increasing wall-time suggests the ledger size is impacting performance.
+*   **[Entry Logic] Market Closed:** `WARNING | execution.entry_logic | execute_entries: market closed (after-hours gate) — skipping all entries.` This is expected behavior, but the bot continued to run `run_cycle` and `confluence` checks after 20:00 ET, which is redundant.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity:** The last 10 trades (from `trade_events`) show consistent P&L signs.
+*   **Stop-Hit Rate:** The `SOFI` trade (ID: `INTRA-SOFI-2026-09-22...`) resulted in a `stop_hit` at 17.24. The `partial_exit` occurred at 15.86. The P&L calculation appears consistent with the exit price.
+*   **Score Correlation:** The bot is correctly identifying high-score setups (e.g., `SOFI` 10/12, `AAPL` 12/12), but the `Kelly` criterion is consistently returning `NEGATIVE EXPECTANCY` for short intraday trades, leading to `KELLY_MIN_RISK_PCT` fallback. This suggests the current short-side strategy parameters may be misaligned with recent market volatility.
+
+### TRADE INTEGRITY
+*   **No issues found.** All recorded trades in the provided JSON have valid `realized_pnl` or `pnl` fields, and exit reasons are clearly mapped.
+
+### MODIFIED FILE FINDINGS
+*   **No issues found.** No source files were modified in the last 24 hours.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: confluence.py | description: Persistent failure to handle missing daily data for DRAM | exact failure condition: The bot attempts to process `DRAM` every cycle despite the lack of daily data, resulting in repeated `WARNING` logs and redundant computation.**
+*   **CATEGORY: EXECUTION BUG | SEVERITY: LOW | file: strategy/run_cycle | description: Redundant cycle execution after market close | exact failure condition: `run_cycle` continues to perform confluence scoring and entry logic checks after the `after-hours gate` has already triggered, wasting CPU cycles.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Address DRAM Data:** Investigate why `DRAM` is missing daily data. If the symbol is no longer supported or data is unavailable, add it to a blacklist to prevent the bot from attempting to process it every cycle.
+2.  **Optimize Ledger Sync:** The `ledger_sync` wall-time is increasing. Consider implementing a pruning strategy for the `trade_events` log or optimizing the `ledger_sync` query to prevent future performance degradation.
+3.  **Short-Side Strategy Review:** Given the `NEGATIVE EXPECTANCY` warnings for `short_intraday` trades, review the `Kelly` input parameters and the `short` scoring logic to determine if the edge has decayed.
+4.  **After-Hours Gate:** Add a hard exit or sleep condition in `main.py` once the `after-hours gate` is hit to stop redundant `confluence` and `run_cycle` processing.
+================================================================================
+BROKER GROUND TRUTH (2026-10-02, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=8m [06:30-06:37] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=8m [06:30-06:37] rejected_stop_orders=0
