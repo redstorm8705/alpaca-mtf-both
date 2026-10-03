@@ -23,10 +23,13 @@ fetch). Manual sync 10-02 17:06 PT: 12 legs re-attributed, AMZN/META/MSFT flat, 
 now reads every tier (verify: `ssh mtf-bot 'grep -c "attributed to their parent" /home/ubuntu/mtf-bot/logs/ledger_sync_cron.log'` ≥ 1).
 Non-blocking follow-ups (board/cold-2nd nits): QHM-parent OCO test, None-parent test, warn if nested view yields 0 legs.
 
-**⏩ EXACT NEXT ACTION (one blocker left before re-enabling the allocator):** conformance to CLAUDE.md "QHM/F6 excluded
-from swing exposure limits" — the allocator's account-gross cap (1.25× equity) and overnight cap (0.40× equity) count
-QHM holdings; 10-02 prod: gross $3,430 vs cap $3,052, so every swing/day entry would be denied. Risk-path design →
-board + Gro + GAI before code. Then re-enable only after a read-only OCI probe of `_evaluate` approves a sample swing and day entry.
+**⏩ ALLOCATOR STAYS OFF (Claude rec 2026-10-02):** two blockers remain, design in
+`logs/design_records/allocator_reenable_2026-10-02.md` (verify: `ls logs/design_records/allocator_reenable_2026-10-02.md`):
+(1) QHM/F6 gross counted in swing/day account-gross + overnight caps — board + Gro + GAI aligned APPROVE-WITH-CHANGES
+on the exclusion design (build list in the record); (2) ledger-freshness lockout — `_ledger_tier_gross` denies every
+tier until the 20-min ledger cron re-syncs after ANY fill, and all evening after the ~2:40 PM PT last sync; needs a
+design (on-fill ledger update) + BGG. Owner flag: the 0.40× equity overnight cap (new on 9/29) is stricter than
+invariant #11. Coordinate the rebuild with Codex (allocator author).
 
 ## ⏩ LATEST (2026-09-29, ChatGPT/Codex signed) — live tier-capital allocator
 
