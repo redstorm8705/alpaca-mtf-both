@@ -100,6 +100,25 @@ def _write_streak(streak: dict) -> None:
         logger.warning("streak write failed: %s", e)
 
 
+def _inherit_leg_tiers(coid_map: dict, orders: list) -> int:
+    """An UNTAGGED multi-leg child (OCO/bracket leg — Alpaca generates its client_order_id)
+    inherits its parent's TIER-TAGGED client_order_id, by the exact `_parent_id` link from
+    fetch_all_orders(nested=True). Never by symbol/time proximity. A tagged leg, or a leg
+    whose parent is untagged, is left unchanged. Returns the count re-attributed.
+    Why (Claude 2026-10-02): day-tier OCO stop fills were attributed to intraday, leaving
+    crossed AMZN/META/MSFT ledger rows that make the tier-capital allocator deny every tier."""
+    from execution.ownership_guard import tier_of_coid
+    n = 0
+    for o in (orders or []):
+        oid = o.get("id")
+        parent_coid = o.get("_parent_client_order_id")
+        if (oid and o.get("_parent_id") and tier_of_coid(parent_coid)
+                and tier_of_coid(o.get("client_order_id")) is None):
+            coid_map[oid] = parent_coid
+            n += 1
+    return n
+
+
 def sync_once() -> dict:
     """Run one full-replay maintenance pass. Returns a result dict for logging/tests.
     NEVER raises into a cron caller — the ENTIRE body (imports, fetch, attribute, sync,
@@ -119,7 +138,7 @@ def sync_once() -> dict:
 
         stage = "fetch"
         fills = fetch_all_fills()
-        orders = fetch_all_orders()
+        orders = fetch_all_orders(nested=True)   # legs carry their parent link (see _inherit_leg_tiers)
         positions = fetch_positions()
 
         # SETTLED/STABLE/COMPLETE net contract — an OPERATOR-CONFIRMED protected-floor down-heal
@@ -149,6 +168,10 @@ def sync_once() -> dict:
 
         stage = "attribute"
         coid_map = build_coid_map(orders)
+        _legs_inherited = _inherit_leg_tiers(coid_map, orders)
+        if _legs_inherited:
+            logger.info("ledger_sync: %d untagged multi-leg child order(s) attributed to "
+                        "their parent's tier", _legs_inherited)
         # Authoritative qhm-tier share counts. Legacy QHM buys are untagged → they land
         # in the intraday tier of the fill-based ledger; the QHM manager knows the real
         # quarterly holdings, giving NVDA/GOOGL etc. a true never-sell floor. Absent
