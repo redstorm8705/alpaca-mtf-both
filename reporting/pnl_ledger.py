@@ -195,8 +195,16 @@ def _bump_iso_ms(ts: str) -> str | None:
     return _t.isoformat().replace("+00:00", "Z")
 
 
-def fetch_all_orders(strict: bool = False) -> list[dict]:
+def fetch_all_orders(strict: bool = False, nested: bool = False) -> list[dict]:
     """
+    nested=True (ownership-ledger sync only; Claude 2026-10-02): request Alpaca's nested
+    view and FLATTEN it, so the result holds the same orders as nested=false, but every
+    multi-leg child (OCO/bracket leg) also carries `_parent_id` + `_parent_client_order_id`.
+    The flat view gives a leg NO link to its parent, and Alpaca generates the leg's own
+    client_order_id (an untagged UUID), so a day-tier OCO stop fill was attributed to
+    intraday (verified 10-02: AMZN/META/MSFT crossed ledger rows). Default False keeps
+    every existing caller's request and result unchanged.
+
     All orders from account inception (status=all), for the ownership tier-attribution
     JOIN. Alpaca FILL activities do NOT carry client_order_id — only order_id — but the
     ORDER object carries client_order_id and `fill.order_id == order.id` (verified live
@@ -216,9 +224,10 @@ def fetch_all_orders(strict: bool = False) -> list[dict]:
     _max_pages = 400  # hard backstop against a cursor regression
     _pages = 0
     _seen: set = set()  # order ids already collected (dedupe the intentional overlap)
+    _by_id: dict = {}   # nested mode: id -> collected dict, to stamp parent links on a seen leg
     while _pages < _max_pages:
         url = (f"{_PAPER_BASE}/v2/orders?status=all&limit=500&direction=desc"
-               "&nested=false")
+               f"&nested={'true' if nested else 'false'}")
         if until:
             url += f"&until={until}"
         batch = _get_json(url)
@@ -235,9 +244,29 @@ def fetch_all_orders(strict: bool = False) -> list[dict]:
         _new = [o for o in batch if o.get("id") not in _seen]
         for o in _new:
             _seen.add(o.get("id"))
+            _by_id[o.get("id")] = o
         orders.extend(_new)
+        if nested:
+            # Pagination/cursor logic below stays on the top-level `batch`; legs ride along.
+            for o in batch:
+                for leg in (o.get("legs") or []):
+                    if not isinstance(leg, dict) or not leg.get("id"):
+                        continue
+                    _link = {"_parent_id": o.get("id"),
+                             "_parent_client_order_id": o.get("client_order_id")}
+                    if leg["id"] in _seen:
+                        _by_id[leg["id"]].update(_link)
+                        continue
+                    _leg = {**leg, **_link}
+                    _seen.add(leg["id"])
+                    _by_id[leg["id"]] = _leg
+                    orders.append(_leg)
         _pages += 1
-        if len(batch) < 500:
+        # Nested mode: Alpaca counts each leg toward limit=500 (verified 10-02: a full page
+        # was 488 parents + 12 legs), so a full page can hold <500 top-level rows.
+        _page_rows = len(batch) + (sum(len(o.get("legs") or []) for o in batch)
+                                   if nested else 0)
+        if _page_rows < 500:
             break  # last (partial) page — no more data
         _oldest = batch[-1].get("created_at")
         _next = _bump_iso_ms(_oldest) if _oldest else None
