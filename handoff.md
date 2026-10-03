@@ -8,6 +8,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-02 evening, Claude-signed) — C2 breakout tier: budget fork AWAITING RAFAEL — pick up here
+
+The built C2 megacap breakout tier (patch `logs/pending_patches/c2_swing_breakout_2026-09-29.patch` on branch
+`claude/handoff-2026-09-29-allocator`) would take ZERO entries today: its room = min(80%, equity − ALL other notional)
+and QHM alone is ~130% of equity ($3,175 vs $2,441), while the same diff turns legacy 12-point swing entries OFF
+(verify: patch `size_order` + `other_notional` loop). BGG aligned 4/4 on Option C: a block-only ceiling on TOTAL
+overnight notional of K × equity, K = 1.75 (Gro, Thorp, Shaw; GAI 1.6), legacy 12-point entries stay off, and
+Invariant #11 amended to "100% for swing/day tiers, buy-and-hold excluded, total overnight ≤ 1.75× equity".
+Today's room ≈ $842 (~1.7 slots). Worst case −10% overnight gap: equity ≈ $2,014, margin call needs ~39% gap.
+**⏩ EXACT NEXT ACTION:** Rafael approves/rejects the Invariant #11 amendment + K. If approved: rebuild `size_order`
+room to K-based, then the full patch sequence from Step 1 (RULE C-7) on all 7 files, then FINAL Gro+GAI preship.
+
 ## ⏩ LATEST (2026-10-02 09:40 PT, Claude-signed) — allocator DISABLED, entries restored — pick up here
 
 **SHIPPED + DEPLOYED (deployed, unexercised):** PR #449 / OCI `f7e86fb` sets `TIER_CAPITAL_ALLOCATOR_ENABLED=False`
