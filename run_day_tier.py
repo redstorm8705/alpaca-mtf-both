@@ -176,6 +176,45 @@ def _mark_track_b_signal(dtm, sym: str, day: str) -> None:
         logger.warning("[%s] track-B signal marker write errored (in-process block only this tick): %s", sym, e)
 
 
+def _trend_direction_conflict(side: object, direction: object) -> str:
+    """'' when a day-tier trade direction AGREES with the Layer-A structural trend side; else the skip
+    reason. Owner rule (Rafael 2026-10-03): no trade against another signal, period; no clear trend
+    direction (TWO_SIDED / UNKNOWN / missing) means no trade. Live evidence 2026-09-15..10-02: trades
+    against the side or on TWO_SIDED went 0/13 (-$32.93); aligned 3/6 (-$3.06). Never raises."""
+    s = str(side or "").upper()
+    d = str(direction or "").lower()
+    if s not in ("LONG", "SHORT"):
+        return f"no clear trend direction (side={s or 'UNKNOWN'})"
+    if d not in ("long", "short"):
+        return f"invalid trade direction {direction!r}"
+    if (s == "LONG") != (d == "long"):
+        return f"{d} trade against the {s} trend side"
+    return ""
+
+
+def _side_for(sym: str) -> str:
+    """Layer-A structural trend side for `sym` (LONG / SHORT / TWO_SIDED / UNKNOWN). Any error returns
+    UNKNOWN, which the direction rule treats as no trade (fail closed)."""
+    try:
+        from strategy.day_tier_side import compute_side_bias
+        return str((compute_side_bias(sym) or {}).get("side") or "UNKNOWN")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] Layer-A side read failed — UNKNOWN (no trade): %s", sym, e)
+        return "UNKNOWN"
+
+
+def _log_direction_skip(sym: str, decision: dict, trigger: dict, reason: str, bar_id: str) -> None:
+    """Decision-explainability (Rule D) for a trend-direction skip: the full decision + trigger stack plus
+    the skip reason go to day_tier_events.jsonl. Best-effort: a logging failure never blocks the skip."""
+    logger.info("[%s] day-tier ENTER skipped — %s", sym, reason)
+    try:
+        from strategy import day_tier_logger
+        day_tier_logger.log_decision(f"SKIP-{sym}-{bar_id}", sym, decision=decision,
+                                     trigger={**(trigger or {}), "skip_reason": reason})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] direction-skip decision log failed: %s", sym, e)
+
+
 def _track_b_symbols_today(state: dict, day: str) -> set:
     """Symbols already USED by Track B today: any Track-B ENTER signal (the persisted per-day marker — counted
     at the signal, before sizing/min-stop/caps, exactly like the Rule-C replay; exec seat R2) OR any Track-B
@@ -444,6 +483,11 @@ def run_tick() -> dict:
             trigger = compute_entry_trigger(sym, decision)
             if trigger.get("trigger") != "ENTER":
                 continue
+            # Owner rule 2026-10-03: never trade against the trend side; no clear trend = no trade.
+            _conflict = _trend_direction_conflict(decision.get("side"), trigger.get("direction"))
+            if _conflict:
+                _log_direction_skip(sym, decision, trigger, _conflict, bar_id)
+                continue
             size = compute_day_tier_size(sym, decision, trigger.get("entry_ref"), equity,
                                          buying_power=buying_power, track="A")
             if not size.get("size_ok"):
@@ -532,6 +576,14 @@ def run_tick() -> dict:
                 b_today.add(sym)
                 _mark_track_b_signal(dtm, sym, b_day)
                 decision_b, trigger_b = tb.momentum_to_entry(mom, screen.get("gap_direction"))
+                # Same owner rule as Track A: the momentum direction must agree with the symbol's Layer-A
+                # trend side (computed here — Track B has no Layer-A read of its own). An unreadable side is
+                # UNKNOWN -> no trade (fail closed). The day's shot is already used, so this costs one read.
+                _side_b = _side_for(sym)
+                _conflict_b = _trend_direction_conflict(_side_b, trigger_b.get("direction"))
+                if _conflict_b:
+                    _log_direction_skip(sym, {**decision_b, "side": _side_b}, trigger_b, _conflict_b, bar_id)
+                    continue
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
                 if not size_b.get("size_ok"):
