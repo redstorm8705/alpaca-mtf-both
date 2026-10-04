@@ -1178,6 +1178,97 @@ def force_flat_all(reason: str = "eod_force_flat") -> int:
     return n
 
 
+# ── daily dollar risk budget (Rafael 2026-10-04 — replaces the 3-position count cap) ──────────────
+def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) -> "tuple[float, float, str] | None":
+    """Dollars already at risk for the day tier TODAY = realized day-tier losses today (loss-only; gains
+    never offset) + every open day-tier lot's loss-if-stopped (|entry - stop| x qty). Day-tier stops never
+    trail, so the loss-if-stopped is fixed at entry. A lot whose stop or entry cannot be read counts at
+    `risk_ceiling_usd` (the per-trade maximum the sizing allows) — never as zero. A same-day non-terminal
+    state record with no logged entry_fill (submit/log crash window) also counts at the ceiling — including a
+    crash-left 'submitting' record, which keeps counting until the day ends (deliberate conservatism).
+    Returns (realized_loss_usd >= 0, open_stop_risk_usd >= 0, detail) or None if the realized-loss journal is
+    unreadable (caller fails closed)."""
+    from strategy import day_tier_logger
+    realized, readable = _realized_loss_today()
+    if not readable:
+        return None
+    events, ev_ok = day_tier_logger.read_events_checked()
+    stops: dict = {}
+    if ev_ok:
+        for e in events:
+            if e.get("event") == "stop_placed" and e.get("trade_id"):
+                stops[str(e["trade_id"])] = e.get("stop_price")
+    open_risk = 0.0
+    n_open = 0
+    logged = set()
+    for t in open_trades.values():
+        tid = str(t.get("trade_id") or "")
+        logged.add(tid)
+        n_open += 1
+        try:
+            qty = abs(float(t.get("fill_qty") or 0.0))
+            entry = float(t.get("entry_price") or 0.0)
+            _sp = stops.get(tid)
+            stop = float(_sp) if _sp is not None else float("nan")
+            r = abs(entry - stop) * qty
+            if not (math.isfinite(r) and qty > 0 and entry > 0 and stop > 0):
+                raise ValueError("unreadable lot risk")
+        except (TypeError, ValueError):
+            r = risk_ceiling_usd
+        open_risk += r
+    # A lot with a logged entry_fill is either OPEN (counted above at its stop) or EXITED (its loss is in
+    # realized) — never a phantom. A 'protected' state record never transitions after its stop/target fills,
+    # so without this a closed winner would be charged at the ceiling all day (masked-loss seat 2026-10-04;
+    # mirrors the Track-B _state_only logic). Unreadable log -> only the open set is known (over-count, safe).
+    if ev_ok:
+        logged |= {str(e.get("trade_id") or "") for e in events if e.get("event") == "entry_fill"}
+    today = f"{_now_et():%Y%m%d}"
+    for k, v in state.items():
+        if (k.startswith("entry::") and isinstance(v, dict)
+                and v.get("state") in ("submitting", "submitted", "filled", "protected", "fill_unverified")
+                and str(v.get("bar_id") or "").split("-", 1)[0] == today
+                and str(v.get("coid") or "") not in logged):
+            open_risk += risk_ceiling_usd
+            n_open += 1
+    realized_loss = max(0.0, -realized)
+    return realized_loss, open_risk, f"realized loss ${realized_loss:.2f} + open stop-risk ${open_risk:.2f} ({n_open} lot(s))"
+
+
+def _retire_unsubmitted(state: dict, key: str) -> bool:
+    """Mark a pre-submit ('submitting') entry record terminal ('submit_failed') when NO order was sent, so it is
+    not counted as open risk by _daily_risk_used and does not block re-entry. Only a 'submitting' record is
+    touched (anything later may own a live order). Returns the save result. Never raises."""
+    try:
+        rec = state.get(key)
+        if isinstance(rec, dict) and rec.get("state") == "submitting":
+            rec["state"] = "submit_failed"
+            return _save_state(state)
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("retire-unsubmitted failed for %s: %s", key, e)
+        return False
+
+
+def _budget_fit_qty(qty: int, per_share_risk: float, budget: float, realized_loss: float,
+                    open_risk: float, slip_mult: float) -> int:
+    """Largest share count <= qty whose risk fits the daily dollar budget:
+    realized_loss + slip_mult x (open_risk + n x per_share_risk) <= budget. Realized losses are booked (no
+    slippage scaling); open and new stop-risk are scaled for gap-through. Returns 0 when nothing fits or any
+    input is invalid (fail closed). Pure function; never raises."""
+    try:
+        vals = (per_share_risk, budget, realized_loss, open_risk, slip_mult)
+        if qty < 1 or not all(math.isfinite(float(v)) for v in vals):
+            return 0
+        if per_share_risk <= 0 or budget <= 0 or realized_loss < 0 or open_risk < 0 or slip_mult < 1.0:
+            return 0
+        room = budget - realized_loss - slip_mult * open_risk
+        if room <= 0:
+            return 0
+        return max(0, min(int(qty), math.floor(room / (slip_mult * per_share_risk))))
+    except (TypeError, ValueError):
+        return 0
+
+
 # ── entry (B1/B2/B3/B6 + Rafael amendments) ─────────────────────────────────────────────────────
 def _mint_coid(symbol: str, direction: str) -> str:
     """Stable day-tier client_order_id via ownership_guard.make_coid (tier 'daytrade' → 'DT-...').
@@ -1261,19 +1352,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.info("[%s] day-tier entry skipped — day-tier position/order already active", symbol)
             return False
 
-        # CONCURRENCY CAP (aggression guardrail 2026-09-18): bound concurrent day-tier positions so
-        # MAX_CONCURRENT × per-trade-risk <= the tier kill (self-bounding correlated tail; validate_config
-        # asserts it). Count DISTINCT active day-tier symbols (open log ∪ same-day non-terminal state);
-        # this symbol is NOT among them (same-symbol re-entry was blocked just above). Skip if at the cap.
-        _active_syms = {str(t.get("symbol") or "") for t in open_trades.values() if t.get("symbol")}
-        _active_syms |= {str(v.get("symbol") or "") for k, v in state.items()
-                         if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") and _state_blocks(v)}
-        _active_syms.discard(symbol)
-        _max_conc = int(_cfg("DAYTRADE_MAX_CONCURRENT_POSITIONS", 3))
-        if len(_active_syms) >= _max_conc:
-            logger.info("[%s] day-tier entry skipped — concurrency cap %d reached (%d active: %s)",
-                        symbol, _max_conc, len(_active_syms), sorted(_active_syms))
-            return False
+        # No position-COUNT cap (Rafael 2026-10-04): concurrency is bounded by the daily DOLLAR risk budget
+        # applied after wire-time sizing below (realized loss + every open lot's loss-if-stopped + this entry's
+        # risk <= DAYTRADE_TIER_KILL_EQUITY_PCT x start-of-day equity). No sector/correlation limit either.
 
         # Structural stop FIRST (never enter a position we can't protect — B2 precondition).
         stop_px = _compute_stop_price(trigger, direction, entry_ref)
@@ -1372,6 +1453,31 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False
+        # DAILY DOLLAR RISK BUDGET (Rafael 2026-10-04; replaces the 3-position cap). Every dollar the day tier
+        # could lose today — realized losses + each open lot's loss-if-stopped + THIS entry's risk, the at-risk
+        # part scaled by DAYTRADE_BUDGET_SLIPPAGE_MULT for gap-through — must fit inside the day-tier kill
+        # (DAYTRADE_TIER_KILL_EQUITY_PCT x start-of-day equity). It only shrinks qty or skips (min-only).
+        _kill_pct = float(_cfg("DAYTRADE_TIER_KILL_EQUITY_PCT", 0.04))  # same fallback as tier_kill_check
+        _slip_mult = float(_cfg("DAYTRADE_BUDGET_SLIPPAGE_MULT", 1.2))
+        _risk_ceiling = float(_cfg("DAYTRADE_PER_TRADE_RISK_EQUITY_PCT", 0.02)) * day_start_equity
+        _budget = _kill_pct * day_start_equity
+        _per_share = abs(limit_px - stop_px)
+        if not all(math.isfinite(v) and v > 0 for v in (_kill_pct, _budget, _per_share, _risk_ceiling)) or _slip_mult < 1.0:
+            logger.warning("[%s] day-tier entry aborted — daily risk budget inputs invalid (fail-closed)", symbol)
+            return False
+        _used = _daily_risk_used(open_trades, state, _risk_ceiling)
+        if _used is None:
+            logger.warning("[%s] day-tier entry aborted — realized-loss journal unreadable (fail-closed)", symbol)
+            return False
+        _realized_usd, _open_usd, _used_detail = _used
+        _fit = _budget_fit_qty(qty, _per_share, _budget, _realized_usd, _open_usd, _slip_mult)
+        if _fit < 1:
+            logger.info("[%s] day-tier entry skipped — daily risk budget full: %s; budget $%.2f",
+                        symbol, _used_detail, _budget)
+            return False
+        if _fit < qty:
+            why += f"; daily risk budget → {qty}→{_fit}sh ({_used_detail}, budget ${_budget:.2f})"
+            qty = _fit
         logger.info("[%s] day-tier wire-time sizing — %s", symbol, why)
         size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
                 "wire_cap_reason": why}
@@ -1395,6 +1501,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         _capital = live_admit("daytrade", "daytrade", symbol, order_side, qty, limit_px, stop_price=stop_px)
         if not _capital.approved:
             logger.warning("[%s] day-tier entry skipped — allocator: %s", symbol, _capital.reason)
+            # No order was submitted: retire the pre-submit record so it neither blocks re-entry nor counts
+            # as open risk in the daily dollar budget for the rest of the day (cold-2nd 2026-10-04).
+            _retire_unsubmitted(state, key)
             return False
         order = broker.submit_limit_order(
             symbol, qty, order_side, limit_px, tier="daytrade",

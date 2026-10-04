@@ -905,7 +905,7 @@ DAYTRADE_FILL_POLL_MAX       = 8      # max fill-confirm polls before treating t
 DAYTRADE_PER_TRADE_RISK_BASIS_PCT = 0.015 # PROV:daytier-aggression-2026-09-18 — ACTIVE per-trade risk basis 1.5% (raised
                                           # 1%→1.5%, Rafael "go further" + board/Gro/GAI; still <= the 2% retained ceiling
                                           # DAYTRADE_PER_TRADE_RISK_EQUITY_PCT). SELF-BOUNDED with the concurrency cap:
-                                          # DAYTRADE_MAX_CONCURRENT_POSITIONS × this <= DAYTRADE_TIER_KILL_EQUITY_PCT.
+                                          # The daily dollar budget (realized + open stop-risk) <= DAYTRADE_TIER_KILL_EQUITY_PCT bounds the total.
 # F2 — min-stop distance = max(k×ATR(5m), spread_mult×spread). k=1.5 from Harris's noise-band
 #   derivation (a stop inside ~1.5×ATR(5m) is inside normal 5-min noise). The spread backstop keeps the
 #   floor from collapsing to ~0 on a thin/quiet tape where ATR≈0 (the seat's critical catch — without
@@ -924,10 +924,14 @@ DAYTRADE_STOP_SPREAD_SANITY_PCT = 0.02  # PROV:daytier-hairpin-2026-09-18 — a 
 # These MUST ship WITH the ceiling/risk increase above (board: non-optional). Two cold board seats
 # converged: the raised gross ceiling is safe ONLY where the book can liquidate it, and the correlated
 # tail must be self-bounded. RISK-PATH.
-#   1. CONCURRENCY CAP — bound the number of concurrent day-tier positions so
-#      MAX_CONCURRENT × PER_TRADE_RISK_BASIS <= TIER_KILL (self-bounding: even if all stop out together,
-#      the loss equals the pre-committed floor). 3 × 1.5% = 4.5% < the 5% tier kill (validate_config asserts).
-DAYTRADE_MAX_CONCURRENT_POSITIONS   = 3       # PROV:daytier-aggression-2026-09-18 — max concurrent open day-tier positions
+#   1. CONCURRENCY — bounded in DOLLARS since 2026-10-04 (was a 3-position count cap): realized loss + every open
+#      lot's loss-if-stopped + the new entry's risk <= the tier kill, so even if all open lots stop out together
+#      the loss stays inside the pre-committed floor (see DAYTRADE_BUDGET_SLIPPAGE_MULT below).
+# REPLACED 2026-10-04 (Rafael): the 3-position count cap is gone. Concurrency is bounded in DOLLARS: a new entry
+# must fit realized day-tier loss + every open lot's loss-if-stopped + its own risk inside the day-tier kill
+# (DAYTRADE_TIER_KILL_EQUITY_PCT x start-of-day equity), with open/new stop-risk scaled by this gap-through
+# allowance (board example: three correlated stops gapping ~20% past their level). No sector/correlation cap.
+DAYTRADE_BUDGET_SLIPPAGE_MULT       = 1.2     # PROV:daytier-dollar-budget-2026-10-04 — gap-through allowance on stop-risk
 #   2. DEEP-LIQUIDITY CARVE-OUT — the raised 1.0× ceiling applies ONLY to deep-liquidity (Mag-7) names;
 #      non-deep names keep the BASE 0.60× aggregate ceiling. Thin names (DRAM/EWY) market-fill 2-3% off
 #      on the forced flat-by-close (the entry spread-gate does NOT cover the exit liquidation), so the
@@ -1181,18 +1185,10 @@ def validate_config():
         errors.append(f"DAYTRADE_STOP_SPREAD_SANITY_PCT ({DAYTRADE_STOP_SPREAD_SANITY_PCT}) must be between 0 and 1")
 
     # Day-tier aggression guardrails (2026-09-18, risk-path). Fail CLOSED on a mis-set.
-    if not (isinstance(DAYTRADE_MAX_CONCURRENT_POSITIONS, int) and DAYTRADE_MAX_CONCURRENT_POSITIONS >= 1):
-        errors.append(f"DAYTRADE_MAX_CONCURRENT_POSITIONS ({DAYTRADE_MAX_CONCURRENT_POSITIONS}) must be an int >= 1")
-    # SELF-BOUNDING correlated-tail invariant: even if every concurrent position stops out together, the
-    # summed ordinary-stop loss must not exceed the tier kill (the risk seat's key guardrail).
-    if isinstance(DAYTRADE_MAX_CONCURRENT_POSITIONS, int):
-        _dt_max_conc_risk = DAYTRADE_MAX_CONCURRENT_POSITIONS * DAYTRADE_PER_TRADE_RISK_BASIS_PCT
-        if _dt_max_conc_risk > DAYTRADE_TIER_KILL_EQUITY_PCT + 1e-9:
-            errors.append(
-                f"Day-tier correlated-tail unbounded: MAX_CONCURRENT ({DAYTRADE_MAX_CONCURRENT_POSITIONS}) × "
-                f"RISK_BASIS ({DAYTRADE_PER_TRADE_RISK_BASIS_PCT}) = {_dt_max_conc_risk:.4f} > TIER_KILL "
-                f"({DAYTRADE_TIER_KILL_EQUITY_PCT}) — a full correlated stop-out would breach the tier kill"
-            )
+    # Daily dollar risk budget (2026-10-04, replaces the position-count cap): the gap-through allowance must
+    # be >= 1 (it may only make the budget stricter) and finite; the budget itself IS the tier kill.
+    if not (isinstance(DAYTRADE_BUDGET_SLIPPAGE_MULT, (int, float)) and 1.0 <= DAYTRADE_BUDGET_SLIPPAGE_MULT < 10.0):
+        errors.append(f"DAYTRADE_BUDGET_SLIPPAGE_MULT ({DAYTRADE_BUDGET_SLIPPAGE_MULT}) must be in [1, 10)")
     if not (0 < DAYTRADE_TRACK_A_BASE_CEILING_PCT <= DAYTRADE_TRACK_A_EQUITY_CEILING_PCT):
         errors.append(
             f"DAYTRADE_TRACK_A_BASE_CEILING_PCT ({DAYTRADE_TRACK_A_BASE_CEILING_PCT}) must be in "
