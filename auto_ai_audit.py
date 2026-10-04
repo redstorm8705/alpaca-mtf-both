@@ -550,11 +550,45 @@ def _load_prior_directives(n: int = _DIRECTIVES_HISTORY_WEEKS) -> list[dict]:
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("file") and entry.get("finding"):
+                # A finding verified FALSE at source (status "refuted") is never replayed as a
+                # directive: replaying it re-raised the same false alarm every audit
+                # (2026-10-03: "intraday not liquidated at close", "$0.00 profit buffer").
+                if (entry.get("file") and entry.get("finding")
+                        and entry.get("status") != "refuted"):
                     entries.append(entry)
     except OSError:
         pass
     return entries[-n:] if entries else []
+
+
+def _load_refuted_findings(limit: int = 12) -> list[dict]:
+    """Findings verified FALSE at source (status "refuted", with a "refutation"), newest
+    first, deduped by finding text. Shown to the auditors as do-not-re-raise context."""
+    path = _LOGS_DIR / "audit_directives.jsonl"
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    seen: set = set()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            rows = [r for r in (raw.strip() for raw in fh) if r]
+        for raw in reversed(rows):
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("status") != "refuted" or not entry.get("refutation"):
+                continue
+            key = str(entry.get("refutation"))[:120]
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(entry)
+            if len(out) >= limit:
+                break
+    except OSError:
+        pass
+    return out
 
 
 def _append_directives_log(
@@ -776,6 +810,7 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
         "chart_proxies": chart_proxies,
         "macro_events": macro_events,
         "prior_directives": prior_directives,
+        "refuted_findings": _load_refuted_findings(),
         "bot_log_tail": bot_tail,
         "stats": stats,
         "rejected_signals": rejected,
@@ -815,9 +850,12 @@ def _format_meta_audit_body(
     parts += [
         "=== BOT CONTEXT (how the bot is DESIGNED to behave — judge trades against this) ===",
         "alpaca-mtf-bot runs THREE independent tiers on one small paper account (aggressive growth phase, ~$2.5K):",
-        "  1) INTRADAY MTF confluence — 12-point score; the SPY 5-min bar-over-bar is the intraday DIRECTIONAL",
-        "     gate; entry requires score >= MIN_SCORE (10/12). Trades BOTH long AND short on a dynamic scanner",
-        "     universe. These entries carry a real score (10-12) and trade_mode='intraday'.",
+        "  1) CORE MTF / SWING (legacy tag trade_mode='intraday' — the name is historical, NOT 'flat by close')",
+        "     — 12-point confluence score; entry requires score >= MIN_SCORE (10/12); trades long AND short.",
+        "     These positions are DESIGNED to CARRY OVERNIGHT (multi-day swing holds protected by GTC stops);",
+        "     they are NOT liquidated at the close, so an 'intraday' position held overnight is NOT a defect.",
+        "     Since 2026-10-03 NEW 12-point entries are OFF; the C2 megacap-breakout swing tier (same tag,",
+        "     setup='c2_breakout_55d') holds up to 30 sessions. Only the DAY tier force-flattens before the close.",
         "  2) DAY tier (Track A) — entries are GEX FADE/RIDE triggered, NOT confluence-scored, so they log",
         "     score=0 and tier='daytrade' by design. score=0 + tier='daytrade' is a valid day-tier entry, NOT a",
         "     miss of the MIN_SCORE gate (that gate applies only to tier 1).",
@@ -880,6 +918,16 @@ def _format_meta_audit_body(
             ]
     else:
         parts += ["=== PRIOR DIRECTIVES: None (first audit run — skip compliance section) ===", ""]
+
+    refuted = ctx.get("refuted_findings") or []
+    if refuted:
+        parts += ["=== REFUTED FINDINGS (verified FALSE at source — do NOT re-raise these) ==="]
+        for d in refuted:
+            parts += [
+                f"  File: {d.get('file', '?')} | Claimed: {str(d.get('finding', ''))[:200]}",
+                f"  Verified: {str(d.get('refutation', ''))[:400]}",
+                "",
+            ]
 
     # ── Trade events with inline chart proxies ────────────────────────────
     events = ctx["events"]
