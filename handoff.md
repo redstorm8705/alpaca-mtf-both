@@ -20,6 +20,8 @@ Sep-Oct): GEX timing -14bp to close vs random -3bp; pin magnet 40% vs placebo 38
 POSITIVE gamma (no NEGATIVE) — suspected gamma-sign data issue. Record:
 `logs/design_records/day_tier_pattern_sweep_2026-10-04.md`.
 
+**C2 DAY-TIER RESEARCH (2026-10-04, no code):** Alpaca SIP 1m history verified free on our account (2022->). Pre-registered TEST 1 market intraday momentum (Gao 2018) FAIL (-1.32 bp/trade, perm p 0.81); TEST 2 noise-area breakout (Zarattini 2024) REFUTED by adversarial audit (DSR 0.79, decays to SR -0.17 in 2026, IWM negative). Record: `logs/design_records/c2_day_tier_methodology_2026-10-04.md`. Pending owner choice: TEST 3 stocks-in-play ORB next and/or a QQQ-only forward paper trial (not validated; Rule E board if TQQQ).
+
 **⏩ EXACT NEXT ACTION:** Rafael chose order: day-tier list done -> SWING next (recommended: overnight-hold evidence,
 +222% overnight vs +10% intraday). First: check why data/gex.py never reports NEGATIVE gamma before any swing use of GEX.
 Follow-ups: stale "3-concurrency cap" comments (config.py:815/907, run_day_tier.py:601, strategy/day_tier_track_b.py:85).
