@@ -21,6 +21,8 @@ Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "DAYTRADE_ALIGN_BLOCKIN
 
 **DESIGN ALIGNED (no code yet, 2026-10-04):** day-tier all-session momentum entry + 3-trade cap replaced by a dollar budget (realized day-tier loss + open stop-risk <= the 5% day-tier kill); no sector/correlation limit, no time stop; kill switches unchanged (-7% account, -5% day tier). Spec: `logs/design_records/day_tier_momentum_continuation_2026-10-04.md`. Day-tier list (Rafael order): momentum entry → fade stop past the sweep extreme → SPY/market check → min payoff 1.5R → GEX edge study; swing after.
 
+**RESEARCH (2026-10-04, no code):** momentum-continuation entry FAILED its replay; 15-pattern sweep over 2 years (IEX 5m, causal stops after a board-caught look-ahead) found NO intraday entry edge on the 15 names after costs; overnight held nearly all of the year's return (+222% vs +10% summed log). Record: `logs/design_records/day_tier_pattern_sweep_2026-10-04.md`. Recommendation to Rafael pending: keep day tier as-is (data collection) and move to swing.
+
 **⏩ EXACT NEXT ACTION:** Mon 10-05: confirm day-tier skips/entries in `logs/day_tier_events.jsonl` carry
 `alignment` (+ `trend_failure` on fades) and no runner errors; then day-tier gap #1 (RIDE trigger freshness/hold/VWAP),
 #2 (FADE stop beyond the sweep extreme). Queued separately: shared `indicators/vwap.add_vwap` resets on the UTC date
