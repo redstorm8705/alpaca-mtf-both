@@ -866,6 +866,13 @@ def run_cycle(
             _main._check_exits_extended_hours(tracker, risk, kelly)
         except Exception as _ehe:
             logger.warning(f"EH exit check failed: {_ehe}")
+        # C2 swing breakout tier: after-hours reconcile (re-places a stop on any lot flagged unprotected, books
+        # a stop fill); the near-close exits never fire here (the window is before the close).
+        try:
+            from execution.swing_breakout_manager import MANAGER as _breakout_ah
+            _breakout_ah.run_exit_check()
+        except Exception as _bo_ah_e:
+            logger.warning("Swing breakout after-hours reconcile failed: %s", _bo_ah_e)
         # Overnight entry check — Phase 1 dry-run (8 PM – midnight ET only)
         if not _kill_block_entries:
             try:
@@ -1693,6 +1700,17 @@ def run_cycle(
         except Exception as _qhm_wk_e:
             logger.warning("QHM run_weekly_check failed: %s", _qhm_wk_e)
 
+    # ── C2 swing breakout tier: stop-fill reconcile every cycle + near-close trend/time exits ──
+    # EXITS — placed before the kill/halt return so they always run (design record
+    # logs/design_records/c2_swing_breakout_tier_2026-09-29.md). Runs even with the tier disabled (held lots keep exits).
+    try:
+        from execution.swing_breakout_manager import MANAGER as _breakout
+        _bo_closed = _breakout.run_exit_check()   # call-time clock: the near-close window is checked when it runs
+        if _bo_closed:
+            logger.info("Swing breakout exits: %s", _bo_closed)
+    except Exception as _bo_x_e:
+        logger.warning("Swing breakout exit check failed: %s", _bo_x_e)
+
     # ── T3: MRI STRESSED+ breakeven push ─────────────────────────────────────
     if mri and mri.level() in ("STRESSED", "HIGH", "CRITICAL") and tracker.open_trades:
         _apply_mri_breakeven_push(tracker, mri)
@@ -1780,10 +1798,12 @@ def run_cycle(
         from execution.drift_detector import detect_and_emit_drift
         from execution.broker import get_open_positions, get_open_orders
         from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-        from execution.orphan_manager import _get_forever6_syms, _get_daytrade_syms
+        from execution.orphan_manager import _get_forever6_syms, _get_daytrade_syms, _get_breakout_syms
         # day-tier positions are DT-tagged + outside tracker.open_trades → they read as phantom_broker
         # drift every cycle; exclude them so the day-tier does not flood the drift feed once live.
-        _drift_exclude = set(get_quarterly_hold_symbols()) | _get_forever6_syms() | _get_daytrade_syms()
+        # Breakout-tier lots (swing owner tag, own state file, not in the tracker) are excluded for the same reason.
+        _drift_exclude = (set(get_quarterly_hold_symbols()) | _get_forever6_syms() | _get_daytrade_syms()
+                          | _get_breakout_syms())
         _drift_records = detect_and_emit_drift(
             tracker, _drift_exclude,
             log_event=_log_trade_event, send_slack=send_slack,
@@ -1807,7 +1827,8 @@ def run_cycle(
         from execution.quarterly_hold_manager import get_quarterly_hold_symbols as _qhs_dc
         from execution.orphan_manager import _get_forever6_syms as _f6_dc
         from execution.orphan_manager import _get_daytrade_syms as _dt_dc
-        _dc_exclude = set(_qhs_dc()) | _f6_dc() | _dt_dc()
+        from execution.orphan_manager import _get_breakout_syms as _bo_dc
+        _dc_exclude = set(_qhs_dc()) | _f6_dc() | _dt_dc() | _bo_dc()
 
         def _heal_phantom(_sym, _trade):
             # REAL fill or None — the anti-fabrication guard. None => the corrector drops NOTHING.
@@ -1917,6 +1938,16 @@ def run_cycle(
             _main.qhm.maybe_enter_positions()  # type: ignore[attr-defined]
         except Exception as _qhm_entry_e:
             logger.warning("QHM maybe_enter_positions failed: %s", _qhm_entry_e)
+
+    # ── C2 swing breakout tier: once-per-day entries (after the kill/halt return, like QHM; the swing
+    # tier does not use the SPY 5-min gate — Rafael 2026-09-27). No-op unless SWING_BREAKOUT_ENABLED.
+    try:
+        from execution.swing_breakout_manager import MANAGER as _breakout_e
+        _bo_entered = _breakout_e.run_entries(now)
+        if _bo_entered:
+            logger.info("Swing breakout entries: %s", _bo_entered)
+    except Exception as _bo_e_e:
+        logger.warning("Swing breakout entries failed: %s", _bo_e_e)
 
     # ── EXTREME: block all new entries ────────────────────────────────────────
     if _main._spy_event_type == "EXTREME":

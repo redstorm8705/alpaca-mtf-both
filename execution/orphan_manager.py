@@ -965,6 +965,23 @@ def _get_daytrade_syms() -> set:
         return set()
 
 
+def _get_breakout_syms() -> set:
+    """Symbols the C2 swing-breakout tier currently HOLDS, from the tier's own
+    state file (data/state/swing_breakout.json, open lots). Its lots carry the
+    swing owner tag ("intraday") but live outside tracker.open_trades, so
+    without this exclusion a restart would adopt them as intraday orphans
+    (handed to check_exits, a second stop placed). get_breakout_symbols fails
+    CLOSED on an unreadable state file (last good set, else the configured pool);
+    the empty set here covers only an import failure."""
+    try:
+        from execution.swing_breakout_manager import get_breakout_symbols
+        return get_breakout_symbols()
+    except Exception as _bse:
+        logger.warning(
+            "orphan_manager: breakout-symbols state lookup failed: %s", _bse)
+        return set()
+
+
 def reconcile_positions(
     tracker: "PortfolioTracker",
     risk: "Optional[RiskManager]" = None,
@@ -1025,7 +1042,7 @@ def reconcile_positions(
     # day-tier: DT-tagged, tracked outside tracker.open_trades — excluded from adoption
     orphans = (
         (alpaca_symbols - tracker_symbols) - _get_qhm_syms() - _get_forever6_syms()
-        - _get_daytrade_syms()
+        - _get_daytrade_syms() - _get_breakout_syms()
     )
 
     # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
