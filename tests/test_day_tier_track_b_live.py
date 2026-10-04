@@ -666,6 +666,7 @@ class RunnerWindowGate(unittest.TestCase):
             # Owner rule 2026-10-03: Track B must agree with the symbol's Layer-A trend side. These tests
             # exercise the window/budget/shot mechanics, so the trend side agrees with the long ENTER.
             mock.patch.object(run_day_tier, "_side_for", return_value="LONG"),
+            mock.patch.object(run_day_tier, "_alignment_for", return_value={"aligned": True, "checks": {}, "reason": "ok"}),
         ] + list(extra or [])
         with ExitStack() as stack:  # >20 nested `with` items is a SyntaxError on the OCI py3.10 target
             for p in patches:

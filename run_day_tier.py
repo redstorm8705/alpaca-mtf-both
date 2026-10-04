@@ -176,22 +176,6 @@ def _mark_track_b_signal(dtm, sym: str, day: str) -> None:
         logger.warning("[%s] track-B signal marker write errored (in-process block only this tick): %s", sym, e)
 
 
-def _trend_direction_conflict(side: object, direction: object) -> str:
-    """'' when a day-tier trade direction AGREES with the Layer-A structural trend side; else the skip
-    reason. Owner rule (Rafael 2026-10-03): no trade against another signal, period; no clear trend
-    direction (TWO_SIDED / UNKNOWN / missing) means no trade. Live evidence 2026-09-15..10-02: trades
-    against the side or on TWO_SIDED went 0/13 (-$32.93); aligned 3/6 (-$3.06). Never raises."""
-    s = str(side or "").upper()
-    d = str(direction or "").lower()
-    if s not in ("LONG", "SHORT"):
-        return f"no clear trend direction (side={s or 'UNKNOWN'})"
-    if d not in ("long", "short"):
-        return f"invalid trade direction {direction!r}"
-    if (s == "LONG") != (d == "long"):
-        return f"{d} trade against the {s} trend side"
-    return ""
-
-
 def _side_for(sym: str) -> str:
     """Layer-A structural trend side for `sym` (LONG / SHORT / TWO_SIDED / UNKNOWN). Any error returns
     UNKNOWN, which the direction rule treats as no trade (fail closed)."""
@@ -213,6 +197,97 @@ def _log_direction_skip(sym: str, decision: dict, trigger: dict, reason: str, ba
                                      trigger={**(trigger or {}), "skip_reason": reason})
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] direction-skip decision log failed: %s", sym, e)
+
+
+def _alignment_for(sym: str, direction: object) -> dict:
+    """Short-term (2m + 5m blocking, 15m informational) indicator alignment for the trade direction
+    (strategy.day_tier_alignment). Any error -> not aligned (fail closed)."""
+    try:
+        from strategy.day_tier_alignment import short_term_alignment
+        return short_term_alignment(sym, str(direction or ""))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] short-term alignment unavailable (not aligned): %s", sym, e)
+        return {"aligned": False, "checks": {}, "reason": f"alignment unavailable: {e!r}"}
+
+
+def _trend_failure_for(sym: str, direction: str) -> dict:
+    """Has today's intraday trend failed (15m lead + structure break, 30m confirmation) in favour of a fade in
+    `direction`? (strategy.day_tier_alignment.trend_failure). Any error -> not failed (no fade)."""
+    try:
+        from strategy.day_tier_alignment import trend_failure
+        return trend_failure(sym, direction)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] trend-failure read unavailable (no fade): %s", sym, e)
+        return {"failed": False, "checks": {}, "levels": {}, "reason": f"trend-failure unavailable: {e!r}"}
+
+
+def _record_counter_trend_intent(sym: str, decision: dict, trigger: dict, bar_id: str) -> str:
+    """Durably log a counter-trend fade's decision record (trigger.counter_trend=True) BEFORE its order, under a
+    fresh decision_id that place_entry then stamps on the entry_fill. Returns the decision_id, or "" when the
+    write did not persist — the caller must then NOT place the fade (its loss could escape the reversal
+    criterion). Never raises."""
+    import uuid
+    did = f"CT-{sym}-{bar_id}-{uuid.uuid4().hex[:8]}"
+    try:
+        from strategy import day_tier_logger
+        if day_tier_logger.log_decision(did, sym, decision=decision, trigger=trigger):
+            return did
+        logger.warning("[%s] counter-trend fade NOT placed — its decision record did not persist", sym)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] counter-trend fade NOT placed — decision record write failed: %s", sym, e)
+    return ""
+
+
+def _counter_trend_fades_ok() -> "tuple[bool, str]":
+    """Live reversal criterion for counter-trend fades (strategy.day_tier_alignment). Any error -> not allowed."""
+    try:
+        from strategy.day_tier_alignment import counter_trend_fades_ok
+        return counter_trend_fades_ok()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("counter-trend fade check unavailable (not allowed): %s", e)
+        return False, f"counter-trend check unavailable: {e!r}"
+
+
+def _entry_direction_gate(sym: str, side: object, direction: object, mode: object,
+                          allow_counter_fade: bool) -> dict:
+    """Owner rules (Rafael 2026-10-03/04): no clear daily trend -> no trade; every entry needs its 2m and 5m
+    indicators to agree with it (15m informational); a trade against the daily trend is allowed ONLY as a FADE
+    (Track A) whose intraday trend has FAILED — the 15m leads with a structure break and a 30m bar confirms (not a
+    flag pullback) — and only while counter-trend fades pass their live reversal criterion. Returns
+    {"ok": bool, "reason": str, "counter_trend": bool, "alignment": dict, "trend_failure": dict}. Never raises."""
+    out: dict = {"ok": False, "reason": "", "counter_trend": False, "alignment": {}, "trend_failure": {}}
+    s = str(side or "").upper()
+    d = str(direction or "").lower()
+    if s not in ("LONG", "SHORT"):
+        out["reason"] = f"no clear trend direction (side={s or 'UNKNOWN'})"
+        return out
+    if d not in ("long", "short"):
+        out["reason"] = f"invalid trade direction {direction!r}"
+        return out
+    counter = (s == "LONG") != (d == "long")
+    if counter and not (allow_counter_fade and str(mode or "").upper() == "FADE"):
+        out["reason"] = f"{d} trade against the {s} trend side (counter-trend allowed only for aligned fades)"
+        return out
+    al = _alignment_for(sym, d)
+    out["alignment"] = al
+    if not al.get("aligned"):
+        out["reason"] = f"short-term indicators not aligned with {d} ({al.get('reason', '')})"
+        return out
+    if counter:
+        tf = _trend_failure_for(sym, d)
+        out["trend_failure"] = tf
+        if not tf.get("failed"):
+            out["reason"] = f"counter-trend fade blocked — intraday trend not confirmed failed ({tf.get('reason', '')})"
+            return out
+        ok, why = _counter_trend_fades_ok()
+        if not ok:
+            out["reason"] = why
+            return out
+        out["counter_trend"] = True
+    out["ok"] = True
+    out["reason"] = ("counter-trend fade: trend failed, short-term aligned" if counter
+                     else "with trend, short-term aligned")
+    return out
 
 
 def _track_b_symbols_today(state: dict, day: str) -> set:
@@ -483,11 +558,25 @@ def run_tick() -> dict:
             trigger = compute_entry_trigger(sym, decision)
             if trigger.get("trigger") != "ENTER":
                 continue
-            # Owner rule 2026-10-03: never trade against the trend side; no clear trend = no trade.
-            _conflict = _trend_direction_conflict(decision.get("side"), trigger.get("direction"))
-            if _conflict:
-                _log_direction_skip(sym, decision, trigger, _conflict, bar_id)
+            # Owner rules 2026-10-03/04: clear daily trend + 2m/5m alignment; counter-trend only as a fade of a
+            # FAILED intraday trend (15m lead + 30m confirmation).
+            _gate = _entry_direction_gate(sym, decision.get("side"), trigger.get("direction"),
+                                          trigger.get("mode"), allow_counter_fade=True)
+            if not _gate["ok"]:
+                _log_direction_skip(sym, decision, {**trigger, "alignment": _gate["alignment"],
+                                                    "trend_failure": _gate["trend_failure"]},
+                                    _gate["reason"], bar_id)
                 continue
+            # tagged for measurement: place_entry logs this trigger in the entry's decision record
+            trigger = {**trigger, "counter_trend": _gate["counter_trend"], "alignment": _gate["alignment"],
+                       "trend_failure": _gate["trend_failure"]}
+            _ct_decision_id = ""
+            if _gate["counter_trend"]:
+                # Never-mask-a-loss: the counter-trend tag must be DURABLE before any fade order exists, so its
+                # P&L always reaches the fade reversal criterion (entry_fill carries this decision_id).
+                _ct_decision_id = _record_counter_trend_intent(sym, decision, trigger, bar_id)
+                if not _ct_decision_id:
+                    continue
             size = compute_day_tier_size(sym, decision, trigger.get("entry_ref"), equity,
                                          buying_power=buying_power, track="A")
             if not size.get("size_ok"):
@@ -495,7 +584,8 @@ def run_tick() -> dict:
             if calls_used + per_entry_est > call_budget:
                 capped = True
                 break  # defer the remaining ENTERs to the next tick (bar_id idempotency preserves them)
-            if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity):
+            _pe_kw = {"decision_id": _ct_decision_id} if _ct_decision_id else {}
+            if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, **_pe_kw):
                 entered += 1
             calls_used += per_entry_est
         except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
@@ -576,14 +666,17 @@ def run_tick() -> dict:
                 b_today.add(sym)
                 _mark_track_b_signal(dtm, sym, b_day)
                 decision_b, trigger_b = tb.momentum_to_entry(mom, screen.get("gap_direction"))
-                # Same owner rule as Track A: the momentum direction must agree with the symbol's Layer-A
-                # trend side (computed here — Track B has no Layer-A read of its own). An unreadable side is
-                # UNKNOWN -> no trade (fail closed). The day's shot is already used, so this costs one read.
+                # Same owner rules as Track A, without the counter-trend fade exception (Track B is momentum):
+                # the direction must match the symbol's Layer-A trend side (read here — Track B has no Layer-A
+                # read of its own) and the short-term indicators must agree. Unreadable -> no trade (fail closed).
                 _side_b = _side_for(sym)
-                _conflict_b = _trend_direction_conflict(_side_b, trigger_b.get("direction"))
-                if _conflict_b:
-                    _log_direction_skip(sym, {**decision_b, "side": _side_b}, trigger_b, _conflict_b, bar_id)
+                _gate_b = _entry_direction_gate(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
+                                                allow_counter_fade=False)
+                if not _gate_b["ok"]:
+                    _log_direction_skip(sym, {**decision_b, "side": _side_b},
+                                        {**trigger_b, "alignment": _gate_b["alignment"]}, _gate_b["reason"], bar_id)
                     continue
+                trigger_b = {**trigger_b, "counter_trend": False, "alignment": _gate_b["alignment"]}
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
                 if not size_b.get("size_ok"):

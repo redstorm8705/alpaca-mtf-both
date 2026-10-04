@@ -948,6 +948,17 @@ DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD = 1300.0  # PROV:daytier-size-up-2026-10-04 
 DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.65  # PROV:daytier-size-up-2026-10-04 (Rafael size-up; board Thorp/Taleb + GAI) — max single-name per-entry notional (× EQUITY);
                                               # 0.65 × 10% halt-reopen gap = 6.5% < 7% account kill (0.70 = at the kill, 0.80 = breach)
 
+# Short-term alignment (Rafael 2026-10-04: "2-minute and 5-min scans aligned"; 15m informational). Which of the
+# per-timeframe checks BLOCK an entry on BOTH the 2m and 5m: "ema" (EMA13 vs EMA30), "vwap" (close vs session
+# VWAP), "macd_fast" (MACD-fast histogram sign). Checks not listed are still computed and logged (info).
+DAYTRADE_ALIGN_BLOCKING_CHECKS = ("ema", "vwap")
+
+# Counter-trend FADES (Rafael 2026-10-04: "I do want counter-trend fades, but short-term indicators must align …
+# 15-min should lead and then ladder into a 30-min bar … not just a bull flag").
+# Kill flag (Rule E): False blocks every counter-trend fade. A fade also needs strategy/day_tier_alignment.
+# trend_failure (15m lead + structure break + 30m confirmation) and auto-disables on live losses
+# (counter_trend_fades_ok: cumulative <= -$25 or 3 consecutive losses).
+DAYTRADE_COUNTER_TREND_FADES_ENABLED = True
 
 # ─── SHARED LIVE TIER-CAPITAL ALLOCATOR (paper; increasing orders only) ───
 # Signed: ChatGPT/Codex, 2026-09-27.
