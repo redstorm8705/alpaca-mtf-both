@@ -665,21 +665,38 @@ def run_cycle(
                         )
                         # C-1: Require profit >= 0.5R before moving stop to breakeven.
                         # Prevents penny-stop bug where any float > 0 triggered breakeven.
-                        _grisk_dist   = abs(_gentry - _gatr_stop)
+                        # R is the ORIGINAL sized risk (original_stop): measured from the
+                        # current stored stop it read $0 once the stop was already at
+                        # breakeven (PLTR/NFLX "0.5R $0.00" logs). (Claude 2026-10-03)
+                        _gorig        = _gtr.get("original_stop") or _gatr_stop
+                        _grisk_dist   = abs(_gentry - _gorig)
                         _gprofit_dist = abs(_gcur - _gentry)
                         _half_r       = _grisk_dist * 0.5
-                        if _gprofitable and _grisk_dist > 0 and _gprofit_dist >= _half_r:
+                        # Breakeven may only TIGHTEN: a trail already beyond entry stays
+                        # (META 2026-09-03: trail $605.86 was replaced by breakeven $576.48).
+                        _gbe_tighter  = (
+                            (_gdir == "long" and _gentry > _gatr_stop) or
+                            (_gdir == "short" and _gentry < _gatr_stop)
+                        )
+                        if (_gprofitable and _grisk_dist > 0 and _gprofit_dist >= _half_r
+                                and _gbe_tighter):
                             _gstop_price = _gentry
                             logger.info(
                                 f"[{_gsym}] AH GTC: profitable (${_gcur:.2f} vs entry "
                                 f"${_gentry:.2f}), profit ${_gprofit_dist:.2f} >= 0.5R "
                                 f"${_half_r:.2f} — stop at BREAKEVEN."
                             )
+                        elif not _gbe_tighter:
+                            logger.info(
+                                f"[{_gsym}] AH GTC: stored stop ${_gatr_stop:.2f} already at/"
+                                f"beyond breakeven (entry ${_gentry:.2f}, original R "
+                                f"${_grisk_dist:.2f}) — keeping it (never loosened)."
+                            )
                         else:
                             logger.info(
                                 f"[{_gsym}] AH GTC: profit dist ${_gprofit_dist:.2f} < "
                                 f"0.5R ${_half_r:.2f} or at loss (${_gcur:.2f} vs entry "
-                                f"${_gentry:.2f}) — stop at ATR level ${_gatr_stop:.2f}."
+                                f"${_gentry:.2f}) — stop at stored level ${_gatr_stop:.2f}."
                             )
                 except Exception as _gpe:
                     logger.warning(f"[{_gsym}] AH GTC: price fetch failed — using ATR stop. {_gpe}")
