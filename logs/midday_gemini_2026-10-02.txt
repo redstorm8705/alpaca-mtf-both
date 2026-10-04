@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-10-02
+Model: gemini-3.1-flash-lite | Verdict: PASS
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: PASS
+
+---
+
+### PERFORMANCE AUDIT
+- **Trades Executed**: 0 entries, 0 exits, 0 partials (Alpaca ground-truth fills confirms 0 fills).
+- **Integrity & P&L**: Session P&L is $0.00 with 0 closed trades.
+- **Coverage Check**: 4 positions (`GE`, `GOOGL`, `LLY`, `NVDA`) are class `COVERED` by broker stops; 2 positions (`NFLX`, `PLTR`) are class `SOFTWARE-ONLY-BY-DESIGN` under core intraday holding rules prior to the pre-close sweep. No naked positions.
+
+---
+
+### ENTRY QUALITY
+- **Filtering & Gating**: High discipline observed. Signals meeting the dynamic `MIN_SCORE` threshold (raised to 9/12 due to `MRI=ELEVATED`) such as `AAPL` (score=12), `SOFI` (score=12), and `DDOG` (score=12) were blocked by the SPY Opening Range Breakout (ORB) gate because SPY was rangebound ($769.50 vs ORB range $769.49–$771.65).
+- **Bias Filtering**: Weekly bias filters appropriately dropped counter-trend setups (e.g., `TOST`, `CRWD`, `AMZN`, `GOOGL`, `MARA`, `SOXS`).
+
+---
+
+### EXIT QUALITY
+- No intraday exits triggered during the audited window.
+
+---
+
+### MRI ALIGNMENT
+- **Distribution**: 100% of samples (27/27) were `ELEVATED` (score=36/100).
+- **Handling**: Dynamic scoring properly raised `MIN_SCORE` from the base paper profile of 8 to 9/12, and intraday sizing applied an MRI size floor of 0.85x alongside overnight exposure scale-backs.
+
+---
+
+### LOG ANOMALIES
+- **DRAM Missing Daily Data**: `confluence` logged `WARNING | confluence | [DRAM] No daily data — long/short entry blocked (fail-closed)`. Correct fail-safe behavior, but indicates a
