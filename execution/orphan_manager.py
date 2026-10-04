@@ -771,7 +771,13 @@ def cancel_and_reconcile_gtc_stops(
                 if risk is not None:
                     risk.register_close(_p1_pnl or 0.0)
                 continue
-            _stop_px   = _trade.get("stop")
+            # Protective level = the TRAIL stop when set, else the stop: the SAME
+            # comparator the adoption check above uses (`trail_stop or stop`).
+            # Submitting `stop` alone placed a ratcheted trade's broker stop BELOW
+            # its trail (META 2026-09-04: trail $605.86, resubmitted @ $576.48),
+            # and the mismatch then cancelled + resubmitted it every closed-market
+            # cycle. (Claude 2026-10-03)
+            _stop_px   = _trade.get("trail_stop") or _trade.get("stop")
             _direction = _trade.get("direction", "long")
             # Use qty_remaining when explicitly set (including 0 after a
             # partial exit); fall back to original qty only when the field is
@@ -817,6 +823,23 @@ def cancel_and_reconcile_gtc_stops(
                         (_gtc_side == "sell" and _stop_px >= _p1_live_px) or
                         (_gtc_side == "buy"  and _stop_px <= _p1_live_px)
                     )
+                    # Trail already through the market: fall back to the plain stop
+                    # when it is still valid, so the position keeps a broker floor
+                    # overnight (never worse than the pre-2026-10-03 behaviour, which
+                    # always used `stop`). RTH cover-on-breach closes the trail.
+                    _p1_floor = _trade.get("stop")
+                    if _p1_invalid and _p1_floor and _p1_floor != _stop_px and (
+                        (_gtc_side == "sell" and _p1_floor < _p1_live_px) or
+                        (_gtc_side == "buy" and _p1_floor > _p1_live_px)
+                    ):
+                        logger.warning(
+                            f"[{_sym}] Patch 1: trail ${_stop_px:.2f} is through "
+                            f"live ${_p1_live_px:.2f} ({_gtc_side}) — placing the "
+                            f"stop floor ${_p1_floor:.2f} instead; RTH "
+                            f"cover-on-breach handles the trail."
+                        )
+                        _stop_px = _p1_floor
+                        _p1_invalid = False
                     if _p1_invalid:
                         logger.critical(
                             f"[{_sym}] OM-BUG-1 GUARD: stop ${_stop_px:.2f} "
