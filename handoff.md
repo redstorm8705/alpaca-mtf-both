@@ -8,6 +8,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-04 late, Claude-signed) — day-tier dollar budget LIVE; day-tier fix list closed on evidence — pick up here
+
+**SHIPPED + DEPLOYED (deployed, unexercised until Mon 2026-10-05):** PR #471 / OCI `b09a4a3` — day-tier 3-position
+count cap replaced by a daily DOLLAR budget (realized day-tier loss + 1.2 x (open stop-risk + new risk) <= 5% SOD
+equity; min-only, fail-closed; no count/sector/correlation cap; kills unchanged). Verify:
+`ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c DAYTRADE_BUDGET_SLIPPAGE_MULT config.py'` -> >= 1.
+**Tested on the 19 live trades and NOT shipped:** fade stop past the sweep extreme (-$19.88 vs -$4.72 now), 1.5R minimum
+payoff (kept the worse trades), SPY market check (blocked nothing). **GEX scorecard** (73 live shadow ENTER signals,
+Sep-Oct): GEX timing -14bp to close vs random -3bp; pin magnet 40% vs placebo 38% (n=1215); EVERY GEX reading labelled
+POSITIVE gamma (no NEGATIVE) — suspected gamma-sign data issue. Record:
+`logs/design_records/day_tier_pattern_sweep_2026-10-04.md`.
+
+**⏩ EXACT NEXT ACTION:** Rafael chose order: day-tier list done -> SWING next (recommended: overnight-hold evidence,
++222% overnight vs +10% intraday). First: check why data/gex.py never reports NEGATIVE gamma before any swing use of GEX.
+Follow-ups: stale "3-concurrency cap" comments (config.py:815/907, run_day_tier.py:601, strategy/day_tier_track_b.py:85).
+
 ## ⏩ LATEST (2026-10-04, Claude-signed) — day-tier 2m/5m alignment gate + trend-failure fades LIVE — pick up here
 
 **SHIPPED + DEPLOYED (deployed, unexercised until Mon 2026-10-05 open):** PR #467 / OCI `db1fd57` — day-tier entries

@@ -36,3 +36,12 @@ Stated approximations: daily side = prior-session 20/50-SMA stack (proxy for Lay
 - With-trend vs against-trend split of P11 (running); exit selection; conflict with the live direction rules (P11 fires
   ~09:35 and ignores the daily side; current rules allow counter-trend fades only after 11:00 with the 15m/30m test) ->
   board + Gro + GAI, then a Rafael approval package. Earnings-day drift not yet tested (needs FMP history).
+
+## Live-trade checks of the remaining day-tier fixes (19 live trades 2026-09-15..10-02) — none ship
+- Fade stop beyond the 3-bar sweep extreme (+0.1% buffer): simulated -$19.88 vs current -$4.72 (13 fades).
+- Minimum payoff 1.5R: trades with R:R >= 1.5 lost -$29.81 (1/9 wins) vs < 1.5 / unknown -$6.18 (2/10).
+- SPY 30-min move against the trade: 1 of 19 cases (a +$2.53 winner) -> nothing to block.
+## GEX scorecard (logs/day_tier_shadow.jsonl, 4,359 rows, 73 ENTER signals, priced with IEX 5m)
+- To the close: GEX -14.0bp (win 42%) vs random-time same symbol/day/direction -3.2bp; FADE -1.2 vs +11.2; RIDE -45.7 vs -38.7.
+- Pin magnet: ended closer to the GEX pin 40% vs a placebo level 38% (n=1,215) -> no measurable magnet.
+- Every reading labelled POSITIVE gamma; zero NEGATIVE -> suspected sign/data issue in data/gex.py (check before reuse).
