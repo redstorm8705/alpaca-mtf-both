@@ -22,6 +22,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - PR #460 / OCI `7d530a1` — meta-audit no longer replays findings verified false; 19 rows in
   logs/audit_directives.jsonl marked `refuted` with reasons (backup: audit_directives.jsonl.bak-2026-10-03).
 
+**AI-audit false alarms (BGG aligned 2026-10-03):** W39 measured 16/21 findings false (76%). Build order (board Majors+Beck,
+Gro, GAI all rank the evidence gate first): (A) deterministic evidence gate — each finding must quote a real log line + real
+file:line code, checked by script before Slack, with a NEVER-DROP rule for stops/kill-switch/orders/sizing (downgraded to a
+visible "unverified safety claim" line, never silenced); golden-set fixtures (the W39 verified findings incl. the real
+overnight-stop bug) written FIRST as the acceptance test; (E) one daily card of verified findings only; then (C) design-facts
+registry, (D) weekly precision % in the header; (B) cross-model verifier only if replay misses 85%. Also: a one-time
+verification of the ~70 never-checked W36-W38 findings. Real gap found while checking the correlation finding: the C2
+breakout tier has NO sector (1-per-sector) or correlation (Invariant #10) gate — conformance fix next.
+
 **⏩ EXACT NEXT ACTION:** (1) watch Mon 10:05 ET first breakout scan:
 `ssh mtf-bot 'grep -E "breakout (ENTERED|universe)|swing_breakout" /home/ubuntu/mtf-bot/logs/mtf_bot.log | tail'`;
 (2) Mon 16:35 ET meta-audit — confirm the refuted findings no longer appear in Slack; (3) verify the two remaining
