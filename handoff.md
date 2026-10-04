@@ -8,6 +8,28 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-03, Claude-signed) — C2 breakout LIVE + overnight-stop fix + meta-audit noise fix — pick up here
+
+**SHIPPED + DEPLOYED (deployed, unexercised until Mon 2026-10-05 10:05 ET):**
+- PR #458 / OCI `4279681` — C2 megacap-breakout swing tier (`execution/swing_breakout_manager.py`) + Invariant #11
+  amended in CLAUDE.md (swing/day <= 100% equity with QHM/F6 excluded; total overnight <= 1.75x equity; Rafael
+  approved 10-02). Legacy 12-point NEW entries OFF. Read-only prod dry run: room ~$841; MSFT 1 sh would enter.
+  Supersedes the cloud session's unshipped package on branch `claude/c2-breakout-k175` (c1350c8).
+  Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.75" config.py'` → 1.
+- PR #459 / OCI `8f80135` — overnight broker stops never looser than the trailing stop (orphan_manager Patch 1 used
+  `stop` not `trail_stop or stop`: META 09-04 re-placed at $576.48 under a $605.86 trail; AH breakeven only tightens;
+  R from original_stop ends the "0.5R $0.00" logs). Restart verified: stops adopted, no churn.
+- PR #460 / OCI `7d530a1` — meta-audit no longer replays findings verified false; 19 rows in
+  logs/audit_directives.jsonl marked `refuted` with reasons (backup: audit_directives.jsonl.bak-2026-10-03).
+
+**⏩ EXACT NEXT ACTION:** (1) watch Mon 10:05 ET first breakout scan:
+`ssh mtf-bot 'grep -E "breakout (ENTERED|universe)|swing_breakout" /home/ubuntu/mtf-bot/logs/mtf_bot.log | tail'`;
+(2) Mon 16:35 ET meta-audit — confirm the refuted findings no longer appear in Slack; (3) verify the two remaining
+replayed findings (correlation-gate 20-day lookback; "overnight-ATR buffer exit") at source; (4) allocator stays
+OFF — redesign per `logs/design_records/allocator_reenable_2026-10-02.md` with Codex.
+Follow-ups (reviewer nits): breakout earnings-gap filter (FMP); QHM-parent OCO ledger test; Patch 1 double-fault
+(price fetch fails + trail breached) falls through to broker reject + alert.
+
 ## ⏩ LATEST (2026-10-02 evening, Claude-signed) — C2 breakout tier: budget fork AWAITING RAFAEL — pick up here
 
 The built C2 megacap breakout tier (patch `logs/pending_patches/c2_swing_breakout_2026-09-29.patch` on branch
