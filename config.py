@@ -938,14 +938,15 @@ DAYTRADE_TRACK_A_BASE_CEILING_PCT   = 0.60    # PROV:daytier-aggression-2026-09-
 #      wide-spread liquidation cost, so a forced-close market fill on the thinnest tape stays bounded.
 #      ~$1,000 keeps a wide-spread (~2.8% EWY) round-trip liquidation within ~1 per-trade-risk unit; PROV
 #      starting value tied to the observed flicker spread, recalibrate from live fills.
-DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD = 1000.0  # PROV:daytier-aggression-2026-09-18 — max per-entry notional for a NON-deep (thin) name
+DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD = 1300.0  # PROV:daytier-size-up-2026-10-04 (Rafael size-up; board Thorp/Taleb + GAI) — max per-entry notional for a NON-deep (thin) name; 10% halt gap = $130 (5.3% eq)
 #   4. PER-SINGLE-NAME GROSS SUB-CAP — no single day-tier name may exceed this fraction of EQUITY per
 #      entry, so a single-name intraday GAP-THROUGH stays inside the account kill even at the raised 1.0×
 #      aggregate ceiling (0.60 × a 10% halt-reopen gap = 6% < the 7% account kill). The self-bounding
 #      concurrency invariant bounds the ORDINARY correlated stop-out; THIS bounds the single-name gap tail
 #      (masked-loss seat residual). The aggregate 1.0× is still reached by DIVERSIFYING across ≥2 deep
 #      names (board intent: grow via more names, not per-name concentration), bounded by the concurrency cap.
-DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.60  # PROV:daytier-aggression-2026-09-18 — max single-name per-entry notional (× EQUITY)
+DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT = 0.65  # PROV:daytier-size-up-2026-10-04 (Rafael size-up; board Thorp/Taleb + GAI) — max single-name per-entry notional (× EQUITY);
+                                              # 0.65 × 10% halt-reopen gap = 6.5% < 7% account kill (0.70 = at the kill, 0.80 = breach)
 
 
 # ─── SHARED LIVE TIER-CAPITAL ALLOCATOR (paper; increasing orders only) ───
