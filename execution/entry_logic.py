@@ -798,6 +798,16 @@ def execute_entries(
             logger.info(f"[{symbol}] Already has Alpaca position — skipping.")
             continue
 
+        # C2 swing tier (2026-09-29, Claude-signed): NEW 12-point swing entries are off while
+        # SWING12_NEW_ENTRIES_ENABLED is False — the megacap breakout tier (execution/
+        # swing_breakout_manager.py) takes the swing budget. Placed AFTER the #12c opposite-signal
+        # exit and the position checks, so open 12-point positions keep every exit path.
+        # The mean-reversion path (MR_ENABLED, its own strategy) is not a 12-point entry and is exempt.
+        if not _is_mr and not getattr(config, "SWING12_NEW_ENTRIES_ENABLED", True):
+            logger.info(f"[{symbol}] 12-point new entries disabled (SWING12_NEW_ENTRIES_ENABLED=False) — skip")
+            _rc8_clear_buffers(symbol, "swing12-off")
+            continue
+
         # ── Re-entry cooldown (2026-08-01, BGG) ──────────────────────────────
         # NEW ENTRIES ONLY. Placed AFTER the is_in_trade/#12c block AND the Alpaca-position
         # check, so it can NEVER block a #12c defensive exit of an existing OPPOSITE position
@@ -1898,6 +1908,11 @@ def _overnight_entry_check(
 
     # Gate 2: Kill switch
     if risk.check_kill_switch():
+        return
+
+    # Gate 2b: 12-point new entries disabled (C2 swing tier, 2026-09-29) — no overnight 12-point entries
+    if not getattr(config, "SWING12_NEW_ENTRIES_ENABLED", True):
+        logger.debug(f"{_log} 12-point new entries disabled (SWING12_NEW_ENTRIES_ENABLED=False) — skip")
         return
 
     # Gate 3: Max 1 overnight entry — already have one pending or active?

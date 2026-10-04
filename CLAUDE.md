@@ -1452,8 +1452,11 @@ the board output in plain language without losing the directional conclusion.
 9. **MRI is background only.** Sets size floor and MIN_SCORE floor. Does not gate entries directly.
 10. **Max correlated exposure:** No more than 2 simultaneous positions with beta correlation >0.7
     to each other. Sector gate already enforces sector-level; this covers cross-sector beta overlap.
-11. **Overnight exposure budget:** Max 100% of account equity in overnight positions.
-    Breach requires board review before next entry.
+11. **Overnight exposure budget (amended 2026-10-02 — Rafael-approved, board Thorp+Shaw 2-0 + Gro + GAI):**
+    swing/day tiers ≤ 100% of account equity in overnight positions, with the buy-and-hold tiers (QHM, F6)
+    EXCLUDED from that 100%; AND total overnight notional across ALL tiers ≤ 1.75× equity
+    (`SWING_BREAKOUT_TOTAL_OVERNIGHT_K`, below the Reg-T 2× overnight limit). Block-only: a breach stops NEW
+    entries; it never forces a sale. Changing K or either limb requires a board vote.
 12. **VIX-adjusted stop widening (continuous curve, since 2026-06-24):** ATR stop multiplier
     widens via `scalar = min(1.0 + max(0, VIX - 20) × 0.1, 2.0)` — continuous, not a discrete
     step function. Anchors preserved: VIX=25→1.5×, VIX=30→2.0× (hard cap). Target scales

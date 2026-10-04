@@ -963,6 +963,30 @@ TIER_CAPITAL_FOREVER6_TARGET_PCT = 0.10  # PROV:live-tier-capital-allocator-2026
 TIER_CAPITAL_ACCOUNT_GROSS_NORMAL = 1.25  # PROV:live-tier-capital-allocator-2026-09-27
 
 
+# ─── C2 SWING TIER: MEGACAP 55-DAY BREAKOUT (execution/swing_breakout_manager.py) ───
+# Signed: Claude (interactive, 2026-09-29). Design: logs/design_records/c2_swing_breakout_tier_2026-09-29.md.
+# Replaces NEW 12-point swing entries (live since 2026-04-06: -$126.00 over 154 trades, PF 0.89). Long only.
+# Entries are admitted by the tier capital allocator's "swing" budget when it is enabled (OFF since 2026-10-02).
+SWING_BREAKOUT_ENABLED = True       # kill switch: False → no NEW breakout entries; held lots keep stops + managed exits
+SWING12_NEW_ENTRIES_ENABLED = False  # False → no NEW 12-point swing entries; open 12-point positions keep their exits
+SWING_BREAKOUT_TOP_N = 10           # PROV:c2-breakout-2026-09-29 — lab 8c universe: top-10 by 60-day median $ volume
+SWING_BREAKOUT_SLOT_PCT = 0.20      # PROV:c2-breakout-2026-09-29 — one slot = 20% of equity (board risk seat)
+SWING_BREAKOUT_MAX_SLOTS = 4        # PROV:c2-breakout-2026-09-29 — at most 4 concurrent breakout lots
+SWING_BREAKOUT_MIN1_MAX_PCT = 0.25  # PROV:c2-breakout-2026-09-29 — 1-share floor: a name whose one share exceeds the slot
+                                    # may enter as 1 share if that share <= 25% of equity (and the 2% stop-risk cap holds)
+SWING_BREAKOUT_BUDGET_PCT = 0.80    # PROV:c2-breakout-2026-09-29 — tier notional <= min(80%, 100% − other swing/day notional; QHM/F6 excluded)
+SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.75  # Invariant #11 as amended 2026-10-02 (Rafael-approved, BGG 4/4: Gro/Thorp/Shaw 1.75, GAI 1.6):
+                                         # total overnight notional of ALL tiers <= K × equity (below Reg-T 2×); block-only
+SWING_BREAKOUT_STOP_ATR = 2.5       # PROV:c2-breakout-2026-09-29 — GTC stop at fill − 2.5 × ATR(14, daily) (lab 8c)
+SWING_BREAKOUT_MAX_RISK_PCT = 0.02  # PROV:c2-breakout-2026-09-29 — per-lot loss at the stop <= 2% of equity (own cap:
+                                    # the paper profile sets MAX_PORTFOLIO_RISK_PCT to 4%, which this tier must not inherit)
+SWING_BREAKOUT_MAX_HOLD = 30        # PROV:c2-breakout-2026-09-29 — time exit on the 30th session held (lab 8c)
+SWING_BREAKOUT_LIMIT_SLIP_PCT = 0.002  # marketable-limit cross vs the ask (caps the worst entry fill)
+SWING_BREAKOUT_FILL_WAIT_S = 15     # seconds to wait for the entry fill before cancelling the remainder
+SWING_BREAKOUT_EXIT_MINUTES = 10    # trend-break / time exits run in the last N minutes before the real close
+SWING_BREAKOUT_FLAT_GRACE_S = 300   # a zero position read on a lot younger than this is position-endpoint lag, never "gone"
+
+
 # ─── CONFIG VALIDATION ────────────────────────────────────────────────────────
 
 def validate_config():
