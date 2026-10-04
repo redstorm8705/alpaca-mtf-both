@@ -49,14 +49,14 @@ _MAX_DATA_AGE = timedelta(minutes=15)   # data-quality contract #1: newest 1m ba
 _MAX_BAR_END_AGE = {2: timedelta(minutes=6), 5: timedelta(minutes=10)}
 
 # Trend-failure structure (board 2026-10-04; PROV:daytier-trend-failure — reversal criterion in the design record)
-_TF_WINDOW_15M = 16           # session 15m bars searched for today's trend extreme
-_TF_MIN_SESSION_15M = 6       # no fade before 6 closed session 15m bars (11:00 ET)
-_TF_MIN_BARS_AFTER_EXTREME = 2
-_TF_HL_LOOKBACK = 4           # bars before the extreme that hold the last higher-low / lower-high
-_TF_BREAK_ATR = 0.10          # close must clear the higher-low by 0.10 x ATR15 (a body, not a wick)
-_TF_EXTREME_ATR = 0.10        # the extreme must be within 0.10 x ATR15 of today's session extreme
-_TF_BOUNCE_ATR = 0.25         # the bounce after the extreme must stay 0.25 x ATR15 short of it
-_TF_MIN_RETRACE = 0.50        # the move must give back >= 50% of the leg (a flag retraces less)
+_TF_WINDOW_15M = 16           # PROV:daytier-trend-failure — session 15m bars searched for today's trend extreme
+_TF_MIN_SESSION_15M = 6       # PROV:daytier-trend-failure — no fade before 6 closed session 15m bars (11:00 ET)
+_TF_MIN_BARS_AFTER_EXTREME = 2   # PROV:daytier-trend-failure — closed 15m bars after the extreme
+_TF_HL_LOOKBACK = 4           # PROV:daytier-trend-failure — bars before the extreme that hold the last higher-low / lower-high
+_TF_BREAK_ATR = 0.10          # PROV:daytier-trend-failure — close must clear the higher-low by 0.10 x ATR15 (a body, not a wick)
+_TF_EXTREME_ATR = 0.10        # PROV:daytier-trend-failure — the extreme must be within 0.10 x ATR15 of today's session extreme
+_TF_BOUNCE_ATR = 0.25         # PROV:daytier-trend-failure — the bounce after the extreme must stay 0.25 x ATR15 short of it
+_TF_MIN_RETRACE = 0.50        # PROV:daytier-trend-failure — the move must give back >= 50% of the leg (a flag retraces less)
 _ATR_PERIOD = 14
 
 # Reversal criterion (board 2026-10-04): counter-trend fades auto-disable on live evidence.
