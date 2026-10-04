@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-02 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-04 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-04, Claude-signed) — day-tier 2m/5m alignment gate + trend-failure fades LIVE — pick up here
+
+**SHIPPED + DEPLOYED (deployed, unexercised until Mon 2026-10-05 open):** PR #467 / OCI `db1fd57` — day-tier entries
+need the 2m AND 5m trend (EMA13/EMA30) and VWAP side to agree (MACD + 15m logged only; config
+`DAYTRADE_ALIGN_BLOCKING_CHECKS`); counter-trend fades only when the 15m leads and a 30m bar confirms a FAILED trend
+(not a flag), none before 11:00 ET; fade shutoff (-$25 / 3 losses) now joins decision_id -> entry_fill -> exits
+(the old join could never count a loss). Replay of 19 live trades: allows 4 (3 wins, +$6.93), blocks 15 (0 wins,
+-$42.92) — in-sample, not proof of edge. Design + reversal criteria:
+`logs/design_records/day_tier_short_term_alignment_2026-10-04.md`.
+Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "DAYTRADE_ALIGN_BLOCKING_CHECKS" config.py'` -> 1.
+
+**⏩ EXACT NEXT ACTION:** Mon 10-05: confirm day-tier skips/entries in `logs/day_tier_events.jsonl` carry
+`alignment` (+ `trend_failure` on fades) and no runner errors; then day-tier gap #1 (RIDE trigger freshness/hold/VWAP),
+#2 (FADE stop beyond the sweep extreme). Queued separately: shared `indicators/vwap.add_vwap` resets on the UTC date
+(includes extended hours) for every other caller.
 
 ## ⏩ LATEST (2026-10-03, Claude-signed) — C2 breakout LIVE + overnight-stop fix + meta-audit noise fix — pick up here
 
