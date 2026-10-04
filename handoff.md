@@ -19,6 +19,8 @@ need the 2m AND 5m trend (EMA13/EMA30) and VWAP side to agree (MACD + 15m logged
 `logs/design_records/day_tier_short_term_alignment_2026-10-04.md`.
 Verify: `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && grep -c "DAYTRADE_ALIGN_BLOCKING_CHECKS" config.py'` -> 1.
 
+**DESIGN ALIGNED (no code yet, 2026-10-04):** day-tier all-session momentum entry + 3-trade cap replaced by a dollar budget (realized day-tier loss + open stop-risk <= the 5% day-tier kill); no sector/correlation limit, no time stop; kill switches unchanged (-7% account, -5% day tier). Spec: `logs/design_records/day_tier_momentum_continuation_2026-10-04.md`. Day-tier list (Rafael order): momentum entry → fade stop past the sweep extreme → SPY/market check → min payoff 1.5R → GEX edge study; swing after.
+
 **⏩ EXACT NEXT ACTION:** Mon 10-05: confirm day-tier skips/entries in `logs/day_tier_events.jsonl` carry
 `alignment` (+ `trend_failure` on fades) and no runner errors; then day-tier gap #1 (RIDE trigger freshness/hold/VWAP),
 #2 (FADE stop beyond the sweep extreme). Queued separately: shared `indicators/vwap.add_vwap` resets on the UTC date
