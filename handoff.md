@@ -22,6 +22,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - PR #460 / OCI `7d530a1` — meta-audit no longer replays findings verified false; 19 rows in
   logs/audit_directives.jsonl marked `refuted` with reasons (backup: audit_directives.jsonl.bak-2026-10-03).
 
+**DAY TIER (2026-10-03):** SHIPPED PR #464 / OCI `d628eaa` — never trade against the Layer-A trend side; TWO_SIDED/UNKNOWN =
+no trade; Track A + B; skips logged (deployed, unexercised until Mon RTH). Rafael: size UP now (no waiting) — raise the
+notional caps (`DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD`, `DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT`); risk-path -> board sets bounds.
+Remaining gaps (board Simons+Harris, Gro, GAI aligned on top 5): (1) RIDE trigger = single bar 0.15% past a wall — reuse Track B's
+hold/VWAP/extension/wick checks; (2) FADE stop mirrors the target (1:1) — put it beyond the sweep extreme; (3) SPY gamma + market
+regime overlay on single-name FADE/RIDE; (4) time stop (~45-90 min, thesis failed) + no entries without runway to the force-flat;
+(5) minimum reward:risk gate ~1.5. Then: FADE trend-day/VWAP filter, real exit fills not marks, min-stop vs stop slippage,
+MRI/VIX/breadth min-only multipliers, time-of-day volume baseline, per-symbol cooldown, Track B target capped at the nearest wall.
+Deferred: flip-strike, earnings flag, swing view. Then the GEX-edge study (day vs swing). 23 day-tier tests already fail on main (task chip).
+
 **AI-audit false alarms (BGG aligned 2026-10-03):** W39 measured 16/21 findings false (76%). Build order (board Majors+Beck,
 Gro, GAI all rank the evidence gate first): (A) deterministic evidence gate — each finding must quote a real log line + real
 file:line code, checked by script before Slack, with a NEVER-DROP rule for stops/kill-switch/orders/sizing (downgraded to a
