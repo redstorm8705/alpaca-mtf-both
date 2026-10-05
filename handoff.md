@@ -20,11 +20,18 @@ Sep-Oct): GEX timing -14bp to close vs random -3bp; pin magnet 40% vs placebo 38
 POSITIVE gamma (no NEGATIVE) — suspected gamma-sign data issue. Record:
 `logs/design_records/day_tier_pattern_sweep_2026-10-04.md`.
 
-**C2 DAY-TIER RESEARCH (2026-10-04, no code):** Alpaca SIP 1m history verified free on our account (2022->). Pre-registered TEST 1 market intraday momentum (Gao 2018) FAIL (-1.32 bp/trade, perm p 0.81); TEST 2 noise-area breakout (Zarattini 2024) REFUTED by adversarial audit (DSR 0.79, decays to SR -0.17 in 2026, IWM negative). Record: `logs/design_records/c2_day_tier_methodology_2026-10-04.md`. Pending owner choice: TEST 3 stocks-in-play ORB next and/or a QQQ-only forward paper trial (not validated; Rule E board if TQQQ).
+**C2 DAY-TIER RESEARCH (2026-10-04 late, no code; Rafael: detective approach, post-election regime only):** full results in
+`logs/design_records/c2_day_tier_methodology_2026-10-04.md` (DETECTIVE ROUND + TRACK M DESIGN sections). Refuted by
+adversarial audit or no edge: generic gap-down buy, stocks-in-play ORB, cross-sectional leaders, walk-forward ridge v1
+(split bug + leveraged beta), v2 hedged stock selection with news + auction features. Weak-but-real: QQQ Monday
+weekend-gap-down buy (Track M). Pending: SIP order-flow imbalance pull (27 names, 2025-10 ->) in OCI `logs/lab/ofi/`.
 
-**⏩ EXACT NEXT ACTION:** Rafael chose order: day-tier list done -> SWING next (recommended: overnight-hold evidence,
-+222% overnight vs +10% intraday). First: check why data/gex.py never reports NEGATIVE gamma before any swing use of GEX.
-Follow-ups: stale "3-concurrency cap" comments (config.py:815/907, run_day_tier.py:601, strategy/day_tier_track_b.py:85).
+**⏩ EXACT NEXT ACTION:** Track M design aligned 5/5 (board 3 seats + Gro + GAI, spec in the design record) and
+presented to Rafael 2026-10-04 — WAITING on his APPROVE/REJECT/DEFER. If approved: build through the full patch gate
+(target first live Monday 2026-10-12). In parallel: when `logs/lab/ofi/` has enough rows, add order-flow features to
+scratchpad `wf_v2.py` (hedged, empirical-null, slippage-stressed) and audit. Then SWING (check data/gex.py never reports
+NEGATIVE gamma first). Follow-ups: stale "3-concurrency cap" comments (config.py:815/907, run_day_tier.py:601,
+strategy/day_tier_track_b.py:85).
 
 ## ⏩ LATEST (2026-10-04, Claude-signed) — day-tier 2m/5m alignment gate + trend-failure fades LIVE — pick up here
 

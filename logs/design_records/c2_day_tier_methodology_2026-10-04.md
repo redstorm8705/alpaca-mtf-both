@@ -70,3 +70,45 @@ stacked p=0.15; SPY 2025-26 SR -0.32; (3) fragility: top 20 of 1,171 days = all 
 +-5..15 min give SR 0.18-1.00; costs $0.10/sh -> SR 0.70 (SPY negative 2024-26). QQQ alone: 2024-26 p=0.02, 2025-26 SR 0.89
 (p=0.099); TQQQ vehicle (info): SR 0.89, ~-29% drawdown, 2025 +27.3%, 2026 +4.6%. Possible NEW hypothesis (QQQ-only, N=20,
 fresh data only) — owner decision pending. Next pre-registered: TEST 3 stocks-in-play ORB (needs Russell-1000 SIP 1m).
+
+## DETECTIVE ROUND (post-election regime only; Rafael directive 2026-10-04 late) — Claude
+Windows: DISC 2024-11-05..2025-12-31, CONF 2026-01-02..2026-10-02. SIP 1m. Scripts in session scratchpad + OCI /tmp.
+- **Monday weekend-gap-down rebound (QQQ, long 09:45 -> 15:49, 1% stop):** DISC n=19 +51.8bp 74% win; CONF n=17 +42.2bp 71%.
+  Midweek gap-down placebo DISC +13 / CONF -16.5bp; Monday gap-up ~0. Across ~30 symbols positive for most high-beta equities,
+  ~0 for TLT/XLP/USO/SLV/inverse ETFs. Gains accrue 10:00-14:00. By year: 2022 -48 (all below 200d), 2023 +29, 2024 -7,
+  2025 +59, 2026 +42 bp. ADVERSARIAL AUDIT: WEAK-BUT-REAL — no data/look-ahead bug; DISC top-3 days = 76% of P&L (Apr-2025
+  tariff crash); Monday-label permutation DISC p=0.12, CONF p=0.0011; ex-top-3 mean ~+15-25bp; leverage adds variance only;
+  dependent on a dip-buying (bull) market; recommended kill: trailing 15 trades mean <= 0. A 200-day filter removes 2022
+  losses but also the best 2025 trades (inconclusive; not adopted).
+- **Generic buy-the-gap-down (any weekday):** DISC +17bp, CONF -4bp — only the weekend case persists into 2026.
+- **Morning-direction continuation by objective volatility tier:** low-vol third reverses, top third continues
+  (strong-move CONF +45.9bp, date-t 2.7; DISC date-t 0.7) — not robust at the date level.
+- **Cross-sectional leaders/laggards 10:00-12:00 -> close:** +2..+9bp, not tradeable after costs.
+- **Stocks-in-play (3,655 name-days, |gap|>=3%):** first-5-min ORB DISC +0.02R / CONF +0.04R; gap continuation flips sign
+  between windows (DISC -27bp, CONF +15bp); an adaptive (trailing-sign) version also fails. NOT an edge here.
+- **Walk-forward ridge 'combine weak signals' v1:** reported +22bp/day t=1.75 — ADVERSARIAL AUDIT: REFUTED (unadjusted
+  splits in 1Min_sip_r; ~70% of P&L = leveraged-ETF market beta; top-5 days = 75%; pipeline null sd ~2; coefficient signs
+  flip; +5bp/side slippage kills it). Lesson codified: split-adjust, exclude leveraged ETFs from the tradable set, judge
+  QQQ-beta-HEDGED P&L, use an empirical null, stress slippage.
+- **v2 (split-adjusted, hedged, + Benzinga news counts + opening-auction size):** hedged selection +1.9bp/day t=0.44;
+  -8bp with 5bp/side slippage. Price+news+auction stock selection on 38 liquid names: NO edge.
+- **Pending:** SIP order-flow imbalance (tick-rule signed volume 09:30-09:59, block trades >= $100k) for 27 names,
+  2025-10..2026-10, downloading to logs/lab/ofi/ on OCI.
+
+## TRACK M DESIGN — BGG ALIGNED 5/5 (2026-10-04 late; awaiting Rafael approval) — Claude
+Board: Thorp (sizing), Harris (execution), Taleb masked-loss seat — all APPROVE-WITH-CHANGES; Gro + GAI APPROVE-WITH-CHANGES;
+sizing split (Gro 1.2-2x, GAI ~3% risk) resolved in ONE counter-prompt round with the Kelly arithmetic -> both now 0.5x.
+Aligned spec:
+- Eligible: Monday whose previous session is the Friday exactly 3 calendar days earlier (Alpaca calendar); full-day session
+  (skip half-days); QQQ official SIP opening print < Friday split-adjusted SIP daily close. Missing/stale input -> skip + logged reason.
+- Entry: once, 09:45-10:15 ET, marketable limit (ask + small capped buffer); cancel and skip if unfilled (no chasing);
+  skip if quote stale or spread wide. Persist a per-date one-shot marker BEFORE submitting.
+- Protection: stop-market 1% below fill placed right after the fill; if stop placement fails -> flatten immediately.
+  No profit target (the right tail carries the edge). Exit = existing calendar-driven EOD force-flat.
+- Ownership: Track M lot tagged with its own client order id; stop/flatten qty-bounded to that lot (QHM/F6 may hold QQQ).
+- Size: 0.5x the standard day-tier per-trade risk until 15 live Track-M trades, then 1.0x; never above 1.0x without a board vote.
+  Existing daily dollar budget + 5% tier kill + 7% account kill apply. QQQ only (no TQQQ).
+- Auto-off (pauses entries, keeps logging eligibility): trailing-8 Track-M trades mean <= 0 OR 4 consecutive losses,
+  from Alpaca FILL P&L (never modelled P&L). Kill flag DAYTRADE_TRACK_M_ENABLED.
+- No 200-day filter (it removes the best 2025 trades); falling-knife context (QQQ 5-day return) logged, not gated.
+- Risk-path (adds frequency ~1.5/month): board + masked-loss seat done at design; full code gate still required.
