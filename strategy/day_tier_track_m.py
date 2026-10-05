@@ -146,7 +146,7 @@ def evaluate(now_et: datetime, prev_session: "str | None", mins_to_close: "float
         if mins_to_close is None or mins_to_close < _MIN_FULL_DAY_MINUTES_LEFT:
             out["reason"] = f"not a full-length session (minutes to close {mins_to_close}) — skip"
             return out
-        from data.fetcher import fetch_bars, fetch_bars_window
+        from data.fetcher import fetch_bars_window
         day0 = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
         # Friday close: settled, split-adjusted SIP daily bar for the previous session (T1).
         d = fetch_bars_window(SYMBOL, config.TF_DAILY, day0 - timedelta(days=10), day0, feed="sip", adjustment="split")
@@ -188,8 +188,11 @@ def evaluate(now_et: datetime, prev_session: "str | None", mins_to_close: "float
         if opn >= fri:
             out["reason"] = f"no weekend gap-down (open {opn:.2f} >= Friday close {fri:.2f})"
             return out
-        # Live entry reference: the latest 1-minute bar close (T1), which must be fresh.
-        live = fetch_bars(SYMBOL, config.TF_1M, num_bars=5)
+        # Live entry reference: the latest IEX 1-minute bar (T1). IEX is the plan's REAL-TIME feed; the default bar
+        # feed (fetch_bars) is consolidated SIP delayed ~15 minutes on this plan, which left every 2026-10-05 tick
+        # 908 s stale and skipped the trade. The bar must still be fresh (age check below).
+        live = fetch_bars_window(SYMBOL, config.TF_1M, now_et - timedelta(minutes=10), now_et, feed="iex",
+                                 adjustment="split")
         if live is None or getattr(live, "empty", True) or "close" not in live.columns:
             out["reason"] = "live 1m bar unavailable — skip"
             out["retry"] = True   # transient data gap: re-evaluate on the next tick inside the window

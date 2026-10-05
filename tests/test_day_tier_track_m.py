@@ -24,16 +24,21 @@ MON = datetime(2026, 10, 12, 9, 47, tzinfo=ET)      # a Monday
 FRI = "2026-10-09"
 
 
-def _fetch_window(daily_last="2026-10-09", fri_close=600.0, open_930=594.0, first="2026-10-12 09:30"):
+def _fetch_live(last="2026-10-12 09:46", px=595.0):
+    return lambda symbol, tf, start, end, feed="iex", adjustment="raw", asof=None: \
+        _bars([("2026-10-12 09:44", px - 0.5), (last, px)])
+
+
+def _fetch_window(daily_last="2026-10-09", fri_close=600.0, open_930=594.0, first="2026-10-12 09:30", live=None):
+    live = live or _fetch_live()
+
     def f(symbol, tf, start, end, feed="sip", adjustment="raw", asof=None):
+        if feed == "iex":              # the real-time entry-reference read
+            return live(symbol, tf, start, end, feed=feed, adjustment=adjustment)
         if tf == "1Day":
             return _bars([("2026-10-08", 601.0), (daily_last, fri_close)])
         return _bars([(first, open_930)]) if open_930 is not None else None
     return f
-
-
-def _fetch_live(last="2026-10-12 09:46", px=595.0):
-    return lambda symbol, tf, num_bars=5: _bars([("2026-10-12 09:44", px - 0.5), (last, px)])
 
 
 class Window(unittest.TestCase):
@@ -46,8 +51,9 @@ class Window(unittest.TestCase):
 
 class Evaluate(unittest.TestCase):
     def _ev(self, now=MON, prev=FRI, mins=373.0, window=None, live=None):
-        with mock.patch("data.fetcher.fetch_bars_window", side_effect=window or _fetch_window()), \
-                mock.patch("data.fetcher.fetch_bars", side_effect=live or _fetch_live()):
+        win = window or _fetch_window(live=live)
+        with mock.patch("data.fetcher.fetch_bars_window", side_effect=win), \
+                mock.patch("data.fetcher.fetch_bars", side_effect=AssertionError("delayed default feed must not be used")):
             return tm.evaluate(now, prev, mins)
 
     def test_eligible_gap_down(self):
@@ -86,6 +92,8 @@ class Evaluate(unittest.TestCase):
 
     def test_todays_forming_daily_bar_is_ignored(self):
         def f(symbol, tf, start, end, feed="sip", adjustment="raw", asof=None):
+            if feed == "iex":
+                return _fetch_live()(symbol, tf, start, end)
             if tf == "1Day":   # Alpaca stamps daily bars at 00:00 ET, so today's forming bar can be returned
                 return _bars([("2026-10-08", 601.0), ("2026-10-09", 600.0), ("2026-10-12", 590.0)])
             return _bars([("2026-10-12 09:30", 594.0)])
@@ -106,6 +114,16 @@ class Evaluate(unittest.TestCase):
     def test_first_bar_not_930_retries(self):
         r = self._ev(window=_fetch_window(first="2026-10-12 09:31"))
         self.assertTrue(r["retry"])
+
+    def test_live_reference_uses_realtime_iex_feed(self):
+        calls = []
+        base = _fetch_window()
+
+        def spy(symbol, tf, start, end, feed="sip", adjustment="raw", asof=None):
+            calls.append((tf, feed))
+            return base(symbol, tf, start, end, feed=feed, adjustment=adjustment)
+        self.assertTrue(self._ev(window=spy)["eligible"])
+        self.assertIn(("1Min", "iex"), calls)
 
     def test_stale_live_bar_retries(self):
         r = self._ev(live=_fetch_live(last="2026-10-12 09:30"))
