@@ -8,6 +8,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — late-day momentum TEST 3 rejected
+
+PR #475 pre-registered the only material literature gap before results. PR #476 (`23f0530`) records its one-shot run on 1,183 SPY/QQQ SIP dates (2022-2026) and decisive failure: essentially zero gross edge, -9.98 bp/trade at 5 bp/side, every year negative, DSR 0, random-sign p=.474. Do not tune or implement this family. Exact next day-tier research action: finish the pending SIP order-flow-imbalance data QA and evaluate OFI as a conditioning/execution feature under cost-realistic walk-forward gates. No live behavior changed.
+
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — day-tier internet strategy audit
 
 PR #475 (`f64f9dd`) records the Internet/primary-literature audit without changing live behavior. It accepts Claude's 2026-10-04 negative day-tier tests and identifies one material untested distinction: Baltussen et al. (JFE 2021) use the return through 15:30 to predict the final half-hour, whereas the locally failed Gao test used the opening half-hour. The next pre-registered test, cost/statistical gates, architecture boundary, HFT feasibility finding, and sources are in `logs/design_records/day_tier_internet_strategy_audit_2026-10-05.md`. Do not scale the existing ORB path from published claims; local evidence and newer cost-realistic evidence reject that shortcut. No code or config changed.
