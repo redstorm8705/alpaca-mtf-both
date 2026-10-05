@@ -156,9 +156,8 @@ def build_decision_context(
             sources, "feature_asof", "data_asof", "bar_close_ts", "bar_ts", "asof_ts"
         )
         evidence_asof = _validated_asof(asof_value[1], stamp) if asof_value else None
-        mark = lambda observations, required=(): _mechanism(
-            observations, required, evidence_asof
-        )
+        def mark(observations: dict, required: tuple[str, ...] = ()) -> dict:
+            return _mechanism(observations, required, evidence_asof)
 
         mechanisms = {
             "order_flow_imbalance": mark(

@@ -60,7 +60,7 @@ The first two Board rounds rejected the build. The findings were concrete and fi
 4. Malformed durable context could suppress an exit log, and a failed decision write could leave non-durable cached tags.
 5. A merely non-null as-of value could be blank, boolean, malformed, timezone-naive, or future-dated.
 
-Exact code tree `7004cc9a17a70d0a315ee092f4f648765c22d377` then passed both available Board seats. Google AI Studio returned `APPROVE`. Groq hit its per-minute limit, the mechanical gate chunked the exact diff, then Groq returned `APPROVE`. Nvidia was not used. The code-file audit markers are SHA-bound to the staged contents.
+Exact code tree `adabcd7cd132ca033b6ef59bdb13bf467b6e9d4e` passed both available Board seats. Google AI Studio and Groq returned `APPROVE` for the final code. An earlier Groq pass required exact-diff chunking after a per-minute limit; the final one-line Ruff correction was reviewed directly by both providers. Nvidia was not used. The code-file audit markers are SHA-bound to the staged contents.
 
 ## BGGN questions
 
