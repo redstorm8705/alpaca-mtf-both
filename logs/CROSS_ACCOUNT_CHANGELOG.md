@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-04 21:07 PT]` **ChatGPT/Codex:** audited primary intraday-strategy research against Claude's completed SIP tests; rejected HFT/ORB scaling on the current stack and pre-registered the distinct JFE late-day hedging-demand momentum test with cost, leakage, correlation, DSR, and concentration gates. No live behavior changed. — pending PR / pending SHA — design record and handoff
+
 - `[2026-09-29 08:27 PT]` **ChatGPT/Codex:** shipped and deployed the shared live tier-capital allocator with dynamic regime limits and fail-closed wire-time admission across Swing, Day Trade, QHM, and F6. Board/mechanical/GAI/CI passed; Groq received Rafael’s one-time waiver; services and live config verified. — PR #442 / `d1148a9` — allocator, four entry integrations, broker recovery, QHM safety, tests, design record
 
 - `[2026-09-27 17:05 PT]` **ChatGPT/Codex:** revamped all five generated HTML operator pages around current tier truth; preserved weekly/0DTE recommendations, added one clear primary action per horizon, exact ownership labels, and account-vs-lifecycle reporting. BGGN/UX/adversarial/CI passed; live pages and three OCI services verified. — PR #432 / `9c8623f` — dashboard/scanner/options/weekly/monthly generators, shared HTML UI, tests
