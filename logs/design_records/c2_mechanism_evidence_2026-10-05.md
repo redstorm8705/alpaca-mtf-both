@@ -44,3 +44,23 @@ news + auctions, 39 names), `logs/lab/ofi/` (order flow, in progress), `logs/lab
 1. VRP and order-flow results through the gate -> adversarial audit. 2. Untested families: VWAP path/state (#4),
 failed-break trap (#8). 3. GEX gamma-sign root cause (#9). 4. Track M build through the full patch gate.
 Every candidate result is appended here with the verbatim gate line.
+
+## RESULTS UPDATE (2026-10-05, Claude) — all ten mechanisms now tested (except #9, blocked on gamma data)
+- #1 order flow (24 names, 251 days, cross-sectional ofi / block flow / own-surprise, exits 30m/1h/2h/close): 12 configs FAIL
+  (best O2 -> close -0.2bp/day). #8 failed-break trap / confirmed break N=5/15/30: FAIL. #4 VWAP reclaim/reject after
+  60/120 one-sided minutes: FAIL (best REJECT-60 +3.2bp/day t=1.68, fails slippage + ex-top5).
+- Multi-timeframe sweep 5/15/30/60/120m x {own, sector-residual, cross-sectional, megacap->QQQ} x {cont, rev}: 48 FAIL.
+- Regime check (GAI): the same families split by prior-5-day QQQ range tercile — FAIL in HIGH-vol and LOW-vol alike.
+- Options-as-signal (implied-move fade/breakout on SPY/QQQ from the 10:00 0DTE straddle): 12 FAIL.
+- 0DTE iron condor (outside the day tier; Rafael: day tier = stocks/ETFs only): significant GROSS premium, survives
+  $0.01/leg/side, fails $0.02; max loss ~18% of equity per condor at this account size. Historical option QUOTES are not
+  available; OPRA agreement signed by Rafael 2026-10-05 (pending Alpaca activation) enables live quotes.
+- Crypto BTC/ETH/SOL momentum/reversal 1h-24h: gross ~0.
+## BGG ALIGNMENT 4/4 (board Simons + Thorp seats, Gro, GAI) — day-tier role
+Day tier = small data-collection sleeve (~10-15% of risk budget, capped by the 5% tier kill) with a router whose DEFAULT
+allocation is ZERO until a family passes admission; ship Track M (approved) + ChatGPT's point-in-time snapshot +
+implementation-shortfall attribution; put research/growth weight on overnight / multi-day edges (swing tier) where the
+evidence is strongest. Next research (pre-registered, no window shopping): overnight decomposition on index ETFs and
+megacaps (Lou-Polk-Skouras 2019), turn-of-month/holiday-eve close->open (Lakonishok-Smidt 1988), CPI/NFP/FOMC event
+windows as a single pre-registered set. Reviewer caveat: the result we trust is "no market-neutral intraday alpha at
+retail costs in this sample", not "no intraday profit".
