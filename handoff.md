@@ -10,7 +10,7 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — late-day momentum TEST 3 rejected
 
-PR #475 pre-registered the only material literature gap before results. It has now run once on 1,183 SPY/QQQ SIP dates (2022-2026) and failed decisively: essentially zero gross edge, -9.98 bp/trade at 5 bp/side, every year negative, DSR 0, random-sign p=.474. Reproducible script and full result are on `research/day-tier-test3-result`; do not tune or implement this family. Exact next day-tier research action: finish the pending SIP order-flow-imbalance data QA and evaluate OFI as a conditioning/execution feature under cost-realistic walk-forward gates. No live behavior changed.
+PR #475 pre-registered the only material literature gap before results. PR #476 (`23f0530`) records its one-shot run on 1,183 SPY/QQQ SIP dates (2022-2026) and decisive failure: essentially zero gross edge, -9.98 bp/trade at 5 bp/side, every year negative, DSR 0, random-sign p=.474. Do not tune or implement this family. Exact next day-tier research action: finish the pending SIP order-flow-imbalance data QA and evaluate OFI as a conditioning/execution feature under cost-realistic walk-forward gates. No live behavior changed.
 
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — day-tier internet strategy audit
 
