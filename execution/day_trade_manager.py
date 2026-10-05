@@ -265,7 +265,8 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
                        open_orders: list, risk_equity: float | None = None,
                        symbol: str = "", track: str = "A",
                        track_budget: float | None = None,
-                       extra_b_lots: dict | None = None) -> tuple[int, str]:
+                       extra_b_lots: dict | None = None,
+                       risk_mult: float = 1.0) -> tuple[int, str]:
     """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed.
 
     `symbol` selects the DEEP-LIQUIDITY carve-out (aggression guardrail 2026-09-18): a deep-liquidity
@@ -314,6 +315,15 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         if not all(math.isfinite(v) and v >= 0 for v in (reserve, cushion, day_pct, base_ceiling, eff_ceiling, single_name_pct, global_ratio, risk_pct_basis, risk_pct_ceiling)):
             return 0, "invalid configured risk limit — fail closed"
         risk_pct = min(risk_pct_basis, risk_pct_ceiling)  # active basis, never above the retained ceiling
+        # Per-track risk scale (Track M starts at 0.5x). SHRINK-ONLY: anything outside (0, 1] fails closed, so a
+        # caller can never raise per-trade risk above the configured basis through this argument.
+        try:
+            _rm = float(risk_mult)
+        except (TypeError, ValueError):
+            return 0, "invalid risk_mult — fail closed"
+        if not (math.isfinite(_rm) and 0 < _rm <= 1.0):
+            return 0, f"risk_mult {risk_mult!r} outside (0, 1] — fail closed"
+        risk_pct *= _rm
 
         account_gross = _account_gross(positions_by_symbol)
         day_gross = _current_daytrade_gross(open_trades, positions_by_symbol)
@@ -432,7 +442,14 @@ def _compute_stop_price(trigger: dict, direction: str, entry_px: float) -> float
         e = float(entry_px)
         if e <= 0:
             return None
-        if mode == "FADE" and target is not None:
+        if mode == "TRACK_M":
+            # Track M (QQQ Monday weekend dip): the trigger carries an explicit stop level (1% below the entry
+            # reference, strategy.day_tier_track_m). Missing -> no sane stop -> the caller aborts.
+            stop_ref = trigger.get("stop_ref")
+            if stop_ref is None:
+                return None
+            stop = float(stop_ref)
+        elif mode == "FADE" and target is not None:
             t = float(target)
             # A valid fade targets the pin on the PROFIT side (long → pin above entry; short → below).
             # A loss-side target is NOT a fade-to-pin → abort rather than place an inverted-R:R stop.
@@ -1424,8 +1441,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # Per-track attribution (Track B Inc 2 Part 2): the size dict carries compute_day_tier_size's track.
         # Anything other than "B" (incl. a missing key on a legacy caller) is Track A — unchanged behavior.
         # Either dict marking "B" routes to the Track-B cap (defense in depth — risk seat nit).
-        _track = "B" if "B" in (str(size.get("track") or "").strip().upper(),
-                                str((decision or {}).get("track") or "").strip().upper()) else "A"
+        _tracks = (str(size.get("track") or "").strip().upper(),
+                   str((decision or {}).get("track") or "").strip().upper())
+        # Track M (QQQ Monday weekend dip) is attributed separately but sized/capped like Track A (only "B" takes
+        # the Track-B exposure cap); B wins if both are present (the stricter cap).
+        _track = "B" if "B" in _tracks else ("M" if "M" in _tracks else "A")
         # State-only lots (non-terminal, same-day, with NO entry_fill in the durable log at all — a failed log
         # write or the submit→log crash window) must still count against the Track-B budget (risk seat R2). A
         # lot whose entry_fill IS logged is either open (counted via open_trades) or already EXITED (a
@@ -1449,7 +1469,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
                                       buying_power, maintenance_margin, maintenance_rate, open_orders,
                                       risk_equity=day_start_equity, symbol=symbol, track=_track,
-                                      track_budget=size.get("budget"), extra_b_lots=_state_only)
+                                      track_budget=size.get("budget"), extra_b_lots=_state_only,
+                                      risk_mult=size.get("risk_mult", 1.0))
         if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False
@@ -1600,6 +1621,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         elif _stop_dist > 0:
             _ride_r = float(_cfg("DAYTRADE_RIDE_TARGET_R", 2.0))
             tp_px = (fill_px + _ride_r * _stop_dist) if direction == "long" else (fill_px - _ride_r * _stop_dist)
+        if trigger.get("no_target") is True:
+            # Track M: no profit target by design (the right tail carries the edge) -> no OCO; the plain
+            # protective stop below + the EOD force-flat are the only exits.
+            tp_px = None
 
         geometry_ok, geometry_reason = _post_fill_exit_geometry(direction, fill_px, stop_px, tp_px)
         if not geometry_ok:

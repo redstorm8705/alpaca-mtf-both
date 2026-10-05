@@ -237,7 +237,7 @@ def log_entry_fill(trade_id: str, symbol: str, *, order_id: str, decision_id: st
         market_price_at_fill=round(float(market_price_at_fill), 4),
         equity_at_entry=round(float(equity_at_entry), 2),
         budget=round(float(budget), 2), notional=round(float(notional), 2),
-        track=("B" if str(track).upper() == "B" else "A"),
+        track=(str(track).upper() if str(track).upper() in ("B", "M") else "A"),  # M = Track M (QQQ Monday dip)
     )
     return _durable_append([rec])
 
