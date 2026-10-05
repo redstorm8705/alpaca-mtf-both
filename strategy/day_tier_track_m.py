@@ -150,6 +150,12 @@ def evaluate(now_et: datetime, prev_session: "str | None", mins_to_close: "float
         day0 = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
         # Friday close: settled, split-adjusted SIP daily bar for the previous session (T1).
         d = fetch_bars_window(SYMBOL, config.TF_DAILY, day0 - timedelta(days=10), day0, feed="sip", adjustment="split")
+        if d is not None and not getattr(d, "empty", True):
+            # Drop any bar dated TODAY: Alpaca stamps daily bars at 00:00 ET, so a window ending at today 00:00 ET
+            # can include today's forming bar (found by the 2026-10-05 pre-market dry run).
+            _dates = [(t.tz_convert(ET) if t.tzinfo is not None else t.tz_localize("UTC").tz_convert(ET)).date()
+                      for t in d.index]
+            d = d[[x < now_et.date() for x in _dates]]
         if d is None or getattr(d, "empty", True) or "close" not in d.columns:
             out["reason"] = "Friday daily bar unavailable — skip"
             out["retry"] = True   # transient data gap: re-evaluate on the next tick inside the window

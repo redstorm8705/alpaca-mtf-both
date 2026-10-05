@@ -84,6 +84,15 @@ class Evaluate(unittest.TestCase):
             self.assertFalse(r["eligible"])
             self.assertFalse(r["retry"])
 
+    def test_todays_forming_daily_bar_is_ignored(self):
+        def f(symbol, tf, start, end, feed="sip", adjustment="raw", asof=None):
+            if tf == "1Day":   # Alpaca stamps daily bars at 00:00 ET, so today's forming bar can be returned
+                return _bars([("2026-10-08", 601.0), ("2026-10-09", 600.0), ("2026-10-12", 590.0)])
+            return _bars([("2026-10-12 09:30", 594.0)])
+        r = self._ev(window=f)
+        self.assertTrue(r["eligible"], r)
+        self.assertEqual(r["friday_close"], 600.0)
+
     def test_stale_friday_bar_retries(self):
         r = self._ev(window=_fetch_window(daily_last="2026-10-08"))
         self.assertFalse(r["eligible"])
