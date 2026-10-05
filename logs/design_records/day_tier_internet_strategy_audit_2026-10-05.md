@@ -52,9 +52,9 @@ Write this declaration to the trial ledger before looking at results.
 - The current GEX feed must not be used until its all-POSITIVE-sign defect is resolved. An invalid gamma label must never become a profitable-looking filter.
 - Interactions adjust conviction only after walk-forward estimation. They cannot flip a losing base rule into production through full-sample selection.
 
-### Costs and statistical gates
+### Commission, execution friction and statistical gates
 
-- Charge observed spread where available, SEC/TAF fees where applicable, and slippage scenarios of 1, 3, 5 and 10 bp per side.
+- Alpaca charges no commission on ordinary U.S. equity trades. Report a zero-friction diagnostic, then charge observed spread where available and run slippage stresses of 1, 3, 5 and 10 bp per side. Live-account reporting separately includes any actual sell-side regulatory fees; Alpaca paper trading does not simulate those fees, market impact, latency slippage, or queue position.
 - Report gross and net return, trade count, win rate, payoff ratio, profit factor, Sharpe, Sortino, maximum drawdown, expected shortfall, exposure, turnover and fill sensitivity.
 - Required admission: positive net expectancy at 5 bp/side; positive in at least four of five yearly folds including 2022 and 2026; Deflated Sharpe probability above .95 using the complete day-tier trial ledger; stationary-block-bootstrap p below .05; no single 20 trading days contributing more than 50% of total P&L; and positive SPY/QQQ equal-weight portfolio results after correlation is handled at the date level.
 - Required falsifications: random-sign permutation, random entry window matched on holding duration, always-long final-half-hour control, and a 15:15/15:45 timestamp perturbation.
@@ -106,13 +106,16 @@ The equal-weight, date-level SPY/QQQ portfolio had no gross edge. Net results we
 
 | Cost | Mean/trade | Annualized Sharpe | DSR probability | Circular-block p |
 |---|---:|---:|---:|---:|
+| Zero commission, zero friction | +0.02 bp | +0.02 | 0.031 | 0.4765 |
 | 1 bp/side | -1.98 bp | -1.70 | 0.000 | 0.9998 |
 | 3 bp/side | -5.98 bp | -5.14 | 0.000 | 1.0000 |
 | 5 bp/side | -9.98 bp | -8.58 | 0.000 | 1.0000 |
 | 10 bp/side | -19.98 bp | -17.17 | 0.000 | 1.0000 |
 
-At the required 5 bp/side, every calendar year was negative: 2022 -7.17 bp/trade, 2023 -10.09, 2024 -12.61, 2025 -11.02, and 2026 -8.72. SPY and QQQ both failed separately. Extending the exit from the bot-compatible 15:49 to the paper-style 15:59 did not rescue either instrument. The random-sign falsification produced p=0.4737.
+At zero commission and zero modeled friction, the mean was only +0.017 bp/trade, annualized Sharpe was +0.015, DSR probability was 0.031, the circular-block p-value was 0.4765, only two of five calendar years were positive, and the 20 best dates produced more than 60 times the total net result because the total was nearly zero. The strategy therefore fails before any spread, slippage, fee, or commission assumption matters.
 
-The implementation used a fixed-length circular block bootstrap rather than the pre-declared stationary bootstrap. That deviation cannot affect the decision: mean returns were negative before realistic costs, DSR was zero, every yearly fold failed at the required cost, and the independent random-sign null also failed.
+At the 5 bp/side execution-friction stress, every calendar year was negative: 2022 -7.17 bp/trade, 2023 -10.09, 2024 -12.61, 2025 -11.02, and 2026 -8.72. SPY and QQQ both failed separately. Extending the exit from the bot-compatible 15:49 to the paper-style 15:59 did not rescue either instrument. The random-sign falsification also failed.
+
+The implementation used a fixed-length circular block bootstrap rather than the pre-declared stationary bootstrap. That deviation cannot affect the decision: gross expectancy was effectively zero, the zero-friction DSR and bootstrap gates failed, and only two yearly folds were positive even before execution friction.
 
 **Verdict:** reject. Do not implement, tune a threshold, add leverage, or send this family through the live risk gate. The published effect is absent in the bot's available period and execution window. The next useful work is the already-running SIP order-flow-imbalance data audit; it must be evaluated as an execution/conditioning feature first, not presumed to be standalone alpha.
