@@ -10,7 +10,7 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — day-tier internet strategy audit
 
-Internet/primary-literature audit completed without changing live behavior. It accepts Claude's 2026-10-04 negative day-tier tests and identifies one material untested distinction: Baltussen et al. (JFE 2021) use the return through 15:30 to predict the final half-hour, whereas the locally failed Gao test used the opening half-hour. The next pre-registered test, cost/statistical gates, architecture boundary, HFT feasibility finding, and sources are in `logs/design_records/day_tier_internet_strategy_audit_2026-10-05.md`. Do not scale the existing ORB path from published claims; local evidence and newer cost-realistic evidence reject that shortcut. No code or config changed.
+PR #475 (`f64f9dd`) records the Internet/primary-literature audit without changing live behavior. It accepts Claude's 2026-10-04 negative day-tier tests and identifies one material untested distinction: Baltussen et al. (JFE 2021) use the return through 15:30 to predict the final half-hour, whereas the locally failed Gao test used the opening half-hour. The next pre-registered test, cost/statistical gates, architecture boundary, HFT feasibility finding, and sources are in `logs/design_records/day_tier_internet_strategy_audit_2026-10-05.md`. Do not scale the existing ORB path from published claims; local evidence and newer cost-realistic evidence reject that shortcut. No code or config changed.
 
 ## ⏩ LATEST (2026-10-04 late, Claude-signed) — day-tier dollar budget LIVE; day-tier fix list closed on evidence — pick up here
 
