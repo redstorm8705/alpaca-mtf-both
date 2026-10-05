@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 
 SYMBOL = "QQQ"
-_WINDOW_START_MIN = 9 * 60 + 45      # 09:45 ET — entry window opens (design)
-_WINDOW_END_MIN = 10 * 60 + 15       # 10:15 ET — entry window closes (design)
+_WINDOW_START_MIN = 9 * 60 + 45      # PROV:daytier-track-m-2026-10-05 — 09:45 ET entry window opens (design)
+_WINDOW_END_MIN = 10 * 60 + 15       # PROV:daytier-track-m-2026-10-05 — 10:15 ET entry window closes (design)
 _MIN_FULL_DAY_MINUTES_LEFT = 300     # at 09:45 a full session has 375 min left, a 13:00 half-day 195 — skip half-days
 _ENTRY_BAR_MAX_AGE_S = 300           # the live 1m bar used as the entry reference must be <= 5 min old
 _DAY_MARKER_KEY = "_track_m_day"     # day_tier_state.json key: {"date": YYYYMMDD} once the Monday shot is used
@@ -196,7 +196,7 @@ def evaluate(now_et: datetime, prev_session: "str | None", mins_to_close: "float
             out["retry"] = True   # transient data gap: re-evaluate on the next tick inside the window
             return out
         ref = float(live["close"].iloc[-1])
-        stop_pct = float(_cfg("DAYTRADE_TRACK_M_STOP_PCT", 0.01))
+        stop_pct = float(_cfg("DAYTRADE_TRACK_M_STOP_PCT", 0.01))  # PROV:daytier-track-m-2026-10-05 — default mirrors config
         if not (math.isfinite(ref) and ref > 0 and 0 < stop_pct < 0.05):
             out["reason"] = "invalid entry reference / stop percent — skip"
             return out

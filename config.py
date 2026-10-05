@@ -1220,7 +1220,7 @@ def validate_config():
     # Track M (2026-10-05): type and range guards — fail CLOSED on a mis-set.
     if not isinstance(DAYTRADE_TRACK_M_ENABLED, bool):
         errors.append("DAYTRADE_TRACK_M_ENABLED must be a bool (True/False)")
-    if not (isinstance(DAYTRADE_TRACK_M_STOP_PCT, (int, float)) and 0 < DAYTRADE_TRACK_M_STOP_PCT < 0.05):
+    if not (isinstance(DAYTRADE_TRACK_M_STOP_PCT, (int, float)) and 0 < DAYTRADE_TRACK_M_STOP_PCT < 0.05):  # PROV:daytier-track-m-2026-10-05 — sanity bound
         errors.append(f"DAYTRADE_TRACK_M_STOP_PCT ({DAYTRADE_TRACK_M_STOP_PCT}) must be in (0, 0.05)")
     if not (isinstance(DAYTRADE_TRACK_M_START_RISK_MULT, (int, float)) and 0 < DAYTRADE_TRACK_M_START_RISK_MULT <= 1.0):
         errors.append(f"DAYTRADE_TRACK_M_START_RISK_MULT ({DAYTRADE_TRACK_M_START_RISK_MULT}) must be in (0, 1]")
