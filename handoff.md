@@ -8,7 +8,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-05, Claude) — day-tier mechanism results recorded — pick up here
+## ⏩ LATEST (2026-10-05, Claude) — Track M deployed (PR #482, #483) — pick up here
+
+Track M (QQQ Monday weekend-gap-down buy) is deployed on OCI; spec in
+`logs/design_records/c2_day_tier_methodology_2026-10-04.md` (TRACK M DESIGN). Kill flag `DAYTRADE_TRACK_M_ENABLED`.
+**⏩ EXACT NEXT ACTION:** after 10:15 ET each Monday, read the Track-M decision in `logs/day_tier_events.jsonl`
+(`grep TM- logs/day_tier_events.jsonl`) and confirm entry, stop and EOD exit against Alpaca fills.
+
+## ⏩ LATEST (2026-10-05, Claude) — day-tier mechanism results recorded (superseded)
 
 Results and the board/Gro/GAI recommendation on the day tier's role are recorded in
 `logs/design_records/c2_mechanism_evidence_2026-10-05.md` (sections RESULTS UPDATE and BGG ALIGNMENT).
