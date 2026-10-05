@@ -26,12 +26,14 @@ NO order (sizing + the order are Layer C's later, RISK-PATH increments). Committ
 FAIL-SAFE: a candidate that is not would_consider, or missing/insufficient bars, or missing walls,
 or any error -> WAIT (never a spurious ENTER); never raises.
 
-Data tier: T1 intraday bars via data.fetcher.fetch_bars (the only approved bar source) + the GEX
-walls from data.gex.get_gex_levels (cached snapshot). All thresholds PROV-tagged (inert signal).
+Data tier: T1 intraday bars via data.fetcher.fetch_bars_window(feed="iex") — the plan's real-time feed, completed
+bars only (see fetch_bars_ref) — + the GEX walls from data.gex.get_gex_levels (cached snapshot).
+All thresholds PROV-tagged.
 """
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 import config
 
@@ -61,9 +63,32 @@ def _recent_bars(symbol: str, bars):
 
 
 # Indirection so the unit test can patch the fetch without importing alpaca (kept module-level for clarity).
+# REAL-TIME + CLOSED BARS (2026-10-05 fix): the default bar feed (data.fetcher.fetch_bars) is consolidated SIP
+# delayed ~15 minutes on this data plan, so the trigger was judging sweeps/breaks on 15-minute-old bars (live
+# Track-A fills sat a mean 15bp, up to 112bp, from the signal price). Read the plan's REAL-TIME IEX feed instead
+# and keep only COMPLETED 5m bars (data.fetcher.drop_forming_bars — signal code never reads a forming bar).
+# IEX volume is IEX-only, so the RVOL confirmation compares IEX bars with IEX bars (same basis).
+_IEX_LOOKBACK_DAYS = 5     # PROV:daytier-entry-trigger-iex — calendar days of IEX 5m history (>= 30 bars across a weekend/holiday)
+_MAX_LAST_BAR_AGE = timedelta(minutes=10)  # PROV:daytier-entry-trigger-iex — newest closed 5m bar must have ended within this
+
+
 def fetch_bars_ref(symbol, timeframe, num_bars):
-    from data.fetcher import fetch_bars
-    return fetch_bars(symbol, timeframe, num_bars=num_bars)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from data.fetcher import drop_forming_bars, fetch_bars_window
+    import pandas as pd
+    now = datetime.now(ZoneInfo("America/New_York"))
+    df = fetch_bars_window(symbol, timeframe, now - timedelta(days=_IEX_LOOKBACK_DAYS), now, feed="iex")
+    closed = drop_forming_bars(df, timeframe, now).tail(num_bars)
+    # FRESHNESS (cold-2nd + risk seat 2026-10-05): IEX prints a bar only when IEX trades, so on a thin name or at the
+    # open the newest completed bar can be pre-market / prior-session. If it ENDED more than _MAX_LAST_BAR_AGE ago,
+    # return nothing -> the trigger WAITs (never judge a wall or set entry_ref from a stale bar).
+    if not closed.empty:
+        last_end = closed.index[-1].to_pydatetime() + timedelta(minutes=5)
+        if now - last_end > _MAX_LAST_BAR_AGE:
+            return pd.DataFrame()
+    return closed
 
 
 def _vol_ok(df) -> bool:
