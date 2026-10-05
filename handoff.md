@@ -8,7 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-05, Claude) — Track M deployed (PR #482, #483) — pick up here
+## ⏩ LATEST (2026-10-05 evening, Claude) — real-time data fix for Track M + Track A (PR #485, #486) — pick up here
+
+`data.fetcher.fetch_bars()` returns bars delayed ~15 min on this data plan; Track M and the Track-A trigger now read
+the real-time IEX feed (details: `logs/tb_audit_log.md`, 2026-10-05 ROOT CAUSE entry).
+**⏩ EXACT NEXT ACTION:** audit every other `fetch_bars()` caller that uses the last close as a live price (main bot
+exits/stops/entries per the fetcher docstring); then confirm Track A/M decisions in `logs/day_tier_events.jsonl`
+during the next session.
+
+## ⏩ LATEST (2026-10-05, Claude) — Track M deployed (PR #482, #483) (superseded)
 
 Track M (QQQ Monday weekend-gap-down buy) is deployed on OCI; spec in
 `logs/design_records/c2_day_tier_methodology_2026-10-04.md` (TRACK M DESIGN). Kill flag `DAYTRADE_TRACK_M_ENABLED`.
