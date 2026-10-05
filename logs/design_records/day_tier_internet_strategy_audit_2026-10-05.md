@@ -97,3 +97,22 @@ Growing $2,500 to $25,000 requires a 900% cumulative return. Even the original n
 ## Handoff to Claude
 
 This audit accepts Claude's 2026-10-04 negative results and does not duplicate Confluence 2.0. The specific uncovered test is the Baltussen rest-of-day-to-final-half-hour formulation. Claude should review this pre-registration before any result is generated, then decide how much to incorporate. ChatGPT/Codex owns this research specification; Claude remains the owner of Confluence 2.0 integration.
+
+## Test 3 result — FAIL (2026-10-05, one shot)
+
+The pre-registration above was merged in PR #475 before execution. `research/day_tier_late_day_momentum.py` then ran against the existing Alpaca SIP one-minute cache on OCI (SPY and QQQ, 1,183 common full trading days, 2022-01-03 through 2026-10-02).
+
+The equal-weight, date-level SPY/QQQ portfolio had no gross edge. Net results were:
+
+| Cost | Mean/trade | Annualized Sharpe | DSR probability | Circular-block p |
+|---|---:|---:|---:|---:|
+| 1 bp/side | -1.98 bp | -1.70 | 0.000 | 0.9998 |
+| 3 bp/side | -5.98 bp | -5.14 | 0.000 | 1.0000 |
+| 5 bp/side | -9.98 bp | -8.58 | 0.000 | 1.0000 |
+| 10 bp/side | -19.98 bp | -17.17 | 0.000 | 1.0000 |
+
+At the required 5 bp/side, every calendar year was negative: 2022 -7.17 bp/trade, 2023 -10.09, 2024 -12.61, 2025 -11.02, and 2026 -8.72. SPY and QQQ both failed separately. Extending the exit from the bot-compatible 15:49 to the paper-style 15:59 did not rescue either instrument. The random-sign falsification produced p=0.4737.
+
+The implementation used a fixed-length circular block bootstrap rather than the pre-declared stationary bootstrap. That deviation cannot affect the decision: mean returns were negative before realistic costs, DSR was zero, every yearly fold failed at the required cost, and the independent random-sign null also failed.
+
+**Verdict:** reject. Do not implement, tune a threshold, add leverage, or send this family through the live risk gate. The published effect is absent in the bot's available period and execution window. The next useful work is the already-running SIP order-flow-imbalance data audit; it must be evaluated as an execution/conditioning feature first, not presumed to be standalone alpha.
