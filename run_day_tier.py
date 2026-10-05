@@ -290,6 +290,52 @@ def _entry_direction_gate(sym: str, side: object, direction: object, mode: objec
     return out
 
 
+def _run_track_m(dtm, equity: float, mins_to_close: "float | None", bar_id_day: str) -> "tuple[int, str]":
+    """Track M (QQQ Monday weekend-gap-down buy; strategy.day_tier_track_m). Inside 09:45-10:15 ET only, at most
+    ONE shot per day: the one-shot marker is persisted BEFORE any order (a restart can never double-enter). A
+    definitive skip (not a gap-down Monday, holiday, half-day, auto-off) is journaled once and uses the day's
+    shot; a transient data gap retries on the next tick. Returns (entries placed 0/1, note). Never raises."""
+    try:
+        import config
+        from strategy import day_tier_logger, day_tier_track_m as tm
+        now_et = datetime.now(ET)
+        if not tm.in_window(now_et) or now_et.weekday() != 0:
+            return 0, "outside_window"
+        day = now_et.strftime("%Y%m%d")
+        if tm.used_today(dtm._load_state(), day):
+            return 0, "used_today"
+        ev = tm.evaluate(now_et, _prev_session_date(now_et), mins_to_close)
+        if not ev.get("eligible") and ev.get("retry"):
+            logger.info("[QQQ] track-M: %s (retry next tick)", ev.get("reason"))
+            return 0, "retry"
+        events, readable = day_tier_logger.read_events_checked()
+        off, off_why = tm.auto_off(events, readable)
+        rmult = tm.risk_mult(events) if readable else float(getattr(config, "DAYTRADE_TRACK_M_START_RISK_MULT", 0.5))
+        decision, trigger = tm.build_order_dicts(ev, rmult)
+        did = f"TM-{day}"
+        if not tm.mark_used(dtm, day):
+            return 0, "marker_write_failed"     # fail closed: no persisted one-shot marker -> no order
+        if not ev.get("eligible") or off:
+            reason = ev.get("reason") if not ev.get("eligible") else f"auto-off: {off_why}"
+            day_tier_logger.log_decision(f"SKIP-{did}", tm.SYMBOL, decision={**decision, "would_consider": False},
+                                         trigger={**trigger, "trigger": "WAIT", "skip_reason": reason})
+            logger.info("[QQQ] track-M skip: %s", reason)
+            return 0, "skip"
+        if not tm.in_window(datetime.now(ET)):
+            return 0, "window_closed"           # slow data reads ran past 10:15 — never enter late
+        px = float(ev["entry_ref"])
+        shares = max(1, math.floor(equity * float(getattr(config, "DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT", 0.65)) / px))
+        size = {"symbol": tm.SYMBOL, "size_ok": True, "shares": shares, "track": "M", "risk_mult": rmult,
+                "notional": round(shares * px, 2), "budget": 0.0,
+                "reason": f"track M: risk x{rmult:g} of the standard per-trade basis; wire-time caps size it"}
+        ok = dtm.place_entry(tm.SYMBOL, decision, trigger, size, bar_id=f"{bar_id_day}-TM", equity=equity,
+                             decision_id=did)
+        return (1 if ok else 0), ("entered" if ok else "not_entered")
+    except Exception as e:  # noqa: BLE001 — Track M must never abort the tick
+        logger.warning("track-M error (non-fatal): %s", e)
+        return 0, "error"
+
+
 def _track_b_symbols_today(state: dict, day: str) -> set:
     """Symbols already USED by Track B today: any Track-B ENTER signal (the persisted per-day marker — counted
     at the signal, before sizing/min-stop/caps, exactly like the Rule-C replay; exec seat R2) OR any Track-B
@@ -550,6 +596,13 @@ def run_tick() -> dict:
     bar_id = dtm.bar_id_for()
     entered = 0
     capped = False
+    # TRACK M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05). Runs FIRST inside its 09:45-10:15 ET
+    # window (one shot per day); a no-op on every other tick. Same reconcile/force-flat/kill/budget machinery.
+    entered_m, track_m_note = 0, "disabled"
+    if bool(getattr(config, "DAYTRADE_TRACK_M_ENABLED", False)) and calls_used + per_entry_est <= call_budget:
+        entered_m, track_m_note = _run_track_m(dtm, equity, mins_to_close, bar_id.split("-", 1)[0])
+        if track_m_note in ("entered", "not_entered"):
+            calls_used += per_entry_est
     for sym in universe:
         try:
             decision = compute_day_tier_decision(sym)
@@ -696,7 +749,8 @@ def run_tick() -> dict:
         logger.warning("day-tier: per-tick API-call budget (%d, ~%d used) reached — deferred remaining "
                        "entries to the next tick", call_budget, calls_used)
     _touch_heartbeat("scan")
-    return {"phase": "scan", "entered": entered, "entered_b": entered_b, "track_b": track_b_on,
+    return {"phase": "scan", "entered": entered, "entered_b": entered_b, "entered_m": entered_m,
+            "track_m_note": track_m_note, "track_b": track_b_on,
             "track_b_window": track_b_window, "track_b_note": track_b_note,
             "universe": len(universe), "capped": capped, "calls_est": calls_used,
             "mins_to_close": round(mins_to_close, 1) if mins_to_close is not None else None,

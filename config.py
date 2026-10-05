@@ -964,6 +964,16 @@ DAYTRADE_ALIGN_BLOCKING_CHECKS = ("ema", "vwap")
 # (counter_trend_fades_ok: cumulative <= -$25 or 3 consecutive losses).
 DAYTRADE_COUNTER_TREND_FADES_ENABLED = True
 
+# Track M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05; board Thorp/Harris/Taleb + Gro + GAI 5/5;
+# design logs/design_records/c2_day_tier_methodology_2026-10-04.md TRACK M DESIGN; strategy/day_tier_track_m.py).
+# Kill flag: False -> no Track-M entries (next */2 tick). Sizing is SHRINK-ONLY vs the standard per-trade risk.
+DAYTRADE_TRACK_M_ENABLED = True
+DAYTRADE_TRACK_M_STOP_PCT = 0.01            # PROV:daytier-track-m-2026-10-05 — protective stop 1% below the entry reference
+DAYTRADE_TRACK_M_START_RISK_MULT = 0.5      # PROV:daytier-track-m-2026-10-05 — 0.5x standard per-trade risk at start
+DAYTRADE_TRACK_M_FULL_SIZE_AFTER = 15       # PROV:daytier-track-m-2026-10-05 — closed Track-M trades before 1.0x
+DAYTRADE_TRACK_M_OFF_TRAILING_N = 8         # PROV:daytier-track-m-2026-10-05 — auto-off: trailing N closed trades mean <= 0
+DAYTRADE_TRACK_M_OFF_CONSEC_LOSSES = 4      # PROV:daytier-track-m-2026-10-05 — auto-off: this many consecutive losses
+
 # ─── SHARED LIVE TIER-CAPITAL ALLOCATOR (paper; increasing orders only) ───
 # Signed: ChatGPT/Codex, 2026-09-27.
 # DISABLED 2026-10-02 (Rafael approved Option B; Claude-signed): the live snapshot read str(enum)
@@ -1206,6 +1216,17 @@ def validate_config():
             f"(0, DAYTRADE_TRACK_A_EQUITY_CEILING_PCT={DAYTRADE_TRACK_A_EQUITY_CEILING_PCT}] — a single "
             f"name can never exceed the aggregate ceiling"
         )
+
+    # Track M (2026-10-05): type and range guards — fail CLOSED on a mis-set.
+    if not isinstance(DAYTRADE_TRACK_M_ENABLED, bool):
+        errors.append("DAYTRADE_TRACK_M_ENABLED must be a bool (True/False)")
+    if not (isinstance(DAYTRADE_TRACK_M_STOP_PCT, (int, float)) and 0 < DAYTRADE_TRACK_M_STOP_PCT < 0.05):  # PROV:daytier-track-m-2026-10-05 — sanity bound
+        errors.append(f"DAYTRADE_TRACK_M_STOP_PCT ({DAYTRADE_TRACK_M_STOP_PCT}) must be in (0, 0.05)")
+    if not (isinstance(DAYTRADE_TRACK_M_START_RISK_MULT, (int, float)) and 0 < DAYTRADE_TRACK_M_START_RISK_MULT <= 1.0):
+        errors.append(f"DAYTRADE_TRACK_M_START_RISK_MULT ({DAYTRADE_TRACK_M_START_RISK_MULT}) must be in (0, 1]")
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 1 for v in (
+            DAYTRADE_TRACK_M_FULL_SIZE_AFTER, DAYTRADE_TRACK_M_OFF_TRAILING_N, DAYTRADE_TRACK_M_OFF_CONSEC_LOSSES)):
+        errors.append("Track-M trade-count thresholds must be positive integers")
 
     _capital_targets = (
         TIER_CAPITAL_DAYTRADE_TARGET_PCT, TIER_CAPITAL_SWING_TARGET_PCT,
