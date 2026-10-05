@@ -79,7 +79,7 @@ def block_p(r, block=10, B=5000):
 
 
 frames = {s: table(s) for s in SYMS}
-for cost_side in [1, 3, 5, 10]:
+for cost_side in [0, 1, 3, 5, 10]:
     cols = []
     for s, x in frames.items():
         direction = np.sign(x.c1529 / x.prev - 1)

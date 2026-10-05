@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-04 21:38 PT]` **ChatGPT/Codex:** corrected day-tier research language to distinguish Alpaca's zero equity commission from spread/slippage/regulatory friction and reran Test 3 at zero commission and zero modeled friction; it still failed with +0.017 bp/trade, SR .015, DSR .031, and bootstrap p=.477. No live behavior changed. — PR #477 / `d987d4b` — research test, design record, handoff
+
 - `[2026-10-04 21:25 PT]` **ChatGPT/Codex:** executed the pre-registered JFE late-day hedging-demand momentum test once on 1,183 SPY/QQQ SIP dates; it failed all admission gates and is recorded as rejected, with the exact reproducible research script. No live behavior changed. — PR #476 / `23f0530` — research test, design record, handoff
 
 - `[2026-10-04 21:07 PT]` **ChatGPT/Codex:** audited primary intraday-strategy research against Claude's completed SIP tests; rejected HFT/ORB scaling on the current stack and pre-registered the distinct JFE late-day hedging-demand momentum test with cost, leakage, correlation, DSR, and concentration gates. No live behavior changed. — PR #475 / `f64f9dd` — design record and handoff
