@@ -8,6 +8,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-05, Claude) — day-tier mechanism results recorded — pick up here
+
+Results and the board/Gro/GAI recommendation on the day tier's role are recorded in
+`logs/design_records/c2_mechanism_evidence_2026-10-05.md` (sections RESULTS UPDATE and BGG ALIGNMENT).
+**⏩ EXACT NEXT ACTION (Claude lane):** build Track M through the full patch gate, spec in
+`logs/design_records/c2_day_tier_methodology_2026-10-04.md` (TRACK M DESIGN). ChatGPT lane: ten-mechanism plumbing.
+
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — ten-mechanism day-tier foundation
 
 Rafael directed continued day-tier work after the Internet audit. The ranked foundation is now documented in `logs/design_records/day_tier_ten_mechanism_foundation_2026-10-05.md`: OFI, residual return, liquidity/implementation shortfall, VWAP state, catalyst participation, overnight/opening inventory, volatility normalization, breakout/failure structure, validated hedging pressure, and time/auction flow. These are independent hypotheses, never ten points in a static score. Exact next action remains OCI OFI data QA, followed by the shared point-in-time mechanism snapshot and entry/exit tags. No live behavior changed; any admitted family still requires full BGGN.
