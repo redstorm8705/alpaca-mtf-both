@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-04 21:50 PT]` **ChatGPT/Codex:** defined the day tier's ten-mechanism foundation and build order, explicitly separating independent hypothesis families from static confluence scoring; OFI and shared mechanism tagging are first. No live behavior changed. — pending PR / pending SHA — design record and handoff
+
 - `[2026-10-04 21:38 PT]` **ChatGPT/Codex:** corrected day-tier research language to distinguish Alpaca's zero equity commission from spread/slippage/regulatory friction and reran Test 3 at zero commission and zero modeled friction; it still failed with +0.017 bp/trade, SR .015, DSR .031, and bootstrap p=.477. No live behavior changed. — PR #477 / `d987d4b` — research test, design record, handoff
 
 - `[2026-10-04 21:25 PT]` **ChatGPT/Codex:** executed the pre-registered JFE late-day hedging-demand momentum test once on 1,183 SPY/QQQ SIP dates; it failed all admission gates and is recorded as rejected, with the exact reproducible research script. No live behavior changed. — PR #476 / `23f0530` — research test, design record, handoff

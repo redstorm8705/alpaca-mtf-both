@@ -8,6 +8,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — ten-mechanism day-tier foundation
+
+Rafael directed continued day-tier work after the Internet audit. The ranked foundation is now documented in `logs/design_records/day_tier_ten_mechanism_foundation_2026-10-05.md`: OFI, residual return, liquidity/implementation shortfall, VWAP state, catalyst participation, overnight/opening inventory, volatility normalization, breakout/failure structure, validated hedging pressure, and time/auction flow. These are independent hypotheses, never ten points in a static score. Exact next action remains OCI OFI data QA, followed by the shared point-in-time mechanism snapshot and entry/exit tags. No live behavior changed; any admitted family still requires full BGGN.
+
 ## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — late-day momentum TEST 3 rejected
 
 PR #475 pre-registered the only material literature gap before results. PR #476 records its one-shot run on 1,183 SPY/QQQ SIP dates (2022-2026) and decisive failure. Follow-up zero-commission clarification: Alpaca equity commission is $0; with both commission and modeled execution friction set to zero, the strategy still produced only +0.017 bp/trade, SR +0.015, DSR .031, bootstrap p=.477, and two positive years out of five. Do not tune or implement this family. Exact next day-tier research action: finish the pending SIP order-flow-imbalance data QA and evaluate OFI as a conditioning/execution feature under walk-forward gates. No live behavior changed.
