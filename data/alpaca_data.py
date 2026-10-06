@@ -152,6 +152,38 @@ def get_latest_trade(symbol: str) -> float | None:
     return None
 
 
+def get_latest_trade_with_time(symbol: str):
+    """Latest trade as (price, tz-aware UTC timestamp), or None on any failure.
+
+    Same endpoint as get_latest_trade (IEX on this account's plan). It exists so a
+    caller can AGE the print (data/live_price.py). Same 429 backoff; never raises.
+    """
+    from datetime import datetime
+    try:
+        url = f"{_BASE}/v2/stocks/{symbol}/trades/latest"
+        for _attempt in range(3):
+            resp = requests.get(url, headers=_headers(), timeout=_TIMEOUT)
+            if resp.status_code == 429 and _attempt < 2:
+                time.sleep(2 ** _attempt)
+                continue
+            break
+        if resp.status_code != 200:
+            logger.debug(f"[{symbol}] latest trade+time: HTTP {resp.status_code}")
+            return None
+        trade = resp.json().get("trade", {}) or {}
+        price, ts = trade.get("p"), trade.get("t")
+        if not price or not ts:
+            return None
+        # RFC-3339 with nanoseconds (2026-10-05T20:57:31.206793818Z): trim the
+        # fraction to microseconds so datetime.fromisoformat accepts it.
+        base, _, frac = str(ts).rstrip("Z").partition(".")
+        iso = f"{base}.{(frac + '000000')[:6]}+00:00" if frac else f"{base}+00:00"
+        return float(price), datetime.fromisoformat(iso)
+    except Exception as e:
+        logger.debug(f"[{symbol}] get_latest_trade_with_time failed: {e}")
+        return None
+
+
 _CA_TIMEOUT = 20.0  # seconds — offline/lab lookup, not on the trading path
 _CA_PAGE_LIMIT = 1000
 _CA_MAX_PAGES = 200  # safety cap: a repeating next_page_token cannot loop forever
