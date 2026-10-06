@@ -2,7 +2,7 @@
 
 **Owner/signature:** ChatGPT/Codex
 
-**Status:** risk-path integration under BGGN review; not shipped at the time of this record.
+**Status:** shipped in PR #493, merge `086eafe5ba37933c40accdb92b2def5f6c538803`; deployed to OCI.
 
 ## Eligibility audit
 
@@ -40,3 +40,11 @@ The swing breakout tier is enabled and can act on any regular session, including
 - Ruff E/W/F/B, `py_compile`, and diff check;
 - exact-tree Board, Groq, Google AI Studio, mechanical preship, and GitHub CI;
 - OCI fast-forward to the merged commit, Python 3.10 compile, enabled flags, cron/service health, and a no-order router-denial probe.
+
+## Final gate and deployment record
+
+Exact final staged tree `cfc99bf4ca7ba97a5a27ae424ba5a7a409cb0230`: Board 2/2 PASS, Groq APPROVE, Google AI Studio APPROVE, mechanical PASS, and GitHub preship PASS. The first adversarial Board round rejected unbounded/NaN router allocations; the finite `(0, 1]` boundary and regressions were added before final approval.
+
+OCI fast-forwarded from `c866373` to merge `086eafe5`. Python 3.10 compilation passed. Seven no-order live-environment tests passed, including Track-M denial isolation for Track A and Track B and the invalid-allocation boundary. The registry probe admitted `monday_weekend_dip_v1` at allocation `1.0` and rejected a wrong hypothesis version. Live flags were `DAYTRADE_ENABLED=True`, `DAYTRADE_TRACK_B_ENABLED=True`, `DAYTRADE_TRACK_M_ENABLED=True`, and `SWING_BREAKOUT_ENABLED=True`. The runner remains scheduled every two minutes on weekdays.
+
+The long-running `mtf-bot` restart exceeded its existing 90-second stop timeout and systemd killed the old process group before starting PID 3481697. After recovery, `mtf-bot`, `mtf-writer`, and `mtf-http` were all active. Startup emitted a legacy main-tracker warning for MSFT. Read-only reconciliation verified that MSFT is the swing-breakout lot: ownership ledger `intraday=1`, swing state `status=open`, Alpaca position `qty=1`, and matching open sell stop `qty=1` at `497.10`. The lot is protected; the legacy startup warning should be corrected separately so it recognizes swing-manager state.
