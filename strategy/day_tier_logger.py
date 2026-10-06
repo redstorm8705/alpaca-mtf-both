@@ -73,6 +73,32 @@ _WRITE_FAIL_ALERT_THROTTLE_S = 3600.0
 _last_write_fail_alert = 0.0
 # One-time parent-dir fsync guard (guards the directory ENTRY against power loss on first create).
 _dir_fsynced = False
+_mechanism_tags_by_trade: dict[str, dict] = {}
+
+
+def _remember_mechanism_tags(trade_id: str, context: dict) -> dict:
+    from strategy.day_tier_mechanism_context import compact_tags
+    tags = compact_tags(context)
+    if trade_id:
+        _mechanism_tags_by_trade[trade_id] = tags
+    return tags
+
+
+def _mechanism_tags(trade_id: str) -> dict:
+    """Resolve tags from memory, then durable decisions after a process restart."""
+    from strategy.day_tier_mechanism_context import compact_tags
+    try:
+        if trade_id in _mechanism_tags_by_trade:
+            return dict(_mechanism_tags_by_trade[trade_id])
+        if trade_id:
+            events, _ = read_events_checked(trade_id)
+            for event in reversed(events):
+                context = event.get("mechanism_context")
+                if event.get("event") == "decision" and isinstance(context, dict):
+                    return _remember_mechanism_tags(trade_id, context)
+    except Exception as e:  # noqa: BLE001 — enrichment failure must not drop a lifecycle event
+        logger.error("day-tier mechanism tag recovery failed; using unclassified tags: %s", e)
+    return compact_tags(None)
 
 
 def _json_default(o: Any) -> Any:
@@ -212,7 +238,18 @@ def log_decision(decision_id: str, symbol: str, decision: dict | None = None,
     rec["decision"] = decision or {}
     rec["trigger"] = trigger or {}
     rec["size"] = size or {}
-    return _durable_append([rec])
+    from strategy.day_tier_mechanism_context import build_decision_context
+    context = build_decision_context(
+        symbol, rec["decision"], rec["trigger"], rec["size"], datetime.fromisoformat(rec["ts"])
+    )
+    rec["mechanism_context"] = context
+    ok = _durable_append([rec])
+    if ok and trade_id:
+        try:
+            _remember_mechanism_tags(trade_id, context)
+        except Exception as e:  # noqa: BLE001 — the durable decision remains authoritative
+            logger.error("day-tier mechanism tag cache failed after durable decision: %s", e)
+    return ok
 
 
 @_guard
@@ -239,6 +276,7 @@ def log_entry_fill(trade_id: str, symbol: str, *, order_id: str, decision_id: st
         budget=round(float(budget), 2), notional=round(float(notional), 2),
         track=(str(track).upper() if str(track).upper() in ("B", "M") else "A"),  # M = Track M (QQQ Monday dip)
     )
+    rec["mechanism_tags"] = _mechanism_tags(trade_id)
     return _durable_append([rec])
 
 
@@ -302,6 +340,7 @@ def log_exit_fill(trade_id: str, symbol: str, *, order_id: str, exit_reason: str
         market_price_at_exit=round(float(market_price_at_exit), 4),
         realized_pnl=round(float(realized_pnl), 2),
     )
+    rec["mechanism_tags"] = _mechanism_tags(trade_id)
     return _durable_append([rec])
 
 
@@ -317,6 +356,7 @@ def log_partial_exit_fill(trade_id: str, symbol: str, *, order_id: str, exit_rea
         market_price_at_exit=round(float(market_price_at_exit), 4),
         realized_pnl=round(float(realized_pnl), 2),
     )
+    rec["mechanism_tags"] = _mechanism_tags(trade_id)
     return _durable_append([rec])
 
 

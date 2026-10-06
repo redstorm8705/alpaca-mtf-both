@@ -36,7 +36,13 @@ Results and the board/Gro/GAI recommendation on the day tier's role are recorded
 **⏩ EXACT NEXT ACTION (Claude lane):** build Track M through the full patch gate, spec in
 `logs/design_records/c2_day_tier_methodology_2026-10-04.md` (TRACK M DESIGN). ChatGPT lane: ten-mechanism plumbing.
 
-## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — ten-mechanism day-tier foundation
+## ⏩ LATEST (2026-10-05, ChatGPT/Codex-signed) — mechanism evidence build verification
+
+ChatGPT/Codex mechanism-evidence build package. Verify the files and exact implementation with `test -f strategy/day_tier_mechanism_context.py && git diff --cached -- strategy/day_tier_mechanism_context.py strategy/day_tier_logger.py`. Read the declared scope, failure behavior, reviewed tree hash, Board findings, fixes, and model results with `test -f logs/design_records/day_tier_mechanism_foundation_build_2026-10-05.md && sed -n '1,140p' logs/design_records/day_tier_mechanism_foundation_build_2026-10-05.md`; corroborate the audit entry with `grep -n 'day-tier mechanism evidence architecture' logs/tb_audit_log.md`.
+
+Captured final gate output after rebasing over Claude's Track M: `Board PASS (2/2) — exact tree 5327857b054f44881c6cf98c2a04ff758c4ba18b`; `strategy/day_tier_mechanism_context.py: APPROVED (gro=APPROVE gai=APPROVE)`; `tests/test_day_tier_mechanism_context.py: APPROVED (gro=APPROVE gai=APPROVE)`. Explicit Track M decisions map to `monday_weekend_dip_v1`; the integration changes no Track M execution code. Reproduce the mechanism and restart-recovery checks with `uv run --with pytest python -m pytest -q tests/test_day_tier_mechanism_context.py`; captured output: `13 passed in 0.04s`. Reproduce the legacy logger check with `uv run --with pytest --with pandas --with 'alpaca-py==0.43.3' python -m pytest -q tests/test_day_tier_track_b_live.py::DurableTrackStamp::test_entry_fill_stamp_and_open_set_default`; captured output: `1 passed`.
+
+## ⏩ PRIOR (2026-10-05, ChatGPT/Codex-signed) — ten-mechanism day-tier foundation
 
 Rafael directed continued day-tier work after the Internet audit. The ranked foundation is now documented in `logs/design_records/day_tier_ten_mechanism_foundation_2026-10-05.md`: OFI, residual return, liquidity/implementation shortfall, VWAP state, catalyst participation, overnight/opening inventory, volatility normalization, breakout/failure structure, validated hedging pressure, and time/auction flow. These are independent hypotheses, never ten points in a static score. Exact next action remains OCI OFI data QA, followed by the shared point-in-time mechanism snapshot and entry/exit tags. No live behavior changed; any admitted family still requires full BGGN.
 
