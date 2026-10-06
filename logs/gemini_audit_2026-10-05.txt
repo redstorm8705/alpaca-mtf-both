@@ -1,0 +1,63 @@
+Nightly Gemini Audit — 2026-10-05
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'run_day_tier.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_track_m.py', 'execution/day_trade_manager.py', 'research/day_tier_late_day_momentum.py']
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+(Active critical bug P5-C2 confirmed; new high-severity logic error in Track-M evaluation; data-integrity risk in `day_tier_manager.py`.)
+
+### LOG ANOMALIES
+- **[DRAM] Fail-Closed Loop**: Recurring `WARNING | confluence | [DRAM] No daily data — long/short entry blocked` every cycle. This indicates a persistent data-fetch failure for the Roundhill Memory ETF, likely due to its recent addition (2026-09-05) and lack of historical bars in the Alpaca paper environment.
+- **MRI Elevated Sizing**: MRI score of 36 correctly triggered the 0.85x size floor at 19:41:47, but the news monitor simultaneously flagged a 100% bankruptcy penalty for "LIV".
+- **QHM Blockage**: NVDA, GOOGL, and GEV entries were correctly blocked by `QuarterlyHoldManager` due to the 20% name/40% aggregate cap (19:41:54).
+
+### PERFORMANCE AUDIT
+- **Trade ID: DT-AMZN-s-1790603290759-2341b0fe**: Short entry at 245.83, exit at 247.745. Realized P&L -3.83. Correct sign (Short: Exit > Entry = Loss).
+- **Trade ID: DT-NVDA-s-1790690177059-e6dfc47b**: Entry 230.3, Exit 230.3, P&L 0.0. Reason: `fill_invalidated_setup`. This is a "ghost fill" where the stop (230.29) was tighter than the entry slippage allowed, triggering an immediate invalidation.
+- **Stop-Hit Analysis**: SOFI (Short) hit `trail_stop` at 17.24 (Entry was ~15.86 based on partial exit). P&L +2.66. Correct sign.
+- **Score Correlation**: 12/12 scores (AAPL, PLTR, AMD) reached "BoD-1 CONFIRM GATE" but failed to enter because the second scan (19:49:26) saw scores drop or MRI/QHM constraints bind.
+
+### TRADE INTEGRITY
+- **SPY P&L Recording**: Trade `INTRA-SPY-2026-09-25...` exited at 771.11 with `pnl: 0.0`. This is a recording anomaly; unless the entry was exactly 771.11, a 2-share exit should have a non-zero P&L.
+- **GEV External Close**: `pnl: null` and `price_pending: true` for GEV exit (09-28). This indicates the `qhm_external_close` logic is failing to reconcile the final fill price from the broker.
+
+### MODIFIED FILE FINDINGS
+- **`strategy/day_tier_track_m.py` | `evaluate()`**:
+  - **Logic Error**: The code calculates `day0 = now_et.replace(hour=0, minute=0...)`. It then fetches bars for Friday using `fetch_bars_window(..., day0 - timedelta(days=10), day0, ...)`.
+  - **Failure Condition**: On Monday 2026-10-05, `day0` is 2026-10-05 00:00. The window ends at `day0`. As noted in the code's own comments, Alpaca stamps daily bars at 00:00 ET. This fetch *includes* the Monday bar (which has no close yet or a partial one), causing `d.index[-1]` to potentially be Monday, not Friday. The `_dates` filter `[x < now_et.date() for x in _dates]` attempts to fix this, but `now_et.date()` is Monday. If a Monday bar exists, `last.date().isoformat() != prev_session` (Friday) will trigger, causing a "transient data gap" retry loop that prevents entry.
+- **`execution/day_trade_manager.py` | `_save_state()`**:
+  - **Risk**: Uses `os.replace(tmp, _STATE)`. While atomic on Linux, if the process is killed between `f.write` and `os.replace`, the `.tmp` file is orphaned. Over time, `/tmp` or the local `logs/` dir will fill with `.tmp[pid]` files.
+- **`run_day_tier.py` | `_maybe_sample_prices()`**:
+  - **Logic Error**: The unrealized P&L calculation `upl = ((cur - ent) * qty ...)` does not account for the `LEVERAGED_STOP_MULTIPLIER` or `LEVERAGED_3X_TICKERS` defined in `config.py`. It provides a raw P&L which will mislead the `tier_kill_check` for leveraged ETFs.
+
+### P5 STATUS
+- **P5-C1 (FVG Crash)**: UNTOUCHED.
+- **P5-C2 (run_movers.py ImportError)**: **TRIGGERED**. `run_day_tier.py` was modified today and relies on `data.fetcher`, but the `run_movers.py` dependency remains broken.
+- **P5-H4 (Rule 2 Dead Code)**: **TRIGGERED**. `config.py` still defines `TOD_MARKET_OPEN_BUFFER_MINS = 30`, but `run_day_tier.py` uses a hardcoded `_WINDOW_START_MIN = 9 * 60 + 45` (9:45 AM), creating a 15-minute logic conflict.
+
+### NEW BUGS FOUND
+| CATEGORY | SEVERITY | FILE | DESCRIPTION | EXACT FAILURE CONDITION |
+| :--- | :--- | :--- | :--- | :--- |
+| EXECUTION BUG | HIGH | `day_tier_track_m.py` | Friday Close Fetch | `fetch_bars_window` windowing includes the current Monday bar; the `_dates` filter is insufficient if Alpaca provides a 00:00:00 timestamped bar for the current day, causing `last.date() != prev_session`. |
+| ALPHA ISSUE | MEDIUM | `day_tier_manager.py` | `_bounded_entry_qty` | The `maintenance` room calculation uses `maintenance_rate`. If `maintenance_rate` is 1.0 (standard for some paper assets), but the broker requires 100% for volatile stocks (e.g., MSTR, MARA), the cushion check will under-estimate required margin. |
+| INFRASTRUCTURE | LOW | `day_tier_logger.py` | `_lead` newline logic | The logic `rf.seek(-1, os.SEEK_END)` will raise `OSError` if the file exists but is 0 bytes (empty). |
+
+### FIX VALIDATION: N/A
+
+### RECOMMENDED ACTIONS
+1. **FIX `day_tier_track_m.py`**: Change the `fetch_bars_window` end parameter for the Friday close to `day0 - timedelta(seconds=1)` to strictly exclude the current Monday.
+2. **RESOLVE P5-C2**: Fix the `ImportError` in `run_movers.py` as the new `run_day_tier.py` Track-B logic depends on mover-screening integrity.
+3. **PATCH `day_tier_manager.py`**: Add a `try/except` block around the `rf.seek` in `_durable_append` to handle empty files.
+4. **AUDIT SPY P&L**: Investigate why the 2026-09-28 SPY exit recorded 0.0 P&L despite a price of 771.11.
+5. **DRAM DATA**: Disable DRAM in `config.py` until daily historical data is confirmed available in the Alpaca environment to stop log spam.
+================================================================================
+BROKER GROUND TRUTH (2026-10-05, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=347m no-broker-stop=0m [07:13-07:13] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=3m [06:30-06:33] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=3m [06:30-06:33] rejected_stop_orders=0

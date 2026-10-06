@@ -1,0 +1,59 @@
+Midday Gemini Audit — 2026-10-05
+Model: gemini-3.1-flash-lite | Verdict: PASS
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: PASS
+
+---
+
+### PERFORMANCE AUDIT
+- **Trade Activity**: 1 fill executed today (`MSFT` buy), 0 closed trades.
+- **P&L Integrity**: Intraday realized P&L is `$0.00` across ledger and Alpaca FIFO. Unsettled paper account accounting matches expected behavior.
+- **Stop Coverage**: All active positions (`GE`, `GOOGL`, `LLY`, `MSFT`, `NFLX`, `NVDA`, `PLTR`) are properly covered (broker stops active or software-only by design during intraday window). Zero naked exposure.
+- **Kelly & Sizing**: Kelly engine stats are actively tracking 159 closed trades (`long_intraday` PF 1.22, `short_intraday` PF 0.25).
+
+---
+
+### ENTRY QUALITY
+- **Filtering & Gate Integrity**: The entry pipeline operated strictly according to rules:
+  - Dynamic score threshold raised to 10/12 due to elevated MRI (36/100) and ATH proximity.
+  - Multi-scan confirmation (`BoD-1 CONFIRM GATE`) appropriately held `PANW`, `SOXL`, and `EWY` for second-scan verification.
+  - Directional ORB breakdown filters prevented shorting `UBER`, `NFLX`, and `MARA` while SPY remained above ORB support.
+  - Weekly bias filters blocked counter-trend long signals on `AMZN` and `GOOGL`.
+  - QHM tranche caps cleanly blocked over-allocation on `GOOGL` and `GEV`.
+
+---
+
+### EXIT QUALITY
+- No positions closed during the audited period. No anomalous exit behavior detected.
+
+---
+
+### MRI ALIGNMENT
+- **MRI Level**: 100% of samples (29/29) at `ELEVATED` (score 36/100).
+- **Regime Handling**: Strategy dynamically scaled its entry filter (`Dynamic MIN_SCORE: raised to 10/12`), filtering out 8 lower-confluence signals and preventing low-edge churn in choppy market conditions.
+
+---
+
+### LOG ANOMALIES
+- **DRAM Missing Data**: `WARNING | confluence | [DRAM] No daily data — long/short entry blocked (fail-closed)`. The bot correctly failed closed to prevent trading without historical daily bars.
+
+---
+
+### NEW BUGS / CONCERNS
+- **INFRASTRUCTURE | LOW** | Missing daily bar data for ticker `DRAM` | Occurs during universe scan when fetching daily timeframe bars for `DRAM`. Fail-closed safety handled the missing data properly without crashing.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **INFRA** — Investigate data provider daily bar availability for ticker `DRAM` to resolve scan warning or remove delisted/invalid symbols from the universe list.
