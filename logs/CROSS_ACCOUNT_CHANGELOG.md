@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-06, merge pending]` **ChatGPT/Codex:** added direction-aware day-tier implementation-shortfall attribution and a fail-closed, evidence-versioned family router with timestamped score freshness. It consumes Claude's admission decisions and is not wired to order execution or account-tier budgets. Board 2/2, Groq, Google AI Studio, and mechanical preship passed after three reject/fix rounds; not deployed. — `feat/day-tier-cost-router` — cost reducer, admission registry/router, tests, design record
+
 - `[2026-10-04 21:57 PT]` **ChatGPT/Codex:** built an additive day-tier mechanism evidence layer: ten independent evidence states, validated as-of provenance, explicit unknowns, versioned family/digest tags on decisions and lifecycle fills, and fail-safe restart recovery by trade ID. BGGN passed after two reject/fix rounds; no signal, sizing, allocation, entry/exit, or routing behavior changed. Pending Claude adversarial audit; not merged or deployed. — `feat/day-tier-mechanism-foundation` — mechanism context, logger, tests, design record
 
 - `[2026-10-04 21:50 PT]` **ChatGPT/Codex:** defined the day tier's ten-mechanism foundation and build order, explicitly separating independent hypothesis families from static confluence scoring; OFI and shared mechanism tagging are first. No live behavior changed. — PR #478 / `65e2ba2` — design record and handoff
