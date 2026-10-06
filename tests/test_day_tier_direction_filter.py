@@ -84,7 +84,7 @@ class RunTickTrackA(unittest.TestCase):
     """Drives run_tick with function-level patches on the real modules (the RunnerWindowGate pattern) —
     never a sys.modules swap, which would unload modules other test files rely on."""
 
-    def _run(self, side, direction, mode=None, failed=True, log_ok=True):
+    def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None):
         import contextlib
         placed, logged = [], []
         acct = SimpleNamespace(equity=2500.0, last_equity=2500.0, buying_power=9000.0)
@@ -114,6 +114,11 @@ class RunTickTrackA(unittest.TestCase):
             mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", False),
             mock.patch.object(config, "DAYTRADE_UNIVERSE", ["NVDA"]),
         ]
+        if track_m_result is not None:
+            patches.extend([
+                mock.patch.object(config, "DAYTRADE_TRACK_M_ENABLED", True),
+                mock.patch.object(rdt, "_run_track_m", return_value=track_m_result),
+            ])
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
@@ -139,6 +144,14 @@ class RunTickTrackA(unittest.TestCase):
         self.assertFalse(placed[0][1]["counter_trend"])
         self.assertEqual(out["entered"], 1)
         self.assertEqual(logged, [])
+
+    def test_track_m_router_denial_does_not_block_track_a(self):
+        out, placed, _ = self._run(
+            "SHORT", "short", track_m_result=(0, "router_denied")
+        )
+        self.assertEqual(out["track_m_note"], "router_denied")
+        self.assertEqual(out["entered"], 1)
+        self.assertEqual([p[0] for p in placed], ["NVDA"])
 
     def test_counter_trend_fade_reaches_place_entry_tagged(self):
         out, placed, logged = self._run("LONG", "short", mode="FADE")

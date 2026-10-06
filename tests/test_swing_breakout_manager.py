@@ -41,6 +41,14 @@ def _mods(fakes):
 
 
 class Decisions(unittest.TestCase):
+    def test_events_carry_versioned_c2_family_identity(self):
+        fake = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {"trade_logger": fake}):
+            sb._log("signal", "AAPL", note="test")
+        kwargs = fake.log_event.call_args.kwargs
+        self.assertEqual(kwargs["family_id"], "swing_breakout_55d_v1")
+        self.assertEqual(kwargs["hypothesis_version"], "c2-swing-breakout-2026-09-29")
+
     def test_signal_fires_on_new_55d_high_above_sma200(self):
         sig = sb.breakout_signal(_breakout_df())
         self.assertIsNotNone(sig)

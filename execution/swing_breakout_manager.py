@@ -66,6 +66,8 @@ PT = ZoneInfo("America/Los_Angeles")
 # four-tier reconciliation (tier_capital_allocator._ledger_tier_gross) and block every tier's entries.
 TIER = "intraday"
 ALLOC_TIER = "swing"
+FAMILY_ID = "swing_breakout_55d_v1"
+HYPOTHESIS_VERSION = "c2-swing-breakout-2026-09-29"
 _STATE = Path(__file__).resolve().parent.parent / "data" / "state" / "swing_breakout.json"
 
 # Lot statuses that may still hold shares at the broker: counted as this tier's (slots, notional, orphan/drift
@@ -325,7 +327,8 @@ def _log(event: str, symbol: str, **kw) -> None:
     try:
         import trade_logger
         trade_logger.log_event(event, symbol=symbol, data_source="alpaca_data", tier=TIER,
-                               setup="c2_breakout_55d", **kw)
+                               setup="c2_breakout_55d", family_id=FAMILY_ID,
+                               hypothesis_version=HYPOTHESIS_VERSION, **kw)
     except Exception as e:
         logger.warning("[%s] swing_breakout trade_logger write failed: %s", symbol, e)
 
