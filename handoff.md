@@ -8,6 +8,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-06 10:30 PT, Claude) — day tier not trading: diagnosed, BGG aligned, awaiting Rafael
+
+Findings + aligned plan: `logs/design_records/day_tier_not_trading_and_price_confirm_2026-10-06.md`.
+**⏩ EXACT NEXT ACTION:** on Rafael's approval, build in order through the full patch gate: (1) FADE target profit-side +
+R:R>=1 fix in `strategy/day_tier_entry_trigger.py`; (2) Track A GEX families capped at 1 share; (3) exit-side bid/ask price
+confirmation (trail/breakeven/tranche) in `execution/exit_logic.py`. PR #497 (step 2) awaits Rafael's merge approval.
+
 ## ⏩ LATEST (2026-10-06 09:30 PT, Claude) — main-bot live-price step 2 SHIPPED (exit/stop checks)
 
 Exit/stop + partial-exit checks now read the real-time IEX price; verify with
