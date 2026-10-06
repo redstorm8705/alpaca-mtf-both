@@ -8,6 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-06 01:45 PT, Claude) — main-bot live-price step 2 prepared, NOT shipped
+
+Exit-path real-time price change (step 2 of `logs/design_records/main_bot_live_price_feed_2026-10-05.md`) is saved as
+`logs/wip/exit_live_price_rev8_WIP_2026-10-06.patch`; verify with
+`git apply --check logs/wip/exit_live_price_rev8_WIP_2026-10-06.patch`; captured output: (none — applies cleanly).
+Gate status and findings: `logs/tb_audit_log.md` entry "2026-10-06 01:45 PT (Claude, AWP)".
+**⏩ EXACT NEXT ACTION:** apply the patch, run a FRESH cold-2nd + risk seat on it (subagent limit resets 2026-10-10),
+re-run Gro+GAI preship on the exact diff, then ship; then step 3 (entry_logic/lifecycle/run_cycle live-price reads).
+
 ## ⏩ LATEST (2026-10-06, ChatGPT/Codex) — admitted C2 components live-wiring review
 
 Review the ChatGPT/Codex work package and its reproducible evidence in

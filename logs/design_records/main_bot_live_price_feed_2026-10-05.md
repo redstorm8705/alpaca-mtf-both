@@ -27,3 +27,27 @@ RECOMMENDATION: Implement Option C with a centralized IEX price cache to prevent
 1. data/ helper: real-time IEX bars + latest-trade fallback, closed-bar rule for signals, age/source tag, short TTL cache, timeouts; never fail open on a stop evaluation (fall back to SIP + WARNING + alert).
 2. exit_logic live-price reads first; 3. entry_logic / lifecycle / run_cycle ~659; 4. SPY/QQQ 5m entry gate last with an IEX-only RVOL (single basis) and board ratification (Architecture Invariant #1).
 5. Prod probe on OCI before calling anything live (age per site, fallback rate, 429s, price vs latest trade). No shadow period (Rafael 2026-09-26).
+
+## Step 2 (exit_logic) — reviewer findings and forward items (2026-10-05 night, Claude)
+
+Shipped design: exit reads use `live_price_or(..., DELAYED_FEED_AGE_S=900)`. Fresh IEX bar (<=180s) as is, else the newer
+of IEX bar / IEX trade (<=1080s = 900s SIP delay + 180s fetch_bars cache, i.e. newer than the delayed fallback), else the delayed close. Live reads age each
+source against the clock after its own response. Bar-only 120s pause after a >3s bar read; failures cached 15s.
+Five cold-2nd rounds (rev1 PASS-with-threats, rev3 FAIL x2, rev4 FAIL, rev5 below), risk seat APPROVE rev4.
+
+Measured (adversarial, OCI, 2026-10-05 RTH): IEX vs SIP same-minute close gap median 0.1-4.5 bps, p99 1.3-18 bps (max
+MARA 102 bps); the 15-min delay it replaces: median 13-27 bps, p95 44-117 bps, max 457 bps.
+
+FORWARD (each its own gated diff):
+1. AFTER-HOURS EXITS ARE PRICE-BLIND: IEX has no bars after 16:00 and its latest trade froze at ~16:01 ET, so
+   `_check_exits_extended_hours` evaluates EH stops against a ~4 PM price all evening. Largest remaining exit-path gap.
+2. Hold `stop_breach_count` / `hard_out_count` (no reset) when the price came from `delayed_fallback` (risk seat; risk-path).
+3. Same-bar breach dedupe still keys on the delayed 15M bar — a 3-scan stop confirm needs ~30+ min. Key it on the live minute.
+4. Trail hits in check_partial_exits act on ONE read; a phase-3 trail (~0.25 ATR, 15-30 bps) is near IEX's p99 gap.
+   Consider a 2-read confirm or a p99-gap band.
+5. Record price source + age in the exit decision record (trade_events.jsonl), not only a DEBUG log (Rule D).
+6. Replay mode: an explicit `now` can read a 1m bar whose close is after `now` (<=59s look-ahead) — require
+   bar_start+60s <= now when replaying.
+7. Static thresholds (180/900/3/120/15 s) — derive: 900 -> per-call "newer than the fallback bar's end"; 3s -> rolling
+   p99 latency; 120s -> next cycle; cache TTL -> cycle id.
+8. Test hygiene: an auto_ai_audit test posts a REAL Slack message when the full suite runs.
