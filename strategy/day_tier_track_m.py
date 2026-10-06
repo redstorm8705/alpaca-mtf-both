@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 
 SYMBOL = "QQQ"
+FAMILY_ID = "monday_weekend_dip_v1"
+HYPOTHESIS_VERSION = "daytier-track-m-2026-10-05"
 _WINDOW_START_MIN = 9 * 60 + 45      # PROV:daytier-track-m-2026-10-05 — 09:45 ET entry window opens (design)
 _WINDOW_END_MIN = 10 * 60 + 15       # PROV:daytier-track-m-2026-10-05 — 10:15 ET entry window closes (design)
 _MIN_FULL_DAY_MINUTES_LEFT = 300     # at 09:45 a full session has 375 min left, a 13:00 half-day 195 — skip half-days
@@ -227,3 +229,18 @@ def build_order_dicts(ev: dict, rmult: float) -> "tuple[dict, dict]":
     trigger = {"trigger": "ENTER", "direction": "long", "mode": "TRACK_M", "entry_ref": ev.get("entry_ref"),
                "stop_ref": ev.get("stop_ref"), "no_target": True, "target": None}
     return decision, trigger
+
+
+def route_candidate(now_et: datetime) -> dict:
+    """Point-in-time candidate consumed by the fail-closed family router.
+
+    Track M is currently the only admitted day-tier family, so its within-sleeve
+    routing score is 1.0. Admission still requires the exact registry version,
+    independent-audit PASS, and a fresh aware timestamp.
+    """
+    return {
+        "family_id": FAMILY_ID,
+        "hypothesis_version": HYPOTHESIS_VERSION,
+        "routing_score": 1.0,
+        "score_asof": now_et.isoformat(),
+    }

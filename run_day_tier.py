@@ -311,6 +311,23 @@ def _run_track_m(dtm, equity: float, mins_to_close: "float | None", bar_id_day: 
         events, readable = day_tier_logger.read_events_checked()
         off, off_why = tm.auto_off(events, readable)
         rmult = tm.risk_mult(events) if readable else float(getattr(config, "DAYTRADE_TRACK_M_START_RISK_MULT", 0.5))
+        route = None
+        if ev.get("eligible") and not off:
+            from strategy.day_tier_family_router import route_families
+            routed = route_families([tm.route_candidate(now_et)], now=now_et)
+            route = routed[0] if len(routed) == 1 else None
+            try:
+                route_share = float(route.allocation) if route is not None else 0.0
+            except (TypeError, ValueError):
+                route_share = 0.0
+            if (route is None or not route.admitted or not math.isfinite(route_share)
+                    or not 0 < route_share <= 1.0):
+                why = route.reason if route is not None else "router returned no decision"
+                logger.error("[QQQ] track-M admission router denied entry: %s (retry next tick)", why)
+                return 0, "router_denied"
+            # Router allocation is a share of the admitted-family sleeve, never
+            # an account allocation. It may only shrink Track M's existing risk.
+            rmult *= route_share
         decision, trigger = tm.build_order_dicts(ev, rmult)
         did = f"TM-{day}"
         if not tm.mark_used(dtm, day):

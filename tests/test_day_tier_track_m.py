@@ -228,6 +228,15 @@ class RiskMultInCaps(unittest.TestCase):
             self.assertEqual(self._q(bad)[0], 0, bad)
 
 
+class FamilyRouteCandidate(unittest.TestCase):
+    def test_exact_admitted_identity_and_aware_score_timestamp(self):
+        candidate = tm.route_candidate(MON)
+        self.assertEqual(candidate["family_id"], "monday_weekend_dip_v1")
+        self.assertEqual(candidate["hypothesis_version"], "daytier-track-m-2026-10-05")
+        self.assertEqual(candidate["routing_score"], 1.0)
+        self.assertEqual(datetime.fromisoformat(candidate["score_asof"]), MON)
+
+
 class PlaceEntryNoTarget(unittest.TestCase):
     """End-to-end place_entry with the broker mocked: a Track-M entry must place a PLAIN protective stop at the
     trigger's stop level and NO take-profit/OCO, and stamp the entry_fill with track 'M'."""
@@ -285,6 +294,10 @@ class PlaceEntryNoTarget(unittest.TestCase):
 
 
 class RunnerOneShot(unittest.TestCase):
+    @staticmethod
+    def _admitted_route():
+        return SimpleNamespace(admitted=True, allocation=1.0, reason="ok")
+
     def test_marker_blocks_second_attempt(self):
         import run_day_tier as r
         st = {"_track_m_day": {"date": "20261012"}}
@@ -321,6 +334,7 @@ class RunnerOneShot(unittest.TestCase):
                 mock.patch("strategy.day_tier_track_m.evaluate", return_value=ev), \
                 mock.patch("strategy.day_tier_track_m.mark_used", return_value=True), \
                 mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
+                mock.patch("strategy.day_tier_family_router.route_families", return_value=[self._admitted_route()]), \
                 mock.patch.object(r, "_prev_session_date", return_value=FRI):
             dt.now.return_value = MON
             n, note = r._run_track_m(dtm_mod, 2500.0, 373.0, "20261012")
@@ -344,6 +358,61 @@ class RunnerOneShot(unittest.TestCase):
             dt.now.side_effect = [MON.replace(hour=10, minute=14), MON.replace(hour=10, minute=15)]
             self.assertEqual(r._run_track_m(dtm_mod, 2500.0, 373.0, "20261012"), (0, "window_closed"))
         dtm_mod.place_entry.assert_not_called()
+
+    def test_router_denial_retries_without_using_daily_shot(self):
+        import run_day_tier as r
+        dtm_mod = mock.MagicMock()
+        dtm_mod._load_state.return_value = {}
+        ev = {"eligible": True, "retry": False, "entry_ref": 595.0, "stop_ref": 589.05, "reason": "gap"}
+        denied = SimpleNamespace(admitted=False, allocation=0.0, reason="version mismatch")
+        with mock.patch.object(r, "datetime") as dt, \
+                mock.patch("strategy.day_tier_track_m.evaluate", return_value=ev), \
+                mock.patch("strategy.day_tier_track_m.mark_used") as mark_used, \
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
+                mock.patch("strategy.day_tier_family_router.route_families", return_value=[denied]), \
+                mock.patch.object(r, "_prev_session_date", return_value=FRI):
+            dt.now.return_value = MON
+            self.assertEqual(r._run_track_m(dtm_mod, 2500.0, 373.0, "20261012"), (0, "router_denied"))
+        mark_used.assert_not_called()
+        dtm_mod.place_entry.assert_not_called()
+
+    def test_invalid_router_share_never_uses_shot_or_places_order(self):
+        import run_day_tier as r
+        ev = {"eligible": True, "retry": False, "entry_ref": 595.0, "stop_ref": 589.05, "reason": "gap"}
+        for bad in (1.01, 2.0, float("nan")):
+            with self.subTest(allocation=bad):
+                dtm_mod = mock.MagicMock()
+                dtm_mod._load_state.return_value = {}
+                routed = SimpleNamespace(admitted=True, allocation=bad, reason="malformed")
+                with mock.patch.object(r, "datetime") as dt, \
+                        mock.patch("strategy.day_tier_track_m.evaluate", return_value=ev), \
+                        mock.patch("strategy.day_tier_track_m.mark_used") as mark_used, \
+                        mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
+                        mock.patch("strategy.day_tier_family_router.route_families", return_value=[routed]), \
+                        mock.patch.object(r, "_prev_session_date", return_value=FRI):
+                    dt.now.return_value = MON
+                    self.assertEqual(r._run_track_m(dtm_mod, 2500.0, 373.0, "20261012"),
+                                     (0, "router_denied"))
+                mark_used.assert_not_called()
+                dtm_mod.place_entry.assert_not_called()
+
+    def test_router_share_can_only_shrink_track_m_risk(self):
+        import run_day_tier as r
+        dtm_mod = mock.MagicMock()
+        dtm_mod._load_state.return_value = {}
+        dtm_mod.place_entry.return_value = True
+        ev = {"eligible": True, "retry": False, "entry_ref": 595.0, "stop_ref": 589.05, "reason": "gap"}
+        routed = SimpleNamespace(admitted=True, allocation=0.5, reason="capped")
+        with mock.patch.object(r, "datetime") as dt, \
+                mock.patch("strategy.day_tier_track_m.evaluate", return_value=ev), \
+                mock.patch("strategy.day_tier_track_m.mark_used", return_value=True), \
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
+                mock.patch("strategy.day_tier_family_router.route_families", return_value=[routed]), \
+                mock.patch.object(r, "_prev_session_date", return_value=FRI):
+            dt.now.side_effect = [MON, MON]
+            self.assertEqual(r._run_track_m(dtm_mod, 2500.0, 373.0, "20261012"), (1, "entered"))
+        size = dtm_mod.place_entry.call_args.args[3]
+        self.assertEqual(size["risk_mult"], 0.25)
 
     def test_retry_does_not_use_the_shot(self):
         import run_day_tier as r

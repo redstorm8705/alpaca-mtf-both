@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-06, in review]` **ChatGPT/Codex:** audited existing C2 indicators against the recorded walk-forward/admission evidence; staged live wiring only for admitted Track M through the fail-closed router plus versioned family tags on the existing live swing-breakout lifecycle. Failed swing-score features, rejected ORB, and blocked GEX remain excluded. BGGN pending; not shipped. — `feat/c2-admitted-live-wiring` — Track M, runner, swing manager, tests, design record
+
 - `[2026-10-06]` **ChatGPT/Codex:** added direction-aware day-tier implementation-shortfall attribution and a fail-closed, evidence-versioned family router with timestamped score freshness. It consumes Claude's admission decisions and is not wired to order execution or account-tier budgets. Board 2/2, Groq, Google AI Studio, mechanical preship, and CI passed after three reject/fix rounds; no service restart because the modules are not execution-wired. — PR #491 / `9a826d6d` — cost reducer, admission registry/router, tests, design record
 
 - `[2026-10-04 21:57 PT]` **ChatGPT/Codex:** built an additive day-tier mechanism evidence layer: ten independent evidence states, validated as-of provenance, explicit unknowns, versioned family/digest tags on decisions and lifecycle fills, and fail-safe restart recovery by trade ID. BGGN passed after two reject/fix rounds; no signal, sizing, allocation, entry/exit, or routing behavior changed. Pending Claude adversarial audit; not merged or deployed. — `feat/day-tier-mechanism-foundation` — mechanism context, logger, tests, design record

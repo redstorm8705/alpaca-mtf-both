@@ -695,6 +695,17 @@ class RunnerWindowGate(unittest.TestCase):
         self.assertEqual(size["track"], "B")
         self.assertTrue(size["size_ok"])
 
+    def test_track_m_router_denial_does_not_block_track_b(self):
+        extra = [
+            mock.patch.object(config, "DAYTRADE_TRACK_M_ENABLED", True),
+            mock.patch.object(run_day_tier, "_run_track_m", return_value=(0, "router_denied")),
+        ]
+        result, bsf, pe = self._tick(True, extra=extra)
+        self.assertEqual(result["track_m_note"], "router_denied")
+        self.assertEqual(result["entered_b"], 1)
+        bsf.assert_called_once()
+        pe.assert_called_once()
+
     def test_enter_signal_persists_the_daily_shot_before_place_entry(self):
         import copy
         state: dict = {}
