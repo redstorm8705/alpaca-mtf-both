@@ -183,6 +183,7 @@ class TestPartialExitSequence(Base):
         more = {
             "fetch_bars": mock.Mock(return_value=pd.DataFrame({"close": [104.5, 104.5]})),
             "get_latest_trade": mock.Mock(return_value=104.5),
+            "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (fb, "delayed_fallback")),
             "_get_qhm_syms": mock.Mock(return_value=set()),
             "partial_close_position": mock.Mock(side_effect=lambda s, q, **k: self.calls.append(("partial", q)) or True),
             "_fetch_actual_fill_price": mock.Mock(return_value=104.5),
@@ -236,6 +237,32 @@ class TestPartialExitSequence(Base):
         self.assertEqual(self.calls[0], ("replace", "S1", 95.0, 6))
         self.assertEqual(self.calls[2], ("replace", "S1-r", 95.0, 9))          # restored to all 9 shares
         self.m["cancel_order"].assert_called_once_with("LMT")                  # never the stop
+
+    def test_realtime_price_triggers_tranche_the_delayed_bar_has_not_reached(self):
+        # delayed 15M close $103 (< T1 $104); real-time IEX $104.5 -> T1 fires on the live price
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [103.0, 103.0]})
+        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (104.5, "iex_1m")
+        t = self._trade()
+        self._run(t)
+        self.assertIn(("partial", 3), self.calls)
+
+    def test_exit_read_accepts_any_price_fresher_than_delayed_feed(self):
+        t = self._trade()
+        self._run(t)
+        self.assertEqual(self.m["live_price_or"].call_args[0][3], el.DELAYED_FEED_AGE_S)
+
+    def test_realtime_price_below_tranche_holds_even_if_delayed_bar_reached(self):
+        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (103.0, "iex_trade")
+        t = self._trade()
+        self._run(t)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(t["qty_remaining"], 9)
+
+    def test_realtime_none_keeps_delayed_bar_price(self):
+        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (None, "delayed_fallback")
+        t = self._trade()
+        self._run(t)
+        self.assertIn(("partial", 3), self.calls)                             # bar $104.5 still evaluated
 
     def test_shares_not_freed_restores_and_does_not_sell(self):
         with mock.patch.object(el, "_wait_shares_free", return_value=False):
@@ -292,6 +319,7 @@ class TestTrailRatchet(Base):
         self.addCleanup(p.stop)
         for n, v in {"fetch_bars": mock.Mock(return_value=pd.DataFrame({"close": [108.0, 108.0]})),
                      "get_latest_trade": mock.Mock(return_value=108.0),
+                     "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (fb, "delayed_fallback")),
                      "_get_qhm_syms": mock.Mock(return_value=set())}.items():
             p = mock.patch.object(el, n, v)
             p.start()
@@ -322,3 +350,54 @@ class TestTrailRatchet(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCheckExitsLivePrice(Base):
+    """check_exits reads the stop/target price through live_price_or (2026-10-05 live-price plan step 2)."""
+
+    def setUp(self):
+        super().setUp()
+        main_stub = types.ModuleType("main")
+        main_stub._spy_risk_active = False
+        main_stub._spy_event_type = ""
+        p = mock.patch.dict(sys.modules, {"main": main_stub})
+        p.start()
+        self.addCleanup(p.stop)
+        bars = pd.DataFrame({"close": [96.0, 96.0]},
+                            index=pd.DatetimeIndex(["2026-10-06 14:00", "2026-10-06 14:15"], tz="UTC"))
+        for n, v in {"fetch_bars": mock.Mock(return_value=bars),
+                     "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (94.0, "iex_1m")),
+                     "_get_qhm_syms": mock.Mock(return_value=set()),
+                     "_get_tod_phase": mock.Mock(return_value="normal"),
+                     "get_exit_signal": mock.Mock(return_value=False),
+                     "close_position": mock.Mock(return_value=True)}.items():
+            p = mock.patch.object(el, n, v)
+            self.m[n] = p.start()
+            self.addCleanup(p.stop)
+
+    def _trade(self):
+        from datetime import datetime
+        return {"direction": "long", "trade_mode": "intraday", "entry_price": 100.0, "stop": 95.0, "target": 110.0,
+                "qty": 9, "qty_remaining": 9, "rth_day_stop_order_id": "S1", "score": 10,
+                "entry_time": datetime.now(el.ET).isoformat(), "be_stop_promoted": True}
+
+    def _run(self, t):
+        risk = mock.Mock()
+        return el.check_exits(FakeTracker({"X": t}), risk, kelly=mock.Mock(), last_vix=15.0,
+                              gate_state=SimpleNamespace(entry_confirm_buffer={}, conviction_streak={}))
+
+    def test_realtime_breach_counts_when_delayed_bar_shows_none(self):
+        # delayed 15M close $96 is above the $95 stop; real-time IEX $94 is below it -> breach 1/3 (not a reset)
+        t = self._trade()
+        self._run(t)
+        self.assertEqual(t.get("stop_breach_count"), 1)
+        self.assertEqual(self.m["live_price_or"].call_args[0][1], 96.0)              # delayed close is the fallback
+        self.assertEqual(self.m["live_price_or"].call_args[0][3], el.DELAYED_FEED_AGE_S)
+        self.m["close_position"].assert_not_called()
+
+    def test_fallback_keeps_delayed_close(self):
+        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (fb, "delayed_fallback")
+        t = self._trade()
+        t["stop_breach_count"] = 2
+        self._run(t)
+        self.assertEqual(t["stop_breach_count"], 0)                                 # $96 inside the stop: same as pre-patch

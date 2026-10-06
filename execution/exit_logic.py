@@ -31,6 +31,7 @@ import config
 from alerts import alert_exit, alert_partial, alert_stop_breach, alert_gtc_failed
 from data.alpaca_data import get_latest_trade
 from data.fetcher import fetch_bars
+from data.live_price import DELAYED_FEED_AGE_S, live_price_or
 from execution.broker import (
     PROTECTION_ALREADY_HELD,
     PROTECTION_UNKNOWN,
@@ -468,24 +469,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
             )
             continue
 
-        # ── Live price override — Alpaca Data REST API ───────────────────────
-        # DATA-2c: replaced yfinance fast_info with get_latest_trade().
-        # Alpaca 15m bars can lag 15 min on fast-moving names; last trade
-        # gives millisecond-precision SIP price for accurate tranche triggers.
-        try:
-            _px_live = get_latest_trade(symbol)
-            if _px_live and _px_live > 0:
-                logger.debug(
-                    f"[{symbol}] Partial exit live price ${_px_live:.2f} "
-                    f"(bar was ${current_price:.2f})"
-                )
-                current_price = _px_live
-        except Exception as _e:
-            logger.warning(
-                "[%s] Live price override failed (partial): %s: %s "
-                "— using 15M bar close $%.2f",
-                symbol, type(_e).__name__, _e, current_price,
-            )
+        # ── Live price override — real-time IEX feed (data/live_price.py) ─────
+        # fetch_bars() is consolidated SIP delayed ~15 min on this data plan. live_price_or returns an
+        # IEX 1m-bar close / IEX trade newer than the delayed fallback (<=18 min), else the delayed 15M close unchanged — a failed
+        # real-time read never skips a check (2026-10-05 live-price plan, step 2). Never raises.
+        _bar_px = current_price
+        _live_px, _px_src = live_price_or(symbol, _bar_px, "partial-exit price", DELAYED_FEED_AGE_S)
+        current_price = _live_px if _live_px is not None else _bar_px
+        logger.debug(f"[{symbol}] Partial exit price ${current_price:.2f} ({_px_src}; 15M bar ${_bar_px:.2f})")
 
         # DS P0: symbol with active GTC cancel deferral may already be closed by
         # Alpaca's stop. Skip partial exits — check_exits handles cleanup.
@@ -1153,6 +1144,8 @@ def check_exits(
             except Exception as _bapfe:
                 logger.warning(f"[{symbol}] Bucket A price fetch failed in check_exits — stop breach check skipped: {_bapfe}")
             if current_price is not None:
+                current_price, _ = live_price_or(symbol, current_price, "bucket-A breach price", DELAYED_FEED_AGE_S)
+            if current_price is not None:
                 active_stop = trade.get("trail_stop") or trade.get("stop")
                 breach = active_stop is not None and (
                     (trade["direction"] == "long"  and current_price <= active_stop) or
@@ -1173,22 +1166,13 @@ def check_exits(
             except Exception as _e:
                 logger.warning(f"[{symbol}] Price fetch failed in check_exits: {_e}")
 
-        # ── Live price override (exit equivalent of Fix-C) ───────────────────
+        # ── Live price override (exit equivalent of Fix-C) — real-time IEX feed ──
+        # Same contract as the partial-exit read above: fresh IEX price, else the delayed 15M close.
+        # _cur_bar_ts (stop-breach same-bar dedupe) still comes from the 15M bar — unchanged.
         if current_price is not None:
-            try:
-                _ex_live = get_latest_trade(symbol)
-                if _ex_live and _ex_live > 0:
-                    logger.debug(
-                        f"[{symbol}] Exit live price ${_ex_live:.2f} "
-                        f"(bar close ${current_price:.2f})"
-                    )
-                    current_price = _ex_live
-            except Exception as _e:
-                logger.warning(
-                    "[%s] Live price override failed (exits): %s: %s "
-                    "— using 15M bar close $%.2f for stop/reversal checks",
-                    symbol, type(_e).__name__, _e, current_price,
-                )
+            _bar_px = current_price
+            current_price, _px_src = live_price_or(symbol, _bar_px, "exit/stop price", DELAYED_FEED_AGE_S)
+            logger.debug(f"[{symbol}] Exit price ${current_price:.2f} ({_px_src}; 15M bar ${_bar_px:.2f})")
 
         # ── Stop-sync retry (P0 inc 3): an earlier in-place stop move that could not complete is
         # retried every cycle until the broker stop matches the software stop (never loosened).
