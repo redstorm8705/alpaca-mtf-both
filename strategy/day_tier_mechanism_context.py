@@ -96,6 +96,8 @@ def _family(decision: Mapping[str, Any], trigger: Mapping[str, Any]) -> tuple[st
     track = str(track_value[1] if track_value else "A").upper()
     mode_value = _first((trigger, decision), "mode", "gex_mode", "signal_mode", "setup")
     mode = str(mode_value[1]).upper() if mode_value else ""
+    if track == "M":
+        return "monday_weekend_dip_v1", "daytier-track-m-2026-10-05"
     if track == "B":
         return "orb_break_hold_v1", "daytier-track-b-2026-09-21"
     if mode == "RIDE":
@@ -156,6 +158,7 @@ def build_decision_context(
             sources, "feature_asof", "data_asof", "bar_close_ts", "bar_ts", "asof_ts"
         )
         evidence_asof = _validated_asof(asof_value[1], stamp) if asof_value else None
+
         def mark(observations: dict, required: tuple[str, ...] = ()) -> dict:
             return _mechanism(observations, required, evidence_asof)
 

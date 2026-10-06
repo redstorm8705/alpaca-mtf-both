@@ -54,6 +54,14 @@ def test_track_b_and_ride_are_independent_families():
     assert ride["family_id"] == "gex_wall_ride_v1"
 
 
+def test_explicit_track_m_uses_the_admitted_monday_family():
+    context = build_decision_context(
+        "QQQ", {"track": "M"}, {"mode": "TRACK_M"}, {}, NOW
+    )
+    assert context["family_id"] == "monday_weekend_dip_v1"
+    assert context["hypothesis_version"] == "daytier-track-m-2026-10-05"
+
+
 def test_family_classifier_does_not_promote_name_substrings_to_track_b():
     context = build_decision_context(
         "AAPL", {"track": "A"}, {"mode": "FADE_BREAK_FAILURE"}, {}, NOW

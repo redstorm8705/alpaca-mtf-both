@@ -2,7 +2,7 @@
 
 **Owner/signature:** ChatGPT/Codex
 
-**Status:** Implemented and BGGN-approved on `feat/day-tier-mechanism-foundation`; pending Claude adversarial audit before merge/deploy.
+**Status:** Implemented, BGGN-approved, and approved to continue by Rafael on 2026-10-06.
 
 **Behavioral scope:** Logging and attribution only. Claude's day-tier signals, thresholds, sizing, allocation, entry/exit decisions, and order routing are unchanged.
 
@@ -28,6 +28,7 @@ The current family mapping describes the strategies already implemented by Claud
 
 | Existing path | Family ID |
 |---|---|
+| Explicit Track M, Monday weekend dip | `monday_weekend_dip_v1` |
 | Track A, FADE | `gex_wall_fade_v1` |
 | Track A, RIDE | `gex_wall_ride_v1` |
 | Explicit Track B (including DRIVE/PULLBACK/ORB) | `orb_break_hold_v1` |
@@ -48,7 +49,7 @@ Mode-name substrings never promote Track A into Track B; an unrecognized Track-A
 
 `tests/test_day_tier_mechanism_context.py` covers family separation, missing-data honesty, deterministic digests, malformed input, zero risk delta, no cache entry for WAIT decisions, and durable tag recovery across a simulated restart.
 
-Final focused result: `12 passed`; the legacy durable logger stamp regression also passed. Python compilation, Ruff correctness checks, `git diff --check`, and the repository preship gate pass. A broader pre-existing day-tier selection produced 72 passes and 23 failures; the failures are in unchanged sizing/order tests and reproduce signatures unrelated to this logging diff (including an existing mock that does not accept `client_order_id`). They are not represented as passing evidence for this build.
+Final focused result after rebasing over Claude's Track M: `13 passed`; the legacy durable logger stamp regression also passed. Python compilation, Ruff correctness checks, `git diff --check`, and the repository preship gate pass. A broader pre-existing day-tier selection produced 72 passes and 23 failures; the failures are in unchanged sizing/order tests and reproduce signatures unrelated to this logging diff (including an existing mock that does not accept `client_order_id`). They are not represented as passing evidence for this build.
 
 ## BGGN result
 
@@ -60,7 +61,7 @@ The first two Board rounds rejected the build. The findings were concrete and fi
 4. Malformed durable context could suppress an exit log, and a failed decision write could leave non-durable cached tags.
 5. A merely non-null as-of value could be blank, boolean, malformed, timezone-naive, or future-dated.
 
-Exact code tree `adabcd7cd132ca033b6ef59bdb13bf467b6e9d4e` passed both available Board seats. Google AI Studio and Groq returned `APPROVE` for the final code. An earlier Groq pass required exact-diff chunking after a per-minute limit; the final one-line Ruff correction was reviewed directly by both providers. Nvidia was not used. The code-file audit markers are SHA-bound to the staged contents.
+Exact code tree `5327857b054f44881c6cf98c2a04ff758c4ba18b` passed both available Board seats after the rebase and explicit Track-M attribution. Google AI Studio and Groq returned `APPROVE` for the final code and test. An earlier Groq pass required exact-diff chunking after a per-minute limit. Nvidia was not used. The code-file audit markers are SHA-bound to the staged contents.
 
 ## BGGN questions
 
