@@ -128,9 +128,9 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         acct = SimpleNamespace(buying_power="4000", equity="2500", last_equity="2500", maintenance_margin="0",
                                trading_blocked=False, account_blocked=False)
 
-        def _submit_limit(symbol, qty, side, px, tier=None):
+        def _submit_limit(symbol, qty, side, px, tier=None, client_order_id=None):
             submitted["qty"] = qty
-            return SimpleNamespace(id="ENT1", client_order_id="DT-UBER-b-1-x")
+            return SimpleNamespace(id="ENT1", client_order_id=client_order_id or "DT-UBER-b-1-x")
 
         def _log_entry_fill(trade_id, symbol, **kw):
             logged.update(kw)
@@ -336,7 +336,8 @@ class PlaceEntryTrackThreading(unittest.TestCase):
                               "target": 338.76, "wall_ref": None},
         )
         self.assertEqual(self.last_emergency_stop.call_count, 2)
-        self.assertEqual(self.last_emergency_stop.call_args.args[1], 1)
+        first_qty = self.last_emergency_stop.call_args_list[0].args[1]
+        self.assertEqual(self.last_emergency_stop.call_args.args[1], first_qty - 1)
         self.last_flatten.assert_not_called()
         self.last_halt.assert_called_once()
 
@@ -377,7 +378,9 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         today = datetime.now(ET).strftime("%Y%m%d")
         st = {f"entry::NFLX::{today}-0945": {"symbol": "NFLX", "track": "B", "state": "protected", "coid": "DT-NFLX-x",
                                              "bar_id": f"{today}-0945", "fill_qty": 1, "fill_px": 100.0, "side": "long"}}
-        ev = [{"event": "entry_fill", "trade_id": "DT-NFLX-x"}, {"event": "exit_fill", "trade_id": "DT-NFLX-x"}]
+        now = datetime.now(ET).isoformat()
+        ev = [{"event": "entry_fill", "trade_id": "DT-NFLX-x", "ts": now},
+              {"event": "exit_fill", "trade_id": "DT-NFLX-x", "ts": now, "realized_pnl": 0.0}]
         ok, qty, _, _ = self._run("B", state=st, events=ev)
         self.assertTrue(ok)
         self.assertEqual(qty, 1)
