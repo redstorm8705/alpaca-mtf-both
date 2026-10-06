@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-04 (interactive, Rafael present) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-06 (interactive, Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,14 +8,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-06 01:45 PT, Claude) — main-bot live-price step 2 prepared, NOT shipped
+## ⏩ LATEST (2026-10-06 09:30 PT, Claude) — main-bot live-price step 2 SHIPPED (exit/stop checks)
 
-Exit-path real-time price change (step 2 of `logs/design_records/main_bot_live_price_feed_2026-10-05.md`) is saved as
-`logs/wip/exit_live_price_rev8_WIP_2026-10-06.patch`; verify with
-`git apply --check logs/wip/exit_live_price_rev8_WIP_2026-10-06.patch`; captured output: (none — applies cleanly).
-Gate status and findings: `logs/tb_audit_log.md` entry "2026-10-06 01:45 PT (Claude, AWP)".
-**⏩ EXACT NEXT ACTION:** apply the patch, run a FRESH cold-2nd + risk seat on it (subagent limit resets 2026-10-10),
-re-run Gro+GAI preship on the exact diff, then ship; then step 3 (entry_logic/lifecycle/run_cycle live-price reads).
+Exit/stop + partial-exit checks now read the real-time IEX price; verify with
+`git log --oneline --grep "AWP live-price step 2" origin/main`.
+Gate record: `logs/tb_audit_log.md` entries "2026-10-06 08:45 PT", "09:05 PT", "09:30 PT" (rev8/rev9 FAILs fixed in rev10).
+The superseded WIP patch `logs/wip/exit_live_price_rev8_WIP_2026-10-06.patch` is history only — do not apply.
+**⏩ EXACT NEXT ACTION:** step 3 of `logs/design_records/main_bot_live_price_feed_2026-10-05.md` (entry_logic / lifecycle /
+run_cycle live-price reads), full patch gate; then the after-hours price source (design forward item 1).
 
 ## ⏩ LATEST (2026-10-06, ChatGPT/Codex) — admitted C2 components live-wiring review
 
