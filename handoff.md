@@ -13,9 +13,8 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 Review the ChatGPT/Codex work package and its reproducible evidence in
 `logs/design_records/c2_existing_live_wiring_2026-10-06.md`. Verify the exact file with
 `shasum -a 256 logs/design_records/c2_existing_live_wiring_2026-10-06.md`; captured output:
-`c0961bb15b71c685078d89c8d6d36403d2d2516adca995a50e5939c8e0b9b2a4`.
-**⏩ EXACT NEXT ACTION:** complete exact-tree BGGN/preship, merge, deploy to OCI, and verify tomorrow-ready flags and
-runner/service health. No failed or blocked indicator may be added during reconciliation.
+`070a0ecb9248c8cc39fbae0eeafbd4a75de8e053efb1ef26540c846772919bb8`.
+**⏩ EXACT NEXT ACTION:** review startup reconciliation handling for lots owned by the swing-breakout manager.
 
 ## ⏩ LATEST (2026-10-06, ChatGPT/Codex-signed) — day-tier cost attribution + admission-router increment
 
