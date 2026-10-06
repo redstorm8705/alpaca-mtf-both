@@ -59,11 +59,11 @@ class BoundedEntryQty(unittest.TestCase):
 
     def test_clamps_high_conviction_instead_of_rejecting(self):
         qty, _ = _bounded(requested=20, maint=0, rate=0.30)
-        self.assertEqual(qty, 15)
+        self.assertEqual(qty, 13)
 
     def test_uses_actual_limit_price_at_boundary(self):
         qty, _ = _bounded(requested=15, order_price=100.20, maint=0, rate=0.30)
-        self.assertEqual(qty, 14)
+        self.assertEqual(qty, 12)
 
     def test_pending_increasing_orders_consume_room(self):
         pending = _Order("NVDA", 10, 100, side="buy")
@@ -76,7 +76,8 @@ class BoundedEntryQty(unittest.TestCase):
         reducing = _Order("NVDA", 5, 110, side="sell")
         stop = _Order("NVDA", 10, 95, side="sell", otype="stop")
         qty, _ = _bounded(requested=5, positions=positions, orders=[reducing, stop], maint=0, rate=0.30)
-        self.assertEqual(qty, 5)
+        baseline, _ = _bounded(requested=5, positions=positions, orders=[], maint=0, rate=0.30)
+        self.assertEqual(qty, baseline)
 
     def test_oversized_reducing_order_counts_reversal_excess(self):
         positions = [_Pos("NVDA", 100, qty=5, market_value=500, side="long")]
@@ -87,8 +88,8 @@ class BoundedEntryQty(unittest.TestCase):
 
     def test_stop_distance_risk_cap(self):
         qty, why = _bounded(requested=20, order_price=100, stop_price=80, maint=0, rate=0.30)
-        self.assertEqual(qty, 2)
-        self.assertIn("stop-risk cap=2sh", why)
+        self.assertEqual(qty, 1)
+        self.assertIn("risk-basis 1sh", why)
 
     def test_bad_values_fail_closed(self):
         for bad in (float("nan"), float("inf"), 0.0, -1.0):
@@ -120,9 +121,16 @@ class TierKill(unittest.TestCase):
         return killed, ff
 
     def test_cumulative_realized_loss_plus_open_loss_fires(self):
-        killed, ff = self._run(96.0, 100.0, 10, 2475.0, realized_loss=-65.0)
+        killed, ff = self._run(96.0, 100.0, 10, 2475.0, realized_loss=-90.0)
         self.assertTrue(killed)
         ff.assert_called_once()
+
+    def test_loss_between_old_four_percent_and_current_five_percent_does_not_fire(self):
+        # -$65 realized + -$40 open = -$105, or 4.2% of the $2,500 SOD baseline.
+        # This fired under the retired 4% limit but must remain live under the shipped 5% limit.
+        killed, ff = self._run(96.0, 100.0, 10, 2475.0, realized_loss=-65.0)
+        self.assertFalse(killed)
+        ff.assert_not_called()
 
     def test_positive_exit_never_offsets_loss_floor(self):
         events = [
