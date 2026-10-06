@@ -1,0 +1,579 @@
+diff --git a/data/live_price.py b/data/live_price.py
+index 5b79144..bd36e9c 100644
+--- a/data/live_price.py
++++ b/data/live_price.py
+@@ -13,8 +13,9 @@ Order of sources (first fresh one wins):
+   1. "iex_1m"   — close of the newest IEX 1-minute bar (fetch_bars_window(feed="iex")), if that bar is no more than
+                   _MAX_BAR_AGE_S old. The newest bar may still be forming: that is intended — this is a PRICE read,
+                   not a signal; signal code must keep using completed bars only.
+-  2. "iex_trade"— the latest IEX trade print (data.alpaca_data.get_latest_trade_with_time), held to the SAME age
+-                  limit (an IEX print can be much older than the delayed bar on a thin name — never prefer it then).
++  2. "iex_trade"— the latest IEX trade print (data.alpaca_data.get_latest_trade_with_time), held to the SAME
++                  caller-set age limit (max_age_s; an IEX print can be older than the delayed bar on a thin name —
++                  never prefer it then).
+   3. None       — neither available. The CALLER decides; an exit/stop evaluation must fall back to its previous
+                   source (never skip a stop check because the real-time read failed) and log a WARNING.
+ 
+@@ -31,6 +32,8 @@ from dataclasses import dataclass
+ from datetime import datetime, timedelta
+ from zoneinfo import ZoneInfo
+ 
++import config
++
+ logger = logging.getLogger(__name__)
+ _ET = ZoneInfo("America/New_York")
+ 
+@@ -38,9 +41,29 @@ _MAX_BAR_AGE_S = 180.0    # PROV:main-bot-live-price-2026-10-05 — newest IEX 1
+ _LOOKBACK_MIN = 10        # PROV:main-bot-live-price-2026-10-05 — window of IEX 1m bars requested
+ _CACHE_TTL_S = 15.0       # PROV:main-bot-live-price-2026-10-05 — per-symbol reuse window inside one cycle
+ _CLOCK_SKEW_S = 5.0       # PROV:main-bot-live-price-2026-10-05 — tolerate a slightly-behind local clock (negative age)
++# The delayed default feed (fetch_bars, consolidated SIP) is served only once >= ~15 min old, so ANY IEX price younger
++# than this is fresher than the fallback it would replace. Exit/stop callers pass max_age_s=DELAYED_FEED_AGE_S so a
++# 3-15 min old IEX print on a thin name is never discarded in favour of an OLDER delayed close (risk seat 2026-10-05).
++# fetch_bars() also serves frames from its own TTL cache (config.ALPACA_BAR_CACHE_TTL_SECS), so the fallback close can be
++# as old as the SIP delay PLUS that TTL (cold-2nd rev5) — the exit age limit covers both.
++_SIP_DELAY_S = 900.0        # PROV:main-bot-live-price-2026-10-05 — SIP delay on this data plan (probe: recent SIP -> 403)
++DELAYED_FEED_AGE_S = _SIP_DELAY_S + float(getattr(config, "ALPACA_BAR_CACHE_TTL_SECS", 0) or 0)
++# That allowance fits the TRADE source (the pre-2026-10-05 exit code used the latest print with no age limit at all).
++# An IEX BAR is a new source: at a longer max age it must have STARTED no more than 900 - 60 = 840s ago, so every print
++# in it is NEWER than the SIP cutoff and it is never older than a freshly fetched delayed close (cold-2nd rev6).
++_BAR_WIDTH_S = 60.0
++
++# LATENCY BOUND (cold-2nd 2026-10-05): fetch_bars_window retries a 429 for up to ~61s, and this runs on the trading
++# thread ahead of check_exits(). (1) Every result, None included, is cached for _CACHE_TTL_S, so the second exit site
++# does not repeat a read — except a FAILED latest-trade request, which is re-tried at the next check. (2) An IEX BAR read slower than _SLOW_READ_S (success or not) pauses BAR reads for
++# _BAR_PAUSE_S; the latest-trade read stays available (it costs what the pre-2026-10-05 exit code already paid), so a
++# slow bar endpoint never pushes other symbols onto the delayed price, and costs at most ONE slow bar read per pause.
++_SLOW_READ_S = 3.0        # PROV:main-bot-live-price-2026-10-05 — a healthy IEX bar read takes well under 1s
++_BAR_PAUSE_S = 120.0      # PROV:main-bot-live-price-2026-10-05 — skip IEX bar reads this long after a slow one
+ 
+ _cache: dict = {}
+ _lock = threading.Lock()
++_bar_paused_until = 0.0
+ 
+ 
+ @dataclass(frozen=True)
+@@ -57,9 +80,13 @@ def _valid(p) -> bool:
+         return False
+ 
+ 
+-def _from_iex_bars(symbol: str, now: datetime) -> "LivePrice | None":
++def _from_iex_bars(symbol: str, now: datetime, max_age_s: float = _MAX_BAR_AGE_S,
++                   live: bool = False) -> "LivePrice | None":
+     from data.fetcher import fetch_bars_window
+-    df = fetch_bars_window(symbol, "1Min", now - timedelta(minutes=_LOOKBACK_MIN), now, feed="iex")
++    lookback = max(_LOOKBACK_MIN, int(max_age_s // 60) + 2)
++    df = fetch_bars_window(symbol, "1Min", now - timedelta(minutes=lookback), now, feed="iex")
++    if live:
++        now = datetime.now(_ET)           # age against the clock AFTER the (possibly slow) read — cold-2nd rev4
+     if df is None or getattr(df, "empty", True) or "close" not in df.columns:
+         return None
+     ts = df.index[-1]
+@@ -68,58 +95,100 @@ def _from_iex_bars(symbol: str, now: datetime) -> "LivePrice | None":
+         return None                       # a naive timestamp cannot be aged safely
+     age = (now - ts).total_seconds()
+     px = df["close"].iloc[-1]
+-    if not (-_CLOCK_SKEW_S <= age <= _MAX_BAR_AGE_S) or not _valid(px):
++    if not (-_CLOCK_SKEW_S <= age <= max_age_s) or not _valid(px):
+         return None
+     return LivePrice(float(px), "iex_1m", round(max(age, 0.0), 1))
+ 
+ 
+-def _from_latest_trade(symbol: str, now: datetime) -> "LivePrice | None":
++class _TradeUnavailable(Exception):
++    """The latest-trade request itself failed (timeout / HTTP error / empty body) — as opposed to a print that came
++    back but is too old. A failed request is NOT cached: the next exit check re-reads, as the old code did."""
++
++
++def _from_latest_trade(symbol: str, now: "datetime | None", max_age_s: float = _MAX_BAR_AGE_S) -> "LivePrice | None":
++    """now=None (live): age the print against the clock read AFTER the response, so a print made while an earlier
++    slow read was running is never rejected as 'from the future' (cold-2nd rev4). Raises _TradeUnavailable when the
++    request failed; returns None when a print came back but is too old / invalid."""
+     from data.alpaca_data import get_latest_trade_with_time
+     got = get_latest_trade_with_time(symbol)
+     if not got:
+-        return None
++        raise _TradeUnavailable(symbol)
++    if now is None:
++        now = datetime.now(_ET)
+     px, ts = got
+     age = (now - ts).total_seconds()
+-    if not (-_CLOCK_SKEW_S <= age <= _MAX_BAR_AGE_S) or not _valid(px):
++    if not (-_CLOCK_SKEW_S <= age <= max_age_s) or not _valid(px):
+         return None                      # an old print is never preferred over the caller's own source
+     return LivePrice(float(px), "iex_trade", round(max(age, 0.0), 1))
+ 
+ 
+-def live_price(symbol: str, now: "datetime | None" = None) -> "LivePrice | None":
+-    """The symbol's current price from the real-time feed, or None. Never raises."""
++def _pause_bars_if_slow(symbol: str, elapsed: float) -> None:
++    global _bar_paused_until
++    if elapsed > _SLOW_READ_S:
++        with _lock:
++            _bar_paused_until = time.monotonic() + _BAR_PAUSE_S
++        logger.warning("[%s] live_price: IEX bar read took %.1fs — bar reads paused %.0fs (latest-trade still read)",
++                       symbol, elapsed, _BAR_PAUSE_S)
++
++
++def live_price(symbol: str, now: "datetime | None" = None,
++               max_age_s: float = _MAX_BAR_AGE_S) -> "LivePrice | None":
++    """The symbol's current price from the real-time feed, or None. Never raises.
++    max_age_s: oldest acceptable bar/print (default 3 min; exit paths pass DELAYED_FEED_AGE_S).
++    A bar no older than _MAX_BAR_AGE_S is used as is; otherwise the latest trade is also read and the NEWER of the
++    two (smallest age) wins — a 10-min-old bar never beats a 20-s-old print (cold-2nd 2026-10-05)."""
+     try:
+-        use_cache = now is None             # an explicit `now` (replay/test) never reads or writes the live cache
++        live = now is None                  # an explicit `now` (replay/test) skips the cache and the bar pause
+         now = now if now is not None else datetime.now(_ET)
+         mono = time.monotonic()
+-        if use_cache:
++        read_bars = True
++        if live:
+             with _lock:
+-                hit = _cache.get(symbol)
++                hit = _cache.get((symbol, max_age_s))
+                 if hit is not None and mono - hit[1] < _CACHE_TTL_S:
+                     return hit[0]
+-        out = None
+-        try:
+-            out = _from_iex_bars(symbol, now)
+-        except Exception as e:  # noqa: BLE001
+-            logger.warning("[%s] live_price: IEX bar read failed: %s", symbol, e)
+-        if out is None:
++                read_bars = mono >= _bar_paused_until
++        bar = None
++        bar_max = max_age_s if max_age_s <= _MAX_BAR_AGE_S else min(max_age_s, _SIP_DELAY_S - _BAR_WIDTH_S)
++        if read_bars:
++            t0 = time.monotonic()
++            try:
++                bar = _from_iex_bars(symbol, now, bar_max, live=live)
++            except Exception as e:  # noqa: BLE001
++                logger.warning("[%s] live_price: IEX bar read failed: %s", symbol, e)
++            if live:
++                _pause_bars_if_slow(symbol, time.monotonic() - t0)
++        out = bar
++        trade_failed = False
++        if bar is None or bar.age_s > _MAX_BAR_AGE_S:
++            trade = None
+             try:
+-                out = _from_latest_trade(symbol, now)
++                trade = _from_latest_trade(symbol, None if live else now, max_age_s)
++            except _TradeUnavailable:
++                trade_failed = True
+             except Exception as e:  # noqa: BLE001
++                trade_failed = True
+                 logger.warning("[%s] live_price: latest-trade read failed: %s", symbol, e)
+-        if out is not None and use_cache:
++            found = [c for c in (bar, trade) if c is not None]
++            out = min(found, key=lambda c: c.age_s) if found else None
++        # Cache the result (None included) — EXCEPT when the latest-trade request failed: the next exit check then
++        # re-reads the trade, exactly as the pre-2026-10-05 code did per check (cold-2nd rev7). The expensive bar
++        # read is bounded separately by the bar pause.
++        if live and not trade_failed:
+             with _lock:
+-                _cache[symbol] = (out, mono)
++                _cache[(symbol, max_age_s)] = (out, mono)
+         return out
+     except Exception as e:  # noqa: BLE001 — a price read must never raise into a trading path
+         logger.warning("[%s] live_price error: %s", symbol, e)
+         return None
+ 
+ 
+-def live_price_or(symbol: str, fallback: "float | None", where: str) -> "tuple[float | None, str]":
++def live_price_or(symbol: str, fallback: "float | None", where: str,
++                  max_age_s: float = _MAX_BAR_AGE_S) -> "tuple[float | None, str]":
+     """Real-time price if available, else `fallback` (the caller's previous source) with a WARNING.
+     Returns (price, source_label). Use this at exit/stop checks: a failed real-time read must never skip a stop
+     evaluation, so the old value is still returned when nothing fresher exists."""
+-    lp = live_price(symbol)
++    lp = live_price(symbol, max_age_s=max_age_s)
+     if lp is not None:
+         return lp.price, lp.source
+     logger.warning("[%s] %s: real-time price unavailable — using the delayed fallback %s", symbol, where, fallback)
+diff --git a/execution/exit_logic.py b/execution/exit_logic.py
+index 3e8ea7b..bf3bc73 100644
+--- a/execution/exit_logic.py
++++ b/execution/exit_logic.py
+@@ -31,6 +31,7 @@ import config
+ from alerts import alert_exit, alert_partial, alert_stop_breach, alert_gtc_failed
+ from data.alpaca_data import get_latest_trade
+ from data.fetcher import fetch_bars
++from data.live_price import DELAYED_FEED_AGE_S, live_price_or
+ from execution.broker import (
+     PROTECTION_ALREADY_HELD,
+     PROTECTION_UNKNOWN,
+@@ -468,24 +469,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk:
+             )
+             continue
+ 
+-        # ── Live price override — Alpaca Data REST API ───────────────────────
+-        # DATA-2c: replaced yfinance fast_info with get_latest_trade().
+-        # Alpaca 15m bars can lag 15 min on fast-moving names; last trade
+-        # gives millisecond-precision SIP price for accurate tranche triggers.
+-        try:
+-            _px_live = get_latest_trade(symbol)
+-            if _px_live and _px_live > 0:
+-                logger.debug(
+-                    f"[{symbol}] Partial exit live price ${_px_live:.2f} "
+-                    f"(bar was ${current_price:.2f})"
+-                )
+-                current_price = _px_live
+-        except Exception as _e:
+-            logger.warning(
+-                "[%s] Live price override failed (partial): %s: %s "
+-                "— using 15M bar close $%.2f",
+-                symbol, type(_e).__name__, _e, current_price,
+-            )
++        # ── Live price override — real-time IEX feed (data/live_price.py) ─────
++        # fetch_bars() is consolidated SIP delayed ~15 min on this data plan. live_price_or returns an
++        # IEX 1m-bar close / IEX trade newer than the delayed fallback (<=18 min), else the delayed 15M close unchanged — a failed
++        # real-time read never skips a check (2026-10-05 live-price plan, step 2). Never raises.
++        _bar_px = current_price
++        _live_px, _px_src = live_price_or(symbol, _bar_px, "partial-exit price", DELAYED_FEED_AGE_S)
++        current_price = _live_px if _live_px is not None else _bar_px
++        logger.debug(f"[{symbol}] Partial exit price ${current_price:.2f} ({_px_src}; 15M bar ${_bar_px:.2f})")
+ 
+         # DS P0: symbol with active GTC cancel deferral may already be closed by
+         # Alpaca's stop. Skip partial exits — check_exits handles cleanup.
+@@ -1152,6 +1143,8 @@ def check_exits(
+                     current_price = float(df_price["close"].iloc[-1])
+             except Exception as _bapfe:
+                 logger.warning(f"[{symbol}] Bucket A price fetch failed in check_exits — stop breach check skipped: {_bapfe}")
++            if current_price is not None:
++                current_price, _ = live_price_or(symbol, current_price, "bucket-A breach price", DELAYED_FEED_AGE_S)
+             if current_price is not None:
+                 active_stop = trade.get("trail_stop") or trade.get("stop")
+                 breach = active_stop is not None and (
+@@ -1173,22 +1166,13 @@ def check_exits(
+             except Exception as _e:
+                 logger.warning(f"[{symbol}] Price fetch failed in check_exits: {_e}")
+ 
+-        # ── Live price override (exit equivalent of Fix-C) ───────────────────
++        # ── Live price override (exit equivalent of Fix-C) — real-time IEX feed ──
++        # Same contract as the partial-exit read above: fresh IEX price, else the delayed 15M close.
++        # _cur_bar_ts (stop-breach same-bar dedupe) still comes from the 15M bar — unchanged.
+         if current_price is not None:
+-            try:
+-                _ex_live = get_latest_trade(symbol)
+-                if _ex_live and _ex_live > 0:
+-                    logger.debug(
+-                        f"[{symbol}] Exit live price ${_ex_live:.2f} "
+-                        f"(bar close ${current_price:.2f})"
+-                    )
+-                    current_price = _ex_live
+-            except Exception as _e:
+-                logger.warning(
+-                    "[%s] Live price override failed (exits): %s: %s "
+-                    "— using 15M bar close $%.2f for stop/reversal checks",
+-                    symbol, type(_e).__name__, _e, current_price,
+-                )
++            _bar_px = current_price
++            current_price, _px_src = live_price_or(symbol, _bar_px, "exit/stop price", DELAYED_FEED_AGE_S)
++            logger.debug(f"[{symbol}] Exit price ${current_price:.2f} ({_px_src}; 15M bar ${_bar_px:.2f})")
+ 
+         # ── Stop-sync retry (P0 inc 3): an earlier in-place stop move that could not complete is
+         # retried every cycle until the broker stop matches the software stop (never loosened).
+diff --git a/tests/test_exit_logic_stop_moves.py b/tests/test_exit_logic_stop_moves.py
+index 881ff82..dbc9f3e 100644
+--- a/tests/test_exit_logic_stop_moves.py
++++ b/tests/test_exit_logic_stop_moves.py
+@@ -183,6 +183,7 @@ class TestPartialExitSequence(Base):
+         more = {
+             "fetch_bars": mock.Mock(return_value=pd.DataFrame({"close": [104.5, 104.5]})),
+             "get_latest_trade": mock.Mock(return_value=104.5),
++            "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (fb, "delayed_fallback")),
+             "_get_qhm_syms": mock.Mock(return_value=set()),
+             "partial_close_position": mock.Mock(side_effect=lambda s, q, **k: self.calls.append(("partial", q)) or True),
+             "_fetch_actual_fill_price": mock.Mock(return_value=104.5),
+@@ -237,6 +238,32 @@ class TestPartialExitSequence(Base):
+         self.assertEqual(self.calls[2], ("replace", "S1-r", 95.0, 9))          # restored to all 9 shares
+         self.m["cancel_order"].assert_called_once_with("LMT")                  # never the stop
+ 
++    def test_realtime_price_triggers_tranche_the_delayed_bar_has_not_reached(self):
++        # delayed 15M close $103 (< T1 $104); real-time IEX $104.5 -> T1 fires on the live price
++        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [103.0, 103.0]})
++        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (104.5, "iex_1m")
++        t = self._trade()
++        self._run(t)
++        self.assertIn(("partial", 3), self.calls)
++
++    def test_exit_read_accepts_any_price_fresher_than_delayed_feed(self):
++        t = self._trade()
++        self._run(t)
++        self.assertEqual(self.m["live_price_or"].call_args[0][3], el.DELAYED_FEED_AGE_S)
++
++    def test_realtime_price_below_tranche_holds_even_if_delayed_bar_reached(self):
++        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (103.0, "iex_trade")
++        t = self._trade()
++        self._run(t)
++        self.assertEqual(self.calls, [])
++        self.assertEqual(t["qty_remaining"], 9)
++
++    def test_realtime_none_keeps_delayed_bar_price(self):
++        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (None, "delayed_fallback")
++        t = self._trade()
++        self._run(t)
++        self.assertIn(("partial", 3), self.calls)                             # bar $104.5 still evaluated
++
+     def test_shares_not_freed_restores_and_does_not_sell(self):
+         with mock.patch.object(el, "_wait_shares_free", return_value=False):
+             t = self._trade()
+@@ -292,6 +319,7 @@ class TestTrailRatchet(Base):
+         self.addCleanup(p.stop)
+         for n, v in {"fetch_bars": mock.Mock(return_value=pd.DataFrame({"close": [108.0, 108.0]})),
+                      "get_latest_trade": mock.Mock(return_value=108.0),
++                     "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (fb, "delayed_fallback")),
+                      "_get_qhm_syms": mock.Mock(return_value=set())}.items():
+             p = mock.patch.object(el, n, v)
+             p.start()
+@@ -322,3 +350,54 @@ class TestTrailRatchet(Base):
+ 
+ if __name__ == "__main__":
+     unittest.main()
++
++
++class TestCheckExitsLivePrice(Base):
++    """check_exits reads the stop/target price through live_price_or (2026-10-05 live-price plan step 2)."""
++
++    def setUp(self):
++        super().setUp()
++        main_stub = types.ModuleType("main")
++        main_stub._spy_risk_active = False
++        main_stub._spy_event_type = ""
++        p = mock.patch.dict(sys.modules, {"main": main_stub})
++        p.start()
++        self.addCleanup(p.stop)
++        bars = pd.DataFrame({"close": [96.0, 96.0]},
++                            index=pd.DatetimeIndex(["2026-10-06 14:00", "2026-10-06 14:15"], tz="UTC"))
++        for n, v in {"fetch_bars": mock.Mock(return_value=bars),
++                     "live_price_or": mock.Mock(side_effect=lambda s, fb, w, *a: (94.0, "iex_1m")),
++                     "_get_qhm_syms": mock.Mock(return_value=set()),
++                     "_get_tod_phase": mock.Mock(return_value="normal"),
++                     "get_exit_signal": mock.Mock(return_value=False),
++                     "close_position": mock.Mock(return_value=True)}.items():
++            p = mock.patch.object(el, n, v)
++            self.m[n] = p.start()
++            self.addCleanup(p.stop)
++
++    def _trade(self):
++        from datetime import datetime
++        return {"direction": "long", "trade_mode": "intraday", "entry_price": 100.0, "stop": 95.0, "target": 110.0,
++                "qty": 9, "qty_remaining": 9, "rth_day_stop_order_id": "S1", "score": 10,
++                "entry_time": datetime.now(el.ET).isoformat(), "be_stop_promoted": True}
++
++    def _run(self, t):
++        risk = mock.Mock()
++        return el.check_exits(FakeTracker({"X": t}), risk, kelly=mock.Mock(), last_vix=15.0,
++                              gate_state=SimpleNamespace(entry_confirm_buffer={}, conviction_streak={}))
++
++    def test_realtime_breach_counts_when_delayed_bar_shows_none(self):
++        # delayed 15M close $96 is above the $95 stop; real-time IEX $94 is below it -> breach 1/3 (not a reset)
++        t = self._trade()
++        self._run(t)
++        self.assertEqual(t.get("stop_breach_count"), 1)
++        self.assertEqual(self.m["live_price_or"].call_args[0][1], 96.0)              # delayed close is the fallback
++        self.assertEqual(self.m["live_price_or"].call_args[0][3], el.DELAYED_FEED_AGE_S)
++        self.m["close_position"].assert_not_called()
++
++    def test_fallback_keeps_delayed_close(self):
++        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (fb, "delayed_fallback")
++        t = self._trade()
++        t["stop_breach_count"] = 2
++        self._run(t)
++        self.assertEqual(t["stop_breach_count"], 0)                                 # $96 inside the stop: same as pre-patch
+diff --git a/tests/test_live_price.py b/tests/test_live_price.py
+index c1edf20..d7cd1b7 100644
+--- a/tests/test_live_price.py
++++ b/tests/test_live_price.py
+@@ -18,11 +18,21 @@ def _bars(stamps, closes):
+     return pd.DataFrame({"open": closes, "high": closes, "low": closes, "close": closes, "volume": 1}, index=idx)
+ 
+ 
++def _fetcher_stub(fn):
++    """Stand-in data.fetcher (some suites stub the alpaca SDK, so the real module cannot always be imported)."""
++    import sys
++    import types
++    stub = types.ModuleType("data.fetcher")
++    stub.fetch_bars_window = fn
++    return mock.patch.dict(sys.modules, {"data.fetcher": stub})
++
++
+ class LivePrice(unittest.TestCase):
+     def setUp(self):
+         lp._cache.clear()
++        lp._bar_paused_until = 0.0
+ 
+-    def _run(self, bars=None, trade=None, bar_exc=None, trade_age_s=20):
++    def _run(self, bars=None, trade=None, bar_exc=None, trade_age_s=20, max_age_s=lp._MAX_BAR_AGE_S):
+         def win(symbol, tf, start, end, feed="sip", adjustment="raw", asof=None):
+             self.assertEqual(feed, "iex")
+             self.assertEqual(tf, "1Min")
+@@ -33,7 +43,7 @@ class LivePrice(unittest.TestCase):
+         got = (trade, NOW - timedelta(seconds=trade_age_s)) if trade is not None else None
+         with mock.patch("data.fetcher.fetch_bars_window", side_effect=win), \
+                 mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=got):
+-            return lp.live_price("NVDA", now=NOW)
++            return lp.live_price("NVDA", now=NOW, max_age_s=max_age_s)
+ 
+     def test_fresh_iex_bar_wins(self):
+         r = self._run(_bars(["2026-10-06 10:14", "2026-10-06 10:15"], [180.0, 181.5]), trade=170.0)
+@@ -85,6 +95,159 @@ class LivePrice(unittest.TestCase):
+             lp.live_price("NVDA", now=NOW)
+             self.assertEqual(len(calls), 2)          # an explicit `now` bypasses it
+ 
++    def test_exit_age_accepts_print_fresher_than_delayed_feed(self):
++        # a 10-min-old IEX print is still fresher than the >=15-min-old delayed close -> exit paths must use it
++        from datetime import timedelta
++        got = (94.8, NOW - timedelta(seconds=600))
++        with mock.patch.object(lp, "_from_iex_bars", return_value=None), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=got):
++            self.assertIsNone(lp.live_price("NVDA", now=NOW))
++            self.assertEqual(lp.DELAYED_FEED_AGE_S, 900.0 + lp.config.ALPACA_BAR_CACHE_TTL_SECS)   # SIP delay + fetch_bars cache
++            r = lp.live_price("NVDA", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S)
++            self.assertEqual((r.price, r.source), (94.8, "iex_trade"))
++        with mock.patch.object(lp, "_from_iex_bars", return_value=None), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=(94.8, NOW - timedelta(seconds=1000))):
++            self.assertEqual(lp.live_price("NVDA", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S).source, "iex_trade")   # 16.7 min old: fresher than an 18-min fallback
++        with mock.patch.object(lp, "_from_iex_bars", return_value=None), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time",
++                           return_value=(94.8, NOW - timedelta(seconds=lp.DELAYED_FEED_AGE_S + 1))):
++            self.assertIsNone(lp.live_price("NVDA", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S))
++
++    def test_newer_trade_beats_stale_bar_at_exit_age(self):
++        # cold-2nd rev3 FAIL 2: a 10-min-old bar ($95) must not beat a 20-s-old print ($94) — the newer one wins
++        from datetime import timedelta
++        bar = lp.LivePrice(95.0, "iex_1m", 600.0)
++        with mock.patch.object(lp, "_from_iex_bars", return_value=bar), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=(94.0, NOW - timedelta(seconds=20))):
++            r = lp.live_price("X", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S)
++        self.assertEqual((r.price, r.source), (94.0, "iex_trade"))
++        with mock.patch.object(lp, "_from_iex_bars", return_value=bar), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=None):
++            self.assertEqual(lp.live_price("X", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S), bar)   # no print: stale bar still beats the delayed close
++        fresh = lp.LivePrice(95.0, "iex_1m", 30.0)
++        trade = mock.Mock(return_value=None)
++        with mock.patch.object(lp, "_from_iex_bars", return_value=fresh), mock.patch.object(lp, "_from_latest_trade", trade):
++            self.assertEqual(lp.live_price("X", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S), fresh)
++            trade.assert_not_called()                            # a fresh bar needs no second read
++
++    def test_failure_is_cached(self):
++        bar = mock.Mock(return_value=None)
++        trade = mock.Mock(return_value=None)
++        with mock.patch.object(lp, "_from_iex_bars", bar), mock.patch.object(lp, "_from_latest_trade", trade):
++            self.assertIsNone(lp.live_price("NVDA"))
++            self.assertIsNone(lp.live_price("NVDA"))
++        self.assertEqual((bar.call_count, trade.call_count), (1, 1))   # not retried within the TTL
++
++    def test_failed_trade_request_is_not_cached(self):
++        # cold-2nd rev7: a trade request that FAILS at the partial-exit read must be re-tried at the stop check
++        from datetime import timedelta
++        stale_bar = lp.LivePrice(95.0, "iex_1m", 600.0)
++        clock = [NOW]
++
++        class _DT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock[0]
++        got = mock.Mock(side_effect=[None, (94.0, NOW - timedelta(seconds=1))])     # timeout, then a 1-s-old print
++        with mock.patch.object(lp, "datetime", _DT), mock.patch.object(lp, "_from_iex_bars", return_value=stale_bar), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", got):
++            self.assertEqual(lp.live_price("X", max_age_s=lp.DELAYED_FEED_AGE_S), stale_bar)       # site 1: bar only
++            r = lp.live_price("X", max_age_s=lp.DELAYED_FEED_AGE_S)                                 # site 2: re-read
++        self.assertEqual((r.price, r.source), (94.0, "iex_trade"))
++        self.assertEqual(got.call_count, 2)
++
++    def test_old_print_result_is_cached(self):
++        from datetime import timedelta
++        got = mock.Mock(return_value=(94.0, NOW - timedelta(seconds=5000)))                       # came back, too old
++        clock = [NOW]
++
++        class _DT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock[0]
++        with mock.patch.object(lp, "datetime", _DT), mock.patch.object(lp, "_from_iex_bars", return_value=None), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", got):
++            self.assertIsNone(lp.live_price("X", max_age_s=lp.DELAYED_FEED_AGE_S))
++            self.assertIsNone(lp.live_price("X", max_age_s=lp.DELAYED_FEED_AGE_S))
++        self.assertEqual(got.call_count, 1)
++
++    def test_slow_bar_read_pauses_bars_only_and_trade_still_used(self):
++        # cold-2nd rev3 FAIL 1: a 61s bar ladder followed by a successful trade read must still pause bar reads
++        mono = [1000.0]
++        good = lp.LivePrice(94.0, "iex_trade", 5.0)
++        slow_bar = mock.Mock(side_effect=lambda *a, **k: mono.__setitem__(0, mono[0] + 61.0))          # 429 ladder, then empty
++        with mock.patch.object(lp.time, "monotonic", side_effect=lambda: mono[0]), \
++                mock.patch.object(lp, "_from_iex_bars", slow_bar), mock.patch.object(lp, "_from_latest_trade", return_value=good):
++            self.assertEqual(lp.live_price("A"), good)
++            self.assertGreater(lp._bar_paused_until, mono[0])
++            self.assertEqual(lp.live_price("B"), good)           # B: bar read skipped, trade still read
++            self.assertEqual(slow_bar.call_count, 1)             # at most ONE slow bar read per pause
++        mono[0] += lp._BAR_PAUSE_S + 1
++        ok_bar = mock.Mock(return_value=lp.LivePrice(95.0, "iex_1m", 10.0))
++        with mock.patch.object(lp.time, "monotonic", side_effect=lambda: mono[0]), mock.patch.object(lp, "_from_iex_bars", ok_bar):
++            self.assertEqual(lp.live_price("C").source, "iex_1m")  # pause expired: bars read again
++        lp._bar_paused_until = 0.0
++        lp._cache.clear()
++        mono[0] = 5000.0
++        fast_ok = mock.Mock(return_value=lp.LivePrice(95.0, "iex_1m", 10.0))
++        with mock.patch.object(lp.time, "monotonic", side_effect=lambda: mono[0]), mock.patch.object(lp, "_from_iex_bars", fast_ok):
++            lp.live_price("D")
++        self.assertEqual(lp._bar_paused_until, 0.0)              # a fast read never pauses
++
++    def test_trade_printed_during_slow_bar_read_is_accepted(self):
++        # cold-2nd rev4 FAIL: `now` taken before a 61s bar read made a fresh print look 60s "in the future"
++        from datetime import timedelta
++        clock = [NOW]
++
++        class _DT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock[0]
++
++        def slow_bars(*a, **k):
++            clock[0] = NOW + timedelta(seconds=61)
++            return pd.DataFrame()
++        with mock.patch.object(lp, "datetime", _DT), _fetcher_stub(slow_bars), \
++                mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=(94.0, NOW + timedelta(seconds=60))):
++            r = lp.live_price("NVDA", max_age_s=lp.DELAYED_FEED_AGE_S)
++        self.assertEqual((r.price, r.source), (94.0, "iex_trade"))
++
++    def test_bar_aged_against_clock_after_read(self):
++        from datetime import timedelta
++        clock = [NOW]
++
++        class _DT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock[0]
++
++        def slow_bars(*a, **k):
++            clock[0] = NOW + timedelta(seconds=61)
++            return _bars(["2026-10-06 10:13:00"], [180.0])                   # 150s old at the call, 211s after it
++        with mock.patch.object(lp, "datetime", _DT), _fetcher_stub(slow_bars):
++            self.assertIsNone(lp._from_iex_bars("NVDA", NOW, lp._MAX_BAR_AGE_S, live=True))
++            self.assertEqual(lp._from_iex_bars("NVDA", NOW, lp._MAX_BAR_AGE_S).age_s, 150.0)   # replay: uses `now`
++
++    def test_exit_age_bar_must_close_before_sip_cutoff(self):
++        # cold-2nd rev6: trade read fails; a 1000s-old IEX bar must not beat a ~900s-old delayed close
++        old = _bars(["2026-10-06 09:58:50"], [180.0])                        # started 1000s before NOW
++        ok = _bars(["2026-10-06 10:02:10"], [181.0])                         # started 800s before NOW
++        with _fetcher_stub(lambda *a, **k: old), mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=None):
++            self.assertIsNone(lp.live_price("NVDA", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S))
++        with _fetcher_stub(lambda *a, **k: ok), mock.patch("data.alpaca_data.get_latest_trade_with_time", return_value=None):
++            r = lp.live_price("NVDA", now=NOW, max_age_s=lp.DELAYED_FEED_AGE_S)
++        self.assertEqual((r.price, r.source, r.age_s), (181.0, "iex_1m", 800.0))
++
++    def test_cached_value_served_while_bars_paused(self):
++        ok = lp.LivePrice(181.0, "iex_1m", 10.0)
++        with mock.patch.object(lp, "_from_iex_bars", return_value=ok):
++            lp.live_price("NVDA")
++        lp._bar_paused_until = 10 ** 12
++        with mock.patch.object(lp, "_from_iex_bars") as fb, mock.patch.object(lp, "_from_latest_trade") as ft:
++            self.assertEqual(lp.live_price("NVDA"), ok)
++            fb.assert_not_called()
++            ft.assert_not_called()
++
+     def test_live_price_or_falls_back_with_label(self):
+         with mock.patch.object(lp, "live_price", return_value=None):
+             self.assertEqual(lp.live_price_or("NVDA", 179.9, "exit check"), (179.9, "delayed_fallback"))
