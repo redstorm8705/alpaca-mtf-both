@@ -27,8 +27,10 @@ admission and zero allocation for rejected/unregistered/stale/malformed inputs; 
 No runner or execution module imports either new Python module; verify with
 `rg -n 'day_tier_(family_router|execution_costs)' run_day_tier.py execution strategy --glob '!day_tier_family_router.py' --glob '!day_tier_execution_costs.py'`; captured output: none, exit 1.
 Final captured gate results: Board `2/2 PASS`; Groq `APPROVE`; Google AI Studio `APPROVE`; mechanical preship `PASS`;
-focused suites `25 passed`. **⏩ EXACT NEXT ACTION:** merge after CI, then hand the contract to Claude for adversarial
-review before any runner integration.
+focused suites `25 passed`. **MERGED:** PR #491 / `9a826d6d`. Verify with
+`gh pr view 491 --json state,mergeCommit --jq '.state, .mergeCommit.oid'`; captured output:
+`MERGED` and `9a826d6dd26d1c69e6875d7f52d6f1259571172f`.
+**⏩ EXACT NEXT ACTION:** Claude adversarially reviews the contract before any runner integration.
 
 ## ⏩ LATEST (2026-10-05 night, Claude) — main-bot live-price feed plan recorded — pick up here
 
