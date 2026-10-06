@@ -1,0 +1,39 @@
+{
+  "schema_v": 1,
+  "owner": "Claude admission lane; machine-readable mirror maintained by ChatGPT/Codex",
+  "families": {
+    "monday_weekend_dip_v1": {
+      "status": "ADMITTED_PAPER",
+      "hypothesis_version": "daytier-track-m-2026-10-05",
+      "independent_audit": "PASS",
+      "max_router_share": 1.0,
+      "max_score_age_seconds": 3600,
+      "authority": "Rafael approval 2026-10-05; Claude BGG 5/5",
+      "evidence_record": "logs/design_records/c2_day_tier_methodology_2026-10-04.md#track-m-design"
+    },
+    "gex_wall_fade_v1": {
+      "status": "BLOCKED",
+      "hypothesis_version": "daytier-track-a-fade-2026-10-04",
+      "independent_audit": "FAIL",
+      "max_router_share": 0.0,
+      "max_score_age_seconds": 0,
+      "evidence_record": "logs/design_records/c2_mechanism_evidence_2026-10-05.md"
+    },
+    "gex_wall_ride_v1": {
+      "status": "BLOCKED",
+      "hypothesis_version": "daytier-track-a-ride-2026-10-04",
+      "independent_audit": "FAIL",
+      "max_router_share": 0.0,
+      "max_score_age_seconds": 0,
+      "evidence_record": "logs/design_records/c2_mechanism_evidence_2026-10-05.md"
+    },
+    "orb_break_hold_v1": {
+      "status": "REJECTED",
+      "hypothesis_version": "daytier-track-b-2026-09-21",
+      "independent_audit": "FAIL",
+      "max_router_share": 0.0,
+      "max_score_age_seconds": 0,
+      "evidence_record": "logs/design_records/c2_mechanism_evidence_2026-10-05.md"
+    }
+  }
+}

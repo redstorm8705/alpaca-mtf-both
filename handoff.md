@@ -8,6 +8,28 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-06, ChatGPT/Codex-signed) — day-tier cost attribution + admission-router increment
+
+PR #481 is present at merge commit `f6495477`; verify with
+`git show -s --oneline f6495477`; captured output:
+`f6495477 Merge pull request #481 from redstorm8705/feat/day-tier-mechanism-foundation`.
+The staged follow-up adds
+`strategy/day_tier_execution_costs.py`, `strategy/day_tier_family_router.py`, and
+`strategy/day_tier_family_admissions.json`; verify with
+`git diff --cached --name-only | grep -E 'day_tier_(execution_costs|family_router|family_admissions)'`; captured output
+lists those exact three paths.
+The registry records Track M as `ADMITTED_PAPER`, both GEX families as `BLOCKED`, and ORB as `REJECTED`; verify with
+`python3 -m json.tool strategy/day_tier_family_admissions.json`; captured statuses:
+`monday_weekend_dip_v1=ADMITTED_PAPER`, `gex_wall_fade_v1=BLOCKED`, `gex_wall_ride_v1=BLOCKED`,
+`orb_break_hold_v1=REJECTED`. The focused router tests prove exact-version audit
+admission and zero allocation for rejected/unregistered/stale/malformed inputs; reproduce with
+`uv run --with pytest python -m pytest -q tests/test_day_tier_cost_router.py` (captured: `12 passed`).
+No runner or execution module imports either new Python module; verify with
+`rg -n 'day_tier_(family_router|execution_costs)' run_day_tier.py execution strategy --glob '!day_tier_family_router.py' --glob '!day_tier_execution_costs.py'`; captured output: none, exit 1.
+Final captured gate results: Board `2/2 PASS`; Groq `APPROVE`; Google AI Studio `APPROVE`; mechanical preship `PASS`;
+focused suites `25 passed`. **⏩ EXACT NEXT ACTION:** merge after CI, then hand the contract to Claude for adversarial
+review before any runner integration.
+
 ## ⏩ LATEST (2026-10-05 night, Claude) — main-bot live-price feed plan recorded — pick up here
 
 Plan and reviewer recommendations: `logs/design_records/main_bot_live_price_feed_2026-10-05.md`.
