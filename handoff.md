@@ -8,12 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-08, Claude) — tier-safety + co-hold plan agreed with the CEO
+## ⏩ LATEST (2026-10-07 evening PT, Claude) — tier safety stage 1 shipped (PR #517); round-2 CEO decisions recorded
 
-Plan and decisions: verify with `grep -n "Build order" logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`;
-captured output: `29:## Build order`.
-**⏩ EXACT NEXT ACTION:** build item 1 (tier safety: tier-scoped cancels, wash-trade reject never cancels, own-share-sized
-stops, per-tier exits) through the full gate, with a replay proving a reject leaves another tier's stop in place.
+Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
+`f785de8 Merge pull request #517 from redstorm8705/claude/tier-safety`.
+Round-2 decisions (close sequence, 10% leveraged cap, no 1-share ETF, index 3x): verify with
+`grep -n "Decisions round 2" logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`.
+OPEN for CEO: stock 1-share fallback when no usable ETF exists.
+**⏩ EXACT NEXT ACTION:** build item 2 (close timing: day-tier cancel at 3:58 with retry, market on confirm, retries to
+4:00; swing/QHM/F6 overnight stops after 4:00; promotion decision at 3:56) through the full gate. Also confirm EWY/AAPL
+transferred at the day tier's first reconcile on 2026-10-08.
 
 ## ⏩ LATEST (2026-10-07 10:10 PT, Claude) — day-tier adoption incident fixed (PR #512 spam stop, PR #513 root cause)
 
