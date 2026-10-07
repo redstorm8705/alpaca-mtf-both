@@ -22,7 +22,7 @@ B1 fix: _SHORTING_ENABLED, _feed_age_history, _systemic_stale_alerted moved here
 
 Broker imports: replace_stop_order, resolve_live_order, submit_day_stop_order, get_open_position,
 get_open_orders from execution.broker.
-Data imports: fetch_bars from data.fetcher; get_latest_trade from data.alpaca_data.
+Data imports: fetch_bars from data.fetcher; live_price_or from data.live_price (real-time IEX, 2026-10-06).
 """
 
 import logging
@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 
 import config
 from data.fetcher import fetch_bars
-from data.alpaca_data import get_latest_trade
+from data.live_price import DELAYED_FEED_AGE_S, live_price_or
 from execution.broker import (
     PROTECTION_ALREADY_HELD,
     PROTECTION_UNKNOWN,
@@ -269,16 +269,11 @@ def apply_mri_breakeven_push(tracker, mri) -> None:
                 logger.warning(f"[{symbol}] MRI BE push: price fetch failed: {_e}")
             if current_price is None:
                 continue
-            try:
-                _live = get_latest_trade(symbol)
-                if _live and _live > 0:
-                    current_price = _live
-            except Exception as _live_e:
-                logger.warning(
-                    "[%s] MRI breakeven: live price fetch failed — using stale bar close "
-                    "(risk of incorrect push): %s",
-                    symbol, _live_e
-                )
+            # Real-time price (live-price plan step 3, 2026-10-06): the newer of the latest IEX trade and the newest
+            # IEX 1m bar, else the delayed 15M close above (fetch_bars is SIP ~15 min delayed on this data plan).
+            # Same contract as the exit checks (execution/exit_logic.py); never raises.
+            _lp_px, _ = live_price_or(symbol, current_price, "MRI breakeven price", DELAYED_FEED_AGE_S)
+            current_price = _lp_px if _lp_px is not None else current_price
 
             # Require ≥ 0.5×ATR profit buffer (board condition)
             min_buf = 0.5 * atr_value

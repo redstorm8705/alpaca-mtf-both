@@ -49,9 +49,11 @@ class Base(unittest.TestCase):
         lifecycle._be_last_page.clear()
         self.pages = []
         self.events = []
+        self.live = {"px": self.PRICE}     # the real-time price live_price_or returns (None -> delayed fallback)
         patches = {
             "fetch_bars": mock.Mock(return_value=pd.DataFrame({"close": [self.PRICE, self.PRICE]})),
-            "get_latest_trade": mock.Mock(return_value=self.PRICE),
+            "live_price_or": mock.Mock(side_effect=lambda sym, fb, where, age: (
+                (self.live["px"], "iex_trade") if self.live["px"] is not None else (fb, "delayed_fallback"))),
             "get_open_position": mock.Mock(return_value=SimpleNamespace(qty="2")),
             "resolve_live_order": mock.Mock(side_effect=lambda oid: (_order(oid), oid)),
             "replace_stop_order": mock.Mock(side_effect=lambda sym, oid, px, qty=None: _order(oid + "-r", stop_price=px)),
@@ -102,7 +104,7 @@ class TestMoveInPlace(Base):
         # production log: UBER SHORT 2, DAY stop BUY 2 @ $75.46 (ea420e21…); at 14:05:10 the old
         # push cancelled it and the resubmit @ $71.75 hit 40310000 → 204 min with no broker stop.
         self.m["fetch_bars"].return_value = pd.DataFrame({"close": [69.5, 69.5]})
-        self.m["get_latest_trade"].return_value = 69.5
+        self.live["px"] = 69.5
         self.m["get_open_position"].return_value = SimpleNamespace(qty="-2", side="short")
         self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, stop_price=75.46, side="buy"), oid)
         t = _trade(direction="short", entry_price=71.72, stop=75.46, atr_value=3.0,
@@ -227,7 +229,7 @@ class TestMoveInPlace(Base):
 
     def test_short_moves_down_to_breakeven_plus_offset(self):
         self.m["fetch_bars"].return_value = pd.DataFrame({"close": [67.0, 67.0]})
-        self.m["get_latest_trade"].return_value = 67.0
+        self.live["px"] = 67.0
         self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, stop_price=73.0, side="buy"), oid)
         self.m["get_open_position"].return_value = SimpleNamespace(qty="-2", side="short")
         t = _trade(direction="short", stop=73.0)
@@ -326,7 +328,7 @@ class TestSubmitPath(Base):
 class TestUnchangedGates(Base):
     def test_no_push_without_half_atr_buffer(self):
         self.m["fetch_bars"].return_value = pd.DataFrame({"close": [70.5, 70.5]})
-        self.m["get_latest_trade"].return_value = 70.5
+        self.live["px"] = 70.5
         t = _trade()
         self.run_push(t)
         self.m["replace_stop_order"].assert_not_called()
@@ -337,6 +339,23 @@ class TestUnchangedGates(Base):
         self.run_push(t)
         self.m["replace_stop_order"].assert_not_called()
         self.assertTrue(t["be_pushed_by_mri"])
+
+
+class TestRealTimePrice(Base):
+    def test_real_time_price_decides_the_half_atr_buffer(self):
+        # delayed 15M close says $72 (eligible) but the live IEX price is $70.5 (< entry + 0.5 ATR): no push
+        self.live["px"] = 70.5
+        t = _trade()
+        self.run_push(t)
+        self.m["replace_stop_order"].assert_not_called()
+        self.assertNotIn("be_pushed_by_mri", t)
+
+    def test_no_real_time_price_falls_back_to_the_delayed_close(self):
+        self.live["px"] = None             # live read failed -> the delayed $72 close is used (eligible)
+        t = _trade()
+        self.run_push(t)
+        self.m["replace_stop_order"].assert_called_once()
+        self.assertEqual(self.m["live_price_or"].call_args[0][1], self.PRICE)
 
 
 if __name__ == "__main__":
