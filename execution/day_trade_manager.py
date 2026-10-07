@@ -1529,6 +1529,29 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 logger.info("[%s] day-tier entry skipped — existing %s position opposite our %s "
                             "(no cross-tier netting)", symbol, getattr(existing, "side", "?"), direction)
                 return False
+            # NO SAME-SIDE CO-HOLD (interim, 2026-10-07; board Peterffy/Taleb + Gro + GAI): the day tier's own lots
+            # already returned "already active" above, so a live position here belongs to ANOTHER tier. The main
+            # bot's exits are whole-symbol closes priced from the first fill on the symbol, so a shared symbol could
+            # sell the day tier's shares and book a foreign fill (a masked loss). The runner routes longs on such a
+            # symbol to a free 2x ETF; anything that still reaches here is skipped. Checked right before submit, from
+            # the live book read above. Kill flag: DAYTRADE_NO_COHOLD (only an explicit False disables it).
+            if _cfg("DAYTRADE_NO_COHOLD", True) is not False:
+                logger.info("[%s] day-tier entry skipped — another tier holds a %s position on this symbol "
+                            "(no co-hold until the per-tier ownership guard ships)", symbol,
+                            getattr(existing, "side", "?"))
+                return False
+        if _cfg("DAYTRADE_NO_COHOLD", True) is not False:
+            # ...nor while ANOTHER tier has a pending order on the symbol (an entry about to create a co-hold;
+            # masked-loss seat 2026-10-07). Our own day-tier orders were cleared by the "already active" check.
+            # open_orders is the SAME pre-submit book read validated above (None -> return False): no new API call.
+            from execution.ownership_guard import tier_of_coid as _tier_of
+            _other = [o for o in (open_orders or [])
+                      if str(getattr(o, "symbol", "") or "") == symbol
+                      and _tier_of(getattr(o, "client_order_id", None)) != "daytrade"]
+            if _other:
+                logger.info("[%s] day-tier entry skipped — another tier has %d open order(s) on this symbol "
+                            "(no co-hold)", symbol, len(_other))
+                return False
 
         # Per-track attribution (Track B Inc 2 Part 2): the size dict carries compute_day_tier_size's track.
         # Anything other than "B" (incl. a missing key on a legacy caller) is Track A — unchanged behavior.
