@@ -171,6 +171,9 @@ _CONT_FIELD = re.compile(
     r"^\**\s*(why|severity|exact failure|impact|recommendation|root cause|"
     r"fix|evidence|explanation|reason|mitigation|detail)\b[^:\n]{0,60}:", re.I)
 _BOLD_LEAD = re.compile(r"^\*\*[^*]")
+_PROSE_FINDING_LEAD = re.compile(
+    r"^(?:(?:real|immediate)\s+)?(?:failure|bug|error)\s*:", re.IGNORECASE
+)
 _TAGS = {"EXECUTION BUG", "ALPHA ISSUE", "INFRASTRUCTURE",
          "CRITICAL", "HIGH", "MEDIUM", "LOW"}
 _STOP_HEADERS = ("VERDICT", "LOG ANOMALIES", "PERFORMANCE AUDIT",
@@ -219,6 +222,7 @@ def findings_from_report(report: str) -> list[dict]:
     findings: list[dict] = []
     section: Optional[str] = None
     cur: Optional[dict] = None
+    in_findings_table = False
 
     def _flush() -> None:
         nonlocal cur
@@ -256,31 +260,121 @@ def findings_from_report(report: str) -> list[dict]:
         })
         cur = None
 
+    def _table_cells(value: str) -> list[str] | None:
+        """Parse either Markdown table form while preserving code/escaped pipes."""
+        if "|" not in value:
+            return None
+        row = value.strip()
+        if row.startswith("|"):
+            row = row[1:]
+        if row.endswith("|") and not row.endswith(r"\|"):
+            row = row[:-1]
+        cells: list[str] = []
+        cell: list[str] = []
+        in_code = False
+        escaped = False
+        for char in row:
+            if escaped:
+                cell.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == "`":
+                in_code = not in_code
+                cell.append(char)
+            elif char == "|" and not in_code:
+                cells.append(_clean_md("".join(cell).strip()))
+                cell = []
+            else:
+                cell.append(char)
+        if escaped:
+            cell.append("\\")
+        cells.append(_clean_md("".join(cell).strip()))
+        return cells
+
+    def _separator_row(cells: list[str]) -> bool:
+        return bool(cells) and all(
+            re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+            for cell in cells
+        )
+
     for raw in report.splitlines():
         line = raw.strip()
         s = line.lstrip("#* ").strip()
         if s.upper().startswith("CATASTROPHIC ALERT"):
             _flush()
             section = "cat"
+            in_findings_table = False
             continue
         if s.upper().startswith("NEW BUGS"):
             _flush()
             section = "bugs"
+            in_findings_table = False
             continue
         if s.upper().startswith(_STOP_HEADERS):
             _flush()
             section = None
+            in_findings_table = False
             continue
         if not section:
             continue
         if not line:                               # blank line closes the current finding
             _flush()
+            in_findings_table = False
             continue
+        cells = _table_cells(line)
+        is_header = bool(
+            cells and len(cells) >= 5
+            and [cell.upper() for cell in cells[:4]]
+            == ["CATEGORY", "SEVERITY", "FILE", "DESCRIPTION"]
+        )
+        if is_header:
+            _flush()
+            in_findings_table = True
+            continue
+        if in_findings_table and (
+            cells is None or len(cells) < 5 or bool(_ITEM_MARKER.match(raw))
+            or bool(_PROSE_FINDING_LEAD.match(line))
+        ):
+            # Markdown tables are contiguous. A prose/item line ends the table
+            # even when that prose itself contains several pipe characters.
+            in_findings_table = False
+        if in_findings_table and cells is not None and len(cells) >= 5:
+            _flush()
+            # Gemini sometimes emits the NEW BUGS contract as a Markdown table.
+            # Its header/separator are structure, never findings. Each data row is
+            # rendered as one phone-readable finding with its source file attached.
+            if _separator_row(cells):
+                continue
+            valid_category = cells[0].upper() in _TAGS
+            valid_severity = cells[1].upper() in {
+                "CRITICAL", "HIGH", "MEDIUM", "LOW",
+            }
+            if not (valid_category and valid_severity):
+                in_findings_table = False
+            else:
+                _category, severity, file_name, title = cells[:4]
+                file_name = file_name.strip("`")
+                title = title.strip("`")
+                detail = " — ".join(cell for cell in cells[4:] if cell)
+                sev_text = severity.upper()
+                sev = ("critical" if section == "cat" or "CRITICAL" in sev_text
+                       else "high" if "HIGH" in sev_text
+                       else "low")
+                if title and not title.lower().startswith("none"):
+                    findings.append({
+                        "severity": sev,
+                        "title": _word_trunc(title, 120),
+                        "detail": _word_trunc(detail, 240),
+                        "file": file_name,
+                    })
+                continue
         stripped = line.lstrip("0123456789.)•*->— \t").strip()
         if not stripped:
             continue
         new_item = bool(_ITEM_MARKER.match(raw)) or (
-            bool(_BOLD_LEAD.match(line)) and not _CONT_FIELD.match(line))
+            bool(_BOLD_LEAD.match(line)) and not _CONT_FIELD.match(line)
+        ) or bool(_PROSE_FINDING_LEAD.match(stripped))
         if cur is not None and not new_item:
             cur["raw"].append(stripped)            # continuation → fold into current finding
             continue
@@ -303,11 +397,14 @@ def findings_from_report(report: str) -> list[dict]:
 # ── Card renderer ────────────────────────────────────────────────────────────
 
 def _finding_line(f: dict) -> str:
-    """`*Title* — detail`, but drop the ` — detail` when detail is empty or identical to
-    the title (the old renderer printed `*title* — title` for prose findings)."""
+    """Render a compact finding with a separate detail line for mobile Slack."""
     t = str(f.get("title", "")).strip()
     d = str(f.get("detail", "")).strip()
-    return f"*{t}* — {d}" if d and d != t else f"*{t}*"
+    file_name = str(f.get("file", "")).strip()
+    head = f"*{t}*"
+    if file_name:
+        head += f" · `{file_name}`"
+    return f"{head}\n{d}" if d and d != t else head
 
 
 def render_card(mode: str, date_str: str, verdict: str, pnl: dict,

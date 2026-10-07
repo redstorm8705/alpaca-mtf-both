@@ -43,6 +43,50 @@ class TestPostFilterUntouched(unittest.TestCase):
         self.assertIsNone(na._match_directive("FIFO orphan: closing fill for GOOGL has no prior lot", sup))
         self.assertIsNotNone(na._match_directive("GOOGL replay noise", sup))
 
+    def test_october_false_positive_rows_are_removed_exactly(self):
+        report = """### NEW BUGS FOUND
+| CATEGORY | SEVERITY | FILE | DESCRIPTION | EXACT FAILURE CONDITION |
+| :--- | :--- | :--- | :--- | :--- |
+| EXECUTION BUG | HIGH | `day_tier_track_m.py` | Friday Close Fetch | `fetch_bars_window` windowing includes the current Monday bar; the `_dates` filter is insufficient if Alpaca provides a 00:00:00 timestamped bar for the current day, causing `last.date() != prev_session`. |
+| INFRASTRUCTURE | LOW | `real_bug.py` | Genuine problem | order submission crashes. |
+### FIX VALIDATION: N/A
+"""
+        with mock.patch.object(na, "AUDIT_DATE", "2026-10-05"):
+            filtered, verdict, suppressed, acknowledged = na._apply_suppressions(
+                report, "WARN"
+            )
+        self.assertNotIn("current Monday bar", filtered)
+        self.assertIn("order submission crashes", filtered)
+        self.assertEqual((verdict, suppressed, acknowledged), ("WARN", 1, 0))
+
+    def test_exact_false_row_plus_real_failure_is_not_suppressed(self):
+        report = """### NEW BUGS FOUND
+| EXECUTION BUG | CRITICAL | `day_tier_track_m.py` | Friday Close Fetch | `fetch_bars_window` windowing includes the current Monday bar; the `_dates` filter is insufficient if Alpaca provides a 00:00:00 timestamped bar for the current day, causing `last.date() != prev_session`. Order submission also crashes. |
+### FIX VALIDATION: N/A
+"""
+        filtered, verdict, suppressed, _ = na._apply_suppressions(report, "FAIL")
+        self.assertIn("Order submission also crashes", filtered)
+        self.assertEqual((verdict, suppressed), ("FAIL", 0))
+
+    def test_future_maintenance_conversion_regression_is_not_suppressed(self):
+        report = """### NEW BUGS FOUND
+| EXECUTION BUG | CRITICAL | `execution/broker.py` | Maintenance conversion | The `maintenance` room calculation uses `maintenance_rate` after the broker changed to return 30.0 instead of 0.30, causing 100x under-reservation. |
+### FIX VALIDATION: N/A
+"""
+        filtered, verdict, suppressed, _ = na._apply_suppressions(report, "FAIL")
+        self.assertIn("100x under-reservation", filtered)
+        self.assertEqual((verdict, suppressed), ("FAIL", 0))
+
+    def test_identical_historical_wording_on_future_date_remains_visible(self):
+        report = """### NEW BUGS FOUND
+| EXECUTION BUG | HIGH | `day_tier_track_m.py` | Friday Close Fetch | `fetch_bars_window` windowing includes the current Monday bar; the `_dates` filter is insufficient if Alpaca provides a 00:00:00 timestamped bar for the current day, causing `last.date() != prev_session`. |
+### FIX VALIDATION: N/A
+"""
+        with mock.patch.object(na, "AUDIT_DATE", "2026-10-12"):
+            filtered, verdict, suppressed, _ = na._apply_suppressions(report, "FAIL")
+        self.assertIn("current Monday bar", filtered)
+        self.assertEqual((verdict, suppressed), ("FAIL", 0))
+
 
 class TestPromptCarriesGroundTruth(unittest.TestCase):
     def test_block_and_rules_in_prompt(self):
