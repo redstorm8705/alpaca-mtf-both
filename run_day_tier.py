@@ -1049,7 +1049,7 @@ def run_tick() -> dict:
                                                             buying_power, "B", prior_close=prior_close)
                         if _inv_b is not None:
                             decision_b, trigger_b, size_b, order_sym = _inv_b
-                            if _ten and size_b.get("size_ok"):
+                            if _ten and size_b.get("size_ok"):   # never on a size_ok=False dict
                                 size_b = {**size_b, "max_size": True}   # 10/10 short -> maximum size on the ETF
                             logger.info("[%s] track-B INVERSE ROUTE -> %s (%s; stock buys %d sh): %s", sym, order_sym,
                                         "co-held" if _coheld_b else "budget", _stock_shares, size_b.get("reason"))

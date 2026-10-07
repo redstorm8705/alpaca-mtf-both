@@ -1534,6 +1534,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.warning("[%s] day-tier entry aborted — order book or maintenance rate unreadable (fail-closed)", symbol)
             return False
         if direction == "short":
+            # limit_px is finite and > 0 here: it was checked right after it was computed (the entry aborts otherwise),
+            # and _short_maintenance_rate re-checks math.isfinite + > 0 before any division (returns None -> skip).
             # A short carries Alpaca's SHORT maintenance requirement (board Thorp + Taleb 2026-10-07): the posted asset
             # rate is the long rate. Above 100% (a short under $2.50) the maintenance room cannot be sized -> skip.
             maintenance_rate = _short_maintenance_rate(maintenance_rate, limit_px)
