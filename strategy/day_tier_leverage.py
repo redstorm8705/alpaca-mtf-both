@@ -164,7 +164,8 @@ def etf_stop_level(etf_px, underlying_px, level, k: float, inverse: bool, prior_
 
 
 def is_ten_of_ten(screen: dict, mom: dict, gate: dict) -> "tuple[bool, str]":
-    """10/10 confidence for a Track-B LONG (see module docstring). Returns (ok, reason). Never raises."""
+    """10/10 confidence for a Track-B entry, long or short (see module docstring; the gate's alignment checks are
+    computed for the trade's own direction). Returns (ok, reason). Never raises."""
     try:
         if not (isinstance(screen, dict) and screen.get("is_mover")):
             return False, "not a screened mover"

@@ -427,6 +427,20 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         return 0, f"entry-cap error (fail-closed): {e!r}"
 
 
+def _short_maintenance_rate(rate: "float | None", price: float) -> "float | None":
+    """Alpaca's SHORT maintenance requirement (docs.alpaca.markets margin-and-short-selling, verified 2026-10-07):
+    price < $5 -> greater of $2.50/share or 100%; price >= $5 -> greater of $5.00/share or 30%. The asset's posted
+    rate is the LONG rate, so a short uses the larger of the two. None when the inputs are unusable. Never raises."""
+    try:
+        r, p = float(rate), float(price)  # type: ignore[arg-type]
+        if not (math.isfinite(r) and math.isfinite(p) and r > 0 and p > 0):
+            return None
+        floor = max(1.0, 2.5 / p) if p < 5.0 else max(0.30, 5.0 / p)
+        return max(r, floor)
+    except (TypeError, ValueError):
+        return None
+
+
 def _account_entry_halt_reason(account) -> str | None:
     """Return a reason when Alpaca or the durable main-book kill state forbids new entries."""
     try:
@@ -1516,6 +1530,14 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if open_orders is None or maintenance_rate is None:
             logger.warning("[%s] day-tier entry aborted — order book or maintenance rate unreadable (fail-closed)", symbol)
             return False
+        if direction == "short":
+            # A short carries Alpaca's SHORT maintenance requirement (board Thorp + Taleb 2026-10-07): the posted asset
+            # rate is the long rate. Above 100% (a short under $2.50) the maintenance room cannot be sized -> skip.
+            maintenance_rate = _short_maintenance_rate(maintenance_rate, limit_px)
+            if maintenance_rate is None or maintenance_rate > 1.0:
+                logger.info("[%s] day-tier short skipped — short maintenance requirement %s > 100%% at $%.2f",
+                            symbol, maintenance_rate, limit_px)
+                return False
 
         # OPPOSITE-SIDE CO-HOLD GUARD (masked-loss D): never open a side opposite an existing
         # position on this symbol — the flatten infers its side from the NET position, so an
