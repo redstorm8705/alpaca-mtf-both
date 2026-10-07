@@ -1310,11 +1310,15 @@ def force_flat_all(reason: str = "eod_force_flat") -> int:
             qty = min(held, want)
             # Only a lot with NO live day-tier stop can be "held by another tier" (our own OCO is flattened as usual);
             # the foreign stop must cover the whole position.
+            _ft_eod: list = []
             if (qty >= 1 and _has_live_daytrade_stop(sym) is False
-                    and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held)):
+                    and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held, _ft_eod)):
+                if _record_transfer(tgt, _ft_eod, held, want, abs(float(getattr(pos, "current_price", 0) or 0))):
+                    continue
                 _page_once_today(sym, "foreign_stop_eod",
-                                 f"[{sym}] day-tier force-flat ({reason}) skipped — the lot is held by ANOTHER tier's stop "
-                                 f"(adopted by the main bot), which now manages it. Close manually if it must be flat.")
+                                 f"[{sym}] day-tier force-flat ({reason}) skipped — the lot was taken over by the "
+                                 f"{_tier_names(_ft_eod)}, whose stop protects it and which now manages it. Close "
+                                 f"manually if it must be flat.")
                 continue
             if qty >= 1 and flatten_position(sym, qty, tgt["side"], entry_price=tgt["entry_price"],
                                              trade_id=tgt["trade_id"], order_id_hint=tgt["order_id"],
@@ -2292,7 +2296,10 @@ def _has_live_daytrade_stop(symbol: str) -> "bool | None":
     return False
 
 
-def _foreign_stop_covers(symbol: str, side: str, qty: int) -> bool:
+_TIER_DISPLAY = {"intraday": "swing tier", "qhm": "QHM", "forever6": "Forever-6"}  # Slack names (pnl_snapshot)
+
+
+def _foreign_stop_covers(symbol: str, side: str, qty: int, tiers_out: "list | None" = None) -> bool:
     """True when ANOTHER tier's live STOP order on `symbol` reduces our `side` for at least `qty` shares — the day
     tier's lot is protected, but by a stop it does not own (2026-10-07: the main bot's orphan scan adopted the
     day-tier EWY short and AAPL long, cancelled the day-tier OCO and placed its own IN- stops; the day tier then
@@ -2324,6 +2331,8 @@ def _foreign_stop_covers(symbol: str, side: str, qty: int) -> bool:
             otype = _enum_text(getattr(o, "order_type", None) or getattr(o, "type", None))
             if "stop" not in otype or _enum_text(getattr(o, "side", None)) != want_side:
                 continue
+            if tiers_out is not None and _tier not in tiers_out:
+                tiers_out.append(_tier)
             covered += abs(float(getattr(o, "qty", 0) or 0)) - abs(float(getattr(o, "filled_qty", 0) or 0))
         return covered + 1e-9 >= qty
     except Exception as e:  # noqa: BLE001
@@ -2345,6 +2354,51 @@ def _page_once_today(symbol: str, key: str, msg: str) -> None:
     except Exception as e:  # noqa: BLE001 — a dedupe failure pages (never silences)
         logger.debug("page dedupe failed: %s", e)
     _page(msg)
+
+
+def _tier_names(tiers: list) -> str:
+    return ", ".join(_TIER_DISPLAY.get(t, t) for t in tiers) or "another tier"
+
+
+def _record_transfer(tgt: dict, tiers: list, held: int, want: int, mark: float) -> bool:
+    """The SWING tier (intraday tag) has taken over this day-tier lot (its stop now protects it — 2026-10-07 EWY/AAPL).
+    When the lot is the WHOLE position (held == want), the day tier's trade ends at the take-over: book an exit at the
+    live Alpaca mark (`mark` = the position's current_price), exit_reason 'transferred_to_swing_tier', realized P&L
+    from that mark (a loss is booked, never masked; it counts in the day tier's own loss journal today), and retire
+    the lot. From then on the swing tier owns the position and books its own result — no later fill matching (two
+    cold-2nd FAILs showed another tier's or a later trade's fill could be mis-booked). A co-held symbol (held !=
+    want) or a non-swing adopter is NOT transferred (the caller keeps the protected/halt path). False on any
+    failure (the caller retries next tick). Never raises."""
+    from strategy import day_tier_logger
+    try:
+        trade_id = str(tgt.get("trade_id") or "")
+        sym = str(tgt.get("symbol") or "")
+        side = str(tgt.get("side") or "long")
+        entry = abs(float(tgt.get("entry_price") or 0.0))
+        m = float(mark)
+        if ("intraday" not in tiers or held != want or want < 1 or not trade_id or not sym
+                or not (entry > 0 and math.isfinite(m) and m > 0)):
+            return False
+        if _durable_exit_recorded(trade_id):
+            # Already booked (a prior tick's retire save failed): only retry the retire — never a second exit_fill.
+            _mark_symbol_flattened(sym)
+            return True
+        realized = round((m - entry) * want if side == "long" else (entry - m) * want, 2)
+        if not day_tier_logger.log_exit_fill(trade_id, sym, order_id="", exit_reason="transferred_to_swing_tier",
+                                             fill_price=round(m, 4), fill_qty=float(want),
+                                             market_price_at_exit=round(m, 4), realized_pnl=realized):
+            return False
+        _mark_symbol_flattened(sym)
+        _page_once_today(sym, "transferred",
+                         f"[{sym}] day-tier lot ({want} sh {side}) was taken over by the swing tier — the day-tier "
+                         f"trade is closed in its journal at the take-over MARK ${m:.2f} (realized ${realized:+.2f}; a "
+                         f"mark, not a broker fill). The swing tier now holds the shares at the original entry "
+                         f"${entry:.2f}, so the move to the mark appears in both tiers' records; the account P&L "
+                         f"(Alpaca fills) counts it once.")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] day-tier transfer booking failed: %s", tgt.get("symbol"), e)
+        return False
 
 
 def _order_filled_qty(order_id: str) -> "tuple[bool, float]":
@@ -2643,13 +2697,17 @@ def reconcile_open_state() -> dict:
             # The foreign stop must cover the WHOLE live position (cold-2nd 2026-10-07): once our stop is gone every
             # remaining stop belongs to another tier, and on a co-held symbol a stop sized to ITS shares would
             # otherwise "cover" our naked lot.
-            if want > 0 and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held):
-                # Protected by ANOTHER tier's stop (an adoption by the main bot): not naked. A scoped close would be
+            _ft: list = []
+            if want > 0 and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held, _ft):
+                # Protected by ANOTHER tier's stop (that tier adopted the lot): not naked. A scoped close would be
                 # refused (the foreign stop holds the shares) and must never cancel another tier's order (B1).
+                if _record_transfer(tgt, _ft, held, want, abs(float(getattr(pos, "current_price", 0) or 0))):
+                    summary["cleared"] += 1   # the day-tier trade ended at the take-over; the swing tier owns it now
+                    continue
                 summary["protected"] += 1
                 _page_once_today(sym, "foreign_stop",
-                                 f"[{sym}] day-tier lot ({want} sh {tgt.get('side')}) is protected by ANOTHER tier's stop "
-                                 f"(adopted by the main bot) — the day tier will not close it; the main bot manages it.")
+                                 f"[{sym}] day-tier lot ({want} sh {tgt.get('side')}) was taken over by the "
+                                 f"{_tier_names(_ft)}, whose stop protects it — the {_tier_names(_ft)} manages it now.")
                 continue
             # NAKED (no live DT stop) → scoped-flatten the day-tier's OWN CONFIRMED qty. flatten_position's
             # net-side/qty guard additionally protects any co-held tier.
