@@ -187,6 +187,9 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             # 2026-10-06: place_entry widens via _room_stop and prices off live_price — both offline here
             mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _lim, stop: (stop, "room stop kept")),
             mock.patch("data.live_price.live_price", return_value=None),
+            # 2026-10-07 touch pricing + terminal-entry wait — offline here (exercised in tests/test_day_tier_entry_fill.py)
+            mock.patch("data.alpaca_data.get_latest_quote", return_value=None),
+            mock.patch.object(dtm, "_await_entry_terminal", return_value=True),
             # the crossed-target safety tests below exercise the flatten machinery (fallback OFF); see
             # test_pin_fallback_turns_a_crossed_target_into_an_r_multiple_bracket for the default (ON) behaviour
             mock.patch.object(config, "DAYTRADE_FADE_PIN_FALLBACK", pin_fallback, create=True),
