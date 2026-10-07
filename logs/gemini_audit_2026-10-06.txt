@@ -1,0 +1,15 @@
+Nightly Gemini Audit — 2026-10-06
+Model: gemini-3.1-flash-lite | Verdict: UNKNOWN
+Modified files: ['run_day_tier.py', 'data/alpaca_data.py', 'data/live_price.py', 'strategy/day_tier_mechanism_context.py', 'strategy/day_tier_family_router.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_entry_trigger.py', 'strategy/day_tier_execution_costs.py', 'strategy/day_tier_track_m.py', 'execution/swing_breakout_manager.py']
+================================================================================
+
+(Gemini API error — all models failed: all Gemini ladder models failed (last: HTTP 503))
+================================================================================
+BROKER GROUND TRUTH (2026-10-06, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=2m [06:30-06:32] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [07:03-07:03] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=2m [06:30-06:32] rejected_stop_orders=0
