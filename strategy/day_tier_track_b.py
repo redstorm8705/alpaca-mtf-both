@@ -255,7 +255,7 @@ def screen_mover(symbol: str, intraday_5m, prior_close, avg_daily_volume,
         rvol = today_vol / expected_vol
         result["rvol"] = round(rvol, 2)
         if rvol < _MIN_RVOL:
-            result["reason"] = f"RVOL {rvol:.1f}x < {_MIN_RVOL:.0f}x — not a mover"
+            result["reason"] = f"RVOL {rvol:.2f}x < {_MIN_RVOL:.2f}x — not a mover"
             return result
 
         result["is_mover"] = True

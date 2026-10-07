@@ -308,6 +308,35 @@ def _is_counter(side: object, direction: object) -> bool:
     return s in ("LONG", "SHORT") and d in ("long", "short") and (s == "LONG") != (d == "long")
 
 
+def _watch_day_ok(sym: str, side: object, direction: object) -> "tuple[bool, str]":
+    """CEO watch-day rule (Rafael 2026-10-06; board Asness/LdP + GAI; design record day_tier_not_trading_and_price_
+    confirm_2026-10-06.md): a SHORT against a LONG daily side is taken only after a WATCH DAY — the previous session
+    closed red AND below the prior session's low (settled daily bars; today's partial bar is dropped). Evidence (2y,
+    21 names, open->close): unconfirmed counter-trend shorts -3.6 bps (n=3,095), after a watch day +6.8 bps (n=709) —
+    an unproven hypothesis with a pre-registered reversal test (after ~100 live watch-day shorts, mean P&L after costs
+    <= 0 -> skip all counter-trend shorts). Every other trade returns True (no watch day). Unreadable data -> False
+    (only the losing pattern is affected). Never raises."""
+    if not (str(side or "").upper() == "LONG" and str(direction or "").lower() == "short"):
+        return True, "not a short against a LONG daily side — no watch day needed"
+    try:
+        import config
+        from data.fetcher import fetch_bars
+        df = fetch_bars(sym, config.TF_DAILY, num_bars=6)
+        if df is None or getattr(df, "empty", True):
+            return False, "watch day: daily bars unavailable — counter-trend short skipped"
+        idx = df.index
+        idx_et = idx.tz_convert(ET) if getattr(idx, "tz", None) is not None else idx.tz_localize("UTC").tz_convert(ET)
+        done = df[idx_et.date < datetime.now(ET).date()]          # completed sessions only
+        if len(done) < 2:
+            return False, "watch day: fewer than 2 completed sessions — counter-trend short skipped"
+        y, p = done.iloc[-1], done.iloc[-2]
+        red_below = float(y["close"]) < float(y["open"]) and float(y["close"]) < float(p["low"])
+        return (red_below, f"watch day {'CONFIRMED' if red_below else 'not confirmed'}: prior session close "
+                           f"{float(y['close']):.2f} vs open {float(y['open']):.2f}, prior-prior low {float(p['low']):.2f}")
+    except Exception as e:  # noqa: BLE001
+        return False, f"watch day check error ({e!r}) — counter-trend short skipped"
+
+
 def _run_track_m(dtm, equity: float, mins_to_close: "float | None", bar_id_day: str) -> "tuple[int, str]":
     """Track M (QQQ Monday weekend-gap-down buy; strategy.day_tier_track_m). Inside 09:45-10:15 ET only, at most
     ONE shot per day: the one-shot marker is persisted BEFORE any order (a restart can never double-enter). A
@@ -663,6 +692,12 @@ def run_tick() -> dict:
                        "trend_failure": _gate["trend_failure"], "gate_ok": _gate["ok"],
                        "gate_reason": _gate["reason"]}
             _gate = {**_gate, "counter_trend": _counter}
+            _wd_ok, _wd_why = _watch_day_ok(sym, decision.get("side"), trigger.get("direction"))
+            if not _wd_ok:
+                _log_direction_skip(sym, decision, trigger, _wd_why, bar_id)
+                continue
+            if _counter and str(trigger.get("direction")) == "short":
+                trigger = {**trigger, "watch_day": True, "watch_day_reason": _wd_why}
             _ct_decision_id = ""
             if _gate["counter_trend"]:
                 # Never-mask-a-loss: the counter-trend tag must be DURABLE before any fade order exists, so its
@@ -774,6 +809,12 @@ def run_tick() -> dict:
                              "alignment": _gate_b["alignment"], "gate_ok": _gate_b["ok"],
                              "gate_reason": _gate_b["reason"]}
                 decision_b = {**decision_b, "side": _side_b}
+                _wd_ok_b, _wd_why_b = _watch_day_ok(sym, _side_b, trigger_b.get("direction"))
+                if not _wd_ok_b:
+                    _log_direction_skip(sym, decision_b, trigger_b, _wd_why_b, bar_id)
+                    continue
+                if trigger_b.get("counter_trend") and str(trigger_b.get("direction")) == "short":
+                    trigger_b = {**trigger_b, "watch_day": True, "watch_day_reason": _wd_why_b}
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
                 # LEVERAGED PIVOT (Rafael CEO directive 2026-10-06; strategy/day_tier_leverage.py): a Track-B LONG trades

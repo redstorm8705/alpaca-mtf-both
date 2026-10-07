@@ -87,7 +87,8 @@ class RunTickTrackA(unittest.TestCase):
     """Drives run_tick with function-level patches on the real modules (the RunnerWindowGate pattern) —
     never a sys.modules swap, which would unload modules other test files rely on."""
 
-    def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None, blocks=True):
+    def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None, blocks=True,
+             watch_day=True):
         import contextlib
         placed, logged = [], []
         acct = SimpleNamespace(equity=2500.0, last_equity=2500.0, buying_power=9000.0)
@@ -117,6 +118,8 @@ class RunTickTrackA(unittest.TestCase):
             mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", False),
             mock.patch.object(config, "DAYTRADE_UNIVERSE", ["NVDA"]),
             mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", blocks, create=True),
+            # watch-day rule (2026-10-06) is unit-tested in tests/test_day_tier_watch_day.py; offline here
+            mock.patch.object(rdt, "_watch_day_ok", return_value=(watch_day, "watch day (test)")),
         ]
         if track_m_result is not None:
             patches.extend([
@@ -208,6 +211,18 @@ class RunTickTrackA(unittest.TestCase):
         self.assertEqual(logged[0][0], placed[0][2]["decision_id"])
         _, placed, _ = self._run("LONG", "short", blocks=False, log_ok=False)
         self.assertEqual(placed, [])                      # never-mask-a-loss: no durable tag -> no order
+
+    def test_counter_trend_short_without_a_watch_day_is_skipped_and_logged(self):
+        out, placed, logged = self._run("LONG", "short", blocks=False, watch_day=False)
+        self.assertEqual(placed, [])
+        self.assertEqual(out["entered"], 0)
+        self.assertIn("watch day", logged[-1][2]["trigger"]["skip_reason"])
+
+    def test_counter_trend_short_after_a_watch_day_is_tagged(self):
+        out, placed, _ = self._run("LONG", "short", blocks=False, watch_day=True)
+        self.assertEqual(out["entered"], 1)
+        self.assertTrue(placed[0][1]["watch_day"])
+
 
 if __name__ == "__main__":
     unittest.main()
