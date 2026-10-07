@@ -16,6 +16,9 @@ Both are deployed, unexercised. Gate record: `grep -n "2026-10-07" logs/tb_audit
 **⏩ EXACT NEXT ACTION:** after 10:15 ET on 2026-10-07, read OCI `logs/day_tier_events.jsonl` + Alpaca fills to confirm
 day-tier entries (incl. 2x-ETF pivots on co-held GOOGL/MSFT/NFLX/NVDA/PLTR) and fresh IEX quotes in the exit check; then build
 Track B per-stock gap/RVOL thresholds (Rule C replay first).
+Update 06:00 PT: Track B per-stock thresholds REFUTED by replay (not built). Inverse-ETF short route is BGG-aligned and
+AWAITING CEO; verify with `grep -n "AWAITING CEO" logs/design_records/day_tier_inverse_etf_route_2026-10-07.md`;
+captured output: `1:# Day tier: short signals route to a bought inverse ETF — BGG alignment (2026-10-07, Claude) — AWAITING CEO`.
 
 ## ⏩ LATEST (2026-10-06 23:40 PT, Claude) — day-tier "must trade" build deployed (PR #499)
 
