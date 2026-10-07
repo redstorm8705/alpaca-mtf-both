@@ -731,26 +731,50 @@ def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> 
 
 
 # ── fill confirmation ──────────────────────────────────────────────────────────────────────────
-def _confirm_fill(order_id: str) -> bool:
-    """Poll broker.get_order until the entry order shows ANY fill (filled_qty > 0) or the poll
-    budget is exhausted. Returns True on the first sign of a fill (the caller then cancels the
-    resting remainder and re-reads the order for the AUTHORITATIVE final filled_qty — so a partial
-    can never leave an uncovered remainder), False if nothing filled. Never raises."""
+def _confirm_fill(order_id: str, expected_qty: int = 0) -> bool:
+    """Poll broker.get_order until the entry order is FULLY filled (filled_qty >= expected_qty), reaches a
+    terminal status, or the poll budget is exhausted. Returns True if ANY share filled, False if nothing filled.
+    (2026-10-07: it used to return at the FIRST partial fill and the caller cancelled the rest — 6 of 14 day-tier
+    entries filled partly, 47 of 61 wired shares; EWY 7 -> 1.) The caller then cancels any resting remainder,
+    waits for the order to be terminal and re-reads its AUTHORITATIVE final filled_qty. Never raises."""
+    from execution import broker
+    polls = max(1, int(_cfg("DAYTRADE_FILL_POLL_MAX", 8)))
+    wait = float(_cfg("DAYTRADE_FILL_POLL_S", 1.0))
+    any_fill = False
+    for i in range(polls):
+        try:
+            o = broker.get_order(order_id)
+            if o is not None:
+                fq = float(getattr(o, "filled_qty", 0) or 0)
+                status = _enum_text(getattr(o, "status", None))
+                if fq > 0:
+                    any_fill = True
+                    if expected_qty < 1 or fq + 1e-9 >= expected_qty or status == "filled":
+                        return True
+                if status in ("canceled", "expired", "rejected", "done_for_day"):
+                    return any_fill  # terminal: a zero fill has nothing to protect
+        except Exception as e:  # noqa: BLE001
+            logger.debug("fill poll error (order %s): %s", order_id, e)
+        if i < polls - 1:
+            time.sleep(wait)
+    return any_fill
+
+
+def _await_entry_terminal(order_id: str) -> bool:
+    """After the resting remainder is cancelled, poll the ENTRY order until its status is terminal, so its
+    filled_qty is final before the protective stop is sized (board Harris + Taleb 2026-10-07: a cancel can sit in
+    pending_cancel and fill more shares that the stop would not cover). True = terminal. Never raises."""
     from execution import broker
     polls = max(1, int(_cfg("DAYTRADE_FILL_POLL_MAX", 8)))
     wait = float(_cfg("DAYTRADE_FILL_POLL_S", 1.0))
     for i in range(polls):
         try:
             o = broker.get_order(order_id)
-            if o is not None:
-                fq = float(getattr(o, "filled_qty", 0) or 0)
-                status = str(getattr(o, "status", "")).lower()
-                if fq > 0:
-                    return True
-                if status in ("canceled", "expired", "rejected", "done_for_day"):
-                    return False  # terminal with zero fill → nothing to protect
+            if o is not None and _enum_text(getattr(o, "status", None)) in (
+                    "filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"):
+                return True
         except Exception as e:  # noqa: BLE001
-            logger.debug("fill poll error (order %s): %s", order_id, e)
+            logger.debug("entry terminal poll error (order %s): %s", order_id, e)
         if i < polls - 1:
             time.sleep(wait)
     return False
@@ -1494,6 +1518,29 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         except Exception as _lpe:  # noqa: BLE001 — a failed read keeps the signal reference
             logger.warning("[%s] day-tier live limit price unavailable (signal ref used): %s", symbol, _lpe)
         limit_px = round(_px_base * (1.0 + slip) if direction == "long" else _px_base * (1.0 - slip), 2)
+        # MARKETABLE AT THE TOUCH (2026-10-07; board Harris + Taleb, Gro, GAI): a limit priced off the last trade rests
+        # when the trade sits off the bid/ask (EWY 10/07: sell limit $181.12, bid $180.44 -> 1 of 7 filled). With a
+        # usable IEX quote (same test as _room_stop), a long pays up to max(ask, trade) + slip and a short sells
+        # down to min(bid, trade) - slip, never more than DAYTRADE_ENTRY_TOUCH_CAP_PCT through the trade price.
+        _touch_src = "trade"
+        try:
+            from data.alpaca_data import get_latest_quote as _glq
+            _q = _glq(symbol) or {}
+            _bid, _ask = float(_q.get("bid") or 0.0), float(_q.get("ask") or 0.0)
+            _sanity = float(_cfg("DAYTRADE_STOP_SPREAD_SANITY_PCT", 0.02))
+            _cap = float(_cfg("DAYTRADE_ENTRY_TOUCH_CAP_PCT", 0.01))  # PROV:entry-fill-rate-2026-10-07
+            _band_q = float(_cfg("DAYTRADE_LIVE_PRICE_SANITY_PCT", 0.05))
+            if (math.isfinite(_bid) and math.isfinite(_ask) and 0 < _bid <= _ask
+                    and (_ask - _bid) <= _sanity * ((_bid + _ask) / 2.0)
+                    and abs(((_bid + _ask) / 2.0) / entry_ref - 1.0) <= _band_q and 0 < slip < _cap):
+                if direction == "long":
+                    limit_px = round(min(max(_px_base, _ask) * (1.0 + slip), _px_base * (1.0 + _cap)), 2)
+                else:
+                    limit_px = round(max(min(_px_base, _bid) * (1.0 - slip), _px_base * (1.0 - _cap)), 2)
+                _touch_src = f"touch (bid {_bid:.2f} / ask {_ask:.2f}, trade {_px_base:.2f})"
+        except Exception as _tqe:  # noqa: BLE001 — an unreadable quote keeps the trade-based limit
+            logger.warning("[%s] day-tier touch quote unavailable (trade-based limit): %s", symbol, _tqe)
+        logger.info("[%s] day-tier marketable limit %.2f from %s", symbol, limit_px, _touch_src)
         if not (math.isfinite(limit_px) and limit_px > 0):
             logger.warning("[%s] day-tier entry aborted — invalid marketable-limit price", symbol)
             return False
@@ -1688,11 +1735,15 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         _save_state(state)
 
         # Confirm ANY fill, then cancel the resting remainder and re-read the ORDER's FINAL fill.
-        got_fill = _confirm_fill(entry_order_id)
+        got_fill = _confirm_fill(entry_order_id, qty)
         try:
             broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")  # stop further fills
-        except Exception:
-            pass
+        except Exception as _ce:  # noqa: BLE001
+            logger.warning("[%s] day-tier entry remainder cancel raised: %s", symbol, _ce)
+        if not _await_entry_terminal(entry_order_id):
+            # The order is still live (pending cancel): shares can fill after the stop is sized to today's count.
+            _page(f"[{symbol}] day-tier entry order {entry_order_id} not confirmed terminal after the cancel — the "
+                  f"stop covers the shares filled so far; a late fill could be UNPROTECTED. Manual check.")
         fq, fp = _final_fill(entry_order_id)
         # A fill may need a beat to settle on the order object — retry the authoritative order read.
         for _ in range(3):
