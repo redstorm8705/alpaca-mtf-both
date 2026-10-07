@@ -88,12 +88,14 @@ class RunTickTrackA(unittest.TestCase):
     never a sys.modules swap, which would unload modules other test files rely on."""
 
     def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None, blocks=True,
-             watch_day=True):
+             watch_day=True, held=frozenset(), wall_ref=None):
         import contextlib
         placed, logged = [], []
         acct = SimpleNamespace(equity=2500.0, last_equity=2500.0, buying_power=9000.0)
         decision = {"would_consider": True, "side": side}
         trigger = {"trigger": "ENTER", "direction": direction, "entry_ref": 100.0, "mode": mode}
+        if wall_ref is not None:
+            trigger.update(wall_ref=wall_ref, symbol="NVDA")   # the live trigger carries its symbol
         patches = [
             mock.patch.object(rdt, "_clock_state", return_value=("open", 300.0)),
             mock.patch.object(rdt, "_touch_heartbeat"),
@@ -120,6 +122,7 @@ class RunTickTrackA(unittest.TestCase):
             mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", blocks, create=True),
             # watch-day rule (2026-10-06) is unit-tested in tests/test_day_tier_watch_day.py; offline here
             mock.patch.object(rdt, "_watch_day_ok", return_value=(watch_day, "watch day (test)")),
+            mock.patch.object(rdt, "_held_by_other_tiers", return_value=held),
         ]
         if track_m_result is not None:
             patches.extend([
@@ -222,6 +225,21 @@ class RunTickTrackA(unittest.TestCase):
         out, placed, _ = self._run("LONG", "short", blocks=False, watch_day=True)
         self.assertEqual(out["entered"], 1)
         self.assertTrue(placed[0][1]["watch_day"])
+
+
+    def test_symbol_held_by_another_tier_long_routes_to_the_2x_etf(self):
+        from data.live_price import LivePrice
+        lp = {"NVDA": LivePrice(100.0, "iex_trade", 1.0), "NVDL": LivePrice(40.0, "iex_trade", 1.0)}
+        with mock.patch("data.live_price.live_price", side_effect=lambda s, **k: lp.get(s)):
+            out, placed, _ = self._run("LONG", "long", mode="RIDE", blocks=False, held=frozenset({"NVDA"}),
+                                       wall_ref=98.0)
+        self.assertEqual([p[0] for p in placed], ["NVDL"])
+        self.assertEqual(placed[0][1]["underlying"], "NVDA")
+
+    def test_symbol_held_by_another_tier_short_is_skipped(self):
+        out, placed, logged = self._run("SHORT", "short", blocks=False, held=frozenset({"NVDA"}))
+        self.assertEqual(placed, [])
+        self.assertIn("no co-hold", logged[-1][2]["trigger"]["skip_reason"])
 
 
 if __name__ == "__main__":
