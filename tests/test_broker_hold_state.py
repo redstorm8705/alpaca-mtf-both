@@ -120,7 +120,7 @@ class OptOutMapsHoldStateToSentinels(unittest.TestCase):
         self.cancels = []
         self._p = [
             mock.patch.object(bk, "cancel_open_orders_for_symbol",
-                              mock.Mock(side_effect=lambda s: self.cancels.append(s) or 1)),
+                              mock.Mock(side_effect=lambda s, only_tier=None: self.cancels.append((s, only_tier)) or 1)),
             mock.patch.object(bk, "_floor_bound_stop_qty",
                               mock.Mock(side_effect=lambda symbol, qty, side, tier: qty)),
             mock.patch.object(bk.time, "sleep", mock.Mock()),
@@ -197,7 +197,8 @@ class OptOutMapsHoldStateToSentinels(unittest.TestCase):
              mock.patch.object(bk, "get_open_orders", mock.Mock(return_value=[])):
             r = bk.submit_day_stop_order("X", 3, "sell", 100.0)      # default allow_cancel_blocking=True
         self.assertIsNone(r)
-        self.assertEqual(self.cancels, ["X"], "default path MUST still cancel blocking orders")
+        # Tier-safety 2026-10-08: the default path still cancels — but ONLY the calling tier's own orders.
+        self.assertEqual(self.cancels, [("X", "intraday")], "default path MUST still cancel its OWN blocking orders")
 
 
 if __name__ == "__main__":

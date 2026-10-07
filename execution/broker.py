@@ -418,6 +418,87 @@ def _parse_insufficient_qty(err: str) -> "tuple[int | None, int | None, int | No
     return _hfo, _avail, _exist
 
 
+def _is_wash_trade_reject(err: str) -> bool:
+    """Alpaca's wash-trade rejection (docs user-protection; prod 2026-07-29 SMCI / 2026-08-11 RBLX:
+    "potential wash trade detected. use complex orders", reject_reason "opposite side market/stop order
+    exists"). It shares code 40310000 with the held_for_orders qty rejection but means something else:
+    an OPPOSITE-side market/stop order rests on the symbol. Cancelling orders does not "free" anything
+    here — the old recovery treated it as a qty hold and cancelled every tier's orders. Never raises."""
+    try:
+        e = str(err).lower()
+        return "wash trade" in e or "opposite side market/stop order" in e
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _cancel_related_orders_for_tier(err: str, symbol: str, tier: str) -> int:
+    """Cancel the order ids Alpaca lists in an error's related_orders — ONLY those whose client_order_id
+    parses to `tier` (tier-safety 2026-10-08: the list can name ANOTHER tier's live protective stop; an
+    untagged / unreadable order is never ours to cancel). Returns the number of OWN related orders found
+    (cancel attempted, whatever its result — an own order already cancelled can still hold the qty while
+    Alpaca releases it, which the caller's poll exists for). Never raises."""
+    import re as _re3
+    n = 0
+    try:
+        from execution.ownership_guard import tier_of_coid as _tier_of_coid
+        _rel = _re3.findall(r'"related_orders"\s*:\s*\[([^\]]*)\]', err)
+        if not _rel:
+            return 0
+        for _oid in _re3.findall(r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', _rel[0]):
+            _o = get_order(_oid)
+            _owner = _tier_of_coid(getattr(_o, "client_order_id", None)) if _o is not None else None
+            if _owner != tier:
+                logger.info(f"[{symbol}] related order {_oid} belongs to {_owner or 'an untagged/unknown owner'} "
+                            f"— not cancelled by {tier} (tier-safe recovery)")
+                continue
+            n += 1
+            if cancel_order(_oid):
+                logger.info(f"[{symbol}] GTC-RACE: force-cancelled own ({tier}) related order {_oid}")
+    except Exception as _re_e:  # noqa: BLE001
+        logger.warning(f"[{symbol}] related-order cancel skipped: {_re_e}")
+    return n
+
+
+def _foreign_reducing_cover(symbol: str, side: str, tier: str) -> "tuple[int, float]":
+    """(count, unfilled stop qty) of open REDUCING-side orders (same side as the stop being placed) that do NOT
+    belong to `tier` — another tier's, or untagged/manual. Only stop-family orders count as cover, and only their
+    UNFILLED qty (qty - filled_qty). An unreadable order book (get_open_orders -> None) yields (0, 0.0), so callers
+    fall back to their legacy retry/poll, which pages on failure. Callers still wrap it in try/except."""
+    from execution.ownership_guard import tier_of_coid as _toc
+    n, cover = 0, 0.0
+    for _fo in (get_open_orders(symbol) or []):
+        if _toc(getattr(_fo, "client_order_id", None)) == tier:
+            continue
+        _fos = getattr(_fo, "side", "")
+        if str(getattr(_fos, "value", _fos)).lower() != str(side).lower():
+            continue
+        n += 1
+        _fot = getattr(_fo, "type", "")
+        if "stop" in str(getattr(_fot, "value", _fot)).lower():
+            try:
+                cover += max(0.0, abs(float(getattr(_fo, "qty", 0) or 0))
+                             - abs(float(getattr(_fo, "filled_qty", 0) or 0)))
+            except (TypeError, ValueError):
+                pass   # unparseable qty contributes no cover (fail toward paging)
+    return n, cover
+
+
+def _free_share_stop_ok(err: str, qty: int, foreign_stop_qty: float) -> "int | None":
+    """The number of FREE shares to protect with this tier's own stop when another tier's STOP orders hold the
+    rest (board C1 2026-10-08), or None when that is not proven (caller pages). Requires a consistent 40310000
+    body: 1 <= available < qty, held_for_orders >= 1 and fully covered by foreign stops, existing == available +
+    held when present. Never raises."""
+    try:
+        _hfo, _avail, _exist = _parse_insufficient_qty(err)
+        if (_avail is not None and 1 <= _avail < qty
+                and _hfo is not None and _hfo >= 1 and foreign_stop_qty >= _hfo
+                and (_exist is None or _exist == _avail + _hfo)):
+            return int(_avail)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 # ── Order submission ──────────────────────────────────────────────────────────
 
 def submit_market_order(
@@ -471,6 +552,11 @@ def submit_market_order(
                     f"order may already be live. Manual verification required. "
                     f"idem_id={_idem_id}"
                 )
+                return None
+            elif _is_wash_trade_reject(err):
+                # Not a shorting restriction — an opposite-side market/stop order rests on the symbol.
+                logger.error(f"[{symbol}] {side.upper()} market order rejected — WASH-TRADE rule (an "
+                             f"opposite-side market/stop order rests on {symbol}); not cached as a short block: {e}")
                 return None
             elif "40310000" in err or "not allowed to short" in err:
                 # Cache the block — prevents retry on every subsequent scan cycle.
@@ -557,6 +643,10 @@ def submit_limit_order(
                     f"(attempt {_attempt + 1}) — order may already be live. "
                     f"Manual verification required. idem_id={_idem_id}"
                 )
+                return None
+            if _is_wash_trade_reject(err):
+                logger.error(f"[{symbol}] LIMIT {side.upper()} rejected — WASH-TRADE rule (an opposite-side "
+                             f"market/stop order rests on {symbol}): {e}")
                 return None
             if "40310000" in err or "not allowed to short" in err:
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
@@ -817,7 +907,6 @@ def submit_gtc_stop_order(
       PROTECTION_ALREADY_HELD for a held_for_orders rejection, None for any other
       failure. The caller re-derives protection on its next cycle.
     """
-    import re as _re
     if qty <= 0 or stop_price <= 0:
         logger.warning(f"[{symbol}] GTC stop skipped: qty={qty}, stop=${stop_price}")
         return None
@@ -856,6 +945,18 @@ def submit_gtc_stop_order(
         return order
     except Exception as e:
         err = str(e)
+        if _is_wash_trade_reject(err):
+            # TIER-SAFETY (2026-10-08): an opposite-side market/stop order rests on the symbol. Cancelling
+            # (the old 40310000 recovery, every tier's orders) cannot fix this and stripped other tiers'
+            # protection. Cancel nothing, poll nothing; page so the operator sees the conflict.
+            logger.error(f"[{symbol}] GTC stop REJECTED by the wash-trade rule (an opposite-side market/stop "
+                         f"order rests on {symbol}) — nothing cancelled. Position may be unprotected: {e}")
+            try:
+                from alerts import alert_gtc_failed
+                alert_gtc_failed(symbol, side, stop_price, f"wash-trade reject (opposite-side order exists): {e}")
+            except Exception as _wae:
+                logger.error(f"[{symbol}] alert_gtc_failed send failed: {_wae}")
+            return None
         if "40310000" in err or "insufficient qty available" in err.lower():
             # GTC-RACE: cancel+resubmit timing race — held_for_orders not yet released.
             # Root cause (MSTR incident 2026-04-21): Alpaca paper cancel API returns 200
@@ -998,12 +1099,56 @@ def submit_gtc_stop_order(
                     )
                     # fall through to the existing recovery below
 
-            cancel_open_orders_for_symbol(symbol)
-            _related = _re.findall(r'"related_orders"\s*:\s*\[([^\]]*)\]', err)
-            if _related:
-                for _oid in _re.findall(r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', _related[0]):
-                    cancel_order(_oid)
-                    logger.info(f"[{symbol}] GTC-RACE: force-cancelled stuck related order {_oid}")
+            # TIER-SAFETY (2026-10-08): cancel ONLY this tier's own blocking orders — never another tier's
+            # live protective stop (EWY/AAPL 2026-10-07: the swing tier's recovery cancelled the day tier's OCO).
+            _own = cancel_open_orders_for_symbol(symbol, only_tier=tier)
+            _own += _cancel_related_orders_for_tier(err, symbol, tier)
+            _foreign = 0
+            _foreign_stop_qty = 0.0
+            if _own == 0:
+                try:
+                    _foreign, _foreign_stop_qty = _foreign_reducing_cover(symbol, side, tier)
+                except Exception as _fe:  # noqa: BLE001
+                    logger.warning(f"[{symbol}] foreign-blocker check failed ({_fe}) — keeping the legacy poll")
+            if _own == 0 and _foreign > 0:
+                # Nothing of ours is blocking and another tier's (or an untagged/manual) order rests on the
+                # symbol: waiting cannot free that qty, and cancelling it is not ours to do — so do not block
+                # the caller's thread for 63s; page now and let the caller re-derive protection next cycle.
+                # (No order of ours AND no foreign order = a lingering reservation from an already-cancelled
+                # order, the MSTR case — that keeps the legacy poll below.)
+                # Board C1 (Harris/Taleb 2026-10-08): the other tier's order covers ITS shares; protect the
+                # shares still free with this tier's own stop, so no share is left without a stop.
+                # Cold-2nd N1: only when the held shares are held by STOP orders (real downside protection) —
+                # a resting profit limit holding them is not protection, so that case pages instead.
+                _avail2 = _free_share_stop_ok(err, qty, _foreign_stop_qty)
+                if _avail2 is not None:
+                    try:
+                        _rem = client.submit_order(StopOrderRequest(
+                            symbol=symbol,
+                            qty=_avail2,
+                            side=order_side,
+                            stop_price=round(stop_price, 2),
+                            time_in_force=TimeInForce.GTC,
+                            client_order_id=_make_idem_id(tier, symbol, side),
+                        ))
+                        if _rem:
+                            logger.warning(
+                                f"[{symbol}] GTC stop ({tier}) placed for the {_avail2} FREE share(s) of {qty}: the "
+                                f"other {qty - _avail2} are held by another tier's stop (not cancelled) | "
+                                f"Order ID: {_rem.id}"  # type: ignore[union-attr]
+                            )
+                            return _rem
+                    except Exception as _rme:
+                        logger.error(f"[{symbol}] GTC stop for the {_avail2} free share(s) FAILED: {_rme}")
+                try:
+                    from alerts import alert_gtc_failed
+                    alert_gtc_failed(symbol, side, stop_price,
+                                     f"qty held by another tier's / an untagged order — {tier} cancelled nothing: {e}")
+                except Exception as _ae0:
+                    logger.error(f"[{symbol}] alert_gtc_failed send failed: {_ae0}")
+                logger.error(f"[{symbol}] GTC stop ({tier}) NOT placed: the blocking order(s) are not {tier}'s "
+                             f"(another tier's or untagged) — nothing cancelled, no poll. Original: {e}")
+                return None
 
             # Hard 3s initial delay — Alpaca cancel is async; reservation rarely clears
             # in under 2s on paper. Eliminates the guaranteed-fail first-attempt pattern.
@@ -1020,6 +1165,14 @@ def submit_gtc_stop_order(
                     return order
                 except Exception as _pe:
                     _pe_str = str(_pe)
+                    if _is_wash_trade_reject(_pe_str):
+                        logger.error(f"[{symbol}] GTC stop poll retry hit the WASH-TRADE rule — stopping: {_pe}")
+                        try:   # our own blocking order was already cancelled — page, same as the top-level branch
+                            from alerts import alert_gtc_failed
+                            alert_gtc_failed(symbol, side, stop_price, f"wash-trade reject during the hold-clear poll: {_pe}")
+                        except Exception as _wpe:
+                            logger.error(f"[{symbol}] alert_gtc_failed send failed: {_wpe}")
+                        return None
                     if "40310000" not in _pe_str and "insufficient qty available" not in _pe_str.lower():
                         logger.error(f"[{symbol}] GTC stop poll retry failed (non-40310000): {_pe}")
                         return None
@@ -1115,6 +1268,15 @@ def submit_day_stop_order(
         # When all limits consume the cushion, the DAY stop gets insufficient buying_power.
         # Fix: cancel all blocking orders for the symbol, retry once. If retry succeeds,
         # the position gets stop protection. Caller must resubmit GTC limit after close.
+        if _is_wash_trade_reject(err):
+            logger.error(f"[{symbol}] DAY stop REJECTED by the wash-trade rule (an opposite-side market/stop "
+                         f"order rests on {symbol}) — nothing cancelled. Position may be unprotected: {e}")
+            try:   # board C2: page, same as the GTC path
+                from alerts import alert_gtc_failed
+                alert_gtc_failed(symbol, side, stop_price, f"DAY stop wash-trade reject (opposite-side order exists): {e}")
+            except Exception as _wae:
+                logger.error(f"[{symbol}] alert_gtc_failed send failed: {_wae}")
+            return None
         if "40310000" in err or "insufficient" in err.lower():
             # OPT-OUT GUARD (2026-07-20): see submit_gtc_stop_order. A protection-asserting
             # caller cancels NOTHING here, whatever the reason. Discriminate the two errors
@@ -1205,8 +1367,42 @@ def submit_day_stop_order(
                 f"[{symbol}] DAY stop blocked (40310000 / insufficient buying_power) — "
                 f"cancelling blocking orders and retrying once."
             )
-            freed = cancel_open_orders_for_symbol(symbol)
-            logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying DAY stop…")
+            freed = cancel_open_orders_for_symbol(symbol, only_tier=tier)   # TIER-SAFETY: own orders only
+            logger.info(f"[{symbol}] Freed {freed} own ({tier}) blocking order(s). Retrying DAY stop…")
+            if freed == 0:
+                # Nothing of ours blocks. If another tier's / an untagged order holds the shares, a full-qty retry
+                # cannot succeed: protect the FREE shares when other-tier stops cover the rest (board C1), else page.
+                try:
+                    _df, _dfstop = _foreign_reducing_cover(symbol, side, tier)
+                except Exception as _dfe:  # noqa: BLE001
+                    _df, _dfstop = 0, 0.0
+                    logger.warning(f"[{symbol}] DAY foreign-blocker check failed ({_dfe}) — plain retry")
+                if _df > 0:
+                    _dfree = _free_share_stop_ok(err, qty, _dfstop)
+                    if _dfree is not None:
+                        try:
+                            _drem = client.submit_order(StopOrderRequest(
+                                symbol=symbol, qty=_dfree, side=order_side,
+                                stop_price=round(stop_price, 2), time_in_force=TimeInForce.DAY,
+                                client_order_id=_make_idem_id(tier, symbol, side),
+                            ))
+                            if _drem:
+                                logger.warning(
+                                    f"[{symbol}] DAY stop ({tier}) placed for the {_dfree} FREE share(s) of {qty}; the "
+                                    f"rest are held by another tier's stop (not cancelled) | Order ID: {_drem.id}"  # type: ignore[union-attr]
+                                )
+                                return _drem
+                        except Exception as _dre:
+                            logger.error(f"[{symbol}] DAY stop for the {_dfree} free share(s) FAILED: {_dre}")
+                    try:
+                        from alerts import alert_gtc_failed
+                        alert_gtc_failed(symbol, side, stop_price,
+                                         f"DAY stop: qty held by another tier's / an untagged order — {tier} cancelled nothing: {e}")
+                    except Exception as _dae:
+                        logger.error(f"[{symbol}] alert_gtc_failed send failed: {_dae}")
+                    logger.error(f"[{symbol}] DAY stop ({tier}) NOT placed: the blocking order(s) are not {tier}'s — "
+                                 f"nothing cancelled. Original: {e}")
+                    return None
             try:
                 order = client.submit_order(order_data)
                 logger.info(
@@ -1219,6 +1415,11 @@ def submit_day_stop_order(
                     f"[{symbol}] DAY stop retry FAILED after clearing orders: {retry_e} "
                     f"— position unprotected. Set manual stop in Alpaca immediately."
                 )
+                try:   # adversarial review 2026-10-08: a failed retry pages (it used to only log)
+                    from alerts import alert_gtc_failed
+                    alert_gtc_failed(symbol, side, stop_price, f"DAY stop retry failed: {retry_e}")
+                except Exception as _rae:
+                    logger.error(f"[{symbol}] alert_gtc_failed send failed: {_rae}")
                 return None
         # 42210000 = "market is closed" — DAY stop submitted before RTH open (pre-market).
         # _submit_rth_day_stops() already retries each cycle; returning None here lets
@@ -1521,8 +1722,10 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
     once.  Main.py pre-cancels the two tracked order IDs before calling here, but
     unknown blockers (orphaned GTC partials, manually placed orders) were not
     covered — resulting in silent partial-close failures every cycle until manual
-    intervention.  cancel_open_orders_for_symbol() catches ALL open orders so the
-    retry succeeds even when the blocker is untracked.
+    intervention.  cancel_open_orders_for_symbol() catches the calling tier's open orders
+    (tracked or not) so the retry succeeds when the blocker is this tier's own.
+    TIER-SAFETY (2026-10-08): it NEVER cancels another tier's order or an untagged/manual one
+    (only_tier=tier for every tier) — a blocker that is not ours fails the close loudly instead.
     """
     if qty < 1:
         logger.warning(f"[{symbol}] partial_close_position called with qty={qty} < 1 — skipping to prevent zero-share order.")
@@ -1585,18 +1788,19 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                 f"Returning True so the caller's exit-recording path runs."
             )
             return True
+        if _is_wash_trade_reject(err):
+            logger.error(f"[{symbol}] Partial close REJECTED by the wash-trade rule (an opposite-side "
+                         f"market/stop order rests on {symbol}) — nothing cancelled: {e}")
+            return False
         if "40310000" in err:
             logger.warning(
                 f"[{symbol}] Partial close blocked (40310000 held_for_orders) — "
-                f"cancelling all open orders and retrying once."
+                f"cancelling this tier's own ({tier}) open orders and retrying once."
             )
-            # TIER-SAFE CANCEL (day-tier order-safety Diff B, design record §5c): for the
-            # "daytrade" tier, the 40310000 recovery cancels ONLY its own blocking orders (via
-            # Diff A's only_tier) — never a co-held tier's live protective stop on a shared lot
-            # (the Movers/QHM collision the project retired the Movers bot over). Every OTHER tier
-            # resolves to only_tier=None, the legacy BLANKET cancel, byte-for-byte unchanged.
-            # Inert until the Track-A day-tier module (diff #2) becomes the first daytrade caller.
-            _only_tier = tier if tier == "daytrade" else None
+            # TIER-SAFE CANCEL (day tier since 2026-08-30; EVERY tier since 2026-10-08): the 40310000
+            # recovery cancels ONLY the calling tier's own blocking orders — never a co-held tier's live
+            # protective stop on a shared lot. An untagged/unknown order is never cancelled.
+            _only_tier = tier
             freed = cancel_open_orders_for_symbol(symbol, only_tier=_only_tier)
             logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying partial close…")
             try:
