@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 
 import config
 from alerts import alert_exit, alert_partial, alert_stop_breach, alert_gtc_failed
-from data.alpaca_data import get_latest_trade
+from data.alpaca_data import get_latest_quote, get_latest_trade
 from data.fetcher import fetch_bars
 from data.live_price import DELAYED_FEED_AGE_S, live_price_or
 from execution.broker import (
@@ -81,6 +81,57 @@ _STOP_TERMINAL = frozenset(("canceled", "expired", "done_for_day", "rejected"))
 _STOP_NOT_YET = frozenset(("pending_replace", "pending_cancel", "pending_new", "accepted"))
 _STOP_REPLACEABLE = frozenset(("new", "held", "partially_filled"))
 _both_stops_warned: set = set()   # symbols already paged for the DAY+GTC anomaly (this process)
+
+
+# ─── SECOND PRICE CHECK ON EXITS (Rafael-approved 2026-10-06; board Harris/Thorp + GAI, Gro minority) ─────────
+# A single IEX print can tick through a level while the market (the bid for a long, the ask for a short) has not.
+# Trail hits and profit-tranche targets are confirmed against the live quote before they act. Hard stops are
+# unchanged (3-scan confirm + broker stop). Kill flag: EXIT_PRICE_CONFIRM_ENABLED (only an explicit False disables).
+_CONFIRM_SPREAD_SANITY_PCT = 0.02   # PROV:exit-confirm-2026-10-06 — a quote wider than 2% of mid is unusable
+_CONFIRM_BAND_PCT = 0.05            # PROV:exit-confirm-2026-10-06 — a quote > 5% from the level is a bad read
+
+
+def _quote_confirms(symbol: str, direction: str, level: float, kind: str) -> "bool | None":
+    """Does the live IEX quote agree that `level` was crossed? kind "trail" (protective: long -> bid <= level,
+    short -> ask >= level) or "target" (profit: long -> ask >= level, short -> bid <= level — the market is quoting
+    at the level, so the print is real; a bad print sits outside the quote. Requiring the bid would make a long
+    target wait for price to run half the spread past it). None when the quote is unreadable, crossed, too wide or
+    implausibly far from the level (the caller decides). Never raises."""
+    try:
+        q = get_latest_quote(symbol)
+        if not isinstance(q, dict):
+            return None
+        bid, ask, lv = float(q.get("bid") or 0.0), float(q.get("ask") or 0.0), float(level)
+        if not (bid > 0 and ask >= bid and lv > 0):
+            return None
+        mid = (bid + ask) / 2.0
+        if (ask - bid) > _CONFIRM_SPREAD_SANITY_PCT * mid or abs(mid / lv - 1.0) > _CONFIRM_BAND_PCT:
+            return None
+        if kind == "trail":
+            return bid <= lv if direction == "long" else ask >= lv
+        return ask >= lv if direction == "long" else bid <= lv
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] exit quote confirm unavailable: %s", symbol, e)
+        return None
+
+
+def _exit_confirm_enabled() -> bool:
+    return getattr(config, "EXIT_PRICE_CONFIRM_ENABLED", True) is not False
+
+
+def _profit_confirm_ok(trade: dict, symbol: str, direction: str, level: float, flag: str) -> bool:
+    """Profit-taking second check. Quote confirms -> act. Quote says not reached (False) -> wait. Quote unusable
+    (None) -> wait ONE scan, then act on the print (a thin name's permanently wide quote must not block every
+    take-profit). Kill flag off -> act."""
+    if not _exit_confirm_enabled():
+        return True
+    _tc = _quote_confirms(symbol, direction, level, "target")
+    if _tc is True or (_tc is None and trade.get(flag)):
+        trade.pop(flag, None)
+        return True
+    if _tc is None:
+        trade[flag] = True
+    return False
 
 
 def _order_status(order) -> str:
@@ -507,6 +558,20 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 (direction == "long"  and current_price <= trail_stop) or
                 (direction == "short" and current_price >= trail_stop)
             )
+            # Second price check (protective): act when the quote also confirms; if only the print crossed, wait
+            # at most ONE scan, then act on the print; an unreadable quote acts on the print as before.
+            if trail_hit and _exit_confirm_enabled():
+                _tc = _quote_confirms(symbol, direction, trail_stop, "trail")
+                if _tc is False and not trade.get("_trail_unconfirmed"):
+                    trade["_trail_unconfirmed"] = True
+                    tracker._save_log()
+                    logger.info(f"[{symbol}] Trail print ${current_price:.2f} crossed ${trail_stop:.2f} but the "
+                                f"quote did not — re-checking next scan (one-scan max)")
+                    trail_hit = False
+                else:
+                    trade.pop("_trail_unconfirmed", None)
+            elif not trail_hit:
+                trade.pop("_trail_unconfirmed", None)
             if trail_hit:
                 _trail_phase = trade.get("trail_phase")
                 if _trail_phase in (1, 2) and atr_value > 0:
@@ -715,7 +780,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 t_hit = current_price <= t_price
 
             if not t_hit:
+                trade.pop("_tranche_unconfirmed", None)
                 break   # price hasn't reached this level; higher levels won't be hit either
+            # Second price check (profit-taking): the quote must also reach the level; otherwise wait for the next
+            # scan (an unusable quote waits one scan) — deferring a take-profit can never hide a loss.
+            if not _profit_confirm_ok(trade, symbol, direction, t_price, "_tranche_unconfirmed"):
+                logger.info(f"[{symbol}] T{t_idx + 1} print ${current_price:.2f} reached ${t_price:.2f} but the "
+                            f"quote did not confirm — waiting for the next scan")
+                break
 
             # DS Finding 3: abort remaining tranches if cycle blocking budget exhausted
             _elapsed_budget = time.monotonic() - _cycle_start
@@ -1593,6 +1665,15 @@ def check_exits(
                 (direction == "short" and current_price <= target_price) or
                 trade.get("exit_pending_reason") == "target"
             )
+            # Second price check (profit-taking): a fresh target hit needs the quote to confirm; otherwise wait for
+            # the next scan (an unusable quote waits one scan). An exit already in progress is not re-gated.
+            if not _target_hit:
+                trade.pop("_target_unconfirmed", None)
+            elif (trade.get("exit_pending_reason") != "target"
+                    and not _profit_confirm_ok(trade, symbol, direction, target_price, "_target_unconfirmed")):
+                logger.info(f"[{symbol}] target print ${current_price:.2f} reached ${target_price:.2f} but the "
+                            f"quote did not confirm — waiting for the next scan")
+                _target_hit = False
             if _target_hit:
                 _op = ">=" if direction == "long" else "<="
                 logger.info(

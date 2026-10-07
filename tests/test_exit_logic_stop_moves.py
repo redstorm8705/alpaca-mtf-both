@@ -44,6 +44,7 @@ class Base(unittest.TestCase):
             "submit_gtc_stop_order": mock.Mock(side_effect=lambda **k: _order("NEWGTC", stop_price=k["stop_price"])),
             "cancel_stop_confirmed": mock.Mock(return_value=True),
             "_log_trade_event": mock.Mock(),
+            "_quote_confirms": mock.Mock(return_value=True),   # second price check: confirmed unless a test says otherwise
         }
         for n, v in pats.items():
             p = mock.patch.object(el, n, v)
@@ -309,7 +310,7 @@ class TestPartialExitSequence(Base):
         self.assertEqual(self.m["submit_day_stop_order"].call_args[1]["allow_cancel_blocking"], False)
 
 
-class TestTrailRatchet(Base):
+class TrailBase(Base):
     def setUp(self):
         super().setUp()
         main_stub = types.ModuleType("main")
@@ -328,6 +329,8 @@ class TestTrailRatchet(Base):
         p.start()
         self.addCleanup(p.stop)
 
+
+class TestTrailRatchet(TrailBase):
     def test_ratchet_moves_stop_in_place(self):
         t = {"direction": "long", "entry_price": 100.0, "atr_value": 4.0, "qty": 6, "qty_remaining": 6,
              "stop": 100.0, "trail_stop": 103.0, "trail_phase": 1, "rth_day_stop_order_id": "S1",
@@ -401,3 +404,162 @@ class TestCheckExitsLivePrice(Base):
         t["stop_breach_count"] = 2
         self._run(t)
         self.assertEqual(t["stop_breach_count"], 0)                                 # $96 inside the stop: same as pre-patch
+
+
+class TestQuoteConfirms(unittest.TestCase):
+    # META 10/02: a ~0.6% IEX spread must not push a long target half a spread higher (adversarial C6)
+    """The quote reader itself (2026-10-06 second price check)."""
+
+    def _q(self, quote, direction, level, kind):
+        with mock.patch.object(el, "get_latest_quote", return_value=quote):
+            return el._quote_confirms("X", direction, level, kind)
+
+    def test_trail_and_target_sides(self):
+        q = {"bid": 99.98, "ask": 100.02}
+        self.assertTrue(self._q(q, "long", 100.0, "trail"))       # bid 99.98 <= 100 trail
+        self.assertFalse(self._q(q, "long", 99.9, "trail"))       # bid above the trail: not crossed
+        self.assertTrue(self._q(q, "short", 100.0, "trail"))      # ask 100.02 >= 100
+        self.assertTrue(self._q(q, "long", 100.0, "target"))      # offer 100.02 >= 100: market quotes the target
+        self.assertFalse(self._q(q, "long", 100.05, "target"))    # offer below the target: the print is outside the quote
+        self.assertTrue(self._q(q, "short", 100.0, "target"))     # bid 99.98 <= 100
+        self.assertFalse(self._q(q, "short", 99.95, "target"))
+
+    def test_wide_spread_long_target_confirms_at_the_level(self):
+        self.assertTrue(self._q({"bid": 760.0, "ask": 764.6}, "long", 762.0, "target"))
+
+    def test_unusable_quotes_return_none(self):
+        for q in (None, {}, {"bid": 0, "ask": 100}, {"bid": 101, "ask": 100},       # missing / crossed
+                  {"bid": 97.0, "ask": 103.0},                                     # 6% wide
+                  {"bid": 89.99, "ask": 90.01}):                                   # 10% from the level
+            self.assertIsNone(self._q(q, "long", 100.0, "trail"), q)
+        with mock.patch.object(el, "get_latest_quote", side_effect=RuntimeError("down")):
+            self.assertIsNone(el._quote_confirms("X", "long", 100.0, "trail"))
+
+
+class TestProfitConfirmOk(unittest.TestCase):
+    def test_outcomes(self):
+        t = {}
+        with mock.patch.object(el, "_quote_confirms", return_value=True):
+            self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
+        with mock.patch.object(el, "_quote_confirms", return_value=False):
+            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
+            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))      # not reached: keeps waiting
+            self.assertNotIn("_f", t)
+        with mock.patch.object(el, "_quote_confirms", return_value=None):
+            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))      # unusable: wait one scan
+            self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))       # then act on the print
+            self.assertNotIn("_f", t)
+        with mock.patch.object(el.config, "EXIT_PRICE_CONFIRM_ENABLED", False, create=True), \
+                mock.patch.object(el, "_quote_confirms", side_effect=AssertionError("no quote read")):
+            self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
+
+
+class TestTrancheConfirm(TestPartialExitSequence):
+    def test_unconfirmed_tranche_waits(self):
+        self.m["_quote_confirms"].return_value = False
+        t = self._trade()
+        self._run(t)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(t["qty_remaining"], 9)
+        self.assertEqual(self.m["_quote_confirms"].call_args[0][3], "target")
+
+    def test_unusable_quote_waits_one_scan_then_sells(self):
+        self.m["_quote_confirms"].return_value = None
+        t = self._trade()
+        self._run(t)
+        self.assertEqual(self.calls, [])
+        self._run(t)
+        self.assertIn(("partial", 3), self.calls)
+
+
+class _Acted(BaseException):
+    """Raised by the first downstream exit call: proves the exit decision acted (escapes `except Exception`)."""
+
+
+class TestTrailConfirm(TrailBase):
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(el, "_move_stops", side_effect=_Acted)   # first call on a trail hit (phase partial)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _trade(self):
+        # live $102.5 is through the $103 trail
+        return {"direction": "long", "entry_price": 100.0, "atr_value": 4.0, "qty": 6, "qty_remaining": 6,
+                "stop": 100.0, "trail_stop": 103.0, "trail_phase": 1, "rth_day_stop_order_id": "S1",
+                "trade_mode": "swing", "score": 10}
+
+    def _run(self, t, tr):
+        with mock.patch.object(el, "live_price_or", side_effect=lambda s, fb, w, *a: (102.5, "iex_trade")):
+            el.check_partial_exits(tr, kelly=mock.Mock(), risk=mock.Mock(), mri=None, last_vix=15.0)
+
+    def test_quote_disagrees_defers_exactly_one_scan(self):
+        self.m["_quote_confirms"].return_value = False
+        t = self._trade()
+        tr = FakeTracker({"X": t})
+        self._run(t, tr)                                                          # scan 1: deferred
+        self.assertTrue(t.get("_trail_unconfirmed"))
+        self.assertEqual(self.m["_quote_confirms"].call_args[0][1:], ("long", 103.0, "trail"))
+        with self.assertRaises(_Acted):                                           # scan 2: acts on the print
+            self._run(t, tr)
+        self.assertNotIn("_trail_unconfirmed", t)
+
+    def test_confirmed_or_unusable_quote_acts_immediately(self):
+        for qc in (True, None):
+            self.m["_quote_confirms"].return_value = qc
+            t = self._trade()
+            with self.assertRaises(_Acted):
+                self._run(t, FakeTracker({"X": t}))
+
+    def test_kill_flag_skips_the_quote(self):
+        self.m["_quote_confirms"].side_effect = AssertionError("no quote read")
+        t = self._trade()
+        with mock.patch.object(el.config, "EXIT_PRICE_CONFIRM_ENABLED", False, create=True), \
+                self.assertRaises(_Acted):
+            self._run(t, FakeTracker({"X": t}))
+
+    def test_flag_cleared_when_price_recovers(self):
+        t = self._trade()
+        t["_trail_unconfirmed"] = True
+        with mock.patch.object(el, "live_price_or", side_effect=lambda s, fb, w, *a: (108.0, "iex_trade")), \
+                mock.patch.object(el, "_move_stops", return_value="moved"):           # $108 only ratchets the trail
+            el.check_partial_exits(FakeTracker({"X": t}), kelly=mock.Mock(), risk=mock.Mock(), mri=None, last_vix=15.0)
+        self.assertNotIn("_trail_unconfirmed", t)
+
+
+class TestTargetConfirm(TestCheckExitsLivePrice):
+    def _target_trade(self):
+        t = self._trade()
+        t.update(direction="short", stop=105.0, target=95.0)   # live $94 is through the $95 short target
+        return t
+
+    def test_unconfirmed_target_does_not_close(self):
+        self.m["_quote_confirms"].return_value = False
+        t = self._target_trade()
+        self._run(t)
+        self.m["close_position"].assert_not_called()
+
+    def test_confirmed_target_closes(self):
+        self.m["close_position"].side_effect = _Acted
+        t = self._target_trade()
+        with self.assertRaises(_Acted):
+            self._run(t)
+        self.assertEqual(self.m["_quote_confirms"].call_args[0][1:], ("short", 95.0, "target"))
+
+    def test_unusable_quote_waits_one_scan_then_closes(self):
+        self.m["_quote_confirms"].return_value = None
+        self.m["close_position"].side_effect = _Acted
+        t = self._target_trade()
+        self._run(t)
+        self.assertTrue(t.get("_target_unconfirmed"))
+        with self.assertRaises(_Acted):
+            self._run(t)
+
+    def test_exit_already_pending_is_not_regated(self):
+        self.m["_quote_confirms"].return_value = False
+        self.m["close_position"].side_effect = _Acted
+        t = self._target_trade()
+        t["exit_pending_reason"] = "target"
+        with self.assertRaises(_Acted):
+            self._run(t)
+        self.m["_quote_confirms"].assert_not_called()
