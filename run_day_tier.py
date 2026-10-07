@@ -308,6 +308,21 @@ def _is_counter(side: object, direction: object) -> bool:
     return s in ("LONG", "SHORT") and d in ("long", "short") and (s == "LONG") != (d == "long")
 
 
+def _held_by_other_tiers() -> "set | None":
+    """Symbols with a live broker position NOT owned by the day tier (main bot, swing, QHM, F6), or None when the
+    book cannot be read. Interim no-co-hold rule (2026-10-07): the day tier never shares a symbol with another tier
+    (their whole-symbol exits would sell its shares and book a foreign fill); longs switch to a free 2x ETF.
+    place_entry re-checks the live book right before submit. Never raises."""
+    try:
+        from execution import broker
+        from strategy import day_tier_logger as _dtl
+        owned = {str(t.get("symbol") or "") for t in _dtl.open_trades_from_log().values()}
+        return {str(getattr(p, "symbol", "")) for p in (broker.get_open_positions() or [])} - owned
+    except Exception as e:  # noqa: BLE001
+        logger.warning("day-tier: position read for the co-hold check failed (place_entry re-checks): %s", e)
+        return None
+
+
 def _watch_day_ok(sym: str, side: object, direction: object) -> "tuple[bool, str]":
     """CEO watch-day rule (Rafael 2026-10-06; board Asness/LdP + GAI; design record day_tier_not_trading_and_price_
     confirm_2026-10-06.md): a SHORT against a LONG daily side is taken only after a WATCH DAY — the previous session
@@ -660,6 +675,7 @@ def run_tick() -> dict:
     bar_id = dtm.bar_id_for()
     entered = 0
     capped = False
+    _held_other = _held_by_other_tiers()   # ONCE per tick (co-hold routing); place_entry re-checks before submit
     # TRACK M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05). Runs FIRST inside its 09:45-10:15 ET
     # window (one shot per day); a no-op on every other tick. Same reconcile/force-flat/kill/budget machinery.
     entered_m, track_m_note = 0, "disabled"
@@ -709,11 +725,38 @@ def run_tick() -> dict:
                                          buying_power=buying_power, track="A")
             if not size.get("size_ok"):
                 continue
+            order_sym_a = sym
+            if _held_other is not None and sym in _held_other:
+                # NO CO-HOLD (interim 2026-10-07): another tier holds this stock -> a long switches to a free 2x ETF;
+                # a short (no bear ETF route) or a long with no free ETF is skipped with its reason logged.
+                _piv_a = None
+                try:
+                    from strategy import day_tier_leverage as lev
+                    _etf_a = (lev.etf_for_order(sym, _held_other)
+                              if lev.pivot_enabled() and trigger.get("direction") == "long" else None)
+                    if _etf_a:
+                        from data.live_price import DELAYED_FEED_AGE_S, live_price
+                        _ua, _ea = live_price(sym), live_price(_etf_a, max_age_s=DELAYED_FEED_AGE_S)
+                        _piv_a = lev.leveraged_entry(decision, trigger, _etf_a,
+                                                     _ua.price if _ua else None, _ea.price if _ea else None)
+                        if _piv_a is not None:
+                            decision, trigger = _piv_a
+                            order_sym_a = _etf_a
+                            size = compute_day_tier_size(_etf_a, decision, trigger.get("entry_ref"), equity,
+                                                         buying_power=buying_power, track="A")
+                except Exception as _pa:  # noqa: BLE001
+                    logger.warning("[%s] track-A co-hold pivot error (skip): %s", sym, _pa)
+                    _piv_a = None
+                if _piv_a is None or not size.get("size_ok"):
+                    _log_direction_skip(sym, decision, trigger,
+                                        "another tier holds this symbol and no free 2x ETF route (no co-hold)", bar_id)
+                    continue
+                logger.info("[%s] track-A CO-HOLD PIVOT -> %s: %s", sym, order_sym_a, size.get("reason"))
             if calls_used + per_entry_est > call_budget:
                 capped = True
                 break  # defer the remaining ENTERs to the next tick (bar_id idempotency preserves them)
             _pe_kw = {"decision_id": _ct_decision_id} if _ct_decision_id else {}
-            if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, **_pe_kw):
+            if dtm.place_entry(order_sym_a, decision, trigger, size, bar_id=bar_id, equity=equity, **_pe_kw):
                 entered += 1
             calls_used += per_entry_est
         except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
@@ -829,14 +872,7 @@ def run_tick() -> dict:
                     _etf = None
                     if lev.pivot_enabled() and trigger_b.get("direction") == "long" and lev.bull_etf_for(sym):
                         # ETFs already held by ANOTHER tier are skipped (co-hold close hazard); unreadable book -> no pivot
-                        try:
-                            from strategy import day_tier_logger as _dtl
-                            _owned = {str(t.get("symbol") or "") for t in _dtl.open_trades_from_log().values()}
-                            _held = {str(getattr(p, "symbol", "")) for p in (broker.get_open_positions() or [])} - _owned
-                        except Exception as _he:  # noqa: BLE001
-                            logger.warning("[%s] track-B pivot: position read failed (no pivot): %s", sym, _he)
-                            _held = None
-                        _etf = lev.etf_for_order(sym, _held)
+                        _etf = lev.etf_for_order(sym, _held_other)
                     # Rafael 2026-10-06: trade the STOCK when the budget buys 2+ shares; switch to the 2x ETF only
                     # when it buys 0 or 1. For a 10/10 setup the budget is the max-size notional (single-name cap,
                     # and the thin-name cap for non-deep names) — the same rooms place_entry sizes max_size to.
@@ -853,7 +889,8 @@ def run_tick() -> dict:
                         _stock_shares = 0
                     if _ten and _stock_shares >= 2 and size_b.get("size_ok"):
                         size_b = {**size_b, "max_size": True}   # 10/10 on the stock itself, at maximum size
-                    if _etf and _stock_shares <= 1:
+                    # ...and ALWAYS switch when another tier holds the stock (no co-hold, interim 2026-10-07)
+                    if _etf and (_stock_shares <= 1 or (_held_other is not None and sym in _held_other)):
                         from data.live_price import DELAYED_FEED_AGE_S, live_price
                         # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
                         _up, _ep = live_price(sym), live_price(_etf, max_age_s=DELAYED_FEED_AGE_S)

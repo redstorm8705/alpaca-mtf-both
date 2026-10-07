@@ -126,7 +126,7 @@ class PlaceEntryTrackThreading(unittest.TestCase):
              *, fill_price=70.1, trigger_override=None, flatten_ok=True, exit_recorded=None,
              stop_state=False, pending_close=False, emergency_cancelled=True,
              emergency_fill_qty=0.0, emergency_readable=True, live_net_covers=True,
-             emergency_submit_status="live", pin_fallback=False):
+             emergency_submit_status="live", pin_fallback=False, positions=None):
         state = {} if state is None else state
         self.last_state = state
         submitted: dict = {}
@@ -201,7 +201,7 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             mock.patch("strategy.day_tier_logger.log_target_placed", return_value=True),
             mock.patch("trade_logger.log_event", return_value=True),
             mock.patch.object(broker, "get_account", return_value=acct),
-            mock.patch.object(broker, "get_open_positions", return_value=[]),
+            mock.patch.object(broker, "get_open_positions", return_value=list(positions or [])),
             mock.patch.object(broker, "get_open_orders", return_value=[]),
             mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30),
             mock.patch.object(broker, "submit_limit_order", side_effect=_submit_limit),
@@ -436,6 +436,13 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(qty, 1)
         self.assertEqual(log_track, "B")
+
+    def test_same_side_co_hold_with_another_tier_is_skipped(self):
+        # 2026-10-07 interim: a live same-side position the day tier does not own -> no entry (no co-hold)
+        other = SimpleNamespace(symbol="UBER", side="long", qty="3", current_price=70.0, market_value=210.0)
+        ok, qty, _, _ = self._run("A", positions=[other])
+        self.assertFalse(ok)
+        self.assertIsNone(qty)
 
     def test_track_a_unchanged(self):
         ok, qty, log_track, state_track = self._run("A")
@@ -698,6 +705,7 @@ class RunnerWindowGate(unittest.TestCase):
             mock.patch.object(run_day_tier, "_alignment_for", return_value={"aligned": True, "checks": {}, "reason": "ok"}),
             # leveraged pivot (2026-10-06) is exercised in test_pivot_routes_the_order_to_the_etf
             mock.patch("strategy.day_tier_leverage.etf_for_order", return_value=None),
+            mock.patch.object(run_day_tier, "_held_by_other_tiers", return_value=set()),
         ] + list(extra or [])
         with ExitStack() as stack:  # >20 nested `with` items is a SyntaxError on the OCI py3.10 target
             for p in patches:
