@@ -43,11 +43,12 @@ class DayTierSizing(unittest.TestCase):
         self.assertEqual(r["shares"], 2)                                  # floor(200/100)
 
     def test_track_a_per_trade_budget_is_equity_capped(self):
-        # BP slice is $2,000, but 60% × $2,500 = $1,500 is the per-trade hard ceiling.
+        # BP slice = 20% x $10,000 = $2,000; the equity ceiling (config) caps it at ceiling x $2,500.
+        ceil = float(config.DAYTRADE_TRACK_A_EQUITY_CEILING_PCT)
         r = sz.compute_day_tier_size("NVDA", _dec(conviction=1.0), entry_ref=100.0,
                                      equity=2500.0, buying_power=10000.0, track="A")
-        self.assertEqual(r["budget"], 1500.0)
-        self.assertEqual(r["shares"], 15)
+        self.assertEqual(r["budget"], min(2000.0, ceil * 2500.0))
+        self.assertEqual(r["shares"], int(min(2000.0, ceil * 2500.0) // 100))
 
     # 1c -- BP fail-CLOSED: missing / non-positive / non-finite buying_power on Track A -> size 0, size_ok False.
     def test_track_a_bp_unavailable_fail_closed(self):
@@ -92,13 +93,14 @@ class DayTierSizing(unittest.TestCase):
             self.assertEqual(r["shares"], 0, f"eq={eq} px={px} cv={cv}")
             self.assertFalse(r["size_ok"])
 
-    # 7 -- budget can't afford a whole share (RC-7 floor) -> 0, size_ok False (skip, not a phantom 1).
-    def test_cannot_afford_share(self):
-        # BP 1000 -> track A budget 200, entry 500 -> floor(200/500)=0.
+    # 7 -- CEO order 2026-10-06: a budget below one share no longer skips — the min-1-share floor takes 1 share
+    #      and the wire-time caps (single-name / thin-name / gross / BP / daily dollar budget) decide.
+    def test_cannot_afford_share_takes_the_one_share_floor(self):
+        # BP 1000 -> track A budget 200, entry 500 -> floor(200/500)=0 -> MIN-1-SHARE FLOOR -> 1 share.
         r = sz.compute_day_tier_size("NVDA", _dec(conviction=1.0), entry_ref=500.0, equity=2500.0, buying_power=1000.0, track="A")
-        self.assertEqual(r["shares"], 0)
-        self.assertFalse(r["size_ok"])
-        self.assertIn("< 1 share", r["reason"])
+        self.assertEqual(r["shares"], 1)
+        self.assertTrue(r["size_ok"])
+        self.assertIn("FLOOR", r["reason"])
 
     # 8 -- garbage decision / non-numeric -> 0, never raises.
     def test_garbage_fail_safe(self):
@@ -152,14 +154,12 @@ class DayTierSizing(unittest.TestCase):
         self.assertLessEqual(r["notional"], r["budget"] + 0.01)   # floored notional never exceeds the budget
         self.assertIn("FLOOR", r["reason"])
 
-    # 11b -- floor is GATED by the per-trade budget: when even 1 share exceeds track_budget
-    #        (track_budget < px) it does NOT fire -> stays 0 (the existing "cannot afford" behavior, test 7).
-    def test_min_one_share_floor_gated_by_budget(self):
-        # BP 1000 -> budget 200; entry 500 -> track_budget 200 < 500 -> NO floor -> 0 shares.
+    # 11b -- CEO order 2026-10-06: the floor is NO LONGER gated by the per-trade budget (budget < px still takes 1
+    #        share; the wire-time caps decide whether it fits).
+    def test_min_one_share_floor_not_gated_by_budget(self):
         r = sz.compute_day_tier_size("NVDA", _dec(conviction=1.0), entry_ref=500.0, equity=2500.0, buying_power=1000.0, track="A")
-        self.assertEqual(r["shares"], 0)
-        self.assertFalse(r["size_ok"])
-        self.assertIn("< 1 share", r["reason"])
+        self.assertEqual(r["shares"], 1)
+        self.assertTrue(r["size_ok"])
 
     # 11c -- kill flag: DAYTRADE_MIN_ONE_SHARE_FLOOR=False disables the floor (reverts to skip); the skip
     #        reason honestly names the disabled floor (Rule D per-feature kill flag). Restores config state.

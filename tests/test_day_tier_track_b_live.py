@@ -78,9 +78,12 @@ class TrackBBudgetCap(unittest.TestCase):
                 self.assertEqual(_bounded(1, track="B")[0], 1, repr(junk))
 
     def test_open_track_b_notional_consumes_the_budget(self):
-        # 1 NFLX B lot open at $72 -> $59.25 of the $131.25 budget left -> a $70 UBER entry wires 0.
+        # 1 NFLX B lot open at $72 -> $59.25 of the $131.25 budget left -> room 0 sh at $70. CEO order 2026-10-06:
+        # the Track-B budget never cuts an entry below ONE share (account rooms + daily budget still bound it).
         open_b = {"t1": {"symbol": "NFLX", "track": "B", "fill_qty": 1, "entry_price": 72.0}}
-        self.assertEqual(_bounded(1, track="B", open_trades=open_b)[0], 0)
+        self.assertEqual(_bounded(1, track="B", open_trades=open_b)[0], 1)
+        # ... but it still SHRINKS a larger request: 3 requested, $59.25 room at $70 -> floored at 1, not 3.
+        self.assertEqual(_bounded(3, track="B", open_trades=open_b)[0], 1)
         # An open Track-A lot does NOT consume Track B's budget (a small one, so the shared day-tier gross
         # room — equity x 0.60 for a thin name — is not what binds).
         open_a = {"t2": {"symbol": "MSFT", "track": "A", "fill_qty": 1, "entry_price": 100.0}}
@@ -88,18 +91,21 @@ class TrackBBudgetCap(unittest.TestCase):
 
     def test_state_only_b_lot_counts_against_the_budget(self):
         # Risk seat R2: a B lot missing from the durable log (failed log write) but present in state still
-        # consumes the Track-B budget -> the next $70 B entry wires 0; the same lot does not touch Track A.
+        # consumes the Track-B budget (a 3-share request is floored at 1, never 0); the same lot does not touch Track A.
         extra = {"entry::NFLX::x": {"symbol": "NFLX", "track": "B", "fill_qty": 1, "entry_price": 72.0}}
-        self.assertEqual(dtm._bounded_entry_qty(1, 70.0, 69.0, 2500.0, {}, {}, 4000.0, 0.0, 0.30, [],
+        # the state-only lot still COUNTS (3 requested -> budget room 0 -> floored at 1 share, CEO order 2026-10-06)
+        self.assertEqual(dtm._bounded_entry_qty(3, 70.0, 69.0, 2500.0, {}, {}, 4000.0, 0.0, 0.30, [],
                                                 risk_equity=2500.0, symbol="UBER", track="B",
-                                                track_budget=131.25, extra_b_lots=extra)[0], 0)
+                                                track_budget=131.25, extra_b_lots=extra)[0], 1)
         qa = dtm._bounded_entry_qty(1, 70.0, 69.0, 2500.0, {}, {}, 4000.0, 0.0, 0.30, [], risk_equity=2500.0,
                                     symbol="UBER", track="A", extra_b_lots=extra)[0]
         self.assertEqual(qa, _bounded(1, track="A")[0])
 
     def test_budget_measured_at_order_price_closes_slippage_overshoot(self):
-        # budget $131.25 affords 1 share at entry_ref $131.00, but the marketable limit is $131.26 -> 0.
-        self.assertEqual(_bounded(1, track="B", order_price=131.26, stop_price=129.0)[0], 0)
+        # budget $131.25 affords 1 share at entry_ref $131.00, but the marketable limit is $131.26 -> 0 by the budget;
+        # CEO order 2026-10-06: the Track-B budget never cuts below ONE share -> 1 (rooms/daily budget still bound it).
+        self.assertEqual(_bounded(1, track="B", order_price=131.26, stop_price=129.0)[0], 1)
+        self.assertEqual(_bounded(2, track="B", order_price=131.26, stop_price=129.0)[0], 1)   # still shrinks 2 -> 1
 
     def test_missing_budget_fails_closed(self):
         for bad in (None, 0, -5, float("nan"), "x"):
@@ -120,7 +126,7 @@ class PlaceEntryTrackThreading(unittest.TestCase):
              *, fill_price=70.1, trigger_override=None, flatten_ok=True, exit_recorded=None,
              stop_state=False, pending_close=False, emergency_cancelled=True,
              emergency_fill_qty=0.0, emergency_readable=True, live_net_covers=True,
-             emergency_submit_status="live"):
+             emergency_submit_status="live", pin_fallback=False):
         state = {} if state is None else state
         self.last_state = state
         submitted: dict = {}
@@ -178,6 +184,12 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             mock.patch.object(dtm, "_load_state", side_effect=lambda: state),
             mock.patch.object(dtm, "_save_state", return_value=True),
             mock.patch.object(dtm, "_min_stop_room_ok", return_value=(True, "ok")),
+            # 2026-10-06: place_entry widens via _room_stop and prices off live_price — both offline here
+            mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _lim, stop: (stop, "room stop kept")),
+            mock.patch("data.live_price.live_price", return_value=None),
+            # the crossed-target safety tests below exercise the flatten machinery (fallback OFF); see
+            # test_pin_fallback_turns_a_crossed_target_into_an_r_multiple_bracket for the default (ON) behaviour
+            mock.patch.object(config, "DAYTRADE_FADE_PIN_FALLBACK", pin_fallback, create=True),
             mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None),
             mock.patch.object(dtm, "_confirm_fill", return_value=True),
             mock.patch.object(dtm, "_final_fill", side_effect=_final_fill),
@@ -238,6 +250,20 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertEqual(self.last_flatten.call_args.kwargs["reason"], "fill_invalidated_setup")
         self.assertEqual(self.last_emergency_stop.call_count, 1)  # valid stop before flatten
         self.last_oco_submit.assert_not_called()
+
+    def test_pin_fallback_turns_a_crossed_target_into_an_r_multiple_bracket(self):
+        # CEO order 2026-10-06 default: the fill passed the pin (short filled 338.29 below target 338.76) -> the
+        # trade is KEPT with an R-multiple target on the profit side instead of being flattened.
+        ok, _, _, _ = self._run(
+            "A", fill_price=338.29, pin_fallback=True,
+            trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 339.0,
+                              "target": 338.76, "wall_ref": None},
+        )
+        self.assertTrue(ok)
+        self.last_flatten.assert_not_called()
+        self.last_oco_submit.assert_called_once()
+        tp = self.last_oco_submit.call_args.args[3]
+        self.assertLess(tp, 338.29)                      # a short target below the fill
 
     def test_failed_invalid_geometry_flatten_remains_reconcilable(self):
         self._run(
@@ -357,8 +383,8 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         st = {f"entry::NFLX::{today}-0945": {"symbol": "NFLX", "track": "B", "state": "filled", "coid": "DT-NFLX-x",
                                              "bar_id": f"{today}-0945", "fill_qty": 1, "fill_px": 72.0, "side": "long"}}
         ok, qty, _, _ = self._run("B", state=st)
-        self.assertFalse(ok)
-        self.assertIsNone(qty)
+        self.assertTrue(ok)          # CEO order 2026-10-06: the budget shrinks to ONE share, never to a skip
+        self.assertEqual(qty, 1)
 
     def test_logged_b_lot_is_counted_once_not_twice(self):
         # The same lot present in BOTH the log and state is counted once. Order price = round(70*1.002,2) = 70.14.
@@ -670,6 +696,8 @@ class RunnerWindowGate(unittest.TestCase):
             # exercise the window/budget/shot mechanics, so the trend side agrees with the long ENTER.
             mock.patch.object(run_day_tier, "_side_for", return_value="LONG"),
             mock.patch.object(run_day_tier, "_alignment_for", return_value={"aligned": True, "checks": {}, "reason": "ok"}),
+            # leveraged pivot (2026-10-06) is exercised in test_pivot_routes_the_order_to_the_etf
+            mock.patch("strategy.day_tier_leverage.etf_for_order", return_value=None),
         ] + list(extra or [])
         with ExitStack() as stack:  # >20 nested `with` items is a SyntaxError on the OCI py3.10 target
             for p in patches:
@@ -839,6 +867,43 @@ class RunnerWindowGate(unittest.TestCase):
         self.assertEqual(result["phase"], "scan")
         self.assertEqual(result["track_b_note"], "import_error")
         bsf.assert_not_called()
+
+    def test_pivot_routes_the_order_to_the_etf(self):
+        from data.live_price import LivePrice
+        lp = {"UBER": LivePrice(70.0, "iex_trade", 1.0), "UBRL": LivePrice(20.0, "iex_trade", 1.0)}
+        # 10/10 whose max-size budget buys only 1 share of the stock (single-name cap shrunk to $75 vs UBER $70)
+        # -> the 2x ETF at max size (Rafael 2026-10-06: ETF only when the stock gives 0 or 1 share)
+        extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),
+                 mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),
+                 mock.patch.object(config, "DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT", 0.03),
+                 mock.patch("data.live_price.live_price", side_effect=lambda s, **k: lp.get(s)),
+                 mock.patch("execution.broker.get_open_positions", return_value=[]),
+                 mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={})]
+        result, bsf, pe = self._tick(True, extra=extra)
+        self.assertEqual(result["entered_b"], 1)
+        sym, _dec, trg, size = pe.call_args.args[:4]
+        self.assertEqual(sym, "UBRL")
+        self.assertEqual((trg["underlying"], trg["leverage"]), ("UBER", 2.0))
+        self.assertAlmostEqual(trg["wall_ref"], 20.0 * (1 + 2 * (69.0 / 70.0 - 1)), places=3)
+        self.assertEqual(size["track"], "B")
+        self.assertTrue(size.get("max_size"))
+
+    def test_ten_of_ten_buying_two_plus_shares_trades_the_stock_at_max_size(self):
+        extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),
+                 mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),
+                 mock.patch("execution.broker.get_open_positions", return_value=[]),
+                 mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={})]
+        _r, _b, pe = self._tick(True, extra=extra)
+        self.assertEqual(pe.call_args.args[0], "UBER")       # $1,300 thin cap / $70 = 18 shares -> stock
+        self.assertTrue(pe.call_args.args[3].get("max_size"))
+
+    def test_affordable_non_ten_does_not_pivot(self):
+        extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),
+                 mock.patch("execution.broker.get_open_positions", return_value=[]),
+                 mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={})]
+        _r, _b, pe = self._tick(True, extra=extra)
+        self.assertEqual(pe.call_args.args[0], "UBER")
+        self.assertFalse(pe.call_args.args[3].get("max_size"))
 
     def test_track_b_flag_off_is_a_no_op(self):
         # T4: with the window, universe and calendar all forced ON, only the FLAG can keep Track B off.

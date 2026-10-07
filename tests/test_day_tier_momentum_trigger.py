@@ -236,7 +236,7 @@ class MomentumTrigger(unittest.TestCase):
 
     def test_past_cutoff_is_wait(self):
         self._vwap(101.0)
-        rows = _OR + [(100.5, 102.0, 100.6, 101.5, 1000)] * 20
+        rows = _OR + [(100.5, 102.0, 100.6, 101.5, 1000)] * M._SESSION_CUTOFF_BARS  # one past the cutoff
         r = M.compute_momentum_trigger("X", "up", _frame(rows))
         self.assertEqual(r["trigger"], "WAIT")
         self.assertIn("cutoff", r["reason"])

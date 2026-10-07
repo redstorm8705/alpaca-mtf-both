@@ -119,24 +119,43 @@ _GRO_BOT_LOG_LINES = 15            # Groq-only bot-log tail (vs 100 for Gemini)
 _GRO_MAX_COMPLETION_TOKENS = 2500  # bound Groq completion so input+completion ≤ 8k TPM (gpt-oss)
 _GRO_PROMPT_CHAR_BUDGET = 9_000    # Groq-only clamp (~4.3k tok at ~2.1 ch/tok); keeps total < 8k TPM
 
-# ── Adversarial role preambles (Round 2 DS/GAI finding — prevent groupthink) ─
-_GRO_ROLE_PREAMBLE = (
-    "You are a SKEPTICAL RISK AUDITOR reviewing an Alpaca paper trading bot.\n"
-    "YOUR MANDATE: Find evidence this bot should be paused or its parameters tightened.\n"
-    "DEFAULT STANCE: Assume the worst interpretation of ambiguous data. "
-    "Challenge every apparent win. Surface hidden fragility.\n"
-    "ANALYTICAL LENSES:\n"
-    "  - Nassim Taleb (Antifragile, The Black Swan): "
-    "Is recent P&L luck or edge? Is this system fragile to tail events?\n"
-    "  - Larry Harris (Trading and Exchanges): "
-    "Is adverse selection or execution leakage consuming alpha?\n"
-    "  - Thomas Peterffy (IBKR infrastructure): "
-    "Where will this system fail silently under load or edge conditions?\n"
-    "If you cannot find evidence of positive expectancy, say so explicitly — "
-    "do not invent edge.\n\n"
+# ── NORTH STAR FRAME (Rafael CEO order 2026-10-06) — opens BOTH auditor prompts ─────────
+# Root cause of the 2026-10-06 "breaches risk-management safeguards / defensive paralysis" Slack cards: the Groq
+# preamble told the model to "find evidence this bot should be paused or its parameters tightened ... assume the
+# worst", and neither prompt carried the account's purpose or the per-tier risk model. Both now reason FROM this.
+_NORTH_STAR_FRAME = (
+    "NORTH STAR (the owner's standing order — every judgement you make starts here):\n"
+    "  This is a PAPER trading account. Goal: grow $2.5K to $25K. Until real money the #1 objective is DATA\n"
+    "  COLLECTION AND EDGE EVALUATION — the bot must TRADE EVERY DAY. Not trading is the failure mode, not losing\n"
+    "  a paper trade: a losing trade is investigated and learned from.\n"
+    "  The ONLY safety envelope (do not ask for more): a protective stop on every position, the day tier\n"
+    "  flattens before the close, the 7% account daily kill switch, paper=True. Do NOT recommend pausing,\n"
+    "  halting, tightening filters, raising score floors, or shrinking size — those are out of scope.\n"
+    "  RISK IS PER TIER: the DAY tier is meant to be the LOOSEST and MOST ACTIVE tier (intraday, flat by\n"
+    "  close, may trade 2x leveraged single-stock ETFs at full size on 10/10 setups); SWING carries overnight;\n"
+    "  QHM / Forever-6 are long-term buy-and-hold anchors. Judge each tier by its OWN rules.\n"
+    "  FACTS ONLY: every claim you make must quote the exact line from the DATA below that proves it. A claim\n"
+    "  you cannot quote is not reported. Your output is fact-checked against the data and code before the\n"
+    "  owner sees it; unprovable claims are removed.\n\n"
 )
 
-_GAI_ROLE_PREAMBLE = (
+_GRO_ROLE_PREAMBLE = _NORTH_STAR_FRAME + (
+    "You are a SKEPTICAL FACT AUDITOR reviewing an Alpaca paper trading bot.\n"
+    "YOUR MANDATE: find what is BROKEN, FALSE, or MIS-RECORDED — a trade whose logged outcome contradicts the\n"
+    "fills, a protective stop that is genuinely missing (quote the trade id), a silent failure, an entry the\n"
+    "bot's own rules should have taken but blocked. Challenge apparent wins with the fills data.\n"
+    "ANALYTICAL LENSES:\n"
+    "  - Nassim Taleb (Antifragile, The Black Swan): "
+    "Is recent P&L luck or edge? Where is a tail exposure that the existing stop does NOT bound?\n"
+    "  - Larry Harris (Trading and Exchanges): "
+    "Is adverse selection or execution leakage consuming alpha (fill vs signal price)?\n"
+    "  - Thomas Peterffy (IBKR infrastructure): "
+    "Where will this system fail silently under load or edge conditions?\n"
+    "If you cannot find evidence of positive expectancy, say so explicitly — do not invent edge. A low trade\n"
+    "count is itself a defect to report.\n\n"
+)
+
+_GAI_ROLE_PREAMBLE = _NORTH_STAR_FRAME + (
     "You are an ALPHA OPTIMIZER reviewing an Alpaca paper trading bot.\n"
     "YOUR MANDATE: Find evidence this bot's edge is being suppressed by "
     "overly conservative parameters. Find alpha left on the table.\n"
@@ -208,6 +227,12 @@ def _find_latest_audit_file(glob_pattern: str) -> Path | None:
     star_pattern = glob_pattern.replace("{date}", "*")
     candidates = sorted(_LOGS_DIR.glob(star_pattern), reverse=True)
     return next((c for c in candidates if c.stat().st_size > 0), None)
+
+
+def _today_audit_file(glob_pattern: str) -> Path | None:
+    """TODAY's audit file only (PT date, as the reports are named) — never a prior day's (Rafael 2026-10-06)."""
+    p = _LOGS_DIR / glob_pattern.replace("{date}", datetime.now(_PT).strftime("%Y-%m-%d"))
+    return p if p.exists() and p.stat().st_size > 0 else None
 
 
 def _read_tail(path: Path, n_lines: int) -> str:
@@ -689,19 +714,22 @@ def _parse_pipe_findings(report_path: Path | None) -> list[dict]:
 
 
 def _append_structured_directives(
-    week: str, gro_text: str | None, gai_text: str | None
+    week: str, gro_text: str | None, gai_text: str | None,
+    gro_proven: list | None = None, gai_proven: list | None = None,
+    nightly_proven: list | None = None, midday_proven: list | None = None,
 ) -> dict:
     """Validate + dedup structured findings from all 4 sources and append each as
-    its own pending_review line in audit_directives.jsonl. Returns per-source counts."""
+    its own pending_review line in audit_directives.jsonl. Returns per-source counts.
+    gro_proven / gai_proven: the fact-checked findings (meta-audit) — when given, ONLY those are queued."""
     path = _LOGS_DIR / "audit_directives.jsonl"
     import hashlib
     sources = {
-        "gro_meta": _parse_json_findings(gro_text),
-        "gai_meta": _parse_json_findings(gai_text),
-        "nightly_report": _parse_pipe_findings(
-            _find_latest_audit_file("gemini_audit_{date}.txt")),
-        "midday_report": _parse_pipe_findings(
-            _find_latest_audit_file("midday_gemini_{date}.txt")),
+        "gro_meta": gro_proven if gro_proven is not None else _parse_json_findings(gro_text),
+        "gai_meta": gai_proven if gai_proven is not None else _parse_json_findings(gai_text),
+        "nightly_report": (nightly_proven if nightly_proven is not None else _parse_pipe_findings(
+            _find_latest_audit_file("gemini_audit_{date}.txt"))),
+        "midday_report": (midday_proven if midday_proven is not None else _parse_pipe_findings(
+            _find_latest_audit_file("midday_gemini_{date}.txt"))),
     }
     # existing dedup keys (any status — never re-add a finding once seen)
     seen: set = set()
@@ -856,9 +884,15 @@ def _format_meta_audit_body(
         "     they are NOT liquidated at the close, so an 'intraday' position held overnight is NOT a defect.",
         "     Since 2026-10-03 NEW 12-point entries are OFF; the C2 megacap-breakout swing tier (same tag,",
         "     setup='c2_breakout_55d') holds up to 30 sessions. Only the DAY tier force-flattens before the close.",
-        "  2) DAY tier (Track A) — entries are GEX FADE/RIDE triggered, NOT confluence-scored, so they log",
-        "     score=0 and tier='daytrade' by design. score=0 + tier='daytrade' is a valid day-tier entry, NOT a",
-        "     miss of the MIN_SCORE gate (that gate applies only to tier 1).",
+        "  2) DAY tier — Track A (GEX FADE/RIDE), Track B (movers; may trade the 2x bull ETF, e.g. TSLL for TSLA),",
+        "     Track M (QQQ Monday dip). NOT confluence-scored: entries log score=0 and tier='daytrade' by design —",
+        "     a valid day-tier entry, NOT a miss of the MIN_SCORE gate (that gate applies only to tier 1).",
+        "     DAY-TIER STOPS ARE BROKER-SIDE: right after each fill the bot places an Alpaca OCO exit pair (stop +",
+        "     take-profit), or a plain DAY stop if the OCO fails, else it flattens. The OCO child legs do NOT carry",
+        "     the day-tier client_order_id, so they will not appear tagged 'daytrade' and there is NO 'stop' field on",
+        "     the trade_events entry line. 'Entered without a stop' may ONLY be claimed by quoting a day-tier",
+        "     trade id whose fills show the position open with no stop/exit order — otherwise it is false.",
+        "     Day-tier positions are force-flattened ~20 min before the close; they never carry overnight.",
         "  3) QHM / Forever-6 — multi-week / quarterly buy-and-hold; not intraday-scored.",
         "MRI (macro risk index) is BACKGROUND-ONLY (architecture invariant): it only nudges the size floor and",
         "  the MIN_SCORE floor; it does NOT hard-block entries. An entry during ELEVATED / STRESSED MRI is by",
@@ -1180,6 +1214,164 @@ def _build_gai_prompt(ctx: dict) -> str:
     return _GAI_ROLE_PREAMBLE + _format_meta_audit_body(ctx)
 
 
+# ── ADVERSARIAL FACT-CHECK GATE (Rafael CEO order 2026-10-06) ──────────────────────────────
+# "Neither Groq nor GAI should communicate ANYTHING to me that is not 100% factual." Every verdict rationale,
+# directive and code finding is sent to an adversarial checker that must return a VERBATIM quote proving it, from
+# the audit DATA (the provider's own prompt body) or from the named repo file. The quote is then verified
+# MECHANICALLY (whitespace-normalised substring) — the checker's say-so alone never passes a claim. Unproven claims
+# are withheld from Slack and from the directive queue. If the checker cannot run, NOTHING unverified is sent.
+_FACTCHECK_MIN_QUOTE = 12          # a proof quote shorter than this proves nothing
+_FACTCHECK_FILE_CHARS = 200_000    # per-file code context cap for the checker
+
+
+_FACTCHECK_FILE_SUFFIXES = frozenset({".py", ".sh", ".json", ".md", ".txt", ".yaml", ".yml", ".toml"})
+# Proof may come ONLY from these evidence sections of the audit body — never from the preamble/frame, the BOT
+# CONTEXT, PRIOR DIRECTIVES, REFUTED FINDINGS or the output instructions (cold-2nd 2026-10-06: a claim could
+# otherwise be "proven" by quoting an earlier, unproven or refuted copy of itself).
+_EVIDENCE_SECTION_PREFIXES = ("=== TRADE EVENTS", "=== ALPACA FILLS", "=== FILLS", "=== PER-SYMBOL",
+                              "=== SCORE DISTRIBUTION", "=== MRI LEVEL", "=== REJECTED SIGNALS",
+                              "=== US MACRO", "=== MACRO CALENDAR", "=== BOT LOG TAIL")
+
+
+def _norm_ws(t: str) -> str:
+    return " ".join(str(t or "").split())
+
+
+def _evidence_only(prompt: str, day: "str | None" = None) -> str:
+    """The audit DAY's evidence only: lines inside the evidence sections (see _EVIDENCE_SECTION_PREFIXES) that carry
+    the day's date (YYYY-MM-DD, ET) — that day's trade events, fills and bot log. Multi-day aggregates, prior
+    sessions, prior directives and feedback are never proof (Rafael 2026-10-06: 'pulled from that day's data only')."""
+    days = {day} if day else {datetime.now(_ET).strftime("%Y-%m-%d"),
+                              datetime.now(timezone.utc).strftime("%Y-%m-%d")}  # OCI bot log + fills stamp UTC
+    keep, out = False, []
+    for line in str(prompt or "").splitlines():
+        if line.startswith("=== "):
+            keep = line.startswith(_EVIDENCE_SECTION_PREFIXES)
+            continue
+        if keep and any(d in line for d in days):
+            out.append(line)
+    return "\n".join(out)
+
+
+def _safe_repo_file(name: str) -> "Path | None":
+    """A repo file the checker may read: inside the repo, no hidden path part (.env, .git), allow-listed suffix.
+    Never a secret or a file outside the repo (cold-2nd 2026-10-06). None otherwise."""
+    try:
+        if not name:
+            return None
+        root = _HERE.resolve()
+        p = (_HERE / name).resolve()
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            return None
+        if p.suffix.lower() not in _FACTCHECK_FILE_SUFFIXES or not p.is_file():
+            return None
+        return p
+    except (ValueError, OSError):
+        return None
+
+
+def _claims_from(text: str | None) -> list[dict]:
+    claims: list[dict] = []
+    if not text:
+        return claims
+    v = _extract_final_verdict(text)
+    if v:
+        claims.append({"id": "verdict", "kind": "verdict", "text": v})
+    for i, d in enumerate(_extract_directives(text)):
+        if "insufficient trade sample" in d.lower():
+            continue
+        claims.append({"id": f"directive{i}", "kind": "directive", "text": d})
+    for i, f in enumerate(_parse_json_findings(text)):
+        claims.append({"id": f"finding{i}", "kind": "finding", "text": str(f.get("finding", "")),
+                       "file": str(f.get("file", "")), "raw": f})
+    return claims
+
+
+def _fact_check(text: str | None, data: str) -> dict:
+    """Return {"available", "checked", "kept", "verdict", "directives", "findings", "withheld", "note"}.
+    Only mechanically-proven claims are kept. Fails CLOSED (keeps nothing) when the checker is unavailable."""
+    return _check_claims(_claims_from(text), data)
+
+
+def _prove_findings(findings: list, data: str) -> list:
+    """Fact-check pre-parsed findings (e.g. the nightly/midday Gemini report NEW BUGS rows) — only proven ones."""
+    claims = [{"id": f"finding{i}", "kind": "finding", "text": str(f.get("finding", "")),
+               "file": str(f.get("file", "")), "raw": f} for i, f in enumerate(findings or []) if isinstance(f, dict)]
+    return list(_check_claims(claims, data).get("findings") or [])
+
+
+def _check_claims(claims: list, data: str) -> dict:
+    out: dict = {"available": False, "checked": 0, "kept": 0, "verdict": "", "directives": [],
+                 "findings": [], "withheld": [], "note": ""}
+    out["checked"] = len(claims)
+    if not claims:
+        out["available"] = True
+        return out
+    files: dict = {}
+    for c in claims:
+        f = c.get("file")
+        _sp = _safe_repo_file(f) if f and f not in files else None
+        if _sp is not None:
+            try:
+                files[f] = _sp.read_text(encoding="utf-8", errors="replace")[:_FACTCHECK_FILE_CHARS]
+            except OSError:
+                pass
+    data = _evidence_only(data)
+    listing = "\n".join(
+        f'- id={c["id"]} kind={c["kind"]}' + (f' file={c["file"]}' if c.get("file") else "") + f': {c["text"][:400]}'
+        for c in claims)
+    code = "\n\n".join(f"===== FILE {k} =====\n{v}" for k, v in files.items())
+    prompt = (
+        "You are an ADVERSARIAL FACT-CHECKER. Your job is to REJECT any claim that the evidence below does not\n"
+        "prove. The DATA is the audit DAY's records ONLY (that day's trades, fills and bot log); earlier sessions\n"
+        "and prior feedback are deliberately absent and can never prove a claim.\n"
+        "For each claim, find a VERBATIM quote (copied character-for-character, at least a full line) from\n"
+        "the DATA section or from THAT claim's own named FILE that proves the claim TRUE as stated. If no such quote exists,\n"
+        "or the evidence shows the claim is false or exaggerated, mark it UNSUPPORTED. Interpretation, inference\n"
+        "and 'likely' are UNSUPPORTED. Return ONLY a JSON array: "
+        '[{"id": "<id>", "status": "SUPPORTED"|"UNSUPPORTED", "source": "DATA"|"<file path>", '
+        '"quote": "<verbatim text>", "why": "<one line>"}].\n\n'
+        f"=== CLAIMS ===\n{listing}\n\n=== DATA ===\n{data}\n\n{code}\n"
+    )
+    try:
+        key = os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            raise RuntimeError("GEMINI_API_KEY not set")
+        raw = call_gai(prompt, key, max_output_tokens=8192, timeout=_API_TIMEOUT_S)
+        rows = _parse_json_findings(raw)
+        if not rows:
+            m = re.search(r"\[.*\]", raw or "", re.DOTALL)
+            rows = json.loads(m.group(0)) if m else []
+        out["available"] = True
+    except Exception as exc:  # noqa: BLE001 — fail CLOSED: nothing unverified reaches the owner
+        out["note"] = f"fact-check unavailable ({str(exc)[:80]}) — all claims withheld"
+        out["withheld"] = [c["text"][:160] for c in claims]
+        return out
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    data_n = _norm_ws(data)
+    files_n = {k: _norm_ws(v) for k, v in files.items()}
+    for c in claims:
+        r = by_id.get(c["id"]) or {}
+        quote = _norm_ws(r.get("quote", ""))
+        src = str(r.get("source", ""))
+        own = c.get("file") or ""
+        proven = (str(r.get("status", "")).upper() == "SUPPORTED" and len(quote) >= _FACTCHECK_MIN_QUOTE
+                  and ((src == "DATA" and quote in data_n)
+                       or (src == own and own in files_n and quote in files_n[own])))
+        if not proven:
+            out["withheld"].append(c["text"][:160])
+            continue
+        out["kept"] += 1
+        if c["kind"] == "verdict":
+            out["verdict"] = c["text"]
+        elif c["kind"] == "directive":
+            out["directives"].append(c["text"])
+        else:
+            out["findings"].append(c["raw"])
+    return out
+
+
 # ── Slack post (meta-audit results) ──────────────────────────────────────────
 def _slackify_report_line(line: str) -> str:
     """Translate the small GitHub-Markdown subset emitted by the audit models."""
@@ -1258,11 +1450,24 @@ def _meta_report_blocks(result: dict, label: str, report_url: str | None = None)
         return [{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"*{label}:* ❌ {error[:120]}"}}]
 
-    verdict = _extract_final_verdict(text)
-    directives = _extract_directives(text)
-    findings = _parse_json_findings(text)
+    fc = result.get("fact_check")
+    if isinstance(fc, dict):
+        verdict = fc.get("verdict") or ("verdict withheld — not proven by the data"
+                                        if _extract_final_verdict(text) else "")
+        directives = list(fc.get("directives") or [])
+        findings = list(fc.get("findings") or [])
+    else:
+        verdict = _extract_final_verdict(text)
+        directives = _extract_directives(text)
+        findings = _parse_json_findings(text)
 
     lines: list[str] = [f"*{label}* — {verdict or 'verdict not parsed (see full report)'}"]
+    if isinstance(fc, dict) and not directives and re.search(r"DIRECTIVES BLOCKED", text, re.IGNORECASE):
+        directives = ["Directives blocked — insufficient trade sample this window."]
+    if isinstance(fc, dict):
+        lines.append(f"_Fact-check: {fc.get('kept', 0)} of {fc.get('checked', 0)} claims proven; "
+                     f"{len(fc.get('withheld') or [])} withheld as unproven._"
+                     + (f" {fc.get('note')}" if fc.get("note") else ""))
     if directives:
         lines.append("*Directives:*")
         lines.extend(f"  • {d}" for d in directives)
@@ -1277,7 +1482,8 @@ def _meta_report_blocks(result: dict, label: str, report_url: str | None = None)
     if not directives and not findings:
         lines.append("_No directives or code findings this run._")
     if report_url:
-        lines.append(f"Full report: {report_url}")
+        lines.append(f"Full report ({'raw model output — NOT fact-checked' if isinstance(fc, dict) else 'raw'}): "
+                     f"{report_url}")
 
     text_block = "\n".join(lines)
     # Slack's section hard limit is 3000 chars. The digest is far smaller, but
@@ -1554,6 +1760,20 @@ def _run_audit(
             f"({gai_result['elapsed_s']}s, {gai_result['tokens']} tokens)"
         )
 
+    # ── Adversarial fact-check (meta-audit only): nothing unproven reaches the owner ───────
+    if mode_label == "meta-audit":
+        print("[auto_ai_audit] 🔎 Fact-checking Groq + Gemini claims ...")
+        # Proof corpus = the FULL, unclamped evidence (the Gemini prompt body). The Groq prompt is clamped to its
+        # TPM budget and loses the evidence sections, which would withhold every Groq claim (cold-2nd 2026-10-06).
+        _evidence_corpus = _gai_call_prompt or _gro_call_prompt
+        gro_result["fact_check"] = _fact_check(gro_result.get("text"), _evidence_corpus)
+        gai_result["fact_check"] = _fact_check(gai_result.get("text"), _evidence_corpus)
+        gro_result["evidence_corpus"] = _evidence_corpus
+        for _lbl, _r in (("Groq", gro_result), ("Gemini", gai_result)):
+            _fc = _r["fact_check"]
+            print(f"[auto_ai_audit]   {_lbl}: {_fc['kept']}/{_fc['checked']} proven, "
+                  f"{len(_fc['withheld'])} withheld {_fc.get('note', '')}")
+
     # ── Build output dict ─────────────────────────────────────────────────
     gro_ok = gro_result["error"] is None
     gai_ok = gai_result["error"] is None
@@ -1724,6 +1944,12 @@ def main() -> None:
             _week_label,
             gro_result.get("text") if gro_result else None,
             gai_result.get("text") if gai_result else None,
+            gro_proven=(gro_result.get("fact_check") or {}).get("findings") if gro_result else None,
+            gai_proven=(gai_result.get("fact_check") or {}).get("findings") if gai_result else None,
+            nightly_proven=_prove_findings(_parse_pipe_findings(_today_audit_file("gemini_audit_{date}.txt")),
+                                           gai_p),
+            midday_proven=_prove_findings(_parse_pipe_findings(_today_audit_file("midday_gemini_{date}.txt")),
+                                          gai_p),
         )
         # Majors instrumentation: zero extracted findings across ALL sources while
         # DS/GAI both succeeded = likely format drift, not a clean week. Alert.
@@ -1731,7 +1957,10 @@ def main() -> None:
             v for k, v in _counts.items()
             if k not in ("validation_rejects", "total_new", "write_error")
         )
-        if _src_total == 0 and gro_result.get("text") and gai_result.get("text"):
+        # Raw (pre-fact-check) count: findings WITHHELD as unproven are not format drift.
+        _raw_total = (len(_parse_json_findings(gro_result.get("text") if gro_result else None))
+                      + len(_parse_json_findings(gai_result.get("text") if gai_result else None)))
+        if _src_total == 0 and _raw_total == 0 and gro_result.get("text") and gai_result.get("text"):
             _wh = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
             if _wh:
                 import requests  # type: ignore[import-untyped]

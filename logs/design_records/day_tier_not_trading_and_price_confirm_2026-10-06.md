@@ -33,3 +33,25 @@ Q2 secondary price confirmation (exit side only; Rule E all zero):
 - Profit-tranche targets: print + bid/ask + a volatility band (k x recent 1m realized vol, floor = the symbol's p99 IEX/SIP
   gap); unconfirmed -> wait for the next scan.
 - Caveat: Alpaca's IEX quote is IEX's own BBO, not the NBBO; wide on thin names (hence the stale/crossed fallbacks).
+
+## CEO ORDER + BUILD (2026-10-06 evening, Claude) — "the day tier must trade. Period."
+Rafael approved Proposals 1-3 and PR #497, then ordered: the day tier is the loosest, most active tier; budget and
+filters are never the reason a confident trade is skipped; Track B pivots to 2x bull ETFs; 10/10 -> maximum size;
+losses are investigated afterwards. Removed the 1-share Track A cap (his call).
+Whole-chain replay (10/02, 10/05, 10/06; scratchpad replay_day_tier.py) found every chokepoint, then re-ran on the fix:
+Track A 1 -> 24 of 25 setups enterable; Track B 0 -> ~5/day on 10/02 (ETF pivots TSLL/AMDL/AVL); simulated P&L
+-$97 over 3 days (same weak signals the research flagged, now trading for data). Fixes shipped in this build:
+- trend/alignment gate records but does not block (kill flag DAYTRADE_ALIGN_GATE_BLOCKS);
+- FADE pin behind price -> wall stop + R target (trigger) and post-fill fallback (kill flag DAYTRADE_FADE_PIN_FALLBACK);
+- too-tight stop WIDENED to max(1.5xATR, 2xspread) instead of skipped; wide/stale IEX quote -> latest trade; skip
+  only when the live price already broke the stop; live limit price (5% sanity band);
+- min-1-share floor no longer needs budget >= price; Track-B budget shrinks but never below 1 share;
+- Track B: stock when the budget buys 2+ shares, 2x bull ETF when 0-1 (alternate ETF if another tier holds the
+  primary); 10/10 = mover + vol-confirmed momentum + daily side + 2m/5m/15m EMA+VWAP -> max size (account rooms;
+  daily dollar budget still applies); screen gap 1%, RVOL 1.5x, all session to ~15:35 ET;
+- nightly Groq/GAI meta-audit: North Star frame + per-tier risk facts; adversarial fact-check (verbatim quote,
+  mechanically verified, that day's evidence only / claim's own file; secrets never read); only proven claims reach
+  Slack or the directive queue.
+OPEN (next builds): ownership guard per tier (OWNERSHIP_GUARD_ENFORCE is dormant and protects only QHM/F6 — a main-bot
+whole-symbol close can take day-tier shares on a co-held symbol); derive Track-B gap/RVOL thresholds per name; leverage-
+weighted caps were declined by the CEO (max size ordered); exit-side bid/ask confirmation (Proposal 3) not yet built.

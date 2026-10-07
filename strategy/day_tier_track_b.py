@@ -60,9 +60,10 @@ ET = ZoneInfo("America/New_York")
 # live screen (wired 2026-09-23; Track-B size stays budget-capped). Track B's design (§7, §7c, LdP selection-bias guard) requires deriving them
 # from the pooled "gap that BROKE-AND-HELD a level" setup outcomes once live, and NEVER tuning them on live
 # P&L. Until that data exists these are documented starting values.
-_MIN_GAP_PCT = 0.02          # PROV:daytier-track-b-screen — a real intraday mover has gapped/moved >= 2% off prior close
+_MIN_GAP_PCT = 0.01          # PROV:daytier-must-trade-2026-10-06 — was 2%; replay 10/05-06: 1,048 of 1,050 screened ticks failed the 2% gap
+                             # (CEO order: the day tier must trade). FORWARD: derive per name from its 20-day abs daily move.
 _MAX_GAP_PCT = 0.60          # PROV:daytier-track-b-screen — a > 60% move is bad data / a corporate action (split) -> reject (NFLX-split lesson)
-_MIN_RVOL = 3.0              # PROV:daytier-track-b-screen — session relative volume >= 3x (today vol-so-far vs avg-daily x session-fraction)
+_MIN_RVOL = 1.5              # PROV:daytier-must-trade-2026-10-06 — was 3x; session relative volume (today vol-so-far vs avg-daily x session-fraction)
 _MIN_PRICE = 5.0             # PROV:daytier-track-b-screen — price floor (thin/penny names excluded; the pre-registered list is already liquid)
 _MIN_FRAME_BARS = 5          # PROV:daytier-track-b-screen — need the OR (3) + a break bar + >= 1 confirming hold bar (matches momentum trigger _MIN_BARS)
 _RTH_OPEN_MIN = 9 * 60 + 30  # 09:30 ET session open (minutes since midnight ET)

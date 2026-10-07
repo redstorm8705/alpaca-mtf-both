@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # the OR range AND the instrument price so it means the same structural thing across the OR-range tails.
 _OR_BARS = 3                    # PROV:daytier-momentum-trigger — opening range = first 3x 5m bars (15 min; matches config.ORB_WINDOW_MINUTES=15)
 _DRIVE_MAX_BARS = 3             # PROV:daytier-momentum-trigger — episode start within this many bars of the latest (no retest) = DRIVE
-_SESSION_CUTOFF_BARS = 18       # PROV:daytier-momentum-trigger — coarse guard: no trigger past ~90 min of 5m session bars (the runner enforces the precise clock-time cutoff in Inc 2)
+_SESSION_CUTOFF_BARS = 72       # PROV:daytier-must-trade-2026-10-06 — was 18 (~90 min); now the whole session to ~15:30 ET (72 x 5m bars). CEO order: Track B trades all day; the EOD force-flat still closes it.
 _MIN_BARS = 5                   # PROV:daytier-momentum-trigger — need the OR (3) + a break bar + >= 1 confirming hold bar
 _VOL_CONFIRM = 1.2              # PROV:daytier-momentum-trigger — latest bar volume >= this x the MEDIAN of the recent post-OR bars (bar-level RVOL; the session 3-5x RVOL screen is Inc 2)
 _VOL_BASELINE_BARS = 5          # PROV:daytier-momentum-trigger — rolling recent-window size for the volume baseline (excludes the OR bars + the latest)
