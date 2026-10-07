@@ -1543,6 +1543,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if _cfg("DAYTRADE_NO_COHOLD", True) is not False:
             # ...nor while ANOTHER tier has a pending order on the symbol (an entry about to create a co-hold;
             # masked-loss seat 2026-10-07). Our own day-tier orders were cleared by the "already active" check.
+            # open_orders is the SAME pre-submit book read validated above (None -> return False): no new API call.
             from execution.ownership_guard import tier_of_coid as _tier_of
             _other = [o for o in (open_orders or [])
                       if str(getattr(o, "symbol", "") or "") == symbol

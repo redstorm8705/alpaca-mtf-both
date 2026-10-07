@@ -726,6 +726,9 @@ def run_tick() -> dict:
             if not size.get("size_ok"):
                 continue
             order_sym_a = sym
+            # _held_other None (book unreadable) -> no pivot here, and the entry is NOT unguarded: place_entry
+            # re-reads live positions + open orders right before submit, returns False if either is unreadable,
+            # and refuses a symbol another tier holds or has an order on (day_trade_manager NO SAME-SIDE CO-HOLD).
             if _held_other is not None and sym in _held_other:
                 # NO CO-HOLD (interim 2026-10-07): another tier holds this stock -> a long switches to a free 2x ETF;
                 # a short (no bear ETF route) or a long with no free ETF is skipped with its reason logged.
