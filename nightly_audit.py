@@ -634,12 +634,13 @@ def _load_suppressions() -> list[dict]:
                 continue
             if (isinstance(d, dict)
                     and d.get("status") in ("false_alarm", "acknowledged", "resolved")
-                    and isinstance(d.get("match_keywords"), list)):
+                    and (isinstance(d.get("match_keywords"), list)
+                         or isinstance(d.get("exact_line"), str))):
                 # Keep only non-empty STRING keywords — a malformed directive with a
                 # numeric/None keyword is skipped, never stringified into a match target.
-                d["match_keywords"] = [k for k in d["match_keywords"]
+                d["match_keywords"] = [k for k in d.get("match_keywords", [])
                                        if isinstance(k, str) and k.strip()]
-                if d["match_keywords"]:
+                if d["match_keywords"] or str(d.get("exact_line", "")).strip():
                     out.append(d)
     except Exception as e:
         logger.warning("suppressions load failed (%s) — auditing UNFILTERED (fail-open)", e)
@@ -667,6 +668,15 @@ def _match_directive(line: str, sup: list[dict]) -> dict | None:
     if any(tok in low for tok in _NEVER_SUPPRESS_TOKENS):
         return None
     for d in sup:
+        report_date = d.get("report_date")
+        if isinstance(report_date, str) and report_date != AUDIT_DATE:
+            continue
+        exact_line = d.get("exact_line")
+        if isinstance(exact_line, str) and exact_line.strip():
+            if line.strip() == exact_line.strip():
+                return d
+            # An exact-line directive never falls back to its descriptive keywords.
+            continue
         # match_keywords are guaranteed non-empty strings by _load_suppressions.
         for kw in d.get("match_keywords", []):
             if kw.lower() in low:

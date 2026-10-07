@@ -1499,6 +1499,7 @@ def _post_slack_summary(
     gai_result: dict,
     out_path: Path,
     mode_label: str = "meta-audit",
+    report_url: str | None = None,
 ) -> None:
     """Post complete, phone-readable audit reports through the shared block sender."""
     webhook = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
@@ -1523,9 +1524,9 @@ def _post_slack_summary(
                     f"Run {now_pt.strftime('%I:%M %p PT')}"}},
         {"type": "divider"},
     ]
-    blocks += _meta_report_blocks(gro_result, "Groq", report_url=_GIST_RAW_URL)
+    blocks += _meta_report_blocks(gro_result, "Groq", report_url=report_url)
     blocks.append({"type": "divider"})
-    blocks += _meta_report_blocks(gai_result, "Google AI Studio", report_url=_GIST_RAW_URL)
+    blocks += _meta_report_blocks(gai_result, "Google AI Studio", report_url=report_url)
     fallback = (f"Auto AI {mode_label.title()} — {ts} — "
                 f"Gro {'ok' if gro_ok else 'err'} / GAI {'ok' if gai_ok else 'err'}")
 
@@ -1642,8 +1643,8 @@ def _call_gemini(prompt: str) -> dict:
 
 
 # ── Atomic write (RC-5 compliance) ───────────────────────────────────────────
-def _push_to_gist(data: dict) -> None:
-    """Push meta_audit_latest.json to GitHub Gist so board CCR can fetch it."""
+def _push_to_gist(data: dict) -> bool:
+    """Push the latest meta-audit and report whether the public copy is fresh."""
     import urllib.request  # stdlib only — no requests dependency here
     token = os.environ.get("GITHUB_GIST_TOKEN", "")
     if not token:
@@ -1651,7 +1652,7 @@ def _push_to_gist(data: dict) -> None:
             "[auto_ai_audit] ⚠️  GITHUB_GIST_TOKEN not set — skipping Gist push",
             file=sys.stderr,
         )
-        return
+        return False
     payload = json.dumps({
         "files": {
             "meta_audit_latest.json": {
@@ -1670,17 +1671,38 @@ def _push_to_gist(data: dict) -> None:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status == 200:
+                try:
+                    returned = json.loads(resp.read().decode("utf-8"))
+                    returned_content = returned["files"]["meta_audit_latest.json"]["content"]
+                except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+                    print(
+                        f"[auto_ai_audit] ⚠️  Gist response validation failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    return False
+                expected_content = json.loads(payload.decode("utf-8"))["files"][
+                    "meta_audit_latest.json"
+                ]["content"]
+                if returned_content != expected_content:
+                    print(
+                        "[auto_ai_audit] ⚠️  Gist response content did not match this run",
+                        file=sys.stderr,
+                    )
+                    return False
                 print(f"[auto_ai_audit] 📤 Gist updated: {_GIST_RAW_URL}")
+                return True
             else:
                 print(
                     f"[auto_ai_audit] ⚠️  Gist push returned HTTP {resp.status}",
                     file=sys.stderr,
                 )
+                return False
     except Exception as exc:  # noqa: BLE001
         print(
             f"[auto_ai_audit] ⚠️  Gist push failed: {exc}",
             file=sys.stderr,
         )
+        return False
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -1799,6 +1821,7 @@ def _run_audit(
             "both_failed": not gro_ok and not gai_ok,
         },
     }
+    published_report_url: str | None = None
 
     _atomic_write_json(out_path, output)
     print(f"[auto_ai_audit] 📄 JSON written: {out_path.name}")
@@ -1823,7 +1846,13 @@ def _run_audit(
             )
 
         # Push to GitHub Gist so board CCR can fetch without IP allowlist issues
-        _push_to_gist(output)
+        if _push_to_gist(output):
+            # A cache-buster prevents Slack clients from reopening a cached raw
+            # response from a previous audit run.
+            from urllib.parse import quote
+            published_report_url = (
+                f"{_GIST_RAW_URL}?v={quote(str(output['ts_iso']))}"
+            )
 
         # S47e: Write local meta_audit_latest.json as guaranteed fallback.
         # /var/www/mtf-bot/ may not exist; Gist requires GITHUB_GIST_TOKEN.
@@ -1861,7 +1890,10 @@ def _run_audit(
     print(f"[auto_ai_audit] Done. Full JSON: {out_path}")
 
     if post_slack:
-        _post_slack_summary(gro_result, gai_result, out_path, mode_label)
+        _post_slack_summary(
+            gro_result, gai_result, out_path, mode_label,
+            report_url=published_report_url,
+        )
 
     return gro_result, gai_result
 

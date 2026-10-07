@@ -28,6 +28,10 @@ Build record; verify with `grep -n "CEO ORDER + BUILD" logs/design_records/day_t
 captured output: `37:## CEO ORDER + BUILD (2026-10-06 evening, Claude) — "the day tier must trade. Period."`.
 **⏩ EXACT NEXT ACTION:** after 10:15 ET on 2026-10-07, read `logs/day_tier_events.jsonl` and the Alpaca fills to confirm
 day-tier entries; then the per-tier ownership guard build.
+## ⏩ LATEST (2026-10-07, ChatGPT/Codex-signed) — Slack audit truth/freshness fix
+
+The staged reporting fix is recorded in `logs/design_records/nightly_audit_slack_truth_2026-10-07.md`. It changes no trading behavior. It parses nightly Markdown tables into phone-readable findings, never links a Gist unless this run's returned content matches, and limits the three October 5 false-positive exceptions to the exact rows on that exact audit date. Final focused suite: 71 PASS; Board/cold/mechanical + Groq + Google AI Studio approved after adversarial revisions.
+**⏩ EXACT NEXT ACTION:** deploy through Git, securely add `GITHUB_GIST_TOKEN` on OCI, publish/verify the current `logs/meta_audit_latest.json`, then inspect the next scheduled Slack audit. Deployed code is unexercised until the scheduled run.
 
 ## ⏩ LATEST (2026-10-06 10:30 PT, Claude) — day tier not trading: diagnosed, BGG aligned, awaiting Rafael
 
