@@ -88,7 +88,8 @@ class RunTickTrackA(unittest.TestCase):
     never a sys.modules swap, which would unload modules other test files rely on."""
 
     def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None, blocks=True,
-             watch_day=True, held=frozenset(), wall_ref=None):
+             watch_day=True, held=frozenset(), wall_ref=None, inverse=(None, "no free liquid inverse ETF for this stock"),
+             exposure=None):
         import contextlib
         placed, logged = [], []
         acct = SimpleNamespace(equity=2500.0, last_equity=2500.0, buying_power=9000.0)
@@ -123,6 +124,10 @@ class RunTickTrackA(unittest.TestCase):
             # watch-day rule (2026-10-06) is unit-tested in tests/test_day_tier_watch_day.py; offline here
             mock.patch.object(rdt, "_watch_day_ok", return_value=(watch_day, "watch day (test)")),
             mock.patch.object(rdt, "_held_by_other_tiers", return_value=held),
+            mock.patch.object(rdt, "_prior_close", return_value=None),            # first-order stop math offline
+            mock.patch.object(rdt, "_day_tier_exposure",
+                              return_value=None if exposure == "unreadable" else dict(exposure or {})),
+            mock.patch.object(rdt, "_inverse_pivot", return_value=inverse),
         ]
         if track_m_result is not None:
             patches.extend([
@@ -236,10 +241,69 @@ class RunTickTrackA(unittest.TestCase):
         self.assertEqual([p[0] for p in placed], ["NVDL"])
         self.assertEqual(placed[0][1]["underlying"], "NVDA")
 
-    def test_symbol_held_by_another_tier_short_is_skipped(self):
+    def test_symbol_held_by_another_tier_short_without_an_inverse_route_is_skipped(self):
         out, placed, logged = self._run("SHORT", "short", blocks=False, held=frozenset({"NVDA"}))
         self.assertEqual(placed, [])
-        self.assertIn("no co-hold", logged[-1][2]["trigger"]["skip_reason"])
+        self.assertIn("another tier holds this symbol", logged[-1][2]["trigger"]["skip_reason"])
+        self.assertIn("no free liquid inverse", logged[-1][2]["trigger"]["skip_reason"])
+
+    def test_symbol_held_by_another_tier_short_buys_the_inverse_etf(self):
+        dec = {"symbol": "NVD", "underlying": "NVDA", "signal_direction": "short"}
+        trg = {"symbol": "NVD", "trigger": "ENTER", "direction": "long", "signal_direction": "short",
+               "instrument": "inverse_etf", "underlying": "NVDA", "entry_ref": 3.3, "wall_ref": 3.17}
+        out, placed, _ = self._run("SHORT", "short", blocks=False, held=frozenset({"NVDA"}),
+                                   inverse=((dec, trg, {"size_ok": True, "shares": 50}, "NVD"), "inverse route -> NVD"))
+        self.assertEqual([p[0] for p in placed], ["NVD"])
+        self.assertEqual((placed[0][1]["direction"], placed[0][1]["signal_direction"]), ("long", "short"))
+        self.assertEqual(out["entered"], 1)
+
+    def test_not_held_short_shorts_the_stock_without_the_inverse_route(self):
+        out, placed, _ = self._run("SHORT", "short", blocks=False,
+                                   inverse=(({}, {"symbol": "NVD", "direction": "long"}, {"size_ok": True}, "NVD"), "x"))
+        self.assertEqual([(p[0], p[1]["direction"]) for p in placed], [("NVDA", "short")])   # route offered, not used
+
+    def test_one_direction_per_stock(self):
+        # the day tier already holds NVD (short NVDA exposure): a long NVDA entry is refused and logged
+        out, placed, logged = self._run("LONG", "long", blocks=False, exposure={"NVDA": -1})
+        self.assertEqual(placed, [])
+        self.assertIn("opposite direction on NVDA", logged[-1][2]["trigger"]["skip_reason"])
+        # same direction is fine
+        out, placed, _ = self._run("LONG", "long", blocks=False, exposure={"NVDA": 1})
+        self.assertEqual([p[0] for p in placed], ["NVDA"])
+
+    def test_unreadable_exposure_does_not_block(self):
+        out, placed, _ = self._run("LONG", "long", blocks=False, exposure="unreadable")
+        self.assertEqual([p[0] for p in placed], ["NVDA"])
+
+
+class InversePivotReal(unittest.TestCase):
+    """The real _inverse_pivot (every run_tick harness patches it out): argument order + gates, data mocked."""
+
+    def _run(self, quote=None, vol=900_000.0, etf_prev=10.0, size_ok=True):
+        from data.live_price import LivePrice
+        lp = {"NVDA": LivePrice(95.0, "iex_trade", 1.0), "NVD": LivePrice(11.0, "iex_trade", 1.0)}
+        trig = {"symbol": "NVDA", "trigger": "ENTER", "direction": "short", "mode": "RIDE", "entry_ref": 95.0,
+                "wall_ref": 96.9, "target": None, "reason": "t"}
+        with mock.patch("data.live_price.live_price", side_effect=lambda s, **k: lp.get(s)), \
+                mock.patch.object(rdt, "_prior_close", side_effect=lambda s: {"NVDA": 100.0, "NVD": etf_prev}.get(s)), \
+                mock.patch.object(rdt, "_today_iex_volume", return_value=vol), \
+                mock.patch("data.alpaca_data.get_latest_quote", return_value=quote or {"bid": 10.99, "ask": 11.0}), \
+                mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                           return_value={"size_ok": size_ok, "shares": 40, "reason": "r"}):
+            return rdt._inverse_pivot("NVDA", {"symbol": "NVDA"}, trig, set(), 2500.0, 9000.0, "A")
+
+    def test_route_ok(self):
+        res, why = self._run()
+        dec, trg, size, etf = res
+        self.assertEqual((etf, trg["symbol"], trg["direction"], trg["signal_direction"]), ("NVD", "NVD", "long", "short"))
+        self.assertAlmostEqual(trg["wall_ref"], round(11.0 * (1 - 0.038 / 1.10), 4))
+        self.assertIn("tracking ok", trg["tracking"])
+
+    def test_each_gate_blocks(self):
+        self.assertIsNone(self._run(etf_prev=10.6)[0])                               # tracking off
+        self.assertIsNone(self._run(vol=1000.0)[0])                                  # thin
+        self.assertIsNone(self._run(quote={"bid": 10.80, "ask": 11.0})[0])           # wide
+        self.assertIsNone(self._run(size_ok=False)[0])
 
 
 if __name__ == "__main__":
