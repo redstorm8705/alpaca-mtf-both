@@ -195,6 +195,17 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
                 result["reason"] = "RIDE: no wall close-through yet — wait"
                 return result
 
+        # PROFIT-SIDE TARGET (2026-10-06 replay: 10 of 25 Track-A setups on 10/05-06 died at place_entry because the
+        # pin sat on the LOSS side of the entry, e.g. NVDA short 241.25 vs pin 241.74). A fade whose pin is already
+        # behind price keeps the fade but drops the pin target: target None -> place_entry stops just beyond the
+        # swept wall (the setup's invalidation) and takes profit at an R-multiple of that stop.
+        if result["mode"] == "FADE" and result["target"] is not None:
+            _t = _f(result["target"])
+            if _t is None or (result["direction"] == "long" and _t <= close) or \
+                    (result["direction"] == "short" and _t >= close):
+                result["target"] = None
+                result["pin_ref"] = _t
+                _cand += f" (pin {_t} behind price -> wall stop + R-multiple target)"
         # A candidate pattern is present — require the volume confirmation to ENTER.
         if not vol_ok:
             result["reason"] = f"{_cand} but volume not confirmed (RVOL < {_VOL_CONFIRM}) — wait"

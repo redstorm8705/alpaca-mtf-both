@@ -290,6 +290,24 @@ def _entry_direction_gate(sym: str, side: object, direction: object, mode: objec
     return out
 
 
+def _gate_blocks() -> bool:
+    """CEO order 2026-10-06: the day tier must trade — the trend/alignment gate RECORDS its verdict but does not
+    block entries. config.DAYTRADE_ALIGN_GATE_BLOCKS=True restores blocking (kill flag, Rule D). Only an explicit
+    True blocks."""
+    try:
+        import config
+        return getattr(config, "DAYTRADE_ALIGN_GATE_BLOCKS", False) is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _is_counter(side: object, direction: object) -> bool:
+    """True when the trade direction opposes a clear LONG/SHORT daily side (attribution tag only)."""
+    s = str(side or "").upper()
+    d = str(direction or "").lower()
+    return s in ("LONG", "SHORT") and d in ("long", "short") and (s == "LONG") != (d == "long")
+
+
 def _run_track_m(dtm, equity: float, mins_to_close: "float | None", bar_id_day: str) -> "tuple[int, str]":
     """Track M (QQQ Monday weekend-gap-down buy; strategy.day_tier_track_m). Inside 09:45-10:15 ET only, at most
     ONE shot per day: the one-shot marker is persisted BEFORE any order (a restart can never double-enter). A
@@ -632,14 +650,19 @@ def run_tick() -> dict:
             # FAILED intraday trend (15m lead + 30m confirmation).
             _gate = _entry_direction_gate(sym, decision.get("side"), trigger.get("direction"),
                                           trigger.get("mode"), allow_counter_fade=True)
-            if not _gate["ok"]:
+            if not _gate["ok"] and _gate_blocks():
                 _log_direction_skip(sym, decision, {**trigger, "alignment": _gate["alignment"],
                                                     "trend_failure": _gate["trend_failure"]},
                                     _gate["reason"], bar_id)
                 continue
-            # tagged for measurement: place_entry logs this trigger in the entry's decision record
-            trigger = {**trigger, "counter_trend": _gate["counter_trend"], "alignment": _gate["alignment"],
-                       "trend_failure": _gate["trend_failure"]}
+            # CEO order 2026-10-06 ("the day tier must trade"): the trend/alignment verdict is RECORDED on the
+            # entry's decision record (Rule D) but no longer blocks. A trade against the daily side is tagged
+            # counter_trend so its P&L stays attributable.
+            _counter = bool(_gate["counter_trend"]) or _is_counter(decision.get("side"), trigger.get("direction"))
+            trigger = {**trigger, "counter_trend": _counter, "alignment": _gate["alignment"],
+                       "trend_failure": _gate["trend_failure"], "gate_ok": _gate["ok"],
+                       "gate_reason": _gate["reason"]}
+            _gate = {**_gate, "counter_trend": _counter}
             _ct_decision_id = ""
             if _gate["counter_trend"]:
                 # Never-mask-a-loss: the counter-trend tag must be DURABLE before any fade order exists, so its
@@ -742,13 +765,86 @@ def run_tick() -> dict:
                 _side_b = _side_for(sym)
                 _gate_b = _entry_direction_gate(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
                                                 allow_counter_fade=False)
-                if not _gate_b["ok"]:
+                if not _gate_b["ok"] and _gate_blocks():
                     _log_direction_skip(sym, {**decision_b, "side": _side_b},
                                         {**trigger_b, "alignment": _gate_b["alignment"]}, _gate_b["reason"], bar_id)
                     continue
-                trigger_b = {**trigger_b, "counter_trend": False, "alignment": _gate_b["alignment"]}
+                # CEO order 2026-10-06: the gate verdict is recorded, not blocking (see _gate_blocks).
+                trigger_b = {**trigger_b, "counter_trend": _is_counter(_side_b, trigger_b.get("direction")),
+                             "alignment": _gate_b["alignment"], "gate_ok": _gate_b["ok"],
+                             "gate_reason": _gate_b["reason"]}
+                decision_b = {**decision_b, "side": _side_b}
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
+                # LEVERAGED PIVOT (Rafael CEO directive 2026-10-06; strategy/day_tier_leverage.py): a Track-B LONG trades
+                # its 2x bull ETF when the setup is 10/10 or the budget cannot buy one share of the stock. Any failure
+                # -> no pivot (today's behaviour). The 10/10 verdict is recorded on the decision.
+                order_sym = sym
+                try:
+                    from strategy import day_tier_leverage as lev
+                    _ten, _ten_why = (lev.is_ten_of_ten(screen, mom, _gate_b)
+                                      if trigger_b.get("direction") == "long" else (False, "short — no pivot"))
+                    decision_b = {**decision_b, "ten_of_ten": _ten, "ten_of_ten_reason": _ten_why}
+                    _etf = None
+                    if lev.pivot_enabled() and trigger_b.get("direction") == "long" and lev.bull_etf_for(sym):
+                        # ETFs already held by ANOTHER tier are skipped (co-hold close hazard); unreadable book -> no pivot
+                        try:
+                            from strategy import day_tier_logger as _dtl
+                            _owned = {str(t.get("symbol") or "") for t in _dtl.open_trades_from_log().values()}
+                            _held = {str(getattr(p, "symbol", "")) for p in (broker.get_open_positions() or [])} - _owned
+                        except Exception as _he:  # noqa: BLE001
+                            logger.warning("[%s] track-B pivot: position read failed (no pivot): %s", sym, _he)
+                            _held = None
+                        _etf = lev.etf_for_order(sym, _held)
+                    # Rafael 2026-10-06: trade the STOCK when the budget buys 2+ shares; switch to the 2x ETF only
+                    # when it buys 0 or 1. For a 10/10 setup the budget is the max-size notional (single-name cap,
+                    # and the thin-name cap for non-deep names) — the same rooms place_entry sizes max_size to.
+                    try:
+                        _px_u = float(trigger_b.get("entry_ref") or 0.0)
+                        if _ten:
+                            _bud = float(getattr(config, "DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT", 0.65)) * equity
+                            if sym not in set(getattr(config, "DAYTRADE_DEEP_LIQUIDITY_SYMBOLS", []) or []):
+                                _bud = min(_bud, float(getattr(config, "DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD", 1300.0)))
+                        else:
+                            _bud = float(size_b.get("budget") or 0.0)
+                        _stock_shares = int(_bud // _px_u) if _px_u > 0 else 0
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        _stock_shares = 0
+                    if _ten and _stock_shares >= 2 and size_b.get("size_ok"):
+                        size_b = {**size_b, "max_size": True}   # 10/10 on the stock itself, at maximum size
+                    if _etf and _stock_shares <= 1:
+                        from data.live_price import DELAYED_FEED_AGE_S, live_price
+                        # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
+                        _up, _ep = live_price(sym), live_price(_etf, max_age_s=DELAYED_FEED_AGE_S)
+                        _piv = lev.leveraged_entry(decision_b, trigger_b, _etf,
+                                                   _up.price if _up else None, _ep.price if _ep else None)
+                        if _piv is not None:
+                            decision_b, trigger_b = _piv
+                            order_sym = _etf
+                            size_b = compute_day_tier_size(_etf, decision_b, trigger_b.get("entry_ref"), equity,
+                                                           buying_power=buying_power, track="B")
+                            if _ten and size_b.get("size_ok"):
+                                size_b = {**size_b, "max_size": True}   # 10/10 -> maximum size (place_entry)
+                            logger.info("[%s] track-B LEVERAGED PIVOT -> %s (%s; stock buys %d sh): %s", sym, _etf,
+                                        "10/10" if _ten else "budget", _stock_shares, size_b.get("reason"))
+                        else:
+                            logger.info("[%s] track-B leveraged pivot to %s not possible (price/geometry) — stock path",
+                                        sym, _etf)
+                except Exception as _pe:  # noqa: BLE001 — a pivot failure keeps the stock path
+                    logger.warning("[%s] track-B leveraged pivot error (stock path): %s", sym, _pe)
+                if size_b.get("size_ok"):
+                    # CEO order 2026-10-06: the budget is never the reason a Track-B trade is skipped. The Track-B budget
+                    # is floored at ONE share of the instrument actually ordered (stock or ETF) at the worst marketable
+                    # limit (live-price band + entry slippage), so the min-1-share order survives the Track-B budget
+                    # cap; the account caps and the daily dollar budget still decide.
+                    try:
+                        _one = (float(trigger_b.get("entry_ref") or 0.0)
+                                * (1.0 + float(getattr(config, "DAYTRADE_LIVE_PRICE_SANITY_PCT", 0.05)))
+                                * (1.0 + float(getattr(config, "DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))))
+                        if _one > float(size_b.get("budget") or 0.0):
+                            size_b = {**size_b, "budget": round(_one, 2)}
+                    except (TypeError, ValueError):
+                        pass
                 if not size_b.get("size_ok"):
                     continue
                 if time.monotonic() - _tick_t0 > _TICK_CADENCE_S - _PLACE_ENTRY_RESERVE_S:
@@ -756,7 +852,14 @@ def run_tick() -> dict:
                     logger.warning("[%s] track-B ENTER not placed — < %.0fs left in the tick (the signal's "
                                    "daily shot is already used)", sym, _PLACE_ENTRY_RESERVE_S)
                     break
-                if dtm.place_entry(sym, decision_b, trigger_b, size_b, bar_id=bar_id, equity=equity):
+                _pe_kw_b: dict = {}
+                if trigger_b.get("counter_trend"):
+                    # never-mask-a-loss: a counter-trend Track-B trade's tag must be DURABLE before the order exists
+                    _ct_b = _record_counter_trend_intent(order_sym, decision_b, trigger_b, bar_id)
+                    if not _ct_b:
+                        continue
+                    _pe_kw_b["decision_id"] = _ct_b
+                if dtm.place_entry(order_sym, decision_b, trigger_b, size_b, bar_id=bar_id, equity=equity, **_pe_kw_b):
                     entered_b += 1
                 calls_used += per_entry_est
             except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick

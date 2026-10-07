@@ -17,7 +17,7 @@ so it reads STALE pre-market, on holidays, and on weekends — then every symbol
 which only proves the path is WIRED, not that it will trade. For a real go/no-go, run it SHORTLY AFTER THE
 OPEN (≈9:35–9:50 ET) once refresh_gex has run at least once and GEX has resolved to a live regime.
 
-TRACK B: evaluated only inside its ~09:50-11:05 ET trigger window. To exercise the full Track-B path pre-market,
+TRACK B: evaluated only inside its ~09:50-15:35 ET trigger window (all session since 2026-10-06). To exercise the full Track-B path pre-market,
 replay a past session read-only:  python3 scripts/day_tier_preflight.py --asof 2026-09-22T10:15   (ET; completed
 bars only; the wire-time cap uses the CURRENT account snapshot; the live-quote min-stop gate is skipped in replay).
 
@@ -141,6 +141,12 @@ def evaluate_universe(universe, equity: float, buying_power: float = 0.0,
                     row["reason"] = "stop/order-book/maintenance data unavailable — fail closed"
                     rows.append(row)
                     continue
+                # Same room stop place_entry runs (2026-10-06): widen a too-tight stop, skip only a setup the live
+                # price already invalidated.
+                stop_px, room_why = dtm._room_stop(sym, direction, limit_px, stop_px)
+                if stop_px is None:
+                    row["stop"] = "ROOM_STOP"; row["reason"] = _trunc(room_why)
+                    rows.append(row); continue
                 safe_qty, wire_reason = dtm._bounded_entry_qty(
                     int(z.get("shares") or 0), limit_px, stop_px, equity,
                     risk_snapshot.get("open_trades", {}), risk_snapshot.get("positions", {}),
@@ -199,7 +205,7 @@ def evaluate_track_b(equity: float, buying_power: float = 0.0,
                "size_ok": None, "shares": None, "stop": "", "reason": ""}
         if not in_window:
             row["stop"] = "outside_window"
-            row["reason"] = (f"{now_et:%H:%M} ET is outside the trigger window (~09:50-11:05 ET) — the runner "
+            row["reason"] = (f"{now_et:%H:%M} ET is outside the trigger window (~09:50-15:35 ET) — the runner "
                              "skips Track B; replay a session with --asof YYYY-MM-DDTHH:MM (ET)")
             rows.append(row); continue
         if sym in used_today:
@@ -229,6 +235,24 @@ def evaluate_track_b(equity: float, buying_power: float = 0.0,
             d, t = tb.momentum_to_entry(mom, screen.get("gap_direction"))
             z = compute_day_tier_size(sym, d, t.get("entry_ref"), equity, buying_power=buying_power, track="B")
             z = z if isinstance(z, dict) else {}
+            # Leveraged pivot parity (2026-10-06): a long whose budget cannot buy one share trades the 2x ETF.
+            osym = sym
+            if t.get("direction") == "long" and float(z.get("budget") or 0.0) < float(t.get("entry_ref") or 0.0):
+                from strategy import day_tier_leverage as lev
+                held = set((risk_snapshot or {}).get("positions", {}) or {}) - {
+                    str(v.get("symbol") or "") for v in ((risk_snapshot or {}).get("open_trades") or {}).values()}
+                etf = lev.etf_for_order(sym, held) if lev.pivot_enabled() else None
+                if etf and not replay:
+                    from data.live_price import DELAYED_FEED_AGE_S, live_price
+                    up, ep = live_price(sym), live_price(etf, max_age_s=DELAYED_FEED_AGE_S)
+                    piv = lev.leveraged_entry(d, t, etf, up.price if up else None, ep.price if ep else None)
+                    if piv is not None:
+                        d, t = piv
+                        osym = etf
+                        z = compute_day_tier_size(etf, d, t.get("entry_ref"), equity, buying_power=buying_power,
+                                                  track="B")
+                        z = z if isinstance(z, dict) else {}
+                row["symbol"] = f"{sym}->{osym}" if osym != sym else sym
             row["size_ok"] = bool(z.get("size_ok")); row["shares"] = z.get("shares")
             if not z.get("size_ok"):
                 row["stop"] = "size_ok=False"; row["reason"] = _trunc(z.get("reason"))
@@ -243,23 +267,23 @@ def evaluate_track_b(equity: float, buying_power: float = 0.0,
                 stop_px = dtm._compute_stop_price(t, direction, entry_ref)
                 slip = float(getattr(config, "DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))
                 limit_px = round(entry_ref * (1.0 + slip) if direction == "long" else entry_ref * (1.0 - slip), 2)
-                rate = broker.get_asset_maintenance_margin_rate(sym)
+                rate = broker.get_asset_maintenance_margin_rate(osym)
                 if stop_px is None or rate is None or risk_snapshot.get("orders") is None:
                     row["stop"] = "WIRE_RISK_UNKNOWN"; row["reason"] = "stop/order-book/maintenance unavailable"
                     rows.append(row); continue
                 if not replay:
-                    # Same min-stop-room gate place_entry runs (live ATR + live quote) — parity with production.
+                    # Same room stop place_entry runs (live ATR + live quote) — parity with production (2026-10-06).
                     # Skipped in an --asof replay: its quote/ATR would be TODAY's, not the replayed session's.
-                    room_ok, room_why = dtm._min_stop_room_ok(sym, direction, limit_px, stop_px)
-                    if not room_ok:
-                        row["stop"] = "MIN_STOP_ROOM"; row["reason"] = _trunc(room_why)
+                    stop_px, room_why = dtm._room_stop(osym, direction, limit_px, stop_px)
+                    if stop_px is None:
+                        row["stop"] = "ROOM_STOP"; row["reason"] = _trunc(room_why)
                         rows.append(row); continue
                 safe_qty, wire_reason = dtm._bounded_entry_qty(
                     int(z.get("shares") or 0), limit_px, stop_px, equity,
                     risk_snapshot.get("open_trades", {}), risk_snapshot.get("positions", {}),
                     buying_power, float(risk_snapshot.get("maintenance_margin", 0.0)),
                     rate, risk_snapshot.get("orders", []),
-                    risk_equity=float(risk_snapshot.get("last_equity", 0.0)), symbol=sym, track="B",
+                    risk_equity=float(risk_snapshot.get("last_equity", 0.0)), symbol=osym, track="B",
                     track_budget=z.get("budget"))
                 row["shares"] = safe_qty
                 if safe_qty < 1:
@@ -345,7 +369,7 @@ def main() -> int:
         print(f"SUMMARY (Track B): {len(tb_would)}/{len(tb_rows)} WOULD ENTER"
               + (f"  ({', '.join(r['symbol'] for r in tb_would)})" if tb_would else "")
               + f"  ·  stops: {dict(tb_stops)}")
-        print("NOTE: Track B needs a real intraday mover on the pre-registered list (gap≥2%, RVOL≥3x) that "
+        print("NOTE: Track B needs an intraday mover on the pre-registered list (gap≥1%, RVOL≥1.5x) that "
               "then breaks-and-holds its opening range on volume; on a quiet day 'not_mover'/'no_trigger' "
               "blocking every symbol is the CORRECT no-go, not a wiring failure.")
     return 0

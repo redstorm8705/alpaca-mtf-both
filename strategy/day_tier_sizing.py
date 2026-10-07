@@ -148,7 +148,11 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
         # config.DAYTRADE_MIN_ONE_SHARE_FLOOR (default True; set False in config.py to disable — Rule D).
         floor_enabled = bool(getattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR", True))
         floored = False
-        if shares < 1 and track_budget >= px and floor_enabled:
+        # CEO order 2026-10-06 ("the day tier must trade"; replay: MU $1,059 and SNDK $1,688 Track-A setups sized to 0
+        # because the per-trade budget was below one share): the floor no longer requires track_budget >= px. One
+        # share is taken whenever a trade fires; the wire-time caps (single-name, thin-name, gross, buying power,
+        # maintenance, daily dollar budget) in day_trade_manager._bounded_entry_qty decide whether it fits.
+        if shares < 1 and floor_enabled:
             shares = 1
             floored = True
         result["shares"] = max(0, shares)
@@ -156,8 +160,8 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
         result["size_ok"] = result["shares"] >= 1
         if result["size_ok"]:
             _floor_note = (
-                " [MIN-1-SHARE FLOOR: conviction-scaled notional < 1 share; per-trade budget affords 1 "
-                "— wire-time re-clamps for margin/stop-risk/gross]" if floored else ""
+                " [MIN-1-SHARE FLOOR: conviction-scaled notional < 1 share; wire-time caps decide "
+                "(margin/stop-risk/gross/single-name)]" if floored else ""
             )
             result["reason"] = (
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "

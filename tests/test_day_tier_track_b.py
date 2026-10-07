@@ -260,13 +260,16 @@ class Window(unittest.TestCase):
         return datetime(2026, 9, 21, h, m, tzinfo=tz)
 
     def test_bounds_derived_from_trigger_bar_limits(self):
-        # lower = (_MIN_FRAME_BARS-1)=4 bars -> 09:50; upper = (_SESSION_CUTOFF_BARS+1)=19 bars -> 11:05 (inclusive)
+        # lower = (_MIN_FRAME_BARS-1)=4 bars -> 09:50; upper = (_SESSION_CUTOFF_BARS+1) bars after 09:30 (inclusive).
+        # 2026-10-06 (CEO order): cutoff 72 bars -> upper = 73 x 5 = 365 min -> 15:35 ET (all session).
+        from strategy.day_tier_momentum_trigger import _SESSION_CUTOFF_BARS
+        up = datetime(2026, 9, 21, 9, 30, tzinfo=ET) + timedelta(minutes=(_SESSION_CUTOFF_BARS + 1) * 5)
         self.assertFalse(B.track_b_in_window(self._at(9, 49)))
         self.assertTrue(B.track_b_in_window(self._at(9, 50)))
         self.assertTrue(B.track_b_in_window(self._at(10, 30)))
-        self.assertTrue(B.track_b_in_window(self._at(11, 5)))
-        self.assertFalse(B.track_b_in_window(self._at(11, 6)))
-        self.assertFalse(B.track_b_in_window(self._at(15, 0)))
+        self.assertTrue(B.track_b_in_window(self._at(13, 0)))
+        self.assertTrue(B.track_b_in_window(up))
+        self.assertFalse(B.track_b_in_window(up + timedelta(minutes=1)))
 
     def test_non_et_clock_is_converted_not_read_raw(self):
         # 14:00 UTC == 10:00 EDT -> inside; a raw read (14:00) would wrongly fall outside.
@@ -276,7 +279,8 @@ class Window(unittest.TestCase):
 
     def test_naive_clock_is_treated_as_et(self):
         self.assertTrue(B.track_b_in_window(datetime(2026, 9, 21, 10, 0)))
-        self.assertFalse(B.track_b_in_window(datetime(2026, 9, 21, 12, 0)))
+        self.assertFalse(B.track_b_in_window(datetime(2026, 9, 21, 9, 40)))
+        self.assertFalse(B.track_b_in_window(datetime(2026, 9, 21, 16, 0)))
 
     def test_window_covers_every_bar_count_the_trigger_accepts(self):
         # Every tick at which the frame can hold 5..18 bars (either bar-publication convention) is inside.

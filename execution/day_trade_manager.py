@@ -266,7 +266,8 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
                        symbol: str = "", track: str = "A",
                        track_budget: float | None = None,
                        extra_b_lots: dict | None = None,
-                       risk_mult: float = 1.0) -> tuple[int, str]:
+                       risk_mult: float = 1.0,
+                       max_size: bool = False) -> tuple[int, str]:
     """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed.
 
     `symbol` selects the DEEP-LIQUIDITY carve-out (aggression guardrail 2026-09-18): a deep-liquidity
@@ -365,6 +366,17 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         notional_room = min(rooms.values())
         notional_qty = math.floor(max(0.0, notional_room) / order_price)
         safe_qty = max(0, min(int(risk_qty), int(notional_qty)))
+        if max_size is True:
+            # 10/10 MAXIMUM SIZE (Rafael CEO directive 2026-10-06): size to the account/exposure caps (every room
+            # above: global gross, day gross, buying power after the main-bot reserve, maintenance cushion, thin-
+            # name and single-name caps) instead of the per-trade risk basis; the Track-B budget cap below is
+            # skipped. Still bounded afterwards by the daily day-tier dollar budget in place_entry, the protective
+            # stop, the EOD force-flat and the 7% account kill.
+            safe_qty = max(0, int(notional_qty))
+            why = (f"MAX-SIZE (10/10): requested {requested_qty} → notional cap {notional_qty}sh "
+                   f"(risk-basis {risk_qty}sh not applied); rooms="
+                   + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items()))
+            return safe_qty, why
         # TRACK-B EXPOSURE CAP (Track B Inc 2 Part 2, 2026-09-23; flag DAYTRADE_TRACK_B_CASH_ONLY). Track B's
         # notional is bounded by its small equity-slice budget (§7b.6 — a halted mover can reopen far through
         # its stop), never a risk-sized position. It bounds EXPOSURE, not funding: a B short / a buy on a
@@ -397,7 +409,10 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
                     return 0, "open track-B notional unreadable — fail closed"
                 open_b += q * px
             b_room_qty = math.floor(max(0.0, b_budget - open_b) / order_price)
-            b_cap = max(0, min(int(requested_qty), int(b_room_qty)))
+            # CEO order 2026-10-06 ("the budget is never the reason a trade is skipped"): the Track-B budget may SHRINK
+            # an entry but never below ONE share; every account room above (and the daily dollar budget in
+            # place_entry) still bounds it.
+            b_cap = max(0, min(int(requested_qty), max(1, int(b_room_qty))))
             cash_note = (f"; track-B budget cap: requested {int(requested_qty)}sh, open-B ${open_b:.2f} of "
                          f"${b_budget:.2f} → room {b_room_qty}sh")
             if b_cap < safe_qty:
@@ -630,6 +645,72 @@ def _min_stop_room_ok(symbol: str, direction: str, entry_px: float, stop_px: flo
         # malfunction (e.g. a data-API outage skipping every entry) and must be visible above INFO.
         logger.warning("[%s] day-tier min-stop gate error (fail-closed skip): %s", symbol, e)
         return False, f"min-stop gate error (fail-closed skip): {e!r}"
+
+
+def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> "tuple[float | None, str]":
+    """CEO order 2026-10-06 ("the day tier must trade"; replay of 10/05-06: 9 of 25 Track-A setups died in the
+    min-stop gate). Returns a protective stop with at least the volatility room max(k x ATR(5m), spread_mult x
+    spread), measured from BOTH the marketable limit and the live touch — WIDENING a too-tight structural stop
+    instead of skipping the trade (wire-time sizing then sizes to the wider stop). A broken/wide IEX quote (the IEX
+    BBO is often wide at the open: TSLA $8-$17) is not a skip: the live reference falls back to the latest trade
+    and the spread term to 0. An unavailable ATR falls back to DAYTRADE_ROOM_FALLBACK_PCT of price. Returns
+    (None, why) only when no usable price exists. Never raises."""
+    try:
+        e = float(limit_px)
+        s = float(stop_px)
+        if not (math.isfinite(e) and math.isfinite(s) and e > 0 and s > 0) or direction not in ("long", "short"):
+            return None, "room stop: invalid entry/stop/direction"
+        k = float(_cfg("DAYTRADE_MIN_STOP_ATR_MULT", 1.5))
+        spread_mult = float(_cfg("DAYTRADE_MIN_STOP_SPREAD_MULT", 2.0))
+        sanity_pct = float(_cfg("DAYTRADE_STOP_SPREAD_SANITY_PCT", 0.02))
+        fallback_pct = float(_cfg("DAYTRADE_ROOM_FALLBACK_PCT", 0.005))  # PROV:daytier-must-trade-2026-10-06
+        live_ref, spread, src = None, 0.0, ""
+        from data.alpaca_data import get_latest_quote, get_latest_trade
+        q = get_latest_quote(symbol)
+        try:
+            bid = float((q or {}).get("bid") or 0.0)
+            ask = float((q or {}).get("ask") or 0.0)
+        except (TypeError, ValueError):
+            bid = ask = 0.0
+        band = float(_cfg("DAYTRADE_LIVE_PRICE_SANITY_PCT", 0.05))  # PROV:daytier-must-trade-2026-10-06
+        if (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask
+                and (ask - bid) <= sanity_pct * ((bid + ask) / 2.0)
+                and abs(((bid + ask) / 2.0) / e - 1.0) <= band):
+            live_ref, spread, src = (bid if direction == "short" else ask), ask - bid, "quote"
+        else:
+            try:
+                lt = get_latest_trade(symbol)
+                if (lt is not None and math.isfinite(float(lt)) and float(lt) > 0
+                        and abs(float(lt) / e - 1.0) <= band):
+                    live_ref, src = float(lt), "latest trade (quote unusable)"
+            except Exception:  # noqa: BLE001
+                live_ref = None
+        if live_ref is None:
+            live_ref, src = e, "limit price (no live quote/trade)"
+        # A live price already AT/THROUGH the structural stop means the setup is invalidated (cold-2nd 2026-10-06) —
+        # that is not a "too tight" stop to widen; skip, exactly as a post-fill cross would flatten.
+        if src != "limit price (no live quote/trade)" and (
+                (direction == "long" and live_ref <= s) or (direction == "short" and live_ref >= s)):
+            return None, (f"room stop: stop ${s:.2f} already reached by the live {src} ${live_ref:.2f} — "
+                          f"setup invalidated, skip")
+        atr = _robust_atr_5m(symbol)
+        vol_floor = k * atr if (atr is not None and math.isfinite(atr) and atr > 0) else fallback_pct * live_ref
+        min_stop = max(vol_floor, spread_mult * spread)
+        if direction == "long":
+            need = round(min(e, live_ref) - min_stop, 2)
+            out = min(s, need)
+        else:
+            need = round(max(e, live_ref) + min_stop, 2)
+            out = max(s, need)
+        out = round(out, 2)
+        if not (math.isfinite(out) and out > 0):
+            return None, "room stop: no positive protective stop"
+        how = "kept" if out == round(s, 2) else f"WIDENED {s:.2f}->{out:.2f}"
+        return out, (f"room stop {how}: min room ${min_stop:.4f} (vol ${vol_floor:.4f}, {spread_mult}x spread "
+                     f"${spread_mult * spread:.4f}) from limit ${e:.2f} / live ${live_ref:.2f} [{src}]")
+    except Exception as ex:  # noqa: BLE001
+        logger.warning("[%s] day-tier room-stop error: %s", symbol, ex)
+        return None, f"room stop error: {ex!r}"
 
 
 # ── fill confirmation ──────────────────────────────────────────────────────────────────────────
@@ -1383,19 +1464,30 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # the long-side +slippage boundary breach where 15×$100 passed a $1,500 cap but the submitted
         # 15×$100.20 order reserved $1,503.
         slip = float(_cfg("DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))
-        limit_px = round(entry_ref * (1.0 + slip) if direction == "long" else entry_ref * (1.0 - slip), 2)
+        # LIVE LIMIT (CEO order 2026-10-06; replay: entries priced off a minutes-old bar never filled): price the
+        # marketable limit off the real-time IEX price when one is fresh, else the signal reference.
+        _px_base = entry_ref
+        try:
+            from data.live_price import live_price as _live_price
+            _lp = _live_price(symbol)
+            _band = float(_cfg("DAYTRADE_LIVE_PRICE_SANITY_PCT", 0.05))  # PROV:daytier-must-trade-2026-10-06
+            if (_lp is not None and math.isfinite(_lp.price) and _lp.price > 0
+                    and abs(_lp.price / entry_ref - 1.0) <= _band):   # a print >5% off the signal = a bad print
+                _px_base = float(_lp.price)
+        except Exception as _lpe:  # noqa: BLE001 — a failed read keeps the signal reference
+            logger.warning("[%s] day-tier live limit price unavailable (signal ref used): %s", symbol, _lpe)
+        limit_px = round(_px_base * (1.0 + slip) if direction == "long" else _px_base * (1.0 - slip), 2)
         if not (math.isfinite(limit_px) and limit_px > 0):
             logger.warning("[%s] day-tier entry aborted — invalid marketable-limit price", symbol)
             return False
 
-        # MIN-STOP-DISTANCE GATE (hairpin fix Part A — 2026-09-18). A structural stop inside the
-        # volatility/noise band = a "no-room" trade a random tick stops out for pennies. Require the
-        # entry→stop distance >= max(k×ATR(5m), spread_mult×live_spread); if the pin/wall is closer,
-        # SKIP (NEVER widen past the pin — that breaks the setup's logic). Fail-closed on invalid
-        # ATR / broken quote. Runs before the heavier live-book reads so a no-room setup skips cheaply.
-        room_ok, room_why = _min_stop_room_ok(symbol, direction, limit_px, stop_px)
-        if not room_ok:
-            logger.info("[%s] day-tier entry skipped — %s", symbol, room_why)
+        # ROOM STOP (CEO order 2026-10-06 — replaces the skip-on-no-room gate for live entries): a structural stop
+        # inside the volatility band is WIDENED to the minimum room (from the limit and the live touch) instead of
+        # skipping the trade; wire-time sizing and the daily dollar budget then size to the wider stop.
+        stop_px, room_why = _room_stop(symbol, direction, limit_px, stop_px)
+        if stop_px is None or (direction == "long" and stop_px >= limit_px) or \
+                (direction == "short" and stop_px <= limit_px):
+            logger.warning("[%s] day-tier entry aborted — %s", symbol, room_why)
             return False
         logger.info("[%s] day-tier %s", symbol, room_why)
 
@@ -1470,7 +1562,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                       buying_power, maintenance_margin, maintenance_rate, open_orders,
                                       risk_equity=day_start_equity, symbol=symbol, track=_track,
                                       track_budget=size.get("budget"), extra_b_lots=_state_only,
-                                      risk_mult=size.get("risk_mult", 1.0))
+                                      risk_mult=size.get("risk_mult", 1.0),
+                                      max_size=size.get("max_size") is True)
         if qty < 1:
             logger.info("[%s] day-tier entry skipped — %s", symbol, why)
             return False
@@ -1618,7 +1711,13 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 tp_px = _t if (math.isfinite(_t) and _t > 0) else None
             except (TypeError, ValueError):
                 tp_px = None
-        elif _stop_dist > 0:
+            # A pin target the LIVE fill already passed (the price moved between signal and fill) is not a loss to
+            # book: fall back to the R-multiple target below instead of an inverted bracket / flatten (2026-10-06
+            # replay: META long filled 740.72 vs pin 739.23).
+            if (tp_px is not None and _cfg("DAYTRADE_FADE_PIN_FALLBACK", True) is not False
+                    and ((direction == "long" and tp_px <= fill_px) or (direction == "short" and tp_px >= fill_px))):
+                tp_px = None   # kill flag DAYTRADE_FADE_PIN_FALLBACK=False restores the flatten-on-crossed-target path
+        if tp_px is None and _stop_dist > 0 and trigger.get("no_target") is not True:
             _ride_r = float(_cfg("DAYTRADE_RIDE_TARGET_R", 2.0))
             tp_px = (fill_px + _ride_r * _stop_dist) if direction == "long" else (fill_px - _ride_r * _stop_dist)
         if trigger.get("no_target") is True:

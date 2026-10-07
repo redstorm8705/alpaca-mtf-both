@@ -5,7 +5,10 @@ counter-trend FADE is the one exception: its 2m/5m indicators must agree AND tod
 failed (15m lead + structure break, 30m confirmation — Rafael 2026-10-04).
 
 Live evidence 2026-09-15..10-02: trades opposite the trend side or on TWO_SIDED went 0/13 (-$32.93);
-aligned trades 3/6 (-$3.06). The rule is enforced in run_day_tier.run_tick for Track A and Track B."""
+aligned trades 3/6 (-$3.06). The rule is enforced in run_day_tier.run_tick for Track A and Track B.
+
+2026-10-06 CEO order ("the day tier must trade"): the gate's verdict is recorded on the entry but no longer
+blocks unless config.DAYTRADE_ALIGN_GATE_BLOCKS is True. The blocking tests below run with blocks=True."""
 import sys
 import unittest
 from types import SimpleNamespace
@@ -84,7 +87,7 @@ class RunTickTrackA(unittest.TestCase):
     """Drives run_tick with function-level patches on the real modules (the RunnerWindowGate pattern) —
     never a sys.modules swap, which would unload modules other test files rely on."""
 
-    def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None):
+    def _run(self, side, direction, mode=None, failed=True, log_ok=True, track_m_result=None, blocks=True):
         import contextlib
         placed, logged = [], []
         acct = SimpleNamespace(equity=2500.0, last_equity=2500.0, buying_power=9000.0)
@@ -113,6 +116,7 @@ class RunTickTrackA(unittest.TestCase):
             mock.patch.object(config, "DAYTRADE_ENABLED", True),
             mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", False),
             mock.patch.object(config, "DAYTRADE_UNIVERSE", ["NVDA"]),
+            mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", blocks, create=True),
         ]
         if track_m_result is not None:
             patches.extend([
@@ -183,6 +187,27 @@ class RunTickTrackA(unittest.TestCase):
         self.assertIn("not confirmed failed", trg["skip_reason"])
         self.assertEqual(trg["trend_failure"], NOT_FAILED)
 
+
+    # ── CEO order 2026-10-06: "the day tier must trade" — the gate RECORDS its verdict, it does not block ──────
+    def test_default_gate_records_but_does_not_block(self):
+        with mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", None, create=True):
+            self.assertFalse(rdt._gate_blocks())          # anything but an explicit True = not blocking
+        for side, direction, mode, failed in (("LONG", "short", None, True), ("TWO_SIDED", "short", None, True),
+                                              ("LONG", "short", "FADE", False)):
+            out, placed, logged = self._run(side, direction, mode=mode, failed=failed, blocks=False)
+            self.assertEqual([p[0] for p in placed], ["NVDA"], (side, direction, mode))
+            self.assertEqual(out["entered"], 1)
+            trg = placed[0][1]
+            self.assertFalse(trg["gate_ok"])
+            self.assertTrue(trg["gate_reason"])
+            self.assertEqual(trg["counter_trend"], side == "LONG")   # against a clear daily side -> tagged
+
+    def test_counter_trend_trade_still_writes_its_intent_record_first(self):
+        out, placed, logged = self._run("LONG", "short", blocks=False)
+        self.assertTrue(placed[0][2]["decision_id"].startswith("CT-NVDA-"))
+        self.assertEqual(logged[0][0], placed[0][2]["decision_id"])
+        _, placed, _ = self._run("LONG", "short", blocks=False, log_ok=False)
+        self.assertEqual(placed, [])                      # never-mask-a-loss: no durable tag -> no order
 
 if __name__ == "__main__":
     unittest.main()
