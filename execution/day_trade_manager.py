@@ -430,7 +430,10 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
 def _short_maintenance_rate(rate: "float | None", price: float) -> "float | None":
     """Alpaca's SHORT maintenance requirement (docs.alpaca.markets margin-and-short-selling, verified 2026-10-07):
     price < $5 -> greater of $2.50/share or 100%; price >= $5 -> greater of $5.00/share or 30%. The asset's posted
-    rate is the LONG rate, so a short uses the larger of the two. None when the inputs are unusable. Never raises."""
+    rate is the LONG rate, so a short uses the larger of the two. None when the inputs are unusable. Never raises.
+    As a RATE the rule is max(dollar-floor / price, percent-floor). Worked: $100 short -> $5/sh = 5% vs 30% -> 30%
+    ($30/sh — the greater of $5/sh and 30%); $10 short -> $5/sh = 50% vs 30% -> 50%; $4 short -> $2.50/sh = 62.5%
+    vs 100% -> 100%; $2 short -> 125% (> 100%, the caller skips). p <= 0 returns None BEFORE any division."""
     try:
         r, p = float(rate), float(price)  # type: ignore[arg-type]
         if not (math.isfinite(r) and math.isfinite(p) and r > 0 and p > 0):
