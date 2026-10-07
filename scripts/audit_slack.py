@@ -355,7 +355,10 @@ def findings_from_report(report: str) -> list[dict]:
             else:
                 _category, severity, file_name, title = cells[:4]
                 file_name = file_name.strip("`")
-                title = title.strip("`")
+                # The title is wrapped in Slack bold later; remove inline-code markers
+                # as a pair. strip("`") broke mixed titles such as ``_lead` newline``
+                # by deleting only the opening marker and leaving a dangling backtick.
+                title = title.replace("`", "")
                 detail = " — ".join(cell for cell in cells[4:] if cell)
                 sev_text = severity.upper()
                 sev = ("critical" if section == "cat" or "CRITICAL" in sev_text

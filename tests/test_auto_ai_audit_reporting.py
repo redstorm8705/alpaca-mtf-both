@@ -101,7 +101,7 @@ class MetaAuditSlackRendering(unittest.TestCase):
             block.get("text", {}).get("text", "") for block in blocks
             if block.get("type") == "section"
         )
-        self.assertIn(f"Full report: {fresh}", rendered)
+        self.assertIn(f"Full report (raw): {fresh}", rendered)
 
 
 class GistFreshness(unittest.TestCase):

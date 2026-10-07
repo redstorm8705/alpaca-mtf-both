@@ -165,3 +165,12 @@ Recovery failed: id | coid | symbol | qty | stop | broker state
     assert findings[-1]["title"] == "Recovery failed: id"
     assert "coid" in findings[-1]["detail"]
     assert findings[-1].get("file", "") != "symbol"
+
+
+def test_inline_code_in_title_has_no_dangling_backtick():
+    report = REPORT.replace("Friday Close Fetch", "`_lead` newline logic")
+
+    findings = findings_from_report(report)
+
+    assert findings[0]["title"] == "_lead newline logic"
+    assert "`" not in findings[0]["title"]
