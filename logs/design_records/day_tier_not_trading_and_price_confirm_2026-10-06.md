@@ -55,3 +55,14 @@ Track A 1 -> 24 of 25 setups enterable; Track B 0 -> ~5/day on 10/02 (ETF pivots
 OPEN (next builds): ownership guard per tier (OWNERSHIP_GUARD_ENFORCE is dormant and protects only QHM/F6 — a main-bot
 whole-symbol close can take day-tier shares on a co-held symbol); derive Track-B gap/RVOL thresholds per name; leverage-
 weighted caps were declined by the CEO (max size ordered); exit-side bid/ask confirmation (Proposal 3) not yet built.
+
+## TRACK B PER-STOCK THRESHOLDS — Rule C replay (2026-10-07, Claude) — NOT BUILT (refuted)
+Replay: 15 Track-B names, 2026-02-02..10-06, settled SIP 30m split-adjusted, checkpoints 10:00/11:00/12:30/14:00 ET
+(9,660 rows); outcome = continuation to 15:30 ET in the move's direction. Screen-only (the momentum trigger is not
+modeled); checkpoints within a day overlap (not independent). Script: scratchpad trackb_threshold_study.py (run on OCI).
+- Static 1%/1.5x: n=1,692, +15.4 bps (se 4.8). Per-stock normalized at the SAME count (move >= 1.2x the name's 20d sigma,
+  same-time-of-day RVOL >= 1.1x): n=1,694, +10.4 bps (se 4.0). The setups only the per-stock screen adds: -6.5 bps (se 3.7).
+  Static wins in both halves (+27.3 vs +21.3; +2.6 vs -1.0). Hypothesis refuted -> keep the static screen.
+- Static grid: RVOL is the selector (1.5x -> 2.0x roughly doubles continuation, ~+30 bps, at half the count); the gap
+  size barely matters (0.5% vs 1%: +200 setups at ~same edge). Second half weak at every setting (+1..+8 bps).
+- Reversal / revisit: if live Track B results diverge from the replay, re-test the RVOL floor first (gap second).
