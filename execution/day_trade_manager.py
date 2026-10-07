@@ -1308,6 +1308,14 @@ def force_flat_all(reason: str = "eod_force_flat") -> int:
                       f"close (never close the cross-tier net); manual check needed. ({reason})")
                 continue
             qty = min(held, want)
+            # Only a lot with NO live day-tier stop can be "held by another tier" (our own OCO is flattened as usual);
+            # the foreign stop must cover the whole position.
+            if (qty >= 1 and _has_live_daytrade_stop(sym) is False
+                    and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held)):
+                _page_once_today(sym, "foreign_stop_eod",
+                                 f"[{sym}] day-tier force-flat ({reason}) skipped — the lot is held by ANOTHER tier's stop "
+                                 f"(adopted by the main bot), which now manages it. Close manually if it must be flat.")
+                continue
             if qty >= 1 and flatten_position(sym, qty, tgt["side"], entry_price=tgt["entry_price"],
                                              trade_id=tgt["trade_id"], order_id_hint=tgt["order_id"],
                                              reason=reason):
@@ -2284,6 +2292,61 @@ def _has_live_daytrade_stop(symbol: str) -> "bool | None":
     return False
 
 
+def _foreign_stop_covers(symbol: str, side: str, qty: int) -> bool:
+    """True when ANOTHER tier's live STOP order on `symbol` reduces our `side` for at least `qty` shares — the day
+    tier's lot is protected, but by a stop it does not own (2026-10-07: the main bot's orphan scan adopted the
+    day-tier EWY short and AAPL long, cancelled the day-tier OCO and placed its own IN- stops; the day tier then
+    saw 'naked', its scoped close was refused (shares held by the foreign stop) and it paged every tick). False on
+    any read error (the caller keeps today's behaviour). Never raises."""
+    from execution import broker
+    from execution.ownership_guard import tier_of_coid
+    try:
+        orders = broker.get_open_orders(symbol)
+        if not orders or qty < 1:
+            return False
+        # Our OWN OCO legs carry no DT- coid (Alpaca child legs) — exclude them by their recorded ids, exactly as
+        # _has_live_daytrade_stop does (cold-2nd 2026-10-07: otherwise our own stop leg reads as "foreign").
+        own_ids: set = set()
+        for k, v in _load_state().items():
+            if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol:
+                for _f in ("stop_order_id", "oco_order_id", "tp_order_id"):
+                    if v.get(_f):
+                        own_ids.add(str(v.get(_f)))
+        want_side = "sell" if side == "long" else "buy"
+        covered = 0.0
+        for o in orders:
+            # FOREIGN only when the tag POSITIVELY names another tier (IN-/QH-/F6-). An untagged order — our own
+            # OCO child legs carry Alpaca ids, and an unreadable state file leaves own_ids empty — never counts
+            # (cold-2nd 2026-10-07: an empty state would otherwise turn our own leg into "foreign" cover).
+            _tier = tier_of_coid(getattr(o, "client_order_id", None))
+            if _tier is None or _tier == "daytrade" or str(getattr(o, "id", "") or "") in own_ids:
+                continue
+            otype = _enum_text(getattr(o, "order_type", None) or getattr(o, "type", None))
+            if "stop" not in otype or _enum_text(getattr(o, "side", None)) != want_side:
+                continue
+            covered += abs(float(getattr(o, "qty", 0) or 0)) - abs(float(getattr(o, "filled_qty", 0) or 0))
+        return covered + 1e-9 >= qty
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] foreign-stop check failed: %s", symbol, e)
+        return False
+
+
+def _page_once_today(symbol: str, key: str, msg: str) -> None:
+    """Page at most once per symbol per ET day for `key` (state-file marker); the log still records every tick."""
+    try:
+        state = _load_state()
+        k = f"_paged::{key}::{symbol}"
+        today = f"{_now_et():%Y%m%d}"
+        if state.get(k) == today:
+            logger.warning(msg)
+            return
+        state[k] = today
+        _save_state(state)
+    except Exception as e:  # noqa: BLE001 — a dedupe failure pages (never silences)
+        logger.debug("page dedupe failed: %s", e)
+    _page(msg)
+
+
 def _order_filled_qty(order_id: str) -> "tuple[bool, float]":
     """(readable, filled_qty) for an order. readable=False when the order cannot be read (empty id,
     None, or an exception) — the caller must NOT treat an unreadable order as zero-fill."""
@@ -2576,9 +2639,20 @@ def reconcile_open_state() -> dict:
                 )
                 continue
             want = int(tgt.get("qty") or 0)
+            held = abs(int(float(getattr(pos, "qty", 0) or 0)))
+            # The foreign stop must cover the WHOLE live position (cold-2nd 2026-10-07): once our stop is gone every
+            # remaining stop belongs to another tier, and on a co-held symbol a stop sized to ITS shares would
+            # otherwise "cover" our naked lot.
+            if want > 0 and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held):
+                # Protected by ANOTHER tier's stop (an adoption by the main bot): not naked. A scoped close would be
+                # refused (the foreign stop holds the shares) and must never cancel another tier's order (B1).
+                summary["protected"] += 1
+                _page_once_today(sym, "foreign_stop",
+                                 f"[{sym}] day-tier lot ({want} sh {tgt.get('side')}) is protected by ANOTHER tier's stop "
+                                 f"(adopted by the main bot) — the day tier will not close it; the main bot manages it.")
+                continue
             # NAKED (no live DT stop) → scoped-flatten the day-tier's OWN CONFIRMED qty. flatten_position's
             # net-side/qty guard additionally protects any co-held tier.
-            held = abs(int(float(getattr(pos, "qty", 0) or 0)))
             qty = min(held, want) if want > 0 else 0
             if qty < 1:
                 _page(f"[{sym}] day-tier reconcile: NAKED position but own confirmed-qty 0 — NOT closing "
