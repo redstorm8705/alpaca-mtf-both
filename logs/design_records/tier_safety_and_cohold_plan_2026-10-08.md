@@ -26,7 +26,42 @@
   on every promotion (symbol, shares, original cost, take-over price, day-tier result, new swing stop).
 - Tier names: only Day / Swing / QHM / F6 everywhere (CEO).
 
+## Decisions round 2 (2026-10-07 evening PT; board Harris+Thorp+Taleb, Gro, GAI; CEO)
+- D1 close sequence (CEO): day-tier stop stays live until 3:58 PM ET; at 3:58 cancel it and RETRY the cancel until
+  confirmed (the stop stays live meanwhile — never naked without a confirmed cancel); the market exit goes out the
+  moment the cancel confirms (board/Gro/GAI 4-0: no wait to 3:59); unfilled remainder retried up to 4:00. Any lot
+  still open at 4:00 -> after-close stop + Slack CRITICAL + exit at next open.
+- Promotion timing: decide at 3:56 on the closed 3:55 5-min bar; a promoted lot KEEPS the day-tier stop through the
+  close; after 4:00 the swing GTC stop is placed first, then the day stop is removed (no unprotected gap).
+- Leveraged ETF notional cap LEVERAGED_NOTIONAL_MAX_PCT 5% -> 10% of equity (CEO-approved; risk-path -> board gates
+  the implementation). Plus the board's overnight-gap limit on swing 3x holds (CEO-approved): a stress index gap on one
+  position (-5% index ~ -15% on a 3x ETF) costs < 2% of equity; overnight notional counted at 3x face vs the 1.75x cap.
+- No 1-share leveraged ETF positions (CEO): an ETF route needs >= 2 shares, else no ETF trade. At $2,556 equity and the
+  10% cap: SPXL 0 / UPRO 1 (no 3x S&P long until ~$3,110 equity); TQQQ 3, TNA 4, UDOW 4, SPXS 10, SPXU 7, SQQQ 7,
+  TZA 5, SDOW 9 (Oct 7 close prices).
+- ETFs come in ONLY when the stock/index is unaffordable (CEO). Shorts: 2x bear, else 1x bear (already the day-tier
+  map); GOOGL/NFLX/META/AMD/COIN have no liquid bear — check for a 1x bear before building.
+- Index 3x (CEO): signal on SPY/QQQ/IWM/DIA bars, execute in the 3x ETF (SPXL|UPRO / SPXS|SPXU by live liquidity,
+  TQQQ/SQQQ, TNA/TZA, UDOW/SDOW) for Day and Swing. TQQQ/SQQQ retired as standalone scored tickers (CEO agreed).
+  Build notes: rewrite the FORCE_FLAT > SWEEP validation (config.py:1160) for the new timing; add every 3x name to
+  LEVERAGED_3X_TICKERS; LEVERAGED_MIN_HOLD_DAYS must not block a day-tier 3:59 exit or any stop exit; day-tier 3x lots
+  not exempt from news-halt closes (Invariant #7 Bucket A exemption) — confirm in build.
+- Rejected reviewer suggestions (masked loss): excluding overnight-gap P&L from the kill switch (GAI); counting only
+  the planned risk of a gap loss toward P&L (Gro).
+- OPEN for CEO: stock 1-share fallback when no usable ETF exists (board 4-0 yes).
+
 ## Build order
 1 tier safety; 2 close timing; 3 tier names (display, then internal IN->SW migration); 4 5-min ownership refresh +
 polling inventory; 5 0-1-share ETF routing for Track A and Swing; 6 bot-watched stops on shared stocks; 7 promotion;
 8 hourly balance + watch-day reporting.
+
+## Stage 1 shipped scope + stage-2 carry-overs (2026-10-07 PT, Claude)
+- Shipped: tier-scoped cancels in the GTC/DAY stop recoveries and partial close (every tier); wash-trade rejects
+  cancel nothing and page; wash-trade no longer cached as a short block; free-share stop when another tier's STOP
+  orders cover the held shares, else page. Out of scope: close_position / close_all blanket cancel (Invariant #7).
+- Stage 2: (a) a free-share stop + later full-qty resubmit can churn (own-cancel -> futile 63s poll) — check own+foreign
+  cover before cancelling [hypothesis — unverified]; (b) a free-share stop relies on another tier's stop that can be
+  replaced/cancelled — the tier tracker records a full-qty stop id; (c) swing and swing_breakout share the IN- tag;
+  (d) day-tier OCO child legs are untagged (own legs read as foreign); (e) dynamic cover = position qty minus all live
+  unfilled reducing-stop qty instead of parsing the error text.
+
