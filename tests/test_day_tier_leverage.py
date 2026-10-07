@@ -223,5 +223,21 @@ class LiquidityTracking(unittest.TestCase):
         self.assertFalse(lev.etf_tracking_ok(10.0, None, 100.0, 100.0, 1.0, inverse=True)[0])
 
 
+class ShortMaintenance(unittest.TestCase):
+    """Alpaca short maintenance (docs margin-and-short-selling, 2026-10-07): < $5 greater of $2.50/sh or 100%;
+    >= $5 greater of $5.00/sh or 30%."""
+
+    def test_rule(self):
+        from execution import day_trade_manager as dtm
+        self.assertAlmostEqual(dtm._short_maintenance_rate(0.30, 100.0), 0.30)        # 5/100 = 5% < 30%
+        self.assertAlmostEqual(dtm._short_maintenance_rate(0.30, 10.0), 0.50)         # $5/sh on $10 = 50%
+        self.assertAlmostEqual(dtm._short_maintenance_rate(0.30, 16.0), 5.0 / 16.0)
+        self.assertAlmostEqual(dtm._short_maintenance_rate(0.50, 100.0), 0.50)        # posted rate higher -> kept
+        self.assertAlmostEqual(dtm._short_maintenance_rate(0.30, 4.0), 1.0)           # < $5 -> 100%
+        self.assertGreater(dtm._short_maintenance_rate(0.30, 2.0), 1.0)               # $2.50/sh on $2 = 125%
+        self.assertIsNone(dtm._short_maintenance_rate(None, 10.0))
+        self.assertIsNone(dtm._short_maintenance_rate(0.30, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

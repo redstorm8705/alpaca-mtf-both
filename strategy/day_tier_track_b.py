@@ -79,7 +79,9 @@ _STALE_FRAME_S = _BAR_SECONDS + 120  # PROV:daytier-track-b-screen — newest CO
 # in compute_day_tier_size (min-only) — it never up-sizes. Derived from realized per-mode/side expectancy once live.
 _CONVICTION_DRIVE = 0.5      # PROV:daytier-track-b-screen — a fresh drive (no retest yet)
 _CONVICTION_PULLBACK = 0.6  # PROV:daytier-track-b-screen — a retest that held (higher-quality continuation)
-_SHORT_CONVICTION_SCALE = 0.7  # PROV:daytier-track-b-screen — shorts sized smaller (§7c-d)
+_SHORT_CONVICTION_SCALE = 1.0  # CEO 2026-10-07 ("full size, long or short"; board Thorp + Taleb, Gro, GAI): was 0.7 —
+                               # shorts are sized like longs; per-trade stop risk, the daily dollar budget and every
+                               # account cap still bound them
 
 # PRE-REGISTERED liquid mover candidate list (PROV:daytier-track-b-screen). This fixed list IS the float /
 # micro-cap / liquidity guard — high-ADV, optionable names that genuinely gap and run intraday. Overlap with
@@ -158,7 +160,7 @@ def _now_et(now_et: "datetime | None" = None) -> datetime:
 
 
 def track_b_conviction(mode: str, direction: str) -> float:
-    """PROV conviction for a Track-B ENTER, in [0,1]. DRIVE/PULLBACK base, shorts scaled smaller (§7c-d).
+    """PROV conviction for a Track-B ENTER, in [0,1]. DRIVE/PULLBACK base; shorts scaled by _SHORT_CONVICTION_SCALE.
     Only ever SHRINKS the Track-B budget (compute_day_tier_size is min-only). Never raises."""
     try:
         base = _CONVICTION_PULLBACK if str(mode).upper() == "PULLBACK" else _CONVICTION_DRIVE

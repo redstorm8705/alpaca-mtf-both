@@ -995,8 +995,9 @@ def run_tick() -> dict:
                 order_sym = sym
                 try:
                     from strategy import day_tier_leverage as lev
-                    _ten, _ten_why = (lev.is_ten_of_ten(screen, mom, _gate_b)
-                                      if trigger_b.get("direction") == "long" else (False, "short — no pivot"))
+                    # 10/10 applies to longs AND shorts (CEO 2026-10-07: "full size, long or short"); the alignment
+                    # and trend checks inside are computed for the trade's own direction.
+                    _ten, _ten_why = lev.is_ten_of_ten(screen, mom, _gate_b)
                     decision_b = {**decision_b, "ten_of_ten": _ten, "ten_of_ten_reason": _ten_why}
                     _etf = None
                     if lev.pivot_enabled() and trigger_b.get("direction") == "long" and lev.bull_etf_for(sym):
@@ -1048,6 +1049,8 @@ def run_tick() -> dict:
                                                             buying_power, "B", prior_close=prior_close)
                         if _inv_b is not None:
                             decision_b, trigger_b, size_b, order_sym = _inv_b
+                            if _ten and size_b.get("size_ok"):   # never on a size_ok=False dict
+                                size_b = {**size_b, "max_size": True}   # 10/10 short -> maximum size on the ETF
                             logger.info("[%s] track-B INVERSE ROUTE -> %s (%s; stock buys %d sh): %s", sym, order_sym,
                                         "co-held" if _coheld_b else "budget", _stock_shares, size_b.get("reason"))
                         elif _coheld_b:

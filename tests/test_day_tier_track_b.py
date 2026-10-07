@@ -102,9 +102,10 @@ class Conviction(unittest.TestCase):
         self.assertAlmostEqual(B.track_b_conviction("DRIVE", "long"), 0.5, places=3)
         self.assertAlmostEqual(B.track_b_conviction("PULLBACK", "long"), 0.6, places=3)
 
-    def test_shorts_smaller(self):
-        self.assertLess(B.track_b_conviction("DRIVE", "short"), B.track_b_conviction("DRIVE", "long"))
-        self.assertAlmostEqual(B.track_b_conviction("PULLBACK", "short"), 0.6 * 0.7, places=3)
+    def test_shorts_sized_like_longs(self):
+        # CEO 2026-10-07: "full size, long or short" — the 0.7 short scale is retired
+        self.assertEqual(B.track_b_conviction("DRIVE", "short"), B.track_b_conviction("DRIVE", "long"))
+        self.assertAlmostEqual(B.track_b_conviction("PULLBACK", "short"), 0.6, places=3)
 
     def test_bad_input_safe(self):
         self.assertGreaterEqual(B.track_b_conviction(None, None), 0.0)  # never raises
@@ -132,12 +133,12 @@ class Adapter(unittest.TestCase):
         self.assertEqual(decision["track"], "B")
         self.assertAlmostEqual(decision["conviction"], 0.5, places=3)
 
-    def test_enter_short_smaller_conviction(self):
+    def test_enter_short_same_conviction(self):
         d_long, _ = B.momentum_to_entry(self._mom("long", "DRIVE"))
         d_short, t_short = B.momentum_to_entry(self._mom("short", "DRIVE"))
         self.assertEqual(t_short["direction"], "short")
         self.assertEqual(d_short["side"], "SHORT")
-        self.assertLess(d_short["conviction"], d_long["conviction"])
+        self.assertEqual(d_short["conviction"], d_long["conviction"])
 
     def test_non_enter_momentum_yields_wait(self):
         _, trigger = B.momentum_to_entry({"symbol": "NVDA", "trigger": "WAIT"}, gap_direction="up")

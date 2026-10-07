@@ -237,6 +237,33 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertEqual(log_track, "B")
         self.assertEqual(state_track, "B")
 
+    def test_short_uses_alpacas_short_maintenance_rate(self):
+        # $10 short, posted (long) rate 30% -> Alpaca short rule: greater of $5/share or 30% = 50% (board 2026-10-07)
+        from execution import day_trade_manager as dtm
+        spy = mock.Mock(wraps=dtm._bounded_entry_qty)
+        with mock.patch.object(dtm, "_bounded_entry_qty", spy):
+            self._run("A", fill_price=10.0, pin_fallback=True,
+                      trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 10.0,
+                                        "target": 9.5, "wall_ref": None})
+        self.assertAlmostEqual(spy.call_args.args[8], 5.0 / 9.98, places=6)   # priced at the short limit (10 x 0.998)
+        # a long at the same price keeps the posted rate
+        spy.reset_mock()
+        with mock.patch.object(dtm, "_bounded_entry_qty", spy):
+            self._run("A", fill_price=10.0, pin_fallback=True,
+                      trigger_override={"direction": "long", "mode": "FADE", "entry_ref": 10.0,
+                                        "target": 10.5, "wall_ref": None})
+        self.assertAlmostEqual(spy.call_args.args[8], 0.30)
+
+    def test_short_under_two_fifty_is_skipped(self):
+        from execution import day_trade_manager as dtm
+        spy = mock.Mock(wraps=dtm._bounded_entry_qty)
+        with mock.patch.object(dtm, "_bounded_entry_qty", spy):
+            ok, qty, _, _ = self._run("A", fill_price=2.0, pin_fallback=True,
+                                      trigger_override={"direction": "short", "mode": "FADE", "entry_ref": 2.0,
+                                                        "target": 1.9, "wall_ref": None})
+        self.assertFalse(ok)
+        spy.assert_not_called()
+
     def test_actual_fill_crossing_short_target_flattens_without_oco(self):
         # Mirrors the 2026-09-23 AAPL failure: signal geometry was valid at entry_ref=339, but the
         # short filled below its 338.76 target. The newly filled setup must close immediately.
@@ -947,6 +974,31 @@ class RunnerWindowGate(unittest.TestCase):
                             return_value={"size_ok": True, "shares": 1, "budget": 100.0, "track": "B"})]
         result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
         self.assertEqual((pe.call_args.args[0], pe.call_args.args[2]["direction"]), ("UBER", "short"))
+
+    def test_ten_of_ten_short_on_the_stock_gets_max_size(self):
+        extra = [mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),
+                 mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                            return_value={"size_ok": True, "shares": 3, "budget": 300.0, "track": "B"})]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        sym, _dec, trg, size = pe.call_args.args[:4]
+        self.assertEqual((sym, trg["direction"]), ("UBER", "short"))
+        self.assertTrue(size.get("max_size"))
+
+    def test_ten_of_ten_short_routed_to_the_inverse_etf_gets_max_size(self):
+        extra = [mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),
+                 mock.patch.object(run_day_tier, "_held_by_other_tiers", return_value={"UBER"}),
+                 mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK)]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        sym, _dec, _trg, size = pe.call_args.args[:4]
+        self.assertEqual(sym, "UBRD")
+        self.assertTrue(size.get("max_size"))
+
+    def test_short_not_ten_of_ten_is_not_max_size(self):
+        extra = [mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(False, "no")),
+                 mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                            return_value={"size_ok": True, "shares": 3, "budget": 300.0, "track": "B"})]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        self.assertFalse(pe.call_args.args[3].get("max_size"))
 
     def test_ten_of_ten_buying_two_plus_shares_trades_the_stock_at_max_size(self):
         extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),
