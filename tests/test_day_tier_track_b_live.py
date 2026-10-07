@@ -675,11 +675,11 @@ class DurableTrackStamp(unittest.TestCase):
 class RunnerWindowGate(unittest.TestCase):
     """Outside the window the runner does NO Track-B fetch; inside it routes an ENTER to place_entry(track B)."""
 
-    def _tick(self, in_window, state=None, extra=None, pe_side_effect=None):
+    def _tick(self, in_window, state=None, extra=None, pe_side_effect=None, mom_over=None, side="LONG"):
         acct = SimpleNamespace(equity="2500", last_equity="2500", buying_power="4000")
         frame = mock.MagicMock(name="frame")
         mom = {"symbol": "UBER", "trigger": "ENTER", "direction": "long", "mode": "DRIVE",
-               "entry_ref": 70.0, "structural_level": 69.0, "vol_confirmed": True}
+               "entry_ref": 70.0, "structural_level": 69.0, "vol_confirmed": True, **(mom_over or {})}
         patches = [
             mock.patch.object(run_day_tier, "_clock_state", return_value=("open", 300.0)),
             mock.patch.object(run_day_tier, "_touch_heartbeat"),
@@ -701,7 +701,9 @@ class RunnerWindowGate(unittest.TestCase):
             mock.patch.object(run_day_tier, "_prev_session_date", return_value="2026-09-22"),
             # Owner rule 2026-10-03: Track B must agree with the symbol's Layer-A trend side. These tests
             # exercise the window/budget/shot mechanics, so the trend side agrees with the long ENTER.
-            mock.patch.object(run_day_tier, "_side_for", return_value="LONG"),
+            mock.patch.object(run_day_tier, "_side_for", return_value=side),
+            mock.patch.object(run_day_tier, "_day_tier_exposure", return_value={}),
+            mock.patch.object(run_day_tier, "_watch_day_ok", return_value=(True, "watch day (test)")),
             mock.patch.object(run_day_tier, "_alignment_for", return_value={"aligned": True, "checks": {}, "reason": "ok"}),
             # leveraged pivot (2026-10-06) is exercised in test_pivot_routes_the_order_to_the_etf
             mock.patch("strategy.day_tier_leverage.etf_for_order", return_value=None),
@@ -892,9 +894,59 @@ class RunnerWindowGate(unittest.TestCase):
         sym, _dec, trg, size = pe.call_args.args[:4]
         self.assertEqual(sym, "UBRL")
         self.assertEqual((trg["underlying"], trg["leverage"]), ("UBER", 2.0))
-        self.assertAlmostEqual(trg["wall_ref"], 20.0 * (1 + 2 * (69.0 / 70.0 - 1)), places=3)
+        # exact daily-reset stop with the harness's prior close (100): UBER 70 -> 69 moves UBRL by -5%, so 19.00
+        from strategy import day_tier_leverage as lev
+        self.assertAlmostEqual(trg["wall_ref"], lev.etf_stop_level(20.0, 70.0, 69.0, 2.0, False, prior_close=100.0),
+                               places=3)
+        self.assertAlmostEqual(trg["wall_ref"], 19.0, places=3)
         self.assertEqual(size["track"], "B")
         self.assertTrue(size.get("max_size"))
+
+    # ── inverse-ETF short route (Rafael 2026-10-07) ─────────────────────────────────────────────────────────
+    _SHORT = {"direction": "short", "entry_ref": 70.0, "structural_level": 71.0}
+    _INV_OK = (({"symbol": "UBRD", "underlying": "UBER", "signal_direction": "short"},
+                {"symbol": "UBRD", "trigger": "ENTER", "direction": "long", "signal_direction": "short",
+                 "instrument": "inverse_etf", "underlying": "UBER", "entry_ref": 9.0, "wall_ref": 8.8},
+                {"size_ok": True, "shares": 20, "budget": 200.0, "track": "B"}, "UBRD"), "inverse route -> UBRD")
+
+    def test_short_on_a_coheld_stock_buys_the_inverse_etf(self):
+        extra = [mock.patch.object(run_day_tier, "_held_by_other_tiers", return_value={"UBER"}),
+                 mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK)]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        self.assertEqual(result["entered_b"], 1)
+        sym, _dec, trg = pe.call_args.args[:3]
+        self.assertEqual((sym, trg["direction"], trg["signal_direction"]), ("UBRD", "long", "short"))
+
+    def test_short_on_a_coheld_stock_with_no_route_is_skipped(self):
+        extra = [mock.patch.object(run_day_tier, "_held_by_other_tiers", return_value={"UBER"}),
+                 mock.patch.object(run_day_tier, "_inverse_pivot", return_value=(None, "no free liquid inverse ETF"))]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        self.assertEqual(result["entered_b"], 0)
+        pe.assert_not_called()
+
+    def test_short_not_held_with_budget_for_two_shares_shorts_the_stock(self):
+        inv = mock.Mock(return_value=self._INV_OK)
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", inv),
+                 mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                            return_value={"size_ok": True, "shares": 3, "budget": 300.0, "track": "B"})]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        inv.assert_not_called()
+        sym, _dec, trg = pe.call_args.args[:3]
+        self.assertEqual((sym, trg["direction"]), ("UBER", "short"))
+
+    def test_short_not_held_with_budget_for_one_share_buys_the_inverse_etf(self):
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK),
+                 mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                            return_value={"size_ok": True, "shares": 1, "budget": 100.0, "track": "B"})]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        self.assertEqual(pe.call_args.args[0], "UBRD")
+
+    def test_short_budget_route_failure_keeps_the_stock_short(self):
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=(None, "spread too wide")),
+                 mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
+                            return_value={"size_ok": True, "shares": 1, "budget": 100.0, "track": "B"})]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
+        self.assertEqual((pe.call_args.args[0], pe.call_args.args[2]["direction"]), ("UBER", "short"))
 
     def test_ten_of_ten_buying_two_plus_shares_trades_the_stock_at_max_size(self):
         extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),

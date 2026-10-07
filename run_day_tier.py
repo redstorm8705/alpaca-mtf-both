@@ -323,6 +323,114 @@ def _held_by_other_tiers() -> "set | None":
         return None
 
 
+def _prior_close(sym: str) -> "float | None":
+    """The last COMPLETED session's daily close (today's forming bar dropped), or None. Feeds the exact daily-reset
+    ETF stop and the ETF tracking check; None -> first-order stop / tracking check fails safe. Never raises."""
+    try:
+        import config
+        from data.fetcher import fetch_bars
+        df = fetch_bars(sym, config.TF_DAILY, num_bars=6)
+        done = _prior_days(df, datetime.now(ET))
+        v = float(done["close"].iloc[-1]) if done is not None else None
+        return v if (v is not None and math.isfinite(v) and v > 0) else None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] prior close unavailable: %s", sym, e)
+        return None
+
+
+def _today_iex_volume(sym: str) -> "float | None":
+    """Shares traded on IEX today so far (5m IEX bars since 09:30 ET — the real-time feed this plan serves), or None.
+    Never raises."""
+    try:
+        import config
+        from data.fetcher import fetch_bars_window
+        now = datetime.now(ET)
+        df = fetch_bars_window(sym, config.TF_5M, now.replace(hour=9, minute=30, second=0, microsecond=0), now,
+                               feed="iex")
+        if df is None or getattr(df, "empty", True) or "volume" not in df.columns:
+            return None
+        v = float(df["volume"].fillna(0).sum())
+        return v if math.isfinite(v) else None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] today's IEX volume unavailable: %s", sym, e)
+        return None
+
+
+def _day_tier_exposure() -> "dict | None":
+    """{underlying: +1/-1} for the day tier's open lots (stock, bull ETF = +1, inverse ETF = -1 on its underlying),
+    or None when the durable log cannot be read. Never raises."""
+    try:
+        from strategy import day_tier_leverage as lev
+        from strategy import day_tier_logger as _dtl
+        out: dict = {}
+        for t in _dtl.open_trades_from_log().values():
+            und, sgn = lev.exposure_sign(str(t.get("symbol") or ""), str(t.get("side") or "long"))
+            out[und] = sgn
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("day-tier: open-exposure read failed (one-direction check skipped this tick): %s", e)
+        return None
+
+
+def _direction_conflict(exposure: "dict | None", order_sym: str, direction: object) -> "str | None":
+    """One direction per underlying (board Taleb 2026-10-07): refuse an entry whose exposure on its underlying is
+    opposite an open day-tier lot (NVDL vs NVD, NVDA vs NVD, ...). An unreadable log ALLOWS the entry (logged): an
+    opposite pair only wastes a spread — it cannot hide a loss — and the CEO order is that the day tier trades.
+    Returns a skip reason or None."""
+    if exposure is None:
+        logger.warning("[%s] day-tier open-exposure unreadable — one-direction check skipped this entry", order_sym)
+        return None
+    try:
+        from strategy import day_tier_leverage as lev
+        und, sgn = lev.exposure_sign(order_sym, "long" if str(direction).lower() == "long" else "short")
+        cur = exposure.get(und)
+        if cur is not None and cur != sgn:
+            return f"day tier already holds the opposite direction on {und} — one direction per stock"
+        return None
+    except Exception as e:  # noqa: BLE001
+        return f"direction check error ({e!r}) — entry refused"
+
+
+def _inverse_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", equity: float,
+                   buying_power: float, track: str, prior_close: "float | None" = None) -> "tuple[tuple | None, str]":
+    """Route a SHORT signal on `sym` to a BUY of its inverse ETF (strategy/day_tier_leverage.inverse_entry), then
+    gate it live: tracking vs the stock, size, liquidity. Returns ((decision, trigger, size, etf), reason) or
+    (None, reason). Never raises."""
+    try:
+        from data.alpaca_data import get_latest_quote
+        from data.live_price import DELAYED_FEED_AGE_S, live_price
+        from strategy import day_tier_leverage as lev
+        from strategy.day_tier_sizing import compute_day_tier_size
+        route = lev.inverse_etf_for_order(sym, held)
+        if route is None:
+            return None, "no free liquid inverse ETF for this stock"
+        etf, k = route
+        up, ep = live_price(sym), live_price(etf, max_age_s=DELAYED_FEED_AGE_S)
+        c = prior_close if prior_close else _prior_close(sym)
+        piv = lev.inverse_entry(decision, trigger, etf, k, up.price if up else None, ep.price if ep else None,
+                                prior_close=c)
+        if piv is None:
+            return None, f"inverse route to {etf}: price/geometry not usable"
+        d2, t2 = piv
+        ok, why = lev.etf_tracking_ok(t2.get("entry_ref"), _prior_close(etf), t2.get("underlying_entry_ref"), c, k,
+                                      inverse=True)
+        if not ok:
+            return None, f"inverse route to {etf}: {why}"
+        size = compute_day_tier_size(etf, d2, t2.get("entry_ref"), equity, buying_power=buying_power, track=track)
+        if not size.get("size_ok"):
+            return None, f"inverse route to {etf}: size not ok ({size.get('reason')})"
+        _n = datetime.now(ET)
+        _frac = ((_n.hour * 60 + _n.minute) - (9 * 60 + 30)) / 390.0   # session fraction elapsed (expected-by-now)
+        ok, liq = lev.etf_liquidity_ok(get_latest_quote(etf), _today_iex_volume(etf), size.get("shares"),
+                                       t2.get("entry_ref"), t2.get("wall_ref"), session_frac=_frac)
+        if not ok:
+            return None, f"inverse route to {etf}: {liq}"
+        return (d2, {**t2, "tracking": why, "liquidity": liq}, size, etf), f"inverse route -> {etf}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] inverse route error (no route): %s", sym, e)
+        return None, f"inverse route error: {e!r}"
+
+
 def _watch_day_ok(sym: str, side: object, direction: object) -> "tuple[bool, str]":
     """CEO watch-day rule (Rafael 2026-10-06; board Asness/LdP + GAI; design record day_tier_not_trading_and_price_
     confirm_2026-10-06.md): a SHORT against a LONG daily side is taken only after a WATCH DAY — the previous session
@@ -676,6 +784,7 @@ def run_tick() -> dict:
     entered = 0
     capped = False
     _held_other = _held_by_other_tiers()   # ONCE per tick (co-hold routing); place_entry re-checks before submit
+    _dt_exp = _day_tier_exposure()          # ONCE per tick (one direction per stock); updated on each new entry
     # TRACK M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05). Runs FIRST inside its 09:45-10:15 ET
     # window (one shot per day); a no-op on every other tick. Same reconcile/force-flat/kill/budget machinery.
     entered_m, track_m_note = 0, "disabled"
@@ -730,37 +839,54 @@ def run_tick() -> dict:
             # re-reads live positions + open orders right before submit, returns False if either is unreadable,
             # and refuses a symbol another tier holds or has an order on (day_trade_manager NO SAME-SIDE CO-HOLD).
             if _held_other is not None and sym in _held_other:
-                # NO CO-HOLD (interim 2026-10-07): another tier holds this stock -> a long switches to a free 2x ETF;
-                # a short (no bear ETF route) or a long with no free ETF is skipped with its reason logged.
+                # NO CO-HOLD (interim 2026-10-07): another tier holds this stock -> a long switches to a free 2x bull
+                # ETF; a short BUYS a free liquid inverse ETF (Rafael 2026-10-07); no route -> skipped, reason logged.
                 _piv_a = None
+                _why_a = "another tier holds this symbol and no free ETF route (no co-hold)"
                 try:
                     from strategy import day_tier_leverage as lev
-                    _etf_a = (lev.etf_for_order(sym, _held_other)
-                              if lev.pivot_enabled() and trigger.get("direction") == "long" else None)
-                    if _etf_a:
-                        from data.live_price import DELAYED_FEED_AGE_S, live_price
-                        _ua, _ea = live_price(sym), live_price(_etf_a, max_age_s=DELAYED_FEED_AGE_S)
-                        _piv_a = lev.leveraged_entry(decision, trigger, _etf_a,
-                                                     _ua.price if _ua else None, _ea.price if _ea else None)
-                        if _piv_a is not None:
-                            decision, trigger = _piv_a
-                            order_sym_a = _etf_a
-                            size = compute_day_tier_size(_etf_a, decision, trigger.get("entry_ref"), equity,
-                                                         buying_power=buying_power, track="A")
+                    if trigger.get("direction") == "long":
+                        _etf_a = lev.etf_for_order(sym, _held_other) if lev.pivot_enabled() else None
+                        if _etf_a:
+                            from data.live_price import DELAYED_FEED_AGE_S, live_price
+                            _ua, _ea = live_price(sym), live_price(_etf_a, max_age_s=DELAYED_FEED_AGE_S)
+                            _piv_a = lev.leveraged_entry(decision, trigger, _etf_a,
+                                                         _ua.price if _ua else None, _ea.price if _ea else None,
+                                                         prior_close=_prior_close(sym))
+                            if _piv_a is not None:
+                                decision, trigger = _piv_a
+                                order_sym_a = _etf_a
+                                size = compute_day_tier_size(_etf_a, decision, trigger.get("entry_ref"), equity,
+                                                             buying_power=buying_power, track="A")
+                    elif lev.inverse_pivot_enabled():
+                        _inv_a, _why_inv = _inverse_pivot(sym, decision, trigger, _held_other, equity, buying_power,
+                                                          "A")
+                        if _inv_a is not None:
+                            decision, trigger, size, order_sym_a = _inv_a
+                            _piv_a = (decision, trigger)
+                        else:
+                            _why_a = f"another tier holds this symbol; {_why_inv}"
                 except Exception as _pa:  # noqa: BLE001
                     logger.warning("[%s] track-A co-hold pivot error (skip): %s", sym, _pa)
                     _piv_a = None
                 if _piv_a is None or not size.get("size_ok"):
-                    _log_direction_skip(sym, decision, trigger,
-                                        "another tier holds this symbol and no free 2x ETF route (no co-hold)", bar_id)
+                    _log_direction_skip(sym, decision, trigger, _why_a, bar_id)
                     continue
                 logger.info("[%s] track-A CO-HOLD PIVOT -> %s: %s", sym, order_sym_a, size.get("reason"))
+            _dc_a = _direction_conflict(_dt_exp, order_sym_a, trigger.get("direction"))
+            if _dc_a:
+                _log_direction_skip(sym, decision, trigger, _dc_a, bar_id)
+                continue
             if calls_used + per_entry_est > call_budget:
                 capped = True
                 break  # defer the remaining ENTERs to the next tick (bar_id idempotency preserves them)
             _pe_kw = {"decision_id": _ct_decision_id} if _ct_decision_id else {}
             if dtm.place_entry(order_sym_a, decision, trigger, size, bar_id=bar_id, equity=equity, **_pe_kw):
                 entered += 1
+                if _dt_exp is not None:
+                    from strategy import day_tier_leverage as _lv
+                    _u, _sg = _lv.exposure_sign(order_sym_a, str(trigger.get("direction") or "long"))
+                    _dt_exp[_u] = _sg
             calls_used += per_entry_est
         except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
             logger.warning("[%s] day-tier entry loop error (non-fatal): %s", sym, e)
@@ -898,7 +1024,8 @@ def run_tick() -> dict:
                         # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
                         _up, _ep = live_price(sym), live_price(_etf, max_age_s=DELAYED_FEED_AGE_S)
                         _piv = lev.leveraged_entry(decision_b, trigger_b, _etf,
-                                                   _up.price if _up else None, _ep.price if _ep else None)
+                                                   _up.price if _up else None, _ep.price if _ep else None,
+                                                   prior_close=prior_close)
                         if _piv is not None:
                             decision_b, trigger_b = _piv
                             order_sym = _etf
@@ -911,6 +1038,25 @@ def run_tick() -> dict:
                         else:
                             logger.info("[%s] track-B leveraged pivot to %s not possible (price/geometry) — stock path",
                                         sym, _etf)
+                    # SHORT -> BUY the inverse ETF (Rafael 2026-10-07): when another tier holds the stock, or the budget
+                    # buys 0-1 shares. Otherwise the stock itself is shorted. A failed route on a co-held stock is
+                    # skipped (place_entry would refuse the co-hold anyway); on a budget route it keeps the stock path.
+                    _coheld_b = _held_other is not None and sym in _held_other
+                    if (trigger_b.get("direction") == "short" and lev.inverse_pivot_enabled()
+                            and (_coheld_b or _stock_shares <= 1)):
+                        _inv_b, _why_inv_b = _inverse_pivot(sym, decision_b, trigger_b, _held_other, equity,
+                                                            buying_power, "B", prior_close=prior_close)
+                        if _inv_b is not None:
+                            decision_b, trigger_b, size_b, order_sym = _inv_b
+                            logger.info("[%s] track-B INVERSE ROUTE -> %s (%s; stock buys %d sh): %s", sym, order_sym,
+                                        "co-held" if _coheld_b else "budget", _stock_shares, size_b.get("reason"))
+                        elif _coheld_b:
+                            _log_direction_skip(sym, decision_b, trigger_b, f"another tier holds this symbol; "
+                                                f"{_why_inv_b}", bar_id)
+                            continue
+                        else:
+                            logger.info("[%s] track-B inverse route not taken (%s) — shorting the stock", sym,
+                                        _why_inv_b)
                 except Exception as _pe:  # noqa: BLE001 — a pivot failure keeps the stock path
                     logger.warning("[%s] track-B leveraged pivot error (stock path): %s", sym, _pe)
                 if size_b.get("size_ok"):
@@ -928,6 +1074,10 @@ def run_tick() -> dict:
                         pass
                 if not size_b.get("size_ok"):
                     continue
+                _dc_b = _direction_conflict(_dt_exp, order_sym, trigger_b.get("direction"))
+                if _dc_b:
+                    _log_direction_skip(sym, decision_b, trigger_b, _dc_b, bar_id)
+                    continue
                 if time.monotonic() - _tick_t0 > _TICK_CADENCE_S - _PLACE_ENTRY_RESERVE_S:
                     track_b_note = "tick_budget"
                     logger.warning("[%s] track-B ENTER not placed — < %.0fs left in the tick (the signal's "
@@ -942,6 +1092,10 @@ def run_tick() -> dict:
                     _pe_kw_b["decision_id"] = _ct_b
                 if dtm.place_entry(order_sym, decision_b, trigger_b, size_b, bar_id=bar_id, equity=equity, **_pe_kw_b):
                     entered_b += 1
+                    if _dt_exp is not None:
+                        from strategy import day_tier_leverage as _lv_b
+                        _u_b, _sg_b = _lv_b.exposure_sign(order_sym, str(trigger_b.get("direction") or "long"))
+                        _dt_exp[_u_b] = _sg_b
                 calls_used += per_entry_est
             except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
                 logger.warning("[%s] track-B entry loop error (non-fatal): %s", sym, e)
