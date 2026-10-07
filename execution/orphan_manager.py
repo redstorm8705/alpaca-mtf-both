@@ -969,23 +969,52 @@ def _get_forever6_syms() -> set:
 
 
 def _get_daytrade_syms() -> set:
-    """Symbols the day-trade tier currently HOLDS (ledger daytrade qty > 0).
+    """Symbols the day-trade tier currently HOLDS — long OR short.
 
     Excluded from the startup orphan set so a day-tier position — tracked in
     day_tier_state.json + the ownership ledger (DT- client_order_id), never in
-    tracker.open_trades — is not adopted as an intraday orphan on restart (which would
-    mislabel its tier, count it against intraday risk, hand it to check_exits). Mirrors
-    _get_forever6_syms / _get_qhm_syms, EXCEPT the error fallback is a plain set(), not
-    the protected cache: daytrade is NOT in _PROTECTED_TIERS (forever6, qhm), so no
-    never-sell floor needs defending and that cache never holds a day-tier symbol. Worst
-    case on a ledger error is a one-restart mislabel — benign, self-correcting."""
+    tracker.open_trades — is not adopted as an intraday orphan on restart (which
+    would mislabel its tier, count it against intraday risk, hand it to
+    check_exits, and — via the adoption stop's hold-clear — cancel the day tier's
+    own OCO). Mirrors _get_forever6_syms / _get_qhm_syms, EXCEPT the error
+    fallback is a plain set(): daytrade is NOT in _PROTECTED_TIERS.
+
+    Two sources, unioned (2026-10-07: the EWY day-tier SHORT and the AAPL day-tier
+    long were adopted after a restart):
+      * the ownership ledger, any NON-ZERO daytrade qty — a short is stored
+        negative (EWY ledger daytrade qty -1.0); the old `> 0` let shorts through;
+      * the day tier's own durable open set (day_tier_logger.open_trades_from_log)
+        — real-time, unlike the ledger, which run_ledger_sync refreshes only every
+        20 min (AAPL entered 14:12:15 UTC, adopted 14:18:06, refresh at 14:20).
+        TODAY'S entries only (ET date of entry_ts): the day tier is flat by every
+        close, so an older open record is stale (e.g. a lot another tier closed,
+        which never gets a day-tier exit_fill) and must not hide a real orphan on
+        that symbol (cold-2nd 2026-10-07). The ledger covers anything older.
+    Each source fails independently (logged); the union keeps what is readable."""
+    out: set = set()
     try:
         _l = _og_load_ledger()
-        return {s for s in _l.get("positions", {})
-                if _og_tier_qty(_l, s, "daytrade") > 0}
+        out |= {s for s in _l.get("positions", {})
+                if abs(_og_tier_qty(_l, s, "daytrade")) > 0}
     except Exception as _de:
-        logger.warning("orphan_manager: daytrade-symbols lookup failed: %s", _de)
-        return set()
+        logger.warning(
+            "orphan_manager: daytrade-symbols ledger lookup failed: %s", _de)
+    try:
+        from strategy import day_tier_logger as _dtl
+        _today = datetime.now(ET).date()
+        for _t in _dtl.open_trades_from_log().values():
+            try:
+                _ets = datetime.fromisoformat(str(_t.get("entry_ts") or ""))
+                if _ets.tzinfo is None:
+                    _ets = _ets.replace(tzinfo=PT)
+                if _t.get("symbol") and _ets.astimezone(ET).date() == _today:
+                    out.add(str(_t.get("symbol")))
+            except (TypeError, ValueError):
+                continue  # unparseable entry time = stale; the ledger arm still applies
+    except Exception as _dle:
+        logger.warning(
+            "orphan_manager: daytrade-symbols durable-log lookup failed: %s", _dle)
+    return out
 
 
 def _get_breakout_syms() -> set:
