@@ -8,6 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-07 04:40 PT, Claude) — no-co-hold guard (PR #503) + exit second price check (PR #504) deployed
+
+Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
+`1b544c0 Merge pull request #504 from redstorm8705/claude/exit-price-confirm`.
+Both are deployed, unexercised. Gate record: `grep -n "2026-10-07" logs/tb_audit_log.md`.
+**⏩ EXACT NEXT ACTION:** after 10:15 ET on 2026-10-07, read OCI `logs/day_tier_events.jsonl` + Alpaca fills to confirm
+day-tier entries (incl. 2x-ETF pivots on co-held GOOGL/MSFT/NFLX/NVDA/PLTR) and fresh IEX quotes in the exit check; then build
+Track B per-stock gap/RVOL thresholds (Rule C replay first).
+
 ## ⏩ LATEST (2026-10-06 23:40 PT, Claude) — day-tier "must trade" build deployed (PR #499)
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
