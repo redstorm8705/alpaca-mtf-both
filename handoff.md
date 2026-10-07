@@ -8,6 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-07 10:10 PT, Claude) — day-tier adoption incident fixed (PR #512 spam stop, PR #513 root cause)
+
+Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
+`a865349 Merge pull request #513 from redstorm8705/claude/orphan-skip-daytier`.
+Also shipped today: #509 inverse-ETF short route, #510 full-size shorts, #511 entry fill rate (all deployed, unexercised).
+OPEN: EWY short 1 + AAPL long 4 (day-tier lots) are now held by the main bot (adopted 14:10/14:18 UTC, IN- stops,
+overnight=True). **⏩ EXACT NEXT ACTION:** build "retire a day-tier lot closed by another tier" (when the position
+disappears and the lot was foreign-protected, book the real closing fill from Alpaca instead of _halt_unresolved_exit,
+which would halt day-tier entries every day) — through the full gate, before the main bot exits EWY/AAPL.
+
 ## ⏩ LATEST (2026-10-07 04:40 PT, Claude) — no-co-hold guard (PR #503) + exit second price check (PR #504) deployed
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
