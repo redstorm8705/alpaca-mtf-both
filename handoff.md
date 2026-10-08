@@ -16,16 +16,15 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 **⏩ EXACT NEXT ACTION:** Claude should review PR #520 before extending the same snapshot into the remaining startup/orphan/reconciliation consumers. Preserve Claude's tier-safety close-timing work below; this change supplies the ownership truth layer and does not supersede it. Verify with `gh pr view 520 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
-## ⏩ LATEST (2026-10-07 evening PT, Claude) — tier safety stage 1 shipped (PR #517); round-2 CEO decisions recorded
+## ⏩ LATEST (2026-10-08 early UTC, Claude) — day-tier close timing shipped (PR #522); tier safety stage 1 (PR #517)
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
-`f785de8 Merge pull request #517 from redstorm8705/claude/tier-safety`.
-Round-2 decisions (close sequence, 10% leveraged cap, no 1-share ETF, index 3x): verify with
-`grep -n "Decisions round 2" logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`.
-OPEN for CEO: stock 1-share fallback when no usable ETF exists.
-**⏩ EXACT NEXT ACTION:** build item 2 (close timing: day-tier cancel at 3:58 with retry, market on confirm, retries to
-4:00; swing/QHM/F6 overnight stops after 4:00; promotion decision at 3:56) through the full gate. Also confirm EWY/AAPL
-transferred at the day tier's first reconcile on 2026-10-08.
+`c3cefcf Merge pull request #522 from redstorm8705/claude/close-timing`.
+OCI cron for run_day_tier.py widened to `*/2 13-23 * * 1-5` (backup /home/ubuntu/crontab.bak.202610080726).
+Decisions + carry-overs: verify with `grep -n "Item 2 (close timing)" logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`.
+**⏩ EXACT NEXT ACTION:** at 2026-10-08 3:58 PM ET watch the first live EOD exit in logs/day_tier_runner_cron.log
+(phase force_flat, then any after-hours exit at 4:00); then build item 3 (tier names Day/Swing/QHM/F6 everywhere).
+Follow-up (logged): after_hours_exit should apply the foreign-stop/transfer check before placing an exit.
 
 ## ⏩ LATEST (2026-10-07 10:10 PT, Claude) — day-tier adoption incident fixed (PR #512 spam stop, PR #513 root cause)
 
