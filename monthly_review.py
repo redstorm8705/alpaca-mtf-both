@@ -28,7 +28,9 @@ from reporting.metrics import (
     _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
 from reporting.report_figures import ReportFigures, build_report_figures, reconcile
-from reporting.html_ui import PRIMARY_NAV_CSS, TIER_LABELS, primary_nav
+from reporting.html_ui import (
+    PRIMARY_NAV_CSS, normalize_tier_mapping, primary_nav,
+)
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
@@ -61,10 +63,13 @@ _MECH_EXITS = frozenset({
     "pm_exit", "forced_exit", "breakeven_exit",
 })
 
-# Same names as every other page: a copy of reporting.html_ui.TIER_LABELS (keys intraday, daytrade, qhm, forever6,
-# unattributed — in that order; labels from tier_names: Swing / Day / QHM / F6 / Unattributed). Copied whole, no
-# per-key lookup, so the row order and keys are exactly the old _EDGE_TIER_LABELS.
-_EDGE_TIER_LABELS = dict(TIER_LABELS)
+_EDGE_TIER_LABELS = {
+    "swing": "Swing",
+    "day": "Day",
+    "qhm": "QHM",
+    "forever_6": "Forever 6",
+    "unattributed": "Unattributed",
+}
 
 
 def _strategy_edge_html(figures: ReportFigures) -> tuple[str, dict]:
@@ -99,6 +104,14 @@ def _strategy_edge_html(figures: ReportFigures) -> tuple[str, dict]:
             {},
         )
     edge = figures.strategy_edge_stats()
+    try:
+        edge["by_tier"] = normalize_tier_mapping(edge.get("by_tier") or {})
+    except ValueError:
+        return (
+            '<div class="edge-integrity-error"><b>Strategy Edge unavailable — '
+            "ambiguous tier attribution.</b></div>",
+            {},
+        )
     overall = edge["overall"]
 
     def _money(value) -> str:

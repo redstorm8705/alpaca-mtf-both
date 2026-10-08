@@ -332,7 +332,7 @@ def _held_by_other_tiers() -> "set | None":
     """
     try:
         from execution.ownership_snapshot import build_ownership_snapshot
-        return set(build_ownership_snapshot().foreign_symbols("daytrade"))
+        return set(build_ownership_snapshot().foreign_symbols("day"))
     except Exception as e:  # noqa: BLE001
         logger.warning("day-tier: position read for the co-hold check failed (place_entry re-checks): %s", e)
         return None

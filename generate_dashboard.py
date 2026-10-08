@@ -26,8 +26,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from reporting.metrics import compute_lifetime_stats, _net_deposits
 from reporting.html_ui import (
-    PRIMARY_NAV_CSS, TIER_COLORS, TIER_LABELS, primary_nav, tier_badges,
+    PRIMARY_NAV_CSS, TIER_COLORS, TIER_LABELS, normalize_tier_mapping,
+    primary_nav, tier_badges,
 )
+from tier_names import TIER_IDS
 from ui_tokens import LIVE_CLOCK_HTML
 
 # Load .env explicitly so API keys are available whether this module is
@@ -120,7 +122,7 @@ def _load_edge_snapshot() -> dict:
         by_tier = data["by_tier"]
         if not isinstance(overall, dict) or not isinstance(by_tier, dict):
             return {}
-        def _valid_metrics(metrics: dict) -> bool:
+        def _valid_metrics(metrics: object) -> bool:
             if not isinstance(metrics, dict):
                 return False
             completed = float(metrics.get("completed_trades", 0))
@@ -139,11 +141,11 @@ def _load_edge_snapshot() -> dict:
             )
         if not _valid_metrics(overall):
             return {}
-        if any(
-            tier not in TIER_LABELS or not _valid_metrics(metrics)
-            for tier, metrics in by_tier.items()
-        ):
+        canonical_by_tier = normalize_tier_mapping(by_tier)
+        if any(not _valid_metrics(metrics) for metrics in canonical_by_tier.values()):
             return {}
+        data = dict(data)
+        data["by_tier"] = canonical_by_tier
     except (KeyError, TypeError, ValueError, OverflowError):
         return {}
     return data
@@ -153,6 +155,46 @@ def _load_ownership_positions() -> dict:
     data = _load_json(ROOT / "data" / "state" / "ownership_ledger.json", {})
     positions = data.get("positions", {}) if isinstance(data, dict) else {}
     return positions if isinstance(positions, dict) else {}
+
+
+def _canonical_position_tiers(rec: object, net_qty: float) -> list[tuple[str, float]]:
+    """Validate and canonicalize one ownership-ledger position for display."""
+    if not isinstance(rec, dict):
+        return []
+    tiers = rec.get("tiers")
+    if not isinstance(tiers, dict):
+        return []
+    try:
+        raw_net = rec.get("alpaca_net_qty", 0.0)
+        raw_drift = rec.get("drift", 0.0)
+        if any(isinstance(value, bool) for value in (raw_net, raw_drift, net_qty)):
+            return []
+        ledger_net = float(raw_net or 0.0)
+        drift = float(raw_drift or 0.0)
+        if not all(math.isfinite(value) for value in (ledger_net, drift, net_qty)):
+            return []
+        normalized = normalize_tier_mapping(tiers)
+        rows = []
+        for tier, claim in normalized.items():
+            if (
+                tier == "unattributed"
+                or not isinstance(claim, dict)
+                or "qty" not in claim
+                or isinstance(claim["qty"], bool)
+            ):
+                return []
+            qty = float(claim["qty"])
+            if not math.isfinite(qty):
+                return []
+            rows.append((tier, qty))
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if abs(ledger_net - net_qty) > 1e-6 or abs(drift) > 1e-6:
+        return []
+    active = [(tier, qty) for tier, qty in rows if abs(qty) > 1e-9]
+    if abs(sum(qty for _tier, qty in active) - net_qty) > 1e-6:
+        return []
+    return active
 
 
 def _compute_spy_levels() -> dict:
@@ -601,27 +643,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     _open_tier_qty: dict[str, float] = {k: 0.0 for k in TIER_LABELS}
 
     def _exact_position_tiers(symbol: str, net_qty: float) -> list[tuple[str, float]]:
-        rec = ownership_positions.get(symbol)
-        if not isinstance(rec, dict):
-            return []
-        tiers = rec.get("tiers")
-        if not isinstance(tiers, dict):
-            return []
-        try:
-            ledger_net = float(rec.get("alpaca_net_qty", 0.0) or 0.0)
-            drift = float(rec.get("drift", 0.0) or 0.0)
-            rows = [
-                (tier, float((tiers.get(tier) or {}).get("qty", 0.0) or 0.0))
-                for tier in ("intraday", "daytrade", "qhm", "forever6")
-            ]
-        except (TypeError, ValueError):
-            return []
-        if abs(ledger_net - net_qty) > 1e-6 or abs(drift) > 1e-6:
-            return []
-        active = [(tier, qty) for tier, qty in rows if abs(qty) > 1e-9]
-        if abs(sum(qty for _tier, qty in active) - net_qty) > 1e-6:
-            return []
-        return active
+        return _canonical_position_tiers(ownership_positions.get(symbol), net_qty)
     # Overnight-held breakeven soft-exit transparency (Rafael 2026-07-13): the visible GTC
     # stop is the catastrophe backstop, but an OVERNIGHT-HELD non-QHM position actually exits
     # at ~entry−0.5×ATR (the "overnight breakeven buffer" in exit_logic) once it breaches for
@@ -713,7 +735,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 
     _tier_cards = []
     _edge_by_tier = edge_snapshot.get("by_tier", {})
-    for _tier in ("intraday", "daytrade", "qhm", "forever6", "unattributed"):
+    for _tier in (*TIER_IDS, "unattributed"):
         _hist = _edge_by_tier.get(_tier, {}) if isinstance(_edge_by_tier, dict) else {}
         _rpnl = _hist.get("realized_pnl")
         _rpnl_s = "—" if _rpnl is None else f"{'+' if _rpnl >= 0 else ''}${_rpnl:,.2f}"

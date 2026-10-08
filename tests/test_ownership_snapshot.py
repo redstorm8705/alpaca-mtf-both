@@ -45,7 +45,7 @@ def test_partial_claim_detects_a_cohold_instead_of_hiding_it():
     ):
         snap = build_ownership_snapshot(positions, ledger)
     assert not snap.exclusively_owned("AAPL", "daytrade")
-    assert snap.claimants("AAPL") == frozenset({"daytrade", "intraday"})
+    assert snap.claimants("AAPL") == frozenset({"day", "swing"})
     assert snap.foreign_symbols("daytrade") == frozenset({"AAPL"})
 
 
@@ -316,13 +316,40 @@ def test_date_only_lifecycle_timestamp_cannot_prove_ownership():
 
 def test_unknown_ledger_tier_denies_exclusivity():
     positions = [SimpleNamespace(symbol="NVDA", qty="1")]
-    ledger = {"positions": {"NVDA": {"tiers": {"swing": {"qty": 1}}}}}
+    ledger = {"positions": {"NVDA": {"tiers": {"other": {"qty": 1}}}}}
     with mock.patch(
         "execution.ownership_snapshot._today_daytrade_claims", return_value={"NVDA": 1}
     ):
         snap = build_ownership_snapshot(positions, ledger)
-    assert "ledger_unknown_tier:NVDA:swing" in snap.errors
+    assert "ledger_unknown_tier:NVDA:other" in snap.errors
     assert not snap.exclusively_owned("NVDA", "daytrade")
+
+
+def test_canonical_ledger_keys_are_accepted_during_migration():
+    positions = [SimpleNamespace(symbol="NVDA", qty="1")]
+    ledger = {"positions": {"NVDA": {"tiers": {"swing": {"qty": 1}}}}}
+    with mock.patch(
+        "execution.ownership_snapshot._today_daytrade_claims", return_value={}
+    ):
+        snap = build_ownership_snapshot(positions, ledger)
+    assert snap.errors == ()
+    assert snap.exclusively_owned("NVDA", "swing")
+    assert snap.claimants("NVDA") == frozenset({"swing"})
+
+
+def test_legacy_and_canonical_aliases_cannot_double_count():
+    positions = [SimpleNamespace(symbol="NVDA", qty="2")]
+    ledger = {
+        "positions": {
+            "NVDA": {"tiers": {"intraday": {"qty": 1}, "swing": {"qty": 1}}}
+        }
+    }
+    with mock.patch(
+        "execution.ownership_snapshot._today_daytrade_claims", return_value={}
+    ):
+        snap = build_ownership_snapshot(positions, ledger)
+    assert "ledger_duplicate_tier:NVDA:swing" in snap.errors
+    assert not snap.exclusively_owned("NVDA", "swing")
 
 
 def test_present_malformed_zero_like_ledger_claim_denies_exclusivity():
