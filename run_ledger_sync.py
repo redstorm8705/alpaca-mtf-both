@@ -119,6 +119,46 @@ def _inherit_leg_tiers(coid_map: dict, orders: list) -> int:
     return n
 
 
+def _parse_utc(ts) -> "datetime | None":
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _owner_exit_explained(pending: dict, fills: list, coid_map: dict, tier_of_coid, since_utc) -> dict:
+    """{"SYM/tier": True|False} for each pending protected-floor reduction: True when the drop is fully explained by
+    SELL fills AFTER `since_utc` (this maintainer's last HEALED pass — sells before it are already booked and must
+    not be reused; cold-2nd 2026-10-08) on orders tagged to that SAME protected tier (QH- for qhm, F6- for
+    forever6, incl. multi-leg children inherited via coid_map) — i.e. the owner's own exit (its GTC stop / its own
+    sell), which the owner's manager heals within its next cycle. False on any doubt (no readable since_utc, or a
+    reduction not covered by the owner's own unbooked sells — a possible breach, which still pages). Never raises.
+    Why (CEO 2026-10-08): QHM's NVDA stop filled 13:31 UTC; the 13:40 sync paged for operator confirmation 23 min
+    before QHM's own auto-heal ran — a page for the owner's own, already-explained exit."""
+    out: dict = {}
+    since = _parse_utc(since_utc) if since_utc else None
+    for key, v in (pending or {}).items():
+        try:
+            if since is None:
+                out[key] = False      # cannot tell booked from unbooked sells -> page
+                continue
+            sym, tier = str(key).split("/", 1)
+            need = float(v.get("was") or 0.0) - float(v.get("would_be") or 0.0)
+            sold = 0.0
+            for f in fills or []:
+                _ft = _parse_utc(f.get("transaction_time"))
+                if (f.get("symbol") == sym and str(f.get("side", "")).lower() in ("sell", "sell_short")
+                        and _ft is not None and _ft > since
+                        and tier_of_coid(coid_map.get(f.get("order_id"))) == tier):
+                    sold += abs(float(f.get("qty") or 0.0))
+            out[key] = need > 0 and sold + 1e-9 >= need
+        except Exception as e:  # noqa: BLE001 — doubt pages
+            logger.warning("ledger_sync: owner-exit check failed for %s (%s) — will page", key, e)
+            out[key] = False
+    return out
+
+
 def sync_once() -> dict:
     """Run one full-replay maintenance pass. Returns a result dict for logging/tests.
     NEVER raises into a cron caller — the ENTIRE body (imports, fetch, attribute, sync,
@@ -210,6 +250,19 @@ def sync_once() -> dict:
                             reason, streak["count"], led.get("shrink"))
             _pending = led.get("pending_heal") or {}
             if _pending and streak["count"] == 1:
+                # The owner tier's own exit (a QH-/F6- tagged sell today) is not a breach: its manager heals the
+                # ledger within its next cycle, so no operator page for it. If the heal never lands, the
+                # consecutive non-heal escalation below still fires (CEO 2026-10-08).
+                # The last HEALED pass of this maintainer (recorded in the streak file below). The ledger's own
+                # last_reconciled_utc is not stamped by sync_ledger (cold-2nd 2026-10-08), so it cannot be used.
+                # Absent (first pass after deploy / unreadable) -> None -> page (fail-safe).
+                _since = streak.get("last_healed_utc")
+                _explained = _owner_exit_explained(_pending, fills, coid_map, tier_of_coid, _since)
+                for _k in [k for k, ok in _explained.items() if ok]:
+                    logger.warning("ledger_sync: %s reduction is the owner tier's own exit (its tagged sell since the last healed sync) "
+                                   "— no operator page; awaiting the owner's auto-heal.", _k)
+                _pending = {k: v for k, v in _pending.items() if not _explained.get(k)}
+            if _pending and streak["count"] == 1:
                 _cmds = " ; ".join(v.get("confirm_cmd", "") for v in _pending.values())
                 _detail = {k: {"was": v.get("was"), "now": v.get("would_be"), "net": v.get("net")}
                            for k, v in _pending.items()}
@@ -221,14 +274,15 @@ def sync_once() -> dict:
                 _rs = set(streak["reasons"])
                 _slack(f":rotating_light: ledger_sync FAILING: {streak['count']} "
                        f"consecutive non-heals (reasons={_rs}) — ledger STALE")
-            _write_streak(streak)
+            _write_streak(streak)   # keeps last_healed_utc (unchanged by a non-heal)
             return {"ok": False, "healed": False, "reason": reason,
                     "elapsed_s": elapsed, "fills": len(fills), "orders": len(orders)}
 
         # ── healed OK — reset streak, emit per-symbol sanity ─────────────────
         if streak.get("count", 0):
             logger.info("ledger_sync recovered after %d non-heal(s)", streak["count"])
-        _write_streak({"count": 0, "reasons": [], "last_utc": None})
+        _write_streak({"count": 0, "reasons": [], "last_utc": None,
+                       "last_healed_utc": datetime.now(timezone.utc).isoformat()})
 
         positions_out = led.get("positions", {})
         drift_syms = {s: e.get("drift", 0.0) for s, e in positions_out.items()
