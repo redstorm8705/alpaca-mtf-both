@@ -120,15 +120,66 @@ _HEDGE = re.compile(
 )
 
 
+# MARKET-FACT ABSENCE (Rafael 2026-10-09): "AMD has no liquid inverse ETF" was stated as fact — false (DAMD, 2x
+# short AMD, traded 322,212 IEX shares that day); the claim came from the bot's own hardcoded map. The capability
+# patterns above never fired: the subject was a STOCK, and the message cited unrelated file paths elsewhere. So a
+# claim that an instrument / stock LACKS a market thing (an ETF, history, liquidity, borrow) or "is not tradable"
+# needs its evidence in the SAME sentence or the next one — evidence elsewhere in the message does not count.
+_ETF = (r"(?:etfs?|inverse|bear|bull|leveraged|levered|2x|3x)(?:\s+(?:etfs?|funds?|products?))?"
+        r"(?!\s+(?:market|run|case|trend|thesis|flag|trap|leg|phase)s?\b)")   # "bear market" / "bull run" are prose
+_MKT_ALL = r"(?:" + _ETF + r"|price history|history|bars|liquidity|volume|borrow|options?|data)"
+# An upper-case ticker subject (NVDA, SNDK, DRAM) — not a common acronym / indicator name (cold-2nd 2026-10-09).
+_NOT_TICKER = ("ET|PT|UTC|OK|AH|RTH|API|CI|OCO|GTC|DAY|ETF|ETFS|RSI|MACD|ATR|EMA|SMA|VWAP|VIX|MRI|GEX|FMP|IEX|SIP|"
+               "OCI|PR|CEO|QHM|F6|DT|IN|QH|TP|SL|PNL|KPI|SPY|AND|THE|IT|WE|NOT|NO")
+_TICKER = r"(?-i:\b(?!(?:" + _NOT_TICKER + r")\b)[A-Z]{2,5}\b)(?:'s)?"
+_MKT_ABSENCE = re.compile(
+    # <TICKER> has no / lacks <market thing>
+    _TICKER + r"\s+(?:(?:has|have|had)\s+no|lacks?|is lacking)\s+(?:(?:\w+)\s+){0,3}?" + _MKT_ALL + r"\b"
+    # any subject, but only an ETF-type object: "has no liquid inverse ETF", "with no 2x bear", "without an inverse"
+    r"|\b(?:(?:has|have|had|with|there(?:'?s| is| are)?)\s+no|without(?:\s+an?)?)\s+"
+    r"(?:(?:liquid|usable|tradable|tradeable|real|available|listed|such|other)\s+){0,2}" + _ETF + r"\b"
+    r"|\b(?:never|not|isn'?t|aren'?t|is not|are not|can'?t be|cannot be)\s+(?:\w+\s+)?"
+    r"(?:tradable|tradeable|shortable|borrowable)\b"
+    r"|\b(?:no|none of the|not an?)\s+(?:liquid\s+|usable\s+)?(?:inverse|bear|bull|leveraged|2x|3x)\s+(?:etf|fund|exists?)\b"
+    r"|\b(?:doesn'?t|does not|don'?t|do not)\s+have an? (?:inverse|bear|bull|leveraged)\b",
+    re.I,
+)
+# Evidence a market fact was CHECKED at its source (asset list / quote / bars / a cited number).
+_MKT_EVIDENCE = re.compile(
+    r"\b(alpaca|/v2/assets|assets api|snapshot|get_asset|iex|sip|checked|verified|confirmed|queried|"
+    r"per the (api|data|asset)|traded [\d,]+|[\d,]{4,} (iex )?shares|volume [\d,]+|"
+    r"\d+ (daily |trading )?(bars|days|months))\b"
+    r"|\b[\w./-]+\.(py|sh|md|json)(:\d+)?\b",
+    re.I,
+)
+_CONDITIONAL = re.compile(r"\b(if|when|whenever|where|unless|until|once|any|an? ([\w-]+ )?(stock|name|symbol|lot|ticker|long|short))\b[^.!?]*$", re.I)
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _market_absence_violation(text: str):
+    """A market-fact absence claim whose own sentence (or the next) carries neither source evidence nor a hedge."""
+    for para in re.split(r"\n\s*\n", text):   # the "next sentence" never crosses a blank line
+        sents = [x for x in _SENT_SPLIT.split(para) if x and x.strip()]
+        for i, sent in enumerate(sents):
+            m = _MKT_ABSENCE.search(sent)
+            if not m:
+                continue
+            if _CONDITIONAL.search(sent[max(0, m.start() - 40):m.start()]):
+                continue   # a rule/condition ("when there's no 2x bear", "a stock with no ETF"), not a fact claim
+            window = sent + " " + (sents[i + 1] if i + 1 < len(sents) else "")
+            if _MKT_EVIDENCE.search(window) or _HEDGE.search(window):
+                continue
+            return m.group(0).strip()[:80]
+    return None
+
+
 def _violation(text: str):
     """Return the offending absence phrase if the message asserts a capability is missing with
-    NEITHER search evidence NOR a hedge; else None."""
+    NEITHER search evidence NOR a hedge, or a market-fact absence without same-sentence evidence; else None."""
     m = _ABSENCE_VERB.search(text) or _ABSENCE_EXIST.search(text)
-    if not m:
-        return None
-    if _SEARCHED.search(text) or _HEDGE.search(text):
-        return None
-    return m.group(0).strip()[:80]
+    if m and not (_SEARCHED.search(text) or _HEDGE.search(text)):
+        return m.group(0).strip()[:80]
+    return _market_absence_violation(text)
 
 
 def main() -> int:
@@ -150,8 +201,10 @@ def main() -> int:
             f"data, or work — '{hit}' — with NO evidence you searched for it. This is the recurring "
             "thoroughness failure (claiming order-flow/gamma/edge-tracker/watchdog didn't exist when "
             "it did). Per the NO-GUESS + full-thorough-read mandate: SEARCH FIRST (grep/find/glob/"
-            "semantic_search the repo), then cite what you found — or found nothing. Do not state "
-            "absence as fact from assumption. Redo the turn: search, then claim."
+            "semantic_search the repo), then cite what you found — or found nothing. For a MARKET fact "
+            "(an ETF, history, liquidity, tradability) check the source (Alpaca assets / snapshot / bars) "
+            "and cite it in the SAME sentence — a gap in the bot's own map/config is not a market fact. "
+            "Do not state absence as fact from assumption. Redo the turn: check, then claim."
         )
         return 2
     return 0
