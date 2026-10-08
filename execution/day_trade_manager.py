@@ -86,6 +86,34 @@ _HALT_KEY = "_tier_halted_date"   # data-blind fail-closed halt; protected posit
 _TERMINAL_STATES = frozenset({"protected", "flattened_no_stop", "flatten_failed",
                               "flattened_invalid_geometry", "submit_failed", "unfilled_cancelled"})
 _STATE_TTL_DAYS = 3
+# Why the LAST place_entry on a symbol stopped at wire-time sizing (this process only). The runner reads it to route an
+# unaffordable stock to its ETF (CEO 2026-10-07: ETFs only when the stock is unaffordable). Cleared at each call.
+_LAST_ENTRY_SKIP: dict = {}
+
+
+def last_entry_skip(symbol: str) -> "dict | None":
+    """{"reason": "below_min_qty" | "risk_budget", "wired": n, "min": m} when the last place_entry on `symbol` stopped
+    because the sized share count was below its minimum; None otherwise (any other skip, or an entry)."""
+    v = _LAST_ENTRY_SKIP.get(str(symbol))
+    return dict(v) if isinstance(v, dict) else None
+
+
+def _min_entry_qty(symbol: str, min_qty: object) -> int:
+    """Smallest share count place_entry will submit: `min_qty` (>= 1), and >= 2 for any leveraged or inverse ETF
+    (CEO 2026-10-07: never one share of a leveraged ETF). Never raises; an unreadable map counts the symbol as an ETF
+    only when it is in config.LEVERAGED_3X_TICKERS."""
+    try:
+        m = max(1, int(min_qty))  # type: ignore[call-overload]  # non-int caught below
+    except (TypeError, ValueError):
+        m = 1
+    sym = str(symbol or "").strip().upper()
+    is_etf = sym in set(_cfg("LEVERAGED_3X_TICKERS", set()) or set())
+    try:
+        from strategy import day_tier_leverage as _lev
+        is_etf = is_etf or _lev.exposure_sign(sym, "long")[0] != sym
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] leveraged-ETF map unreadable (min qty from config only): %s", sym, e)
+    return max(m, 2) if is_etf else m
 
 
 def _cfg(name: str, default):
@@ -1885,10 +1913,12 @@ def _mint_coid(symbol: str, direction: str) -> str:
 
 
 def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
-                bar_id: str, equity: float, decision_id: str = "") -> bool:
+                bar_id: str, equity: float, decision_id: str = "", min_qty: int = 1) -> bool:
     """Place ONE day-tier entry (Track A, or Track B when size["track"]=="B" — exposure-capped at wire time)
     with a confirmed protective stop. Idempotent per (symbol, bar_id). Returns True on a filled+protected entry, False otherwise. NEVER raises into
-    the caller (the runner). No-op when DAYTRADE_ENABLED is False."""
+    the caller (the runner). No-op when DAYTRADE_ENABLED is False. `min_qty`: skip (recorded for last_entry_skip)
+    when fewer shares fit; a leveraged/inverse ETF always needs >= 2 (_min_entry_qty)."""
+    _LAST_ENTRY_SKIP.pop(str(symbol), None)
     if not _enabled():
         return False
     from execution import broker
@@ -2122,8 +2152,13 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                       track_budget=size.get("budget"), extra_b_lots=_state_only,
                                       risk_mult=size.get("risk_mult", 1.0),
                                       max_size=size.get("max_size") is True)
-        if qty < 1:
-            logger.info("[%s] day-tier entry skipped — %s", symbol, why)
+        _min_q = _min_entry_qty(symbol, min_qty)
+        if qty < _min_q:
+            # Only a SIZE result routes to an ETF; a fail-closed zero (unreadable data / invalid limit — no "rooms=" in
+            # the reason) is final (cold-2nd 2026-10-08).
+            if "rooms=" in why:
+                _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "below_min_qty", "wired": max(0, int(qty)), "min": _min_q}
+            logger.info("[%s] day-tier entry skipped — %s (minimum %d sh)", symbol, why, _min_q)
             return False
         # DAILY DOLLAR RISK BUDGET (Rafael 2026-10-04; replaces the 3-position cap). Every dollar the day tier
         # could lose today — realized losses + each open lot's loss-if-stopped + THIS entry's risk, the at-risk
@@ -2143,9 +2178,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             return False
         _realized_usd, _open_usd, _used_detail = _used
         _fit = _budget_fit_qty(qty, _per_share, _budget, _realized_usd, _open_usd, _slip_mult)
-        if _fit < 1:
-            logger.info("[%s] day-tier entry skipped — daily risk budget full: %s; budget $%.2f",
-                        symbol, _used_detail, _budget)
+        if _fit < _min_q:
+            _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "risk_budget", "wired": max(0, int(_fit)), "min": _min_q}
+            logger.info("[%s] day-tier entry skipped — daily risk budget fits %d sh (minimum %d): %s; budget $%.2f",
+                        symbol, _fit, _min_q, _used_detail, _budget)
             return False
         if _fit < qty:
             why += f"; daily risk budget → {qty}→{_fit}sh ({_used_detail}, budget ${_budget:.2f})"
