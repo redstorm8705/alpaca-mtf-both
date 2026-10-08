@@ -82,4 +82,5 @@ polling inventory; 5 0-1-share ETF routing for Track A and Swing; 6 bot-watched 
 - Carry-overs: adaptive reprice step from live spread + after-hours volatility, log slippage vs touch (adversarial);
   stale comment strategy/day_tier_sizing.py:146 ("buying power returned before the close"); _ah_account docstring
   wording; unknown clock on a market holiday inside host hours still flattens at market (queued to the open).
-
+- Follow-up: after_hours_exit has no foreign-stop/transfer check (a lot adopted by another tier after the close
+  could get an exit order); #513 prevents same-day adoption, so low likelihood — add the check in the next pass.
