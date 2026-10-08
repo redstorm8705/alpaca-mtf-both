@@ -496,7 +496,8 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 
     for symbol, trade in list(tracker.open_trades.items()):
         # QHM ownership guard (Option B, 2026-07-01): skip QHM-held symbols — the
-        # main bot must not partial-close/trail a QHM position. The collision
+        # Swing tier must not partial-close/trail a QHM position. (The PortfolioTracker these functions
+        # manage IS the Swing tier — internal key "intraday", IN- order tags; "main bot" is its retired name.) The collision
         # alert is fired once by check_exits (same cycle); keep this a quiet skip.
         if symbol in _get_qhm_syms():
             logger.debug("[%s] QHM-held — skipped by Swing-tier partial-exit management.", symbol)
@@ -1172,8 +1173,9 @@ def check_exits(
         _tr["_exit_tod_last"] = _cur_tod
 
     for symbol, trade in list(tracker.open_trades.items()):
-        # QHM ownership guard (Option B, 2026-07-01): the main bot must not exit a
-        # QHM-held symbol (QHM owns its Alpaca position + its own GTC stop).
+        # QHM ownership guard (Option B, 2026-07-01): the Swing tier (this tracker — internal key "intraday",
+        # IN- tags; formerly called the "main bot") must not exit a QHM-held symbol (QHM owns its Alpaca
+        # position + its own GTC stop).
         # Entries are blocked in entry_logic, so a QHM symbol in the tracker is an
         # ownership COLLISION (held before QHM entered, or a race) — suppress
         # main-bot exit management and alert ONCE. Do NOT close here: at step 1 the

@@ -61,8 +61,10 @@ _MECH_EXITS = frozenset({
     "pm_exit", "forced_exit", "breakeven_exit",
 })
 
-# Same names as every other page (reporting.html_ui.TIER_LABELS -> tier_names: Day / Swing / QHM / F6).
-_EDGE_TIER_LABELS = {k: TIER_LABELS[k] for k in ("intraday", "daytrade", "qhm", "forever6", "unattributed")}
+# Same names as every other page: a copy of reporting.html_ui.TIER_LABELS (keys intraday, daytrade, qhm, forever6,
+# unattributed — in that order; labels from tier_names: Swing / Day / QHM / F6 / Unattributed). Copied whole, no
+# per-key lookup, so the row order and keys are exactly the old _EDGE_TIER_LABELS.
+_EDGE_TIER_LABELS = dict(TIER_LABELS)
 
 
 def _strategy_edge_html(figures: ReportFigures) -> tuple[str, dict]:
