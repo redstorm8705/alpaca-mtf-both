@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-06 (interactive, Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-07 (OpenAI Codex; Claude pointer preserved below) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-07 late PT, OpenAI Codex signed) — signed cross-tier ownership snapshot live (PR #520)
+
+PR #520 merged as `bf81288` and is deployed on OCI `137.131.51.250`. The shared snapshot joins signed broker net positions, signed ownership-ledger claims, and the current day-tier lifecycle log. A symbol is exclusively day-tier-owned only when its signed claim equals the full broker net and every other tier claim is zero; malformed, missing, stale, future, duplicate, or contradictory source data fails closed to foreign-held. `run_day_tier._held_by_other_tiers()` now consumes this snapshot. Signals, sizing, targets, stops, exits, and order submission are unchanged.
+
+Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ownership regressions; Python 3.10 compile/import passed on OCI; live read-only snapshot found 9 broker-held symbols, zero source errors, and correctly classified all 9 as foreign to Day Trade. Board/mechanical and masked-loss reviews PASS; Groq APPROVE; Google AI Studio APPROVE; Nvidia not used as the authorized backup. Services `mtf-bot`, `mtf-writer`, `mtf-http`, and `nginx` are active. Status: **deployed, unexercised** until a live day-tier routing tick encounters a held symbol.
+
+**⏩ EXACT NEXT ACTION:** Claude should review PR #520 before extending the same snapshot into the remaining startup/orphan/reconciliation consumers. Preserve Claude's tier-safety close-timing work below; this change supplies the ownership truth layer and does not supersede it. Verify with `gh pr view 520 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
 ## ⏩ LATEST (2026-10-07 evening PT, Claude) — tier safety stage 1 shipped (PR #517); round-2 CEO decisions recorded
 
