@@ -323,15 +323,16 @@ def _is_counter(side: object, direction: object) -> bool:
 
 
 def _held_by_other_tiers() -> "set | None":
-    """Symbols with a live broker position NOT owned by the day tier (main bot, swing, QHM, F6), or None when the
-    book cannot be read. Interim no-co-hold rule (2026-10-07): the day tier never shares a symbol with another tier
-    (their whole-symbol exits would sell its shares and book a foreign fill); longs switch to a free 2x ETF.
-    place_entry re-checks the live book right before submit. Never raises."""
+    """Live broker symbols not proven exclusively owned by the day tier.
+
+    The shared ownership snapshot compares signed tier quantity with the complete
+    broker net, so a one-share day claim cannot hide a two-tier, three-share co-hold.
+    None means the broker book was unreadable.  The interim no-co-hold rule remains
+    live until every reducing path consumes this same per-tier quantity contract.
+    """
     try:
-        from execution import broker
-        from strategy import day_tier_logger as _dtl
-        owned = {str(t.get("symbol") or "") for t in _dtl.open_trades_from_log().values()}
-        return {str(getattr(p, "symbol", "")) for p in (broker.get_open_positions() or [])} - owned
+        from execution.ownership_snapshot import build_ownership_snapshot
+        return set(build_ownership_snapshot().foreign_symbols("daytrade"))
     except Exception as e:  # noqa: BLE001
         logger.warning("day-tier: position read for the co-hold check failed (place_entry re-checks): %s", e)
         return None
