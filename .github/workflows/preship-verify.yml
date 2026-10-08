@@ -242,4 +242,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 .claude/preship/test_gai_health.py
+          # reviewer false-premise control (2026-10-08): static-facts block + name-premise auto counter-prompt
+          python3 .claude/preship/test_static_facts.py
           python3 .claude/preship/gai_health.py canary
