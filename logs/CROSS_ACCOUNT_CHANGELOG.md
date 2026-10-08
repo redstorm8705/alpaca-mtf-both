@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-08 late PT]` **OpenAI Codex:** extended Claude’s PR #526 tier-name foundation with canonical internal IDs and strict legacy-state adapters; ownership and reports now reject alias collisions and malformed attribution. Rebased over Claude PRs #522–#536, with no parallel registry or trading-logic replacement. — PR #535 / `cf0e190` — tier names, ownership snapshot, dashboard/monthly/shared HTML, tests, design record
+
 - `[2026-10-07 late PT]` **OpenAI Codex:** shipped a signed cross-tier ownership snapshot and wired the day-tier no-co-hold route to it; ambiguous or inconsistent broker/ledger/lifecycle state now fails closed to foreign-held. BGGN, CI, OCI compile/import, and live read-only reconciliation passed; no signal, sizing, stop, exit, or order behavior changed. — PR #520 / `bf81288` — ownership snapshot, day logger, day runner, tests, design record
 
 - `[2026-10-06, in review]` **ChatGPT/Codex:** restored the full day-tier lifecycle preflight to the shipped order-ID, journal, risk-sizing, and tier-kill contracts. Combined Track M/router/context/Swing/Track A/Track B/cap/kill simulation: 230 passed plus 5 parameterized cases; production code unchanged. — `test/day-tier-full-lifecycle-preflight` — two test modules and design record
