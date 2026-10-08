@@ -24,6 +24,14 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 **⏩ EXACT NEXT ACTION:** Claude should review PR #520 before extending the same snapshot into the remaining startup/orphan/reconciliation consumers. Preserve Claude's tier-safety close-timing work below; this change supplies the ownership truth layer and does not supersede it. Verify with `gh pr view 520 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
+## ⏩ LATEST (2026-10-09, Claude) — pick-up pointer
+
+Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`.
+Plan of record: `logs/design_records/co_audit_and_anomaly_2026-10-09.md` (build order at the end of section 6).
+**⏩ EXACT NEXT ACTION:** build item 1 (ETF map: DAMD; SNXX/SNDG/SNDU; SNDQ) through the gate, then item 2 (DRAM
+coverage), then the META defects (replay first). After the 2026-10-09 close: post-live audit of PR #531 and #532
+(`python3 .claude/preship/post_live_due.py`).
+
 ## ⏩ LATEST (2026-10-08 15:00 PT, Claude) — pick-up pointer
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
