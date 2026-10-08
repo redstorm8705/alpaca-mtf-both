@@ -83,3 +83,25 @@ the 20-min cron stays as the backstop and the full replay stays the authority. T
 3. META: spread cap + pin suppression + thesis-stop exit/tighten — replay first (check wall history), then gate.
 4. CO audit cron (deterministic pass + Gro/GAI triage) on OCI, first run Saturday.  5. Exit-event ledger nudge +
 attribution override.  6. Anomaly rules feed (into the CO deterministic pass + daily).
+
+## Round 2 (2026-10-09, after the owner's follow-ups) — board Schneier+LdP, Harris+Kyle; Gro; GAI; FACT RULE in the brief
+**Claim taxonomy (20 types, all checkable at a source):** liveness/deploy status; verified/fixed/tested; quantities,
+prices, P&L; counts and zeros; time; attribution (which tier did it); universals (always/never/none); capability
+exists; "by design"; predictions; third-party API/model claims; what a reviewer/board said; market facts (presence
+and absence); anomaly dismissal; comparative/causal; capability absence; coverage ("read the whole file"); numbers
+reported by reviewers/agents; scope/impact ("display only"); negations of state ("no open orders").
+**Mechanisms, in order:** (1) in-turn claims ledger — every number / SHA / verdict count in a report must appear in a
+tool result from the same turn or carry "[estimate — method]"; (2) "by design / as intended / expected" needs a
+design source in the same sentence, else it is an anomaly to investigate; (3) scope the existing gates' evidence to
+the claim's own sentence and require a matching tool call this turn (a bare file path no longer counts).
+**Reviewer prompts:** closed-world facts; quote-or-omit for every number; never report a run that was not run;
+required FACTS / ESTIMATES / UNKNOWNS sections; a mechanical post-check that rejects any number not found in the
+supplied material and not labelled an estimate (counter-prompt naming the tokens, never a blind re-roll).
+**Dynamic liquidity (replaces the static 50K / 100x / 0.5% floors):** L1 round-trip cost (entry spread + the ETF's
+own 90th-percentile exit spread for that time bucket + stop slippage from its own minute bars) <= f x stop distance;
+L2 spread <= m x its own median spread for that 5-min bucket (catches dislocations); L3 order <= p x max(its own
+expected IEX volume over the next window, trailing 15-min volume) — no cumulative-since-open floor; L4 liveness vs
+its own typical print gap; L5 displayed size >= order when sizes are available. Baselines from the same feed (IEX)
+history; missing baseline -> current static gate with the reason logged. Rule E: frequency can rise -> board gate.
+**Report language:** "thin"/"illiquid" only with the instrument, the measurement and its own baseline in the same
+sentence; never from a static constant, a single snapshot, a missing-data block or a morning-only reading.
