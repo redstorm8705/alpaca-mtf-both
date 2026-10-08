@@ -105,3 +105,42 @@ its own typical print gap; L5 displayed size >= order when sizes are available. 
 history; missing baseline -> current static gate with the reason logged. Rule E: frequency can rise -> board gate.
 **Report language:** "thin"/"illiquid" only with the instrument, the measurement and its own baseline in the same
 sentence; never from a static constant, a single snapshot, a missing-data block or a morning-only reading.
+
+## Round 3 (2026-10-09) — CO audit RE-SCOPED by the owner: adversarial ACCURACY audit (supersedes the hygiene scope in section 2)
+Owner: "optimize and make sure the bot is dynamic and connected, not siloed ... an adversarial audit and POV to
+specifically shift gaps that need to be connected to other bots to ensure accuracy." Voices: board Simons+Shaw
+(candidates, grep-verified file:line), Taleb+LdP (method), Gro, GAI — aligned on the method below.
+**Method.** Unit = a decision instance (tier, type: entry/skip/size/stop/target/exit/hold-overnight/routing,
+decision_id, timestamp, inputs read). A consumption map (script, free) lists for every decision type the signals it
+reads and the signals the bot already computes that it does NOT read; that complement is the candidate list.
+Adversarial roles: PROSECUTOR (Gro + GAI, same prompt) argues "decision X is less accurate because it ignores Y",
+with a mechanism, a pre-registered falsifier and a logged instance where Y disagreed; DEFENDER (cold Claude seat)
+argues no connection / redundancy / feedback risk; FRAGILITY seat argues what happens when Y is stale/wrong; the
+REPLAY is the judge (point-in-time Y only; outcomes from logged fills/price path; purged train/test; permutation
+null; a trial ledger counting every candidate ever tested; candidates sharing one Y counted as one family).
+**Ship live** (after replay + the normal gate, no shadow) when: falsifier did not fire, beats the deflated null, holds
+on the held-out block and without its best day, Y was logged point-in-time, fail-safe exercised (stale Y -> current
+behaviour), read through one isolated call with a timeout, Rule-E delta traced (non-zero -> board), new input logged
+in the decision record, and any trade-count reduction justified against data collection. Connections that ADD
+entries or size face the strictest bar. Recorded "no safe cross-use" with a reason when: no mechanism / an existing
+proxy, Y not available point-in-time (open a logging fix), no neutral fail-safe, fails the null ("not supported at N
+trials"), underpowered ("undecidable", decisions needed stated), widens downside risk, or cascades.
+**Engine/cadence.** Server (free): consumption map + Gro/GAI prosecutor candidates (model canary first), weekly
+Saturday. Interactive Claude (flat rate): defender/fragility seats, replay build (written once, reused), owner
+report — top findings in plain English with a stock + dollar example. API budget only for the final diff gate of a
+connection that passed replay. Cap ~5 candidates tested per run [estimate]; "no connection warranted" is a normal
+result. Weekly until the backlog to April 2026 is covered, then biweekly; connections ship one at a time.
+**First candidates (grep-verified, Simons+Shaw):** (1) Swing-breakout entry ignores earnings dates
+(swing_breakout_manager.py run_entries; Swing intraday checks at entry_logic.py:1027-1094); (2) Swing-breakout entry
+ignores the negative-catalyst gate (entry_logic.py:493-507 has it); (3) Day tier reads no earnings data (grep of
+run_day_tier.py, day_trade_manager.py, strategy/day_tier_*.py); (4) Day tier ignores the negative-catalyst cache;
+(5) Day tier ignores MacroRiskIndex (logs/mri_state.json, macro_risk_index.py:932-949); (6) Day side module could
+inherit the underlying's side for a young ETF; (7) an open Day lot ignores the tier's own opposite trigger (META);
+(8) Swing targets ignore GEX call/put walls (risk_manager.py:695-760) that the options scanner and Day tier use;
+(9) Swing exits ignore a NEW negative catalyst on a held name (gate is entry-only, entry_logic.py:497); (10) QHM adds
+ignore the catalyst gate F6 has (forever_hold_manager.py:178-186); (11) QHM/F6 adds ignore MRI + breadth; (12)
+Swing-breakout ignores MRI/breadth; (13) Track B ignores the premarket cache Swing uses (entry_logic.py:381-408);
+(14) Day stops ignore the VIX/ATR curve Swing uses; (15) options scanner ignores earnings/catalysts/MRI; (16) Kelly
+GEX multiplier uses SPY's regime, not the name's own (kelly.py:360-407) — risk-path; (17) capital allocator ignores
+per-tier realized expectancy — risk-path; (18) Day ETF routing ignores the live asset list (DAMD/SNDK case).
+#7 and #9 realize losses earlier -> masked-loss seat; #11/#16/#17 can raise size -> board.
