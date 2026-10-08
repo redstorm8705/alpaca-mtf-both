@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-07 late PT]` **OpenAI Codex:** shipped a signed cross-tier ownership snapshot and wired the day-tier no-co-hold route to it; ambiguous or inconsistent broker/ledger/lifecycle state now fails closed to foreign-held. BGGN, CI, OCI compile/import, and live read-only reconciliation passed; no signal, sizing, stop, exit, or order behavior changed. — PR #520 / `bf81288` — ownership snapshot, day logger, day runner, tests, design record
+
 - `[2026-10-06, in review]` **ChatGPT/Codex:** restored the full day-tier lifecycle preflight to the shipped order-ID, journal, risk-sizing, and tier-kill contracts. Combined Track M/router/context/Swing/Track A/Track B/cap/kill simulation: 230 passed plus 5 parameterized cases; production code unchanged. — `test/day-tier-full-lifecycle-preflight` — two test modules and design record
 
 - `[2026-10-06]` **ChatGPT/Codex:** shipped the admitted-family router into Track M only and added versioned family tags to the live swing-breakout lifecycle. Track A/B isolation simulations, malformed-allocation regressions, Board 2/2, Groq, Google AI Studio, mechanical review, CI, and OCI no-order probes passed. Failed swing-score features, rejected ORB, and blocked GEX remain excluded. — PR #493 / `086eafe5` — Track M, runner, swing manager, tests, design record
