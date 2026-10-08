@@ -70,6 +70,15 @@ _RTH_OPEN_MIN = 9 * 60 + 30  # 09:30 ET session open (minutes since midnight ET)
 _RTH_CLOSE_MIN = 16 * 60     # 16:00 ET session close
 _RTH_SESSION_MIN = _RTH_CLOSE_MIN - _RTH_OPEN_MIN  # 390 min full session (RVOL session-fraction denominator)
 _BAR_SECONDS = 300           # 5-min bars — contiguity spacing (a larger gap = a halt)
+# IEX SPARSE-PRINT TOLERANCE (audit 2026-10-08: AMD 15:25 UTC had 0 IEX prints vs 80,005 SIP shares, and the frame read
+# it as a HALT, benching AMD for the rest of the day while it fell 3.9%). An isolated ONE-bar hole is tolerated when it
+# is outside the opening range and older than the trigger's recent window; anything else is still a halt -> skip.
+_MAX_IEX_HOLES = 2           # PROV:track-b-iex-gap-2026-10-08 — at most this many isolated one-bar holes per frame
+_HOLE_RECENT_BARS = 6        # PROV:track-b-iex-gap-2026-10-08 — no hole among the newest 6 bars (the momentum trigger's
+                             # volume baseline (5) + the latest bar, which also covers its 3-bar drive window)
+_HOLE_JUMP_RANGES = 3.0      # PROV:track-b-iex-gap-2026-10-08 — a price jump across the hole (next open vs prior close)
+                             # larger than this many median 5m bar ranges of the frame = a pause-and-reopen -> halt
+                             # (board Harris 2026-10-08)
 _STALE_FRAME_S = _BAR_SECONDS + 120  # PROV:daytier-track-b-screen — newest COMPLETED bar ENDED more than one bar + 2 min
                                      # (publication lag) before now = a missing completed bar = a halt/feed-stall -> skip
                                      # (data seat R2: an end-based 2-bar bound let a name halted ~11 min through)
@@ -272,6 +281,45 @@ def screen_mover(symbol: str, intraday_5m, prior_close, avg_daily_volume,
         return result
 
 
+def _iex_holes_ok(df) -> "tuple[bool, str]":
+    """Whether the missing 5m bars in a session frame are tolerable IEX sparse-print holes: every gap is exactly ONE
+    bar, none falls inside the opening range (bars 0.._OR_BARS-1 from the open), none is among the newest
+    _HOLE_RECENT_BARS bar slots, there are at most _MAX_IEX_HOLES, and the price does not jump across the hole by more
+    than _HOLE_JUMP_RANGES median bar ranges (a pause-and-reopen). Anything else -> False (treated as a halt).
+    Residual (board Harris): a pause that starts and reopens inside one slot with no price jump is not detectable from
+    IEX bars; the stop and size caps bound it (follow-up: Alpaca trading-status halt feed). Never raises."""
+    try:
+        from strategy.day_tier_momentum_trigger import _OR_BARS
+        ts = list(df.index)
+        if len(ts) < 2:
+            return False, "too few bars"
+        slots = [int(round((t - ts[0]).total_seconds() / _BAR_SECONDS)) for t in ts]
+        last = slots[-1]
+        holes: list = []
+        rng = (df["high"] - df["low"]).abs().median()
+        for i, (a, b) in enumerate(zip(slots[:-1], slots[1:], strict=True)):
+            if b - a == 1:
+                continue
+            if b - a != 2:
+                return False, f"{b - a - 1} consecutive bars missing after bar {a}"
+            jump = abs(float(df["open"].iloc[i + 1]) - float(df["close"].iloc[i]))
+            if not (rng == rng and rng > 0) or not (jump == jump) or jump > _HOLE_JUMP_RANGES * float(rng):
+                return False, f"price jump {jump:.4f} across the hole at bar {a + 1} (> {_HOLE_JUMP_RANGES:g} x median range {rng})"
+            holes.append(a + 1)
+        if not holes:
+            return True, "contiguous"
+        if len(holes) > _MAX_IEX_HOLES:
+            return False, f"{len(holes)} one-bar holes > {_MAX_IEX_HOLES}"
+        for h in holes:
+            if h < _OR_BARS:
+                return False, f"hole at bar {h} inside the opening range"
+            if h > last - _HOLE_RECENT_BARS:
+                return False, f"hole at bar {h} among the newest {_HOLE_RECENT_BARS} bars"
+        return True, f"isolated one-bar IEX hole(s) at bar(s) {holes}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"hole check error: {e!r}"
+
+
 def build_session_frame(symbol: str, now_et: "datetime | None" = None):
     """Today's RTH 5m frame FROM the 09:30 ET open (the momentum trigger's INPUT CONTRACT). Fetches via
     data.fetcher.fetch_bars_window(feed="iex", RAW) over [today 09:30 ET, now] — IEX because it is the only
@@ -279,7 +327,8 @@ def build_session_frame(symbol: str, now_et: "datetime | None" = None):
     return None on every live tick; verified 2026-09-23). IEX 5m bars were contiguous for all 15 pre-
     registered names over the 2 probed sessions (a small sample — monitor live). Then VERIFIES:
       * bar 0's timestamp == today's 09:30 ET open (DST-aware) — else the OR window / VWAP reset misalign;
-      * the 5m sequence is CONTIGUOUS (no missing bar) — a gap = a multi-bar HALT -> skip. LIMIT: a short
+      * the 5m sequence is CONTIGUOUS — a gap = a HALT -> skip, except an isolated one-bar IEX hole (no IEX prints
+        that 5 min; see _iex_holes_ok) outside the OR and the newest bars (audit 2026-10-08, AMD). LIMIT: a short
         LULD pause (< ~7 min) can leave contiguous partial bars and pass; the marketable limit + small size bound it;
       * >= _MIN_FRAME_BARS usable bars.
     Returns the RTH-only DataFrame (UTC-indexed, [open,high,low,close,volume]) or None on any failure/halt.
@@ -335,13 +384,16 @@ def build_session_frame(symbol: str, now_et: "datetime | None" = None):
         if (first_et.hour * 60 + first_et.minute) != _RTH_OPEN_MIN:
             logger.info("[%s] day-tier TRACK-B frame: first bar %s is not the 09:30 ET open — skip", symbol, first_et)
             return None
-        # HALT AWARENESS: the 5m sequence must be contiguous. expected = bars if no gap; fewer = a halt gap.
+        # HALT AWARENESS: the 5m sequence must be contiguous, except isolated one-bar IEX holes (_iex_holes_ok).
         span_s = (df.index[-1] - df.index[0]).total_seconds()
         expected = int(round(span_s / _BAR_SECONDS)) + 1
         if len(df) < expected:
-            logger.info("[%s] day-tier TRACK-B frame: non-contiguous (%d bars, expected %d — a HALT) — skip",
-                        symbol, len(df), expected)
-            return None
+            ok, why = _iex_holes_ok(df)
+            if not ok:
+                logger.info("[%s] day-tier TRACK-B frame: non-contiguous (%d bars, expected %d — %s — a HALT) — skip",
+                            symbol, len(df), expected, why)
+                return None
+            logger.info("[%s] day-tier TRACK-B frame: %s — kept (IEX had no prints; not a halt)", symbol, why)
         # END-OF-FRAME FRESHNESS (halt / feed-stall guard — adversarial B1): internal contiguity does NOT
         # catch a name that halted mid-session and is STILL halted now — it returns a contiguous but STALE
         # frame whose newest bar predates `now` by many minutes, which the momentum trigger would read as a
