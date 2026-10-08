@@ -28,7 +28,7 @@ from reporting.metrics import (
     _fetch_alpaca_equity, compute_lifetime_stats, compute_period_stats,
 )
 from reporting.report_figures import ReportFigures, build_report_figures, reconcile
-from reporting.html_ui import PRIMARY_NAV_CSS, primary_nav
+from reporting.html_ui import PRIMARY_NAV_CSS, TIER_LABELS, primary_nav
 from ui_tokens import (
     BG_BASE, BG_PANEL, BG_ELEVATED, BG_TODAY, BG_WEEKEND, BG_LT_BANNER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_DIM,
@@ -61,13 +61,8 @@ _MECH_EXITS = frozenset({
     "pm_exit", "forced_exit", "breakeven_exit",
 })
 
-_EDGE_TIER_LABELS = {
-    "intraday": "Core MTF",
-    "daytrade": "Day Tier",
-    "qhm": "QHM",
-    "forever6": "Forever-6",
-    "unattributed": "Unattributed",
-}
+# Same names as every other page (reporting.html_ui.TIER_LABELS -> tier_names: Day / Swing / QHM / F6).
+_EDGE_TIER_LABELS = {k: TIER_LABELS[k] for k in ("intraday", "daytrade", "qhm", "forever6", "unattributed")}
 
 
 def _strategy_edge_html(figures: ReportFigures) -> tuple[str, dict]:

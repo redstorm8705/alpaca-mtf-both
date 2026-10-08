@@ -37,7 +37,7 @@ class RecordTransfer(unittest.TestCase):
         self.assertEqual((kw["exit_reason"], kw["fill_qty"], kw["fill_price"]), ("transferred_to_swing_tier", 4.0, 330.0))
         self.assertEqual(kw["realized_pnl"], round((330.0 - 335.24) * 4, 2))       # -20.96: a loss, not masked
         fl.assert_called_once_with("AAPL")
-        self.assertIn("swing tier", pg.call_args.args[2])
+        self.assertIn("Swing tier", pg.call_args.args[2])   # the four tier names (CEO 2026-10-07)
 
     def test_short_sign(self):
         ok, log, _, _ = self._t(EWY, ["intraday"], 1, 1, 184.0)

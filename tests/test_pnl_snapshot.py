@@ -116,8 +116,8 @@ class TestUnrealizedCard(unittest.TestCase):
         self.assertNotIn("Unrealized by tier", body)      # redundant header removed
         self.assertNotIn("AVGO", body)                    # no per-position names
         self.assertNotIn("flat", body)                    # no empty-tier collapse
-        # "Overall" headline (distinct from the "Day-Trade" tier), then all four tiers, one per line
-        for lbl in ("Overall", "Swing", "QHM", "F6", "Day-Trade"):
+        # "Overall" headline (distinct from the Day tier), then all four tiers, one per line (Day / Swing / QHM / F6)
+        for lbl in ("Overall", "Swing", "QHM", "F6", "Day"):
             self.assertIn(lbl, body)
         self.assertNotIn("Intraday", body)                # retired term (Rafael 2026-09-25)
         self.assertEqual(body.count("\n"), 4)             # Overall + 4 tiers = 5 lines

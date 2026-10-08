@@ -133,7 +133,7 @@ _NORTH_STAR_FRAME = (
     "  halting, tightening filters, raising score floors, or shrinking size — those are out of scope.\n"
     "  RISK IS PER TIER: the DAY tier is meant to be the LOOSEST and MOST ACTIVE tier (intraday, flat by\n"
     "  close, may trade 2x leveraged single-stock ETFs at full size on 10/10 setups); SWING carries overnight;\n"
-    "  QHM / Forever-6 are long-term buy-and-hold anchors. Judge each tier by its OWN rules.\n"
+    "  QHM / F6 are long-term buy-and-hold anchors. Judge each tier by its OWN rules.\n"
     "  FACTS ONLY: every claim you make must quote the exact line from the DATA below that proves it. A claim\n"
     "  you cannot quote is not reported. Your output is fact-checked against the data and code before the\n"
     "  owner sees it; unprovable claims are removed.\n\n"
@@ -877,8 +877,8 @@ def _format_meta_audit_body(
     # long "sign-flip", "opened during drift", PDT violations).
     parts += [
         "=== BOT CONTEXT (how the bot is DESIGNED to behave — judge trades against this) ===",
-        "alpaca-mtf-bot runs THREE independent tiers on one small paper account (aggressive growth phase, ~$2.5K):",
-        "  1) CORE MTF / SWING (legacy tag trade_mode='intraday' — the name is historical, NOT 'flat by close')",
+        "alpaca-mtf-bot runs FOUR tiers on one small paper account (aggressive growth phase, ~$2.5K): Swing, Day, QHM, F6.",
+        "  1) SWING (internal tag trade_mode='intraday' — the name is historical, NOT 'flat by close')",
         "     — 12-point confluence score; entry requires score >= MIN_SCORE (10/12); trades long AND short.",
         "     These positions are DESIGNED to CARRY OVERNIGHT (multi-day swing holds protected by GTC stops);",
         "     they are NOT liquidated at the close, so an 'intraday' position held overnight is NOT a defect.",
@@ -892,8 +892,9 @@ def _format_meta_audit_body(
         "     the day-tier client_order_id, so they will not appear tagged 'daytrade' and there is NO 'stop' field on",
         "     the trade_events entry line. 'Entered without a stop' may ONLY be claimed by quoting a day-tier",
         "     trade id whose fills show the position open with no stop/exit order — otherwise it is false.",
-        "     Day-tier positions are force-flattened ~20 min before the close; they never carry overnight.",
-        "  3) QHM / Forever-6 — multi-week / quarterly buy-and-hold; not intraday-scored.",
+        "     Day-tier stops stay live until 3:58 PM ET, then the lot exits at market (since 2026-10-08); a lot still",
+        "     open after the close gets an extended-hours limit order at the bid/ask until filled. Not an overnight hold.",
+        "  3) QHM / F6 — multi-week / quarterly buy-and-hold; not intraday-scored.",
         "MRI (macro risk index) is BACKGROUND-ONLY (architecture invariant): it only nudges the size floor and",
         "  the MIN_SCORE floor; it does NOT hard-block entries. An entry during ELEVATED / STRESSED MRI is by",
         "  design, so 'MRI was STRESSED' alone is not evidence of a gate failure.",
@@ -1072,7 +1073,7 @@ def _format_meta_audit_body(
             "=== SCORE DISTRIBUTION AT ENTRY ===",
             "  " + str(stats["score_distribution"]),
             "  (score=0 entries are day-tier GEX trades — not confluence-scored; exclude them from any",
-            "   MIN_SCORE analysis. Real intraday scores are 10-12.)",
+            "   MIN_SCORE analysis. Real Swing-tier confluence scores are 10-12.)",
             "",
         ]
     if stats["mri_distribution"]:

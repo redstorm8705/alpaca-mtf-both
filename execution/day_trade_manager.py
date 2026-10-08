@@ -68,6 +68,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import config
+from tier_names import tier_label
 
 logger = logging.getLogger(__name__)
 
@@ -2744,7 +2745,8 @@ def _has_live_daytrade_stop(symbol: str) -> "bool | None":
     return False
 
 
-_TIER_DISPLAY = {"intraday": "swing tier", "qhm": "QHM", "forever6": "Forever-6"}  # Slack names (pnl_snapshot)
+# Slack names — the four tier names (tier_names: Day / Swing / QHM / F6, CEO 2026-10-07)
+_TIER_DISPLAY = {k: f"{tier_label(k)} tier" for k in ("intraday", "qhm", "forever6")}
 
 
 def _foreign_stop_covers(symbol: str, side: str, qty: int, tiers_out: "list | None" = None) -> bool:
@@ -2838,9 +2840,9 @@ def _record_transfer(tgt: dict, tiers: list, held: int, want: int, mark: float) 
             return False
         _mark_symbol_flattened(sym)
         _page_once_today(sym, "transferred",
-                         f"[{sym}] day-tier lot ({want} sh {side}) was taken over by the swing tier — the day-tier "
+                         f"[{sym}] Day-tier lot ({want} sh {side}) was taken over by the Swing tier — the Day-tier "
                          f"trade is closed in its journal at the take-over MARK ${m:.2f} (realized ${realized:+.2f}; a "
-                         f"mark, not a broker fill). The swing tier now holds the shares at the original entry "
+                         f"mark, not a broker fill). The Swing tier now holds the shares at the original entry "
                          f"${entry:.2f}, so the move to the mark appears in both tiers' records; the account P&L "
                          f"(Alpaca fills) counts it once.")
         return True

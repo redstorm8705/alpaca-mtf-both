@@ -499,7 +499,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
         # main bot must not partial-close/trail a QHM position. The collision
         # alert is fired once by check_exits (same cycle); keep this a quiet skip.
         if symbol in _get_qhm_syms():
-            logger.debug("[%s] QHM-held — skipped by main-bot partial-exit management.", symbol)
+            logger.debug("[%s] QHM-held — skipped by Swing-tier partial-exit management.", symbol)
             continue
         direction   = trade["direction"]
         entry_price = trade["entry_price"]
@@ -1183,15 +1183,15 @@ def check_exits(
                 trade["_qhm_collision_alerted"] = True
                 tracker._save_log()
                 logger.error(
-                    "[%s] QHM COLLISION: main-bot position present for a QHM-held "
-                    "symbol — main-bot exit management suppressed (Option B). "
+                    "[%s] QHM COLLISION: Swing-tier position present for a QHM-held "
+                    "symbol — Swing-tier exit management suppressed (Option B). "
                     "Reconcile ownership.", symbol,
                 )
                 try:
                     from alerts import send_slack as _qhm_slack
                     _qhm_slack(
-                        f":warning: [{symbol}] QHM collision — main bot holds a "
-                        f"position in a QHM-held symbol; main-bot exits suppressed "
+                        f":warning: [{symbol}] QHM collision — the Swing tier holds a "
+                        f"position in a QHM-held symbol; Swing exits suppressed "
                         f"(QHM owns it). Reconcile."
                     )
                 except Exception as _qhm_ae:

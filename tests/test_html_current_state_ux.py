@@ -66,10 +66,10 @@ def test_options_primary_action_rejects_unknown_direction_and_escapes_fields():
 
 def test_tier_components_use_current_bot_vocabulary():
     badges = tier_badges([("intraday", 2), ("qhm", 1)])
-    assert "Core MTF 2" in badges
+    assert "Swing 2" in badges   # tier names Day / Swing / QHM / F6 (CEO 2026-10-07)
     assert "QHM 1" in badges
     table = tier_performance_table(_figures().strategy_edge_stats())
-    for label in ("Core MTF", "Day Tier", "QHM", "Forever-6", "Unattributed"):
+    for label in ("Swing", "Day", "QHM", "F6", "Unattributed"):
         assert label in table
     assert "+$10.00" in table
 
