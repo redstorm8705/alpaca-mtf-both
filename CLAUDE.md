@@ -215,6 +215,36 @@ allowed; "I didn't consider interconnection" is the failure this rule exists to 
 GEX↔options-scanner, GEX↔0DTE-direction-lock, delta-strike↔flip/walls, confluence↔support/resistance,
 and VIX / VIX3M-term-structure / realized-vol ↔ GEX-regime-confirmation.
 
+**CONNECTION-OPTIMIZATION (CO) AUDIT — RECURRING, AUTOMATIC (Rafael mandate 2026-10-09):** the silo audit is to run
+on its own every weekend on the server, whether or not anyone asks (the cron is build item 4 of the design record
+below; until it is deployed this obligation is carried by the interactive session — status: not yet built). Radius = the whole bot, in slices: the newest
+merged PRs/diffs first, then backward through history to April 2026; plus one signal family per run. Weekly until
+the backlog reaches April and every signal family has been covered once, then every two weeks. Findings go to the
+owner as a short digest; each accepted finding ships through the normal gate. Scope and engine:
+`logs/design_records/co_audit_and_anomaly_2026-10-09.md`.
+
+---
+
+## ANOMALY → INVESTIGATE → OPTIMIZE (Rafael mandate 2026-10-09)
+
+**An anomaly is never explained away.** Conflicting signals on an open position, a stock benched all day, an
+impossible ledger value, a repeated warning, a page that fires before a tier's own heal, a stop moved far from its
+setup level — each one gets: (1) an investigation from the real logs, fills and price tape (replay the exact
+moves), (2) a board + Gro + GAI review of the cause and the fix, (3) a fix or optimization through the gate, and
+(4) the same check added to the anomaly rules (section 3 of `logs/design_records/co_audit_and_anomaly_2026-10-09.md`;
+automated detection is build item 6 — not yet built) so it is caught automatically next time. "By design" is not a
+finding until the design has been re-examined against what actually happened.
+
+**Why:** on 2026-10-08 the Day tier held a META long while its own short trigger fired six times on the same $720
+level; the report called it "one direction per stock, working as designed". That missed a pin (put wall = call
+wall), a stop widened from $719.44 to $709.67 by an IEX quote spread at the open, and the absence of any rule that
+acts on an open lot when the setup is contradicted. The same report called DRAM "never tradeable" (it has ~6
+months of history) and said AMD had no inverse ETF (DAMD traded 322,212 IEX shares that day).
+
+**Post-live audit + replay (Rafael mandate 2026-10-08):** every diff that goes live is audited and replayed against
+its first full trading session; bugs are fixed at once. Tracked by `.claude/preship/post_live_due.py` (prompt hook);
+record with `record_post_live.py`.
+
 ---
 
 ## BUILD, DON'T JUST FIX — SHIP-LIVE VELOCITY + DECISION-EXPLAINABILITY DOCTRINE (Rafael mandate 2026-08-02)
