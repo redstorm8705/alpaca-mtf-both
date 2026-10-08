@@ -446,6 +446,111 @@ def _inverse_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", 
         return None, f"inverse route error: {e!r}"
 
 
+def _bull_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", equity: float,
+                buying_power: float, track: str) -> "tuple[tuple | None, str]":
+    """Route a LONG signal on `sym` to its free 2x bull ETF (strategy/day_tier_leverage.leveraged_entry), gated live
+    like the inverse route: tracking vs the stock, size, liquidity. Returns ((decision, trigger, size, etf), reason)
+    or (None, reason). Never raises."""
+    try:
+        from data.alpaca_data import get_latest_quote
+        from data.live_price import live_price
+        from strategy import day_tier_leverage as lev
+        from strategy.day_tier_sizing import compute_day_tier_size
+        etf = lev.etf_for_order(sym, held)
+        if not etf:
+            return None, "no free 2x bull ETF for this stock"
+        up, ep = live_price(sym), live_price(etf)   # fresh ETF price for the stop translation (risk seat 2026-10-08)
+        c = _prior_close(sym)
+        piv = lev.leveraged_entry(decision, trigger, etf, up.price if up else None, ep.price if ep else None,
+                                  prior_close=c)
+        if piv is None:
+            return None, f"bull route to {etf}: price/geometry not usable"
+        d2, t2 = piv
+        ok, why = lev.etf_tracking_ok(t2.get("entry_ref"), _prior_close(etf), t2.get("underlying_entry_ref"), c, 2.0,
+                                      inverse=False)
+        if not ok:
+            return None, f"bull route to {etf}: {why}"
+        size = compute_day_tier_size(etf, d2, t2.get("entry_ref"), equity, buying_power=buying_power, track=track)
+        if not size.get("size_ok"):
+            return None, f"bull route to {etf}: size not ok ({size.get('reason')})"
+        _n = datetime.now(ET)
+        _frac = ((_n.hour * 60 + _n.minute) - (9 * 60 + 30)) / 390.0
+        ok, liq = lev.etf_liquidity_ok(get_latest_quote(etf), _today_iex_volume(etf), size.get("shares"),
+                                       t2.get("entry_ref"), t2.get("wall_ref"), session_frac=_frac)
+        if not ok:
+            return None, f"bull route to {etf}: {liq}"
+        return (d2, {**t2, "tracking": why, "liquidity": liq}, size, etf), f"bull route -> {etf}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] bull route error (no route): %s", sym, e)
+        return None, f"bull route error: {e!r}"
+
+
+def _place_affordable(dtm, sym: str, decision: dict, trigger: dict, size: dict, *, bar_id: str, equity: float,
+                      buying_power: float, held: "set | None", track: str, exposure: "dict | None",
+                      pe_kw: "dict | None" = None, max_tries: int = 3) -> "tuple[bool, str, str, int]":
+    """Place a day-tier entry on the STOCK, switching to its ETF only when the stock is unaffordable (CEO
+    2026-10-07): the stock first, needing 2+ shares when an ETF route exists; if wire-time sizing fits 0-1 shares
+    (account rooms), the 2x bull ETF (long) / inverse ETF (short) — which itself needs 2+ shares; if no ETF fits and
+    the stock fits exactly 1 share, that 1 share. A daily-risk-budget cut never routes to an ETF (the 1-share stock
+    when exactly 1 fits); any other skip (stop, co-hold, unreadable data, ...) is final.
+    ONE day-tier lot per underlying (cold-2nd 2026-10-08): when the day tier's durable log shows an open lot on the
+    stock or any of its ETFs (`exposure`, from _day_tier_exposure), nothing is placed, so a later tick of the same
+    signal does not stack NVDA on a logged NVDL lot; an unreadable `exposure` (None) means no ETF route (the stock,
+    minimum 1 share, as before). At most `max_tries` place_entry calls (the tick's remaining API budget). Returns
+    (entered, ordered symbol, direction, place_entry attempts). Never raises."""
+    kw = dict(pe_kw or {})
+    direction = str(trigger.get("direction") or "long")
+    tries = 0
+    try:
+        from strategy import day_tier_leverage as lev
+        und = lev.exposure_sign(sym, "long")[0]
+        if exposure is not None and exposure.get(und) is not None:
+            logger.info("[%s] track-%s skipped — the day tier already holds a lot on %s (one lot per stock)", sym,
+                        track, und)
+            return False, sym, direction, 0
+        if exposure is None:
+            has_route = False
+        elif direction == "long":
+            has_route = lev.pivot_enabled() and bool(lev.etf_for_order(sym, held))
+        else:
+            has_route = lev.inverse_pivot_enabled() and lev.inverse_etf_for_order(sym, held) is not None
+        if max_tries < 1:
+            return False, sym, direction, 0
+        tries += 1
+        if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity,
+                           min_qty=2 if has_route else 1, **kw):
+            return True, sym, direction, tries
+        skip = dtm.last_entry_skip(sym) if has_route else None
+        if not skip:
+            return False, sym, direction, tries
+        wired = int(skip.get("wired") or 0)
+        if skip.get("reason") == "below_min_qty":
+            if direction == "long":
+                route, why = _bull_pivot(sym, decision, trigger, held, equity, buying_power, track)
+            else:
+                route, why = _inverse_pivot(sym, decision, trigger, held, equity, buying_power, track)
+            if route is not None and tries < max_tries:
+                d2, t2, s2, etf = route
+                logger.info("[%s] track-%s stock fits %d sh -> ETF %s (%s)", sym, track, wired, etf, why)
+                tries += 1
+                if dtm.place_entry(etf, d2, t2, s2, bar_id=bar_id, equity=equity, **kw):
+                    return True, etf, str(t2.get("direction") or "long"), tries
+                if dtm.last_entry_skip(etf) is None:
+                    # The ETF attempt ended for a reason OTHER than its size (an order may have been submitted, e.g.
+                    # fill_unverified / flattened_no_stop): never add the stock on top (risk seat 2026-10-08).
+                    return False, sym, direction, tries
+            else:
+                logger.info("[%s] track-%s stock fits %d sh; no ETF route (%s)", sym, track, wired, why)
+        if wired == 1 and tries < max_tries:
+            tries += 1   # no usable ETF: the 1-share stock fallback (CEO 2026-10-07)
+            if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, min_qty=1, **kw):
+                return True, sym, direction, tries
+        return False, sym, direction, tries
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] affordable-entry routing error (no entry): %s", sym, e)
+        return False, sym, direction, max(1, tries)
+
+
 def _watch_day_ok(sym: str, side: object, direction: object) -> "tuple[bool, str]":
     """CEO watch-day rule (Rafael 2026-10-06; board Asness/LdP + GAI; design record day_tier_not_trading_and_price_
     confirm_2026-10-06.md): a SHORT against a LONG daily side is taken only after a WATCH DAY — the previous session
@@ -928,13 +1033,24 @@ def run_tick() -> dict:
                 capped = True
                 break  # defer the remaining ENTERs to the next tick (bar_id idempotency preserves them)
             _pe_kw = {"decision_id": _ct_decision_id} if _ct_decision_id else {}
-            if dtm.place_entry(order_sym_a, decision, trigger, size, bar_id=bar_id, equity=equity, **_pe_kw):
+            if order_sym_a == sym:
+                # ETF only when the stock is unaffordable (CEO 2026-10-07): stock first, ETF at 0-1 shares, 1-share
+                # stock fallback when no ETF fits.
+                _ok_a, order_sym_a, _dir_a, _tries_a = _place_affordable(
+                    dtm, sym, decision, trigger, size, bar_id=bar_id, equity=equity, buying_power=buying_power,
+                    held=_held_other, track="A", exposure=_dt_exp, pe_kw=_pe_kw,
+                    max_tries=max(1, (call_budget - calls_used) // max(1, per_entry_est)))
+            else:
+                _ok_a = dtm.place_entry(order_sym_a, decision, trigger, size, bar_id=bar_id, equity=equity,
+                                        decision_id=_ct_decision_id)
+                _dir_a, _tries_a = str(trigger.get("direction") or "long"), 1
+            if _ok_a:
                 entered += 1
                 if _dt_exp is not None:
                     from strategy import day_tier_leverage as _lv
-                    _u, _sg = _lv.exposure_sign(order_sym_a, str(trigger.get("direction") or "long"))
+                    _u, _sg = _lv.exposure_sign(order_sym_a, _dir_a)
                     _dt_exp[_u] = _sg
-            calls_used += per_entry_est
+            calls_used += per_entry_est * _tries_a
         except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
             logger.warning("[%s] day-tier entry loop error (non-fatal): %s", sym, e)
 

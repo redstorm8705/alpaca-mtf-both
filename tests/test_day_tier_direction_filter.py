@@ -267,8 +267,11 @@ class RunTickTrackA(unittest.TestCase):
         out, placed, logged = self._run("LONG", "long", blocks=False, exposure={"NVDA": -1})
         self.assertEqual(placed, [])
         self.assertIn("opposite direction on NVDA", logged[-1][2]["trigger"]["skip_reason"])
-        # same direction is fine
+        # same direction: one day-tier lot per stock (cold-2nd 2026-10-08 — NVDA must never stack on an open NVDL)
         out, placed, _ = self._run("LONG", "long", blocks=False, exposure={"NVDA": 1})
+        self.assertEqual(placed, [])
+        # a different stock is unaffected
+        out, placed, _ = self._run("LONG", "long", blocks=False, exposure={"AAPL": 1})
         self.assertEqual([p[0] for p in placed], ["NVDA"])
 
     def test_unreadable_exposure_does_not_block(self):
