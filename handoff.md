@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-07 (OpenAI Codex; Claude pointer preserved below) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-08 (OpenAI Codex; Claude pointer preserved below) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-08 late PT, OpenAI Codex signed) — Claude’s tier-name foundation extended, PR #535 live
+
+PR #535 merged as `cf0e190` and is deployed on OCI `137.131.51.250`. It rebased over and preserves Claude PRs #522–#536, removes the duplicate Codex registry, and extends Claude’s `tier_names.py` as the single identity authority. Canonical internal IDs are `day`, `swing`, `qhm`, and `forever_6`; canonical display names are Day, Swing, QHM, and Forever 6. Existing ledger/report keys remain readable at strict compatibility boundaries. Ownership and reports reject alias collisions plus malformed, missing, Boolean, and non-finite quantities instead of guessing or hiding attribution.
+
+Validation: 59 focused tests plus independent 123 adjacent tests and 20 subtests PASS; Python 3.10 compile, Ruff, mypy, tier-name AST gate, CI, Board, masked-loss, mechanical, Google AI Studio, and configured backup review PASS. OCI live probe: 7 broker symbols, zero ownership-source errors, all 7 correctly foreign to Day; four services active. No entry, exit, stop, close-timing, Confluence, allocation, or order-tag logic was replaced.
+
+**⏩ EXACT NEXT ACTION:** keep Claude’s post-live audits for PR #531 and #532 as the immediate trading priority below. For this architecture, next migrate canonical durable writes behind versioned state upgrade; do not remove historical read aliases until OCI state and rollback artifacts are migrated. Verify with `gh pr view 535 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
 ## ⏩ LATEST (2026-10-07 late PT, OpenAI Codex signed) — signed cross-tier ownership snapshot live (PR #520)
 
