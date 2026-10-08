@@ -206,6 +206,48 @@ class SessionFrame(unittest.TestCase):
         self._ret = self._utc(8, drop=4)  # a missing middle bar = a HALT
         self.assertIsNone(B.build_session_frame("NVDA", now_et=_FRAME_NOW))
 
+    # IEX sparse-print holes (audit 2026-10-08: AMD 15:25 UTC had 0 IEX prints vs 80,005 SIP shares -> benched all day)
+    def _utc_holes(self, n_bars, holes):
+        idx = pd.date_range("2026-09-21 13:30", periods=n_bars, freq="5min", tz="UTC")
+        idx = idx[[i for i in range(n_bars) if i not in set(holes)]]
+        rows = [(100.0, 101.0, 99.0, 100.5, 1000)] * len(idx)
+        return pd.DataFrame(rows, columns=["open", "high", "low", "close", "volume"], index=idx)
+
+    _LATE_NOW = datetime(2026, 9, 21, 11, 11, tzinfo=ET)   # 20 bars 09:30..11:05 EDT completed
+
+    def test_isolated_old_iex_hole_is_kept(self):
+        self._ret = self._utc_holes(20, [8])
+        df = B.build_session_frame("AMD", now_et=self._LATE_NOW)
+        self.assertIsNotNone(df)
+        self.assertEqual(len(df), 19)
+
+    def test_two_isolated_holes_kept_three_rejected(self):
+        self._ret = self._utc_holes(20, [5, 10])
+        self.assertIsNotNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+        self._ret = self._utc_holes(20, [4, 8, 11])
+        self.assertIsNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+
+    def test_two_consecutive_missing_bars_is_a_halt(self):
+        self._ret = self._utc_holes(20, [8, 9])
+        self.assertIsNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+
+    def test_hole_inside_opening_range_is_rejected(self):
+        self._ret = self._utc_holes(20, [1])
+        self.assertIsNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+
+    def test_recent_hole_is_rejected(self):
+        # newest slot 19; holes at slots > 13 are among the newest 6 bars
+        self._ret = self._utc_holes(20, [14])
+        self.assertIsNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+        self._ret = self._utc_holes(20, [13])
+        self.assertIsNotNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+
+    def test_price_jump_across_hole_is_a_halt(self):
+        df = self._utc_holes(20, [8])
+        df.iloc[8:, df.columns.get_loc("open")] = 110.0   # reopened ~$9.5 away vs a $2 median bar range
+        self._ret = df
+        self.assertIsNone(B.build_session_frame("AMD", now_et=self._LATE_NOW))
+
     def test_first_bar_not_open_returns_none(self):
         self._ret = self._utc(8, start="2026-09-21 13:35")  # 09:35 EDT, not the 09:30 open
         self.assertIsNone(B.build_session_frame("NVDA", now_et=_FRAME_NOW))
