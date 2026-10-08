@@ -1703,6 +1703,19 @@ def after_hours_exit(only_pending: bool = False) -> dict:
                 if _pos2 is None or (getattr(_pos2, "side", None) == "long") != (side == "long"):
                     continue
                 held = abs(int(float(getattr(_pos2, "qty", 0) or 0)))
+            # Taken over by another tier (its stop now protects the lot — the 2026-10-07 EWY/AAPL case): never place an
+            # exit for shares another tier manages. A whole-position take-over by the swing tier is booked as a
+            # transfer at the mark (same as the 3:58 path); anything else is skipped and paged once.
+            _ft_ah: list = []
+            if _has_live_daytrade_stop(sym) is False and _foreign_stop_covers(sym, side, held, _ft_ah):
+                if _record_transfer(tgt, _ft_ah, held, want, abs(float(getattr(pos, "current_price", 0) or 0))):
+                    summary["closed"] += 1
+                    continue
+                summary["skipped"] += 1
+                _page_once_today(sym, "ah_foreign_stop",
+                                 f"[{sym}] day-tier lot is protected by the {_tier_names(_ft_ah)}'s stop after the "
+                                 f"close — no after-hours exit placed; the {_tier_names(_ft_ah)} manages it.")
+                continue
             if not _eod_stop_cleared(sym):
                 summary["waiting"] += 1
                 _page_once_today(sym, "ah_exit_stop_live",

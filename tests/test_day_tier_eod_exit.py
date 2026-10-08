@@ -182,6 +182,8 @@ class AfterHoursExit(unittest.TestCase):
             mock.patch.object(dtm, "_eod_stop_cleared", return_value=cleared),
             mock.patch.object(dtm, "_set_pending_exit", side_effect=lambda t, o, q, kind="", reprices=0: self.pending.append((t, o, q, kind)) or True),
             mock.patch.object(dtm, "_bump_pending_ticks"),
+            mock.patch.object(dtm, "_has_live_daytrade_stop", return_value=False),
+            mock.patch.object(dtm, "_foreign_stop_covers", return_value=False),
             mock.patch.object(dtm, "_record_confirmed_stop_exit", return_value=False),
             mock.patch.object(dtm, "_closed_in_log", return_value=False),
             mock.patch.object(dtm, "_page_once_today"),
@@ -233,6 +235,24 @@ class AfterHoursExit(unittest.TestCase):
         out, ms = self._go(ps)
         self.assertEqual(self.submits, [])
         ms[-1].assert_called_once_with("DT-L")
+
+    def test_lot_protected_by_another_tiers_stop_gets_no_exit(self):
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.1, "ask": 179.4})
+        ps = [p for p in ps if getattr(p, "attribute", None) != "_foreign_stop_covers"]
+        ps += [mock.patch.object(dtm, "_foreign_stop_covers", return_value=True),
+               mock.patch.object(dtm, "_record_transfer", return_value=False)]
+        out, _ = self._go(ps)
+        self.assertEqual(self.submits, [])
+        self.assertEqual(out["skipped"], 1)
+
+    def test_swing_takeover_after_close_is_booked_as_transfer(self):
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.1, "ask": 179.4})
+        ps = [p for p in ps if getattr(p, "attribute", None) != "_foreign_stop_covers"]
+        ps += [mock.patch.object(dtm, "_foreign_stop_covers", return_value=True),
+               mock.patch.object(dtm, "_record_transfer", return_value=True)]
+        out, _ = self._go(ps)
+        self.assertEqual(self.submits, [])
+        self.assertEqual(out["closed"], 1)
 
     def test_stop_filled_before_close_on_cohold_never_sells_other_tier(self):
         """cold-2nd rev3: swing long 5 + day long 10; the day stop filled 10 at 3:59:55. At 4:00 the exit must book the
