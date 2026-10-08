@@ -25,9 +25,10 @@ from types import MappingProxyType
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from tier_names import TIER_IDS, canonical_tier
+
 _ET = ZoneInfo("America/New_York")
 _EPS = 1e-6
-_LEDGER_TIERS = ("intraday", "qhm", "forever6", "daytrade")
 _SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")
 
 
@@ -124,7 +125,10 @@ class OwnershipSnapshot:
     errors: tuple[str, ...] = ()
 
     def claimed_qty(self, symbol: str, tier: str) -> float:
-        return float(self.claims.get(str(symbol).upper(), {}).get(tier, 0.0) or 0.0)
+        canonical = canonical_tier(tier)
+        return float(
+            self.claims.get(str(symbol).upper(), {}).get(canonical, 0.0) or 0.0
+        )
 
     def claimants(self, symbol: str) -> frozenset[str]:
         return frozenset(
@@ -142,6 +146,7 @@ class OwnershipSnapshot:
         callers fail closed to foreign-held until the next clean snapshot.
         """
         symbol = str(symbol).upper()
+        tier = canonical_tier(tier)
         if self.errors or symbol not in self.broker_qty:
             return False
         own = self.claimed_qty(symbol, tier)
@@ -226,16 +231,28 @@ def build_ownership_snapshot(
             errors.append(f"ledger_entry:{symbol}")
             continue
         tiers = entry.get("tiers", {}) if isinstance(entry, dict) else {}
-        unknown_tiers = set(tiers) - set(_LEDGER_TIERS)
+        parsed_tiers: dict[str, tuple[str, object]] = {}
+        unknown_tiers: set[object] = set()
+        for raw_tier, claim in tiers.items():
+            try:
+                canonical = canonical_tier(raw_tier)
+            except ValueError:
+                unknown_tiers.add(raw_tier)
+                continue
+            if canonical in parsed_tiers:
+                errors.append(f"ledger_duplicate_tier:{symbol}:{canonical}")
+                continue
+            parsed_tiers[canonical] = (str(raw_tier), claim)
         if unknown_tiers:
+            unknown_text = ",".join(sorted(map(str, unknown_tiers)))
             errors.append(
-                f"ledger_unknown_tier:{symbol}:{','.join(sorted(unknown_tiers))}"
+                f"ledger_unknown_tier:{symbol}:{unknown_text}"
             )
-        for tier in _LEDGER_TIERS:
-            if tier not in tiers:
+        for tier in TIER_IDS:
+            if tier not in parsed_tiers:
                 continue  # absent tier is a valid backward-compatible zero claim
             try:
-                tier_claim = tiers[tier]
+                _raw_tier, tier_claim = parsed_tiers[tier]
                 if not isinstance(tier_claim, dict) or "qty" not in tier_claim:
                     raise ValueError("claim mapping/qty missing")
                 raw_qty = tier_claim["qty"]
@@ -247,10 +264,10 @@ def build_ownership_snapshot(
                     raise ValueError("claim qty invalid")
                 qty = float(raw_qty)
             except (AttributeError, TypeError, ValueError):
-                errors.append(f"ledger_claim:{symbol}:{tier}")
+                errors.append(f"ledger_claim:{symbol}:{_raw_tier}")
                 continue
             if not math.isfinite(qty):
-                errors.append(f"ledger_claim_nonfinite:{symbol}:{tier}")
+                errors.append(f"ledger_claim_nonfinite:{symbol}:{_raw_tier}")
                 continue
             if abs(qty) > _EPS:
                 mutable.setdefault(symbol, {})[tier] = qty
@@ -264,9 +281,9 @@ def build_ownership_snapshot(
     # both directions: clear every ledger daytrade slice, then overlay open claims.
     if not any(error.startswith("daytrade_log:") for error in errors):
         for tiers in mutable.values():
-            tiers.pop("daytrade", None)
+            tiers.pop("day", None)
     for symbol, qty in live_daytrade.items():
-        mutable.setdefault(symbol, {})["daytrade"] = qty
+        mutable.setdefault(symbol, {})["day"] = qty
 
     frozen_claims = MappingProxyType(
         {symbol: MappingProxyType(dict(tiers)) for symbol, tiers in mutable.items()}

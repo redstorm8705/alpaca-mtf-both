@@ -1,23 +1,56 @@
 # ruff: noqa: E501  — rationale docstring/comments run long (project convention)
-"""The four tier names every person-facing output uses (CEO 2026-10-07): Day, Swing, QHM, F6.
+"""Canonical identity for the bot's four tiers.
 
-Display only. The internal keys stay exactly as stored — client_order_id prefixes DT- / IN- / QH- / F6-, the
-ownership-ledger and trade_mode keys "daytrade" / "intraday" / "qhm" / "forever6" — because attribution, P&L by
-tier and the ledger depend on them. Every report, dashboard and Slack message maps a key through tier_label().
-tests/test_tier_names.py fails CI if a retired name ("Core MTF", "main bot", "Forever-6", "Day-Trade") reappears in
-a person-facing string.
+Existing durable state still carries historical keys. Read boundaries translate
+those aliases while new domain APIs use day/swing/qhm/forever_6.
 """
 from __future__ import annotations
 
-TIER_NAMES = ("Day", "Swing", "QHM", "F6")
+from typing import Literal
+
+TierId = Literal["day", "swing", "qhm", "forever_6"]
+TIER_IDS: tuple[TierId, ...] = ("day", "swing", "qhm", "forever_6")
+TIER_NAMES = ("Day", "Swing", "QHM", "Forever 6")
 
 TIER_DISPLAY = {
+    "day": "Day",
     "daytrade": "Day",
     "intraday": "Swing",   # internal key of the Swing tier (IN- order tags); "intraday" is a historical name
     "swing": "Swing",
     "qhm": "QHM",
-    "forever6": "F6",
+    "forever6": "Forever 6",
+    "forever_6": "Forever 6",
 }
+
+_ALIASES: dict[str, TierId] = {
+    "daytrade": "day",
+    "intraday": "swing",
+    "forever6": "forever_6",
+}
+_LEGACY_STORAGE: dict[TierId, str] = {
+    "day": "daytrade",
+    "swing": "intraday",
+    "qhm": "qhm",
+    "forever_6": "forever6",
+}
+
+
+def canonical_tier(key: object) -> TierId:
+    """Strict canonical ID; historical persisted keys are accepted on read."""
+    if not isinstance(key, str):
+        raise ValueError(f"tier must be a string, got {type(key).__name__}")
+    value = key.strip().lower()
+    if value in TIER_IDS:
+        return value  # type: ignore[return-value]
+    try:
+        return _ALIASES[value]
+    except KeyError as exc:
+        raise ValueError(f"unknown tier {key!r}") from exc
+
+
+def legacy_storage_tier(tier: TierId) -> str:
+    """Temporary durable-schema-v1 adapter."""
+    return _LEGACY_STORAGE[canonical_tier(tier)]
 
 
 def tier_label(key: object, default: "str | None" = None) -> str:

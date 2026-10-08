@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501
-"""Gate (CEO 2026-10-07): only four tier names appear in anything a person reads — Day, Swing, QHM, F6.
+"""Gate: person-facing tier names are Day, Swing, QHM, and Forever 6.
 
 Scans every string literal in the bot's Python (docstrings excluded — they are developer documentation) for the retired
-names "Core MTF", "main bot", "Forever-6"/"Forever 6" and "Day-Trade". A hit fails CI: route the name through
+names "Core MTF", "main bot", "Forever-6", and "Day-Trade". A hit fails CI: route the name through
 tier_names.tier_label() instead. Excluded: tests/, research/ (offline research artefacts), .claude/ (ship tooling),
 strategy/movers/ (the retired Movers bot — forbidden to run), virtualenvs, logs/.
 
@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-_RETIRED = re.compile(r"(?i:Core MTF|\bmain[- ]bot\b|Forever[- ]6)|Day-Trade")   # "day-trade count" (PDT) is not a tier name
+_RETIRED = re.compile(r"(?i:Core MTF|\bmain[- ]bot\b|Forever-6)|Day-Trade")
 _EXCLUDED_DIRS = ("tests", "research", ".claude", "logs", "venv", ".venv", "node_modules", ".git")
 _EXCLUDED_PREFIXES = ("strategy/movers/",)
 
@@ -61,9 +61,9 @@ class TierNames(unittest.TestCase):
 
     def test_labels(self):
         from tier_names import TIER_NAMES, tier_label
-        self.assertEqual(TIER_NAMES, ("Day", "Swing", "QHM", "F6"))
+        self.assertEqual(TIER_NAMES, ("Day", "Swing", "QHM", "Forever 6"))
         self.assertEqual([tier_label(k) for k in ("daytrade", "intraday", "swing", "qhm", "forever6")],
-                         ["Day", "Swing", "Swing", "QHM", "F6"])
+                         ["Day", "Swing", "Swing", "QHM", "Forever 6"])
         self.assertEqual(tier_label("unattributed", "Unattributed"), "Unattributed")
         self.assertEqual(tier_label(None), "")
 

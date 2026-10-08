@@ -7,24 +7,24 @@ strategy or strand the user without navigation.
 from __future__ import annotations
 
 from html import escape
+from typing import Any
 
-from tier_names import tier_label
+from tier_names import (
+    TIER_IDS,
+    canonical_tier,
+    tier_label,
+)
 
-# Display names from tier_names (Day / Swing / QHM / F6 — CEO 2026-10-07);
-# the keys stay the internal tier keys.
-TIER_LABELS = {
-    "intraday": tier_label("intraday"),
-    "daytrade": tier_label("daytrade"),
-    "qhm": tier_label("qhm"),
-    "forever6": tier_label("forever6"),
+TIER_LABELS: dict[str, str] = {
+    **{tier: tier_label(tier) for tier in TIER_IDS},
     "unattributed": "Unattributed",
 }
 
-TIER_COLORS = {
-    "intraday": "#00e5ff",
-    "daytrade": "#ff9f0a",
+TIER_COLORS: dict[str, str] = {
+    "swing": "#00e5ff",
+    "day": "#ff9f0a",
     "qhm": "#bf5af2",
-    "forever6": "#30d158",
+    "forever_6": "#30d158",
     "unattributed": "#8a94ae",
 }
 
@@ -47,6 +47,23 @@ _PAGES = (
 )
 
 
+def normalize_tier_mapping(by_tier: object) -> dict[str, Any]:
+    """Canonicalize a tier-keyed mapping and reject unknown/alias collisions."""
+    if not isinstance(by_tier, dict):
+        raise ValueError("tier mapping must be a dict")
+    normalized: dict[str, Any] = {}
+    for raw_tier, value in by_tier.items():
+        tier: str = (
+            "unattributed"
+            if raw_tier == "unattributed"
+            else canonical_tier(raw_tier)
+        )
+        if tier in normalized:
+            raise ValueError(f"duplicate tier aliases for {tier}")
+        normalized[tier] = value
+    return normalized
+
+
 def primary_nav(active: str, prefix: str = "") -> str:
     links = []
     for key, label, href in _PAGES:
@@ -60,9 +77,13 @@ def tier_badges(tiers: list[tuple[str, float]]) -> str:
     if not tiers:
         tiers = [("unattributed", 0.0)]
     out = []
-    for tier, qty in tiers:
-        label = TIER_LABELS.get(tier, tier.replace("_", " ").title())
-        color = TIER_COLORS.get(tier, TIER_COLORS["unattributed"])
+    for raw_tier, qty in tiers:
+        try:
+            tier_key: str = canonical_tier(raw_tier)
+        except ValueError:
+            tier_key = "unattributed"
+        label = TIER_LABELS[tier_key]
+        color = TIER_COLORS[tier_key]
         qty_text = f" {abs(qty):g}" if qty else ""
         out.append(
             f'<span class="tier-badge" style="color:{color};border-color:{color}55;'
@@ -73,10 +94,21 @@ def tier_badges(tiers: list[tuple[str, float]]) -> str:
 
 def tier_performance_table(edge: dict) -> str:
     """All-time broker-ledger performance by entry tier."""
-    by_tier = edge.get("by_tier") or {}
+    try:
+        by_tier = normalize_tier_mapping(edge.get("by_tier") or {})
+    except ValueError:
+        return (
+            '<div class="edge-integrity-error"><b>Tier performance unavailable — '
+            "ambiguous tier attribution.</b></div>"
+        )
     rows = []
-    for tier in ("intraday", "daytrade", "qhm", "forever6", "unattributed"):
+    for tier in (*TIER_IDS, "unattributed"):
         stats = by_tier.get(tier) or {}
+        if not isinstance(stats, dict):
+            return (
+                '<div class="edge-integrity-error"><b>Tier performance unavailable — '
+                "invalid tier metrics.</b></div>"
+            )
         label = TIER_LABELS[tier]
         color = TIER_COLORS[tier]
         pnl = stats.get("realized_pnl")
