@@ -244,6 +244,8 @@ jobs:
           python3 .claude/preship/test_gai_health.py
           # reviewer false-premise control (2026-10-08): static-facts block + name-premise auto counter-prompt
           python3 .claude/preship/test_static_facts.py
+          # post-live audit tracker (Rafael 2026-10-08): every live diff audited + replayed after its first full trading day
+          python3 .claude/preship/test_post_live_due.py
           # four tier names only — Day / Swing / QHM / F6 (CEO 2026-10-07); fails on a retired name in person-facing text
           python3 tests/test_tier_names.py
           python3 .claude/preship/gai_health.py canary
