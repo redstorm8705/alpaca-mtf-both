@@ -4,6 +4,7 @@
 Live case 2026-10-08: NVDA $235.84 Track-A ENTERs wired to 0 shares (global gross room ~$207) all morning while NVDL
 traded ~$37. Rules: the stock first; 0-1 affordable shares -> the 2x bull / inverse ETF; a leveraged ETF needs 2+
 shares; no usable ETF and exactly 1 stock share fits -> that 1 share."""
+import contextlib
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -39,28 +40,33 @@ class PlaceEntryMinimum(unittest.TestCase):
             return None
         trigger = {"trigger": "ENTER", "direction": "long", "mode": "RIDE", "entry_ref": 100.0, "target": None,
                    "wall_ref": 97.0}
-        with mock.patch.object(dtm, "_enabled", return_value=True), \
-                mock.patch.object(dtm, "_load_state", return_value={}), \
-                mock.patch.object(dtm, "_save_state", return_value=True), \
-                mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")), \
-                mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None), \
-                mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")), \
-                mock.patch.object(dtm, "_bounded_entry_qty", return_value=(wired, why)), \
-                mock.patch.object(dtm, "_budget_fit_qty", return_value=wired if fit is None else fit), \
-                mock.patch("data.live_price.live_price", return_value=LivePrice(100.0, "iex_trade", 1.0)), \
-                mock.patch("data.alpaca_data.get_latest_quote", return_value=None), \
-                mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}), \
-                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
-                mock.patch("strategy.day_tier_logger.log_decision", return_value=True), \
-                mock.patch.object(broker, "get_account", return_value=acct), \
-                mock.patch.object(broker, "get_open_positions", return_value=[]), \
-                mock.patch.object(broker, "get_open_orders", return_value=[]), \
-                mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30), \
-                mock.patch("execution.tier_capital_allocator.live_admit",
-                           return_value=SimpleNamespace(approved=True, lease=None, reason="")), \
-                mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"), \
-                mock.patch("execution.tier_capital_allocator.live_release", return_value=None), \
-                mock.patch.object(broker, "submit_limit_order", side_effect=_submit):
+        patches = [
+            mock.patch.object(dtm, "_enabled", return_value=True),
+            mock.patch.object(dtm, "_load_state", return_value={}),
+            mock.patch.object(dtm, "_save_state", return_value=True),
+            mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")),
+            mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None),
+            mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")),
+            mock.patch.object(dtm, "_bounded_entry_qty", return_value=(wired, why)),
+            mock.patch.object(dtm, "_budget_fit_qty", return_value=wired if fit is None else fit),
+            mock.patch("data.live_price.live_price", return_value=LivePrice(100.0, "iex_trade", 1.0)),
+            mock.patch("data.alpaca_data.get_latest_quote", return_value=None),
+            mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}),
+            mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)),
+            mock.patch("strategy.day_tier_logger.log_decision", return_value=True),
+            mock.patch.object(broker, "get_account", return_value=acct),
+            mock.patch.object(broker, "get_open_positions", return_value=[]),
+            mock.patch.object(broker, "get_open_orders", return_value=[]),
+            mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30),
+            mock.patch("execution.tier_capital_allocator.live_admit",
+                       return_value=SimpleNamespace(approved=True, lease=None, reason="")),
+            mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"),
+            mock.patch("execution.tier_capital_allocator.live_release", return_value=None),
+            mock.patch.object(broker, "submit_limit_order", side_effect=_submit),
+        ]
+        with contextlib.ExitStack() as stack:   # > 20 context managers in one `with` is a SyntaxError on py3.10/3.11
+            for p in patches:
+                stack.enter_context(p)
             dtm.place_entry(symbol, {"would_consider": True}, trigger, {"size_ok": True, "shares": 5},
                             bar_id="20261008-0930", equity=2500.0, min_qty=min_qty)
         return sub.get("qty"), dtm.last_entry_skip(symbol)
