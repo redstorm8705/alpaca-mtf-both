@@ -826,11 +826,11 @@ DAYTRADE_FORCE_FLAT_MINUTES = 2      # CEO 2026-10-07: the day tier's stop stays
                                      # (PRECLOSE_SWEEP_MINUTES) only touches the swing tracker's own trades
                                      # (stop_protection.reconcile_protection iterates tracker.open_trades), so a day-tier
                                      # lot held past 3:45 cannot pick up a swing-tagged stop.
-DAYTRADE_ENTRY_CUTOFF_MINUTES = 20   # no NEW day-tier entries in the final N min (3:40 PM — unchanged entry window);
+DAYTRADE_ENTRY_CUTOFF_MINUTES = 20   # PROV:close-timing-2026-10-07 — no NEW day-tier entries in the final N min (3:40 PM — the unchanged entry window, CEO);
                                      # positions keep their stops until the 3:58 exit. Must be > FORCE_FLAT.
 DAYTRADE_EOD_EXIT_GUARD_S = 10.0     # no new EOD exit pass/lot this many s before the close; a market close is never SENT < 2 s before it
 DAYTRADE_EOD_RETRY_S = 1.0           # pause between EOD exit passes (cancel not yet confirmed / partial fill)
-DAYTRADE_AH_FALLBACK_PCT = 0.01      # after-hours exit price when no usable IEX quote: latest trade -1% (sell) / +1% (buy)
+DAYTRADE_AH_FALLBACK_PCT = 0.01      # PROV:close-timing-2026-10-07 — after-hours exit price with no usable IEX quote: latest trade -1% (sell) / +1% (buy)
 DAYTRADE_MAINT_CUSHION_USD  = 650.0  # minimum equity−maintenance_margin dollars left after a proposed entry
 
 # ─── Track-A BUYING-POWER sizing (Rafael directive 2026-09-08; board + Gro + GAI + masked-loss seat) ──
