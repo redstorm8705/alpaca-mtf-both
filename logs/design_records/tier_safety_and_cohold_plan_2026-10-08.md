@@ -48,7 +48,14 @@
   not exempt from news-halt closes (Invariant #7 Bucket A exemption) — confirm in build.
 - Rejected reviewer suggestions (masked loss): excluding overnight-gap P&L from the kill switch (GAI); counting only
   the planned risk of a gap loss toward P&L (Gro).
-- OPEN for CEO: stock 1-share fallback when no usable ETF exists (board 4-0 yes).
+- CEO 2026-10-07 (answered): YES to the 1-share fallback — no usable ETF and the budget buys exactly 1 share of the
+  stock -> trade that 1 share (CEO wording "Yes to one share etf", recorded as the stock fallback; leveraged ETF
+  positions still need >= 2 shares).
+- CEO 2026-10-07: a day-tier lot still open at 4:00 PM is NOT left for the next open: an extended-hours GTC LIMIT at
+  the bid (sell) / ask (buy), re-priced until filled — all non-promoted day-tier trades closed out by end of day.
+  (Alpaca docs: extended-hours orders must be limit, TIF day or gtc; non-extended orders after 4:00 queue to the
+  next session.) Code fact: the swing tier already places its overnight GTC stops after the close (4:05 AH block);
+  its 3:45 sweep places DAY stops only, on swing-tracker trades only.
 
 ## Build order
 1 tier safety; 2 close timing; 3 tier names (display, then internal IN->SW migration); 4 5-min ownership refresh +
@@ -64,4 +71,15 @@ polling inventory; 5 0-1-share ETF routing for Track A and Swing; 6 bot-watched 
   replaced/cancelled — the tier tracker records a full-qty stop id; (c) swing and swing_breakout share the IN- tag;
   (d) day-tier OCO child legs are untagged (own legs read as foreign); (e) dynamic cover = position qty minus all live
   unfilled reducing-stop qty instead of parsing the error text.
+
+## Item 2 (close timing) shipped scope + carry-overs (2026-10-07 PT, Claude)
+- Shipped: entries stop 3:40; stops live to 3:58; confirmed cancel -> market exit (3 tries, none < 2 s before the
+  close); any lot left open -> extended-hours GTC limit at bid/ask, repriced (touch moved / 2 unfilled ticks, 0.5% per
+  step, cap 2%), managed next morning if still open; split fills booked at their own price. Board Harris+Taleb, 7
+  cold-2nd rounds, GAI preship (Gro daily token cap hit -> waived per the 2026-07-07 rule), adversarial PASS.
+- Deploy: OCI cron for run_day_tier.py widened */2 13-21 -> 13-23 UTC (repricing to 7:58 PM EDT / 6:58 PM EST).
+- Unverified: whether an extended-hours GTC limit can fill in Alpaca's overnight session (8 PM-4 AM).
+- Carry-overs: adaptive reprice step from live spread + after-hours volatility, log slippage vs touch (adversarial);
+  stale comment strategy/day_tier_sizing.py:146 ("buying power returned before the close"); _ah_account docstring
+  wording; unknown clock on a market holiday inside host hours still flattens at market (queued to the open).
 

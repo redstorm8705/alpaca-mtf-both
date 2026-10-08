@@ -930,7 +930,13 @@ def _record_partial_exit(target: dict, order_id: str, fill_qty: int, fill_price:
             old_qty = abs(int(float(value.get("fill_qty") or value.get("qty") or 0)))
             value["fill_qty"] = max(0, old_qty - fill_qty)
             if str(value.get("pending_exit_order_id") or "") == order_id:
-                value["pending_exit_accounted_qty"] = float(value.get("pending_exit_accounted_qty") or 0.0) + fill_qty
+                _prev_q = float(value.get("pending_exit_accounted_qty") or 0.0)
+                value["pending_exit_accounted_qty"] = _prev_q + fill_qty
+                # Track booked VALUE only while it is complete: a record written before this field existed (qty already
+                # booked, no value) stays "unknown" so _increment_price falls back to the average (cold-2nd 2026-10-07).
+                if value.get("pending_exit_accounted_value") is not None or _prev_q <= 0:
+                    value["pending_exit_accounted_value"] = (float(value.get("pending_exit_accounted_value") or 0.0)
+                                                             + fill_qty * fill_price)
     if not _save_state(state):
         return False
     target["qty"] = max(0, int(target.get("qty") or 0) - fill_qty)
@@ -943,8 +949,22 @@ def _record_partial_exit(target: dict, order_id: str, fill_qty: int, fill_price:
     return True
 
 
-def _set_pending_exit(trade_id: str, order_id: str, requested_qty: int) -> bool:
-    """Persist a close order before polling it, so a later fill cannot be retried blind."""
+def _bump_pending_ticks(trade_id: str, ticks: int) -> None:
+    """Persist how many ticks the after-hours exit has rested unfilled. Best-effort; never raises."""
+    try:
+        state = _load_state()
+        for key, value in state.items():
+            if key.startswith("entry::") and isinstance(value, dict) and value.get("coid") == trade_id:
+                value["pending_exit_open_ticks"] = int(ticks)
+                _save_state(state)
+                return
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pending tick count write failed: %s", e)
+
+
+def _set_pending_exit(trade_id: str, order_id: str, requested_qty: int, kind: str = "", reprices: int = 0) -> bool:
+    """Persist a close order before polling it, so a later fill cannot be retried blind. `kind` "after_hours" marks
+    the extended-hours exit limit, which after_hours_exit keeps managing (re-pricing) even during regular hours."""
     if not trade_id or not order_id or requested_qty < 1:
         return False
     state = _load_state()
@@ -953,6 +973,10 @@ def _set_pending_exit(trade_id: str, order_id: str, requested_qty: int) -> bool:
             value["pending_exit_order_id"] = order_id
             value["pending_exit_requested_qty"] = requested_qty
             value["pending_exit_accounted_qty"] = 0.0
+            value["pending_exit_accounted_value"] = 0.0
+            value["pending_exit_kind"] = kind
+            value["pending_exit_open_ticks"] = 0
+            value["pending_exit_reprices"] = int(reprices)
             return _save_state(state)
     return False
 
@@ -965,8 +989,25 @@ def _clear_pending_exit(trade_id: str) -> None:
             value["pending_exit_order_id"] = ""
             value["pending_exit_requested_qty"] = 0
             value["pending_exit_accounted_qty"] = 0.0
+            value["pending_exit_accounted_value"] = 0.0
+            value["pending_exit_kind"] = ""
+            value["pending_exit_open_ticks"] = 0
             _save_state(state)
             return
+
+
+def _increment_price(cum_qty: float, avg_px: float, booked_qty: float, booked_value: "float | None", delta: int) -> float:
+    """Price of the NEW shares of an order's fill: Alpaca reports a running average, so the increment is
+    (cum_qty*avg - value already booked) / delta (adversarial review 2026-10-07: booking every increment at the running
+    average mis-states a split fill — 4 @ 100 then 6 @ 99 would book the 6 @ 99.40). Falls back to the average when
+    nothing was booked yet (exact then) or the result is not a positive number. Never raises."""
+    try:
+        if booked_qty <= 0 or delta < 1 or booked_value is None:
+            return float(avg_px)   # nothing booked yet (exact), or the booked value is unknown (legacy record)
+        p = (float(cum_qty) * float(avg_px) - float(booked_value)) / float(delta)
+        return round(p, 4) if (math.isfinite(p) and p > 0) else float(avg_px)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return float(avg_px)
 
 
 def _resolve_pending_exit(target: dict) -> bool:
@@ -995,6 +1036,9 @@ def _resolve_pending_exit(target: dict) -> bool:
         return True
     delta = int(math.floor(cumulative - accounted))
     if delta > 0:
+        _bv0 = entry.get("pending_exit_accounted_value")
+        price = _increment_price(cumulative, price, accounted,
+                                 float(_bv0) if _bv0 is not None else None, delta) if price > 0 else price
         if price <= 0 or not _record_partial_exit(target, order_id, delta, price, price, "forced_close_late_fill"):
             _halt_unresolved_exit(str(target.get("symbol") or ""), "Prior forced-close fill could not be persisted.")
             return True
@@ -1255,9 +1299,14 @@ def _flatten_targets() -> dict:
                 continue
             if v.get("state") in ("filled", "protected", "fill_unverified"):
                 sym = str(v.get("symbol") or "")
+                _fq = v.get("fill_qty")
+                if _fq is not None and float(_fq) <= 0:
+                    # fill_qty explicitly 0 = the lot was fully closed by booked partial exits (cold-2nd 2026-10-07:
+                    # `fill_qty or qty` fell back to the ORIGINAL qty and resurrected a closed lot).
+                    continue
                 if sym and sym not in targets:  # log is preferred; state fills the crash-window gap
                     targets[sym] = {"symbol": sym, "side": str(v.get("side") or "long"),
-                                    "qty": abs(int(float(v.get("fill_qty") or v.get("qty") or 0))),
+                                    "qty": abs(int(float(_fq if _fq is not None else (v.get("qty") or 0)))),
                                     "entry_price": float(v.get("fill_px") or v.get("stop_px") or 0.0),
                                     "trade_id": str(v.get("coid") or ""),
                                     "order_id": str(v.get("order_id") or ""),
@@ -1282,51 +1331,437 @@ def _flatten_targets() -> dict:
     return targets
 
 
-def force_flat_all(reason: str = "eod_force_flat") -> int:
+def _eod_stop_cleared(symbol: str) -> bool:
+    """EOD exit (CEO 2026-10-07): cancel the day tier's OWN protective orders on `symbol` — the recorded OCO legs by
+    id and any DT-tagged stop — and PROVE none is still live. Until this returns True the stop keeps protecting the
+    lot (a pending_cancel stop can still execute), so the market exit is not sent yet and the caller retries.
+    Never cancels another tier's order. Never raises."""
+    from execution import broker
+    try:
+        legs = _cancel_recorded_exit_legs_confirmed(symbol)
+        broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")
+        return legs is True and _has_live_daytrade_stop(symbol) is False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] day-tier EOD stop cancel not confirmed (retrying): %s", symbol, e)
+        return False
+
+
+def _force_flat_one(tgt: dict, reason: str, confirm_cancel: bool,
+                    submit_by: "float | None" = None, tries: "dict | None" = None) -> "tuple[bool, bool]":
+    """One flatten attempt for one target. Returns (done, flattened): done=True when nothing more can be done for
+    it in this call (closed, already flat, taken over by the swing tier, or a refusal a retry cannot fix);
+    done=False means retry (the EOD stop cancel is not confirmed yet, or the close did not complete).
+    `submit_by` (time.monotonic()): no market close is sent at/after it — a market order after the 4:00 close would
+    be queued for the next open (cold-2nd 2026-10-07); the after-hours exit takes the lot instead."""
+    from execution import broker
+    sym = tgt["symbol"]
+    if _closed_in_log(str(tgt.get("trade_id") or "")):
+        # Already booked closed (e.g. a market close earlier this pass): retire the state record so it can never
+        # be re-targeted — on a co-held symbol a re-target would sell ANOTHER tier's shares (cold-2nd 2026-10-07).
+        _retire_trade_record(str(tgt.get("trade_id") or ""))
+        return True, False
+    try:
+        pos = broker.get_open_position(sym)
+    except Exception:
+        pos = None
+    if pos is None:
+        return True, False
+    held = abs(int(float(getattr(pos, "qty", 0) or 0)))
+    want = int(tgt["qty"])
+    if want < 1:
+        _page(f"[{sym}] day-tier force-flat: recorded own-qty is 0/missing — REFUSING to "
+              f"close (never close the cross-tier net); manual check needed. ({reason})")
+        return True, False
+    qty = min(held, want)
+    # Only a lot with NO live day-tier stop can be "held by another tier" (our own OCO is flattened as usual);
+    # the foreign stop must cover the whole position.
+    _ft_eod: list = []
+    if (qty >= 1 and _has_live_daytrade_stop(sym) is False
+            and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held, _ft_eod)):
+        if _record_transfer(tgt, _ft_eod, held, want, abs(float(getattr(pos, "current_price", 0) or 0))):
+            return True, False
+        _page_once_today(sym, "foreign_stop_eod",
+                         f"[{sym}] day-tier force-flat ({reason}) skipped — the lot was taken over by the "
+                         f"{_tier_names(_ft_eod)}, whose stop protects it and which now manages it. Close "
+                         f"manually if it must be flat.")
+        return True, False
+    if qty < 1:
+        return True, False
+    if confirm_cancel:
+        if not _eod_stop_cleared(sym):
+            return False, False   # the stop is still live (protecting the lot) — retry the cancel next pass
+        # The stop is terminal — it may have FILLED during the cancel (cold-2nd 2026-10-07). Book that first; never
+        # follow it with a market sell of shares the lot no longer owns (on a co-held symbol they are another tier's).
+        _stop_fill = _record_confirmed_stop_exit(tgt)
+        if _stop_fill is True:
+            _retire_trade_record(str(tgt.get("trade_id") or ""))
+            return True, False
+        if _stop_fill is None:
+            return False, False   # stop fill unreadable/partial-unbooked — retry next pass
+        _fresh = _flatten_targets().get(sym)
+        if not _fresh or _fresh.get("trade_id") != tgt.get("trade_id"):
+            return True, False
+        qty = min(held, int(_fresh.get("qty") or 0))
+        if qty < 1:
+            return True, False
+    if submit_by is not None and time.monotonic() >= submit_by:
+        return True, False    # too close to the close for a market order; after_hours_exit takes it
+    if tries is not None:
+        tries[sym] = tries.get(sym, 0) + 1
+        if tries[sym] > 3:
+            return True, False    # 3 market attempts per lot per window (no page storm); after_hours_exit follows
+    ok = flatten_position(sym, qty, tgt["side"], entry_price=tgt["entry_price"],
+                          trade_id=tgt["trade_id"], order_id_hint=tgt["order_id"], reason=reason)
+    if ok:
+        _retire_trade_record(str(tgt.get("trade_id") or ""))   # retire it now (the 4:00 tick runs after_hours_exit first)
+    return ok, ok
+
+
+def force_flat_all(reason: str = "eod_force_flat", deadline: "float | None" = None) -> int:
     """Flatten EVERY open day-tier position (EOD force-flat / tier-kill). Unions the durable-log
     open set with the state file's filled/protected records (crash-window safety), reconciled
     against the live broker position. NEVER falls back to the whole broker-held qty (B1: masked-loss
     /cold-2nd — a missing recorded qty must SKIP+PAGE, never close `held`, which is the cross-tier
-    net). Returns the count flattened. No-op when DAYTRADE_ENABLED is False."""
+    net). Returns the count flattened. No-op when DAYTRADE_ENABLED is False.
+
+    `deadline` (time.monotonic() value; the EOD exit, CEO 2026-10-07): retry in passes until every lot is closed or
+    the deadline passes — each lot's stop is cancelled with CONFIRMATION before its market close (the stop protects
+    the lot until then), and a partial close is retried for the remainder. None = one pass (tier kill, clock loss).
+    A lot still open at the deadline is left to after_hours_exit (an extended-hours limit at the bid/ask)."""
     if not _enabled():
         return 0
-    from execution import broker
     n = 0
+    done: set = set()
+    tries: dict = {}
+    retry_s = float(_cfg("DAYTRADE_EOD_RETRY_S", 1.0))
+    # The last moment a market close may be SENT: 2 s before the close (deadline = close - EOD_EXIT_GUARD_S).
+    submit_by = (deadline + max(0.0, float(_cfg("DAYTRADE_EOD_EXIT_GUARD_S", 10.0)) - 2.0)
+                 if deadline is not None else None)
     try:
-        for tgt in _flatten_targets().values():
-            sym = tgt["symbol"]
-            try:
-                pos = broker.get_open_position(sym)
-            except Exception:
-                pos = None
-            if pos is None:
-                continue
-            held = abs(int(float(getattr(pos, "qty", 0) or 0)))
-            want = int(tgt["qty"])
-            if want < 1:
-                _page(f"[{sym}] day-tier force-flat: recorded own-qty is 0/missing — REFUSING to "
-                      f"close (never close the cross-tier net); manual check needed. ({reason})")
-                continue
-            qty = min(held, want)
-            # Only a lot with NO live day-tier stop can be "held by another tier" (our own OCO is flattened as usual);
-            # the foreign stop must cover the whole position.
-            _ft_eod: list = []
-            if (qty >= 1 and _has_live_daytrade_stop(sym) is False
-                    and _foreign_stop_covers(sym, str(tgt.get("side") or "long"), held, _ft_eod)):
-                if _record_transfer(tgt, _ft_eod, held, want, abs(float(getattr(pos, "current_price", 0) or 0))):
-                    continue
-                _page_once_today(sym, "foreign_stop_eod",
-                                 f"[{sym}] day-tier force-flat ({reason}) skipped — the lot was taken over by the "
-                                 f"{_tier_names(_ft_eod)}, whose stop protects it and which now manages it. Close "
-                                 f"manually if it must be flat.")
-                continue
-            if qty >= 1 and flatten_position(sym, qty, tgt["side"], entry_price=tgt["entry_price"],
-                                             trade_id=tgt["trade_id"], order_id_hint=tgt["order_id"],
-                                             reason=reason):
-                n += 1
+        while True:
+            targets = _flatten_targets()
+            todo = [t for s, t in targets.items() if s not in done]
+            if not todo:
+                break
+            for tgt in todo:
+                if deadline is not None and time.monotonic() >= deadline:
+                    break   # no new lot starts after the deadline (cold-2nd 2026-10-07)
+                try:
+                    finished, flat = _force_flat_one(tgt, reason, confirm_cancel=deadline is not None,
+                                                     submit_by=submit_by,
+                                                     tries=tries if deadline is not None else None)
+                except Exception as e:  # noqa: BLE001 — one symbol never stops the others
+                    finished, flat = False, False
+                    logger.warning("[%s] day-tier force-flat attempt raised: %s", tgt.get("symbol"), e)
+                n += 1 if flat else 0
+                if finished:
+                    done.add(tgt["symbol"])
+            if deadline is None or time.monotonic() + retry_s >= deadline:
+                break
+            if all(s in done for s in _flatten_targets()):
+                break
+            time.sleep(retry_s)
+        if deadline is not None:
+            left = [s for s in _flatten_targets() if s not in done]
+            if left:
+                _page(f"day-tier EOD exit: {', '.join(sorted(left))} still open at the close ({reason}) — the "
+                      f"after-hours exit (extended-hours limit at the bid/ask) will close them.")
     except Exception as e:  # noqa: BLE001
         _page(f"day-tier force_flat_all RAISED ({reason}): {e!r}")
     return n
+
+
+def _ah_exit_price(symbol: str, close_side: str, step: float = 0.0) -> "tuple[float | None, str]":
+    """After-hours exit price (CEO 2026-10-07: "fill at whatever the bid is"): the live IEX bid for a sell, the ask
+    for a buy; with no usable quote, the latest trade -/+ DAYTRADE_AH_FALLBACK_PCT. `step` (0..0.02) moves the price
+    that fraction further through the touch after unfilled ticks (board Harris 2026-10-07: an unchanging IEX quote can
+    leave the order unfilled). (None, why) when no price exists. Never raises."""
+    try:
+        step = max(0.0, min(float(step), 0.02))
+        px, why = _ah_touch_price(symbol, close_side)
+        if px is None or step <= 0:
+            return px, why
+        px2 = round(px * (1.0 - step if close_side == "sell" else 1.0 + step), 2)
+        return px2, f"{why} stepped {step:.1%} through"
+    except Exception as e:  # noqa: BLE001
+        return None, f"price read failed: {e!r}"
+
+
+def _ah_touch_price(symbol: str, close_side: str) -> "tuple[float | None, str]":
+    """The bid (sell) / ask (buy), else latest trade -/+ DAYTRADE_AH_FALLBACK_PCT. Never raises."""
+    try:
+        from data.alpaca_data import get_latest_quote, get_latest_trade
+        q = get_latest_quote(symbol) or {}
+        bid, ask = float(q.get("bid") or 0.0), float(q.get("ask") or 0.0)
+        if close_side == "sell" and math.isfinite(bid) and bid > 0 and (ask <= 0 or bid <= ask):
+            return round(bid, 2), f"bid {bid:.2f}"
+        if close_side == "buy" and math.isfinite(ask) and ask > 0 and (bid <= 0 or bid <= ask):
+            return round(ask, 2), f"ask {ask:.2f}"
+        lt = get_latest_trade(symbol)
+        f = float(_cfg("DAYTRADE_AH_FALLBACK_PCT", 0.01))
+        if lt is not None and math.isfinite(float(lt)) and float(lt) > 0:
+            px = float(lt) * (1.0 - f if close_side == "sell" else 1.0 + f)
+            return round(px, 2), f"latest trade {float(lt):.2f} {'-' if close_side == 'sell' else '+'}{f:.1%} (no usable quote)"
+        return None, "no usable quote or trade"
+    except Exception as e:  # noqa: BLE001
+        return None, f"price read failed: {e!r}"
+
+
+def _ah_account(tgt: dict, order_id: str, accounted: float) -> str:
+    """Book any new fill on the after-hours exit order: the whole remaining lot -> exit_fill (closes the trade);
+    less -> partial_exit_fill (reduces the owned qty). Returns 'closed' | 'terminal' | 'open' | 'unreadable'.
+    The fill price is the order's cumulative average (exact for a single fill; the Alpaca fills are the P&L system
+    of record). Never raises."""
+    from execution import broker
+    from strategy import day_tier_logger
+    import trade_logger
+    sym = str(tgt.get("symbol") or "")
+    try:
+        o = broker.get_order(order_id)
+        if o is None:
+            return "unreadable"
+        cum = float(getattr(o, "filled_qty", 0) or 0)
+        px = float(getattr(o, "filled_avg_price", 0) or 0)
+        status = _enum_text(getattr(o, "status", None))
+        if not (math.isfinite(cum) and math.isfinite(px) and math.isfinite(accounted)) or cum + 1e-9 < accounted:
+            return "unreadable"
+        delta = int(math.floor(cum - accounted + 1e-9))
+        remaining = int(tgt.get("qty") or 0)
+        if delta >= 1 and px > 0:
+            _bv = (_entry_record(str(tgt.get("trade_id") or "")) or {}).get("pending_exit_accounted_value")
+            px = _increment_price(cum, px, accounted, float(_bv) if _bv is not None else None, delta)  # these shares' price
+            if delta >= remaining:
+                entry = abs(float(tgt.get("entry_price") or 0.0))
+                side = str(tgt.get("side") or "long")
+                realized = round((px - entry) * remaining if side == "long" else (entry - px) * remaining, 2) if entry > 0 else 0.0
+                if not day_tier_logger.log_exit_fill(str(tgt.get("trade_id") or ""), sym, order_id=order_id,
+                                                     exit_reason="eod_after_hours_exit", fill_price=px,
+                                                     fill_qty=float(remaining), market_price_at_exit=px,
+                                                     realized_pnl=realized):
+                    _halt_unresolved_exit(sym, "After-hours exit filled but the fill could not be durably recorded.")
+                    return "unreadable"
+                try:
+                    trade_logger.log_event("exit", symbol=sym, price=px, size=remaining, data_source="daytrade",
+                                           tier="daytrade", exit_reason="eod_after_hours_exit",
+                                           trade_id=str(tgt.get("trade_id") or ""), realized_pnl=realized)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[%s] after-hours exit trade_logger write failed: %s", sym, e)
+                _clear_pending_exit(str(tgt.get("trade_id") or ""))
+                _retire_trade_record(str(tgt.get("trade_id") or ""))
+                logger.info("[%s] day-tier after-hours exit FILLED %d @ %.2f (realized %.2f)", sym, remaining, px, realized)
+                return "closed"
+            if not _record_partial_exit(tgt, order_id, delta, px, px, "eod_after_hours_exit_partial"):
+                _halt_unresolved_exit(sym, "After-hours exit partial fill could not be durably recorded.")
+                return "unreadable"
+        if status == "filled" and not (px > 0):
+            return "unreadable"   # a fill with no price cannot be booked (matches _confirmed_order_fill)
+        if status in ("filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"):
+            _clear_pending_exit(str(tgt.get("trade_id") or ""))
+            return "terminal"
+        return "open"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] after-hours exit fill read failed: %s", sym, e)
+        return "unreadable"
+
+
+def _entry_record(trade_id: str) -> "dict | None":
+    """The state entry record whose coid is `trade_id`, or None. Never raises."""
+    try:
+        return next((v for k, v in _load_state().items() if k.startswith("entry::") and isinstance(v, dict)
+                     and v.get("coid") == trade_id), None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _pending_accounted(trade_id: str) -> float:
+    """Shares of the recorded exit order already booked (state pending_exit_accounted_qty). Never raises."""
+    try:
+        return float((_entry_record(trade_id) or {}).get("pending_exit_accounted_qty") or 0.0)
+    except (TypeError, ValueError):
+        return float("nan")   # _ah_account treats a non-finite watermark as unreadable
+
+
+def after_hours_exit(only_pending: bool = False) -> dict:
+    """CEO 2026-10-07: every day-tier lot (no promotion yet) is closed out by end of day. A lot still open after the
+    regular-hours close gets an extended-hours GTC LIMIT at the live bid (sell) / ask (buy), re-priced each tick when
+    the touch moves away, until it fills. Run by the runner whenever the market is closed (after hours and pre-
+    market). Never a market order after hours (Alpaca queues those for the next open). Never touches another tier's
+    shares (net side + own recorded qty). `only_pending=True` (regular hours): manage ONLY lots that already carry an
+    after-hours exit order (one still unfilled at the open keeps being re-priced at the touch); such a lot has no stop
+    (cancelled at the 3:58 exit) and no other day-tier order can exist on its symbol (place_entry blocks re-entry
+    while it is open). Returns a summary. Never raises."""
+    if not _enabled():
+        return {"enabled": False}
+    from execution import broker
+    summary = {"checked": 0, "placed": 0, "repriced": 0, "closed": 0, "waiting": 0, "skipped": 0}
+    try:
+        for sym, tgt in _flatten_targets().items():
+            trade_id = str(tgt.get("trade_id") or "")
+            if _closed_in_log(trade_id):
+                # Booked closed (e.g. by the 3:58 market exit, or a stop that filled before 4:00) but the state record
+                # was not yet retired. Never re-target it — on a co-held symbol the "position" is another tier's
+                # (cold-2nd 2026-10-07). First make sure no exit order of ours is still resting: a later fill would sell
+                # shares the lot no longer owns. Retire only once that order is confirmed terminal.
+                _pc = str((_entry_record(trade_id) or {}).get("pending_exit_order_id") or "")
+                if _pc:
+                    _po = broker.get_order(_pc)
+                    _terminal = ("filled", "canceled", "cancelled", "expired", "rejected", "done_for_day")
+                    if _po is None or _enum_text(getattr(_po, "status", None)) not in _terminal:
+                        broker.cancel_order(_pc)
+                        _po = broker.get_order(_pc)
+                        if _po is None or _enum_text(getattr(_po, "status", None)) not in _terminal:
+                            summary["waiting"] += 1
+                            _page_once_today(sym, "ah_exit_closed_cancel",
+                                             f"[{sym}] day-tier lot is already closed but its exit order {_pc} is not "
+                                             f"confirmed cancelled yet — retrying each tick.")
+                            continue
+                    _clear_pending_exit(trade_id)
+                _retire_trade_record(trade_id)
+                continue
+            _rec0 = _entry_record(trade_id) if trade_id else None
+            _pend0 = str((_rec0 or {}).get("pending_exit_order_id") or "")
+            _ah0 = _pend0 and str((_rec0 or {}).get("pending_exit_kind") or "") == "after_hours"
+            if only_pending and not _ah0:
+                continue
+            summary["checked"] += 1
+            try:
+                pos = broker.get_open_position(sym)
+            except Exception as e:  # noqa: BLE001
+                summary["skipped"] += 1
+                logger.warning("[%s] after-hours exit: position read failed (next tick): %s", sym, e)
+                continue
+            if pos is None:
+                if _ah0:
+                    # Flat (filled between ticks, or closed another way): book any fill, and never leave the GTC exit
+                    # resting with no position behind it — a later fill would OPEN a new position.
+                    if _ah_account(tgt, _pend0, _pending_accounted(trade_id)) == "open":
+                        broker.cancel_order(_pend0)
+                        _page_once_today(sym, "ah_exit_orphan_cancel",
+                                         f"[{sym}] day-tier lot is flat but its after-hours exit order {_pend0} was "
+                                         f"still open — cancelled so it cannot open a new position.")
+                continue  # flat — reconcile books how it closed
+            side = str(tgt.get("side") or "long")
+            want = int(tgt.get("qty") or 0)
+            held = abs(int(float(getattr(pos, "qty", 0) or 0)))
+            if want < 1 or not trade_id or (getattr(pos, "side", None) == "long") != (side == "long") or held < 1:
+                summary["skipped"] += 1
+                _page_once_today(sym, "ah_exit_refused",
+                                 f"[{sym}] day-tier after-hours exit REFUSED — own qty {want}, live net "
+                                 f"{getattr(pos, 'side', '?')} {held} vs our {side}: will not trade another tier's "
+                                 f"shares. Manual check.")
+                continue
+            close_side = "sell" if side == "long" else "buy"
+            rec = _entry_record(trade_id)
+            pending = str((rec or {}).get("pending_exit_order_id") or "")
+            _stale_inc = 0   # 1 when this reprice is because the order sat unfilled (not because the touch moved)
+            if pending:
+                res = _ah_account(tgt, pending, _pending_accounted(trade_id))
+                if res == "closed":
+                    summary["closed"] += 1
+                    continue
+                if res == "unreadable":
+                    summary["waiting"] += 1
+                    continue
+                if res == "open":
+                    o = broker.get_order(pending)
+                    lim = float(getattr(o, "limit_price", 0) or 0) if o is not None else 0.0
+                    px_now, _src = _ah_touch_price(sym, close_side)
+                    away = (px_now is not None and lim > 0
+                            and ((close_side == "sell" and px_now < lim) or (close_side == "buy" and px_now > lim)))
+                    # A recorded exit that is NOT the after-hours limit (a regular-hours market close sent near 4:00 is
+                    # queued for the next open) is replaced by the after-hours limit (board Taleb 2026-10-07).
+                    stale_rth = str((rec or {}).get("pending_exit_kind") or "") != "after_hours"
+                    ticks = int((rec or {}).get("pending_exit_open_ticks") or 0) + 1
+                    if not (away or stale_rth or ticks >= 2):
+                        _bump_pending_ticks(trade_id, ticks)
+                        summary["waiting"] += 1
+                        continue
+                    _stale_inc = 0 if (away or stale_rth) else 1
+                    broker.cancel_order(pending)
+                    for _ in range(5):
+                        time.sleep(1.0)
+                        res = _ah_account(tgt, pending, _pending_accounted(trade_id))
+                        if res in ("closed", "terminal", "unreadable"):
+                            break
+                    if res == "closed":
+                        summary["closed"] += 1
+                        continue
+                    if res != "terminal":
+                        summary["waiting"] += 1   # cancel not confirmed yet — never two exit orders at once
+                        continue
+                    summary["repriced"] += 1
+                # 'terminal': the old order is done; re-read the owned qty (a partial reduced it) and the live position,
+                # then place a new one.
+                tgt = _flatten_targets().get(sym) or {}
+                want = int(tgt.get("qty") or 0)
+                if want < 1:
+                    continue
+                try:
+                    _pos2 = broker.get_open_position(sym)
+                except Exception:  # noqa: BLE001
+                    _pos2 = None
+                if _pos2 is None or (getattr(_pos2, "side", None) == "long") != (side == "long"):
+                    continue
+                held = abs(int(float(getattr(_pos2, "qty", 0) or 0)))
+            if not _eod_stop_cleared(sym):
+                summary["waiting"] += 1
+                _page_once_today(sym, "ah_exit_stop_live",
+                                 f"[{sym}] day-tier after-hours exit waiting — a day-tier stop/leg is still live or "
+                                 f"its cancel is unconfirmed; retrying each tick.")
+                continue
+            # The stop is terminal — it may have FILLED before the close (cold-2nd 2026-10-07). Book that first and never
+            # place an exit for shares the lot no longer owns (on a co-held symbol they are another tier's).
+            _sf = _record_confirmed_stop_exit(tgt)
+            if _sf is True:
+                _retire_trade_record(trade_id)
+                summary["closed"] += 1
+                continue
+            if _sf is None:
+                summary["waiting"] += 1
+                _page_once_today(sym, "ah_exit_stop_unreadable",
+                                 f"[{sym}] day-tier after-hours exit WAITING — the lot's stop fill cannot be read "
+                                 f"(an exit-order id is unreadable), so no exit is placed; the lot is open with no stop "
+                                 f"after hours. Retrying each tick — manual check if it persists.")
+                continue
+            _fresh = _flatten_targets().get(sym)
+            if not _fresh or _fresh.get("trade_id") != trade_id:
+                continue
+            want = int(_fresh.get("qty") or 0)
+            if want < 1:
+                continue
+            qty = min(held, want)
+            # Unfilled-only reprices step 0.5% further through the touch each (cap 2%); a reprice because the touch
+            # moved goes to the new touch at the current step.
+            _reprices = int((rec or {}).get("pending_exit_reprices") or 0) + _stale_inc
+            px, src = _ah_exit_price(sym, close_side, step=0.005 * _reprices)
+            if px is None or not (math.isfinite(px) and px > 0):
+                summary["skipped"] += 1
+                _page_once_today(sym, "ah_exit_no_price",
+                                 f"[{sym}] day-tier after-hours exit NOT placed — {src}. {qty} sh {side} still open; "
+                                 f"retrying each tick.")
+                continue
+            order = broker.submit_limit_order(sym, qty, close_side, px, extended_hours=True, tier="daytrade",
+                                              time_in_force="gtc")
+            oid = str(getattr(order, "id", "") or "") if order is not None else ""
+            if not oid:
+                summary["skipped"] += 1
+                _page_once_today(sym, "ah_exit_submit_failed",
+                                 f"[{sym}] day-tier after-hours exit submit FAILED ({close_side} {qty} @ {px:.2f}); "
+                                 f"retrying each tick.")
+                continue
+            if not _set_pending_exit(trade_id, oid, qty, kind="after_hours", reprices=_reprices):
+                _halt_unresolved_exit(sym, f"After-hours exit order {oid} could not be durably recorded.")
+                continue
+            summary["placed"] += 1
+            _page_once_today(sym, "ah_exit_placed",
+                             f"[{sym}] day-tier lot still open after the close — after-hours exit placed: "
+                             f"{close_side} {qty} @ ${px:.2f} ({src}), extended-hours GTC limit, re-priced each tick "
+                             f"until filled.")
+        logger.info("day-tier after-hours exit: %s", summary)
+        return summary
+    except Exception as e:  # noqa: BLE001
+        _page(f"day-tier after_hours_exit RAISED: {e!r}")
+        return {"error": repr(e)}
 
 
 # ── daily dollar risk budget (Rafael 2026-10-04 — replaces the 3-position count cap) ──────────────
@@ -2547,7 +2982,41 @@ def _halt_unresolved_exit(symbol: str, detail: str) -> None:
         _page(f"[{symbol}] day-tier exit is unresolved — halting new entries for the day. {detail}")
 
 
-def reconcile_open_state() -> dict:
+def _retire_trade_record(trade_id: str) -> None:
+    """Retire ONLY the state record(s) of this exact trade (coid == trade_id) to 'flattened_no_stop' — never another
+    lot on the same symbol (a re-entry, or a 'submitted' crash-window record). Never raises."""
+    if not trade_id:
+        return
+    try:
+        st = _load_state()
+        changed = False
+        for k, v in st.items():
+            if (k.startswith("entry::") and isinstance(v, dict) and v.get("coid") == trade_id
+                    and v.get("state") in ("submitted", "filled", "protected", "fill_unverified")):
+                v["state"] = "flattened_no_stop"
+                changed = True
+        if changed:
+            _save_state(st)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_retire_trade_record(%s) failed: %s", trade_id, e)
+
+
+def _closed_in_log(trade_id: str) -> bool:
+    """True when the durable log shows this trade entered and is no longer open (an exit_fill, or partial exits that
+    add up to the whole lot). False on any doubt. Never raises."""
+    if not trade_id:
+        return False
+    try:
+        from strategy import day_tier_logger
+        events, readable = day_tier_logger.read_events_checked(trade_id)
+        if not readable or not any(e.get("event") == "entry_fill" for e in events):
+            return False
+        return trade_id not in day_tier_logger.open_trades_from_log()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def reconcile_open_state(allow_flatten: bool = True) -> dict:
     """Per-tick reconcile — called at the TOP of each runner tick, BEFORE entries. The runner is a
     2-3 min cron, so every tick is a fresh process; this is the board-named go-live gate that ensures
     no day-tier position is ever left NAKED or double-managed across that process boundary (the
@@ -2560,7 +3029,10 @@ def reconcile_open_state() -> dict:
                                           'submitted' crash-window fill, or a vanished stop);
       • order book UNREADABLE           → do NOT flatten (fail-safe) + page.
     A 'submitted' record with NO position (a crashed entry that never filled) → cancel any resting DT
-    order for the symbol (so it can't fill mid-next-bar) + mark the record terminal."""
+    order for the symbol (so it can't fill mid-next-bar) + mark the record terminal.
+
+    allow_flatten=False (market closed — CEO 2026-10-07): a naked lot is NOT market-closed here (Alpaca would queue
+    a market order for the next open); after_hours_exit closes it with an extended-hours limit."""
     if not _enabled():
         return {"enabled": False}
     from execution import broker
@@ -2635,6 +3107,15 @@ def reconcile_open_state() -> dict:
                 # Confirmed absent. A 'submitted' target we just confirmed filled>=1 but with no live
                 # position = endpoint lag → leave it (next tick reconciles); do NOT retire. A confirmed-
                 # owned (log/filled/protected) target that is gone simply closed — nothing to do.
+                if sym not in submitted and _closed_in_log(str(tgt.get("trade_id") or "")):
+                    # Checked FIRST: a booked-closed trade never gets another (partial) fill booked (cold-2nd 2026-10-07).
+                    summary["cleared"] += 1
+                    _retire_trade_record(str(tgt.get("trade_id") or ""))
+                    continue
+                if sym not in submitted and _resolve_pending_exit(tgt):
+                    # A recorded exit order (EOD market close / after-hours limit) closed it: its fills are booked.
+                    summary["cleared"] += 1
+                    continue
                 if sym in submitted:
                     _page(f"[{sym}] day-tier reconcile: 'submitted' order filled {want} but position "
                           f"absent (endpoint lag) — NOT retiring; next tick reconciles.")
@@ -2708,6 +3189,10 @@ def reconcile_open_state() -> dict:
                 _page_once_today(sym, "foreign_stop",
                                  f"[{sym}] day-tier lot ({want} sh {tgt.get('side')}) was taken over by the "
                                  f"{_tier_names(_ft)}, whose stop protects it — the {_tier_names(_ft)} manages it now.")
+                continue
+            if not allow_flatten:
+                # Market closed: after_hours_exit owns this lot (extended-hours limit). Never a market order here.
+                summary["deferred_after_hours"] = summary.get("deferred_after_hours", 0) + 1
                 continue
             # NAKED (no live DT stop) → scoped-flatten the day-tier's OWN CONFIRMED qty. flatten_position's
             # net-side/qty guard additionally protects any co-held tier.

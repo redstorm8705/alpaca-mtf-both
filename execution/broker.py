@@ -590,13 +590,19 @@ def submit_limit_order(
     extended_hours: bool = False,
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
     client_order_id: str | None = None,
+    time_in_force: str = "day",   # "day" (default, unchanged) or "gtc" — Alpaca accepts both for extended hours
 ) -> object:
     """
-    Submit a DAY limit order. Used for overnight swing entries.
+    Submit a limit order (DAY by default; time_in_force="gtc" for a good-till-cancelled order — the day
+    tier's after-hours exit, CEO 2026-10-07). Used for overnight swing entries.
     extended_hours=True only works during active AH/PM sessions (4–8 PM ET, 4–9:30 AM ET).
     After 8 PM ET, submit without extended_hours — order queues for pre-market open.
     Returns order object or None on failure.
     """
+    _tif_s = str(time_in_force or "day").lower()
+    if _tif_s not in ("day", "gtc"):
+        logger.warning(f"[{symbol}] Limit order rejected: unsupported time_in_force {time_in_force!r}")
+        return None
     if qty <= 0 or not (0 < limit_price < 99_999):
         logger.warning(f"[{symbol}] Limit order rejected: qty={qty}, price={limit_price}")
         return None
@@ -617,7 +623,7 @@ def submit_limit_order(
         qty=qty,
         side=order_side,
         limit_price=round(limit_price, 2),
-        time_in_force=TimeInForce.DAY,
+        time_in_force=TimeInForce.GTC if _tif_s == "gtc" else TimeInForce.DAY,
         extended_hours=extended_hours,
         client_order_id=_idem_id,
     )

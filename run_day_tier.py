@@ -13,9 +13,11 @@ Graduates run_day_tier_shadow.py from logging-only to order-placing. Per tick (i
   1. gate on config.DAYTRADE_ENABLED; gate on market-open (broker.get_clock — half-day aware).
   2. RECONCILE (day_trade_manager.reconcile_open_state) — the go-live gate: never leave a day-tier
      position naked across the cron's process boundary (flatten any position with no live DT stop).
-  3. FORCE-FLAT window: within DAYTRADE_FORCE_FLAT_MINUTES of the real close, flatten the tier and
-     place NO new entries (the board's EOD go-live gate; runs BEFORE the pre-close sweep window so a
-     day-tier lot never inherits an intraday-tagged sweep stop — config validates FORCE_FLAT > SWEEP).
+  3. EOD (CEO 2026-10-07): no new entries in the final DAYTRADE_ENTRY_CUTOFF_MINUTES (3:40); in the final
+     DAYTRADE_FORCE_FLAT_MINUTES (3:58) cancel each lot's stop — retrying until Alpaca CONFIRMS the cancel, the stop
+     protecting the lot until then — and exit at market the moment it confirms, retrying any remainder until just
+     before the close. Market CLOSED: a lot still open gets an extended-hours GTC limit at the bid/ask
+     (day_trade_manager.after_hours_exit), re-priced each tick until filled — never a market order after hours.
   4. TIER-KILL (day_trade_manager.tier_kill_check) — force-flat + halt for the day at
      −DAYTRADE_TIER_KILL_EQUITY_PCT of SOD equity (both tracks' lots count toward it).
   5. 30-min PRICE SAMPLING — one price_sample per open trade per 30-min bucket (Rafael's price PATH),
@@ -94,6 +96,18 @@ def _clock_state() -> "tuple[str, float | None]":
     except Exception as e:  # noqa: BLE001
         logger.warning("clock read failed (entries blocked; owned day-tier positions will flatten): %s", e)
         return "unknown", None
+
+
+def _host_in_rth(now_et: "datetime | None" = None) -> bool:
+    """Host-clock check: Mon-Fri 09:30-16:00 ET. Used only when the Alpaca clock is unreadable, to keep a market
+    order from being sent outside regular hours (it would be queued for the next open). Holidays are not detected
+    (fail toward the existing in-hours behaviour). Never raises."""
+    try:
+        n = now_et or datetime.now(ET)
+        m = n.hour * 60 + n.minute
+        return n.weekday() < 5 and 9 * 60 + 30 <= m < 16 * 60
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _maybe_sample_prices() -> None:
@@ -706,6 +720,7 @@ def run_tick() -> dict:
     from strategy.day_tier_sizing import compute_day_tier_size
 
     clock_state, mins_to_close = _clock_state()
+    _clock_t0 = time.monotonic()   # the moment mins_to_close was measured (EOD deadline anchor — board Harris 2026-10-07)
     try:
         _acct = broker.get_account()
         equity = float(getattr(_acct, "equity", 0.0) or 0.0)
@@ -715,8 +730,24 @@ def run_tick() -> dict:
         logger.error("account/equity fetch failed — position management continues; entries fail closed: %s", e)
         _acct = None
         equity = day_start_equity = buying_power = float("nan")
-    # Reconcile FIRST — never leave a naked day-tier position across the cron's process boundary.
-    recon = dtm.reconcile_open_state()
+    if clock_state == "unknown" and not _host_in_rth():
+        # Clock read failed OUTSIDE regular hours by the host's own ET clock (cold-2nd 2026-10-07): a market close now
+        # would be queued for the next open — treat as closed (after-hours exit, non-flattening reconcile).
+        clock_state = "closed"
+    if clock_state == "closed":
+        # After hours / pre-market (CEO 2026-10-07): every day-tier lot is closed out by end of day. The
+        # extended-hours exit runs FIRST (it books its own fills), then a reconcile that never market-closes
+        # (a market order now would be queued for the next open).
+        ah = dtm.after_hours_exit()
+        recon = dtm.reconcile_open_state(allow_flatten=False)
+        _touch_heartbeat("market_closed")
+        return {"skipped": "market_closed", "after_hours_exit": ah, "reconcile": recon}
+    # An after-hours exit still unfilled at the open keeps being re-priced at the touch (it never touches a stop or
+    # places a new exit in regular hours); then reconcile — never leave a naked day-tier position across the cron's
+    # process boundary.
+    dtm.after_hours_exit(only_pending=True)
+    # In the last 2 s before the close a market close could land after 4:00 (queued for the open) — no flatten then.
+    recon = dtm.reconcile_open_state(allow_flatten=(mins_to_close is None or mins_to_close * 60.0 > 2.0))
 
     # A failed clock read must never be mistaken for a known market closure.  It still cannot prove
     # that submitting a new entry is safe, but an existing day-tier lot must not be left to cross the
@@ -732,12 +763,21 @@ def run_tick() -> dict:
         _touch_heartbeat("market_closed")
         return {"skipped": "market_closed", "reconcile": recon}
 
-    # Force-flat window: flatten the tier + NO new entries in the final N min before the real close.
-    # An UNKNOWN close-distance (mins_to_close None) is treated as IN-window → fail-CLOSED (flatten,
-    # no entries) — the lone must-not-trade path that was otherwise fail-open (masked-loss #2 / cold-2nd).
-    ff_min = float(getattr(config, "DAYTRADE_FORCE_FLAT_MINUTES", 20))
+    # EOD exit window (final DAYTRADE_FORCE_FLAT_MINUTES, 3:58): confirmed stop cancel -> market exit, retried in
+    # passes until DAYTRADE_EOD_EXIT_GUARD_S before the close. An UNKNOWN close-distance (mins_to_close None) is
+    # treated as IN-window → fail-CLOSED (one flatten pass, no entries) — the lone must-not-trade path that was
+    # otherwise fail-open (masked-loss #2 / cold-2nd).
+    ff_min = float(getattr(config, "DAYTRADE_FORCE_FLAT_MINUTES", 2))
+    _mins_at_read = mins_to_close if mins_to_close is not None else 0.0
+    if mins_to_close is not None and ff_min < mins_to_close <= ff_min + 0.5:
+        # The */2 cron fires on the 3:58 minute; a host clock a second fast would read just over 2 min to the close
+        # and skip the exit window entirely. Wait for the exact window start instead (the stop stays live).
+        time.sleep(max(0.0, _clock_t0 + (mins_to_close - ff_min) * 60.0 - time.monotonic()))
+        mins_to_close = ff_min
     if mins_to_close is None or mins_to_close <= ff_min:
-        n = dtm.force_flat_all(reason="eod_force_flat")
+        _guard = float(getattr(config, "DAYTRADE_EOD_EXIT_GUARD_S", 10.0))
+        _deadline = (_clock_t0 + max(0.0, _mins_at_read * 60.0 - _guard)) if mins_to_close is not None else None
+        n = dtm.force_flat_all(reason="eod_force_flat", deadline=_deadline)
         _touch_heartbeat("force_flat")
         return {"phase": "force_flat", "flattened": n,
                 "mins_to_close": round(mins_to_close, 1) if mins_to_close is not None else None,
@@ -748,6 +788,12 @@ def run_tick() -> dict:
     if dtm.tier_kill_check(equity, day_start_equity=day_start_equity):
         _touch_heartbeat("tier_killed")
         return {"phase": "tier_killed", "reconcile": recon}
+
+    # Entry cutoff (final DAYTRADE_ENTRY_CUTOFF_MINUTES, 3:40): no NEW entries; open lots keep their stops until the
+    # 3:58 exit; reconcile + the tier kill above keep running.
+    if mins_to_close <= float(getattr(config, "DAYTRADE_ENTRY_CUTOFF_MINUTES", 20)):
+        _touch_heartbeat("eod_no_entries")
+        return {"phase": "eod_no_entries", "mins_to_close": round(mins_to_close, 1), "reconcile": recon}
 
     # Account-data and entry-halt failures block only NEW risk. They run after reconcile/EOD/tier
     # risk management so a zero-BP or killed account cannot bypass liquidation.
