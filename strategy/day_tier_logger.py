@@ -51,6 +51,7 @@ from __future__ import annotations  # PEP-604 (X | None) hints stay lazy → saf
 import functools
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime
@@ -395,7 +396,7 @@ def read_events(trade_id: str | None = None) -> list[dict]:
     return read_events_checked(trade_id)[0]
 
 
-def open_trades_from_log() -> dict[str, dict]:
+def open_trades_from_log(_events: list[dict] | None = None) -> dict[str, dict]:
     """STATELESS open-set derivation (the restart-safety keystone): replay the durable log and
     return every trade_id that has an entry_fill and NO exit_fill — the set of currently-open
     day-tier trades — each with the fields the 30-min sampler needs, INCLUDING last_seq (so the
@@ -406,7 +407,7 @@ def open_trades_from_log() -> dict[str, dict]:
     opened: dict[str, dict] = {}
     exited: set[str] = set()
     max_seq: dict[str, int] = {}
-    for ev in read_events():
+    for ev in read_events() if _events is None else _events:
         tid = ev.get("trade_id")
         if not tid:
             continue
@@ -447,3 +448,36 @@ def open_trades_from_log() -> dict[str, dict]:
         for tid, info in opened.items()
         if tid not in exited
     }
+
+
+def open_trades_from_log_checked() -> tuple[dict[str, dict], bool]:
+    """Return the open set plus whether the complete durable log was readable.
+
+    Ownership callers must use the completeness bit: JSON-valid is not enough when
+    a malformed lifecycle quantity could change the remaining owned quantity.
+    """
+    events, complete = read_events_checked()
+    entry_ids: set[str] = set()
+    for event in events:
+        kind = event.get("event")
+        if kind not in ("entry_fill", "exit_fill", "partial_exit_fill"):
+            continue
+        raw_trade_id = event.get("trade_id")
+        trade_id = raw_trade_id if isinstance(raw_trade_id, str) else ""
+        if not trade_id or trade_id != trade_id.strip():
+            complete = False
+        elif kind == "entry_fill":
+            if trade_id in entry_ids:
+                complete = False
+            entry_ids.add(trade_id)
+        if kind in ("entry_fill", "partial_exit_fill"):
+            try:
+                raw_qty = event.get("fill_qty")
+                if raw_qty is None:
+                    raise ValueError("missing fill_qty")
+                qty = float(str(raw_qty))
+                if not math.isfinite(qty) or qty <= 0:
+                    complete = False
+            except (TypeError, ValueError):
+                complete = False
+    return open_trades_from_log(events), complete
