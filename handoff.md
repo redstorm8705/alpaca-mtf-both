@@ -16,6 +16,15 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 **⏩ EXACT NEXT ACTION:** Claude should review PR #520 before extending the same snapshot into the remaining startup/orphan/reconciliation consumers. Preserve Claude's tier-safety close-timing work below; this change supplies the ownership truth layer and does not supersede it. Verify with `gh pr view 520 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
+## ⏩ LATEST (2026-10-08 10:45 PT, Claude) — pick-up pointer
+
+Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
+`fc307e7 Merge pull request #529 from redstorm8705/claude/sync-2026-10-08d`.
+Item 5a (Track A ETF routing) patch; verify with `git ls-files logs/design_records/ | grep track_a_etf`; captured output:
+`logs/design_records/track_a_etf_route_wip_2026-10-08.patch`.
+**⏩ EXACT NEXT ACTION:** `git checkout -b claude/track-a-etf origin/main && git apply
+logs/design_records/track_a_etf_route_wip_2026-10-08.patch`, then run the full gate on that diff before any ship.
+
 ## ⏩ LATEST (2026-10-08 ~15:30 UTC, Claude) — ledger alert defer (PR #528), tier names (PR #526), preship static facts (PR #525), AH take-over guard (PR #524), close timing (PR #522)
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
