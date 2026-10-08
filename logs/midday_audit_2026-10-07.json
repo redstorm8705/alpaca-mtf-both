@@ -1,0 +1,285 @@
+{
+  "audit_date": "2026-10-07",
+  "run_ts": "2026-10-07T10:30:02.198035-07:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "EWY",
+      "TSLA",
+      "AAPL"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 28
+    },
+    "last_score": 21,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 78,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-07 16:14:59,912 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-07 16:14:59,914 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-07 16:15:35,131 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-65.95 tracker=$0.00 drift=$-65.95",
+      "2026-10-07 16:20:17,123 WARNING ledger_sync ledger_sync wall-time 15.5s (fills=715 orders=3032)",
+      "2026-10-07 16:20:41,129 | WARNING  | strategy.run_cycle | Risk day (FOMC Minutes Sep meeting \u2014 50% size) \u2014 sizing at 50%"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 7.449900000000127,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 7.449900000000127,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "TSLA",
+      "pnl": 7.449900000000127,
+      "entry_price": 378.22,
+      "exit_price": 375.7367,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 379.44,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "TSLA",
+      "pnl": 7.449900000000127,
+      "entry_price": 378.22,
+      "exit_price": 375.7367,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 379.44,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "TSLA",
+        "pnl": 7.449900000000127,
+        "entry_price": 378.22,
+        "exit_price": 375.7367,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 379.44,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 198,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:12-10:12",
+          "10:18-10:18",
+          "12:50-12:50"
+        ],
+        "uncovered_windows_pt": [
+          "07:12-07:12",
+          "07:18-07:18",
+          "09:50-09:50"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "EWY": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 234,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:36-09:36",
+          "10:10-10:10",
+          "10:18-10:18"
+        ],
+        "uncovered_windows_pt": [
+          "06:36-06:36",
+          "07:10-07:10",
+          "07:18-07:18"
+        ],
+        "rejected_stop_orders": 1
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NFLX": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 3,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:32"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:32"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 3,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:32"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:32"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "TSLA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 22,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:42-09:42",
+          "10:04-10:04"
+        ],
+        "uncovered_windows_pt": [
+          "06:42-06:42",
+          "07:04-07:04"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-07",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 6,
+    "symbols": [
+      "AAPL",
+      "EWY",
+      "TSLA"
+    ],
+    "by_symbol": {
+      "AAPL": {
+        "buy": 1,
+        "sell": 0
+      },
+      "TSLA": {
+        "buy": 3,
+        "sell": 0
+      },
+      "EWY": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}

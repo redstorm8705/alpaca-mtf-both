@@ -1,0 +1,73 @@
+Nightly Gemini Audit — 2026-10-07
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['nightly_audit.py', 'auto_ai_audit.py', 'run_day_tier.py', 'scripts/day_tier_preflight.py', 'scripts/audit_slack.py', 'data/live_price.py', 'strategy/day_tier_momentum_trigger.py', 'strategy/day_tier_sizing.py', 'strategy/day_tier_leverage.py', 'strategy/day_tier_entry_trigger.py', 'strategy/day_tier_track_b.py', 'execution/lifecycle.py', 'execution/orphan_manager.py', 'execution/day_trade_manager.py', 'execution/exit_logic.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: FAIL
+(FAIL due to active P5-C2 ImportError in `run_day_tier.py` and confirmed P&L recording logic errors in `execution/lifecycle.py`.)
+
+### LOG ANOMALIES
+*   **[DRAM] No daily data — entry blocked**: Recurring fail-closed events for DRAM (19:42:03, 19:42:24, 19:49:30). This indicates a failure in `data.fetcher` or Alpaca's daily bar availability for this ticker, correctly handled by the bot's safety gates.
+*   **[MSFT] ANOMALY-2**: "confirm_gate=9 scans but no entry — risk.open_positions=5 vs tracker=4". This indicates a desync where the risk manager sees an open position that the portfolio tracker has not yet recorded, blocking new entries due to perceived (but unverified) exposure.
+*   **[EWY] GTC stop blocked**: "40310000 held_for_orders" (20:05:09). The bot attempted to place a stop while shares were already locked by another order.
+
+### PERFORMANCE AUDIT
+*   **TSLA Short (2026-10-07 06:42:21)**: Entry $378.22, Exit $375.7367. Realized P&L $7.45. Correct sign (Short: Entry > Exit = Profit).
+*   **EWY Short (2026-10-07 06:36:27)**: Entry $181.46, Stop $183.18. Position remains open.
+*   **AAPL Long (2026-10-07 07:12:15)**: Entry $335.24, Stop $334.31. Position remains open.
+*   **Stop Rate**: 1 stop hit (SOFI) vs 1 take profit (TSLA) in recent events. Win rate is currently 33.5% all-time, below the profit factor threshold of 1.0 (currently 0.8).
+
+### TRADE INTEGRITY
+*   **P&L Sign Error (SOFI)**: In `trade_events` (2026-10-01 10:30:28), a **Short** position exited at $17.24 with a recorded P&L of **+$2.66**. However, the previous partial exit (2026-09-30) was at $15.86. If the price moved from $15.86 to $17.24 on a Short, this should be a loss, not a profit.
+*   **EOD P&L Drift**: Alpaca=$-65.95 vs Tracker=$0.00. While marked as "Benign/Expected," the drift is entirely accounted for by TSLA and EWY fills (Snapshot telemetry) not yet reconciled by the internal tracker.
+
+### MODIFIED FILE FINDINGS
+#### `run_day_tier.py`
+*   **BUG**: `_prior_close` function.
+*   **Trace**: Line 283 calls `_prior_days(df, datetime.now(ET))`.
+*   **Failure**: `_prior_days` is **not found in provided source**. This will cause a `NameError` and crash the Day Tier runner whenever it attempts to calculate a prior close for ETF stop translation.
+
+#### `execution/lifecycle.py`
+*   **BUG**: `apply_mri_breakeven_push` function, variable `trade["stop"]`.
+*   **Trace**: Line 264: `trade["stop"] = entry_price`.
+*   **Failure**: This unconditionally sets the software stop to the entry price *before* the broker confirms the move. If the broker `replace_stop_order` fails (Line 304), the software stop remains at breakeven while the actual broker stop is at the old (wider) level. This creates a "silent tightening" where the bot might exit in software at $0 P&L while the market has not hit the real stop.
+
+#### `strategy/day_tier_momentum_trigger.py`
+*   **BUG**: `_vol_ok` function.
+*   **Trace**: Line 102: `baseline = float(prior.tail(_VOL_BASELINE_BARS).median())`.
+*   **Failure**: If `prior` has fewer than `_VOL_BASELINE_BARS` (5) bars, `tail(5)` returns whatever is available. If `prior` is empty, `median()` on an empty Series returns `NaN`. Line 103 `baseline > 0` will be False, but the logic lacks an explicit check for sufficient baseline data points, potentially leading to `WAIT` signals on valid breakouts simply due to rolling window warm-up.
+
+### P5 STATUS
+*   **P5-C1 (FVG MultiIndex)**: UNTOUCHED.
+*   **P5-C2 (run_movers.py ImportError)**: **TRIGGERED**. `run_day_tier.py` (Line 1) and `scripts/day_tier_preflight.py` (Line 1) both attempt to use the Day Tier logic which relies on `DataFetcher`. If `DataFetcher` is missing (as stated in P5-C2), the entire Day Tier track is dead.
+*   **P5-H4 (Rule 2 dead code)**: UNTOUCHED. `orphan_manager.py` still references `config.TOD_MARKET_OPEN_BUFFER_MINS` (Line 58).
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | CRITICAL | run_day_tier.py | Missing Helper Function** | `_prior_days` is called but not defined or imported. This crashes the execution loop for all leveraged ETF pivots.
+*   **EXECUTION BUG | HIGH | execution/lifecycle.py | Premature State Mutation** | `trade["stop"]` is updated to breakeven before `replace_stop_order` succeeds.
+*   **EXECUTION BUG | MEDIUM | strategy/day_tier_leverage.py | Potential Zero Division** | In `etf_stop_level` (Line 155), `move = sgn * kk * (lv - u) / c / den`. If `c` (prior_close) is 0 or None (despite `_pos` check), this could fail. More importantly, `den` is checked for `<= 0` but not for infinitesimal values that could cause float overflow.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **CRITICAL**: Define or import `_prior_days` in `run_day_tier.py` to prevent runner crashes.
+2.  **HIGH**: Modify `execution/lifecycle.py` to only update `trade["stop"]` *after* a successful return from `replace_stop_order`.
+3.  **HIGH**: Resolve P5-C2. The bot log shows `VOLSHADOW` and `BoD-1` gates firing, but the Day Tier runner cannot execute without the `DataFetcher` class.
+4.  **MEDIUM**: Investigate SOFI P&L sign discrepancy in `trade_events`. Verify if `record_exit` in `portfolio_tracker.py` (not provided) is correctly handling Short P&L: `(entry - exit) * qty`.
+5.  **MEDIUM**: Add a minimum bar count check to `_vol_ok` in `day_tier_momentum_trigger.py` to ensure the volume baseline is statistically significant before gating entries.
+================================================================================
+BROKER GROUND TRUTH (2026-10-07, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=day exposed=348m no-broker-stop=0m [07:12-07:12, 07:18-07:18, 09:50-09:50] rejected_stop_orders=0
+  EWY    COVERED                  owners=day exposed=384m no-broker-stop=0m [06:36-06:36, 07:10-07:10, 07:18-07:18] rejected_stop_orders=1
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=3m [06:30-06:32] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=3m [06:30-06:32] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=22m no-broker-stop=0m [06:42-06:42, 07:04-07:04] rejected_stop_orders=0
