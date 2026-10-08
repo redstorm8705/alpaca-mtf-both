@@ -16,15 +16,16 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 **⏩ EXACT NEXT ACTION:** Claude should review PR #520 before extending the same snapshot into the remaining startup/orphan/reconciliation consumers. Preserve Claude's tier-safety close-timing work below; this change supplies the ownership truth layer and does not supersede it. Verify with `gh pr view 520 --json state,mergeCommit,statusCheckRollup` and `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git rev-parse --short HEAD && systemctl is-active mtf-bot mtf-writer mtf-http nginx'`.
 
-## ⏩ LATEST (2026-10-08 early UTC, Claude) — day-tier close timing shipped (PR #522); tier safety stage 1 (PR #517)
+## ⏩ LATEST (2026-10-08 ~12:00 UTC, Claude) — tier names (PR #526), preship static facts (PR #525), AH take-over guard (PR #524), close timing (PR #522)
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`; captured output:
-`c3cefcf Merge pull request #522 from redstorm8705/claude/close-timing`.
-OCI cron for run_day_tier.py widened to `*/2 13-23 * * 1-5` (backup /home/ubuntu/crontab.bak.202610080726).
-Decisions + carry-overs: verify with `grep -n "Item 2 (close timing)" logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`.
-**⏩ EXACT NEXT ACTION:** at 2026-10-08 3:58 PM ET watch the first live EOD exit in logs/day_tier_runner_cron.log
-(phase force_flat, then any after-hours exit at 4:00); then build item 3 (tier names Day/Swing/QHM/F6 everywhere).
-Follow-up (logged): after_hours_exit should apply the foreign-stop/transfer check before placing an exit.
+`1ee8a5c Merge pull request #526 from redstorm8705/claude/tier-names`.
+Tier names: only Day / Swing / QHM / F6 in person-facing text (tier_names.py; CI gate tests/test_tier_names.py); internal
+keys/tags unchanged. OCI cron for run_day_tier.py is `*/2 13-23 * * 1-5` (backup /home/ubuntu/crontab.bak.202610080726).
+**⏩ EXACT NEXT ACTION:** watch the first live 3:58 PM ET day-tier exit today (logs/day_tier_runner_cron.log, phase
+force_flat, then after_hours_exit at 4:00); then item 4 (5-min ownership refresh, check Codex's ownership-snapshot
+work first) or item 5 (0-1-share ETF routing for Track A + Swing). Build order: `grep -n "Build order"
+logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md`.
 
 ## ⏩ LATEST (2026-10-07 10:10 PT, Claude) — day-tier adoption incident fixed (PR #512 spam stop, PR #513 root cause)
 
