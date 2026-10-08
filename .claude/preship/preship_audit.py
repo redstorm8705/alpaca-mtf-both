@@ -324,6 +324,8 @@ def _gro_chunked(head, diff_body, ctx_suffix, key):
     for i, ch in enumerate(chunks, 1):
         marker = (f"(CHUNK {i} of {n} of a larger staged diff — audit ONLY this chunk's changed "
                   f"lines for a defect INTRODUCED here; the other chunks are audited separately. "
+                  f"Bare names used here may be DEFINED in another chunk or in unchanged code not shown "
+                  f"(see the STATIC ANALYSIS block below for bare-name resolution). "
                   f"APPROVE this chunk if IT introduces no defect.)\n")
         cprompt = head + marker + ch + ctx_suffix
         txt = _gro_rl(cprompt)
@@ -531,6 +533,107 @@ def _check_prompt_bias(*texts):
     return hits
 
 
+# STATIC-FACTS block (Rafael 2026-10-08, "why are there still so many false premise claims?"). Three
+# Gro REJECTs in one session (2026-10-07/08: `e` undefined in broker.py, `pos` undefined in
+# day_trade_manager.py, plus a config claim) were all on CHUNKED diffs: a chunk showed a USE of a name
+# whose definition sat in another chunk or in unchanged code. The --context rule asks the author to
+# pre-load such facts by hand, which cannot cover every function body — a request, not a control. The
+# tool now RUNS the undefined-name check itself on the exact staged blob and states the result in every
+# prompt (and every chunk), and an undefined-name REJECT contradicted by it gets one automatic counter-
+# prompt carrying that evidence (the DISAGREEMENT PROTOCOL, mechanized — never a blind re-roll).
+# Only the "name does not exist" class. NOT "possibly unbound / referenced before assignment on some path":
+# ruff F821 proves a name is defined somewhere in scope, not that every path assigns it — those claims stay
+# with the reviewer (never auto-countered).
+_NAME_REJECT_RE = re.compile(
+    r"nameerror|undefined (name|variable|identifier)|is not defined|not defined anywhere|is undefined|"
+    r"never (defined|declared|imported)", re.IGNORECASE)
+_PATH_CLAIM_RE = re.compile(r"unbound|before assignment|not assigned (on|in)|some (path|branch)", re.IGNORECASE)
+
+
+def _static_facts(relpath, blob):
+    """(facts_text, names_ok) for a staged .py blob: ruff F821/F822/F823 (undefined / undefined-export /
+    used-before-assignment names) and py_compile, run on the EXACT staged bytes. names_ok is True only
+    when the name check RAN and found nothing; ("", None) when not a .py file or the check could not run
+    (no claim is made then). Never raises."""
+    if not relpath.endswith(".py"):
+        return "", None
+    import shutil
+    import tempfile
+    tmpdir = None
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="preship_static_")
+        path = os.path.join(tmpdir, os.path.basename(relpath))
+        with open(path, "wb") as f:
+            f.write(blob)
+        ruff = shutil.which("ruff")
+        cmd = ([ruff] if ruff else [sys.executable, "-m", "ruff"]) + [
+            "check", "--no-cache", "--isolated", "--select", "F821,F822,F823", "--output-format", "concise", path]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode not in (0, 1) or ("All checks passed" not in out and "F82" not in out):
+            return "", None   # ruff unavailable / crashed -> make no claim
+        names_ok = r.returncode == 0
+        c = subprocess.run([sys.executable, "-m", "py_compile", path], capture_output=True, text=True, timeout=60)
+        comp = "PASS" if c.returncode == 0 else "FAIL: " + (c.stderr.strip().splitlines() or ["?"])[-1][:200]
+        names = ("PASS — every BARE name used in the file is defined/imported/a parameter somewhere in its "
+                 "scope. NOT checked: attribute access (x.y), whether an imported member exists in its module, "
+                 "and whether a name is assigned on every code path"
+                 if names_ok else "FINDINGS:\n" + out.replace(path, relpath)[:1500])
+        return (f"\n\n--- STATIC ANALYSIS (machine-run by this tool on the EXACT staged file {relpath}; "
+                f"authoritative for bare-name resolution only) ---\n"
+                f"ruff F821/F822/F823 undefined-name check: {names}\n"
+                f"py_compile: {comp}\n"
+                f"A bare variable/function/import name used in the changed lines may be DEFINED outside the "
+                f"lines shown (earlier in the same function, in another chunk, or in unchanged code); an "
+                f"undefined BARE name would appear above as a finding. Attribute and imported-member claims "
+                f"are not covered by this check."), names_ok
+    except Exception:  # noqa: BLE001 — a tooling hiccup makes no claim; the audit proceeds unchanged
+        return "", None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# A claim about an ATTRIBUTE (x.y), an imported member, or a module is NOT covered by ruff F821 (bare names
+# only) — such a reject is never auto-countered (cold-2nd 2026-10-08: `config.X is not defined` must stay a
+# real REJECT).
+_NOT_BARE_RE = re.compile(r"\b\w+\.\w+|\bimport|\battribute|\bmodule\b|\bmember\b", re.IGNORECASE)
+
+
+def _reject_reason(text):
+    """The reason on the single anchored `VERDICT: REJECT ...` line (same anchoring as _verdict), else ''.
+    Only the stated reason is matched — never the rest of the reply (a reviewer echoing the static block or a
+    NIT about a name must not trigger the counter-prompt)."""
+    lines = [ln for ln in (text or "").splitlines()
+             if ln.strip().lstrip("*#-+>• ").strip().upper().startswith("VERDICT:")]
+    if len(lines) != 1:
+        return ""
+    after = lines[0].strip().split(":", 1)[1].strip() if ":" in lines[0] else ""
+    return after if after.upper().startswith("REJECT") else ""
+
+
+def _name_premise_reject(text, names_ok):
+    """True when the REJECT's stated reason is a BARE-name 'does not exist' claim that the static check
+    contradicts (never an attribute/import/module claim, never a path-dependent unbound claim)."""
+    r = _reject_reason(text)
+    return (names_ok is True and bool(r) and bool(_NAME_REJECT_RE.search(r))
+            and not _PATH_CLAIM_RE.search(r) and not _NOT_BARE_RE.search(r))
+
+
+_NAME_COUNTER = ("\n\n--- AUTOMATIC COUNTER-PROMPT EVIDENCE (machine-generated) ---\nYour previous verdict "
+                 "REJECTED on an undefined bare-name premise. The STATIC ANALYSIS block above was run on the "
+                 "exact staged file and found NO undefined bare name (ruff F821/F822/F823 clean): that name is "
+                 "defined outside the lines you were shown. Re-verdict on the changed lines; you may still "
+                 "REJECT for a different concrete failing input (including a name left unassigned on a "
+                 "specific path — quote that path).")
+
+
+def _name_counter(reject_text):
+    """_NAME_COUNTER plus the reviewer's own quoted reason, so any OTHER defect it named must be addressed."""
+    return (_NAME_COUNTER + "\nYour previous reason, quoted: \"" + _reject_reason(reject_text)[:600] + "\"\n"
+            "If that reason also named any OTHER defect, it still stands unless you show it is not a defect.")
+
+
 def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     _bias = _check_prompt_bias(context, evidence)
     if _bias:
@@ -579,7 +682,8 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     # reviewer cannot REJECT on an assumption these facts contradict.
     # Build the context/evidence SUFFIX separately so the Gro TPM-overflow chunker can re-attach
     # the SAME ground-truth to every chunk's prompt (each chunk must carry full context).
-    _ctx_suffix = ""
+    _static_txt, _names_ok = _static_facts(relpath, blob)
+    _ctx_suffix = _static_txt
     if context.strip():
         _ctx_suffix += ("\n\n--- REVIEWER CONTEXT (author-supplied FACTS about code OUTSIDE "
                         "this diff — treat as GROUND TRUTH; do NOT REJECT on an assumption "
@@ -635,6 +739,18 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
             gai_substituted = f"NVIDIA_{_LAST_NVIDIA_MODEL}"
         except Exception as e2:
             return False, f"{relpath}: GAI down ({e}) AND option-C substitute failed after retry ({e2}) — fail-closed, no marker"
+    if gai_v == "REJECT" and _name_premise_reject(gai_txt, _names_ok):
+        sys.stderr.write("[preship] GAI rejected on an undefined-name premise the static check contradicts — "
+                         "one automatic counter-prompt with that evidence.\n")
+        try:
+            if gai_substituted:
+                gai_txt = _nvidia(prompt + _name_counter(gai_txt) + _reminder, keys.get("NVIDIA_API_KEY", ""))
+            else:
+                gai_txt = _gai(prompt + _name_counter(gai_txt) + _reminder, keys.get("GEMINI_API_KEY", ""),
+                               keys.get("GEMINI_PAID_API_KEY", ""))
+            gai_v = _verdict(gai_txt)
+        except Exception as _ge:
+            return False, f"{relpath}: GAI counter-prompt failed ({_ge}) after a name-premise REJECT — no marker"
     _gai_label = f"substitute {gai_substituted}" if gai_substituted else "GAI"
     if gai_v == "INDETERMINATE":
         return False, (f"{relpath}: {_gai_label} INDETERMINATE — no parseable VERDICT line after a retry "
@@ -702,6 +818,21 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                     return False, (f"{relpath}: Gro down ({e}), chunked audit did not land a verdict, "
                                    f"AND option-C substitute failed ({e2}). Re-run with --waive-gro "
                                    "only if Rafael authorizes.")
+        if gro_v == "REJECT" and _name_premise_reject(gro_txt, _names_ok):
+            sys.stderr.write("[preship] Gro rejected on an undefined-name premise the static check contradicts — "
+                             "one automatic counter-prompt with that evidence.\n")
+            try:
+                if gro_substituted:
+                    gro_txt = _nvidia(prompt + _name_counter(gro_txt) + _reminder, keys.get("NVIDIA_API_KEY", ""))
+                elif "chunked audit" in gro_txt:
+                    gro_txt = _gro_chunked(_head, _diff_body, _ctx_suffix + _name_counter(gro_txt),
+                                           keys.get("GROQ_API_KEY", ""))
+                else:
+                    gro_txt = _gro(prompt + _name_counter(gro_txt) + _reminder, keys.get("GROQ_API_KEY", ""))
+                gro_v = _verdict(gro_txt)
+            except Exception as _xe:
+                return False, (f"{relpath}: Gro counter-prompt failed ({_xe}) after a name-premise REJECT — "
+                               "no marker; re-run (or --evidence).")
         _gro_lbl = f"substitute {gro_substituted}" if gro_substituted else "Gro"
         if gro_v == "INDETERMINATE":
             return False, (f"{relpath}: {_gro_lbl} INDETERMINATE — no parseable VERDICT line after a "
