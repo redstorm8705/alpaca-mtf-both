@@ -818,11 +818,19 @@ DAYTRADE_TRACK_B_KILL_PCT   = 0.20   # PROV:daytier-v2-2026-08-29  Track B sub-k
 
 # Cadence + flat-by-close (§7 CADENCE; §5d/§7b overnight-safety).
 DAYTRADE_SCAN_INTERVAL_MIN  = 2      # fast EXECUTION-loop cadence (min); the SIGNAL stays on 15/30m bar-close
-DAYTRADE_FORCE_FLAT_MINUTES = 20     # force-liquidate the tier's OWN positions in the final N min before the REAL
-                                     # close (Alpaca clock next_close — half-day aware). MUST be > PRECLOSE_SWEEP_MINUTES
-                                     # so the day-tier flattens BEFORE the pre-close sweep places any intraday-tagged
-                                     # DAY stop on a still-open day-tier lot (avoids the mis-tagged-stop flatten
-                                     # deadlock — masked-loss seat C2, 2026-09-02).
+DAYTRADE_FORCE_FLAT_MINUTES = 2      # CEO 2026-10-07: the day tier's stop stays live until 3:58 PM ET; in the final
+                                     # N min before the REAL close (Alpaca clock next_close — half-day aware) the runner
+                                     # cancels it (retrying until Alpaca CONFIRMS the cancel — the stop stays live until
+                                     # then) and exits at market the moment it confirms, retrying any remainder up to
+                                     # DAYTRADE_EOD_EXIT_GUARD_S before the close. Was 20 (3:40). The swing pre-close sweep
+                                     # (PRECLOSE_SWEEP_MINUTES) only touches the swing tracker's own trades
+                                     # (stop_protection.reconcile_protection iterates tracker.open_trades), so a day-tier
+                                     # lot held past 3:45 cannot pick up a swing-tagged stop.
+DAYTRADE_ENTRY_CUTOFF_MINUTES = 20   # PROV:close-timing-2026-10-07 — no NEW day-tier entries in the final N min (3:40 PM — the unchanged entry window, CEO);
+                                     # positions keep their stops until the 3:58 exit. Must be > FORCE_FLAT.
+DAYTRADE_EOD_EXIT_GUARD_S = 10.0     # no new EOD exit pass/lot this many s before the close; a market close is never SENT < 2 s before it
+DAYTRADE_EOD_RETRY_S = 1.0           # pause between EOD exit passes (cancel not yet confirmed / partial fill)
+DAYTRADE_AH_FALLBACK_PCT = 0.01      # PROV:close-timing-2026-10-07 — after-hours exit price with no usable IEX quote: latest trade -1% (sell) / +1% (buy)
 DAYTRADE_MAINT_CUSHION_USD  = 650.0  # minimum equity−maintenance_margin dollars left after a proposed entry
 
 # ─── Track-A BUYING-POWER sizing (Rafael directive 2026-09-08; board + Gro + GAI + masked-loss seat) ──
@@ -1157,12 +1165,14 @@ def validate_config():
             f"Day-tier kill in account terms ({DAYTRADE_TIER_KILL_EQUITY_PCT:.4f}) "
             f"must be < account daily kill ({MAX_DAILY_LOSS_PCT}) when DAYTRADE_ENABLED"
         )
-    if DAYTRADE_FORCE_FLAT_MINUTES <= PRECLOSE_SWEEP_MINUTES:
+    if not (0 < DAYTRADE_FORCE_FLAT_MINUTES < DAYTRADE_ENTRY_CUTOFF_MINUTES):
         errors.append(
-            f"DAYTRADE_FORCE_FLAT_MINUTES ({DAYTRADE_FORCE_FLAT_MINUTES}) must be > "
-            f"PRECLOSE_SWEEP_MINUTES ({PRECLOSE_SWEEP_MINUTES}) so the day-tier flattens "
-            f"before the pre-close sweep can place an intraday-tagged stop on a day-tier lot"
+            f"DAYTRADE_FORCE_FLAT_MINUTES ({DAYTRADE_FORCE_FLAT_MINUTES}) must be > 0 and < "
+            f"DAYTRADE_ENTRY_CUTOFF_MINUTES ({DAYTRADE_ENTRY_CUTOFF_MINUTES}): entries stop before the EOD exit"
         )
+    if not (0 <= DAYTRADE_EOD_EXIT_GUARD_S < DAYTRADE_FORCE_FLAT_MINUTES * 60 and DAYTRADE_EOD_RETRY_S > 0
+            and 0 < DAYTRADE_AH_FALLBACK_PCT < 0.10):
+        errors.append("Day-tier EOD exit guard/retry/after-hours fallback settings are out of range")
 
     # Day-tier hairpin-fix constants (2026-09-18, risk-path). Fail CLOSED on a mis-set so a bad edit
     # can never silently disable the min-stop gate or invert the risk basis vs the retained ceiling.

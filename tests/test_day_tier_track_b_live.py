@@ -835,13 +835,14 @@ class RunnerWindowGate(unittest.TestCase):
         return SimpleNamespace(monotonic=_mono)
 
     def test_place_entry_reserve_threshold_both_sides(self):
-        # Reads: t0, pre-loop, loop-top, pre-context, RESERVE. With the real 120 s cadence and 35 s reserve:
+        # Reads: t0, clock-read anchor (_clock_t0, EOD deadline 2026-10-07), pre-loop, loop-top, pre-context, RESERVE.
+        # With the real 120 s cadence and 35 s reserve:
         # 90 s elapsed (30 s left) -> deferred; 80 s elapsed (40 s left) -> place_entry IS called.
-        extra = [mock.patch.object(run_day_tier, "time", self._seq_clock([0.0, 0.0, 0.0, 0.0, 90.0]))]
+        extra = [mock.patch.object(run_day_tier, "time", self._seq_clock([0.0, 0.0, 0.0, 0.0, 0.0, 90.0]))]
         result, bsf, pe = self._tick(True, extra=extra)
         pe.assert_not_called()
         self.assertEqual(result["track_b_note"], "tick_budget")
-        extra = [mock.patch.object(run_day_tier, "time", self._seq_clock([0.0, 0.0, 0.0, 0.0, 80.0]))]
+        extra = [mock.patch.object(run_day_tier, "time", self._seq_clock([0.0, 0.0, 0.0, 0.0, 0.0, 80.0]))]
         result, bsf, pe = self._tick(True, extra=extra)
         pe.assert_called_once()
     def test_one_track_b_entry_per_symbol_per_day(self):
@@ -871,7 +872,8 @@ class RunnerWindowGate(unittest.TestCase):
     @staticmethod
     def _clock(over_after_calls):
         """A controlled monotonic clock: 0.0 for the first `over_after_calls` reads, then 1000 s (over budget).
-        Read order in run_tick: _tick_t0, the pre-loop check, the loop-top check, the pre-daily-context check."""
+        Read order in run_tick: _tick_t0, the clock-read anchor (_clock_t0), the pre-loop check, the loop-top check,
+        the pre-daily-context check."""
         calls = {"n": 0}
 
         def _mono():
@@ -880,9 +882,9 @@ class RunnerWindowGate(unittest.TestCase):
         return SimpleNamespace(monotonic=_mono)
 
     def test_budget_crossed_at_loop_top_stops_before_any_fetch(self):
-        # Pre-loop check passes (reads 1-2 in budget); the IN-LOOP top check (read 3) is over -> break.
+        # Pre-loop check passes (reads 1-3 in budget); the IN-LOOP top check (read 4) is over -> break.
         ctx = mock.MagicMock(return_value=(100.0, 1e6))
-        extra = [mock.patch.object(run_day_tier, "time", self._clock(2)),
+        extra = [mock.patch.object(run_day_tier, "time", self._clock(3)),
                  mock.patch.object(run_day_tier, "_track_b_daily_context", ctx)]
         result, bsf, pe = self._tick(True, extra=extra)
         self.assertTrue(result["track_b_window"])   # proves the PRE-loop check did NOT fire
@@ -891,9 +893,9 @@ class RunnerWindowGate(unittest.TestCase):
         self.assertEqual(result["track_b_note"], "tick_budget")
 
     def test_budget_crossed_before_daily_context_skips_the_fetch(self):
-        # Reads 1-3 in budget (the frame is built); the re-check before the daily context (read 4) is over.
+        # Reads 1-4 in budget (the frame is built); the re-check before the daily context (read 5) is over.
         ctx = mock.MagicMock(return_value=(100.0, 1e6))
-        extra = [mock.patch.object(run_day_tier, "time", self._clock(3)),
+        extra = [mock.patch.object(run_day_tier, "time", self._clock(4)),
                  mock.patch.object(run_day_tier, "_track_b_daily_context", ctx)]
         result, bsf, pe = self._tick(True, extra=extra)
         bsf.assert_called_once()

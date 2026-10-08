@@ -204,20 +204,24 @@ class DurableLossRead(unittest.TestCase):
 
 class RunnerOrdering(unittest.TestCase):
     def test_account_failure_cannot_bypass_eod_flatten(self):
-        with mock.patch.object(run_day_tier, "_clock_state", return_value=("open", 15.0)), \
+        # 1.5 min to the close = inside the EOD exit window (DAYTRADE_FORCE_FLAT_MINUTES=2 since 2026-10-07)
+        with mock.patch.object(run_day_tier, "_clock_state", return_value=("open", 1.5)), \
              mock.patch.object(run_day_tier, "_touch_heartbeat"), \
              mock.patch("execution.broker.get_account", side_effect=RuntimeError("down")), \
+             mock.patch("execution.day_trade_manager.after_hours_exit", return_value={}), \
              mock.patch("execution.day_trade_manager.reconcile_open_state", return_value={"checked": 1}) as recon, \
              mock.patch("execution.day_trade_manager.force_flat_all", return_value=1) as flat, \
              mock.patch.object(config, "DAYTRADE_ENABLED", True):
             result = run_day_tier.run_tick()
         self.assertEqual(result["phase"], "force_flat")
         recon.assert_called_once()
-        flat.assert_called_once_with(reason="eod_force_flat")
+        self.assertEqual(flat.call_args.kwargs["reason"], "eod_force_flat")
+        self.assertIsNotNone(flat.call_args.kwargs["deadline"])
 
     def test_account_halt_cannot_bypass_latched_tier_liquidation(self):
         acct = SimpleNamespace(equity="2500", last_equity="2500", buying_power="4000")
         with mock.patch.object(run_day_tier, "_clock_state", return_value=("open", 120.0)), \
+             mock.patch("execution.day_trade_manager.after_hours_exit", return_value={}), \
              mock.patch.object(run_day_tier, "_touch_heartbeat"), \
              mock.patch("execution.broker.get_account", return_value=acct), \
              mock.patch("execution.day_trade_manager.reconcile_open_state", return_value={"checked": 1}), \
@@ -232,7 +236,10 @@ class RunnerOrdering(unittest.TestCase):
     def test_unknown_clock_reconciles_then_flattens_owned_tier_only(self):
         acct = SimpleNamespace(equity="2500", last_equity="2500", buying_power="4000")
         targets = {"MSFT": {"symbol": "MSFT", "qty": 2, "side": "long"}}
+        # Clock unreadable DURING regular hours by the host clock (outside them it is the after-hours path).
         with mock.patch.object(run_day_tier, "_clock_state", return_value=("unknown", None)), \
+             mock.patch.object(run_day_tier, "_host_in_rth", return_value=True), \
+             mock.patch("execution.day_trade_manager.after_hours_exit", return_value={}), \
              mock.patch.object(run_day_tier, "_touch_heartbeat") as heartbeat, \
              mock.patch("execution.broker.get_account", return_value=acct), \
              mock.patch("execution.day_trade_manager.reconcile_open_state", return_value={"checked": 1}) as recon, \
@@ -248,7 +255,10 @@ class RunnerOrdering(unittest.TestCase):
 
     def test_unknown_clock_blocks_entries_without_phantom_flatten(self):
         acct = SimpleNamespace(equity="2500", last_equity="2500", buying_power="4000")
+        # Clock unreadable DURING regular hours by the host clock (outside them it is the after-hours path).
         with mock.patch.object(run_day_tier, "_clock_state", return_value=("unknown", None)), \
+             mock.patch.object(run_day_tier, "_host_in_rth", return_value=True), \
+             mock.patch("execution.day_trade_manager.after_hours_exit", return_value={}), \
              mock.patch.object(run_day_tier, "_touch_heartbeat") as heartbeat, \
              mock.patch("execution.broker.get_account", return_value=acct), \
              mock.patch("execution.day_trade_manager.reconcile_open_state", return_value={"checked": 0}) as recon, \
