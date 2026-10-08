@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from html import escape
 
+from tier_names import tier_label
+
+# Display names from tier_names (Day / Swing / QHM / F6 — CEO 2026-10-07);
+# the keys stay the internal tier keys.
 TIER_LABELS = {
-    "intraday": "Core MTF",
-    "daytrade": "Day Tier",
-    "qhm": "QHM",
-    "forever6": "Forever-6",
+    "intraday": tier_label("intraday"),
+    "daytrade": tier_label("daytrade"),
+    "qhm": tier_label("qhm"),
+    "forever6": tier_label("forever6"),
     "unattributed": "Unattributed",
 }
 

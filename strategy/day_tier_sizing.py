@@ -142,8 +142,9 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
         # per-trade budget cap (1×px <= track_budget by the guard), and the wire-time _bounded_entry_qty
         # (execution/day_trade_manager.place_entry) still re-clamps DOWN for the main-bot BP reserve, the
         # maintenance cushion, the day/global gross caps, and the <=2%-equity stop-risk cap — re-zeroing
-        # it whenever live margin/risk cannot afford it (min()-only, fail-closed). The day-tier is EOD
-        # force-flat at T-DAYTRADE_FORCE_FLAT_MINUTES, so this buying power is returned before the close.
+        # it whenever live margin/risk cannot afford it (min()-only, fail-closed). The day tier exits by the
+        # close (3:58 PM ET market exit; a lot still open after the close gets an extended-hours limit until it
+        # fills — 2026-10-08), so this buying power is normally returned by the close.
         # Sizing runs only after trigger==ENTER (run_day_tier.py entry loop). Kill flag:
         # config.DAYTRADE_MIN_ONE_SHARE_FLOOR (default True; set False in config.py to disable — Rule D).
         floor_enabled = bool(getattr(config, "DAYTRADE_MIN_ONE_SHARE_FLOOR", True))
@@ -167,7 +168,7 @@ def compute_day_tier_size(symbol: str, decision: dict, entry_ref, equity, buying
                 f"track {_track}: budget ${track_budget:.2f} × conviction {conviction:.2f} "
                 f"= ${target_notional:.2f} → {result['shares']} sh @ ${px:.2f} "
                 f"(${result['notional']:.2f}{', B exposure-capped' if result['cash_only'] else ''}){_floor_note} "
-                f"— per-trade budget; aggregate gross cap + main-bot reserve + cushion enforced at wire-time"
+                f"— per-trade budget; aggregate gross cap + Swing-tier BP reserve + cushion enforced at wire-time"
             )
         elif track_budget >= px and not floor_enabled:
             # Budget COULD afford a whole share; the min-1-share floor is switched OFF. Report the REAL
