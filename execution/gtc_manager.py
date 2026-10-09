@@ -174,7 +174,8 @@ def submit_rth_day_stops(tracker, risk=None) -> None:
                     # leaving the position NAKED. The stop's purpose is met — close
                     # now at market (RTH is open) rather than leave it unhedged.
                     # Symmetric long/short. >3xATR-past logged as a sizing anomaly.
-                    _gap = "gap-up" if _dir == "long" else "gap-down"
+                    # a long's stop is breached when price opens BELOW it (gap down); a short's when it opens above
+                    _gap = "gap-down" if _dir == "long" else "gap-up"
                     _atr = t.get("atr_value") or 0
                     if _atr > 0 and abs(_mkt - _stop_price) > 3 * _atr:
                         logger.critical(
@@ -197,10 +198,17 @@ def submit_rth_day_stops(tracker, risk=None) -> None:
                             f"(P&L ${_cov_pnl or 0.0:.2f})."
                         )
                         try:
-                            send_slack(
-                                f":rotating_light: [{sym}] stop breached at open — covered @ "
-                                f"${_cov_fill:.2f} (P&L ${_cov_pnl or 0.0:.2f})."
-                            )
+                            # AAPL 2026-10-09: the fill was not confirmed within the poll, so the entry-price
+                            # fallback produced "P&L $0.00" on Slack while the real loss was -$12.61. Never
+                            # page a placeholder as a result: say the fill is pending reconciliation.
+                            if t.get("_fill_unverified"):
+                                _cov_msg = (f"covered at market ({_gap}, stop ${_stop_price:.2f}, market "
+                                            f"${_mkt:.2f}); fill not yet confirmed — P&L pending reconciliation "
+                                            f"from Alpaca fills.")
+                            else:
+                                _cov_msg = (f"covered @ ${_cov_fill:.2f} ({_gap}, stop ${_stop_price:.2f}; "
+                                            f"P&L ${_cov_pnl or 0.0:.2f}).")
+                            send_slack(f":rotating_light: [{sym}] stop breached at open — {_cov_msg}")
                         except Exception as _csl:
                             logger.debug("[%s] cover Slack alert failed — %s", sym, _csl)
                     else:
