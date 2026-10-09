@@ -39,6 +39,7 @@ from data.premarket import calculate_atr
 from data.sectors import SECTOR_MAP as _SECTOR_MAP
 from events.handlers import get_halt_entries as _get_halt_entries
 from execution.broker import (
+    close_position,
     get_account,
     get_open_orders,
     get_open_position,
@@ -64,6 +65,7 @@ from strategy.scoring import (
 )
 from strategy.signal_generator import run_scan
 from execution.exit_logic import _cancel_open_gtc_orders  # noqa: F401
+from execution.fill_helpers import fetch_actual_fill_price as _fetch_actual_fill_price
 from execution.quarterly_hold_manager import get_quarterly_hold_symbols
 from execution import reentry_cooldown as _reentry_cooldown
 from execution import counter_trend as _counter_trend
@@ -292,6 +294,37 @@ def _shift_sized_levels(direction: str, fill_price: float, entry_price: float,
     if new_stop <= 0 or new_target <= 0:
         return None
     return new_stop, new_target
+
+
+def _exit_on_opposite_signal(symbol: str, trade: dict, tracker, risk, mri) -> str:
+    """#12c exit of an open Swing position when a high-conviction OPPOSITE signal arrives. Same close path as every
+    other exit (exit_logic signal / hard-stop / target): confirm the GTC stop is gone, then broker.close_position(),
+    which on a 40310000 held_for_orders (the RTH DAY stop still reserving the shares) cancels the blocking orders and
+    retries. 2026-10-08 EWY: the old code sent a plain market BUY while the DAY stop rested, Alpaca rejected it, and
+    the reversal exit never happened (the cancel step's result was also ignored). The fill price is the real Alpaca
+    fill (RC-4; an unverified fill is flagged and paged by fetch_actual_fill_price). Returns "exited" /
+    "cancel_unconfirmed" / "close_failed" (the last two are retried on the next scan)."""
+    if not _cancel_open_gtc_orders(symbol, trade, tracker):
+        logger.warning(f"[{symbol}] #12c GTC stop cancel not confirmed — exit retried next scan.")
+        return "cancel_unconfirmed"
+    _ts = time.time()
+    if not close_position(symbol):
+        logger.critical(f"[{symbol}] #12c close_position FAILED — position still open; exit retried next scan. "
+                        f"Verify the protective stop in Alpaca.")
+        # close_position's 40310000 retry cancels every open order on the symbol (incl. the RTH DAY stop),
+        # so a failed close can leave the lot without a stop until a stop is re-placed — page a human.
+        try:
+            send_slack(f":rotating_light: [{symbol}] opposite-signal exit FAILED — position still open and may "
+                       f"have NO protective stop. Check Alpaca now; the bot retries next scan.")
+        except Exception as _slack_err:
+            logger.error(f"[{symbol}] #12c Slack page failed: {_slack_err!r}")
+        return "close_failed"
+    _exit_price = _fetch_actual_fill_price(symbol, trade, poll_secs=0.3, submitted_after=_ts)
+    pnl = tracker.record_exit(symbol, _exit_price, reason="opposite_signal",
+                              mri_level=mri.level() if mri else "NORMAL")
+    risk.register_close(pnl or 0.0)
+    logger.warning(f"[{symbol}] #12c exit complete — fill ${_exit_price:.2f} | PnL ${(pnl or 0.0):.2f}")
+    return "exited"
 
 
 def execute_entries(
@@ -743,46 +776,7 @@ def execute_entries(
                     f"exiting existing position immediately."
                 )
                 try:
-                    _exit_side  = "sell" if _open_dir == "long" else "buy"
-                    _exit_qty   = _open_trade.get("qty_remaining") or _open_trade.get("qty", 1)
-                    _cancel_open_gtc_orders(symbol, _open_trade, tracker)
-                    _exit_order = submit_market_order(symbol=symbol, qty=_exit_qty, side=_exit_side)
-                    if _exit_order:
-                        # Fetch fill price — 3× retry at 1s intervals (mirrors entry fill pattern L1293-1327).
-                        # RC-4: never use entry_price as exit fill — retry until confirmed or exhaust retries.
-                        _exit_price = _open_trade.get("entry_price", 0)  # pre-fill fallback only
-                        try:
-                            for _12c_attempt in range(3):
-                                time.sleep(1.0)
-                                _filled_12c = get_order(str(_exit_order.id))  # type: ignore[attr-defined]
-                                if _filled_12c and getattr(_filled_12c, "filled_avg_price", None):
-                                    _exit_price = float(_filled_12c.filled_avg_price)
-                                    break
-                            else:
-                                logger.warning(
-                                    f"[{symbol}] #12c fill price unavailable after 3 polls — "
-                                    f"using entry_price=${_exit_price:.2f} as fallback. "
-                                    f"P&L estimate may be wrong; review fill manually."
-                                )
-                        except Exception as _e12c_fill:
-                            logger.error(
-                                f"[{symbol}] #12c fill price fetch failed — using entry_price={_exit_price} "
-                                f"as fallback (P&L estimate may be wrong): {_e12c_fill}"
-                            )
-                        if _exit_price == 0:
-                            logger.error(
-                                f"[{symbol}] #12c exit_price is 0 — P&L recorded as $0, "
-                                f"kill switch may not reflect actual loss. Manual review required."
-                            )
-                        pnl_12c = tracker.record_exit(symbol, _exit_price, reason="opposite_signal",
-                                                      mri_level=mri.level() if mri else "NORMAL")
-                        risk.register_close(pnl_12c or 0.0)
-                        logger.warning(
-                            f"[{symbol}] #12c exit complete — "
-                            f"fill ${_exit_price:.2f} | PnL ${pnl_12c:.2f}"
-                        )
-                    else:
-                        logger.error(f"[{symbol}] #12c exit order submission failed — skipping entry.")
+                    _exit_on_opposite_signal(symbol, _open_trade, tracker, risk, mri)
                 except Exception as _e12c:
                     logger.error(f"[{symbol}] #12c exit error: {_e12c}")
                 # Either way — do not enter the new position this cycle.
