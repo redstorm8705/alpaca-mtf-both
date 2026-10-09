@@ -1303,9 +1303,20 @@ def _flatten_targets() -> dict:
     trade_id/order_id for a scoped flatten."""
     from strategy import day_tier_logger
     targets: dict = {}
+    # A lot marked for promotion to the Swing tier (execution/day_promotion.py, CEO 2026-10-09) is NOT a flatten
+    # target: its own DAY stop protects it until 4:00 and the after-close hand-off books it. Unreadable state ->
+    # nothing excluded (every lot keeps its normal Day exit).
+    _promoting: set = set()
+    try:
+        _promoting = {str(v.get("coid") or "") for k, v in _load_state().items()
+                      if k.startswith("entry::") and isinstance(v, dict) and v.get("state") == "promote_pending"}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("flatten targets: promotion state read failed: %s", e)
     try:
         for t in day_tier_logger.open_trades_from_log().values():
             sym = str(t.get("symbol") or "")
+            if sym and str(t.get("trade_id") or "") in _promoting:
+                continue
             if sym:
                 targets[sym] = {"symbol": sym, "side": str(t.get("side") or "long"),
                                 "qty": abs(int(float(t.get("fill_qty") or 0))),

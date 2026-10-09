@@ -1309,7 +1309,8 @@ def check_exits(
         )
         if (current_price is not None
                 and _is_prior_session
-                and not tracker.opened_today(symbol)):
+                and not tracker.opened_today(symbol)
+                and not _promoted_keeps_swing_stop(symbol, trade)):
             # QHM positions use their own wide GTC stop — exempt from intraday buffer
             if symbol in _get_qhm_syms():
                 logger.info('[%s] QHM-protected: overnight ATR buffer suppressed', symbol)

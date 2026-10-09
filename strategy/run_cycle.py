@@ -280,6 +280,17 @@ def run_cycle(
                 alert_kill_switch(daily_pnl=_ks_pnl, limit_pct=_ks_pct,
                                   portfolio=portfolio_value)
 
+    # ── Day-tier promotion hand-off (CEO 2026-10-09; execution/day_promotion.py) ─────────────────
+    # Adopt any Day lot the Day tier has booked over to the Swing tier ("ready" hand-off) and place its GTC
+    # stop. Every cycle and every phase, so a restart never strands a promoted lot. Fail-safe.
+    try:
+        from execution.day_promotion import adopt_promotions as _adopt_promotions
+        _adopted = _adopt_promotions(tracker, risk)
+        if _adopted:
+            logger.warning("Day-tier promotion: adopted by the Swing tier: %s", _adopted)
+    except Exception as _promo_err:
+        logger.error("Day-tier promotion adoption failed (non-fatal; retried next cycle): %s", _promo_err)
+
     # ── VOTE-4: SPY 200d MA — once-per-day refresh (board-approved 2026-04-20) ─
     # Used in _main.execute_entries() to halve overnight size when SPY < 200d MA.
     # Fetches 210 daily bars (200 needed + buffer). Refreshes once per ET calendar date.
@@ -678,8 +689,10 @@ def run_cycle(
                             (_gdir == "long" and _gentry > _gatr_stop) or
                             (_gdir == "short" and _gentry < _gatr_stop)
                         )
+                        # A lot promoted from the Day tier keeps its Swing stop (CEO 2026-10-09) — no break-even move.
+                        from execution.lifecycle import promoted_lot_keeps_swing_stop as _promo_keep
                         if (_gprofitable and _grisk_dist > 0 and _gprofit_dist >= _half_r
-                                and _gbe_tighter):
+                                and _gbe_tighter and not _promo_keep(_gsym, _gtr)):
                             _gstop_price = _gentry
                             logger.info(
                                 f"[{_gsym}] AH GTC: profitable (${_gcur:.2f} vs entry "
