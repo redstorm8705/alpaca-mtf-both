@@ -12,8 +12,9 @@ account/exposure caps, the daily day-tier dollar budget, the protective stop, th
 kill bound every path.
 SHORTS (Rafael 2026-10-07; design record day_tier_inverse_etf_route_2026-10-07.md): a SHORT signal BUYS the stock's
 inverse ETF (a long position in the ETF: no borrow, no co-hold) when another tier holds the stock, or when the budget
-buys 0-1 shares; otherwise it shorts the stock itself. Only names with a liquid inverse are mapped; every pivot is
-re-checked live (spread, today's volume, tracking) and skipped when any check fails.
+buys 0-1 shares; otherwise it shorts the stock itself. Every listed inverse fund is mapped (2026-10-09: liquidity is
+judged live, not by leaving a fund out of the map); every pivot is re-checked live (spread, today's volume, tracking) and
+skipped when any check fails.
 
 10/10 CONFIDENCE (all must hold; the runner already enforces the first four before it gets here):
   mover screen PASS (gap + RVOL) . momentum ENTER (volume-confirmed) . the stock's daily trend side agrees .
@@ -44,20 +45,27 @@ _DEFAULT_BULL_2X = {
     "TSLA": "TSLL", "NVDA": "NVDL", "META": "METU", "AMD": "AMDL", "AMZN": "AMZU", "AAPL": "AAPU",
     "MSFT": "MSFU", "GOOGL": "GGLL", "AVGO": "AVL", "NFLX": "NFXL", "MU": "MUU", "COIN": "CONL",
     "PLTR": "PLTU", "SMCI": "SMCL", "UBER": "UBRL",
+    "SNDK": "SNXX",   # Tradr 2X Long SNDK (Alpaca /v2/assets tradable + active, checked 2026-10-09; 1,056,025 IEX sh 10/08)
 }
 # Second 2x bull ETF on the same stock (also verified tradable 2026-10-06), used when the primary ETF is already held
 # by another tier: a co-held ETF could be closed whole by the main bot, taking the day tier's shares with it and
 # leaving its OCO stop resting with no position (risk seat 2026-10-06). Names with no second ETF are not pivoted then.
-_DEFAULT_BULL_2X_ALT = {"TSLA": "TSLT", "NVDA": "NVDU", "META": "FBL", "AVGO": "AVGX", "SMCI": "SMCX"}
+_DEFAULT_BULL_2X_ALT = {"TSLA": "TSLT", "NVDA": "NVDU", "META": "FBL", "AVGO": "AVGX", "SMCI": "SMCX",
+                        "SNDK": "SNDG"}   # Leverage Shares 2X Long SNDK (checked 2026-10-09; 80,728 IEX sh 10/08)
 _LEVERAGE = 2.0  # every mapped BULL ETF is a 2x DAILY product
 # Inverse ETF per underlying -> (symbol, daily leverage k). Alpaca tradable + active and 10/06 IEX-only volume checked
 # 2026-10-07: NVD 17.9M, PLTD 3.9M, AVS 2.5M, AMZD 1.5M, AAPD 426K, MUD 309K, MSFD 101K, TSLQ 54K; alternates NVDQ 441K,
-# TSLZ 26K. Not mapped (too thin): GGLS (GOOGL), NFXS (NFLX), METD (META), AMDD (AMD), CONI (COIN).
+# TSLZ 26K. Added 2026-10-09 (CEO; Alpaca /v2/assets names + tradable/active checked that day): DAMD 2x short AMD
+# (322,212 IEX sh 10/08), SNDQ 2x short SNDK (324,059), CONI 2x short COIN, GGLS / NFXS / METD 1x bear GOOGL / NFLX /
+# META, alternate AMDD 1x bear AMD (4,011). A low-volume fund is not excluded here: the live liquidity gate
+# (etf_liquidity_ok) decides at order time, so the map only says which funds exist.
 _DEFAULT_INVERSE = {
     "NVDA": ("NVD", 2.0), "PLTR": ("PLTD", 1.0), "AVGO": ("AVS", 1.0), "AMZN": ("AMZD", 1.0),
     "AAPL": ("AAPD", 1.0), "MU": ("MUD", 1.0), "MSFT": ("MSFD", 1.0), "TSLA": ("TSLQ", 2.0),
+    "AMD": ("DAMD", 2.0), "SNDK": ("SNDQ", 2.0), "COIN": ("CONI", 2.0), "GOOGL": ("GGLS", 1.0),
+    "NFLX": ("NFXS", 1.0), "META": ("METD", 1.0),
 }
-_DEFAULT_INVERSE_ALT = {"NVDA": ("NVDQ", 2.0), "TSLA": ("TSLZ", 2.0)}
+_DEFAULT_INVERSE_ALT = {"NVDA": ("NVDQ", 2.0), "TSLA": ("TSLZ", 2.0), "AMD": ("AMDD", 1.0)}
 # Live liquidity / tracking gates on a pivoted ETF (board Harris + Taleb, Gro, GAI 2026-10-07). PROV starting values.
 _INV_MAX_SPREAD_PCT = 0.005      # PROV:inverse-route-2026-10-07 — quoted spread <= 0.5% of mid ...
 _INV_MAX_SPREAD_OF_STOP = 0.25   # PROV:inverse-route-2026-10-07 — ... and <= 25% of the stop distance
@@ -109,7 +117,8 @@ def inverse_pivot_enabled() -> bool:
 
 def inverse_etf_for_order(symbol: str, held: "set | None") -> "tuple[str, float] | None":
     """(inverse ETF, k) to BUY for a short signal on `symbol`, skipping any ETF another tier holds. Primary first,
-    then the alternate; None when unmapped, both held, or `held` is unknown (fail-safe). Never raises."""
+    then the alternate; None when unmapped, both held, or `held` is unknown (fail-safe). The map lists funds that
+    exist, not funds that are liquid: the caller's live liquidity gate decides. Never raises."""
     try:
         if held is None:
             return None
