@@ -28,6 +28,7 @@ Rafael-locked (2026-07-09): ring-fenced names are LONG-ONLY for the share tiers
 
 Data tier: reads Alpaca positions via execution.broker (T1). State file RC-5 atomic.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -40,6 +41,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
+
+from execution.ownership_ledger_codec import (
+    LedgerSchemaError,
+    Schema,
+    convert as convert_ledger,
+    dumps as dump_ledger,
+    loads_strict,
+    schema_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +69,10 @@ _LEDGER_BAK_PATH = _ROOT / "data" / "state" / "ownership_ledger.bak.json"
 # _ledger_write_lock — without it, two concurrent full-replays can lost-update
 # each other (each compares its rebuild to a baseline read BEFORE the other's write).
 _LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
+# Dedicated schema-migration fence. Every durable save holds SHARED; the migration
+# command holds EXCLUSIVE. Unlike the legacy liveness lock, this fence never proceeds
+# unlocked, so schema conversion cannot race any routine writer.
+_LEDGER_MIGRATION_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.migration.lock"
 # Operator confirmations authorizing a protected-floor DOWN-heal (human-in-the-loop; board
 # 2026-08-08 — automated manual-close-vs-breach distinction is impossible, so the irreversible
 # heal-down direction needs an EXPLICIT, one-shot, expiring operator confirmation written by
@@ -87,8 +101,12 @@ _QTY_EPS = 1e-6
 # The guard pages the operator ONLY when it fails closed because it is BLIND (ledger/Alpaca
 # unreadable, ledger↔Alpaca drift, or type-corrupt ledger) — NOT on the deterministic
 # floor-binding rejects (those are the guard doing its designed job; log-only, no page).
-_PAGE_THROTTLE_S = 1800  # 30-min per-(kind, symbol) dedup window (v1; cycle-rollup is v2)
-_CRITICAL_PAGE_KINDS = frozenset({"ledger_unreadable", "drift_freeze", "ledger_type_corrupt"})
+_PAGE_THROTTLE_S = (
+    1800  # 30-min per-(kind, symbol) dedup window (v1; cycle-rollup is v2)
+)
+_CRITICAL_PAGE_KINDS = frozenset(
+    {"ledger_unreadable", "drift_freeze", "ledger_type_corrupt"}
+)
 
 
 # ── client_order_id tagging ───────────────────────────────────────────────────
@@ -115,7 +133,7 @@ def tier_of_coid(client_order_id: Optional[str]) -> Optional[str]:
 @dataclass(frozen=True)
 class GuardResult:
     action: Literal["APPROVE", "QTY_BOUND", "REJECT"]
-    qty: float          # the qty the caller may submit (0 on REJECT)
+    qty: float  # the qty the caller may submit (0 on REJECT)
     reason: str = ""
 
     @property
@@ -134,17 +152,28 @@ def load_ledger() -> dict:
     if not _LEDGER_PATH.exists():
         return _empty_ledger()
     try:
-        data = json.loads(_LEDGER_PATH.read_text())
-        if not isinstance(data, dict) or "positions" not in data:
-            raise LedgerError("ledger schema invalid")
-        return data
+        return convert_ledger(loads_strict(_LEDGER_PATH.read_bytes()), 1)
     except LedgerError:
         raise
     except Exception as e:  # RC-3
         raise LedgerError(f"ledger unreadable/corrupt: {e}") from e
 
 
-def save_ledger(ledger: dict) -> None:
+@contextlib.contextmanager
+def _migration_save_fence():
+    _LEDGER_MIGRATION_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_LEDGER_MIGRATION_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _save_ledger_fenced(ledger: dict) -> None:
     """Atomic tmp→replace write (RC-5). Before overwriting the current ledger, rotate
     the existing (VALID) ledger to a one-generation .bak — the last-known-good snapshot
     the guard falls back to when the CURRENT ledger is unreadable (Opt-2, board
@@ -152,25 +181,47 @@ def save_ledger(ledger: dict) -> None:
     best-effort and copies ONLY a VALID current ledger, so it can neither hang the cron
     nor overwrite a good .bak with corruption."""
     _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Validate and serialize the complete candidate before changing current or backup.
+    # Routine writers preserve the validated on-disk schema; only the explicit migration
+    # command may flip v1 to v2. An absent ledger deliberately starts as v1.
+    target_schema: Schema = 1
+    current_raw: bytes | None = None
+    if _LEDGER_PATH.exists():
+        try:
+            current_raw = _LEDGER_PATH.read_bytes()
+            target_schema = schema_of(loads_strict(current_raw))
+        except (LedgerSchemaError, OSError) as exc:
+            # Never launder an unreadable/corrupt current file into a readable ledger:
+            # its protected floor may be newer than the operational backup. The guard
+            # must remain blind/fail-closed until an explicit repair resolves it.
+            raise LedgerError(f"current ledger invalid; refusing save: {exc}") from exc
+    candidate = dump_ledger(ledger, target=target_schema)
     # Rotate the CURRENT good ledger to .bak BEFORE overwriting it. Best-effort: skipped
     # if current ledger is absent or already corrupt, so .bak keeps the last VALID one.
     try:
-        if _LEDGER_PATH.exists():
-            _cur = load_ledger()   # raises LedgerError if current ledger corrupt → skip
+        if current_raw is not None:
+            # Validation already completed above. Preserve the exact last-known-good bytes;
+            # v1 and v2 backups are decoded through the compatibility adapter on read.
             _bt = _LEDGER_BAK_PATH.with_suffix(".tmp")
-            with open(_bt, "w") as f:
-                json.dump(_cur, f, indent=2)
+            with open(_bt, "wb") as f:
+                f.write(current_raw)
                 f.flush()
                 os.fsync(f.fileno())
             _bt.replace(_LEDGER_BAK_PATH)
     except Exception as e:  # RC-3: .bak best-effort — never blocks/hangs the save.
         logger.warning("ownership ledger .bak rotation skipped: %s", e)
     tmp = _LEDGER_PATH.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        json.dump(ledger, f, indent=2)
+    with open(tmp, "wb") as f:
+        f.write(candidate)
         f.flush()
         os.fsync(f.fileno())
     tmp.replace(_LEDGER_PATH)
+
+
+def save_ledger(ledger: dict) -> None:
+    """Validate and atomically save while participating in the migration fence."""
+    with _migration_save_fence():
+        _save_ledger_fenced(ledger)
 
 
 def _load_bak_ledger() -> dict:
@@ -180,12 +231,20 @@ def _load_bak_ledger() -> dict:
     try:
         if not _LEDGER_BAK_PATH.exists():
             return _empty_ledger()
-        data = json.loads(_LEDGER_BAK_PATH.read_text())
-        if isinstance(data, dict) and "positions" in data:
-            return data
+        return convert_ledger(loads_strict(_LEDGER_BAK_PATH.read_bytes()), 1)
     except Exception as e:  # RC-3: missing/corrupt .bak degrades to empty (fail open).
         logger.debug("_load_bak_ledger: read failed, empty: %s", e)
     return _empty_ledger()
+
+
+def load_canonical_ledger() -> dict:
+    """Load a fresh canonical schema-v2 view without changing durable state."""
+    if not _LEDGER_PATH.exists():
+        return convert_ledger(_empty_ledger(), 2)
+    try:
+        return convert_ledger(loads_strict(_LEDGER_PATH.read_bytes()), 2)
+    except (LedgerSchemaError, OSError) as exc:
+        raise LedgerError(f"ledger unreadable/corrupt: {exc}") from exc
 
 
 def _cached_protected_symbols() -> set:
@@ -196,8 +255,9 @@ def _cached_protected_symbols() -> set:
     valid .bak)."""
     bak = _load_bak_ledger()
     try:
-        return {s for s in bak.get("positions", {})
-                if protected_floor(bak, s) > _QTY_EPS}
+        return {
+            s for s in bak.get("positions", {}) if protected_floor(bak, s) > _QTY_EPS
+        }
     except Exception as e:  # RC-3: type-corrupt .bak entry must not raise to a caller.
         logger.debug("_cached_protected_symbols: derive failed, empty: %s", e)
         return set()
@@ -230,12 +290,15 @@ def _ledger_write_lock(timeout_s: float = 5.0):
                     if time.monotonic() >= _deadline:
                         logger.warning(
                             "ledger write-lock not acquired in %.1fs — proceeding "
-                            "without it (save is atomic; last-writer-wins).", timeout_s)
+                            "without it (save is atomic; last-writer-wins).",
+                            timeout_s,
+                        )
                         break
                     time.sleep(0.1)
         except OSError as _se:
             logger.warning(
-                "ledger write-lock setup failed (%s) — proceeding without it.", _se)
+                "ledger write-lock setup failed (%s) — proceeding without it.", _se
+            )
         yield
     finally:
         if _fd is not None:
@@ -275,26 +338,37 @@ def page_floor_blind(symbol: str, tier: str, kind: str, detail: str = "") -> Non
         try:
             if stamp.exists():
                 last = float(json.loads(stamp.read_text()).get("ts", 0.0) or 0.0)
-        except Exception:  # RC-3: corrupt/unreadable stamp → treat as "send" (fail toward alerting)
+        except (
+            Exception
+        ):  # RC-3: corrupt/unreadable stamp → treat as "send" (fail toward alerting)
             last = 0.0
         if (now - last) < _PAGE_THROTTLE_S:
             return
         from alerts import alert_floor_blind
+
         if alert_floor_blind(symbol, tier, kind, detail, kind in _CRITICAL_PAGE_KINDS):
             # Confirmed send → write the dedup stamp. Unique .{pid}.tmp suffix so two
             # overlapping writers can't garble a shared tmp; atomic replace (RC-5).
             stamp.parent.mkdir(parents=True, exist_ok=True)
             _tmp = stamp.with_suffix(f".{os.getpid()}.tmp")
             with open(_tmp, "w") as f:
-                json.dump({"ts": now, "kind": kind, "symbol": symbol,
-                           "utc": datetime.now(timezone.utc).isoformat()}, f)
+                json.dump(
+                    {
+                        "ts": now,
+                        "kind": kind,
+                        "symbol": symbol,
+                        "utc": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                )
                 f.flush()
                 os.fsync(f.fileno())
             _tmp.replace(stamp)
     except Exception as e:  # RC-3: a pager MUST NEVER break the guard / order path.
         try:
-            logger.warning("page_floor_blind swallowed error (%s/%s/%s): %s",
-                           symbol, kind, tier, e)
+            logger.warning(
+                "page_floor_blind swallowed error (%s/%s/%s): %s", symbol, kind, tier, e
+            )
         except Exception:
             pass
     return None
@@ -370,23 +444,42 @@ def check_never_sell_floor(
             # symbol carries a protected-tier value here, so this narrow double-blind is the
             # one place fail-CLOSED is correct. Page it — the guard is blind on a would-be
             # protected exit.
-            page_floor_blind(symbol, tier, "ledger_type_corrupt",
-                             f"current ledger unreadable + .bak protected_floor raised: {_pe}")
+            page_floor_blind(
+                symbol,
+                tier,
+                "ledger_type_corrupt",
+                f"current ledger unreadable + .bak protected_floor raised: {_pe}",
+            )
             logger.critical(
                 "[%s] check_never_sell_floor: current ledger unreadable AND .bak "
-                "protected_floor raised (%s) — fail closed.", symbol, _pe)
-            return GuardResult("REJECT", 0.0,
-                               "current ledger unreadable and .bak corrupt — fail closed")
+                "protected_floor raised (%s) — fail closed.",
+                symbol,
+                _pe,
+            )
+            return GuardResult(
+                "REJECT",
+                0.0,
+                "current ledger unreadable and .bak corrupt — fail closed",
+            )
         if _bak_floor <= _QTY_EPS:
             return GuardResult(
-                "APPROVE", qty,
-                "current ledger unreadable, symbol not protected in .bak — exit ok")
-        page_floor_blind(symbol, tier, "ledger_unreadable",
-                         f"current ledger unreadable, using .bak for protected symbol: {e}")
+                "APPROVE",
+                qty,
+                "current ledger unreadable, symbol not protected in .bak — exit ok",
+            )
+        page_floor_blind(
+            symbol,
+            tier,
+            "ledger_unreadable",
+            f"current ledger unreadable, using .bak for protected symbol: {e}",
+        )
         logger.critical(
             "[%s] check_never_sell_floor: current ledger unreadable (%s) — using "
             "last-known-good .bak for a PROTECTED symbol; live-Alpaca drift fails "
-            "closed on any mismatch.", symbol, e)
+            "closed on any mismatch.",
+            symbol,
+            e,
+        )
         ledger = _bak
 
     # ── Protection determination (main ledger). A raise here (type-corrupt qty) means we
@@ -397,18 +490,32 @@ def check_never_sell_floor(
         floor = protected_floor(ledger, symbol)  # ledger-derived ONLY (forever6 + qhm)
     except Exception as _pe:
         if symbol in _cached_protected_symbols():
-            page_floor_blind(symbol, tier, "ledger_type_corrupt",
-                             f"protected_floor raised for cached-protected symbol: {_pe}")
+            page_floor_blind(
+                symbol,
+                tier,
+                "ledger_type_corrupt",
+                f"protected_floor raised for cached-protected symbol: {_pe}",
+            )
             logger.critical(
                 "[%s] check_never_sell_floor: protected_floor raised for a cached-protected "
-                "symbol (%s) — fail closed.", symbol, _pe)
-            return GuardResult("REJECT", 0.0,
-                               "ledger entry corrupt for protected symbol — fail closed")
+                "symbol (%s) — fail closed.",
+                symbol,
+                _pe,
+            )
+            return GuardResult(
+                "REJECT", 0.0, "ledger entry corrupt for protected symbol — fail closed"
+            )
         logger.warning(
             "[%s] check_never_sell_floor: protected_floor raised, symbol not protected in "
-            ".bak — fail open (keystone): %s", symbol, _pe)
-        return GuardResult("APPROVE", qty,
-                           "ledger entry corrupt, symbol not protected in .bak — exit ok")
+            ".bak — fail open (keystone): %s",
+            symbol,
+            _pe,
+        )
+        return GuardResult(
+            "APPROVE",
+            qty,
+            "ledger entry corrupt, symbol not protected in .bak — exit ok",
+        )
     if floor <= _QTY_EPS:
         # No protected floor → nothing to protect. Approve the full order regardless of
         # ledger drift or Alpaca-net availability (those only bind when a floor exists).
@@ -420,26 +527,43 @@ def check_never_sell_floor(
     # exit path.
     try:
         if alpaca_net_qty is None:
-            page_floor_blind(symbol, tier, "alpaca_unreadable",
-                             "live Alpaca net unavailable for protected symbol")
-            return GuardResult("REJECT", 0.0,
-                               "Alpaca net unavailable for PROTECTED symbol — fail closed")
+            page_floor_blind(
+                symbol,
+                tier,
+                "alpaca_unreadable",
+                "live Alpaca net unavailable for protected symbol",
+            )
+            return GuardResult(
+                "REJECT",
+                0.0,
+                "Alpaca net unavailable for PROTECTED symbol — fail closed",
+            )
         _ent = _entry(ledger, symbol)
         if _ent is not None:
             _drift = float(_ent.get("drift", 0.0) or 0.0)
             if abs(_drift) > _QTY_EPS:
-                page_floor_blind(symbol, tier, "drift_freeze",
-                                 f"ledger drift field={_drift}")
+                page_floor_blind(
+                    symbol, tier, "drift_freeze", f"ledger drift field={_drift}"
+                )
                 return GuardResult(
-                    "REJECT", 0.0, f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen")
+                    "REJECT",
+                    0.0,
+                    f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen",
+                )
         # reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
         ledger_sum = get_combined_symbol_exposure(ledger, symbol)
         if abs(ledger_sum - float(alpaca_net_qty)) > _QTY_EPS:
-            page_floor_blind(symbol, tier, "drift_freeze",
-                             f"ledger_sum={ledger_sum} vs alpaca_net={alpaca_net_qty}")
+            page_floor_blind(
+                symbol,
+                tier,
+                "drift_freeze",
+                f"ledger_sum={ledger_sum} vs alpaca_net={alpaca_net_qty}",
+            )
             return GuardResult(
-                "REJECT", 0.0,
-                f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed")
+                "REJECT",
+                0.0,
+                f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed",
+            )
 
         own = tier_qty(ledger, symbol, tier)
         net = float(alpaca_net_qty)
@@ -451,38 +575,57 @@ def check_never_sell_floor(
 
         # short on a ring-fenced (floor>0) name → REJECT (long-only; shorts → options).
         if str(side).lower() == "short":
-            return GuardResult("REJECT", 0.0, "ring-fenced name is long-only (shorts→opts)")
+            return GuardResult(
+                "REJECT", 0.0, "ring-fenced name is long-only (shorts→opts)"
+            )
 
         # sells, per tier
         if tier == "forever6":
             if not is_authorized_f6_trim:
                 return GuardResult(
-                    "REJECT", 0.0, "forever6 reduces only via authorized +1000/+2000 trim")
+                    "REJECT",
+                    0.0,
+                    "forever6 reduces only via authorized +1000/+2000 trim",
+                )
             bounded = min(qty, own)
             if bounded <= _QTY_EPS:
                 return GuardResult("REJECT", 0.0, "forever6 trim exceeds own qty")
-            return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
-                               "f6 authorized trim")
+            return GuardResult(
+                "QTY_BOUND" if bounded < qty else "APPROVE",
+                bounded,
+                "f6 authorized trim",
+            )
 
         # intraday / qhm sell: bound to the tier's OWN qty AND keep net >= effective_floor.
-        bounded = min(qty, own)                   # never sell more than the tier owns
+        bounded = min(qty, own)  # never sell more than the tier owns
         if net - bounded < effective_floor - _QTY_EPS:
-            allowed = net - effective_floor       # max sellable before breaching floor
+            allowed = net - effective_floor  # max sellable before breaching floor
             if allowed <= _QTY_EPS:
                 return GuardResult(
-                    "REJECT", 0.0,
-                    f"floor binding (net={net} floor={effective_floor}) — 0 sellable")
+                    "REJECT",
+                    0.0,
+                    f"floor binding (net={net} floor={effective_floor}) — 0 sellable",
+                )
             bounded = min(bounded, allowed)
         if bounded <= _QTY_EPS:
             return GuardResult("REJECT", 0.0, f"{tier} has no sellable qty (own={own})")
-        return GuardResult("QTY_BOUND" if bounded < qty else "APPROVE", bounded,
-                           f"{tier} sell bounded to {bounded}")
+        return GuardResult(
+            "QTY_BOUND" if bounded < qty else "APPROVE",
+            bounded,
+            f"{tier} sell bounded to {bounded}",
+        )
     except Exception as _ce:
-        page_floor_blind(symbol, tier, "ledger_type_corrupt",
-                         f"guard body raised for protected symbol: {_ce}")
+        page_floor_blind(
+            symbol,
+            tier,
+            "ledger_type_corrupt",
+            f"guard body raised for protected symbol: {_ce}",
+        )
         logger.critical(
             "[%s] check_never_sell_floor: protected-body raised (%s) — fail closed.",
-            symbol, _ce)
+            symbol,
+            _ce,
+        )
         return GuardResult("REJECT", 0.0, "guard computation error — fail closed")
 
 
@@ -497,10 +640,11 @@ def reconcile_drift(alpaca_positions: list) -> dict:
         ledger = load_ledger()
     except LedgerError as e:
         logger.critical(
-            "reconcile_drift: ledger unreadable (%s) — guard fails closed", e)
+            "reconcile_drift: ledger unreadable (%s) — guard fails closed", e
+        )
         return {}
     alp = {}
-    for p in (alpaca_positions or []):
+    for p in alpaca_positions or []:
         try:
             alp[p.get("symbol")] = float(p.get("qty", 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -519,7 +663,10 @@ def reconcile_drift(alpaca_positions: list) -> dict:
             drifted[sym] = drift
             logger.critical(
                 "OWNERSHIP DRIFT %s: alpaca=%s ledger=%s drift=%s — sells FROZEN",
-                sym, net, ledger_sum, drift,
+                sym,
+                net,
+                ledger_sum,
+                drift,
             )
     ledger["last_reconciled_utc"] = datetime.now(timezone.utc).isoformat()
     save_ledger(ledger)
@@ -540,8 +687,9 @@ def _load_heal_confirmations() -> dict:
         return {}
 
 
-def _matching_heal_confirmation(confs: dict, symbol: str, tier: str,
-                                net: float, now_ts: float) -> Optional[dict]:
+def _matching_heal_confirmation(
+    confs: dict, symbol: str, tier: str, net: float, now_ts: float
+) -> Optional[dict]:
     """The operator confirmation authorizing a heal of symbol/tier DOWN to its recorded target,
     or None. SAFETY - ALL must hold (else None -> refuse): (a) live broker net UNCHANGED since the
     confirm was written (net == net_at_confirm) - a moved position invalidates it; (b) target
@@ -583,12 +731,15 @@ def _consume_heal_confirmations(keys: set) -> None:
             os.fsync(f.fileno())
         _tmp.replace(_HEAL_CONFIRM_PATH)
     except Exception as e:  # RC-3
-        logger.warning("heal-confirmation consume failed (%s) - will re-page next run.", e)
+        logger.warning(
+            "heal-confirmation consume failed (%s) - will re-page next run.", e
+        )
 
 
 # ── System authorized tier reduction (v4-B: direct, synchronous, no confirm file) ──
-def apply_authorized_tier_reduction(symbol: str, tier: str, fresh_net: float,
-                                    source: str = "system") -> bool:
+def apply_authorized_tier_reduction(
+    symbol: str, tier: str, fresh_net: float, source: str = "system"
+) -> bool:
     """A strategy that has just SOLD part/all of its OWN protected tier writes that tier's new,
     broker-verified qty DIRECTLY into the ledger — the AUTHORIZED path that lowers a protected
     baseline (the seller owns what it sold). It does NOT route through / get refused by the
@@ -612,66 +763,121 @@ def apply_authorized_tier_reduction(symbol: str, tier: str, fresh_net: float,
     """
     _sym = str(symbol)
     if tier not in _PROTECTED_TIERS:
-        logger.warning("apply_authorized_tier_reduction: tier %r not protected — no-op (%s)", tier, _sym)
+        logger.warning(
+            "apply_authorized_tier_reduction: tier %r not protected — no-op (%s)",
+            tier,
+            _sym,
+        )
         return False
     try:
         net = float(fresh_net)
     except (TypeError, ValueError):
-        logger.warning("apply_authorized_tier_reduction: non-numeric fresh_net %r for %s — no-op",
-                       fresh_net, _sym)
+        logger.warning(
+            "apply_authorized_tier_reduction: non-numeric fresh_net %r for %s — no-op",
+            fresh_net,
+            _sym,
+        )
         return False
     import math
+
     if not math.isfinite(net) or net < -_QTY_EPS:
-        logger.warning("apply_authorized_tier_reduction: bad fresh_net %r for %s — no-op (fail-safe)",
-                       net, _sym)
+        logger.warning(
+            "apply_authorized_tier_reduction: bad fresh_net %r for %s — no-op (fail-safe)",
+            net,
+            _sym,
+        )
         return False
     try:
         with _ledger_write_lock(timeout_s=1.5):
             try:
                 ledger = load_ledger()
             except LedgerError as _le:
-                logger.critical("apply_authorized_tier_reduction: ledger unreadable (%s) for %s — skip; "
-                                "periodic sync reconciles.", _le, _sym)
+                logger.critical(
+                    "apply_authorized_tier_reduction: ledger unreadable (%s) for %s — skip; "
+                    "periodic sync reconciles.",
+                    _le,
+                    _sym,
+                )
                 return False
             ent = ledger.get("positions", {}).get(_sym)
             if not ent:
-                logger.warning("apply_authorized_tier_reduction: %s absent from ledger — skip (sync "
-                               "reconciles).", _sym)
+                logger.warning(
+                    "apply_authorized_tier_reduction: %s absent from ledger — skip (sync "
+                    "reconciles).",
+                    _sym,
+                )
                 return False
             tiers = ent.setdefault("tiers", {})
             cur = float(tiers.get(tier, {}).get("qty", 0.0) or 0.0)
-            other = sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
-                        for t in _TIERS if t != tier)
+            other = sum(
+                float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
+                for t in _TIERS
+                if t != tier
+            )
             # PURE-TIER GUARD: co-held → tier-blind inputs untrusted → REFUSE + page.
             if other > _QTY_EPS:
-                logger.warning("apply_authorized_tier_reduction: %s co-held (other tiers=%g) — REFUSED "
-                               "(auto path is pure-%s only; operator confirm remains).", _sym, other, tier)
-                page_floor_blind(_sym, tier, "authorized_reduction_coheld",
-                                 f"other={other:g} fresh_net={net:g} src={source}")
+                logger.warning(
+                    "apply_authorized_tier_reduction: %s co-held (other tiers=%g) — REFUSED "
+                    "(auto path is pure-%s only; operator confirm remains).",
+                    _sym,
+                    other,
+                    tier,
+                )
+                page_floor_blind(
+                    _sym,
+                    tier,
+                    "authorized_reduction_coheld",
+                    f"other={other:g} fresh_net={net:g} src={source}",
+                )
                 return False
             # Only ACT on a genuine reduction (net < current tier qty). A non-reduction is not a trim we
             # authorize here — skip, let the periodic sync handle any increase.
             if net > cur - _QTY_EPS:
-                logger.info("apply_authorized_tier_reduction: %s fresh_net %g not below current %s %g — "
-                            "no reduction to apply; skip.", _sym, net, tier, cur)
+                logger.info(
+                    "apply_authorized_tier_reduction: %s fresh_net %g not below current %s %g — "
+                    "no reduction to apply; skip.",
+                    _sym,
+                    net,
+                    tier,
+                    cur,
+                )
                 return False
             tiers.setdefault(tier, {})["qty"] = round(net, 6)
             ent["alpaca_net_qty"] = round(net, 6)
-            ent["drift"] = round(net - sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
-                                           for t in _TIERS), 6)
+            ent["drift"] = round(
+                net
+                - sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0) for t in _TIERS),
+                6,
+            )
             try:
                 save_ledger(ledger)
             except Exception as _se:  # RC-3
-                logger.critical("apply_authorized_tier_reduction: SAVE FAILED for %s/%s post-trim — "
-                                "ledger NOT updated (stale/over-protective) until next sync: %s",
-                                _sym, tier, _se)
+                logger.critical(
+                    "apply_authorized_tier_reduction: SAVE FAILED for %s/%s post-trim — "
+                    "ledger NOT updated (stale/over-protective) until next sync: %s",
+                    _sym,
+                    tier,
+                    _se,
+                )
                 return False
-            logger.warning("apply_authorized_tier_reduction: %s/%s %g→%g (authorized reduction, net=%g, "
-                           "src=%s).", _sym, tier, cur, net, net, source)
+            logger.warning(
+                "apply_authorized_tier_reduction: %s/%s %g→%g (authorized reduction, net=%g, "
+                "src=%s).",
+                _sym,
+                tier,
+                cur,
+                net,
+                net,
+                source,
+            )
             return True
     except Exception as _e:  # RC-3: never raise into the caller
-        logger.warning("apply_authorized_tier_reduction: unexpected error for %s/%s (%s) — no-op.",
-                       _sym, tier, _e)
+        logger.warning(
+            "apply_authorized_tier_reduction: unexpected error for %s/%s (%s) — no-op.",
+            _sym,
+            tier,
+            _e,
+        )
         return False
 
 
@@ -681,15 +887,18 @@ def _fill_time_key(f: dict) -> str:
     lexicographically sortable). Missing/unknown sorts last so a malformed fill can
     never jump ahead of a real, timestamped one. Never raises."""
     t = f.get("transaction_time") or f.get("filled_at") or f.get("timestamp")
-    if not t:                    # None / "" / absent → sort LAST
-        return "~"               # "~" (0x7E) > any digit or 'T' lexicographically
+    if not t:  # None / "" / absent → sort LAST
+        return "~"  # "~" (0x7E) > any digit or 'T' lexicographically
     return str(t)
 
 
-def sync_ledger(fills: list, positions: list,
-                coid_by_order_id: dict | None = None,
-                qhm_holdings: dict | None = None,
-                positions_settled: bool = False) -> dict:
+def sync_ledger(
+    fills: list,
+    positions: list,
+    coid_by_order_id: dict | None = None,
+    qhm_holdings: dict | None = None,
+    positions_settled: bool = False,
+) -> dict:
     """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
     authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
     replaying the FULL Alpaca fill history, attributing each fill to its tier, then
@@ -719,8 +928,8 @@ def sync_ledger(fills: list, positions: list,
     here (defensive — never assumes the caller sorted). Returns the ledger dict on
     success, or {"healed": False, "reason":..., "shrink":{...}} on a refused replay.
     """
-    tiers_qty: dict = {}   # symbol -> {tier: net_qty}
-    lots: dict = {}        # symbol -> {tier: list[[qty, price]]} open longs, FIFO
+    tiers_qty: dict = {}  # symbol -> {tier: net_qty}
+    lots: dict = {}  # symbol -> {tier: list[[qty, price]]} open longs, FIFO
     for f in sorted((fills or []), key=_fill_time_key):
         sym = f.get("symbol")
         side = str(f.get("side", "")).lower()
@@ -756,8 +965,11 @@ def sync_ledger(fills: list, positions: list,
         # sell across co-held tiers is the deferred Movers-class ownership work, not decided here.
         # TAGGED fills are authoritative + untouched (an explicit IN- coid stays intraday even if it
         # shorts). If no protected tier fully covers it, it is a genuine short and stays on intraday.
-        if (_tagged is None and side not in ("buy", "buy_to_cover")
-                and tq.get("intraday", 0.0) <= _QTY_EPS):
+        if (
+            _tagged is None
+            and side not in ("buy", "buy_to_cover")
+            and tq.get("intraday", 0.0) <= _QTY_EPS
+        ):
             for _pt in ("qhm", "forever6"):
                 if tq.get(_pt, 0.0) >= q - _QTY_EPS:
                     tier = _pt
@@ -770,8 +982,8 @@ def sync_ledger(fills: list, positions: list,
         else:
             rem = q
             while rem > _QTY_EPS and lt:
-                if lt[0][0] <= _QTY_EPS:      # defensive: drop a degenerate/empty
-                    lt.pop(0)                 # lot so the loop always makes progress
+                if lt[0][0] <= _QTY_EPS:  # defensive: drop a degenerate/empty
+                    lt.pop(0)  # lot so the loop always makes progress
                     continue
                 if lt[0][0] <= rem + _QTY_EPS:
                     rem -= lt[0][0]
@@ -781,7 +993,7 @@ def sync_ledger(fills: list, positions: list,
                     rem = 0.0
 
     alp = {}
-    for p in (positions or []):
+    for p in positions or []:
         try:
             alp[p.get("symbol")] = float(p.get("qty", 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -795,8 +1007,11 @@ def sync_ledger(fills: list, positions: list,
             q = round(tq.get(t, 0.0), 6)
             _lt = lots.get(sym, {}).get(t, [])
             _open = sum(lot[0] for lot in _lt)
-            avg = (round(sum(lot[0] * lot[1] for lot in _lt) / _open, 4)
-                   if _open > _QTY_EPS else 0.0)
+            avg = (
+                round(sum(lot[0] * lot[1] for lot in _lt) / _open, 4)
+                if _open > _QTY_EPS
+                else 0.0
+            )
             tier_entries[t] = {"qty": q, "avg_cost": avg, "last_fill_id": None}
         ledger_sum = round(sum(tier_entries[t]["qty"] for t in _TIERS), 6)
         net = alp.get(sym, 0.0)
@@ -832,8 +1047,10 @@ def sync_ledger(fills: list, positions: list,
         _f6 = float(_ent["tiers"]["forever6"]["qty"] or 0.0)
         _replay_qhm = float(_ent["tiers"]["qhm"].get("qty", 0.0) or 0.0)
         try:
-            _qhm = min(max(round(float(_qhm_qty), 6), round(_replay_qhm, 6)),
-                       round(_net - _f6, 6))
+            _qhm = min(
+                max(round(float(_qhm_qty), 6), round(_replay_qhm, 6)),
+                round(_net - _f6, 6),
+            )
         except (TypeError, ValueError):
             continue
         # Only act when the overlay RAISES qhm above the replay; if the replay already
@@ -867,7 +1084,9 @@ def sync_ledger(fills: list, positions: list,
             logger.warning(
                 "sync_ledger: reattributed impossible negative protected replay %s/%s=%g "
                 "to intraday; protected tiers are long-only.",
-                _sym, _pt, _protected_qty,
+                _sym,
+                _pt,
+                _protected_qty,
             )
 
     # NEVER-SHRINK-A-PROTECTED-FLOOR: compare the rebuild to the persisted baseline.
@@ -917,38 +1136,67 @@ def sync_ledger(fills: list, positions: list,
                     if _conf is None:
                         continue
                     _target = round(float(_conf["target_qty"]), 6)
-                    _base_pt = float(_base_positions.get(_sym, {}).get("tiers", {})
-                                     .get(pt, {}).get("qty", 0.0) or 0.0)
+                    _base_pt = float(
+                        _base_positions.get(_sym, {})
+                        .get("tiers", {})
+                        .get(pt, {})
+                        .get("qty", 0.0)
+                        or 0.0
+                    )
                     if _target >= _base_pt - _QTY_EPS:
-                        continue   # not a reduction vs baseline — nothing to authorize here
+                        continue  # not a reduction vs baseline — nothing to authorize here
                     if _ent is None:
                         # fully-closed symbol → materialise a zeroed entry (net 0) so the
                         # confirmed heal-to-0 is written and skipped by the never-shrink check.
-                        _ent = {"alpaca_net_qty": _net,
-                                "tiers": {t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None}
-                                          for t in _TIERS},
-                                "drift": 0.0}
+                        _ent = {
+                            "alpaca_net_qty": _net,
+                            "tiers": {
+                                t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None}
+                                for t in _TIERS
+                            },
+                            "drift": 0.0,
+                        }
                         _new_positions[_sym] = _ent
                     # JOINT PROTECTED-SUM GUARD (masked-loss + cold-2nd 2026-08-08): a symbol
                     # holding BOTH protected tiers could, on confirming one, push the OTHER tier's
                     # rebuilt qty + this target above net → floor>net / negative intraday. Refuse the
                     # override in that case (fail-safe: let the never-shrink check freeze it) — never
                     # write a protected floor exceeding live net.
-                    _other_prot = sum(float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
-                                      for t in _PROTECTED_TIERS if t != pt)
+                    _other_prot = sum(
+                        float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
+                        for t in _PROTECTED_TIERS
+                        if t != pt
+                    )
                     if _target + _other_prot > _net + _QTY_EPS:
                         logger.warning(
                             "sync_ledger: confirmed heal %s/%s target=%s + other protected %s "
                             "would exceed net %s — refusing override (fail-safe freeze).",
-                            _sym, pt, _target, _other_prot, _net)
+                            _sym,
+                            pt,
+                            _target,
+                            _other_prot,
+                            _net,
+                        )
                         continue
                     # OVERRIDE: set this protected tier to the confirmed target (verified target<=net
                     # AND target+other_protected<=net), absorb the remainder into intraday, clear drift.
                     _ent["tiers"].setdefault(pt, {})["qty"] = _target
-                    _ent["tiers"].setdefault("intraday", {})["qty"] = round(_net - _target - _other_prot, 6)
-                    _ent["drift"] = round(_net - sum(float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
-                                                     for t in _TIERS), 6)
-                    _healed_down[f"{_sym}/{pt}"] = {"was": _base_pt, "now": _target, "net": _net}
+                    _ent["tiers"].setdefault("intraday", {})["qty"] = round(
+                        _net - _target - _other_prot, 6
+                    )
+                    _ent["drift"] = round(
+                        _net
+                        - sum(
+                            float(_ent["tiers"].get(t, {}).get("qty", 0.0) or 0.0)
+                            for t in _TIERS
+                        ),
+                        6,
+                    )
+                    _healed_down[f"{_sym}/{pt}"] = {
+                        "was": _base_pt,
+                        "now": _target,
+                        "net": _net,
+                    }
                     _consumed.add(f"{_sym}/{pt}")
         # Never-shrink check on the (confirmation-adjusted) rebuild. Confirmed keys are skipped;
         # any REMAINING protected-tier shrink is unconfirmed -> refuse + page.
@@ -957,16 +1205,22 @@ def sync_ledger(fills: list, positions: list,
         for sym in set(_new_positions) | set(_base_positions):
             _new_tiers = _new_positions.get(sym, {}).get("tiers", {})
             _base_tiers = _base_positions.get(sym, {}).get("tiers", {})
-            _sym_net = float(_new_positions.get(sym, {}).get("alpaca_net_qty", 0.0) or 0.0)  # absent symbol = fully closed = net 0
+            _sym_net = float(
+                _new_positions.get(sym, {}).get("alpaca_net_qty", 0.0) or 0.0
+            )  # absent symbol = fully closed = net 0
             for pt in _PROTECTED_TIERS:
                 _key = f"{sym}/{pt}"
                 if _key in _consumed:
-                    continue   # operator-confirmed reduction, already applied
+                    continue  # operator-confirmed reduction, already applied
                 new_q = float(_new_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
                 old_q = float(_base_tiers.get(pt, {}).get("qty", 0.0) or 0.0)
                 if new_q < old_q - _QTY_EPS:
-                    _shrink_entry = {"was": old_q, "would_be": new_q, "net": _sym_net,
-                                     "confirm_cmd": f"confirm_ledger_heal.py {sym} {pt} {_sym_net:g}"}
+                    _shrink_entry = {
+                        "was": old_q,
+                        "would_be": new_q,
+                        "net": _sym_net,
+                        "confirm_cmd": f"confirm_ledger_heal.py {sym} {pt} {_sym_net:g}",
+                    }
                     _shrink[_key] = _shrink_entry
                     _pending_heal[_key] = _shrink_entry
         if _shrink:
@@ -974,23 +1228,35 @@ def sync_ledger(fills: list, positions: list,
                 "sync_ledger REFUSED — protected floor shrink(s) %s need OPERATOR CONFIRMATION "
                 "(a real manual close and a breach are automation-indistinguishable). NOT written; "
                 "sells stay frozen. Confirm a legitimate reduction with confirm_ledger_heal.py, or "
-                "investigate a breach.", _shrink)
-            return {"healed": False,
-                    "reason": "protected-floor shrink — awaiting operator confirmation",
-                    "shrink": _shrink, "pending_heal": _pending_heal}
+                "investigate a breach.",
+                _shrink,
+            )
+            return {
+                "healed": False,
+                "reason": "protected-floor shrink — awaiting operator confirmation",
+                "shrink": _shrink,
+                "pending_heal": _pending_heal,
+            }
         if _healed_down:
             logger.critical(
                 "sync_ledger OPERATOR-CONFIRMED heal-down applied: %s — protected floor(s) "
-                "reconciled to broker truth per explicit confirmation.", _healed_down)
+                "reconciled to broker truth per explicit confirmation.",
+                _healed_down,
+            )
 
         save_ledger(ledger)
         _consume_heal_confirmations(_consumed)
-        _drifted = {s: e["drift"] for s, e in ledger["positions"].items()
-                   if abs(e["drift"]) > _QTY_EPS}
+        _drifted = {
+            s: e["drift"]
+            for s, e in ledger["positions"].items()
+            if abs(e["drift"]) > _QTY_EPS
+        }
         if _drifted:
             logger.critical(
                 "sync_ledger: drift on %d symbol(s) %s — sells frozen there",
-                len(_drifted), _drifted)
+                len(_drifted),
+                _drifted,
+            )
         ledger["healed"] = True
         return ledger
 
@@ -1018,7 +1284,7 @@ def launch_init(alpaca_positions: list, force: bool = False) -> dict:
     ledger = _empty_ledger()
     stamp = f"SEED-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
     seeded = []
-    for p in (alpaca_positions or []):
+    for p in alpaca_positions or []:
         sym = p.get("symbol")
         if not sym:
             continue
@@ -1030,7 +1296,9 @@ def launch_init(alpaca_positions: list, force: bool = False) -> dict:
         # Build the per-tier map from _TIERS so a newly-seeded entry has the SAME key set as a
         # sync_ledger()-rebuilt one (incl. any registered tier like "daytrade":0) — no schema
         # asymmetry between seed and rebuild. Only intraday is seeded with the net qty.
-        _tiers: dict[str, dict] = {t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None} for t in _TIERS}
+        _tiers: dict[str, dict] = {
+            t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None} for t in _TIERS
+        }
         _tiers["intraday"] = {"qty": q, "avg_cost": avg, "last_fill_id": stamp}
         ledger["positions"][sym] = {
             "alpaca_net_qty": q,

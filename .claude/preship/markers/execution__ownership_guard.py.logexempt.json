@@ -1,0 +1,6 @@
+{
+ "file": "execution/ownership_guard.py",
+ "sha256": "d58d0d72eee545dab7664cd7fe8d551d20fe10df2f244a983606f4bf25a29e90",
+ "reason": "OpenAI Codex canonical ownership-ledger schema architecture; no claim that this fixes a logged production defect.",
+ "recorded_at": "2026-10-09T07:33:58.339017+02:00"
+}

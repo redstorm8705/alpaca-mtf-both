@@ -1,0 +1,7 @@
+{
+  "file": "execution/ownership_guard.py",
+  "verdict": "PASS",
+  "sha256": "d58d0d72eee545dab7664cd7fe8d551d20fe10df2f244a983606f4bf25a29e90",
+  "ts": 1791527439.379461,
+  "claims": "Canonical ownership-ledger v2 preserves all four owner claims, protected floors, compatibility behavior, atomic durability, and compare-and-swap rollback; deployed code remains unexercised until explicit migration."
+}
