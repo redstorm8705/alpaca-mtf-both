@@ -844,10 +844,19 @@ def run_tick() -> dict:
         # After hours / pre-market (CEO 2026-10-07): every day-tier lot is closed out by end of day. The
         # extended-hours exit runs FIRST (it books its own fills), then a reconcile that never market-closes
         # (a market order now would be queued for the next open).
+        # Promotion hand-off FIRST (CEO 2026-10-09): a lot marked at 3:56 is booked over to the Swing tier, or — if its
+        # own stop/target filled before 4:00, or the position changed — booked from the fill / handed back to the
+        # after-hours exit below.
+        try:
+            from execution import day_promotion
+            promo = day_promotion.complete_handoffs()
+        except Exception as _pe:  # noqa: BLE001 — never block the after-hours exit below
+            logger.error("day-tier promotion hand-off failed: %s", _pe)
+            promo = {"error": repr(_pe)}
         ah = dtm.after_hours_exit()
         recon = dtm.reconcile_open_state(allow_flatten=False)
         _touch_heartbeat("market_closed")
-        return {"skipped": "market_closed", "after_hours_exit": ah, "reconcile": recon}
+        return {"skipped": "market_closed", "promotion": promo, "after_hours_exit": ah, "reconcile": recon}
     # An after-hours exit still unfilled at the open keeps being re-priced at the touch (it never touches a stop or
     # places a new exit in regular hours); then reconcile — never leave a naked day-tier position across the cron's
     # process boundary.
@@ -874,6 +883,16 @@ def run_tick() -> dict:
     # treated as IN-window → fail-CLOSED (one flatten pass, no entries) — the lone must-not-trade path that was
     # otherwise fail-open (masked-loss #2 / cold-2nd).
     ff_min = float(getattr(config, "DAYTRADE_FORCE_FLAT_MINUTES", 2))
+    # PROMOTION DECISION (CEO 2026-10-09; design execution/day_promotion.py): once per day, in the last 4.5 minutes
+    # (the 3:56 tick; the 3:58 tick catches a missed one) BEFORE the EOD exit, so a promoted lot is skipped by it.
+    if mins_to_close is not None and mins_to_close <= ff_min + 2.5:
+        try:
+            from execution import day_promotion
+            _promoted = day_promotion.select_promotions(equity)
+            if _promoted:
+                logger.warning("day-tier promotion pending for %s", ", ".join(_promoted))
+        except Exception as _pe:  # noqa: BLE001 — a failed decision means the normal EOD exit, never a crash
+            logger.error("day-tier promotion decision failed (normal EOD exit): %s", _pe)
     _mins_at_read = mins_to_close if mins_to_close is not None else 0.0
     if mins_to_close is not None and ff_min < mins_to_close <= ff_min + 0.5:
         # The */2 cron fires on the 3:58 minute; a host clock a second fast would read just over 2 min to the close
