@@ -38,10 +38,15 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`.
 Plan of record: `logs/design_records/co_audit_and_anomaly_2026-10-09.md` (build order at the end of section 6).
-Items 1-2 are PR #544 (ETF map) and PR #546 (DRAM / young-instrument side); verify with `gh pr view 546 --json state -q .state`; captured output: `MERGED`.
+Items 1-2 are PR #544 (ETF map) and PR #546 (DRAM / young-instrument side). Pre-open 10/09 fixes from the EWY
+10/08 anomaly: PR #548 (opposite-signal exit uses the standard close path) and PR #549 (rejected buy-to-cover no
+longer marks a stock un-shortable); verify with `gh pr view 549 --json state -q .state`; captured output: `MERGED`.
 **⏩ EXACT NEXT ACTION:** item 3 — META defects (spread-capped opening stop, one-strike pin, thesis-stop exit/tighten on an
-opposite trigger): check that historical GEX wall snapshots exist for the replay, run the replay, then the gate. After the
-2026-10-09 close: post-live audits listed by `python3 .claude/preship/post_live_due.py`.
+opposite trigger), using `research/day_tier_conflict_replay.py` (uncommitted in the gamma worktree) extended with the
+decision-layer filters, then the gate. Also queued: on an opposite-signal close failure, re-place the protective stop
+at once (the close retry can cancel the day stop). Weekend: review the tier-blind FIFO pairing in the EOD reconcile
+(trigger: the 10/08 EOD drift alert). After the 2026-10-09 close: post-live
+audits listed by `python3 .claude/preship/post_live_due.py`.
 
 ## ⏩ LATEST (2026-10-08 15:00 PT, Claude) — pick-up pointer
 
