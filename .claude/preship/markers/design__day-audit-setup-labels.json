@@ -1,0 +1,10 @@
+{
+  "feature": "day-audit-setup-labels",
+  "doc_path": "logs/design_records/day_audit_setup_labels_2026-10-09.md",
+  "doc_sha256": "11e598c8f973408c3efb9f641e7513119eef58658329954270b0052f8eb006bd",
+  "covers": [
+    "auto_ai_audit.py",
+    "tests/test_auto_ai_audit_reporting.py"
+  ],
+  "ts": 1791540549.403231
+}

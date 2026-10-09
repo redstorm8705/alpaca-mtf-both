@@ -1,0 +1,7 @@
+{
+  "file": "auto_ai_audit.py",
+  "verdict": "PASS",
+  "sha256": "5c0aa10fc5634dd24d0a53646c3fda5cc43d69fff28222209a86bcf696a7f0e9",
+  "ts": 1791553112.085406,
+  "claims": "Reporting-only exact-ID Day setup/conviction labels replace inapplicable 12-point score; ambiguous, malformed, conflicting, future, or late evidence renders UNKNOWN; valid explicit Swing INTRA lifecycle IDs retain Swing scoring; no trading behavior changes; deployed-unexercised until the next audit run."
+}
