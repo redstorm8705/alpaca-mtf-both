@@ -572,3 +572,84 @@ class TestPromotedLotBreakEven(TestCheckExitsLivePrice):
             self._run_at(t, 103.5)
         self.assertTrue(t.get("be_stop_promoted"))
         self.assertEqual(t["stop"], 100.0)
+
+
+class _ClosingTracker(FakeTracker):
+    def __init__(self, trades):
+        super().__init__(trades)
+        self.closed_trades = []
+
+    def record_exit(self, symbol, px, reason=None, mri_level=None):
+        trade = self.open_trades.pop(symbol)
+        trade.update(exit_price=px, exit_reason=reason, pnl=1.0, tqi_score=0)
+        self.closed_trades.append(trade)
+        return 1.0
+
+
+class TestTrailCloseVerified(TrailBase):
+    """A trailing-stop close is booked only when the broker shows the position gone (P0-1, 2026-09-26 design)."""
+
+    def _hit(self):
+        # live $102.5 is through the $103 trail; phase 3 = no tranche advance, the remainder closes
+        return {"direction": "long", "entry_price": 100.0, "atr_value": 4.0, "qty": 6, "qty_remaining": 6,
+                "stop": 95.0, "trail_stop": 103.0, "trail_phase": 3, "rth_day_stop_order_id": "S1",
+                "trade_mode": "swing", "score": 10}
+
+    def _run(self, tr, close_ok):
+        with mock.patch.object(el, "live_price_or", side_effect=lambda s, fb, w, *a: (102.5, "iex_trade")), \
+                mock.patch.object(el, "close_position", return_value=close_ok), \
+                mock.patch.object(el, "_fetch_actual_fill_price", return_value=102.4) as fill, \
+                mock.patch.object(el, "_record_tqi"), mock.patch.object(el, "alert_exit") as alert, \
+                mock.patch("alerts.send_slack") as slack:
+            el.check_partial_exits(tr, kelly=mock.Mock(), risk=mock.Mock(), mri=None, last_vix=15.0)
+        return fill, alert, slack
+
+    def test_failed_close_keeps_trade_and_restores_the_stop(self):
+        t = self._hit()
+        tr = _ClosingTracker({"X": t})
+        self.m["get_open_position"].return_value = SimpleNamespace(qty="6", qty_available="6", side="long")
+        fill, alert, slack = self._run(tr, close_ok=False)
+        self.assertIn("X", tr.open_trades)                       # never booked
+        self.assertEqual(t["rth_day_stop_order_id"], "NEWDAY")   # protection put back at the trail
+        # the $103 trail is above the $102.5 market (crossed), so protection goes back at the $95 hard stop
+        self.assertEqual(self.m["submit_day_stop_order"].call_args.kwargs["stop_price"], 95.0)
+        self.assertFalse(t["_stop_sync_pending"])
+        fill.assert_not_called()
+        alert.assert_not_called()
+        slack.assert_not_called()
+
+    def test_failed_close_with_unconfirmed_cancel_keeps_old_stop_and_submits_none(self):
+        t = self._hit()
+        tr = _ClosingTracker({"X": t})
+        self.m["cancel_stop_confirmed"].return_value = False
+        self.m["get_open_position"].side_effect = RuntimeError("broker unreadable")
+        fill, _a, _s = self._run(tr, close_ok=False)
+        self.assertIn("X", tr.open_trades)
+        self.assertEqual(t["rth_day_stop_order_id"], "S1")
+        self.m["submit_day_stop_order"].assert_not_called()
+        fill.assert_not_called()
+
+    def test_failed_restore_pages(self):
+        t = self._hit()
+        tr = _ClosingTracker({"X": t})
+        self.m["submit_day_stop_order"].side_effect = lambda **k: None
+        _f, _a, slack = self._run(tr, close_ok=False)
+        self.assertTrue(t["_stop_sync_pending"])
+        slack.assert_called_once()
+
+    def test_false_close_but_broker_flat_books_from_entry_bound(self):
+        t = self._hit()
+        tr = _ClosingTracker({"X": t})
+        self.m["get_open_position"].return_value = None
+        fill, _a, _s = self._run(tr, close_ok=False)
+        self.assertNotIn("X", tr.open_trades)
+        self.assertEqual(len(tr.closed_trades), 1)
+        self.assertIsNone(fill.call_args.kwargs["submitted_after"])
+
+    def test_successful_close_books_as_before(self):
+        t = self._hit()
+        tr = _ClosingTracker({"X": t})
+        fill, alert, _s = self._run(tr, close_ok=True)
+        self.assertNotIn("X", tr.open_trades)
+        self.assertIsNotNone(fill.call_args.kwargs["submitted_after"])
+        alert.assert_called_once()
