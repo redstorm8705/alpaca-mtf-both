@@ -933,6 +933,45 @@ def _fetch_fill_timestamp(symbol: str) -> str | None:
         return None
 
 
+def _entry_from_day_tier(symbol: str, direction: str) -> bool:
+    """True when the most recent filled OPENING order on `symbol` (buy for a
+    long, sell for a short; 14-day lookback) carries the Day tier's DT- client
+    order id: the lot the Swing tier is adopting is a Day-tier lot. CEO
+    2026-10-09: a promoted lot keeps its Swing stop from the Day-tier entry
+    (lifecycle.promoted_lot_keeps_swing_stop). False on any read failure (the
+    normal break-even rules then apply). Never raises."""
+    try:
+        from datetime import timedelta, timezone
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        from execution.broker import get_trading_client
+        from execution.ownership_guard import tier_of_coid
+        _want = "buy" if direction == "long" else "sell"
+        _req = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            symbols=[symbol],
+            limit=20,
+            after=datetime.now(tz=timezone.utc) - timedelta(days=14),
+        )
+        _filled = []
+        for _o in get_trading_client().get_orders(filter=_req):
+            _side = getattr(_o, "side", "")
+            _side_s = str(getattr(_side, "value", _side)).lower()
+            if getattr(_o, "filled_at", None) is not None and _side_s == _want:
+                _filled.append(_o)
+        if not _filled:
+            return False
+        _last = max(_filled, key=lambda o: str(getattr(o, "filled_at", "") or ""))
+        _coid = getattr(_last, "client_order_id", None)
+        return tier_of_coid(_coid) == "daytrade"
+    except Exception as _e:  # noqa: BLE001
+        logger.warning(
+            f"[{symbol}] day-tier entry check failed ({_e}) — "
+            f"not treated as a promoted lot"
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Startup position reconciliation
 # ---------------------------------------------------------------------------
@@ -1271,6 +1310,12 @@ def reconcile_positions(
             "stop_breached":          False,
             "stop_breach_price":      None,
             "_adopted_orphan":        True,
+            # CEO 2026-10-09: a Day-tier lot keeps its ATR Swing stop from
+            # the Day-tier entry (no break-even moves). Only with an ATR-based
+            # stop — the 5% emergency floor keeps the normal break-even rules.
+            "_promoted_from_day_tier": (
+                bool(_orph_atr) and _entry_from_day_tier(sym, _direction)
+            ),
         }
         # QHM stop linkage: restore QHM GTC stop_order_id so exit_logic sees it
         if sym in _get_qhm_syms():

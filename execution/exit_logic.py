@@ -52,6 +52,7 @@ from execution.broker import (
 from execution.fill_helpers import fetch_actual_fill_price as _fetch_actual_fill_price
 from execution.lifecycle import (
     get_partial_fail_counts as _get_partial_fail_counts,
+    promoted_lot_keeps_swing_stop as _promoted_keeps_swing_stop,
     set_shorts_banned as _set_shorts_banned,
 )
 from execution.orphan_manager import get_tod_phase as _get_tod_phase
@@ -1538,6 +1539,7 @@ def check_exits(
             current_price is not None
             and not trade.get("be_stop_promoted")
             and not trade.get("partial_exited")
+            and not _promoted_keeps_swing_stop(symbol, trade)
         ):
             _be_entry  = trade.get("entry_price", 0)
             _be_stp    = trade.get("stop", 0)
