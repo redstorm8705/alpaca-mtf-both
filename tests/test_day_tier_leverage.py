@@ -154,8 +154,8 @@ class Inverse(unittest.TestCase):
         self.assertEqual(lev.inverse_etf_for_order("NVDA", {"NVD"}), ("NVDQ", 2.0))
         self.assertIsNone(lev.inverse_etf_for_order("NVDA", {"NVD", "NVDQ"}))
         self.assertEqual(lev.inverse_etf_for_order("msft", set()), ("MSFD", 1.0))
-        for thin in ("GOOGL", "NFLX", "META", "AMD", "COIN"):
-            self.assertIsNone(lev.inverse_etf_for_order(thin, set()), thin)
+        for unmapped in ("XYZ", "EWY"):   # no listed inverse fund in the map (2026-10-09: thin funds ARE mapped)
+            self.assertIsNone(lev.inverse_etf_for_order(unmapped, set()), unmapped)
         self.assertIsNone(lev.inverse_etf_for_order("NVDA", None))
 
     def test_kill_flag(self):
@@ -237,6 +237,36 @@ class ShortMaintenance(unittest.TestCase):
         self.assertGreater(dtm._short_maintenance_rate(0.30, 2.0), 1.0)               # $2.50/sh on $2 = 125%
         self.assertIsNone(dtm._short_maintenance_rate(None, 10.0))
         self.assertIsNone(dtm._short_maintenance_rate(0.30, 0.0))
+
+
+
+class MapAdditions20261009(unittest.TestCase):
+    """CEO 2026-10-09: AMD's 2x short (DAMD) and SNDK's bull/bear funds were missing from the map (verified on Alpaca
+    /v2/assets that day); low-volume funds are mapped too — the live liquidity gate decides at order time."""
+
+    def test_new_inverse_routes(self):
+        self.assertEqual(lev.inverse_etf_for_order("AMD", set()), ("DAMD", 2.0))
+        self.assertEqual(lev.inverse_etf_for_order("AMD", {"DAMD"}), ("AMDD", 1.0))
+        self.assertEqual(lev.inverse_etf_for_order("SNDK", set()), ("SNDQ", 2.0))
+        self.assertEqual(lev.inverse_etf_for_order("COIN", set()), ("CONI", 2.0))
+        for und, etf in (("GOOGL", "GGLS"), ("NFLX", "NFXS"), ("META", "METD")):
+            self.assertEqual(lev.inverse_etf_for_order(und, set()), (etf, 1.0))
+
+    def test_new_bull_routes(self):
+        self.assertEqual(lev.etf_for_order("SNDK", set()), "SNXX")
+        self.assertEqual(lev.etf_for_order("SNDK", {"SNXX"}), "SNDG")
+
+    def test_exposure_sign_maps_new_funds_to_their_stock(self):
+        self.assertEqual(lev.exposure_sign("DAMD", "long"), ("AMD", -1))
+        self.assertEqual(lev.exposure_sign("AMDD", "long"), ("AMD", -1))
+        self.assertEqual(lev.exposure_sign("SNDQ", "long"), ("SNDK", -1))
+        self.assertEqual(lev.exposure_sign("SNXX", "long"), ("SNDK", 1))
+        self.assertEqual(lev.exposure_sign("SNDG", "long"), ("SNDK", 1))
+
+    def test_new_funds_need_two_shares(self):
+        from execution import day_trade_manager as dtm
+        for etf in ("DAMD", "AMDD", "SNDQ", "SNXX", "SNDG", "CONI", "GGLS", "NFXS", "METD"):
+            self.assertEqual(dtm._min_entry_qty(etf, 1), 2, etf)
 
 
 if __name__ == "__main__":
