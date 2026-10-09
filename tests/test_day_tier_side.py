@@ -21,12 +21,27 @@ import sys
 import unittest
 from unittest import mock
 
-# Stub the Alpaca SDK so data.fetcher imports at load (fetch_bars is mock-patched in every test).
-for _mod in ("alpaca", "alpaca.data", "alpaca.data.timeframe",
-             "alpaca.data.requests", "alpaca.data.historical"):
-    sys.modules.setdefault(_mod, mock.MagicMock())
+# Stub the Alpaca SDK ONLY when it is not installed, so data.fetcher imports at load (fetch_bars is mock-patched in
+# every test). An unconditional partial stub broke the import when data.fetcher needs a submodule the stub lacks
+# (alpaca.data.enums) — the reason this file failed on main before 2026-10-09.
+try:
+    import alpaca.data.historical  # noqa: F401
+except ImportError:
+    for _mod in ("alpaca", "alpaca.data", "alpaca.data.timeframe", "alpaca.data.enums",
+                 "alpaca.data.requests", "alpaca.data.historical"):
+        sys.modules.setdefault(_mod, mock.MagicMock())
 
 import pandas as pd  # noqa: E402
+
+# Another test file may already have installed a PARTIAL alpaca stub in this pytest process, which makes
+# data.fetcher fail to import; every test here patches ds.fetch_bars, so a stand-in module is enough then.
+try:
+    import data.fetcher  # noqa: F401
+except ImportError:
+    import types
+    _stub = types.ModuleType("data.fetcher")
+    _stub.fetch_bars = None  # type: ignore[attr-defined]
+    sys.modules["data.fetcher"] = _stub
 
 from strategy import day_tier_side as ds  # noqa: E402
 
@@ -129,6 +144,58 @@ class DayTierSide(unittest.TestCase):
         self.assertLess(r["weight_coverage"], 1.0)          # 10wk/10mo did NOT vote
         self.assertIsNone(r["stack"].get("sma_10week"))
         self.assertIsNone(r["stack"].get("sma_10month"))
+
+    # 9 -- YOUNG instrument (CEO 2026-10-09: 6+ months of data = tradable). DRAM: ~130 daily bars, ~27 weekly, 7
+    # monthly -> SMA150/200/325 + 10-month cannot exist; coverage judged on the supportable MAs.
+    def test_young_instrument_with_six_months_is_scored(self):
+        with self._patch(self._by_tf(daily=_up(130), weekly=_up(27), monthly=_up(7))):
+            r = ds.compute_side_bias("DRAM")
+        self.assertEqual(r["side"], "LONG")
+        self.assertTrue(r.get("stack_truncated"))
+        self.assertEqual(r.get("history_days"), 130)
+        self.assertIn("truncated stack", r["reason"])
+
+    def test_young_instrument_downtrend_and_weak_lean(self):
+        with self._patch(self._by_tf(daily=_down(130), weekly=_down(27), monthly=_down(7))):
+            self.assertEqual(ds.compute_side_bias("DRAM")["side"], "SHORT")
+        # a score between the normal (0.34) and young (0.50) thresholds is TWO_SIDED for a truncated stack
+        with self._patch(self._by_tf(daily=_up(130), weekly=_up(27), monthly=_up(7))), \
+                mock.patch.object(ds, "_vote", side_effect=[(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (-1.0, 1.0),
+                                                            (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (-1.0, 1.0),
+                                                            (0.0, 0.0), (0.5, 0.5)]):
+            r = ds.compute_side_bias("DRAM")
+        self.assertAlmostEqual(r["score"], 1.5 / 5.5, places=3)          # 0.273 < 0.34 -> TWO_SIDED either way
+        self.assertEqual(r["side"], "TWO_SIDED")
+        with self._patch(self._by_tf(daily=_up(130), weekly=_up(27), monthly=_up(7))), \
+                mock.patch.object(ds, "_vote", side_effect=[(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0),
+                                                            (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (-1.0, 1.0),
+                                                            (0.0, 0.0), (-0.5, 0.5)]):
+            r = ds.compute_side_bias("DRAM")
+        self.assertAlmostEqual(r["score"], 2.5 / 5.5, places=3)          # 0.455: LONG under 0.34, TWO_SIDED under 0.50
+        self.assertEqual(r["side"], "TWO_SIDED")
+
+    def test_young_boundary_119_vs_120_bars(self):
+        with self._patch(self._by_tf(daily=_up(119), weekly=_up(24), monthly=_up(6))):
+            self.assertEqual(ds.compute_side_bias("NEW")["side"], "UNKNOWN")
+        with self._patch(self._by_tf(daily=_up(120), weekly=_up(24), monthly=_up(6))):
+            self.assertEqual(ds.compute_side_bias("NEW")["side"], "LONG")
+
+    def test_young_but_under_six_months_stays_unknown(self):
+        with self._patch(self._by_tf(daily=_up(100), weekly=_up(20), monthly=_up(5))):
+            self.assertEqual(ds.compute_side_bias("NEWIPO")["side"], "UNKNOWN")
+
+    def test_young_with_failed_weekly_fetch_stays_unknown(self):
+        # the 10-week SMA is supportable at 130 days; a failed weekly fetch still counts against coverage
+        with self._patch(self._by_tf(daily=_up(130), weekly=None, monthly=_up(7))):
+            r = ds.compute_side_bias("DRAM")
+        self.assertEqual(r["side"], "UNKNOWN")
+        self.assertTrue(r.get("stack_truncated"))
+
+    def test_full_history_name_unchanged(self):
+        with self._patch(self._by_tf(daily=_up(360), weekly=_up(14), monthly=_up(13))):
+            r = ds.compute_side_bias("NVDA")
+        self.assertEqual(r["side"], "LONG")
+        self.assertIsNone(r.get("stack_truncated"))
 
     # 8 -- score is always in [-1, 1] and the result shape is stable
     def test_score_bounds_and_shape(self):
