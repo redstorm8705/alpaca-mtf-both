@@ -437,39 +437,23 @@ class TestQuoteConfirms(unittest.TestCase):
 
 
 class TestProfitConfirmOk(unittest.TestCase):
-    def test_outcomes(self):
-        t = {}
-        with mock.patch.object(el, "_quote_confirms", return_value=True):
+    # CEO 2026-10-09: profit targets act on the last price; the bid/ask is never read.
+    def test_acts_without_reading_the_quote(self):
+        t = {"_f": True}                                   # a wait flag left by the old check is cleared
+        with mock.patch.object(el, "_quote_confirms", side_effect=AssertionError("no quote read")) as q:
             self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
-        with mock.patch.object(el, "_quote_confirms", return_value=False):
-            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
-            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))      # not reached: keeps waiting
-            self.assertNotIn("_f", t)
-        with mock.patch.object(el, "_quote_confirms", return_value=None):
-            self.assertFalse(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))      # unusable: wait one scan
-            self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))       # then act on the print
-            self.assertNotIn("_f", t)
-        with mock.patch.object(el.config, "EXIT_PRICE_CONFIRM_ENABLED", False, create=True), \
-                mock.patch.object(el, "_quote_confirms", side_effect=AssertionError("no quote read")):
-            self.assertTrue(el._profit_confirm_ok(t, "X", "long", 1.0, "_f"))
+            self.assertTrue(el._profit_confirm_ok(t, "X", "short", 1.0, "_f"))
+        q.assert_not_called()
+        self.assertNotIn("_f", t)
 
 
 class TestTrancheConfirm(TestPartialExitSequence):
-    def test_unconfirmed_tranche_waits(self):
-        self.m["_quote_confirms"].return_value = False
+    def test_quote_disagreeing_does_not_block_a_tranche(self):
+        self.m["_quote_confirms"].return_value = False      # a wide/odd quote can no longer hold a take-profit
         t = self._trade()
-        self._run(t)
-        self.assertEqual(self.calls, [])
-        self.assertEqual(t["qty_remaining"], 9)
-        self.assertEqual(self.m["_quote_confirms"].call_args[0][3], "target")
-
-    def test_unusable_quote_waits_one_scan_then_sells(self):
-        self.m["_quote_confirms"].return_value = None
-        t = self._trade()
-        self._run(t)
-        self.assertEqual(self.calls, [])
         self._run(t)
         self.assertIn(("partial", 3), self.calls)
+        self.assertNotIn("target", [c[0][3] for c in self.m["_quote_confirms"].call_args_list])
 
 
 class _Acted(BaseException):
@@ -533,27 +517,13 @@ class TestTargetConfirm(TestCheckExitsLivePrice):
         t.update(direction="short", stop=105.0, target=95.0)   # live $94 is through the $95 short target
         return t
 
-    def test_unconfirmed_target_does_not_close(self):
+    def test_target_on_last_price_closes_even_if_quote_disagrees(self):
         self.m["_quote_confirms"].return_value = False
-        t = self._target_trade()
-        self._run(t)
-        self.m["close_position"].assert_not_called()
-
-    def test_confirmed_target_closes(self):
         self.m["close_position"].side_effect = _Acted
         t = self._target_trade()
         with self.assertRaises(_Acted):
             self._run(t)
-        self.assertEqual(self.m["_quote_confirms"].call_args[0][1:], ("short", 95.0, "target"))
-
-    def test_unusable_quote_waits_one_scan_then_closes(self):
-        self.m["_quote_confirms"].return_value = None
-        self.m["close_position"].side_effect = _Acted
-        t = self._target_trade()
-        self._run(t)
-        self.assertTrue(t.get("_target_unconfirmed"))
-        with self.assertRaises(_Acted):
-            self._run(t)
+        self.assertNotIn("target", [c[0][3] for c in self.m["_quote_confirms"].call_args_list])
 
     def test_exit_already_pending_is_not_regated(self):
         self.m["_quote_confirms"].return_value = False

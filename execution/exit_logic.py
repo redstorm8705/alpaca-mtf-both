@@ -85,7 +85,8 @@ _both_stops_warned: set = set()   # symbols already paged for the DAY+GTC anomal
 
 # ─── SECOND PRICE CHECK ON EXITS (Rafael-approved 2026-10-06; board Harris/Thorp + GAI, Gro minority) ─────────
 # A single IEX print can tick through a level while the market (the bid for a long, the ask for a short) has not.
-# Trail hits and profit-tranche targets are confirmed against the live quote before they act. Hard stops are
+# Trail hits are confirmed against the live quote before they act (at most one scan). Profit targets act on the last
+# price alone since 2026-10-09 (CEO last-price rule). Hard stops are
 # unchanged (3-scan confirm + broker stop). Kill flag: EXIT_PRICE_CONFIRM_ENABLED (only an explicit False disables).
 _CONFIRM_SPREAD_SANITY_PCT = 0.02   # PROV:exit-confirm-2026-10-06 — a quote wider than 2% of mid is unusable
 _CONFIRM_BAND_PCT = 0.05            # PROV:exit-confirm-2026-10-06 — a quote > 5% from the level is a bad read
@@ -120,18 +121,12 @@ def _exit_confirm_enabled() -> bool:
 
 
 def _profit_confirm_ok(trade: dict, symbol: str, direction: str, level: float, flag: str) -> bool:
-    """Profit-taking second check. Quote confirms -> act. Quote says not reached (False) -> wait. Quote unusable
-    (None) -> wait ONE scan, then act on the print (a thin name's permanently wide quote must not block every
-    take-profit). Kill flag off -> act."""
-    if not _exit_confirm_enabled():
-        return True
-    _tc = _quote_confirms(symbol, direction, level, "target")
-    if _tc is True or (_tc is None and trade.get(flag)):
-        trade.pop(flag, None)
-        return True
-    if _tc is None:
-        trade[flag] = True
-    return False
+    """Profit targets act on the LAST PRICE alone (CEO 2026-10-09: "use the last price, not the bid-ask because those
+    can fluctuate wildly"; board Harris/Douglas): the bid/ask is not read. A wide IEX quote made the old quote check
+    pass early anyway (a high ask "confirms" a long target) and on a thin name it only added a one-scan wait. The
+    protective trail check (_quote_confirms "trail") is unchanged. Clears any wait flag left by the old check."""
+    trade.pop(flag, None)
+    return True
 
 
 def _order_status(order) -> str:
@@ -783,8 +778,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
             if not t_hit:
                 trade.pop("_tranche_unconfirmed", None)
                 break   # price hasn't reached this level; higher levels won't be hit either
-            # Second price check (profit-taking): the quote must also reach the level; otherwise wait for the next
-            # scan (an unusable quote waits one scan) — deferring a take-profit can never hide a loss.
+            # Profit-taking acts on the last price (CEO 2026-10-09); _profit_confirm_ok no longer reads the quote.
             if not _profit_confirm_ok(trade, symbol, direction, t_price, "_tranche_unconfirmed"):
                 logger.info(f"[{symbol}] T{t_idx + 1} print ${current_price:.2f} reached ${t_price:.2f} but the "
                             f"quote did not confirm — waiting for the next scan")
@@ -1667,8 +1661,7 @@ def check_exits(
                 (direction == "short" and current_price <= target_price) or
                 trade.get("exit_pending_reason") == "target"
             )
-            # Second price check (profit-taking): a fresh target hit needs the quote to confirm; otherwise wait for
-            # the next scan (an unusable quote waits one scan). An exit already in progress is not re-gated.
+            # Profit-taking acts on the last price (CEO 2026-10-09); _profit_confirm_ok no longer reads the quote.
             if not _target_hit:
                 trade.pop("_target_unconfirmed", None)
             elif (trade.get("exit_pending_reason") != "target"
