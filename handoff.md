@@ -8,6 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-09, OpenAI Codex signed) — canonical ownership ledger v2 live
+
+PR #542 merged as `27a1dbc` and is deployed on OCI `137.131.51.250`. The durable ownership ledger now stores exactly the four canonical tier IDs: `day`, `swing`, `qhm`, and `forever_6`. Existing execution code still receives its historical compatibility view, so Claude's entries, exits, stops, close timing, Confluence, order prefixes, and allocation logic were not replaced.
+
+The migration was applied under an exclusive writer fence from live v1 SHA-256 `78aaef8e19765d432aa74570e5cf22dbc9f223733d433bf9c1d0396d705327c8` to canonical v2 SHA-256 `59c86461b35f62b4a5f79843e277cb2229033010f3630301ee334a6deaefe9f9`, with an immutable preimage archive and prepared/applied manifest. The first post-migration ledger sync completed successfully; durable state remained v2 with all 43 symbols, zero drift, one exact canonical tier-key shape, seven broker symbols, and zero ownership-snapshot source errors. All four services are active.
+
+Validation: Board, masked-loss, and mechanical approved after adversarial reviewers found and fixed rollback races, schema ambiguity, corrupt-current laundering, post-replace fsync recovery, and corrupt-archive recovery. Final focused suite 23 PASS; independent expanded suite 255 PASS + 24 subtests; Python 3.10 compile, Ruff, mypy, diff, and CI passed. Google AI Studio approved all gated files. Groq approved the ownership guard and codec; its rate limit invoked the repository-configured Nvidia backup for the migration tool and tests.
+
+**⏩ EXACT NEXT ACTION:** preserve Claude's post-live audit priorities. The next complementary architecture item is the shared reconciliation interface that consumes canonical ownership state; audit Claude's newest files first and do not duplicate its Confluence 2.0 or entry work.
+
 ## ⏩ LATEST (2026-10-08 late PT, OpenAI Codex signed) — Claude’s tier-name foundation extended, PR #535 live
 
 PR #535 merged as `cf0e190` and is deployed on OCI `137.131.51.250`. It rebased over and preserves Claude PRs #522–#536, removes the duplicate Codex registry, and extends Claude’s `tier_names.py` as the single identity authority. Canonical internal IDs are `day`, `swing`, `qhm`, and `forever_6`; canonical display names are Day, Swing, QHM, and Forever 6. Existing ledger/report keys remain readable at strict compatibility boundaries. Ownership and reports reject alias collisions plus malformed, missing, Boolean, and non-finite quantities instead of guessing or hiding attribution.
