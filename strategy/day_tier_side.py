@@ -74,6 +74,15 @@ _LONG_THRESHOLD = 0.34          # PROV:daytier-side-thresholds — >= -> LONG le
 _SHORT_THRESHOLD = -0.34        # PROV:daytier-side-thresholds — <= -> SHORT lean; else TWO_SIDED
 # Minimum share of total possible weight that must actually vote, else UNKNOWN (neutral).
 _MIN_WEIGHT_COVERAGE = 0.60     # PROV:daytier-side-thresholds — data-sufficiency floor
+# YOUNG INSTRUMENT (CEO 2026-10-09: "6+ months of price data = tradable"; board López de Prado + Thorp). A name whose
+# whole daily history is shorter than requested cannot have the long MAs (SMA150/200/325, 10-month), so coverage is
+# measured against the MAs its history CAN support instead of the full stack. DRAM (history from April 2026) read
+# 58% < 60% on every tick of 2026-10-08 and was never considered. A failed fetch of an old name is still a gap.
+_YOUNG_MIN_DAILY_BARS = 120     # PROV:young-instrument-2026-10-09 — ~6 months of daily closes
+_YOUNG_MIN_APPLICABLE_COV = 0.90  # PROV:young-instrument-2026-10-09 — of the supportable weight, this much must vote
+_YOUNG_MIN_VOTING_WEIGHT = 5.0  # PROV:young-instrument-2026-10-09 — absolute floor on the weight that votes
+_YOUNG_SIDE_THRESHOLD = 0.50    # PROV:young-instrument-2026-10-09 — truncated stacks are short-horizon and collinear;
+                                # a stronger agreement is needed for a LONG/SHORT lean (else TWO_SIDED, still tradable)
 
 
 def _finite_positive(x) -> "float | None":
@@ -116,6 +125,33 @@ def _ema(df, period: int) -> "float | None":
         return _finite_positive(closes.ewm(span=period, adjust=False).mean().iloc[-1])
     except (IndexError, ValueError):
         return None
+
+
+def _n_closes(df) -> int:
+    """Number of non-null closes in a fetch_bars frame (0 for None/empty/malformed). Never raises."""
+    try:
+        if df is None or getattr(df, "empty", True) or "close" not in getattr(df, "columns", []):
+            return 0
+        return int(df["close"].dropna().shape[0])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _applicable_weight(n_daily: int) -> float:
+    """Total weight of the MAs a history of n_daily daily closes can support (the young-instrument coverage
+    denominator). Applicability follows the instrument's AGE, not what a fetch returned, so a failed weekly/monthly
+    fetch still counts against coverage (fail-safe). 10-week SMA ~ 50 daily closes; 10-month SMA ~ 210."""
+    w = 0.0
+    for period, _label in _DAILY_EMAS + _DAILY_SMAS:
+        if n_daily >= period:
+            w += 1.0
+    if n_daily >= _TENWEEK_PERIOD * 5:
+        w += 1.0
+    if n_daily >= _TENMONTH_PERIOD * 21:
+        w += 1.0
+    if n_daily >= _QUARTERLY_PERIOD:
+        w += _QUARTERLY_WEIGHT
+    return w
 
 
 def _vote(close: float, ma: "float | None", weight: float, label: str, stack: dict) -> tuple:
@@ -203,6 +239,22 @@ def compute_side_bias(symbol: str) -> dict:
         coverage = (weight_used / weight_total) if weight_total > 0 else 0.0
         result["weight_coverage"] = round(coverage, 3)
 
+        # YOUNG INSTRUMENT: the daily fetch returned a whole but SHORT history (fewer bars than requested, yet >= ~6
+        # months). Coverage is then judged against the MAs that history can support.
+        # A truncated stack (any history shorter than requested, >= ~6 months) always uses the stronger lean threshold,
+        # so a slightly older but still truncated name is never judged more leniently than a younger one.
+        long_thr, short_thr = _LONG_THRESHOLD, _SHORT_THRESHOLD
+        n_daily = _n_closes(daily)
+        if _YOUNG_MIN_DAILY_BARS <= n_daily < _DAILY_BARS:
+            applicable = _applicable_weight(n_daily)
+            app_cov = (weight_used / applicable) if applicable > 0 else 0.0
+            result.update(stack_truncated=True, history_days=n_daily, applicable_weight=round(applicable, 2),
+                          applicable_coverage=round(app_cov, 3))
+            long_thr, short_thr = _YOUNG_SIDE_THRESHOLD, -_YOUNG_SIDE_THRESHOLD
+            if (coverage < _MIN_WEIGHT_COVERAGE and app_cov >= _YOUNG_MIN_APPLICABLE_COV
+                    and weight_used >= _YOUNG_MIN_VOTING_WEIGHT):
+                coverage = app_cov   # judged against the MAs its history supports
+
         # Too little of the stack voted (data gaps) -> do NOT emit a low-confidence lean.
         if weight_used <= 0.0 or coverage < _MIN_WEIGHT_COVERAGE:
             result["reason"] = (f"insufficient MA coverage {coverage:.0%} < "
@@ -214,15 +266,18 @@ def compute_side_bias(symbol: str) -> dict:
         # not biased toward zero: score in [-1, +1].
         score = weighted_sum / weight_used
         result["score"] = round(score, 4)
-        if score >= _LONG_THRESHOLD:
+        if score >= long_thr:
             result["side"] = "LONG"
-        elif score <= _SHORT_THRESHOLD:
+        elif score <= short_thr:
             result["side"] = "SHORT"
         else:
             result["side"] = "TWO_SIDED"
         _n_bull = sum(1 for v in stack.values() if v == 1)
         _n_voted = sum(1 for v in stack.values() if v is not None)
-        result["reason"] = f"score={score:+.3f} coverage={coverage:.0%} (bull {_n_bull}/{_n_voted} MAs)"
+        result["reason"] = f"score={score:+.3f} coverage={coverage:.0%} (bull {_n_bull}/{_n_voted} MAs)" + (
+            f" [truncated stack: {n_daily} daily bars, {result.get('applicable_coverage', 0):.0%} of the supportable"
+            f" weight, threshold +-{_YOUNG_SIDE_THRESHOLD:.2f}]"
+            if result.get("stack_truncated") else "")
         logger.info("[%s] day-tier SIDE (INERT): %s %s", symbol, result["side"], result["reason"])
         return result
     except Exception as _e:  # read-only signal must NEVER raise into a caller
