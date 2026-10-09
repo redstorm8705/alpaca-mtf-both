@@ -449,8 +449,10 @@ def main():
         """Thin adapter: maps QHM broker protocol to module-level broker functions."""
         def get_account(self): return _qhm_get_account()
         def get_position(self, sym): return _qhm_get_pos(sym)
-        def submit_limit_order(self, s, q, side, price, ext=False, tier="qhm"):
-            return _qhm_submit_limit(s, q, side, price, ext, tier=tier)
+        # client_order_id: the QHM dispatcher passes it on every entry/add (#442, 2026-09-29); without it here
+        # every QHM buy raised TypeError (NVDA tranche 1, 49 failures on 2026-10-09).
+        def submit_limit_order(self, s, q, side, price, ext=False, tier="qhm", client_order_id=None):
+            return _qhm_submit_limit(s, q, side, price, ext, tier=tier, client_order_id=client_order_id)
         def submit_gtc_stop_order(self, s, q, side, price, tier="qhm"):
             return _qhm_submit_gtc_stop(s, q, side, price, tier=tier)
         # tier="qhm" (matches the submit siblings): the QHM manager's own close must
