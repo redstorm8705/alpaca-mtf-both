@@ -1,0 +1,11 @@
+{
+  "feature": "ownership-ledger-v2",
+  "doc_path": "logs/design_records/ownership_ledger_v2_2026-10-09.md",
+  "doc_sha256": "92076dc43868437584d207945566d76f3c30cd84dc2e0adb99170be11bfc9274",
+  "covers": [
+    "execution/ownership_ledger_codec.py",
+    "scripts/migrate_ownership_ledger_v2.py",
+    "tests/test_ownership_ledger_v2.py"
+  ],
+  "ts": 1791524038.3034
+}

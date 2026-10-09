@@ -1,0 +1,6 @@
+{
+ "file": "scripts/migrate_ownership_ledger_v2.py",
+ "sha256": "66250e7227a9ccdabe64003bbc8228798d8a40e570840c215e82e9913d5cd561",
+ "reason": "OpenAI Codex canonical ownership-ledger schema architecture; no claim that this fixes a logged production defect.",
+ "recorded_at": "2026-10-09T07:33:58.392254+02:00"
+}

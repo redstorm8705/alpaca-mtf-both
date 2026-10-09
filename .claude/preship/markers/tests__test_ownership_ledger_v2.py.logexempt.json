@@ -1,0 +1,6 @@
+{
+ "file": "tests/test_ownership_ledger_v2.py",
+ "sha256": "ade3fdb22b13070be13a852d9cea3ab8ca50be7f5cf558a6bd630d8695488e4f",
+ "reason": "OpenAI Codex canonical ownership-ledger schema architecture; no claim that this fixes a logged production defect.",
+ "recorded_at": "2026-10-09T07:33:58.424398+02:00"
+}
