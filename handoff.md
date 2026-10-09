@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-09 PM, Claude signed) — Day->Swing promotion deployed (PR #562)
+
+PR #562 merged as `3c86e60` and deployed on OCI (all three services active). New `execution/day_promotion.py`:
+3:56 PM ET decision (long stock, position = lot, >= 0.5R profit, trend LONG, <= 2% lot / 6% aggregate risk to the
+Swing stop, Invariant #11 limbs, max 3/day) -> after-close hand-off in the Day runner -> adoption into the Swing
+tracker with a GTC stop. Kill flag `DAYTRADE_PROMOTION_ENABLED`. Status: deployed, unexercised.
+
+**⏩ EXACT NEXT ACTION:** post-live audit of PR #562 after its first close (`data/state/day_promotions.json`,
+`promotion_decision` events, Day runner log) plus the queued post-live audits (#548-#560). Ledger tier-transfer for
+promoted lots is owned by the ChatGPT/Codex session. Cleanup of 20 dead items awaits CEO yes.
+
 ## ⏩ LATEST (2026-10-09, OpenAI Codex signed) — canonical ownership ledger v2 live
 
 PR #542 merged as `27a1dbc` and is deployed on OCI `137.131.51.250`. The durable ownership ledger now stores exactly the four canonical tier IDs: `day`, `swing`, `qhm`, and `forever_6`. Existing execution code still receives its historical compatibility view, so Claude's entries, exits, stops, close timing, Confluence, order prefixes, and allocation logic were not replaced.
