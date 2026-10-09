@@ -631,15 +631,57 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     f"[{symbol}] Trail stop hit @ ${current_price:.2f} "
                     f"(stop ${trail_stop:.2f}) — closing remainder"
                 )
-                # Cancel existing stops before close to release held_for_orders shares.
-                for _skey in ("rth_day_stop_order_id", "gtc_stop_order_id"):
+                # The exit is only an INTENT until the broker proves the position is closed (P0-1, design from
+                # the 2026-09-26 risk-integrity worktree). The old path cleared the stop ids, ignored a False close
+                # and booked the exit anyway — a failed close left a live, untracked position with no stop.
+                _cancelled_stop_keys = []
+                for _skey in _STOP_KEYS:
                     _soid = trade.get(_skey)
-                    if _soid:
-                        cancel_order(_soid)
+                    if _soid and cancel_stop_confirmed(symbol, str(_soid)):
+                        # terminal (cancelled OR filled) — the position read below decides which outcome won
                         trade[_skey] = None
+                        _cancelled_stop_keys.append(_skey)
+                tracker._save_log()
                 time.sleep(0.1)
-                _ts_ts  = time.time()
-                _close_pos(symbol)
+                _ts_ts: "float | None" = time.time()
+                if not _close_pos(symbol):
+                    # A False close is either a real failure or a lost reply / stop-fill race: only a broker read
+                    # that shows NO position lets the exit be booked; an unreadable read counts as still open.
+                    try:
+                        _after_close = get_open_position(symbol)
+                    except Exception as _verify_e:
+                        _after_close = "unreadable"
+                        logger.error(f"[{symbol}] trail close verification failed: {_verify_e}")
+                    if _after_close is not None:
+                        # Still open: put the protection back. A stop whose cancel was not confirmed keeps its id
+                        # (it may still be live), so no competing stop is submitted in that case.
+                        _restored = any(trade.get(k) for k in _STOP_KEYS)
+                        if not _restored and _cancelled_stop_keys:
+                            # The trail is already crossed (that is why we are closing), so a stop AT the trail
+                            # would sit on the wrong side of the market and be rejected: use it only while it is
+                            # still protective, else the hard stop.
+                            _restore_px = float(trail_stop)
+                            _hard = trade.get("stop")
+                            if ((direction == "long" and _restore_px >= current_price)
+                                    or (direction == "short" and _restore_px <= current_price)) and _hard:
+                                _restore_px = float(_hard)
+                            _restored = _submit_new_stop(symbol, trade, tracker, _restore_px, qty_rem,
+                                                         direction, mri, "trail_close_retry")
+                        trade["_stop_sync_pending"] = not _restored
+                        tracker._save_log()
+                        logger.critical(f"[{symbol}] TRAIL CLOSE NOT CONFIRMED — trade kept open in the tracker; "
+                                        f"protection restored={_restored}. Retrying next cycle.")
+                        if not _restored:
+                            try:
+                                from alerts import send_slack
+                                send_slack(f":rotating_light: [{symbol}] trailing-stop close failed and the "
+                                           f"protective stop could not be confirmed — trade kept open; check Alpaca.")
+                            except Exception as _page_e:
+                                logger.error(f"[{symbol}] trail-close page failed: {_page_e}")
+                        continue
+                    # Broker shows no position despite the False close: a stop fill or a lost reply won. Recover
+                    # the fill from every close order since entry, not from the failed close's submit time.
+                    _ts_ts = None
                 _ts_fill = _fetch_actual_fill_price(
                     symbol, trade, poll_secs=0.3, submitted_after=_ts_ts
                 )
